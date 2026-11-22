@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "rootDir": "src",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
+  },
+  "include": [
+    "src/theme/**/*.ts",
+    "src/layout/**/*.ts",
+    "src/logic/**/*.ts",
+    "src/__tests__/**/*.test.ts"
+  ]
+}

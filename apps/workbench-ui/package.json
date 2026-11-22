@@ -8,15 +8,26 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "@prismux/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },
   "scripts": {
+    "dev": "vite --port 1420 --strictPort",
     "typecheck": "tsc --noEmit --customConditions @prismux/source",
-    "build": "tsc --rootDir src"
+    "build": "vite build",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/__tests__/*.test.js"
   },
   "dependencies": {
-    "@prismux/protocol": "workspace:*"
+    "@prismux/protocol": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "vite": "^6.3.5"
   }
 }
