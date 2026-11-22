@@ -32,6 +32,7 @@ jobs:
           node-version: "24"
           cache: "pnpm"
           registry-url: "https://npm.pkg.github.com"
+          scope: "@fish-under-sea"
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
@@ -56,6 +57,17 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          DIST_TAG=$(node -e "
+            const v = String(JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version || '');
+            const idx = v.indexOf('-');
+            if (idx === -1) { console.log('latest'); }
+            else {
+              const seg = v.slice(idx + 1).split('.')[0] || '';
+              const alpha = seg.match(/^[A-Za-z]+/);
+              console.log(alpha ? alpha[0].toLowerCase() : 'prerelease');
+            }
+          ")
+          echo "Resolved npm dist-tag: ${DIST_TAG}"
           for id in qq pet fishdock-hook ssh; do
-            npm publish ".work/npm-packages/${id}" --registry=https://npm.pkg.github.com
+            npm publish ".work/npm-packages/${id}" --tag "${DIST_TAG}" --registry=https://npm.pkg.github.com
           done

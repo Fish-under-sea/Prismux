@@ -760,10 +760,40 @@ describe('release-and-npm-packages', () => {
       prismux: '>=0.0.1-0 <2.0.0',
       node: '>=20.0.0',
     });
+    assert.deepEqual(qqPkgJson['bin'], {
+      'prismux-plugin-qq': './bin/install.mjs',
+      'prismux-install-qq': './bin/install.mjs',
+    });
+
+    // Execute generated bin/install.mjs --out export mode & verify anti-overwrite protection
+    const exportDir = join(workspace, 'plugins-stage');
+    const installerBin = join(scopedOut, 'qq', 'bin', 'install.mjs');
+    execFileSync(process.execPath, [installerBin, '--out', exportDir], {
+      encoding: 'utf8',
+    });
+    const exportedArchive = join(exportDir, `qq-${version}.wb-plugin`);
+    const exportedShaFile = join(exportDir, `qq-${version}.wb-plugin.sha256`);
+    assert.ok(existsSync(exportedArchive));
+    assert.ok(existsSync(exportedShaFile));
+    assert.equal(
+      createHash('sha256').update(readFileSync(exportedArchive)).digest('hex'),
+      scopedBuilt[0]?.sha256,
+    );
+    assert.equal(
+      readFileSync(exportedShaFile, 'utf8'),
+      `${scopedBuilt[0]?.sha256}  qq-${version}.wb-plugin\n`,
+    );
+    assert.throws(() => {
+      execFileSync(process.execPath, [installerBin, '--out', exportDir], {
+        encoding: 'utf8',
+      });
+    }, /already exists/i);
+    execFileSync(process.execPath, [installerBin, '--out', exportDir, '--force'], {
+      encoding: 'utf8',
+    });
 
     // Execute generated bin/install.mjs into clean temp plugin directory
     const pluginsTarget = join(workspace, 'installed-plugins');
-    const installerBin = join(scopedOut, 'qq', 'bin', 'install.mjs');
     execFileSync(process.execPath, [installerBin, '--dir', pluginsTarget], {
       encoding: 'utf8',
     });

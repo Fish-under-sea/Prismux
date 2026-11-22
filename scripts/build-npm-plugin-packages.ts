@@ -88,7 +88,7 @@ import { gunzipSync } from 'node:zlib';
 const META = ${metaJson};
 
 function parseFlags(argv) {
-  const flags = { force: false, portable: false, dir: undefined, help: false };
+  const flags = { force: false, portable: false, dir: undefined, out: undefined, help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--force' || arg === '-f') {
@@ -98,7 +98,14 @@ function parseFlags(argv) {
     } else if (arg === '--help' || arg === '-h') {
       flags.help = true;
     } else if (arg === '--dir' || arg === '-d') {
-      flags.dir = argv[i + 1];
+      const next = argv[i + 1];
+      if (!next) throw new Error(\`Missing value for \${arg}\`);
+      flags.dir = next;
+      i += 1;
+    } else if (arg === '--out' || arg === '-o') {
+      const next = argv[i + 1];
+      if (!next) throw new Error(\`Missing value for \${arg}\`);
+      flags.out = next;
       i += 1;
     }
   }
@@ -165,7 +172,7 @@ function main() {
   const flags = parseFlags(process.argv.slice(2));
   if (flags.help) {
     console.log(
-      \`Usage: prismux-install-\${META.pluginId} [--dir <pluginsDir>] [--portable] [--force]\`,
+      \`Usage: prismux-plugin-\${META.pluginId} [--out <exportDir>] [--dir <pluginsDir>] [--portable] [--force]\`,
     );
     return;
   }
@@ -179,6 +186,22 @@ function main() {
     throw new Error(
       \`SHA-256 verification failed for \${META.archiveFilename}: expected \${META.expectedSha256}, got \${actualSha}\`,
     );
+  }
+
+  if (flags.out) {
+    const outDir = resolve(flags.out);
+    const destArchive = join(outDir, META.archiveFilename);
+    const destSha = join(outDir, \`\${META.archiveFilename}.sha256\`);
+    if ((existsSync(destArchive) || existsSync(destSha)) && !flags.force) {
+      throw new Error(
+        \`Export target already exists: \${existsSync(destArchive) ? destArchive : destSha}. Pass --force to overwrite.\`,
+      );
+    }
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(destArchive, archiveBytes);
+    writeFileSync(destSha, \`\${actualSha}  \${META.archiveFilename}\\n\`, 'utf8');
+    console.log(\`Exported \${META.archiveFilename} (sha256: \${actualSha}) -> \${outDir}\`);
+    return;
   }
 
   const basePluginsDir = flags.dir
@@ -304,6 +327,7 @@ export function buildNpmPluginPackages(
         node: '>=20.0.0',
       },
       bin: {
+        [`prismux-plugin-${id}`]: './bin/install.mjs',
         [`prismux-install-${id}`]: './bin/install.mjs',
       },
       files: [
