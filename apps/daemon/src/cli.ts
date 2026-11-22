@@ -5,7 +5,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { BRAND } from "@prismux/protocol";
 import { resolvePortableDataDir } from "@prismux/sync-vault";
-import { PrismuxDaemon, sanitizeProviderEnv } from "./index.js";
+import {
+  PrismuxDaemon,
+  resolveDaemonPackageVersion,
+  sanitizeProviderEnv
+} from "./index.js";
 
 export interface DaemonCliParsedArgs {
   command: "start" | "help" | "version";
@@ -170,7 +174,7 @@ export async function runDaemonCli(
   }
 
   if (parsed.command === "version") {
-    process.stdout.write(`${BRAND.appSlug} 0.1.0\n`);
+    process.stdout.write(`${BRAND.appSlug} ${resolveDaemonPackageVersion()}\n`);
     return 0;
   }
 

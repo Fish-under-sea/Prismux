@@ -104,6 +104,9 @@ export function buildT3WebSocketUrl(
   } else if (parsed.protocol === "https:") {
     parsed.protocol = "wss:";
   }
+  if (parsed.pathname === "" || parsed.pathname === "/") {
+    parsed.pathname = "/ws";
+  }
   parsed.searchParams.set(T3_ORCHESTRATION_PROTOCOL_QUERY_PARAM, protocolVersion);
   return parsed.toString();
 }
@@ -166,7 +169,13 @@ export class T3RpcClient {
     this.protocolVersion =
       options.protocolVersion ?? T3_ORCHESTRATION_PROTOCOL_VERSION;
     this.wsUrl = buildT3WebSocketUrl(options.url, this.protocolVersion);
-    this.token = options.token;
+    const urlToken = new URL(this.wsUrl).searchParams.get("token")?.trim();
+    this.token =
+      options.token !== undefined && options.token.length > 0
+        ? options.token
+        : urlToken !== undefined && urlToken.length > 0
+          ? urlToken
+          : undefined;
     this.requestTimeoutMs = Math.max(
       50,
       options.requestTimeoutMs ?? DEFAULT_T3_RPC_TIMEOUT_MS

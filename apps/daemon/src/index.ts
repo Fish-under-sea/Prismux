@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CordisPluginHost,
   CordisStreamingInstaller,
@@ -13,26 +14,32 @@ import {
 } from "@prismux/memory-core";
 import {
   BRAND,
+  DEFAULT_APP_VERSION,
   type ChiefProviderKind,
   type InstalledPluginRecord,
   type PrismuxPluginModule
 } from "@prismux/protocol";
 import { SyncVaultEngine } from "@prismux/sync-vault";
+import { AppearanceConfigStore } from "./appearance/AppearanceConfigStore.js";
 import { ChiefThreadManager } from "./chief/ChiefThreadManager.js";
 import { HandoffEngine } from "./handoff/HandoffEngine.js";
 import { LifecycleHookBus } from "./hooks/LifecycleHookBus.js";
 import { PersistentPtyPool } from "./pty/PersistentPtyPool.js";
 import { WorktreeSandbox } from "./sandbox/WorktreeSandbox.js";
+import { DaemonBusinessService } from "./server/DaemonBusinessRoutes.js";
 import { DaemonRpcServer } from "./server/DaemonRpcServer.js";
 import { PairingManager } from "./server/PairingManager.js";
+import { SystemFontService } from "./system/SystemFontService.js";
 import { T3RpcClient } from "./t3/T3RpcClient.js";
 import {
   sanitizeChildEnv,
   T3ServerSupervisor
 } from "./t3/T3ServerSupervisor.js";
 import { AppUpdater } from "./updater/AppUpdater.js";
+import { WallpaperMediaService } from "./wallpapers/WallpaperMediaService.js";
 import { OvernightFactory } from "./workflows/OvernightFactory.js";
 
+export * from "./appearance/AppearanceConfigStore.js";
 export * from "./pty/PersistentPtyPool.js";
 export * from "./handoff/HandoffEngine.js";
 export * from "./hooks/LifecycleHookBus.js";
@@ -42,10 +49,48 @@ export * from "./t3/T3ServerSupervisor.js";
 export * from "./t3/T3RpcClient.js";
 export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
+export * from "./server/DaemonBusinessRoutes.js";
 export * from "./server/DaemonRpcServer.js";
+export * from "./system/SystemFontService.js";
 export * from "./updater/AppUpdater.js";
+export * from "./wallpapers/WallpaperMediaService.js";
 
 const PLUGIN_MASTER_KEY_FILENAME = "credentials-master.key";
+
+/**
+ * Resolves the `@prismux/daemon` runtime version from its `package.json`
+ * (covering both dev/dist and staged `resources/prismux-daemon/` layouts),
+ * falling back cleanly to `DEFAULT_APP_VERSION`.
+ */
+export function resolveDaemonPackageVersion(): string {
+  let cursor = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 4; depth += 1) {
+    const pkgPath = join(cursor, "package.json");
+    if (existsSync(pkgPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+          name?: unknown;
+          version?: unknown;
+        };
+        if (
+          (parsed.name === "@prismux/daemon" || parsed.name === "prismux-daemon") &&
+          typeof parsed.version === "string" &&
+          parsed.version.trim().length > 0
+        ) {
+          return parsed.version.trim();
+        }
+      } catch {
+        // continue walking up
+      }
+    }
+    const parent = resolve(cursor, "..");
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return DEFAULT_APP_VERSION;
+}
 
 /**
  * Strips host-polluting Electron environment variables before spawning provider sessions or sub-shells.
@@ -100,6 +145,8 @@ export interface DaemonStartOptions {
   t3HealthUrl?: string;
   defaultChiefProvider?: ChiefProviderKind;
   defaultChiefModel?: string;
+  officialCatalogPath?: string;
+  steamRootsDiscoverer?: () => Promise<string[]>;
   onShutdownRequested?: (reason?: string) => void | Promise<void>;
 }
 
@@ -131,6 +178,10 @@ export class PrismuxDaemon {
   readonly memoryStore: SqliteMemoryStore;
   readonly obsidianImporter: ObsidianVaultImporterImpl;
   readonly syncVault: SyncVaultEngine;
+  readonly wallpaperService: WallpaperMediaService;
+  readonly fontService: SystemFontService;
+  readonly appearanceStore: AppearanceConfigStore;
+  readonly businessService: DaemonBusinessService;
   readonly t3Supervisor: T3ServerSupervisor | undefined;
   readonly t3RpcClient: T3RpcClient | undefined;
   readonly chiefManager: ChiefThreadManager;
@@ -146,6 +197,9 @@ export class PrismuxDaemon {
   private readyInfo: DaemonReadyInfo | undefined;
   private activeStartPromise: Promise<DaemonReadyInfo> | undefined;
   private activeStopPromise: Promise<void> | undefined;
+  private t3ConnectRetryTimer: NodeJS.Timeout | undefined;
+  private t3ConnectStopped = false;
+  private t3StateUnsubscribe: (() => void) | undefined;
 
   constructor(options: DaemonStartOptions) {
     this.options = options;
@@ -165,7 +219,8 @@ export class PrismuxDaemon {
       dataDir: options.dataDir,
       masterKey: this.pluginMasterKey
     });
-    const resolvedHostVersion = options.hostVersion ?? "0.0.1-alpha.1";
+    const resolvedHostVersion =
+      options.hostVersion ?? resolveDaemonPackageVersion();
     this.pluginInstaller = new CordisStreamingInstaller({
       pluginsDir: join(options.dataDir, "plugins"),
       hostVersion: resolvedHostVersion
@@ -242,6 +297,38 @@ export class PrismuxDaemon {
       initialAuthToken: options.authToken
     });
 
+    this.appearanceStore = new AppearanceConfigStore({
+      dataDir: options.dataDir
+    });
+    const initialAppearance = this.appearanceStore.get().config;
+    this.wallpaperService = new WallpaperMediaService({
+      dataDir: options.dataDir,
+      customDirs: initialAppearance.wallpaper.customDirs,
+      steamRootOverride: initialAppearance.wallpaper.steamRootOverride,
+      ...(options.steamRootsDiscoverer !== undefined
+        ? { steamRootsDiscoverer: options.steamRootsDiscoverer }
+        : {})
+    });
+    this.fontService = new SystemFontService();
+    this.businessService = new DaemonBusinessService({
+      dataDir: options.dataDir,
+      hostVersion: resolvedHostVersion,
+      officialCatalogPath: options.officialCatalogPath,
+      chiefManager: this.chiefManager,
+      handoffEngine: this.handoffEngine,
+      t3RpcClient: this.t3RpcClient,
+      memoryStore: this.memoryStore,
+      memoryDbPath: join(options.dataDir, "data", "memory.db"),
+      syncVault: this.syncVault,
+      pluginHost: this.pluginHost,
+      pluginInstaller: this.pluginInstaller,
+      pluginCredentialStore: this.pluginCredentialStore,
+      onMountPlugin: (record, mod) => this.mountPluginModule(record, mod),
+      onTogglePlugin: (pluginId, enabled) => this.togglePlugin(pluginId, enabled),
+      onUninstallPlugin: (pluginId) => this.uninstallPlugin(pluginId)
+    });
+    this.businessService.restorePersistedSyncConfig();
+
     this.rpcServer = new DaemonRpcServer({
       host: options.host ?? "127.0.0.1",
       port: options.port ?? 0,
@@ -260,6 +347,10 @@ export class PrismuxDaemon {
       hookBus: this.hookBus,
       t3Supervisor: this.t3Supervisor,
       t3RpcClient: this.t3RpcClient,
+      wallpaperService: this.wallpaperService,
+      fontService: this.fontService,
+      appearanceStore: this.appearanceStore,
+      businessService: this.businessService,
       onRequestShutdown: options.onShutdownRequested
     });
   }
@@ -376,6 +467,100 @@ export class PrismuxDaemon {
     }
   }
 
+  private clearT3ConnectLoop(): void {
+    this.t3ConnectStopped = true;
+    if (this.t3ConnectRetryTimer !== undefined) {
+      clearTimeout(this.t3ConnectRetryTimer);
+      this.t3ConnectRetryTimer = undefined;
+    }
+    this.t3StateUnsubscribe?.();
+    this.t3StateUnsubscribe = undefined;
+  }
+
+  private async tryEnsureChiefThread(slot: {
+    workspacePath: string;
+    activeProvider: ChiefProviderKind;
+    model?: string;
+  }): Promise<void> {
+    if (!this.t3RpcClient || !this.t3RpcClient.isConnected()) {
+      return;
+    }
+    try {
+      await this.t3RpcClient.ensureChiefThread(
+        slot.workspacePath,
+        slot.activeProvider,
+        slot.model
+      );
+    } catch {
+      // Transient chief sync failure will retry on next reconnect
+    }
+  }
+
+  private startT3ConnectLoop(slot: {
+    workspacePath: string;
+    activeProvider: ChiefProviderKind;
+    model?: string;
+  }): void {
+    const client = this.t3RpcClient;
+    if (!client) {
+      return;
+    }
+
+    this.t3ConnectStopped = false;
+    this.t3StateUnsubscribe?.();
+    this.t3StateUnsubscribe = client.onStateChange((connected) => {
+      if (this.readyInfo !== undefined) {
+        this.readyInfo = {
+          ...this.readyInfo,
+          t3Connected: connected
+        };
+      }
+      if (connected && !this.t3ConnectStopped) {
+        void this.tryEnsureChiefThread(slot);
+      }
+    });
+
+    const backoffDelays = [250, 500, 1_000, 2_000, 5_000] as const;
+    let attempt = 0;
+
+    const scheduleNext = () => {
+      if (this.t3ConnectStopped || client.isConnected()) {
+        return;
+      }
+      const delayMs =
+        backoffDelays[Math.min(attempt, backoffDelays.length - 1)] ?? 5_000;
+      attempt += 1;
+      this.t3ConnectRetryTimer = setTimeout(() => {
+        this.t3ConnectRetryTimer = undefined;
+        void attemptConnect();
+      }, delayMs);
+    };
+
+    const attemptConnect = async () => {
+      if (this.t3ConnectStopped || client.isConnected()) {
+        return;
+      }
+      try {
+        await client.connect();
+        if (this.t3ConnectStopped) {
+          return;
+        }
+        attempt = 0;
+        if (this.readyInfo !== undefined) {
+          this.readyInfo = {
+            ...this.readyInfo,
+            t3Connected: true
+          };
+        }
+        await this.tryEnsureChiefThread(slot);
+      } catch {
+        scheduleNext();
+      }
+    };
+
+    scheduleNext();
+  }
+
   private async performStart(): Promise<DaemonReadyInfo> {
     try {
       this.ensureMasterKeyPersisted();
@@ -386,19 +571,57 @@ export class PrismuxDaemon {
         await this.t3Supervisor.start();
       }
 
-      if (this.t3RpcClient !== undefined) {
-        await this.t3RpcClient.connect();
-        await this.t3RpcClient.ensureChiefThread(
-          slot.workspacePath,
-          slot.activeProvider,
-          slot.model
-        );
-      }
-
+      // Bind HTTP & WebSocket RPC server first so /health and API routes are ready in <150ms.
       await this.rpcServer.start();
       const httpUrl = this.rpcServer.getHttpUrl();
       const wsUrl = this.rpcServer.getWsUrl();
       const pairing = this.pairingManager.createPairingCode(undefined, httpUrl);
+
+      this.t3ConnectStopped = false;
+      if (this.t3RpcClient !== undefined) {
+        // Fast bounded probe: succeeds immediately if T3 Server is already listening
+        // (preserving deterministic readiness), or falls back to non-blocking background backoff.
+        let initialTimer: NodeJS.Timeout | undefined;
+        const initialAttempt = this.t3RpcClient
+          .connect()
+          .then(async () => {
+            if (!this.t3ConnectStopped) {
+              await this.tryEnsureChiefThread(slot);
+            }
+          })
+          .catch(() => {
+            // Handled below via background reconnect loop
+          });
+        try {
+          await Promise.race([
+            initialAttempt,
+            new Promise<void>((resolveWait) => {
+              initialTimer = setTimeout(resolveWait, 350);
+            })
+          ]);
+        } finally {
+          if (initialTimer !== undefined) {
+            clearTimeout(initialTimer);
+          }
+        }
+
+        if (!this.t3RpcClient.isConnected()) {
+          this.startT3ConnectLoop(slot);
+        } else {
+          this.t3StateUnsubscribe?.();
+          this.t3StateUnsubscribe = this.t3RpcClient.onStateChange((connected) => {
+            if (this.readyInfo !== undefined) {
+              this.readyInfo = {
+                ...this.readyInfo,
+                t3Connected: connected
+              };
+            }
+            if (connected && !this.t3ConnectStopped) {
+              void this.tryEnsureChiefThread(slot);
+            }
+          });
+        }
+      }
 
       const info: DaemonReadyInfo = {
         port: this.rpcServer.getPort(),
@@ -423,6 +646,7 @@ export class PrismuxDaemon {
   }
 
   private async performStop(): Promise<void> {
+    this.clearT3ConnectLoop();
     try {
       await this.rpcServer.stop();
     } finally {

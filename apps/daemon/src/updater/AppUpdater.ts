@@ -15,6 +15,7 @@ import * as https from "node:https";
 import { basename, join, resolve } from "node:path";
 import { compareSemver, parseSemver } from "@prismux/cordis-kernel";
 import {
+  DEFAULT_APP_VERSION,
   DEFAULT_UPDATE_POLICY,
   NETWORK_ROUTE_PREFERENCES,
   PLUGIN_REGISTRY_IDS,
@@ -334,7 +335,7 @@ function openHttpWithRedirects(
           method: "GET",
           agent: false,
           headers: {
-            "user-agent": "Prismux-Updater/0.0.1-alpha.1",
+            "user-agent": `Prismux-Updater/${DEFAULT_APP_VERSION}`,
             connection: "close",
             ...headers
           }
@@ -602,7 +603,7 @@ export class AppUpdater {
   private lastError: string | null = null;
 
   constructor(options: AppUpdaterOptions) {
-    const currentVersion = (options.currentVersion ?? "0.0.1-alpha.1").trim();
+    const currentVersion = (options.currentVersion ?? DEFAULT_APP_VERSION).trim();
     if (parseSemver(currentVersion) === null) {
       throw new Error(`Invalid AppUpdater currentVersion SemVer: "${currentVersion}".`);
     }

@@ -14,6 +14,7 @@ import {
   type SqliteMemoryStore
 } from "@prismux/memory-core";
 import {
+  DEFAULT_APP_VERSION,
   DIAL_MODES,
   MEMORY_KINDS,
   NETWORK_ROUTE_PREFERENCES,
@@ -41,6 +42,7 @@ import {
   type UpdateSourceId
 } from "@prismux/protocol";
 import { WebSocket, WebSocketServer } from "ws";
+import type { AppearanceConfigStore } from "../appearance/AppearanceConfigStore.js";
 import type { ChiefThreadManager } from "../chief/ChiefThreadManager.js";
 import type {
   HandoffEngine,
@@ -48,12 +50,24 @@ import type {
 } from "../handoff/HandoffEngine.js";
 import type { LifecycleHookBus } from "../hooks/LifecycleHookBus.js";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
+import { SystemFontService } from "../system/SystemFontService.js";
 import type { T3RpcClient } from "../t3/T3RpcClient.js";
 import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
 import type { AppUpdater } from "../updater/AppUpdater.js";
+import {
+  WallpaperServiceError,
+  type WallpaperImportRequest,
+  type WallpaperMediaService,
+  type WallpaperRescanRequest
+} from "../wallpapers/WallpaperMediaService.js";
+import {
+  BusinessRouteError,
+  type DaemonBusinessService
+} from "./DaemonBusinessRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
+const MAX_IMPORT_JSON_BODY_BYTES = 34 * 1024 * 1024;
 
 export interface DaemonRpcServerOptions {
   host?: string;
@@ -76,6 +90,10 @@ export interface DaemonRpcServerOptions {
   hookBus?: LifecycleHookBus;
   t3Supervisor?: T3ServerSupervisor;
   t3RpcClient?: T3RpcClient;
+  wallpaperService?: WallpaperMediaService;
+  fontService?: SystemFontService;
+  appearanceStore?: AppearanceConfigStore;
+  businessService?: DaemonBusinessService;
   startedAt?: number;
   onRequestShutdown?: (reason?: string) => void | Promise<void>;
 }
@@ -134,6 +152,10 @@ function extractRequestToken(
   if (bearer !== null) {
     return bearer;
   }
+  const customHeader = req.headers["x-prismux-token"];
+  if (typeof customHeader === "string" && customHeader.trim().length > 0) {
+    return customHeader.trim();
+  }
   if (allowQueryToken) {
     const queryToken = requestUrl.searchParams.get("token")?.trim();
     if (queryToken !== undefined && queryToken.length > 0) {
@@ -143,7 +165,10 @@ function extractRequestToken(
   return null;
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+  req: IncomingMessage,
+  maxBytes: number = MAX_JSON_BODY_BYTES
+): Promise<unknown> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
 
@@ -151,10 +176,10 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     const buf =
       typeof chunk === "string" ? Buffer.from(chunk, "utf8") : (chunk as Buffer);
     totalBytes += buf.length;
-    if (totalBytes > MAX_JSON_BODY_BYTES) {
+    if (totalBytes > maxBytes) {
       throw new RpcDispatchError(
         "payload_too_large",
-        `Request body exceeded ${MAX_JSON_BODY_BYTES} bytes.`,
+        `Request body exceeded ${maxBytes} bytes.`,
         413
       );
     }
@@ -169,6 +194,55 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     return JSON.parse(rawText) as unknown;
   } catch {
     throw new RpcDispatchError("invalid_json", "Request body must be valid JSON.");
+  }
+}
+
+const ALLOWED_DESKTOP_ORIGIN_RE = /^(?:t3code|prismux)(?:-dev)?:\/\//i;
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  const trimmed = origin.trim();
+  if (trimmed === "null") {
+    return true;
+  }
+  const lower = trimmed.toLowerCase();
+  if (
+    ALLOWED_DESKTOP_ORIGIN_RE.test(lower) ||
+    lower.startsWith("file://") ||
+    lower.startsWith("app://") ||
+    lower.startsWith("tauri://")
+  ) {
+    return true;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
+  const origin = req.headers.origin;
+  if (typeof origin === "string" && isAllowedCorsOrigin(origin)) {
+    res.setHeader("access-control-allow-origin", origin);
+    res.setHeader("vary", "Origin");
+    res.setHeader(
+      "access-control-allow-methods",
+      "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+    );
+    res.setHeader(
+      "access-control-allow-headers",
+      "Content-Type, Authorization, Range, X-Prismux-Token"
+    );
+    res.setHeader(
+      "access-control-expose-headers",
+      "Content-Range, Accept-Ranges, Content-Length, ETag, Content-Type"
+    );
+    res.setHeader("access-control-max-age", "600");
   }
 }
 
@@ -300,6 +374,10 @@ export class DaemonRpcServer {
   private readonly identityGuard = new ForwardIdentityGuard();
   private readonly t3Supervisor: T3ServerSupervisor | undefined;
   private readonly t3RpcClient: T3RpcClient | undefined;
+  private readonly wallpaperService: WallpaperMediaService | undefined;
+  private readonly fontService: SystemFontService;
+  private readonly appearanceStore: AppearanceConfigStore | undefined;
+  private readonly businessService: DaemonBusinessService | undefined;
   private readonly startedAt: number;
   private readonly onRequestShutdown:
     | ((reason?: string) => void | Promise<void>)
@@ -317,7 +395,7 @@ export class DaemonRpcServer {
     this.host = options.host ?? "127.0.0.1";
     this.requestedPort = options.port ?? 0;
     this.headless = options.headless;
-    this.version = options.version ?? "0.0.1-alpha.1";
+    this.version = options.version ?? DEFAULT_APP_VERSION;
     this.machineId = options.machineId ?? "local";
     this.ptyPool = options.ptyPool;
     this.chiefManager = options.chiefManager;
@@ -331,6 +409,10 @@ export class DaemonRpcServer {
     this.hookBus = options.hookBus;
     this.t3Supervisor = options.t3Supervisor;
     this.t3RpcClient = options.t3RpcClient;
+    this.wallpaperService = options.wallpaperService;
+    this.fontService = options.fontService ?? new SystemFontService();
+    this.appearanceStore = options.appearanceStore;
+    this.businessService = options.businessService;
     this.startedAt = options.startedAt ?? Date.now();
     this.onRequestShutdown = options.onRequestShutdown;
   }
@@ -495,9 +577,14 @@ export class DaemonRpcServer {
 
   private authenticateHttpRequest(
     req: IncomingMessage,
-    res: ServerResponse
+    res: ServerResponse,
+    requestUrl?: URL,
+    allowQueryToken = false
   ): CallerScope | null {
-    const token = extractBearerToken(req);
+    const token =
+      requestUrl !== undefined
+        ? extractRequestToken(req, requestUrl, allowQueryToken)
+        : extractBearerToken(req);
     const trustedScope =
       token !== null ? this.pairingManager.resolveTokenScope(token) : null;
     if (trustedScope === null) {
@@ -517,6 +604,8 @@ export class DaemonRpcServer {
     req: IncomingMessage,
     res: ServerResponse
   ): Promise<void> {
+    applyCorsHeaders(req, res);
+
     let requestUrl: URL;
     try {
       requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -528,6 +617,12 @@ export class DaemonRpcServer {
       return;
     }
     const method = req.method?.toUpperCase() ?? "GET";
+
+    if (method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
 
     try {
       if (method === "GET" && requestUrl.pathname === "/health") {
@@ -723,6 +818,12 @@ export class DaemonRpcServer {
         return;
       }
 
+      if (
+        await this.handleExtendedHttpRoutes(req, res, method, requestUrl)
+      ) {
+        return;
+      }
+
       writeJsonResponse(res, 404, {
         ok: false,
         error: {
@@ -731,6 +832,24 @@ export class DaemonRpcServer {
         }
       });
     } catch (error) {
+      if (error instanceof WallpaperServiceError) {
+        writeJsonResponse(res, error.statusCode, {
+          ok: false,
+          error: { code: error.code, message: error.message }
+        });
+        return;
+      }
+      if (error instanceof BusinessRouteError) {
+        writeJsonResponse(res, error.statusCode, {
+          ok: false,
+          error: {
+            code: error.code,
+            message: error.message,
+            ...(error.details !== undefined ? { details: error.details } : {})
+          }
+        });
+        return;
+      }
       if (error instanceof RpcDispatchError) {
         writeJsonResponse(res, error.httpStatus, {
           id: "unknown",
@@ -745,6 +864,460 @@ export class DaemonRpcServer {
         error: { code: "internal_error", message }
       });
     }
+  }
+
+  private async handleExtendedHttpRoutes(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    requestUrl: URL
+  ): Promise<boolean> {
+    const rawPathPart = (req.url ?? "/").split("?")[0] ?? "/";
+    if (
+      rawPathPart.startsWith("/v1/wallpapers/") &&
+      /(?:^|[\\/])\.\.(?:[\\/]|$)|%2e%2e|\0/i.test(rawPathPart)
+    ) {
+      const trustedCallerScope = this.authenticateHttpRequest(
+        req,
+        res,
+        requestUrl,
+        true
+      );
+      if (trustedCallerScope === null) {
+        return true;
+      }
+      writeJsonResponse(res, 403, {
+        ok: false,
+        error: {
+          code: "PATH_TRAVERSAL_BLOCKED",
+          message: "Path traversal is forbidden."
+        }
+      });
+      return true;
+    }
+
+    const pathname = requestUrl.pathname;
+
+    if (method === "GET" && pathname === "/v1/wallpapers/inventory") {
+      if (this.authenticateHttpRequest(req, res) === null) return true;
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      const inventory = await this.wallpaperService.getInventory();
+      writeJsonResponse(res, 200, inventory);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/wallpapers/rescan") {
+      if (this.authenticateHttpRequest(req, res) === null) return true;
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const rescanReq: WallpaperRescanRequest = {};
+      if (isRecord(rawBody)) {
+        if (Array.isArray(rawBody["customDirs"])) {
+          rescanReq.customDirs = rawBody["customDirs"].filter(
+            (d): d is string => typeof d === "string"
+          );
+        }
+        if (typeof rawBody["steamRootOverride"] === "string") {
+          rescanReq.steamRootOverride = rawBody["steamRootOverride"];
+        }
+      }
+      const inventory = await this.wallpaperService.rescan(rescanReq);
+      writeJsonResponse(res, 200, inventory);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/wallpapers/import") {
+      if (this.authenticateHttpRequest(req, res) === null) return true;
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req, MAX_IMPORT_JSON_BODY_BYTES);
+      if (!isRecord(rawBody)) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          "Import request body must be a JSON object."
+        );
+      }
+      const importReq: WallpaperImportRequest = {
+        ...(typeof rawBody["sourcePath"] === "string"
+          ? { sourcePath: rawBody["sourcePath"] }
+          : {}),
+        ...(typeof rawBody["fileName"] === "string"
+          ? { fileName: rawBody["fileName"] }
+          : typeof rawBody["filename"] === "string"
+            ? { fileName: rawBody["filename"] }
+            : typeof rawBody["name"] === "string"
+              ? { fileName: rawBody["name"] }
+              : {}),
+        ...(typeof rawBody["base64"] === "string"
+          ? { base64: rawBody["base64"] }
+          : typeof rawBody["dataBase64"] === "string"
+            ? { base64: rawBody["dataBase64"] }
+            : typeof rawBody["contentBase64"] === "string"
+              ? { base64: rawBody["contentBase64"] }
+              : {}),
+        ...(typeof rawBody["title"] === "string" ? { title: rawBody["title"] } : {})
+      };
+      const result = await this.wallpaperService.importWallpaper(importReq);
+      writeJsonResponse(res, 200, { ok: true, ...result });
+      return true;
+    }
+
+    if (
+      (method === "GET" || method === "HEAD") &&
+      pathname.startsWith("/v1/wallpapers/preview/")
+    ) {
+      if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
+        return true;
+      }
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      const rawId = pathname.slice("/v1/wallpapers/preview/".length);
+      await this.wallpaperService.servePreview(rawId, req, res);
+      return true;
+    }
+
+    if (
+      (method === "GET" || method === "HEAD") &&
+      pathname.startsWith("/v1/wallpapers/media/")
+    ) {
+      if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
+        return true;
+      }
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      const rawId = pathname.slice("/v1/wallpapers/media/".length);
+      await this.wallpaperService.serveMedia(rawId, req, res);
+      return true;
+    }
+
+    if (
+      (method === "GET" || method === "HEAD") &&
+      (pathname === "/v1/wallpapers/web" ||
+        pathname.startsWith("/v1/wallpapers/web/"))
+    ) {
+      if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
+        return true;
+      }
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      const suffix = pathname.slice("/v1/wallpapers/web/".length);
+      const slashIdx = suffix.indexOf("/");
+      const rawId = slashIdx >= 0 ? suffix.slice(0, slashIdx) : suffix;
+      const relPath = slashIdx >= 0 ? suffix.slice(slashIdx + 1) : "";
+      if (rawId.length === 0) {
+        writeJsonResponse(res, 404, {
+          ok: false,
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+        });
+        return true;
+      }
+      await this.wallpaperService.serveWebAsset(rawId, relPath, req, res);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/system/fonts") {
+      if (this.authenticateHttpRequest(req, res) === null) return true;
+      const forceRefresh =
+        requestUrl.searchParams.get("refresh") === "true" ||
+        requestUrl.searchParams.get("force") === "true";
+      const result = await this.fontService.listFonts(forceRefresh);
+      writeJsonResponse(res, 200, { ok: true, ...result });
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/appearance") {
+      if (this.authenticateHttpRequest(req, res) === null) return true;
+      if (!this.appearanceStore) {
+        throw new BusinessRouteError(
+          503,
+          "APPEARANCE_UNAVAILABLE",
+          "AppearanceConfigStore is not configured."
+        );
+      }
+      const loaded = this.appearanceStore.get();
+      writeJsonResponse(res, 200, {
+        ok: true,
+        ...loaded.config,
+        recoveredFromCorruption: loaded.recoveredFromCorruption
+      });
+      return true;
+    }
+
+    if (method === "PUT" && pathname === "/v1/appearance") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" cannot modify appearance settings.`
+        );
+      }
+      if (!this.appearanceStore) {
+        throw new BusinessRouteError(
+          503,
+          "APPEARANCE_UNAVAILABLE",
+          "AppearanceConfigStore is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      if (!isRecord(rawBody)) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          "Appearance payload must be a JSON object."
+        );
+      }
+      const updated = this.appearanceStore.update(rawBody);
+      if (
+        this.wallpaperService &&
+        (isRecord(rawBody["wallpaper"]) ||
+          "customDirs" in rawBody ||
+          "steamRootOverride" in rawBody)
+      ) {
+        await this.wallpaperService.rescan({
+          customDirs: updated.wallpaper.customDirs,
+          steamRootOverride: updated.wallpaper.steamRootOverride
+        });
+      }
+      writeJsonResponse(res, 200, { ok: true, ...updated });
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/chief") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      writeJsonResponse(
+        res,
+        200,
+        this.businessService.getChiefStatus(trustedCallerScope)
+      );
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/chief/switch") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.switchChief(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/memory/stats") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const stats = await this.businessService.getMemoryStats(trustedCallerScope);
+      writeJsonResponse(res, 200, stats);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/memory/search") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.searchMemory(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/sync/status") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const result = await this.businessService.getSyncStatus(trustedCallerScope);
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "PUT" && pathname === "/v1/sync/config") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.updateSyncConfig(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/plugins/catalog") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const result = await this.businessService.getPluginsCatalog(trustedCallerScope);
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/plugins/installed") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const result = await this.businessService.getPluginsInstalled(
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/plugins/install") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req, MAX_IMPORT_JSON_BODY_BYTES);
+      const result = await this.businessService.installPlugin(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/plugins/toggle") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.togglePlugin(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/plugins/uninstall") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.uninstallPlugin(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "PUT" && pathname === "/v1/updater/policy") {
+      if (this.authenticateHttpRequest(req, res) === null) return true;
+      const rawBody = await readJsonBody(req);
+      const result = await this.executeUpdaterSetPolicy(rawBody);
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    return false;
   }
 
   private handleUpgrade(
