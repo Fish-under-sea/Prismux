@@ -4,7 +4,7 @@
 
 ## 渲染命令
 
-在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.0.1-alpha.1`）：
+在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.1.0-alpha.1`）：
 
 ```powershell
 node scripts/render-readme.mjs
@@ -33,4 +33,4 @@ node scripts/render-readme.mjs
 ## 字体与素材许可边界
 
 - 像素字体 [`Jersey20-Regular.ttf`](./Jersey20-Regular.ttf) 遵循 [SIL Open Font License 1.1](./OFL-Jersey20.txt)。
-- 吉祥物 [`logo.png`](./logo.png) 与界面实景截图 [`preview-glass-standby.png`](./preview-glass-standby.png) / [`preview-theme-capsule.png`](./preview-theme-capsule.png) / [`preview-multi-agent.png`](./preview-multi-agent.png) 归属本仓项目资产；排版模板与渲染工具代码遵循仓库根 MIT 许可。
+- 吉祥物 [`logo.png`](./logo.png) 与界面实景截图 [`preview-workbench-glass.png`](./preview-workbench-glass.png) / [`preview-celestial-appearance.png`](./preview-celestial-appearance.png) / [`preview-plugins-market.png`](./preview-plugins-market.png) / [`preview-dual-updater.png`](./preview-dual-updater.png) 归属本仓项目资产；排版模板与渲染工具代码遵循仓库根 MIT 许可。
