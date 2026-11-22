@@ -321,7 +321,7 @@ html[data-prismux-gpu="0"] .pmx-glass-overlay {
 
 /* Reserve clear bottom lane in multi-agent-coding so FloatingCapsules never overlaps split panes */
 .pmx-shell[data-pane-preset="multi-agent-coding"] .pmx-main-stage {
-  padding-bottom: 60px;
+  padding-bottom: 72px;
 }
 
 /* Optimize approval-inbox leaf body so embedded ApprovalGuidePanel keeps max vertical budget */
