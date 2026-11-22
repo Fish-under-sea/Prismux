@@ -1,0 +1,34 @@
+{
+  "name": "@prismux/wallpaper",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "description": "Prismux multi-source wallpaper stage, right-sidebar QuickPanel, full settings view, and Node Steam Workshop 431960 + local wallpaper scanner.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@prismux/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node": {
+      "@prismux/source": "./src/node/index.ts",
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js"
+    },
+    "./styles.css": "./src/styles/wallpaper-panel.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit --customConditions @prismux/source",
+    "build": "tsc --rootDir src && node -e \"const fs=require('node:fs');fs.mkdirSync('dist/styles',{recursive:true});fs.copyFileSync('src/styles/wallpaper-panel.css','dist/styles/wallpaper-panel.css');\"",
+    "test": "node --test dist/__tests__/wallpaper.test.js"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "react": "^19.1.0"
+  }
+}

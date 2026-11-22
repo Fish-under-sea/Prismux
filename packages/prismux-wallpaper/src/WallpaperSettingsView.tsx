@@ -1,0 +1,1050 @@
+import { useMemo, useRef, useState } from "react";
+import type { ChangeEvent, ReactNode } from "react";
+import {
+  CARD_TYPE_LABELS,
+  RATING_LABELS,
+  RATING_TIER_VALUES,
+  TYPE_TIER_VALUES,
+} from "./defaults.js";
+import { AppearanceSections } from "./renderers/AppearanceSections.js";
+import {
+  cardKeyDown,
+  ConfirmRow,
+  CtlText,
+  SectionHead,
+  SwitchRow,
+  VinylRecord,
+} from "./renderers/controls.js";
+import {
+  PlaybackAudioSection,
+  PlaybackEffectsSection,
+} from "./renderers/PlaybackSections.js";
+import { UserPropsDrillPanel } from "./renderers/UserPropsDrillPanel.js";
+import type { WallpaperStore } from "./store.js";
+import {
+  computeFilterCounts,
+  filterVisibleWallpapers,
+  useWallpaperStore,
+} from "./store.js";
+import type {
+  AppearanceBridge,
+  OrientationFilter,
+  RotationGroup,
+  ThemeHeroRenderContext,
+  WallpaperHostAdapter,
+  WallpaperItem,
+  WallpaperSettingsTabId,
+} from "./types.js";
+import { schedulePrewarmVideo } from "./videoPrewarm.js";
+
+export interface WallpaperSettingsViewProps {
+  store: WallpaperStore;
+  adapter?: WallpaperHostAdapter;
+  appearanceBridge?: AppearanceBridge;
+  renderThemeHero?: (ctx: ThemeHeroRenderContext) => ReactNode;
+  initialTab?: WallpaperSettingsTabId;
+  activeTab?: WallpaperSettingsTabId;
+  onTabChange?: (tab: WallpaperSettingsTabId) => void;
+  className?: string;
+}
+
+const SETTINGS_TABS: readonly { id: WallpaperSettingsTabId; label: string }[] = [
+  { id: "library", label: "壁纸库" },
+  { id: "appearance", label: "外观" },
+  { id: "playback", label: "播放" },
+  { id: "rotation", label: "轮播与隐藏" },
+  { id: "system", label: "系统与目录" },
+];
+
+interface RotationDraft {
+  id: string | null;
+  name: string;
+  intervalMinutes: number;
+  order: "sequence" | "random";
+  trigger: "timer" | "videoEnd";
+  wallpaperIds: string[];
+}
+
+/**
+ * Full 5-tab Settings Page Wallpaper View:
+ *   1. 壁纸库 (library): Vinyl hero, local image/video import, filter bar with counts, batch hide, inline props
+ *   2. 外观 (appearance): Reuses the exact same AppearanceSections (`surface="settings"`)
+ *   3. 播放 (playback): Reuses the exact same PlaybackEffectsSection & PlaybackAudioSection (`surface="settings"`)
+ *   4. 轮播与隐藏 (rotation): Rotation group CRUD + Hidden wallpapers restore manager
+ *   5. 系统与目录 (system): Steam Workshop 431960 directory & local wallpaper directory config, refresh, full reset
+ */
+export function WallpaperSettingsView({
+  store,
+  adapter,
+  appearanceBridge,
+  renderThemeHero,
+  initialTab = "library",
+  activeTab: controlledTab,
+  onTabChange,
+  className,
+}: WallpaperSettingsViewProps) {
+  const snap = useWallpaperStore(store);
+  const { settings, wallpapers } = snap;
+  const [internalTab, setInternalTab] = useState<WallpaperSettingsTabId>(initialTab);
+  const tab = controlledTab ?? internalTab;
+
+  const setTab = (next: WallpaperSettingsTabId) => {
+    setInternalTab(next);
+    onTabChange?.(next);
+  };
+
+  // Settings-surface local section collapse states (defaults: detail/glass/corners open, uiColor/font closed)
+  const [secOpen, setSecOpen] = useState({
+    detailOpen: true,
+    glassUiOpen: true,
+    cornersOpen: true,
+    uiColorOpen: false,
+    fontOpen: false,
+  });
+
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchSelected, setBatchSelected] = useState<string[]>([]);
+  const [armedConfirm, setArmedConfirm] = useState<string | null>(null);
+  const [showInlineProps, setShowInlineProps] = useState(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [rotDraft, setRotDraft] = useState<RotationDraft | null>(null);
+  const [steamDirDraft, setSteamDirDraft] = useState(settings.steamRootOverride);
+  const [customDirDraft, setCustomDirDraft] = useState(settings.customWallpaperDir);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const current = useMemo(
+    () => wallpapers.find((w) => w.id === settings.selectedId) ?? null,
+    [wallpapers, settings.selectedId],
+  );
+
+  const playbackLive = Boolean(current && settings.playing && !snap.occluded);
+  const visibleList = useMemo(
+    () => filterVisibleWallpapers(wallpapers, settings, snap.settingsSearch),
+    [
+      wallpapers,
+      settings.hiddenIds,
+      settings.contentRatingFilter,
+      settings.typeFilter,
+      settings.orientationFilter,
+      snap.settingsSearch,
+    ],
+  );
+  const hiddenList = useMemo(() => {
+    const hiddenSet = new Set(settings.hiddenIds);
+    return wallpapers.filter((w) => hiddenSet.has(w.id));
+  }, [wallpapers, settings.hiddenIds]);
+
+  const counts = useMemo(
+    () => computeFilterCounts(wallpapers, settings),
+    [wallpapers, settings.hiddenIds, settings.contentRatingFilter, settings.typeFilter],
+  );
+
+  const handleLocalFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setImportStatus("正在导入本地壁纸…");
+    try {
+      if (adapter?.importLocalFiles) {
+        await store.importLocalFiles(adapter, files);
+        setImportStatus(`已成功导入 ${files.length} 个本地壁纸`);
+      } else {
+        // Browser standalone fallback using Object URLs so UI works even without a backend daemon
+        const created: WallpaperItem[] = [];
+        for (const f of Array.from(files)) {
+          const isVideo = f.type.startsWith("video/") || /\.(mp4|webm|mov)$/i.test(f.name);
+          const url = URL.createObjectURL(f);
+          created.push({
+            id: `custom:local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            title: f.name.replace(/\.[^.]+$/, ""),
+            type: isVideo ? "video" : "image",
+            source: "custom",
+            previewUrl: isVideo ? null : url,
+            mediaUrl: url,
+            filePath: null,
+            width: null,
+            height: null,
+            orientation: "unknown",
+            contentRating: "everyone",
+          });
+        }
+        store.setWallpapers([...wallpapers, ...created]);
+        if (created[0]) store.selectWallpaper(created[0].id);
+        setImportStatus(`已导入 ${created.length} 个本地壁纸（临时预览会话）`);
+      }
+    } catch (err) {
+      setImportStatus(`导入失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const toggleBatchItem = (id: string) => {
+    setBatchSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  const openNewRotationGroup = () => {
+    setRotDraft({
+      id: null,
+      name: `轮播分组 ${settings.rotationGroups.length + 1}`,
+      intervalMinutes: 15,
+      order: "sequence",
+      trigger: "timer",
+      wallpaperIds: visibleList.slice(0, 4).map((w) => w.id),
+    });
+  };
+
+  const openEditRotationGroup = (g: RotationGroup) => {
+    setRotDraft({
+      id: g.id,
+      name: g.name,
+      intervalMinutes: g.intervalMinutes,
+      order: g.order,
+      trigger: g.trigger,
+      wallpaperIds: [...g.wallpaperIds],
+    });
+  };
+
+  const saveRotationDraft = () => {
+    if (!rotDraft) return;
+    if (rotDraft.id) {
+      store.updateRotationGroup(rotDraft.id, {
+        name: rotDraft.name,
+        intervalMinutes: rotDraft.intervalMinutes,
+        order: rotDraft.order,
+        trigger: rotDraft.trigger,
+        wallpaperIds: rotDraft.wallpaperIds,
+      });
+    } else {
+      store.createRotationGroup({
+        name: rotDraft.name,
+        intervalMinutes: rotDraft.intervalMinutes,
+        order: rotDraft.order,
+        trigger: rotDraft.trigger,
+        wallpaperIds: rotDraft.wallpaperIds,
+      });
+    }
+    setRotDraft(null);
+  };
+
+  const tabIdx = Math.max(0, SETTINGS_TABS.findIndex((t) => t.id === tab));
+  const ratingSet = new Set(settings.contentRatingFilter);
+  const typeSet = new Set(settings.typeFilter);
+
+  const renderTabReset = (targetTab: WallpaperSettingsTabId) => {
+    const token = `tab:${targetTab}`;
+    return (
+      <div className="pmx-wp-section">
+        <div className="pmx-wp-section-head">
+          <span className="pmx-wp-section-reset-label">重置本页</span>
+        </div>
+        <span className="pmx-wp-hint">
+          把这一页的设置恢复为默认值；其他页签与已导入的壁纸文件不受影响。
+        </span>
+        <div className="pmx-wp-row">
+          <button
+            type="button"
+            className="pmx-wp-btn"
+            disabled={armedConfirm === token}
+            onClick={() => setArmedConfirm(token)}
+          >
+            重置本页
+          </button>
+        </div>
+        <ConfirmRow
+          armed={armedConfirm === token}
+          prompt="确定把这一页的设置恢复为默认值吗？此操作不可撤销。"
+          onConfirm={() => {
+            store.resetTab(targetTab);
+            setArmedConfirm(null);
+          }}
+          onCancel={() => setArmedConfirm(null)}
+        />
+      </div>
+    );
+  };
+
+  return (
+    <div
+      className={"pmx-wp-settings" + (className ? ` ${className}` : "")}
+      data-pmx-cards={settings.pickerLayout}
+      data-pmx-settings-view="1"
+    >
+      {/* 顶部标题卡 */}
+      <div className="pmx-wp-card-head">
+        <span className="pmx-wp-card-name">壁纸引擎与视觉工作台</span>
+        <span className="pmx-wp-card-badge">{visibleList.length} 个可播放</span>
+        <span className="pmx-wp-card-desc">
+          支持 Steam Workshop 431960 · 本地图片/视频 · 内置 WebWallGL 着色器（0 Token）
+        </span>
+      </div>
+
+      {/* 5 页签滑动胶囊导航 */}
+      <div className="pmx-wp-tabs" role="tablist" aria-label="壁纸设置分区">
+        <span
+          className="pmx-wp-tabs__pill"
+          aria-hidden="true"
+          style={{
+            width: `calc((100% - 6px) / ${SETTINGS_TABS.length})`,
+            transform: `translateX(${tabIdx * 100}%)`,
+          }}
+        />
+        {SETTINGS_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className={
+              "pmx-wp-tabs__tab" + (tab === t.id ? " pmx-wp-tabs__tab--active" : "")
+            }
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Tab 1: 壁纸库 ── */}
+      {tab === "library" ? (
+        <div className="pmx-wp-tabpanel">
+          {/* 当前壁纸黑胶大卡 */}
+          <div className="pmx-wp-current-card">
+            <VinylRecord
+              cover={current?.previewUrl}
+              title={current?.title}
+              playing={playbackLive}
+              size="sm"
+            />
+            <div className="pmx-wp-current-card__info">
+              <div className="pmx-wp-current-card__title">
+                {current ? current.title : "尚未选择壁纸"}
+              </div>
+              <div className="pmx-wp-current-card__meta">
+                {current
+                  ? `${CARD_TYPE_LABELS[current.type]} · 来源：${
+                      current.source === "steam"
+                        ? "Steam 431960"
+                        : current.source === "custom"
+                          ? "本地导入"
+                          : "内置 WebWallGL"
+                    }${current.width && current.height ? ` · ${current.width}×${current.height}` : ""} · ${
+                      playbackLive ? "播放中" : "已暂停"
+                    }`
+                  : "从下方网格选择壁纸或导入本地图片/视频"}
+              </div>
+            </div>
+            <div className="pmx-wp-current-card__actions">
+              <button
+                type="button"
+                className="pmx-wp-btn pmx-wp-btn--primary"
+                disabled={!current}
+                onClick={() => store.togglePlay()}
+              >
+                {playbackLive ? "暂停" : "播放"}
+              </button>
+              {current && (current.type === "scene" || current.type === "web" || (current.userProperties?.length ?? 0) > 0) ? (
+                <button
+                  type="button"
+                  className={"pmx-wp-btn" + (showInlineProps ? " is-on" : "")}
+                  onClick={() => setShowInlineProps((v) => !v)}
+                >
+                  {showInlineProps ? "收起属性" : "壁纸属性"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="pmx-wp-btn"
+                disabled={snap.loading}
+                onClick={() => void store.refreshLibrary(adapter, true)}
+              >
+                {snap.loading ? "扫描中…" : "刷新库"}
+              </button>
+              <button
+                type="button"
+                className="pmx-wp-btn"
+                disabled={!current}
+                onClick={() => store.clearWallpaper()}
+              >
+                清除
+              </button>
+            </div>
+          </div>
+
+          {showInlineProps && current ? (
+            <UserPropsDrillPanel store={store} adapter={adapter} />
+          ) : null}
+
+          {/* 本地图片 / 视频上传导入栏 */}
+          <div className="pmx-wp-uploads">
+            <div className="pmx-wp-row">
+              <CtlText
+                label="导入本地图片 / 视频壁纸"
+                hint="支持 .jpg / .png / .webp / .gif / .bmp / .mp4 / .webm / .mov，安全存入 ~/.prismux/wallpapers/"
+              />
+              <button
+                type="button"
+                className="pmx-wp-btn"
+                onClick={() => {
+                  if (adapter?.pickLocalFiles) {
+                    void adapter.pickLocalFiles().then((added) => {
+                      if (added.length > 0) {
+                        store.setWallpapers([...wallpapers, ...added]);
+                        store.selectWallpaper(added[0]!.id);
+                        setImportStatus(`已导入 ${added.length} 个本地壁纸`);
+                      }
+                    });
+                  } else {
+                    fileInputRef.current?.click();
+                  }
+                }}
+              >
+                选择本地文件…
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.mp4,.webm,.mov,image/*,video/*"
+                style={{ display: "none" }}
+                onChange={(e) => void handleLocalFileChange(e)}
+              />
+            </div>
+            {importStatus ? <div className="pmx-wp-note">{importStatus}</div> : null}
+          </div>
+
+          {/* 工具栏 + 批量管理 */}
+          <div className="pmx-wp-row">
+            <span className="pmx-wp-hint">
+              {visibleList.length} 个可播放壁纸 · 点击卡片即刻切换
+            </span>
+            <button
+              type="button"
+              className={"pmx-wp-btn" + (batchMode ? " is-on" : "")}
+              disabled={visibleList.length === 0}
+              onClick={() => {
+                setBatchMode((prev) => !prev);
+                setBatchSelected([]);
+                setArmedConfirm(null);
+              }}
+            >
+              {batchMode ? "退出批量" : "批量隐藏"}
+            </button>
+          </div>
+
+          {batchMode ? (
+            <div className="pmx-wp-row pmx-wp-batch-bar">
+              <span className="pmx-wp-hint">已选 {batchSelected.length} 张</span>
+              <button
+                type="button"
+                className="pmx-wp-btn pmx-wp-btn--danger"
+                disabled={batchSelected.length === 0 || armedConfirm === "batchHide"}
+                onClick={() => setArmedConfirm("batchHide")}
+              >
+                隐藏选中
+              </button>
+              <button
+                type="button"
+                className="pmx-wp-btn"
+                onClick={() => {
+                  setBatchMode(false);
+                  setBatchSelected([]);
+                  setArmedConfirm(null);
+                }}
+              >
+                取消
+              </button>
+            </div>
+          ) : null}
+
+          <ConfirmRow
+            armed={armedConfirm === "batchHide"}
+            prompt={`隐藏选中的 ${batchSelected.length} 张壁纸？可在「轮播与隐藏」页签随时恢复。`}
+            onConfirm={() => {
+              store.hideWallpapers(batchSelected);
+              setBatchSelected([]);
+              setBatchMode(false);
+              setArmedConfirm(null);
+            }}
+            onCancel={() => setArmedConfirm(null)}
+          />
+
+          {/* 搜索 + 分级/类型/方向筛选（带精确计数） */}
+          <div className="pmx-wp-row pmx-wp-filter-row">
+            <input
+              type="text"
+              className="pmx-wp-text pmx-wp-search"
+              value={snap.settingsSearch}
+              placeholder="搜索壁纸标题或标签…"
+              aria-label="搜索壁纸"
+              onChange={(e) => store.setSettingsSearch(e.target.value)}
+            />
+
+            <details className="pmx-wp-menu">
+              <summary className="pmx-wp-menu-btn">
+                <span className="pmx-wp-menu-text">内容分级</span>
+                <span className="pmx-wp-menu-caret">▾</span>
+              </summary>
+              <div className="pmx-wp-menu-list">
+                {RATING_TIER_VALUES.map((r) => (
+                  <label
+                    key={r}
+                    className={"pmx-wp-menu-item" + (ratingSet.has(r) ? " pmx-wp-menu-item--on" : "")}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={ratingSet.has(r)}
+                      onChange={() => store.toggleRatingFilter(r)}
+                    />
+                    <span>{`${RATING_LABELS[r]}（${counts.ratings[r]}）`}</span>
+                  </label>
+                ))}
+              </div>
+            </details>
+
+            <details className="pmx-wp-menu">
+              <summary className="pmx-wp-menu-btn">
+                <span className="pmx-wp-menu-text">类型</span>
+                <span className="pmx-wp-menu-caret">▾</span>
+              </summary>
+              <div className="pmx-wp-menu-list">
+                {TYPE_TIER_VALUES.map((t) => (
+                  <label
+                    key={t}
+                    className={"pmx-wp-menu-item" + (typeSet.has(t) ? " pmx-wp-menu-item--on" : "")}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={typeSet.has(t)}
+                      onChange={() => store.toggleTypeFilter(t)}
+                    />
+                    <span>{`${CARD_TYPE_LABELS[t]}（${counts.types[t]}）`}</span>
+                  </label>
+                ))}
+              </div>
+            </details>
+
+            <details className="pmx-wp-menu">
+              <summary className="pmx-wp-menu-btn">
+                <span className="pmx-wp-menu-text">壁纸方向</span>
+                <span className="pmx-wp-menu-caret">▾</span>
+              </summary>
+              <div className="pmx-wp-menu-list">
+                {(
+                  [
+                    { id: "all", label: `全部方向（${counts.orientations.all}）` },
+                    { id: "landscape", label: `横屏（${counts.orientations.landscape}）` },
+                    { id: "portrait", label: `竖屏（${counts.orientations.portrait}）` },
+                  ] as Array<{ id: OrientationFilter; label: string }>
+                ).map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={
+                      "pmx-wp-menu-item" +
+                      (settings.orientationFilter === opt.id ? " pmx-wp-menu-item--on" : "")
+                    }
+                  >
+                    <input
+                      type="radio"
+                      name="pmx-wp-settings-orientation"
+                      checked={settings.orientationFilter === opt.id}
+                      onChange={() => store.setSetting("orientationFilter", opt.id)}
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+            </details>
+          </div>
+
+          {/* 壁纸网格 */}
+          <div className="pmx-wp-grid">
+            {visibleList.length === 0 ? (
+              <span className="pmx-wp-hint">
+                {snap.settingsSearch.trim()
+                  ? `没有匹配「${snap.settingsSearch}」的壁纸`
+                  : "当前筛选下没有可播放的壁纸"}
+              </span>
+            ) : (
+              visibleList.map((w) => {
+                const isSelected = w.id === settings.selectedId;
+                const isChecked = batchMode && batchSelected.includes(w.id);
+                return (
+                  <div
+                    key={w.id}
+                    className={
+                      "pmx-wp-card" +
+                      (isSelected ? " pmx-wp-card--selected" : "") +
+                      (isChecked ? " pmx-wp-card--checked" : "")
+                    }
+                    role="button"
+                    tabIndex={0}
+                    title={w.title}
+                    onPointerOver={() => {
+                      if (w.type === "video" && w.mediaUrl) schedulePrewarmVideo(w.mediaUrl, false);
+                    }}
+                    onPointerDown={() => {
+                      if (w.type === "video" && w.mediaUrl) schedulePrewarmVideo(w.mediaUrl, true);
+                    }}
+                    onClick={() => {
+                      if (batchMode) toggleBatchItem(w.id);
+                      else store.selectWallpaper(w.id);
+                    }}
+                    onKeyDown={cardKeyDown}
+                  >
+                    {w.previewUrl ? (
+                      <img
+                        src={w.previewUrl}
+                        alt={w.title}
+                        loading="lazy"
+                        onLoad={(e) => {
+                          e.currentTarget.style.opacity = "1";
+                        }}
+                      />
+                    ) : (
+                      <span className="pmx-wp-card__placeholder">无预览</span>
+                    )}
+                    {!batchMode ? (
+                      <span className="pmx-wp-card__type">{CARD_TYPE_LABELS[w.type]}</span>
+                    ) : (
+                      <span className="pmx-wp-card__check">{isChecked ? "✓" : ""}</span>
+                    )}
+                    <span className="pmx-wp-card__title">{w.title}</span>
+                    {!batchMode ? (
+                      <button
+                        type="button"
+                        className="pmx-wp-card__hide"
+                        title="隐藏此壁纸（不删源文件，可在「轮播与隐藏」恢复）"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          store.hideWallpapers([w.id]);
+                        }}
+                      >
+                        隐藏
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+          </div>
+          {renderTabReset("library")}
+        </div>
+      ) : null}
+
+      {/* ── Tab 2: 外观（100% 共享 AppearanceSections）── */}
+      {tab === "appearance" ? (
+        <div className="pmx-wp-tabpanel">
+          <AppearanceSections
+            store={store}
+            surface="settings"
+            adapter={adapter}
+            appearanceBridge={appearanceBridge}
+            renderThemeHero={renderThemeHero}
+            settingsSectionOpen={{
+              ...secOpen,
+              onToggle: (key) => setSecOpen((prev) => ({ ...prev, [key]: !prev[key] })),
+            }}
+          />
+          {renderTabReset("appearance")}
+        </div>
+      ) : null}
+
+      {/* ── Tab 3: 播放（100% 共享 PlaybackSections）── */}
+      {tab === "playback" ? (
+        <div className="pmx-wp-tabpanel">
+          <PlaybackEffectsSection
+            store={store}
+            surface="settings"
+            onPickWallpaper={() => setTab("library")}
+          />
+          <PlaybackAudioSection store={store} />
+          {renderTabReset("playback")}
+        </div>
+      ) : null}
+
+      {/* ── Tab 4: 轮播与隐藏 ── */}
+      {tab === "rotation" ? (
+        <div className="pmx-wp-tabpanel">
+          <div className="pmx-wp-section">
+            <SectionHead label="自动轮播分组" />
+            <SwitchRow
+              label="启用自动轮播"
+              checked={settings.rotationEnabled}
+              hint="按所选轮播列表定时切图，或在视频播完时自动切换"
+              onChange={(on) => store.setSetting("rotationEnabled", on)}
+            />
+            <div className="pmx-wp-row">
+              <button
+                type="button"
+                className="pmx-wp-btn pmx-wp-btn--primary"
+                onClick={openNewRotationGroup}
+              >
+                + 新建轮播分组
+              </button>
+              <button
+                type="button"
+                className="pmx-wp-btn"
+                disabled={wallpapers.length < 2}
+                onClick={() => store.nextWallpaper()}
+              >
+                立即切到下一张
+              </button>
+            </div>
+
+            {settings.rotationGroups.length === 0 ? (
+              <div className="pmx-wp-hint">尚未创建轮播分组，点击上方「新建轮播分组」开始配置。</div>
+            ) : (
+              <div className="pmx-wp-group-list">
+                {settings.rotationGroups.map((g) => (
+                  <div
+                    key={g.id}
+                    className={
+                      "pmx-wp-group-item" +
+                      (settings.rotationGroupId === g.id ? " pmx-wp-group-item--active" : "")
+                    }
+                  >
+                    <div className="pmx-wp-group-item__info">
+                      <strong>{g.name}</strong>
+                      <span className="pmx-wp-hint">
+                        {`${g.wallpaperIds.length} 张 · ${
+                          g.trigger === "videoEnd" ? "视频播完切换" : `每 ${g.intervalMinutes} 分钟`
+                        } · ${g.order === "random" ? "随机" : "顺序"}`}
+                      </span>
+                    </div>
+                    <div className="pmx-wp-row">
+                      <button
+                        type="button"
+                        className="pmx-wp-btn pmx-wp-btn--mini"
+                        onClick={() => store.setSetting("rotationGroupId", g.id)}
+                      >
+                        {settings.rotationGroupId === g.id ? "当前使用" : "设为活动"}
+                      </button>
+                      <button
+                        type="button"
+                        className="pmx-wp-btn pmx-wp-btn--mini"
+                        onClick={() => openEditRotationGroup(g)}
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        className="pmx-wp-btn pmx-wp-btn--mini pmx-wp-btn--danger"
+                        onClick={() => store.deleteRotationGroup(g.id)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {rotDraft ? (
+              <div className="pmx-wp-editor">
+                <div className="pmx-wp-row">
+                  <input
+                    type="text"
+                    className="pmx-wp-text"
+                    value={rotDraft.name}
+                    placeholder="分组名称"
+                    onChange={(e) => setRotDraft({ ...rotDraft, name: e.target.value })}
+                  />
+                  <input
+                    type="number"
+                    className="pmx-wp-text"
+                    style={{ maxWidth: "88px" }}
+                    min={1}
+                    max={1440}
+                    value={rotDraft.intervalMinutes}
+                    title="轮播间隔（分钟）"
+                    onChange={(e) =>
+                      setRotDraft({
+                        ...rotDraft,
+                        intervalMinutes: Math.max(1, Number(e.target.value) || 1),
+                      })
+                    }
+                  />
+                  <select
+                    className="pmx-wp-select"
+                    value={rotDraft.order}
+                    onChange={(e) =>
+                      setRotDraft({
+                        ...rotDraft,
+                        order: e.target.value === "random" ? "random" : "sequence",
+                      })
+                    }
+                  >
+                    <option value="sequence">顺序</option>
+                    <option value="random">随机</option>
+                  </select>
+                  <select
+                    className="pmx-wp-select"
+                    value={rotDraft.trigger}
+                    onChange={(e) =>
+                      setRotDraft({
+                        ...rotDraft,
+                        trigger: e.target.value === "videoEnd" ? "videoEnd" : "timer",
+                      })
+                    }
+                  >
+                    <option value="timer">定时切换</option>
+                    <option value="videoEnd">视频播完</option>
+                  </select>
+                </div>
+
+                <div className="pmx-wp-hint">
+                  勾选加入本分组的壁纸（已选 {rotDraft.wallpaperIds.length} 张）：
+                </div>
+                <div className="pmx-wp-editor-grid">
+                  {wallpapers.map((w) => {
+                    const included = rotDraft.wallpaperIds.includes(w.id);
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        className={
+                          "pmx-wp-btn pmx-wp-rate" + (included ? " pmx-wp-rate--active" : "")
+                        }
+                        onClick={() =>
+                          setRotDraft({
+                            ...rotDraft,
+                            wallpaperIds: included
+                              ? rotDraft.wallpaperIds.filter((id) => id !== w.id)
+                              : [...rotDraft.wallpaperIds, w.id],
+                          })
+                        }
+                      >
+                        {included ? "✓ " : ""}
+                        {w.title}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="pmx-wp-row">
+                  <button
+                    type="button"
+                    className="pmx-wp-btn pmx-wp-btn--primary"
+                    onClick={saveRotationDraft}
+                  >
+                    保存分组
+                  </button>
+                  <button
+                    type="button"
+                    className="pmx-wp-btn"
+                    onClick={() => setRotDraft(null)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {/* 已隐藏壁纸恢复 */}
+          <div className="pmx-wp-section">
+            <SectionHead label={`已隐藏壁纸（${hiddenList.length}）`} />
+            {hiddenList.length === 0 ? (
+              <span className="pmx-wp-hint">没有已隐藏的壁纸</span>
+            ) : (
+              <>
+                <div className="pmx-wp-row">
+                  <span className="pmx-wp-hint">
+                    仅从壁纸库隐藏，不会删除你的磁盘源文件。
+                  </span>
+                  <button
+                    type="button"
+                    className="pmx-wp-btn"
+                    disabled={armedConfirm === "restoreAll"}
+                    onClick={() => setArmedConfirm("restoreAll")}
+                  >
+                    全部恢复
+                  </button>
+                </div>
+                <ConfirmRow
+                  armed={armedConfirm === "restoreAll"}
+                  prompt={`确定恢复全部 ${hiddenList.length} 张已隐藏壁纸吗？`}
+                  onConfirm={() => {
+                    store.restoreAllWallpapers();
+                    setArmedConfirm(null);
+                  }}
+                  onCancel={() => setArmedConfirm(null)}
+                />
+                <div className="pmx-wp-grid">
+                  {hiddenList.map((w) => (
+                    <div key={w.id} className="pmx-wp-card pmx-wp-card--hidden">
+                      {w.previewUrl ? (
+                        <img
+                          src={w.previewUrl}
+                          alt={w.title}
+                          loading="lazy"
+                          onLoad={(e) => {
+                            e.currentTarget.style.opacity = "1";
+                          }}
+                        />
+                      ) : (
+                        <span className="pmx-wp-card__placeholder">无预览</span>
+                      )}
+                      <span className="pmx-wp-card__type">{CARD_TYPE_LABELS[w.type]}</span>
+                      <span className="pmx-wp-card__title">{w.title}</span>
+                      <button
+                        type="button"
+                        className="pmx-wp-card__hide"
+                        style={{ opacity: 1 }}
+                        onClick={() => store.restoreWallpapers([w.id])}
+                      >
+                        恢复
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          {renderTabReset("rotation")}
+        </div>
+      ) : null}
+
+      {/* ── Tab 5: 系统与目录 ── */}
+      {tab === "system" ? (
+        <div className="pmx-wp-tabpanel">
+          <div className="pmx-wp-section">
+            <SectionHead label="Steam Workshop 431960 与本地壁纸目录" />
+            <div className="pmx-wp-uploads">
+              <div className="pmx-wp-row">
+                <span className="pmx-wp-label">Steam 根目录</span>
+                <input
+                  type="text"
+                  className="pmx-wp-text"
+                  value={steamDirDraft}
+                  placeholder="留空自动从注册表与 libraryfolders.vdf 扫描多盘 Steam 库"
+                  onChange={(e) => setSteamDirDraft(e.target.value)}
+                />
+                {adapter?.selectDirectory ? (
+                  <button
+                    type="button"
+                    className="pmx-wp-btn"
+                    onClick={() => {
+                      void adapter.selectDirectory?.("steam", steamDirDraft).then((picked) => {
+                        if (picked) {
+                          setSteamDirDraft(picked);
+                          store.setSetting("steamRootOverride", picked);
+                        }
+                      });
+                    }}
+                  >
+                    浏览…
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="pmx-wp-btn"
+                  onClick={() => {
+                    store.setSetting("steamRootOverride", steamDirDraft.trim());
+                    void store.refreshLibrary(adapter, true);
+                  }}
+                >
+                  应用并刷新
+                </button>
+              </div>
+              {snap.steamRoots.length > 0 ? (
+                <div className="pmx-wp-hint">
+                  已发现 Steam 库：{snap.steamRoots.join(" ； ")}
+                </div>
+              ) : null}
+
+              <div className="pmx-wp-row">
+                <span className="pmx-wp-label">本地壁纸目录</span>
+                <input
+                  type="text"
+                  className="pmx-wp-text"
+                  value={customDirDraft}
+                  placeholder="默认 ~/.prismux/wallpapers/"
+                  onChange={(e) => setCustomDirDraft(e.target.value)}
+                />
+                {adapter?.selectDirectory ? (
+                  <button
+                    type="button"
+                    className="pmx-wp-btn"
+                    onClick={() => {
+                      void adapter.selectDirectory?.("custom", customDirDraft).then((picked) => {
+                        if (picked) {
+                          setCustomDirDraft(picked);
+                          store.setSetting("customWallpaperDir", picked);
+                        }
+                      });
+                    }}
+                  >
+                    浏览…
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="pmx-wp-btn"
+                  onClick={() => {
+                    store.setSetting("customWallpaperDir", customDirDraft.trim());
+                    void store.refreshLibrary(adapter, true);
+                  }}
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="pmx-wp-section">
+            <SectionHead label="浏览与省电偏好" />
+            <SwitchRow
+              label="紧凑 CD 架网格"
+              checked={settings.pickerLayout === "classic"}
+              hint={settings.pickerLayout === "classic" ? "层叠唱片架视觉风格" : "标准固定高度卡片网格"}
+              onChange={(on) => store.setSetting("pickerLayout", on ? "classic" : "fixed")}
+            />
+            <SwitchRow
+              label="使用电池时暂停"
+              checked={settings.pauseOnBattery}
+              hint="笔记本切换电池供电时自动暂停动态壁纸"
+              onChange={(on) => store.setSetting("pauseOnBattery", on)}
+            />
+            <SwitchRow
+              label="启动时默认暂停"
+              checked={settings.startPaused}
+              hint="下次打开应用时保留已选壁纸但保持静态首帧"
+              onChange={(on) => store.setSetting("startPaused", on)}
+            />
+          </div>
+
+          <div className="pmx-wp-section">
+            <div className="pmx-wp-section-head">
+              <span className="pmx-wp-section-reset-label">重置全部壁纸与外观设置</span>
+            </div>
+            <span className="pmx-wp-hint">
+              把全部配置恢复为出厂默认值；你导入的本地图片和视频源文件不会被删除。
+            </span>
+            <div className="pmx-wp-row">
+              <button
+                type="button"
+                className="pmx-wp-btn pmx-wp-btn--danger"
+                disabled={armedConfirm === "resetAll"}
+                onClick={() => setArmedConfirm("resetAll")}
+              >
+                全部重置
+              </button>
+            </div>
+            <ConfirmRow
+              armed={armedConfirm === "resetAll"}
+              prompt="确定要将所有壁纸与外观设置恢复为出厂默认吗？此操作不可撤销。"
+              onConfirm={() => {
+                store.resetAllSettings();
+                setArmedConfirm(null);
+              }}
+              onCancel={() => setArmedConfirm(null)}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
