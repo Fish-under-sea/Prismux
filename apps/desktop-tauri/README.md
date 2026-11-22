@@ -7,7 +7,7 @@
 - `src/wallpaper.rs`：跨平台 Steam Workshop（`431960`）与自定义目录动态壁纸扫描器（解析 `libraryfolders.vdf` 与 `project.json`）。
 - `src/audio.rs`：系统音频 FFT 32 频段频谱与 Now Playing 抽象桥接（含指数攻防平滑滤波与无设备静默降级）。
 - `src/visibility.rs`：窗口最小化 / 遮挡 / 省电检测与 `0 FPS` 挂起状态机（派发 `prismux://visibility` 事件）。
-- `src/installer_meta.rs`：5 步静奢安装向导契约与同级 `data/` 便携模式探测（显式断言五大官方插件默认不预装）。
+- `src/installer_meta.rs`：5 步静奢安装向导契约与同级 `data/` 便携模式探测（显式断言四大官方插件默认不预装）。
 - `src/lib.rs`：注册 8 个 Tauri IPC 命令及窗口生命周期监听（`Resized` / `Moved` / `Focused` / `Destroyed`）。
 
 ## 安装包与资产

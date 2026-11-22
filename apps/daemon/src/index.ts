@@ -152,7 +152,7 @@ export class PrismuxDaemon {
     this.sandbox = new WorktreeSandbox();
     this.overnightFactory = new OvernightFactory();
 
-    // Official plugins (qq, pet, fishdock-hook, ssh, purge) are NEVER preinstalled by default.
+    // Official plugins (qq, pet, fishdock-hook, ssh) are NEVER preinstalled by default.
     this.pluginHost = new CordisPluginHost("daemon");
     this.pluginMasterKey = loadOrGeneratePluginMasterKey(
       options.dataDir,

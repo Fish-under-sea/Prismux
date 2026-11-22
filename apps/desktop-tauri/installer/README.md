@@ -16,7 +16,7 @@
 | :--- | :--- | :--- |
 | 第 1 步 | **欢迎** | 展示 Prismux 极简棱镜标志、核心定位（「极简液态玻璃 AI 超级工作台与 24h 秘书系统」）与版本信息 |
 | 第 2 步 | **安装路径** | 目录选择、等宽数字（`tabular-nums`）所需/剩余空间对比，以及同级 `data/` 便携模式零残留说明 |
-| 第 3 步 | **组件确认** | **显式硬编码声明**：仅安装极简高效内核（`apps/daemon` + `apps/workbench-ui` + `packages/memory-core`）；`qq`、`pet`、`fishdock-hook`、`ssh`、`purge` 五大官方插件 `preinstalled: false`，默认绝不预装 |
+| 第 3 步 | **组件确认** | **显式硬编码声明**：仅安装极简高效内核（`apps/daemon` + `apps/workbench-ui` + `packages/memory-core`）；`qq`、`pet`、`fishdock-hook`、`ssh` 四大官方插件 `preinstalled: false`，默认绝不预装 |
 | 第 4 步 | **安装中** | `1px–3px` 平滑细线进度条（`MUI_INSTFILESPAGE_PROGRESSBAR "smooth"`）、等宽百分比与当前解压/写入文件路径单行提示 |
 | 第 5 步 | **完成** | 极简收尾状态提示与启动入口；首次启动进入简明外观与主秘书代理引导 |
 

@@ -51,7 +51,7 @@ export const PERMISSION_ZH_LABELS: Record<string, { label: string; elevated: boo
 
 /**
  * Built-in mirror of `plugins-official/catalog/official.json`.
- * All 5 official plugins are strictly NOT preinstalled in the minimal core.
+ * All 4 official plugins are strictly NOT preinstalled in the minimal core.
  */
 export const DEFAULT_OFFICIAL_PLUGIN_CATALOG: ReadonlyArray<OfficialPluginCatalogEntry> =
   [
@@ -116,19 +116,6 @@ export const DEFAULT_OFFICIAL_PLUGIN_CATALOG: ReadonlyArray<OfficialPluginCatalo
         "fs:write",
         "ui:panel"
       ],
-      modelVisible: false,
-      sha256: null,
-      bytes: null,
-      status: "source-only"
-    },
-    {
-      id: "purge",
-      packageName: `${BRAND.npmScope}/plugin-purge`,
-      version: "0.1.0",
-      description: "按需单装的模型提示词清洗与红队回滚演练插件",
-      engines: { prismux: ">=0.1.0 <2.0.0" },
-      realms: ["daemon", "ui"],
-      permissions: ["hooks:intercept", "ui:panel"],
       modelVisible: false,
       sha256: null,
       bytes: null,

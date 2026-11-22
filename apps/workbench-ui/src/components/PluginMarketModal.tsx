@@ -130,7 +130,7 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
               </h2>
             </div>
             <p className="pmx-muted" style={{ margin: "4px 0 0" }}>
-              QQ / 桌宠 / 灵动岛 / SSH / 红队清洗五大官方插件默认绝不预装，全部按需单装与可逆卸载零残留
+              QQ / 桌宠 / 灵动岛 / SSH 四大官方插件默认绝不预装，全部按需单装与可逆卸载零残留
             </p>
           </div>
           <button type="button" className="pmx-btn" onClick={onClose}>

@@ -127,7 +127,7 @@ function packOfficialPluginArchive(
   return readFileSync(archivePath);
 }
 
-test("official catalog metadata verifies all 5 plugins and deterministic .wb-plugin market install mounts/unmounts with zero residual", async () => {
+test("official catalog metadata verifies all 4 plugins and deterministic .wb-plugin market install mounts/unmounts with zero residual", async () => {
   const { repoRoot, archiveOutDir, pluginsDir, dataDir } = createTempMarketRoot();
   const installer = new CordisStreamingInstaller({
     pluginsDir,
@@ -146,7 +146,9 @@ test("official catalog metadata verifies all 5 plugins and deterministic .wb-plu
     assert.ok((item.bytes ?? 0) > 0, `${item.id} must have positive bytes`);
   }
 
-  for (const expectedId of ["qq", "pet", "fishdock-hook", "ssh", "purge"]) {
+  assert.equal(catalog.plugins.length, 4);
+  assert.equal(entryById.has("purge"), false);
+  for (const expectedId of ["qq", "pet", "fishdock-hook", "ssh"]) {
     assert.ok(entryById.has(expectedId), `Catalog must include ${expectedId}`);
   }
 

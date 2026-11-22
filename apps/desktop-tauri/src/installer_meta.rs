@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Official plugin IDs that must NEVER be preinstalled in the minimal Prismux installer.
-pub const OFFICIAL_OPTIONAL_PLUGIN_IDS: [&str; 5] = ["qq", "pet", "fishdock-hook", "ssh", "purge"];
+pub const OFFICIAL_OPTIONAL_PLUGIN_IDS: [&str; 4] = ["qq", "pet", "fishdock-hook", "ssh"];
 
-pub const COMPONENT_CONFIRMATION_NOTICE: &str = "仅安装极简高效内核（守护中枢 + 工作台界面 + 单文件 SQLite 记忆引擎）；QQ 机器人、桌宠、FISH-Dock 灵动岛、SSH 运维、红队清洗五大官方独立插件默认绝不预装，安装完成后可在内置插件市场按需选装。";
+pub const COMPONENT_CONFIRMATION_NOTICE: &str = "仅安装极简高效内核（守护中枢 + 工作台界面 + 单文件 SQLite 记忆引擎）；QQ 机器人、桌宠、FISH-Dock 灵动岛、SSH 运维四大官方独立插件默认绝不预装，安装完成后可在内置插件市场按需选装。";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,17 +113,11 @@ pub fn official_plugins_contract() -> Vec<OptionalOfficialPluginMeta> {
             display_name: "SSH 运维".to_string(),
             preinstalled: false,
         },
-        OptionalOfficialPluginMeta {
-            id: "purge".to_string(),
-            package_name: "@prismux/plugin-purge".to_string(),
-            display_name: "红队清洗".to_string(),
-            preinstalled: false,
-        },
     ];
 
     assert!(
         plugins.iter().all(|p| !p.preinstalled),
-        "all 5 official plugins must never be preinstalled"
+        "all 4 official plugins must never be preinstalled"
     );
     plugins
 }
@@ -192,7 +186,7 @@ mod tests {
         let titles: Vec<&str> = plan.steps.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(titles, vec!["欢迎", "安装路径", "组件确认", "安装中", "完成"]);
 
-        assert_eq!(plan.official_plugins.len(), 5);
+        assert_eq!(plan.official_plugins.len(), 4);
         for expected_id in OFFICIAL_OPTIONAL_PLUGIN_IDS {
             let entry = plan
                 .official_plugins

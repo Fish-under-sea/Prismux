@@ -44,8 +44,7 @@ const OFFICIAL_EXCLUDED_PLUGINS = [
   { id: "qq", label: "QQ 机器人 (@prismux/plugin-qq)" },
   { id: "pet", label: "桌宠联动 (@prismux/plugin-pet)" },
   { id: "fishdock-hook", label: "FISH-Dock 灵动岛桥接 (@prismux/plugin-fishdock-hook)" },
-  { id: "ssh", label: "SSH 运维面板 (@prismux/plugin-ssh)" },
-  { id: "purge", label: "红队清洗演练 (@prismux/plugin-purge)" }
+  { id: "ssh", label: "SSH 运维面板 (@prismux/plugin-ssh)" }
 ] as const;
 
 const PROVIDER_LABELS: Record<ChiefProviderKind, string> = {
@@ -389,8 +388,8 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
                 }}
               >
                 仅安装极简高效内核（守护中枢 + 工作台界面 + 单文件 SQLite
-                记忆引擎）；QQ 机器人、桌宠、FISH-Dock
-                灵动岛、SSH 运维、红队清洗五大官方独立插件默认绝不预装，安装完成后可在内置插件市场按需选装。
+                记忆引擎）；QQ 机器人、桌宠、FISH-Dock 灵动岛、SSH
+                运维四大官方独立插件默认绝不预装，安装完成后可在内置插件市场按需选装。
               </div>
 
               <div

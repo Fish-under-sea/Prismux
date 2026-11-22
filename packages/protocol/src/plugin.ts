@@ -8,8 +8,7 @@ export const OFFICIAL_PLUGIN_IDS = [
   "qq",
   "pet",
   "fishdock-hook",
-  "ssh",
-  "purge"
+  "ssh"
 ] as const;
 
 export type OfficialPluginId = (typeof OFFICIAL_PLUGIN_IDS)[number];

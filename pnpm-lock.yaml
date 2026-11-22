@@ -198,12 +198,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/protocol
 
-  plugins-official/plugin-purge:
-    dependencies:
-      '@prismux/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-
   plugins-official/plugin-qq:
     dependencies:
       '@prismux/protocol':

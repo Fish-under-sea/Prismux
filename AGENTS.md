@@ -67,8 +67,7 @@ prismux/
     ├── plugin-qq/                     # @prismux/plugin-qq：OneBot v11 私聊主秘书 + 群聊隔离陪聊插件
     ├── plugin-pet/                    # @prismux/plugin-pet：带租约锁与分阶段交还的桌宠联动插件
     ├── plugin-fishdock-hook/          # @prismux/plugin-fishdock-hook：FISH-Dock 灵动岛审批与回执桥接插件
-    ├── plugin-ssh/                    # @prismux/plugin-ssh：按需选装的 SSH 主机池、Web PTY 与 SFTP 插件
-    └── plugin-purge/                  # @prismux/plugin-purge：按需单装的模型提示词清洗与红队回滚插件
+    └── plugin-ssh/                    # @prismux/plugin-ssh：按需选装的 SSH 主机池、Web PTY 与 SFTP 插件
 ```
 
 ### Workspace 与技术栈边界
@@ -91,8 +90,8 @@ prismux/
 3. **内生单文件 SQLite 记忆中枢与物理防泄密**
    - 记忆引擎固定为单文件 `~/.prismux/data/memory.db`（`SQLite WAL + FTS5 + sqlite-vec`），**零 PostgreSQL、零 Qdrant、零 MinIO、零本地 Obsidian 客户端运行依赖**（仅在 `apps/daemon` 暴露 `POST /v1/memory/import-obsidian` 接口承接历史笔记迁移）。
    - 查询层强制在传输层通过 `forwardIdentity` 注入并覆写 `_callerScope`，**绝不信任模型自报参数**；当 `_callerScope` 为 `qq_group:<gid>` 时，SQL 构造器底层硬编码绑定 `WHERE namespace = 'social/qq-group-' || :gid AND deleted_at IS NULL`，物理杜绝读取 `private/chief` 与 `workspace/*`。
-4. **五大官方插件默认绝不预装**
-   - `qq`、`pet`、`fishdock-hook`、`ssh`、`purge` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序与默认守护进程启动链路保持极简，不捆绑预装。
+4. **四大官方插件默认绝不预装**
+   - `qq`、`pet`、`fishdock-hook`、`ssh` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序与默认守护进程启动链路保持极简，不捆绑预装。
 5. **视觉层对模型 0 Token 开销与强制设计规范**
    - `WebWallGL` 动态壁纸、360° Fresnel 液态玻璃、字体调色、系统音频律动、桌宠演出与安装包向导属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
    - M4 工作台前端、`apps/desktop-tauri/installer/` 与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、无障碍对比度及降级兜底红线。
@@ -106,8 +105,8 @@ prismux/
 | **M1：骨架、只读 T3 桥接与守护中枢** | 初始化 pnpm Monorepo 与 `scripts/` 工具链；拉取只读 `vendor/t3code` 并写入 `UPSTREAM_LOCK.json`；实现 `apps/daemon` 进程监督、环境变量清洗、主秘书槽位（`Chief Thread Slot`）与 `PersistentPtyPool`（默认每终端 `2 MB` 环形缓冲） | `pnpm -r typecheck`、`pnpm -r build`、`pnpm test:scripts` 与 `pnpm upstream:check` 全绿；`node apps/daemon/dist/cli.js start --headless` 可无界面连上 T3 Server RPC 并在重连后无损回放 PTY 历史流 |
 | **M2：内生三域记忆库与五大标杆原语** | 实现 `packages/memory-core`（SQLite WAL + FTS5 + `sqlite-vec` + Obsidian 导入）；实现 `forwardIdentity` 作用域硬隔离与 60 s 熔断、`LifecycleHookBus`（6 类事件、退出码 `2` 拦截、安全钩子默认 `onFailure: "block"`、四档权限）、`HandoffEngine`（`/handoff` + 三档拨盘）与 `WorktreeSandbox`（OS 级写隔离 + 域名白名单网关） | 越权单测验证 `qq_group:<gid>` 查询 `private/chief` 与 `workspace/*` **100% 返回空集**；安全 Hook 超时或抛错时必定阻断执行；`/handoff` 可无损提纯 `{ goal, decisions, touchedFiles, openQuestions }` 并续跑新线程 |
 | **M3：Cordis 双轨插件商城与 Magpie 同步** | 实现 `packages/cordis-kernel`（顶层 `engines.prismux` SemVer 校验、`ctx.effect()` 卸载零残留、官方 SHA-256 校验、免 Git 无脚本 `npm` Tarball 安装器 + `distribution: "managed"` 锁）；实现 `packages/sync-vault`（Argon2id + AEAD 密封、WebDAV/S3/Git 独立开关、`If-Match` 乐观锁、60 s 停滞看门狗与 `data/` 便携模式） | 慢速流模拟测试 3 分钟持续低速传输不断连、连续 60 s 零字节准时触发停滞报错；双机并发上传验证 `If-Match`（及降级 `HEAD ETag`）拦截覆盖；`npm` 插件启停与卸载无残留监听、路由或 DOM |
-| **M4：Tauri v2 液态玻璃壳、四把手术刀与壁纸引擎** | 搭建 `apps/desktop-tauri`（无边框透明合成、WASAPI/CoreAudio/PipeWire 音频 FFT、`visibility: occluded` 0 FPS 挂起、Steam `431960` 扫描、克制 5 步 NSIS/首次引导安装包）与 `apps/workbench-ui`（严格按 `docs/specs/ui-ux-design-mandate.md` 实现全宽内凹天体三态胶囊、四区域 360° Fresnel 液态玻璃、独立浅/深文字调色、自由分屏 + 浮动胶囊双预设、`WebWallGL`、`.wb-theme` 导入导出，以及内置 `ApprovalGuide`、`ReasoningEffortCard`、`UsageLedger`、`NavAndCommandOrder`） | `cargo check`（必要时 `-j 1`）与前端生产构建全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成控件八态、对比度、`prefers-reduced-motion` 与禁 GPU 实底兜底核验；实测切换浅色 / 深色 / 液态玻璃天体三态胶囊、切换「秘书待机 / 多代理编码」布局预设、窗口最小化或全屏遮挡时壁纸渲染立即暂停至 0 FPS，安装包组件页明确声明五大官方插件默认不预装 |
-| **M5：夜间全自动工场与官方独立插件** | 完成 `OvernightFactory`（Gmail OAuth2 / IMAP `#factory` 监听 → 记忆补全与 Handoff 立项 → Worktree 沙箱编码与提交 → Oracle 只读 `review` 挑刺 → HTML 完工早报回信与 `prismux://review/<threadId>` 深链）；完成 `plugins-official/` 下 `plugin-qq`、`plugin-pet`（定向实例、Lease 锁、进度订阅、分阶段交还）、`plugin-fishdock-hook`、`plugin-ssh` 与 `plugin-purge` | 跑通端到端模拟邮件入站 → 自动拉分支改代码过单测 → 产出带 Diff 与 Oracle 评语的 HTML 邮件全文；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
+| **M4：Tauri v2 液态玻璃壳、四把手术刀与壁纸引擎** | 搭建 `apps/desktop-tauri`（无边框透明合成、WASAPI/CoreAudio/PipeWire 音频 FFT、`visibility: occluded` 0 FPS 挂起、Steam `431960` 扫描、克制 5 步 NSIS/首次引导安装包）与 `apps/workbench-ui`（严格按 `docs/specs/ui-ux-design-mandate.md` 实现全宽内凹天体三态胶囊、四区域 360° Fresnel 液态玻璃、独立浅/深文字调色、自由分屏 + 浮动胶囊双预设、`WebWallGL`、`.wb-theme` 导入导出，以及内置 `ApprovalGuide`、`ReasoningEffortCard`、`UsageLedger`、`NavAndCommandOrder`） | `cargo check`（必要时 `-j 1`）与前端生产构建全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成控件八态、对比度、`prefers-reduced-motion` 与禁 GPU 实底兜底核验；实测切换浅色 / 深色 / 液态玻璃天体三态胶囊、切换「秘书待机 / 多代理编码」布局预设、窗口最小化或全屏遮挡时壁纸渲染立即暂停至 0 FPS，安装包组件页明确声明四大官方插件默认不预装 |
+| **M5：夜间全自动工场与官方独立插件** | 完成 `OvernightFactory`（Gmail OAuth2 / IMAP `#factory` 监听 → 记忆补全与 Handoff 立项 → Worktree 沙箱编码与提交 → Oracle 只读 `review` 挑刺 → HTML 完工早报回信与 `prismux://review/<threadId>` 深链）；完成 `plugins-official/` 下 `plugin-qq`、`plugin-pet`（定向实例、Lease 锁、进度订阅、分阶段交还）、`plugin-fishdock-hook` 与 `plugin-ssh` | 跑通端到端模拟邮件入站 → 自动拉分支改代码过单测 → 产出带 Diff 与 Oracle 评语的 HTML 邮件全文；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
 
 ## 四、核心工具脚本与插件打包契约
 

@@ -91,27 +91,6 @@
       "sha256": "010f826d9962fd45c8cc553bc83f526b2596406a4f147a6c21fea4e3f7363f08",
       "bytes": 31616,
       "status": "verified"
-    },
-    {
-      "id": "purge",
-      "packageName": "@prismux/plugin-purge",
-      "version": "0.1.0",
-      "description": "Optional prompt sanitization and red-team rollback workbench plugin.",
-      "engines": {
-        "prismux": ">=0.1.0 <2.0.0"
-      },
-      "realms": [
-        "daemon",
-        "ui"
-      ],
-      "permissions": [
-        "hooks:intercept",
-        "ui:panel"
-      ],
-      "modelVisible": false,
-      "sha256": "66a15616e981b3e8e0e9df26d9c984f855362c6513e0b9f5545b416863f948c0",
-      "bytes": 29774,
-      "status": "verified"
     }
   ]
 }
