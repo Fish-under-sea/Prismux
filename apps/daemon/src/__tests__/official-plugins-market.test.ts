@@ -107,10 +107,21 @@ function createTempMarketRoot(): {
   return { repoRoot, tempRoot, archiveOutDir, pluginsDir, dataDir };
 }
 
+function readRootPackageVersion(repoRoot: string): string {
+  const pkgRaw = JSON.parse(
+    readFileSync(join(repoRoot, "package.json"), "utf8")
+  ) as { version?: unknown };
+  if (typeof pkgRaw.version !== "string" || pkgRaw.version.trim().length === 0) {
+    throw new Error("Root package.json is missing a valid version string.");
+  }
+  return pkgRaw.version.trim();
+}
+
 function packOfficialPluginArchive(
   repoRoot: string,
   pluginId: string,
-  outDir: string
+  outDir: string,
+  version: string
 ): Buffer {
   const packScript = join(repoRoot, "scripts", "pack-plugin.ts");
   const pluginDir = join(repoRoot, "plugins-official", `plugin-${pluginId}`);
@@ -123,15 +134,16 @@ function packOfficialPluginArchive(
       encoding: "utf8"
     }
   );
-  const archivePath = join(outDir, `${pluginId}-0.1.0.wb-plugin`);
+  const archivePath = join(outDir, `${pluginId}-${version}.wb-plugin`);
   return readFileSync(archivePath);
 }
 
 test("official catalog metadata verifies all 4 plugins and deterministic .wb-plugin market install mounts/unmounts with zero residual", async () => {
   const { repoRoot, archiveOutDir, pluginsDir, dataDir } = createTempMarketRoot();
+  const rootVersion = readRootPackageVersion(repoRoot);
   const installer = new CordisStreamingInstaller({
     pluginsDir,
-    hostVersion: "0.1.0"
+    hostVersion: rootVersion
   });
 
   const catalogPath = join(repoRoot, "plugins-official", "catalog", "official.json");
@@ -162,7 +174,12 @@ test("official catalog metadata verifies all 4 plugins and deterministic .wb-plu
     const entry = entryById.get(targetId);
     assert.ok(entry !== undefined);
 
-    const archiveBytes = packOfficialPluginArchive(repoRoot, targetId, archiveOutDir);
+    const archiveBytes = packOfficialPluginArchive(
+      repoRoot,
+      targetId,
+      archiveOutDir,
+      rootVersion
+    );
     const actualSha256 = createHash("sha256").update(archiveBytes).digest("hex");
 
     assert.equal(
@@ -221,9 +238,10 @@ test("official catalog metadata verifies all 4 plugins and deterministic .wb-plu
 
 test("installOfficialEntry rejects 1-byte tampered .wb-plugin archive with ChecksumMismatchError", async () => {
   const { repoRoot, archiveOutDir, pluginsDir } = createTempMarketRoot();
+  const rootVersion = readRootPackageVersion(repoRoot);
   const installer = new CordisStreamingInstaller({
     pluginsDir,
-    hostVersion: "0.1.0"
+    hostVersion: rootVersion
   });
 
   const catalog = await installer.loadOfficialCatalog(
@@ -232,7 +250,12 @@ test("installOfficialEntry rejects 1-byte tampered .wb-plugin archive with Check
   const qqEntry = catalog.plugins.find((entry) => entry.id === "qq");
   assert.ok(qqEntry !== undefined);
 
-  const original = packOfficialPluginArchive(repoRoot, "qq", archiveOutDir);
+  const original = packOfficialPluginArchive(
+    repoRoot,
+    "qq",
+    archiveOutDir,
+    rootVersion
+  );
   const tampered = Buffer.from(original);
   const tamperIndex = Math.floor(tampered.length / 2);
   const originalByte = tampered[tamperIndex];

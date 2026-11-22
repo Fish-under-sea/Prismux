@@ -1,6 +1,6 @@
 [package]
 name = "prismux-desktop"
-version = "0.1.0"
+version = "0.0.1-alpha.1"
 description = "Prismux Tauri v2 lightweight transparent native desktop shell"
 authors = ["Prismux Contributors"]
 edition = "2021"

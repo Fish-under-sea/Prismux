@@ -1,6 +1,6 @@
 {
   "name": "prismux-monorepo",
-  "version": "0.1.0",
+  "version": "0.0.1-alpha.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.3.4",
@@ -16,7 +16,8 @@
     "upstream:check": "node scripts/sync-t3-upstream.ts --check",
     "upstream:sync": "node scripts/sync-t3-upstream.ts --sync",
     "brand:rename": "node scripts/rename-brand.ts",
-    "plugin:pack": "node scripts/pack-plugin.ts"
+    "plugin:pack": "node scripts/pack-plugin.ts",
+    "release:build": "node scripts/build-release-packages.ts"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

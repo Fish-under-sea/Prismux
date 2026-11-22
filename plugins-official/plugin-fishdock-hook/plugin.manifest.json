@@ -1,6 +1,6 @@
 {
   "id": "fishdock-hook",
-  "version": "0.1.0",
+  "version": "0.0.1-alpha.1",
   "realms": ["daemon"],
   "permissions": ["network:outbound", "hooks:subscribe", "notifications:push"],
   "modelVisible": false,

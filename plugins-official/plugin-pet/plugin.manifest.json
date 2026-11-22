@@ -1,6 +1,6 @@
 {
   "id": "pet",
-  "version": "0.1.0",
+  "version": "0.0.1-alpha.1",
   "realms": ["ui", "daemon"],
   "permissions": ["pet:lease", "ui:panel", "hooks:subscribe"],
   "modelVisible": false,
