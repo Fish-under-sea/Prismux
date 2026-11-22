@@ -44,8 +44,7 @@ export const DEFAULT_WORKBENCH_SHELL_STATE: WorkbenchShellState = {
 };
 
 /**
- * M1 placeholder state factory. Milestone M4 mounts the React 19 + Vite workbench,
- * binary split tree, floating glass capsules, WebWallGL viewport, and built-in panels.
+ * Legacy shell state factory retained for backward compatibility across M1-M4 packages.
  */
 export function createWorkbenchShellPlaceholder(
   overrides?: Partial<Pick<WorkbenchShellState, "themeMode" | "layoutPreset">>
@@ -57,3 +56,28 @@ export function createWorkbenchShellPlaceholder(
       overrides?.layoutPreset ?? DEFAULT_WORKBENCH_SHELL_STATE.layoutPreset
   };
 }
+
+// M4 Pure Logic & Theme/Layout Engines
+export * from "./logic/emptyInputContinue.js";
+export * from "./logic/reasoningThemeTokens.js";
+export * from "./logic/navAndCommandStore.js";
+export * from "./logic/usageFormatting.js";
+export * from "./logic/approvalTranslator.js";
+export * from "./logic/pluginMarketCatalog.js";
+export * from "./logic/visibilityBridge.js";
+export * from "./theme/themeEngine.js";
+export * from "./layout/splitTree.js";
+
+// M4 React 19 UI Components & Root Workbench App
+export * from "./components/ApprovalGuidePanel.js";
+export * from "./components/ReasoningEffortCard.js";
+export * from "./components/UsageLedgerBar.js";
+export * from "./components/NavAndCommandOrder.js";
+export * from "./components/PluginMarketModal.js";
+export * from "./components/FirstRunWizard.js";
+export * from "./components/CelestialThemeCapsule.js";
+export * from "./components/ThemeBackgroundPanel.js";
+export * from "./components/WallpaperViewport.js";
+export * from "./components/SplitWorkspace.js";
+export * from "./components/FloatingCapsules.js";
+export { App, type WorkbenchAppProps } from "./App.js";
