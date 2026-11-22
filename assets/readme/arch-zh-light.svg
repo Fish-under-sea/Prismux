@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="azl-title azl-desc">
+  <title id="azl-title">Prismux 四层系统架构总览（浅色）</title>
+  <desc id="azl-desc">展示顶层 0-Token 视觉宿主层、Daemon 编排中枢层与底层四大核心模块的架构图</desc>
+  <defs>
+    <linearGradient id="azl-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+    <linearGradient id="azl-rim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.12"/>
+      <stop offset="50%" stop-color="#2563eb" stop-opacity="0.62"/>
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.12"/>
+    </linearGradient>
+    <pattern id="azl-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#cbd5e1" stroke-width="0.65" stroke-opacity="0.45"/>
+    </pattern>
+  </defs>
+
+  <rect x="2" y="2" width="1196" height="436" rx="18" fill="url(#azl-bg)" stroke="#dbe3ee" stroke-width="1.5"/>
+  <rect x="2" y="2" width="1196" height="436" rx="18" fill="url(#azl-grid)"/>
+
+  <text x="36" y="34" fill="#0f172a" font-size="14" font-weight="700" letter-spacing="1.2" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">PRISMUX · 系统架构总览</text>
+  <rect x="780" y="16" width="384" height="26" rx="13" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+  <circle cx="798" cy="29" r="3.5" fill="#2563eb"/>
+  <text x="810" y="33" fill="#1d4ed8" font-size="11.5" font-weight="600" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">0-Token 视觉层 · 只读 vendor/t3code · 4 大可选插件</text>
+
+  <rect x="36" y="52" width="1128" height="90" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <line x1="60" y1="53" x2="1140" y2="53" stroke="url(#azl-rim)" stroke-width="1.5"/>
+  <text x="54" y="72" fill="#1d4ed8" font-size="11.5" font-weight="700" letter-spacing="0.8" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">TIER 01 · 顶层 0-TOKEN 原生视觉宿主层（纯宿主渲染，不向模型注入任何 Prompt 或 Tool Schema）</text>
+
+  <g font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="54" y="82" width="352" height="48" rx="10" fill="#f8fafc" stroke="#dbe3ee" stroke-width="1"/>
+    <text x="70" y="102" fill="#0f172a" font-size="13" font-weight="600">apps/desktop-tauri · Rust / Tauri v2</text>
+    <text x="70" y="120" fill="#475569" font-size="11.5">WASAPI / CoreAudio FFT · 遮挡 0 FPS · Steam 431960</text>
+
+    <rect x="424" y="82" width="352" height="48" rx="10" fill="#f8fafc" stroke="#dbe3ee" stroke-width="1"/>
+    <text x="440" y="102" fill="#0f172a" font-size="13" font-weight="600">apps/workbench-ui · React 19 + Vite 6</text>
+    <text x="440" y="120" fill="#475569" font-size="11.5">360° Fresnel 液态玻璃 · 天体三态胶囊 · WebWallGL</text>
+
+    <rect x="794" y="82" width="352" height="48" rx="10" fill="#f8fafc" stroke="#dbe3ee" stroke-width="1"/>
+    <text x="810" y="102" fill="#0f172a" font-size="13" font-weight="600">4 大内置手术刀增强 · 零冗余面板</text>
+    <text x="810" y="120" fill="#475569" font-size="11.5">中文审批解说 · 思考强度 · Token 台账 · 导航排序</text>
+  </g>
+
+  <line x1="320" y1="142" x2="320" y2="167" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <polygon points="320,171 315,163 325,163" fill="#2563eb"/>
+  <line x1="880" y1="142" x2="880" y2="167" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <polygon points="880,171 875,163 885,163" fill="#2563eb"/>
+  <rect x="380" y="145" width="440" height="22" rx="11" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+  <text x="600" y="160" text-anchor="middle" fill="#1d4ed8" font-size="11.5" font-weight="600" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">鉴权 WebSocket RPC &amp; @prismux/protocol 强类型契约</text>
+
+  <rect x="36" y="172" width="1128" height="106" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <line x1="60" y1="173" x2="1140" y2="173" stroke="url(#azl-rim)" stroke-width="1.5"/>
+  <text x="54" y="192" fill="#0284c7" font-size="11.5" font-weight="700" letter-spacing="0.8" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">TIER 02 · 中枢编排层（apps/daemon · 24 小时无头常驻 · 强制剔除 ELECTRON_RUN_AS_NODE）</text>
+
+  <rect x="54" y="202" width="352" height="64" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.2"/>
+  <text x="70" y="222" fill="#0f172a" font-size="13" font-weight="700" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">主秘书槽位 · Chief Thread Slot</text>
+  <text x="70" y="240" fill="#334155" font-size="11.5" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">热切换 Claude Code / Codex / Antigravity 复用额度</text>
+  <text x="70" y="256" fill="#1d4ed8" font-size="11" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">MCP: prismux-memory + prismux-orchestrator</text>
+
+  <rect x="424" y="202" width="722" height="64" rx="10" fill="#f8fafc" stroke="#dbe3ee" stroke-width="1"/>
+  <text x="438" y="220" fill="#0f172a" font-size="12.5" font-weight="600" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">五大标杆内化原语 + 夜间全自动工场（OvernightFactory）</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.8" font-weight="600">
+    <rect x="436" y="227" width="134" height="22" rx="6" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+    <text x="503" y="241.5" text-anchor="middle" fill="#1d4ed8">PersistentPtyPool</text>
+
+    <rect x="577" y="227" width="134" height="22" rx="6" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+    <text x="644" y="241.5" text-anchor="middle" fill="#1d4ed8">Handoff / Dial</text>
+
+    <rect x="718" y="227" width="134" height="22" rx="6" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+    <text x="785" y="241.5" text-anchor="middle" fill="#1d4ed8">CollectorAndGuard</text>
+
+    <rect x="859" y="227" width="134" height="22" rx="6" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+    <text x="926" y="241.5" text-anchor="middle" fill="#1d4ed8">LifecycleHookBus</text>
+
+    <rect x="1000" y="227" width="134" height="22" rx="6" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+    <text x="1067" y="241.5" text-anchor="middle" fill="#1d4ed8">WorktreeSandbox</text>
+  </g>
+  <text x="438" y="261" fill="#475569" font-size="11" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">夜间闭环：Gmail / IMAP #factory → Memory + Handoff → Worktree 沙箱提交 → Oracle 审阅 → HTML 早报与深链回信</text>
+
+  <g stroke="#3b82f6" stroke-width="1.4">
+    <line x1="169.5" y1="278" x2="169.5" y2="300"/>
+    <line x1="456.5" y1="278" x2="456.5" y2="300"/>
+    <line x1="743.5" y1="278" x2="743.5" y2="300"/>
+    <line x1="1030.5" y1="278" x2="1030.5" y2="300"/>
+  </g>
+  <g fill="#2563eb">
+    <polygon points="169.5,305 164.5,297 174.5,297"/>
+    <polygon points="456.5,305 451.5,297 461.5,297"/>
+    <polygon points="743.5,305 738.5,297 748.5,297"/>
+    <polygon points="1030.5,305 1025.5,297 1035.5,297"/>
+  </g>
+
+  <g font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="36" y="306" width="267" height="104" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="36" y="306" width="267" height="3" rx="1.5" fill="#2563eb"/>
+    <text x="52" y="327" fill="#1d4ed8" font-size="10.5" font-weight="700" letter-spacing="0.8">READ-ONLY SUBMODULE</text>
+    <text x="52" y="347" fill="#0f172a" font-size="13.5" font-weight="700">只读上游 · vendor/t3code</text>
+    <text x="52" y="367" fill="#475569" font-size="11.5">UPSTREAM_LOCK.json 锁定只读</text>
+    <text x="52" y="384" fill="#475569" font-size="11.5">显式排除出 pnpm-workspace.yaml</text>
+    <text x="52" y="401" fill="#475569" font-size="11.5">外置 WS RPC 与 client-runtime 桥接</text>
+
+    <rect x="323" y="306" width="267" height="104" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="323" y="306" width="267" height="3" rx="1.5" fill="#0284c7"/>
+    <text x="339" y="327" fill="#0284c7" font-size="10.5" font-weight="700" letter-spacing="0.8">HYBRID MEMORY ENGINE</text>
+    <text x="339" y="347" fill="#0f172a" font-size="13.5" font-weight="700">单文件记忆 · memory-core</text>
+    <text x="339" y="367" fill="#475569" font-size="11.5">SQLite WAL + FTS5 + sqlite-vec</text>
+    <text x="339" y="384" fill="#475569" font-size="11.5">_callerScope 传输层物理防泄密</text>
+    <text x="339" y="401" fill="#475569" font-size="11.5">零 PG / Qdrant / Obsidian 客户端依赖</text>
+
+    <rect x="610" y="306" width="267" height="104" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="610" y="306" width="267" height="3" rx="1.5" fill="#3b82f6"/>
+    <text x="626" y="327" fill="#1d4ed8" font-size="10.5" font-weight="700" letter-spacing="0.8">CORDIS DUAL-REALM PLUGINS</text>
+    <text x="626" y="347" fill="#0f172a" font-size="13.5" font-weight="700">四大可选插件 · cordis-kernel</text>
+    <text x="626" y="367" fill="#475569" font-size="11.5">qq · pet · fishdock-hook · ssh</text>
+    <text x="626" y="384" fill="#475569" font-size="11.5">默认绝不预装 · ctx.effect() 卸载</text>
+    <text x="626" y="401" fill="#475569" font-size="11.5">免 Git 无脚本流式安装 · 0600 凭据</text>
+
+    <rect x="897" y="306" width="267" height="104" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="897" y="306" width="267" height="3" rx="1.5" fill="#2563eb"/>
+    <text x="913" y="327" fill="#1d4ed8" font-size="10.5" font-weight="700" letter-spacing="0.8">E2EE SYNC VAULT</text>
+    <text x="913" y="347" fill="#0f172a" font-size="13.5" font-weight="700">加密同步 · sync-vault</text>
+    <text x="913" y="367" fill="#475569" font-size="11.5">Argon2id + AEAD .prismux-backup</text>
+    <text x="913" y="384" fill="#475569" font-size="11.5">WebDAV / S3 / GitHub / data/ 便携</text>
+    <text x="913" y="401" fill="#475569" font-size="11.5">If-Match 乐观锁 + 60s 停滞看门狗</text>
+  </g>
+
+  <text x="600" y="427" text-anchor="middle" fill="#64748b" font-size="11.5" font-family="system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">五大绝对工程红线：只读 vendor/t3code · 严禁 5 项冗余面板 · 物理隔离三域记忆 · 四大插件默认零预装 · 视觉层 0 Token 开销</text>
+</svg>

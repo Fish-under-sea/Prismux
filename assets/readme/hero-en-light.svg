@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="hel-title hel-desc">
+  <title id="hel-title">Prismux — Minimalist Liquid-Glass AI Super Workbench &amp; 24/7 Secretary</title>
+  <desc id="hel-desc">Prismux Light Theme Hero Banner</desc>
+  <defs>
+    <linearGradient id="hel-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="55%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#eff6ff"/>
+    </linearGradient>
+    <radialGradient id="hel-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.16"/>
+      <stop offset="55%" stop-color="#38bdf8" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#f8fafc" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hel-rim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.06"/>
+      <stop offset="35%" stop-color="#2563eb" stop-opacity="0.45"/>
+      <stop offset="70%" stop-color="#0284c7" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="hel-facet-a" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.88"/>
+      <stop offset="100%" stop-color="#2563eb" stop-opacity="0.52"/>
+    </linearGradient>
+    <linearGradient id="hel-facet-b" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.72"/>
+      <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.42"/>
+    </linearGradient>
+    <linearGradient id="hel-facet-c" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#eff6ff" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#93c5fd" stop-opacity="0.65"/>
+    </linearGradient>
+    <pattern id="hel-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#cbd5e1" stroke-width="0.75" stroke-opacity="0.45"/>
+    </pattern>
+  </defs>
+
+  <rect x="2" y="2" width="1196" height="316" rx="20" fill="url(#hel-bg)" stroke="#dbe3ee" stroke-width="1.5"/>
+  <rect x="2" y="2" width="1196" height="316" rx="20" fill="url(#hel-grid)"/>
+  <line x1="60" y1="3" x2="1140" y2="3" stroke="url(#hel-rim)" stroke-width="1.5"/>
+
+  <circle cx="195" cy="160" r="148" fill="url(#hel-glow)"/>
+  <circle cx="195" cy="160" r="112" fill="none" stroke="#3b82f6" stroke-opacity="0.20" stroke-width="1"/>
+  <circle cx="195" cy="160" r="88" fill="none" stroke="#0284c7" stroke-opacity="0.25" stroke-width="1" stroke-dasharray="4 6"/>
+
+  <g transform="translate(195,160)">
+    <polygon points="0,-70 60,-20 40,56 -40,56 -60,-20" fill="#ffffff" fill-opacity="0.88" stroke="#3b82f6" stroke-opacity="0.55" stroke-width="1.5"/>
+    <polygon points="0,-70 60,-20 0,8 -60,-20" fill="url(#hel-facet-c)" stroke="#60a5fa" stroke-opacity="0.75" stroke-width="1"/>
+    <polygon points="-60,-20 0,8 -40,56" fill="url(#hel-facet-a)" stroke="#3b82f6" stroke-opacity="0.65" stroke-width="1"/>
+    <polygon points="60,-20 40,56 0,8" fill="url(#hel-facet-b)" stroke="#0284c7" stroke-opacity="0.60" stroke-width="1"/>
+    <polygon points="-40,56 0,8 40,56" fill="#e2e8f0" fill-opacity="0.75" stroke="#64748b" stroke-opacity="0.45" stroke-width="1"/>
+    <circle cx="0" cy="8" r="5" fill="#1d4ed8" fill-opacity="0.92"/>
+    <path d="M 64 -52 L 66 -44 L 74 -42 L 66 -40 L 64 -32 L 62 -40 L 54 -42 L 62 -44 Z" fill="#2563eb" fill-opacity="0.85"/>
+  </g>
+
+  <rect x="355" y="48" width="465" height="28" rx="14" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+  <circle cx="373" cy="62" r="4" fill="#2563eb"/>
+  <text x="387" y="66.5" fill="#1d4ed8" font-size="12" font-weight="600" letter-spacing="1.0" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">24H HEADLESS DAEMON · 0-TOKEN LIQUID GLASS WORKBENCH</text>
+
+  <text x="355" y="138" fill="#0f172a" font-size="56" font-weight="700" letter-spacing="7" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">PRISMUX</text>
+  <line x1="355" y1="154" x2="720" y2="154" stroke="url(#hel-rim)" stroke-width="1.5"/>
+
+  <text x="355" y="186" fill="#334155" font-size="21" font-weight="500" letter-spacing="0.2" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">Minimalist Liquid-Glass AI Super Workbench &amp; 24/7 Secretary</text>
+
+  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13" font-weight="500">
+    <rect x="355" y="218" width="194" height="36" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="452" y="241" text-anchor="middle" fill="#1e293b">Agent-Agnostic Chief</text>
+
+    <rect x="561" y="218" width="194" height="36" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="658" y="241" text-anchor="middle" fill="#1e293b">360° Fresnel Glass</text>
+
+    <rect x="767" y="218" width="194" height="36" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="864" y="241" text-anchor="middle" fill="#1e293b">SQLite + vec Memory</text>
+
+    <rect x="973" y="218" width="187" height="36" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="1066.5" y="241" text-anchor="middle" fill="#1e293b">4 Optional Plugins</text>
+  </g>
+
+  <text x="355" y="286" fill="#64748b" font-size="12" letter-spacing="0.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">Tauri v2 · React 19 · WebWallGL · SQLite WAL + FTS5 + sqlite-vec · Cordis · Magpie Vault</text>
+</svg>
