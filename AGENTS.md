@@ -17,7 +17,7 @@
 
 ## 一、项目定位、品牌常量与 Monorepo 边界
 
-Prismux 是一个「极简液态玻璃 AI 超级工作台与 24h 秘书系统」，由 24 小时常驻无头守护进程（`apps/daemon`）、任意代理接任主秘书槽位（`Chief Thread Slot`）、单文件 SQLite 混合记忆引擎、Cordis 双域可逆插件内核、Magpie 端到端加密同步引擎、夜间全自动工场，以及基于 Tauri v2 + React 19 的 360° Fresnel 液态玻璃原生桌面端共同组成。
+Prismux 是一个「极简液态玻璃 AI 超级工作台与 24h 秘书系统」，在 **v0.1.0 架构重构中以真实 T3 Code（含原生 Electron 44 桌面端、`apps/server` 与 `apps/web`）为运行底座**（逐步退役早期原型壳 `apps/workbench-ui`），融合 24 小时常驻无头守护进程（`apps/daemon`）、任意代理接任主秘书槽位（`Chief Thread Slot`）、单文件 SQLite 混合记忆引擎、Cordis 双域可逆插件内核、Magpie 端到端加密同步引擎、夜间全自动工场，以及外置沉淀的 360° Fresnel 液态玻璃（`@prismux/appearance`）与多源壁纸引擎（`@prismux/wallpaper`）。
 
 ### 品牌命名常量与远端仓库
 
@@ -37,31 +37,34 @@ Prismux 是一个「极简液态玻璃 AI 超级工作台与 24h 秘书系统」
 prismux/
 ├── AGENTS.md                          # 本文件：跨机器统配入口与工程红线
 ├── README.md                          # 项目中文概览与快速开始
-├── UPSTREAM_LOCK.json                 # 锁定 vendor/t3code 的上游仓库、分支、Commit SHA、同步时间与必需路径
-├── pnpm-workspace.yaml                # Workspace 边界定义（显式排除 vendor/t3code 与 apps/desktop-tauri）
-├── package.json                       # 根脚本（typecheck / build / test:scripts / upstream:* / brand:rename / plugin:pack）
+├── UPSTREAM_LOCK.json                 # 记录上游 pingdotgg/t3code 基线仓库、分支、Commit SHA 与同步时间（便于周期合并）
+├── pnpm-workspace.yaml                # Workspace 边界定义（当前白名单含 packages/*、apps/{daemon,workbench-ui}、plugins-official/plugin-*）
+├── package.json                       # 根脚本（typecheck / build / test / test:scripts / upstream:* / brand:rename / plugin:pack / release:build）
 ├── tsconfig.base.json                 # 公共 TS 严格基线（ES2024 + NodeNext + verbatimModuleSyntax）
 ├── docs/
+│   ├── t3code-patch-manifest.md       # T3 Code 最小入侵 6 挂载点登记台账与改造边界规范
 │   ├── agents/                        # 个人本机环境档案说明、模板与按人档案
 │   └── specs/
-│       ├── master-prompt-v1.3.md      # 全栈自主施工总指令书（最高架构宪法）
-│       └── ui-ux-design-mandate.md    # 世界级 UI/UX、主题与背景及安装包强制设计规范
-├── scripts/                           # 零第三方依赖运维工具脚本（Node 24 原生 TS 运行）与原生单测
+│       ├── master-prompt-v1.3.md      # 全栈自主施工总指令书（历史归档宪法，严禁擅自删改）
+│       └── ui-ux-design-mandate.md    # 世界级 UI/UX、主题与背景及安装包强制设计规范（归档规范，严禁擅自删改）
+├── scripts/                           # 零第三方依赖运维工具脚本（Node 24 原生 TS 运行）、README 渲染器与原生单测
 │   ├── rename-brand.ts                # 全局品牌标识安全替换脚本
-│   ├── sync-t3-upstream.ts            # 只读校验（--check）与上游同步（--sync）脚本
+│   ├── sync-t3-upstream.ts            # 上游基线校验与同步脚本（需配合 v0.1.0 最小入侵策略演化）
 │   ├── pack-plugin.ts                 # 确定性 ustar + gzip 回环自检打包与 SHA-256 生成脚本
 │   └── __tests__/scripts.test.ts      # node:test 脚本回归测试
 ├── vendor/
-│   └── t3code/                        # 100% 原样只读 Git 子模块（pingdotgg/t3code），严禁纳入 pnpm-workspace.yaml
+│   └── t3code/                        # T3 Code 本体运行底座（pingdotgg/t3code 二开：Electron 44 + server + web），仅允许通过 docs/t3code-patch-manifest.md 登记的 6 挂载点最小入侵定制
 ├── packages/
-│   ├── protocol/                      # @prismux/protocol：品牌常量、Daemon <-> UI 扩展 RPC、Hook 类型、三域记忆与插件契约
-│   ├── cordis-kernel/                 # @prismux/cordis-kernel：时空可逆双域插件内核（daemon + ui）与双轨安装器
+│   ├── protocol/                      # @prismux/protocol：品牌常量、Daemon <-> UI 扩展 RPC、Hook 类型、三域记忆、插件与更新契约
+│   ├── cordis-kernel/                 # @prismux/cordis-kernel：时空可逆双域插件内核（daemon + ui）与双源流式安装器
 │   ├── memory-core/                   # @prismux/memory-core：SQLite WAL + FTS5 + sqlite-vec 混合记忆与物理防泄密守卫
-│   └── sync-vault/                    # @prismux/sync-vault：Argon2id + AEAD 端到端加密同步（WebDAV / S3 / GitHub / 便携模式）
+│   ├── sync-vault/                    # @prismux/sync-vault：Argon2id + AEAD 端到端加密同步（WebDAV / S3 / GitHub / 便携模式）
+│   ├── prismux-appearance/            # @prismux/appearance：1:1 FISH-Dock 光学天体三态胶囊、浮窗调色盘、对比度钳制与 T3 Glass 桥接
+│   └── prismux-wallpaper/             # @prismux/wallpaper：右侧壁纸边栏、完整设置页、Z-0 多源渲染舞台（Image/Video/Web/WebWallGL）与 Steam 431960 扫描器
 ├── apps/
-│   ├── daemon/                        # @prismux/daemon：24h 无头守护服务（托管 t3code server、主秘书槽位、五大原语、夜间工场）
-│   ├── workbench-ui/                  # @prismux/workbench-ui：React 19 + Vite 前端（分屏网格、浮动胶囊、液态玻璃、WebWallGL、插件市场）
-│   └── desktop-tauri/                 # prismux-desktop：Rust 1.85+ / Tauri v2 轻量透明原生壳（不纳入 pnpm workspace）
+│   ├── daemon/                        # @prismux/daemon：24h 无头守护服务（主秘书槽位、五大原语、双源更新器、夜间工场）
+│   ├── workbench-ui/                  # @prismux/workbench-ui：[待退役原型壳] v0.0.1 原型验证界面，正按 v0.1.0 方案退役并替换为真实 T3 Code 融合界面
+│   └── desktop-tauri/                 # prismux-desktop：[历史/阶段原生壳] 原 Tauri v2 壳（v0.1.0 起主桌面端切换为 T3 Code 原生 Electron 44 桌面端，不纳入 pnpm workspace）
 └── plugins-official/                  # 官方认证独立插件源码与索引（默认全部不预装）
     ├── catalog/official.json          # 官方插件权威索引（version / engines / sha256 / bytes / status）
     ├── plugin-qq/                     # @prismux/plugin-qq：OneBot v11 私聊主秘书 + 群聊隔离陪聊插件
@@ -72,18 +75,20 @@ prismux/
 
 ### Workspace 与技术栈边界
 
-- **基础工具链要求**：`Node.js >= 24.12.0`、`pnpm >= 10.0.0`（仓库声明 `pnpm@12.3.4`）、`TypeScript >= 5.8`（`NodeNext` + `verbatimModuleSyntax`，包内相对导入必须显式带 `.js` 后缀，纯类型导入使用 `import type`）、`Rust >= 1.85`（M4 `apps/desktop-tauri`）。
-- **`pnpm-workspace.yaml` 白名单**：仅包含 `packages/*`、`apps/daemon`、`apps/workbench-ui`、`plugins-official/plugin-*`。
-- **`vendor/t3code/` 只读隔离**：`vendor/t3code/` 是由 `UPSTREAM_LOCK.json` 锁定的只读 Git 子模块，**绝不纳入根 `pnpm-workspace.yaml`**，防止其上游依赖污染主仓锁文件或触发无意修改。
-- **`apps/desktop-tauri/` Rust 隔离**：属于独立 Cargo crate，仅在 M4 桌面原生壳阶段由 Cargo 构建，不纳入 `pnpm` workspace。
+- **基础工具链要求**：`Node.js >= 24.12.0`、`pnpm >= 10.0.0`（仓库声明 `pnpm@12.3.4`；`vendor/t3code` 上游另声明 `pnpm@12.14.0` 与 `vite-plus` `vp` 构建体系）、`TypeScript >= 5.8`（`NodeNext` + `verbatimModuleSyntax`，包内相对导入必须显式带 `.js` 后缀，纯类型导入使用 `import type`）、`Electron 44`（T3 Code 原生桌面端）、`Rust >= 1.85`（T3 Code 原生 `resource-monitor` 及历史 `apps/desktop-tauri`）。
+- **`pnpm-workspace.yaml` 白名单**：当前包含 `packages/*`（自动纳入 `packages/prismux-appearance` 与 `packages/prismux-wallpaper`）、`apps/daemon`、`apps/workbench-ui`、`plugins-official/plugin-*`，暂排除 `vendor/t3code` 与 `apps/desktop-tauri`。
+- **`vendor/t3code/` 分层治理**：`vendor/t3code/` 作为真实 T3 Code 运行底座进行可控二次开发（按需可从子模块转为 Prismux 主仓常规托管源码目录），**所有定制必须严格收敛在 [`docs/t3code-patch-manifest.md`](./docs/t3code-patch-manifest.md) 登记的挂载点内**，同时保留 `UPSTREAM_LOCK.json` 记录 `pingdotgg/t3code` 上游基线 SHA（`b23f1e8af9b13af2c4aa1ba8e0d6987550688645`）以便周期性合并上游更新。
+- **`apps/desktop-tauri/` Rust 隔离**：属于独立 Cargo crate，不纳入 `pnpm` workspace。
 
 ## 二、五大绝对工程红线
 
 任何代理与开发者在施工过程中必须无条件遵守以下 5 条红线：
 
-1. **严禁修改 `vendor/t3code/` 内任何一行上游源码**
-   - `vendor/t3code/` 必须保持 `git status --porcelain` 完全为空且 `HEAD` 与 `UPSTREAM_LOCK.json` 一致。
-   - 所有扩展能力必须外置实现：通过 T3 Code 暴露的鉴权 WebSocket RPC、`packages/client-runtime` 状态订阅以及 Orchestrator V2 MCP 在外层桥接与编排。
+1. **T3 Code 本体二次开发与最小入侵分层原则**
+   - Prismux 以真实 T3 Code（含原生 Electron 44 桌面端、`apps/server` 与 `apps/web`）为运行底座，**禁止从 0 编写脱离真实内核的长期假壳**。
+   - **业务与视觉外置沉淀**：所有 Prismux 专属业务与视觉实现必须独立沉淀在 `packages/prismux-appearance`、`packages/prismux-wallpaper`、`packages/protocol`、`packages/memory-core`、`packages/cordis-kernel`、`packages/sync-vault`、`apps/daemon` 与 `plugins-official/*`。
+   - **标准化最小入侵挂载**：对 T3 Code 本体的全部定制必须严格收敛在标准化挂载点（初始 6 大挂载点），并在 [`docs/t3code-patch-manifest.md`](./docs/t3code-patch-manifest.md) 逐项登记文件路径、行号范围、挂载目的与上游合并策略；禁止在未登记位置向 T3 Code 内核注入散落业务代码。
+   - **基线记录与上游合并**：保留根 [`UPSTREAM_LOCK.json`](./UPSTREAM_LOCK.json) 记录上游 `pingdotgg/t3code` 基线 Commit SHA，以便周期性合并或 Rebase 上游更新。
 2. **严禁混入已明确砍掉的 5 项冗余模块**
    - **禁止实现**：① 权威任务看板（Task Board）、② 多代理组队 DAG（AgentTeam）、③ 技能中心面板（Skill Lens）、④ 网页视觉伴侣（Visual Companion）、⑤ 重型会话归档系统（Session Archive）。
    - 上述场景统一由五大内化原语替代：`PersistentPtyPool`、`HandoffEngine`（`/handoff` 与 `agent / oracle / review` 三档拨盘）、`CollectorAndGuard`、`LifecycleHookBus` 与 `WorktreeSandbox`。
@@ -94,7 +99,7 @@ prismux/
    - `qq`、`pet`、`fishdock-hook`、`ssh` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序与默认守护进程启动链路保持极简，不捆绑预装。
 5. **视觉层对模型 0 Token 开销与强制设计规范**
    - `WebWallGL` 动态壁纸、360° Fresnel 液态玻璃、字体调色、系统音频律动、桌宠演出与安装包向导属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
-   - M4 工作台前端、`apps/desktop-tauri/installer/` 与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、无障碍对比度及降级兜底红线。
+   - `@prismux/appearance`、`@prismux/wallpaper`、T3 Code 融合桌面端/前端定制、安装包向导与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、无障碍对比度及降级兜底红线。
 
 ## 三、M1–M5 分阶段路线图与自动化验收门禁（DoD）
 
@@ -105,7 +110,7 @@ prismux/
 | **M1：骨架、只读 T3 桥接与守护中枢** | 初始化 pnpm Monorepo 与 `scripts/` 工具链；拉取只读 `vendor/t3code` 并写入 `UPSTREAM_LOCK.json`；实现 `apps/daemon` 进程监督、环境变量清洗、主秘书槽位（`Chief Thread Slot`）与 `PersistentPtyPool`（默认每终端 `2 MB` 环形缓冲） | `pnpm -r typecheck`、`pnpm -r build`、`pnpm test:scripts` 与 `pnpm upstream:check` 全绿；`node apps/daemon/dist/cli.js start --headless` 可无界面连上 T3 Server RPC 并在重连后无损回放 PTY 历史流 |
 | **M2：内生三域记忆库与五大标杆原语** | 实现 `packages/memory-core`（SQLite WAL + FTS5 + `sqlite-vec` + Obsidian 导入）；实现 `forwardIdentity` 作用域硬隔离与 60 s 熔断、`LifecycleHookBus`（6 类事件、退出码 `2` 拦截、安全钩子默认 `onFailure: "block"`、四档权限）、`HandoffEngine`（`/handoff` + 三档拨盘）与 `WorktreeSandbox`（OS 级写隔离 + 域名白名单网关） | 越权单测验证 `qq_group:<gid>` 查询 `private/chief` 与 `workspace/*` **100% 返回空集**；安全 Hook 超时或抛错时必定阻断执行；`/handoff` 可无损提纯 `{ goal, decisions, touchedFiles, openQuestions }` 并续跑新线程 |
 | **M3：Cordis 双轨插件商城与 Magpie 同步** | 实现 `packages/cordis-kernel`（顶层 `engines.prismux` SemVer 校验、`ctx.effect()` 卸载零残留、官方 SHA-256 校验、免 Git 无脚本 `npm` Tarball 安装器 + `distribution: "managed"` 锁）；实现 `packages/sync-vault`（Argon2id + AEAD 密封、WebDAV/S3/Git 独立开关、`If-Match` 乐观锁、60 s 停滞看门狗与 `data/` 便携模式） | 慢速流模拟测试 3 分钟持续低速传输不断连、连续 60 s 零字节准时触发停滞报错；双机并发上传验证 `If-Match`（及降级 `HEAD ETag`）拦截覆盖；`npm` 插件启停与卸载无残留监听、路由或 DOM |
-| **M4：Tauri v2 液态玻璃壳、四把手术刀与壁纸引擎** | 搭建 `apps/desktop-tauri`（无边框透明合成、WASAPI/CoreAudio/PipeWire 音频 FFT、`visibility: occluded` 0 FPS 挂起、Steam `431960` 扫描、克制 5 步 NSIS/首次引导安装包）与 `apps/workbench-ui`（严格按 `docs/specs/ui-ux-design-mandate.md` 实现全宽内凹天体三态胶囊、四区域 360° Fresnel 液态玻璃、独立浅/深文字调色、自由分屏 + 浮动胶囊双预设、`WebWallGL`、`.wb-theme` 导入导出，以及内置 `ApprovalGuide`、`ReasoningEffortCard`、`UsageLedger`、`NavAndCommandOrder`） | `cargo check`（必要时 `-j 1`）与前端生产构建全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成控件八态、对比度、`prefers-reduced-motion` 与禁 GPU 实底兜底核验；实测切换浅色 / 深色 / 液态玻璃天体三态胶囊、切换「秘书待机 / 多代理编码」布局预设、窗口最小化或全屏遮挡时壁纸渲染立即暂停至 0 FPS，安装包组件页明确声明四大官方插件默认不预装 |
+| **M4：真实 T3 Code 融合底座、液态玻璃、四把手术刀与壁纸引擎** | 完成 `@prismux/appearance`（1:1 FISH-Dock 天体三态胶囊、浮窗调色盘、≥ 4.5:1 对比度钳制、T3 Glass 桥接）与 `@prismux/wallpaper`（右侧壁纸边栏、5 页签设置页、Z-0 多源渲染舞台与 Steam `431960` 扫描器）；通过 `docs/t3code-patch-manifest.md` 6 大最小入侵挂载点融入真实 T3 Code（Electron 44 `apps/desktop` + `apps/server` + `apps/web`），逐步退役旧原型壳 `apps/workbench-ui`，并集成 4 大内置效率增强与 NSIS 安装包 | `@prismux/appearance`、`@prismux/wallpaper` 与 T3 Code（`server / web / desktop`）编译与单测全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成八态、对比度、`prefers-reduced-motion` 与无 GPU 兜底核验；**真实桌面二进制冷启动直达工作台、窗口拖拽区与最小化/最大化/关闭三键 100% 可用，并通过多场景实机截图自审（天体三态胶囊、右侧壁纸边栏、设置页、遮挡 `0 FPS` 挂起、四大官方插件零预装声明）** |
 | **M5：夜间全自动工场与官方独立插件** | 完成 `OvernightFactory`（Gmail OAuth2 / IMAP `#factory` 监听 → 记忆补全与 Handoff 立项 → Worktree 沙箱编码与提交 → Oracle 只读 `review` 挑刺 → HTML 完工早报回信与 `prismux://review/<threadId>` 深链）；完成 `plugins-official/` 下 `plugin-qq`、`plugin-pet`（定向实例、Lease 锁、进度订阅、分阶段交还）、`plugin-fishdock-hook` 与 `plugin-ssh` | 跑通端到端模拟邮件入站 → 自动拉分支改代码过单测 → 产出带 Diff 与 Oracle 评语的 HTML 邮件全文；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
 
 ## 四、核心工具脚本与插件打包契约
@@ -120,14 +125,13 @@ prismux/
 
 ### 2. `scripts/sync-t3-upstream.ts`（`pnpm upstream:check` / `pnpm upstream:sync`）
 
-- **`--check`（默认）**：
-  1. 校验根 `UPSTREAM_LOCK.json` 格式完整且 `readOnly === true`；
-  2. 检查 `vendor/t3code/` 目录存在；
-  3. 校验 `git -C vendor/t3code rev-parse HEAD` 与 `UPSTREAM_LOCK.json.commit` 一致；
-  4. 校验 `git -C vendor/t3code status --porcelain` **完全为空**（任何本地脏改动立即报错阻断，守住只读红线）；
-  5. 检查 `requiredPaths`（`apps/server/package.json`、`packages/client-runtime`、`packages/contracts`、`docs/internals/overview.md`）存在且 `apps/server/package.json` 为合法 JSON。
+- **`--check`（默认，当前基线校验实现）**：
+  1. 校验根 `UPSTREAM_LOCK.json` 格式完整（当前字段仍要求 `readOnly === true`）；
+  2. 检查 `vendor/t3code/` 目录存在且 `git -C vendor/t3code rev-parse HEAD` 与 `UPSTREAM_LOCK.json.commit` 一致；
+  3. 当前阶段若 `git -C vendor/t3code status --porcelain` 非空会触发旧只读校验拦截；随 v0.1.0 启用本体最小入侵二开，后续脚本将演化为对照 [`docs/t3code-patch-manifest.md`](./docs/t3code-patch-manifest.md) 登记的白名单挂载点执行越界校验；
+  4. 检查 `requiredPaths`（`apps/server/package.json`、`packages/client-runtime`、`packages/contracts`、`docs/internals/overview.md`）存在且 `apps/server/package.json` 为合法 JSON。
 - **`--sync`**：
-  - 使用 `git -c core.longpaths=true -c http.sslBackend=openssl -c http.version=HTTP/1.1` 拉取上游目标分支（`--depth 1`）并检出至 `vendor/t3code`，更新 `UPSTREAM_LOCK.json` 的 `commit` 与 `syncedAt`，随后自动执行一次完整 `--check` 门禁。
+  - 使用 `git -c core.longpaths=true -c http.sslBackend=openssl -c http.version=HTTP/1.1` 拉取上游目标分支（`--depth 1`）并更新 `UPSTREAM_LOCK.json` 的 `commit` 与 `syncedAt`（v0.1.0 启用二开后须结合 `docs/t3code-patch-manifest.md` 执行三方合并与 6 大挂载点复核）。
 
 ### 3. `scripts/pack-plugin.ts`（`pnpm plugin:pack`）
 
@@ -161,5 +165,6 @@ prismux/
 - **原子提交与中文规范**：遵循中文 Conventional Commits 格式 `<type>(<scope>): <简明中文描述>`（如 `feat(daemon): 实现主秘书槽位与 PTY 环形缓冲`、`fix(memory-core): 强制绑定 qq_group 查询隔离条件`、`docs(agents): 更新 <用户名> 的本机环境档案`、`chore(scripts): 补全插件打包回环校验`），保持单次提交单一职责。
 - **精确路径暂存**：提交前严禁执行 `git add .` 或 `git add -A`，必须使用精确路径 `git add <path1> <path2> ...` 核对无误后再提交。
 - **严禁误提交物**：禁止提交 `.work/` 临时目录、任何凭据正文（`.env`、`.env.local`、token 等）或构建产物（`dist/`、`target/`、`*.wb-plugin`、`*.sha256`）；已正式归档的架构与设计宪法（[`docs/specs/master-prompt-v1.3.md`](./docs/specs/master-prompt-v1.3.md) 与 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md)）应保持原规划语义，未经明确授权严禁擅自删改。
+- **挂载点同步登记**：任何修改 `vendor/t3code/` 的提交，必须在同一批改动中同步更新 [`docs/t3code-patch-manifest.md`](./docs/t3code-patch-manifest.md) 对应挂载点坐标与改动摘要。
 - **一次性产物管理与清理**：所有临时调试脚本、中间打包输出（如 `.work/plugin-dist`）与临时缓存统一放进本仓 `.work/`；任务收尾时仅按精确路径逐项删除自己产生的产物（`Remove-Item <精确路径>`），禁止误删他人产物。
 - **规则与档案分流提交**：跨机器工程规则随对应功能提交一起入库；纯个人本机环境档案更新按 [`docs/agents/README.md`](./docs/agents/README.md) 规范单独提交。
