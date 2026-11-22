@@ -1,6 +1,6 @@
 {
   "name": "@prismux/sync-vault",
-  "version": "0.0.1-alpha.1",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "Passphrase-sealed AEAD multi-device encrypted sync engine (WebDAV / S3 / GitHub / Portable) for Prismux.",

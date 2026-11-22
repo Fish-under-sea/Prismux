@@ -50,6 +50,13 @@ import {
   extractGiteeTokenFromCredentialsText,
   normalizeReleaseTag,
 } from '../publish-gitee-release.ts';
+import {
+  buildPrismuxDesktop,
+  parseBuildDesktopArgs,
+  sanitizeDesktopBuildEnv,
+  type DesktopCommandInvocation,
+} from '../build-prismux-desktop.ts';
+import { runReleaseAll } from '../release-all.ts';
 
 const createdTempDirs: string[] = [];
 
@@ -662,6 +669,77 @@ describe('sync-t3-upstream', () => {
     });
     assert.equal(helpCode, 0);
   });
+
+  it('supports managed-fork mode without vendor/t3code/.git, requires patchManifest, and blocks destructive sync', () => {
+    const repoRoot = createTempDir('prismux-upstream-managed-fork-');
+    const vendorDir = join(repoRoot, 'vendor/t3code');
+    writeTextFile(
+      join(vendorDir, 'apps/server/package.json'),
+      JSON.stringify({ name: 't3', version: '0.1.11' }),
+    );
+    writeTextFile(
+      join(vendorDir, 'apps/web/package.json'),
+      JSON.stringify({ name: '@t3tools/web', version: '0.1.11' }),
+    );
+    writeTextFile(
+      join(vendorDir, 'apps/desktop/package.json'),
+      JSON.stringify({ name: '@t3tools/desktop', version: '0.1.11' }),
+    );
+    mkdirSync(join(vendorDir, 'packages/client-runtime'), { recursive: true });
+    mkdirSync(join(vendorDir, 'packages/contracts'), { recursive: true });
+    writeTextFile(join(vendorDir, 'docs/internals/overview.md'), '# T3 Code Internals\n');
+    writeTextFile(join(repoRoot, 'docs/t3code-patch-manifest.md'), '# Patch Manifest\n');
+
+    const lockData: UpstreamLockData = {
+      upstreamRepo: 'https://github.com/pingdotgg/t3code.git',
+      repository: 'https://github.com/pingdotgg/t3code.git',
+      branch: 'main',
+      commit: SAMPLE_COMMIT,
+      syncedAt: '2026-11-22T00:00:00.000Z',
+      license: 'MIT',
+      mode: 'managed-fork',
+      readOnly: false,
+      patchManifest: 'docs/t3code-patch-manifest.md',
+      requiredPaths: [
+        'apps/server/package.json',
+        'apps/web/package.json',
+        'apps/desktop/package.json',
+        'packages/client-runtime',
+        'packages/contracts',
+        'docs/internals/overview.md',
+      ],
+    };
+    writeTextFile(join(repoRoot, 'UPSTREAM_LOCK.json'), JSON.stringify(lockData, null, 2));
+
+    const neverCalledGit: GitRunner = {
+      run(): string {
+        throw new Error('git must not be called in managed-fork mode');
+      },
+    };
+
+    const result = checkUpstream({ root: repoRoot }, neverCalledGit);
+    assert.equal(result.ok, true);
+    assert.equal(result.mode, 'managed-fork');
+    assert.equal(result.commit, SAMPLE_COMMIT);
+    assert.equal(result.checkedPaths.length, 6);
+    assert.equal(result.patchManifest, 'docs/t3code-patch-manifest.md');
+
+    assert.throws(
+      () => syncUpstream({ root: repoRoot }, neverCalledGit),
+      /managed-fork/i,
+    );
+
+    assert.throws(
+      () => validateLockData({ ...lockData, readOnly: true }),
+      /readOnly/i,
+    );
+
+    rmSync(join(repoRoot, 'docs/t3code-patch-manifest.md'));
+    assert.throws(
+      () => checkUpstream({ root: repoRoot }, neverCalledGit),
+      /patchManifest/i,
+    );
+  });
 });
 
 describe('release-and-npm-packages', () => {
@@ -854,4 +932,230 @@ describe('release-and-npm-packages', () => {
     );
   });
 });
+
+describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
+  it('sanitizes proxy and Electron env vars and parses CLI arguments accurately', () => {
+    const cleanEnv = sanitizeDesktopBuildEnv(
+      {
+        PATH: 'C:\\Windows\\System32',
+        HTTP_PROXY: 'http://127.0.0.1:7895',
+        HTTPS_PROXY: 'http://127.0.0.1:7895',
+        ALL_PROXY: 'socks5://127.0.0.1:7895',
+        http_proxy: 'http://127.0.0.1:7895',
+        https_proxy: 'http://127.0.0.1:7895',
+        all_proxy: 'http://127.0.0.1:7895',
+        ELECTRON_RUN_AS_NODE: '1',
+        ELECTRON_NO_ATTACH_CONSOLE: '1',
+      },
+      { T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: '1' },
+    );
+
+    assert.equal(cleanEnv['HTTP_PROXY'], undefined);
+    assert.equal(cleanEnv['HTTPS_PROXY'], undefined);
+    assert.equal(cleanEnv['ALL_PROXY'], undefined);
+    assert.equal(cleanEnv['http_proxy'], undefined);
+    assert.equal(cleanEnv['https_proxy'], undefined);
+    assert.equal(cleanEnv['all_proxy'], undefined);
+    assert.equal(cleanEnv['ELECTRON_RUN_AS_NODE'], undefined);
+    assert.equal(cleanEnv['ELECTRON_NO_ATTACH_CONSOLE'], undefined);
+    assert.equal(cleanEnv['NO_PROXY'], '*');
+    assert.equal(cleanEnv['T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR'], '1');
+
+    const parsed = parseBuildDesktopArgs([
+      '--installer',
+      '--skip-rust',
+      '--skip-root-build',
+      '--version',
+      '0.1.0-alpha.1',
+      '--out',
+      '.work/custom-out',
+    ]);
+    assert.equal(parsed.help, false);
+    assert.equal(parsed.options.installer, true);
+    assert.equal(parsed.options.skipRust, true);
+    assert.equal(parsed.options.skipRootBuild, true);
+    assert.equal(parsed.options.version, '0.1.0-alpha.1');
+    assert.equal(parsed.options.outDir, '.work/custom-out');
+  });
+
+  it('orchestrates 4-step desktop build + NSIS archiving + 7z verification + sha256 and supports --skip-rust', () => {
+    const mockRepo = createTempDir('prismux-desktop-build-');
+    writeTextFile(
+      join(mockRepo, 'package.json'),
+      JSON.stringify({ name: 'prismux-monorepo', version: '0.1.0-alpha.1' }),
+    );
+    mkdirSync(join(mockRepo, 'vendor', 't3code', 'scripts'), { recursive: true });
+
+    const monitorExe = join(
+      mockRepo,
+      'vendor',
+      't3code',
+      'native',
+      'resource-monitor',
+      'target',
+      'x86_64-pc-windows-msvc',
+      'release',
+      process.platform === 'win32' ? 't3-resource-monitor.exe' : 't3-resource-monitor',
+    );
+    const outDir = join(mockRepo, '.work', 'release-v0.1.0-alpha.1');
+    const invocations: DesktopCommandInvocation[] = [];
+    const verifiedPaths: string[] = [];
+
+    const result = buildPrismuxDesktop({
+      repoRoot: mockRepo,
+      installer: true,
+      outDir,
+      runner: (inv) => {
+        invocations.push(inv);
+        if (inv.command === 'cargo') {
+          writeBinaryFile(monitorExe, Buffer.from('MZ-MONITOR-STUB'));
+        }
+        if (inv.args.includes('scripts/build-desktop-artifact.ts')) {
+          const outIdx = inv.args.indexOf('--output-dir');
+          const stageDir = outIdx >= 0 ? inv.args[outIdx + 1]! : '';
+          writeBinaryFile(
+            join(stageDir, 'Prismux-Setup-0.1.0-alpha.1.exe'),
+            Buffer.from('NSIS-INSTALLER-PAYLOAD-V0.1.0-ALPHA.1'),
+          );
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      },
+      verifySevenZip: (_sevenZipPath, archivePath) => {
+        verifiedPaths.push(archivePath);
+      },
+    });
+
+    assert.deepEqual(result.executedSteps, [
+      'root-build',
+      'rust-build',
+      't3-build-desktop',
+      'nsis-installer',
+    ]);
+    assert.equal(invocations.length, 4);
+    assert.ok(invocations[1]!.args.includes('-j'));
+    assert.ok(invocations[1]!.args.includes('1'));
+    assert.equal(invocations[2]!.command, 'pnpm');
+    assert.deepEqual(invocations[2]!.args, ['exec', 'vp', 'run', 'build:desktop']);
+    assert.equal(invocations[3]!.env['T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR'], '1');
+    assert.ok(invocations[3]!.args.includes('--platform'));
+    assert.ok(invocations[3]!.args.includes('win'));
+    assert.ok(invocations[3]!.args.includes('nsis'));
+
+    const expectedExe = join(outDir, 'Prismux-Setup-0.1.0-alpha.1.exe');
+    assert.equal(result.installerExePath, expectedExe);
+    assert.ok(existsSync(expectedExe));
+    assert.deepEqual(verifiedPaths, [expectedExe]);
+    assert.ok(existsSync(`${expectedExe}.sha256`));
+    assert.ok(
+      readFileSync(`${expectedExe}.sha256`, 'utf8').includes(
+        `${result.installerSha256}  Prismux-Setup-0.1.0-alpha.1.exe`,
+      ),
+    );
+    assert.ok(existsSync(join(outDir, 'SHA256SUMS.txt')));
+
+    // Verify --skip-rust reuses existing monitor binary cleanly without calling cargo
+    const skipInvocations: DesktopCommandInvocation[] = [];
+    const skipResult = buildPrismuxDesktop({
+      repoRoot: mockRepo,
+      skipRust: true,
+      skipRootBuild: true,
+      installer: false,
+      runner: (inv) => {
+        skipInvocations.push(inv);
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.deepEqual(skipResult.executedSteps, ['rust-skipped', 't3-build-desktop']);
+    assert.equal(skipInvocations.some((i) => i.command === 'cargo'), false);
+
+    rmSync(monitorExe, { force: true });
+    assert.throws(
+      () =>
+        buildPrismuxDesktop({
+          repoRoot: mockRepo,
+          skipRust: true,
+          skipRootBuild: true,
+          runner: () => ({ status: 0, stdout: '', stderr: '' }),
+        }),
+      /missing/i,
+    );
+  });
+
+  it('runs release-all for v0.1.0-alpha.1 packing official plugins, updating catalog engines, and generating npm packages', () => {
+    const workspace = createTempDir('prismux-release-all-');
+    const mockRepo = join(workspace, 'repo');
+    const outDir = join(workspace, 'release-v0.1.0-alpha.1');
+    const version = '0.1.0-alpha.1';
+    const engineRange = '>=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0';
+
+    writeTextFile(join(mockRepo, 'LICENSE'), 'MIT License\n');
+    writeTextFile(join(mockRepo, 'package.json'), JSON.stringify({ version }));
+
+    const catalogEntries = [];
+    for (const id of OFFICIAL_PLUGIN_IDS) {
+      const pDir = join(mockRepo, 'plugins-official', `plugin-${id}`);
+      writeTextFile(
+        join(pDir, 'package.json'),
+        JSON.stringify({
+          name: `@prismux/plugin-${id}`,
+          version,
+          description: `Mock ${id} v0.1`,
+          engines: { prismux: engineRange },
+        }),
+      );
+      writeTextFile(
+        join(pDir, 'plugin.manifest.json'),
+        JSON.stringify({
+          id,
+          version,
+          realms: ['daemon'],
+          permissions: [],
+          modelVisible: false,
+        }),
+      );
+      writeTextFile(join(pDir, 'dist', 'index.js'), `export const id = '${id}';\n`);
+      catalogEntries.push({
+        id,
+        packageName: `@prismux/plugin-${id}`,
+        version: '0.0.1-alpha.1',
+        engines: { prismux: '>=0.0.1-0 <2.0.0' },
+        realms: ['daemon'],
+        permissions: [],
+        modelVisible: false,
+        sha256: null,
+        status: 'source-only',
+      });
+    }
+
+    const catalogPath = join(mockRepo, 'plugins-official', 'catalog', 'official.json');
+    writeTextFile(
+      catalogPath,
+      JSON.stringify({ schemaVersion: 1, plugins: catalogEntries }, null, 2),
+    );
+
+    const releaseRes = runReleaseAll({
+      repoRoot: mockRepo,
+      outDir,
+      version,
+      skipDesktop: true,
+    });
+
+    assert.equal(releaseRes.version, version);
+    assert.equal(releaseRes.plugins.length, 4);
+    assert.equal(releaseRes.unscopedNpmPackages.length, 4);
+    assert.equal(releaseRes.scopedNpmPackages.length, 4);
+    assert.ok(existsSync(join(outDir, 'plugins', `qq-${version}.wb-plugin`)));
+    assert.ok(existsSync(releaseRes.sumsPath));
+
+    const updatedCatalog = JSON.parse(readFileSync(catalogPath, 'utf8')) as {
+      plugins: Array<{ id: string; version: string; engines: { prismux: string }; status: string }>;
+    };
+    for (const item of updatedCatalog.plugins) {
+      assert.equal(item.version, version);
+      assert.equal(item.engines.prismux, engineRange);
+      assert.equal(item.status, 'verified');
+    }
+  });
+});
+
 

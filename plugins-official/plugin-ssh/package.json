@@ -1,11 +1,11 @@
 {
   "name": "@prismux/plugin-ssh",
-  "version": "0.0.1-alpha.1",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "Official optional SSH host pool, Web PTY, and SFTP operations plugin for Prismux.",
   "engines": {
-    "prismux": ">=0.0.1-0 <2.0.0"
+    "prismux": ">=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

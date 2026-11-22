@@ -511,7 +511,12 @@ function writeBufferAtomic(targetPath: string, payload: Buffer | string): void {
 export function updateCatalogFile(
   catalogPath: string,
   pluginId: string,
-  metadata: { version: string; sha256: string; bytes: number },
+  metadata: {
+    version: string;
+    sha256: string;
+    bytes: number;
+    engines?: Record<string, unknown>;
+  },
 ): void {
   const resolvedPath = resolve(catalogPath);
   if (!existsSync(resolvedPath)) {
@@ -551,6 +556,9 @@ export function updateCatalogFile(
   target['sha256'] = metadata.sha256;
   target['bytes'] = metadata.bytes;
   target['status'] = 'verified';
+  if (metadata.engines && typeof metadata.engines['prismux'] === 'string') {
+    target['engines'] = { prismux: metadata.engines['prismux'] };
+  }
 
   writeBufferAtomic(resolvedPath, `${JSON.stringify(parsed, null, 2)}\n`);
 }
@@ -572,7 +580,7 @@ export function packPlugin(options: PackPluginOptions): PackPluginResult {
     throw new Error(`Plugin path is not a directory: ${pluginDir}`);
   }
 
-  const { manifest } = validatePluginMetadata(pluginDir);
+  const { packageJson, manifest } = validatePluginMetadata(pluginDir);
   const outDir = resolve(options.outDir ?? join(process.cwd(), '.work', 'plugin-dist'));
 
   const files = collectPluginFiles(pluginDir);
@@ -612,6 +620,7 @@ export function packPlugin(options: PackPluginOptions): PackPluginResult {
       version: manifest.version,
       sha256,
       bytes: gzippedBuffer.length,
+      ...(packageJson.engines ? { engines: packageJson.engines } : {}),
     });
     catalogUpdated = true;
   }

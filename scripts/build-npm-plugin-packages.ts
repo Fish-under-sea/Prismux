@@ -302,7 +302,7 @@ export function buildNpmPluginPackages(
     const prismuxEngine =
       typeof enginesRaw['prismux'] === 'string' && enginesRaw['prismux'].trim().length > 0
         ? enginesRaw['prismux'].trim()
-        : '>=0.0.1-0 <2.0.0';
+        : '>=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0';
 
     const generatedPackageJson = {
       name: packageName,

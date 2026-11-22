@@ -178,6 +178,30 @@ importers:
         specifier: ^0.1.9
         version: 0.1.9
 
+  packages/prismux-appearance:
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.1.0
+        version: 19.3.0
+      react:
+        specifier: ^19.1.0
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.1.0
+        version: 19.3.1
+
+  packages/prismux-wallpaper:
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.0
+        version: 19.3.0
+      react:
+        specifier: ^19.1.0
+        version: 19.3.1
+
   packages/protocol: {}
 
   packages/sync-vault:
