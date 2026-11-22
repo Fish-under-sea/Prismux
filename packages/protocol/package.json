@@ -17,6 +17,11 @@
       "types": "./dist/brand.d.ts",
       "import": "./dist/brand.js"
     },
+    "./chief": {
+      "@prismux/source": "./src/chief.ts",
+      "types": "./dist/chief.d.ts",
+      "import": "./dist/chief.js"
+    },
     "./memory": {
       "@prismux/source": "./src/memory.ts",
       "types": "./dist/memory.d.ts",

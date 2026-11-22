@@ -18,12 +18,17 @@
   "scripts": {
     "typecheck": "tsc --noEmit --customConditions @prismux/source",
     "build": "tsc --rootDir src",
-    "start": "node dist/cli.js start"
+    "start": "node dist/cli.js start",
+    "test": "node --test dist/__tests__/*.test.js"
   },
   "dependencies": {
     "@prismux/protocol": "workspace:*",
     "@prismux/cordis-kernel": "workspace:*",
     "@prismux/memory-core": "workspace:*",
-    "@prismux/sync-vault": "workspace:*"
+    "@prismux/sync-vault": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.0"
   }
 }

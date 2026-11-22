@@ -1,3 +1,8 @@
+import type {
+  ChiefProviderKind,
+  ChiefThreadSlotState,
+  T3BridgeStatus
+} from "./chief.js";
 import type { DialMode, HandoffRequest, HandoffResult } from "./handoff.js";
 import type { ApprovalGuideCard, RiskLevel } from "./hooks.js";
 import type {
@@ -22,6 +27,82 @@ export const LAYOUT_PRESET_IDS = [
 
 export type LayoutPresetId = (typeof LAYOUT_PRESET_IDS)[number];
 
+export interface GlassRegionConfig {
+  fill: number;
+  blur: number;
+}
+
+export const GLASS_PRESET_KINDS = [
+  "off",
+  "light",
+  "balanced",
+  "clear",
+  "custom"
+] as const;
+
+export type GlassPresetKind = (typeof GLASS_PRESET_KINDS)[number];
+
+export interface FourRegionGlassSettings {
+  sidebar: GlassRegionConfig;
+  content: GlassRegionConfig;
+  overlay: GlassRegionConfig;
+  control: GlassRegionConfig;
+  preset: GlassPresetKind;
+  glassTint?: string;
+  fresnelRimOpacity: number;
+  followFishDockTheme: boolean;
+}
+
+export interface WallpaperSettings {
+  sourceType: "none" | "scene" | "web" | "video" | "image";
+  sourcePath?: string;
+  steamWorkshopId?: string;
+  veilOpacity: number;
+  vignetteStrength: number;
+  blurPx: number;
+  fpsLimit: number;
+  pauseWhenOccluded: boolean;
+  audioReactive: boolean;
+}
+
+export interface TypographyColorSettings {
+  lightTextColor: string;
+  darkTextColor: string;
+  lightMutedColor: string;
+  darkMutedColor: string;
+  controlFgColor: string;
+  fontFamily?: string;
+  fontWeight?: number;
+}
+
+export const DEFAULT_FOUR_REGION_GLASS_SETTINGS: FourRegionGlassSettings = {
+  sidebar: { fill: 72, blur: 18 },
+  content: { fill: 84, blur: 18 },
+  overlay: { fill: 92, blur: 20 },
+  control: { fill: 76, blur: 14 },
+  preset: "balanced",
+  fresnelRimOpacity: 0.45,
+  followFishDockTheme: false
+};
+
+export const DEFAULT_WALLPAPER_SETTINGS: WallpaperSettings = {
+  sourceType: "none",
+  veilOpacity: 0.32,
+  vignetteStrength: 0.2,
+  blurPx: 0,
+  fpsLimit: 60,
+  pauseWhenOccluded: true,
+  audioReactive: false
+};
+
+export const DEFAULT_TYPOGRAPHY_COLOR_SETTINGS: TypographyColorSettings = {
+  lightTextColor: "#141821",
+  darkTextColor: "#eef2f8",
+  lightMutedColor: "#5b6472",
+  darkMutedColor: "#98a2b3",
+  controlFgColor: "#ffffff"
+};
+
 export interface LiquidGlassSettings {
   enabled: boolean;
   refractionBlurPx: number;
@@ -32,6 +113,9 @@ export interface LiquidGlassSettings {
   darkFontColor?: string;
   fontFamily?: string;
   fontWeight?: number;
+  regions?: FourRegionGlassSettings;
+  wallpaper?: WallpaperSettings;
+  typography?: TypographyColorSettings;
 }
 
 export const DEFAULT_LIQUID_GLASS_SETTINGS: LiquidGlassSettings = {
@@ -39,7 +123,10 @@ export const DEFAULT_LIQUID_GLASS_SETTINGS: LiquidGlassSettings = {
   refractionBlurPx: 18,
   fresnelRimOpacity: 0.45,
   vignetteStrength: 0.2,
-  followFishDockTheme: false
+  followFishDockTheme: false,
+  regions: DEFAULT_FOUR_REGION_GLASS_SETTINGS,
+  wallpaper: DEFAULT_WALLPAPER_SETTINGS,
+  typography: DEFAULT_TYPOGRAPHY_COLOR_SETTINGS
 };
 
 export interface WorkbenchPresetConfig {
@@ -47,6 +134,8 @@ export interface WorkbenchPresetConfig {
   name: string;
   themeMode: AppearanceThemeMode;
   glass: LiquidGlassSettings;
+  wallpaper?: WallpaperSettings;
+  typography?: TypographyColorSettings;
 }
 
 export type IslandCardKind =
@@ -86,6 +175,14 @@ export interface PtyReplayFrame {
   data: string;
 }
 
+export interface PtyReplayResult {
+  frames: PtyReplayFrame[];
+  oldestSeq: number;
+  latestSeq: number;
+  droppedBytes: number;
+  bufferBytes: number;
+}
+
 export interface PtySessionDescriptor {
   ptyId: string;
   cwd: string;
@@ -109,13 +206,60 @@ export interface RpcMethodMap {
     params: Record<string, never>;
     result: { sessions: PtySessionDescriptor[] };
   };
+  "pty.spawn": {
+    params: {
+      ptyId?: string;
+      cwd?: string;
+      command?: string;
+      args?: string[];
+      group?: "default" | "agent-scratch";
+      worktreeBranch?: string;
+    };
+    result: { session: PtySessionDescriptor };
+  };
+  "pty.write": {
+    params: { ptyId: string; data: string };
+    result: { accepted: boolean };
+  };
+  "pty.resize": {
+    params: { ptyId: string; cols: number; rows: number };
+    result: { resized: boolean };
+  };
+  "pty.kill": {
+    params: { ptyId: string; signal?: string };
+    result: { killed: boolean };
+  };
   "pty.replay": {
     params: { ptyId: string; fromSeq?: number };
-    result: { frames: PtyReplayFrame[] };
+    result: PtyReplayResult;
+  };
+  "pty.scanScratch": {
+    params: { repoRoot: string };
+    result: {
+      repoRoot: string;
+      discoveredWorktrees: string[];
+      sessions: PtySessionDescriptor[];
+    };
   };
   "pty.adoptScratch": {
     params: { ptyId: string; projectName?: string };
     result: { adoptedThreadId: string; session: PtySessionDescriptor };
+  };
+  "chief.status": {
+    params: Record<string, never>;
+    result: { slot: ChiefThreadSlotState };
+  };
+  "chief.switchProvider": {
+    params: { provider: ChiefProviderKind; model?: string };
+    result: { slot: ChiefThreadSlotState };
+  };
+  "t3.status": {
+    params: Record<string, never>;
+    result: { status: T3BridgeStatus };
+  };
+  "daemon.shutdown": {
+    params: { reason?: string };
+    result: { shuttingDown: boolean };
   };
   "handoff.execute": {
     params: HandoffRequest;

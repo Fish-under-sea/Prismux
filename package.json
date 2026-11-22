@@ -11,6 +11,7 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
+    "test": "pnpm -r --if-present test",
     "test:scripts": "node --test scripts/__tests__/scripts.test.ts",
     "upstream:check": "node scripts/sync-t3-upstream.ts --check",
     "upstream:sync": "node scripts/sync-t3-upstream.ts --sync",
