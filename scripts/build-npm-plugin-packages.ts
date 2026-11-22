@@ -327,8 +327,8 @@ export function buildNpmPluginPackages(
         node: '>=20.0.0',
       },
       bin: {
-        [`prismux-plugin-${id}`]: './bin/install.mjs',
-        [`prismux-install-${id}`]: './bin/install.mjs',
+        [`prismux-plugin-${id}`]: 'bin/install.mjs',
+        [`prismux-install-${id}`]: 'bin/install.mjs',
       },
       files: [
         'bin/',
@@ -352,7 +352,10 @@ export function buildNpmPluginPackages(
       archiveFilename,
       expectedSha256: sha256,
     });
-    writeFileSync(join(binDir, 'install.mjs'), binScript, 'utf8');
+    writeFileSync(join(binDir, 'install.mjs'), binScript, {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
 
     const readmeLines = [
       `# ${packageName}`,

@@ -761,8 +761,8 @@ describe('release-and-npm-packages', () => {
       node: '>=20.0.0',
     });
     assert.deepEqual(qqPkgJson['bin'], {
-      'prismux-plugin-qq': './bin/install.mjs',
-      'prismux-install-qq': './bin/install.mjs',
+      'prismux-plugin-qq': 'bin/install.mjs',
+      'prismux-install-qq': 'bin/install.mjs',
     });
 
     // Execute generated bin/install.mjs --out export mode & verify anti-overwrite protection

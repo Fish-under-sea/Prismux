@@ -69,5 +69,12 @@ jobs:
           ")
           echo "Resolved npm dist-tag: ${DIST_TAG}"
           for id in qq pet fishdock-hook ssh; do
-            npm publish ".work/npm-packages/${id}" --tag "${DIST_TAG}" --registry=https://npm.pkg.github.com
+            PKG_DIR=".work/npm-packages/${id}"
+            PKG_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('${PKG_DIR}/package.json', 'utf8')).name)")
+            PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('${PKG_DIR}/package.json', 'utf8')).version)")
+            if npm view "${PKG_NAME}@${PKG_VERSION}" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
+              echo "Skip ${PKG_NAME}@${PKG_VERSION}: already published on GitHub Packages."
+              continue
+            fi
+            (cd "${PKG_DIR}" && npm publish --tag "${DIST_TAG}" --registry=https://npm.pkg.github.com)
           done
