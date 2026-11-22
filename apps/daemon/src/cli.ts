@@ -10,22 +10,45 @@ export interface DaemonCliParsedArgs {
   command: "start" | "help" | "version";
   headless: boolean;
   dataDir: string;
+  host: string;
+  port: number;
+  t3Url?: string;
+  t3Token?: string;
+  t3Command?: string;
+  t3Args?: string[];
+  authToken?: string;
 }
 
 export function resolveDefaultDataDir(): string {
   return join(homedir(), BRAND.dataDirName);
 }
 
+function readNextArg(argv: string[], index: number, flag: string): string {
+  const value = argv[index + 1];
+  if (value === undefined || value.length === 0) {
+    throw new Error(`Missing value for CLI option ${flag}`);
+  }
+  return value;
+}
+
 export function parseDaemonCliArgs(argv: string[]): DaemonCliParsedArgs {
   let command: "start" | "help" | "version" = "start";
   let headless = false;
   let dataDir = resolveDefaultDataDir();
+  let host = "127.0.0.1";
+  let port = 0;
+  let t3Url: string | undefined;
+  let t3Token: string | undefined;
+  let t3Command: string | undefined;
+  let t3Args: string[] | undefined;
+  let authToken: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === undefined) {
       continue;
     }
+
     if (arg === "--help" || arg === "-h") {
       command = "help";
     } else if (arg === "--version" || arg === "-v") {
@@ -35,23 +58,77 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliParsedArgs {
     } else if (arg === "--headless") {
       headless = true;
     } else if (arg === "--data-dir") {
-      const next = argv[i + 1];
-      if (next !== undefined && next.length > 0) {
-        dataDir = resolve(next);
-        i += 1;
+      dataDir = resolve(readNextArg(argv, i, "--data-dir"));
+      i += 1;
+    } else if (arg === "--host") {
+      host = readNextArg(argv, i, "--host");
+      i += 1;
+    } else if (arg === "--port") {
+      const rawPort = readNextArg(argv, i, "--port");
+      const parsedPort = Number.parseInt(rawPort, 10);
+      if (!Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
+        throw new Error(`Invalid port number for --port: ${rawPort}`);
       }
+      port = parsedPort;
+      i += 1;
+    } else if (arg === "--t3-url") {
+      t3Url = readNextArg(argv, i, "--t3-url");
+      i += 1;
+    } else if (arg === "--t3-token") {
+      t3Token = readNextArg(argv, i, "--t3-token");
+      i += 1;
+    } else if (arg === "--t3-command") {
+      t3Command = readNextArg(argv, i, "--t3-command");
+      i += 1;
+    } else if (arg === "--t3-args") {
+      const rawJson = readNextArg(argv, i, "--t3-args");
+      const parsed: unknown = JSON.parse(rawJson);
+      if (
+        !Array.isArray(parsed) ||
+        parsed.some((entry) => typeof entry !== "string")
+      ) {
+        throw new Error("--t3-args must be a JSON array of strings.");
+      }
+      t3Args = parsed;
+      i += 1;
+    } else if (arg === "--auth-token") {
+      authToken = readNextArg(argv, i, "--auth-token");
+      i += 1;
     }
   }
 
-  return { command, headless, dataDir };
+  return {
+    command,
+    headless,
+    dataDir,
+    host,
+    port,
+    ...(t3Url !== undefined ? { t3Url } : {}),
+    ...(t3Token !== undefined ? { t3Token } : {}),
+    ...(t3Command !== undefined ? { t3Command } : {}),
+    ...(t3Args !== undefined ? { t3Args } : {}),
+    ...(authToken !== undefined ? { authToken } : {})
+  };
 }
 
-export async function runDaemonCli(argv: string[] = process.argv.slice(2)): Promise<number> {
+export async function runDaemonCli(
+  argv: string[] = process.argv.slice(2)
+): Promise<number> {
   const parsed = parseDaemonCliArgs(argv);
 
   if (parsed.command === "help") {
     process.stdout.write(
-      `${BRAND.appName} Daemon CLI\n\nUsage:\n  ${BRAND.appSlug} start [--headless] [--data-dir <path>]\n  ${BRAND.appSlug} --help\n  ${BRAND.appSlug} --version\n`
+      [
+        `${BRAND.appName} Daemon CLI`,
+        "",
+        "Usage:",
+        `  ${BRAND.appSlug} start [--headless] [--port <n>] [--host <h>] [--data-dir <dir>]`,
+        "                 [--t3-url <url>] [--t3-token <tok>] [--t3-command <cmd>]",
+        "                 [--t3-args <json>] [--auth-token <tok>]",
+        `  ${BRAND.appSlug} --help`,
+        `  ${BRAND.appSlug} --version`,
+        ""
+      ].join("\n")
     );
     return 0;
   }
@@ -61,17 +138,45 @@ export async function runDaemonCli(argv: string[] = process.argv.slice(2)): Prom
     return 0;
   }
 
-  const sanitizedEnv = sanitizeProviderEnv(process.env);
+  sanitizeProviderEnv(process.env);
+
+  let resolveShutdown: (() => void) | undefined;
+  const shutdownSignal = new Promise<void>((resolvePromise) => {
+    resolveShutdown = resolvePromise;
+  });
+
+  const triggerShutdown = () => {
+    resolveShutdown?.();
+  };
+
   const daemon = new PrismuxDaemon({
     headless: parsed.headless,
-    dataDir: parsed.dataDir
+    dataDir: parsed.dataDir,
+    host: parsed.host,
+    port: parsed.port,
+    t3Url: parsed.t3Url,
+    t3Token: parsed.t3Token,
+    t3Command: parsed.t3Command,
+    t3Args: parsed.t3Args,
+    authToken: parsed.authToken,
+    onShutdownRequested: () => {
+      triggerShutdown();
+    }
   });
-  await daemon.start();
 
-  process.stdout.write(
-    `[${BRAND.appName}] daemon scaffold started (headless=${String(parsed.headless)}, dataDir=${parsed.dataDir}, cleanEnvKeys=${Object.keys(sanitizedEnv).length}).\n`
-  );
-  await daemon.stop();
+  process.on("SIGINT", triggerShutdown);
+  process.on("SIGTERM", triggerShutdown);
+
+  try {
+    const readyInfo = await daemon.start();
+    process.stdout.write(`PRISMUX_DAEMON_READY ${JSON.stringify(readyInfo)}\n`);
+    await shutdownSignal;
+  } finally {
+    process.off("SIGINT", triggerShutdown);
+    process.off("SIGTERM", triggerShutdown);
+    await daemon.stop();
+  }
+
   return 0;
 }
 
