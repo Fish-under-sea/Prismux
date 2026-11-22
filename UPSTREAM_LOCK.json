@@ -1,12 +1,17 @@
 {
   "upstreamRepo": "https://github.com/pingdotgg/t3code.git",
+  "repository": "https://github.com/pingdotgg/t3code.git",
   "branch": "main",
   "commit": "b23f1e8af9b13af2c4aa1ba8e0d6987550688645",
   "syncedAt": "2026-11-22T21:25:00+08:00",
   "license": "MIT",
-  "readOnly": true,
+  "mode": "managed-fork",
+  "readOnly": false,
+  "patchManifest": "docs/t3code-patch-manifest.md",
   "requiredPaths": [
     "apps/server/package.json",
+    "apps/web/package.json",
+    "apps/desktop/package.json",
     "packages/client-runtime",
     "packages/contracts",
     "docs/internals/overview.md"

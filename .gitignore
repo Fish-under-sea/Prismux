@@ -13,6 +13,27 @@ coverage/
 # Rust / Tauri build artifacts
 apps/desktop-tauri/target/
 
+# T3 Code managed-fork dependencies & build artifacts
+vendor/t3code/node_modules/
+vendor/t3code/**/node_modules/
+vendor/t3code/apps/*/dist/
+vendor/t3code/apps/*/dist-exe/
+vendor/t3code/apps/desktop/dist-electron/
+vendor/t3code/apps/desktop/out/
+vendor/t3code/apps/desktop/prod-resources/
+vendor/t3code/apps/mobile/**/*.a
+vendor/t3code/apps/mobile/**/*.xcframework/
+vendor/t3code/packages/*/dist/
+vendor/t3code/infra/*/dist/
+vendor/t3code/native/**/target/
+vendor/t3code/release/
+vendor/t3code/release-mock/
+vendor/t3code/.vite-plus/
+vendor/t3code/**/.vite-plus/
+vendor/t3code/.vite-hooks/
+vendor/t3code/.t3/
+vendor/t3code/.repos/
+
 # Local environment & logs
 .env
 .env.local

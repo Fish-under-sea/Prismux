@@ -13,21 +13,28 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+export type UpstreamMode = 'managed-fork' | 'read-only-submodule';
+
 export interface UpstreamLockData {
   upstreamRepo: string;
+  repository?: string;
   branch: string;
   commit: string;
   syncedAt: string;
   license: string;
+  mode?: UpstreamMode;
   readOnly: boolean;
+  patchManifest?: string;
   requiredPaths: string[];
 }
 
 export interface UpstreamContractResult {
   ok: boolean;
+  mode: UpstreamMode;
   vendorDir: string;
   commit: string;
   checkedPaths: string[];
+  patchManifest?: string;
   errors: string[];
 }
 
@@ -93,14 +100,22 @@ function validateSafeRelativePath(relPath: string): string {
 }
 
 /**
- * Validates parsed `UPSTREAM_LOCK.json` structure and enforces `readOnly === true`.
+ * Validates parsed `UPSTREAM_LOCK.json` structure for either `managed-fork`
+ * (v0.1.0+ regular directory with patch manifest) or legacy `read-only-submodule`.
  */
 export function validateLockData(raw: unknown): UpstreamLockData {
   if (!isPlainRecord(raw)) {
     throw new Error('UPSTREAM_LOCK.json must be a JSON object');
   }
 
-  const upstreamRepo = assertNonEmptyString(raw, 'upstreamRepo');
+  const upstreamRepo =
+    typeof raw['upstreamRepo'] === 'string' && raw['upstreamRepo'].trim().length > 0
+      ? raw['upstreamRepo'].trim()
+      : assertNonEmptyString(raw, 'repository');
+  const repository =
+    typeof raw['repository'] === 'string' && raw['repository'].trim().length > 0
+      ? raw['repository'].trim()
+      : upstreamRepo;
   const branch = assertNonEmptyString(raw, 'branch');
   const commit = assertNonEmptyString(raw, 'commit');
   if (!COMMIT_SHA_PATTERN.test(commit)) {
@@ -113,10 +128,45 @@ export function validateLockData(raw: unknown): UpstreamLockData {
   }
 
   const license = assertNonEmptyString(raw, 'license');
-  if (raw['readOnly'] !== true) {
+  const rawMode = raw['mode'];
+  const rawReadOnly = raw['readOnly'];
+  if (typeof rawReadOnly !== 'boolean') {
+    throw new Error('UPSTREAM_LOCK.json field "readOnly" must be a boolean');
+  }
+
+  let mode: UpstreamMode;
+  if (rawMode === undefined) {
+    if (rawReadOnly !== true) {
+      throw new Error(
+        'UPSTREAM_LOCK.json field "readOnly" must be true unless mode is "managed-fork"',
+      );
+    }
+    mode = 'read-only-submodule';
+  } else if (rawMode === 'managed-fork') {
+    if (rawReadOnly !== false) {
+      throw new Error(
+        'UPSTREAM_LOCK.json field "readOnly" must be false when mode is "managed-fork"',
+      );
+    }
+    mode = 'managed-fork';
+  } else if (rawMode === 'read-only-submodule') {
+    if (rawReadOnly !== true) {
+      throw new Error(
+        'UPSTREAM_LOCK.json field "readOnly" must be true when mode is "read-only-submodule"',
+      );
+    }
+    mode = 'read-only-submodule';
+  } else {
     throw new Error(
-      'UPSTREAM_LOCK.json field "readOnly" must be strictly true (vendor/t3code is read-only)',
+      `UPSTREAM_LOCK.json field "mode" must be "managed-fork" or "read-only-submodule", got ${String(rawMode)}`,
     );
+  }
+
+  let patchManifest: string | undefined;
+  if (mode === 'managed-fork') {
+    patchManifest = validateSafeRelativePath(assertNonEmptyString(raw, 'patchManifest'));
+  } else if (raw['patchManifest'] !== undefined) {
+    patchManifest = validateSafeRelativePath(assertNonEmptyString(raw, 'patchManifest'));
   }
 
   const requiredRaw = raw['requiredPaths'];
@@ -134,11 +184,14 @@ export function validateLockData(raw: unknown): UpstreamLockData {
 
   return {
     upstreamRepo,
+    repository,
     branch,
     commit,
     syncedAt,
     license,
-    readOnly: true,
+    mode,
+    readOnly: rawReadOnly,
+    ...(patchManifest !== undefined ? { patchManifest } : {}),
     requiredPaths,
   };
 }
@@ -211,6 +264,10 @@ export function inspectUpstreamContract(
     errors.push(err instanceof Error ? err.message : String(err));
   }
 
+  const mode: UpstreamMode =
+    validatedLock?.mode ??
+    (lockData.mode === 'managed-fork' ? 'managed-fork' : 'read-only-submodule');
+
   let vendorExists = false;
   try {
     vendorExists = statSync(vendorDir).isDirectory();
@@ -221,7 +278,7 @@ export function inspectUpstreamContract(
     errors.push(`Upstream directory missing: ${vendorDir}`);
   }
 
-  if (gitStatusOutput.trim().length > 0) {
+  if (mode === 'read-only-submodule' && gitStatusOutput.trim().length > 0) {
     errors.push(
       `违反禁止修改 vendor/t3code 红线 (vendor/t3code is strictly read-only): ` +
         `git status --porcelain is non-empty:\n${gitStatusOutput.trimEnd()}`,
@@ -229,13 +286,27 @@ export function inspectUpstreamContract(
   }
 
   const normalizedHead = actualHead.trim();
+  const effectiveCommit =
+    mode === 'managed-fork' && normalizedHead.length === 0
+      ? (validatedLock?.commit ?? '')
+      : normalizedHead;
+
   if (validatedLock) {
-    if (normalizedHead.length === 0) {
-      errors.push('Actual HEAD commit in vendor/t3code is empty');
-    } else if (normalizedHead.toLowerCase() !== validatedLock.commit.toLowerCase()) {
-      errors.push(
-        `Commit mismatch in vendor/t3code: UPSTREAM_LOCK.json expects ${validatedLock.commit}, actual HEAD is ${normalizedHead}`,
-      );
+    if (mode === 'read-only-submodule') {
+      if (normalizedHead.length === 0) {
+        errors.push('Actual HEAD commit in vendor/t3code is empty');
+      } else if (normalizedHead.toLowerCase() !== validatedLock.commit.toLowerCase()) {
+        errors.push(
+          `Commit mismatch in vendor/t3code: UPSTREAM_LOCK.json expects ${validatedLock.commit}, actual HEAD is ${normalizedHead}`,
+        );
+      }
+    } else if (validatedLock.patchManifest) {
+      const manifestPath = resolve(resolvedRoot, validatedLock.patchManifest);
+      if (!isInsideDirectory(resolvedRoot, manifestPath)) {
+        errors.push(`patchManifest escapes repository root: ${validatedLock.patchManifest}`);
+      } else if (!existsSync(manifestPath)) {
+        errors.push(`Missing patchManifest file: ${validatedLock.patchManifest}`);
+      }
     }
 
     if (vendorExists) {
@@ -271,9 +342,11 @@ export function inspectUpstreamContract(
 
   return {
     ok: errors.length === 0,
+    mode,
     vendorDir,
-    commit: normalizedHead,
+    commit: effectiveCommit,
     checkedPaths,
+    ...(validatedLock?.patchManifest ? { patchManifest: validatedLock.patchManifest } : {}),
     errors,
   };
 }
@@ -333,7 +406,8 @@ function resolveUpstreamPaths(options?: {
 }
 
 /**
- * Verifies `UPSTREAM_LOCK.json`, submodule cleanliness, commit pin, and required paths.
+ * Verifies `UPSTREAM_LOCK.json`, mode contract (managed-fork patchManifest or
+ * legacy read-only submodule cleanliness), commit pin, and required paths.
  */
 export function checkUpstream(
   options?: { root?: string; lockPath?: string; vendorDir?: string },
@@ -345,6 +419,11 @@ export function checkUpstream(
   if (!existsSync(vendorDir)) {
     throw new Error(`vendor/t3code directory does not exist: ${vendorDir}`);
   }
+
+  if (lockData.mode === 'managed-fork') {
+    return validateUpstreamContract(repoRoot, lockData, '', lockData.commit, vendorDir);
+  }
+
   if (!existsSync(join(vendorDir, '.git'))) {
     throw new Error(
       `vendor/t3code is not an initialized git checkout/submodule (missing ${join(vendorDir, '.git')})`,
@@ -366,6 +445,7 @@ export function checkUpstream(
 /**
  * Fetches shallow upstream tip for the locked branch, updates `UPSTREAM_LOCK.json`,
  * and runs the full read-only & contract validation suite.
+ * In `managed-fork` mode, refuses destructive checkout to protect registered Prismux mount points.
  */
 export function syncUpstream(
   options?: { root?: string; lockPath?: string; vendorDir?: string },
@@ -373,6 +453,14 @@ export function syncUpstream(
 ): SyncUpstreamResult {
   const { repoRoot, lockPath, vendorDir } = resolveUpstreamPaths(options);
   const lockData = readUpstreamLock(lockPath);
+
+  if (lockData.mode === 'managed-fork') {
+    const manifest = lockData.patchManifest ?? 'docs/t3code-patch-manifest.md';
+    throw new Error(
+      `Refusing destructive --sync in managed-fork mode: vendor/t3code is managed directly in Prismux (baseline ${lockData.commit}). ` +
+        `Perform a manual 3-way merge against ${lockData.upstreamRepo} (${lockData.branch}), verify mount points in ${manifest}, and update UPSTREAM_LOCK.json.`,
+    );
+  }
 
   const hasGitCheckout = existsSync(join(vendorDir, '.git'));
   if (hasGitCheckout) {
@@ -533,6 +621,10 @@ export function runSyncUpstreamCli(
     const checkResult = checkUpstream(opts);
     if (parsed.json) {
       io.log(JSON.stringify(checkResult, null, 2));
+    } else if (checkResult.mode === 'managed-fork') {
+      io.log(
+        `Upstream contract OK at ${checkResult.commit} (${checkResult.checkedPaths.length} paths verified, managed-fork mode, manifest ${checkResult.patchManifest ?? 'n/a'}).`,
+      );
     } else {
       io.log(
         `Upstream contract OK at ${checkResult.commit} (${checkResult.checkedPaths.length} paths verified, read-only intact).`,
