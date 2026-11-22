@@ -319,6 +319,19 @@ html[data-prismux-gpu="0"] .pmx-glass-overlay {
     transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Reserve clear bottom lane in multi-agent-coding so FloatingCapsules never overlaps split panes */
+.pmx-shell[data-pane-preset="multi-agent-coding"] .pmx-main-stage {
+  padding-bottom: 60px;
+}
+
+/* Optimize approval-inbox leaf body so embedded ApprovalGuidePanel keeps max vertical budget */
+.prismux-leaf-pane[data-pane-id="approval-inbox"] .prismux-leaf-body {
+  padding: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .pmx-drawer-backdrop {
   position: fixed;
   inset: 0;

@@ -96,31 +96,43 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: "12px",
-        padding: "16px",
+        gap: "8px",
+        padding: "10px 12px",
         height: "100%",
-        minHeight: 0
+        minHeight: 0,
+        overflow: "hidden"
       }}
     >
       <header
         style={{
+          flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: "8px"
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
           <span className="prismux-ico" aria-hidden="true">
             ⚑
           </span>
-          <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 600 }}>
+          <h3
+            style={{
+              margin: 0,
+              fontSize: "13px",
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis"
+            }}
+          >
             中文审批解说（ApprovalGuide）
           </h3>
         </div>
         <span
           className="pmx-muted pmx-tabular"
           style={{
+            flexShrink: 0,
             padding: "2px 8px",
             borderRadius: "999px",
             border: "1px solid var(--prismux-line, rgba(148,163,184,0.28))"
@@ -131,7 +143,7 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
       </header>
 
       {errorMessage && (
-        <div className="pmx-alert" role="alert">
+        <div className="pmx-alert" role="alert" style={{ flexShrink: 0 }}>
           <span>审批动作失败：{errorMessage}。请检查守护进程连接后重试。</span>
           {onRetryError && (
             <button
@@ -146,25 +158,25 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
       )}
 
       {disabledReason && (
-        <p className="pmx-muted" style={{ margin: 0 }}>
+        <p className="pmx-muted" style={{ margin: 0, flexShrink: 0 }}>
           操作受限：{disabledReason}
         </p>
       )}
 
       <div
         style={{
-          flex: 1,
-          minHeight: 0,
+          flex: "1 1 0",
+          minHeight: "110px",
           overflowY: "auto",
           display: "flex",
           flexDirection: "column",
-          gap: "12px"
+          gap: "8px"
         }}
       >
         {pendingApprovals.length === 0 ? (
           <div
             style={{
-              padding: "16px",
+              padding: "12px",
               borderRadius: "10px",
               border: "1px dashed var(--prismux-line, rgba(148,163,184,0.28))",
               color: "var(--prismux-muted, #94a3b8)",
@@ -185,8 +197,8 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                 key={item.requestId}
                 aria-busy={isBusy}
                 style={{
-                  padding: "12px 16px",
-                  borderRadius: "12px",
+                  padding: "8px 12px",
+                  borderRadius: "10px",
                   border: `1px solid ${
                     riskMeta.level === "high"
                       ? "var(--c-bad, #dc2626)"
@@ -195,44 +207,46 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                   background: "var(--prismux-control, rgba(15, 23, 42, 0.35))",
                   display: "flex",
                   flexDirection: "column",
-                  gap: "12px"
+                  gap: "8px"
                 }}
               >
                 {/* 三栏中文审批卡 */}
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                    gap: "12px"
+                    gridTemplateColumns: "minmax(0, 1.35fr) auto minmax(0, 1.35fr)",
+                    gap: "8px",
+                    alignItems: "start"
                   }}
                 >
-                  <div>
-                    <div className="pmx-muted" style={{ marginBottom: "4px" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="pmx-muted" style={{ marginBottom: "2px" }}>
                       准备干什么
                     </div>
-                    <div style={{ fontWeight: 600, fontSize: "13px" }}>
+                    <div style={{ fontWeight: 600, fontSize: "12.5px", lineHeight: 1.35 }}>
                       {item.card.actionSummary}
                     </div>
-                    <div className="pmx-muted" style={{ marginTop: "4px" }}>
+                    <div className="pmx-muted" style={{ marginTop: "2px" }}>
                       工具：{item.card.toolName}
                     </div>
                   </div>
 
-                  <div>
-                    <div className="pmx-muted" style={{ marginBottom: "4px" }}>
+                  <div style={{ flexShrink: 0 }}>
+                    <div className="pmx-muted" style={{ marginBottom: "2px" }}>
                       潜在风险等级
                     </div>
                     <div
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
-                        gap: "6px",
-                        padding: "2px 10px",
+                        gap: "4px",
+                        padding: "2px 8px",
                         borderRadius: "999px",
                         border: `1px solid ${riskMeta.colorVar}`,
                         color: riskMeta.colorVar,
                         fontWeight: 600,
-                        fontSize: "12.5px"
+                        fontSize: "12px",
+                        whiteSpace: "nowrap"
                       }}
                     >
                       <span className="prismux-ico" aria-hidden="true">
@@ -242,11 +256,11 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                     </div>
                   </div>
 
-                  <div>
-                    <div className="pmx-muted" style={{ marginBottom: "4px" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="pmx-muted" style={{ marginBottom: "2px" }}>
                       触发拦截依据
                     </div>
-                    <div style={{ fontSize: "12.5px" }}>
+                    <div style={{ fontSize: "12px", lineHeight: 1.35 }}>
                       {item.card.triggerReason}
                     </div>
                   </div>
@@ -256,12 +270,13 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                   <pre
                     style={{
                       margin: 0,
-                      padding: "8px 12px",
-                      borderRadius: "8px",
+                      padding: "4px 8px",
+                      borderRadius: "6px",
                       background: "rgba(15, 23, 42, 0.45)",
                       border: "1px solid var(--prismux-line, rgba(148,163,184,0.22))",
                       fontFamily: "ui-monospace, Consolas, monospace",
                       fontSize: "12px",
+                      lineHeight: 1.35,
                       overflowX: "auto",
                       whiteSpace: "pre-wrap",
                       wordBreak: "break-all"
@@ -276,7 +291,7 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                     display: "flex",
                     flexWrap: "wrap",
                     alignItems: "center",
-                    gap: "8px"
+                    gap: "6px"
                   }}
                 >
                   <input
@@ -292,13 +307,20 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                         [item.requestId]: e.target.value
                       }))
                     }
-                    style={{ flex: 1, minWidth: "160px" }}
+                    style={{
+                      flex: 1,
+                      minWidth: "100px",
+                      height: "24px",
+                      minHeight: "24px",
+                      padding: "0 8px",
+                      fontSize: "12px"
+                    }}
                   />
 
                   {riskMeta.requiresExtraCaution && !isConfirmingHigh ? (
                     <button
                       type="button"
-                      className="pmx-btn pmx-btn-danger"
+                      className="pmx-btn pmx-btn-sm pmx-btn-danger"
                       disabled={Boolean(disabledReason) || isBusy}
                       title={disabledReason}
                       onClick={() => setConfirmHighRiskId(item.requestId)}
@@ -311,7 +333,7 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                   ) : (
                     <button
                       type="button"
-                      className="pmx-btn pmx-btn-primary"
+                      className="pmx-btn pmx-btn-sm pmx-btn-primary"
                       disabled={Boolean(disabledReason) || isBusy}
                       aria-busy={isBusy}
                       title={disabledReason}
@@ -336,7 +358,7 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                   {isConfirmingHigh && (
                     <button
                       type="button"
-                      className="pmx-btn"
+                      className="pmx-btn pmx-btn-sm"
                       onClick={() => setConfirmHighRiskId(null)}
                     >
                       取消高危放行
@@ -345,7 +367,7 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
 
                   <button
                     type="button"
-                    className="pmx-btn pmx-btn-danger"
+                    className="pmx-btn pmx-btn-sm pmx-btn-danger"
                     disabled={Boolean(disabledReason) || isBusy}
                     title={disabledReason}
                     onClick={() => {
@@ -376,19 +398,21 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
           void handleDispatchPrompt("button");
         }}
         style={{
+          flexShrink: 0,
           display: "flex",
           flexDirection: "column",
-          gap: "8px",
-          paddingTop: "8px",
+          gap: "6px",
+          paddingTop: "6px",
           borderTop: "1px solid var(--prismux-line, rgba(148,163,184,0.2))"
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
           <input
             type="text"
             className="pmx-input"
             aria-label="主秘书快捷指令输入框"
-            placeholder="输入补充说明；留空直接按 Enter 或点击发送将自动续跑 Continue"
+            title="输入补充说明；留空直接按 Enter 或点击发送将自动续跑 Continue"
+            placeholder="输入指令，留空直接 Continue"
             value={promptInput}
             disabled={Boolean(disabledReason)}
             onChange={(e) => setPromptInput(e.target.value)}
@@ -398,7 +422,12 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
                 void handleDispatchPrompt("enter");
               }
             }}
-            style={{ flex: 1 }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: "28px",
+              minHeight: "28px"
+            }}
           />
           <button
             type="submit"
@@ -406,6 +435,7 @@ export const ApprovalGuidePanel: React.FC<ApprovalGuidePanelProps> = ({
             disabled={Boolean(disabledReason)}
             aria-busy={submitting}
             title={disabledReason}
+            style={{ flexShrink: 0, padding: "0 10px" }}
           >
             <span className="prismux-ico" aria-hidden="true">
               ▶

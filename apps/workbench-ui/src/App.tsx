@@ -29,6 +29,7 @@ import { UsageLedgerBar } from "./components/UsageLedgerBar.js";
 import { WallpaperViewport } from "./components/WallpaperViewport.js";
 import {
   PRESET_TREES,
+  resizeSplit,
   WORKBENCH_PANE_TITLES,
   type SplitNode,
   type WorkbenchPaneId
@@ -163,6 +164,14 @@ export interface WorkbenchAppProps {
   initialWizardOpen?: boolean;
 }
 
+function getPresetSplitTree(preset: LayoutPresetId): SplitNode {
+  const base = PRESET_TREES[preset];
+  if (preset === "multi-agent-coding") {
+    return resizeSplit(base, "split-right-stack", 0.46);
+  }
+  return base;
+}
+
 export const App: React.FC<WorkbenchAppProps> = ({
   initialAppearance = DEFAULT_APPEARANCE_STATE,
   initialWizardOpen = false
@@ -170,7 +179,7 @@ export const App: React.FC<WorkbenchAppProps> = ({
   const [appearance, setAppearance] =
     useState<PrismuxAppearanceState>(initialAppearance);
   const [splitRoot, setSplitRoot] = useState<SplitNode>(
-    () => PRESET_TREES[initialAppearance.layoutPreset]
+    () => getPresetSplitTree(initialAppearance.layoutPreset)
   );
 
   const [chiefProvider, setChiefProvider] =
@@ -378,7 +387,7 @@ export const App: React.FC<WorkbenchAppProps> = ({
       ...prev,
       layoutPreset: nextPreset
     }));
-    setSplitRoot(PRESET_TREES[nextPreset]);
+    setSplitRoot(getPresetSplitTree(nextPreset));
     if (nextPreset === "multi-agent-coding") {
       setStandbyChatOpen(false);
     }
@@ -871,15 +880,17 @@ export const App: React.FC<WorkbenchAppProps> = ({
         case "approval-inbox":
           return (
             <div
+              className="pmx-approval-inbox-shell"
               style={{
                 display: "flex",
                 flexDirection: "column",
                 height: "100%",
-                gap: "8px",
-                padding: "8px"
+                minHeight: 0,
+                overflow: "hidden",
+                gap: "8px"
               }}
             >
-              <div style={{ display: "flex", gap: "8px" }}>
+              <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
                 <button
                   type="button"
                   role="tab"
@@ -903,7 +914,15 @@ export const App: React.FC<WorkbenchAppProps> = ({
                   思考强度直调卡
                 </button>
               </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+              <div
+                style={{
+                  flex: "1 1 0",
+                  minHeight: 0,
+                  overflow: rightPaneSubTab === "approvals" ? "hidden" : "auto",
+                  display: "flex",
+                  flexDirection: "column"
+                }}
+              >
                 {rightPaneSubTab === "approvals" ? (
                   <ApprovalGuidePanel
                     approvals={approvals}
@@ -1244,7 +1263,7 @@ export const App: React.FC<WorkbenchAppProps> = ({
             )}
           </div>
         ) : (
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <SplitWorkspace
               root={splitRoot}
               onChangeRoot={setSplitRoot}
