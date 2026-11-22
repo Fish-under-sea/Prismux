@@ -1,6 +1,6 @@
 # Prismux 超级工作台 · Agent 必读
 
-> 本文件是本仓的**跨机器统配入口与工程口径**，所有克隆者与执行代理通用；项目完整架构规格见 [`agy_super_workbench_master_prompt.md`](./agy_super_workbench_master_prompt.md)。
+> 本文件是本仓的**跨机器统配入口与工程口径**，所有克隆者与执行代理通用；项目完整架构规格见 [`docs/specs/master-prompt-v1.3.md`](./docs/specs/master-prompt-v1.3.md)，世界级 UI/UX、主题与背景及安装包强制规范见 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md)。
 > 本机路径、工具链版本、缓存目录与凭据文件磁盘路径等**本机环境事实**，统一放在 `docs/agents/local/<规范化用户名>.md`，不写入本文件。
 
 ## 零、先识别当前用户，再读取本机档案
@@ -37,13 +37,15 @@ Prismux 是一个「极简液态玻璃 AI 超级工作台与 24h 秘书系统」
 prismux/
 ├── AGENTS.md                          # 本文件：跨机器统配入口与工程红线
 ├── README.md                          # 项目中文概览与快速开始
-├── agy_super_workbench_master_prompt.md # 全栈自主施工总指令书（最高架构宪法）
 ├── UPSTREAM_LOCK.json                 # 锁定 vendor/t3code 的上游仓库、分支、Commit SHA、同步时间与必需路径
 ├── pnpm-workspace.yaml                # Workspace 边界定义（显式排除 vendor/t3code 与 apps/desktop-tauri）
 ├── package.json                       # 根脚本（typecheck / build / test:scripts / upstream:* / brand:rename / plugin:pack）
 ├── tsconfig.base.json                 # 公共 TS 严格基线（ES2024 + NodeNext + verbatimModuleSyntax）
 ├── docs/
-│   └── agents/                        # 个人本机环境档案说明、模板与按人档案
+│   ├── agents/                        # 个人本机环境档案说明、模板与按人档案
+│   └── specs/
+│       ├── master-prompt-v1.3.md      # 全栈自主施工总指令书（最高架构宪法）
+│       └── ui-ux-design-mandate.md    # 世界级 UI/UX、主题与背景及安装包强制设计规范
 ├── scripts/                           # 零第三方依赖运维工具脚本（Node 24 原生 TS 运行）与原生单测
 │   ├── rename-brand.ts                # 全局品牌标识安全替换脚本
 │   ├── sync-t3-upstream.ts            # 只读校验（--check）与上游同步（--sync）脚本
@@ -91,8 +93,9 @@ prismux/
    - 查询层强制在传输层通过 `forwardIdentity` 注入并覆写 `_callerScope`，**绝不信任模型自报参数**；当 `_callerScope` 为 `qq_group:<gid>` 时，SQL 构造器底层硬编码绑定 `WHERE namespace = 'social/qq-group-' || :gid AND deleted_at IS NULL`，物理杜绝读取 `private/chief` 与 `workspace/*`。
 4. **五大官方插件默认绝不预装**
    - `qq`、`pet`、`fishdock-hook`、`ssh`、`purge` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序与默认守护进程启动链路保持极简，不捆绑预装。
-5. **视觉层对模型 0 Token 开销**
-   - `WebWallGL` 动态壁纸、360° Fresnel 液态玻璃、字体调色、系统音频律动与桌宠演出属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
+5. **视觉层对模型 0 Token 开销与强制设计规范**
+   - `WebWallGL` 动态壁纸、360° Fresnel 液态玻璃、字体调色、系统音频律动、桌宠演出与安装包向导属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
+   - M4 工作台前端、`apps/desktop-tauri/installer/` 与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、无障碍对比度及降级兜底红线。
 
 ## 三、M1–M5 分阶段路线图与自动化验收门禁（DoD）
 
@@ -103,7 +106,7 @@ prismux/
 | **M1：骨架、只读 T3 桥接与守护中枢** | 初始化 pnpm Monorepo 与 `scripts/` 工具链；拉取只读 `vendor/t3code` 并写入 `UPSTREAM_LOCK.json`；实现 `apps/daemon` 进程监督、环境变量清洗、主秘书槽位（`Chief Thread Slot`）与 `PersistentPtyPool`（默认每终端 `2 MB` 环形缓冲） | `pnpm -r typecheck`、`pnpm -r build`、`pnpm test:scripts` 与 `pnpm upstream:check` 全绿；`node apps/daemon/dist/cli.js start --headless` 可无界面连上 T3 Server RPC 并在重连后无损回放 PTY 历史流 |
 | **M2：内生三域记忆库与五大标杆原语** | 实现 `packages/memory-core`（SQLite WAL + FTS5 + `sqlite-vec` + Obsidian 导入）；实现 `forwardIdentity` 作用域硬隔离与 60 s 熔断、`LifecycleHookBus`（6 类事件、退出码 `2` 拦截、安全钩子默认 `onFailure: "block"`、四档权限）、`HandoffEngine`（`/handoff` + 三档拨盘）与 `WorktreeSandbox`（OS 级写隔离 + 域名白名单网关） | 越权单测验证 `qq_group:<gid>` 查询 `private/chief` 与 `workspace/*` **100% 返回空集**；安全 Hook 超时或抛错时必定阻断执行；`/handoff` 可无损提纯 `{ goal, decisions, touchedFiles, openQuestions }` 并续跑新线程 |
 | **M3：Cordis 双轨插件商城与 Magpie 同步** | 实现 `packages/cordis-kernel`（顶层 `engines.prismux` SemVer 校验、`ctx.effect()` 卸载零残留、官方 SHA-256 校验、免 Git 无脚本 `npm` Tarball 安装器 + `distribution: "managed"` 锁）；实现 `packages/sync-vault`（Argon2id + AEAD 密封、WebDAV/S3/Git 独立开关、`If-Match` 乐观锁、60 s 停滞看门狗与 `data/` 便携模式） | 慢速流模拟测试 3 分钟持续低速传输不断连、连续 60 s 零字节准时触发停滞报错；双机并发上传验证 `If-Match`（及降级 `HEAD ETag`）拦截覆盖；`npm` 插件启停与卸载无残留监听、路由或 DOM |
-| **M4：Tauri v2 液态玻璃壳、四把手术刀与壁纸引擎** | 搭建 `apps/desktop-tauri`（无边框透明合成、WASAPI/CoreAudio/PipeWire 音频 FFT、`visibility: occluded` 0 FPS 挂起、Steam `431960` 扫描）与 `apps/workbench-ui`（360° Fresnel 液态玻璃、自由分屏 + 浮动胶囊双预设、`WebWallGL`、`.wb-theme` 导入导出，以及内置 `ApprovalGuide`、`ReasoningEffortCard`、`UsageLedger`、`NavAndCommandOrder`） | `cargo check`（必要时 `-j 1`）与前端生产构建全绿；实测切换浅色 / 深色 / 液态玻璃三态胶囊、切换「秘书待机 / 多代理编码」布局预设、窗口最小化或全屏遮挡时壁纸渲染立即暂停至 0 FPS |
+| **M4：Tauri v2 液态玻璃壳、四把手术刀与壁纸引擎** | 搭建 `apps/desktop-tauri`（无边框透明合成、WASAPI/CoreAudio/PipeWire 音频 FFT、`visibility: occluded` 0 FPS 挂起、Steam `431960` 扫描、克制 5 步 NSIS/首次引导安装包）与 `apps/workbench-ui`（严格按 `docs/specs/ui-ux-design-mandate.md` 实现全宽内凹天体三态胶囊、四区域 360° Fresnel 液态玻璃、独立浅/深文字调色、自由分屏 + 浮动胶囊双预设、`WebWallGL`、`.wb-theme` 导入导出，以及内置 `ApprovalGuide`、`ReasoningEffortCard`、`UsageLedger`、`NavAndCommandOrder`） | `cargo check`（必要时 `-j 1`）与前端生产构建全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成控件八态、对比度、`prefers-reduced-motion` 与禁 GPU 实底兜底核验；实测切换浅色 / 深色 / 液态玻璃天体三态胶囊、切换「秘书待机 / 多代理编码」布局预设、窗口最小化或全屏遮挡时壁纸渲染立即暂停至 0 FPS，安装包组件页明确声明五大官方插件默认不预装 |
 | **M5：夜间全自动工场与官方独立插件** | 完成 `OvernightFactory`（Gmail OAuth2 / IMAP `#factory` 监听 → 记忆补全与 Handoff 立项 → Worktree 沙箱编码与提交 → Oracle 只读 `review` 挑刺 → HTML 完工早报回信与 `prismux://review/<threadId>` 深链）；完成 `plugins-official/` 下 `plugin-qq`、`plugin-pet`（定向实例、Lease 锁、进度订阅、分阶段交还）、`plugin-fishdock-hook`、`plugin-ssh` 与 `plugin-purge` | 跑通端到端模拟邮件入站 → 自动拉分支改代码过单测 → 产出带 Diff 与 Oracle 评语的 HTML 邮件全文；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
 
 ## 四、核心工具脚本与插件打包契约
@@ -158,6 +161,6 @@ prismux/
 - **默认命令行**：统一使用 PowerShell 7（`pwsh`）。
 - **原子提交与中文规范**：遵循中文 Conventional Commits 格式 `<type>(<scope>): <简明中文描述>`（如 `feat(daemon): 实现主秘书槽位与 PTY 环形缓冲`、`fix(memory-core): 强制绑定 qq_group 查询隔离条件`、`docs(agents): 更新 <用户名> 的本机环境档案`、`chore(scripts): 补全插件打包回环校验`），保持单次提交单一职责。
 - **精确路径暂存**：提交前严禁执行 `git add .` 或 `git add -A`，必须使用精确路径 `git add <path1> <path2> ...` 核对无误后再提交。
-- **严禁误提交物**：禁止提交 `.work/` 临时目录、任何凭据正文（`.env`、`.env.local`、token 等）、构建产物（`dist/`、`target/`、`*.wb-plugin`、`*.sha256`），以及他人未请求改动的规划草稿（勿擅自删除或修改无关的 `agy_super_workbench_master_prompt.md`）。
+- **严禁误提交物**：禁止提交 `.work/` 临时目录、任何凭据正文（`.env`、`.env.local`、token 等）或构建产物（`dist/`、`target/`、`*.wb-plugin`、`*.sha256`）；已正式归档的架构与设计宪法（[`docs/specs/master-prompt-v1.3.md`](./docs/specs/master-prompt-v1.3.md) 与 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md)）应保持原规划语义，未经明确授权严禁擅自删改。
 - **一次性产物管理与清理**：所有临时调试脚本、中间打包输出（如 `.work/plugin-dist`）与临时缓存统一放进本仓 `.work/`；任务收尾时仅按精确路径逐项删除自己产生的产物（`Remove-Item <精确路径>`），禁止误删他人产物。
 - **规则与档案分流提交**：跨机器工程规则随对应功能提交一起入库；纯个人本机环境档案更新按 [`docs/agents/README.md`](./docs/agents/README.md) 规范单独提交。

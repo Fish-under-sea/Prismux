@@ -55,6 +55,7 @@ cargo test -j 1
 | 现象 | 处置 |
 | :--- | :--- |
 | `schannel` HTTPS 凭证异常（`SEC_E_NO_CREDENTIALS`）或 TLS 握手中断 | 改走 Node TLS 脚本（见 `D:\Fish-code\工具\可复用脚本与经验\`）或为 `git` 显式追加 `-c http.sslBackend=openssl -c http.version=HTTP/1.1` |
+| 克隆或推送 GitHub 大仓（如 `vendor/t3code` / `Prismux`）遇 `127.0.0.1:7895` 代理引起 OpenSSL EOF 断流 | 使用命令级 `GIT_CONFIG_COUNT` 注入 `url.git@github.com:.insteadOf=https://github.com/` 改走已认证 SSH 通道，保持 `.gitmodules` / `.git/config` 为公开 HTTPS 地址且严禁修改 `~/.gitconfig` |
 | Clash 开启 TUN 模式时命令行同时残留 `HTTP_PROXY` / `HTTPS_PROXY` 导致请求抖动 | 在当前 `pwsh` 会话清空 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`（及小写变量）后直走原生 TUN |
 | Rust MSVC 链接阶段偶发 `0xC0000005` 访问冲突 | 执行 `cargo check -j 1` / `cargo test -j 1` / `cargo build -j 1` 强制单线程链接，偶发失败时直接重试 |
 
