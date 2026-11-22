@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-22T00:00:00Z",
+  "plugins": [
+    {
+      "id": "qq",
+      "packageName": "@prismux/plugin-qq",
+      "version": "0.1.0",
+      "description": "OneBot v11 QQ private Chief Supervisor bridge and isolated group companion plugin.",
+      "engines": {
+        "prismux": ">=0.1.0 <2.0.0"
+      },
+      "realms": ["daemon", "ui"],
+      "permissions": [
+        "network:outbound",
+        "network:inbound",
+        "memory:social-qq",
+        "hooks:subscribe"
+      ],
+      "modelVisible": false,
+      "sha256": null,
+      "bytes": null,
+      "status": "source-only"
+    },
+    {
+      "id": "pet",
+      "packageName": "@prismux/plugin-pet",
+      "version": "0.1.0",
+      "description": "Desktop mascot / pet plugin with instance binding, lease tokens, playback progress, and staged handover.",
+      "engines": {
+        "prismux": ">=0.1.0 <2.0.0"
+      },
+      "realms": ["ui", "daemon"],
+      "permissions": ["pet:lease", "ui:panel", "hooks:subscribe"],
+      "modelVisible": false,
+      "sha256": null,
+      "bytes": null,
+      "status": "source-only"
+    },
+    {
+      "id": "fishdock-hook",
+      "packageName": "@prismux/plugin-fishdock-hook",
+      "version": "0.1.0",
+      "description": "Bridge plugin pushing PreToolUse approvals, email alerts, and factory completions to FISH-Dock Dynamic Island.",
+      "engines": {
+        "prismux": ">=0.1.0 <2.0.0"
+      },
+      "realms": ["daemon"],
+      "permissions": [
+        "network:outbound",
+        "hooks:subscribe",
+        "notifications:push"
+      ],
+      "modelVisible": false,
+      "sha256": null,
+      "bytes": null,
+      "status": "source-only"
+    },
+    {
+      "id": "ssh",
+      "packageName": "@prismux/plugin-ssh",
+      "version": "0.1.0",
+      "description": "Optional SSH host pool, Web PTY, and SFTP operations plugin.",
+      "engines": {
+        "prismux": ">=0.1.0 <2.0.0"
+      },
+      "realms": ["daemon", "ui"],
+      "permissions": [
+        "network:outbound",
+        "pty:spawn",
+        "fs:read",
+        "fs:write",
+        "ui:panel"
+      ],
+      "modelVisible": false,
+      "sha256": null,
+      "bytes": null,
+      "status": "source-only"
+    },
+    {
+      "id": "purge",
+      "packageName": "@prismux/plugin-purge",
+      "version": "0.1.0",
+      "description": "Optional prompt sanitization and red-team rollback workbench plugin.",
+      "engines": {
+        "prismux": ">=0.1.0 <2.0.0"
+      },
+      "realms": ["daemon", "ui"],
+      "permissions": ["hooks:intercept", "ui:panel"],
+      "modelVisible": false,
+      "sha256": null,
+      "bytes": null,
+      "status": "source-only"
+    }
+  ]
+}

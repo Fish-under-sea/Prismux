@@ -1,0 +1,24 @@
+{
+  "name": "prismux-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=24.12.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "test:scripts": "node --test scripts/__tests__/scripts.test.ts",
+    "upstream:check": "node scripts/sync-t3-upstream.ts --check",
+    "upstream:sync": "node scripts/sync-t3-upstream.ts --sync",
+    "brand:rename": "node scripts/rename-brand.ts",
+    "plugin:pack": "node scripts/pack-plugin.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^24.0.0"
+  }
+}

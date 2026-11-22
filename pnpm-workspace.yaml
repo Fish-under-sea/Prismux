@@ -1,0 +1,6 @@
+# Explicitly excludes vendor/t3code (read-only upstream) and apps/desktop-tauri (Rust crate).
+packages:
+  - "packages/*"
+  - "apps/daemon"
+  - "apps/workbench-ui"
+  - "plugins-official/plugin-*"

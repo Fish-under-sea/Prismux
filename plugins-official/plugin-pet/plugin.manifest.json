@@ -1,0 +1,10 @@
+{
+  "id": "pet",
+  "version": "0.1.0",
+  "realms": ["ui", "daemon"],
+  "permissions": ["pet:lease", "ui:panel", "hooks:subscribe"],
+  "modelVisible": false,
+  "behaviors": {
+    "autostart": true
+  }
+}

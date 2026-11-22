@@ -1,0 +1,22 @@
+{
+  "name": "@prismux/workbench-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prismux workbench UI contracts and M4 React 19 + Vite + WebWallGL + 360° Fresnel liquid glass shell.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@prismux/protocol": "workspace:*"
+  }
+}

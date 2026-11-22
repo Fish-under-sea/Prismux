@@ -1,0 +1,17 @@
+{
+  "id": "ssh",
+  "version": "0.1.0",
+  "realms": ["daemon", "ui"],
+  "permissions": [
+    "network:outbound",
+    "pty:spawn",
+    "fs:read",
+    "fs:write",
+    "ui:panel"
+  ],
+  "modelVisible": false,
+  "behaviors": {
+    "autostart": false,
+    "requiresConfiguration": true
+  }
+}

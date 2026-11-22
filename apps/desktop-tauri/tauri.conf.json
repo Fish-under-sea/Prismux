@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Prismux",
+  "version": "0.1.0",
+  "identifier": "io.prismux.desktop",
+  "build": {
+    "frontendDist": "../workbench-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Prismux",
+        "width": 1280,
+        "height": 800,
+        "transparent": true,
+        "decorations": false,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

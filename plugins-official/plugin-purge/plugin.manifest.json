@@ -1,0 +1,10 @@
+{
+  "id": "purge",
+  "version": "0.1.0",
+  "realms": ["daemon", "ui"],
+  "permissions": ["hooks:intercept", "ui:panel"],
+  "modelVisible": false,
+  "behaviors": {
+    "autostart": false
+  }
+}

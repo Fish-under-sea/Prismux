@@ -1,0 +1,26 @@
+{
+  "name": "@prismux/memory-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Single-file SQLite WAL + FTS5 + sqlite-vec hybrid memory engine and physical scope guard for Prismux.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./collector": {
+      "types": "./dist/CollectorAndGuard.d.ts",
+      "import": "./dist/CollectorAndGuard.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@prismux/protocol": "workspace:*"
+  }
+}

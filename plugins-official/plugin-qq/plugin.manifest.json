@@ -1,0 +1,16 @@
+{
+  "id": "qq",
+  "version": "0.1.0",
+  "realms": ["daemon", "ui"],
+  "permissions": [
+    "network:outbound",
+    "network:inbound",
+    "memory:social-qq",
+    "hooks:subscribe"
+  ],
+  "modelVisible": false,
+  "behaviors": {
+    "autostart": true,
+    "supportsLoopbackTest": true
+  }
+}

@@ -1,0 +1,23 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Workspace scratch & packaged plugin artifacts
+.work/
+*.wb-plugin
+*.sha256
+
+# Rust / Tauri build artifacts
+apps/desktop-tauri/target/
+
+# Local environment & logs
+.env
+.env.local
+.env.*.local
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
