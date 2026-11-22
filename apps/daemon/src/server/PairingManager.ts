@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { DaemonPairingInfo } from "@prismux/protocol";
+import { validateTrustedCallerScope } from "@prismux/memory-core";
+import type { CallerScope, DaemonPairingInfo } from "@prismux/protocol";
 
 export const DEFAULT_PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
 
@@ -7,17 +8,20 @@ interface PairingCodeRecord {
   codeHash: Buffer;
   expiresAt: number;
   used: boolean;
+  callerScope: CallerScope;
 }
 
 interface DeviceTokenRecord {
   tokenHash: Buffer;
   deviceLabel: string;
+  callerScope: CallerScope;
   issuedAt: number;
 }
 
 export interface ExchangePairingResult {
   token: string;
   deviceLabel: string;
+  callerScope: CallerScope;
   issuedAt: number;
 }
 
@@ -35,7 +39,8 @@ function constantTimeHashEquals(a: Buffer, b: Buffer): boolean {
 }
 
 /**
- * Manages one-time pairing code exchange and SHA-256 + timingSafeEqual bearer token verification.
+ * Manages one-time pairing code exchange and SHA-256 + timingSafeEqual bearer token verification
+ * with server-authoritative `CallerScope` binding.
  */
 export class PairingManager {
   private readonly defaultPairingTtlMs: number;
@@ -52,34 +57,65 @@ export class PairingManager {
       options.initialAuthToken !== undefined &&
       options.initialAuthToken.trim().length > 0
     ) {
-      this.registerStaticToken(options.initialAuthToken.trim(), "cli-static");
+      this.registerStaticToken(
+        options.initialAuthToken.trim(),
+        "cli-static",
+        "owner_chief"
+      );
     }
   }
 
-  registerStaticToken(token: string, deviceLabel = "static"): void {
+  registerStaticToken(
+    token: string,
+    deviceLabel = "static",
+    callerScope: CallerScope = "owner_chief"
+  ): void {
+    this.registerScopedToken(token, callerScope, deviceLabel);
+  }
+
+  registerScopedToken(
+    token: string,
+    callerScope: CallerScope,
+    deviceLabel?: string
+  ): void {
     const trimmed = token.trim();
     if (trimmed.length === 0) {
       throw new Error("Auth token must not be empty.");
     }
+    const verifiedScope = validateTrustedCallerScope(callerScope);
     const tokenHash = sha256Digest(trimmed);
-    const alreadyExists = this.tokens.some((entry) =>
+    const label =
+      deviceLabel !== undefined && deviceLabel.trim().length > 0
+        ? deviceLabel.trim()
+        : verifiedScope === "owner_chief"
+          ? "owner-static"
+          : `scoped:${verifiedScope}`;
+
+    const existing = this.tokens.find((entry) =>
       constantTimeHashEquals(entry.tokenHash, tokenHash)
     );
-    if (!alreadyExists) {
-      this.tokens.push({
-        tokenHash,
-        deviceLabel,
-        issuedAt: Date.now()
-      });
+    if (existing !== undefined) {
+      existing.callerScope = verifiedScope;
+      existing.deviceLabel = label;
+      return;
     }
+
+    this.tokens.push({
+      tokenHash,
+      deviceLabel: label,
+      callerScope: verifiedScope,
+      issuedAt: Date.now()
+    });
   }
 
   createPairingCode(
     ttlMs: number = this.defaultPairingTtlMs,
-    daemonUrl = ""
+    daemonUrl = "",
+    callerScope: CallerScope = "owner_chief"
   ): DaemonPairingInfo {
     this.pruneExpiredPairingCodes();
 
+    const verifiedScope = validateTrustedCallerScope(callerScope);
     const rawHex = randomBytes(12).toString("hex").toUpperCase();
     const pairingCode = `${rawHex.slice(0, 6)}-${rawHex.slice(6, 12)}-${rawHex.slice(12, 18)}-${rawHex.slice(18, 24)}`;
     const expiresAt = Date.now() + Math.max(1_000, ttlMs);
@@ -87,7 +123,8 @@ export class PairingManager {
     this.pairingCodes.push({
       codeHash: sha256Digest(pairingCode),
       expiresAt,
-      used: false
+      used: false,
+      callerScope: verifiedScope
     });
 
     return {
@@ -130,32 +167,38 @@ export class PairingManager {
     this.tokens.push({
       tokenHash: sha256Digest(token),
       deviceLabel: normalizedLabel,
+      callerScope: matched.callerScope,
       issuedAt
     });
 
     return {
       token,
       deviceLabel: normalizedLabel,
+      callerScope: matched.callerScope,
       issuedAt
     };
   }
 
-  verifyToken(token: string): boolean {
+  resolveTokenScope(token: string): CallerScope | null {
     const trimmed = token.trim();
     if (trimmed.length === 0) {
-      return false;
+      return null;
     }
 
     const candidateHash = sha256Digest(trimmed);
-    let verified = false;
+    let resolvedScope: CallerScope | null = null;
 
     for (const record of this.tokens) {
       if (constantTimeHashEquals(candidateHash, record.tokenHash)) {
-        verified = true;
+        resolvedScope = record.callerScope;
       }
     }
 
-    return verified;
+    return resolvedScope;
+  }
+
+  verifyToken(token: string): boolean {
+    return this.resolveTokenScope(token) !== null;
   }
 
   revokeToken(token: string): boolean {

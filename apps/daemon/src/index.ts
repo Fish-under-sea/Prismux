@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { CordisPluginHost } from "@prismux/cordis-kernel";
-import { SqliteMemoryStoreSkeleton } from "@prismux/memory-core";
+import {
+  ObsidianVaultImporterImpl,
+  SqliteMemoryStore
+} from "@prismux/memory-core";
 import { BRAND, type ChiefProviderKind } from "@prismux/protocol";
 import { SyncVaultEngine } from "@prismux/sync-vault";
 import { ChiefThreadManager } from "./chief/ChiefThreadManager.js";
@@ -70,13 +73,15 @@ export interface DaemonReadyInfo {
 
 export class PrismuxDaemon {
   readonly options: DaemonStartOptions;
+  readonly machineId: string;
   readonly ptyPool: PersistentPtyPool;
   readonly handoffEngine: HandoffEngine;
   readonly hookBus: LifecycleHookBus;
   readonly sandbox: WorktreeSandbox;
   readonly overnightFactory: OvernightFactory;
   readonly pluginHost: CordisPluginHost;
-  readonly memoryStore: SqliteMemoryStoreSkeleton;
+  readonly memoryStore: SqliteMemoryStore;
+  readonly obsidianImporter: ObsidianVaultImporterImpl;
   readonly syncVault: SyncVaultEngine;
   readonly t3Supervisor: T3ServerSupervisor | undefined;
   readonly t3RpcClient: T3RpcClient | undefined;
@@ -91,17 +96,35 @@ export class PrismuxDaemon {
 
   constructor(options: DaemonStartOptions) {
     this.options = options;
+    this.machineId = options.machineId ?? "local";
     this.ptyPool = new PersistentPtyPool();
-    this.handoffEngine = new HandoffEngine();
     this.hookBus = new LifecycleHookBus();
     this.sandbox = new WorktreeSandbox();
     this.overnightFactory = new OvernightFactory();
     this.pluginHost = new CordisPluginHost("daemon");
-    this.memoryStore = new SqliteMemoryStoreSkeleton({
+    this.memoryStore = new SqliteMemoryStore({
       dbPath: join(options.dataDir, "data", "memory.db"),
-      machineId: options.machineId ?? "local",
+      machineId: this.machineId,
       embeddingDimensions: 768,
       enableWal: true
+    });
+    this.obsidianImporter = new ObsidianVaultImporterImpl(
+      this.memoryStore,
+      this.machineId
+    );
+    this.handoffEngine = new HandoffEngine({
+      onPersistHandoffNote: async (note) => {
+        if (this.running) {
+          await this.memoryStore.upsert({
+            namespace: "private/chief",
+            kind: "handoff_note",
+            title: `Handoff: ${note.summary.goal}`,
+            content: note.continuationPrompt,
+            sourceRef: `thread:${note.newThreadId}`,
+            machineId: this.machineId
+          });
+        }
+      }
     });
     this.syncVault = new SyncVaultEngine();
 
@@ -139,9 +162,14 @@ export class PrismuxDaemon {
       host: options.host ?? "127.0.0.1",
       port: options.port ?? 0,
       headless: options.headless,
+      machineId: this.machineId,
       ptyPool: this.ptyPool,
       chiefManager: this.chiefManager,
       pairingManager: this.pairingManager,
+      memoryStore: this.memoryStore,
+      obsidianImporter: this.obsidianImporter,
+      handoffEngine: this.handoffEngine,
+      hookBus: this.hookBus,
       t3Supervisor: this.t3Supervisor,
       t3RpcClient: this.t3RpcClient,
       onRequestShutdown: options.onShutdownRequested
@@ -192,6 +220,7 @@ export class PrismuxDaemon {
 
   private async performStart(): Promise<DaemonReadyInfo> {
     try {
+      await this.memoryStore.initialize();
       const slot = await this.chiefManager.init();
 
       if (this.t3Supervisor !== undefined) {
@@ -235,16 +264,28 @@ export class PrismuxDaemon {
   }
 
   private async performStop(): Promise<void> {
-    await this.rpcServer.stop();
-    if (this.t3RpcClient !== undefined) {
-      await this.t3RpcClient.close();
+    try {
+      await this.rpcServer.stop();
+    } finally {
+      try {
+        if (this.t3RpcClient !== undefined) {
+          await this.t3RpcClient.close();
+        }
+      } finally {
+        try {
+          if (this.t3Supervisor !== undefined) {
+            await this.t3Supervisor.stop();
+          }
+        } finally {
+          try {
+            await this.ptyPool.dispose();
+          } finally {
+            await this.memoryStore.close();
+            this.running = false;
+            this.readyInfo = undefined;
+          }
+        }
+      }
     }
-    if (this.t3Supervisor !== undefined) {
-      await this.t3Supervisor.stop();
-    }
-    await this.ptyPool.dispose();
-    await this.memoryStore.close();
-    this.running = false;
-    this.readyInfo = undefined;
   }
 }

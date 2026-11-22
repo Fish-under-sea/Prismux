@@ -7,28 +7,55 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import type {
-  ChiefProviderKind,
-  DaemonHealthResponse,
-  T3BridgeStatus
+import {
+  ForwardIdentityGuard,
+  type ObsidianVaultImporterImpl,
+  type SqliteMemoryStore
+} from "@prismux/memory-core";
+import {
+  DIAL_MODES,
+  MEMORY_KINDS,
+  isScopeAllowedForNamespace,
+  isValidMemoryNamespace,
+  type CallerScope,
+  type ChiefProviderKind,
+  type DaemonHealthResponse,
+  type DialMode,
+  type MemoryKind,
+  type MemoryNamespace,
+  type MemoryQueryRequest,
+  type MemoryQueryResponse,
+  type MemoryUpsertInput,
+  type ObsidianImportRequest,
+  type T3BridgeStatus
 } from "@prismux/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import type { ChiefThreadManager } from "../chief/ChiefThreadManager.js";
+import type {
+  HandoffEngine,
+  HandoffTranscriptMessage
+} from "../handoff/HandoffEngine.js";
+import type { LifecycleHookBus } from "../hooks/LifecycleHookBus.js";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
 import type { T3RpcClient } from "../t3/T3RpcClient.js";
 import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
 import type { PairingManager } from "./PairingManager.js";
 
-const MAX_JSON_BODY_BYTES = 256 * 1024;
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 export interface DaemonRpcServerOptions {
   host?: string;
   port?: number;
   headless: boolean;
   version?: string;
+  machineId?: string;
   ptyPool: PersistentPtyPool;
   chiefManager: ChiefThreadManager;
   pairingManager: PairingManager;
+  memoryStore?: SqliteMemoryStore;
+  obsidianImporter?: ObsidianVaultImporterImpl;
+  handoffEngine?: HandoffEngine;
+  hookBus?: LifecycleHookBus;
   t3Supervisor?: T3ServerSupervisor;
   t3RpcClient?: T3RpcClient;
   startedAt?: number;
@@ -43,11 +70,13 @@ interface RpcPayloadEnvelope {
 
 class RpcDispatchError extends Error {
   readonly code: string;
+  readonly httpStatus: number;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, httpStatus = 400) {
     super(message);
     this.name = "RpcDispatchError";
     this.code = code;
+    this.httpStatus = httpStatus;
   }
 }
 
@@ -107,7 +136,8 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     if (totalBytes > MAX_JSON_BODY_BYTES) {
       throw new RpcDispatchError(
         "payload_too_large",
-        `Request body exceeded ${MAX_JSON_BODY_BYTES} bytes.`
+        `Request body exceeded ${MAX_JSON_BODY_BYTES} bytes.`,
+        413
       );
     }
     chunks.push(buf);
@@ -168,6 +198,20 @@ function optionalStringParam(
   return value;
 }
 
+function requireBooleanParam(
+  params: Record<string, unknown>,
+  key: string
+): boolean {
+  const value = params[key];
+  if (typeof value !== "boolean") {
+    throw new RpcDispatchError(
+      "invalid_params",
+      `Parameter "${key}" must be a boolean.`
+    );
+  }
+  return value;
+}
+
 function requirePositiveIntParam(
   params: Record<string, unknown>,
   key: string
@@ -182,14 +226,52 @@ function requirePositiveIntParam(
   return Math.floor(value);
 }
 
+function parseOptionalEmbedding(raw: unknown): number[] | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (
+    !Array.isArray(raw) ||
+    raw.some((v) => typeof v !== "number" || !Number.isFinite(v))
+  ) {
+    throw new RpcDispatchError(
+      "invalid_params",
+      'Parameter "embedding" must be an array of finite numbers.'
+    );
+  }
+  return raw as number[];
+}
+
+function parseOptionalStringArray(
+  raw: unknown,
+  key: string
+): string[] | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(raw) || raw.some((v) => typeof v !== "string")) {
+    throw new RpcDispatchError(
+      "invalid_params",
+      `Parameter "${key}" must be an array of strings.`
+    );
+  }
+  return raw as string[];
+}
+
 export class DaemonRpcServer {
   private readonly host: string;
   private readonly requestedPort: number;
   private readonly headless: boolean;
   private readonly version: string;
+  private readonly machineId: string;
   private readonly ptyPool: PersistentPtyPool;
   private readonly chiefManager: ChiefThreadManager;
   private readonly pairingManager: PairingManager;
+  private readonly memoryStore: SqliteMemoryStore | undefined;
+  private readonly obsidianImporter: ObsidianVaultImporterImpl | undefined;
+  private readonly handoffEngine: HandoffEngine | undefined;
+  private readonly hookBus: LifecycleHookBus | undefined;
+  private readonly identityGuard = new ForwardIdentityGuard();
   private readonly t3Supervisor: T3ServerSupervisor | undefined;
   private readonly t3RpcClient: T3RpcClient | undefined;
   private readonly startedAt: number;
@@ -210,9 +292,14 @@ export class DaemonRpcServer {
     this.requestedPort = options.port ?? 0;
     this.headless = options.headless;
     this.version = options.version ?? "0.1.0";
+    this.machineId = options.machineId ?? "local";
     this.ptyPool = options.ptyPool;
     this.chiefManager = options.chiefManager;
     this.pairingManager = options.pairingManager;
+    this.memoryStore = options.memoryStore;
+    this.obsidianImporter = options.obsidianImporter;
+    this.handoffEngine = options.handoffEngine;
+    this.hookBus = options.hookBus;
     this.t3Supervisor = options.t3Supervisor;
     this.t3RpcClient = options.t3RpcClient;
     this.startedAt = options.startedAt ?? Date.now();
@@ -309,8 +396,11 @@ export class DaemonRpcServer {
       this.handleUpgrade(req, socket, head, wss);
     });
 
-    wss.on("connection", (ws) => {
-      this.handleWsConnection(ws);
+    wss.on("connection", (ws, req) => {
+      const trustedScope =
+        (req as IncomingMessage & { __prismuxCallerScope?: CallerScope })
+          .__prismuxCallerScope ?? "owner_chief";
+      this.handleWsConnection(ws, trustedScope);
     });
 
     this.wss = wss;
@@ -374,11 +464,40 @@ export class DaemonRpcServer {
     }
   }
 
+  private authenticateHttpRequest(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): CallerScope | null {
+    const token = extractBearerToken(req);
+    const trustedScope =
+      token !== null ? this.pairingManager.resolveTokenScope(token) : null;
+    if (trustedScope === null) {
+      writeJsonResponse(res, 401, {
+        ok: false,
+        error: {
+          code: "unauthorized",
+          message: "Missing or invalid Bearer token."
+        }
+      });
+      return null;
+    }
+    return trustedScope;
+  }
+
   private async handleHttpRequest(
     req: IncomingMessage,
     res: ServerResponse
   ): Promise<void> {
-    const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    let requestUrl: URL;
+    try {
+      requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    } catch {
+      writeJsonResponse(res, 400, {
+        ok: false,
+        error: { code: "invalid_url", message: "Malformed request URL." }
+      });
+      return;
+    }
     const method = req.method?.toUpperCase() ?? "GET";
 
     try {
@@ -425,22 +544,99 @@ export class DaemonRpcServer {
         return;
       }
 
-      if (method === "POST" && requestUrl.pathname === "/v1/rpc") {
-        const token = extractBearerToken(req);
-        if (token === null || !this.pairingManager.verifyToken(token)) {
-          writeJsonResponse(res, 401, {
+      if (method === "POST" && requestUrl.pathname === "/v1/memory/query") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        const rawBody = await readJsonBody(req);
+        const result = await this.executeMemoryQuery(rawBody, trustedCallerScope);
+        writeJsonResponse(res, 200, result);
+        return;
+      }
+
+      if (method === "POST" && requestUrl.pathname === "/v1/memory/upsert") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        const rawBody = await readJsonBody(req);
+        const entry = await this.executeMemoryUpsert(rawBody, trustedCallerScope);
+        writeJsonResponse(res, 200, {
+          id: entry.id,
+          updatedAt: entry.updatedAt,
+          entry
+        });
+        return;
+      }
+
+      if (
+        method === "POST" &&
+        requestUrl.pathname === "/v1/memory/import-obsidian"
+      ) {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        if (trustedCallerScope !== "owner_chief") {
+          writeJsonResponse(res, 403, {
             ok: false,
             error: {
-              code: "unauthorized",
-              message: "Missing or invalid Bearer token."
+              code: "forbidden",
+              message: "Only owner_chief callerScope may import an Obsidian vault."
             }
           });
+          return;
+        }
+        if (this.obsidianImporter === undefined) {
+          throw new RpcDispatchError(
+            "not_configured",
+            "Obsidian importer is not configured.",
+            503
+          );
+        }
+        const rawBody = await readJsonBody(req);
+        if (!isRecord(rawBody)) {
+          throw new RpcDispatchError(
+            "invalid_params",
+            "Request body must be a JSON object."
+          );
+        }
+        const vaultPath = requireStringParam(rawBody, "vaultPath");
+        const targetNsRaw = optionalStringParam(rawBody, "targetNamespace");
+        let targetNamespace: MemoryNamespace | undefined;
+        if (targetNsRaw !== undefined) {
+          if (!isValidMemoryNamespace(targetNsRaw)) {
+            throw new RpcDispatchError(
+              "invalid_params",
+              `Invalid targetNamespace: "${targetNsRaw}".`
+            );
+          }
+          targetNamespace = targetNsRaw;
+        }
+        const dryRun =
+          rawBody.dryRun !== undefined
+            ? requireBooleanParam(rawBody, "dryRun")
+            : undefined;
+        const importReq: ObsidianImportRequest = {
+          vaultPath,
+          ...(targetNamespace !== undefined ? { targetNamespace } : {}),
+          ...(dryRun !== undefined ? { dryRun } : {})
+        };
+        const result = await this.obsidianImporter.importVault(importReq);
+        writeJsonResponse(res, 200, result);
+        return;
+      }
+
+      if (method === "POST" && requestUrl.pathname === "/v1/rpc") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
           return;
         }
 
         const rawBody = await readJsonBody(req);
         const envelope = this.parseRpcEnvelope(rawBody);
-        const outcome = await this.executeRpc(envelope);
+        const outcome = await this.executeRpc(envelope, trustedCallerScope);
         writeJsonResponse(res, 200, outcome.response);
         outcome.afterSend?.();
         return;
@@ -455,7 +651,7 @@ export class DaemonRpcServer {
       });
     } catch (error) {
       if (error instanceof RpcDispatchError) {
-        writeJsonResponse(res, 400, {
+        writeJsonResponse(res, error.httpStatus, {
           id: "unknown",
           ok: false,
           error: { code: error.code, message: error.message }
@@ -476,7 +672,15 @@ export class DaemonRpcServer {
     head: Buffer,
     wss: WebSocketServer
   ): void {
-    const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    let requestUrl: URL;
+    try {
+      requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    } catch {
+      socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
     if (requestUrl.pathname !== "/rpc") {
       socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -484,18 +688,26 @@ export class DaemonRpcServer {
     }
 
     const token = extractRequestToken(req, requestUrl, true);
-    if (token === null || !this.pairingManager.verifyToken(token)) {
+    const trustedScope =
+      token !== null ? this.pairingManager.resolveTokenScope(token) : null;
+    if (trustedScope === null) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
     }
+
+    (req as IncomingMessage & { __prismuxCallerScope?: CallerScope }).__prismuxCallerScope =
+      trustedScope;
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
   }
 
-  private handleWsConnection(ws: WebSocket): void {
+  private handleWsConnection(
+    ws: WebSocket,
+    trustedCallerScope: CallerScope
+  ): void {
     const ptySubscriptions = new Map<string, () => void>();
 
     const cleanupSubscriptions = () => {
@@ -569,7 +781,7 @@ export class DaemonRpcServer {
             return;
           }
 
-          const outcome = await this.executeRpc(envelope);
+          const outcome = await this.executeRpc(envelope, trustedCallerScope);
           sendJson(outcome.response);
           outcome.afterSend?.();
         } catch (error) {
@@ -598,6 +810,186 @@ export class DaemonRpcServer {
     });
   }
 
+  private async executeMemoryQuery(
+    rawParams: unknown,
+    trustedCallerScope: CallerScope
+  ): Promise<MemoryQueryResponse> {
+    if (this.memoryStore === undefined) {
+      throw new RpcDispatchError(
+        "not_configured",
+        "Memory store is not configured.",
+        503
+      );
+    }
+    if (!isRecord(rawParams)) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        "Memory query payload must be a JSON object."
+      );
+    }
+
+    const query = rawParams.query;
+    if (typeof query !== "string") {
+      throw new RpcDispatchError(
+        "invalid_params",
+        'Parameter "query" must be a string.'
+      );
+    }
+
+    const namespaces = parseOptionalStringArray(
+      rawParams.namespaces,
+      "namespaces"
+    ) as MemoryNamespace[] | undefined;
+
+    const kindsRaw = parseOptionalStringArray(rawParams.kinds, "kinds");
+    let kinds: MemoryKind[] | undefined;
+    if (kindsRaw !== undefined) {
+      for (const kind of kindsRaw) {
+        if (!MEMORY_KINDS.includes(kind as MemoryKind)) {
+          throw new RpcDispatchError(
+            "invalid_params",
+            `Invalid memory kind: "${kind}".`
+          );
+        }
+      }
+      kinds = kindsRaw as MemoryKind[];
+    }
+
+    let limit: number | undefined;
+    if (rawParams.limit !== undefined) {
+      limit = requirePositiveIntParam(rawParams, "limit");
+    }
+
+    const modeRaw = optionalStringParam(rawParams, "mode");
+    let mode: MemoryQueryRequest["mode"];
+    if (modeRaw !== undefined) {
+      if (modeRaw !== "hybrid" && modeRaw !== "fts" && modeRaw !== "vector") {
+        throw new RpcDispatchError(
+          "invalid_params",
+          `Invalid query mode: "${modeRaw}".`
+        );
+      }
+      mode = modeRaw;
+    }
+
+    const queryEmbedding = parseOptionalEmbedding(
+      rawParams.queryEmbedding ?? rawParams.embedding
+    );
+
+    // Transport-layer override: unconditionally enforce server-authenticated callerScope
+    // and ignore any client-supplied callerScope / _callerScope fields.
+    const boundRequest = this.identityGuard.bindCallerScope(trustedCallerScope, {
+      query,
+      ...(namespaces !== undefined ? { namespaces } : {}),
+      ...(kinds !== undefined ? { kinds } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(mode !== undefined ? { mode } : {})
+    });
+
+    return this.memoryStore.query(
+      boundRequest,
+      trustedCallerScope,
+      queryEmbedding
+    );
+  }
+
+  private async executeMemoryUpsert(
+    rawParams: unknown,
+    trustedCallerScope: CallerScope
+  ) {
+    if (this.memoryStore === undefined) {
+      throw new RpcDispatchError(
+        "not_configured",
+        "Memory store is not configured.",
+        503
+      );
+    }
+    if (!isRecord(rawParams)) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        "Memory upsert payload must be a JSON object."
+      );
+    }
+
+    const id = optionalStringParam(rawParams, "id");
+    const namespaceRaw = requireStringParam(rawParams, "namespace");
+    if (!isValidMemoryNamespace(namespaceRaw)) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        `Invalid memory namespace: "${namespaceRaw}".`
+      );
+    }
+
+    if (!isScopeAllowedForNamespace(trustedCallerScope, namespaceRaw)) {
+      throw new RpcDispatchError(
+        "forbidden",
+        `Caller scope "${trustedCallerScope}" is not authorized to write namespace "${namespaceRaw}".`,
+        403
+      );
+    }
+
+    const kindRaw = requireStringParam(rawParams, "kind");
+    if (!MEMORY_KINDS.includes(kindRaw as MemoryKind)) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        `Invalid memory kind: "${kindRaw}".`
+      );
+    }
+
+    const title = requireStringParam(rawParams, "title");
+    const contentValue = rawParams.content;
+    if (typeof contentValue !== "string") {
+      throw new RpcDispatchError(
+        "invalid_params",
+        'Parameter "content" must be a string.'
+      );
+    }
+
+    const sourceRefRaw = rawParams.sourceRef;
+    let sourceRef: string | null | undefined;
+    if (sourceRefRaw === null || sourceRefRaw === undefined) {
+      sourceRef = sourceRefRaw;
+    } else if (typeof sourceRefRaw === "string") {
+      sourceRef = sourceRefRaw;
+    } else {
+      throw new RpcDispatchError(
+        "invalid_params",
+        'Parameter "sourceRef" must be a string or null.'
+      );
+    }
+
+    let importance: number | undefined;
+    if (rawParams.importance !== undefined) {
+      if (
+        typeof rawParams.importance !== "number" ||
+        !Number.isFinite(rawParams.importance)
+      ) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          'Parameter "importance" must be a finite number.'
+        );
+      }
+      importance = rawParams.importance;
+    }
+
+    const machineId =
+      optionalStringParam(rawParams, "machineId") ?? this.machineId;
+    const embedding = parseOptionalEmbedding(rawParams.embedding);
+
+    const input: MemoryUpsertInput = {
+      ...(id !== undefined ? { id } : {}),
+      namespace: namespaceRaw,
+      kind: kindRaw as MemoryKind,
+      title,
+      content: contentValue,
+      ...(sourceRef !== undefined ? { sourceRef } : {}),
+      ...(importance !== undefined ? { importance } : {}),
+      machineId
+    };
+
+    return this.memoryStore.upsert(input, embedding);
+  }
+
   private parseRpcEnvelope(raw: unknown): RpcPayloadEnvelope {
     if (!isRecord(raw)) {
       throw new RpcDispatchError(
@@ -624,7 +1016,10 @@ export class DaemonRpcServer {
     return { id, method, params };
   }
 
-  private async executeRpc(envelope: RpcPayloadEnvelope): Promise<{
+  private async executeRpc(
+    envelope: RpcPayloadEnvelope,
+    trustedCallerScope: CallerScope
+  ): Promise<{
     response:
       | { id: string; ok: true; result: unknown }
       | { id: string; ok: false; error: { code: string; message: string } };
@@ -645,10 +1040,7 @@ export class DaemonRpcServer {
         }
 
         case "pty.spawn": {
-          const rawArgs = params.args;
-          const args = Array.isArray(rawArgs)
-            ? rawArgs.filter((v): v is string => typeof v === "string")
-            : undefined;
+          const args = parseOptionalStringArray(params.args, "args");
           const rawGroup = params.group;
           const group =
             rawGroup === "agent-scratch" || rawGroup === "default"
@@ -793,6 +1185,149 @@ export class DaemonRpcServer {
               id: envelope.id,
               ok: true,
               result: { status: this.getT3BridgeStatus() }
+            }
+          };
+        }
+
+        case "memory.query": {
+          const result = await this.executeMemoryQuery(
+            params,
+            trustedCallerScope
+          );
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result
+            }
+          };
+        }
+
+        case "memory.upsert": {
+          const entry = await this.executeMemoryUpsert(
+            params,
+            trustedCallerScope
+          );
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: { id: entry.id, updatedAt: entry.updatedAt }
+            }
+          };
+        }
+
+        case "handoff.execute": {
+          if (this.handoffEngine === undefined) {
+            throw new RpcDispatchError(
+              "not_configured",
+              "HandoffEngine is not configured."
+            );
+          }
+          const sourceThreadId = requireStringParam(params, "sourceThreadId");
+          const rawDial = optionalStringParam(params, "targetDialMode");
+          let targetDialMode: DialMode | undefined;
+          if (rawDial !== undefined) {
+            if (!(DIAL_MODES as readonly string[]).includes(rawDial)) {
+              throw new RpcDispatchError(
+                "invalid_params",
+                `Invalid targetDialMode: "${rawDial}".`
+              );
+            }
+            targetDialMode = rawDial as DialMode;
+          }
+          const targetWorkspace = optionalStringParam(params, "targetWorkspace");
+          const targetBranch = optionalStringParam(params, "targetBranch");
+          const additionalContext = optionalStringParam(
+            params,
+            "additionalContext"
+          );
+          const rawTranscript = params.transcript;
+          let transcript: HandoffTranscriptMessage[] | undefined;
+          if (rawTranscript !== undefined) {
+            if (!Array.isArray(rawTranscript)) {
+              throw new RpcDispatchError(
+                "invalid_params",
+                'Parameter "transcript" must be an array.'
+              );
+            }
+            transcript = rawTranscript.filter(
+              (item): item is HandoffTranscriptMessage =>
+                isRecord(item) &&
+                typeof item.role === "string" &&
+                typeof item.content === "string"
+            );
+          }
+
+          const result = await this.handoffEngine.executeHandoff({
+            sourceThreadId,
+            ...(targetDialMode !== undefined ? { targetDialMode } : {}),
+            ...(targetWorkspace !== undefined ? { targetWorkspace } : {}),
+            ...(targetBranch !== undefined ? { targetBranch } : {}),
+            ...(additionalContext !== undefined ? { additionalContext } : {}),
+            ...(transcript !== undefined ? { transcript } : {})
+          });
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result
+            }
+          };
+        }
+
+        case "dial.setMode": {
+          if (this.handoffEngine === undefined) {
+            throw new RpcDispatchError(
+              "not_configured",
+              "HandoffEngine is not configured."
+            );
+          }
+          const threadId = requireStringParam(params, "threadId");
+          const modeRaw = requireStringParam(params, "mode");
+          if (!(DIAL_MODES as readonly string[]).includes(modeRaw)) {
+            throw new RpcDispatchError(
+              "invalid_params",
+              `Invalid dial mode: "${modeRaw}".`
+            );
+          }
+          const mode = this.handoffEngine.setDialMode(
+            threadId,
+            modeRaw as DialMode
+          );
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: { threadId, mode }
+            }
+          };
+        }
+
+        case "hooks.decideApproval": {
+          if (this.hookBus === undefined) {
+            throw new RpcDispatchError(
+              "not_configured",
+              "LifecycleHookBus is not configured."
+            );
+          }
+          const requestId = requireStringParam(params, "requestId");
+          const allow = requireBooleanParam(params, "allow");
+          const reason = optionalStringParam(params, "reason");
+          const record = this.hookBus.recordApprovalDecision(
+            requestId,
+            allow,
+            reason
+          );
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: {
+                requestId: record.requestId,
+                accepted: true,
+                status: record.status
+              }
             }
           };
         }
