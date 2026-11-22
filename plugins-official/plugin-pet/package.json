@@ -17,7 +17,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit --customConditions @prismux/source",
-    "build": "tsc --rootDir src"
+    "build": "tsc --rootDir src",
+    "test": "node --test dist/__tests__/*.test.js"
   },
   "dependencies": {
     "@prismux/protocol": "workspace:*"
