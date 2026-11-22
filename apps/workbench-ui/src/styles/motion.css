@@ -1,0 +1,93 @@
+/*
+ * Prismux Motion Choreography
+ * - Critical / subtly under-damped spring curves (never cheap over-bounce)
+ * - Strictly honored prefers-reduced-motion: reduce (<= 10ms)
+ */
+
+:root {
+  --ease-layout: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-celestial: cubic-bezier(0.2, 0.92, 0.28, 1);
+  --ease-press: cubic-bezier(0.2, 0, 0, 1);
+
+  --dur-layout: 240ms;
+  --dur-celestial: 290ms;
+  --dur-press: 110ms;
+}
+
+.prismux-motion-layout {
+  transition:
+    opacity var(--dur-layout) var(--ease-layout),
+    transform var(--dur-layout) var(--ease-layout),
+    flex-basis var(--dur-layout) var(--ease-layout),
+    width var(--dur-layout) var(--ease-layout),
+    height var(--dur-layout) var(--ease-layout),
+    background-color var(--dur-layout) var(--ease-layout),
+    border-color var(--dur-layout) var(--ease-layout);
+}
+
+.prismux-motion-drawer {
+  transition:
+    transform var(--dur-layout) var(--ease-layout),
+    opacity var(--dur-layout) var(--ease-layout);
+}
+
+.prismux-motion-capsule {
+  transition:
+    transform var(--dur-celestial) var(--ease-celestial),
+    opacity var(--dur-celestial) var(--ease-celestial),
+    box-shadow var(--dur-celestial) var(--ease-celestial);
+}
+
+@keyframes prismux-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes prismux-star-twinkle {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes prismux-cloud-drift {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+}
+
+.prismux-star-twinkle {
+  animation: prismux-star-twinkle 3.4s ease-in-out infinite;
+}
+
+.prismux-cloud-drift {
+  animation: prismux-cloud-drift 6s ease-in-out infinite;
+}
+
+/* Accessibility: Reduced Motion collapses transitions <= 10ms & pauses decorative motion */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-layout: 1ms;
+    --dur-celestial: 1ms;
+    --dur-press: 1ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
