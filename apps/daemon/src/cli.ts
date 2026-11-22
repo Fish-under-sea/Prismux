@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { BRAND } from "@prismux/protocol";
+import { resolvePortableDataDir } from "@prismux/sync-vault";
 import { PrismuxDaemon, sanitizeProviderEnv } from "./index.js";
 
 export interface DaemonCliParsedArgs {
   command: "start" | "help" | "version";
   headless: boolean;
   dataDir: string;
+  isPortable: boolean;
+  portableRoot?: string;
   host: string;
   port: number;
   t3Url?: string;
@@ -31,10 +34,15 @@ function readNextArg(argv: string[], index: number, flag: string): string {
   return value;
 }
 
-export function parseDaemonCliArgs(argv: string[]): DaemonCliParsedArgs {
+export function parseDaemonCliArgs(
+  argv: string[],
+  env: Record<string, string | undefined> = process.env,
+  defaultExecutableDir: string = dirname(process.execPath)
+): DaemonCliParsedArgs {
   let command: "start" | "help" | "version" = "start";
   let headless = false;
-  let dataDir = resolveDefaultDataDir();
+  let explicitDataDir: string | undefined;
+  let explicitPortableRoot: string | undefined;
   let host = "127.0.0.1";
   let port = 0;
   let t3Url: string | undefined;
@@ -58,7 +66,10 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliParsedArgs {
     } else if (arg === "--headless") {
       headless = true;
     } else if (arg === "--data-dir") {
-      dataDir = resolve(readNextArg(argv, i, "--data-dir"));
+      explicitDataDir = resolve(readNextArg(argv, i, "--data-dir"));
+      i += 1;
+    } else if (arg === "--portable-root") {
+      explicitPortableRoot = resolve(readNextArg(argv, i, "--portable-root"));
       i += 1;
     } else if (arg === "--host") {
       host = readNextArg(argv, i, "--host");
@@ -97,10 +108,35 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliParsedArgs {
     }
   }
 
+  const envPortableDir = env.PRISMUX_PORTABLE_DIR?.trim();
+  const probeExecutableDir =
+    explicitPortableRoot ??
+    (envPortableDir !== undefined && envPortableDir.length > 0
+      ? resolve(envPortableDir)
+      : defaultExecutableDir);
+
+  let dataDir: string;
+  let isPortable = false;
+  let portableRoot: string | undefined;
+
+  if (explicitDataDir !== undefined) {
+    dataDir = explicitDataDir;
+  } else {
+    const portable = resolvePortableDataDir({
+      executableDir: probeExecutableDir,
+      defaultDataDir: resolveDefaultDataDir()
+    });
+    dataDir = portable.dataDir;
+    isPortable = portable.isPortable;
+    portableRoot = portable.isPortable ? probeExecutableDir : undefined;
+  }
+
   return {
     command,
     headless,
     dataDir,
+    isPortable,
+    ...(portableRoot !== undefined ? { portableRoot } : {}),
     host,
     port,
     ...(t3Url !== undefined ? { t3Url } : {}),
@@ -123,8 +159,8 @@ export async function runDaemonCli(
         "",
         "Usage:",
         `  ${BRAND.appSlug} start [--headless] [--port <n>] [--host <h>] [--data-dir <dir>]`,
-        "                 [--t3-url <url>] [--t3-token <tok>] [--t3-command <cmd>]",
-        "                 [--t3-args <json>] [--auth-token <tok>]",
+        "                 [--portable-root <dir>] [--t3-url <url>] [--t3-token <tok>]",
+        "                 [--t3-command <cmd>] [--t3-args <json>] [--auth-token <tok>]",
         `  ${BRAND.appSlug} --help`,
         `  ${BRAND.appSlug} --version`,
         ""
@@ -152,6 +188,7 @@ export async function runDaemonCli(
   const daemon = new PrismuxDaemon({
     headless: parsed.headless,
     dataDir: parsed.dataDir,
+    portableRoot: parsed.portableRoot,
     host: parsed.host,
     port: parsed.port,
     t3Url: parsed.t3Url,

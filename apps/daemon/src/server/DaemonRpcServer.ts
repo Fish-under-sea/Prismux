@@ -7,6 +7,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import type { CordisPluginHost } from "@prismux/cordis-kernel";
 import {
   ForwardIdentityGuard,
   type ObsidianVaultImporterImpl,
@@ -52,6 +53,11 @@ export interface DaemonRpcServerOptions {
   ptyPool: PersistentPtyPool;
   chiefManager: ChiefThreadManager;
   pairingManager: PairingManager;
+  pluginHost?: CordisPluginHost;
+  onTogglePlugin?: (
+    pluginId: string,
+    enabled: boolean
+  ) => Promise<{ pluginId: string; enabled: boolean }>;
   memoryStore?: SqliteMemoryStore;
   obsidianImporter?: ObsidianVaultImporterImpl;
   handoffEngine?: HandoffEngine;
@@ -267,6 +273,13 @@ export class DaemonRpcServer {
   private readonly ptyPool: PersistentPtyPool;
   private readonly chiefManager: ChiefThreadManager;
   private readonly pairingManager: PairingManager;
+  private readonly pluginHost: CordisPluginHost | undefined;
+  private readonly onTogglePlugin:
+    | ((
+        pluginId: string,
+        enabled: boolean
+      ) => Promise<{ pluginId: string; enabled: boolean }>)
+    | undefined;
   private readonly memoryStore: SqliteMemoryStore | undefined;
   private readonly obsidianImporter: ObsidianVaultImporterImpl | undefined;
   private readonly handoffEngine: HandoffEngine | undefined;
@@ -296,6 +309,8 @@ export class DaemonRpcServer {
     this.ptyPool = options.ptyPool;
     this.chiefManager = options.chiefManager;
     this.pairingManager = options.pairingManager;
+    this.pluginHost = options.pluginHost;
+    this.onTogglePlugin = options.onTogglePlugin;
     this.memoryStore = options.memoryStore;
     this.obsidianImporter = options.obsidianImporter;
     this.handoffEngine = options.handoffEngine;
@@ -1185,6 +1200,64 @@ export class DaemonRpcServer {
               id: envelope.id,
               ok: true,
               result: { status: this.getT3BridgeStatus() }
+            }
+          };
+        }
+
+        case "plugins.list": {
+          if (this.pluginHost === undefined) {
+            throw new RpcDispatchError(
+              "not_configured",
+              "Plugin host is not configured."
+            );
+          }
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: { plugins: this.pluginHost.listInstalled() }
+            }
+          };
+        }
+
+        case "plugins.toggle": {
+          const pluginId = requireStringParam(params, "pluginId");
+          const enabled = requireBooleanParam(params, "enabled");
+          if (this.onTogglePlugin !== undefined) {
+            const toggled = await this.onTogglePlugin(pluginId, enabled);
+            return {
+              response: {
+                id: envelope.id,
+                ok: true,
+                result: toggled
+              }
+            };
+          }
+          if (this.pluginHost === undefined) {
+            throw new RpcDispatchError(
+              "not_configured",
+              "Plugin host is not configured."
+            );
+          }
+          const existing = this.pluginHost.getRecord(pluginId);
+          if (existing === undefined) {
+            throw new RpcDispatchError(
+              "not_found",
+              `Plugin "${pluginId}" is not installed.`
+            );
+          }
+          if (enabled) {
+            throw new RpcDispatchError(
+              "not_configured",
+              `Cannot enable plugin "${pluginId}" without daemon plugin toggle handler.`
+            );
+          }
+          await this.pluginHost.unmountPlugin(pluginId);
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: { pluginId, enabled: false }
             }
           };
         }
