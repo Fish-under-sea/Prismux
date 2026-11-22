@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   BRAND,
   CHIEF_PROVIDER_KINDS,
+  DEFAULT_UPDATE_POLICY,
   DIAL_MODES,
   DIAL_MODE_DESCRIPTIONS,
   type ChiefProviderKind,
@@ -9,6 +10,7 @@ import {
   type LayoutPresetId,
   type OfficialPluginCatalogEntry,
   type ReasoningModelProfile,
+  type UpdatePolicyConfig,
   type UsageLedgerSummary
 } from "@prismux/protocol";
 import {
@@ -25,6 +27,7 @@ import { PluginMarketModal } from "./components/PluginMarketModal.js";
 import { ReasoningEffortCard } from "./components/ReasoningEffortCard.js";
 import { SplitWorkspace } from "./components/SplitWorkspace.js";
 import { ThemeBackgroundPanel } from "./components/ThemeBackgroundPanel.js";
+import { UpdateCenterPanel } from "./components/UpdateCenterPanel.js";
 import { UsageLedgerBar } from "./components/UsageLedgerBar.js";
 import { WallpaperViewport } from "./components/WallpaperViewport.js";
 import {
@@ -45,6 +48,7 @@ import {
   type SlashCommandItem
 } from "./logic/navAndCommandStore.js";
 import {
+  APP_CURRENT_VERSION,
   DEFAULT_OFFICIAL_PLUGIN_CATALOG,
   type CommunityAuditDraft,
   type MarketInstalledPlugin
@@ -207,7 +211,11 @@ export const App: React.FC<WorkbenchAppProps> = ({
   const [usageEntries] = useState<UsageLedgerSummary[]>(INITIAL_USAGE_ENTRIES);
 
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"theme" | "nav">("theme");
+  const [settingsTab, setSettingsTab] = useState<"theme" | "nav" | "updater">("theme");
+  const [updateCenterOpen, setUpdateCenterOpen] = useState(false);
+  const [updatePolicy, setUpdatePolicy] = useState<UpdatePolicyConfig>(() => ({
+    ...DEFAULT_UPDATE_POLICY
+  }));
   const [marketOpen, setMarketOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(initialWizardOpen);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -1076,12 +1084,31 @@ export const App: React.FC<WorkbenchAppProps> = ({
       <header className="pmx-topbar prismux-topbar prismux-glass-sidebar">
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span className="prismux-ico" aria-hidden="true">
-              ◆
-            </span>
+            <img
+              src="/logo.png"
+              alt="Prismux Logo"
+              width={24}
+              height={24}
+              style={{
+                width: "24px",
+                height: "24px",
+                borderRadius: "6px",
+                objectFit: "cover",
+                flexShrink: 0
+              }}
+            />
             <strong style={{ fontSize: "14px", letterSpacing: "0.02em" }}>
               {BRAND.appName}
             </strong>
+            <button
+              type="button"
+              className="pmx-btn pmx-btn-sm pmx-btn-pill pmx-tabular"
+              title="打开软件更新与国内外双源路由中心"
+              aria-label={`当前版本 v${APP_CURRENT_VERSION}，点击打开软件更新中心`}
+              onClick={() => setUpdateCenterOpen(true)}
+            >
+              v{APP_CURRENT_VERSION}
+            </button>
           </div>
 
           <span
@@ -1369,6 +1396,17 @@ export const App: React.FC<WorkbenchAppProps> = ({
                 >
                   导航与命令
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === "updater"}
+                  className={`pmx-btn ${
+                    settingsTab === "updater" ? "pmx-btn-selected" : ""
+                  }`}
+                  onClick={() => setSettingsTab("updater")}
+                >
+                  软件更新
+                </button>
               </div>
               <button
                 type="button"
@@ -1456,7 +1494,7 @@ export const App: React.FC<WorkbenchAppProps> = ({
                     </div>
                   )}
                 </>
-              ) : (
+              ) : settingsTab === "nav" ? (
                 <NavAndCommandOrder
                   state={navState}
                   onChange={setNavState}
@@ -1469,11 +1507,35 @@ export const App: React.FC<WorkbenchAppProps> = ({
                   }}
                   machineId="fish-win11-primary"
                 />
+              ) : (
+                <UpdateCenterPanel
+                  embedded
+                  currentVersion={APP_CURRENT_VERSION}
+                  policy={updatePolicy}
+                  onPolicyChange={setUpdatePolicy}
+                  onOpenPluginMarket={() => {
+                    setSettingsDrawerOpen(false);
+                    setMarketOpen(true);
+                  }}
+                />
               )}
             </div>
           </aside>
         </div>
       )}
+
+      {/* 软件更新中心弹窗 */}
+      <UpdateCenterPanel
+        open={updateCenterOpen}
+        currentVersion={APP_CURRENT_VERSION}
+        policy={updatePolicy}
+        onPolicyChange={setUpdatePolicy}
+        onClose={() => setUpdateCenterOpen(false)}
+        onOpenPluginMarket={() => {
+          setUpdateCenterOpen(false);
+          setMarketOpen(true);
+        }}
+      />
 
       {/* 双轨插件市场 */}
       <PluginMarketModal
@@ -1481,6 +1543,12 @@ export const App: React.FC<WorkbenchAppProps> = ({
         onClose={() => setMarketOpen(false)}
         officialCatalog={DEFAULT_OFFICIAL_PLUGIN_CATALOG}
         installedPlugins={installedPlugins}
+        networkPreference={updatePolicy.routePreference}
+        pluginRegistryOverride={updatePolicy.pluginRegistryOverride}
+        onOpenUpdateCenter={() => {
+          setMarketOpen(false);
+          setUpdateCenterOpen(true);
+        }}
         onInstallOfficial={handleInstallOfficial}
         onInstallCommunityNpm={handleInstallCommunityNpm}
         onTogglePlugin={async (pluginId, enabled) => {

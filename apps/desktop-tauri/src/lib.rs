@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod installer_meta;
+pub mod updater;
 pub mod visibility;
 pub mod wallpaper;
 
@@ -9,6 +10,10 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, Window, WindowEvent};
+use updater::{
+    build_updater_bootstrap, verify_installer_sha256_file, Sha256VerificationResult,
+    UpdaterBootstrapInfo,
+};
 use visibility::{VisibilitySignal, VisibilityState, VISIBILITY_EVENT_NAME};
 use wallpaper::{
     scan_custom_wallpapers_in_dir, scan_steam_wallpapers_default, scan_steam_wallpapers_with_roots,
@@ -159,12 +164,26 @@ pub mod commands {
         let dir_buf = executable_dir.map(PathBuf::from);
         build_installer_plan(dir_buf.as_deref())
     }
+
+    #[tauri::command]
+    pub fn get_updater_bootstrap(executable_dir: Option<String>) -> UpdaterBootstrapInfo {
+        let dir_buf = executable_dir.map(PathBuf::from);
+        build_updater_bootstrap(dir_buf.as_deref())
+    }
+
+    #[tauri::command]
+    pub fn verify_installer_sha256(
+        file_path: String,
+        expected_sha256: String,
+    ) -> Result<Sha256VerificationResult, String> {
+        verify_installer_sha256_file(PathBuf::from(file_path).as_path(), &expected_sha256)
+    }
 }
 
 pub use commands::{
-    get_audio_spectrum, get_installer_plan, get_shell_capabilities, get_visibility_signal,
-    report_window_occlusion, scan_custom_wallpapers, scan_steam_wallpapers,
-    set_audio_capture_enabled,
+    get_audio_spectrum, get_installer_plan, get_shell_capabilities, get_updater_bootstrap,
+    get_visibility_signal, report_window_occlusion, scan_custom_wallpapers,
+    scan_steam_wallpapers, set_audio_capture_enabled, verify_installer_sha256,
 };
 
 fn handle_window_event<R: tauri::Runtime>(window: &Window<R>, event: &WindowEvent) {
@@ -227,7 +246,9 @@ pub fn run() {
             commands::set_audio_capture_enabled,
             commands::get_visibility_signal,
             commands::report_window_occlusion,
-            commands::get_installer_plan
+            commands::get_installer_plan,
+            commands::get_updater_bootstrap,
+            commands::verify_installer_sha256
         ])
         .run(tauri::generate_context!())
         .expect("error while running Prismux desktop shell");

@@ -16,6 +16,10 @@ import {
 import {
   DIAL_MODES,
   MEMORY_KINDS,
+  NETWORK_ROUTE_PREFERENCES,
+  PLUGIN_REGISTRY_IDS,
+  UPDATE_CHANNELS,
+  UPDATE_SOURCE_IDS,
   isScopeAllowedForNamespace,
   isValidMemoryNamespace,
   type CallerScope,
@@ -27,8 +31,14 @@ import {
   type MemoryQueryRequest,
   type MemoryQueryResponse,
   type MemoryUpsertInput,
+  type NetworkRoutePreference,
   type ObsidianImportRequest,
-  type T3BridgeStatus
+  type PluginRegistryOverride,
+  type T3BridgeStatus,
+  type UpdateChannel,
+  type UpdatePackageKind,
+  type UpdatePolicyPatch,
+  type UpdateSourceId
 } from "@prismux/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import type { ChiefThreadManager } from "../chief/ChiefThreadManager.js";
@@ -40,6 +50,7 @@ import type { LifecycleHookBus } from "../hooks/LifecycleHookBus.js";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
 import type { T3RpcClient } from "../t3/T3RpcClient.js";
 import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
+import type { AppUpdater } from "../updater/AppUpdater.js";
 import type { PairingManager } from "./PairingManager.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
@@ -58,6 +69,7 @@ export interface DaemonRpcServerOptions {
     pluginId: string,
     enabled: boolean
   ) => Promise<{ pluginId: string; enabled: boolean }>;
+  appUpdater?: AppUpdater;
   memoryStore?: SqliteMemoryStore;
   obsidianImporter?: ObsidianVaultImporterImpl;
   handoffEngine?: HandoffEngine;
@@ -280,6 +292,7 @@ export class DaemonRpcServer {
         enabled: boolean
       ) => Promise<{ pluginId: string; enabled: boolean }>)
     | undefined;
+  private readonly appUpdater: AppUpdater | undefined;
   private readonly memoryStore: SqliteMemoryStore | undefined;
   private readonly obsidianImporter: ObsidianVaultImporterImpl | undefined;
   private readonly handoffEngine: HandoffEngine | undefined;
@@ -304,13 +317,14 @@ export class DaemonRpcServer {
     this.host = options.host ?? "127.0.0.1";
     this.requestedPort = options.port ?? 0;
     this.headless = options.headless;
-    this.version = options.version ?? "0.1.0";
+    this.version = options.version ?? "0.0.1-alpha.1";
     this.machineId = options.machineId ?? "local";
     this.ptyPool = options.ptyPool;
     this.chiefManager = options.chiefManager;
     this.pairingManager = options.pairingManager;
     this.pluginHost = options.pluginHost;
     this.onTogglePlugin = options.onTogglePlugin;
+    this.appUpdater = options.appUpdater;
     this.memoryStore = options.memoryStore;
     this.obsidianImporter = options.obsidianImporter;
     this.handoffEngine = options.handoffEngine;
@@ -639,6 +653,58 @@ export class DaemonRpcServer {
           ...(dryRun !== undefined ? { dryRun } : {})
         };
         const result = await this.obsidianImporter.importVault(importReq);
+        writeJsonResponse(res, 200, result);
+        return;
+      }
+
+      if (method === "GET" && requestUrl.pathname === "/v1/updater/status") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        writeJsonResponse(res, 200, this.requireAppUpdater().getStatus());
+        return;
+      }
+
+      if (method === "POST" && requestUrl.pathname === "/v1/updater/probe") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        const report = await this.requireAppUpdater().probeSources();
+        writeJsonResponse(res, 200, report);
+        return;
+      }
+
+      if (method === "POST" && requestUrl.pathname === "/v1/updater/check") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        const rawBody = await readJsonBody(req);
+        const result = await this.executeUpdaterCheck(rawBody);
+        writeJsonResponse(res, 200, result);
+        return;
+      }
+
+      if (method === "POST" && requestUrl.pathname === "/v1/updater/policy") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        const rawBody = await readJsonBody(req);
+        const policy = this.executeUpdaterSetPolicy(rawBody);
+        writeJsonResponse(res, 200, { policy });
+        return;
+      }
+
+      if (method === "POST" && requestUrl.pathname === "/v1/updater/download") {
+        const trustedCallerScope = this.authenticateHttpRequest(req, res);
+        if (trustedCallerScope === null) {
+          return;
+        }
+        const rawBody = await readJsonBody(req);
+        const result = await this.executeUpdaterDownload(rawBody);
         writeJsonResponse(res, 200, result);
         return;
       }
@@ -1405,6 +1471,60 @@ export class DaemonRpcServer {
           };
         }
 
+        case "updater.status": {
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: this.requireAppUpdater().getStatus()
+            }
+          };
+        }
+
+        case "updater.probe": {
+          const report = await this.requireAppUpdater().probeSources();
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: report
+            }
+          };
+        }
+
+        case "updater.check": {
+          const result = await this.executeUpdaterCheck(params);
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result
+            }
+          };
+        }
+
+        case "updater.setPolicy": {
+          const policy = this.executeUpdaterSetPolicy(params);
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result: { policy }
+            }
+          };
+        }
+
+        case "updater.download": {
+          const result = await this.executeUpdaterDownload(params);
+          return {
+            response: {
+              id: envelope.id,
+              ok: true,
+              result
+            }
+          };
+        }
+
         case "daemon.shutdown": {
           const reason = optionalStringParam(params, "reason");
           return {
@@ -1439,5 +1559,141 @@ export class DaemonRpcServer {
         }
       };
     }
+  }
+
+  private requireAppUpdater(): AppUpdater {
+    if (this.appUpdater === undefined) {
+      throw new RpcDispatchError(
+        "not_configured",
+        "AppUpdater is not configured.",
+        503
+      );
+    }
+    return this.appUpdater;
+  }
+
+  private async executeUpdaterCheck(rawParams: unknown) {
+    const updater = this.requireAppUpdater();
+    if (!isRecord(rawParams)) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        "Updater check payload must be a JSON object."
+      );
+    }
+    const channelRaw = optionalStringParam(rawParams, "channel");
+    let channel: UpdateChannel | undefined;
+    if (channelRaw !== undefined) {
+      if (!(UPDATE_CHANNELS as readonly string[]).includes(channelRaw)) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          `Invalid update channel: "${channelRaw}".`
+        );
+      }
+      channel = channelRaw as UpdateChannel;
+    }
+
+    const sourceRaw = optionalStringParam(rawParams, "sourceOverride");
+    let sourceOverride: UpdateSourceId | undefined;
+    if (sourceRaw !== undefined) {
+      if (!(UPDATE_SOURCE_IDS as readonly string[]).includes(sourceRaw)) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          `Invalid update sourceOverride: "${sourceRaw}".`
+        );
+      }
+      sourceOverride = sourceRaw as UpdateSourceId;
+    }
+
+    return updater.checkForUpdates({
+      ...(channel !== undefined ? { channel } : {}),
+      ...(sourceOverride !== undefined ? { sourceOverride } : {})
+    });
+  }
+
+  private executeUpdaterSetPolicy(rawParams: unknown) {
+    const updater = this.requireAppUpdater();
+    if (!isRecord(rawParams)) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        "Updater policy payload must be a JSON object."
+      );
+    }
+
+    const patch: UpdatePolicyPatch = {};
+    if (rawParams.routePreference !== undefined) {
+      const routeRaw = requireStringParam(rawParams, "routePreference");
+      if (!(NETWORK_ROUTE_PREFERENCES as readonly string[]).includes(routeRaw)) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          `Invalid routePreference: "${routeRaw}".`
+        );
+      }
+      patch.routePreference = routeRaw as NetworkRoutePreference;
+    }
+    if (rawParams.includePrerelease !== undefined) {
+      patch.includePrerelease = requireBooleanParam(rawParams, "includePrerelease");
+    }
+    if (rawParams.customGhProxyPrefix !== undefined) {
+      if (typeof rawParams.customGhProxyPrefix !== "string") {
+        throw new RpcDispatchError(
+          "invalid_params",
+          'Parameter "customGhProxyPrefix" must be a string.'
+        );
+      }
+      patch.customGhProxyPrefix = rawParams.customGhProxyPrefix;
+    }
+    if (rawParams.pluginRegistryOverride !== undefined) {
+      const regRaw = requireStringParam(rawParams, "pluginRegistryOverride");
+      if (
+        regRaw !== "auto" &&
+        !(PLUGIN_REGISTRY_IDS as readonly string[]).includes(regRaw)
+      ) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          `Invalid pluginRegistryOverride: "${regRaw}".`
+        );
+      }
+      patch.pluginRegistryOverride = regRaw as PluginRegistryOverride;
+    }
+    if (rawParams.timeoutMs !== undefined) {
+      patch.timeoutMs = requirePositiveIntParam(rawParams, "timeoutMs");
+    }
+
+    try {
+      return updater.setPolicy(patch);
+    } catch (error) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  private async executeUpdaterDownload(rawParams: unknown) {
+    const updater = this.requireAppUpdater();
+    if (!isRecord(rawParams)) {
+      throw new RpcDispatchError(
+        "invalid_params",
+        "Updater download payload must be a JSON object."
+      );
+    }
+
+    const destDir = optionalStringParam(rawParams, "destDir");
+    const kindRaw = optionalStringParam(rawParams, "kind");
+    let kind: UpdatePackageKind | undefined;
+    if (kindRaw !== undefined) {
+      if (kindRaw !== "setup-exe" && kindRaw !== "portable-zip") {
+        throw new RpcDispatchError(
+          "invalid_params",
+          `Invalid update package kind: "${kindRaw}".`
+        );
+      }
+      kind = kindRaw;
+    }
+
+    return updater.downloadUpdate({
+      ...(destDir !== undefined ? { destDir } : {}),
+      ...(kind !== undefined ? { kind } : {})
+    });
   }
 }

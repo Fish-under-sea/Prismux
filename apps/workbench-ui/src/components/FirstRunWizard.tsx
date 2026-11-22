@@ -5,6 +5,7 @@ import {
   type AppearanceThemeMode,
   type ChiefProviderKind
 } from "@prismux/protocol";
+import { APP_CURRENT_VERSION } from "../logic/pluginMarketCatalog.js";
 import { formatLedgerMetric } from "../logic/usageFormatting.js";
 
 export interface FirstRunWizardConfig {
@@ -177,27 +178,19 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
         >
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
-              >
-                <polygon
-                  points="12,3 21,19 3,19"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="12"
-                  y1="3"
-                  x2="12"
-                  y2="19"
-                  stroke="var(--prismux-accent, #6cb6ff)"
-                  strokeWidth="1.2"
-                />
-              </svg>
+              <img
+                src="/logo.png"
+                alt="Prismux"
+                width={24}
+                height={24}
+                style={{
+                  width: "24px",
+                  height: "24px",
+                  borderRadius: "6px",
+                  objectFit: "cover",
+                  flexShrink: 0
+                }}
+              />
               <span style={{ fontWeight: 600, fontSize: "14px", letterSpacing: "0.02em" }}>
                 {BRAND.appName}
               </span>
@@ -240,7 +233,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
           </div>
 
           <div className="pmx-muted pmx-tabular" style={{ fontSize: "12px" }}>
-            v0.1.0 · 视觉层 0 Token 开销
+            v{APP_CURRENT_VERSION} · 视觉层 0 Token 开销
           </div>
         </aside>
 
@@ -257,12 +250,30 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
           {step === 1 && (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
               <div className="pmx-muted">STEP 01 · WELCOME</div>
-              <h2 style={{ margin: 0, fontSize: "20px", fontWeight: 600 }}>
-                欢迎使用 {BRAND.appName}
-              </h2>
-              <p style={{ margin: 0, fontSize: "14px" }}>
-                极简液态玻璃 AI 超级工作台与 24h 秘书系统
-              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                <img
+                  src="/logo.png"
+                  alt="Prismux"
+                  width={52}
+                  height={52}
+                  style={{
+                    width: "52px",
+                    height: "52px",
+                    borderRadius: "12px",
+                    objectFit: "cover",
+                    border: "1px solid var(--prismux-line, rgba(148,163,184,0.26))",
+                    flexShrink: 0
+                  }}
+                />
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <h2 style={{ margin: 0, fontSize: "20px", fontWeight: 600 }}>
+                    欢迎使用 {BRAND.appName}
+                  </h2>
+                  <p style={{ margin: 0, fontSize: "14px" }}>
+                    极简液态玻璃 AI 超级工作台与 24h 秘书系统
+                  </p>
+                </div>
+              </div>
               <div
                 style={{
                   padding: "16px",
@@ -276,7 +287,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
               >
                 <div className="pmx-kv-row">
                   <span className="pmx-muted">发行版本</span>
-                  <span className="pmx-tabular">0.1.0 (M4 Desktop &amp; Headless)</span>
+                  <span className="pmx-tabular">{APP_CURRENT_VERSION} (M4 Desktop &amp; Headless)</span>
                 </div>
                 <div className="pmx-kv-row">
                   <span className="pmx-muted">架构基线</span>

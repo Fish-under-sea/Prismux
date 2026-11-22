@@ -27,13 +27,16 @@ import { fileURLToPath } from "node:url";
 import { createGunzip } from "node:zlib";
 import {
   BRAND,
+  UPDATE_ENDPOINTS,
   type InstalledPluginRecord,
+  type NetworkRoutePreference,
   type OfficialPluginCatalog,
   type OfficialPluginCatalogEntry,
   type PluginDistribution,
   type PluginManifest,
   type PluginPermission,
-  type PluginRealm
+  type PluginRealm,
+  type PluginRegistryId
 } from "@prismux/protocol";
 import {
   checkPackageEngineCompatibility,
@@ -45,9 +48,9 @@ import {
 } from "./semver.js";
 
 const TAR_BLOCK_SIZE = 512;
-const DEFAULT_REGISTRY_URL = "https://registry.npmjs.org";
-const DEFAULT_FALLBACK_REGISTRY_URL = "https://registry.npmmirror.com";
-const DEFAULT_GITHUB_API_URL = "https://api.github.com";
+const DEFAULT_REGISTRY_URL = UPDATE_ENDPOINTS.npmRegistry;
+const DEFAULT_FALLBACK_REGISTRY_URL = UPDATE_ENDPOINTS.npmMirrorRegistry;
+const DEFAULT_GITHUB_API_URL = UPDATE_ENDPOINTS.githubApiBase;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -123,6 +126,7 @@ export interface StreamingInstallOptions {
   packageNameOrTarball: string;
   registryUrl?: string;
   fallbackRegistryUrl?: string;
+  networkPreference?: NetworkRoutePreference;
   expectedSha256?: string;
   ignoreScripts: true;
   distribution?: PluginDistribution;
@@ -158,10 +162,44 @@ export interface CordisStreamingInstallerOptions {
   hostVersion: string;
   defaultRegistryUrl?: string;
   defaultFallbackRegistryUrl?: string;
+  networkPreference?: NetworkRoutePreference;
   githubApiBaseUrl?: string;
   requestTimeoutMs?: number;
   maxArchiveBytes?: number;
   maxUncompressedBytes?: number;
+}
+
+export interface RegistryOrderResolution {
+  preference: NetworkRoutePreference;
+  primary: string;
+  fallback: string;
+  order: string[];
+}
+
+export interface ProbePluginRegistriesOptions {
+  npmRegistryUrl?: string;
+  npmMirrorRegistryUrl?: string;
+  timeoutMs?: number;
+  headers?: Record<string, string>;
+  probePath?: string;
+}
+
+export interface PluginRegistryProbeEntry {
+  id: PluginRegistryId;
+  url: string;
+  reachable: boolean;
+  statusCode: number | null;
+  latencyMs: number | null;
+  error?: string;
+}
+
+export interface PluginRegistryProbeReport {
+  probedAt: number;
+  recommendedRegistryId: PluginRegistryId;
+  recommendedUrl: string;
+  fallbackUrl: string;
+  order: [string, string];
+  registries: [PluginRegistryProbeEntry, PluginRegistryProbeEntry];
 }
 
 export interface CommunityPluginSummary {
@@ -1203,10 +1241,142 @@ function isFallbackEligibleError(error: unknown): boolean {
   if (error instanceof RegistryNetworkError) {
     return true;
   }
-  if (error instanceof RegistryHttpError && error.statusCode >= 500) {
+  if (
+    error instanceof RegistryHttpError &&
+    (error.statusCode >= 500 ||
+      error.statusCode === 404 ||
+      error.statusCode === 408 ||
+      error.statusCode === 429)
+  ) {
     return true;
   }
   return false;
+}
+
+/**
+ * Resolves the primary/fallback npm registry order for a given network route preference.
+ * - `domestic`: `npmmirror` first, `npmjs` fallback
+ * - `global` / `auto` (static default): `npmjs` first, `npmmirror` fallback
+ */
+export function resolveRegistryOrder(
+  preference: NetworkRoutePreference = "auto",
+  primaryOverride?: string,
+  fallbackOverride?: string
+): RegistryOrderResolution {
+  const globalUrl = normalizeBaseUrl(primaryOverride ?? DEFAULT_REGISTRY_URL);
+  const domesticUrl = normalizeBaseUrl(
+    fallbackOverride ?? DEFAULT_FALLBACK_REGISTRY_URL
+  );
+
+  const primary = preference === "domestic" ? domesticUrl : globalUrl;
+  const fallback = preference === "domestic" ? globalUrl : domesticUrl;
+  const order =
+    fallback.length === 0 || fallback === primary ? [primary] : [primary, fallback];
+
+  return {
+    preference,
+    primary,
+    fallback,
+    order
+  };
+}
+
+async function probeSingleRegistry(
+  id: PluginRegistryId,
+  baseUrl: string,
+  probePath: string,
+  timeoutMs: number,
+  headers: Record<string, string>
+): Promise<PluginRegistryProbeEntry> {
+  const normalizedBase = normalizeBaseUrl(baseUrl);
+  const normalizedPath = probePath.startsWith("/") ? probePath : `/${probePath}`;
+  const targetUrl = `${normalizedBase}${normalizedPath}`;
+  const startedAt = performance.now();
+
+  try {
+    const response = await openHttpStream(
+      targetUrl,
+      {
+        accept: "application/json",
+        ...headers
+      },
+      timeoutMs,
+      3
+    );
+    response.stream.resume();
+    const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
+    const reachable = response.statusCode >= 200 && response.statusCode < 400;
+    return {
+      id,
+      url: normalizedBase,
+      reachable,
+      statusCode: response.statusCode,
+      latencyMs,
+      ...(reachable ? {} : { error: `HTTP ${response.statusCode}` })
+    };
+  } catch (error) {
+    return {
+      id,
+      url: normalizedBase,
+      reachable: false,
+      statusCode: null,
+      latencyMs: null,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+/**
+ * Concurrently probes `registry.npmjs.org` and `registry.npmmirror.com` (or custom URLs)
+ * and ranks the fastest reachable registry first, keeping the other as automatic fallback.
+ */
+export async function probePluginRegistries(
+  options?: ProbePluginRegistriesOptions
+): Promise<PluginRegistryProbeReport> {
+  const npmRegistryUrl = normalizeBaseUrl(
+    options?.npmRegistryUrl ?? DEFAULT_REGISTRY_URL
+  );
+  const npmMirrorRegistryUrl = normalizeBaseUrl(
+    options?.npmMirrorRegistryUrl ?? DEFAULT_FALLBACK_REGISTRY_URL
+  );
+  const timeoutMs = options?.timeoutMs ?? 5_000;
+  const probePath = options?.probePath ?? "/";
+  const headers = options?.headers ?? {};
+
+  const [npmjsProbe, mirrorProbe] = await Promise.all([
+    probeSingleRegistry("npmjs", npmRegistryUrl, probePath, timeoutMs, headers),
+    probeSingleRegistry(
+      "npmmirror",
+      npmMirrorRegistryUrl,
+      probePath,
+      timeoutMs,
+      headers
+    )
+  ]);
+
+  let recommended: PluginRegistryProbeEntry = npmjsProbe;
+  let fallback: PluginRegistryProbeEntry = mirrorProbe;
+
+  if (npmjsProbe.reachable && mirrorProbe.reachable) {
+    const npmLatency = npmjsProbe.latencyMs ?? Number.POSITIVE_INFINITY;
+    const mirrorLatency = mirrorProbe.latencyMs ?? Number.POSITIVE_INFINITY;
+    if (mirrorLatency < npmLatency) {
+      recommended = mirrorProbe;
+      fallback = npmjsProbe;
+    }
+  } else if (mirrorProbe.reachable && !npmjsProbe.reachable) {
+    recommended = mirrorProbe;
+    fallback = npmjsProbe;
+  }
+
+  return {
+    probedAt: Date.now(),
+    recommendedRegistryId: recommended.id,
+    recommendedUrl: recommended.url,
+    fallbackUrl: fallback.url,
+    order: [recommended.url, fallback.url],
+    registries: [npmjsProbe, mirrorProbe]
+  };
 }
 
 /**
@@ -1284,6 +1454,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
   private readonly hostVersion: string;
   private readonly defaultRegistryUrl: string;
   private readonly defaultFallbackRegistryUrl: string;
+  private readonly networkPreference: NetworkRoutePreference | undefined;
+  private readonly hasCustomRegistries: boolean;
   private readonly githubApiBaseUrl: string;
   private readonly requestTimeoutMs: number;
   private readonly maxArchiveBytes: number;
@@ -1305,6 +1477,10 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     this.defaultFallbackRegistryUrl = normalizeBaseUrl(
       options.defaultFallbackRegistryUrl ?? DEFAULT_FALLBACK_REGISTRY_URL
     );
+    this.networkPreference = options.networkPreference;
+    this.hasCustomRegistries =
+      options.defaultRegistryUrl !== undefined ||
+      options.defaultFallbackRegistryUrl !== undefined;
     this.githubApiBaseUrl = normalizeBaseUrl(
       options.githubApiBaseUrl ?? DEFAULT_GITHUB_API_URL
     );
@@ -1313,6 +1489,19 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     this.maxArchiveBytes = options.maxArchiveBytes ?? DEFAULT_MAX_ARCHIVE_BYTES;
     this.maxUncompressedBytes =
       options.maxUncompressedBytes ?? DEFAULT_MAX_UNCOMPRESSED_BYTES;
+  }
+
+  async probeRegistries(
+    options?: ProbePluginRegistriesOptions
+  ): Promise<PluginRegistryProbeReport> {
+    return probePluginRegistries({
+      npmRegistryUrl: options?.npmRegistryUrl ?? this.defaultRegistryUrl,
+      npmMirrorRegistryUrl:
+        options?.npmMirrorRegistryUrl ?? this.defaultFallbackRegistryUrl,
+      timeoutMs: options?.timeoutMs ?? Math.min(this.requestTimeoutMs, 5_000),
+      headers: options?.headers,
+      probePath: options?.probePath
+    });
   }
 
   getPluginsDir(): string {
@@ -1409,12 +1598,44 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     }
 
     const parsedSpec = parseNpmPackageSpec(specInput);
-    const primaryRegistry = normalizeBaseUrl(
+    const baseGlobal = normalizeBaseUrl(
       options.registryUrl ?? this.defaultRegistryUrl
     );
-    const fallbackRegistry = normalizeBaseUrl(
+    const baseDomestic = normalizeBaseUrl(
       options.fallbackRegistryUrl ?? this.defaultFallbackRegistryUrl
     );
+    const hasExplicitDifferentRegistry =
+      options.registryUrl !== undefined &&
+      normalizeBaseUrl(options.registryUrl) !== this.defaultRegistryUrl;
+    const effectivePreference = options.networkPreference ?? this.networkPreference;
+
+    let primaryRegistry = baseGlobal;
+    let fallbackRegistry = baseDomestic;
+
+    if (hasExplicitDifferentRegistry && options.networkPreference === undefined) {
+      primaryRegistry = baseGlobal;
+      fallbackRegistry = baseDomestic;
+    } else if (
+      effectivePreference === "domestic" ||
+      effectivePreference === "global"
+    ) {
+      const resolved = resolveRegistryOrder(
+        effectivePreference,
+        baseGlobal,
+        baseDomestic
+      );
+      primaryRegistry = resolved.primary;
+      fallbackRegistry = resolved.fallback;
+    } else if (effectivePreference === "auto" || !this.hasCustomRegistries) {
+      const probe = await probePluginRegistries({
+        npmRegistryUrl: baseGlobal,
+        npmMirrorRegistryUrl: baseDomestic,
+        timeoutMs: Math.min(this.requestTimeoutMs, 5_000),
+        headers: options.headers
+      });
+      primaryRegistry = probe.recommendedUrl;
+      fallbackRegistry = probe.fallbackUrl;
+    }
 
     try {
       const details = await this.installFromRegistryBase(

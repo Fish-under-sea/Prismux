@@ -5,3 +5,4 @@ export * from "./hooks.js";
 export * from "./handoff.js";
 export * from "./plugin.js";
 export * from "./rpc.js";
+export * from "./updater.js";

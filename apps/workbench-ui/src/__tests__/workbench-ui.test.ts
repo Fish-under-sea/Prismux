@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { OFFICIAL_PLUGIN_IDS } from "@prismux/protocol";
+import { DEFAULT_UPDATE_POLICY, OFFICIAL_PLUGIN_IDS, UPDATE_ENDPOINTS } from "@prismux/protocol";
 import {
   closePane,
   collectLeafPaneIds,
@@ -31,8 +31,13 @@ import {
   toggleSlashCommandVisibility
 } from "../logic/navAndCommandStore.js";
 import {
+  APP_CURRENT_VERSION,
   buildCommunityAuditDraft,
   DEFAULT_OFFICIAL_PLUGIN_CATALOG,
+  formatGhProxyPreviewUrl,
+  normalizeUpdatePolicyPatch,
+  resolveUiPluginRegistryOrder,
+  resolveUiUpdateSourceOrder,
   validateNpmPackageSpec
 } from "../logic/pluginMarketCatalog.js";
 import {
@@ -461,6 +466,81 @@ describe("Plugin market catalog & 0 FPS occlusion resolver", () => {
         signal: { occluded: true }
       }),
       false
+    );
+  });
+});
+
+describe("Updater route preference, dual-mirror order, and v0.0.1-alpha.1 catalog metadata", () => {
+  it("tracks v0.0.1-alpha.1 catalog metadata with unscoped prismux-plugin-* aliases", () => {
+    assert.equal(APP_CURRENT_VERSION, "0.0.1-alpha.1");
+    for (const entry of DEFAULT_OFFICIAL_PLUGIN_CATALOG) {
+      assert.equal(entry.version, "0.0.1-alpha.1");
+      assert.equal(entry.engines.prismux, ">=0.0.1-0 <2.0.0");
+      assert.equal(entry.unscopedPackageName, `prismux-plugin-${entry.id}`);
+    }
+  });
+
+  it("resolves update sources and npm/npmmirror order across auto, domestic, global, and overrides", () => {
+    const autoSources = resolveUiUpdateSourceOrder("auto");
+    assert.equal(autoSources.preference, "auto");
+
+    const domesticSources = resolveUiUpdateSourceOrder("domestic");
+    assert.equal(domesticSources.primarySource, "gitee");
+    assert.equal(domesticSources.fallbackSource, "github");
+
+    const globalSources = resolveUiUpdateSourceOrder("global");
+    assert.equal(globalSources.primarySource, "github");
+    assert.equal(globalSources.fallbackSource, "gitee");
+
+    const autoReg = resolveUiPluginRegistryOrder("auto", "auto");
+    assert.equal(autoReg.effectiveMode, "auto-probe");
+
+    const domesticReg = resolveUiPluginRegistryOrder("domestic", "auto");
+    assert.equal(domesticReg.effectiveMode, "domestic-first");
+    assert.equal(domesticReg.primaryId, "npmmirror");
+    assert.equal(domesticReg.primaryUrl, UPDATE_ENDPOINTS.npmMirrorRegistry);
+    assert.equal(domesticReg.fallbackUrl, UPDATE_ENDPOINTS.npmRegistry);
+
+    const globalReg = resolveUiPluginRegistryOrder("global", "auto");
+    assert.equal(globalReg.effectiveMode, "global-first");
+    assert.equal(globalReg.primaryId, "npmjs");
+    assert.equal(globalReg.primaryUrl, UPDATE_ENDPOINTS.npmRegistry);
+    assert.equal(globalReg.fallbackUrl, UPDATE_ENDPOINTS.npmMirrorRegistry);
+
+    const explicitMirrorOverride = resolveUiPluginRegistryOrder("global", "npmmirror");
+    assert.equal(explicitMirrorOverride.primaryId, "npmmirror");
+    assert.equal(explicitMirrorOverride.fallbackId, "npmjs");
+
+    const explicitGlobalOverride = resolveUiPluginRegistryOrder("domestic", "npmjs");
+    assert.equal(explicitGlobalOverride.primaryId, "npmjs");
+    assert.equal(explicitGlobalOverride.fallbackId, "npmmirror");
+  });
+
+  it("normalizes update policy patches and keeps customGhProxyPrefix empty by default", () => {
+    assert.equal(DEFAULT_UPDATE_POLICY.routePreference, "auto");
+    assert.equal(DEFAULT_UPDATE_POLICY.includePrerelease, true);
+    assert.equal(DEFAULT_UPDATE_POLICY.customGhProxyPrefix, "");
+
+    const rawAssetUrl = "https://github.com/Fish-under-sea/Prismux/releases/download/v0.0.1-alpha.1/Prismux-Setup-0.0.1-alpha.1.exe";
+    assert.equal(formatGhProxyPreviewUrl(rawAssetUrl, ""), rawAssetUrl);
+    assert.equal(
+      formatGhProxyPreviewUrl(rawAssetUrl, "https://gh.example.com"),
+      `https://gh.example.com/${rawAssetUrl}`
+    );
+
+    const updated = normalizeUpdatePolicyPatch(DEFAULT_UPDATE_POLICY, {
+      routePreference: "domestic",
+      customGhProxyPrefix: "  https://mirror.local/  ",
+      includePrerelease: false
+    });
+    assert.equal(updated.routePreference, "domestic");
+    assert.equal(updated.customGhProxyPrefix, "https://mirror.local/");
+    assert.equal(updated.includePrerelease, false);
+
+    assert.throws(() =>
+      normalizeUpdatePolicyPatch(DEFAULT_UPDATE_POLICY, {
+        customGhProxyPrefix: "ftp://invalid-proxy.local"
+      })
     );
   });
 });

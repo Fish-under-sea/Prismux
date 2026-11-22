@@ -30,6 +30,7 @@ import {
   sanitizeChildEnv,
   T3ServerSupervisor
 } from "./t3/T3ServerSupervisor.js";
+import { AppUpdater } from "./updater/AppUpdater.js";
 import { OvernightFactory } from "./workflows/OvernightFactory.js";
 
 export * from "./pty/PersistentPtyPool.js";
@@ -42,6 +43,7 @@ export * from "./t3/T3RpcClient.js";
 export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
 export * from "./server/DaemonRpcServer.js";
+export * from "./updater/AppUpdater.js";
 
 const PLUGIN_MASTER_KEY_FILENAME = "credentials-master.key";
 
@@ -125,6 +127,7 @@ export class PrismuxDaemon {
   readonly pluginHost: CordisPluginHost;
   readonly pluginCredentialStore: EncryptedPluginCredentialStore;
   readonly pluginInstaller: CordisStreamingInstaller;
+  readonly appUpdater: AppUpdater;
   readonly memoryStore: SqliteMemoryStore;
   readonly obsidianImporter: ObsidianVaultImporterImpl;
   readonly syncVault: SyncVaultEngine;
@@ -162,9 +165,15 @@ export class PrismuxDaemon {
       dataDir: options.dataDir,
       masterKey: this.pluginMasterKey
     });
+    const resolvedHostVersion = options.hostVersion ?? "0.0.1-alpha.1";
     this.pluginInstaller = new CordisStreamingInstaller({
       pluginsDir: join(options.dataDir, "plugins"),
-      hostVersion: options.hostVersion ?? "0.1.0"
+      hostVersion: resolvedHostVersion
+    });
+    this.appUpdater = new AppUpdater({
+      currentVersion: resolvedHostVersion,
+      dataDir: options.dataDir,
+      portableMode: Boolean(options.portableRoot)
     });
 
     this.memoryStore = new SqliteMemoryStore({
@@ -237,12 +246,14 @@ export class PrismuxDaemon {
       host: options.host ?? "127.0.0.1",
       port: options.port ?? 0,
       headless: options.headless,
+      version: resolvedHostVersion,
       machineId: this.machineId,
       ptyPool: this.ptyPool,
       chiefManager: this.chiefManager,
       pairingManager: this.pairingManager,
       pluginHost: this.pluginHost,
       onTogglePlugin: (pluginId, enabled) => this.togglePlugin(pluginId, enabled),
+      appUpdater: this.appUpdater,
       memoryStore: this.memoryStore,
       obsidianImporter: this.obsidianImporter,
       handoffEngine: this.handoffEngine,

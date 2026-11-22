@@ -1,9 +1,16 @@
 import React, { useEffect, useState } from "react";
-import type { OfficialPluginCatalogEntry } from "@prismux/protocol";
 import {
+  formatCommunityPluginPackageName,
+  type NetworkRoutePreference,
+  type OfficialPluginCatalogEntry,
+  type PluginRegistryOverride
+} from "@prismux/protocol";
+import {
+  NETWORK_ROUTE_META,
   buildCommunityAuditDraft,
   DEFAULT_OFFICIAL_PLUGIN_CATALOG,
   PERMISSION_ZH_LABELS,
+  resolveUiPluginRegistryOrder,
   validateNpmPackageSpec,
   type CommunityAuditDraft,
   type MarketInstalledPlugin
@@ -14,6 +21,9 @@ export interface PluginMarketModalProps {
   onClose: () => void;
   officialCatalog?: ReadonlyArray<OfficialPluginCatalogEntry>;
   installedPlugins: MarketInstalledPlugin[];
+  networkPreference?: NetworkRoutePreference;
+  pluginRegistryOverride?: PluginRegistryOverride;
+  onOpenUpdateCenter?: () => void;
   onInstallOfficial: (entry: OfficialPluginCatalogEntry) => Promise<void> | void;
   onInstallCommunityNpm: (request: {
     packageName: string;
@@ -31,6 +41,9 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
   onClose,
   officialCatalog = DEFAULT_OFFICIAL_PLUGIN_CATALOG,
   installedPlugins,
+  networkPreference = "auto",
+  pluginRegistryOverride = "auto",
+  onOpenUpdateCenter,
   onInstallOfficial,
   onInstallCommunityNpm,
   onTogglePlugin,
@@ -69,6 +82,12 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
   if (!open) {
     return null;
   }
+
+  const registryOrder = resolveUiPluginRegistryOrder(
+    networkPreference,
+    pluginRegistryOverride
+  );
+  const routeMeta = NETWORK_ROUTE_META[networkPreference];
 
   const findInstalled = (pluginId: string): MarketInstalledPlugin | undefined =>
     installedPlugins.find((p) => p.id === pluginId || p.packageName === pluginId);
@@ -256,6 +275,9 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
                         <strong style={{ fontSize: "14px" }}>
                           {entry.packageName}
                         </strong>
+                        <span className="pmx-muted">
+                          （无作用域包：{formatCommunityPluginPackageName(entry.id)}）
+                        </span>
                         <span
                           style={{
                             display: "inline-flex",
@@ -429,6 +451,35 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <div
+                className="pmx-glass-content"
+                style={{
+                  padding: "12px 16px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "12px",
+                  flexWrap: "wrap"
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <strong>当前插件源模式：npm ↔ npmmirror</strong>
+                    <span className="prismux-badge">{routeMeta.shortLabel}</span>
+                  </div>
+                  <div className="pmx-muted">{registryOrder.summaryZh}</div>
+                </div>
+                {onOpenUpdateCenter && (
+                  <button
+                    type="button"
+                    className="pmx-btn pmx-btn-sm"
+                    onClick={onOpenUpdateCenter}
+                  >
+                    切换国内外路线
+                  </button>
+                )}
+              </div>
+
+              <div
                 style={{
                   padding: "12px 16px",
                   borderRadius: "10px",
@@ -436,7 +487,8 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
                   fontSize: "12.5px"
                 }}
               >
-                社区免 Git 流式安装器：直接通过 HTTPS 请求 npm Registry（失败自动回退 npmmirror 镜像）流式拉取{" "}
+                社区免 Git 流式安装器：直接通过 HTTPS 请求 npm Registry（按当前网络策略优选{" "}
+                <code>npmjs</code> / <code>npmmirror</code> 并在 404/5xx/网络失败时自动回退）流式拉取{" "}
                 <code>.tgz</code> 解包并写入 <code>distribution: "managed"</code>，
                 <strong>绝不调用本机 git</strong>，并
                 <strong>强制禁用 preinstall / install / postinstall 脚本</strong>。
@@ -453,7 +505,7 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
                   type="text"
                   className="pmx-input"
                   aria-label="输入社区 npm 插件包名"
-                  placeholder="输入 npm 包名，例如 prismux-plugin-theme-lab 或 @scope/prismux-plugin-prompt-helper"
+                  placeholder="输入无作用域或社区 npm 包名，例如 prismux-plugin-qq、prismux-plugin-pet 或 @scope/prismux-plugin-foo"
                   value={npmPackageInput}
                   onChange={(e) => setNpmPackageInput(e.target.value)}
                   style={{ flex: 1 }}
@@ -471,18 +523,30 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
                   alignItems: "center"
                 }}
               >
-                <span className="pmx-muted">快速体验审计门控示例：</span>
+                <span className="pmx-muted">快速体验无作用域包 / 审计门控示例：</span>
                 <button
                   type="button"
                   className="pmx-btn pmx-btn-sm"
                   onClick={() =>
-                    handlePrepareCommunityInstall("prismux-plugin-clock-widget", {
+                    handlePrepareCommunityInstall("prismux-plugin-qq", {
                       modelVisible: false,
                       modifiesSystemPrompt: false
                     })
                   }
                 >
-                  导入纯 UI 扩展（0 Token）
+                  导入 prismux-plugin-qq（0 Token）
+                </button>
+                <button
+                  type="button"
+                  className="pmx-btn pmx-btn-sm"
+                  onClick={() =>
+                    handlePrepareCommunityInstall("prismux-plugin-pet", {
+                      modelVisible: false,
+                      modifiesSystemPrompt: false
+                    })
+                  }
+                >
+                  导入 prismux-plugin-pet（0 Token）
                 </button>
                 <button
                   type="button"
