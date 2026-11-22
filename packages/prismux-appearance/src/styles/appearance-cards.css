@@ -1,0 +1,497 @@
+/* ============================================================================
+ * Prismux Appearance Hero, Liquid Glass & Typography Cards
+ * 1:1 FISH-Dock visual hierarchy + 8-state accessible interactive controls.
+ * Never uses @media (prefers-color-scheme) so host theme polarity always wins.
+ * ========================================================================== */
+
+.pmx-appearance {
+  --g1: #1c1c1e;
+  --g2: rgba(255, 255, 255, 0.07);
+  --g3: rgba(255, 255, 255, 0.16);
+  --g4: #8e8e93;
+  --g5: #a1a1a6;
+  --fg: #f5f5f7;
+  --ok-ink: #34d27b;
+  --bad-ink: #ff6b7a;
+  --spring: cubic-bezier(0.3, 1.45, 0.5, 1);
+  color: var(--dock-fg, var(--pmx-text-color, var(--fg)));
+  font-size: 13px;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance,
+.pmx-light .pmx-appearance,
+.tb-light .pmx-appearance {
+  --g1: #ffffff;
+  --g2: rgba(0, 0, 0, 0.045);
+  --g3: rgba(0, 0, 0, 0.16);
+  --g4: #5d5d5d;
+  --g5: #3a3a3c;
+  --fg: #1b1b1f;
+  --ok-ink: #0f7b3f;
+  --bad-ink: #c42b3c;
+}
+
+.pmx-appearance.ilook-cards-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pmx-appearance.ilook-sec-card,
+.pmx-appearance .ilook-sec-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance.ilook-sec-card,
+:root[data-pmx-theme='light'] .pmx-appearance .ilook-sec-card,
+.pmx-light .pmx-appearance.ilook-sec-card,
+.pmx-light .pmx-appearance .ilook-sec-card,
+.tb-light .pmx-appearance.ilook-sec-card,
+.tb-light .pmx-appearance .ilook-sec-card {
+  border-color: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.025);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.pmx-appearance.ilook-hero-card,
+.pmx-appearance .ilook-hero-card {
+  gap: 8px;
+  padding: 12px 14px 10px;
+}
+
+.pmx-appearance .ilook-hero-card .dock-theme-pill,
+.pmx-appearance.ilook-hero-card .dock-theme-pill {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.pmx-appearance .ilook-hero-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pmx-appearance .ilook-hero-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--g3);
+  background: var(--g2);
+  color: var(--dock-muted, var(--pmx-muted-color, var(--g5)));
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pmx-appearance .ilook-box-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  min-width: 0;
+}
+
+.pmx-appearance .ilook-box-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--dock-heading, var(--dock-fg, var(--fg)));
+}
+
+.pmx-appearance .ilook-box-note {
+  font-size: 12px;
+  line-height: 1.38;
+  color: var(--dock-muted, var(--pmx-muted-color, var(--g4)));
+}
+
+.pmx-appearance .grow {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/* Segmented pills (5-preset liquid glass & toggles) */
+.pmx-appearance .seg {
+  display: inline-flex;
+  flex: none;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--g2);
+  border: 1px solid var(--g3);
+  font-size: 12px;
+}
+
+.pmx-appearance .seg > button {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dock-muted, var(--g5));
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.14s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.pmx-appearance .seg > button:hover:not(:disabled) {
+  color: var(--dock-fg, var(--fg));
+}
+
+.pmx-appearance .seg > button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.96);
+}
+
+.pmx-appearance .seg > button:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 2px;
+}
+
+.pmx-appearance .seg > button.on {
+  background: var(--g3);
+  color: var(--dock-heading, var(--dock-fg, var(--fg)));
+  font-weight: 600;
+}
+
+.pmx-appearance .dock-glass-seg {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px;
+  margin: 2px 0 4px;
+}
+
+.pmx-appearance .dock-glass-seg > button {
+  padding: 5px 0;
+  text-align: center;
+  font-size: 12px;
+}
+
+/* Pill buttons (8-state compliant) */
+.pmx-appearance .pbtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--g3);
+  border-radius: 999px;
+  background: var(--g2);
+  color: var(--dock-fg, var(--fg));
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    filter 0.14s ease,
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    transform 0.14s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.pmx-appearance .pbtn.sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.pmx-appearance .pbtn:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.pmx-appearance .pbtn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.97);
+}
+
+.pmx-appearance .pbtn:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 2px;
+}
+
+.pmx-appearance .pbtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pmx-appearance .pbtn.al {
+  border-color: #005fb8;
+  background: #005fb8;
+  color: #ffffff;
+}
+
+/* Accent & Glass Regions */
+.pmx-appearance .glass-accent-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance .glass-accent-zone,
+.pmx-light .pmx-appearance .glass-accent-zone {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.pmx-appearance .ilook-accent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.pmx-appearance .winaccent-mode {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pmx-appearance .glass-reg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance .glass-reg,
+.pmx-light .pmx-appearance .glass-reg {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.pmx-appearance .glass-reg-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.pmx-appearance .glass-reg-t {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--dock-heading, var(--dock-fg, var(--fg)));
+}
+
+.pmx-appearance .glass-reg-d {
+  font-size: 12px;
+  color: var(--dock-muted, var(--g4));
+}
+
+.pmx-appearance .ilook-slider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 26px;
+}
+
+.pmx-appearance .ilook-slider-lbl {
+  flex: 0 0 60px;
+  font-size: 12px;
+  color: var(--dock-muted, var(--g4));
+}
+
+.pmx-appearance .ilook-rng {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pmx-appearance .rng {
+  flex: 1;
+  width: auto;
+  height: 4px;
+  accent-color: var(--dock-accent, var(--pmx-accent, #0a84ff));
+  cursor: pointer;
+}
+
+.pmx-appearance .rng:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.pmx-appearance .rv {
+  width: 44px;
+  font-size: 12px;
+  color: var(--dock-muted, var(--g5));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Typography & Color Pill Rows */
+.pmx-appearance .ilook-typo-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance .ilook-typo-item,
+.pmx-light .pmx-appearance .ilook-typo-item {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.pmx-appearance .ilook-typo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  flex-wrap: wrap;
+}
+
+.pmx-appearance .ilook-typo-lbl {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--dock-fg, var(--fg));
+}
+
+.pmx-appearance .ilook-typo-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.pmx-appearance .typo-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  height: 26px;
+  padding: 0 10px 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--g3);
+  background: var(--g2);
+  color: var(--dock-fg, var(--fg));
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.14s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.pmx-appearance .typo-pill-btn:hover:not(:disabled) {
+  border-color: var(--g4);
+  transform: translateY(-1px);
+}
+
+.pmx-appearance .typo-pill-btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.96);
+}
+
+.pmx-appearance .typo-pill-btn:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 2px;
+}
+
+.pmx-appearance .typo-pill-btn.on {
+  border-color: var(--dock-accent, var(--pmx-accent, #5e9bff));
+  box-shadow: 0 0 0 1px var(--dock-accent, var(--pmx-accent, #5e9bff));
+}
+
+.pmx-appearance .typo-dot {
+  flex: none;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.pmx-appearance .typo-hex {
+  display: inline-flex;
+  align-items: center;
+  width: 7.2ch;
+  font-size: 12px;
+  line-height: 1;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  color: var(--dock-fg, var(--fg));
+}
+
+.pmx-appearance .typo-clear-btn.is-ghost {
+  opacity: 0.32;
+  pointer-events: none;
+}
+
+.pmx-appearance .pmx-select {
+  height: 28px;
+  min-width: 170px;
+  max-width: 240px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--g3);
+  background: var(--g1);
+  color: var(--dock-fg, var(--fg));
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pmx-appearance .pmx-select:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 2px;
+}
+
+.pmx-appearance .pmx-advanced-grid,
+.pmx-appearance .pmx-uicolor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.pmx-appearance .pmx-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pmx-appearance .pmx-status-note {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--g2);
+}
+
+.pmx-appearance .pmx-status-note.ok {
+  color: var(--ok-ink);
+}
+
+.pmx-appearance .pmx-status-note.bad {
+  color: var(--bad-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pmx-appearance * {
+    transition-duration: 0.01ms !important;
+  }
+}

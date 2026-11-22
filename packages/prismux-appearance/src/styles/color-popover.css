@@ -1,0 +1,397 @@
+/* ============================================================================
+ * Prismux Floating Liquid-Glass Color Popover (244px)
+ * 1:1 recreation of FISH-Dock's .cp-popover + quick swatches + solid fallback.
+ * ========================================================================== */
+
+.pmx-cp-popover.cp-popover {
+  --cp-spring: cubic-bezier(0.3, 1.45, 0.5, 1);
+  --cp-g2: rgba(255, 255, 255, 0.08);
+  --cp-g3: rgba(255, 255, 255, 0.16);
+  --cp-g5: #a1a1a6;
+  --cp-fg: #f5f5f7;
+  position: fixed;
+  z-index: 9999;
+  isolation: isolate;
+  width: 244px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: color-mix(
+    in srgb,
+    var(--dock-accent, var(--pmx-accent, #5e9bff)) 10%,
+    rgba(18, 21, 32, 0.98)
+  );
+  color: var(--dock-fg, var(--cp-fg));
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 16px 40px rgba(0, 0, 0, 0.48);
+  animation: pmx-cp-pop-in 0.22s var(--cp-spring) both;
+}
+
+:root[data-pmx-theme='light'] .pmx-cp-popover.cp-popover,
+.pmx-light .pmx-cp-popover.cp-popover,
+.tb-light .pmx-cp-popover.cp-popover {
+  --cp-g2: #f0f0f3;
+  --cp-g3: #d6d6dc;
+  --cp-g5: #52525b;
+  --cp-fg: #18181b;
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(253, 253, 255, 0.98);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 14px 36px rgba(0, 0, 0, 0.16);
+}
+
+@keyframes pmx-cp-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pmx-cp-popover .cp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pmx-cp-popover .cp-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--dock-heading, var(--dock-fg, var(--cp-fg)));
+}
+
+.pmx-cp-popover .cp-close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dock-muted, var(--cp-g5));
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.2s var(--cp-spring);
+}
+
+.pmx-cp-popover .cp-close:hover {
+  background: var(--cp-g2);
+  color: var(--dock-fg, var(--cp-fg));
+}
+
+.pmx-cp-popover .cp-close:active {
+  transform: scale(0.9);
+}
+
+.pmx-cp-popover .cp-close:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 2px;
+}
+
+/* 2D Saturation × Value Canvas */
+.pmx-cp-popover .cp-sv {
+  position: relative;
+  width: 100%;
+  height: 126px;
+  border-radius: 10px;
+  overflow: visible;
+  cursor: crosshair;
+  touch-action: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.pmx-cp-popover .cp-sv-white {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ffffff 0%, rgba(255, 255, 255, 0) 100%);
+  pointer-events: none;
+}
+
+.pmx-cp-popover .cp-sv-black {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, #000000 100%);
+  pointer-events: none;
+}
+
+.pmx-cp-popover .cp-sv-thumb {
+  position: absolute;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* Rainbow Hue Slider */
+.pmx-cp-popover .cp-hue {
+  position: relative;
+  width: 100%;
+  height: 13px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    #ff0000 0%,
+    #ffff00 17%,
+    #00ff00 33%,
+    #00ffff 50%,
+    #0000ff 67%,
+    #ff00ff 83%,
+    #ff0000 100%
+  );
+  cursor: ew-resize;
+  touch-action: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.pmx-cp-popover .cp-hue-thumb {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.48);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* Quick Swatches Row */
+.pmx-cp-popover .cp-swatches {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.pmx-cp-popover .cp-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 0 0 1px rgba(0, 0, 0, 0.25);
+  transition: transform 0.16s var(--cp-spring), box-shadow 0.16s ease;
+}
+
+.pmx-cp-popover .cp-swatch:hover {
+  transform: scale(1.16);
+}
+
+.pmx-cp-popover .cp-swatch:active {
+  transform: scale(0.92);
+}
+
+.pmx-cp-popover .cp-swatch.on {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 3.5px var(--dock-accent, var(--pmx-accent, #5e9bff));
+}
+
+.pmx-cp-popover .cp-swatch:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 2px;
+}
+
+/* RGB (0-255) 3-channel precision inputs */
+.pmx-cp-popover .cp-rgb-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pmx-cp-popover .cp-rgb-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1px solid var(--cp-g3);
+  background: var(--cp-g2);
+  box-sizing: border-box;
+}
+
+.pmx-cp-popover .cp-rgb-field:focus-within {
+  border-color: var(--dock-accent, var(--pmx-accent, #5e9bff));
+}
+
+.pmx-cp-popover .cp-rgb-field > span {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dock-muted, var(--cp-g5));
+  user-select: none;
+}
+
+.pmx-cp-popover .cp-rgb-in {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  outline: none;
+  background: transparent;
+  color: var(--dock-fg, var(--cp-fg));
+  font-size: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Footer: Clear + HEX */
+.pmx-cp-popover .cp-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pmx-cp-popover .cp-clear {
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dock-fg, var(--cp-fg));
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.16s ease, transform 0.2s var(--cp-spring);
+}
+
+.pmx-cp-popover .cp-clear:hover {
+  background: var(--cp-g2);
+}
+
+.pmx-cp-popover .cp-clear:active {
+  transform: scale(0.95);
+}
+
+.pmx-cp-popover .cp-clear:focus-visible {
+  outline: 2px solid var(--dock-accent, var(--pmx-accent, #5e9bff));
+  outline-offset: 2px;
+}
+
+.pmx-cp-popover .cp-hex-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 9px;
+  border: 1px solid var(--cp-g3);
+  background: var(--cp-g2);
+  box-sizing: border-box;
+}
+
+.pmx-cp-popover .cp-hex-wrap:focus-within {
+  border-color: var(--dock-accent, var(--pmx-accent, #5e9bff));
+}
+
+.pmx-cp-popover .cp-hex-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+.pmx-cp-popover .cp-hex-in {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  outline: none;
+  background: transparent;
+  color: var(--dock-fg, var(--cp-fg));
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.pmx-cp-popover .mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* Solid fallbacks when backdrop blur is unavailable or transparency is reduced. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .pmx-cp-popover.cp-popover {
+    background: #1b1e2b;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  :root[data-pmx-theme='light'] .pmx-cp-popover.cp-popover,
+  .pmx-light .pmx-cp-popover.cp-popover {
+    background: #ffffff;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .pmx-cp-popover.cp-popover {
+    background: #1b1e2b;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  :root[data-pmx-theme='light'] .pmx-cp-popover.cp-popover,
+  .pmx-light .pmx-cp-popover.cp-popover {
+    background: #ffffff;
+  }
+}
+
+html[data-pmx-gpu='0'] .pmx-cp-popover.cp-popover,
+html[data-prismux-gpu='0'] .pmx-cp-popover.cp-popover {
+  background: #1b1e2b;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-pmx-theme='light'][data-pmx-gpu='0'] .pmx-cp-popover.cp-popover,
+html[data-prismux-theme='light'][data-prismux-gpu='0'] .pmx-cp-popover.cp-popover {
+  background: #ffffff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pmx-cp-popover.cp-popover,
+  .pmx-cp-popover * {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .pmx-cp-popover.cp-popover {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+  }
+}

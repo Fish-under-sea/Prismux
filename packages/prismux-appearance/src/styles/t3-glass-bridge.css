@@ -1,0 +1,707 @@
+/* ============================================================================
+ * Prismux <-> T3 Code Tailwind v4 Liquid Glass & Typography Token Bridge
+ *
+ * CRITICAL CONTRACT:
+ * Every glass token override is strictly gated behind `html[data-pmx-glass="1"]`.
+ * When glass is OFF (`data-pmx-glass="0"`), ZERO glass selectors match and
+ * T3 Code preserves 100% of its native Tailwind v4 appearance.
+ *
+ * SPECIFICITY CONTRACT:
+ * T3 Code's Tailwind v4 `:root { @variant dark { ... } }` compiles to
+ * `:root:is(.dark, .dark *)` (specificity 0,2,0) and built-in themes use
+ * `html[data-theme-id]:not([data-theme-id=""])` (0,2,1). Every root token
+ * override below therefore qualifies `html.dark` / `html:not(.dark)` (>= 0,2,1)
+ * and `[data-theme-id]:not([data-theme-id=''])` (0,3,1) so Prismux glass and
+ * typography overrides always win cleanly without `!important` leakage.
+ * ========================================================================== */
+
+/* ── 0. Windows Frameless Edge Alignment (Eliminates 6px Right Wallpaper Seam) */
+:root.electron-windows,
+html.electron-windows,
+body.electron-windows {
+  --desktop-window-right-resize-inset: 0px;
+}
+
+html.electron-windows #root {
+  padding-right: 0;
+}
+
+/* ── 1. Active Liquid Glass Semantic Token Bridge (T3 Code Tailwind v4) ──── */
+html.dark[data-pmx-glass='1'],
+html:not(.dark)[data-pmx-glass='1'],
+html[data-pmx-glass='1'][data-pmx-theme],
+html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']) {
+  /* Effective readability-floor compositing: floor + regionFill * (1 - floor). */
+  --pmx-surface-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-glass-surface-fill, 38%),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  /* Center workspace canvas: luminous single-pass translucent wash letting colorful
+     Z-0 dynamic wallpapers visibly radiate through while cards & prose retain full floor. */
+  --pmx-canvas-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 78%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) calc(var(--pmx-glass-surface-fill, 38%) * 0.3),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59) * 0.78) * 100%)
+  );
+  --pmx-card-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-glass-card-fill, 22%),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  --pmx-overlay-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-glass-overlay-fill, 45%),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  --pmx-control-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-glass-control-fill, 28%),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+
+  --pmx-fresnel-edge: rgba(255, 255, 255, calc(0.2 * var(--pmx-fresnel-strength, 1)));
+  --pmx-glass-border: color-mix(
+    in srgb,
+    var(--pmx-accent, #5e9bff) var(--dock-glass-tint-rim, 18%),
+    var(--pmx-fresnel-edge)
+  );
+  --prismux-glass-border: var(--pmx-glass-border);
+
+  /* T3 Code core Tailwind v4 semantic tokens */
+  --background: var(--pmx-surface-bg);
+  --app-chrome-background: var(--pmx-surface-bg);
+  --card: var(--pmx-card-bg);
+  --surface-raised: var(--pmx-card-bg);
+  --popover: var(--pmx-overlay-bg);
+  --sidebar: var(--pmx-surface-bg);
+  --sidebar-control-surface: var(--pmx-control-bg);
+  --sidebar-stage-fade: transparent;
+  --toolbar-background: var(--pmx-surface-bg);
+  --toolbar-control: var(--pmx-control-bg);
+  --message-surface: color-mix(
+    in srgb,
+    var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524))
+      calc(var(--pmx-conversation-floor, var(--pmx-readability-floor, 0.59)) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524)) var(--pmx-glass-card-fill, 22%),
+      transparent
+    ) calc((1 - var(--pmx-conversation-floor, var(--pmx-readability-floor, 0.59))) * 100%)
+  );
+  --code-background: var(--pmx-card-bg);
+  --border: var(--pmx-glass-border);
+  --sidebar-border: var(--pmx-glass-border);
+  --primary: var(--pmx-accent, #5e9bff);
+  --primary-foreground: var(--pmx-accent-ink, #ffffff);
+  --ring: var(--pmx-accent, #5e9bff);
+
+  /* Native T3 Code @utility surface-glass / dialog-glass / dropdown-glass hooks */
+  --glass-blur: var(--pmx-glass-overlay-blur, 16px);
+  --glass-opacity: var(--pmx-glass-overlay-fill, 45%);
+  --glass-saturation: 1.55;
+}
+
+/* When a Z-0 dynamic wallpaper sits behind the workbench, open root + center canvas
+   as a single frosted glass pass (eliminating nested `.bg-background` double-compositing). */
+html[data-pmx-glass='1'][data-pmx-wallpaper='1'],
+html[data-pmx-glass='1'][data-pmx-wallpaper='1'] body,
+html[data-pmx-glass='1'][data-pmx-wallpaper='1'] #root {
+  background-color: transparent;
+  background-image: none;
+}
+
+html[data-pmx-glass='1'][data-pmx-wallpaper='1'] main[data-slot='sidebar-inset'] {
+  background-color: var(--pmx-canvas-bg);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, calc(0.045 * var(--pmx-fresnel-strength, 1))) 0%,
+    rgba(255, 255, 255, 0) 36%,
+    rgba(255, 255, 255, calc(0.02 * var(--pmx-fresnel-strength, 1))) 100%
+  );
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: blur(var(--pmx-glass-surface-blur, 18px)) saturate(1.75) brightness(1.12);
+  backdrop-filter: blur(var(--pmx-glass-surface-blur, 18px)) saturate(1.75) brightness(1.12);
+}
+
+/* Remove redundant second `.bg-background` wash inside ChatView and inline PreviewPanelShell
+   so the center workspace and right panel never double-composite over SidebarInset. */
+html[data-pmx-glass='1'][data-pmx-wallpaper='1'] main[data-slot='sidebar-inset'] > .bg-background,
+html[data-pmx-glass='1'][data-pmx-wallpaper='1'] [data-preview-panel-mode='inline'].bg-background {
+  background-color: transparent;
+}
+
+/* ── 2. Independent Chrome Surface Gates ─────────────────────────────────── */
+
+/* Left sidebar: single-pass frosted glass on `[data-slot='sidebar-inner']` (with fallback
+   to `[data-app-sidebar]` directly when no inner slot exists) to prevent double-compositing. */
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'] [data-app-sidebar],
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id] [data-app-sidebar] {
+  --pmx-left-sidebar-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-left-sidebar-fill, var(--pmx-glass-surface-fill, 38%)),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  --background: var(--pmx-left-sidebar-bg);
+  --card: var(--pmx-left-sidebar-bg);
+  --sidebar: var(--pmx-left-sidebar-bg);
+  --sidebar-stage-fade: transparent;
+  --sidebar-border: var(--pmx-glass-border);
+}
+
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'] [data-app-sidebar]:has([data-slot='sidebar-inner']),
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id]
+  [data-app-sidebar]:has([data-slot='sidebar-inner']) {
+  background-color: transparent;
+  background-image: none;
+}
+
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'] [data-app-sidebar] [data-slot='sidebar-inner'],
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id]
+  [data-app-sidebar]
+  [data-slot='sidebar-inner'],
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1']
+  [data-app-sidebar]:not(:has([data-slot='sidebar-inner'])),
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id]
+  [data-app-sidebar]:not(:has([data-slot='sidebar-inner'])) {
+  background-color: var(--pmx-left-sidebar-bg);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, calc(0.06 * var(--pmx-fresnel-strength, 1))) 0%,
+    rgba(255, 255, 255, calc(0.015 * var(--pmx-fresnel-strength, 1))) 45%,
+    rgba(255, 255, 255, calc(0.03 * var(--pmx-fresnel-strength, 1))) 100%
+  );
+  /* Override `.surface-grain` (256px 256px repeat) so specular sheen spans seamlessly edge-to-edge */
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: blur(var(--pmx-left-sidebar-blur, var(--pmx-glass-surface-blur, 18px)))
+    saturate(1.62) brightness(1.06);
+  backdrop-filter: blur(var(--pmx-left-sidebar-blur, var(--pmx-glass-surface-blur, 18px)))
+    saturate(1.62) brightness(1.06);
+}
+
+/* Keep left-sidebar child regions fully transparent so the sidebar reads as one unbroken pane */
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1']
+  [data-app-sidebar]
+  :is(
+    [data-slot='sidebar-header'],
+    [data-slot='sidebar-content'],
+    [data-slot='sidebar-footer'],
+    [data-slot='sidebar-group'],
+    [data-slot='scroll-area'],
+    [data-slot='scroll-area-viewport']
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Titlebar / chat header glass gate */
+html[data-pmx-glass='1'][data-pmx-titlebar-glass='1'] [data-chat-header],
+html[data-pmx-glass='1'][data-pmx-titlebar-glass='1'] [data-pmx-titlebar] {
+  --pmx-titlebar-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 35%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-titlebar-fill, var(--pmx-glass-surface-fill, 38%)),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59) * 0.35) * 100%)
+  );
+  background-color: var(--pmx-titlebar-bg);
+  -webkit-backdrop-filter: blur(var(--pmx-titlebar-blur, var(--pmx-glass-surface-blur, 18px)))
+    saturate(1.55) brightness(1.04);
+  backdrop-filter: blur(var(--pmx-titlebar-blur, var(--pmx-glass-surface-blur, 18px)))
+    saturate(1.55) brightness(1.04);
+  border-bottom-color: var(--pmx-glass-border);
+}
+
+/* Right sidebar glass gate: apply cohesive single-pass glass to the inline shell
+   (covering both tab bar and body without double-compositing). */
+html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-preview-panel-mode='inline'],
+html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-right-panel-surface-content],
+html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-pmx-right-sidebar] {
+  --pmx-right-sidebar-bg: color-mix(
+    in srgb,
+    var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524))
+      calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524))
+        var(--pmx-right-sidebar-fill, var(--pmx-glass-surface-fill, 38%)),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+}
+
+html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-preview-panel-mode='inline'] {
+  background-color: var(--pmx-right-sidebar-bg);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, calc(0.06 * var(--pmx-fresnel-strength, 1))) 0%,
+    rgba(255, 255, 255, calc(0.015 * var(--pmx-fresnel-strength, 1))) 50%,
+    rgba(255, 255, 255, calc(0.03 * var(--pmx-fresnel-strength, 1))) 100%
+  );
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: blur(
+      var(--pmx-right-sidebar-blur, var(--pmx-glass-surface-blur, 18px))
+    )
+    saturate(1.62) brightness(1.06);
+  backdrop-filter: blur(var(--pmx-right-sidebar-blur, var(--pmx-glass-surface-blur, 18px)))
+    saturate(1.62) brightness(1.06);
+}
+
+html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1']
+  [data-preview-panel-mode='inline']
+  :is([data-right-panel-surface-content], [data-pmx-right-sidebar]) {
+  background-color: transparent;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Fallback when right sidebar is mounted outside PreviewPanelShell (sheet or standalone) */
+html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1']
+  :not([data-preview-panel-mode='inline'])
+  > [data-right-panel-surface-content],
+html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1']
+  :not([data-preview-panel-mode='inline'])
+  > [data-pmx-right-sidebar] {
+  background-color: var(--pmx-right-sidebar-bg);
+  -webkit-backdrop-filter: blur(
+      var(--pmx-right-sidebar-blur, var(--pmx-glass-surface-blur, 18px))
+    )
+    saturate(1.55) brightness(1.04);
+  backdrop-filter: blur(var(--pmx-right-sidebar-blur, var(--pmx-glass-surface-blur, 18px)))
+    saturate(1.55) brightness(1.04);
+}
+
+/* Explicit right-sidebar full-clear opt-in (drops readability floor & sheen on right panel only) */
+html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-preview-panel-mode='inline'],
+html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-right-panel-surface-content],
+html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-pmx-right-sidebar] {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* ── 3. Thinking Block & Prose Mode (off / glass / native) ───────────────── */
+html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-pmx-thinking-block],
+html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-turn-trigger] {
+  background-color: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-thinking-trigger-fill, var(--pmx-glass-card-fill, 22%)),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  -webkit-backdrop-filter: blur(var(--pmx-thinking-trigger-blur, var(--pmx-glass-card-blur, 12px)))
+    saturate(1.5);
+  backdrop-filter: blur(var(--pmx-thinking-trigger-blur, var(--pmx-glass-card-blur, 12px)))
+    saturate(1.5);
+}
+
+/* Native prose gate: restore opaque cards/code inside chat stream while keeping composer glass */
+html[data-pmx-glass='1'][data-pmx-thinking-mode='native'] .chat-markdown {
+  --message-surface: #edf3fe;
+  --code-background: #f9fafb;
+}
+
+html[data-pmx-theme='dark'][data-pmx-glass='1'][data-pmx-thinking-mode='native'] .chat-markdown {
+  --message-surface: #24262b;
+  --code-background: #17181c;
+}
+
+/* ── 4. Sidebar Corner Radius & 4-Corner Square Overrides ────────────────── */
+/* Longhands MUST appear after border-radius shorthand so square corners win. */
+html[data-pmx-corner-radius] [data-app-sidebar] {
+  border-radius: var(--pmx-sidebar-radius);
+  overflow: hidden;
+}
+
+html[data-pmx-corner-square~='tl'] [data-app-sidebar] { border-top-left-radius: 0; }
+html[data-pmx-corner-square~='tr'] [data-app-sidebar] { border-top-right-radius: 0; }
+html[data-pmx-corner-square~='br'] [data-app-sidebar] { border-bottom-right-radius: 0; }
+html[data-pmx-corner-square~='bl'] [data-app-sidebar] { border-bottom-left-radius: 0; }
+
+html[data-pmx-right-corner-radius] [data-right-panel-surface-content],
+html[data-pmx-right-corner-radius] [data-pmx-right-sidebar] {
+  border-radius: var(--pmx-right-sidebar-radius);
+  overflow: hidden;
+}
+
+html[data-pmx-right-corner-square~='tl'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='tl'] [data-pmx-right-sidebar] { border-top-left-radius: 0; }
+html[data-pmx-right-corner-square~='tr'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='tr'] [data-pmx-right-sidebar] { border-top-right-radius: 0; }
+html[data-pmx-right-corner-square~='br'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='br'] [data-pmx-right-sidebar] { border-bottom-right-radius: 0; }
+html[data-pmx-right-corner-square~='bl'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='bl'] [data-pmx-right-sidebar] { border-bottom-left-radius: 0; }
+
+/* ── 5. Independent Typography, Fonts, Caret & 5-Item UI Custom Colors ───── */
+/* Qualify .dark / :not(.dark) and [data-theme-id]:not([data-theme-id='']) so user
+   overrides always outrank T3 Code's :root @variant dark (0,2,0) & theme blocks. */
+html.dark[data-pmx-custom-text='1'],
+html:not(.dark)[data-pmx-custom-text='1'],
+html[data-pmx-custom-text='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-custom-text='1'] [data-app-sidebar],
+html[data-pmx-custom-text='1'][data-theme-id] [data-app-sidebar] {
+  --foreground: var(--pmx-text-color);
+  --card-foreground: var(--pmx-text-color);
+  --popover-foreground: var(--pmx-text-color);
+  --sidebar-foreground: var(--pmx-text-color);
+  --message-foreground: var(--pmx-text-color);
+}
+
+html.dark[data-pmx-custom-muted='1'],
+html:not(.dark)[data-pmx-custom-muted='1'],
+html[data-pmx-custom-muted='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-custom-muted='1'] [data-app-sidebar],
+html[data-pmx-custom-muted='1'][data-theme-id] [data-app-sidebar] {
+  --muted-foreground: var(--pmx-muted-color);
+  --sidebar-muted-foreground: var(--pmx-muted-color);
+  --placeholder: var(--pmx-muted-color);
+  --secondary-label: var(--pmx-muted-color);
+}
+
+html[data-pmx-custom-heading='1'] :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]),
+html[data-pmx-custom-heading='1'][data-theme-id]:not([data-theme-id=''])
+  :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]) {
+  color: var(--pmx-heading-color);
+}
+
+html.dark[data-pmx-custom-font-sans='1'],
+html:not(.dark)[data-pmx-custom-font-sans='1'],
+html[data-pmx-custom-font-sans='1'][data-theme-id]:not([data-theme-id='']) {
+  --font-sans: var(--pmx-font-sans);
+}
+
+html.dark[data-pmx-custom-font-mono='1'],
+html:not(.dark)[data-pmx-custom-font-mono='1'],
+html[data-pmx-custom-font-mono='1'][data-theme-id]:not([data-theme-id='']) {
+  --font-mono: var(--pmx-font-mono);
+}
+
+html[data-pmx-caret='1'] :is(textarea, input, [contenteditable='true'], [contenteditable='plaintext-only']) {
+  caret-color: var(--pmx-caret-color) !important;
+}
+
+html.dark[data-pmx-ui-colors='1'],
+html:not(.dark)[data-pmx-ui-colors='1'],
+html[data-pmx-ui-colors='1'][data-theme-id]:not([data-theme-id='']) {
+  --message-action: var(--pmx-ui-send, var(--pmx-accent, #5e9bff));
+  --info-foreground: var(--pmx-ui-link, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] [data-pmx-file-icon],
+html[data-pmx-ui-colors='1'] .chat-markdown-file-link {
+  color: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] [data-pmx-active-tab],
+html[data-pmx-ui-colors='1'] [role='tab'][aria-selected='true'] {
+  color: var(--pmx-ui-tab, var(--pmx-accent, #5e9bff));
+  border-bottom-color: var(--pmx-ui-tab, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] [data-pmx-deep-diving],
+html[data-pmx-ui-colors='1'] [data-pmx-reasoning-accent] {
+  color: var(--pmx-ui-deep-diving, #6cb6ff);
+}
+
+/* ── 6. Reusable 360° Fresnel Liquid Glass Utility Surface ───────────────── */
+.pmx-glass-surface,
+.prismux-glass-surface {
+  background: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, var(--card, #181a24)) var(--pmx-glass-card-fill, 100%),
+    transparent
+  );
+  -webkit-backdrop-filter: blur(var(--pmx-glass-card-blur, 0px)) saturate(1.65) brightness(1.05);
+  backdrop-filter: blur(var(--pmx-glass-card-blur, 0px)) saturate(1.65) brightness(1.05);
+  border: 1px solid var(--pmx-glass-border, var(--border, rgba(255, 255, 255, 0.14)));
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.24 * var(--pmx-fresnel-strength, 1))),
+    inset 0 -1px 0 rgba(255, 255, 255, calc(0.08 * var(--pmx-fresnel-strength, 1)));
+}
+
+/* ── 7. Three Mandatory Solid Fallbacks (No Blur / Reduced Transparency / No GPU / HC) */
+/* Every fallback selector matches or exceeds the specificity of sections 1–3
+   (including .dark / :not(.dark) and [data-theme-id]:not([data-theme-id=''])) and
+   reverts root, canvas, sidebars, titlebar, thinking blocks, and utility surfaces to
+   opaque solid tint with zero sheen gradient or backdrop blur. */
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html.dark[data-pmx-glass='1'],
+  html:not(.dark)[data-pmx-glass='1'],
+  html[data-pmx-glass='1'][data-pmx-theme],
+  html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']) {
+    --pmx-surface-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-canvas-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-card-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-overlay-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-control-bg: var(--pmx-glass-tint, #0d1524);
+    --message-surface: var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524));
+    --glass-blur: 0px;
+    --glass-opacity: 100%;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'],
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'] body,
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'] #root,
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'] main[data-slot='sidebar-inset'] {
+    background-color: var(--pmx-glass-tint, #0d1524);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'] [data-app-sidebar],
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id] [data-app-sidebar],
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'] [data-app-sidebar] [data-slot='sidebar-inner'],
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id]
+    [data-app-sidebar]
+    [data-slot='sidebar-inner'] {
+    --pmx-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-left-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-titlebar-glass='1'] [data-chat-header],
+  html[data-pmx-glass='1'][data-pmx-titlebar-glass='1'] [data-pmx-titlebar] {
+    --pmx-titlebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-titlebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-preview-panel-mode='inline'],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-right-panel-surface-content],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-pmx-right-sidebar],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-preview-panel-mode='inline'],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-right-panel-surface-content],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-pmx-right-sidebar] {
+    --pmx-right-sidebar-bg: var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524));
+    background-color: var(--pmx-right-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-pmx-thinking-block],
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-turn-trigger],
+  .pmx-glass-surface,
+  .prismux-glass-surface {
+    background: var(--pmx-glass-tint, var(--card, #0d1524));
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html.dark[data-pmx-glass='1'],
+  html:not(.dark)[data-pmx-glass='1'],
+  html[data-pmx-glass='1'][data-pmx-theme],
+  html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']) {
+    --pmx-surface-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-canvas-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-card-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-overlay-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-control-bg: var(--pmx-glass-tint, #0d1524);
+    --message-surface: var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524));
+    --glass-blur: 0px;
+    --glass-opacity: 100%;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'],
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'] body,
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'] #root,
+  html[data-pmx-glass='1'][data-pmx-wallpaper='1'] main[data-slot='sidebar-inset'] {
+    background-color: var(--pmx-glass-tint, #0d1524);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'] [data-app-sidebar],
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id] [data-app-sidebar],
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'] [data-app-sidebar] [data-slot='sidebar-inner'],
+  html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id]
+    [data-app-sidebar]
+    [data-slot='sidebar-inner'] {
+    --pmx-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-left-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-titlebar-glass='1'] [data-chat-header],
+  html[data-pmx-glass='1'][data-pmx-titlebar-glass='1'] [data-pmx-titlebar] {
+    --pmx-titlebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-titlebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-preview-panel-mode='inline'],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-right-panel-surface-content],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-glass='1'] [data-pmx-right-sidebar],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-preview-panel-mode='inline'],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-right-panel-surface-content],
+  html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'] [data-pmx-right-sidebar] {
+    --pmx-right-sidebar-bg: var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524));
+    background-color: var(--pmx-right-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-pmx-thinking-block],
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-turn-trigger],
+  .pmx-glass-surface,
+  .prismux-glass-surface {
+    background: var(--pmx-glass-tint, var(--card, #0d1524));
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
+
+html.dark[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1']),
+html:not(.dark)[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1']),
+html[data-pmx-glass='1'][data-pmx-theme]:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1']),
+html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  ) {
+  --pmx-surface-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-canvas-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-card-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-overlay-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-control-bg: var(--pmx-glass-tint, #0d1524);
+  --message-surface: var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524));
+  --glass-blur: 0px;
+  --glass-opacity: 100%;
+}
+
+html[data-pmx-glass='1'][data-pmx-wallpaper='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  ),
+html[data-pmx-glass='1'][data-pmx-wallpaper='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(body, #root, main[data-slot='sidebar-inset']) {
+  background-color: var(--pmx-glass-tint, #0d1524);
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-app-sidebar] [data-slot='sidebar-inner']),
+html[data-pmx-glass='1'][data-pmx-sidebar-glass='1'][data-theme-id]:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-app-sidebar] [data-slot='sidebar-inner']) {
+  --pmx-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+  background-color: var(--pmx-left-sidebar-bg);
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1'][data-pmx-titlebar-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-chat-header], [data-pmx-titlebar]) {
+  --pmx-titlebar-bg: var(--pmx-glass-tint, #0d1524);
+  background-color: var(--pmx-titlebar-bg);
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1']:is([data-pmx-right-sidebar-glass='1'], [data-pmx-right-sidebar-fullclear='1']):is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-preview-panel-mode='inline'], [data-right-panel-surface-content], [data-pmx-right-sidebar]) {
+  --pmx-right-sidebar-bg: var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524));
+  background-color: var(--pmx-right-sidebar-bg);
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1'][data-pmx-thinking-mode='glass']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-pmx-thinking-block], [data-turn-trigger]),
+html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  :is(.pmx-glass-surface, .prismux-glass-surface) {
+  background: var(--pmx-glass-tint, var(--card, #0d1524));
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+@media (forced-colors: active) {
+  .pmx-glass-surface,
+  .prismux-glass-surface {
+    background: Canvas !important;
+    color: CanvasText !important;
+    border: 1px solid CanvasText !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
