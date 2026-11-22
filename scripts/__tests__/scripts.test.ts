@@ -1,5 +1,6 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -36,6 +37,19 @@ import {
   type GitRunner,
   type UpstreamLockData,
 } from '../sync-t3-upstream.ts';
+import {
+  OFFICIAL_PLUGIN_IDS,
+  assertStageContainsNoOfficialPlugins,
+  toWindowsProductVersion,
+} from '../build-release-packages.ts';
+import {
+  buildNpmPluginPackages,
+  formatNpmPluginPackageName,
+} from '../build-npm-plugin-packages.ts';
+import {
+  extractGiteeTokenFromCredentialsText,
+  normalizeReleaseTag,
+} from '../publish-gitee-release.ts';
 
 const createdTempDirs: string[] = [];
 
@@ -649,3 +663,165 @@ describe('sync-t3-upstream', () => {
     assert.equal(helpCode, 0);
   });
 });
+
+describe('release-and-npm-packages', () => {
+  it('converts SemVer prerelease versions to 4-part Windows VIProductVersion and blocks plugins in release stage', () => {
+    assert.equal(toWindowsProductVersion('0.0.1-alpha.1'), '0.0.1.1');
+    assert.equal(toWindowsProductVersion('0.1.0'), '0.1.0.0');
+    assert.equal(toWindowsProductVersion('1.2.3-beta.12'), '1.2.3.12');
+
+    const cleanStage = createTempDir('prismux-clean-stage-');
+    writeTextFile(join(cleanStage, 'Prismux.exe'), 'stub');
+    writeTextFile(join(cleanStage, 'workbench-ui', 'index.html'), '<html></html>');
+    assert.doesNotThrow(() => assertStageContainsNoOfficialPlugins(cleanStage));
+
+    const pollutedStage = createTempDir('prismux-polluted-stage-');
+    writeTextFile(join(pollutedStage, 'plugins-official', 'plugin-qq', 'index.js'), '');
+    assert.throws(
+      () => assertStageContainsNoOfficialPlugins(pollutedStage),
+      /must NOT include official plugins/i,
+    );
+  });
+
+  it('builds scriptless unscoped and @fish-under-sea scoped npm plugin packages with working SHA-256 verified installer bin', () => {
+    assert.equal(formatNpmPluginPackageName('qq'), 'prismux-plugin-qq');
+    assert.equal(
+      formatNpmPluginPackageName('qq', '@fish-under-sea'),
+      '@fish-under-sea/prismux-plugin-qq',
+    );
+
+    const workspace = createTempDir('prismux-npm-pkgs-');
+    const mockRepo = join(workspace, 'repo');
+    const releaseDir = join(workspace, 'release');
+    const unscopedOut = join(workspace, 'out-unscoped');
+    const scopedOut = join(workspace, 'out-scoped');
+    const version = '0.0.1-alpha.1';
+
+    writeTextFile(join(mockRepo, 'LICENSE'), 'MIT License\n');
+    writeTextFile(join(mockRepo, 'package.json'), JSON.stringify({ version }));
+
+    for (const id of OFFICIAL_PLUGIN_IDS) {
+      const pDir = join(mockRepo, 'plugins-official', `plugin-${id}`);
+      writeTextFile(
+        join(pDir, 'package.json'),
+        JSON.stringify({
+          name: `@prismux/plugin-${id}`,
+          version,
+          description: `Mock ${id} plugin`,
+          engines: { prismux: '>=0.0.1-0 <2.0.0' },
+        }),
+      );
+      writeTextFile(
+        join(pDir, 'plugin.manifest.json'),
+        JSON.stringify({
+          id,
+          version,
+          realms: ['daemon'],
+          permissions: [],
+          modelVisible: false,
+        }),
+      );
+      writeTextFile(join(pDir, 'dist', 'index.js'), `export const id = '${id}';\n`);
+      packPlugin({ pluginDir: pDir, outDir: releaseDir });
+    }
+
+    const unscopedBuilt = buildNpmPluginPackages({
+      repoRoot: mockRepo,
+      releaseDir,
+      outDir: unscopedOut,
+      version,
+    });
+    assert.equal(unscopedBuilt.length, 4);
+    assert.deepEqual(
+      unscopedBuilt.map((b) => b.packageName),
+      [
+        'prismux-plugin-qq',
+        'prismux-plugin-pet',
+        'prismux-plugin-fishdock-hook',
+        'prismux-plugin-ssh',
+      ],
+    );
+
+    const scopedBuilt = buildNpmPluginPackages({
+      repoRoot: mockRepo,
+      releaseDir,
+      outDir: scopedOut,
+      scope: '@fish-under-sea',
+      version,
+    });
+    assert.equal(scopedBuilt[0]?.packageName, '@fish-under-sea/prismux-plugin-qq');
+
+    const qqPkgJson = JSON.parse(
+      readFileSync(join(scopedOut, 'qq', 'package.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    assert.equal(qqPkgJson['scripts'], undefined);
+    assert.equal(qqPkgJson['license'], 'MIT');
+    assert.deepEqual(qqPkgJson['engines'], {
+      prismux: '>=0.0.1-0 <2.0.0',
+      node: '>=20.0.0',
+    });
+
+    // Execute generated bin/install.mjs into clean temp plugin directory
+    const pluginsTarget = join(workspace, 'installed-plugins');
+    const installerBin = join(scopedOut, 'qq', 'bin', 'install.mjs');
+    execFileSync(process.execPath, [installerBin, '--dir', pluginsTarget], {
+      encoding: 'utf8',
+    });
+    assert.ok(existsSync(join(pluginsTarget, 'qq', 'dist', 'index.js')));
+    const meta = JSON.parse(
+      readFileSync(join(pluginsTarget, 'qq', '.prismux-install.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    assert.equal(meta['distribution'], 'managed');
+    assert.equal(meta['sha256'], scopedBuilt[0]?.sha256);
+
+    // Reject overwrite unless --force is supplied
+    assert.throws(() => {
+      execFileSync(process.execPath, [installerBin, '--dir', pluginsTarget], {
+        encoding: 'utf8',
+      });
+    }, /already exists/i);
+
+    execFileSync(process.execPath, [installerBin, '--dir', pluginsTarget, '--force'], {
+      encoding: 'utf8',
+    });
+
+    // Tamper archive and verify bin/install.mjs refuses installation
+    const archiveFile = join(scopedOut, 'qq', `qq-${version}.wb-plugin`);
+    const bytes = readFileSync(archiveFile);
+    const tamperIdx = Math.floor(bytes.length / 2);
+    const prevByte = bytes[tamperIdx];
+    assert.ok(prevByte !== undefined);
+    bytes[tamperIdx] = prevByte ^ 0xff;
+    writeBinaryFile(archiveFile, bytes);
+    assert.throws(() => {
+      execFileSync(
+        process.execPath,
+        [installerBin, '--dir', join(workspace, 'tampered-target')],
+        { encoding: 'utf8' },
+      );
+    }, /SHA-256/i);
+  });
+
+  it('normalizes release tags and parses gitee credentials cleanly', () => {
+    assert.deepEqual(normalizeReleaseTag('0.0.1-alpha.1'), {
+      version: '0.0.1-alpha.1',
+      tag: 'v0.0.1-alpha.1',
+      isPrerelease: true,
+    });
+    assert.deepEqual(normalizeReleaseTag('v1.2.0'), {
+      version: '1.2.0',
+      tag: 'v1.2.0',
+      isPrerelease: false,
+    });
+
+    const credSample = [
+      'https://oauth2:gh-placeholder@github.com',
+      'https://oauth2:synthetic-gitee-cred-sample@gitee.com',
+    ].join('\n');
+    assert.equal(
+      extractGiteeTokenFromCredentialsText(credSample),
+      'synthetic-gitee-cred-sample',
+    );
+  });
+});
+
