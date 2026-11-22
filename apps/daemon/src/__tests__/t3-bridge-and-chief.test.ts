@@ -1,0 +1,850 @@
+import assert from "node:assert/strict";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import process from "node:process";
+import type { Duplex } from "node:stream";
+import { after, describe, it } from "node:test";
+import type { T3SupervisorState } from "@prismux/protocol";
+import { WebSocketServer, type WebSocket } from "ws";
+import {
+  CHIEF_MARKER_FILENAME,
+  CHIEF_README_FILENAME,
+  CHIEF_SLOT_FILENAME,
+  ChiefThreadManager,
+  DEFAULT_CHIEF_MCP_SERVERS
+} from "../chief/ChiefThreadManager.js";
+import {
+  T3RpcClient,
+  T3RpcHandshakeError,
+  T3RpcRemoteError,
+  type T3RpcPushEvent
+} from "../t3/T3RpcClient.js";
+import {
+  T3ServerSupervisor,
+  sanitizeChildEnv
+} from "../t3/T3ServerSupervisor.js";
+
+const tempDirs: string[] = [];
+
+function createTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function waitForCondition(
+  check: () => boolean,
+  subscribe: (trigger: () => void) => () => void,
+  timeoutMs: number,
+  label: string
+): Promise<void> {
+  if (check()) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+    const attempt = () => {
+      if (settled) {
+        return;
+      }
+      if (check()) {
+        settled = true;
+        cleanup();
+        resolve();
+      }
+    };
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      unsubscribe();
+      reject(new Error(`Timed out after ${timeoutMs}ms waiting for: ${label}`));
+    }, timeoutMs);
+    const unsubscribe = subscribe(attempt);
+    attempt();
+  });
+}
+
+interface MockEnsureCall {
+  workspacePath: string;
+  provider: string;
+  model?: string;
+}
+
+interface MockT3ServerHandle {
+  port: number;
+  wsUrl: string;
+  ensureCalls: MockEnsureCall[];
+  close: () => Promise<void>;
+}
+
+async function startMockT3Server(options: {
+  port?: number;
+  expectedToken: string;
+  generation: number;
+}): Promise<MockT3ServerHandle> {
+  const wss = new WebSocketServer({ noServer: true });
+  const sockets = new Set<WebSocket>();
+  const ensureCalls: MockEnsureCall[] = [];
+
+  wss.on("connection", (ws: WebSocket) => {
+    sockets.add(ws);
+    ws.on("close", () => {
+      sockets.delete(ws);
+    });
+
+    ws.send(
+      JSON.stringify({
+        event: "provider.status",
+        data: { generation: options.generation, ready: true }
+      })
+    );
+
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(raw.toString("utf8")) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+
+      if (msg.method === "server.probe") {
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            ok: true,
+            result: { ok: true, generation: options.generation }
+          })
+        );
+        return;
+      }
+
+      if (msg.method === "provider.list") {
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            ok: true,
+            result: {
+              providers: [
+                { id: "claude-code", state: "ready" },
+                { id: "codex", state: "ready" },
+                { id: "antigravity", state: "ready" },
+                { id: "opencode", state: "ready" }
+              ]
+            }
+          })
+        );
+        return;
+      }
+
+      if (msg.method === "chief.ensureThread") {
+        const params = msg.params ?? {};
+        ensureCalls.push({
+          workspacePath: String(params.workspacePath ?? ""),
+          provider: String(params.provider ?? ""),
+          ...(typeof params.model === "string" ? { model: params.model } : {})
+        });
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            ok: true,
+            result: {
+              ensured: true,
+              workspacePath: params.workspacePath,
+              provider: params.provider,
+              ...(params.model !== undefined ? { model: params.model } : {})
+            }
+          })
+        );
+        return;
+      }
+
+      if (msg.method === "orchestration.dispatchCommand") {
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            ok: true,
+            result: {
+              accepted: true,
+              threadId: msg.params?.threadId,
+              payload: msg.params?.payload
+            }
+          })
+        );
+        return;
+      }
+
+      if (msg.method === "rpc.fail") {
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            ok: false,
+            error: {
+              code: "bad_request",
+              message: "Intentional mock RPC error"
+            }
+          })
+        );
+        return;
+      }
+
+      if (msg.method === "rpc.slow") {
+        // Intentionally never reply so timeout test triggers cleanly.
+        return;
+      }
+
+      ws.send(
+        JSON.stringify({
+          id: msg.id,
+          ok: false,
+          error: {
+            code: "method_not_found",
+            message: `Unknown method ${msg.method}`
+          }
+        })
+      );
+    });
+  });
+
+  const httpServer: Server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, generation: options.generation }));
+  });
+
+  httpServer.on(
+    "upgrade",
+    (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (parsed.pathname !== "/ws") {
+        socket.write(
+          "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        );
+        socket.destroy();
+        return;
+      }
+
+      if (parsed.searchParams.get("orchestrationProtocol") !== "2") {
+        const body = JSON.stringify({
+          code: "orchestration_protocol_incompatible",
+          orchestrationProtocolVersion: 2
+        });
+        socket.write(
+          `HTTP/1.1 426 Upgrade Required\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+        );
+        socket.destroy();
+        return;
+      }
+
+      if (req.headers.authorization !== `Bearer ${options.expectedToken}`) {
+        const body = JSON.stringify({ code: "unauthorized" });
+        socket.write(
+          `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+        );
+        socket.destroy();
+        return;
+      }
+
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+    }
+  );
+
+  await new Promise<void>((resolveListen, rejectListen) => {
+    httpServer.once("error", rejectListen);
+    httpServer.listen(options.port ?? 0, "127.0.0.1", () => {
+      httpServer.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+
+  const addr = httpServer.address();
+  assert(addr !== null && typeof addr === "object");
+  const boundPort = addr.port;
+
+  return {
+    port: boundPort,
+    wsUrl: `ws://127.0.0.1:${boundPort}/ws`,
+    ensureCalls,
+    close: async () => {
+      for (const ws of sockets) {
+        try {
+          ws.terminate();
+        } catch {
+          // Ignore socket terminate error.
+        }
+      }
+      sockets.clear();
+      await new Promise<void>((resolveWss) => {
+        wss.close(() => resolveWss());
+      });
+      httpServer.closeAllConnections?.();
+      await new Promise<void>((resolveHttp) => {
+        httpServer.close(() => resolveHttp());
+      });
+    }
+  };
+}
+
+after(() => {
+  for (const dir of tempDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("T3ServerSupervisor", () => {
+  it("strips ELECTRON_RUN_AS_NODE and ELECTRON_NO_ATTACH_CONSOLE when spawning Node child", async () => {
+    const cleaned = sanitizeChildEnv({
+      ELECTRON_RUN_AS_NODE: "1",
+      ELECTRON_NO_ATTACH_CONSOLE: "1",
+      OMITTED: undefined,
+      KEEP_ME: "ok"
+    });
+    assert.deepEqual(cleaned, { KEEP_ME: "ok" });
+
+    const dir = createTempDir("prismux-sup-env-");
+    const scriptPath = join(dir, "env-probe.mjs");
+    writeFileSync(
+      scriptPath,
+      [
+        "const report = {",
+        '  hasElectronRunAsNode: "ELECTRON_RUN_AS_NODE" in process.env,',
+        '  hasElectronNoAttach: "ELECTRON_NO_ATTACH_CONSOLE" in process.env,',
+        "  keepValue: process.env.PRISMUX_KEEP ?? null",
+        "};",
+        'console.log("ENV_REPORT:" + JSON.stringify(report));',
+        "const keepAlive = setInterval(() => {}, 1000);",
+        'process.on("SIGTERM", () => { clearInterval(keepAlive); process.exit(0); });'
+      ].join("\n"),
+      "utf8"
+    );
+
+    const prevRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+    const prevNoAttach = process.env.ELECTRON_NO_ATTACH_CONSOLE;
+    process.env.ELECTRON_RUN_AS_NODE = "1";
+    process.env.ELECTRON_NO_ATTACH_CONSOLE = "1";
+
+    const supervisor = new T3ServerSupervisor({
+      command: process.execPath,
+      args: [scriptPath],
+      cwd: dir,
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+        ELECTRON_NO_ATTACH_CONSOLE: "1",
+        PRISMUX_KEEP: "clean-child"
+      },
+      stopTimeoutMs: 1000
+    });
+
+    try {
+      await supervisor.start();
+      assert.equal(supervisor.getStatus().state, "running");
+      assert.equal(typeof supervisor.getStatus().pid, "number");
+
+      await waitForCondition(
+        () =>
+          supervisor
+            .getLogs()
+            .some((line) => line.includes("ENV_REPORT:")),
+        (trigger) => {
+          supervisor.on("log", trigger);
+          return () => supervisor.off("log", trigger);
+        },
+        5000,
+        "child env probe output"
+      );
+
+      const reportLine = supervisor
+        .getLogs()
+        .find((line) => line.includes("ENV_REPORT:"));
+      assert.ok(reportLine !== undefined);
+      const jsonPart = reportLine.slice(
+        reportLine.indexOf("ENV_REPORT:") + "ENV_REPORT:".length
+      );
+      const parsed = JSON.parse(jsonPart) as {
+        hasElectronRunAsNode: boolean;
+        hasElectronNoAttach: boolean;
+        keepValue: string | null;
+      };
+      assert.equal(parsed.hasElectronRunAsNode, false);
+      assert.equal(parsed.hasElectronNoAttach, false);
+      assert.equal(parsed.keepValue, "clean-child");
+    } finally {
+      await supervisor.stop();
+      assert.equal(supervisor.getStatus().state, "stopped");
+      assert.equal(supervisor.getStatus().pid, undefined);
+
+      if (prevRunAsNode === undefined) {
+        delete process.env.ELECTRON_RUN_AS_NODE;
+      } else {
+        process.env.ELECTRON_RUN_AS_NODE = prevRunAsNode;
+      }
+      if (prevNoAttach === undefined) {
+        delete process.env.ELECTRON_NO_ATTACH_CONSOLE;
+      } else {
+        process.env.ELECTRON_NO_ATTACH_CONSOLE = prevNoAttach;
+      }
+    }
+  });
+
+  it("auto-restarts on unexpected exit 1 with exponential backoff and stops cleanly", async () => {
+    const dir = createTempDir("prismux-sup-restart-");
+    const countFile = join(dir, "boot-count.txt");
+    const scriptPath = join(dir, "crash-once.mjs");
+    writeFileSync(
+      scriptPath,
+      [
+        'import { existsSync, readFileSync, writeFileSync } from "node:fs";',
+        "const file = process.argv[2];",
+        'const prev = existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;',
+        "const next = prev + 1;",
+        "writeFileSync(file, String(next), 'utf8');",
+        "if (next === 1) {",
+        '  console.log("boot-1-crashing");',
+        "  setTimeout(() => process.exit(1), 25);",
+        "} else {",
+        '  console.log("boot-" + next + "-healthy");',
+        "  const timer = setInterval(() => {}, 1000);",
+        '  process.on("SIGTERM", () => { clearInterval(timer); process.exit(0); });',
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const observedStates: T3SupervisorState[] = [];
+    const supervisor = new T3ServerSupervisor({
+      command: process.execPath,
+      args: [scriptPath, countFile],
+      cwd: dir,
+      maxRestarts: 3,
+      baseBackoffMs: 40,
+      maxBackoffMs: 200,
+      stopTimeoutMs: 1000,
+      logCapacity: 50
+    });
+
+    supervisor.on("stateChange", (evt: { current: T3SupervisorState }) => {
+      observedStates.push(evt.current);
+    });
+
+    try {
+      await supervisor.start();
+
+      await waitForCondition(
+        () =>
+          supervisor.getStatus().state === "running" &&
+          supervisor.getStatus().restartCount >= 1 &&
+          supervisor.getLogs().some((line) => line.includes("boot-2-healthy")),
+        (trigger) => {
+          supervisor.on("stateChange", trigger);
+          supervisor.on("log", trigger);
+          return () => {
+            supervisor.off("stateChange", trigger);
+            supervisor.off("log", trigger);
+          };
+        },
+        6000,
+        "supervisor restart to running"
+      );
+
+      assert.ok(observedStates.includes("restarting"));
+      assert.equal(supervisor.getStatus().restartCount, 1);
+      assert.equal(supervisor.getStatus().state, "running");
+      assert.ok(
+        supervisor.getLogs().some((line) => line.includes("boot-1-crashing"))
+      );
+      assert.ok(
+        supervisor.getLogs().some((line) => line.includes("boot-2-healthy"))
+      );
+    } finally {
+      await supervisor.stop();
+      assert.equal(supervisor.getStatus().state, "stopped");
+      assert.equal(supervisor.getStatus().pid, undefined);
+    }
+  });
+
+  it("transitions to failed after maxRestarts exhaustion and bounds ring log buffer", async () => {
+    const dir = createTempDir("prismux-sup-fail-");
+    const scriptPath = join(dir, "always-fail.mjs");
+    writeFileSync(
+      scriptPath,
+      [
+        'for (let i = 1; i <= 10; i++) console.log("line-" + i);',
+        "setTimeout(() => process.exit(1), 20);"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const supervisor = new T3ServerSupervisor({
+      command: process.execPath,
+      args: [scriptPath],
+      cwd: dir,
+      maxRestarts: 1,
+      baseBackoffMs: 25,
+      maxBackoffMs: 50,
+      logCapacity: 5
+    });
+
+    try {
+      await supervisor.start();
+
+      await waitForCondition(
+        () => supervisor.getStatus().state === "failed",
+        (trigger) => {
+          supervisor.on("stateChange", trigger);
+          return () => supervisor.off("stateChange", trigger);
+        },
+        6000,
+        "supervisor failed after maxRestarts"
+      );
+
+      assert.equal(supervisor.getStatus().restartCount, 1);
+      assert.equal(supervisor.getLogs().length, 5);
+    } finally {
+      await supervisor.stop();
+      assert.equal(supervisor.getStatus().state, "stopped");
+    }
+  });
+
+  it("waits for healthUrl 200 readiness and cancels pending backoff cleanly when stop() is called during restarting", async () => {
+    const dir = createTempDir("prismux-sup-health-");
+    let healthHits = 0;
+    const healthServer = createServer((_req, res) => {
+      healthHits += 1;
+      if (healthHits < 3) {
+        res.writeHead(503);
+        res.end("warming up");
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    await new Promise<void>((resolveListen, rejectListen) => {
+      healthServer.once("error", rejectListen);
+      healthServer.listen(0, "127.0.0.1", () => {
+        healthServer.off("error", rejectListen);
+        resolveListen();
+      });
+    });
+
+    const addr = healthServer.address();
+    assert(addr !== null && typeof addr === "object");
+    const healthUrl = `http://127.0.0.1:${addr.port}/health`;
+
+    const healthyScript = join(dir, "stay-alive.mjs");
+    writeFileSync(
+      healthyScript,
+      [
+        "const keep = setInterval(() => {}, 1000);",
+        'process.on("SIGTERM", () => { clearInterval(keep); process.exit(0); });'
+      ].join("\n"),
+      "utf8"
+    );
+
+    const healthSup = new T3ServerSupervisor({
+      command: process.execPath,
+      args: [healthyScript],
+      cwd: dir,
+      healthUrl,
+      healthCheckIntervalMs: 25,
+      healthTimeoutMs: 500,
+      startTimeoutMs: 5000
+    });
+
+    try {
+      await healthSup.start();
+      assert.equal(healthSup.getStatus().state, "running");
+      assert.ok(healthHits >= 3);
+    } finally {
+      await healthSup.stop();
+      healthServer.closeAllConnections?.();
+      await new Promise<void>((resolveClose) => {
+        healthServer.close(() => resolveClose());
+      });
+    }
+
+    const crashScript = join(dir, "crash-fast.mjs");
+    writeFileSync(crashScript, "setTimeout(() => process.exit(1), 20);\n", "utf8");
+
+    const restartSup = new T3ServerSupervisor({
+      command: process.execPath,
+      args: [crashScript],
+      cwd: dir,
+      maxRestarts: 3,
+      baseBackoffMs: 5_000,
+      maxBackoffMs: 10_000
+    });
+
+    try {
+      await restartSup.start();
+      await waitForCondition(
+        () => restartSup.getStatus().state === "restarting",
+        (trigger) => {
+          restartSup.on("stateChange", trigger);
+          return () => restartSup.off("stateChange", trigger);
+        },
+        3000,
+        "supervisor entering restarting backoff"
+      );
+
+      const stopStart = Date.now();
+      await restartSup.stop();
+      const elapsedMs = Date.now() - stopStart;
+      assert.equal(restartSup.getStatus().state, "stopped");
+      assert.ok(elapsedMs < 1000, `Expected quick stop during backoff, took ${elapsedMs}ms`);
+    } finally {
+      await restartSup.stop();
+    }
+  });
+});
+
+describe("T3RpcClient", () => {
+  it("enforces orchestrationProtocol=2 (426), Bearer auth (401), RPC calls, and reconnects after server restart", async () => {
+    const token = "prismux-secret-token";
+    let server = await startMockT3Server({ expectedToken: token, generation: 1 });
+    const port = server.port;
+
+    const badProtocolClient = new T3RpcClient({
+      url: server.wsUrl,
+      token,
+      protocolVersion: "1",
+      autoReconnect: false
+    });
+    const badAuthClient = new T3RpcClient({
+      url: server.wsUrl,
+      token: "wrong-token",
+      autoReconnect: false
+    });
+    const client = new T3RpcClient({
+      url: server.wsUrl,
+      token,
+      requestTimeoutMs: 1000,
+      baseReconnectMs: 40,
+      maxReconnectMs: 120,
+      autoReconnect: true
+    });
+
+    try {
+      assert.ok(client.wsUrl.includes("orchestrationProtocol=2"));
+
+      await assert.rejects(
+        () => badProtocolClient.connect(),
+        (err: unknown) =>
+          err instanceof T3RpcHandshakeError && err.statusCode === 426
+      );
+
+      await assert.rejects(
+        () => badAuthClient.connect(),
+        (err: unknown) =>
+          err instanceof T3RpcHandshakeError && err.statusCode === 401
+      );
+
+      const events: T3RpcPushEvent[] = [];
+      const unsubscribeEvents = client.onEvent((evt) => {
+        events.push(evt);
+      });
+
+      await client.connect();
+      assert.equal(client.isConnected(), true);
+      assert.equal(client.getStatus().state, "connected");
+
+      await waitForCondition(
+        () => events.some((e) => e.event === "provider.status"),
+        (trigger) => client.onEvent(trigger),
+        3000,
+        "initial push event"
+      );
+
+      const ping1 = await client.ping();
+      assert.equal(ping1.ok, true);
+      assert.deepEqual(ping1.payload, { ok: true, generation: 1 });
+
+      const providers = await client.listProviders();
+      assert.equal(providers.length, 4);
+      assert.equal(providers[0]?.id, "claude-code");
+
+      const ensured = await client.ensureChiefThread(
+        "/tmp/chief-workspace",
+        "codex",
+        "gpt-5"
+      );
+      assert.equal(ensured.ensured, true);
+      assert.equal(ensured.provider, "codex");
+
+      const dispatched = await client.dispatchThreadCommand("chief-1", {
+        action: "continue"
+      });
+      assert.deepEqual(dispatched, {
+        accepted: true,
+        threadId: "chief-1",
+        payload: { action: "continue" }
+      });
+
+      await assert.rejects(
+        () => client.request("rpc.fail", {}),
+        (err: unknown) =>
+          err instanceof T3RpcRemoteError && err.code === "bad_request"
+      );
+
+      await assert.rejects(
+        () => client.request("rpc.slow", {}, 60),
+        /timed out/
+      );
+
+      // Simulate T3 server shutdown and restart on the exact same port.
+      await server.close();
+      await waitForCondition(
+        () => !client.isConnected(),
+        (trigger) => client.onStateChange(trigger),
+        3000,
+        "client disconnect on server shutdown"
+      );
+
+      server = await startMockT3Server({
+        port,
+        expectedToken: token,
+        generation: 2
+      });
+
+      await client.waitForConnected(5000);
+      assert.equal(client.isConnected(), true);
+
+      const ping2 = await client.ping();
+      assert.equal(ping2.ok, true);
+      assert.deepEqual(ping2.payload, { ok: true, generation: 2 });
+
+      unsubscribeEvents();
+    } finally {
+      await badProtocolClient.close();
+      await badAuthClient.close();
+      await client.close();
+      assert.equal(client.isConnected(), false);
+      assert.equal(client.getStatus().state, "closed");
+      await server.close();
+    }
+  });
+});
+
+describe("ChiefThreadManager", () => {
+  it("protects chief-workspace, hot-switches providers keeping threadId invariant, syncs T3, and restores from disk", async () => {
+    const dataDir = createTempDir("prismux-chief-");
+    const workspaceDir = join(dataDir, "chief-workspace");
+    mkdirSync(workspaceDir, { recursive: true });
+    const userNotesPath = join(workspaceDir, "user-notes.txt");
+    writeFileSync(userNotesPath, "keep-me-safe", "utf8");
+
+    const token = "chief-sync-token";
+    const server = await startMockT3Server({ expectedToken: token, generation: 1 });
+    const rpcClient = new T3RpcClient({
+      url: server.wsUrl,
+      token,
+      autoReconnect: false
+    });
+
+    try {
+      await rpcClient.connect();
+
+      const manager = new ChiefThreadManager({
+        dataDir,
+        rpcClient
+      });
+
+      const initial = await manager.init();
+      assert.equal(initial.activeProvider, "claude-code");
+      assert.equal(initial.workspacePath, workspaceDir);
+      assert.deepEqual(initial.injectedMcpServers, [...DEFAULT_CHIEF_MCP_SERVERS]);
+      assert.deepEqual(initial.injectedMcpServers, [
+        "prismux-memory",
+        "prismux-orchestrator"
+      ]);
+      assert.equal(initial.switchHistory.length, 0);
+      assert.equal(existsSync(join(dataDir, CHIEF_SLOT_FILENAME)), true);
+
+      const markerPath = join(workspaceDir, CHIEF_MARKER_FILENAME);
+      const readmePath = join(workspaceDir, CHIEF_README_FILENAME);
+      assert.equal(existsSync(markerPath), true);
+      assert.equal(existsSync(readmePath), true);
+      assert.equal(readFileSync(userNotesPath, "utf8"), "keep-me-safe");
+
+      const markerJson = JSON.parse(readFileSync(markerPath, "utf8")) as {
+        protected: boolean;
+        injectedMcpServers: string[];
+      };
+      assert.equal(markerJson.protected, true);
+      assert.deepEqual(markerJson.injectedMcpServers, [
+        "prismux-memory",
+        "prismux-orchestrator"
+      ]);
+
+      // Verify existing workspace files are never overwritten on subsequent ensureWorkspace().
+      writeFileSync(readmePath, "custom-user-readme", "utf8");
+      manager.ensureWorkspace();
+      assert.equal(readFileSync(readmePath, "utf8"), "custom-user-readme");
+      assert.equal(readFileSync(userNotesPath, "utf8"), "keep-me-safe");
+
+      const step1 = await manager.switchProvider("codex");
+      const step2 = await manager.switchProvider("antigravity", "gemini-4-neon");
+      const step3 = await manager.switchProvider("opencode");
+
+      for (const state of [step1, step2, step3]) {
+        assert.equal(state.threadId, initial.threadId);
+        assert.equal(state.workspacePath, initial.workspacePath);
+        assert.deepEqual(state.injectedMcpServers, [
+          "prismux-memory",
+          "prismux-orchestrator"
+        ]);
+      }
+
+      assert.equal(step1.activeProvider, "codex");
+      assert.equal(step1.model, undefined);
+
+      assert.equal(step2.activeProvider, "antigravity");
+      assert.equal(step2.model, "gemini-4-neon");
+
+      assert.equal(step3.activeProvider, "opencode");
+      assert.equal(step3.model, undefined);
+
+      assert.equal(step3.switchHistory.length, 3);
+      assert.equal(step3.switchHistory[0]?.fromProvider, "claude-code");
+      assert.equal(step3.switchHistory[0]?.toProvider, "codex");
+      assert.equal(step3.switchHistory[1]?.fromProvider, "codex");
+      assert.equal(step3.switchHistory[1]?.toProvider, "antigravity");
+      assert.equal(step3.switchHistory[1]?.model, "gemini-4-neon");
+      assert.equal(step3.switchHistory[2]?.fromProvider, "antigravity");
+      assert.equal(step3.switchHistory[2]?.toProvider, "opencode");
+
+      assert.deepEqual(server.ensureCalls, [
+        { workspacePath: workspaceDir, provider: "codex" },
+        {
+          workspacePath: workspaceDir,
+          provider: "antigravity",
+          model: "gemini-4-neon"
+        },
+        { workspacePath: workspaceDir, provider: "opencode" }
+      ]);
+
+      // Re-instantiate manager from scratch and verify full disk recovery.
+      const restoredManager = new ChiefThreadManager({ dataDir });
+      const restored = await restoredManager.init();
+      assert.deepEqual(restored, step3);
+      assert.deepEqual(restoredManager.getSlot(), step3);
+    } finally {
+      await rpcClient.close();
+      await server.close();
+    }
+  });
+});
