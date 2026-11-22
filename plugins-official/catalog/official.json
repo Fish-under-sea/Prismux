@@ -10,7 +10,10 @@
       "engines": {
         "prismux": ">=0.1.0 <2.0.0"
       },
-      "realms": ["daemon", "ui"],
+      "realms": [
+        "daemon",
+        "ui"
+      ],
       "permissions": [
         "network:outbound",
         "network:inbound",
@@ -18,9 +21,9 @@
         "hooks:subscribe"
       ],
       "modelVisible": false,
-      "sha256": null,
-      "bytes": null,
-      "status": "source-only"
+      "sha256": "d236cc2e3d10f30c68e2f96f7ed1ec3fd08d58233948f4ffa24d68c5493b40b8",
+      "bytes": 72289,
+      "status": "verified"
     },
     {
       "id": "pet",
@@ -30,12 +33,19 @@
       "engines": {
         "prismux": ">=0.1.0 <2.0.0"
       },
-      "realms": ["ui", "daemon"],
-      "permissions": ["pet:lease", "ui:panel", "hooks:subscribe"],
+      "realms": [
+        "ui",
+        "daemon"
+      ],
+      "permissions": [
+        "pet:lease",
+        "ui:panel",
+        "hooks:subscribe"
+      ],
       "modelVisible": false,
-      "sha256": null,
-      "bytes": null,
-      "status": "source-only"
+      "sha256": "fcd03a4ed59c2f0d13c521eace30417772cb1728321a3dcc3b021575ff8a75f0",
+      "bytes": 26844,
+      "status": "verified"
     },
     {
       "id": "fishdock-hook",
@@ -45,16 +55,18 @@
       "engines": {
         "prismux": ">=0.1.0 <2.0.0"
       },
-      "realms": ["daemon"],
+      "realms": [
+        "daemon"
+      ],
       "permissions": [
         "network:outbound",
         "hooks:subscribe",
         "notifications:push"
       ],
       "modelVisible": false,
-      "sha256": null,
-      "bytes": null,
-      "status": "source-only"
+      "sha256": "6c56e830d77f3dff1b6390e06cf3dde7162ba2db1f3719333ed4176dce9e33b9",
+      "bytes": 36962,
+      "status": "verified"
     },
     {
       "id": "ssh",
@@ -64,7 +76,10 @@
       "engines": {
         "prismux": ">=0.1.0 <2.0.0"
       },
-      "realms": ["daemon", "ui"],
+      "realms": [
+        "daemon",
+        "ui"
+      ],
       "permissions": [
         "network:outbound",
         "pty:spawn",
@@ -73,9 +88,9 @@
         "ui:panel"
       ],
       "modelVisible": false,
-      "sha256": null,
-      "bytes": null,
-      "status": "source-only"
+      "sha256": "010f826d9962fd45c8cc553bc83f526b2596406a4f147a6c21fea4e3f7363f08",
+      "bytes": 31616,
+      "status": "verified"
     },
     {
       "id": "purge",
@@ -85,12 +100,18 @@
       "engines": {
         "prismux": ">=0.1.0 <2.0.0"
       },
-      "realms": ["daemon", "ui"],
-      "permissions": ["hooks:intercept", "ui:panel"],
+      "realms": [
+        "daemon",
+        "ui"
+      ],
+      "permissions": [
+        "hooks:intercept",
+        "ui:panel"
+      ],
       "modelVisible": false,
-      "sha256": null,
-      "bytes": null,
-      "status": "source-only"
+      "sha256": "66a15616e981b3e8e0e9df26d9c984f855362c6513e0b9f5545b416863f948c0",
+      "bytes": 29774,
+      "status": "verified"
     }
   ]
 }
