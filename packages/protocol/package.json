@@ -8,36 +8,43 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "@prismux/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./brand": {
+      "@prismux/source": "./src/brand.ts",
       "types": "./dist/brand.d.ts",
       "import": "./dist/brand.js"
     },
     "./memory": {
+      "@prismux/source": "./src/memory.ts",
       "types": "./dist/memory.d.ts",
       "import": "./dist/memory.js"
     },
     "./hooks": {
+      "@prismux/source": "./src/hooks.ts",
       "types": "./dist/hooks.d.ts",
       "import": "./dist/hooks.js"
     },
     "./handoff": {
+      "@prismux/source": "./src/handoff.ts",
       "types": "./dist/handoff.d.ts",
       "import": "./dist/handoff.js"
     },
     "./plugin": {
+      "@prismux/source": "./src/plugin.ts",
       "types": "./dist/plugin.d.ts",
       "import": "./dist/plugin.js"
     },
     "./rpc": {
+      "@prismux/source": "./src/rpc.ts",
       "types": "./dist/rpc.d.ts",
       "import": "./dist/rpc.js"
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "typecheck": "tsc --noEmit --customConditions @prismux/source",
+    "build": "tsc --rootDir src"
   }
 }

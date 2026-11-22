@@ -8,17 +8,19 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "@prismux/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./collector": {
+      "@prismux/source": "./src/CollectorAndGuard.ts",
       "types": "./dist/CollectorAndGuard.d.ts",
       "import": "./dist/CollectorAndGuard.js"
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "typecheck": "tsc --noEmit --customConditions @prismux/source",
+    "build": "tsc --rootDir src"
   },
   "dependencies": {
     "@prismux/protocol": "workspace:*"
