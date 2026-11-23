@@ -1,6 +1,6 @@
 {
   "name": "@prismux/plugin-qq",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "private": true,
   "type": "module",
   "description": "Official optional OneBot v11 QQ private Chief Supervisor bridge & isolated group chat plugin for Prismux.",

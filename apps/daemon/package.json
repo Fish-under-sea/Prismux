@@ -1,6 +1,6 @@
 {
   "name": "@prismux/daemon",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "private": true,
   "type": "module",
   "description": "24h headless supervisor daemon hosting t3code server bridge, Chief Supervisor slot, hook bus, PTY pool, sandbox, and overnight factory.",

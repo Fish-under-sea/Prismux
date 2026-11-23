@@ -1,4 +1,4 @@
-export const DEFAULT_APP_VERSION = "0.1.0-alpha.2" as const;
+export const DEFAULT_APP_VERSION = "0.1.0-alpha.3" as const;
 
 export const BRAND = {
   appName: "Prismux",

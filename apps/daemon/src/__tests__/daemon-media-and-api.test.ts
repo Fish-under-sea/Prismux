@@ -1058,13 +1058,13 @@ export function apply(ctx) {
     currentVersion: string;
     policy: { routePreference: string; includePrerelease: boolean };
   };
-  assert.equal(updaterStatus.currentVersion, "0.1.0-alpha.2");
+  assert.equal(updaterStatus.currentVersion, "0.1.0-alpha.3");
   assert.equal(updaterStatus.policy.routePreference, "domestic");
   assert.equal(updaterStatus.policy.includePrerelease, false);
 
   const healthCheckRes = await fetch(`${ready.httpUrl}/health`);
   assert.equal(healthCheckRes.status, 200);
-  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.0-alpha.2");
+  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.0-alpha.3");
 });
 
 test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electron protocol CORS + PRISMUX_CATALOG_PATH resolution", async () => {
@@ -1092,7 +1092,7 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
       plugins: OFFICIAL_PLUGIN_IDS.map((id) => ({
         id,
         packageName: `@prismux/plugin-${id}`,
-        version: "0.1.0-alpha.2",
+        version: "0.1.0-alpha.3",
         description: `Catalog entry ${id}`,
         engines: { prismux: ">=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0" },
         realms: ["daemon"],
