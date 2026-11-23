@@ -104,6 +104,35 @@ describe("deriveProviderInstanceConfigMap", () => {
 
     expect(merged[instanceId]).toBe(settings.providerInstances[instanceId]);
   });
+
+  it("hydrates hidden built-in default provider instances as disabled until re-added", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const hidden = deriveProviderInstanceConfigMap(
+      settingsWith({
+        providerInstances: {},
+        hiddenDefaultProviderInstances: [codexId],
+      }),
+    );
+
+    expect(hidden[codexId]).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      enabled: false,
+    });
+
+    const restored = deriveProviderInstanceConfigMap(
+      settingsWith({
+        providerInstances: {
+          [codexId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        },
+        hiddenDefaultProviderInstances: [codexId],
+      }),
+    );
+
+    expect(restored[codexId]).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+    });
+  });
 });
 
 describe("seedDevReplayInstance", () => {

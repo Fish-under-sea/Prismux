@@ -343,3 +343,150 @@ it("keeps the touch keyboard down while choosing a provider", async () => {
   await expect.element(page.getByRole("option", { name: /Claude model/ })).toBeVisible();
   await expect.element(search).not.toHaveFocus();
 });
+
+it("scopes unified composer picker to the active agent, filters search within it, folds overflow models, and preserves the unified reasoning effort footer", async () => {
+  const codexId = ProviderInstanceId.make("codex");
+  const claudeId = ProviderInstanceId.make("claude");
+  const entries = deriveProviderInstanceEntries([
+    {
+      instanceId: codexId,
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    },
+    {
+      instanceId: claudeId,
+      driver: ProviderDriverKind.make("claudeAgent"),
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    },
+  ]);
+
+  const codexModels = Array.from({ length: 8 }, (_, index) => ({
+    slug: `gpt-6-${index + 1}`,
+    name: `GPT 6.${index + 1}`,
+    subProvider: "OpenAI",
+  }));
+  const claudeModels = [{ slug: "claude-opus-5", name: "Claude Opus 5" }];
+  const options = new Map([
+    [codexId, codexModels],
+    [claudeId, claudeModels],
+  ]);
+
+  await using screen = await render(
+    <ProviderModelPicker
+      environmentId={null}
+      activeInstanceId={codexId}
+      model="gpt-6-1"
+      lockedProvider={null}
+      instanceEntries={entries}
+      modelOptionsByInstance={options}
+      triggerAriaLabel="Choose model"
+      onInstanceModelChange={() => {}}
+      unifiedFooter={
+        <div data-testid="dsh-effort-footer">
+          <div role="slider" aria-label="Reasoning effort" />
+          <button type="button" data-composer-fast-mode-toggle="true">
+            Fast
+          </button>
+        </div>
+      }
+    />,
+  );
+
+  await screen.getByRole("button", { name: "Choose model" }).click();
+  // Active agent models visible; unrelated vendor (Claude) is NOT mixed in
+  await expect.element(page.getByRole("option", { name: /GPT 6\.1/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /Claude Opus 5/ })).not.toBeInTheDocument();
+  // Left multi-provider sidebar is hidden in scoped mode
+  expect(document.querySelector('[data-model-picker-sidebar="true"]')).toBeNull();
+  // Unified dsh-fish reasoning slider & fast mode footer preserved
+  await expect.element(page.getByTestId("dsh-effort-footer")).toBeVisible();
+  // Overflow models folded under "More models (2)"
+  await expect.element(page.getByRole("option", { name: /More models \(2\)/ })).toBeVisible();
+
+  // Search stays scoped to Codex
+  const search = page.getByPlaceholder("Search models...");
+  await search.fill("Claude");
+  await expect.element(page.getByRole("option", { name: /Claude Opus 5/ })).not.toBeInTheDocument();
+  await search.fill("6.7");
+  await expect.element(page.getByRole("option", { name: /GPT 6\.7/ })).toBeVisible();
+});
+
+it("aligns a composer-owned model picker popup flush with the composer inner card left edge", async () => {
+  const codexId = ProviderInstanceId.make("codex");
+  const entries = deriveProviderInstanceEntries([
+    {
+      instanceId: codexId,
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    },
+  ]);
+  const options = new Map([[codexId, [{ slug: "gpt-5.4", name: "GPT-5.4" }]]]);
+
+  await using screen = await render(
+    <div style={{ paddingLeft: "280px", paddingTop: "420px", width: "1000px" }}>
+      <div data-pmx-composer-layout="agy" style={{ padding: "4px", width: "680px" }}>
+        <div
+          data-pmx-composer-inner-card="1"
+          data-chat-composer-surface="true"
+          style={{ padding: "8px 10px" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <button type="button" style={{ width: "32px", height: "28px" }}>
+              +
+            </button>
+            <ProviderModelPicker
+              environmentId={null}
+              activeInstanceId={codexId}
+              model="gpt-5.4"
+              lockedProvider={null}
+              instanceEntries={entries}
+              modelOptionsByInstance={options}
+              isComposerOwned
+              popupAlign="end"
+              triggerAriaLabel="Choose model"
+              onInstanceModelChange={() => {}}
+              unifiedFooter={<div data-testid="effort-footer">Effort</div>}
+            />
+          </div>
+        </div>
+      </div>
+    </div>,
+  );
+
+  await screen.getByRole("button", { name: "Choose model" }).click();
+  await expect.element(page.getByTestId("effort-footer")).toBeVisible();
+
+  const innerCard = screen.container.querySelector<HTMLElement>('[data-pmx-composer-inner-card="1"]');
+  const popup = document.querySelector<HTMLElement>('[data-slot="popover-popup"]');
+  expect(innerCard).not.toBeNull();
+  expect(popup).not.toBeNull();
+  expect(popup?.getAttribute("data-align")).toBe("start");
+  await vi.waitFor(() => {
+    const delta = Math.abs(popup!.getBoundingClientRect().left - innerCard!.getBoundingClientRect().left);
+    expect(delta).toBeLessThanOrEqual(2);
+  });
+});

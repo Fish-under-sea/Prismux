@@ -48,6 +48,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Schema from "effect/Schema";
@@ -297,6 +298,11 @@ import {
 } from "./preparingComposerImages";
 import { HELD_COMPOSER_SEND_BANNER_ID } from "./ComposerHeldSendBanner";
 import { ComposerControlsBar } from "./ComposerControlsBar";
+import {
+  ComposerLiveTelemetryStrip,
+  shouldWrapComposerTelemetryRow,
+} from "./ComposerLiveTelemetryStrip";
+import { ComposerWorkspaceLocationBar } from "./ComposerWorkspaceLocationBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
 import { promptSuggestionToAccept, usePromptSuggestion } from "./usePromptSuggestion";
 import { useFreshSessionArmed } from "./freshSessionArms";
@@ -387,6 +393,7 @@ export interface ChatComposerProps {
   activeThreadId: ThreadId | null;
   activeThread: Thread | undefined;
   activeThreadRuns: ReadonlyArray<OrchestrationV2Run>;
+  contextWindow?: ContextWindowSnapshot | null | undefined;
   promptHistoryEntries: ReadonlyArray<TimelineEntry>;
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
@@ -1061,6 +1068,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
+  const [isComposerTelemetryWrapped, setIsComposerTelemetryWrapped] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
   const isSoftwareKeyboardOpen = useSoftwareKeyboardOpen();
@@ -1594,6 +1602,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         shouldUseCompactComposerFooter(composerFormWidth, options) &&
           shouldUseCompactComposerPrimaryActions(composerFormWidth, options),
       );
+      setIsComposerTelemetryWrapped(shouldWrapComposerTelemetryRow(composerFormWidth));
     };
 
     measureCompactLayouts();
@@ -3613,7 +3622,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         if (isInsideRestingComposerControlScope(event.target)) return;
         composerMentionDragHandlers.onDrop(event);
       }}
-      className="mx-auto w-full min-w-0 max-w-(--chat-content-max-width)"
+      className="mx-auto w-full min-w-0 max-w-[var(--pmx-chat-content-max-width,var(--chat-content-max-width,960px))]"
       data-chat-composer-form="true"
       {...threadContextDropTargetProps()}
     >
@@ -3656,14 +3665,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         <ComposerSurface.Main
           ref={composerMainSurfaceRef}
           data-inline-resting-controls="true"
-          className={composerProviderState.composerFrameClassName}
+          data-pmx-composer-layout="agy"
+          className={cn("rounded-[20px] p-1", composerProviderState.composerFrameClassName)}
         >
+          {!isComposerCollapsedMobile ? (
+            <div
+              data-pmx-composer-top-tray="1"
+              className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-1.5 pt-0.5 text-xs"
+            >
+              <ComposerWorkspaceLocationBar variant="top-tray" />
+            </div>
+          ) : null}
           <div
             ref={composerSurfaceRef}
+            data-pmx-composer-inner-card="1"
             data-chat-composer-surface="true"
             data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
             className={cn(
-              "rounded-2xl transition-[background-color] duration-200",
+              "rounded-[16px] transition-[background-color] duration-200",
               "in-data-[thread-context-over]:bg-accent/45 in-data-[thread-context-over]:ring-1 in-data-[thread-context-over]:ring-inset in-data-[thread-context-over]:ring-primary/70",
               isDragOverComposer ? "bg-accent/45 ring-1 ring-inset ring-primary/70" : null,
               projectSelectionRequired ? "opacity-75" : null,
@@ -3759,8 +3778,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               }}
               data-chat-composer-body="true"
               className={cn(
-                "relative px-4 pb-2",
-                "pt-3.5 sm:pt-4",
+                "relative px-3.5 pb-1.5",
+                "pt-2.5 sm:pt-3",
                 isComposerCollapsedMobile && "hidden",
               )}
             >
@@ -3967,21 +3986,54 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             {isComposerCollapsedMobile && speechInput.state.phase === "idle" ? null : (
               <div
                 data-chat-composer-footer="true"
+                data-composer-telemetry-wrapped={isComposerTelemetryWrapped ? "true" : "false"}
                 className={cn(
-                  "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-2.5 pb-2 pt-0.5",
+                  "flex min-w-0 flex-col gap-1 overflow-visible px-2.5 pb-2 pt-0.5",
                   pendingUserInputs.length > 0 && "pt-2",
                   showMobilePendingAnswerActions &&
                     speechInput.state.phase === "idle" &&
                     "hidden sm:flex",
                 )}
               >
-                {!dictationTakesFooter ? (
+                <div className="flex min-w-0 w-full flex-nowrap items-center justify-between gap-2">
+                  {!dictationTakesFooter ? (
+                    <div
+                      data-chat-composer-actions="left"
+                      className="flex min-w-0 flex-1 items-center gap-1 overflow-x-clip"
+                    >
+                      {composerAttachButton}
+                      <div
+                        ref={attachExpandedComposerControls}
+                        data-chat-composer-controls="footer"
+                        data-chat-composer-footer-controls="true"
+                        className="relative flex min-w-0 flex-1 items-center gap-0.5 overflow-x-clip [&_button]:max-w-full [&_button]:min-w-0"
+                      >
+                        {composerControls}
+                      </div>
+                    </div>
+                  ) : null}
                   <div
-                    data-chat-composer-actions="left"
-                    className="flex shrink-0 items-center gap-0.5"
+                    data-chat-composer-actions="right"
+                    data-chat-composer-transition-actions="true"
+                    data-chat-composer-primary-actions-compact={
+                      isComposerPrimaryActionsCompact ? "true" : "false"
+                    }
+                    className={cn(
+                      "flex min-w-0 shrink-0 flex-nowrap items-center justify-end gap-1.5",
+                      dictationTakesFooter && "flex-1",
+                    )}
                   >
-                    {composerAttachButton}
-                    {!showProviderUnavailable && compatibleRuntimeModeOptions.length > 0 ? (
+                    {!dictationTakesFooter && !isComposerTelemetryWrapped ? (
+                      <ComposerLiveTelemetryStrip
+                        placement="inline"
+                        threadId={activeThreadId ?? routeThreadRef.threadId}
+                        contextWindow={props.contextWindow ?? null}
+                        className="ms-0"
+                      />
+                    ) : null}
+                    {!dictationTakesFooter &&
+                    !showProviderUnavailable &&
+                    compatibleRuntimeModeOptions.length > 0 ? (
                       <ComposerFooterModeControls
                         runtimeMode={compatibleRuntimeMode}
                         runtimeModeOptions={compatibleRuntimeModeOptions}
@@ -3992,112 +4044,112 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         onRuntimeModeChange={handleRuntimeModeChange}
                       />
                     ) : null}
+                    <div
+                      data-pmx-composer-primary-cluster="true"
+                      className="inline-flex shrink-0 items-center gap-1.5 dark:[&_button[type=submit]:enabled]:bg-white dark:[&_button[type=submit]:enabled]:text-neutral-950 dark:[&_button[type=submit]:enabled:hover]:bg-white/90 [[data-pmx-glass='1']_&_button[type=submit]:enabled]:bg-white [[data-pmx-glass='1']_&_button[type=submit]:enabled]:text-neutral-950 [[data-pmx-glass='1']_&_button[type=submit]:enabled:hover]:bg-white/92"
+                    >
+                      <ComposerFooterPrimaryActions
+                        // Stop state belongs to one thread; the composer stays mounted across threads.
+                        key={`${environmentId}:${activeThreadId ?? "new"}`}
+                        compact={isComposerPrimaryActionsCompact}
+                        canOperateThread={canOperateThread}
+                        pendingAction={pendingPrimaryAction}
+                        isRunning={
+                          (phase === "running" || phase === "connecting") && !draftRunsLocally
+                        }
+                        canInterrupt={canInterrupt}
+                        runId={activeThread?.runtime?.activeRunId ?? null}
+                        followUpBehavior={followUpBehavior}
+                        canSteer={canSteer}
+                        alternateShortcutLabel={shortcutLabelForCommand(
+                          keybindings,
+                          "composer.sendAlternate",
+                          {
+                            context: {
+                              composerFocus: true,
+                              draftThreadRoute: routeKind === "draft",
+                              turnRunning: true,
+                              composerRequiresModifier: composerRequiresModifier(
+                                settings.sendShortcut,
+                                prompt,
+                              ),
+                            },
+                          },
+                        )}
+                        voiceInputActive={voiceInputActive}
+                        isSendBusy={isSendBusy}
+                        isSendHeld={composerSendHeld}
+                        sendDisabledReason={primaryActionSendDisabledReason}
+                        isEnvironmentUnavailable={primaryActionEnvironmentUnavailable}
+                        isPreparingWorktree={isPreparingWorktree}
+                        hasSendableContent={hasMessageToSend || voiceInputActive}
+                        canResume={showResumeAction}
+                        preserveComposerFocusOnPointerDown={isMobileViewport}
+                        isEditingQueuedMessage={isEditingQueuedMessage}
+                        onSubmitMessage={handleSubmitMessageStable}
+                        onResume={onResume}
+                        onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                        onInterrupt={handleInterruptPrimaryActionStable}
+                        compactBeforeSendTokens={props.resumeCompactionTokens}
+                        hideCompactToggle={dictationTakesFooter}
+                        keepFullHistory={props.keepFullHistory}
+                        onToggleKeepFullHistory={props.onToggleKeepFullHistory}
+                      >
+                        {speechInput.available ? (
+                          <>
+                            <ComposerSpeechRecordingPill
+                              state={speechInput.state}
+                              progress={null}
+                              finishShortcutLabel={dictationShortcutLabel}
+                              cancelShortcutLabel="Esc"
+                              level={speechInput.level}
+                              recordingStartedAt={speechInput.recordingStartedAt}
+                              disabled={dictationDisabled}
+                              onStart={() => void speechInput.start()}
+                              onStop={() => void speechInput.stop()}
+                              onCancel={() => speechInput.cancel()}
+                              onSkipPostProcessing={() => speechInput.skipPostProcessing()}
+                            />
+                            <ComposerSpeechButton
+                              state={speechInput.state}
+                              shortcutLabel={dictationShortcutLabel}
+                              disabled={dictationDisabled}
+                              onStart={() => void speechInput.start()}
+                            />
+                          </>
+                        ) : null}
+                        <VoiceInputSetup
+                          environmentId={speechInput.transcriptionEnvironmentId}
+                          open={speechInput.setup.open}
+                          step={speechInput.setup.step}
+                          status={speechInput.status}
+                          model={speechInput.setup.model}
+                          language={speechInput.setup.language}
+                          downloading={speechInput.setup.downloading}
+                          error={speechInput.setup.error}
+                          onOpenChange={speechInput.setup.setOpen}
+                          onRetryCatalog={speechInput.setup.retryCatalog}
+                          onDownload={() => void speechInput.setup.download()}
+                          onCancelDownload={() => void speechInput.setup.cancelDownload()}
+                          onStartRecording={() => void speechInput.setup.startRecording()}
+                        />
+                      </ComposerFooterPrimaryActions>
+                    </div>
+                  </div>
+                </div>
+                {!dictationTakesFooter && isComposerTelemetryWrapped ? (
+                  <div
+                    data-composer-telemetry-wrap-row="true"
+                    className="flex min-w-0 w-full items-center justify-end overflow-x-clip border-t border-border/25 pt-1"
+                  >
+                    <ComposerLiveTelemetryStrip
+                      placement="inline"
+                      threadId={activeThreadId ?? routeThreadRef.threadId}
+                      contextWindow={props.contextWindow ?? null}
+                      className="ms-0"
+                    />
                   </div>
                 ) : null}
-                <div
-                  data-chat-composer-actions="right"
-                  data-chat-composer-transition-actions="true"
-                  data-chat-composer-primary-actions-compact={
-                    isComposerPrimaryActionsCompact ? "true" : "false"
-                  }
-                  className="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2"
-                >
-                  <div
-                    ref={attachExpandedComposerControls}
-                    data-chat-composer-controls="footer"
-                    data-chat-composer-footer-controls="true"
-                    className={cn(
-                      "relative flex min-w-0 flex-1 items-center justify-end gap-0.5",
-                      dictationTakesFooter && "hidden",
-                    )}
-                  >
-                    {composerControls}
-                  </div>
-                  <ComposerFooterPrimaryActions
-                    // Stop state belongs to one thread; the composer stays mounted across threads.
-                    key={`${environmentId}:${activeThreadId ?? "new"}`}
-                    compact={isComposerPrimaryActionsCompact}
-                    canOperateThread={canOperateThread}
-                    pendingAction={pendingPrimaryAction}
-                    isRunning={(phase === "running" || phase === "connecting") && !draftRunsLocally}
-                    canInterrupt={canInterrupt}
-                    runId={activeThread?.runtime?.activeRunId ?? null}
-                    followUpBehavior={followUpBehavior}
-                    canSteer={canSteer}
-                    alternateShortcutLabel={shortcutLabelForCommand(
-                      keybindings,
-                      "composer.sendAlternate",
-                      {
-                        context: {
-                          composerFocus: true,
-                          draftThreadRoute: routeKind === "draft",
-                          turnRunning: true,
-                          composerRequiresModifier: composerRequiresModifier(
-                            settings.sendShortcut,
-                            prompt,
-                          ),
-                        },
-                      },
-                    )}
-                    voiceInputActive={voiceInputActive}
-                    isSendBusy={isSendBusy}
-                    isSendHeld={composerSendHeld}
-                    sendDisabledReason={primaryActionSendDisabledReason}
-                    isEnvironmentUnavailable={primaryActionEnvironmentUnavailable}
-                    isPreparingWorktree={isPreparingWorktree}
-                    hasSendableContent={hasMessageToSend || voiceInputActive}
-                    canResume={showResumeAction}
-                    preserveComposerFocusOnPointerDown={isMobileViewport}
-                    isEditingQueuedMessage={isEditingQueuedMessage}
-                    onSubmitMessage={handleSubmitMessageStable}
-                    onResume={onResume}
-                    onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
-                    onInterrupt={handleInterruptPrimaryActionStable}
-                    compactBeforeSendTokens={props.resumeCompactionTokens}
-                    hideCompactToggle={dictationTakesFooter}
-                    keepFullHistory={props.keepFullHistory}
-                    onToggleKeepFullHistory={props.onToggleKeepFullHistory}
-                  >
-                    {speechInput.available ? (
-                      <>
-                        <ComposerSpeechRecordingPill
-                          state={speechInput.state}
-                          progress={null}
-                          finishShortcutLabel={dictationShortcutLabel}
-                          cancelShortcutLabel="Esc"
-                          level={speechInput.level}
-                          recordingStartedAt={speechInput.recordingStartedAt}
-                          disabled={dictationDisabled}
-                          onStart={() => void speechInput.start()}
-                          onStop={() => void speechInput.stop()}
-                          onCancel={() => speechInput.cancel()}
-                          onSkipPostProcessing={() => speechInput.skipPostProcessing()}
-                        />
-                        <ComposerSpeechButton
-                          state={speechInput.state}
-                          shortcutLabel={dictationShortcutLabel}
-                          disabled={dictationDisabled}
-                          onStart={() => void speechInput.start()}
-                        />
-                      </>
-                    ) : null}
-                    <VoiceInputSetup
-                      environmentId={speechInput.transcriptionEnvironmentId}
-                      open={speechInput.setup.open}
-                      step={speechInput.setup.step}
-                      status={speechInput.status}
-                      model={speechInput.setup.model}
-                      language={speechInput.setup.language}
-                      downloading={speechInput.setup.downloading}
-                      error={speechInput.setup.error}
-                      onOpenChange={speechInput.setup.setOpen}
-                      onRetryCatalog={speechInput.setup.retryCatalog}
-                      onDownload={() => void speechInput.setup.download()}
-                      onCancelDownload={() => void speechInput.setup.cancelDownload()}
-                      onStartRecording={() => void speechInput.setup.startRecording()}
-                    />
-                  </ComposerFooterPrimaryActions>
-                </div>
               </div>
             )}
             {showInlineRestingControls ? (

@@ -117,7 +117,7 @@ it.each([1280, 390])("names each group by a heading outside it at %ipx wide", as
   expect(page.getByRole("tree").query()).toBeNull();
 });
 
-it("highlights Appearance & Wallpaper for legacy /settings/wallpaper deep links and separates slide vs crossfade hover pills", async () => {
+it("highlights the dedicated Wallpaper entry for /settings/wallpaper and separates slide vs crossfade hover pills", async () => {
   await page.viewport(1280, 800);
   await using _screen = await render(
     <SidebarProvider defaultOpen>
@@ -126,11 +126,16 @@ it("highlights Appearance & Wallpaper for legacy /settings/wallpaper deep links 
     { router: "/settings/wallpaper" },
   );
 
+  const wallpaperButton = document.querySelector<HTMLButtonElement>(
+    '[data-settings-section="/settings/wallpaper"]',
+  );
   const appearanceButton = document.querySelector<HTMLButtonElement>(
     '[data-settings-section="/settings/appearance"]',
   );
-  expect(appearanceButton?.getAttribute("aria-current")).toBe("page");
-  expect(appearanceButton?.getAttribute("data-active")).toBe("true");
+  expect(wallpaperButton?.getAttribute("aria-current")).toBe("page");
+  expect(wallpaperButton?.getAttribute("data-active")).toBe("true");
+  expect(appearanceButton?.getAttribute("aria-current")).toBeNull();
+  expect(appearanceButton?.getAttribute("data-active")).toBe("false");
 
   const chatButton = document.querySelector<HTMLButtonElement>(
     '[data-settings-section="/settings/chat"]',

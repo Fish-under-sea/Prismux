@@ -512,7 +512,7 @@ describe("EnvironmentProviderSettings account email", () => {
 });
 
 describe("EnvironmentProviderSettings instance removal", () => {
-  it("resets a configured default instance only once the user confirms", async () => {
+  it("resets a configured core default instance only once the user confirms", async () => {
     await setup();
     state.settings = {
       ...DEFAULT_UNIFIED_SETTINGS,
@@ -542,7 +542,7 @@ describe("EnvironmentProviderSettings instance removal", () => {
     );
   });
 
-  it("warns that resetting an enabled default-off provider turns it off", async () => {
+  it("deletes Antigravity CLI via the left list button with stopPropagation and confirmation dialog", async () => {
     await setup();
     const antigravityId = ProviderInstanceId.make("antigravity");
     const antigravity = ProviderDriverKind.make("antigravity");
@@ -551,47 +551,145 @@ describe("EnvironmentProviderSettings instance removal", () => {
       providerInstances: {
         [antigravityId]: {
           driver: antigravity,
+          displayName: "Antigravity CLI",
           enabled: true,
-          config: { binaryPath: "/opt/antigravity/bin/agy" },
+          config: { authMethod: "local-cli" },
         },
       },
     };
-    await setProviders([{ ...provider(), instanceId: antigravityId, driver: antigravity }]);
-    await using _screen = await render(panel({ targetInstanceId: antigravityId }));
-    await userEvent.click(page.getByRole("button", { name: /^Reset .* provider settings/ }));
+    await setProviders([
+      provider(),
+      { ...provider(), instanceId: antigravityId, driver: antigravity },
+    ]);
+    await using screen = await render(panel());
 
-    expect(state.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("It will also be turned off."),
-      {
-        variant: "destructive",
-      },
+    // Initially Codex is selected; clicking Antigravity CLI's list delete icon must not switch selection.
+    const codexSelect = page.getByRole("button", { name: "Select Codex" });
+    const antigravitySelect = page.getByRole("button", { name: "Select Antigravity CLI" });
+    await expect.element(codexSelect).toHaveAttribute("aria-pressed", "true");
+    await expect.element(antigravitySelect).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(
+      page.getByRole("button", { name: "Delete Antigravity CLI configuration" }),
     );
+    await expect.element(codexSelect).toHaveAttribute("aria-pressed", "true");
+    await expect.element(page.getByText("Delete provider configuration?")).toBeVisible();
+    await expect.element(page.getByText("Instance ID: antigravity")).toBeVisible();
+
+    // Canceling closes the dialog without mutating settings.
+    await userEvent.click(page.getByRole("button", { name: "Cancel" }));
     expect(state.mutateProviderInstance).not.toHaveBeenCalled();
+
+    // Confirming removes Antigravity CLI persistently.
+    await userEvent.click(
+      page.getByRole("button", { name: "Delete Antigravity CLI configuration" }),
+    );
+    await userEvent.click(page.getByRole("button", { name: "Confirm delete" }));
+    await vi.waitFor(() =>
+      expect(state.mutateProviderInstance).toHaveBeenCalledWith({
+        operation: "remove",
+        instanceId: antigravityId,
+      }),
+    );
+
+    // Simulating the persisted server echo removes the row cleanly with no resurrection.
+    state.settings = DEFAULT_UNIFIED_SETTINGS;
+    await screen.rerender(panel());
+    await expect
+      .element(page.getByRole("button", { name: "Select Antigravity CLI" }))
+      .not.toBeInTheDocument();
   });
 
-  it("deletes a custom instance only once the user confirms", async () => {
+  it("deletes a custom instance from the detail Danger zone only once confirmed", async () => {
     await setup();
     state.settings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
-        [customId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          displayName: "Codex Work",
+          enabled: true,
+        },
       },
     };
-    await using _screen = await render(panel({ targetInstanceId: customId }));
-    const remove = page.getByRole("button", { name: `Delete instance ${customId}` });
-    await userEvent.click(remove);
+    await using screen = await render(panel({ targetInstanceId: customId }));
+    const dangerButton = page.getByRole("button", { name: "Delete provider configuration" });
+    await userEvent.click(dangerButton);
 
+    await expect.element(page.getByText("Delete provider configuration?")).toBeVisible();
+    await expect.element(page.getByText(`Instance ID: ${customId}`)).toBeVisible();
     expect(state.mutateProviderInstance).not.toHaveBeenCalled();
-    expect(state.confirm).toHaveBeenCalledOnce();
 
-    state.confirm.mockResolvedValue(true);
-    await userEvent.click(remove);
+    await userEvent.click(page.getByRole("button", { name: "Confirm delete" }));
     await vi.waitFor(() =>
       expect(state.mutateProviderInstance).toHaveBeenCalledWith({
         operation: "remove",
         instanceId: customId,
       }),
     );
+
+    // After the custom instance leaves settings, the detail view falls back cleanly instead of crashing.
+    state.settings = DEFAULT_UNIFIED_SETTINGS;
+    await screen.rerender(panel({ targetInstanceId: customId }));
+    await expect.element(page.getByRole("button", { name: "Select Codex" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("removes a built-in core provider with hideDefault and renders the empty guidance state when none remain", async () => {
+    await setup();
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      hiddenDefaultProviderInstances: [claudeId],
+    };
+    await using screen = await render(panel());
+
+    await userEvent.click(page.getByRole("button", { name: "Delete provider configuration" }));
+    await userEvent.click(page.getByRole("button", { name: "Confirm delete" }));
+    await vi.waitFor(() =>
+      expect(state.mutateProviderInstance).toHaveBeenCalledWith({
+        operation: "remove",
+        instanceId: codexId,
+        hideDefault: true,
+      }),
+    );
+
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      hiddenDefaultProviderInstances: [claudeId, codexId],
+    };
+    await screen.rerender(panel());
+    await expect.element(page.getByText("No providers configured.")).toBeVisible();
+    await expect
+      .element(page.getByText("Add a provider to start chatting with your coding agents."))
+      .toBeVisible();
+  });
+
+  it("keeps the confirmation dialog open and avoids clearing selection when deletion fails", async () => {
+    await setup();
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          displayName: "Codex Work",
+          enabled: true,
+        },
+      },
+    };
+    state.mutateProviderInstance.mockResolvedValueOnce(
+      AsyncResult.failure(Cause.fail(new Error("Disk write failed"))),
+    );
+    await using _screen = await render(panel({ targetInstanceId: customId }));
+
+    await userEvent.click(page.getByRole("button", { name: "Delete provider configuration" }));
+    await userEvent.click(page.getByRole("button", { name: "Confirm delete" }));
+
+    await vi.waitFor(() => expect(state.mutateProviderInstance).toHaveBeenCalledOnce());
+    await expect.element(page.getByText("Delete provider configuration?")).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Confirm delete" })).toBeEnabled();
   });
 });
 

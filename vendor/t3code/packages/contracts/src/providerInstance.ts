@@ -96,6 +96,8 @@ export const ProviderInstanceMutation = Schema.Union([
   Schema.Struct({
     operation: Schema.Literal("remove"),
     instanceId: ProviderInstanceId,
+    /** When true, also records a default-enabled built-in slot as hidden so it stays removed across reloads. */
+    hideDefault: Schema.optionalKey(Schema.Boolean),
   }),
 ]);
 export type ProviderInstanceMutation = typeof ProviderInstanceMutation.Type;

@@ -107,6 +107,7 @@ function SheetPopup({
               "transition-none! will-change-auto! data-ending-style:translate-x-0! data-starting-style:translate-x-0! data-ending-style:translate-y-0! data-starting-style:translate-y-0! data-ending-style:opacity-100! data-starting-style:opacity-100!",
             className,
           )}
+          data-pmx-glass-zone="overlays"
           data-slot="sheet-popup"
           render={keepMounted ? undefined : renderRetainedPopup}
           style={{ ...transitionStyle, ...style }}

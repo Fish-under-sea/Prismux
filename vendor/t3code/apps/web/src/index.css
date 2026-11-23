@@ -89,13 +89,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 :root {
-  --app-scrollbar-width: 6px;
+  --app-scrollbar-width: 8px;
   --appearance-contrast-base: 100%;
   --appearance-contrast-boost: 0%;
   --appearance-contrast-border-boost: 0%;
   --appearance-contrast-target: black;
-  --app-scrollbar-thumb: rgb(217 217 217);
-  --app-scrollbar-thumb-hover: rgb(191 191 191);
+  --app-scrollbar-thumb: rgba(15, 23, 42, 0.16);
+  --app-scrollbar-thumb-hover: rgba(15, 23, 42, 0.34);
   /*
    * Compact UI geometry. Keep these values semantic so sidebar, palette,
    * tooltip, and toolbar controls cannot quietly drift apart.
@@ -121,6 +121,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --glass-saturation: 1.14;
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
+  --pmx-status-bar-height: 20px;
   --workspace-controls-top: 0px;
   --workspace-controls-left: calc(env(safe-area-inset-left) + 0.75rem);
   --workspace-controls-right: calc(env(safe-area-inset-right) + 0.75rem);
@@ -144,9 +145,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   @variant dark {
     --appearance-contrast-target: white;
-    /* Keeps the idle thumb above 3:1 (WCAG 1.4.11) on #000; 35% renders as gray 89, just under. */
-    --app-scrollbar-thumb: rgb(255 255 255 / 36%);
-    --app-scrollbar-thumb-hover: rgb(255 255 255 / 45%);
+    --app-scrollbar-thumb: rgba(255, 255, 255, 0.16);
+    --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
     --glass-blur: 16px;
     --glass-saturation: 1.08;
   }
@@ -1861,21 +1861,44 @@ code {
 }
 
 /* Keep parent scrollbar styles off iframe owners to avoid WebKit resize loops: https://webkit.org/b/324485 */
-:where(:not(iframe))::-webkit-scrollbar {
+:where(:not(iframe):not([data-slot="scroll-area-viewport"]):not(.scrollbar-none))::-webkit-scrollbar {
   width: var(--app-scrollbar-width);
-}
-
-:where(:not(iframe))::-webkit-scrollbar-track {
+  height: var(--app-scrollbar-width);
   background: transparent;
 }
 
-:where(:not(iframe))::-webkit-scrollbar-thumb {
-  background: var(--app-scrollbar-thumb);
-  border-radius: 3px;
+:where(:not(iframe):not([data-slot="scroll-area-viewport"]):not(.scrollbar-none))::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
-:where(:not(iframe))::-webkit-scrollbar-thumb:hover {
-  background: var(--app-scrollbar-thumb-hover);
+:where(:not(iframe):not([data-slot="scroll-area-viewport"]):not(.scrollbar-none))::-webkit-scrollbar-track,
+:where(:not(iframe):not([data-slot="scroll-area-viewport"]):not(.scrollbar-none))::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:where(:not(iframe):not([data-slot="scroll-area-viewport"]):not(.scrollbar-none))::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  min-height: 28px;
+  min-width: 28px;
+}
+
+:where(:not(iframe):not([data-slot="scroll-area-viewport"]):not(.scrollbar-none)):is(
+    [data-pmx-scroll-active="1"],
+    [data-pmx-scroll-scrolling="1"]
+  )::-webkit-scrollbar-thumb {
+  background-color: var(--app-scrollbar-thumb);
+}
+
+:where(:not(iframe):not([data-slot="scroll-area-viewport"]):not(.scrollbar-none)):is(
+    [data-pmx-scroll-active="1"],
+    [data-pmx-scroll-scrolling="1"]
+  )::-webkit-scrollbar-thumb:hover {
+  background-color: var(--app-scrollbar-thumb-hover);
 }
 
 /* Chat markdown rendering */
@@ -2190,23 +2213,12 @@ code {
   border-radius: 0.5rem;
   background: var(--muted);
   padding: 0.8rem 0.9rem;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--contrast-border) 78%, transparent) transparent;
 }
 
 .chat-markdown pre code {
   border: none;
   background: transparent;
   padding: 0;
-}
-
-.chat-markdown pre::-webkit-scrollbar {
-  height: var(--app-scrollbar-width);
-}
-
-.chat-markdown pre::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--contrast-border) 78%, transparent);
 }
 
 :is(.chat-markdown, .composer-tiptap) .chat-markdown-codeblock-header {
@@ -2334,13 +2346,12 @@ code {
   max-width: none;
 }
 
-/* Keep overflow discoverable when the edge fade falls between columns. */
+/* Keep horizontal table scrollbars subtly themed while honoring floating auto-hide. */
 .chat-markdown
   .chat-markdown-table-container
   [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"] {
-  opacity: 1;
-  --app-scrollbar-thumb: color-mix(in srgb, var(--muted-foreground) 60%, transparent);
-  --app-scrollbar-thumb-hover: color-mix(in srgb, var(--muted-foreground) 80%, transparent);
+  --app-scrollbar-thumb: var(--pmx-scrollbar-thumb-active, rgba(255, 255, 255, 0.16));
+  --app-scrollbar-thumb-hover: var(--pmx-scrollbar-thumb-hover, rgba(255, 255, 255, 0.34));
 }
 
 :root {

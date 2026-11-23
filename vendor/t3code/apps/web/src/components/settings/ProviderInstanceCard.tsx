@@ -94,6 +94,8 @@ import {
 } from "./prismuxProviderMeta";
 import { AgentInstallPrompt } from "./AgentInstallPrompt";
 import type { ProviderLaunchMode } from "./prismuxProviderMode";
+import type { ProviderRemovalKind } from "./ProviderSettingsPanel.logic";
+import { formatAgentBrandName } from "../../prismux/agentBrand";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
@@ -723,6 +725,8 @@ interface ProviderInstanceCardProps {
   readonly canWriteSettings?: boolean;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => Promise<boolean>;
   readonly onDelete?: (() => void) | undefined;
+  readonly removalKind?: ProviderRemovalKind | undefined;
+  readonly showDeleteSlot?: boolean | undefined;
   readonly headerAction?: ReactNode | undefined;
   readonly setup?: ReactNode;
   readonly runtime?: ReactNode;
@@ -801,6 +805,8 @@ export function ProviderInstanceCard({
   canWriteSettings = true,
   onUpdate,
   onDelete,
+  removalKind = "delete-custom",
+  showDeleteSlot = false,
   headerAction,
   setup,
   runtime,
@@ -872,7 +878,9 @@ export function ProviderInstanceCard({
       : onRunUpdate;
   const urlAuthAction = liveProvider?.auth.action;
   const displayName =
-    instance.displayName?.trim() || driverOption?.label || String(instance.driver);
+    instance.displayName?.trim() ||
+    driverOption?.label ||
+    formatAgentBrandName(String(instance.driver));
   const cliMeta = resolveAgentCliMeta({
     driver: instance.driver,
     instanceId,
@@ -1427,7 +1435,7 @@ export function ProviderInstanceCard({
             </span>
           </span>
         </div>
-        <span className="pointer-events-none relative flex h-6 shrink-0 items-center gap-2 *:pointer-events-auto">
+        <span className="pointer-events-none relative flex h-6 shrink-0 items-center gap-1.5 *:pointer-events-auto">
           {launchModeControlSlot}
           {projectOverride?.value !== undefined ? (
             <span className="flex items-center">
@@ -1452,6 +1460,39 @@ export function ProviderInstanceCard({
               aria-label={gt("Enable {provider}", { provider: displayName })}
             />
           </ManagedControl>
+          {showDeleteSlot ? (
+            <span className="inline-flex size-6 shrink-0 items-center justify-center">
+              {onDelete ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost-destructive"
+                        disabled={readOnly}
+                        data-provider-delete-list={instanceId}
+                        className={cn(
+                          "size-6 transition-opacity",
+                          selected
+                            ? "opacity-75 hover:opacity-100 focus-visible:opacity-100"
+                            : "opacity-0 group-hover:opacity-80 group-focus-within:opacity-100 hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-70",
+                        )}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDelete();
+                        }}
+                        aria-label={gt("Delete {provider} configuration", { provider: displayName })}
+                      >
+                        <Trash2Icon className="size-3.5" />
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup side="top">{gt("Delete provider configuration")}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+            </span>
+          ) : null}
         </span>
       </div>
     );
@@ -1474,16 +1515,23 @@ export function ProviderInstanceCard({
       >
         {titleTailNode}
         {onDelete ? (
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost-destructive"
-            disabled={readOnly}
-            onClick={onDelete}
-            aria-label={gt("Delete instance {instanceId}", { instanceId })}
-          >
-            <Trash2Icon />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost-destructive"
+                  disabled={readOnly}
+                  onClick={onDelete}
+                  aria-label={gt("Delete instance {instanceId}", { instanceId })}
+                >
+                  <Trash2Icon />
+                </Button>
+              }
+            />
+            <TooltipPopup side="top">{gt("Delete provider configuration")}</TooltipPopup>
+          </Tooltip>
         ) : null}
       </span>
     </div>
@@ -1741,6 +1789,36 @@ export function ProviderInstanceCard({
               onModelOrderChange={onModelOrderChange}
             />
           </div>
+        </SettingsSection>
+      ) : null}
+
+      {onDelete && !readOnly ? (
+        <SettingsSection title={gt("Danger zone")}>
+          <SettingsRow
+            title={gt("Delete provider configuration")}
+            description={
+              removalKind === "remove-builtin"
+                ? gt(
+                    "Remove this built-in provider from your configured list and clear its custom settings. Existing conversation history is kept, and you can restore it anytime from Add provider.",
+                  )
+                : gt(
+                    "Remove this provider's connection, environment variables, and model settings. Existing conversation history is kept, and you can add it again anytime from Add provider.",
+                  )
+            }
+            control={
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={readOnly}
+                data-provider-delete-detail={instanceId}
+                onClick={onDelete}
+              >
+                <Trash2Icon className="size-3.5" />
+                <span>{gt("Delete provider configuration")}</span>
+              </Button>
+            }
+          />
         </SettingsSection>
       ) : null}
     </>

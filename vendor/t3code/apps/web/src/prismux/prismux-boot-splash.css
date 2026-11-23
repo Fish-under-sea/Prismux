@@ -1,0 +1,336 @@
+/*
+ * From Uiverse.io by dexter-st - https://uiverse.io/dexter-st/wicked-elephant-4
+ * MIT License, Copyright (c) dexter-st
+ * From Uiverse.io by AqFox - https://uiverse.io/AqFox/young-dragon-29
+ * MIT License, Copyright (c) AqFox (Aquilix)
+ */
+
+#pmx-boot-splash,
+.pmx-boot-splash-overlay {
+  --pmx-boot-bg: #0b0e14;
+  --pmx-boot-fg: #ffffff;
+  --pmx-boot-letter-glow: rgba(255, 255, 255, 0.94);
+  --pmx-boot-ambient: radial-gradient(
+    ellipse 58% 44% at 50% 50%,
+    rgba(64, 118, 255, 0.08),
+    transparent 74%
+  );
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-color: var(--pmx-boot-bg);
+  background-image: var(--pmx-boot-ambient);
+  color: var(--pmx-boot-fg);
+  opacity: 1;
+  transition: opacity 380ms cubic-bezier(0.22, 1, 0.36, 1);
+  -webkit-font-smoothing: antialiased;
+}
+
+html:not(.dark) #pmx-boot-splash,
+html:not(.dark) .pmx-boot-splash-overlay {
+  --pmx-boot-bg: #f8fafc;
+  --pmx-boot-fg: #111827;
+  --pmx-boot-letter-glow: rgba(37, 99, 235, 0.45);
+  --pmx-boot-ambient: radial-gradient(
+    ellipse 58% 44% at 50% 50%,
+    rgba(59, 130, 246, 0.08),
+    transparent 74%
+  );
+}
+
+html[data-theme-selected="true"] #pmx-boot-splash,
+html[data-theme-selected="true"] .pmx-boot-splash-overlay {
+  --pmx-boot-bg: var(--boot-background, #0b0e14);
+  --pmx-boot-fg: var(--boot-foreground, #ffffff);
+}
+
+#pmx-boot-splash.pmx-boot-splash-leaving,
+.pmx-boot-splash-overlay.pmx-boot-splash-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Never obscure the startup recovery screen if bootstrap fails before React mounts. */
+body:has(#boot-error) #pmx-boot-splash {
+  display: none !important;
+}
+
+/* ==========================================================================
+ * Center Stage: Prism Grating Text Scanner (dexter-st / wicked-elephant-4)
+ * ========================================================================== */
+
+.pmx-boot-loader-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: clamp(220px, 34vw, 360px);
+  height: clamp(88px, 14vw, 136px);
+  padding: 0 clamp(20px, 3vw, 36px);
+  font-family:
+    "Inter Variable", "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
+  font-size: clamp(2.15rem, 5.2vw, 3.6rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: var(--pmx-boot-fg, #ffffff);
+  user-select: none;
+  isolation: isolate;
+}
+
+.pmx-boot-loader-beam {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background-color: transparent;
+  -webkit-mask: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent 6px,
+    black 7px,
+    black 8px
+  );
+  mask: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent 6px,
+    black 7px,
+    black 8px
+  );
+}
+
+.pmx-boot-loader-beam::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 50% 50%, #ff0 0%, transparent 50%),
+    radial-gradient(circle at 45% 45%, #f00 0%, transparent 45%),
+    radial-gradient(circle at 55% 55%, #0ff 0%, transparent 45%),
+    radial-gradient(circle at 45% 55%, #0f0 0%, transparent 45%),
+    radial-gradient(circle at 55% 45%, #00f 0%, transparent 45%);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0%, transparent 10%, black 25%);
+  mask: radial-gradient(circle at 50% 50%, transparent 0%, transparent 10%, black 25%);
+  animation:
+    pmx-boot-transform 2s infinite alternate,
+    pmx-boot-opacity 4s infinite;
+  animation-timing-function: cubic-bezier(0.6, 0.8, 0.5, 1);
+  will-change: transform, opacity;
+}
+
+.pmx-boot-loader-letter {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+  opacity: 0.24;
+  animation: pmx-boot-letter-anim 4s infinite linear;
+  will-change: transform, opacity;
+}
+
+.pmx-boot-loader-letter:nth-of-type(1) {
+  animation-delay: 0.1s;
+}
+.pmx-boot-loader-letter:nth-of-type(2) {
+  animation-delay: 0.205s;
+}
+.pmx-boot-loader-letter:nth-of-type(3) {
+  animation-delay: 0.31s;
+}
+.pmx-boot-loader-letter:nth-of-type(4) {
+  animation-delay: 0.415s;
+}
+.pmx-boot-loader-letter:nth-of-type(5) {
+  animation-delay: 0.521s;
+}
+.pmx-boot-loader-letter:nth-of-type(6) {
+  animation-delay: 0.626s;
+}
+.pmx-boot-loader-letter:nth-of-type(7) {
+  animation-delay: 0.731s;
+}
+
+@keyframes pmx-boot-transform {
+  0% {
+    transform: translate(-55%);
+  }
+  100% {
+    transform: translate(55%);
+  }
+}
+
+@keyframes pmx-boot-opacity {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  65% {
+    opacity: 0;
+  }
+}
+
+@keyframes pmx-boot-letter-anim {
+  0% {
+    opacity: 0.24;
+    text-shadow: none;
+    transform: scale(1) translateY(0);
+  }
+  5% {
+    opacity: 1;
+    text-shadow: 0 0 10px var(--pmx-boot-letter-glow, rgba(255, 255, 255, 0.94));
+    transform: scale(1.1) translateY(-2px);
+  }
+  20% {
+    opacity: 0.32;
+    text-shadow: none;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0.24;
+    text-shadow: none;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ==========================================================================
+ * Bottom-Right Corner: 3D Rotating Prismux Logo Cube (AqFox / young-dragon-29)
+ * ========================================================================== */
+
+.pmx-boot-cube-corner {
+  position: absolute;
+  right: 40px;
+  bottom: 36px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 68px;
+  height: 68px;
+  perspective: 420px;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  .pmx-boot-cube-corner {
+    right: 24px;
+    bottom: 24px;
+  }
+}
+
+.pmx-boot-cube {
+  --pmx-cube-size: 44px;
+  --pmx-cube-half: calc(var(--pmx-cube-size) / 2);
+  position: relative;
+  width: var(--pmx-cube-size);
+  height: var(--pmx-cube-size);
+  transform-style: preserve-3d;
+  animation: pmx-boot-cube-spin 2s infinite ease;
+  will-change: transform;
+}
+
+.pmx-boot-cube-face {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 77, 255, 0.2);
+  border: 2px solid #004dff;
+  box-shadow: inset 0 0 10px rgba(0, 77, 255, 0.22);
+  backface-visibility: visible;
+}
+
+.pmx-boot-cube-face:nth-of-type(1) {
+  transform: translateZ(calc(var(--pmx-cube-half) * -1)) rotateY(180deg);
+}
+
+.pmx-boot-cube-face:nth-of-type(2) {
+  transform: rotateY(-270deg) translateX(50%);
+  transform-origin: top right;
+}
+
+.pmx-boot-cube-face:nth-of-type(3) {
+  transform: rotateY(270deg) translateX(-50%);
+  transform-origin: center left;
+}
+
+.pmx-boot-cube-face:nth-of-type(4) {
+  transform: rotateX(90deg) translateY(-50%);
+  transform-origin: top center;
+}
+
+.pmx-boot-cube-face:nth-of-type(5) {
+  transform: rotateX(-90deg) translateY(50%);
+  transform-origin: bottom center;
+}
+
+.pmx-boot-cube-face:nth-of-type(6) {
+  transform: translateZ(var(--pmx-cube-half));
+}
+
+.pmx-boot-cube-logo,
+.pmx-boot-cube-fallback {
+  display: block;
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 0 4px rgba(0, 77, 255, 0.35));
+}
+
+.pmx-boot-cube-fallback[hidden] {
+  display: none;
+}
+
+@keyframes pmx-boot-cube-spin {
+  0% {
+    transform: rotate(45deg) rotateX(-25deg) rotateY(25deg);
+  }
+  50% {
+    transform: rotate(45deg) rotateX(-385deg) rotateY(25deg);
+  }
+  100% {
+    transform: rotate(45deg) rotateX(-385deg) rotateY(385deg);
+  }
+}
+
+/* ==========================================================================
+ * Reduced Motion: Calm Static Degradation
+ * ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  #pmx-boot-splash,
+  .pmx-boot-splash-overlay {
+    transition-duration: 120ms;
+  }
+
+  .pmx-boot-loader-beam::after {
+    animation: none;
+    opacity: 0.72;
+    transform: translate(0);
+  }
+
+  .pmx-boot-loader-letter {
+    animation: none;
+    opacity: 1;
+    text-shadow: 0 0 8px var(--pmx-boot-letter-glow, rgba(255, 255, 255, 0.48));
+    transform: none;
+  }
+
+  .pmx-boot-cube {
+    animation: none;
+    transform: rotate(45deg) rotateX(-25deg) rotateY(25deg);
+  }
+}

@@ -6,7 +6,8 @@ import {
   ActivityIcon,
   CalendarClockIcon,
   ChevronRightIcon,
-  PuzzleIcon,
+  Columns3Icon,
+  ListTodoIcon,
   QrCodeIcon,
   SearchIcon,
   SmartphoneIcon,
@@ -26,19 +27,19 @@ import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popov
 import { useSidebar } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { usePrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
 import {
   dismissMobileSidebarOnboardingBadge,
   PRISMUX_SIDEBAR_QUICK_NAV_ROUTES,
   readMobileSidebarOnboardingDismissed,
   resolveDiagnosticsBadgeTone,
-  resolveInstalledPluginCount,
   shouldShowMobileSidebarOnboardingBadge,
   type DiagnosticsBadgeTone,
 } from "./prismuxSidebarQuickNav.logic";
-import { resolvePluginsRailDotTone } from "./sidebarIconRailMotion";
 
 export interface PrismuxSidebarQuickNavProps {
   readonly routeThreadRef: ScopedThreadRef | null;
+  readonly showSearch?: boolean;
 }
 
 const DIAGNOSTICS_DOT_CLASS: Record<Exclude<DiagnosticsBadgeTone, null>, string> = {
@@ -48,14 +49,16 @@ const DIAGNOSTICS_DOT_CLASS: Record<Exclude<DiagnosticsBadgeTone, null>, string>
 };
 
 /**
- * Orca-aligned top sidebar search bar & primary quick-navigation block
- * (modeled after `stablyai/orca` `components/sidebar/chrome/SidebarNav.tsx`),
+ * Orca-aligned top sidebar search bar & primary 5-item quick-navigation block
+ * (`diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `mobile`),
  * with Spec 2 persistent 54px icon-rail collapse & two-stage text fade choreography.
  */
 export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
   routeThreadRef,
+  showSearch = true,
 }: PrismuxSidebarQuickNavProps) {
   const gt = useGT();
+  const quickNavCopy = usePrismuxSidebarQuickNavCopy();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile, isIconRail, isTextHidden } = useSidebar();
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -69,10 +72,9 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     readMobileSidebarOnboardingDismissed(),
   );
   const [diagnosticsTone, setDiagnosticsTone] = useState<DiagnosticsBadgeTone>(null);
-  const [installedPluginCount, setInstalledPluginCount] = useState<number | null>(null);
 
-  // Non-blocking lightweight poll on Daemon availability for live diagnostics dot & plugin count.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads read-only daemon badge summaries when daemon becomes ready
+  // Non-blocking lightweight poll on Daemon availability for live diagnostics dot.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads read-only daemon badge summary when daemon becomes ready
   useEffect(() => {
     if (!daemon || !daemonReady) return;
     let cancelled = false;
@@ -83,14 +85,6 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
       })
       .catch(() => {
         // Leave badge unset if Daemon diagnostics is unavailable.
-      });
-    void daemon
-      .getInstalledPlugins()
-      .then((payload) => {
-        if (!cancelled) setInstalledPluginCount(resolveInstalledPluginCount(payload));
-      })
-      .catch(() => {
-        // Leave badge unset if Daemon plugin inventory is unavailable.
       });
     return () => {
       cancelled = true;
@@ -107,10 +101,10 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
 
   const showMobileNewBadge = shouldShowMobileSidebarOnboardingBadge(mobileBadgeDismissed);
   const diagnosticsActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.diagnostics;
+  const tasksActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.tasks;
+  const workspaceBoardActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.workspaceBoard;
   const automationsActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.automations;
   const mobileAccessActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.mobileAccess;
-  const pluginsActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.plugins;
-  const pluginsDotTone = resolvePluginsRailDotTone(installedPluginCount);
 
   const handleOpenGlobalSearch = () => {
     closeMobileSidebar();
@@ -122,14 +116,19 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     void navigate({ to: "/settings/diagnostics" });
   };
 
+  const handleOpenTasks = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/tasks" });
+  };
+
+  const handleOpenWorkspaceBoard = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/workspace-board" });
+  };
+
   const handleOpenAutomations = () => {
     closeMobileSidebar();
     void navigate({ to: "/settings/scheduled-tasks" });
-  };
-
-  const handleOpenPlugins = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/settings/plugins" });
   };
 
   const handleOpenMobileWebAccess = () => {
@@ -208,14 +207,12 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     : gt("Search", { $context: "sidebar global search trigger" });
   const diagnosticsRailTooltip =
     diagnosticsDotLabel ?? gt("Service diagnostics", { $context: "sidebar quick navigation" });
+  const tasksRailTooltip = quickNavCopy.tasks;
+  const workspaceBoardRailTooltip = quickNavCopy.workspaceBoard;
   const automationsRailTooltip = gt("Automations", { $context: "sidebar quick navigation" });
   const mobileRailTooltip = showMobileNewBadge
     ? `${gt("Prismux Mobile", { $context: "sidebar quick navigation" })} · ${gt("New", { $context: "new feature badge" })}`
     : gt("Prismux Mobile", { $context: "sidebar quick navigation" });
-  const pluginsRailTooltip =
-    installedPluginCount !== null
-      ? `${gt("Plugins", { $context: "sidebar quick navigation" })} (${installedPluginCount})`
-      : gt("Plugins", { $context: "sidebar quick navigation" });
 
   const mobilePopoverBody = (
     <PopoverPopup side="right" align="start" sideOffset={8} width="sm" padding="compact">
@@ -280,25 +277,28 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         data-rail-mode="true"
         className="flex flex-col items-center gap-0.5 pb-1"
       >
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                data-testid="prismux-sidebar-search-button"
-                onClick={handleOpenGlobalSearch}
-                aria-label={searchRailTooltip}
-                className="group mb-1 flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-sidebar-border/60 bg-sidebar-foreground/[0.045] text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-foreground/[0.09] hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              />
-            }
-          >
-            <SearchIcon aria-hidden className="size-3.5 text-(--sidebar-icon-color) group-hover:text-sidebar-foreground" />
-          </TooltipTrigger>
-          <TooltipPopup side="right" sideOffset={8}>
-            {searchRailTooltip}
-          </TooltipPopup>
-        </Tooltip>
+        {showSearch ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  data-testid="prismux-sidebar-search-button"
+                  onClick={handleOpenGlobalSearch}
+                  aria-label={searchRailTooltip}
+                  className="group mb-1 flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-sidebar-border/60 bg-sidebar-foreground/[0.045] text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-foreground/[0.09] hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                />
+              }
+            >
+              <SearchIcon aria-hidden className="size-3.5 text-(--sidebar-icon-color) group-hover:text-sidebar-foreground" />
+            </TooltipTrigger>
+            <TooltipPopup side="right" sideOffset={8}>
+              {searchRailTooltip}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
 
+        {/* 1. Service diagnostics */}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -331,6 +331,49 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </TooltipPopup>
         </Tooltip>
 
+        {/* 2. Tasks */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-testid="prismux-nav-tasks"
+                aria-label={tasksRailTooltip}
+                aria-current={tasksActive ? "page" : undefined}
+                onClick={handleOpenTasks}
+                className={railButtonClassName(tasksActive)}
+              />
+            }
+          >
+            <ListTodoIcon aria-hidden className={navIconClassName(tasksActive)} />
+          </TooltipTrigger>
+          <TooltipPopup side="right" sideOffset={8}>
+            {tasksRailTooltip}
+          </TooltipPopup>
+        </Tooltip>
+
+        {/* 3. Workspace board */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-testid="prismux-nav-workspace-board"
+                aria-label={workspaceBoardRailTooltip}
+                aria-current={workspaceBoardActive ? "page" : undefined}
+                onClick={handleOpenWorkspaceBoard}
+                className={railButtonClassName(workspaceBoardActive)}
+              />
+            }
+          >
+            <Columns3Icon aria-hidden className={navIconClassName(workspaceBoardActive)} />
+          </TooltipTrigger>
+          <TooltipPopup side="right" sideOffset={8}>
+            {workspaceBoardRailTooltip}
+          </TooltipPopup>
+        </Tooltip>
+
+        {/* 4. Automations */}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -351,6 +394,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </TooltipPopup>
         </Tooltip>
 
+        {/* 5. Prismux Mobile */}
         <Popover
           open={mobilePopoverOpen}
           onOpenChange={(open) => {
@@ -396,34 +440,6 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </Tooltip>
           {mobilePopoverBody}
         </Popover>
-
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                data-testid="prismux-nav-plugins"
-                aria-label={pluginsRailTooltip}
-                aria-current={pluginsActive ? "page" : undefined}
-                onClick={handleOpenPlugins}
-                className={railButtonClassName(pluginsActive)}
-              />
-            }
-          >
-            <PuzzleIcon aria-hidden className={navIconClassName(pluginsActive)} />
-            {pluginsDotTone ? (
-              <span
-                aria-hidden
-                data-testid="prismux-nav-plugins-dot"
-                data-rail-dot="true"
-                className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary ring-2 ring-sidebar"
-              />
-            ) : null}
-          </TooltipTrigger>
-          <TooltipPopup side="right" sideOffset={8}>
-            {pluginsRailTooltip}
-          </TooltipPopup>
-        </Tooltip>
       </nav>
     );
   }
@@ -436,34 +452,36 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
       className="flex flex-col gap-0.5 pb-1"
     >
       {/* Top full-width rounded Search trigger (Orca SidebarNav search bar) */}
-      <button
-        type="button"
-        data-testid="prismux-sidebar-search-button"
-        onClick={handleOpenGlobalSearch}
-        aria-label={gt("Search threads and commands")}
-        className="group mb-1 flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar-foreground/[0.045] px-2.5 text-left text-[13px] font-medium tracking-tight text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-foreground/[0.085] hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-      >
-        <SearchIcon
-          aria-hidden
-          className="size-3.5 shrink-0 text-(--sidebar-icon-color) transition-colors group-hover:text-sidebar-foreground/80"
-        />
-        <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
-          <T context="sidebar global search trigger">Search</T>
-        </span>
-        {searchShortcutLabel ? (
-          <Kbd
+      {showSearch ? (
+        <button
+          type="button"
+          data-testid="prismux-sidebar-search-button"
+          onClick={handleOpenGlobalSearch}
+          aria-label={gt("Search threads and commands")}
+          className="group mb-1 flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar-foreground/[0.045] px-2.5 text-left text-[13px] font-medium tracking-tight text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-foreground/[0.085] hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          <SearchIcon
             aria-hidden
-            className={cn(
-              "pointer-events-none shrink-0 border-sidebar-border/70 bg-sidebar-foreground/[0.06] px-1.5 py-px text-[10px] text-sidebar-muted-foreground opacity-70 shadow-none transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100",
-              isTextHidden && "opacity-0!",
-            )}
-          >
-            {searchShortcutLabel}
-          </Kbd>
-        ) : null}
-      </button>
+            className="size-3.5 shrink-0 text-(--sidebar-icon-color) transition-colors group-hover:text-sidebar-foreground/80"
+          />
+          <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
+            <T context="sidebar global search trigger">Search</T>
+          </span>
+          {searchShortcutLabel ? (
+            <Kbd
+              aria-hidden
+              className={cn(
+                "pointer-events-none shrink-0 border-sidebar-border/70 bg-sidebar-foreground/[0.06] px-1.5 py-px text-[10px] text-sidebar-muted-foreground opacity-70 shadow-none transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100",
+                isTextHidden && "opacity-0!",
+              )}
+            >
+              {searchShortcutLabel}
+            </Kbd>
+          ) : null}
+        </button>
+      ) : null}
 
-      {/* 1. Service diagnostics (replaces Orca Tasks — honors AGENTS.md no-Task-Board red line) */}
+      {/* 1. Service diagnostics */}
       <button
         type="button"
         data-testid="prismux-nav-diagnostics"
@@ -491,7 +509,35 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         ) : null}
       </button>
 
-      {/* 2. Automations (T3 Code scheduled tasks) */}
+      {/* 2. Tasks (Orca-aligned GitHub Issues / PR / Projects aggregator) */}
+      <button
+        type="button"
+        data-testid="prismux-nav-tasks"
+        aria-current={tasksActive ? "page" : undefined}
+        onClick={handleOpenTasks}
+        className={navRowClassName(tasksActive)}
+      >
+        <ListTodoIcon aria-hidden className={navIconClassName(tasksActive)} />
+        <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
+          {quickNavCopy.tasks}
+        </span>
+      </button>
+
+      {/* 3. Workspace board (Orca-aligned 4-column Todo / In progress / In review / Done board) */}
+      <button
+        type="button"
+        data-testid="prismux-nav-workspace-board"
+        aria-current={workspaceBoardActive ? "page" : undefined}
+        onClick={handleOpenWorkspaceBoard}
+        className={navRowClassName(workspaceBoardActive)}
+      >
+        <Columns3Icon aria-hidden className={navIconClassName(workspaceBoardActive)} />
+        <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
+          {quickNavCopy.workspaceBoard}
+        </span>
+      </button>
+
+      {/* 4. Automations (T3 Code scheduled tasks) */}
       <button
         type="button"
         data-testid="prismux-nav-automations"
@@ -505,7 +551,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         </span>
       </button>
 
-      {/* 3. Prismux Mobile + persistent dismissible [New] badge (Orca Mobile onboarding pattern) */}
+      {/* 5. Prismux Mobile + persistent dismissible [New] badge */}
       <Popover
         open={mobilePopoverOpen}
         onOpenChange={(open) => {
@@ -547,31 +593,6 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         </PopoverTrigger>
         {mobilePopoverBody}
       </Popover>
-
-      {/* 4. Plugins (Cordis dual-realm plugin hub — 0 pre-installed official plugins by default) */}
-      <button
-        type="button"
-        data-testid="prismux-nav-plugins"
-        aria-current={pluginsActive ? "page" : undefined}
-        onClick={handleOpenPlugins}
-        className={navRowClassName(pluginsActive)}
-      >
-        <PuzzleIcon aria-hidden className={navIconClassName(pluginsActive)} />
-        <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
-          <T context="sidebar quick navigation">Plugins</T>
-        </span>
-        {installedPluginCount !== null ? (
-          <span
-            data-testid="prismux-nav-plugins-count"
-            className={cn(
-              "shrink-0 rounded-full bg-sidebar-foreground/[0.07] px-1.5 py-px text-[10px] leading-tight font-medium text-sidebar-muted-foreground tabular-nums",
-              labelFadeClass,
-            )}
-          >
-            {installedPluginCount}
-          </span>
-        ) : null}
-      </button>
     </nav>
   );
 });

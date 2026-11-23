@@ -7,6 +7,7 @@ import type {
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
+  PrismuxTrayActionPayload,
   PrismuxWindowOcclusion,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
@@ -601,5 +602,30 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PRISMUX_SET_UPDATE_FEED_URL_CHANNEL, url),
     installDownloadedUpdate: (request) =>
       ipcRenderer.invoke(IpcChannels.PRISMUX_INSTALL_DOWNLOADED_UPDATE_CHANNEL, request),
+    setKeepAwake: (enabled) =>
+      ipcRenderer.invoke(IpcChannels.PRISMUX_SET_KEEP_AWAKE_CHANNEL, enabled),
+    getKeepAwakeState: () =>
+      ipcRenderer.invoke(IpcChannels.PRISMUX_GET_KEEP_AWAKE_STATE_CHANNEL),
+    setTrayRunningAgentsCount: (count, extra) =>
+      ipcRenderer.invoke(IpcChannels.PRISMUX_SET_TRAY_RUNNING_AGENTS_CHANNEL, {
+        count: Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0,
+        ...(extra && "mobileUrl" in extra ? { mobileUrl: extra.mobileUrl ?? null } : {}),
+      }),
+    onTrayAction: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        if (
+          typeof payload !== "object" ||
+          payload === null ||
+          ((payload as { action?: unknown }).action !== "open-mobile-connect" &&
+            (payload as { action?: unknown }).action !== "open-mobile-simulator")
+        ) {
+          return;
+        }
+        listener(payload as PrismuxTrayActionPayload);
+      };
+      ipcRenderer.on(IpcChannels.PRISMUX_TRAY_ACTION_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.PRISMUX_TRAY_ACTION_CHANNEL, wrappedListener);
+    },
   },
 } satisfies DesktopBridge);

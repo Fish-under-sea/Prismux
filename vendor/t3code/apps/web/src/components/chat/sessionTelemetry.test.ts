@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import zhCatalog from "../../i18n/translations/zh.json";
 import { TooltipProvider } from "../ui/tooltip";
 import {
   clearUsageCallLogs,
@@ -13,10 +14,15 @@ import {
   updateSessionLiveTelemetry,
 } from "../usage/usageCallTelemetryStore";
 import {
+  clearPublishedComposerContextWindows,
+  COMPOSER_INLINE_TELEMETRY_MIN_WIDTH_PX,
   ComposerLiveTelemetryStripView,
   formatCompactTelemetryTokens,
+  formatTelemetryStripTps,
+  publishComposerContextWindow,
   resolveComposerTelemetryDisplay,
   resolveContextRingTone,
+  shouldWrapComposerTelemetryRow,
 } from "./ComposerLiveTelemetryStrip";
 import {
   deriveContextOccupancyPercent,
@@ -244,25 +250,32 @@ describe("Spec 3 real-time session telemetry collector & below-composer strip", 
     expect(fallbackDisplay.tps).toBeNull();
   });
 
-  it("renders below-composer live telemetry strip with TPS, tokens, cache hit, and 14x14 4-tier context ring", () => {
+  it("renders all 3 telemetry segments cleanly with data, fallback usage, overflow, and empty state", () => {
     initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+
+    expect(formatTelemetryStripTps(null)).toBe("— tok/s");
+    expect(formatTelemetryStripTps(0)).toBe("— tok/s");
+    expect(formatTelemetryStripTps(111.24)).toBe("111.2 tok/s");
+    expect(formatCompactTelemetryTokens(208_800_000)).toBe("208.8M");
 
     updateSessionLiveTelemetry("thread-render", {
       provider: "codex",
       model: "gpt-5.4-codex",
       active: true,
       ttftMs: 420,
-      tps: 48.2,
-      inputTokens: 2_200,
-      cachedInputTokens: 7_800,
+      tps: 111.2,
+      inputTokens: 8_140_000,
+      cachedInputTokens: 200_660_000,
       outputTokens: 2_400,
-      totalTokens: 12_400,
-      sessionTotalTokens: 12_400,
-      cacheHitRate: 0.78,
-      contextPercent: 65,
+      totalTokens: 208_800_000,
+      sessionTotalTokens: 208_800_000,
+      cacheHitRate: 0.961,
+      contextPercent: 21,
     });
 
     const display = resolveComposerTelemetryDisplay(getSessionLiveTelemetry("thread-render"), null);
+    expect(display.tokensScope).toBe("session");
+    expect(display.tpsScope).toBe("session");
     const html = renderToStaticMarkup(
       createElement(
         GTProvider,
@@ -280,16 +293,20 @@ describe("Spec 3 real-time session telemetry collector & below-composer strip", 
 
     expect(html).toContain('data-composer-live-telemetry="true"');
     expect(html).toContain('data-telemetry-tps="true"');
-    expect(html).toContain("48.2 tok/s");
+    expect(html).toContain('data-telemetry-measured="true"');
+    expect(html).toContain("111.2 tok/s");
     expect(html).toContain('data-telemetry-tokens="true"');
-    expect(html).toContain("12.4k tok");
-    expect(html).toContain("Cache hit 78.0%");
+    expect(html).toContain("208.8M tok");
+    expect(html).toContain("Cache hit 96.1%");
     expect(html).toContain('data-telemetry-context="true"');
-    expect(html).toContain('data-context-ring-tone="warning"');
+    expect(html).toContain('data-context-ring-tone="normal"');
     expect(html).toContain('width="14"');
     expect(html).toContain('height="14"');
     expect(html).toContain("motion-reduce:transition-none");
-    expect(html).toContain("Context 65%");
+    expect(html).toContain("Context 21%");
+    // Must not hide TPS or tokens behind container-query breakpoints.
+    expect(html).not.toContain("@md/composer-surface");
+    expect(html).not.toContain("@lg/composer-surface");
 
     // Overflow (>100%) renders red overflow tone with exact percentage.
     const overflowHtml = renderToStaticMarkup(
@@ -313,7 +330,7 @@ describe("Spec 3 real-time session telemetry collector & below-composer strip", 
     expect(overflowHtml).toContain('data-context-ring-tone="overflow"');
     expect(overflowHtml).toContain("Context 112%");
 
-    // Empty state omits unmeasured TPS/tokens and shows honest em-dash instead of fake 0%.
+    // Empty state ALWAYS keeps all 3 segments visible with honest placeholders (never collapses to Context only).
     const emptyHtml = renderToStaticMarkup(
       createElement(
         GTProvider,
@@ -329,8 +346,139 @@ describe("Spec 3 real-time session telemetry collector & below-composer strip", 
       ),
     );
     expect(emptyHtml).toContain('data-context-ring-tone="unknown"');
+    expect(emptyHtml).toContain('data-telemetry-tps="true"');
+    expect(emptyHtml).toContain("— tok/s");
+    expect(emptyHtml).toContain('data-telemetry-tokens="true"');
+    expect(emptyHtml).toContain("0 tok");
+    expect(emptyHtml).toContain("Cache hit —");
     expect(emptyHtml).toContain("Context —");
-    expect(emptyHtml).not.toContain('data-telemetry-tps="true"');
-    expect(emptyHtml).not.toContain('data-telemetry-tokens="true"');
+    expect(emptyHtml).toContain('data-telemetry-measured="false"');
+
+    // Fresh thread falls back to real recent/global usage summary + recent call log TPS without faking context %.
+    const recentFallback = resolveComposerTelemetryDisplay(null, null, {
+      threadId: "brand-new-draft",
+      callLogs: [
+        {
+          id: "call-1",
+          timestamp: 100_000,
+          provider: "codex",
+          model: "gpt-5.4-codex",
+          threadId: "older-thread",
+          ttftMs: 320,
+          durationMs: 2_320,
+          tps: 94.6,
+          inputTokens: 500,
+          cachedInputTokens: 4_500,
+          cacheCreationTokens: 0,
+          outputTokens: 189,
+          totalTokens: 5_189,
+          cacheHitRate: 0.9,
+          status: "completed",
+          source: "live",
+        },
+      ],
+      mergedUsage: {
+        totalTokens: 208_800_000,
+        uncachedInputTokens: 8_143_200,
+        cachedInputTokens: 200_656_800,
+        cacheCreationTokens: 0,
+      },
+    });
+    expect(recentFallback.tps).toBeCloseTo(94.6, 5);
+    expect(recentFallback.tpsScope).toBe("recent");
+    expect(recentFallback.totalTokens).toBe(208_800_000);
+    expect(recentFallback.tokensScope).toBe("recent");
+    expect(recentFallback.cacheHitRate).toBeCloseTo(0.961, 3);
+    expect(recentFallback.contextPercent).toBeNull();
+
+    // Chinese locale renders Figure 2 format ("111.2 tok/s · 208.8M tok · 缓存命中 96.1% · 上下文 21%")
+    // and never drops TPS or tokens when unmeasured.
+    const zhTranslations = { zh: zhCatalog } as unknown as NonNullable<
+      Parameters<typeof GTProvider>[0]["translations"]
+    >;
+    const zhHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(
+          TooltipProvider,
+          null,
+          createElement(ComposerLiveTelemetryStripView, {
+            display,
+            onOpenUsage: () => undefined,
+          }),
+        ),
+      ),
+    );
+    expect(zhHtml).toContain("111.2 tok/s");
+    expect(zhHtml).toContain("208.8M tok");
+    expect(zhHtml).toContain("缓存命中 96.1%");
+    expect(zhHtml).toContain("上下文 21%");
+
+    const zhEmptyHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(
+          TooltipProvider,
+          null,
+          createElement(ComposerLiveTelemetryStripView, {
+            display: resolveComposerTelemetryDisplay(null, null),
+            onOpenUsage: () => undefined,
+          }),
+        ),
+      ),
+    );
+    expect(zhEmptyHtml).toContain("— tok/s");
+    expect(zhEmptyHtml).toContain("0 tok");
+    expect(zhEmptyHtml).toContain("缓存命中 —");
+    expect(zhEmptyHtml).toContain("上下文 —");
+
+    // AGY 2.0 inline inner-footer mode renders compact 3-segment telemetry without ms-auto push.
+    const zhCompactHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(
+          TooltipProvider,
+          null,
+          createElement(ComposerLiveTelemetryStripView, {
+            display,
+            compact: true,
+            onOpenUsage: () => undefined,
+          }),
+        ),
+      ),
+    );
+    expect(zhCompactHtml).toContain('data-telemetry-placement="inline"');
+    expect(zhCompactHtml).toContain("111.2 tok/s");
+    expect(zhCompactHtml).toContain("208.8M tok");
+    expect(zhCompactHtml).toContain("缓存命中 96.1%");
+    expect(zhCompactHtml).toContain("上下文 21%");
+
+    // External context-window bridge safely publishes & clears without errors.
+    publishComposerContextWindow("thread-agy", {
+      usedTokens: 42_000,
+      maxTokens: 200_000,
+      remainingTokens: 158_000,
+      usedPercentage: 21,
+      remainingPercentage: 79,
+      lastUsedTokens: 42_000,
+      compactsAutomatically: true,
+      updatedAt: "2026-11-23T12:00:00.000Z",
+    });
+    clearPublishedComposerContextWindows();
+
+    // Billion-scale cumulative token totals compact cleanly (e.g. 3.09B) & narrow wrap guard works across 420-1200px.
+    expect(formatCompactTelemetryTokens(3_088_000_000)).toBe("3.09B");
+    expect(formatCompactTelemetryTokens(12_400_000_000)).toBe("12.4B");
+    expect(COMPOSER_INLINE_TELEMETRY_MIN_WIDTH_PX).toBe(700);
+    expect(shouldWrapComposerTelemetryRow(420)).toBe(true);
+    expect(shouldWrapComposerTelemetryRow(550)).toBe(true);
+    expect(shouldWrapComposerTelemetryRow(699)).toBe(true);
+    expect(shouldWrapComposerTelemetryRow(700)).toBe(false);
+    expect(shouldWrapComposerTelemetryRow(960)).toBe(false);
+    expect(shouldWrapComposerTelemetryRow(1200)).toBe(false);
+    expect(shouldWrapComposerTelemetryRow(0)).toBe(false);
   });
 });

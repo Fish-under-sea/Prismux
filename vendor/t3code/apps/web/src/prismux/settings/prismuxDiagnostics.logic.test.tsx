@@ -1,6 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { GTProvider, initializeGT } from "gt-react";
-import { beforeAll, describe, expect, it } from "vite-plus/test";
+import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children, to, ...props }: { children?: unknown; to?: string; [key: string]: unknown }) => (
+    <a href={to} {...props}>
+      {children as never}
+    </a>
+  ),
+}));
 
 import {
   CANONICAL_DIAGNOSTIC_CATEGORIES,
@@ -8,7 +16,10 @@ import {
   normalizeDiagnosticsResponse,
   sanitizeDiagnosticsSettingsRoute,
 } from "./prismuxDiagnostics.logic";
-import { PrismuxDiagnosticsSection } from "./PrismuxDiagnosticsSection";
+import {
+  DiagnosticItemCard,
+  PrismuxDiagnosticsSection,
+} from "./PrismuxDiagnosticsSection";
 
 describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
   beforeAll(async () => {
@@ -138,5 +149,66 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(html).toContain("prismux-diagnostics");
     expect(html).toContain("Prismux Service Diagnostics");
     expect(html).toContain("Total checks");
+  });
+
+  it("renders equal-height diagnostic cards with items-stretch grid and removes redundant bottom command code blocks", () => {
+    const report = normalizeDiagnosticsResponse({
+      ok: true,
+      checkedAt: 1_763_000_000_000,
+      durationMs: 120,
+      cached: false,
+      summary: { total: 2, ok: 1, degraded: 0, error: 1 },
+      items: [
+        {
+          id: "provider.codex",
+          category: "ai_providers",
+          name: "Codex CLI",
+          status: "ok",
+          summary: "Detected on PATH",
+          version: "0.92.0",
+          latencyMs: 14,
+        },
+        {
+          id: "provider.omp",
+          category: "ai_providers",
+          name: "omp CLI",
+          status: "error",
+          summary: "PATH 中未找到 omp",
+          detail: "Run npm global install or configure custom binary path in Settings",
+          fixCommand: "npm install -g @oh-my-pi/pi-coding-agent",
+          settingsRoute: "/settings/providers",
+        },
+      ],
+    });
+
+    const fullHtml = renderToStaticMarkup(
+      <GTProvider locale="en" translations={{}}>
+        <PrismuxDiagnosticsSection variant="full" initialReportOverride={report} />
+      </GTProvider>,
+    );
+
+    // Equal-height stretch grid + uniform flex-col card layout + bottom-pinned footer
+    expect(fullHtml).toContain("grid items-stretch gap-2.5 md:grid-cols-2 xl:grid-cols-3");
+    expect(fullHtml).toContain("flex h-full min-h-[156px] flex-col");
+    expect(fullHtml).toContain("line-clamp-2");
+    expect(fullHtml).toContain('data-diagnostic-card-footer="true"');
+
+    // No redundant <code> command block rendered under the copy button
+    expect(fullHtml).not.toContain("<code");
+    expect(fullHtml).toContain('data-diagnostic-copy-command="true"');
+    expect(fullHtml).toContain('title="npm install -g @oh-my-pi/pi-coding-agent"');
+
+    // Copied feedback renders checkmark state on DiagnosticItemCard
+    const copiedCardHtml = renderToStaticMarkup(
+      <GTProvider locale="en" translations={{}}>
+        <DiagnosticItemCard
+          item={report.items[1]!}
+          copied
+          onCopyCommand={() => undefined}
+        />
+      </GTProvider>,
+    );
+    expect(copiedCardHtml).toContain("Copied ✓");
+    expect(copiedCardHtml).not.toContain("<code");
   });
 });

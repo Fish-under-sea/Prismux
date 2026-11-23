@@ -1,9 +1,8 @@
 import { workspaceAreaProps } from "../lib/workspaceFocus";
-import { Outlet, createFileRoute, redirect, useLocation, useNavigate } from "@tanstack/react-router";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
-import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { ImageIcon, PaletteIcon, RotateCcwIcon } from "lucide-react";
-import { cn } from "../lib/utils";
+import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
+import { useState, type ReactNode } from "react";
+import { T, useGT, useMessages, Var } from "gt-react";
+import { RotateCcwIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 
@@ -126,90 +125,6 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   return children;
 }
 
-const APPEARANCE_WALLPAPER_TABS = [
-  {
-    to: "/settings/appearance" as const,
-    label: msg("Appearance & Themes"),
-    Icon: PaletteIcon,
-  },
-  {
-    to: "/settings/wallpaper" as const,
-    label: msg("Wallpaper Engine"),
-    Icon: ImageIcon,
-  },
-] as const;
-
-function AppearanceWallpaperSubNav({ pathname }: { pathname: string }) {
-  const gt = useGT();
-  const m = useMessages();
-  const navigate = useNavigate();
-  const activeIndex = pathname === "/settings/wallpaper" ? 1 : 0;
-
-  const selectTab = (to: (typeof APPEARANCE_WALLPAPER_TABS)[number]["to"]) => {
-    if (pathname === to) return;
-    void navigate({
-      to,
-      hash: "",
-      replace: true,
-      hashScrollIntoView: false,
-    });
-  };
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") {
-      return;
-    }
-    event.preventDefault();
-    const nextIndex =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? APPEARANCE_WALLPAPER_TABS.length - 1
-          : (activeIndex + (event.key === "ArrowRight" ? 1 : -1) + APPEARANCE_WALLPAPER_TABS.length) %
-            APPEARANCE_WALLPAPER_TABS.length;
-    const nextTab = APPEARANCE_WALLPAPER_TABS[nextIndex];
-    if (!nextTab) return;
-    selectTab(nextTab.to);
-    const button = event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex];
-    button?.focus();
-  };
-
-  return (
-    <div className="shrink-0 border-b border-border/80 bg-background/70 px-5 py-2">
-      <div
-        role="tablist"
-        aria-label={gt("Appearance and wallpaper views")}
-        onKeyDown={handleKeyDown}
-        className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-muted/60 p-1"
-      >
-        {APPEARANCE_WALLPAPER_TABS.map(({ to, label, Icon }, index) => {
-          const isSelected = index === activeIndex;
-          return (
-            <button
-              key={to}
-              type="button"
-              role="tab"
-              aria-selected={isSelected}
-              tabIndex={isSelected ? 0 : -1}
-              data-appearance-subtab={to}
-              onClick={() => selectTab(to)}
-              className={cn(
-                "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none",
-                isSelected
-                  ? "bg-background text-foreground shadow-xs ring-1 ring-inset ring-border/80"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="size-3.5 shrink-0" />
-              <span>{m(label)}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function SettingsContentLayout() {
   const gt = useGT();
   const contentArea = workspaceAreaProps("settings", 1, gt("Settings content"));
@@ -220,8 +135,6 @@ function SettingsContentLayout() {
       ? environment?.environmentId
       : JSON.stringify(search);
   const [restoreSignal, setRestoreSignal] = useState(0);
-  const showAppearanceSubNav =
-    location.pathname === "/settings/appearance" || location.pathname === "/settings/wallpaper";
 
   return (
     <AppRouteModal label={gt("Settings")}>
@@ -239,7 +152,6 @@ function SettingsContentLayout() {
               <AppRouteModalClose />
             </div>
           </header>
-          {showAppearanceSubNav ? <AppearanceWallpaperSubNav pathname={location.pathname} /> : null}
           <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
             <SettingsScopeBoundary pathname={location.pathname}>
               <Outlet />

@@ -600,6 +600,79 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect(
+    "persists hidden built-in default removals without resurrection and clears them on re-create",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const codexId = ProviderInstanceId.make("codex");
+        const antigravityId = ProviderInstanceId.make("antigravity");
+
+        // Configure both a core default slot and an optional built-in driver (Antigravity CLI).
+        yield* serverSettings.updateProviderInstance({
+          operation: "upsert",
+          instanceId: codexId,
+          instance: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            config: { binaryPath: "/opt/codex" },
+          },
+        });
+        yield* serverSettings.updateProviderInstance({
+          operation: "create",
+          instanceId: antigravityId,
+          instance: {
+            driver: ProviderDriverKind.make("antigravity"),
+            displayName: "Antigravity CLI",
+            enabled: true,
+            config: { authMethod: "local-cli" },
+          },
+        });
+
+        // Hard-deleting Antigravity removes it from providerInstances without polluting hidden defaults.
+        const afterAntigravityDelete = yield* serverSettings.updateProviderInstance({
+          operation: "remove",
+          instanceId: antigravityId,
+        });
+        assert.isUndefined(afterAntigravityDelete.providerInstances[antigravityId]);
+        assert.deepEqual(afterAntigravityDelete.hiddenDefaultProviderInstances, []);
+
+        // Deleting a core built-in provider with hideDefault persists it as hidden and rotates text gen.
+        const afterCodexDelete = yield* serverSettings.updateProviderInstance({
+          operation: "remove",
+          instanceId: codexId,
+          hideDefault: true,
+        });
+        assert.isUndefined(afterCodexDelete.providerInstances[codexId]);
+        assert.deepEqual(afterCodexDelete.hiddenDefaultProviderInstances, [codexId]);
+        assert.notEqual(afterCodexDelete.textGenerationModelSelection.instanceId, codexId);
+
+        // Verify raw settings.json on disk persists both removals (no resurrection on reload).
+        const persistedRaw = JSON.parse(yield* fs.readFileString(config.settingsPath)) as {
+          providerInstances?: Record<string, unknown>;
+          hiddenDefaultProviderInstances?: string[];
+        };
+        assert.isUndefined(persistedRaw.providerInstances?.[antigravityId]);
+        assert.isUndefined(persistedRaw.providerInstances?.[codexId]);
+        assert.deepEqual(persistedRaw.hiddenDefaultProviderInstances, [codexId]);
+
+        // Re-adding Codex via create clears it from hiddenDefaultProviderInstances.
+        const restored = yield* serverSettings.updateProviderInstance({
+          operation: "create",
+          instanceId: codexId,
+          instance: {
+            driver: ProviderDriverKind.make("codex"),
+            displayName: "Codex",
+            enabled: true,
+          },
+        });
+        assert.isDefined(restored.providerInstances[codexId]);
+        assert.deepEqual(restored.hiddenDefaultProviderInstances, []);
+      }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("buffers changes after a subscription is acquired but before it is consumed", () =>
     Effect.scoped(
       Effect.gen(function* () {

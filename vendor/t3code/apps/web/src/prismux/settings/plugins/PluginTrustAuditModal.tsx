@@ -10,6 +10,11 @@ import {
 
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import {
+  createBackdropDismissGuardState,
+  recordBackdropPointerDown,
+  shouldDismissOnBackdropClick,
+} from "../../../components/ui/dialog-styles";
 import type { TrustAuditAssessment } from "./pluginCenterModel";
 
 export interface PluginTrustAuditModalProps {
@@ -42,18 +47,14 @@ export function PluginTrustAuditModal({
   onCancel,
 }: PluginTrustAuditModalProps) {
   const [acknowledged, setAcknowledged] = useState(false);
-  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
   const titleId = useId();
   const descId = useId();
   const checkboxId = useId();
   const disabledReasonId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (typeof document !== "undefined") {
-      setPortalHost(document.body);
-    }
-  }, []);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const backdropGuardRef = useRef(createBackdropDismissGuardState());
+  const portalHost = typeof document !== "undefined" ? document.body : null;
 
   useEffect(() => {
     setAcknowledged(false);
@@ -62,7 +63,7 @@ export function PluginTrustAuditModal({
       // so a held Enter keystroke can never confirm an untrusted install.
       cancelRef.current?.focus();
     }
-  }, [audit, portalHost]);
+  }, [audit]);
 
   useEffect(() => {
     if (!audit) return;
@@ -87,20 +88,29 @@ export function PluginTrustAuditModal({
 
   const modalContent = (
     <div
-      className="fixed top-0 right-0 bottom-6 left-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs [-webkit-app-region:no-drag]"
+      className="fixed top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0 z-[80] flex items-center justify-center bg-black/60 px-4 pt-10 pb-5 backdrop-blur-xs [-webkit-app-region:no-drag]"
       data-slot="plugin-trust-audit-backdrop"
       data-portal-layer="plugin-trust-audit"
+      onPointerDownCapture={(event) => {
+        recordBackdropPointerDown(backdropGuardRef.current, event, modalRef.current);
+      }}
       onClick={(event) => {
-        if (event.target === event.currentTarget && !busy) {
+        if (
+          shouldDismissOnBackdropClick(backdropGuardRef.current, event, modalRef.current, {
+            disabled: busy,
+          })
+        ) {
           onCancel();
         }
       }}
     >
       <div
+        ref={modalRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
+        data-pmx-glass-zone="overlays"
         data-testid="plugin-trust-audit-modal"
         className="pmx-plugin-overlay-surface relative flex max-h-[88vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border-2 border-warning/70 text-popover-foreground shadow-2xl"
       >

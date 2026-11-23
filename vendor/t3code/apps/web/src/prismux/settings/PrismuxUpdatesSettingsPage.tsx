@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
+import { Switch } from "../../components/ui/switch";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -40,6 +41,10 @@ import {
   type DaemonUpdatePackageKind,
 } from "../daemonClient";
 import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
+import {
+  prismuxUpdateNotifierStore,
+  useUpdateNotifierState,
+} from "../updates/updateNotifierStore";
 import {
   applyUpdaterSseEvent,
   describeUpdaterProgressStage,
@@ -74,7 +79,7 @@ const REGISTRY_LABELS: Readonly<Record<PluginRegistryOverride, string>> = {
 
 const CHANNEL_LABELS: Readonly<Record<DaemonUpdateChannel, string>> = {
   stable: "稳定正式版（Stable）",
-  prerelease: "公测版（Prerelease · Alpha / Beta）",
+  prerelease: "Preview（Alpha / Beta）",
 };
 
 function formatSize(bytes: number | null): string {
@@ -107,6 +112,7 @@ export function PrismuxUpdatesSettingsPage({
   readonly embedded?: boolean;
 } = {}) {
   const { daemon, daemonInfo } = usePrismuxRuntime();
+  const notifierState = useUpdateNotifierState();
 
   const [status, setStatus] = useState<UpdaterStatusView | null>(null);
   const [probe, setProbe] = useState<ProbeReportView | null>(null);
@@ -116,6 +122,10 @@ export function PrismuxUpdatesSettingsPage({
   const [registryOverride, setRegistryOverride] = useState<PluginRegistryOverride>("auto");
   const [updateChannel, setUpdateChannel] = useState<DaemonUpdateChannel>("prerelease");
   const [customGhProxyPrefix, setCustomGhProxyPrefix] = useState("");
+  const [autoCheckEnabled, setAutoCheckEnabled] = useState<boolean>(
+    () => notifierState.autoCheckEnabled,
+  );
+  const [savingAutoCheck, setSavingAutoCheck] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [probing, setProbing] = useState(false);
@@ -125,6 +135,10 @@ export function PrismuxUpdatesSettingsPage({
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAutoCheckEnabled(notifierState.autoCheckEnabled);
+  }, [notifierState.autoCheckEnabled]);
 
   const applyElectronFeedUrl = useCallback(
     async (pref: RoutePreference, recommendedSource?: UpdateSourceId) => {
@@ -156,6 +170,8 @@ export function PrismuxUpdatesSettingsPage({
         setUpdateChannel(parsed.policy.channel);
         setCustomGhProxyPrefix(parsed.policy.customGhProxyPrefix);
         setDownloading(parsed.downloading);
+        prismuxUpdateNotifierStore.hydrateFromDaemonStatus(parsed, { syncAutoCheck: true });
+        setAutoCheckEnabled(prismuxUpdateNotifierStore.getState().autoCheckEnabled);
         if (parsed.lastProbe) setProbe(parsed.lastProbe);
         if (parsed.lastCheck) setCheckResult(parsed.lastCheck);
       }
@@ -236,6 +252,7 @@ export function PrismuxUpdatesSettingsPage({
       const parsedCheck = parseCheckResult(checkRes, status?.currentVersion ?? APP_VERSION);
       if (parsedCheck) {
         setCheckResult(parsedCheck);
+        prismuxUpdateNotifierStore.reportUpdateAvailable(parsedCheck);
         setStatusMsg(
           parsedCheck.hasUpdate && parsedCheck.latestVersion
             ? `发现新版本 v${parsedCheck.latestVersion}（来源：${parsedCheck.sourceUsed}）。`
@@ -337,18 +354,44 @@ export function PrismuxUpdatesSettingsPage({
     }
   }, [status?.downloadedFilePath, status?.downloadedSha256]);
 
+  const handleToggleAutoCheck = useCallback(
+    async (checked: boolean) => {
+      setAutoCheckEnabled(checked);
+      prismuxUpdateNotifierStore.setAutoCheckEnabled(checked, { markLocalDirty: true });
+      setErrorMsg(null);
+      setStatusMsg(
+        checked
+          ? "已开启自动检查更新，将在启动与后台定时检测新版本并温和提醒。"
+          : "已关闭自动检查更新，你仍可随时在此页手动检查最新版本。",
+      );
+      setSavingAutoCheck(true);
+      try {
+        await daemon.updateUpdaterPolicy({ autoCheckEnabled: checked });
+        prismuxUpdateNotifierStore.clearLocalAutoCheckDirty();
+      } catch {
+        // Offline or daemon restarting: localStorage preference is already persisted and will sync once daemon reconnects.
+      } finally {
+        setSavingAutoCheck(false);
+      }
+    },
+    [daemon],
+  );
+
   const handleSavePolicy = useCallback(async () => {
     setSavingPolicy(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
+      prismuxUpdateNotifierStore.setAutoCheckEnabled(autoCheckEnabled, { markLocalDirty: true });
       await daemon.updateUpdaterPolicy({
         routePreference,
         channel: updateChannel,
         includePrerelease: updateChannel === "prerelease",
         customGhProxyPrefix: customGhProxyPrefix.trim(),
         pluginRegistryOverride: registryOverride,
+        autoCheckEnabled,
       });
+      prismuxUpdateNotifierStore.clearLocalAutoCheckDirty();
       await applyElectronFeedUrl(routePreference, probe?.recommendedSource);
       setStatusMsg("双源更新策略已保存，并已同步更新通道配置。");
       await loadStatus();
@@ -359,6 +402,7 @@ export function PrismuxUpdatesSettingsPage({
     }
   }, [
     applyElectronFeedUrl,
+    autoCheckEnabled,
     customGhProxyPrefix,
     daemon,
     loadStatus,
@@ -406,7 +450,7 @@ export function PrismuxUpdatesSettingsPage({
               {runtimeVersion ? `v${runtimeVersion}` : "版本探测中"}
             </Badge>
             <Badge variant="outline">
-              {updateChannel === "stable" ? "稳定正式版" : "公测版"}
+              {updateChannel === "stable" ? "稳定正式版" : "Preview"}
             </Badge>
             <Badge variant="outline">
               {portableMode ? "便携模式 (Portable)" : "标准安装版"}
@@ -421,8 +465,29 @@ export function PrismuxUpdatesSettingsPage({
           支持 GitHub Releases 与 Gitee Releases（含 3 分卷无损重组）软件内直连下载、整包 SHA-256 强制校验与一键重启升级，同时协同国内 npmmirror / 国际 npmjs 插件源。
         </p>
         <SettingsRow
+          id="auto-check-updates"
+          title="自动检查更新"
+          description="开启后将在启动与后台定时检测 GitHub / Gitee 双源新版本，发现更新时在右下角温和提醒"
+          control={
+            <div className="flex items-center gap-2.5">
+              <span className="text-xs text-muted-foreground">
+                {autoCheckEnabled ? "已开启" : "已关闭"}
+              </span>
+              <Switch
+                aria-label="自动检查更新"
+                data-testid="prismux-auto-check-updates-switch"
+                checked={autoCheckEnabled}
+                disabled={savingAutoCheck}
+                onCheckedChange={(checked) => {
+                  void handleToggleAutoCheck(Boolean(checked));
+                }}
+              />
+            </div>
+          }
+        />
+        <SettingsRow
           title="测速并检查最新版本"
-          description="并行探测 GitHub 与 Gitee Releases 延迟，按所选通道（稳定正式版 / 公测版）拉取最新发行版与校验摘要。"
+          description="并行探测 GitHub 与 Gitee Releases 延迟，按所选通道（稳定正式版 / Preview）拉取最新发行版与校验摘要。"
           control={
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -745,13 +810,13 @@ export function PrismuxUpdatesSettingsPage({
       {/* Routing & Registry Policy */}
       <SettingsSection id="prismux-updates-policy" title="更新通道、双源路由与插件镜像策略">
         <p className="px-4 py-2.5 text-xs text-muted-foreground">
-          收敛为「稳定正式版」与「公测版」双通道；调整更新主线路与社区插件 npm 镜像源后将立即持久化至 Daemon。
+          收敛为「稳定正式版」与「Preview」双通道；调整更新主线路与社区插件 npm 镜像源后将立即持久化至 Daemon。
         </p>
 
         <SettingsRow
           id="update-track"
           title="软件更新通道"
-          description="选择接收稳定正式版（Stable）或包含 Alpha / Beta 早期特性的公测版（Prerelease）。"
+          description="选择接收稳定正式版（Stable）或包含 Alpha / Beta 早期特性的 Preview 通道。"
           control={
             <div className="w-full sm:w-72">
               <Select

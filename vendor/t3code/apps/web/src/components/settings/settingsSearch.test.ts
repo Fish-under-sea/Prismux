@@ -256,7 +256,8 @@ describe("searchSettings", () => {
 
   it("ranks localized exact title matches first for Prismux sections", () => {
     const zhLabels: Record<string, string> = {
-      Wallpaper: "壁纸引擎",
+      Appearance: "外观",
+      Wallpaper: "壁纸",
       "Wallpaper Engine": "壁纸引擎",
       Plugins: "插件中心",
       "Plugin Center": "插件中心",
@@ -264,6 +265,9 @@ describe("searchSettings", () => {
       "Prismux Updates": "软件更新",
     };
     const translate = (message: string) => zhLabels[message] ?? message;
+    expect(searchSettings("壁纸", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
+      "prismux-wallpaper",
+    );
     expect(searchSettings("壁纸引擎", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
       "prismux-wallpaper",
     );

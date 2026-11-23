@@ -10,7 +10,11 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 // AppImage mounts change each run; the launcher must mount the image itself.
 const { logInfo, logWarning } = makeComponentLogger("desktop-cli-shim");
 
-export const MARKER = "Written by T3 Code: runs the desktop app's bundled t3 CLI.";
+export const MARKER = "Written by Prismux: runs the desktop app's bundled prismux CLI.";
+export const LEGACY_MARKER = "Written by T3 Code: runs the desktop app's bundled t3 CLI.";
+
+export const isManagedCliShimContent = (content: string): boolean =>
+  content.includes(MARKER) || content.includes(LEGACY_MARKER);
 
 const SERVER_ENTRY = "apps/server/dist/bin.mjs";
 
@@ -19,7 +23,7 @@ const shellWord = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 const cmdText = (value: string) => value.replaceAll("%", "%%");
 const cmdWord = (value: string) => `"${cmdText(value)}"`;
 
-const MOVED = "T3 Code has moved or been removed. Open the app once to update this command.";
+const MOVED = "Prismux has moved or been removed. Open the app once to update this command.";
 
 export type CliShimTarget =
   | { readonly kind: "appimage"; readonly appImage: string; readonly executableName: string }
@@ -137,11 +141,23 @@ export const renderCliShim = (input: {
   ].join("\n");
 };
 
+export const PRIMARY_CLI_COMMAND = "prismux";
+export const LEGACY_CLI_COMMAND = "t3";
+
 export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment["Service"]) =>
   environment.path.join(
     environment.baseDir,
     "bin",
-    environment.platform === "win32" ? "t3.cmd" : "t3",
+    environment.platform === "win32" ? `${PRIMARY_CLI_COMMAND}.cmd` : PRIMARY_CLI_COMMAND,
+  );
+
+export const legacyAliasLauncherPath = (
+  environment: DesktopEnvironment.DesktopEnvironment["Service"],
+) =>
+  environment.path.join(
+    environment.baseDir,
+    "bin",
+    environment.platform === "win32" ? `${LEGACY_CLI_COMMAND}.cmd` : LEGACY_CLI_COMMAND,
   );
 
 export const install = Effect.gen(function* () {
@@ -151,6 +167,7 @@ export const install = Effect.gen(function* () {
   const path = environment.path;
   const windows = environment.platform === "win32";
   const shimPath = launcherPath(environment);
+  const legacyShimPath = legacyAliasLauncherPath(environment);
   const entry = path.join(environment.serverRoot, SERVER_ENTRY);
   const target: CliShimTarget = windows
     ? { kind: "windows", executable: process.execPath, entry }
@@ -162,28 +179,46 @@ export const install = Effect.gen(function* () {
         }),
         onNone: () => ({ kind: "direct" as const, executable: process.execPath, entry }),
       });
-  const content = renderCliShim({ target, shimPath, t3Home: environment.baseDir });
 
-  return yield* Effect.gen(function* () {
-    const existing = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isSome(existing) && !existing.value.includes(MARKER)) {
-      yield* logWarning("leaving a t3 launcher the app did not write", { shimPath });
+  const writeManagedShim = Effect.fn("desktop.cliShim.writeManagedShim")(function* (
+    destination: string,
+    label: string,
+  ) {
+    const content = renderCliShim({ target, shimPath: destination, t3Home: environment.baseDir });
+    const existing = yield* fs.readFileString(destination).pipe(Effect.option);
+    if (Option.isSome(existing) && !isManagedCliShimContent(existing.value)) {
+      yield* logWarning(`leaving a ${label} launcher the app did not write`, {
+        shimPath: destination,
+      });
       return Option.none<string>();
     }
     if (Option.getOrUndefined(existing) !== content) {
-      yield* fs.makeDirectory(path.dirname(shimPath), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
       // Unique per call: backend startup and the first-launch command install can race here.
-      const staging = `${shimPath}.${process.pid}.${yield* Random.nextIntBetween(0, 0xffffff)}.tmp`;
+      const staging = `${destination}.${process.pid}.${yield* Random.nextIntBetween(0, 0xffffff)}.tmp`;
       yield* fs.writeFileString(staging, content, { mode: 0o755 });
-      yield* fs.rename(staging, shimPath);
-      yield* logInfo("installed t3 launcher", { shimPath });
+      yield* fs.rename(staging, destination);
+      yield* logInfo(`installed ${label} launcher`, { shimPath: destination });
     }
-    return Option.some(shimPath);
+    return Option.some(destination);
+  });
+
+  return yield* Effect.gen(function* () {
+    const installedPrimary = yield* writeManagedShim(shimPath, PRIMARY_CLI_COMMAND);
+    if (Option.isNone(installedPrimary)) {
+      return Option.none<string>();
+    }
+    // Keep a compatibility `t3` shim beside `prismux` so legacy scripts keep working seamlessly.
+    yield* writeManagedShim(legacyShimPath, LEGACY_CLI_COMMAND).pipe(
+      Effect.catchCause(() => Effect.void),
+    );
+    return installedPrimary;
   }).pipe(
     Effect.catchCause((cause) =>
-      logWarning("could not install t3 launcher", { shimPath, cause: Cause.pretty(cause) }).pipe(
-        Effect.as(Option.none<string>()),
-      ),
+      logWarning("could not install prismux launcher", {
+        shimPath,
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as(Option.none<string>())),
     ),
     Effect.withSpan("desktop.cliShim.install"),
   );

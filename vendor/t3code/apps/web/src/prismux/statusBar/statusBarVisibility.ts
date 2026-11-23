@@ -1,7 +1,6 @@
 export const STATUS_BAR_SEGMENT_IDS = [
   "usage",
-  "context",
-  "cache",
+  "keepAwake",
   "ports",
   "resources",
 ] as const;
@@ -23,8 +22,7 @@ export const STATUS_BAR_USAGE_PREFS_STORAGE_KEY = "prismux.statusBar.usagePrefs.
 
 export const DEFAULT_STATUS_BAR_VISIBILITY: StatusBarVisibility = Object.freeze({
   usage: true,
-  context: true,
-  cache: true,
+  keepAwake: true,
   ports: true,
   resources: true,
 });
@@ -55,9 +53,10 @@ export function normalizeStatusBarVisibility(raw: unknown): StatusBarVisibility 
   const record = raw as Record<string, unknown>;
   return {
     usage: typeof record.usage === "boolean" ? record.usage : DEFAULT_STATUS_BAR_VISIBILITY.usage,
-    context:
-      typeof record.context === "boolean" ? record.context : DEFAULT_STATUS_BAR_VISIBILITY.context,
-    cache: typeof record.cache === "boolean" ? record.cache : DEFAULT_STATUS_BAR_VISIBILITY.cache,
+    keepAwake:
+      typeof record.keepAwake === "boolean"
+        ? record.keepAwake
+        : DEFAULT_STATUS_BAR_VISIBILITY.keepAwake,
     ports: typeof record.ports === "boolean" ? record.ports : DEFAULT_STATUS_BAR_VISIBILITY.ports,
     resources:
       typeof record.resources === "boolean"

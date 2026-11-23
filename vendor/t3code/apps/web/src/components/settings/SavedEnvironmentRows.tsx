@@ -779,7 +779,7 @@ function ConfiguredCloudLinkRow({
       ) : (
         <SettingsRow
           title={gt("T3 Connect")}
-          description={gt("Run `t3 connect link` on the host, then restart T3 Code there.")}
+          description={gt("Run `t3 connect link` on the host, then restart Prismux there.")}
         />
       )}
       {signedOut && showSwitch ? null : (

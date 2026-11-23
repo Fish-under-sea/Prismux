@@ -3,10 +3,9 @@ import type { SettingsNavGroup, SettingsPath } from "./settingsSearch";
 
 /**
  * Detail and merged sub-routes without their own sidebar entry highlight their parent nav item.
- * Keeps legacy deep links (e.g. /settings/wallpaper, /settings/archived) 100% intact.
+ * Keeps legacy deep links (e.g. /settings/updates, /settings/open-source-licenses) 100% intact.
  */
 export const SETTINGS_NAV_PARENT_ALIASES: Readonly<Record<string, SettingsPath>> = {
-  "/settings/wallpaper": "/settings/appearance",
   "/settings/updates": "/settings/about",
   "/settings/open-source-licenses": "/settings/about",
   "/settings/labs": "/settings/general",
@@ -41,6 +40,22 @@ export type SettingsNavIndicatorKind = "active" | "hover";
 
 export const SETTINGS_NAV_SLIDE_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 export const SETTINGS_NAV_FADE_EASING = "cubic-bezier(0.2, 0, 0, 1)";
+
+/**
+ * Typography and spacing design tokens for the divider-free settings sidebar hierarchy:
+ * prominent category headings (`14px` semibold) > compact sub-menu items (`12.5px` regular, `28px` height),
+ * with generous inter-group whitespace (`24px`) replacing horizontal borders and crisp `2px` intra-group item cadence.
+ */
+export const SETTINGS_SIDEBAR_LAYOUT = {
+  headingFontSizePx: 14,
+  itemFontSizePx: 12.5,
+  itemHeightPx: 28,
+  itemIconSizePx: 14,
+  intraGroupItemGapPx: 2,
+  headingBottomGapPx: 6,
+  interGroupGapPx: 24,
+  horizontalDividerCount: 0,
+} as const;
 
 const INDICATOR_TIMINGS: Readonly<
   Record<
@@ -182,7 +197,7 @@ export function transitionIndicatorState(
  * Compute GPU-composited inline style for one group's indicator pill.
  * Only transitions `transform` & `height` during intra-group `slide`;
  * during `crossfade` / `enter` / `leave`, `transitionProperty` is restricted to `opacity`
- * so the pill snaps to the target slot instantaneously and crossfades cleanly without flying across dividers.
+ * so the pill snaps to the target slot instantaneously and crossfades cleanly without flying across group boundaries.
  */
 export function buildIndicatorPillStyle(params: {
   readonly state: SettingsNavGroupIndicatorState | undefined;
@@ -222,7 +237,7 @@ export function buildIndicatorPillStyle(params: {
     };
   }
 
-  // crossfade / enter / leave: fade opacity only so transform snaps without crossing dividers.
+  // crossfade / enter / leave: fade opacity only so transform snaps without crossing group boundaries.
   const durationMs = visible ? timings.fadeInMs : timings.fadeOutMs;
   const easing = visible ? SETTINGS_NAV_SLIDE_EASING : SETTINGS_NAV_FADE_EASING;
   return {

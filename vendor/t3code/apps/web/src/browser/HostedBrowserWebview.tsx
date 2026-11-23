@@ -86,7 +86,7 @@ export function savePhoneBezelEnabled(enabled: boolean): void {
 
 /**
  * Defense-in-depth viewport clamp ensuring the fixed preview wrapper NEVER overlaps
- * the bottom 24px Prismux status bar (`[data-prismux-status-bar="true"]`).
+ * the bottom 20px Prismux status bar (`[data-prismux-status-bar="true"]`).
  */
 export function clampBrowserRectAboveStatusBar(
   rect: BrowserSurfaceRect | null,

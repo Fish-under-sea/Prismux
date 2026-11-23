@@ -1,21 +1,26 @@
 import { Link } from "@tanstack/react-router";
 import {
+  ActivityIcon,
   AlertTriangleIcon,
   CheckIcon,
   CopyIcon,
+  DatabaseZapIcon,
   ExternalLinkIcon,
   GaugeIcon,
+  RefreshCwIcon,
   ShieldCheckIcon,
   TerminalIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn } from "~/lib/utils";
 import type { ContextGaugeSummary } from "./statusBarContext";
 import { STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS } from "./statusBarContextMenuPolicy";
 import {
+  formatCompactUsageTokens,
   formatCompactUsageWindowValue,
+  formatCompactUsd,
   formatResetCountdown,
   formatUsageWindowValue,
   type StatusBarUsageSummary,
@@ -30,11 +35,14 @@ import type {
 export interface UsageStatusPopoverProps {
   readonly summary: StatusBarUsageSummary;
   readonly activeThreadIsAntigravity: boolean;
-  readonly contextGauge: ContextGaugeSummary;
+  readonly contextGauge?: ContextGaugeSummary;
   readonly prefs: StatusBarUsagePreferences;
   readonly onPrefsChange: (next: StatusBarUsagePreferences) => void;
   readonly now: number;
+  readonly loading?: boolean;
+  readonly onRefresh?: () => Promise<void>;
   readonly onClose: () => void;
+  readonly embeddedInPopover?: boolean;
 }
 
 function urgencyBarClass(urgency: StatusBarUsageWindowEntry["urgency"]): string {
@@ -66,9 +74,23 @@ export function UsageStatusPopover({
   prefs,
   onPrefsChange,
   now,
+  loading = false,
+  onRefresh,
   onClose,
+  embeddedInPopover = false,
 }: UsageStatusPopoverProps) {
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+  const [refreshingLocal, setRefreshingLocal] = useState(false);
+  const [justRefreshed, setJustRefreshed] = useState(false);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current !== null) {
+        clearTimeout(flashTimerRef.current);
+      }
+    };
+  }, []);
 
   const setDensity = (density: UsagePopoverDensity) => {
     onPrefsChange({ ...prefs, density });
@@ -76,6 +98,24 @@ export function UsageStatusPopover({
 
   const setPercentMode = (percentMode: UsagePercentMode) => {
     onPrefsChange({ ...prefs, percentMode });
+  };
+
+  const handleRefresh = async () => {
+    if (!onRefresh || refreshingLocal) return;
+    setRefreshingLocal(true);
+    try {
+      await onRefresh();
+      setJustRefreshed(true);
+      if (flashTimerRef.current !== null) {
+        clearTimeout(flashTimerRef.current);
+      }
+      flashTimerRef.current = setTimeout(() => {
+        setJustRefreshed(false);
+        flashTimerRef.current = null;
+      }, 1_400);
+    } finally {
+      setRefreshingLocal(false);
+    }
   };
 
   const copyCommand = async (cmd: string) => {
@@ -90,97 +130,143 @@ export function UsageStatusPopover({
     }
   };
 
+  const isBusy = loading || refreshingLocal;
+  const { telemetry } = summary;
+  const hasTelemetryData =
+    telemetry.todayTokens > 0 ||
+    telemetry.weekTokens > 0 ||
+    telemetry.weekRecords > 0 ||
+    telemetry.providers.length > 0;
+
   return (
     <div
       {...STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS}
-      className="flex w-88 max-w-[calc(100vw-1rem)] flex-col gap-3 rounded-xl border border-border bg-popover p-3.5 text-popover-foreground shadow-xl"
+      {...(!embeddedInPopover
+        ? {
+            "data-pmx-glass-zone": "overlays",
+            "data-pmx-status-popover": "1",
+          }
+        : {})}
+      className={cn(
+        "flex w-[24.5rem] max-w-[calc(100vw-1rem)] flex-col gap-3 p-3.5 text-popover-foreground",
+        embeddedInPopover
+          ? "bg-transparent"
+          : "overflow-hidden rounded-xl border border-border bg-popover bg-clip-padding shadow-xl",
+      )}
       data-testid="prismux-usage-popover"
     >
+      {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <GaugeIcon aria-hidden className="size-3.5 shrink-0 text-foreground" />
           <span className="truncate text-xs font-semibold text-foreground">
-            合规额度与订阅总览
+            额度与用量总览
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <div
-            role="group"
-            aria-label="显示密度"
-            className="inline-flex rounded-md border border-border bg-muted/60 p-0.5 text-[11px]"
-          >
+          {summary.windows.length > 0 ? (
+            <>
+              <div
+                role="group"
+                aria-label="显示密度"
+                className="inline-flex rounded-md border border-border bg-muted/60 p-0.5 text-[10px]"
+              >
+                <button
+                  type="button"
+                  aria-pressed={prefs.density === "detailed"}
+                  onClick={() => setDensity("detailed")}
+                  className={cn(
+                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                    prefs.density === "detailed"
+                      ? "bg-background text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  详细
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={prefs.density === "compact"}
+                  onClick={() => setDensity("compact")}
+                  className={cn(
+                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                    prefs.density === "compact"
+                      ? "bg-background text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  紧凑
+                </button>
+              </div>
+              <div
+                role="group"
+                aria-label="百分比模式"
+                className="inline-flex rounded-md border border-border bg-muted/60 p-0.5 text-[10px]"
+              >
+                <button
+                  type="button"
+                  aria-pressed={prefs.percentMode === "used"}
+                  aria-description="按已用额度百分比显示，点击切换"
+                  onClick={(event) => {
+                    setPercentMode("used");
+                    if (event.detail > 0) event.currentTarget.blur();
+                  }}
+                  className={cn(
+                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                    prefs.percentMode === "used"
+                      ? "bg-background text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  % 已用
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={prefs.percentMode === "remaining"}
+                  aria-description="按剩余额度百分比显示，点击切换"
+                  onClick={(event) => {
+                    setPercentMode("remaining");
+                    if (event.detail > 0) event.currentTarget.blur();
+                  }}
+                  className={cn(
+                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                    prefs.percentMode === "remaining"
+                      ? "bg-background text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  % 剩余
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {onRefresh ? (
             <button
               type="button"
-              aria-pressed={prefs.density === "detailed"}
-              onClick={() => setDensity("detailed")}
-              className={cn(
-                "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                prefs.density === "detailed"
-                  ? "bg-background text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+              disabled={isBusy}
+              aria-busy={isBusy || undefined}
+              data-testid="usage-refresh-button"
+              onClick={() => void handleRefresh()}
+              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-background/85 px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
             >
-              详细
-            </button>
-            <button
-              type="button"
-              aria-pressed={prefs.density === "compact"}
-              onClick={() => setDensity("compact")}
-              className={cn(
-                "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                prefs.density === "compact"
-                  ? "bg-background text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
+              {justRefreshed && !isBusy ? (
+                <CheckIcon aria-hidden className="size-3 text-emerald-600 dark:text-emerald-400" />
+              ) : (
+                <RefreshCwIcon aria-hidden className={cn("size-3", isBusy && "animate-spin")} />
               )}
-            >
-              紧凑
+              <span>{isBusy ? "刷新中…" : justRefreshed ? "已刷新" : "刷新"}</span>
             </button>
-          </div>
-          <div
-            role="group"
-            aria-label="百分比模式"
-            className="inline-flex rounded-md border border-border bg-muted/60 p-0.5 text-[11px]"
-          >
-            <button
-              type="button"
-              aria-pressed={prefs.percentMode === "used"}
-              aria-description="按已用额度百分比显示，点击切换"
-              onClick={(event) => {
-                setPercentMode("used");
-                if (event.detail > 0) event.currentTarget.blur();
-              }}
-              className={cn(
-                "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                prefs.percentMode === "used"
-                  ? "bg-background text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              % 已用
-            </button>
-            <button
-              type="button"
-              aria-pressed={prefs.percentMode === "remaining"}
-              aria-description="按剩余额度百分比显示，点击切换"
-              onClick={(event) => {
-                setPercentMode("remaining");
-                if (event.detail > 0) event.currentTarget.blur();
-              }}
-              className={cn(
-                "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                prefs.percentMode === "remaining"
-                  ? "bg-background text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              % 剩余
-            </button>
-          </div>
+          ) : null}
         </div>
       </div>
 
+      {/* Section A: Official Provider Quota Windows */}
       {summary.windows.length > 0 ? (
-        <div className="flex max-h-56 flex-col gap-2 overflow-y-auto pr-0.5">
+        <div
+          data-testid="prismux-usage-quota-windows"
+          className="flex max-h-48 flex-col gap-2 overflow-y-auto pr-0.5"
+        >
           {summary.windows.map((win) => {
             const countdown = formatResetCountdown(win.resetsAtMs, now);
             const barWidth =
@@ -265,12 +351,101 @@ export function UsageStatusPopover({
             );
           })}
         </div>
-      ) : (
-        <div className="rounded-lg border border-border/70 bg-muted/30 px-2.5 py-2 text-xs text-muted-foreground">
-          暂未检测到提供官方配额窗口的 Provider（如 Codex / Claude / OMP）。
-        </div>
-      )}
+      ) : null}
 
+      {/* Section B: Real Local Usage Telemetry (Today & 7-Day Tokens / Calls / Cache / Cost) */}
+      {hasTelemetryData ? (
+        <div
+          data-testid="prismux-usage-telemetry-section"
+          className="flex flex-col gap-2"
+        >
+          <div className="grid grid-cols-3 gap-1.5 text-xs tabular-nums">
+            <div className="rounded-lg border border-border/70 bg-muted/35 p-2">
+              <div className="text-[11px] text-muted-foreground">今日用量</div>
+              <div className="mt-0.5 font-semibold text-foreground">
+                {formatCompactUsageTokens(telemetry.todayTokens)}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                {telemetry.todayCostUsd > 0 ? `约 ${formatCompactUsd(telemetry.todayCostUsd)}` : "按本地记录"}
+              </div>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/35 p-2">
+              <div className="text-[11px] text-muted-foreground">近 7 日</div>
+              <div className="mt-0.5 font-semibold text-foreground">
+                {formatCompactUsageTokens(telemetry.weekTokens)}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                {telemetry.weekRecords} 次调用
+                {telemetry.weekCostUsd > 0 ? ` · ${formatCompactUsd(telemetry.weekCostUsd)}` : ""}
+              </div>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/35 p-2">
+              <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                <DatabaseZapIcon aria-hidden className="size-3 shrink-0" />
+                <span>缓存命中</span>
+              </div>
+              <div className="mt-0.5 font-semibold text-foreground">
+                {telemetry.cacheHitPercent !== null ? `${telemetry.cacheHitPercent}%` : "—"}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                {telemetry.cacheSavingsUsd > 0
+                  ? `节省 ${formatCompactUsd(telemetry.cacheSavingsUsd)}`
+                  : `${telemetry.weekSessions} 会话`}
+              </div>
+            </div>
+          </div>
+
+          {telemetry.providers.length > 0 ? (
+            <div className="flex max-h-44 flex-col gap-1.5 overflow-y-auto pr-0.5">
+              {telemetry.providers.map((prov) => (
+                <div
+                  key={prov.key}
+                  className="flex flex-col gap-1 rounded-lg border border-border/70 bg-muted/30 px-2.5 py-2 text-xs tabular-nums"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <ActivityIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-semibold text-foreground">
+                        {prov.providerName}
+                      </span>
+                      <span className="shrink-0 rounded-sm bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        {prov.hasQuotaWindow
+                          ? "官方配额"
+                          : prov.isCustomEndpoint
+                            ? "自定义端点"
+                            : "本地统计"}
+                      </span>
+                    </div>
+                    <span className="shrink-0 font-semibold text-foreground">
+                      {prov.weekCostUsd > 0
+                        ? formatCompactUsd(prov.weekCostUsd)
+                        : formatCompactUsageTokens(prov.weekTokens)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                    <span>
+                      今日 {formatCompactUsageTokens(prov.todayTokens)} · 7日{" "}
+                      {formatCompactUsageTokens(prov.weekTokens)}
+                    </span>
+                    <span>
+                      {prov.weekRecords} 次
+                      {prov.cacheHitPercent !== null ? ` · 缓存 ${prov.cacheHitPercent}%` : ""}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : summary.windows.length === 0 ? (
+        <div className="rounded-lg border border-border/70 bg-muted/30 px-2.5 py-2 text-xs text-muted-foreground">
+          {isBusy
+            ? "正在读取各提供方配额与本地用量记录…"
+            : "暂无近 7 日调用记录。在任意会话发送消息后，此处将实时汇总今日/本周 Token、缓存命中与估算费用。"}
+        </div>
+      ) : null}
+
+      {/* Section C: Antigravity Official ACP Compliance Card */}
       {summary.antigravityEntries.length > 0 ? (
         <div
           className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-2.5 text-xs"
@@ -286,7 +461,7 @@ export function UsageStatusPopover({
                 (summary.antigravityEntries[0]?.authenticated ? "已通过 agy ACP 登录" : "未登录")}
             </span>
           </div>
-          {activeThreadIsAntigravity && contextGauge.level !== "unknown" ? (
+          {activeThreadIsAntigravity && contextGauge && contextGauge.level !== "unknown" ? (
             <div className="flex items-center justify-between text-[11px] text-foreground tabular-nums">
               <span>当前会话 ACP 上下文水位</span>
               <span className="font-semibold">
@@ -323,7 +498,9 @@ export function UsageStatusPopover({
       ) : null}
 
       <div className="flex items-center justify-between border-t border-border/70 pt-2 text-[11px]">
-        <span className="text-muted-foreground">按最紧迫窗口优先排序</span>
+        <span className="text-muted-foreground">
+          {summary.windows.length > 0 ? "官方配额 + 本地统计" : "本地近 7 日实时统计"}
+        </span>
         <Link
           to="/usage"
           onClick={onClose}

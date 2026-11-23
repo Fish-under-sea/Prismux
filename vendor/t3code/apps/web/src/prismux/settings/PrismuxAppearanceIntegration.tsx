@@ -11,16 +11,15 @@ import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
 
 /**
  * MP-04 / Issue #3: Unified Prismux Appearance settings hub inside /settings/appearance.
- * Consolidates all 6 appearance cards (Theme Hero, Liquid Glass + Per-Surface fold,
- * Sidebar Corners, Global UI & Caret Colors, System Fonts & Typography Colors, .wb-theme Snapshot)
- * while linking cleanly to /settings/wallpaper for pure wallpaper management.
+ * Consolidates Theme Hero (Celestial 3-state capsule), Liquid Glass + decoupled 6-zone
+ * configurator, Global UI & Caret Colors, System Fonts & Typography Colors, and .wb-theme
+ * Snapshot while syncing live with the right-sidebar InlineAppearanceStudio.
  */
 export function PrismuxAppearanceIntegration() {
   const navigate = useNavigate();
   const {
     appearance,
     setAppearance,
-    setThemeMode,
     wallpaperStore,
     daemonInfo,
     systemFonts,
@@ -35,10 +34,6 @@ export function PrismuxAppearanceIntegration() {
     : null;
 
   const handleAppearanceChange = (next: AppearanceConfig) => {
-    if (next.themeMode !== appearance.themeMode) {
-      setThemeMode(next.themeMode);
-      return;
-    }
     setAppearance(next);
   };
 
@@ -87,15 +82,16 @@ export function PrismuxAppearanceIntegration() {
         }
       >
         <p className="px-4 pt-3 text-xs leading-relaxed text-muted-foreground">
-          统一管理光学天体三态胶囊、360° Fresnel 液态玻璃与各面独立调节、侧边栏圆角、全局 UI
-          配色、本机系统字体与主题快照。纯宿主视觉层，对模型 0 Token 开销。
+          统一管理光学天体三态胶囊、360° Fresnel 液态玻璃与 5 大工作台分区独立调节（窗口外框
+          ［含左侧边栏、顶栏、底栏与右细边］/ 右侧功能边栏 / 主内容画布 / 输入框与卡片 /
+          弹窗与设置）、全局 UI 配色、本机系统字体与主题快照，与右侧壁纸边栏实时双向同步。纯宿主视觉层，对模型
+          0 Token 开销。
         </p>
         <div className="p-3 sm:p-4">
           <AppearanceHeroAndCards
             config={appearance}
             onChange={handleAppearanceChange}
             alwaysShowGlassCard
-            showCornersCard
             showUiColorsCard
             showSnapshotCard
             systemFonts={systemFonts}

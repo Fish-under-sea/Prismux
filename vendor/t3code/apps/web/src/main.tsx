@@ -10,6 +10,10 @@ import { startAppServices } from "./appInit";
 import { AppRoot } from "./AppRoot";
 import { whenLocaleReady } from "./i18n/runtime";
 import { chunkLoadState } from "./lib/chunkReloadGuard";
+import {
+  dismissPrismuxBootSplash,
+  installPrismuxBootSplashLifecycle,
+} from "./prismux/PrismuxBootSplash";
 
 const router = startAppServices();
 
@@ -42,8 +46,10 @@ export const startup = Promise.all([
         )}
       </React.StrictMode>,
     );
+    installPrismuxBootSplashLifecycle();
   })
   .catch((error: unknown) => {
+    void dismissPrismuxBootSplash({ immediate: true });
     if (chunkLoadState.reloadScheduled) return;
     throw error;
   });

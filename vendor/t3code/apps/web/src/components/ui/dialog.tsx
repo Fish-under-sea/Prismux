@@ -8,6 +8,8 @@ import {
   createContext,
   type ReactNode,
   use,
+  useCallback,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -15,15 +17,25 @@ import { cn } from "~/lib/utils";
 import { useNativeTitlebarHeight } from "~/lib/windowControlsOverlay";
 import { Button, type ButtonVariant } from "~/components/ui/button";
 import {
+  createBackdropDismissGuardState,
   DIALOG_BACKDROP_CLASS,
   DIALOG_MEDIA_BACKDROP_CLASS,
   DIALOG_MEDIA_POPUP_CLASS,
   DIALOG_MOBILE_SHEET_CLASS,
   DIALOG_POPUP_CLASS,
+  recordBackdropPointerDown,
+  shouldDismissOnBackdropClick,
 } from "~/components/ui/dialog-styles";
 import { ScrollArea } from "~/components/ui/scroll-area";
 
 const ControlledOpenContext = createContext<boolean | undefined>(undefined);
+
+interface DialogBackdropDismissContextValue {
+  readonly enabled: boolean;
+  readonly dismiss: () => void;
+}
+
+const DialogBackdropDismissContext = createContext<DialogBackdropDismissContextValue | null>(null);
 
 function RetainedWhileClosed({ open, children }: { open: boolean; children: ReactNode }) {
   const controlledOpen = use(ControlledOpenContext);
@@ -44,9 +56,66 @@ function renderRetainedPopup(props: ComponentProps<"div">, state: { open: boolea
 }
 
 function Dialog<Payload>(props: DialogPrimitive.Root.Props<Payload>) {
+  const internalActionsRef = useRef<DialogPrimitive.Root.Actions | null>(null);
+  const externalActionsRef = props.actionsRef;
+  const externalOnOpenChange = props.onOpenChange;
+  const controlledOpenRef = useRef<boolean | undefined>(props.open);
+  controlledOpenRef.current = props.open;
+  const lastCloseHandledAtRef = useRef<number>(0);
+
+  const mergedActionsRef = useMemo(
+    () => ({
+      get current() {
+        return internalActionsRef.current;
+      },
+      set current(value: DialogPrimitive.Root.Actions | null) {
+        internalActionsRef.current = value;
+        if (externalActionsRef) {
+          (externalActionsRef as { current: DialogPrimitive.Root.Actions | null }).current = value;
+        }
+      },
+    }),
+    [externalActionsRef],
+  );
+
+  const handleOpenChange = useCallback<NonNullable<DialogPrimitive.Root.Props<Payload>["onOpenChange"]>>(
+    (nextOpen, eventDetails) => {
+      if (!nextOpen) {
+        lastCloseHandledAtRef.current = performance.now();
+      }
+      externalOnOpenChange?.(nextOpen, eventDetails);
+    },
+    [externalOnOpenChange],
+  );
+
+  const dismiss = useCallback(() => {
+    const requestedAt = performance.now();
+    queueMicrotask(() => {
+      if (controlledOpenRef.current === false) return;
+      if (requestedAt - lastCloseHandledAtRef.current < 80 || lastCloseHandledAtRef.current >= requestedAt) {
+        return;
+      }
+      internalActionsRef.current?.close();
+    });
+  }, []);
+
+  const dismissContextValue = useMemo<DialogBackdropDismissContextValue>(
+    () => ({
+      enabled: !props.disablePointerDismissal,
+      dismiss,
+    }),
+    [dismiss, props.disablePointerDismissal],
+  );
+
   return (
     <ControlledOpenContext value={props.open}>
-      <DialogPrimitive.Root {...props} />
+      <DialogBackdropDismissContext value={dismissContextValue}>
+        <DialogPrimitive.Root
+          {...props}
+          actionsRef={mergedActionsRef}
+          onOpenChange={handleOpenChange}
+        />
+      </DialogBackdropDismissContext>
     </ControlledOpenContext>
   );
 }
@@ -98,7 +167,7 @@ function DialogViewport({ className, ...props }: DialogPrimitive.Viewport.Props)
     <DialogPrimitive.Viewport
       // Electron drag regions ignore z-index, so without no-drag a click over a header drag strip never reaches the page.
       className={cn(
-        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_1fr] justify-items-center p-4 [-webkit-app-region:no-drag]",
+        "fixed inset-0 z-50 flex items-center justify-center p-4 [-webkit-app-region:no-drag]",
         className,
       )}
       data-slot="dialog-viewport"
@@ -114,26 +183,31 @@ function DialogPopup({
   bottomStickOnMobile = true,
   variant = "default",
   mediaControlsPlacement = "outside",
+  portalContainer,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
   variant?: "default" | "media";
   mediaControlsPlacement?: "inside" | "outside";
+  portalContainer?: DialogPrimitive.Portal.Props["container"];
 }) {
   const gt = useGT();
   const { popupRef, initialFocus } = useDialogActionInitialFocus();
+  const backdropDismiss = use(DialogBackdropDismissContext);
+  const backdropGuardRef = useRef(createBackdropDismissGuardState());
   const popup = useRender({
     ref: popupRef,
     render: (
       <DialogPrimitive.Popup
         className={cn(
           variant === "media" ? DIALOG_MEDIA_POPUP_CLASS : DIALOG_POPUP_CLASS,
-          "row-start-2 text-popover-foreground",
-          variant === "default" && "max-h-full max-w-lg",
+          "text-popover-foreground",
+          variant === "default" && "max-h-full max-w-lg overflow-hidden bg-clip-padding",
           bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
           className,
         )}
+        data-pmx-glass-zone={variant === "media" ? undefined : "overlays"}
         data-slot="dialog-popup"
         initialFocus={initialFocus}
         render={renderRetainedPopup}
@@ -154,24 +228,51 @@ function DialogPopup({
   });
   // macOS has no CSS window-controls overlay, so use the platform titlebar height.
   const nativeTitlebarHeight = useNativeTitlebarHeight();
+  const resolvedPortalContainer =
+    portalContainer ?? (typeof document !== "undefined" ? document.body : undefined);
   return (
-    <DialogPortal>
+    <DialogPortal container={resolvedPortalContainer}>
       {/* Media opens from inside other overlays (a composer chip, a popover), so it sits above them. */}
-      <DialogBackdrop className={variant === "media" ? "z-[60]" : undefined} variant={variant} />
+      <DialogBackdrop
+        className={variant === "media" ? "z-[60]" : undefined}
+        variant={variant}
+        onPointerDownCapture={(event) => {
+          recordBackdropPointerDown(backdropGuardRef.current, event, popupRef.current);
+        }}
+        onClick={(event) => {
+          if (
+            backdropDismiss?.enabled &&
+            shouldDismissOnBackdropClick(backdropGuardRef.current, event, popupRef.current)
+          ) {
+            backdropDismiss.dismiss();
+          }
+        }}
+      />
       <DialogViewport
         className={cn(
-          bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12",
+          bottomStickOnMobile && "max-sm:items-end max-sm:p-0 max-sm:pt-12",
           variant === "media" &&
-            "z-[60] grid-rows-1 place-items-center px-4 max-[8rem]:px-0 pb-6 pt-[calc(var(--media-dialog-titlebar-height,0px)+1.5rem)] [-webkit-app-region:no-drag]",
+            "z-[60] px-4 max-[8rem]:px-0 py-[max(1.5rem,calc(var(--media-dialog-titlebar-height,0px)+1.5rem))] [-webkit-app-region:no-drag]",
           variant === "media" &&
             mediaControlsPlacement === "inside" &&
-            "pt-[min(calc(var(--media-dialog-titlebar-height,0px)+1.5rem),50dvh)]",
+            "py-[min(calc(var(--media-dialog-titlebar-height,0px)+1.5rem),50dvh)]",
         )}
         style={
           variant === "media"
             ? ({ "--media-dialog-titlebar-height": `${nativeTitlebarHeight}px` } as CSSProperties)
             : undefined
         }
+        onPointerDownCapture={(event) => {
+          recordBackdropPointerDown(backdropGuardRef.current, event, popupRef.current);
+        }}
+        onClick={(event) => {
+          if (
+            backdropDismiss?.enabled &&
+            shouldDismissOnBackdropClick(backdropGuardRef.current, event, popupRef.current)
+          ) {
+            backdropDismiss.dismiss();
+          }
+        }}
       >
         {popup}
       </DialogViewport>

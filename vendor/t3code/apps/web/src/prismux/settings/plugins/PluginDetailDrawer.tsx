@@ -24,6 +24,11 @@ import {
 
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import {
+  createBackdropDismissGuardState,
+  recordBackdropPointerDown,
+  shouldDismissOnBackdropClick,
+} from "../../../components/ui/dialog-styles";
 import { Switch } from "../../../components/ui/switch";
 import { useNativeTitlebarHeight } from "../../../lib/windowControlsOverlay";
 import {
@@ -100,17 +105,13 @@ export function PluginDetailDrawer({
   const titleId = useId();
   const rollbackDisabledId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const backdropGuardRef = useRef(createBackdropDismissGuardState());
   const nativeTitlebarHeight = useNativeTitlebarHeight();
-  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
+  const portalHost = typeof document !== "undefined" ? document.body : null;
   const [logLevelFilter, setLogLevelFilter] = useState<"all" | "info" | "warn" | "error">("all");
   const [confirmingUninstall, setConfirmingUninstall] = useState(false);
   const [copiedLogs, setCopiedLogs] = useState(false);
-
-  useEffect(() => {
-    if (typeof document !== "undefined") {
-      setPortalHost(document.body);
-    }
-  }, []);
 
   useEffect(() => {
     setConfirmingUninstall(false);
@@ -120,7 +121,7 @@ export function PluginDetailDrawer({
       // Aligned with stablyai/orca PluginDetailPage: focus heading on plugin open for A11y.
       headingRef.current?.focus();
     }
-  }, [plugin?.id, portalHost]);
+  }, [plugin?.id]);
 
   useEffect(() => {
     if (!plugin || suspendEscape) return;
@@ -170,19 +171,28 @@ export function PluginDetailDrawer({
 
   const drawerContent = (
     <div
-      className="fixed top-0 right-0 bottom-6 left-0 z-[70] flex justify-end bg-black/55 backdrop-blur-xs [-webkit-app-region:no-drag]"
+      className="fixed top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0 z-[70] flex justify-end bg-black/55 backdrop-blur-xs [-webkit-app-region:no-drag]"
       data-slot="plugin-detail-drawer-backdrop"
       data-portal-layer="plugin-detail-drawer"
+      onPointerDownCapture={(event) => {
+        recordBackdropPointerDown(backdropGuardRef.current, event, drawerRef.current);
+      }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) {
+        if (
+          shouldDismissOnBackdropClick(backdropGuardRef.current, event, drawerRef.current, {
+            disabled: isBusy || suspendEscape,
+          })
+        ) {
           onClose();
         }
       }}
     >
       <aside
+        ref={drawerRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        data-pmx-glass-zone="overlays"
         data-testid="plugin-detail-drawer"
         className="pmx-plugin-overlay-surface relative flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-border text-popover-foreground shadow-2xl transition-transform duration-240 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
       >

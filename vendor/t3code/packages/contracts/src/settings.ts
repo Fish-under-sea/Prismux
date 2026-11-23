@@ -1583,6 +1583,10 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /** Default-enabled built-in provider slots (such as codex or claudeAgent) explicitly removed by the user. */
+  hiddenDefaultProviderInstances: Schema.Array(ProviderInstanceId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sourceControlHosts: Schema.Record(Schema.String, SourceControlHostSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1657,7 +1661,9 @@ export const resolveProviderInstanceEnabled = (
 };
 
 export const resolveProjectProviderInstanceEnabled = (
-  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
+  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides"> & {
+    readonly hiddenDefaultProviderInstances?: ReadonlyArray<ProviderInstanceId>;
+  },
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean => {
@@ -1669,9 +1675,13 @@ export const resolveProjectProviderInstanceEnabled = (
   const instanceConfig = Object.hasOwn(settings.providerInstances, instanceId)
     ? settings.providerInstances[instanceId]
     : undefined;
-  return instanceConfig !== undefined
-    ? resolveProviderInstanceEnabled(instanceConfig)
-    : isUnconfiguredDefaultInstanceEnabled(instanceId);
+  if (instanceConfig !== undefined) {
+    return resolveProviderInstanceEnabled(instanceConfig);
+  }
+  if (settings.hiddenDefaultProviderInstances?.includes(instanceId)) {
+    return false;
+  }
+  return isUnconfiguredDefaultInstanceEnabled(instanceId);
 };
 
 /** The text generator a selection names, if any; it takes precedence over a provider instance. */
@@ -1983,6 +1993,7 @@ export const ServerSettingsPatch = Schema.Struct({
   offeredSourceControlProviders: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
   // Replace whole maps to avoid half-merged driver configs.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  hiddenDefaultProviderInstances: Schema.optionalKey(Schema.Array(ProviderInstanceId)),
   // Merge per source to avoid racing other edits; null removes an entry.
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
@@ -2025,6 +2036,7 @@ export function requiredScopesForServerSettingsPatch(
     } else if (
       key === "providers" ||
       key === "providerInstances" ||
+      key === "hiddenDefaultProviderInstances" ||
       key === "usageLimitSources" ||
       key === "textGenerators" ||
       key === "secretProviders"

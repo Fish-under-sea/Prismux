@@ -1,4 +1,9 @@
-import type { ServerProvider, ServerProviderUsageWindow } from "@t3tools/contracts";
+import type {
+  ServerProvider,
+  ServerProviderUsageWindow,
+  UsageProviderKind,
+} from "@t3tools/contracts";
+import type { MergedUsage } from "@t3tools/shared/usageMerge";
 import type { UsagePercentMode } from "./statusBarVisibility";
 
 export type UsageWindowUrgency = "normal" | "warning" | "critical";
@@ -26,6 +31,33 @@ export interface StatusBarAntigravityAcpEntry {
   readonly complianceNotice: string;
 }
 
+export interface StatusBarProviderUsageLedgerEntry {
+  readonly key: string;
+  readonly providerKind: UsageProviderKind | string;
+  readonly providerName: string;
+  readonly todayTokens: number;
+  readonly todayCostUsd: number;
+  readonly weekTokens: number;
+  readonly weekCostUsd: number;
+  readonly weekRecords: number;
+  readonly weekSessions: number;
+  readonly cacheHitPercent: number | null;
+  readonly hasQuotaWindow: boolean;
+  readonly isCustomEndpoint: boolean;
+}
+
+export interface StatusBarUsageTelemetrySummary {
+  readonly todayTokens: number;
+  readonly todayCostUsd: number;
+  readonly weekTokens: number;
+  readonly weekCostUsd: number;
+  readonly weekRecords: number;
+  readonly weekSessions: number;
+  readonly cacheHitPercent: number | null;
+  readonly cacheSavingsUsd: number;
+  readonly providers: readonly StatusBarProviderUsageLedgerEntry[];
+}
+
 export interface StatusBarUsageSummary {
   /** All compliant provider usage windows, sorted most urgent first. */
   readonly windows: readonly StatusBarUsageWindowEntry[];
@@ -33,6 +65,10 @@ export interface StatusBarUsageSummary {
   readonly antigravityEntries: readonly StatusBarAntigravityAcpEntry[];
   /** Most urgent compliant window for the compact 24px status bar pill. */
   readonly primaryWindow: StatusBarUsageWindowEntry | null;
+  /** Local real usage statistics (today & 7-day tokens, calls, cache hit, cost) across providers. */
+  readonly telemetry: StatusBarUsageTelemetrySummary;
+  /** Count of enabled non-Antigravity providers configured in connected environments. */
+  readonly enabledProviderCount: number;
 }
 
 export const USAGE_WARNING_USED_PERCENT = 80;
@@ -55,6 +91,76 @@ export function classifyUsageUrgency(usedPercent: number): UsageWindowUrgency {
   if (usedPercent >= USAGE_URGENT_USED_PERCENT) return "critical";
   if (usedPercent >= USAGE_WARNING_USED_PERCENT) return "warning";
   return "normal";
+}
+
+export function canonicalProviderDisplayName(rawName: string | undefined, driver?: string): string {
+  const trimmed = (rawName ?? "").trim();
+  const key = (driver ?? trimmed).toLowerCase();
+  if (trimmed.length > 0 && !/^(codex|claudeagent|claude|antigravity|omp|pi|opencode|cursor|grok)$/i.test(trimmed)) {
+    return trimmed;
+  }
+  switch (key) {
+    case "codex":
+      return "Codex";
+    case "claudeagent":
+    case "claude":
+      return "Claude Code";
+    case "antigravity":
+      return "Antigravity";
+    case "omp":
+    case "pi":
+      return "oh-my-pi";
+    case "cursor":
+      return "Cursor";
+    case "opencode":
+      return "OpenCode";
+    case "grok":
+      return "Grok";
+    default:
+      return trimmed || driver || "Provider";
+  }
+}
+
+function driverToUsageKind(driver: string): UsageProviderKind | string {
+  switch (driver) {
+    case "claudeAgent":
+      return "claude";
+    case "codex":
+      return "codex";
+    case "cursor":
+      return "cursor";
+    case "opencode":
+      return "opencode";
+    case "antigravity":
+      return "antigravity";
+    case "omp":
+    case "pi":
+      return "pi";
+    default:
+      return driver;
+  }
+}
+
+export function formatCompactUsageTokens(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens <= 0) return "0 tok";
+  if (tokens < 1_000) return `${Math.round(tokens)} tok`;
+  if (tokens < 1_000_000) {
+    const k = tokens / 1_000;
+    return `${k >= 100 ? Math.round(k) : k.toFixed(1)}K tok`;
+  }
+  if (tokens < 1_000_000_000) {
+    const m = tokens / 1_000_000;
+    return `${m >= 100 ? Math.round(m) : m.toFixed(1)}M tok`;
+  }
+  return `${(tokens / 1_000_000_000).toFixed(2)}B tok`;
+}
+
+export function formatCompactUsd(usd: number): string {
+  if (!Number.isFinite(usd) || usd <= 0) return "$0.00";
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 10) return `$${usd.toFixed(2)}`;
+  if (usd < 100) return `$${usd.toFixed(1)}`;
+  return `$${Math.round(usd)}`;
 }
 
 function readWindowUsedPercent(window: ServerProviderUsageWindow): number | null {
@@ -99,16 +205,167 @@ export function extractAntigravityAcpTierLabel(provider: ServerProvider): string
   return null;
 }
 
+function detectCustomEndpointProvider(provider: ServerProvider): boolean {
+  const rec = provider as unknown as Record<string, unknown>;
+  if (typeof rec.baseUrl === "string" && rec.baseUrl.trim().length > 0) return true;
+  if (typeof rec.endpoint === "string" && rec.endpoint.trim().length > 0) return true;
+  const auth = rec.auth as Record<string, unknown> | undefined;
+  const authType = typeof auth?.type === "string" ? auth.type.toLowerCase() : "";
+  if (authType.includes("api") || authType.includes("custom") || authType.includes("key")) {
+    return true;
+  }
+  return false;
+}
+
+function computeCacheHitPercent(
+  uncachedInput: number,
+  cachedInput: number,
+  cacheCreation: number,
+): number | null {
+  const totalInput = uncachedInput + cachedInput + cacheCreation;
+  if (!Number.isFinite(totalInput) || totalInput <= 0) return null;
+  return Math.round((cachedInput / totalInput) * 1000) / 10;
+}
+
+export function buildUsageTelemetrySummary(
+  mergedUsage: MergedUsage | null | undefined,
+  providers: readonly ServerProvider[],
+  todayDayKey?: string,
+  windowProviderKinds?: ReadonlySet<string>,
+): StatusBarUsageTelemetrySummary {
+  const todayBucket =
+    mergedUsage && todayDayKey
+      ? mergedUsage.daily.find((entry) => entry.day === todayDayKey) ?? null
+      : mergedUsage?.daily.at(-1) ?? null;
+
+  // Per-provider cache hit computed from mergedUsage.models
+  const cacheAggByProvider = new Map<
+    string,
+    { uncached: number; cached: number; creation: number }
+  >();
+  if (mergedUsage) {
+    for (const model of mergedUsage.models) {
+      const cur = cacheAggByProvider.get(model.provider) ?? {
+        uncached: 0,
+        cached: 0,
+        creation: 0,
+      };
+      cur.uncached += model.tokens.uncachedInputTokens;
+      cur.cached += model.tokens.cachedInputTokens;
+      cur.creation += model.tokens.cacheCreationTokens;
+      cacheAggByProvider.set(model.provider, cur);
+    }
+  }
+
+  // Track configured enabled providers by usage kind so custom-endpoint providers always show up
+  const configuredByKind = new Map<
+    string,
+    { displayName: string; isCustomEndpoint: boolean }
+  >();
+  for (const provider of providers) {
+    if (!provider.enabled || provider.driver === "antigravity") continue;
+    const kind = driverToUsageKind(provider.driver);
+    const displayName = canonicalProviderDisplayName(provider.displayName, provider.driver);
+    const isCustomEndpoint = detectCustomEndpointProvider(provider);
+    if (!configuredByKind.has(kind)) {
+      configuredByKind.set(kind, { displayName, isCustomEndpoint });
+    }
+  }
+
+  const ledgerByKind = new Map<string, StatusBarProviderUsageLedgerEntry>();
+
+  if (mergedUsage) {
+    for (const provTotals of mergedUsage.providers) {
+      const kind = provTotals.provider;
+      const todayProv = todayBucket?.byProvider.get(kind);
+      const cacheAgg = cacheAggByProvider.get(kind);
+      const configured = configuredByKind.get(kind);
+      ledgerByKind.set(kind, {
+        key: `usage:${kind}`,
+        providerKind: kind,
+        providerName: configured?.displayName ?? canonicalProviderDisplayName(undefined, kind),
+        todayTokens: todayProv?.totalTokens ?? 0,
+        todayCostUsd: todayProv?.costUsd ?? 0,
+        weekTokens: provTotals.totalTokens,
+        weekCostUsd: provTotals.costUsd,
+        weekRecords: provTotals.records,
+        weekSessions: provTotals.sessions,
+        cacheHitPercent: cacheAgg
+          ? computeCacheHitPercent(cacheAgg.uncached, cacheAgg.cached, cacheAgg.creation)
+          : null,
+        hasQuotaWindow: windowProviderKinds?.has(kind) ?? false,
+        isCustomEndpoint: configured?.isCustomEndpoint ?? !(windowProviderKinds?.has(kind) ?? false),
+      });
+    }
+  }
+
+  // Ensure enabled configured providers (including custom API endpoints with 0 recent calls) appear cleanly
+  for (const [kind, configured] of configuredByKind) {
+    if (ledgerByKind.has(kind)) continue;
+    ledgerByKind.set(kind, {
+      key: `configured:${kind}`,
+      providerKind: kind,
+      providerName: configured.displayName,
+      todayTokens: 0,
+      todayCostUsd: 0,
+      weekTokens: 0,
+      weekCostUsd: 0,
+      weekRecords: 0,
+      weekSessions: 0,
+      cacheHitPercent: null,
+      hasQuotaWindow: windowProviderKinds?.has(kind) ?? false,
+      isCustomEndpoint: configured.isCustomEndpoint || !(windowProviderKinds?.has(kind) ?? false),
+    });
+  }
+
+  const providerRows = [...ledgerByKind.values()].sort(
+    (a, b) =>
+      b.todayTokens - a.todayTokens ||
+      b.weekTokens - a.weekTokens ||
+      b.weekRecords - a.weekRecords ||
+      a.providerName.localeCompare(b.providerName),
+  );
+
+  const weekTokens = mergedUsage?.totalTokens ?? 0;
+  const weekCostUsd = mergedUsage?.costUsd ?? 0;
+  const weekRecords = mergedUsage?.records ?? 0;
+  const weekSessions = mergedUsage?.sessions ?? 0;
+  const cacheHitPercent = mergedUsage
+    ? computeCacheHitPercent(
+        mergedUsage.uncachedInputTokens,
+        mergedUsage.cachedInputTokens,
+        mergedUsage.cacheCreationTokens,
+      )
+    : null;
+
+  return {
+    todayTokens: todayBucket?.totalTokens ?? 0,
+    todayCostUsd: todayBucket?.costUsd ?? 0,
+    weekTokens,
+    weekCostUsd,
+    weekRecords,
+    weekSessions,
+    cacheHitPercent,
+    cacheSavingsUsd: mergedUsage?.costQuality.cacheSavingsUsd ?? 0,
+    providers: providerRows,
+  };
+}
+
 /**
  * Collects legal usage windows across providers sorted by urgency, while strictly enforcing
- * the Antigravity ACP-only compliance boundary (zero unofficial quota scraping/display).
+ * the Antigravity ACP-only compliance boundary (zero unofficial quota scraping/display),
+ * and enriches with real local today/7-day usage telemetry from T3 Code's `useUsage`.
  */
 export function collectStatusBarUsageSummary(
   providers: readonly ServerProvider[],
   now = Date.now(),
+  mergedUsage?: MergedUsage | null,
+  todayDayKey?: string,
 ): StatusBarUsageSummary {
   const windows: StatusBarUsageWindowEntry[] = [];
   const antigravityEntries: StatusBarAntigravityAcpEntry[] = [];
+  const windowProviderKinds = new Set<string>();
+  let enabledProviderCount = 0;
 
   for (const provider of providers) {
     if (!provider.enabled) continue;
@@ -118,7 +375,7 @@ export function collectStatusBarUsageSummary(
       const authenticated = provider.auth?.status === "authenticated";
       antigravityEntries.push({
         providerInstanceId: provider.instanceId,
-        providerName: provider.displayName || "Antigravity",
+        providerName: canonicalProviderDisplayName(provider.displayName, provider.driver),
         authenticated,
         tierLabel: extractAntigravityAcpTierLabel(provider),
         cliCommands: ["/usage", "/credits"],
@@ -127,8 +384,12 @@ export function collectStatusBarUsageSummary(
       continue;
     }
 
+    enabledProviderCount += 1;
+
     const rawWindows = provider.usageLimits?.windows;
     if (!Array.isArray(rawWindows) || rawWindows.length === 0) continue;
+
+    windowProviderKinds.add(driverToUsageKind(provider.driver));
 
     for (const win of rawWindows) {
       const usedPercent = readWindowUsedPercent(win);
@@ -141,7 +402,7 @@ export function collectStatusBarUsageSummary(
       windows.push({
         key: `${provider.instanceId}:${win.id}`,
         providerInstanceId: provider.instanceId,
-        providerName: provider.displayName || provider.driver,
+        providerName: canonicalProviderDisplayName(provider.displayName, provider.driver),
         driver: provider.driver,
         windowId: win.id,
         label: win.label || win.id,
@@ -165,10 +426,19 @@ export function collectStatusBarUsageSummary(
     return a.providerName.localeCompare(b.providerName) || a.label.localeCompare(b.label);
   });
 
+  const telemetry = buildUsageTelemetrySummary(
+    mergedUsage,
+    providers,
+    todayDayKey,
+    windowProviderKinds,
+  );
+
   return {
     windows,
     antigravityEntries,
     primaryWindow: windows[0] ?? null,
+    telemetry,
+    enabledProviderCount,
   };
 }
 

@@ -94,10 +94,13 @@ import {
 } from "./methods/cliCommand.ts";
 import {
   getPrismuxDaemonInfo,
+  getPrismuxKeepAwakeState,
   getPrismuxWindowOcclusion,
   installPrismuxDownloadedUpdate,
   pickPrismuxWallpaperDirectory,
   pickPrismuxWallpaperFiles,
+  setPrismuxKeepAwake,
+  setPrismuxTrayRunningAgentsCount,
   setPrismuxUpdateFeedUrl,
 } from "./methods/prismux.ts";
 
@@ -205,4 +208,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(pickPrismuxWallpaperDirectory);
   yield* ipc.handle(setPrismuxUpdateFeedUrl);
   yield* ipc.handle(installPrismuxDownloadedUpdate);
+  yield* ipc.handle(setPrismuxKeepAwake);
+  yield* ipc.handle(getPrismuxKeepAwakeState);
+  yield* ipc.handle(setPrismuxTrayRunningAgentsCount);
 });

@@ -97,6 +97,10 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import {
+  ProviderDeleteDialog,
+  type PendingProviderDeletion,
+} from "./ProviderDeleteDialog";
 import { useManagedPolicy } from "~/state/managedPolicy";
 import { ExpandableText } from "./ExpandableText";
 import { IntervalSecondsField } from "./IntervalSecondsField";
@@ -129,14 +133,21 @@ import {
 import {
   buildProviderEnvironmentOptions,
   buildProviderInstanceOverridePatch,
+  buildProviderInstanceRows,
+  buildProviderRemovalMutation,
+  canDeleteProviderRow,
   classifyProviderEnvironmentAccess,
+  extractAcpRegistryManagedAgentId,
   isProviderSettingsEnvironmentAvailable,
   type ProviderEnvironmentAccess,
   type ProviderOperateAccess,
+  type ProviderSettingsRowDescriptor,
+  resolveNextSelectedProviderInstanceId,
   resolveRemoteOperateAccess,
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
 import { supportsDualLaunchMode } from "./prismuxProviderMeta";
+import { formatAgentBrandName } from "../../prismux/agentBrand";
 import {
   resolveEffectiveLaunchMode,
   useProviderLaunchModePreferences,
@@ -147,7 +158,7 @@ function providerInstanceName(instance: ProviderInstanceConfig): string {
   return (
     instance.displayName?.trim() ||
     providerClients.get(instance.driver)?.label ||
-    String(instance.driver)
+    formatAgentBrandName(String(instance.driver))
   );
 }
 
@@ -168,12 +179,6 @@ function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<st
   return [...new Set([...currentSet, ...nextSet])]
     .filter((model) => currentSet.has(model) !== nextSet.has(model))
     .map((model) => ({ model, selected: nextSet.has(model) }));
-}
-
-function providerConfigString(config: unknown, key: string): string | null {
-  if (config === null || typeof config !== "object") return null;
-  const value = (config as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
@@ -621,6 +626,11 @@ export function EnvironmentProviderSettings({
   });
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
+  const [pendingDeletion, setPendingDeletion] = useState<PendingProviderDeletion | null>(null);
+  const [isDeletingProvider, setIsDeletingProvider] = useState(false);
+  const [dismissedInstanceIds, setDismissedInstanceIds] = useState<
+    ReadonlySet<ProviderInstanceId>
+  >(() => new Set());
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
     targetInstanceId ?? null,
   );
@@ -628,6 +638,7 @@ export function EnvironmentProviderSettings({
     ReadonlySet<ProviderInstanceId>
   >(() => new Set());
   const refreshingRef = useRef(false);
+  const deletingProviderRef = useRef(false);
   const updatingInstanceIdsRef = useRef<Set<ProviderInstanceId>>(new Set());
 
   const acceptUrlAuthentication = useStableCallback(
@@ -746,84 +757,18 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  interface InstanceRow {
-    readonly instanceId: ProviderInstanceId;
-    /** Undefined for a default slot the user never configured. */
-    readonly explicitInstance: ProviderInstanceConfig | undefined;
-    readonly driver: ProviderDriverKind;
-    readonly isDefault: boolean;
-    readonly isDirty?: boolean;
-  }
-
-  const instancesByDriver = new Map<
-    ProviderDriverKind,
-    Array<[ProviderInstanceId, ProviderInstanceConfig]>
-  >();
-  for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
-    const driver = instance.driver;
-    const list = instancesByDriver.get(driver) ?? [];
-    list.push([rawId as ProviderInstanceId, instance]);
-    instancesByDriver.set(driver, list);
-  }
-
-  const defaultSlotIdsBySource = new Set<string>(
-    visibleProviderSettings.map((providerSettings) =>
-      String(defaultInstanceIdForDriver(providerSettings.provider)),
-    ),
-  );
-
-  const rows: InstanceRow[] = [];
-  const visibleDriverKinds = new Set<ProviderDriverKind>(
-    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
-  );
-
-  for (const providerSettings of visibleProviderSettings) {
-    const driver = providerSettings.provider;
-    const defaultInstanceId = defaultInstanceIdForDriver(driver);
-    const explicitInstance = settings.providerInstances?.[defaultInstanceId];
-    const isDirty = explicitInstance !== undefined;
-    const hasDefaultSlot = providerSettings.hasDefaultInstance || explicitInstance !== undefined;
-    if (
-      hasDefaultSlot &&
-      (driver === "codex" ||
-        driver === "claudeAgent" ||
-        isDirty ||
-        resolveProviderInstanceEnabled(explicitInstance ?? { driver }) ||
-        defaultInstanceId === targetInstanceId)
-    ) {
-      rows.push({
-        instanceId: defaultInstanceId,
-        explicitInstance,
-        driver,
-        isDefault: true,
-        isDirty,
-      });
-    }
-    for (const [id, instance] of instancesByDriver.get(providerSettings.provider) ?? []) {
-      if (id === defaultInstanceId) continue;
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: false,
-      });
-    }
-  }
-  for (const [driver, list] of instancesByDriver) {
-    if (visibleDriverKinds.has(driver)) continue;
-    for (const [id, instance] of list) {
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: defaultSlotIdsBySource.has(String(id)),
-      });
-    }
-  }
+  const rows = buildProviderInstanceRows({
+    visibleProviderSettings,
+    providerInstances: settings.providerInstances,
+    hiddenDefaultProviderInstances: settings.hiddenDefaultProviderInstances,
+    targetInstanceId,
+    dismissedInstanceIds,
+  });
 
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
     selectedInstanceId === targetInstanceId &&
+    !dismissedInstanceIds.has(targetInstanceId) &&
     !rows.some((row) => row.instanceId === targetInstanceId);
   const selectedRow =
     rows.find((row) => row.instanceId === selectedInstanceId) ??
@@ -884,40 +829,80 @@ export function EnvironmentProviderSettings({
       persistInstance(instanceId, next),
   );
 
-  const deleteInstance = useStableCallback(
-    async (instanceId: ProviderInstanceId, instance: ProviderInstanceConfig) => {
-      const confirmed = await confirmProviderInstanceRemoval(
-        gt("Remove the {provider} provider instance?", {
-          provider: providerInstanceName(instance),
-        }),
-      );
-      if (!confirmed) return;
-      const updateResult = await persistProviderInstance({
-        operation: "remove",
-        instanceId,
+  const requestDeleteInstance = useStableCallback(
+    (row: ProviderSettingsRowDescriptor, instance: ProviderInstanceConfig) => {
+      if (readOnly || deletingProviderRef.current) return;
+      setPendingDeletion({
+        instanceId: row.instanceId,
+        driver: row.driver,
+        instance,
+        displayName: providerInstanceName(instance),
+        removalKind: row.removalKind,
+        managedAcpAgentId: extractAcpRegistryManagedAgentId(instance),
       });
+    },
+  );
+
+  const confirmDeleteInstance = useStableCallback(async () => {
+    if (!pendingDeletion || deletingProviderRef.current) return;
+    const target = pendingDeletion;
+    deletingProviderRef.current = true;
+    setIsDeletingProvider(true);
+    try {
+      const shouldClearTextGen =
+        resolveAppModelSelectionState(settings, serverProviders).instanceId === target.instanceId &&
+        readEnvironmentScope(environmentId, AuthSettingsWriteScope);
+      const mutation = buildProviderRemovalMutation({
+        instanceId: target.instanceId,
+        removalKind: target.removalKind,
+      });
+      const updateResult = shouldClearTextGen
+        ? await persistProviderInstance(mutation, {
+            textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+          })
+        : await persistProviderInstance(mutation);
       if (updateResult._tag === "Failure") {
-        const error = squashAtomCommandFailure(updateResult);
-        toastManager.add({
-          type: "error",
-          title: gt("Could not delete provider instance"),
-          description:
-            error instanceof Error
-              ? (thrownErrorMessage(error, resolveNow) ?? error.message)
-              : gt("The settings update failed."),
-        });
+        if (!isAtomCommandInterrupted(updateResult)) {
+          const error = squashAtomCommandFailure(updateResult);
+          toastManager.add({
+            type: "error",
+            title: gt("Could not delete provider configuration"),
+            description:
+              error instanceof Error
+                ? (thrownErrorMessage(error, resolveNow) ?? error.message)
+                : gt("The settings update failed."),
+          });
+        }
         return;
       }
 
-      if (instance.driver !== ProviderDriverKind.make("acpRegistry")) return;
-      if (providerConfigString(instance.config, "source") === "local") return;
-      const agentId = providerConfigString(instance.config, "agentId");
-      if (agentId === null) return;
+      const nextSelected = resolveNextSelectedProviderInstanceId(
+        rows,
+        target.instanceId,
+        selectedRow?.instanceId ?? selectedInstanceId,
+      );
+      setDismissedInstanceIds((previous) => {
+        const next = new Set(previous);
+        next.add(target.instanceId);
+        return next;
+      });
+      setSelectedInstanceId(nextSelected);
+      setInstanceMode(target.instanceId, null);
+      setPendingDeletion(null);
+      toastManager.add({
+        type: "success",
+        title: gt("Provider configuration deleted"),
+        description: gt("{provider} ({instanceId}) has been removed.", {
+          provider: target.displayName,
+          instanceId: target.instanceId,
+        }),
+      });
 
+      if (target.managedAcpAgentId === null) return;
       // Concurrent removals race client snapshots; let the server decide whether the agent remains in use.
       const uninstallResult = await uninstallAcpRegistryManagedBinary({
         environmentId,
-        input: { agentId },
+        input: { agentId: target.managedAcpAgentId },
       });
       if (uninstallResult._tag === "Failure" && !isAtomCommandInterrupted(uninstallResult)) {
         const error = squashAtomCommandFailure(uninstallResult);
@@ -930,8 +915,11 @@ export function EnvironmentProviderSettings({
               : gt("Managed binary cleanup failed."),
         });
       }
-    },
-  );
+    } finally {
+      deletingProviderRef.current = false;
+      setIsDeletingProvider(false);
+    }
+  });
 
   const resetDefaultInstance = useStableCallback(async (driverKind: ProviderDriverKind) => {
     const instanceId = defaultInstanceIdForDriver(driverKind);
@@ -985,7 +973,7 @@ export function EnvironmentProviderSettings({
     runProviderUpdate,
     updateInstance,
     enableInstance,
-    deleteInstance,
+    requestDeleteInstance,
     resetDefaultInstance,
     writeProjectOverride,
     updateModelPreferences: stableUpdateModelPreferences,
@@ -997,7 +985,7 @@ export function EnvironmentProviderSettings({
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
 
   const representativeProjectId = projectIds[0];
-  const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
+  const renderProviderInstance = (row: ProviderSettingsRowDescriptor, mode: "list" | "editor") => {
     const showProjectOverride =
       representativeProjectId !== undefined && supportsProjectProviderOverrides;
     const dualModeSupported = supportsDualLaunchMode({
@@ -1017,11 +1005,7 @@ export function EnvironmentProviderSettings({
         key={row.instanceId}
         environmentId={environmentId}
         environmentLabel={environmentLabel}
-        instanceId={row.instanceId}
-        driver={row.driver}
-        explicitInstance={row.explicitInstance}
-        isDefault={row.isDefault}
-        isDirty={row.isDirty === true}
+        row={row}
         mode={mode}
         selected={mode === "list" && selectedRow?.instanceId === row.instanceId}
         readOnly={readOnly}
@@ -1180,7 +1164,7 @@ export function EnvironmentProviderSettings({
           divided={false}
           className={cn(
             providerCardHeightClassName,
-            "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[20.5rem_minmax(0,1fr)]",
+            "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[22rem_minmax(0,1fr)]",
           )}
         >
           <div className="border-b border-border/60 bg-muted/10 @min-[48rem]/providers:flex @min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-col @min-[48rem]/providers:border-r @min-[48rem]/providers:border-b-0">
@@ -1235,11 +1219,36 @@ export function EnvironmentProviderSettings({
                   {renderProviderInstance(selectedRow, "editor")}
                 </div>
               </ScrollArea>
-            ) : (
+            ) : targetInstanceMissing ? (
               <div className="p-6 text-sm text-muted-foreground">
-                {targetInstanceMissing
-                  ? gt("This provider instance is no longer available on this device.")
-                  : gt("No providers configured.")}
+                {gt("This provider instance is no longer available on this device.")}
+              </div>
+            ) : (
+              <div
+                data-slot="providers-empty-state"
+                className="flex h-full items-center justify-center p-6"
+              >
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>{gt("No providers configured.")}</EmptyTitle>
+                    <EmptyDescription>
+                      {gt("Add a provider to start chatting with your coding agents.")}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  {canAddProvider ? (
+                    <EmptyContent>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setIsAddInstanceDialogOpen(true)}
+                      >
+                        <PlusIcon className="size-3.5" />
+                        <T>Add provider</T>
+                      </Button>
+                    </EmptyContent>
+                  ) : null}
+                </Empty>
               </div>
             )}
           </div>
@@ -1346,9 +1355,24 @@ export function EnvironmentProviderSettings({
           environmentId={environmentId}
           environmentLabel={environmentLabel}
           onOpenChange={setIsAddInstanceDialogOpen}
-          onCreated={setSelectedInstanceId}
+          onCreated={(createdId) => {
+            setDismissedInstanceIds((previous) => {
+              if (!previous.has(createdId)) return previous;
+              const next = new Set(previous);
+              next.delete(createdId);
+              return next;
+            });
+            setSelectedInstanceId(createdId);
+          }}
         />
       ) : null}
+
+      <ProviderDeleteDialog
+        target={pendingDeletion}
+        isDeleting={isDeletingProvider}
+        onCancel={() => setPendingDeletion(null)}
+        onConfirm={confirmDeleteInstance}
+      />
     </>
   );
 }
@@ -1371,10 +1395,10 @@ interface ProviderInstanceRowActions {
     instanceId: ProviderInstanceId,
     next: ProviderInstanceConfig,
   ) => Promise<boolean>;
-  readonly deleteInstance: (
-    instanceId: ProviderInstanceId,
+  readonly requestDeleteInstance: (
+    row: ProviderSettingsRowDescriptor,
     instance: ProviderInstanceConfig,
-  ) => Promise<void>;
+  ) => void;
   readonly resetDefaultInstance: (driverKind: ProviderDriverKind) => Promise<void>;
   readonly writeProjectOverride: (
     instanceId: ProviderInstanceId,
@@ -1395,11 +1419,7 @@ const NO_MODELS: ReadonlyArray<string> = [];
 function ProviderInstanceRow({
   environmentId,
   environmentLabel,
-  instanceId,
-  driver,
-  explicitInstance,
-  isDefault,
-  isDirty,
+  row,
   mode,
   selected,
   readOnly,
@@ -1417,11 +1437,7 @@ function ProviderInstanceRow({
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
-  readonly instanceId: ProviderInstanceId;
-  readonly driver: ProviderDriverKind;
-  readonly explicitInstance: ProviderInstanceConfig | undefined;
-  readonly isDefault: boolean;
-  readonly isDirty: boolean;
+  readonly row: ProviderSettingsRowDescriptor;
   readonly mode: "list" | "editor";
   readonly selected: boolean;
   readonly readOnly: boolean;
@@ -1439,6 +1455,7 @@ function ProviderInstanceRow({
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
 }) {
+  const { instanceId, driver, explicitInstance, isCoreDefault, isDirty, removalKind } = row;
   const gt = useGT();
   const allProjects = useProjects();
   const secretSources = useSecretSources(environmentId);
@@ -1585,13 +1602,15 @@ function ProviderInstanceRow({
         ) : null
       }
       onUpdate={(next) => actions.updateInstance(instanceId, instance, next)}
+      removalKind={removalKind}
+      showDeleteSlot={mode === "list" && !readOnly}
       onDelete={
-        mode === "editor" && !isDefault
-          ? () => actions.deleteInstance(instanceId, instance)
+        canDeleteProviderRow({ explicitInstance, isCoreDefault, readOnly })
+          ? () => actions.requestDeleteInstance(row, instance)
           : undefined
       }
       headerAction={
-        mode === "editor" && isDefault && isDirty ? (
+        mode === "editor" && isCoreDefault && isDirty ? (
           <SettingResetButton
             ariaLabel={gt("Reset {provider} provider settings to default", {
               provider: resetLabel,

@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
-import { decodeMsg } from "gt-react";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { decodeMsg, GTProvider, initializeGT } from "gt-react";
 
 import { settingsBreadcrumbLabel } from "./SettingsBreadcrumb";
 import {
@@ -16,8 +18,22 @@ import {
   findSettingsNavTarget,
   resolveSettingsNavActivePath,
   SETTINGS_NAV_PARENT_ALIASES,
+  SETTINGS_SIDEBAR_LAYOUT,
   transitionIndicatorState,
 } from "./settingsSidebarMotion";
+
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
+  useLocation: () => "",
+}));
+
+vi.mock("./useAvailableSettingsSearchItems", () => ({
+  useAvailableSettingsSearchItems: () => [],
+  useHasSecretProvidersEnvironment: () => false,
+}));
+
+import { SidebarProvider } from "../ui/sidebar";
+import { SettingsSidebarNav } from "./SettingsSidebarNav";
 
 describe("settings sidebar navigation grouping, deduplication & conflict cleanup", () => {
   it("organizes settings into 4 clean logical groups without duplicates and honors platform/capability gates", () => {
@@ -33,6 +49,7 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
       [
         "/settings/general",
         "/settings/appearance",
+        "/settings/wallpaper",
         "/settings/chat",
         "/settings/keybindings",
         "/settings/voice",
@@ -55,8 +72,13 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
 
     const flatWindows = groupsWindows.flatMap((group) => group.paths);
     expect(new Set(flatWindows).size).toBe(flatWindows.length);
+    // Appearance & Wallpaper are independent sibling entries in Group 1
+    expect(flatWindows).toContain("/settings/appearance");
+    expect(flatWindows).toContain("/settings/wallpaper");
+    expect(flatWindows.indexOf("/settings/wallpaper")).toBe(
+      flatWindows.indexOf("/settings/appearance") + 1,
+    );
     // Merged / removed top-level entries
-    expect(flatWindows).not.toContain("/settings/wallpaper");
     expect(flatWindows).not.toContain("/settings/updates");
     expect(flatWindows).not.toContain("/settings/labs");
     expect(flatWindows).not.toContain("/settings/snap-shot");
@@ -81,9 +103,12 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
         expect(decodeMsg(SETTINGS_SECTION_LABELS[path]).trim().length).toBeGreaterThan(0);
       }
     }
-    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("Appearance & Wallpaper");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("Appearance");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("Wallpaper");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/diagnostics"])).toBe("Service Diagnostics");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/about"])).toBe("About & Updates");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/appearance") ?? "")).toBe("Appearance");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/wallpaper") ?? "")).toBe("Wallpaper");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/about") ?? "")).toBe("About & Updates");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/diagnostics") ?? "")).toBe(
       "Service Diagnostics",
@@ -104,13 +129,17 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(byId.get("prismux-updates")?.to).toBe("/settings/about");
   });
 
-  it("maps legacy and merged deep-link routes to their owning sidebar group & item", () => {
+  it("resolves independent /settings/wallpaper entry and maps remaining legacy deep links to their owning sidebar item", () => {
     const groups = settingsNavGroups(false, false);
 
-    expect(SETTINGS_NAV_PARENT_ALIASES["/settings/wallpaper"]).toBe("/settings/appearance");
-    expect(resolveSettingsNavActivePath("/settings/wallpaper")).toBe("/settings/appearance");
-    expect(resolveSettingsNavActivePath("/settings/wallpaper/")).toBe("/settings/appearance");
+    expect(SETTINGS_NAV_PARENT_ALIASES["/settings/wallpaper"]).toBeUndefined();
+    expect(resolveSettingsNavActivePath("/settings/wallpaper")).toBe("/settings/wallpaper");
+    expect(resolveSettingsNavActivePath("/settings/wallpaper/")).toBe("/settings/wallpaper");
     expect(findSettingsNavTarget(groups, "/settings/wallpaper")).toEqual({
+      groupId: "general-appearance",
+      path: "/settings/wallpaper",
+    });
+    expect(findSettingsNavTarget(groups, "/settings/appearance")).toEqual({
       groupId: "general-appearance",
       path: "/settings/appearance",
     });
@@ -163,7 +192,7 @@ describe("settings sidebar indicator motion state machine", () => {
       mode: "instant",
     });
 
-    // Intra-group move: General -> Appearance & Wallpaper (both in group 1) => slide
+    // Intra-group move: General -> Appearance -> Wallpaper (all in group 1) => slide
     const slid = transitionIndicatorState(
       start,
       { groupId: "general-appearance", path: "/settings/appearance" },
@@ -177,14 +206,26 @@ describe("settings sidebar indicator motion state machine", () => {
     });
     expect(slid.groupStates["agents-workspace"]?.visible).toBe(false);
 
+    const slidToWallpaper = transitionIndicatorState(
+      slid,
+      { groupId: "general-appearance", path: "/settings/wallpaper" },
+      { groups, reducedMotion: false, initialMode: "instant" },
+    );
+    expect(slidToWallpaper.mode).toBe("slide");
+    expect(slidToWallpaper.groupStates["general-appearance"]).toEqual({
+      visible: true,
+      path: "/settings/wallpaper",
+      mode: "slide",
+    });
+
     const slideStyle = buildIndicatorPillStyle({
       state: slid.groupStates["general-appearance"],
-      geometry: { y: 36, height: 32 },
+      geometry: { y: 30, height: SETTINGS_SIDEBAR_LAYOUT.itemHeightPx },
       kind: "active",
       reducedMotion: false,
     });
-    expect(slideStyle.transform).toBe("translate3d(0, 36px, 0)");
-    expect(slideStyle.height).toBe("32px");
+    expect(slideStyle.transform).toBe("translate3d(0, 30px, 0)");
+    expect(slideStyle.height).toBe("28px");
     expect(slideStyle.opacity).toBe(1);
     expect(slideStyle.transitionProperty).toBe("transform, height, opacity");
 
@@ -208,7 +249,7 @@ describe("settings sidebar indicator motion state machine", () => {
 
     const departingStyle = buildIndicatorPillStyle({
       state: crossfaded.groupStates["general-appearance"],
-      geometry: { y: 36, height: 32 },
+      geometry: { y: 30, height: SETTINGS_SIDEBAR_LAYOUT.itemHeightPx },
       kind: "active",
       reducedMotion: false,
     });
@@ -217,12 +258,13 @@ describe("settings sidebar indicator motion state machine", () => {
 
     const arrivingStyle = buildIndicatorPillStyle({
       state: crossfaded.groupStates["agents-workspace"],
-      geometry: { y: 0, height: 32 },
+      geometry: { y: 0, height: SETTINGS_SIDEBAR_LAYOUT.itemHeightPx },
       kind: "active",
       reducedMotion: false,
     });
     expect(arrivingStyle.opacity).toBe(1);
     expect(arrivingStyle.transform).toBe("translate3d(0, 0px, 0)");
+    expect(arrivingStyle.height).toBe("28px");
     expect(arrivingStyle.transitionProperty).toBe("opacity");
 
     // Next move inside Group 2 resumes smooth sliding
@@ -333,15 +375,93 @@ describe("settings sidebar indicator motion state machine", () => {
   it("compares geometry maps by value to prevent ResizeObserver loops", () => {
     expect(
       areGeometryMapsEqual(
-        { "/settings/general": { y: 0, height: 32 }, "/settings/appearance": { y: 36, height: 32 } },
-        { "/settings/general": { y: 0, height: 32 }, "/settings/appearance": { y: 36, height: 32 } },
+        { "/settings/general": { y: 0, height: 28 }, "/settings/appearance": { y: 30, height: 28 } },
+        { "/settings/general": { y: 0, height: 28 }, "/settings/appearance": { y: 30, height: 28 } },
       ),
     ).toBe(true);
     expect(
       areGeometryMapsEqual(
+        { "/settings/general": { y: 0, height: 28 } },
         { "/settings/general": { y: 0, height: 32 } },
-        { "/settings/general": { y: 0, height: 36 } },
       ),
     ).toBe(false);
+  });
+
+  it("enforces divider-free typography & spacing hierarchy (heading > sub-menu, group gap >> item gap)", () => {
+    expect(SETTINGS_SIDEBAR_LAYOUT.horizontalDividerCount).toBe(0);
+    expect(SETTINGS_SIDEBAR_LAYOUT.headingFontSizePx).toBeGreaterThan(
+      SETTINGS_SIDEBAR_LAYOUT.itemFontSizePx,
+    );
+    expect(SETTINGS_SIDEBAR_LAYOUT.interGroupGapPx).toBeGreaterThan(
+      SETTINGS_SIDEBAR_LAYOUT.headingBottomGapPx,
+    );
+    expect(SETTINGS_SIDEBAR_LAYOUT.headingBottomGapPx).toBeGreaterThan(
+      SETTINGS_SIDEBAR_LAYOUT.intraGroupItemGapPx,
+    );
+
+    initializeGT({ defaultLocale: "zh" });
+    const html = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        null,
+        createElement(
+          SidebarProvider,
+          { defaultOpen: true },
+          createElement(SettingsSidebarNav, { pathname: "/settings/general" }),
+        ),
+      ),
+    );
+
+    // Zero horizontal divider lines (<hr> or border-t) between category groups
+    expect(html).not.toContain("<hr");
+    expect(html).not.toMatch(/\bborder-t\b/);
+
+    // All 4 category groups render prominent headings visibly on desktop (not unconditionally sr-only)
+    for (const groupId of [
+      "general-appearance",
+      "agents-workspace",
+      "extensions-data",
+      "system-about",
+    ]) {
+      const headingPattern = new RegExp(
+        `<h3[^>]*data-settings-nav-heading="${groupId}"[^>]*class="([^"]+)"`,
+      );
+      const match = html.match(headingPattern);
+      expect(match, `missing heading for ${groupId}`).not.toBeNull();
+      const headingClasses = match?.[1] ?? "";
+      expect(headingClasses).toContain("text-sm");
+      expect(headingClasses).toContain("font-semibold");
+      expect(headingClasses).toContain("mb-1.5");
+      // Must NOT have standalone desktop sr-only (only responsive max-md:sr-only for compact rail)
+      expect(headingClasses.split(/\s+/)).not.toContain("sr-only");
+    }
+
+    // Generous inter-group gap + tight intra-group menu cadence + compact sub-menu items
+    expect(html).toContain("gap-6");
+    expect(html).toContain("relative isolate gap-0.5");
+    expect(html).toContain("h-7");
+    expect(html).toContain("text-[12.5px]");
+    expect(html).toContain("[&amp;&gt;svg]:size-3.5");
+    expect(html).toContain('data-settings-section="/settings/appearance"');
+    expect(html).toContain('data-settings-section="/settings/wallpaper"');
+
+    // /settings/wallpaper highlights its own sidebar entry directly rather than aliasing /settings/appearance
+    const wallpaperActiveHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        null,
+        createElement(
+          SidebarProvider,
+          { defaultOpen: true },
+          createElement(SettingsSidebarNav, { pathname: "/settings/wallpaper" }),
+        ),
+      ),
+    );
+    expect(wallpaperActiveHtml).toMatch(
+      /data-settings-section="\/settings\/wallpaper"[^>]*aria-current="page"|aria-current="page"[^>]*data-settings-section="\/settings\/wallpaper"/,
+    );
+    expect(wallpaperActiveHtml).not.toMatch(
+      /data-settings-section="\/settings\/appearance"[^>]*aria-current="page"|aria-current="page"[^>]*data-settings-section="\/settings\/appearance"/,
+    );
   });
 });

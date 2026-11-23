@@ -1,6 +1,8 @@
 import {
   DEFAULT_APPEARANCE_CONFIG,
   applyPrismuxAppearanceToDocument,
+  installPrismuxFloatingScrollbars,
+  installPrismuxShellCutout,
   normalizeAppearanceConfig,
   resolveBasePolarity,
   setThemeModeWithGlassAutoWake,
@@ -905,6 +907,25 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       wallpaperStore.dispose();
     };
   }, [wallpaperStore]);
+
+  // Install pointer-aware auto-hiding floating scrollbars for the workbench lifetime.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const handle = installPrismuxFloatingScrollbars(document);
+    return () => {
+      handle.dispose();
+    };
+  }, []);
+
+  // Install single-layer viewport-wide SVG <mask> shell cutout backdrop before first paint
+  // (eliminates Chromium multi-surface backdrop-filter corner color mismatch & subpixel seams).
+  useLayoutEffect(() => {
+    if (typeof document === "undefined") return;
+    const handle = installPrismuxShellCutout(document);
+    return () => {
+      handle.dispose();
+    };
+  }, []);
 
   // Track prefers-reduced-transparency media query for live accessibility fallback.
   useEffect(() => {

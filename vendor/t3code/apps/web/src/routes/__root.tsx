@@ -217,7 +217,7 @@ function RootRouteBranch() {
       className={cn(
         "relative z-[1] flex h-dvh w-full flex-col overflow-hidden",
         showStatusBar &&
-          "[&_[data-slot=sidebar-wrapper]]:!h-full [&_[data-slot=sidebar-wrapper]]:!min-h-0 [&_[data-slot=sidebar-inset]]:!h-full [&_[data-slot=sidebar-inset]]:!min-h-0 [&_[data-slot=sidebar-container]]:!bottom-6 [&_[data-slot=sidebar-container]]:!h-[calc(100dvh-1.5rem)]",
+          "[&_[data-slot=sidebar-wrapper]]:!h-full [&_[data-slot=sidebar-wrapper]]:!min-h-0 [&_[data-slot=sidebar-inset]]:!h-full [&_[data-slot=sidebar-inset]]:!min-h-0 [&_[data-slot=sidebar-container]]:!bottom-[var(--pmx-status-bar-height,20px)] [&_[data-slot=sidebar-container]]:!h-[calc(100dvh-var(--pmx-status-bar-height,20px))]",
       )}
     >
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">

@@ -10,6 +10,11 @@ import { useCloseAppModal } from "./sidebar/mainAppLocation";
 import { GlobalVoiceInputIndicator } from "./chat/GlobalVoiceInputIndicator";
 import { Button } from "./ui/button";
 import { DialogBackdrop } from "./ui/dialog";
+import {
+  createBackdropDismissGuardState,
+  recordBackdropPointerDown,
+  shouldDismissOnBackdropClick,
+} from "./ui/dialog-styles";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 /**
@@ -20,8 +25,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 export function AppRouteModal({ label, children }: { label: string; children: ReactNode }) {
   const closeAppModal = useCloseAppModal();
   const [open, setOpen] = useState(true);
-  // Text selection that ends on the backdrop is not a dismissal.
-  const backdropPressRef = useRef(false);
+  // Text selection ending on backdrop or dismissing an inner Select/Popover must never close Settings.
+  const backdropGuardRef = useRef(createBackdropDismissGuardState());
   // Focus the surface, not its first control: no stray focus ring, no phone keyboard.
   // On close, return focus to the opener only after a keyboard close; after a pointer close it
   // would paint a focus ring.
@@ -32,9 +37,16 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
       (document.activeElement instanceof HTMLElement ? document.activeElement : null),
   );
   // Clear the native window controls (macOS traffic lights, the Windows and Linux caption
-  // buttons). Below sm the modal fills the window and leaves that strip empty; up to lg its
-  // 1.5rem inset is shorter than the strip.
+  // buttons) symmetrically on top and bottom so the modal stays strictly centered in the viewport.
   const nativeTitlebarHeight = useNativeTitlebarHeight();
+
+  const requestClose = () => {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && popupRef.current?.contains(focused)) focused.blur();
+    setOpen(false);
+  };
+
+  const portalContainer = typeof document !== "undefined" ? document.body : undefined;
 
   return (
     <DialogPrimitive.Root
@@ -55,33 +67,43 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
         }
         // Closing unmounts a focused field without a blur, so commit-on-blur rows would
         // drop what was typed. Blur first so they commit.
-        const focused = document.activeElement;
-        if (focused instanceof HTMLElement && popupRef.current?.contains(focused)) focused.blur();
-        setOpen(false);
+        requestClose();
       }}
       onOpenChangeComplete={(nextOpen) => {
         if (!nextOpen) void closeAppModal();
       }}
     >
-      <DialogPrimitive.Portal>
-        <DialogBackdrop />
+      <DialogPrimitive.Portal container={portalContainer}>
+        <DialogBackdrop
+          onPointerDownCapture={(event) => {
+            recordBackdropPointerDown(backdropGuardRef.current, event, popupRef.current);
+          }}
+          onClick={(event) => {
+            if (shouldDismissOnBackdropClick(backdropGuardRef.current, event, popupRef.current)) {
+              requestClose();
+            }
+          }}
+        />
         <DialogPrimitive.Viewport
+          data-slot="app-route-modal-viewport"
           style={
             {
               "--app-modal-titlebar-height": `${nativeTitlebarHeight}px`,
               "--app-modal-top-inset": `max(env(safe-area-inset-top), ${nativeTitlebarHeight}px)`,
-              "--app-modal-sm-top": `max(1.5rem, ${nativeTitlebarHeight}px)`,
+              "--app-modal-safe-y": `max(1.5rem, ${nativeTitlebarHeight}px)`,
+              "--app-modal-lg-y": `max(2.5rem, ${nativeTitlebarHeight}px)`,
             } as CSSProperties
           }
           // Electron hit-tests drag regions under the backdrop regardless of z-index; without
           // this, presses above the modal move the window instead of dismissing it.
-          className="fixed inset-0 z-50 flex items-center justify-center [-webkit-app-region:no-drag] sm:p-6 sm:pt-(--app-modal-sm-top) lg:p-10"
-          onPointerDown={(event) => {
-            backdropPressRef.current = event.target === event.currentTarget;
+          className="fixed inset-0 z-50 flex items-center justify-center [-webkit-app-region:no-drag] sm:px-6 sm:py-(--app-modal-safe-y) lg:px-10 lg:py-(--app-modal-lg-y)"
+          onPointerDownCapture={(event) => {
+            recordBackdropPointerDown(backdropGuardRef.current, event, popupRef.current);
           }}
           onClick={(event) => {
-            if (backdropPressRef.current && event.target === event.currentTarget) setOpen(false);
-            backdropPressRef.current = false;
+            if (shouldDismissOnBackdropClick(backdropGuardRef.current, event, popupRef.current)) {
+              requestClose();
+            }
           }}
         >
           <DialogPrimitive.Popup
@@ -98,6 +120,7 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
               return false;
             }}
             aria-label={label}
+            data-pmx-glass-zone="overlays"
             data-slot="dialog-popup"
             data-app-modal=""
             className="relative flex size-full min-h-0 min-w-0 flex-col overflow-hidden bg-background max-sm:pt-(--app-modal-top-inset) max-sm:pb-safe text-foreground outline-none transition-[opacity,scale] duration-150 ease-out [-webkit-app-region:no-drag] data-ending-style:scale-[0.985] data-ending-style:opacity-0 data-starting-style:scale-[0.985] data-starting-style:opacity-0 sm:max-h-[60rem] sm:max-w-[80rem] sm:rounded-2xl sm:border sm:shadow-2xl/40"

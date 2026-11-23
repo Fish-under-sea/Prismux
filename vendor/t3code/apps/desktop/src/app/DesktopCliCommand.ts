@@ -87,6 +87,7 @@ export const make = Effect.gen(function* () {
   const path = environment.path;
   const windows = environment.platform === "win32";
   const launcher = DesktopCliShim.launcherPath(environment);
+  const legacyLauncher = DesktopCliShim.legacyAliasLauncherPath(environment);
   const binDirectory = path.dirname(launcher);
   const ownedPathMarker = path.join(environment.stateDir, "cli-command-path-entry");
   const firstLaunchMarker = path.join(environment.stateDir, "cli-command-first-launch");
@@ -94,9 +95,11 @@ export const make = Effect.gen(function* () {
   const fail = (message: string) => new DesktopCliCommandError({ message });
   const exists = (target: string) => fs.exists(target).pipe(Effect.orElseSucceed(() => false));
   // Read before this launch writes either one: an app that ran before left its launcher or
-  // settings. Its user may have removed t3 or chosen another, so only Settings installs there.
+  // settings. Its user may have removed prismux/t3 or chosen another, so only Settings installs there.
   const freshInstall =
-    !(yield* exists(launcher)) && !(yield* exists(environment.desktopSettingsPath));
+    !(yield* exists(launcher)) &&
+    !(yield* exists(legacyLauncher)) &&
+    !(yield* exists(environment.desktopSettingsPath));
   const writableDirectory = (directory: string) =>
     fs.access(directory, { writable: true }).pipe(
       Effect.as(true),
@@ -106,24 +109,31 @@ export const make = Effect.gen(function* () {
   const isOurLink = Effect.fn("DesktopCliCommand.isOurLink")(
     function* (link: string) {
       yield* fs.readLink(link);
-      // The launcher is a few KB; never read a large binary another `t3` links to.
+      // The launcher is a few KB; never read a large binary another command links to.
       const info = yield* fs.stat(link);
       if (info.type !== "File" || Number(info.size) > 16_384) return false;
       const content = yield* fs.readFileString(link);
-      return content.includes(DesktopCliShim.MARKER);
+      return DesktopCliShim.isManagedCliShimContent(content);
     },
     Effect.orElseSucceed(() => false),
   );
 
   // PATH can reach the regular launcher directly; removal still requires isOurLink.
   const runsOurLauncher = Effect.fn("DesktopCliCommand.runsOurLauncher")(
-    // Another T3 home's link is marked too, so compare where it leads, not the marker alone.
+    // Another Prismux home's link is marked too, so compare where it leads, not the marker alone.
     function* (candidate: string) {
-      const [resolved, ours] = yield* Effect.all([fs.realPath(candidate), fs.realPath(launcher)]);
-      if (resolved !== ours) return false;
+      const resolved = yield* fs.realPath(candidate);
+      const primaryReal = yield* fs.realPath(launcher).pipe(Effect.option);
+      const legacyReal = yield* fs.realPath(legacyLauncher).pipe(Effect.option);
+      if (
+        resolved !== Option.getOrUndefined(primaryReal) &&
+        resolved !== Option.getOrUndefined(legacyReal)
+      ) {
+        return false;
+      }
       const info = yield* fs.stat(candidate);
       if (info.type !== "File" || Number(info.size) > 16_384) return false;
-      return (yield* fs.readFileString(candidate)).includes(DesktopCliShim.MARKER);
+      return DesktopCliShim.isManagedCliShimContent(yield* fs.readFileString(candidate));
     },
     Effect.orElseSucceed(() => false),
   );
@@ -172,7 +182,7 @@ export const make = Effect.gen(function* () {
 
   const firstOnPath = Effect.gen(function* () {
     for (const directory of pathEntries(env.PATH, ":")) {
-      const candidate = path.join(directory, "t3");
+      const candidate = path.join(directory, DesktopCliShim.PRIMARY_CLI_COMMAND);
       if (yield* isExecutableFile(candidate)) return Option.some(candidate);
     }
     return Option.none<string>();
@@ -188,7 +198,7 @@ export const make = Effect.gen(function* () {
   /** A link to this home's launcher; another home's link is marked too. */
   const leadsHere = (link: string) =>
     fs.readLink(link).pipe(
-      Effect.map((target) => target === launcher),
+      Effect.map((target) => target === launcher || target === legacyLauncher),
       Effect.orElseSucceed(() => false),
     );
 
@@ -201,7 +211,7 @@ export const make = Effect.gen(function* () {
         : Option.none<string>();
     }
     for (const directory of knownLocations(environment.homeDirectory, environment.platform)) {
-      const link = path.join(directory, "t3");
+      const link = path.join(directory, DesktopCliShim.PRIMARY_CLI_COMMAND);
       if (yield* isOurLink(link)) return Option.some(link);
     }
     return Option.none<string>();
@@ -286,20 +296,44 @@ export const make = Effect.gen(function* () {
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.flatMap(
       Option.match({
-        onNone: () => Effect.fail(fail(`Could not set up the t3 launcher at ${launcher}.`)),
+        onNone: () => Effect.fail(fail(`Could not set up the prismux launcher at ${launcher}.`)),
         onSome: () => Effect.void,
       }),
     ),
   );
 
+  const linkManagedCommand = Effect.fn("DesktopCliCommand.linkManagedCommand")(function* (
+    link: string,
+    target: string,
+    replaceInPlace: boolean,
+  ) {
+    const staging = `${link}.${yield* Random.nextIntBetween(0, 0xffffff)}.tmp`;
+    return yield* (
+      replaceInPlace
+        ? fs
+            .symlink(target, staging)
+            .pipe(
+              Effect.andThen(
+                fs
+                  .rename(staging, link)
+                  .pipe(Effect.tapError(() => fs.remove(staging).pipe(Effect.ignore))),
+              ),
+            )
+        : fs.symlink(target, link)
+    ).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+  });
+
   const install: DesktopCliCommand["Service"]["install"] = Effect.gen(function* () {
-    if (!environment.isPackaged) return yield* fail("The t3 command needs an installed app.");
+    if (!environment.isPackaged) return yield* fail("The prismux command needs an installed app.");
     yield* ensureLauncher;
     if (windows) {
       // PATH would split the folder at the `;`, leaving two wrong entries behind.
       if (binDirectory.includes(";")) {
         return yield* fail(
-          `T3 Code cannot put ${binDirectory} on PATH because it has a ";". Run ${launcher} directly.`,
+          `Prismux cannot put ${binDirectory} on PATH because it has a ";". Run ${launcher} directly.`,
         );
       }
       const entries = pathEntries(yield* readUserPath, ";");
@@ -307,7 +341,9 @@ export const make = Effect.gen(function* () {
         yield* writeUserPath([...entries, binDirectory].join(";"));
         yield* fs
           .writeFileString(ownedPathMarker, `${binDirectory}\n`)
-          .pipe(Effect.mapError(() => fail("Added t3 to your PATH but could not record it.")));
+          .pipe(
+            Effect.mapError(() => fail("Added prismux to your PATH but could not record it.")),
+          );
       }
       return yield* state;
     }
@@ -318,13 +354,13 @@ export const make = Effect.gen(function* () {
       if (Option.getOrUndefined(target) === launcher) return yield* state;
     }
     const shadowedBy = yield* foreignFirstOnPath;
-    // Our own link into another T3 home runs first too; it is the one this install updates.
+    // Our own link into another Prismux home runs first too; it is the one this install updates.
     if (Option.isSome(shadowedBy) && shadowedBy.value !== replaced) {
       return yield* fail(
-        `Another t3 at ${shadowedBy.value} runs first in a new terminal. Remove it, or run the launcher directly at ${launcher}.`,
+        `Another prismux at ${shadowedBy.value} runs first in a new terminal. Remove it, or run the launcher directly at ${launcher}.`,
       );
     }
-    // An old link of ours is updated where it is, so a t3 that works now keeps working. It is
+    // An old link of ours is updated where it is, so a command that works now keeps working. It is
     // removed only once a new link exists elsewhere.
     const onPath = pathEntries(env.PATH, ":").map((entry) => entry.replace(/\/+$/, ""));
     for (const directory of new Set([
@@ -332,7 +368,7 @@ export const make = Effect.gen(function* () {
       ...candidates.filter((candidate) => onPath.includes(candidate)),
       ...candidates.filter((candidate) => !onPath.includes(candidate)),
     ])) {
-      const link = path.join(directory, "t3");
+      const link = path.join(directory, DesktopCliShim.PRIMARY_CLI_COMMAND);
       const created = (yield* exists(directory))
         ? yield* writableDirectory(directory)
         : yield* fs.makeDirectory(directory, { recursive: true }).pipe(
@@ -341,31 +377,23 @@ export const make = Effect.gen(function* () {
           );
       if (!created) continue;
       // Our own link is swapped in place; anything else there makes symlink fail and stays.
-      const staging = `${link}.${yield* Random.nextIntBetween(0, 0xffffff)}.tmp`;
-      const linked = yield* (
-        link === replaced
-          ? fs
-              .symlink(launcher, staging)
-              .pipe(
-                Effect.andThen(
-                  fs
-                    .rename(staging, link)
-                    .pipe(Effect.tapError(() => fs.remove(staging).pipe(Effect.ignore))),
-                ),
-              )
-          : fs.symlink(launcher, link)
-      ).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      );
+      const linked = yield* linkManagedCommand(link, launcher, link === replaced);
       if (!linked) continue;
       if (replaced !== undefined && replaced !== link) {
         yield* fs.remove(replaced).pipe(Effect.ignore);
       }
+      // Best-effort `t3` compatibility symlink beside `prismux` (never overwrites a foreign `t3`).
+      const legacyAliasLink = path.join(directory, DesktopCliShim.LEGACY_CLI_COMMAND);
+      const legacyAliasOurs = yield* isOurLink(legacyAliasLink);
+      if ((yield* exists(legacyLauncher)) && (legacyAliasOurs || !(yield* exists(legacyAliasLink)))) {
+        yield* linkManagedCommand(legacyAliasLink, legacyLauncher, legacyAliasOurs).pipe(
+          Effect.ignore,
+        );
+      }
       return yield* state;
     }
     return yield* fail(
-      `Another t3 command is already in ~/.local/bin and ~/bin, or neither is writable. Run the launcher directly at ${launcher}.`,
+      `Another prismux command is already in ~/.local/bin and ~/bin, or neither is writable. Run the launcher directly at ${launcher}.`,
     );
   }).pipe(Effect.withSpan("desktop.cliCommand.install"));
 
@@ -382,9 +410,14 @@ export const make = Effect.gen(function* () {
       return yield* state;
     }
     for (const directory of knownLocations(environment.homeDirectory, environment.platform)) {
-      const link = path.join(directory, "t3");
-      if (yield* isOurLink(link)) {
-        yield* fs.remove(link).pipe(Effect.mapError(() => fail(`Could not remove ${link}.`)));
+      for (const commandName of [
+        DesktopCliShim.PRIMARY_CLI_COMMAND,
+        DesktopCliShim.LEGACY_CLI_COMMAND,
+      ]) {
+        const link = path.join(directory, commandName);
+        if (yield* isOurLink(link)) {
+          yield* fs.remove(link).pipe(Effect.mapError(() => fail(`Could not remove ${link}.`)));
+        }
       }
     }
     return yield* state;
@@ -395,22 +428,22 @@ export const make = Effect.gen(function* () {
   const addToPath: DesktopCliCommand["Service"]["addToPath"] = Effect.gen(function* () {
     const installed = yield* installedAt;
     if (Option.isNone(installed) || !(yield* leadsHere(installed.value))) {
-      return yield* fail("Install the t3 command first.");
+      return yield* fail("Install the prismux command first.");
     }
     const setup = startupLine(installed.value);
-    if (setup === undefined) return yield* fail("T3 Code cannot add t3 to this shell's PATH.");
+    if (setup === undefined) return yield* fail("Prismux cannot add prismux to this shell's PATH.");
     const shadowedBy = yield* foreignFirstOnPath;
     if (Option.isSome(shadowedBy)) {
       return yield* fail(
-        `Another t3 at ${shadowedBy.value} runs first; T3 Code leaves it in place.`,
+        `Another prismux at ${shadowedBy.value} runs first; Prismux leaves it in place.`,
       );
     }
     if (!(yield* folderOnPath(installed.value)) && !(yield* hasLine(setup))) {
       yield* fs.makeDirectory(path.dirname(setup.path), { recursive: true }).pipe(
         Effect.andThen(
-          fs.writeFileString(setup.path, `\n# Added by T3 Code\n${setup.line}\n`, { flag: "a" }),
+          fs.writeFileString(setup.path, `\n# Added by Prismux\n${setup.line}\n`, { flag: "a" }),
         ),
-        Effect.mapError(() => fail(`Could not add t3 to ${setup.file}.`)),
+        Effect.mapError(() => fail(`Could not add prismux to ${setup.file}.`)),
       );
     }
     return yield* state;
@@ -422,32 +455,36 @@ export const make = Effect.gen(function* () {
       // Mark first so a failed or removed install is never retried behind the user's back.
       yield* fs.writeFileString(firstLaunchMarker, "");
       if (!freshInstall) {
-        return yield* logInfo("left the t3 command to Settings on an existing install");
+        return yield* logInfo("left the prismux command to Settings on an existing install");
       }
-      // Another T3 home's app owns the existing link; only Install in Settings may take it over.
+      // Another Prismux home's app owns the existing link; only Install in Settings may take it over.
       const existing = Option.getOrUndefined(yield* installedAt);
       if (existing !== undefined) {
         const target = yield* fs.readLink(existing).pipe(Effect.option);
         if (Option.getOrUndefined(target) !== launcher) {
-          return yield* logInfo("left another T3 Code app's t3 command in place", {
+          return yield* logInfo("left another Prismux app's prismux command in place", {
             existing,
           });
         }
       }
-      // A t3 that is not ours in these folders, even off PATH, means the user has one already. On
-      // Windows the app never writes there, so any t3 there is someone else's.
+      // A prismux/t3 that is not ours in these folders, even off PATH, means the user has one already.
+      // On Windows the app never writes there, so any command there is someone else's.
       for (const directory of userCandidates(environment.homeDirectory)) {
-        for (const name of windows ? ["t3.cmd", "t3.exe"] : ["t3"]) {
+        for (const name of windows
+          ? ["prismux.cmd", "prismux.exe", "t3.cmd", "t3.exe"]
+          : ["prismux"]) {
           const other = path.join(directory, name);
           const present =
             (yield* exists(other)) || Option.isSome(yield* fs.readLink(other).pipe(Effect.option));
           if (present && (windows || !(yield* isOurLink(other)))) {
-            return yield* logInfo("left the t3 command to Settings beside another t3", { other });
+            return yield* logInfo("left the prismux command to Settings beside another command", {
+              other,
+            });
           }
         }
       }
       const installed = yield* install;
-      yield* logInfo("installed the t3 command on first launch", {
+      yield* logInfo("installed the prismux command on first launch", {
         installedPath: installed.installedPath,
         onPath: installed.onPath,
       });
@@ -455,7 +492,7 @@ export const make = Effect.gen(function* () {
   ).pipe(
     // Our own messages are short and name only paths; anything else is logged as a category.
     Effect.catch((error) =>
-      logWarning("did not install the t3 command on first launch", {
+      logWarning("did not install the prismux command on first launch", {
         reason: error._tag === "DesktopCliCommandError" ? error.message : "state-write-failed",
       }),
     ),

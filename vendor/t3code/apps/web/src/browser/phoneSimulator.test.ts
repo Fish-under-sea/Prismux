@@ -79,15 +79,15 @@ describe("Phone Simulator presets and CDP device emulation mapping", () => {
     ).toBeNull();
   });
 
-  it("clamps preview wrapper strictly above bottom 24px status bar and fits phone chassis inside panel bounds", () => {
-    // Reproduces verifier Bug 3b: slot rect extending down to y=902 on a 900px window with 24px status bar (top=876).
+  it("clamps preview wrapper strictly above bottom 20px status bar and fits phone chassis inside panel bounds", () => {
+    // Reproduces verifier Bug 3b: slot rect extending down to y=902 on a 900px window with 20px status bar (top=880).
     const clamped = clampBrowserRectAboveStatusBar(
       { x: 900, y: 112, width: 540, height: 790 },
       900,
-      876,
+      880,
     );
     expect(clamped).not.toBeNull();
-    expect(clamped!.y + clamped!.height).toBeLessThanOrEqual(876);
+    expect(clamped!.y + clamped!.height).toBeLessThanOrEqual(880);
 
     const portraitViewport = resolvePreviewViewport({
       mode: "preset",

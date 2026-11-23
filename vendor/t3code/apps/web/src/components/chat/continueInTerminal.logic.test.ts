@@ -74,12 +74,13 @@ describe("continueInTerminal.logic", () => {
     ).toBeNull();
   });
 
-  it("wires Continue in terminal inside ChatView without killing or interrupting the Chat thread", () => {
+  it("wires Continue in terminal into ThreadDetailsPanel (Overview) inside ChatView without killing or interrupting the Chat thread", () => {
     const chatViewPath = path.resolve(import.meta.dirname, "../ChatView.tsx");
     const source = fs.readFileSync(chatViewPath, "utf8");
     expect(source).toContain("handleContinueInTerminalStable");
     expect(source).toContain("buildContinueInTerminalPlan");
-    expect(source).toContain('data-action="continue-in-terminal"');
+    expect(source).toContain("onContinueInTerminal:");
+    expect(source).not.toContain('data-action="continue-in-terminal"');
 
     // Verify the Continue in terminal handler does not invoke thread.stop / interruptTurn / deleteThread.
     const handlerStart = source.indexOf("const handleContinueInTerminalStable = useStableCallback");

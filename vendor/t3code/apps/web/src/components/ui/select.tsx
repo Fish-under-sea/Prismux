@@ -129,7 +129,8 @@ function SelectPopup({
       >
         <SelectPrimitive.Popup
           // Electron drag hit-testing ignores z-index; items over a drag region would swallow clicks.
-          className="origin-(--transform-origin) rounded-lg text-foreground outline-none [-webkit-app-region:no-drag]"
+          className="origin-(--transform-origin) rounded-lg bg-transparent text-foreground outline-none [-webkit-app-region:no-drag] [backdrop-filter:none] [-webkit-backdrop-filter:none]"
+          data-pmx-overlay-shell="transparent"
           data-slot="select-popup"
           {...props}
         >
@@ -140,8 +141,9 @@ function SelectPopup({
             <ChevronUpIcon className="relative size-4.5 sm:size-4" />
           </SelectPrimitive.ScrollUpArrow>
           <div
+            data-pmx-glass-zone="overlays"
             className={cn(
-              "dropdown-glass relative h-full rounded-lg shadow-[0_16px_40px_-18px_rgb(0_0_0/55%)] dark:shadow-[0_18px_44px_-18px_rgb(0_0_0/80%)]",
+              "dropdown-glass relative h-full overflow-hidden rounded-lg bg-clip-padding shadow-[0_16px_40px_-18px_rgb(0_0_0/55%)] dark:shadow-[0_18px_44px_-18px_rgb(0_0_0/80%)]",
               matchTriggerWidth && "min-w-(--anchor-width)",
             )}
           >

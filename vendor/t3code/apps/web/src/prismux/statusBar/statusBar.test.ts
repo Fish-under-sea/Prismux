@@ -1,11 +1,41 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import fs from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import path from "node:path";
 import type { ServerProvider } from "@t3tools/contracts";
-import { createElement } from "react";
+import type { MergedUsage } from "@t3tools/shared/usageMerge";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({
+    children,
+    to,
+    onClick,
+    className,
+  }: {
+    children?: ReactNode;
+    to?: string;
+    onClick?: () => void;
+    className?: string;
+  }) => createElement("a", { href: typeof to === "string" ? to : "#", onClick, className }, children),
+}));
+
 import { PrismuxDaemonClient, PrismuxDaemonError } from "../daemonClient";
+import { KeepAwakeStatusPopover } from "./KeepAwakeStatusPopover";
 import { PortsStatusPopover } from "./PortsStatusPopover";
 import { ResourcesStatusPopover } from "./ResourcesStatusPopover";
+import { UsageStatusPopover } from "./UsageStatusPopover";
+import {
+  countActiveRunningThreads,
+  DEFAULT_KEEP_AWAKE_MODE,
+  deriveKeepAwakeState,
+  KEEP_AWAKE_MODE_STORAGE_KEY,
+  loadKeepAwakeMode,
+  resolveKeepAwakeLocale,
+  saveKeepAwakeMode,
+} from "./statusBarKeepAwake";
 import {
   applyPortsScanFailure,
   applyPortsScanSuccess,
@@ -27,12 +57,14 @@ import {
   formatBytesCompact,
   formatCpuPercent,
   normalizeResourcesSummary,
+  sortProcessResources,
   sortResourceWorkspaceGroups,
 } from "./statusBarResources";
 import {
   ANTIGRAVITY_COMPLIANCE_NOTICE,
   classifyUsageUrgency,
   collectStatusBarUsageSummary,
+  formatCompactUsageTokens,
   formatResetCountdown,
   formatUsageWindowValue,
 } from "./statusBarUsage";
@@ -63,22 +95,39 @@ afterEach(() => {
 });
 
 describe("statusBarVisibility persistence", () => {
-  it("persists and reloads toggled segment visibility from storage", () => {
+  it("persists and reloads 4-segment visibility from storage and upgrades legacy keys", () => {
     const storage = createMemoryStorage();
     expect(loadStatusBarVisibility(storage)).toEqual(DEFAULT_STATUS_BAR_VISIBILITY);
+    expect(DEFAULT_STATUS_BAR_VISIBILITY).toEqual({
+      usage: true,
+      keepAwake: true,
+      ports: true,
+      resources: true,
+    });
 
     const next = toggleStatusBarSegment(
-      toggleStatusBarSegment(DEFAULT_STATUS_BAR_VISIBILITY, "cache"),
+      toggleStatusBarSegment(DEFAULT_STATUS_BAR_VISIBILITY, "ports"),
       "resources",
     );
     saveStatusBarVisibility(next, storage);
 
     expect(loadStatusBarVisibility(storage)).toEqual({
       usage: true,
-      context: true,
-      cache: false,
-      ports: true,
+      keepAwake: true,
+      ports: false,
       resources: false,
+    });
+
+    // Legacy payloads containing removed `context` / `cache` fields and missing `keepAwake` upgrade cleanly.
+    storage.setItem(
+      "prismux.statusBar.visibility.v1",
+      JSON.stringify({ usage: false, context: false, cache: false, ports: true, resources: true }),
+    );
+    expect(loadStatusBarVisibility(storage)).toEqual({
+      usage: false,
+      keepAwake: true,
+      ports: true,
+      resources: true,
     });
   });
 
@@ -316,7 +365,7 @@ describe("statusBarUsage compliance and urgency sorting", () => {
 
     // Compliant windows sorted most urgent first: 96% -> 86% -> 42%.
     expect(summary.windows.map((w) => `${w.providerName}:${w.usedPercent}`)).toEqual([
-      "Claude:96",
+      "Claude Code:96",
       "Codex:86",
       "Codex:42",
     ]);
@@ -325,6 +374,149 @@ describe("statusBarUsage compliance and urgency sorting", () => {
     expect(formatUsageWindowValue(summary.windows[1]!, "used")).toBe("86% 已用");
     expect(formatUsageWindowValue(summary.windows[1]!, "remaining")).toBe("14% 剩余");
     expect(formatResetCountdown(summary.windows[0]!.resetsAtMs, now)).toBe("1h");
+  });
+
+  it("populates real today/7-day usage telemetry and custom-endpoint provider stats even without official quota windows", () => {
+    const customProviders = [
+      {
+        instanceId: "claude-custom-1",
+        driver: "claudeAgent",
+        displayName: "Claude Custom Relay",
+        enabled: true,
+        installed: true,
+        baseUrl: "https://relay.example.test/v1",
+        auth: { status: "authenticated", type: "api-key" },
+      },
+      {
+        instanceId: "codex-custom-1",
+        driver: "codex",
+        displayName: "codex",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated", type: "api-key" },
+      },
+    ] as unknown as ServerProvider[];
+
+    const mergedUsage = {
+      costUsd: 4.25,
+      uncachedInputTokens: 20_000,
+      cachedInputTokens: 180_000,
+      cacheCreationTokens: 0,
+      outputTokens: 12_000,
+      reasoningTokens: 2_000,
+      totalTokens: 212_000,
+      records: 18,
+      sessions: 4,
+      providers: [
+        {
+          provider: "claude",
+          costUsd: 4.25,
+          totalTokens: 212_000,
+          records: 18,
+          sessions: 4,
+          costShare: 1,
+          tokenShare: 1,
+        },
+      ],
+      models: [
+        {
+          model: "claude-sonnet-4-5",
+          provider: "claude",
+          costUsd: 4.25,
+          totalTokens: 212_000,
+          tokens: {
+            uncachedInputTokens: 20_000,
+            cachedInputTokens: 180_000,
+            cacheCreationTokens: 0,
+            outputTokens: 12_000,
+            reasoningTokens: 2_000,
+          },
+          records: 18,
+          unpricedRecords: 0,
+          unpricedTokens: 0,
+          costShare: 1,
+          tokenShare: 1,
+        },
+      ],
+      daily: [
+        {
+          day: "2026-11-23",
+          costUsd: 1.5,
+          totalTokens: 64_000,
+          byProvider: new Map([["claude", { costUsd: 1.5, totalTokens: 64_000 }]]),
+        },
+      ],
+      hourly: [],
+      costQuality: {
+        providerReportedShare: 0,
+        modelPricedShare: 1,
+        unpricedShare: 0,
+        cacheSavingsUsd: 1.2,
+      },
+      categoryCost: { input: 0.5, cacheRead: 0.3, cacheWrite: 0, output: 3.45, unsplit: 0 },
+      speedCost: { standard: 4.25, fast: 0, ultrafast: 0, premium: 0 },
+      duplicateSources: [],
+      contributingEnvironments: [],
+      contractMismatches: [],
+    } as unknown as MergedUsage;
+
+    const summary = collectStatusBarUsageSummary(
+      customProviders,
+      Date.parse("2026-11-23T12:00:00Z"),
+      mergedUsage,
+      "2026-11-23",
+    );
+
+    expect(summary.windows).toHaveLength(0);
+    expect(summary.enabledProviderCount).toBe(2);
+    expect(summary.telemetry.todayTokens).toBe(64_000);
+    expect(summary.telemetry.weekTokens).toBe(212_000);
+    expect(summary.telemetry.weekRecords).toBe(18);
+    expect(summary.telemetry.cacheHitPercent).toBe(90);
+    expect(summary.telemetry.providers.map((p) => p.providerName)).toEqual([
+      "Claude Custom Relay",
+      "Codex",
+    ]);
+    expect(summary.telemetry.providers[0]?.isCustomEndpoint).toBe(true);
+    expect(formatCompactUsageTokens(64_000)).toBe("64.0K tok");
+
+    // Verify UsageStatusPopover renders real local usage cards, custom-endpoint badge, refresh button, and overlays glass attributes
+    const standaloneHtml = renderToStaticMarkup(
+      createElement(UsageStatusPopover, {
+        summary,
+        activeThreadIsAntigravity: false,
+        prefs: { density: "detailed", percentMode: "used" },
+        onPrefsChange: () => {},
+        now: Date.parse("2026-11-23T12:00:00Z"),
+        onRefresh: async () => {},
+        onClose: () => {},
+      }),
+    );
+    expect(standaloneHtml).toContain("额度与用量总览");
+    expect(standaloneHtml).toContain("64.0K tok");
+    expect(standaloneHtml).toContain("212K tok");
+    expect(standaloneHtml).toContain("90%");
+    expect(standaloneHtml).toContain("Claude Custom Relay");
+    expect(standaloneHtml).toContain("自定义端点");
+    expect(standaloneHtml).toContain("刷新");
+    expect(standaloneHtml).toContain('data-pmx-glass-zone="overlays"');
+    expect(standaloneHtml).toContain('data-pmx-status-popover="1"');
+
+    // Embedded inside PopoverPopup: transparent body avoids double background / corner protrusion
+    const embeddedHtml = renderToStaticMarkup(
+      createElement(UsageStatusPopover, {
+        summary,
+        activeThreadIsAntigravity: false,
+        prefs: { density: "detailed", percentMode: "used" },
+        onPrefsChange: () => {},
+        now: Date.parse("2026-11-23T12:00:00Z"),
+        onRefresh: async () => {},
+        onClose: () => {},
+        embeddedInPopover: true,
+      }),
+    );
+    expect(embeddedHtml).toContain("bg-transparent");
+    expect(embeddedHtml).not.toContain("bg-popover");
   });
 });
 
@@ -464,14 +656,67 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
     expect(portsHtml).toContain("PID 4321");
     expect(portsHtml).toContain("当前工作区端口（1）");
     expect(portsHtml).toContain("外部进程端口（1）");
+    expect(portsHtml).toContain('data-pmx-glass-zone="overlays"');
+    expect(portsHtml).toContain('data-pmx-status-popover="1"');
 
     const resourcesHtml = renderToStaticMarkup(
       createElement(ResourcesStatusPopover, {
         raw: {
+          collectedAt: Date.parse("2026-11-23T14:30:05Z"),
           totalCpuPercent: 12.5,
           totalMemoryBytes: 512 * 1024 * 1024,
-          daemon: { cpuPercent: 1.5, memoryBytes: 64 * 1024 * 1024 },
-          t3Server: { cpuPercent: 3.0, memoryBytes: 128 * 1024 * 1024 },
+          desktop: {
+            pid: 1000,
+            cpuPercent: 6.2,
+            memoryBytes: 280 * 1024 * 1024,
+            processCount: 3,
+          },
+          daemon: { pid: 1050, cpuPercent: 1.5, memoryBytes: 64 * 1024 * 1024 },
+          t3Server: {
+            pid: 2000,
+            cpuPercent: 3.0,
+            memoryBytes: 128 * 1024 * 1024,
+            hostedBy: "electron",
+            state: "running",
+          },
+          processes: [
+            {
+              pid: 1000,
+              name: "Prismux 主进程",
+              processName: "Prismux.exe",
+              role: "electron-main",
+              category: "desktop",
+              cpuPercent: 1.2,
+              memoryBytes: 120 * 1024 * 1024,
+            },
+            {
+              pid: 1001,
+              name: "GPU 合成 / 壁纸渲染",
+              processName: "Prismux.exe",
+              role: "electron-gpu",
+              category: "desktop",
+              cpuPercent: 5.0,
+              memoryBytes: 160 * 1024 * 1024,
+            },
+            {
+              pid: 2000,
+              name: "T3 Server",
+              processName: "node.exe",
+              role: "t3-server",
+              category: "core",
+              cpuPercent: 3.0,
+              memoryBytes: 128 * 1024 * 1024,
+            },
+            {
+              pid: 2101,
+              name: "Claude Code",
+              processName: "node.exe",
+              role: "agent",
+              category: "agent",
+              cpuPercent: 1.8,
+              memoryBytes: 40 * 1024 * 1024,
+            },
+          ],
           workspaces: [
             {
               workspace: "D:\\Fish-code\\AGY\\Prismux",
@@ -498,9 +743,39 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
       }),
     );
     expect(resourcesHtml).toContain("系统与 PTY 资源归因");
+    expect(resourcesHtml).toContain("桌面与渲染");
+    expect(resourcesHtml).toContain("PID 2000");
     expect(resourcesHtml).toContain("512 MB");
+    expect(resourcesHtml).toContain("GPU 合成 / 壁纸渲染");
+    expect(resourcesHtml).toContain("Claude Code");
     expect(resourcesHtml).toContain("pnpm dev");
     expect(resourcesHtml).toContain("僵死");
+    expect(resourcesHtml).toContain('data-pmx-glass-zone="overlays"');
+    expect(resourcesHtml).toContain('data-pmx-status-popover="1"');
+
+    // Verify sortProcessResources orders descending by memory / cpu / name keeping nulls last
+    const normalizedRes = normalizeResourcesSummary({
+      processes: [
+        { pid: 1, name: "beta", role: "child", category: "terminal", cpuPercent: null, memoryBytes: null },
+        { pid: 2, name: "alpha", role: "agent", category: "agent", cpuPercent: 9.2, memoryBytes: 100 },
+        { pid: 3, name: "gamma", role: "t3-server", category: "core", cpuPercent: 2.1, memoryBytes: 500 },
+      ],
+    });
+    expect(sortProcessResources(normalizedRes.processes, "memory").map((p) => p.name)).toEqual([
+      "gamma",
+      "alpha",
+      "beta",
+    ]);
+    expect(sortProcessResources(normalizedRes.processes, "cpu").map((p) => p.name)).toEqual([
+      "alpha",
+      "gamma",
+      "beta",
+    ]);
+    expect(sortProcessResources(normalizedRes.processes, "name").map((p) => p.name)).toEqual([
+      "alpha",
+      "beta",
+      "gamma",
+    ]);
   });
 });
 
@@ -623,5 +898,241 @@ describe("Issue #10 Orca & OMP parity mechanisms", () => {
       "beta",
       "gamma",
     ]);
+  });
+});
+
+describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
+  it("persists and restores Keep Awake mode safely across restarts", () => {
+    const storage = createMemoryStorage();
+    expect(loadKeepAwakeMode(storage)).toBe(DEFAULT_KEEP_AWAKE_MODE);
+    expect(DEFAULT_KEEP_AWAKE_MODE).toBe("off");
+
+    saveKeepAwakeMode("agent", storage);
+    expect(loadKeepAwakeMode(storage)).toBe("agent");
+
+    saveKeepAwakeMode("on", storage);
+    expect(loadKeepAwakeMode(storage)).toBe("on");
+
+    // Corrupt / unknown values fall back safely to off.
+    storage.setItem(KEEP_AWAKE_MODE_STORAGE_KEY, "{broken");
+    expect(loadKeepAwakeMode(storage)).toBe("off");
+
+    storage.setItem(KEEP_AWAKE_MODE_STORAGE_KEY, JSON.stringify({ mode: "agent" }));
+    expect(loadKeepAwakeMode(storage)).toBe("agent");
+
+    expect(resolveKeepAwakeLocale("zh")).toBe("zh");
+    expect(resolveKeepAwakeLocale("auto")).toBe("zh");
+    expect(resolveKeepAwakeLocale("en")).toBe("en");
+    expect(resolveKeepAwakeLocale("en-US")).toBe("en");
+  });
+
+  it("transitions accurately across off, on, and agent (idle -> working -> idle) states", () => {
+    const runningMap = new Map<string, ReadonlySet<string>>([
+      ["env-local", new Set(["thread-1", "thread-2"])],
+      ["env-ssh", new Set(["thread-3"])],
+    ]);
+    expect(countActiveRunningThreads(runningMap)).toBe(3);
+    expect(countActiveRunningThreads(null)).toBe(0);
+
+    // 1. Off mode -> never prevents sleep even if agents are running.
+    const offState = deriveKeepAwakeState({
+      mode: "off",
+      activeThreadCount: 2,
+      activeAgentProcessCount: 1,
+      desktopBridgeAvailable: true,
+      nativeActive: false,
+    });
+    expect(offState.shouldPreventSleep).toBe(false);
+    expect(offState.effectiveActive).toBe(false);
+    expect(offState.visualTone).toBe("off");
+    expect(offState.pillLabel).toBe("关闭");
+    expect(offState.statusBadgeText).toBe("关闭 · 未生效");
+
+    // 2. On mode -> always prevents sleep even with zero running tasks.
+    const onState = deriveKeepAwakeState({
+      mode: "on",
+      activeThreadCount: 0,
+      activeAgentProcessCount: 0,
+      desktopBridgeAvailable: true,
+      nativeActive: true,
+    });
+    expect(onState.shouldPreventSleep).toBe(true);
+    expect(onState.effectiveActive).toBe(true);
+    expect(onState.visualTone).toBe("active");
+    expect(onState.pillLabel).toBe("开启");
+    expect(onState.statusBadgeText).toBe("开启 · 防休眠中");
+
+    // 3. Agent mode idle -> standby, does not hold powerSaveBlocker.
+    const agentIdle = deriveKeepAwakeState({
+      mode: "agent",
+      activeThreadCount: 0,
+      activeAgentProcessCount: 0,
+      daemonTaskBusy: false,
+      desktopBridgeAvailable: true,
+      nativeActive: false,
+    });
+    expect(agentIdle.isAgentWorking).toBe(false);
+    expect(agentIdle.shouldPreventSleep).toBe(false);
+    expect(agentIdle.effectiveActive).toBe(false);
+    expect(agentIdle.visualTone).toBe("standby");
+    expect(agentIdle.pillLabel).toBe("代理");
+    expect(agentIdle.statusBadgeText).toBe("代理 · 待命中");
+
+    // 4. Agent mode working (thread running) -> activates powerSaveBlocker.
+    const agentWorkingThread = deriveKeepAwakeState({
+      mode: "agent",
+      activeThreadCount: 1,
+      activeAgentProcessCount: 0,
+      desktopBridgeAvailable: true,
+      nativeActive: true,
+    });
+    expect(agentWorkingThread.isAgentWorking).toBe(true);
+    expect(agentWorkingThread.shouldPreventSleep).toBe(true);
+    expect(agentWorkingThread.effectiveActive).toBe(true);
+    expect(agentWorkingThread.visualTone).toBe("active");
+    expect(agentWorkingThread.statusBadgeText).toBe("代理 · 工作中生效");
+
+    // 5. Agent mode working via active Coding Agent process or daemon background task -> also activates.
+    const agentWorkingProcess = deriveKeepAwakeState({
+      mode: "agent",
+      activeThreadCount: 0,
+      activeAgentProcessCount: 1,
+      desktopBridgeAvailable: true,
+      nativeActive: true,
+    });
+    expect(agentWorkingProcess.shouldPreventSleep).toBe(true);
+    expect(agentWorkingProcess.effectiveActive).toBe(true);
+
+    const agentWorkingDaemon = deriveKeepAwakeState({
+      mode: "agent",
+      activeThreadCount: 0,
+      activeAgentProcessCount: 0,
+      daemonTaskBusy: true,
+      desktopBridgeAvailable: true,
+      nativeActive: true,
+    });
+    expect(agentWorkingDaemon.shouldPreventSleep).toBe(true);
+
+    // 6. Non-Electron browser fallback degrades gracefully with clear desktop notice.
+    const webOnly = deriveKeepAwakeState({
+      mode: "on",
+      activeThreadCount: 0,
+      activeAgentProcessCount: 0,
+      desktopBridgeAvailable: false,
+      webWakeLockActive: false,
+    });
+    expect(webOnly.shouldPreventSleep).toBe(true);
+    expect(webOnly.effectiveActive).toBe(false);
+    expect(webOnly.statusBadgeText).toBe("开启 · 仅桌面端生效");
+    expect(webOnly.footerHint).toContain("桌面端");
+
+    // 7. English locale support.
+    const enAgentActive = deriveKeepAwakeState({
+      mode: "agent",
+      activeThreadCount: 2,
+      activeAgentProcessCount: 0,
+      desktopBridgeAvailable: true,
+      nativeActive: true,
+      locale: "en",
+    });
+    expect(enAgentActive.title).toBe("Keep Awake");
+    expect(enAgentActive.pillLabel).toBe("Agent");
+    expect(enAgentActive.statusBadgeText).toBe("Agent · Active");
+  });
+
+  it("renders KeepAwakeStatusPopover with all 3 options, liquid glass attributes, and embedded zero-border mode", () => {
+    const activeState = deriveKeepAwakeState({
+      mode: "agent",
+      activeThreadCount: 1,
+      activeAgentProcessCount: 0,
+      desktopBridgeAvailable: true,
+      nativeActive: true,
+    });
+
+    const standaloneHtml = renderToStaticMarkup(
+      createElement(KeepAwakeStatusPopover, {
+        state: activeState,
+        onSelectMode: () => {},
+        blockerId: 42,
+      }),
+    );
+
+    expect(standaloneHtml).toContain('data-pmx-glass-zone="overlays"');
+    expect(standaloneHtml).toContain('data-pmx-status-popover="1"');
+    expect(standaloneHtml).toContain('data-keep-awake-mode="agent"');
+    expect(standaloneHtml).toContain('data-keep-awake-active="true"');
+    expect(standaloneHtml).toContain("防止电脑休眠");
+    expect(standaloneHtml).toContain("代理 · 工作中生效");
+    expect(standaloneHtml).toContain("始终防止此电脑进入睡眠状态");
+    expect(standaloneHtml).toContain("代理工作时防止电脑进入睡眠状态");
+    expect(standaloneHtml).toContain("允许系统正常进入睡眠状态");
+    expect(standaloneHtml).toContain("#42");
+    expect(standaloneHtml).toContain('data-testid="keep-awake-option-agent"');
+
+    const embeddedHtml = renderToStaticMarkup(
+      createElement(KeepAwakeStatusPopover, {
+        state: activeState,
+        onSelectMode: () => {},
+        embeddedInPopover: true,
+      }),
+    );
+    expect(embeddedHtml).toContain("bg-transparent");
+    expect(embeddedHtml).not.toContain('data-pmx-glass-zone="overlays"');
+    expect(embeddedHtml).not.toContain("shadow-xl");
+  });
+
+  it("enforces compact 20px status bar geometry, 10.5px text, 11px icons, and synced --pmx-status-bar-height offsets everywhere", () => {
+    const webSrc = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
+      "../..",
+    );
+
+    const indexCss = fs.readFileSync(path.join(webSrc, "index.css"), "utf8");
+    expect(indexCss).toContain("--pmx-status-bar-height: 20px;");
+
+    const statusBarSource = fs.readFileSync(path.join(webSrc, "prismux/PrismuxStatusBar.tsx"), "utf8");
+    expect(statusBarSource).toContain("export const PRISMUX_STATUS_BAR_HEIGHT_PX = 20 as const;");
+    expect(statusBarSource).toContain("h-[var(--pmx-status-bar-height,20px)]");
+    expect(statusBarSource).toContain("text-[10.5px] leading-none");
+    expect(statusBarSource).toContain("size-[11px]");
+    expect(statusBarSource).toContain("inline-flex h-4");
+    expect(statusBarSource).not.toContain("flex h-6 w-full");
+    expect(statusBarSource).not.toContain("text-[11px] leading-none");
+
+    const rootSource = fs.readFileSync(path.join(webSrc, "routes/__root.tsx"), "utf8");
+    expect(rootSource).toContain("[&_[data-slot=sidebar-container]]:!bottom-[var(--pmx-status-bar-height,20px)]");
+    expect(rootSource).toContain(
+      "[&_[data-slot=sidebar-container]]:!h-[calc(100dvh-var(--pmx-status-bar-height,20px))]",
+    );
+    expect(rootSource).not.toContain("!bottom-6");
+    expect(rootSource).not.toContain("calc(100dvh-1.5rem)");
+
+    const updateHostSource = fs.readFileSync(
+      path.join(webSrc, "prismux/updates/PrismuxAutoUpdateHost.tsx"),
+      "utf8",
+    );
+    expect(updateHostSource).toContain("bottom-[calc(var(--pmx-status-bar-height,20px)+12px)]");
+    expect(updateHostSource).not.toContain("right-4 bottom-9");
+
+    const drawerSource = fs.readFileSync(
+      path.join(webSrc, "prismux/settings/plugins/PluginDetailDrawer.tsx"),
+      "utf8",
+    );
+    expect(drawerSource).toContain("top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0");
+
+    const auditModalSource = fs.readFileSync(
+      path.join(webSrc, "prismux/settings/plugins/PluginTrustAuditModal.tsx"),
+      "utf8",
+    );
+    expect(auditModalSource).toContain(
+      "top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0",
+    );
+
+    const sidebarChromeSource = fs.readFileSync(
+      path.join(webSrc, "components/sidebar/SidebarChrome.tsx"),
+      "utf8",
+    );
+    expect(sidebarChromeSource).toContain("bottom-[calc(var(--pmx-status-bar-height,20px)+4px)]");
+    expect(sidebarChromeSource).toContain("bottom-[calc(var(--pmx-status-bar-height,20px)+8px)]");
   });
 });

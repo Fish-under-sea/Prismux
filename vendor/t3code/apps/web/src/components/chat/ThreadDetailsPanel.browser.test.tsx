@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 const SCRATCH_ROOT = "/home/user/.t3/scratch";
 
@@ -178,28 +178,38 @@ function Panel({ fixture }: { fixture: ReturnType<typeof setup> }) {
   );
 }
 
-it("offers no git controls in a No project thread, but shows its linked pull request", async () => {
+it("offers no git controls in a No project thread, shows its linked pull request, and renders AGY Overview without Plugins", async () => {
   using fixture = setup({
     workspaceRoot: SCRATCH_ROOT,
     folder: `${SCRATCH_ROOT}/thread`,
     pullRequests: [linkedPullRequest],
   });
-  await using _screen = await render(<Panel fixture={fixture} />);
+  await using screen = await render(<Panel fixture={fixture} />);
+  await expect.element(page.getByRole("heading", { name: "概览" })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: /审查/ })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "文件列表" })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "在终端继续" })).toBeVisible();
+  expect(screen.container.textContent).not.toContain("插件");
   await expect.element(page.getByText("#27513")).toBeVisible();
+
+  await userEvent.click(page.getByRole("button", { name: "更多操作" }));
+  await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect
     .element(page.getByRole("button", { name: "Initialize Git" }))
     .not.toBeInTheDocument();
 });
 
-it("shows a linked pull request in a folder that is not a git repository", async () => {
+it("shows a linked pull request and preserves Initialize Git inside the ⋮ more menu in a non-git folder", async () => {
   using fixture = setup({
     workspaceRoot: "/work/plain",
     folder: "/work/plain",
     pullRequests: [linkedPullRequest],
   });
   await using _screen = await render(<Panel fixture={fixture} />);
-  await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect.element(page.getByText("#27513")).toBeVisible();
+
+  await userEvent.click(page.getByRole("button", { name: "更多操作" }));
+  await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
 });
 
@@ -210,6 +220,7 @@ it("offers no Initialize Git before the server config says where No project live
     configLoaded: false,
   });
   await using _screen = await render(<Panel fixture={fixture} />);
+  await userEvent.click(page.getByRole("button", { name: "更多操作" }));
   await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect
     .element(page.getByRole("button", { name: "Initialize Git" }))

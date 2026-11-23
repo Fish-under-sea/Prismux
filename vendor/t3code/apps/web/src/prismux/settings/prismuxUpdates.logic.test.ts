@@ -122,11 +122,36 @@ describe("prismuxUpdates.logic", () => {
     expect(selectRecommendedUpdateAsset(assets, false)?.kind).toBe("split-7z-exe");
   });
 
-  it("removes hardcoded 0.1.0-alpha.1 fallback and nightly channel from PrismuxUpdatesSettingsPage", () => {
+  it("parses autoCheckEnabled policy flag with default true and explicit false override", () => {
+    const defaultStatus = parseUpdaterStatusPayload(
+      {
+        currentVersion: "0.1.2",
+        policy: { channel: "prerelease", routePreference: "auto" },
+      },
+      "0.1.2",
+    );
+    expect(defaultStatus?.policy.autoCheckEnabled).toBe(true);
+
+    const disabledStatus = parseUpdaterStatusPayload(
+      {
+        currentVersion: "0.1.2",
+        policy: { channel: "stable", routePreference: "domestic", autoCheckEnabled: false },
+      },
+      "0.1.2",
+    );
+    expect(disabledStatus?.policy.autoCheckEnabled).toBe(false);
+  });
+
+  it("removes hardcoded 0.1.0-alpha.1 fallback, nightly channel, and legacy 公测版/内测版 copy from PrismuxUpdatesSettingsPage", () => {
     const pagePath = path.resolve(import.meta.dirname, "PrismuxUpdatesSettingsPage.tsx");
     const source = fs.readFileSync(pagePath, "utf8");
     expect(source).not.toContain("0.1.0-alpha.1");
     expect(source.toLowerCase()).not.toContain('"nightly"');
+    expect(source).not.toContain("公测版");
+    expect(source).not.toContain("内测版");
+    expect(source).toContain("Preview");
+    expect(source).toContain("prismux-auto-check-updates-switch");
+    expect(source).toContain("自动检查更新");
     expect(source).toContain("installDownloadedUpdate");
   });
 });

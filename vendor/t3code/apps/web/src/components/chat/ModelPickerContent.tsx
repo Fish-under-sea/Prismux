@@ -27,7 +27,12 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { AgentBrandLogo, formatAgentBrandName } from "../../prismux/agentBrand";
+import {
+  formatModelSourceSubtitle,
+  partitionAgentScopedModels,
+} from "./ProviderModelPicker.logic";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
@@ -278,11 +283,15 @@ function ModelPickerList({
   listRef,
   itemKeys,
   extraData,
+  estimatedItemSize = MODEL_LIST_ESTIMATED_ITEM_SIZE,
+  agentScoped = false,
   renderItem,
 }: {
   listRef: RefObject<LegendListRef | null>;
   itemKeys: ReadonlyArray<string>;
   extraData: unknown;
+  estimatedItemSize?: number;
+  agentScoped?: boolean;
   renderItem: (props: { item: string; index: number }) => ReactNode;
 }) {
   const [showTopScrollFade, setShowTopScrollFade] = useState(false);
@@ -309,10 +318,10 @@ function ModelPickerList({
           extraData={extraData}
           keyExtractor={(modelKey) => modelKey}
           renderItem={renderItem}
-          estimatedItemSize={MODEL_LIST_ESTIMATED_ITEM_SIZE}
+          estimatedItemSize={estimatedItemSize}
           drawDistance={480}
           recycleItems
-          contentContainerClassName="pl-2 pr-px"
+          contentContainerClassName={agentScoped ? "px-1.5" : "pl-2 pr-px"}
           ItemSeparatorComponent={ModelListSeparator}
           onLayout={updateScrollFades}
           onScroll={updateScrollFades}
@@ -368,6 +377,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   docked?: boolean;
   /** Stacked Orca-style single-column popover with reasoning slider & speed row below. */
   unifiedLayout?: boolean;
+  /**
+   * Orca-style single-agent scoped focus: opens strictly on the active Agent's models
+   * without mixing other vendors, hides the left provider rail, and offers a minimal
+   * secondary switcher when multiple agents are unlocked.
+   */
+  agentScoped?: boolean;
   /** Right at the end of the search text moves into the popup's effort column. */
   onFocusEffort?: () => void;
   /** Closes the list column, inside the popup's fixed height. */
@@ -437,9 +452,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       activeEntry,
       modelOptionsByInstance.get(props.activeInstanceId) ?? [],
     );
+  const agentScoped = props.agentScoped === true;
+  const [agentSwitcherOpen, setAgentSwitcherOpen] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | "favorites">(
     () => {
       if (
+        agentScoped ||
         props.lockedProvider !== null ||
         activeInstanceHasSelectableUnavailableModel ||
         activeInstanceNeedsSetup
@@ -465,10 +483,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       return hasPickableFavorite ? "favorites" : props.activeInstanceId;
     },
   );
+  // In agent-scoped mode, never drift into mixed cross-vendor favorites.
+  const effectiveSelectedInstanceId: ProviderInstanceId | "favorites" =
+    agentScoped && selectedInstanceId === "favorites"
+      ? props.activeInstanceId
+      : selectedInstanceId;
   const { scanning: workspaceModelsScanning } = useProviderWorkspaceSnapshotRefresh({
     environmentId: props.environmentId,
     gitCwd: props.workspaceCwd ?? null,
-    instanceId: selectedInstanceId === "favorites" ? undefined : selectedInstanceId,
+    instanceId: effectiveSelectedInstanceId === "favorites" ? undefined : effectiveSelectedInstanceId,
   });
   const favoritesSet = new Set(favorites.map((fav) => providerModelKey(fav.provider, fav.model)));
   const [expandedLegacyInstances, setExpandedLegacyInstances] = useState(
@@ -698,15 +721,26 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return [...available, ...disabled];
   })();
-  const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  const showSidebar = !agentScoped && !isSearching && sidebarInstanceEntries.length > 0;
   const instanceOrder = instanceEntries.map((entry) => entry.instanceId);
+  const switchableScopedEntries = agentScoped
+    ? sidebarInstanceEntries.filter(
+        (entry) =>
+          !lockedDisabledInstanceIds?.has(entry.instanceId) &&
+          (isProviderInstancePickerReady(entry) ||
+            selectableUnavailableInstanceIds?.has(entry.instanceId)),
+      )
+    : [];
 
   const filteredModels = (() => {
     let result = flatModels;
 
     if (searchQuery.trim()) {
-      const candidates =
-        lockedProvider !== null ? result.filter((m) => matchesLockedProvider(m)) : result;
+      const candidates = agentScoped
+        ? result.filter((m) => m.instanceId === effectiveSelectedInstanceId)
+        : lockedProvider !== null
+          ? result.filter((m) => matchesLockedProvider(m))
+          : result;
       return rankModelPickerSearch(candidates, searchQuery, (model) => ({
         name: model.name,
         ...(model.shortName ? { shortName: model.shortName } : {}),
@@ -717,29 +751,48 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       }));
     }
 
-    if (lockedProvider !== null) {
+    if (agentScoped) {
+      result = result.filter((m) => m.instanceId === effectiveSelectedInstanceId);
+    } else if (lockedProvider !== null) {
       result = result.filter((m) => matchesLockedProvider(m));
-      if (selectedInstanceId === "favorites") {
+      if (effectiveSelectedInstanceId === "favorites") {
         result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
       } else {
-        result = result.filter((m) => m.instanceId === selectedInstanceId);
+        result = result.filter((m) => m.instanceId === effectiveSelectedInstanceId);
       }
-    } else if (selectedInstanceId === "favorites") {
+    } else if (effectiveSelectedInstanceId === "favorites") {
       result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
     } else {
-      result = result.filter((m) => m.instanceId === selectedInstanceId);
+      result = result.filter((m) => m.instanceId === effectiveSelectedInstanceId);
     }
 
     return sortProviderModelItems(result, {
       favoriteModelKeys: favoritesSet,
-      groupFavorites: selectedInstanceId !== "favorites",
-      instanceOrder: selectedInstanceId === "favorites" ? instanceOrder : [],
+      groupFavorites: effectiveSelectedInstanceId !== "favorites",
+      instanceOrder: effectiveSelectedInstanceId === "favorites" ? instanceOrder : [],
     });
   })();
 
   const legacySection = (() => {
-    if (isSearching || selectedInstanceId === "favorites") {
+    if (isSearching || effectiveSelectedInstanceId === "favorites") {
       return null;
+    }
+    if (agentScoped) {
+      const partitioned = partitionAgentScopedModels({
+        models: filteredModels,
+        activeModelKey,
+        favoriteModelKeys: favoritesSet,
+        keyOf: (model) => modelPickerModelKey(model.instanceId, model.slug),
+      });
+      if (partitioned.overflowModels.length === 0) {
+        return null;
+      }
+      return {
+        key: modelPickerLegacySectionKey(effectiveSelectedInstanceId),
+        currentModels: partitioned.primaryModels,
+        legacyModels: partitioned.overflowModels,
+        isExpanded: expandedLegacyInstances.has(effectiveSelectedInstanceId),
+      };
     }
     const currentModels: ModelPickerItem[] = [];
     const legacyModels: ModelPickerItem[] = [];
@@ -752,10 +805,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       return null;
     }
     return {
-      key: modelPickerLegacySectionKey(selectedInstanceId),
+      key: modelPickerLegacySectionKey(effectiveSelectedInstanceId),
       currentModels,
       legacyModels,
-      isExpanded: expandedLegacyInstances.has(selectedInstanceId),
+      isExpanded: expandedLegacyInstances.has(effectiveSelectedInstanceId),
     };
   })();
 
@@ -763,10 +816,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   // backend as a collapsible heading. Search and Favorites stay flat.
   const subProviderSections = (() => {
     const subProviders =
-      isSearching || selectedInstanceId === "favorites"
+      isSearching || effectiveSelectedInstanceId === "favorites"
         ? undefined
-        : subProvidersByInstance.get(selectedInstanceId);
-    if (!subProviders || selectedInstanceId === "favorites") return null;
+        : subProvidersByInstance.get(effectiveSelectedInstanceId);
+    if (!subProviders || effectiveSelectedInstanceId === "favorites") return null;
     const { ungrouped, groups } = groupModelsBySubProvider(
       filteredModels,
       subProviders,
@@ -775,7 +828,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return {
       ungrouped,
       sections: groups.map(({ subProvider, models }) => {
-        const key = modelPickerSubProviderSectionKey(selectedInstanceId, subProvider.name);
+        const key = modelPickerSubProviderSectionKey(effectiveSelectedInstanceId, subProvider.name);
         return {
           key,
           name: subProvider.name,
@@ -809,7 +862,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   })();
 
   const selectedEntry =
-    selectedInstanceId === "favorites" ? undefined : entryByInstanceId.get(selectedInstanceId);
+    effectiveSelectedInstanceId === "favorites"
+      ? undefined
+      : entryByInstanceId.get(effectiveSelectedInstanceId);
   const providerSetupEntries =
     !isSearching && canOpenProviderSetup
       ? instanceEntries.filter(
@@ -848,17 +903,18 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     .slice(0, MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.length)
     .map((model) => modelPickerModelKey(model.instanceId, model.slug));
   const allItemKeys = ((): string[] => [
-    ...flatModels.map((model) => modelPickerModelKey(model.instanceId, model.slug)),
-    ...new Set(
-      flatModels
+    ...new Set([
+      ...flatModels.map((model) => modelPickerModelKey(model.instanceId, model.slug)),
+      ...flatModels
         .filter((model) => model.isLegacy)
         .map((model) => modelPickerLegacySectionKey(model.instanceId)),
-    ),
-    ...[...subProvidersByInstance].flatMap(([instanceId, subProviders]) =>
-      subProviders.map((subProvider) =>
-        modelPickerSubProviderSectionKey(instanceId, subProvider.name),
+      ...(legacySection ? [legacySection.key] : []),
+      ...[...subProvidersByInstance].flatMap(([instanceId, subProviders]) =>
+        subProviders.map((subProvider) =>
+          modelPickerSubProviderSectionKey(instanceId, subProvider.name),
+        ),
       ),
-    ),
+    ]),
   ])();
   const filteredItemKeys = ((): string[] => {
     const keyOf = (model: ModelPickerItem) => modelPickerModelKey(model.instanceId, model.slug);
@@ -964,14 +1020,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         className={cn(
           "relative flex flex-row overflow-hidden",
           props.unifiedLayout
-            ? "h-[min(17.5rem,42vh)] w-full max-w-none"
+            ? "h-[min(19.5rem,44vh)] w-full max-w-none"
             : props.docked
               ? "w-screen max-w-90 max-sm:h-56 max-sm:w-full max-sm:max-w-none"
-              : "max-h-86.5 w-screen max-w-90",
+              : agentScoped
+                ? "max-h-86.5 w-[min(23.5rem,calc(100vw-1rem))]"
+                : "max-h-86.5 w-screen max-w-90",
         )}
         // Docked or unified, the popup sets the height; a minimum here would overflow short windows.
         style={
-          props.docked || props.unifiedLayout
+          props.docked || props.unifiedLayout || agentScoped
             ? undefined
             : isSearching
               ? { height: searchHeight }
@@ -980,6 +1038,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                 }
         }
         data-model-picker-content="true"
+        data-model-picker-agent-scoped={agentScoped ? "true" : undefined}
+        data-model-picker-scoped-instance={
+          agentScoped && effectiveSelectedInstanceId !== "favorites"
+            ? effectiveSelectedInstanceId
+            : undefined
+        }
       >
         {showSidebar && (
           <ModelPickerSidebar
@@ -1050,7 +1114,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         >
           <div
             className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/40",
+              "flex min-h-0 flex-1 flex-col overflow-hidden",
+              agentScoped ? "bg-transparent" : "bg-muted/40",
               showSidebar && "border-l border-border/70",
             )}
           >
@@ -1146,10 +1211,103 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               onTouchStart={(e) => e.stopPropagation()}
             />
 
+            {/* Minimal secondary Agent switcher (only shown when agentScoped and unlocked multi-agent) */}
+            {agentScoped && selectedEntry ? (
+              <div
+                data-model-picker-agent-scope-bar="true"
+                className="flex shrink-0 flex-col border-b border-border/55 bg-muted/20 px-2.5 py-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex min-w-0 items-center gap-1.5 text-[11.5px] font-medium text-muted-foreground">
+                    <AgentBrandLogo
+                      provider={
+                        selectedEntry.driverKind === "acpRegistry"
+                          ? selectedEntry.displayName || selectedEntry.instanceId
+                          : selectedEntry.driverKind
+                      }
+                      size={13}
+                    />
+                    <span className="truncate">
+                      {formatAgentBrandName(
+                        selectedEntry.driverKind,
+                        selectedEntry.isDefault ? undefined : selectedEntry.displayName,
+                      )}
+                    </span>
+                  </span>
+                  {!isLocked && switchableScopedEntries.length > 1 ? (
+                    <button
+                      type="button"
+                      data-model-picker-switch-agent-toggle="true"
+                      aria-expanded={agentSwitcherOpen}
+                      onClick={() => setAgentSwitcherOpen((open) => !open)}
+                      className="inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <span>切换代理</span>
+                      <ChevronDownIcon
+                        aria-hidden="true"
+                        className={cn(
+                          "size-3 transition-transform",
+                          agentSwitcherOpen && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  ) : null}
+                </div>
+                {agentSwitcherOpen && !isLocked && switchableScopedEntries.length > 1 ? (
+                  <div
+                    data-model-picker-agent-switcher-list="true"
+                    className="mt-1.5 flex flex-wrap gap-1"
+                  >
+                    {switchableScopedEntries.map((entry) => {
+                      const active = entry.instanceId === effectiveSelectedInstanceId;
+                      const brandLabel = formatAgentBrandName(
+                        entry.driverKind,
+                        entry.isDefault &&
+                          entry.driverKind !== "acpRegistry" &&
+                          entry.driverKind !== "openaiCompatible"
+                          ? undefined
+                          : entry.displayName,
+                      );
+                      return (
+                        <button
+                          key={entry.instanceId}
+                          type="button"
+                          data-model-picker-agent-chip={entry.instanceId}
+                          aria-pressed={active}
+                          onClick={() => {
+                            handleSelectInstance(entry.instanceId);
+                            setAgentSwitcherOpen(false);
+                          }}
+                          className={cn(
+                            "inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+                            active
+                              ? "border-primary/45 bg-primary/12 text-foreground"
+                              : "border-border/65 bg-background/55 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                          )}
+                        >
+                          <AgentBrandLogo
+                            provider={
+                              entry.driverKind === "acpRegistry"
+                                ? entry.displayName || entry.instanceId
+                                : entry.driverKind
+                            }
+                            size={12}
+                          />
+                          <span className="truncate">{brandLabel}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <ModelPickerList
               listRef={modelListRef}
               itemKeys={filteredItemKeys}
               extraData={modelListExtraData}
+              estimatedItemSize={agentScoped ? 52 : MODEL_LIST_ESTIMATED_ITEM_SIZE}
+              agentScoped={agentScoped}
               renderItem={({ item: modelKey, index }) => {
                 if (legacySection?.key === modelKey) {
                   return (
@@ -1158,9 +1316,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                       index={index}
                       value={modelKey}
                       aria-expanded={legacySection.isExpanded}
-                      className="group w-full cursor-pointer"
+                      data-model-picker-more-models="true"
+                      className={cn(
+                        "group w-full cursor-pointer",
+                        agentScoped && "rounded-lg px-2.5 py-2",
+                      )}
                     >
-                      <span className="text-sm leading-snug text-muted-foreground group-hover:text-foreground group-data-highlighted:text-foreground">
+                      <span className="text-xs font-medium leading-snug text-muted-foreground group-hover:text-foreground group-data-highlighted:text-foreground">
                         {legacySection.isExpanded
                           ? gt("Show fewer models")
                           : gt("More models ({count})", {
@@ -1224,6 +1386,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                 }
                 const disabledReason =
                   getModelDisabledReason?.(model.instanceId, model.slug) ?? null;
+                const modelEntry = entryByInstanceId.get(model.instanceId);
+                const sourceSubtitle = agentScoped
+                  ? formatModelSourceSubtitle({
+                      driverKind: model.driverKind,
+                      instanceDisplayName: model.instanceDisplayName,
+                      subProvider: model.subProvider,
+                      isDefaultInstance: modelEntry?.isDefault,
+                    })
+                  : undefined;
                 return (
                   <ModelListRow
                     key={modelKey}
@@ -1243,12 +1414,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                         ? selectedModelKeySet.has(modelKey)
                         : modelKey === activeModelKey
                     }
-                    favoriteStarOnHover={selectedInstanceId === "favorites" && !isSearching}
+                    favoriteStarOnHover={effectiveSelectedInstanceId === "favorites" && !isSearching}
                     showInstanceBadge={badgedInstanceIds.has(model.instanceId)}
                     showNewBadge={model.badge === "new"}
                     unavailable={model.isUnavailable === true}
                     jumpLabel={modelJumpLabelByKey.get(modelKey) ?? null}
                     disabledReason={disabledReason}
+                    agentScoped={agentScoped}
+                    sourceSubtitle={sourceSubtitle}
                     onToggleFavorite={toggleFavorite}
                   />
                 );
@@ -1258,7 +1431,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               setupEntries={providerSetupEntries}
               updateRequiredNotices={updateRequiredNotices}
               emptyLabel={
-                selectedInstanceId === "favorites" && !isSearching
+                effectiveSelectedInstanceId === "favorites" && !isSearching
                   ? gt("No favorites yet")
                   : workspaceModelsScanning
                     ? gt("Searching project models...")

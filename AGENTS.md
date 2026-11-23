@@ -89,9 +89,10 @@ prismux/
    - **业务与视觉外置沉淀**：所有 Prismux 专属业务与视觉实现必须独立沉淀在 `packages/prismux-appearance`、`packages/prismux-wallpaper`、`packages/protocol`、`packages/memory-core`、`packages/cordis-kernel`、`packages/sync-vault`、`apps/daemon` 与 `plugins-official/*`。
    - **标准化最小入侵挂载**：对 T3 Code 本体的全部定制必须严格收敛在标准化挂载点（初始 6 大挂载点），并在 [`docs/t3code-patch-manifest.md`](./docs/t3code-patch-manifest.md) 逐项登记文件路径、行号范围、挂载目的与上游合并策略；禁止在未登记位置向 T3 Code 内核注入散落业务代码。
    - **基线记录与上游合并**：保留根 [`UPSTREAM_LOCK.json`](./UPSTREAM_LOCK.json) 记录上游 `pingdotgg/t3code` 基线 Commit SHA，以便周期性合并或 Rebase 上游更新。
-2. **严禁混入已明确砍掉的 4 项冗余模块（保留 T3 Code 原生轻量线程归档）**
-   - **禁止实现**：① 权威任务看板（Task Board）、② 多代理组队 DAG（AgentTeam）、③ 技能中心面板（Skill Lens）、④ 网页视觉伴侣（Visual Companion）；同时仍禁止自建重型独立会话归档系统，**T3 Code 原生轻量线程归档（`/settings/archived`）按项目决策予以保留**。
-   - 上述裁撤场景统一由五大内化原语替代：`PersistentPtyPool`、`HandoffEngine`（`/handoff` 与 `agent / oracle / review` 三档拨盘）、`CollectorAndGuard`、`LifecycleHookBus` 与 `WorktreeSandbox`。
+2. **严禁混入已明确砍掉的 4 项冗余模块（保留 T3 Code 原生轻量线程归档与 Orca 轻量工作区/任务视图）**
+   - **禁止实现**：① 脱离会话体系的重型权威项目看板（Task Board）、② 多代理组队 DAG（AgentTeam）、③ 独立技能中心面板（Skill Lens）、④ 网页视觉伴侣（Visual Companion）；同时仍禁止自建重型独立会话归档系统，**T3 Code 原生轻量线程归档（`/settings/archived`）按项目决策予以保留**。
+   - **按最新项目决策保留并引入**：Orca 风格轻量「**工作区板（Workspace Board，4 列会话/工作区状态流转）**」与「**任务（Tasks，GitHub Issue / PR 聚合检索）**」视图（均直接映射当前会话/工作区与上游 Issue/PR 数据流，不另建脱离会话体系的重型项目管理系统）。
+   - 其余裁撤场景统一由五大内化原语替代：`PersistentPtyPool`、`HandoffEngine`（`/handoff` 与 `agent / oracle / review` 三档拨盘）、`CollectorAndGuard`、`LifecycleHookBus` 与 `WorktreeSandbox`。
 3. **内生单文件 SQLite 记忆中枢与物理防泄密**
    - 记忆引擎固定为单文件 `~/.prismux/data/memory.db`（`SQLite WAL + FTS5 + sqlite-vec`），**零 PostgreSQL、零 Qdrant、零 MinIO、零本地 Obsidian 客户端运行依赖**（仅在 `apps/daemon` 暴露 `POST /v1/memory/import-obsidian` 接口承接历史笔记迁移）。
    - 查询层强制在传输层通过 `forwardIdentity` 注入并覆写 `_callerScope`，**绝不信任模型自报参数**；当 `_callerScope` 为 `qq_group:<gid>` 时，SQL 构造器底层硬编码绑定 `WHERE namespace = 'social/qq-group-' || :gid AND deleted_at IS NULL`，物理杜绝读取 `private/chief` 与 `workspace/*`。

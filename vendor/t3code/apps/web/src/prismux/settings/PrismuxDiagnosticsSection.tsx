@@ -23,6 +23,7 @@ import {
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
 import { toastManager } from "../../components/ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../../components/ui/tooltip";
 import { SettingsSection } from "../../components/settings/settingsLayout";
 import { cn } from "../../lib/utils";
 import { prismuxDaemonClient, type DaemonDiagnosticsStatus } from "../daemonClient";
@@ -128,7 +129,7 @@ function statusLabel(status: DaemonDiagnosticsStatus, gt: ReturnType<typeof useG
   }
 }
 
-function DiagnosticItemCard({
+export function DiagnosticItemCard({
   item,
   copied,
   onCopyCommand,
@@ -139,40 +140,62 @@ function DiagnosticItemCard({
 }) {
   const gt = useGT();
   const tone = statusToneClasses(item.status);
+  const hasFooterActions = Boolean(item.fixCommand || item.settingsRoute);
 
   return (
     <div
+      data-diagnostic-card="true"
       data-diagnostic-id={item.id}
       data-diagnostic-status={item.status}
       className={cn(
-        "flex flex-col justify-between gap-2.5 rounded-lg border bg-background/55 px-3.5 py-3 transition-colors",
+        "flex h-full min-h-[156px] flex-col rounded-lg border bg-background/55 px-3.5 py-3 transition-colors",
         tone.border,
       )}
     >
-      <div className="space-y-1.5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className={cn("size-2 shrink-0 rounded-full", tone.dot)} aria-hidden="true" />
-            <span className="truncate text-xs font-semibold text-foreground" title={item.name}>
-              {item.name}
-            </span>
-          </div>
-          <Badge variant={tone.badgeVariant} className="shrink-0 text-[10px]">
-            {statusLabel(item.status, gt)}
-          </Badge>
+      {/* 1. Fixed single-line header: dot + truncated title + status badge */}
+      <div className="flex h-5 shrink-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={cn("size-2 shrink-0 rounded-full", tone.dot)} aria-hidden="true" />
+          <span className="truncate text-xs font-semibold text-foreground" title={item.name}>
+            {item.name}
+          </span>
         </div>
+        <Badge variant={tone.badgeVariant} className="shrink-0 text-[10px]">
+          {statusLabel(item.status, gt)}
+        </Badge>
+      </div>
 
-        <p className="text-xs leading-relaxed text-foreground/90">{item.summary}</p>
+      {/* 2. Flex-1 body: summary + max 2-line detail/hint + compact version/latency meta */}
+      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-1.5">
+        <p
+          className="line-clamp-2 text-xs leading-relaxed text-foreground/90"
+          title={item.summary}
+        >
+          {item.summary}
+        </p>
         {item.detail ? (
-          <p className="break-all text-[11px] leading-relaxed text-muted-foreground">
+          <p
+            className="line-clamp-2 break-all text-[11px] leading-relaxed text-muted-foreground"
+            title={item.detail}
+          >
             {item.detail}
+          </p>
+        ) : item.fixAction && !item.fixCommand ? (
+          <p
+            className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground"
+            title={item.fixAction}
+          >
+            {item.fixAction}
           </p>
         ) : null}
 
         {(item.version || item.latencyMs !== null) ? (
-          <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] text-muted-foreground">
+          <div className="mt-auto flex flex-wrap items-center gap-2 pt-1 text-[11px] text-muted-foreground">
             {item.version ? (
-              <span className="max-w-full truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px]">
+              <span
+                className="max-w-full truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px]"
+                title={item.version}
+              >
                 {item.version}
               </span>
             ) : null}
@@ -183,19 +206,26 @@ function DiagnosticItemCard({
         ) : null}
       </div>
 
-      {(item.fixCommand || item.settingsRoute || item.fixAction) ? (
-        <div className="space-y-1.5 border-t border-border/50 pt-2">
-          {item.fixAction && !item.fixCommand ? (
-            <p className="text-[11px] text-muted-foreground">{item.fixAction}</p>
-          ) : null}
-          <div className="flex flex-wrap items-center gap-1.5">
-            {item.fixCommand ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                className="h-6 max-w-full gap-1 px-2 text-[11px]"
-                onClick={() => onCopyCommand(item.id, item.fixCommand!)}
+      {/* 3. Fixed bottom-aligned action bar (no redundant command code block below) */}
+      {hasFooterActions ? (
+        <div
+          data-diagnostic-card-footer="true"
+          className="mt-auto flex min-h-[34px] shrink-0 flex-wrap items-center gap-1.5 border-t border-border/50 pt-2.5"
+        >
+          {item.fixCommand ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    data-diagnostic-copy-command="true"
+                    title={item.fixCommand}
+                    className="h-6 max-w-full gap-1 px-2 text-[11px]"
+                    onClick={() => onCopyCommand(item.id, item.fixCommand!)}
+                  />
+                }
               >
                 {copied ? (
                   <CheckIcon className="size-3 shrink-0 text-emerald-500" />
@@ -203,26 +233,26 @@ function DiagnosticItemCard({
                   <CopyIcon className="size-3 shrink-0" />
                 )}
                 <span className="truncate">
-                  {copied ? gt("Copied") : gt("Copy fix command")}
+                  {copied ? `${gt("Copied")} ✓` : gt("Copy fix command")}
                 </span>
-              </Button>
-            ) : null}
-            {item.settingsRoute ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                className="h-6 gap-1 px-2 text-[11px]"
-                render={<Link to={item.settingsRoute as never} />}
-              >
-                <span>{gt("Open settings")}</span>
-                <ArrowRightIcon className="size-3 shrink-0" />
-              </Button>
-            ) : null}
-          </div>
-          {item.fixCommand ? (
-            <code className="block truncate rounded bg-muted/50 px-2 py-1 font-mono text-[10px] text-muted-foreground" title={item.fixCommand}>
-              {item.fixCommand}
-            </code>
+              </TooltipTrigger>
+              <TooltipPopup data-pmx-glass-zone="overlays" side="top" sideOffset={6}>
+                <span className="block max-w-xs break-all font-mono text-[11px]">
+                  {item.fixCommand}
+                </span>
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {item.settingsRoute ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-6 gap-1 px-2 text-[11px]"
+              render={<Link to={item.settingsRoute as never} />}
+            >
+              <span>{gt("Open settings")}</span>
+              <ArrowRightIcon className="size-3 shrink-0" />
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -241,13 +271,17 @@ function DiagnosticItemCard({
  */
 export function PrismuxDiagnosticsSection({
   variant = "full",
+  initialReportOverride,
 }: {
   readonly variant?: "full" | "compact";
+  readonly initialReportOverride?: NormalizedDiagnosticsReport | null;
 }) {
   const gt = useGT();
   const { copiedId, copyCommand } = useCopyFixCommand();
-  const [report, setReport] = useState<NormalizedDiagnosticsReport | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [report, setReport] = useState<NormalizedDiagnosticsReport | null>(
+    () => initialReportOverride ?? null,
+  );
+  const [loading, setLoading] = useState(() => initialReportOverride === undefined);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [compactOpen, setCompactOpen] = useState(false);
 
@@ -265,8 +299,9 @@ export function PrismuxDiagnosticsSection({
   }, []);
 
   useEffect(() => {
+    if (initialReportOverride !== undefined) return;
     void loadDiagnostics(false);
-  }, [loadDiagnostics]);
+  }, [initialReportOverride, loadDiagnostics]);
 
   if (variant === "compact") {
     if (!report) {
@@ -332,7 +367,7 @@ export function PrismuxDiagnosticsSection({
                     <T>All detected host services, tools, and mirrors are healthy.</T>
                   </p>
                 ) : (
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid items-stretch gap-2 sm:grid-cols-2">
                     {attentionItems.slice(0, 6).map((item) => (
                       <DiagnosticItemCard
                         key={item.id}
@@ -508,13 +543,13 @@ export function PrismuxDiagnosticsSection({
                   {gt("Read-only")}
                 </Badge>
               </div>
-              <div className="grid gap-2 sm:grid-cols-3">
+              <div className="grid items-stretch gap-2 sm:grid-cols-3">
                 {report.dormantEngines.map((engine) => {
                   const tone = statusToneClasses(engine.status);
                   return (
                     <div
                       key={engine.id}
-                      className="rounded-md border border-border/60 bg-background/60 px-2.5 py-2"
+                      className="flex h-full flex-col rounded-md border border-border/60 bg-background/60 px-2.5 py-2"
                     >
                       <div className="flex items-center justify-between gap-1.5">
                         <span className="truncate text-[11px] font-medium text-foreground">
@@ -522,7 +557,9 @@ export function PrismuxDiagnosticsSection({
                         </span>
                         <span className={cn("size-2 shrink-0 rounded-full", tone.dot)} />
                       </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{engine.summary}</p>
+                      <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground" title={engine.summary}>
+                        {engine.summary}
+                      </p>
                     </div>
                   );
                 })}
@@ -570,7 +607,10 @@ export function PrismuxDiagnosticsSection({
                       </div>
                     </div>
 
-                    <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
+                    <div
+                      data-diagnostic-group-grid={group.id}
+                      className="grid items-stretch gap-2.5 md:grid-cols-2 xl:grid-cols-3"
+                    >
                       {group.items.map((item) => (
                         <DiagnosticItemCard
                           key={item.id}

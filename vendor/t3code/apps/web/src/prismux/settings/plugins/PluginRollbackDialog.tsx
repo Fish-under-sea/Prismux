@@ -1,9 +1,14 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangleIcon, HistoryIcon, XIcon } from "lucide-react";
 
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import {
+  createBackdropDismissGuardState,
+  recordBackdropPointerDown,
+  shouldDismissOnBackdropClick,
+} from "../../../components/ui/dialog-styles";
 import type { PluginCenterItem } from "./pluginCenterModel";
 
 export interface PluginRollbackDialogProps {
@@ -28,13 +33,9 @@ export function PluginRollbackDialog({
   const titleId = useId();
   const descId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (typeof document !== "undefined") {
-      setPortalHost(document.body);
-    }
-  }, []);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const backdropGuardRef = useRef(createBackdropDismissGuardState());
+  const portalHost = typeof document !== "undefined" ? document.body : null;
 
   useEffect(() => {
     if (!plugin) return;
@@ -48,7 +49,7 @@ export function PluginRollbackDialog({
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [busy, onCancel, plugin, portalHost]);
+  }, [busy, onCancel, plugin]);
 
   if (!plugin || !plugin.previousVersion) {
     return null;
@@ -56,20 +57,29 @@ export function PluginRollbackDialog({
 
   const dialogContent = (
     <div
-      className="fixed top-0 right-0 bottom-6 left-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs [-webkit-app-region:no-drag]"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs [-webkit-app-region:no-drag]"
       data-slot="plugin-rollback-backdrop"
       data-portal-layer="plugin-rollback-dialog"
+      onPointerDownCapture={(event) => {
+        recordBackdropPointerDown(backdropGuardRef.current, event, dialogRef.current);
+      }}
       onClick={(event) => {
-        if (event.target === event.currentTarget && !busy) {
+        if (
+          shouldDismissOnBackdropClick(backdropGuardRef.current, event, dialogRef.current, {
+            disabled: busy,
+          })
+        ) {
           onCancel();
         }
       }}
     >
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
+        data-pmx-glass-zone="overlays"
         data-testid="plugin-rollback-dialog"
         className="pmx-plugin-overlay-surface relative flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border text-popover-foreground shadow-2xl"
       >

@@ -1163,6 +1163,38 @@ export const PrismuxInstallDownloadedUpdateResultSchema = Schema.Struct({
 export type PrismuxInstallDownloadedUpdateResult =
   typeof PrismuxInstallDownloadedUpdateResultSchema.Type;
 
+export const PrismuxKeepAwakeStateSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  blockerId: Schema.NullOr(Schema.Int),
+  active: Schema.Boolean,
+});
+export type PrismuxKeepAwakeState = typeof PrismuxKeepAwakeStateSchema.Type;
+
+export const PrismuxTrayActionSchema = Schema.Literals([
+  "open-mobile-connect",
+  "open-mobile-simulator",
+]);
+export type PrismuxTrayAction = typeof PrismuxTrayActionSchema.Type;
+
+export const PrismuxTrayActionPayloadSchema = Schema.Struct({
+  action: PrismuxTrayActionSchema,
+});
+export type PrismuxTrayActionPayload = typeof PrismuxTrayActionPayloadSchema.Type;
+
+export const PrismuxSetTrayRunningAgentsRequestSchema = Schema.Struct({
+  count: Schema.Number,
+  mobileUrl: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+export type PrismuxSetTrayRunningAgentsRequest =
+  typeof PrismuxSetTrayRunningAgentsRequestSchema.Type;
+
+export const PrismuxSetTrayRunningAgentsResultSchema = Schema.Struct({
+  ok: Schema.Boolean,
+  count: Schema.Int,
+});
+export type PrismuxSetTrayRunningAgentsResult =
+  typeof PrismuxSetTrayRunningAgentsResultSchema.Type;
+
 export interface PrismuxDesktopBridge {
   getDaemonInfo: () => Promise<PrismuxDaemonInfo>;
   getWindowOcclusion: () => Promise<PrismuxWindowOcclusion>;
@@ -1173,6 +1205,13 @@ export interface PrismuxDesktopBridge {
   installDownloadedUpdate: (
     request: PrismuxInstallDownloadedUpdateRequest,
   ) => Promise<PrismuxInstallDownloadedUpdateResult>;
+  setKeepAwake?: (enabled: boolean) => Promise<PrismuxKeepAwakeState>;
+  getKeepAwakeState?: () => Promise<PrismuxKeepAwakeState>;
+  setTrayRunningAgentsCount?: (
+    count: number,
+    extra?: { readonly mobileUrl?: string | null },
+  ) => Promise<PrismuxSetTrayRunningAgentsResult>;
+  onTrayAction?: (listener: (payload: PrismuxTrayActionPayload) => void) => () => void;
 }
 
 export interface DesktopBridge {

@@ -1,4 +1,25 @@
-import { useCallback, useEffect, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import {
+  PrismuxReasoningEffortSlider,
+  formatEffortLabel,
+  getEffortPresetForFamily,
+  normalizeReasoningEffortOptions,
+  resolveReasoningModelTheme,
+  type NormalizedReasoningEffortOption,
+  type ReasoningEffortOption,
+} from "@prismux/appearance";
+import {
+  isReasoningControl,
+  selectableProviderOptionChoices,
+} from "@t3tools/client-runtime/model-traits";
+import {
+  ANTIGRAVITY_DEFAULT_MODEL,
+  MUSE_DEFAULT_MODEL,
+  type ServerProvider,
+  type ServerProviderModel,
+} from "@t3tools/contracts";
+import type { UnifiedSettings } from "@t3tools/contracts/settings";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ActivityIcon,
@@ -8,14 +29,13 @@ import {
   CheckCircle2Icon,
   CloudIcon,
   DatabaseIcon,
-  FolderOpenIcon,
   KeyRoundIcon,
   LockIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   SaveIcon,
   SearchIcon,
   ShieldCheckIcon,
-  UploadIcon,
   WifiIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -36,18 +56,83 @@ import {
   SettingsRow,
   SettingsSection,
 } from "../../components/settings/settingsLayout";
-import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
+import { usePrimarySettings } from "../../hooks/useSettings";
+import { getAppModelOptionsForInstance } from "../../modelSelection";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+} from "../../providerInstances";
+import { primaryServerProvidersAtom } from "../../state/server";
+import {
+  AgentBrandLogo,
+  formatAgentBrandName,
+  toCanonicalChiefProviderId,
+} from "../agentBrand";
+import { DEFAULT_CHIEF_DISPLAY_NAME, normalizeChiefDisplayName } from "../chiefMention";
+import { prismuxDaemonClient, type PrismuxDaemonClient } from "../daemonClient";
+import { emitChiefSlotUpdated } from "../PrismuxChiefStatusPill";
+import { useOptionalPrismuxRuntime } from "../PrismuxRuntimeProvider";
+import { ChiefIdentityAndAgentsMdSection } from "./ChiefIdentityAndAgentsMdSection";
+import { ObsidianAgentImportCard } from "./ObsidianAgentImportCard";
 
 type DialModeValue = "agent" | "oracle" | "review";
+
+export const CHIEF_DEFAULT_MODEL_SENTINEL = "__chief_provider_default__";
+export const CHIEF_DEFAULT_EFFORT_SENTINEL = "__chief_effort_default__";
+export const BUILTIN_CHIEF_FALLBACK_PROVIDERS = [
+  "codex",
+  "claude-code",
+  "antigravity",
+  "omp",
+] as const;
+
+export interface ChiefModelDropdownOption {
+  readonly slug: string;
+  readonly label: string;
+  readonly subtitle?: string;
+  readonly isCustom?: boolean;
+  readonly isDefault?: boolean;
+  readonly isCompatibilityFallback?: boolean;
+  readonly rawModel?: ServerProviderModel;
+}
+
+export interface ChiefProviderDropdownOption {
+  readonly value: string;
+  readonly label: string;
+  readonly configured: boolean;
+  readonly available: boolean;
+  readonly models: readonly ChiefModelDropdownOption[];
+}
+
+export interface ResolvedChiefEffortSpec {
+  readonly familyId: string;
+  readonly familyDisplayName: string;
+  readonly stops: readonly NormalizedReasoningEffortOption[];
+  readonly source: "model-capabilities" | "model-family-preset";
+}
 
 interface ChiefStateView {
   readonly threadId: string;
   readonly provider: string;
+  readonly secretaryName: string;
+  readonly agentsMdPath: string;
   readonly model: string;
+  readonly reasoningEffort: string;
   readonly dialMode: DialModeValue;
   readonly availableProviders: readonly string[];
   readonly t3Connected: boolean;
   readonly updatedAt: number | null;
+}
+
+export interface PrismuxMemorySyncSettingsPageProps {
+  /** Optional overrides for isolated unit testing without full runtime/server providers. */
+  readonly serverProvidersOverride?: ReadonlyArray<ServerProvider>;
+  readonly settingsOverride?: UnifiedSettings | null;
+  readonly daemonOverride?: Pick<
+    PrismuxDaemonClient,
+    "requestJson" | "switchChief" | "triggerSyncNow" | "testSyncConnection"
+  >;
+  readonly daemonReadyOverride?: boolean;
 }
 
 type MemoryRetrievalModeValue = "fts5+sqlite-vec" | "fts5-only";
@@ -307,16 +392,308 @@ function channelDisplayName(channel: string): string {
   }
 }
 
+function isPlaceholderModelSlug(slug: string): boolean {
+  const trimmed = slug.trim();
+  return (
+    trimmed.length === 0 ||
+    trimmed === ANTIGRAVITY_DEFAULT_MODEL ||
+    trimmed === MUSE_DEFAULT_MODEL
+  );
+}
+
+/**
+ * Merges live T3 Code server providers, custom model catalogs, built-in fallbacks
+ * (`codex / claude-code / antigravity / omp`), and Daemon availableProviders into
+ * canonical, de-duplicated Provider dropdown options with official brand names.
+ */
+export function buildChiefProviderOptions(input: {
+  readonly serverProviders: ReadonlyArray<ServerProvider>;
+  readonly settings?: UnifiedSettings | null;
+  readonly daemonAvailableProviders?: readonly string[];
+  readonly currentProvider?: string | null;
+}): ChiefProviderDropdownOption[] {
+  const derivedEntries = deriveProviderInstanceEntries(input.serverProviders);
+  const brandedEntries = input.settings
+    ? brandProviderInstanceEntries(derivedEntries, input.settings)
+    : derivedEntries;
+
+  interface ProviderBucket {
+    value: string;
+    label: string;
+    configured: boolean;
+    available: boolean;
+    models: ChiefModelDropdownOption[];
+    seenModelSlugs: Set<string>;
+    customAcpNames: Set<string>;
+  }
+
+  const buckets = new Map<string, ProviderBucket>();
+
+  const ensureBucket = (rawId: string, customDisplayName?: string | null): ProviderBucket => {
+    const canonicalId = toCanonicalChiefProviderId(rawId);
+    const existing = buckets.get(canonicalId);
+    if (existing) {
+      return existing;
+    }
+    const created: ProviderBucket = {
+      value: canonicalId,
+      label: formatAgentBrandName(canonicalId, customDisplayName),
+      configured: false,
+      available: false,
+      models: [],
+      seenModelSlugs: new Set<string>(),
+      customAcpNames: new Set<string>(),
+    };
+    buckets.set(canonicalId, created);
+    return created;
+  };
+
+  for (const entry of brandedEntries) {
+    const canonicalId = toCanonicalChiefProviderId(entry.driverKind);
+    const customLabel =
+      entry.driverKind === "acpRegistry" ? entry.displayName : undefined;
+    const bucket = ensureBucket(canonicalId, customLabel);
+    if (entry.enabled) {
+      bucket.configured = true;
+    }
+    if (entry.enabled && entry.isAvailable) {
+      bucket.available = true;
+    }
+    if (entry.driverKind === "acpRegistry" && entry.displayName.trim().length > 0) {
+      bucket.customAcpNames.add(entry.displayName.trim());
+      bucket.label =
+        bucket.customAcpNames.size === 1
+          ? formatAgentBrandName("acp", [...bucket.customAcpNames][0])
+          : formatAgentBrandName("acp");
+    }
+
+    const rawModelsBySlug = new Map<string, ServerProviderModel>();
+    for (const rawModel of entry.models) {
+      rawModelsBySlug.set(rawModel.slug, rawModel);
+    }
+
+    const appOptions = input.settings
+      ? getAppModelOptionsForInstance(input.settings, entry, null)
+      : entry.models.map((m) => ({
+          slug: m.slug,
+          name: m.name,
+          subProvider: m.subProvider,
+          isCustom: m.isCustom,
+          isDefault: m.isDefault,
+        }));
+
+    for (const opt of appOptions) {
+      if (isPlaceholderModelSlug(opt.slug) || bucket.seenModelSlugs.has(opt.slug)) {
+        continue;
+      }
+      bucket.seenModelSlugs.add(opt.slug);
+      const rawModel = rawModelsBySlug.get(opt.slug);
+      const displayName = opt.name?.trim() || opt.slug;
+      const sourceParts: string[] = [];
+      if (opt.subProvider && opt.subProvider.trim().length > 0) {
+        sourceParts.push(opt.subProvider.trim());
+      } else if (!entry.isDefault && entry.displayName.trim().length > 0) {
+        sourceParts.push(entry.displayName.trim());
+      }
+      if (displayName.toLowerCase() !== opt.slug.toLowerCase()) {
+        sourceParts.push(opt.slug);
+      }
+      if (opt.isCustom) {
+        sourceParts.push("自定义");
+      }
+      bucket.models.push({
+        slug: opt.slug,
+        label: displayName,
+        ...(sourceParts.length > 0 ? { subtitle: sourceParts.join(" · ") } : {}),
+        ...(opt.isCustom ? { isCustom: true } : {}),
+        ...(opt.isDefault ? { isDefault: true } : {}),
+        ...(rawModel ? { rawModel } : {}),
+      });
+    }
+  }
+
+  for (const fallbackId of BUILTIN_CHIEF_FALLBACK_PROVIDERS) {
+    ensureBucket(fallbackId);
+  }
+
+  if (Array.isArray(input.daemonAvailableProviders)) {
+    for (const rawId of input.daemonAvailableProviders) {
+      if (typeof rawId === "string" && rawId.trim().length > 0) {
+        ensureBucket(rawId);
+      }
+    }
+  }
+
+  if (typeof input.currentProvider === "string" && input.currentProvider.trim().length > 0) {
+    ensureBucket(input.currentProvider);
+  }
+
+  const fallbackOrder = new Map<string, number>(
+    BUILTIN_CHIEF_FALLBACK_PROVIDERS.map((id, idx) => [id, idx]),
+  );
+
+  return [...buckets.values()]
+    .sort((a, b) => {
+      if (a.available !== b.available) return a.available ? -1 : 1;
+      if (a.configured !== b.configured) return a.configured ? -1 : 1;
+      const aRank = fallbackOrder.get(a.value) ?? 100;
+      const bRank = fallbackOrder.get(b.value) ?? 100;
+      if (aRank !== bRank) return aRank - bRank;
+      return a.label.localeCompare(b.label);
+    })
+    .map(({ value, label, configured, available, models }) => ({
+      value,
+      label,
+      configured,
+      available,
+      models,
+    }));
+}
+
+/**
+ * Builds selectable model options for the active Chief provider.
+ * Preserves a legacy/custom compatibility fallback entry if the currently saved model
+ * is absent from the auto-fetched provider catalog so saved configs are never lost.
+ */
+export function buildChiefModelDropdownItems(input: {
+  readonly providerOption: ChiefProviderDropdownOption | undefined;
+  readonly selectedModel: string;
+}): ChiefModelDropdownOption[] {
+  const models = input.providerOption?.models ?? [];
+  const trimmedSelected = input.selectedModel.trim();
+  if (
+    trimmedSelected.length > 0 &&
+    !models.some((item) => item.slug === trimmedSelected)
+  ) {
+    return [
+      {
+        slug: trimmedSelected,
+        label: `当前配置：${trimmedSelected}`,
+        subtitle: "已保存模型（当前目录未返回，保留防丢值）",
+        isCompatibilityFallback: true,
+      },
+      ...models,
+    ];
+  }
+  return [...models];
+}
+
+/**
+ * Resolves supported reasoning effort stops for the selected Chief Provider + Model,
+ * preferring live T3 Code model capabilities and falling back to `@prismux/appearance`'s
+ * model-aware family presets (Codex minimal..max, Claude low..ultracode, Gemini off..max, etc.).
+ * Effort stop labels always use clear English tier names (Minimal / Low / Medium / High / XHigh / Max / Ultracode).
+ */
+export function resolveChiefEffortSpec(input: {
+  readonly provider: string;
+  readonly modelSlug: string;
+  readonly modelOption?: ChiefModelDropdownOption | undefined;
+}): ResolvedChiefEffortSpec {
+  const theme = resolveReasoningModelTheme(
+    input.modelSlug.trim() || null,
+    input.modelOption?.label ?? null,
+    input.provider,
+  );
+  const descriptors = input.modelOption?.rawModel?.capabilities?.optionDescriptors ?? [];
+  const reasoningDescriptor = descriptors.find(
+    (descriptor): descriptor is Extract<typeof descriptor, { type: "select" }> =>
+      descriptor.type === "select" && isReasoningControl(descriptor),
+  );
+  if (reasoningDescriptor) {
+    const choices = selectableProviderOptionChoices(reasoningDescriptor);
+    if (choices.length > 0) {
+      const sliderChoices: ReasoningEffortOption[] = choices.map((choice) => {
+        const englishLabel = formatEffortLabel(choice.id);
+        return {
+          value: choice.id,
+          label: englishLabel,
+          shortLabel: englishLabel,
+          ...(choice.description ? { description: choice.description } : {}),
+        };
+      });
+      return {
+        familyId: theme.id,
+        familyDisplayName: theme.displayName,
+        stops: normalizeReasoningEffortOptions(sliderChoices, theme.id, "en"),
+        source: "model-capabilities",
+      };
+    }
+  }
+  return {
+    familyId: theme.id,
+    familyDisplayName: theme.displayName,
+    stops: getEffortPresetForFamily(theme.id, "en"),
+    source: "model-family-preset",
+  };
+}
+
+/**
+ * Reconciles model and reasoning effort when switching Chief Provider:
+ * - Resets model to `""` (follow provider default) if the previously selected model
+ *   does not belong to the newly chosen provider's model catalog.
+ * - Resets reasoning effort to `""` (follow provider default) if the previous effort
+ *   is not supported by the new provider + model combination.
+ */
+export function reconcileChiefSelectionOnProviderChange(input: {
+  readonly nextProviderRaw: string;
+  readonly providerOptions: readonly ChiefProviderDropdownOption[];
+  readonly currentModel: string;
+  readonly currentEffort: string;
+}): {
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEffort: string;
+} {
+  const nextProvider = toCanonicalChiefProviderId(input.nextProviderRaw);
+  const nextProviderOpt = input.providerOptions.find((opt) => opt.value === nextProvider);
+  const trimmedModel = input.currentModel.trim();
+  const nextModelStillValid =
+    trimmedModel.length > 0 &&
+    Boolean(nextProviderOpt?.models.some((item) => item.slug === trimmedModel));
+  const nextModel = nextModelStillValid ? trimmedModel : "";
+
+  const nextModelOpt = nextProviderOpt?.models.find((item) => item.slug === nextModel);
+  const nextEffortSpec = resolveChiefEffortSpec({
+    provider: nextProvider,
+    modelSlug: nextModel,
+    modelOption: nextModelOpt,
+  });
+  const trimmedEffort = input.currentEffort.trim();
+  const nextEffortStillValid =
+    trimmedEffort.length > 0 &&
+    nextEffortSpec.stops.some((stop) => stop.value === trimmedEffort);
+
+  return {
+    provider: nextProvider,
+    model: nextModel,
+    reasoningEffort: nextEffortStillValid ? trimmedEffort : "",
+  };
+}
+
 /**
  * MP-04: /settings/memory-sync
  * Unified real-data control center for:
- * 1. Chief Thread Slot & Agent/Oracle/Review 3-mode dial (/v1/chief, /v1/chief/switch)
- * 2. Single-file SQLite WAL + FTS5 + sqlite-vec hybrid memory & Obsidian Vault import
- * 3. Magpie E2EE Sync (Argon2id + AEAD) with independent WebDAV / S3 / GitHub toggles
+ * 1. Chief Thread Slot (custom secretary name, independent ~/.prismux/chief/AGENTS.md, canonical Agent brand, auto-fetched model dropdown, model-aware reasoning effort, Agent/Oracle/Review 3-mode dial)
+ * 2. Single-file SQLite WAL + FTS5 + sqlite-vec hybrid memory & Agent-curated Obsidian Vault migration
+ * 3. Prismux E2EE Sync (Argon2id + AEAD) with independent WebDAV / S3 / GitHub toggles
  *    and write-only secret inputs (plaintext credentials are never echoed back).
  */
-export function PrismuxMemorySyncSettingsPage() {
-  const { daemon, daemonInfo, chiefProvider, dialMode, switchChief } = usePrismuxRuntime();
+export function PrismuxMemorySyncSettingsPage({
+  serverProvidersOverride,
+  settingsOverride,
+  daemonOverride,
+  daemonReadyOverride,
+}: PrismuxMemorySyncSettingsPageProps = {}) {
+  const runtime = useOptionalPrismuxRuntime();
+  const liveServerProviders = useAtomValue(primaryServerProvidersAtom);
+  const liveSettings = usePrimarySettings();
+
+  const daemon = daemonOverride ?? runtime?.daemon ?? prismuxDaemonClient;
+  const daemonReady = daemonReadyOverride ?? runtime?.daemonInfo.ready ?? false;
+  const runtimeChiefProvider = runtime?.chiefProvider ?? "codex";
+  const runtimeDialMode = runtime?.dialMode ?? "agent";
+  const serverProviders = serverProvidersOverride ?? liveServerProviders;
+  const unifiedSettings = settingsOverride !== undefined ? settingsOverride : liveSettings;
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -325,17 +702,100 @@ export function PrismuxMemorySyncSettingsPage() {
   // 1. Chief Slot state
   const [chief, setChief] = useState<ChiefStateView>({
     threadId: "",
-    provider: chiefProvider || "claude",
+    provider: toCanonicalChiefProviderId(runtimeChiefProvider),
+    secretaryName: DEFAULT_CHIEF_DISPLAY_NAME,
+    agentsMdPath: "~/.prismux/chief/AGENTS.md",
     model: "",
-    dialMode: dialMode || "agent",
-    availableProviders: ["claude", "codex", "gemini", "custom"],
+    reasoningEffort: "",
+    dialMode: runtimeDialMode,
+    availableProviders: [...BUILTIN_CHIEF_FALLBACK_PROVIDERS],
     t3Connected: false,
     updatedAt: null,
   });
-  const [selectedProvider, setSelectedProvider] = useState(chiefProvider || "claude");
+  const [selectedProvider, setSelectedProvider] = useState(() =>
+    toCanonicalChiefProviderId(runtimeChiefProvider),
+  );
   const [selectedModel, setSelectedModel] = useState("");
-  const [selectedDial, setSelectedDial] = useState<DialModeValue>(dialMode || "agent");
+  const [selectedEffort, setSelectedEffort] = useState("");
+  const [selectedDial, setSelectedDial] = useState<DialModeValue>(runtimeDialMode);
   const [savingChief, setSavingChief] = useState(false);
+
+  const providerOptions = useMemo(
+    () =>
+      buildChiefProviderOptions({
+        serverProviders,
+        settings: unifiedSettings,
+        daemonAvailableProviders: chief.availableProviders,
+        currentProvider: selectedProvider,
+      }),
+    [chief.availableProviders, selectedProvider, serverProviders, unifiedSettings],
+  );
+
+  const activeProviderOption = useMemo(
+    () => providerOptions.find((opt) => opt.value === selectedProvider) ?? providerOptions[0],
+    [providerOptions, selectedProvider],
+  );
+
+  const modelDropdownItems = useMemo(
+    () =>
+      buildChiefModelDropdownItems({
+        providerOption: activeProviderOption,
+        selectedModel,
+      }),
+    [activeProviderOption, selectedModel],
+  );
+
+  const activeModelOption = useMemo(
+    () => modelDropdownItems.find((item) => item.slug === selectedModel.trim()),
+    [modelDropdownItems, selectedModel],
+  );
+
+  const effortSpec = useMemo(
+    () =>
+      resolveChiefEffortSpec({
+        provider: selectedProvider,
+        modelSlug: selectedModel,
+        modelOption: activeModelOption,
+      }),
+    [activeModelOption, selectedModel, selectedProvider],
+  );
+
+  const handleProviderChange = useCallback(
+    (nextRaw: string | null) => {
+      if (!nextRaw) return;
+      const reconciled = reconcileChiefSelectionOnProviderChange({
+        nextProviderRaw: nextRaw,
+        providerOptions,
+        currentModel: selectedModel,
+        currentEffort: selectedEffort,
+      });
+      setSelectedProvider(reconciled.provider);
+      setSelectedModel(reconciled.model);
+      setSelectedEffort(reconciled.reasoningEffort);
+    },
+    [providerOptions, selectedEffort, selectedModel],
+  );
+
+  const handleModelChange = useCallback(
+    (nextRaw: string | null) => {
+      if (!nextRaw) return;
+      const nextModel = nextRaw === CHIEF_DEFAULT_MODEL_SENTINEL ? "" : nextRaw;
+      setSelectedModel(nextModel);
+      const nextModelOpt = activeProviderOption?.models.find((item) => item.slug === nextModel);
+      const nextEffortSpec = resolveChiefEffortSpec({
+        provider: selectedProvider,
+        modelSlug: nextModel,
+        modelOption: nextModelOpt,
+      });
+      if (
+        selectedEffort.trim().length > 0 &&
+        !nextEffortSpec.stops.some((stop) => stop.value === selectedEffort.trim())
+      ) {
+        setSelectedEffort("");
+      }
+    },
+    [activeProviderOption, selectedEffort, selectedProvider],
+  );
 
   // 2. Memory state
   const [memoryStats, setMemoryStats] = useState<MemoryStatsView | null>(null);
@@ -347,13 +807,8 @@ export function PrismuxMemorySyncSettingsPage() {
     totalCandidates: number;
     degradedToFtsOnly: boolean;
   } | null>(null);
-  const [obsidianVaultPath, setObsidianVaultPath] = useState("");
-  const [obsidianNamespace, setObsidianNamespace] = useState("private/chief");
-  const [obsidianDryRun, setObsidianDryRun] = useState(false);
-  const [importingObsidian, setImportingObsidian] = useState(false);
-  const [obsidianReport, setObsidianReport] = useState<string | null>(null);
 
-  // 3. Magpie Sync state
+  // 3. Prismux E2EE Sync state
   const [hasPassphrase, setHasPassphrase] = useState(false);
   const [passphraseInput, setPassphraseInput] = useState("");
   const [syncConfigPath, setSyncConfigPath] = useState("");
@@ -460,24 +915,51 @@ export function PrismuxMemorySyncSettingsPage() {
       if (chiefRes.status === "fulfilled") {
         const root = asRecord(chiefRes.value);
         const slot = asRecord(root?.slot);
-        const provider = asString(slot?.provider, chiefProvider || "claude");
+        const rawProvider =
+          asString(slot?.activeProvider) ||
+          asString(slot?.provider) ||
+          runtimeChiefProvider ||
+          "codex";
+        const provider = toCanonicalChiefProviderId(rawProvider);
+        const secretaryName = normalizeChiefDisplayName(
+          asString(root?.secretaryName) || asString(slot?.secretaryName),
+        );
+        const agentsMdPath =
+          asString(root?.agentsMdPath) ||
+          asString(slot?.agentsMdPath) ||
+          "~/.prismux/chief/AGENTS.md";
         const model = asString(slot?.model);
-        const mode = asDialMode(root?.dialMode, dialMode || "agent");
+        const reasoningEffort =
+          asString(slot?.reasoningEffort) || asString(slot?.defaultEffort);
+        const mode = asDialMode(root?.dialMode, runtimeDialMode);
         const providers = Array.isArray(root?.availableProviders)
           ? root.availableProviders.filter((p): p is string => typeof p === "string")
-          : ["claude", "codex", "gemini", "custom"];
+          : [...BUILTIN_CHIEF_FALLBACK_PROVIDERS];
         setChief({
           threadId: asString(slot?.threadId),
           provider,
+          secretaryName,
+          agentsMdPath,
           model,
+          reasoningEffort,
           dialMode: mode,
-          availableProviders: providers.length > 0 ? providers : ["claude", "codex", "gemini", "custom"],
+          availableProviders:
+            providers.length > 0 ? providers : [...BUILTIN_CHIEF_FALLBACK_PROVIDERS],
           t3Connected: asBoolean(root?.t3Connected, false),
           updatedAt: typeof slot?.updatedAt === "number" ? slot.updatedAt : null,
         });
         setSelectedProvider(provider);
         setSelectedModel(model);
+        setSelectedEffort(reasoningEffort);
         setSelectedDial(mode);
+        emitChiefSlotUpdated({
+          provider,
+          model: model || null,
+          reasoningEffort: reasoningEffort || null,
+          dialMode: mode,
+          secretaryName,
+          agentsMdPath,
+        });
       } else {
         errors.push(`主秘书状态：${chiefRes.reason instanceof Error ? chiefRes.reason.message : String(chiefRes.reason)}`);
       }
@@ -519,7 +1001,7 @@ export function PrismuxMemorySyncSettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, [chiefProvider, daemon, dialMode, hydrateSyncResponse]);
+  }, [daemon, hydrateSyncResponse, runtimeChiefProvider, runtimeDialMode]);
 
   useEffect(() => {
     void loadAll();
@@ -530,23 +1012,49 @@ export function PrismuxMemorySyncSettingsPage() {
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      await switchChief({ provider: selectedProvider, dialMode: selectedDial });
-      await daemon.requestJson<unknown>("/v1/chief/switch", {
-        method: "POST",
-        body: JSON.stringify({
-          provider: selectedProvider,
-          ...(selectedModel.trim().length > 0 ? { model: selectedModel.trim() } : {}),
-          dialMode: selectedDial,
-        }),
+      const normalizedProvider = toCanonicalChiefProviderId(selectedProvider);
+      const trimmedModel = selectedModel.trim();
+      const trimmedEffort = selectedEffort.trim();
+      await daemon.switchChief({
+        provider: normalizedProvider,
+        ...(trimmedModel.length > 0 ? { model: trimmedModel } : {}),
+        dialMode: selectedDial,
+        reasoningEffort: trimmedEffort,
+        defaultEffort: trimmedEffort,
       });
-      setStatusMsg(`主秘书槽位已切换为 ${selectedProvider}（档位：${selectedDial}）。`);
+      emitChiefSlotUpdated({
+        provider: normalizedProvider,
+        model: trimmedModel || null,
+        reasoningEffort: trimmedEffort || null,
+        dialMode: selectedDial,
+        secretaryName: chief.secretaryName,
+        agentsMdPath: chief.agentsMdPath,
+      });
+      const brandLabel = formatAgentBrandName(normalizedProvider);
+      const modelSummary = trimmedModel.length > 0 ? ` · 模型：${trimmedModel}` : "";
+      const effortSummary =
+        trimmedEffort.length > 0
+          ? ` · 思考强度：${formatEffortLabel(trimmedEffort)}`
+          : " · 思考强度：跟随默认";
+      setStatusMsg(
+        `主秘书「${chief.secretaryName}」底层引擎已切换为 ${brandLabel}${modelSummary}${effortSummary}（档位：${selectedDial}；独立 AGENTS.md 与称呼已完整保留）。`,
+      );
       await loadAll();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingChief(false);
     }
-  }, [daemon, loadAll, selectedDial, selectedModel, selectedProvider, switchChief]);
+  }, [
+    chief.agentsMdPath,
+    chief.secretaryName,
+    daemon,
+    loadAll,
+    selectedDial,
+    selectedEffort,
+    selectedModel,
+    selectedProvider,
+  ]);
 
   const handleSearchMemory = useCallback(async () => {
     const q = searchQuery.trim();
@@ -592,53 +1100,6 @@ export function PrismuxMemorySyncSettingsPage() {
     }
   }, [daemon, searchLimit, searchQuery]);
 
-  const handlePickObsidianFolder = useCallback(async () => {
-    const bridge = window.desktopBridge;
-    const picked =
-      (await bridge?.pickFolder?.()) ??
-      (await bridge?.prismux?.pickWallpaperDirectory?.()) ??
-      null;
-    if (picked) {
-      setObsidianVaultPath(picked);
-    }
-  }, []);
-
-  const handleImportObsidian = useCallback(async () => {
-    const vaultPath = obsidianVaultPath.trim();
-    if (!vaultPath) {
-      setErrorMsg("请先输入或选择本地 Obsidian Vault 目录路径。");
-      return;
-    }
-    setImportingObsidian(true);
-    setErrorMsg(null);
-    setObsidianReport(null);
-    try {
-      const res = await daemon.requestJson<unknown>("/v1/memory/import-obsidian", {
-        method: "POST",
-        body: JSON.stringify({
-          vaultPath,
-          ...(obsidianNamespace.trim() ? { targetNamespace: obsidianNamespace.trim() } : {}),
-          dryRun: obsidianDryRun,
-        }),
-      });
-      const root = asRecord(res);
-      const imported = asNumber(root?.imported ?? root?.inserted, 0);
-      const updated = asNumber(root?.updated, 0);
-      const skipped = asNumber(root?.skipped, 0);
-      const scanned = asNumber(root?.scanned ?? root?.totalFiles, imported + updated + skipped);
-      setObsidianReport(
-        `${obsidianDryRun ? "[Dry-Run 预览] " : ""}扫描 ${scanned} 篇笔记 · 导入 ${imported} · 更新 ${updated} · 跳过 ${skipped}`,
-      );
-      if (!obsidianDryRun) {
-        await loadAll();
-      }
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
-    } finally {
-      setImportingObsidian(false);
-    }
-  }, [daemon, loadAll, obsidianDryRun, obsidianNamespace, obsidianVaultPath]);
-
   const handleSaveSyncConfig = useCallback(async () => {
     setSavingSync(true);
     setErrorMsg(null);
@@ -680,7 +1141,7 @@ export function PrismuxMemorySyncSettingsPage() {
       });
       hydrateSyncResponse(res);
       setPassphraseInput("");
-      setStatusMsg("Magpie 端到端加密同步配置已保存（敏感凭据已加密入库，页面已清空明文输入）。");
+      setStatusMsg("Prismux 端到端加密同步配置已保存（敏感凭据已加密入库，页面已清空明文输入）。");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -795,10 +1256,10 @@ export function PrismuxMemorySyncSettingsPage() {
         <div className="flex flex-wrap items-center gap-2">
           <DatabaseIcon className="size-4 text-primary" />
           <span className="text-sm font-medium text-foreground">
-            主秘书槽位 · 单文件 SQLite 记忆中枢 · Magpie 端到端加密同步
+            主秘书槽位 · 单文件 SQLite 记忆中枢 · Prismux 端到端加密同步
           </span>
-          <Badge variant={daemonInfo.ready ? "success" : "warning"}>
-            {daemonInfo.ready ? "Daemon 在线" : "Daemon 未连接"}
+          <Badge variant={daemonReady ? "success" : "warning"}>
+            {daemonReady ? "Daemon 在线" : "Daemon 未连接"}
           </Badge>
         </div>
         <Button
@@ -854,40 +1315,175 @@ export function PrismuxMemorySyncSettingsPage() {
           description={
             chief.threadId
               ? `活动槽位线程：${chief.threadId}`
-              : "选择接任主秘书槽位的代理引擎（热切换不丢失上下文）"
+              : "选择接任主秘书槽位的代理引擎（自动读取已配置提供方，热切换不丢失上下文）"
           }
           control={
-            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-              <div className="w-40">
+            <div className="w-full sm:w-56">
+              <Select value={selectedProvider} onValueChange={handleProviderChange}>
+                <SelectTrigger size="sm" data-pmx-chief-provider-select="">
+                  <SelectValue>
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <AgentBrandLogo
+                        provider={selectedProvider}
+                        size={14}
+                        iconClassName="size-3.5 opacity-100 text-current"
+                      />
+                      <span className="truncate font-medium">
+                        {activeProviderOption?.label ?? formatAgentBrandName(selectedProvider)}
+                      </span>
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {providerOptions.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex min-w-0 items-center gap-2">
+                          <AgentBrandLogo
+                            provider={opt.value}
+                            size={14}
+                            iconClassName="size-3.5 opacity-100 text-current"
+                          />
+                          <span className="truncate font-medium">{opt.label}</span>
+                        </span>
+                        {opt.configured ? (
+                          <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                            已配置
+                          </span>
+                        ) : null}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="可选模型"
+          description={
+            activeProviderOption && activeProviderOption.models.length > 0
+              ? `已自动同步 ${activeProviderOption.label} 模型目录（共 ${activeProviderOption.models.length} 个），切换 Provider 时自动联动刷新。`
+              : "留空则跟随当前提供方的默认模型；连接已配置提供方后自动列出可用模型与自定义代理模型。"
+          }
+          control={
+            <div className="w-full sm:w-72">
+              <Select
+                value={selectedModel.trim().length > 0 ? selectedModel.trim() : CHIEF_DEFAULT_MODEL_SENTINEL}
+                onValueChange={handleModelChange}
+              >
+                <SelectTrigger size="sm" data-pmx-chief-model-select="">
+                  <SelectValue>
+                    <span className="truncate">
+                      {selectedModel.trim().length === 0
+                        ? "跟随该提供方默认模型（留空）"
+                        : (activeModelOption?.label ?? `当前配置：${selectedModel.trim()}`)}
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup className="max-h-72">
+                  <SelectItem value={CHIEF_DEFAULT_MODEL_SENTINEL}>
+                    <div className="flex flex-col">
+                      <span className="font-medium">跟随该提供方默认模型（留空）</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        使用 {activeProviderOption?.label ?? formatAgentBrandName(selectedProvider)} 当前默认模型
+                      </span>
+                    </div>
+                  </SelectItem>
+                  {modelDropdownItems.map((item) => (
+                    <SelectItem key={item.slug} value={item.slug}>
+                      <div className="flex flex-col">
+                        <span className="truncate font-medium">{item.label}</span>
+                        {item.subtitle ? (
+                          <span className="truncate font-mono text-[10.5px] text-muted-foreground">
+                            {item.subtitle}
+                          </span>
+                        ) : null}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="默认思考强度"
+          description={`已按当前模型族（${effortSpec.familyDisplayName}）自动识别支持档位，并持久化至 Daemon 主秘书槽位。`}
+          control={
+            <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+              <div className="w-full sm:w-52">
                 <Select
-                  value={selectedProvider}
+                  value={selectedEffort.trim().length > 0 ? selectedEffort.trim() : CHIEF_DEFAULT_EFFORT_SENTINEL}
                   onValueChange={(val) => {
-                    if (val) setSelectedProvider(val);
+                    if (!val) return;
+                    setSelectedEffort(val === CHIEF_DEFAULT_EFFORT_SENTINEL ? "" : val);
                   }}
                 >
-                  <SelectTrigger size="sm">
-                    <SelectValue>{selectedProvider}</SelectValue>
+                  <SelectTrigger size="sm" data-pmx-chief-effort-select="">
+                    <SelectValue>
+                      <span className="truncate">
+                        {selectedEffort.trim().length === 0
+                          ? "跟随提供方默认"
+                          : formatEffortLabel(selectedEffort.trim())}
+                      </span>
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
-                    {chief.availableProviders.map((prov) => (
-                      <SelectItem key={prov} value={prov}>
-                        {prov}
+                    <SelectItem value={CHIEF_DEFAULT_EFFORT_SENTINEL}>
+                      跟随提供方默认
+                    </SelectItem>
+                    {selectedEffort.trim().length > 0 &&
+                    !effortSpec.stops.some((stop) => stop.value === selectedEffort.trim()) ? (
+                      <SelectItem value={selectedEffort.trim()}>
+                        当前配置：{formatEffortLabel(selectedEffort.trim())}
+                      </SelectItem>
+                    ) : null}
+                    {effortSpec.stops.map((stop) => (
+                      <SelectItem key={stop.value} value={stop.value}>
+                        <span>{stop.label}</span>
                       </SelectItem>
                     ))}
                   </SelectPopup>
                 </Select>
               </div>
-              <Input
-                nativeInput
-                size="sm"
-                className="w-44 font-mono"
-                placeholder="可选模型覆盖（留空默认）"
-                value={selectedModel}
-                onChange={(event) => setSelectedModel(event.target.value)}
-              />
+              {selectedEffort.trim().length > 0 ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => setSelectedEffort("")}
+                  title="恢复跟随提供方默认思考强度"
+                >
+                  <RotateCcwIcon className="size-3" />
+                  跟随默认
+                </Button>
+              ) : null}
             </div>
           }
-        />
+        >
+          <div className="mt-2.5 space-y-1.5 pb-2" data-pmx-chief-effort-slider="">
+            <PrismuxReasoningEffortSlider
+              modelId={selectedModel.trim() || null}
+              modelName={activeModelOption?.label ?? null}
+              provider={selectedProvider}
+              options={effortSpec.stops}
+              value={selectedEffort.trim() || undefined}
+              locale="zh"
+              label={
+                selectedEffort.trim().length > 0
+                  ? `已指定默认强度 · ${effortSpec.familyDisplayName}`
+                  : `当前跟随提供方默认 · ${effortSpec.familyDisplayName}（点击档位或拖动可指定覆盖）`
+              }
+              showStops
+              showRunner
+              compact
+              onChange={(nextValue) => setSelectedEffort(nextValue)}
+            />
+          </div>
+        </SettingsRow>
 
         <SettingsRow
           title="Handoff 三档拨盘（Agent / Oracle / Review）"
@@ -928,6 +1524,22 @@ export function PrismuxMemorySyncSettingsPage() {
             </div>
           </div>
         </SettingsRow>
+
+        <ChiefIdentityAndAgentsMdSection
+          daemon={daemon}
+          secretaryName={chief.secretaryName}
+          agentsMdPath={chief.agentsMdPath}
+          activeProvider={selectedProvider}
+          activeProviderLabel={activeProviderOption?.label ?? formatAgentBrandName(selectedProvider)}
+          activeModel={selectedModel}
+          activeEffort={selectedEffort}
+          activeDialMode={selectedDial}
+          onIdentityUpdated={({ secretaryName, agentsMdPath }) => {
+            setChief((prev) => ({ ...prev, secretaryName, agentsMdPath }));
+          }}
+          onError={(msg) => setErrorMsg(msg)}
+          onStatus={(msg) => setStatusMsg(msg)}
+        />
       </SettingsSection>
 
       {/* Section 2: Single-file SQLite Hybrid Memory Engine */}
@@ -1111,78 +1723,23 @@ export function PrismuxMemorySyncSettingsPage() {
           </div>
         </SettingsRow>
 
-        {/* Obsidian Vault Migration */}
-        <SettingsRow
-          title="Obsidian Vault 历史笔记迁移"
-          description="一次性将本地 Markdown 笔记库导入单文件 SQLite 记忆库，运行时不依赖本地 Obsidian 客户端。"
-        >
-          <div className="mt-2.5 space-y-2.5 pb-2">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Input
-                nativeInput
-                size="sm"
-                className="flex-1 font-mono"
-                placeholder="例如：D:\Notes\ObsidianVault"
-                value={obsidianVaultPath}
-                onChange={(event) => setObsidianVaultPath(event.target.value)}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  void handlePickObsidianFolder();
-                }}
-              >
-                <FolderOpenIcon className="size-3.5" />
-                浏览目录
-              </Button>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>目标命名空间</span>
-                  <Input
-                    nativeInput
-                    size="compact"
-                    className="w-40 font-mono"
-                    value={obsidianNamespace}
-                    onChange={(event) => setObsidianNamespace(event.target.value)}
-                  />
-                </div>
-                <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                  <Switch
-                    size="sm"
-                    checked={obsidianDryRun}
-                    onCheckedChange={(checked) => setObsidianDryRun(Boolean(checked))}
-                  />
-                  仅 Dry-Run 预览统计
-                </label>
-              </div>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={importingObsidian || obsidianVaultPath.trim().length === 0}
-                onClick={() => {
-                  void handleImportObsidian();
-                }}
-              >
-                <UploadIcon className="size-3.5" />
-                {importingObsidian ? "导入中…" : obsidianDryRun ? "预览扫描" : "导入至记忆库"}
-              </Button>
-            </div>
-            {obsidianReport ? (
-              <div className="rounded-md border border-success/30 bg-success/10 px-3 py-1.5 text-xs text-success-foreground">
-                {obsidianReport}
-              </div>
-            ) : null}
-          </div>
-        </SettingsRow>
+        {/* Obsidian Vault Smart Agent Migration */}
+        <ObsidianAgentImportCard
+          daemon={daemon}
+          secretaryName={chief.secretaryName}
+          activeProvider={selectedProvider}
+          activeProviderLabel={activeProviderOption?.label ?? formatAgentBrandName(selectedProvider)}
+          activeModel={selectedModel}
+          onCommitted={loadAll}
+          onError={(msg) => setErrorMsg(msg)}
+          onStatus={(msg) => setStatusMsg(msg)}
+        />
       </SettingsSection>
 
-      {/* Section 3: Magpie E2EE Sync Engine */}
+      {/* Section 3: Prismux E2EE Sync Engine */}
       <SettingsSection
-        id="prismux-magpie-sync"
-        title="Magpie 端到端加密同步（Argon2id + AEAD）"
+        id="prismux-e2ee-sync"
+        title="Prismux 端到端加密同步（Argon2id + AEAD）"
         headerAction={
           <div className="flex items-center gap-1.5">
             <Badge variant={hasPassphrase ? "success" : "warning"}>

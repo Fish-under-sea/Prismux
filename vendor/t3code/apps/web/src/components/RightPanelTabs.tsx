@@ -118,6 +118,7 @@ import {
   savePhoneBezelEnabled,
 } from "~/browser/HostedBrowserWebview";
 import { openUrlInPreview } from "~/browser/openFileInPreview";
+import { AgentBrandLogo } from "~/prismux/agentBrand";
 import { useOptionalPrismuxRuntime } from "~/prismux/PrismuxRuntimeProvider";
 import { resolvePortOpenUrl } from "~/prismux/statusBar/portsPolling";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -146,6 +147,7 @@ import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
+import { useWorkspaceTopbarPortal } from "./workspace/WorkspaceTopbarPortalContext";
 
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -685,6 +687,8 @@ function surfaceTitle(
       return surface.title ?? surface.target?.name ?? resolve(msg("Device"));
     case "wallpaper":
       return "壁纸";
+    case "agent-session":
+      return surface.title;
     case "thread":
       // Until the thread's own title loads.
       return resolve(msg("Thread"));
@@ -797,6 +801,8 @@ function SurfaceIcon({
       );
     case "wallpaper":
       return <ImageIcon className="size-3 shrink-0" />;
+    case "agent-session":
+      return <AgentBrandLogo provider={surface.providerId} size={12} className="shrink-0" />;
   }
 }
 
@@ -1418,7 +1424,7 @@ function normalizeSimulatorQuickUrl(raw: string): string | null {
 /**
  * Interactive Phone Simulator stage displayed immediately when clicking "手机模拟"
  * on a blank/idle preview tab (before any URL is loaded). Sits cleanly below the URL
- * address bar (`[data-surface-subheader]`) and strictly above the 24px bottom status bar.
+ * address bar (`[data-surface-subheader]`) and strictly above the 20px bottom status bar.
  */
 export function PhoneSimulatorBlankStage() {
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -1709,8 +1715,9 @@ export function PhoneSimulatorBlankStage() {
 export function RightPanelTabs(props: RightPanelTabsProps) {
   const gt = useGT();
   const messages = useMessages();
+  const topbarPortal = useWorkspaceTopbarPortal();
   const focusedSurface = props.surfaces.find((surface) => surface.id === props.activeSurfaceId);
-  const ownsDesktopTitleBar = isElectron && props.mode === "inline";
+  const ownsDesktopTitleBar = isElectron && props.mode === "inline" && !topbarPortal.managed;
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
@@ -1819,13 +1826,29 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   });
 
   const activityActionMap: Record<RightPanelActivityItemId, RightPanelActivityAction | null> = {
-    "mobile-simulator": {
-      id: "mobile-simulator",
-      label: "手机模拟",
-      icon: TabletSmartphone,
-      available: props.browserAvailable,
-      active: focusedSurface?.kind === "preview",
-      onClick: handleOpenMobileSimulator,
+    diff: {
+      id: "diff",
+      label: messages(msg("Diff")),
+      icon: FileDiff,
+      available: props.diffAvailable,
+      active: focusedSurface?.kind === "diff",
+      onClick: props.onAddDiff,
+    },
+    files: {
+      id: "files",
+      label: messages(msg("Files")),
+      icon: Files,
+      available: props.filesAvailable,
+      active: focusedSurface?.kind === "files" || focusedSurface?.kind === "file",
+      onClick: props.onAddFiles,
+    },
+    terminal: {
+      id: "terminal",
+      label: messages(msg("Terminal")),
+      icon: TerminalSquare,
+      available: props.terminalAvailable,
+      active: focusedSurface?.kind === "terminal",
+      onClick: props.onAddTerminal,
     },
     preview: {
       id: "preview",
@@ -1838,6 +1861,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         props.onAddBrowser();
       },
     },
+    "mobile-simulator": {
+      id: "mobile-simulator",
+      label: "手机模拟",
+      icon: TabletSmartphone,
+      available: props.browserAvailable,
+      active: focusedSurface?.kind === "preview" && mobileSimulatorIdleActive,
+      onClick: handleOpenMobileSimulator,
+    },
     wallpaper: props.onAddWallpaper
       ? {
           id: "wallpaper",
@@ -1848,38 +1879,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           onClick: props.onAddWallpaper,
         }
       : null,
-    diff: {
-      id: "diff",
-      label: messages(msg("Diff")),
-      icon: FileDiff,
-      available: props.diffAvailable,
-      active: focusedSurface?.kind === "diff",
-      onClick: props.onAddDiff,
-    },
-    terminal: {
-      id: "terminal",
-      label: messages(msg("Terminal")),
-      icon: TerminalSquare,
-      available: props.terminalAvailable,
-      active: focusedSurface?.kind === "terminal",
-      onClick: props.onAddTerminal,
-    },
-    device: {
-      id: "device",
-      label: messages(msg("Device")),
-      icon: Smartphone,
-      available: props.deviceAvailable,
-      active: focusedSurface?.kind === "device",
-      onClick: props.onAddDevice,
-    },
-    files: {
-      id: "files",
-      label: messages(msg("Files")),
-      icon: Files,
-      available: props.filesAvailable,
-      active: focusedSurface?.kind === "files" || focusedSurface?.kind === "file",
-      onClick: props.onAddFiles,
-    },
   };
 
   const orderedActivityActions = activityBarOrder
@@ -2184,11 +2183,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     >
       <div
         className={cn(
-          "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center gap-1 pl-2",
-          props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
-          ownsDesktopTitleBar && "drag-region",
-          ownsDesktopTitleBar && "wco:pr-(--workspace-native-controls-inset)",
-          props.mode === "inline" && props.maximized && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+          "flex shrink-0 items-center gap-1 pl-2",
+          topbarPortal.managed && props.mode === "inline"
+            ? "h-8 min-h-8 border-b border-border/50 pr-2"
+            : cn(
+                "h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)]",
+                props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
+                ownsDesktopTitleBar && "drag-region",
+                ownsDesktopTitleBar && "wco:pr-(--workspace-native-controls-inset)",
+                props.mode === "inline" &&
+                  props.maximized &&
+                  COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+              ),
         )}
         data-right-panel-tabbar
       >

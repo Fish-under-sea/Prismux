@@ -7,17 +7,29 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import type { MessageResolver } from "../../i18n/messages";
+import { formatAgentBrandName } from "../../prismux/agentBrand";
 import {
   isProviderInstancePickerReady,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 
+function resolveCanonicalEntryLabel(entry: ProviderInstanceEntry): string {
+  return entry.isDefault
+    ? formatAgentBrandName(
+        entry.driverKind,
+        entry.driverKind === "acpRegistry" || entry.driverKind === "openaiCompatible"
+          ? entry.displayName
+          : undefined,
+      )
+    : formatAgentBrandName(entry.driverKind, entry.displayName);
+}
+
 function describeUnavailableInstance(
   entry: ProviderInstanceEntry,
   resolve: MessageResolver,
 ): string {
-  const label = entry.displayName;
+  const label = resolveCanonicalEntryLabel(entry);
   // An unavailable instance (a driver this build lacks or the policy leaves out) says why instead.
   if ((!entry.enabled && entry.isAvailable) || entry.status === "disabled") {
     return resolve(msg("{label}: Disabled in settings.", { label }));
@@ -153,11 +165,12 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
             const isHovered = hoveredInstanceId === entry.instanceId;
             const showInstanceBadge = shouldShowInstanceBadge(entry, props.instanceEntries);
 
+            const canonicalLabel = resolveCanonicalEntryLabel(entry);
             const tooltip = isUnavailable
               ? describeUnavailableInstance(entry, m)
               : isContextDisabled
-                ? (props.getDisabledInstanceTooltip?.(entry) ?? entry.displayName)
-                : entry.displayName;
+                ? (props.getDisabledInstanceTooltip?.(entry) ?? canonicalLabel)
+                : canonicalLabel;
 
             const button = (
               <Toolbar.Button
@@ -179,7 +192,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                 focusableWhenDisabled={!isDisabled}
                 aria-pressed={isSelected}
                 type="button"
-                aria-label={isUnavailable || isContextDisabled ? tooltip : entry.displayName}
+                aria-label={isUnavailable || isContextDisabled ? tooltip : canonicalLabel}
               >
                 <ProviderInstanceIcon
                   driverKind={entry.driverKind}

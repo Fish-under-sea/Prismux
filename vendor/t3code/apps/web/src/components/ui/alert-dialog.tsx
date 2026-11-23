@@ -1,11 +1,15 @@
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
 import { useRender } from "@base-ui/react/use-render";
+import { createContext, use, useCallback, useMemo, useRef } from "react";
 
 import { cn } from "~/lib/utils";
 import {
+  createBackdropDismissGuardState,
   DIALOG_BACKDROP_CLASS,
   DIALOG_MOBILE_SHEET_CLASS,
   DIALOG_POPUP_CLASS,
+  recordBackdropPointerDown,
+  shouldDismissOnBackdropClick,
 } from "~/components/ui/dialog-styles";
 import {
   ControlledOpenContext,
@@ -14,10 +18,56 @@ import {
   useDialogActionInitialFocus,
 } from "~/components/ui/dialog";
 
-function AlertDialog<Payload>(props: AlertDialogPrimitive.Root.Props<Payload>) {
+interface AlertDialogBackdropDismissContextValue {
+  readonly enabled: boolean;
+  readonly dismiss: () => void;
+}
+
+const AlertDialogBackdropDismissContext =
+  createContext<AlertDialogBackdropDismissContextValue | null>(null);
+
+function AlertDialog<Payload>({
+  dismissOnBackdropClick = true,
+  actionsRef: externalActionsRef,
+  ...props
+}: AlertDialogPrimitive.Root.Props<Payload> & {
+  dismissOnBackdropClick?: boolean;
+}) {
+  const internalActionsRef = useRef<AlertDialogPrimitive.Root.Actions | null>(null);
+
+  const mergedActionsRef = useMemo(
+    () => ({
+      get current() {
+        return internalActionsRef.current;
+      },
+      set current(value: AlertDialogPrimitive.Root.Actions | null) {
+        internalActionsRef.current = value;
+        if (externalActionsRef) {
+          (externalActionsRef as { current: AlertDialogPrimitive.Root.Actions | null }).current =
+            value;
+        }
+      },
+    }),
+    [externalActionsRef],
+  );
+
+  const dismiss = useCallback(() => {
+    internalActionsRef.current?.close();
+  }, []);
+
+  const dismissContextValue = useMemo<AlertDialogBackdropDismissContextValue>(
+    () => ({
+      enabled: dismissOnBackdropClick,
+      dismiss,
+    }),
+    [dismiss, dismissOnBackdropClick],
+  );
+
   return (
     <ControlledOpenContext value={props.open}>
-      <AlertDialogPrimitive.Root {...props} />
+      <AlertDialogBackdropDismissContext value={dismissContextValue}>
+        <AlertDialogPrimitive.Root {...props} actionsRef={mergedActionsRef} />
+      </AlertDialogBackdropDismissContext>
     </ControlledOpenContext>
   );
 }
@@ -39,7 +89,7 @@ function AlertDialogViewport({ className, ...props }: AlertDialogPrimitive.Viewp
   return (
     <AlertDialogPrimitive.Viewport
       className={cn(
-        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_1fr] justify-items-center p-4",
+        "fixed inset-0 z-50 flex items-center justify-center p-4 [-webkit-app-region:no-drag]",
         className,
       )}
       data-slot="alert-dialog-viewport"
@@ -58,16 +108,19 @@ function AlertDialogPopup({
   portalContainer?: AlertDialogPrimitive.Portal.Props["container"];
 }) {
   const { popupRef, initialFocus } = useDialogActionInitialFocus();
+  const backdropDismiss = use(AlertDialogBackdropDismissContext);
+  const backdropGuardRef = useRef(createBackdropDismissGuardState());
   const popup = useRender({
     ref: popupRef,
     render: (
       <AlertDialogPrimitive.Popup
         className={cn(
           DIALOG_POPUP_CLASS,
-          "row-start-2 max-h-full max-w-lg text-popover-foreground",
+          "max-h-full max-w-lg overflow-hidden bg-clip-padding text-popover-foreground",
           bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
           className,
         )}
+        data-pmx-glass-zone="overlays"
         data-slot="alert-dialog-popup"
         initialFocus={initialFocus}
         render={renderRetainedPopup}
@@ -75,11 +128,36 @@ function AlertDialogPopup({
       />
     ),
   });
+  const resolvedPortalContainer =
+    portalContainer ?? (typeof document !== "undefined" ? document.body : undefined);
   return (
-    <AlertDialogPortal container={portalContainer}>
-      <AlertDialogBackdrop />
+    <AlertDialogPortal container={resolvedPortalContainer}>
+      <AlertDialogBackdrop
+        onPointerDownCapture={(event) => {
+          recordBackdropPointerDown(backdropGuardRef.current, event, popupRef.current);
+        }}
+        onClick={(event) => {
+          if (
+            backdropDismiss?.enabled &&
+            shouldDismissOnBackdropClick(backdropGuardRef.current, event, popupRef.current)
+          ) {
+            backdropDismiss.dismiss();
+          }
+        }}
+      />
       <AlertDialogViewport
-        className={cn(bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12")}
+        className={cn(bottomStickOnMobile && "max-sm:items-end max-sm:p-0 max-sm:pt-12")}
+        onPointerDownCapture={(event) => {
+          recordBackdropPointerDown(backdropGuardRef.current, event, popupRef.current);
+        }}
+        onClick={(event) => {
+          if (
+            backdropDismiss?.enabled &&
+            shouldDismissOnBackdropClick(backdropGuardRef.current, event, popupRef.current)
+          ) {
+            backdropDismiss.dismiss();
+          }
+        }}
       >
         {popup}
       </AlertDialogViewport>

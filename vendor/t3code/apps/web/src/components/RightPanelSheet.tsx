@@ -19,6 +19,7 @@ export function RightPanelSheet(props: {
       }}
     >
       <SheetPopup
+        data-pmx-glass-zone="rightSidebar"
         transitionDurationMs={props.animationDurationMs}
         side="right"
         showCloseButton={false}

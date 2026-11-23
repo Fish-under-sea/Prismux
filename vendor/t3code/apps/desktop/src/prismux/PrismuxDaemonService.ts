@@ -1,10 +1,12 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Daemon supervision spawns and reaps a local child process directly via node:child_process.
 import * as NodeChildProcess from "node:child_process";
 
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FiberHandle from "effect/FiberHandle";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -20,6 +22,14 @@ import * as NetService from "@t3tools/shared/Net";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import * as ElectronApp from "../electron/ElectronApp.ts";
+import {
+  buildHostMetricsPayload,
+  HOST_METRICS_POLL_INTERVAL,
+  HOST_METRICS_WARMUP_DELAY,
+  postHostMetricsToDaemon,
+} from "./PrismuxHostMetricsReporter.ts";
 
 class PrismuxDaemonSpawnError extends Schema.TaggedError<PrismuxDaemonSpawnError>()(
   "PrismuxDaemonSpawnError",
@@ -89,6 +99,7 @@ export function buildPrismuxDaemonChildEnv(input: {
   readonly hostEnv: NodeJS.ProcessEnv;
   readonly catalogPath: string;
   readonly mainPid: number;
+  readonly t3ServerPid?: number | undefined;
   readonly t3HttpUrl?: string | undefined;
   readonly t3WsUrl?: string | undefined;
 }): NodeJS.ProcessEnv {
@@ -98,11 +109,18 @@ export function buildPrismuxDaemonChildEnv(input: {
       ? normalizeT3HttpUrl(input.t3WsUrl)
       : undefined;
   const normalizedWsUrl = input.t3WsUrl ? normalizeT3WebSocketUrl(input.t3WsUrl) : undefined;
+  const validT3Pid =
+    typeof input.t3ServerPid === "number" &&
+    Number.isInteger(input.t3ServerPid) &&
+    input.t3ServerPid > 0
+      ? input.t3ServerPid
+      : undefined;
   return {
     ...input.hostEnv,
     ELECTRON_RUN_AS_NODE: "1",
     PRISMUX_CATALOG_PATH: input.catalogPath,
     PRISMUX_MAIN_PID: String(input.mainPid),
+    ...(validT3Pid !== undefined ? { PRISMUX_T3_SERVER_PID: String(validT3Pid) } : {}),
     ...(normalizedHttpUrl
       ? {
           PRISMUX_T3_SERVER_URL: normalizedHttpUrl,
@@ -238,11 +256,88 @@ const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const executablePath = yield* HostProcess.ExecutablePath;
   const hostEnv = yield* HostProcess.Environment;
+  const electronAppOption = yield* Effect.serviceOption(ElectronApp.ElectronApp);
+  const backendPoolOption = yield* Effect.serviceOption(DesktopBackendPool.DesktopBackendPool);
 
   const stateRef = yield* Ref.make<PrismuxDaemonState>(INITIAL_DAEMON_STATE);
   const lifecycleMutex = yield* Semaphore.make(1);
+  const metricsReporterHandle = yield* FiberHandle.make<void>();
   const runtimeContext = yield* Effect.context<never>();
   const runPromise = Effect.runPromiseWith(runtimeContext);
+
+  const readPrimaryBackendSnapshot = Option.match(backendPoolOption, {
+    onNone: () => Effect.succeed(null),
+    onSome: (pool) =>
+      pool.primary.pipe(
+        Effect.flatMap((primary) => primary.snapshot),
+        Effect.orElseSucceed(() => null),
+      ),
+  });
+
+  const pushHostMetricsOnce = (
+    baseUrl: string,
+    token: string,
+    t3HttpUrl: string | undefined,
+  ): Effect.Effect<boolean> =>
+    Effect.gen(function* () {
+      const metrics = yield* Option.match(electronAppOption, {
+        onNone: () => Effect.succeed([] as const),
+        onSome: (electronApp) =>
+          electronApp.getAppMetrics.pipe(Effect.orElseSucceed(() => [] as const)),
+      });
+      const backendSnapshot = yield* readPrimaryBackendSnapshot;
+      if (metrics.length === 0 && backendSnapshot === null) {
+        return false;
+      }
+      const collectedAt = yield* Clock.currentTimeMillis;
+      const payload = buildHostMetricsPayload({
+        metrics,
+        mainPid: process.pid,
+        collectedAt,
+        t3BackendSnapshot: backendSnapshot,
+        t3HttpUrl: t3HttpUrl ?? null,
+      });
+      return yield* postHostMetricsToDaemon({
+        baseUrl,
+        token,
+        payload,
+        httpClient,
+      });
+    });
+
+  const startHostMetricsReporter = (
+    child: NodeChildProcess.ChildProcess,
+    baseUrl: string,
+    token: string,
+    t3HttpUrl: string | undefined,
+  ): Effect.Effect<void> => {
+    if (Option.isNone(electronAppOption) && Option.isNone(backendPoolOption)) {
+      return Effect.void;
+    }
+    const isActive = Ref.get(stateRef).pipe(
+      Effect.map(
+        (state) =>
+          state.child === child &&
+          state.ready &&
+          !state.stopping &&
+          child.exitCode === null &&
+          child.signalCode === null,
+      ),
+    );
+    const loop = Effect.gen(function* () {
+      // Immediate first push delivers Electron memory & T3 Server PID within <100ms,
+      // and primes Electron app.getAppMetrics() CPU interval.
+      yield* pushHostMetricsOnce(baseUrl, token, t3HttpUrl);
+      // Short follow-up push (800ms) yields real non-zero CPU% deltas on startup.
+      yield* Effect.sleep(HOST_METRICS_WARMUP_DELAY);
+      while (yield* isActive) {
+        yield* pushHostMetricsOnce(baseUrl, token, t3HttpUrl);
+        yield* Effect.sleep(HOST_METRICS_POLL_INTERVAL);
+      }
+    }).pipe(Effect.ignore);
+
+    return FiberHandle.run(metricsReporterHandle, loop).pipe(Effect.asVoid);
+  };
 
   const resolveEntryPath = Effect.gen(function* () {
     const candidates = environment.isPackaged
@@ -294,6 +389,7 @@ const make = Effect.gen(function* () {
 
   const stop = lifecycleMutex.withPermits(1)(
     Effect.gen(function* () {
+      yield* FiberHandle.clear(metricsReporterHandle);
       const current = yield* Ref.getAndUpdate(stateRef, (state) => ({
         ...state,
         child: null,
@@ -388,11 +484,18 @@ const make = Effect.gen(function* () {
               "../../plugins-official/catalog/official.json",
             );
 
+        const initialBackendSnapshot = yield* readPrimaryBackendSnapshot;
+        const initialT3Pid =
+          initialBackendSnapshot !== null
+            ? Option.getOrUndefined(initialBackendSnapshot.activePid)
+            : undefined;
+
         // Only set ELECTRON_RUN_AS_NODE on the isolated daemon child env; never mutate parent process.env.
         const childEnv = buildPrismuxDaemonChildEnv({
           hostEnv,
           catalogPath,
           mainPid: process.pid,
+          t3ServerPid: initialT3Pid,
           t3HttpUrl: normalizedT3HttpUrl,
           t3WsUrl: normalizedT3Url,
         });
@@ -435,19 +538,22 @@ const make = Effect.gen(function* () {
 
         child.once("exit", (code, signal) => {
           void runPromise(
-            Ref.modify(stateRef, (state) => {
-              if (state.child !== child) {
-                return [false, state] as const;
-              }
-              return [
-                !state.stopping || (code !== null && code !== 0),
-                {
-                  ...state,
-                  child: null,
-                  ready: false,
-                },
-              ] as const;
-            }).pipe(
+            FiberHandle.clear(metricsReporterHandle).pipe(
+              Effect.andThen(
+                Ref.modify(stateRef, (state) => {
+                  if (state.child !== child) {
+                    return [false, state] as const;
+                  }
+                  return [
+                    !state.stopping || (code !== null && code !== 0),
+                    {
+                      ...state,
+                      child: null,
+                      ready: false,
+                    },
+                  ] as const;
+                }),
+              ),
               Effect.flatMap((shouldLog) =>
                 shouldLog
                   ? logDaemonWarning("prismux daemon exited unexpectedly", {
@@ -484,6 +590,7 @@ const make = Effect.gen(function* () {
           yield* Ref.update(stateRef, (state) =>
             state.child === child ? { ...state, ready: true } : state,
           );
+          yield* startHostMetricsReporter(child, baseUrl, token, normalizedT3HttpUrl);
           yield* logDaemonInfo("prismux daemon ready", { baseUrl });
         } else {
           yield* logDaemonWarning("prismux daemon did not pass /health within timeout; continuing", {

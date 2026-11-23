@@ -309,11 +309,12 @@ export function AddProviderInstanceDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [createdInstanceId, setCreatedInstanceId] = useState<ProviderInstanceId | null>(null);
 
-  // Reserve Codex/Claude default ids because they run before configuration; other unconfigured slots are
-  // available.
+  // Reserve visible Codex/Claude default ids because they run before configuration; hidden defaults
+  // and other unconfigured slots are available to reclaim.
+  const hiddenDefaultIds = new Set<string>(settings.hiddenDefaultProviderInstances ?? []);
   const existingIds = new Set([
-    "codex",
-    "claudeAgent",
+    ...(!hiddenDefaultIds.has("codex") ? ["codex"] : []),
+    ...(!hiddenDefaultIds.has("claudeAgent") ? ["claudeAgent"] : []),
     ...Object.keys(settings.providerInstances ?? {}),
   ]);
 

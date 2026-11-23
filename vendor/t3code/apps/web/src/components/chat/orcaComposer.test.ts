@@ -1,3 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import fs from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import path from "node:path";
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import {
   ProviderDriverKind,
@@ -214,7 +218,7 @@ describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mo
     expect(geminiHtml).not.toContain('data-composer-fast-mode-toggle="true"');
   });
 
-  it("formats localized Chinese short effort label and FastBolt on composer pill trigger", () => {
+  it("formats canonical English effort label (never localized Chinese tiers) and FastBolt on composer pill trigger", () => {
     initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
     const traits: TraitsSelectionInput = {
       provider: ProviderDriverKind.make("claudeAgent"),
@@ -231,7 +235,48 @@ describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mo
     const suffixHtml = renderToStaticMarkup(
       createElement(GTProvider, { locale: "zh", translations: {} }, described.suffix),
     );
-    expect(suffixHtml).toContain("极高");
+    expect(suffixHtml).toContain("XHigh");
+    expect(suffixHtml).not.toContain("极高");
     expect(suffixHtml).toContain("svg");
+  });
+
+  it("wires AGY 2.0 slender double-layer liquid-glass layout & footer structure in ChatComposer.tsx", () => {
+    const chatDir = path.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const source = fs.readFileSync(path.join(chatDir, "ChatComposer.tsx"), "utf8");
+
+    // 1. Responds to dual-side drag-resize CSS variable with 960px slender default.
+    expect(source).toContain("--pmx-chat-content-max-width");
+    expect(source).toContain("960px");
+
+    // 2. Dual-layer liquid-glass hooks: outer tray -> top tray -> nested inner card.
+    const layoutIdx = source.indexOf('data-pmx-composer-layout="agy"');
+    const topTrayIdx = source.indexOf('data-pmx-composer-top-tray="1"');
+    const topTrayBarIdx = source.indexOf('<ComposerWorkspaceLocationBar variant="top-tray" />');
+    const innerCardIdx = source.indexOf('data-pmx-composer-inner-card="1"');
+    expect(layoutIdx).toBeGreaterThan(-1);
+    expect(topTrayIdx).toBeGreaterThan(layoutIdx);
+    expect(topTrayBarIdx).toBeGreaterThan(topTrayIdx);
+    expect(innerCardIdx).toBeGreaterThan(topTrayBarIdx);
+
+    // 3. Inner footer left has '+' attach & model picker (min-w-0 flex-1 overflow-x-clip);
+    // right has inline telemetry + permissions + send; narrow widths (<700px) drop telemetry to wrap row.
+    const leftActionsIdx = source.indexOf('data-chat-composer-actions="left"');
+    const rightActionsIdx = source.indexOf('data-chat-composer-actions="right"');
+    const leftControlsIdx = source.indexOf("{composerControls}", leftActionsIdx);
+    const inlineTelemetryIdx = source.indexOf('placement="inline"', rightActionsIdx);
+    const permissionsIdx = source.indexOf("<ComposerFooterModeControls", rightActionsIdx);
+    const primaryClusterIdx = source.indexOf('data-pmx-composer-primary-cluster="true"', rightActionsIdx);
+    const wrapRowIdx = source.indexOf('data-composer-telemetry-wrap-row="true"', primaryClusterIdx);
+    expect(leftActionsIdx).toBeGreaterThan(innerCardIdx);
+    expect(leftControlsIdx).toBeGreaterThan(leftActionsIdx);
+    expect(leftControlsIdx).toBeLessThan(rightActionsIdx);
+    expect(inlineTelemetryIdx).toBeGreaterThan(rightActionsIdx);
+    expect(permissionsIdx).toBeGreaterThan(inlineTelemetryIdx);
+    expect(primaryClusterIdx).toBeGreaterThan(permissionsIdx);
+    expect(wrapRowIdx).toBeGreaterThan(primaryClusterIdx);
+    expect(source).toContain("shouldWrapComposerTelemetryRow");
+    expect(source).toContain("data-composer-telemetry-wrapped");
   });
 });

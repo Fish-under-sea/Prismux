@@ -14,15 +14,18 @@ import {
   readMobileSidebarOnboardingDismissed,
   readSidebarProjectsSectionOpen,
   requestLocateActiveSidebarThread,
+  requestOpenCreateWorkspace,
   resolveDiagnosticsBadgeTone,
   resolveInstalledPluginCount,
   resolveSafePrismuxHelpUrl,
   shouldShowMobileSidebarOnboardingBadge,
   subscribeLocateActiveSidebarThread,
+  subscribeOpenCreateWorkspace,
   summarizeSidebarInboxAttention,
   writeSidebarProjectsSectionOpen,
   type SidebarStorageLike,
 } from "./prismuxSidebarQuickNav.logic";
+import { getPrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
 
 function createMemoryStorage(): SidebarStorageLike & { readonly data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -36,20 +39,32 @@ function createMemoryStorage(): SidebarStorageLike & { readonly data: Map<string
 }
 
 describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
-  it("maps quick-nav entries strictly to real Prismux features and excludes Bots and Task Board", () => {
+  it("maps quick-nav entries strictly to the 5-item Orca order and keeps Plugins inside Settings", () => {
     expect([...PRISMUX_SIDEBAR_QUICK_NAV_IDS]).toEqual([
       "diagnostics",
+      "tasks",
+      "workspace-board",
       "automations",
       "mobile",
-      "plugins",
     ]);
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("bots");
-    expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("tasks");
+    expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("plugins");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_ROUTES).toEqual({
       diagnostics: "/settings/diagnostics",
+      tasks: "/tasks",
+      workspaceBoard: "/workspace-board",
       automations: "/settings/scheduled-tasks",
       mobileAccess: "/settings/access",
       plugins: "/settings/plugins",
+    });
+
+    expect(getPrismuxSidebarQuickNavCopy("zh")).toEqual({
+      tasks: "任务面板",
+      workspaceBoard: "工作区板",
+    });
+    expect(getPrismuxSidebarQuickNavCopy("en")).toEqual({
+      tasks: "Tasks",
+      workspaceBoard: "Workspace board",
     });
   });
 
@@ -158,6 +173,17 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
 
     unsubscribe();
     requestLocateActiveSidebarThread();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies and unsubscribes open-create-workspace listeners cleanly for Workspace Board '+' buttons", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeOpenCreateWorkspace(listener);
+    requestOpenCreateWorkspace();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    requestOpenCreateWorkspace();
     expect(listener).toHaveBeenCalledTimes(1);
   });
 

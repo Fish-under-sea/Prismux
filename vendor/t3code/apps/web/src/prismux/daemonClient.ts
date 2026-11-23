@@ -98,7 +98,12 @@ export interface DaemonSystemFontsResponse {
 export interface DaemonChiefSlotDto {
   threadId: string;
   provider: string;
+  activeProvider?: string;
+  secretaryName?: string;
+  agentsMdPath?: string;
   model?: string;
+  reasoningEffort?: string;
+  defaultEffort?: string;
   status?: string;
   updatedAt?: number;
   [key: string]: unknown;
@@ -107,10 +112,29 @@ export interface DaemonChiefSlotDto {
 export interface DaemonChiefStatusResponse {
   ok: boolean;
   slot: DaemonChiefSlotDto;
+  secretaryName?: string;
+  agentsMdPath?: string;
   dialMode: "agent" | "oracle" | "review";
   availableProviders?: string[];
   availableDialModes?: Array<"agent" | "oracle" | "review">;
   t3Connected?: boolean;
+}
+
+export interface DaemonChiefProfileUpdateResponse {
+  ok: boolean;
+  slot: DaemonChiefSlotDto;
+  secretaryName: string;
+  agentsMdPath: string;
+}
+
+export interface DaemonChiefAgentsMdResponse {
+  ok: boolean;
+  path: string;
+  content: string;
+  secretaryName: string;
+  updatedAt: number;
+  exists: boolean;
+  isDefaultTemplate?: boolean;
 }
 
 export interface DaemonMemoryStatsResponse {
@@ -154,6 +178,55 @@ export interface DaemonObsidianImportResponse {
   namespace?: string;
   summary?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export type DaemonObsidianCuratedKind =
+  | "preference"
+  | "decision"
+  | "project"
+  | "knowledge"
+  | "experience";
+
+export type DaemonObsidianCurationSource = "agent" | "structured-fallback";
+
+export interface DaemonObsidianCuratedItemDto {
+  id: string;
+  title: string;
+  summary: string;
+  kind: DaemonObsidianCuratedKind;
+  namespace: string;
+  tags: string[];
+  sourceFile: string;
+  selected: boolean;
+  curationSource: DaemonObsidianCurationSource;
+  redactedSecrets?: number;
+}
+
+export interface DaemonObsidianImportPlanStatsDto {
+  scannedFiles: number;
+  curatedCount: number;
+  dedupedCount: number;
+  filteredNoiseCount: number;
+  redactedSecretCount: number;
+}
+
+export interface DaemonObsidianImportPlanResponse {
+  ok: boolean;
+  vaultPath: string;
+  namespace: string;
+  curationSource: DaemonObsidianCurationSource;
+  curatorLabel?: string;
+  fallbackReason?: string;
+  items: DaemonObsidianCuratedItemDto[];
+  stats: DaemonObsidianImportPlanStatsDto;
+}
+
+export interface DaemonObsidianImportCommitResponse {
+  ok: boolean;
+  committedCount: number;
+  skippedCount: number;
+  entryIds: string[];
+  namespace: string;
 }
 
 export interface DaemonSyncStatusResponse {
@@ -389,6 +462,8 @@ export interface DaemonUpdaterStatusResponse {
   lastDownload?: DaemonUpdateDownloadResultDto | null;
   lastProbe?: Record<string, unknown> | null;
   lastError?: string | null;
+  autoCheckEnabled?: boolean;
+  nextAutoCheckAt?: number | null;
   [key: string]: unknown;
 }
 
@@ -482,9 +557,50 @@ export interface DaemonWorkspaceResourceDto {
   [key: string]: unknown;
 }
 
+export interface DaemonProcessResourceDto {
+  pid: number;
+  parentPid?: number | null;
+  name: string;
+  processName?: string;
+  commandLine?: string | null;
+  role:
+    | "electron-main"
+    | "electron-renderer"
+    | "electron-gpu"
+    | "electron-utility"
+    | "t3-server"
+    | "daemon"
+    | "agent"
+    | "terminal"
+    | "pty"
+    | "child"
+    | string;
+  category: "desktop" | "core" | "terminal" | "agent" | string;
+  cpuPercent?: number | null;
+  memoryBytes?: number | null;
+  privateMemoryBytes?: number | null;
+  alive?: boolean;
+  source?: string;
+  sessionId?: string | null;
+  workspace?: string | null;
+  stale?: boolean;
+  [key: string]: unknown;
+}
+
+export interface DaemonDesktopResourceSummaryDto {
+  pid?: number | null;
+  cpuPercent?: number | null;
+  memoryBytes?: number | null;
+  privateMemoryBytes?: number | null;
+  processCount?: number;
+  source?: string;
+  [key: string]: unknown;
+}
+
 export interface DaemonSystemResourcesResponse {
   ok?: boolean;
   collectedAt?: number;
+  sampledAt?: number;
   totalCpuPercent?: number | null;
   totalMemoryBytes?: number | null;
   totalPrivateMemoryBytes?: number | null;
@@ -494,6 +610,7 @@ export interface DaemonSystemResourcesResponse {
   hasLocalSamples?: boolean;
   history?: number[];
   host?: {
+    cpuCores?: number;
     cpuPercent?: number | null;
     memoryBytes?: number | null;
     totalMemoryBytes?: number | null;
@@ -503,14 +620,27 @@ export interface DaemonSystemResourcesResponse {
     pid?: number;
     cpuPercent?: number | null;
     memoryBytes?: number | null;
+    privateMemoryBytes?: number | null;
     [key: string]: unknown;
   };
   t3Server?: {
     pid?: number | null;
     cpuPercent?: number | null;
     memoryBytes?: number | null;
+    privateMemoryBytes?: number | null;
+    state?: string;
+    hostedBy?: "electron" | "electron-in-process" | "daemon-supervisor" | "external" | string;
+    label?: string;
+    childCount?: number;
     [key: string]: unknown;
-  };
+  } | null;
+  desktop?: DaemonDesktopResourceSummaryDto | null;
+  processes?: DaemonProcessResourceDto[];
+  processCount?: number;
+  activeAgentCount?: number;
+  activeTerminalCount?: number;
+  hostMetricsSource?: string;
+  hostMetricsUpdatedAt?: number | null;
   workspaces?: DaemonWorkspaceResourceDto[];
   ptys?: DaemonPtyResourceDto[];
   [key: string]: unknown;
@@ -788,9 +918,35 @@ export class PrismuxDaemonClient {
     provider?: string;
     model?: string;
     dialMode?: string;
+    reasoningEffort?: string;
+    defaultEffort?: string;
+    secretaryName?: string;
   }): Promise<DaemonChiefStatusResponse> {
     return this.requestJson<DaemonChiefStatusResponse>("/v1/chief/switch", {
       method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  updateChiefProfile(payload: {
+    secretaryName: string;
+  }): Promise<DaemonChiefProfileUpdateResponse> {
+    return this.requestJson<DaemonChiefProfileUpdateResponse>("/v1/chief/profile", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  getChiefAgentsMd(): Promise<DaemonChiefAgentsMdResponse> {
+    return this.requestJson<DaemonChiefAgentsMdResponse>("/v1/chief/agents-md");
+  }
+
+  saveChiefAgentsMd(payload: {
+    content?: string;
+    reset?: boolean;
+  }): Promise<DaemonChiefAgentsMdResponse> {
+    return this.requestJson<DaemonChiefAgentsMdResponse>("/v1/chief/agents-md", {
+      method: "PUT",
       body: JSON.stringify(payload),
     });
   }
@@ -819,6 +975,36 @@ export class PrismuxDaemonClient {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  planObsidianImport(payload: {
+    vaultPath: string;
+    namespace?: string;
+    useAgentCuration?: boolean;
+    provider?: string;
+    model?: string;
+    maxFiles?: number;
+  }): Promise<DaemonObsidianImportPlanResponse> {
+    return this.requestJson<DaemonObsidianImportPlanResponse>(
+      "/v1/memory/import-obsidian/plan",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  commitObsidianImport(payload: {
+    items: DaemonObsidianCuratedItemDto[];
+    namespace?: string;
+  }): Promise<DaemonObsidianImportCommitResponse> {
+    return this.requestJson<DaemonObsidianImportCommitResponse>(
+      "/v1/memory/import-obsidian/commit",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   getSyncStatus(): Promise<DaemonSyncStatusResponse> {
@@ -866,8 +1052,9 @@ export class PrismuxDaemonClient {
     });
   }
 
-  fetchSystemResources(): Promise<DaemonSystemResourcesResponse> {
-    return this.requestJson<DaemonSystemResourcesResponse>("/v1/system/resources");
+  fetchSystemResources(forceRefresh = false): Promise<DaemonSystemResourcesResponse> {
+    const suffix = forceRefresh ? "?refresh=1" : "";
+    return this.requestJson<DaemonSystemResourcesResponse>(`/v1/system/resources${suffix}`);
   }
 
   killStalePty(sessionId: string): Promise<DaemonKillStalePtyResponse> {
@@ -1167,8 +1354,10 @@ export const fetchSystemPorts = (workspace?: string): Promise<DaemonSystemPortsR
 export const killSystemPort = (pid: number): Promise<DaemonKillSystemPortResponse> =>
   prismuxDaemonClient.killSystemPort(pid);
 
-export const fetchSystemResources = (): Promise<DaemonSystemResourcesResponse> =>
-  prismuxDaemonClient.fetchSystemResources();
+export const fetchSystemResources = (
+  forceRefresh = false,
+): Promise<DaemonSystemResourcesResponse> =>
+  prismuxDaemonClient.fetchSystemResources(forceRefresh);
 
 export const killStalePty = (sessionId: string): Promise<DaemonKillStalePtyResponse> =>
   prismuxDaemonClient.killStalePty(sessionId);

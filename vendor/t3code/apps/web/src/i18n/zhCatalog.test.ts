@@ -45,12 +45,14 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
   });
 
   it("translates all Prismux settings navigation, breadcrumb, and search labels to Simplified Chinese", () => {
-    expect(m(SETTINGS_SECTION_LABELS["/settings/wallpaper"])).toBe("壁纸引擎");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/appearance"])).toBe("外观");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_SECTION_LABELS["/settings/plugins"])).toBe("插件中心");
     expect(m(SETTINGS_SECTION_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
     expect(m(SETTINGS_SECTION_LABELS["/settings/updates"])).toBe("软件更新");
 
-    expect(m(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("壁纸引擎");
+    expect(m(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("外观");
+    expect(m(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_NAV_LABELS["/settings/plugins"])).toBe("插件中心");
     expect(m(SETTINGS_NAV_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
     expect(m(SETTINGS_NAV_LABELS["/settings/updates"])).toBe("软件更新");
@@ -62,6 +64,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
 
   it("finds Prismux settings items by both Chinese and English queries", () => {
     const cases: ReadonlyArray<readonly [string, string]> = [
+      ["壁纸", "prismux-wallpaper"],
       ["壁纸引擎", "prismux-wallpaper"],
       ["动态壁纸", "prismux-wallpaper"],
       ["插件中心", "prismux-plugins"],
@@ -194,16 +197,16 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("{agent} isn't installed on this machine."), { agent: "OMP" })).toBe(
       "本机尚未安装 OMP。",
     );
-    expect(m(msg("Run Prismux's CLI as `t3` from any terminal."))).toBe(
-      "在任意终端中以 `t3` 运行 Prismux 命令行工具。",
+    expect(m(msg("Run Prismux's CLI as `prismux` (with `t3` alias) from any terminal."))).toBe(
+      "在任意终端中以 `prismux`（兼容 `t3` 别名）运行 Prismux 命令行工具。",
     );
     expect(
       m(
-        msg("Another t3 at {path} runs first in a new terminal. Remove it to use Prismux's.", {
-          path: "/usr/local/bin/t3",
+        msg("Another prismux at {path} runs first in a new terminal. Remove it to use Prismux's.", {
+          path: "/usr/local/bin/prismux",
         }),
       ),
-    ).toBe("新终端中将优先运行位于 /usr/local/bin/t3 的另一个 t3。请先移除它以使用 Prismux 的版本。");
+    ).toBe("新终端中将优先运行位于 /usr/local/bin/prismux 的另一个 prismux。请先移除它以使用 Prismux 的版本。");
     expect(m(msg("手机模拟器"))).toBe("手机模拟器");
     expect(m(msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"))).toBe(
       "零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。",
@@ -273,5 +276,23 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("Avg speed"))).toBe("平均速度");
     expect(m(msg("Cache hit rate"))).toBe("实际缓存命中率");
     expect(m(msg("Call Logs"))).toBe("调用日志");
+  });
+
+  it("enforces Prismux brand cleanup across zh.json while preserving T3 Connect relay copy", () => {
+    const serializedValues = Object.values(zhCatalog).map((value) => JSON.stringify(value));
+    const residue = serializedValues.filter((entry) =>
+      /T3 Code|T3 Server|T3 server|T3 服务器|T3 主目录|T3 home|Magpie|magpie/.test(entry),
+    );
+    expect(residue).toEqual([]);
+
+    const t3ConnectEntries = serializedValues.filter((entry) => entry.includes("T3 Connect"));
+    expect(t3ConnectEntries.length).toBeGreaterThan(100);
+
+    expect(m(msg("Open pull requests in Prismux"))).toBe("在 Prismux 中打开 PR");
+    expect(m(msg("prismux command"))).toBe("prismux 命令");
+    expect(m(msg("Use Prismux in another app (MCP)"))).toBe("在其他应用中使用 Prismux（MCP）");
+    expect(m(msg("Drop Prismux or VS Code .json files"))).toBe(
+      "拖入 Prismux 或 VS Code .json 文件",
+    );
   });
 });

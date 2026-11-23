@@ -516,7 +516,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                       updateHoverTarget(null);
                     }
                   }}
-                  className="flex flex-col gap-3"
+                  className={cn(
+                    "flex flex-col pt-1",
+                    compactSearchOpen ? "gap-6" : "gap-6 max-md:gap-4",
+                  )}
                 >
                   {navGroups.map((group, index) => {
                     const groupActiveState = activeIndicator.groupStates[group.id];
@@ -546,18 +549,14 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                       <div
                         key={group.id}
                         data-settings-nav-group={group.id}
-                        className={cn(
-                          "flex flex-col gap-1",
-                          index > 0 && "border-t border-sidebar-border/80 pt-3",
-                        )}
+                        className="flex flex-col"
                       >
                         <h3
                           id={`settings-nav-group-${index}`}
+                          data-settings-nav-heading={group.id}
                           className={cn(
-                            "px-2.5 pb-0.5 text-xs font-medium text-sidebar-muted-foreground",
-                            group.headingHidden
-                              ? "sr-only"
-                              : !compactSearchOpen && "max-md:sr-only",
+                            "mb-1.5 px-2.5 text-sm font-semibold leading-5 tracking-normal text-sidebar-foreground/95",
+                            !compactSearchOpen && "max-md:sr-only",
                           )}
                         >
                           {m(group.heading)}
@@ -572,7 +571,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                                 menuRefs.current.delete(group.id);
                               }
                             }}
-                            className="relative isolate"
+                            className="relative isolate gap-0.5"
                           >
                             {/* Layer 0: Intra-group sliding / cross-group crossfading Hover Pill */}
                             <span
@@ -621,7 +620,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                                   data-settings-group={group.id}
                                   aria-current={isActive ? "page" : undefined}
                                   className={cn(
-                                    "peer/menu-button flex h-8 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-lg px-2.5 py-1.5 text-left text-sm font-medium text-sidebar-muted-foreground outline-hidden ring-ring transition-colors duration-150 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset active:translate-y-px active:text-sidebar-foreground data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground motion-reduce:transition-none motion-reduce:active:translate-y-0 [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-(--sidebar-icon-color) hover:[&>svg]:text-sidebar-foreground active:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-foreground",
+                                    "peer/menu-button flex h-7 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-lg px-2.5 py-1 text-left text-[12.5px] leading-4 font-normal text-sidebar-muted-foreground outline-hidden ring-ring transition-colors duration-150 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset active:translate-y-px active:text-sidebar-foreground data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground motion-reduce:transition-none motion-reduce:active:translate-y-0 [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-(--sidebar-icon-color) hover:[&>svg]:text-sidebar-foreground active:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-foreground",
                                     !hasMeasuredGeometry &&
                                       "hover:bg-sidebar-row-hover active:bg-sidebar-row-active data-[active=true]:bg-sidebar-row-selected",
                                   )}

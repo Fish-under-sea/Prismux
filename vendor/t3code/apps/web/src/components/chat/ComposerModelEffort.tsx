@@ -1,7 +1,6 @@
 import {
   PrismuxReasoningEffortSlider,
-  formatReasoningEffortLabel,
-  formatReasoningEffortShortLabel,
+  formatEffortLabel,
   type ReasoningEffortLocale,
   type ReasoningEffortOption,
 } from "@prismux/appearance";
@@ -101,7 +100,7 @@ export function describeComposerEffort(
   effortDisplay: EffortDisplay,
   size: ComposerControlSize,
   resolve: MessageResolver = m,
-  locale?: string,
+  _locale?: string,
 ): { suffix: ReactNode; detail: string | null } {
   if (!traits) return { suffix: null, detail: null };
   const visibility = getTraitsSectionVisibility({ ...traits, resolve });
@@ -147,15 +146,14 @@ export function describeComposerEffort(
         })()
       : null;
   const effectiveGlyph = glyph ?? fallbackUnobservedGlyph;
-  const isZhLocale = typeof locale === "string" && locale.toLowerCase().startsWith("zh");
-  // Workflow levels such as Ultracode always show their name; the setting names every level.
-  const localizedEffortShortLabel =
-    isZhLocale && currentReasoningValue
-      ? formatReasoningEffortShortLabel(currentReasoningValue, "zh")
-      : null;
+  // Reasoning effort labels always stay in canonical English (Minimal/Low/Medium/High/XHigh/Max/Ultracode)
+  // so technical effort tiers remain unambiguous across locales.
+  const canonicalEffortLabel = currentReasoningValue
+    ? formatEffortLabel(currentReasoningValue)
+    : null;
   const word = effectiveGlyph
     ? (effectiveGlyph.special ??
-      (effortDisplay === "label" ? (localizedEffortShortLabel ?? effectiveGlyph.label) : null))
+      (effortDisplay === "label" ? (canonicalEffortLabel ?? effectiveGlyph.label) : null))
     : !reasoning
       ? null
       : reasoning.type === "boolean"
@@ -163,10 +161,8 @@ export function describeComposerEffort(
           ? resolve(msg("{option} On", { option: reasoning.label }))
           : resolve(msg("{option} Off", { option: reasoning.label }))
         : ultrathink
-          ? isZhLocale
-            ? "极致"
-            : "Ultrathink"
-          : (localizedEffortShortLabel ??
+          ? "Ultrathink"
+          : (canonicalEffortLabel ??
             getProviderOptionCurrentLabel(
               reasoning,
               modelSelection,
@@ -804,19 +800,15 @@ const KNOWN_CANONICAL_EFFORT_IDS = new Set([
 
 function formatChoiceForSlider(
   choice: { readonly id: string; readonly label: string; readonly description?: string | undefined },
-  locale: ReasoningEffortLocale,
 ): ReasoningEffortOption {
   const isCanonical = KNOWN_CANONICAL_EFFORT_IDS.has(choice.id.trim().toLowerCase());
-  const label = isCanonical
-    ? formatReasoningEffortLabel(choice.id, locale)
-    : choice.label || formatReasoningEffortLabel(choice.id, locale);
-  const shortLabel = isCanonical
-    ? formatReasoningEffortShortLabel(choice.id, locale)
-    : choice.label || formatReasoningEffortShortLabel(choice.id, locale);
+  const englishLabel = isCanonical
+    ? formatEffortLabel(choice.id)
+    : choice.label || formatEffortLabel(choice.id);
   return {
     value: choice.id,
-    label,
-    shortLabel,
+    label: englishLabel,
+    shortLabel: englishLabel,
     ...(choice.description !== undefined ? { description: choice.description } : {}),
   };
 }
@@ -1027,7 +1019,7 @@ function ComposerUnifiedOptionsFooterBody(props: {
   if (effort?.kind === "select") {
     const choices = selectableProviderOptionChoices(effort.descriptor);
     if (choices.length > 0) {
-      sliderOptions = choices.map((choice) => formatChoiceForSlider(choice, sliderLocale));
+      sliderOptions = choices.map((choice) => formatChoiceForSlider(choice));
       sliderValue = traits.selectValue(effort.descriptor);
       handleSliderChange = (nextValue: string) => traits.changeSelect(effort.descriptor, nextValue);
     }
@@ -1036,13 +1028,13 @@ function ComposerUnifiedOptionsFooterBody(props: {
     sliderOptions = [
       {
         value: "off",
-        label: gt("Off", { $context: "option state" }),
-        shortLabel: sliderLocale === "zh" ? "关" : "Off",
+        label: "Off",
+        shortLabel: "Off",
       },
       {
         value: "on",
-        label: gt("On", { $context: "option state" }),
-        shortLabel: sliderLocale === "zh" ? "开" : "On",
+        label: "On",
+        shortLabel: "On",
       },
     ];
     sliderValue = on ? "on" : "off";

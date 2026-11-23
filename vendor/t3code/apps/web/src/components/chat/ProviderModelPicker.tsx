@@ -24,7 +24,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { ModelPickerContent, resolveModelPickerSelectedModel } from "./ModelPickerContent";
-import { retainedModelWhileProviderLocked } from "./ProviderModelPicker.logic";
+import {
+  retainedModelWhileProviderLocked,
+  shouldScopeModelPickerToActiveAgent,
+} from "./ProviderModelPicker.logic";
 import { ChatGptSharingControl } from "./ChatGptSharingControl";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { ModelEsque, getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
@@ -89,6 +92,68 @@ function lockBackgroundScroll(popup: HTMLElement | null) {
 /** What a docked effort column needs from its picker: the model it serves. */
 export const DockedPickerContext = createContext<{ modelLabel: string }>({ modelLabel: "" });
 
+/**
+ * Candidate composer card containers whose start edge the composer-owned model picker aligns to.
+ * Prioritizes the AGY inner composer card so the popup's left edge forms a crisp vertical line
+ * flush with the input card below it rather than drifting left over the sidebar.
+ */
+export const COMPOSER_PICKER_ANCHOR_CARD_SELECTORS = [
+  '[data-pmx-composer-inner-card="1"]',
+  '[data-chat-composer-surface="true"]',
+  '[data-pmx-composer-layout="agy"]',
+] as const;
+
+export function resolveModelPickerPopupAlign(input: {
+  readonly isComposerOwned?: boolean | undefined;
+  readonly hasUnifiedFooter?: boolean | undefined;
+  readonly popupAlign?: "start" | "end" | undefined;
+}): "start" | "end" {
+  // Composer model pickers sit in the bottom-left toolbar beside the attach button; always anchor
+  // to "start" so the popup opens rightward flush with the composer card instead of crossing the sidebar.
+  if (input.isComposerOwned || input.hasUnifiedFooter) {
+    return "start";
+  }
+  return input.popupAlign ?? "start";
+}
+
+export function findComposerPickerAnchorCard(
+  trigger: Pick<Element, "closest"> | null | undefined,
+): HTMLElement | null {
+  if (!trigger) return null;
+  for (const selector of COMPOSER_PICKER_ANCHOR_CARD_SELECTORS) {
+    const card = trigger.closest<HTMLElement>(selector);
+    if (card) return card;
+  }
+  return null;
+}
+
+export function computeComposerPickerAlignOffset(input: {
+  readonly triggerRect: Pick<DOMRectReadOnly, "left" | "right" | "width">;
+  readonly cardRect: Pick<DOMRectReadOnly, "left" | "right" | "width">;
+  readonly align: "start" | "center" | "end";
+  readonly side?: "top" | "bottom" | "left" | "right" | "inline-start" | "inline-end";
+  readonly isRtl?: boolean;
+}): number {
+  if (input.align !== "start") return 0;
+  if (input.side && input.side !== "top" && input.side !== "bottom") return 0;
+  if (
+    !Number.isFinite(input.triggerRect.left) ||
+    !Number.isFinite(input.cardRect.left) ||
+    input.triggerRect.width <= 0 ||
+    input.cardRect.width <= 0
+  ) {
+    return 0;
+  }
+  const rawOffset = input.isRtl
+    ? input.triggerRect.right - input.cardRect.right
+    : input.cardRect.left - input.triggerRect.left;
+  if (!Number.isFinite(rawOffset) || Math.abs(rawOffset) < 0.01) {
+    return 0;
+  }
+  // Never shift inward past the trigger's own start edge if an atypical wrapper sits right of it.
+  return rawOffset > 0 ? 0 : rawOffset;
+}
+
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   environmentId: EnvironmentId | null;
   workspaceCwd?: string | null;
@@ -134,6 +199,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    * reasoning effort slider + segmented pills + Codex/Claude Fast Mode speed row).
    */
   unifiedFooter?: ReactNode;
+  /**
+   * Explicitly toggle Orca single-agent scoped focus. Defaults to `true` when `unifiedFooter`
+   * is present (Chat Composer) and `false` for multi-provider pickers in settings.
+   */
+  scopeToActiveAgent?: boolean;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
@@ -163,9 +233,20 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const size = props.size ?? "sm";
   const hasUnifiedFooter = props.unifiedFooter !== undefined;
   const docked = props.effortColumn !== undefined || hasUnifiedFooter;
+  const effectivePopupAlign = resolveModelPickerPopupAlign({
+    isComposerOwned: props.isComposerOwned,
+    hasUnifiedFooter,
+    popupAlign: props.popupAlign,
+  });
+  const alignPopupToComposerCard = Boolean(props.isComposerOwned || hasUnifiedFooter);
 
   const activeEntry =
     props.instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null;
+  const isAgentScoped = shouldScopeModelPickerToActiveAgent({
+    scopeToActiveAgent: props.scopeToActiveAgent,
+    hasUnifiedFooter,
+    hasActiveEntry: activeEntry !== null,
+  });
 
   const activeInstanceId = props.activeInstanceId;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
@@ -329,6 +410,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           : (props.getModelDisabledReason?.(instanceId, model) ?? null)
       }
       onInstanceModelChange={handleInstanceModelChange}
+      {...(isAgentScoped ? { agentScoped: true } : {})}
       {...(docked
         ? {
             docked,
@@ -477,23 +559,49 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           };
         }}
         initialFocus={isCoarsePointer ? popupRef : searchInputRef}
-        align={props.popupAlign ?? "start"}
+        align={effectivePopupAlign}
+        alignOffset={
+          alignPopupToComposerCard
+            ? ({ side, align }) => {
+                const trigger = triggerRef.current;
+                const card = findComposerPickerAnchorCard(trigger);
+                if (!trigger || !card) return 0;
+                const isRtl =
+                  typeof window !== "undefined" &&
+                  window.getComputedStyle(card).direction === "rtl";
+                return computeComposerPickerAlignOffset({
+                  triggerRect: trigger.getBoundingClientRect(),
+                  cardRect: card.getBoundingClientRect(),
+                  align,
+                  side,
+                  isRtl,
+                });
+              }
+            : 0
+        }
         // Docked, the popup opens above the composer and slides over it when that space is short,
         // so a short window gets its full height (Floating UI sizes to the viewport) instead of a sliver.
         {...(docked
-          ? { side: "top" as const, collisionAvoidance: { side: "shift", align: "shift" } as const }
+          ? {
+              side: "top" as const,
+              sideOffset: 6,
+              collisionAvoidance: { side: "shift", align: "shift" } as const,
+            }
           : {})}
-        className="before:hidden"
+        className="overflow-hidden rounded-xl bg-clip-padding before:hidden"
         padding="none"
         touchBackdrop
       >
         {hasUnifiedFooter ? (
           <DockedPickerContext value={{ modelLabel: triggerTitle }}>
-            <div className="flex max-h-(--available-height) w-[min(25.5rem,calc(100vw-1rem))] flex-col overflow-hidden">
+            <div
+              data-model-picker-scoped={isAgentScoped ? "true" : undefined}
+              className="flex max-h-(--available-height) w-[min(23.5rem,calc(100vw-1rem))] flex-col overflow-hidden"
+            >
               {picker}
               <div
                 data-model-picker-effort
-                className="shrink-0 border-t border-border/70 bg-muted/35 empty:hidden"
+                className="shrink-0 border-t border-border/70 bg-muted/25 empty:hidden"
               >
                 {props.unifiedFooter}
               </div>

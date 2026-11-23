@@ -19,20 +19,24 @@ export const PRISMUX_SIDEBAR_PROJECTS_OPEN_KEY =
 
 /**
  * Canonical Prismux sidebar quick-nav entries (aligned with Orca `SidebarNav.tsx`).
- * Strictly excludes `Bots` and `Tasks` (Task Board is forbidden by AGENTS.md;
- * `diagnostics` replaces Tasks with Prismux's real service diagnostics center).
+ * Strict 5-item order across expanded sidebar, 54px collapsed icon rail, and hover-peek drawer:
+ * `diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `mobile`.
+ * Plugin Center remains accessible in `/settings/plugins`.
  */
 export const PRISMUX_SIDEBAR_QUICK_NAV_IDS = [
   "diagnostics",
+  "tasks",
+  "workspace-board",
   "automations",
   "mobile",
-  "plugins",
 ] as const;
 
 export type PrismuxSidebarQuickNavId = (typeof PRISMUX_SIDEBAR_QUICK_NAV_IDS)[number];
 
 export const PRISMUX_SIDEBAR_QUICK_NAV_ROUTES = {
   diagnostics: "/settings/diagnostics",
+  tasks: "/tasks",
+  workspaceBoard: "/workspace-board",
   automations: "/settings/scheduled-tasks",
   mobileAccess: "/settings/access",
   plugins: "/settings/plugins",
@@ -211,5 +215,24 @@ export function subscribeLocateActiveSidebarThread(listener: () => void): () => 
   locateActiveThreadListeners.add(listener);
   return () => {
     locateActiveThreadListeners.delete(listener);
+  };
+}
+
+/**
+ * Lightweight event bus connecting the Orca Workspace Board lane `+` buttons to
+ * `OrcaCreateWorkspaceDialog` mounted inside `Sidebar.tsx`.
+ */
+const openCreateWorkspaceListeners = new Set<() => void>();
+
+export function requestOpenCreateWorkspace(): void {
+  for (const listener of openCreateWorkspaceListeners) {
+    listener();
+  }
+}
+
+export function subscribeOpenCreateWorkspace(listener: () => void): () => void {
+  openCreateWorkspaceListeners.add(listener);
+  return () => {
+    openCreateWorkspaceListeners.delete(listener);
   };
 }

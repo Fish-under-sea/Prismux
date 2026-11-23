@@ -1,13 +1,24 @@
 import {
   AuthProvidersManageScope,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   type ServerSettings,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { getTranslationsSnapshot, initializeGT, msg } from "gt-react";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "../../i18n/locales";
+import { m, setActiveLocale } from "../../i18n/messages";
+import zhCatalog from "../../i18n/translations/zh.json";
 import {
   buildProviderInstanceOverridePatch,
+  buildProviderInstanceRows,
+  buildProviderRemovalMutation,
+  canDeleteProviderRow,
+  classifyProviderRemoval,
+  extractAcpRegistryManagedAgentId,
+  resolveNextSelectedProviderInstanceId,
   resolveRemoteOperateAccess,
 } from "./ProviderSettingsPanel.logic";
 
@@ -110,5 +121,227 @@ describe("remote operate access", () => {
         hasError: false,
       }),
     ).toBe("denied");
+  });
+});
+
+describe("provider configuration deletion logic", () => {
+  const codexDriver = ProviderDriverKind.make("codex");
+  const claudeDriver = ProviderDriverKind.make("claudeAgent");
+  const antigravityDriver = ProviderDriverKind.make("antigravity");
+  const acpDriver = ProviderDriverKind.make("acpRegistry");
+
+  const codexId = ProviderInstanceId.make("codex");
+  const claudeId = ProviderInstanceId.make("claudeAgent");
+  const antigravityId = ProviderInstanceId.make("antigravity");
+  const ompId = ProviderInstanceId.make("omp");
+  const codexWorkId = ProviderInstanceId.make("codex_work");
+
+  const visibleProviderSettings = [
+    { provider: codexDriver, hasDefaultInstance: true },
+    { provider: claudeDriver, hasDefaultInstance: true },
+    { provider: antigravityDriver, hasDefaultInstance: true },
+    { provider: acpDriver, hasDefaultInstance: false },
+  ] as const;
+
+  it("classifies deletability and removal kind across built-in, optional, and custom providers", () => {
+    expect(classifyProviderRemoval({ isDefault: true, isCoreDefault: true })).toBe(
+      "remove-builtin",
+    );
+    expect(classifyProviderRemoval({ isDefault: true, isCoreDefault: false })).toBe(
+      "delete-optional",
+    );
+    expect(classifyProviderRemoval({ isDefault: false, isCoreDefault: false })).toBe(
+      "delete-custom",
+    );
+
+    expect(
+      canDeleteProviderRow({ explicitInstance: undefined, isCoreDefault: true, readOnly: false }),
+    ).toBe(true);
+    expect(
+      canDeleteProviderRow({
+        explicitInstance: { driver: antigravityDriver, enabled: true },
+        isCoreDefault: false,
+        readOnly: false,
+      }),
+    ).toBe(true);
+    expect(
+      canDeleteProviderRow({ explicitInstance: undefined, isCoreDefault: false, readOnly: false }),
+    ).toBe(false);
+    expect(
+      canDeleteProviderRow({
+        explicitInstance: { driver: codexDriver, enabled: true },
+        isCoreDefault: true,
+        readOnly: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("builds visible rows, hides deleted optional/built-in providers permanently, and restores on re-add", () => {
+    const withAntigravityAndOmp = buildProviderInstanceRows({
+      visibleProviderSettings,
+      providerInstances: {
+        [antigravityId]: {
+          driver: antigravityDriver,
+          displayName: "Antigravity CLI",
+          enabled: true,
+        },
+        [ompId]: {
+          driver: acpDriver,
+          displayName: "OMP (oh-my-pi)",
+          enabled: true,
+          config: { source: "local", commandPath: "omp", commandArgs: ["acp"] },
+        },
+      },
+      hiddenDefaultProviderInstances: [],
+    });
+
+    expect(withAntigravityAndOmp.map((row) => [row.instanceId, row.removalKind])).toEqual([
+      [codexId, "remove-builtin"],
+      [claudeId, "remove-builtin"],
+      [antigravityId, "delete-optional"],
+      [ompId, "delete-custom"],
+    ]);
+
+    // After deleting Antigravity CLI (removed from providerInstances) and Codex (recorded in hiddenDefaultProviderInstances):
+    const afterDeletes = buildProviderInstanceRows({
+      visibleProviderSettings,
+      providerInstances: {
+        [ompId]: {
+          driver: acpDriver,
+          displayName: "OMP (oh-my-pi)",
+          enabled: true,
+          config: { source: "local", commandPath: "omp", commandArgs: ["acp"] },
+        },
+      },
+      hiddenDefaultProviderInstances: [codexId],
+    });
+
+    expect(afterDeletes.map((row) => row.instanceId)).toEqual([claudeId, ompId]);
+
+    // Deep-linked targetInstanceId does not keep a dismissed default-off provider in the list.
+    const afterDeepLinkDelete = buildProviderInstanceRows({
+      visibleProviderSettings,
+      providerInstances: {},
+      hiddenDefaultProviderInstances: [],
+      targetInstanceId: antigravityId,
+      dismissedInstanceIds: new Set([antigravityId]),
+    });
+    expect(afterDeepLinkDelete.map((row) => row.instanceId)).toEqual([codexId, claudeId]);
+
+    // Re-adding Codex restores it even if a stale snapshot still mentioned it in hiddenDefaultProviderInstances.
+    const afterReAdd = buildProviderInstanceRows({
+      visibleProviderSettings,
+      providerInstances: {
+        [codexId]: { driver: codexDriver, displayName: "Codex", enabled: true },
+      },
+      hiddenDefaultProviderInstances: [codexId],
+    });
+    expect(afterReAdd.map((row) => row.instanceId)).toEqual([codexId, claudeId]);
+  });
+
+  it("falls back selection cleanly when deleting selected, trailing, unselected, or final rows", () => {
+    const rows = [
+      { instanceId: codexId },
+      { instanceId: claudeId },
+      { instanceId: antigravityId },
+    ];
+
+    // Deleting middle selected item advances to the next item.
+    expect(resolveNextSelectedProviderInstanceId(rows, claudeId, claudeId)).toBe(antigravityId);
+    // Deleting the last selected item falls back to the previous item.
+    expect(resolveNextSelectedProviderInstanceId(rows, antigravityId, antigravityId)).toBe(
+      claudeId,
+    );
+    // Deleting a non-selected item preserves the current selection.
+    expect(resolveNextSelectedProviderInstanceId(rows, antigravityId, codexId)).toBe(codexId);
+    // Deleting the only remaining item returns null (empty state).
+    expect(resolveNextSelectedProviderInstanceId([{ instanceId: codexId }], codexId, codexId)).toBe(
+      null,
+    );
+  });
+
+  it("builds server mutations with hideDefault only for core built-in removals", () => {
+    expect(
+      buildProviderRemovalMutation({ instanceId: codexId, removalKind: "remove-builtin" }),
+    ).toEqual({ operation: "remove", instanceId: codexId, hideDefault: true });
+
+    expect(
+      buildProviderRemovalMutation({ instanceId: antigravityId, removalKind: "delete-optional" }),
+    ).toEqual({ operation: "remove", instanceId: antigravityId });
+
+    expect(
+      buildProviderRemovalMutation({ instanceId: codexWorkId, removalKind: "delete-custom" }),
+    ).toEqual({ operation: "remove", instanceId: codexWorkId });
+  });
+
+  it("detects managed ACP registry binaries while skipping local ACP commands", () => {
+    expect(
+      extractAcpRegistryManagedAgentId({
+        driver: acpDriver,
+        config: { agentId: "devin", distribution: "auto" },
+      }),
+    ).toBe("devin");
+
+    expect(
+      extractAcpRegistryManagedAgentId({
+        driver: acpDriver,
+        config: { source: "local", commandPath: "omp", agentId: "omp" },
+      }),
+    ).toBeNull();
+
+    expect(
+      extractAcpRegistryManagedAgentId({
+        driver: antigravityDriver,
+        config: { authMethod: "local-cli" },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("provider configuration deletion zh-CN i18n copy", () => {
+  beforeAll(async () => {
+    await initializeGT({
+      defaultLocale: DEFAULT_LOCALE,
+      locales: [...SUPPORTED_LOCALES],
+      loadTranslations: async (locale) => (locale === "zh" ? zhCatalog : {}),
+      cacheExpiryTime: null,
+    });
+    await getTranslationsSnapshot("zh");
+    setActiveLocale("zh");
+  });
+
+  afterAll(() => {
+    setActiveLocale(DEFAULT_LOCALE);
+  });
+
+  it("resolves all provider deletion UI strings cleanly in Simplified Chinese", () => {
+    expect(m(msg("Delete provider configuration"))).toBe("删除提供方配置");
+    expect(m(msg("Delete {provider} configuration"), { provider: "Antigravity CLI" })).toBe(
+      "删除 Antigravity CLI 配置",
+    );
+    expect(m(msg("Delete provider configuration?"))).toBe("确认删除提供方配置？");
+    expect(m(msg("Instance ID: {instanceId}"), { instanceId: "antigravity" })).toBe(
+      "实例 ID：antigravity",
+    );
+    expect(m(msg("Confirm delete"))).toBe("确认删除");
+    expect(m(msg("Deleting..."))).toBe("正在删除…");
+    expect(m(msg("Danger zone"))).toBe("危险操作");
+    expect(m(msg("Could not delete provider configuration"))).toBe("无法删除提供方配置");
+    expect(m(msg("Provider configuration deleted"))).toBe("已删除提供方配置");
+    expect(
+      m(msg("{provider} ({instanceId}) has been removed."), {
+        provider: "Antigravity CLI",
+        instanceId: "antigravity",
+      }),
+    ).toBe("已移除 Antigravity CLI（antigravity）。");
+    expect(
+      m(
+        msg(
+          'Deleting this configuration will remove its connection and model settings. Existing conversation history will be preserved, and you can add it again anytime via "+ Add provider".',
+        ),
+      ),
+    ).toBe(
+      "删除后将移除该提供方的连接与模型配置（已有历史会话记录保留，可随时通过「+ 添加提供方」重新添加）。",
+    );
   });
 });

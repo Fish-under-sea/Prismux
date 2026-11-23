@@ -9,6 +9,9 @@ import {
   PrismuxDaemonInfoSchema,
   PrismuxInstallDownloadedUpdateRequestSchema,
   PrismuxInstallDownloadedUpdateResultSchema,
+  PrismuxKeepAwakeStateSchema,
+  PrismuxSetTrayRunningAgentsRequestSchema,
+  PrismuxSetTrayRunningAgentsResultSchema,
   PrismuxWindowOcclusionSchema,
   type PrismuxInstallDownloadedUpdateRequest,
   type PrismuxInstallDownloadedUpdateResult,
@@ -29,6 +32,14 @@ import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronUpdater from "../../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as PrismuxDaemonService from "../../prismux/PrismuxDaemonService.ts";
+import {
+  createElectronKeepAwakeController,
+  type PrismuxKeepAwakeController,
+} from "../../prismux/PrismuxKeepAwakeController.ts";
+import {
+  takePendingPrismuxTrayAction,
+  updateSharedPrismuxTrayRunningAgentsCount,
+} from "../../prismux/PrismuxTrayController.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -507,5 +518,64 @@ export const installPrismuxDownloadedUpdate = DesktopIpc.makeIpcMethod({
           Effect.asVoid,
         ),
     });
+  }),
+});
+
+let sharedKeepAwakeController: PrismuxKeepAwakeController | null = null;
+
+function getSharedKeepAwakeController(): PrismuxKeepAwakeController {
+  if (sharedKeepAwakeController === null) {
+    sharedKeepAwakeController = createElectronKeepAwakeController();
+  }
+  return sharedKeepAwakeController;
+}
+
+export const setPrismuxKeepAwake = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PRISMUX_SET_KEEP_AWAKE_CHANNEL,
+  payload: Schema.Boolean,
+  result: PrismuxKeepAwakeStateSchema,
+  handler: Effect.fn("desktop.ipc.prismux.setKeepAwake")(function* (enabled) {
+    return yield* Effect.sync(() => getSharedKeepAwakeController().setEnabled(enabled));
+  }),
+});
+
+export const getPrismuxKeepAwakeState = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PRISMUX_GET_KEEP_AWAKE_STATE_CHANNEL,
+  payload: Schema.Void,
+  result: PrismuxKeepAwakeStateSchema,
+  handler: Effect.fn("desktop.ipc.prismux.getKeepAwakeState")(function* () {
+    return yield* Effect.sync(() => getSharedKeepAwakeController().getState());
+  }),
+});
+
+export const setPrismuxTrayRunningAgentsCount = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PRISMUX_SET_TRAY_RUNNING_AGENTS_CHANNEL,
+  payload: PrismuxSetTrayRunningAgentsRequestSchema,
+  result: PrismuxSetTrayRunningAgentsResultSchema,
+  handler: Effect.fn("desktop.ipc.prismux.setTrayRunningAgentsCount")(function* (request) {
+    const result = yield* Effect.sync(() =>
+      updateSharedPrismuxTrayRunningAgentsCount(
+        request.count,
+        request.mobileUrl !== undefined ? { mobileUrl: request.mobileUrl } : undefined,
+      ),
+    );
+    const pendingAction = yield* Effect.sync(() => takePendingPrismuxTrayAction());
+    if (pendingAction !== null) {
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const windowOption = yield* electronWindow.main;
+      if (Option.isSome(windowOption) && !windowOption.value.isDestroyed()) {
+        yield* Effect.sync(() => {
+          try {
+            windowOption.value.webContents.send(
+              IpcChannels.PRISMUX_TRAY_ACTION_CHANNEL,
+              pendingAction,
+            );
+          } catch {
+            // Ignore send errors if the renderer closed during startup handoff.
+          }
+        });
+      }
+    }
+    return result;
   }),
 });

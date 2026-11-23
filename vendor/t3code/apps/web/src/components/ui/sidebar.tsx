@@ -34,7 +34,7 @@ import {
 import * as Schema from "effect/Schema";
 import { announceSidebarVisibility } from "~/lib/accessibilityAnnouncements";
 
-const SIDEBAR_WIDTH = "16rem";
+const SIDEBAR_WIDTH = "17.5rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing) * 3)";
 const SIDEBAR_WIDTH_ICON = `${SIDEBAR_ICON_RAIL_WIDTH_PX}px`;
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
@@ -374,6 +374,7 @@ function Sidebar({
             "flex h-full w-(--sidebar-width) flex-col bg-sidebar surface-grain text-sidebar-foreground",
             className,
           )}
+          data-pmx-glass-zone={side === "left" ? "shellFrame" : "rightSidebar"}
           data-slot="sidebar"
           {...props}
         >
@@ -402,6 +403,7 @@ function Sidebar({
               className,
             )}
             data-mobile="true"
+            data-pmx-glass-zone={side === "left" ? "shellFrame" : "rightSidebar"}
             data-sidebar="sidebar"
             data-slot="sidebar"
             showCloseButton={false}
@@ -474,7 +476,7 @@ function Sidebar({
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
-              : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+              : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)",
             className,
           )}
           data-slot="sidebar-container"
@@ -482,6 +484,7 @@ function Sidebar({
         >
           <div
             className="flex h-full w-full flex-col overflow-x-hidden bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
+            data-pmx-glass-zone={side === "left" ? "shellFrame" : "rightSidebar"}
             data-sidebar="sidebar"
             data-slot="sidebar-inner"
           >
@@ -650,14 +653,14 @@ function SidebarRail({
           <button
             aria-label={railLabel}
             className={cn(
-              /* A collapsed offcanvas rail overlaps the native scrollbar on Windows and Linux. */
-              "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border group-data-[side=right]:left-0 sm:flex [[data-collapsible=offcanvas][data-state=collapsed]_&]:pointer-events-none",
+              /* Keep resize drag handle 100% invisible so no pale vertical hairline separates sidebar & stage. */
+              "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] focus-visible:after:bg-primary/50 group-data-[side=right]:left-0 sm:flex [[data-collapsible=offcanvas][data-state=collapsed]_&]:pointer-events-none",
               "[[data-panel-animations=true]_&]:transition-all [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
               "touch-none",
               canResize
                 ? "cursor-col-resize"
                 : "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize [[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
-              "group-data-[collapsible=offcanvas]:translate-x-0 hover:group-data-[collapsible=offcanvas]:bg-sidebar group-data-[collapsible=offcanvas]:after:left-full",
+              "group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full",
               "[[data-side=left][data-collapsible=offcanvas]_&]:-right-2",
               "[[data-side=right][data-collapsible=offcanvas]_&]:-left-2",
               className,
@@ -715,6 +718,9 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       className={cn(
         "relative flex min-w-0 w-full flex-1 flex-col bg-background surface-grain",
+        "[[data-pmx-glass='1']_&:has([data-pmx-glass-zone=mainCanvas])]:bg-transparent [[data-pmx-glass='1']_&:has([data-pmx-glass-zone=mainCanvas])]:[background-image:none] [[data-pmx-glass='1']_&:has([data-pmx-glass-zone=mainCanvas])]:[backdrop-filter:none] [[data-pmx-glass='1']_&:has([data-pmx-glass-zone=mainCanvas])]:[-webkit-backdrop-filter:none]",
+        "[[data-pmx-wallpaper='1']_&:has([data-pmx-glass-zone=mainCanvas])]:bg-transparent [[data-pmx-wallpaper='1']_&:has([data-pmx-glass-zone=mainCanvas])]:[background-image:none]",
+        "[[data-pmx-wallpaper-visible='1']_&:has([data-pmx-glass-zone=mainCanvas])]:bg-transparent [[data-pmx-wallpaper-visible='1']_&:has([data-pmx-glass-zone=mainCanvas])]:[background-image:none]",
         "md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ms-2 md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ms-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm/5",
         className,
       )}

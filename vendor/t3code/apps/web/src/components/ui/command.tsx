@@ -74,9 +74,10 @@ function CommandDialogPopup({
           ref={popupRef}
           className={cn(
             DIALOG_POPUP_CLASS,
-            "pointer-events-auto max-h-105 max-w-xl text-foreground data-ending-style:pointer-events-none",
+            "pointer-events-auto max-h-105 max-w-xl overflow-hidden bg-clip-padding text-foreground data-ending-style:pointer-events-none",
             className,
           )}
+          data-pmx-glass-zone="overlays"
           data-slot="command-dialog-popup"
           {...props}
         >

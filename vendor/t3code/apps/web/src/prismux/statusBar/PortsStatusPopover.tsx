@@ -30,6 +30,7 @@ export interface PortsStatusPopoverProps {
   readonly onRefresh: () => Promise<void>;
   readonly onKillPort: (pid: number) => Promise<{ ok: boolean; message?: string; error?: string }>;
   readonly onOpenUrl: (url: string) => void;
+  readonly embeddedInPopover?: boolean;
 }
 
 export function PortsStatusPopover({
@@ -39,6 +40,7 @@ export function PortsStatusPopover({
   onRefresh,
   onKillPort,
   onOpenUrl,
+  embeddedInPopover = false,
 }: PortsStatusPopoverProps) {
   const { workspacePorts, externalPorts } = partitionPortsByWorkspace(
     state.ports,
@@ -257,7 +259,18 @@ export function PortsStatusPopover({
   return (
     <div
       {...STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS}
-      className="flex w-96 max-w-[calc(100vw-1rem)] flex-col gap-3 rounded-xl border border-border bg-popover p-3.5 text-popover-foreground shadow-xl"
+      {...(!embeddedInPopover
+        ? {
+            "data-pmx-glass-zone": "overlays",
+            "data-pmx-status-popover": "1",
+          }
+        : {})}
+      className={cn(
+        "flex w-96 max-w-[calc(100vw-1rem)] flex-col gap-3 p-3.5 text-popover-foreground",
+        embeddedInPopover
+          ? "bg-transparent"
+          : "overflow-hidden rounded-xl border border-border bg-popover bg-clip-padding shadow-xl",
+      )}
       data-testid="prismux-ports-popover"
     >
       <div className="flex items-center justify-between gap-2">

@@ -123,12 +123,26 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
   };
 };
 
+const normalizeHiddenDefaultProviderInstances = (settings: ServerSettings): ServerSettings => {
+  if (settings.hiddenDefaultProviderInstances.length === 0) return settings;
+  const deduped: ProviderInstanceId[] = [];
+  const seen = new Set<ProviderInstanceId>();
+  for (const id of settings.hiddenDefaultProviderInstances) {
+    if (seen.has(id) || Object.hasOwn(settings.providerInstances, id)) continue;
+    seen.add(id);
+    deduped.push(id);
+  }
+  if (deduped.length === settings.hiddenDefaultProviderInstances.length) return settings;
+  return { ...settings, hiddenDefaultProviderInstances: deduped };
+};
+
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
+    Effect.map(normalizeHiddenDefaultProviderInstances),
     Effect.map((next) => withIdleCompaction(next, globalIdleCompaction(next))),
     Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
     Effect.mapError(
@@ -190,12 +204,24 @@ export function applyProviderInstanceMutation(
   mutation: ProviderInstanceMutation,
 ): ServerSettings {
   const providerInstances = { ...settings.providerInstances };
+  let hiddenDefaultProviderInstances = settings.hiddenDefaultProviderInstances;
   if (mutation.operation === "upsert" || mutation.operation === "create") {
     providerInstances[mutation.instanceId] = mutation.instance;
+    if (hiddenDefaultProviderInstances.includes(mutation.instanceId)) {
+      hiddenDefaultProviderInstances = hiddenDefaultProviderInstances.filter(
+        (id) => id !== mutation.instanceId,
+      );
+    }
   } else {
     delete providerInstances[mutation.instanceId];
+    if (
+      mutation.hideDefault === true &&
+      !hiddenDefaultProviderInstances.includes(mutation.instanceId)
+    ) {
+      hiddenDefaultProviderInstances = [...hiddenDefaultProviderInstances, mutation.instanceId];
+    }
   }
-  return { ...settings, providerInstances };
+  return { ...settings, providerInstances, hiddenDefaultProviderInstances };
 }
 
 const secretProviderConfigGuards = new Map(
@@ -509,12 +535,23 @@ function selectionSupportsTextGeneration(
 type DriverAllowed = (driver: ProviderDriverKind) => boolean;
 const anyDriver: DriverAllowed = () => true;
 
+function isHiddenDefaultProviderInstance(
+  settings: ServerSettings,
+  instanceId: ProviderInstanceId,
+): boolean {
+  return (
+    !Object.hasOwn(settings.providerInstances, instanceId) &&
+    settings.hiddenDefaultProviderInstances.includes(instanceId)
+  );
+}
+
 function resolveTextGenerationProvider(
   settings: ServerSettings,
   isDriverAllowed: DriverAllowed = anyDriver,
 ): ServerSettings {
   const selection = settings.textGenerationModelSelection;
-  return isModelSelectionProviderEnabled(settings, selection) &&
+  return !isHiddenDefaultProviderInstance(settings, selection.instanceId) &&
+    isModelSelectionProviderEnabled(settings, selection) &&
     selectionSupportsTextGeneration(settings, selection) &&
     isDriverAllowed(
       settings.providerInstances[selection.instanceId]?.driver ??
@@ -532,6 +569,7 @@ function fallbackTextGenerationProvider(
     settings.providerInstances,
     (instanceId, driver) =>
       // A default instance id can be configured with another driver.
+      !isHiddenDefaultProviderInstance(settings, instanceId) &&
       isDriverAllowed(settings.providerInstances[instanceId]?.driver ?? driver) &&
       resolveProviderInstanceEnabled(
         settings.providerInstances[instanceId] ?? { driver, config: {} },

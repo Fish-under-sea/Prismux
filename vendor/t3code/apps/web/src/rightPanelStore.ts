@@ -10,6 +10,7 @@ import {
   type DesktopPreviewColorScheme,
   type PreviewViewportPresetId,
   type PreviewViewportSetting,
+  type ProviderInstanceId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -46,6 +47,7 @@ const RIGHT_PANEL_KINDS = [
   "thread",
   "linked-thread",
   "wallpaper",
+  "agent-session",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -125,7 +127,30 @@ export type RightPanelSurface =
   /** A linked environment's thread, read through `viaEnvironmentId`; it has no thread here. */
   | LinkedThreadSurface
   /** Prismux liquid-glass & wallpaper engine right-sidebar quick panel. */
-  | { id: "wallpaper"; kind: "wallpaper" };
+  | { id: "wallpaper"; kind: "wallpaper" }
+  /** Quick-launched multi-agent conversation hosted seamlessly inside the right sidebar. */
+  | AgentSessionSurface;
+
+export interface AgentSessionSurface {
+  readonly id: `agent-session:${string}`;
+  readonly kind: "agent-session";
+  readonly title: string;
+  readonly providerId: string;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly environmentId?: EnvironmentId | null | undefined;
+  readonly threadId?: ThreadId | null | undefined;
+}
+
+export interface OpenAgentSessionInput {
+  readonly id?: `agent-session:${string}`;
+  readonly title: string;
+  readonly providerId: string;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly environmentId?: EnvironmentId | null | undefined;
+  readonly threadId?: ThreadId | null | undefined;
+}
 
 export type ThreadSurface = { id: `thread:${string}`; kind: "thread"; threadId: ThreadId };
 
@@ -146,18 +171,31 @@ export function decodeThreadSurface(surface: object): ThreadSurface | null {
 }
 
 export const DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER = [
-  "mobile-simulator",
-  "preview",
-  "wallpaper",
   "diff",
-  "terminal",
-  "device",
   "files",
+  "terminal",
+  "preview",
+  "mobile-simulator",
+  "wallpaper",
 ] as const;
 
 export type RightPanelActivityItemId = (typeof DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER)[number];
 
-export const RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v1";
+export const RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v2";
+const LEGACY_RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v1";
+
+const LEGACY_DEFAULT_ACTIVITY_ORDERS: ReadonlyArray<readonly string[]> = [
+  ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "device", "files"],
+  ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "devices", "files"],
+  ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "files"],
+];
+
+function isLegacyDefaultActivityOrder(items: readonly string[]): boolean {
+  return LEGACY_DEFAULT_ACTIVITY_ORDERS.some(
+    (legacy) =>
+      legacy.length === items.length && legacy.every((value, index) => items[index] === value),
+  );
+}
 
 export interface ActivityOrderStorageLike {
   getItem(key: string): string | null;
@@ -175,17 +213,28 @@ function getDefaultActivityStorage(): ActivityOrderStorageLike | null {
 
 export function normalizeRightPanelActivityOrder(raw: unknown): RightPanelActivityItemId[] {
   const validSet = new Set<string>(DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER);
+  if (Array.isArray(raw)) {
+    const rawStrings = raw.filter((item): item is string => typeof item === "string");
+    if (isLegacyDefaultActivityOrder(rawStrings)) {
+      return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
+    }
+  }
   const next: RightPanelActivityItemId[] = [];
   if (Array.isArray(raw)) {
     for (const item of raw) {
       if (
         typeof item === "string" &&
+        item !== "device" &&
+        item !== "devices" &&
         validSet.has(item) &&
         !next.includes(item as RightPanelActivityItemId)
       ) {
         next.push(item as RightPanelActivityItemId);
       }
     }
+  }
+  if (isLegacyDefaultActivityOrder(next)) {
+    return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
   }
   for (const fallback of DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER) {
     if (!next.includes(fallback)) {
@@ -201,8 +250,16 @@ export function loadRightPanelActivityOrder(
   if (!storage) return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
   try {
     const raw = storage.getItem(RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY);
-    if (!raw) return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
-    return normalizeRightPanelActivityOrder(JSON.parse(raw));
+    if (raw) {
+      return normalizeRightPanelActivityOrder(JSON.parse(raw));
+    }
+    const legacyRaw = storage.getItem(LEGACY_RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY);
+    if (legacyRaw) {
+      const migrated = normalizeRightPanelActivityOrder(JSON.parse(legacyRaw));
+      saveRightPanelActivityOrder(migrated, storage);
+      return migrated;
+    }
+    return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
   } catch {
     return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
   }
@@ -437,6 +494,14 @@ interface RightPanelStoreState {
       "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread"
     >,
   ) => void;
+  /** Opens a quick-launched multi-agent conversation smoothly inside the right sidebar. */
+  openAgentSession: (ref: ScopedThreadRef, input: OpenAgentSessionInput) => string;
+  /** Updates metadata or binds a created server thread to an open right-sidebar agent session tab. */
+  updateAgentSession: (
+    ref: ScopedThreadRef,
+    surfaceId: string,
+    patch: Partial<Omit<AgentSessionSurface, "id" | "kind">>,
+  ) => void;
   /** Opens a side chat or subagent of `ref`'s environment as a tab; `ref` itself has no tab. */
   openThread: (ref: ScopedThreadRef, threadId: ThreadId) => void;
   openLinkedThread: (ref: ScopedThreadRef, target: LinkedThreadTarget) => void;
@@ -508,7 +573,7 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<
       RightPanelKind,
-      "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread"
+      "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread" | "agent-session"
     >,
   ) => void;
   setThreadPanelOpen: (
@@ -571,6 +636,13 @@ const singletonSurface = (
       return { id: "device", kind };
     case "wallpaper":
       return { id: "wallpaper", kind };
+    case "agent-session":
+      return {
+        id: `agent-session:${Date.now().toString(36)}`,
+        kind: "agent-session",
+        title: "新会话",
+        providerId: "codex",
+      };
   }
 };
 
@@ -949,6 +1021,17 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         }),
                       ];
                     }
+                    if (surface.kind === "agent-session") {
+                      if (
+                        typeof surface.id !== "string" ||
+                        !surface.id.startsWith("agent-session:") ||
+                        typeof surface.title !== "string" ||
+                        typeof surface.providerId !== "string"
+                      ) {
+                        return [];
+                      }
+                      return [surface];
+                    }
                     if (surface.kind !== "terminal") return [surface];
                     if (
                       !("resourceId" in surface) ||
@@ -1119,6 +1202,75 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
+          }),
+        ),
+      openAgentSession: (ref, input) => {
+        const surfaceId: `agent-session:${string}` =
+          input.id ??
+          (`agent-session:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` as const);
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            // Deduplicate if targeting an already-open real server thread inside this panel.
+            if (input.environmentId && input.threadId) {
+              const existingByThread = current.surfaces.find(
+                (entry): entry is AgentSessionSurface =>
+                  entry.kind === "agent-session" &&
+                  entry.environmentId === input.environmentId &&
+                  entry.threadId === input.threadId,
+              );
+              if (existingByThread) {
+                return {
+                  ...current,
+                  isOpen: true,
+                  activeSurfaceId: existingByThread.id,
+                };
+              }
+            }
+            const nextSurface: AgentSessionSurface = {
+              id: surfaceId,
+              kind: "agent-session",
+              title: input.title.trim() || "新会话",
+              providerId: input.providerId,
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+              ...(input.model !== undefined ? { model: input.model } : {}),
+              ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
+              ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            };
+            const exists = current.surfaces.some((entry) => entry.id === surfaceId);
+            return {
+              ...current,
+              isOpen: true,
+              activeSurfaceId: surfaceId,
+              surfaces: exists
+                ? current.surfaces.map((entry) => (entry.id === surfaceId ? nextSurface : entry))
+                : [...current.surfaces, nextSurface],
+            };
+          }),
+        );
+        return surfaceId;
+      },
+      updateAgentSession: (ref, surfaceId, patch) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            let changed = false;
+            const surfaces = current.surfaces.map((surface) => {
+              if (surface.id !== surfaceId || surface.kind !== "agent-session") {
+                return surface;
+              }
+              changed = true;
+              return {
+                ...surface,
+                ...(patch.title !== undefined ? { title: patch.title } : {}),
+                ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+                ...(patch.instanceId !== undefined ? { instanceId: patch.instanceId } : {}),
+                ...(patch.model !== undefined ? { model: patch.model } : {}),
+                ...(patch.environmentId !== undefined
+                  ? { environmentId: patch.environmentId }
+                  : {}),
+                ...(patch.threadId !== undefined ? { threadId: patch.threadId } : {}),
+              };
+            });
+            return changed ? { ...current, surfaces } : current;
           }),
         ),
       openDevice: (ref, target, automatic = false) =>
@@ -1775,6 +1927,7 @@ useRightPanelStore.subscribe((next, previous) => {
     for (const surface of closedInOrder.map(withoutReveal)) {
       if (
         surface.kind === "terminal" ||
+        surface.kind === "agent-session" ||
         (surface.kind === "preview" && surface.resourceId !== null)
       )
         continue;

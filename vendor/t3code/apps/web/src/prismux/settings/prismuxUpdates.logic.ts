@@ -68,6 +68,7 @@ export interface UpdaterPolicyView {
   readonly customGhProxyPrefix: string;
   readonly pluginRegistryOverride: PluginRegistryOverride;
   readonly timeoutMs: number;
+  readonly autoCheckEnabled: boolean;
 }
 
 export interface UpdateProgressView {
@@ -318,6 +319,15 @@ export function parseUpdaterStatusPayload(
         ? lastDownload.sha256
         : null;
 
+  const autoCheckEnabled =
+    typeof policyRec?.autoCheckEnabled === "boolean"
+      ? policyRec.autoCheckEnabled
+      : typeof policyRec?.autoCheckUpdates === "boolean"
+        ? policyRec.autoCheckUpdates
+        : typeof root.autoCheckEnabled === "boolean"
+          ? root.autoCheckEnabled
+          : true;
+
   return {
     currentVersion,
     portableMode: asBoolean(root.portableMode, false),
@@ -328,6 +338,7 @@ export function parseUpdaterStatusPayload(
       customGhProxyPrefix: asString(policyRec?.customGhProxyPrefix),
       pluginRegistryOverride: asRegistryOverride(policyRec?.pluginRegistryOverride),
       timeoutMs: typeof policyRec?.timeoutMs === "number" ? policyRec.timeoutMs : 15000,
+      autoCheckEnabled,
     },
     checking: asBoolean(root.checking, false),
     downloading: asBoolean(root.downloading, false),

@@ -57,11 +57,14 @@ export const deriveProviderInstanceConfigMap = (
 ): ProviderInstanceConfigMap => {
   const merged: Record<string, ProviderInstanceConfig> = { ...settings.providerInstances };
 
+  const hiddenDefaults = new Set(settings.hiddenDefaultProviderInstances);
   for (const driver of BUILT_IN_DRIVERS) {
     if (driver.metadata.hasDefaultInstance === false) continue;
     const instanceId = defaultInstanceIdForDriver(driver.driverKind);
     if (instanceId in merged) continue;
-    merged[instanceId] = { driver: driver.driverKind };
+    merged[instanceId] = hiddenDefaults.has(instanceId)
+      ? { driver: driver.driverKind, enabled: false }
+      : { driver: driver.driverKind };
   }
 
   // Probe project-enabled instances even if disabled machine-wide; project threads can still route to them.

@@ -1,15 +1,20 @@
+import { InlineAppearanceStudio } from "@prismux/appearance";
 import {
   WallpaperQuickPanel,
   WallpaperStage,
   useWallpaperStore,
+  type InlineAppearanceRenderContext,
   type WallpaperItem,
 } from "@prismux/wallpaper";
 import { Image as ImageIcon, Sparkles } from "lucide-react";
 import { memo, useCallback } from "react";
 
+import { PopoverCreateHandle, PopoverTrigger } from "../components/ui/popover";
 import { Toggle } from "../components/ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { cn } from "../lib/utils";
+import type { ThreadPanelPresentation } from "../rightPanelLayout";
+import { PrismuxChiefStatusPill } from "./PrismuxChiefStatusPill";
 import { usePrismuxRuntime } from "./PrismuxRuntimeProvider";
 
 /**
@@ -60,11 +65,27 @@ export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop()
 });
 
 /**
- * Native right-panel `"wallpaper"` surface mounting @prismux/wallpaper's deduplicated 2-tab QuickPanel
- * (壁纸 / 播放) with direct shortcuts to /settings/appearance and /settings/wallpaper.
+ * Native right-panel `"wallpaper"` surface mounting @prismux/wallpaper's 3-tab QuickPanel
+ * (壁纸 / 播放 / 外观与玻璃). Clicking bottom `外观与玻璃` switches in-place to
+ * `InlineAppearanceStudio` (zero route navigation) for live 6-zone glass tuning against Z-0.
  */
 export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPanel() {
-  const { wallpaperStore, wallpaperHost } = usePrismuxRuntime();
+  const { appearance, setAppearance, setThemeMode, wallpaperStore, wallpaperHost } =
+    usePrismuxRuntime();
+
+  const renderInlineAppearance = useCallback(
+    ({ onBack }: InlineAppearanceRenderContext) => (
+      <InlineAppearanceStudio
+        config={appearance}
+        onChange={setAppearance}
+        onThemeModeChange={setThemeMode}
+        onBack={onBack}
+        backLabel="返回壁纸"
+        title="外观与玻璃"
+      />
+    ),
+    [appearance, setAppearance, setThemeMode],
+  );
 
   return (
     <div
@@ -74,6 +95,7 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
       <WallpaperQuickPanel
         store={wallpaperStore}
         adapter={wallpaperHost}
+        renderInlineAppearance={renderInlineAppearance}
         dock="official"
         className="min-h-0 flex-1"
       />
@@ -82,103 +104,113 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
 });
 
 export interface PrismuxTopbarControlsProps {
-  readonly wallpaperOpen: boolean;
-  readonly wallpaperAvailable: boolean;
-  readonly inlineRightPanelOwnsTitleBar: boolean;
-  readonly onToggleWallpaper: () => void;
+  /** Overview (`ThreadDetailsPanel`) toggle state when rendered in the unified single topbar. */
+  readonly overviewOpen?: boolean;
+  readonly overviewPresentation?: ThreadPanelPresentation;
+  readonly overviewPopoverHandle?: ReturnType<typeof PopoverCreateHandle>;
+  readonly overviewShortcutLabel?: string | null;
+  readonly onToggleOverview?: () => void;
+  /** Legacy wallpaper toggle props retained for backward compatibility when `onToggleOverview` is omitted. */
+  readonly wallpaperOpen?: boolean;
+  readonly wallpaperAvailable?: boolean;
+  readonly inlineRightPanelOwnsTitleBar?: boolean;
+  readonly onToggleWallpaper?: () => void;
   readonly onOpenChiefSettings: () => void;
+  readonly className?: string;
 }
 
-const DIAL_MODE_LABELS = {
-  agent: "Agent",
-  oracle: "Oracle",
-  review: "Review",
-} as const;
-
 /**
- * MP-02 chat header controls: compact Chief Thread Slot status pill + one-click Wallpaper/Glass sidebar toggle.
- * Strictly marks interactive controls `[-webkit-app-region:no-drag]` to preserve Electron window dragging.
+ * Unified single-topbar Prismux controls:
+ * - Minimalist Chief Thread Slot breathing brand pill (`<PrismuxChiefStatusPill />`)
+ * - AGY + Codex Overview panel (`ThreadDetailsPanel`) toggle button (`✨`, compatible with `Ctrl+Shift+B`)
+ * Strictly marks interactive controls `[-webkit-app-region:no-drag]` and uses clean flow layout
+ * (zero brittle `mr-28` hacks) so it sits flush alongside right-panel toggles & Electron WCO buttons.
  */
 export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
-  wallpaperOpen,
-  wallpaperAvailable,
-  inlineRightPanelOwnsTitleBar,
+  overviewOpen = false,
+  overviewPresentation = "inline",
+  overviewPopoverHandle,
+  overviewShortcutLabel,
+  onToggleOverview,
+  wallpaperOpen = false,
+  wallpaperAvailable = true,
   onToggleWallpaper,
   onOpenChiefSettings,
+  className,
 }: PrismuxTopbarControlsProps) {
-  const { appearance, chiefProvider, dialMode, daemonInfo } = usePrismuxRuntime();
+  const { appearance } = usePrismuxRuntime();
   const isGlassActive = appearance.themeMode === "glass" && appearance.glassPreset !== "off";
+  const usesOverviewMode = onToggleOverview !== undefined || overviewPopoverHandle !== undefined;
+
+  const overviewToggleButton = (
+    <Toggle
+      className={cn(
+        "size-6.5 shrink-0 [-webkit-app-region:no-drag]",
+        isGlassActive && !overviewOpen && "text-primary",
+      )}
+      pressed={overviewOpen}
+      onPressedChange={overviewPresentation === "popover" ? undefined : onToggleOverview}
+      aria-label="切换概览"
+      data-pmx-overview-toggle="1"
+      variant="ghost"
+      size="sm"
+    >
+      <Sparkles className="size-3.5" />
+    </Toggle>
+  );
 
   return (
     <div
       data-pmx-topbar-controls=""
-      className={cn(
-        "flex shrink-0 items-center gap-1.5 [-webkit-app-region:no-drag]",
-        inlineRightPanelOwnsTitleBar ? "mr-10" : "mr-28",
-      )}
+      className={cn("flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]", className)}
     >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              data-pmx-chief-badge=""
-              onClick={onOpenChiefSettings}
-              className={cn(
-                "inline-flex h-7 max-w-44 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-2.5 text-[11px] font-medium text-foreground/85 transition-colors hover:bg-muted/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]",
-                isGlassActive && "border-white/20 bg-white/10 backdrop-blur-md",
-              )}
-              aria-label={`主秘书槽位：${chiefProvider} (${DIAL_MODE_LABELS[dialMode]})，点击管理记忆与同步`}
-            >
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  daemonInfo.ready ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.75)]" : "bg-amber-400/80",
-                )}
-              />
-              <span className="truncate font-mono text-[10.5px] tracking-tight">
-                {chiefProvider}
-              </span>
-              <span className="rounded-sm bg-foreground/10 px-1 py-px text-[9.5px] uppercase tracking-wider text-muted-foreground">
-                {DIAL_MODE_LABELS[dialMode]}
-              </span>
-            </button>
-          }
-        />
-        <TooltipPopup side="bottom">
-          {daemonInfo.ready
-            ? `主秘书槽位：${chiefProvider} · ${DIAL_MODE_LABELS[dialMode]}（点击进入记忆与同步设置）`
-            : `主秘书槽位：${chiefProvider} · 本地预览模式（点击管理记忆与同步）`}
-        </TooltipPopup>
-      </Tooltip>
+      <PrismuxChiefStatusPill
+        onClick={onOpenChiefSettings}
+        isGlassActive={isGlassActive}
+        className="h-6.5 px-2 text-[11px]"
+      />
 
-      <Tooltip>
-        <TooltipTrigger render={<span className="flex shrink-0" />}>
-          <Toggle
-            className={cn(
-              "shrink-0 [-webkit-app-region:no-drag]",
-              isGlassActive && !wallpaperOpen && "text-primary",
-            )}
-            pressed={wallpaperOpen}
-            onPressedChange={onToggleWallpaper}
-            aria-label="切换壁纸与液态玻璃边栏"
-            data-pmx-wallpaper-toggle=""
-            variant="ghost"
-            size="sm"
-            disabled={!wallpaperAvailable}
-          >
-            {isGlassActive ? (
-              <Sparkles className="size-4" />
+      {usesOverviewMode ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" data-thread-panel-toggle="" />}>
+            {overviewPresentation === "popover" && overviewPopoverHandle ? (
+              <PopoverTrigger handle={overviewPopoverHandle} render={overviewToggleButton} />
             ) : (
-              <ImageIcon className="size-4" />
+              overviewToggleButton
             )}
-          </Toggle>
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">
-          {wallpaperAvailable ? "壁纸与液态玻璃边栏" : "打开会话后可使用壁纸边栏"}
-        </TooltipPopup>
-      </Tooltip>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {overviewShortcutLabel ? `切换概览 (${overviewShortcutLabel})` : "切换概览"}
+          </TooltipPopup>
+        </Tooltip>
+      ) : onToggleWallpaper ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className={cn(
+                "size-6.5 shrink-0 [-webkit-app-region:no-drag]",
+                isGlassActive && !wallpaperOpen && "text-primary",
+              )}
+              pressed={wallpaperOpen}
+              onPressedChange={onToggleWallpaper}
+              aria-label="切换壁纸与液态玻璃边栏"
+              data-pmx-wallpaper-toggle=""
+              variant="ghost"
+              size="sm"
+              disabled={!wallpaperAvailable}
+            >
+              {isGlassActive ? (
+                <Sparkles className="size-3.5" />
+              ) : (
+                <ImageIcon className="size-3.5" />
+              )}
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {wallpaperAvailable ? "壁纸与液态玻璃边栏" : "打开会话后可使用壁纸边栏"}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 });

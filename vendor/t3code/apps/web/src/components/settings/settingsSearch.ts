@@ -102,7 +102,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": msg("Service Diagnostics"),
   "/settings/projects": msg("Projects"),
   "/settings/general": msg("General"),
-  "/settings/appearance": msg("Appearance & Wallpaper"),
+  "/settings/appearance": msg("Appearance"),
   "/settings/chat": msg("Chat"),
   "/settings/diffs": msg("Diffs & pull requests"),
   "/settings/keybindings": msg("Keybindings"),
@@ -152,8 +152,8 @@ export type SettingsNavGroup = {
 };
 
 /**
- * Deduplicated 4-group sidebar hierarchy separated by crisp horizontal dividers:
- * - `/settings/wallpaper` is merged into `/settings/appearance` (legacy deep link highlights it).
+ * Deduplicated 4-group divider-free sidebar hierarchy:
+ * - `/settings/appearance` and `/settings/wallpaper` are independent sibling items in Group 1.
  * - `/settings/updates` is merged into `/settings/about` (legacy deep link redirects to `#prismux-updates`).
  * - `/settings/labs` redirects into official pages; `/settings/archived` stays in Group 2.
  */
@@ -165,6 +165,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     paths: [
       "/settings/general",
       "/settings/appearance",
+      "/settings/wallpaper",
       "/settings/chat",
       "/settings/keybindings",
       "/settings/voice",
@@ -979,9 +980,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cli-command",
-    title: msg("t3 command"),
+    title: msg("prismux command"),
     to: "/settings/about",
-    searchTerms: [msg("cli terminal shell path install command line")],
+    searchTerms: [msg("prismux t3 cli terminal shell path install command line")],
     desktopOnly: true,
   },
   {
@@ -1216,7 +1217,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "pull-request-links-open-in-app",
-    title: msg("Open pull requests in T3 Code"),
+    title: msg("Open pull requests in Prismux"),
     to: "/settings/diffs",
     searchTerms: [
       `pr commit links ${SOURCE_CONTROL_HOST_LABELS} browser external click default pull request view panel`,
@@ -1496,7 +1497,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/memory-sync",
     searchTerms: [
       msg(
-        "memory sync chief thread slot secretary sqlite obsidian webdav s3 github magpie e2ee encrypted",
+        "memory sync chief thread slot secretary sqlite obsidian webdav s3 github prismux e2ee encrypted",
       ),
     ],
   },

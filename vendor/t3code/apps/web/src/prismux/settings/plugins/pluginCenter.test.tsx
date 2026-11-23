@@ -315,7 +315,7 @@ describe("Trust Audit Confirmation Gate (modelVisible / prompt / sensitive permi
     );
     expect(modalHtml).toContain('role="alertdialog"');
     expect(modalHtml).toContain("z-[80]");
-    expect(modalHtml).toContain("top-0 right-0 bottom-6 left-0");
+    expect(modalHtml).toContain("top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0");
     expect(modalHtml).toContain("pmx-plugin-overlay-surface");
     expect(modalHtml).toContain("升级前信任审计确认");
     expect(modalHtml).toContain("v0.1.0-alpha.3 → v0.2.0");
@@ -361,7 +361,7 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
 
     expect(drawerHtml).toContain('role="dialog"');
     expect(drawerHtml).toContain("z-[70]");
-    expect(drawerHtml).toContain("top-0 right-0 bottom-6 left-0");
+    expect(drawerHtml).toContain("top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0");
     expect(drawerHtml).toContain("pmx-plugin-overlay-surface");
     expect(drawerHtml).toContain('aria-label="关闭插件详情抽屉"');
     expect(drawerHtml).toContain("distribution: managed");

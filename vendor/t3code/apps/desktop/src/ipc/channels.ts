@@ -164,3 +164,7 @@ export const PRISMUX_PICK_WALLPAPER_DIRECTORY_CHANNEL = "desktop:prismux:pick-wa
 export const PRISMUX_SET_UPDATE_FEED_URL_CHANNEL = "desktop:prismux:set-update-feed-url";
 export const PRISMUX_INSTALL_DOWNLOADED_UPDATE_CHANNEL =
   "desktop:prismux:install-downloaded-update";
+export const PRISMUX_SET_KEEP_AWAKE_CHANNEL = "desktop:prismux:set-keep-awake";
+export const PRISMUX_GET_KEEP_AWAKE_STATE_CHANNEL = "desktop:prismux:get-keep-awake-state";
+export const PRISMUX_SET_TRAY_RUNNING_AGENTS_CHANNEL = "desktop:prismux:set-tray-running-agents";
+export const PRISMUX_TRAY_ACTION_CHANNEL = "desktop:prismux:tray-action";

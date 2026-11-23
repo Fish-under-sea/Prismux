@@ -2,7 +2,6 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m } from "../i18n/messages";
 import { attachSidebarTree } from "../lib/sidebarTree";
-import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
   dropThreadContext,
@@ -39,14 +38,6 @@ import {
 } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
-  nextShownOrder,
-  threadSearchMatchKey,
-  threadSearchSubject,
-  type ShownOrder,
-} from "@t3tools/client-runtime/state/thread-search";
-import { foldSearchQuery, rankMessageMatches } from "@t3tools/shared/paletteSearch";
-import { findForMessageMatch, openThreadFindOnQuery } from "./chat/threadFindStore";
-import {
   threadRuntimeCanArchive,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
@@ -58,33 +49,32 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   AuthOrchestrationOperateScope,
+  AuthSourceControlWriteScope,
   type ContextMenuSource,
+  type EnvironmentId,
   ProjectId,
+  ProviderInstanceId,
+  resolveEnvironmentMachineKind,
+  type ScopedProjectRef,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
+import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
+import { findProjectByPath, inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
+import { createModelSelection } from "@t3tools/shared/model";
 import {
   resolveListedAncestorThreadRef,
   type OlderSettledScope,
 } from "@t3tools/client-runtime/state/threads";
 
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  FolderIcon,
-  MessageSquareIcon,
-  PlusIcon,
-  SettingsIcon,
-  SlidersHorizontalIcon,
-} from "lucide-react";
+import { ChevronDownIcon, MessageSquareIcon, PlusIcon } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
-  useReducer,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
@@ -105,7 +95,7 @@ import {
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { isModelPickerOpen } from "../modelPickerVisibility";
-import { isMacPlatform } from "~/lib/utils";
+import { isMacPlatform, newProjectId, newThreadId } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { configuredHostedAppUrl } from "../hostedPairing";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
@@ -115,7 +105,6 @@ import {
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
-  projectGroupsSpanEnvironments,
   resolveSidebarProjectScopeKeys,
   getSidebarProjectSettingsKey,
   type SidebarProjectSnapshot,
@@ -131,21 +120,22 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
+import { useNewProject } from "../hooks/useNewProject";
+import { useScratchProject } from "../hooks/useScratchProject";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
-import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
+import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { registerCommands } from "../shortcuts/dispatcher";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { updateClientSettings, useClientSettings } from "../hooks/useSettings";
+import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import {
+  useEnvironments,
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
   useEnvironmentMachines,
-  usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
   readThreadShell,
@@ -157,10 +147,11 @@ import {
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
-import { environmentProjects } from "../state/projects";
+import { environmentProjects, projectEnvironment } from "../state/projects";
+import { sourceControlEnvironment } from "../state/sourceControl";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
-import { useThreadSearch } from "../state/queries";
+import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -171,10 +162,12 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
-import type { SidebarThreadSummary } from "../types";
+import {
+  DEFAULT_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  type SidebarThreadSummary,
+} from "../types";
 import { cn } from "~/lib/utils";
-import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
-import { ProjectRowActions } from "./ProjectComboboxRow";
 import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
@@ -189,13 +182,11 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
-  filterSidebarProjectScopeItems,
   firstValidTimestampMs,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   planSidebarThreadDrop,
-  reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
   resolveSidebarRowStatus,
   resolveSidebarSweepKeys,
@@ -204,9 +195,6 @@ import {
   resolveSidebarThreadSection,
   resolveSidebarReorderableThreadKeys,
   resolveThreadLastVisitedAt,
-  searchSidebarThreads,
-  shouldCreateNewThreadInCurrentProject,
-  resolveScopedNewThreadProjectRef,
   shouldNavigateAfterThreadPark,
   sidebarListItemId,
   sidebarThreadKeyAtY,
@@ -246,29 +234,44 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { titleRegenerationToast } from "./threadTitleRegenerationToast";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
-import { Button } from "./ui/button";
-import { isProjectPinShortcut, ProjectPinButton } from "./ProjectPinButton";
-import {
-  Combobox,
-  ComboboxEmpty,
-  ComboboxSearchInput,
-  ComboboxItem,
-  ComboboxList,
-  ComboboxPopup,
-  ComboboxTrigger,
-  useComboboxFilter,
-} from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { PrismuxSidebarQuickNav } from "./sidebar/PrismuxSidebarQuickNav";
 import {
   readSidebarProjectsSectionOpen,
   subscribeLocateActiveSidebarThread,
-  summarizeSidebarInboxAttention,
+  subscribeOpenCreateWorkspace,
   writeSidebarProjectsSectionOpen,
 } from "./sidebar/prismuxSidebarQuickNav.logic";
+import { formatAgentBrandName } from "../prismux/agentBrand";
+import { OrcaActivityView } from "./sidebar/orcaProjects/OrcaActivityView";
+import {
+  OrcaBrowseFolderFallbackDialog,
+  OrcaCloneProjectDialog,
+  OrcaCreateProjectDialog,
+  type OrcaEnvironmentOption,
+} from "./sidebar/orcaProjects/OrcaAddProjectMenu";
+import { OrcaCreateWorkspaceDialog } from "./sidebar/orcaProjects/OrcaCreateWorkspaceDialog";
+import { OrcaProjectsHeader } from "./sidebar/orcaProjects/OrcaProjectsHeader";
+import {
+  areAllProjectsCollapsed,
+  buildOrcaActivityItem,
+  computeCollapseAllProjectsNextExpanded,
+  createOrcaSidebarShortcutHandler,
+  DEFAULT_ORCA_PROJECTS_PREFS,
+  filterOrcaActivityItems,
+  filterSidebarProjectThreads,
+  formatLocalEnvironmentDisplayLabel,
+  readOrcaProjectsPrefs,
+  summarizeOrcaActivityBadge,
+  writeOrcaProjectsPrefs,
+  type CreateWorkspacePayload,
+  type OrcaActivityItem,
+  type OrcaProjectsPrefs,
+  type OrcaWorkspaceAgentOption,
+} from "./sidebar/orcaProjects/orcaProjects.logic";
+import { useOrcaProjectsCopy } from "./sidebar/orcaProjects/orcaProjectsCopy";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { resolveAgentRuntimeLamp } from "./sidebar/sidebarMicroIndicators";
-import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
@@ -278,7 +281,6 @@ import {
 } from "../composerDraftStore";
 import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
 import {
-  SidebarSearchResultRow,
   SortableThreadRow,
   type SidebarProviderEntry,
   type SidebarSweepAction,
@@ -350,7 +352,6 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
-const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -832,7 +833,6 @@ function isOptimisticDropReleased(input: {
 
 // Build maps in a hook so the compiler can prove they are frozen and cache them.
 function useSidebarLookups() {
-  const gt = useGT();
   const projects = useProjects();
   const environments = useEnvironmentIdentities();
   const serverConfigs = useServerConfigs();
@@ -851,16 +851,6 @@ function useSidebarLookups() {
       ),
     ),
   );
-  const projectGroupByScopeKey = new Map(
-    projectGroups.map((project) => [project.projectKey, project] as const),
-  );
-  const projectScopeItems = [
-    { value: "all", label: gt("All projects") },
-    ...pickableProjectGroups(projectGroups).map((project) => ({
-      value: project.projectKey,
-      label: project.displayName,
-    })),
-  ];
   return {
     projects,
     serverConfigs,
@@ -869,22 +859,7 @@ function useSidebarLookups() {
     providerEntriesByEnvironment,
     projectByKey,
     projectDisplayNameByKey,
-    projectGroupByScopeKey,
-    projectScopeItems,
   };
-}
-
-function ProjectScopeRowIcon(props: { isSelected: boolean; children: ReactNode }) {
-  return (
-    <span className="relative flex shrink-0">
-      {props.children}
-      {props.isSelected ? (
-        <span className="pointer-events-none absolute -right-1 -bottom-1 grid size-3 place-items-center rounded-full bg-primary ring-2 ring-popover">
-          <CheckIcon className="size-2 text-primary-foreground" strokeWidth={4} aria-hidden />
-        </span>
-      ) : null}
-    </span>
-  );
 }
 
 function canOperateThreads(
@@ -914,8 +889,6 @@ const SIDEBAR_AUTO_SCROLL: AutoScrollOptions = { threshold: { x: 0, y: 0.05 }, a
 
 const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
 
-const threadSearchResultId = (index: number) => `sidebar-thread-search-result-${index}`;
-
 // Continuations that outlive a render read the open thread from the router.
 function readRouteThreadKey(router: AnyRouter): string | null {
   const target = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
@@ -930,6 +903,7 @@ function readRouteThreadKey(router: AnyRouter): string | null {
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
   const gt = useGT();
   const messages = useMessages();
+  const orcaCopy = useOrcaProjectsCopy();
   const {
     projects,
     serverConfigs,
@@ -938,9 +912,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     providerEntriesByEnvironment,
     projectByKey,
     projectDisplayNameByKey,
-    projectGroupByScopeKey,
-    projectScopeItems: lookupProjectScopeItems,
   } = useSidebarLookups();
+  const { environments: environmentPresentationsList } = useEnvironments();
+  const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const startProjectClone = useAtomCommand(sourceControlEnvironment.startProjectClone, {
+    reportFailure: false,
+  });
+  const createThreadCommand = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const visitThreadCommand = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
+  const createNewProject = useNewProject();
+  const { openScratchProject } = useScratchProject();
   const delegatedUnderParent = useDelegatedUnderParent();
   const router = useRouter();
   const { isMobile, setOpenMobile, isIconRail, isTextHidden } = useSidebar();
@@ -1015,7 +996,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -1033,28 +1013,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const projectGroupsRef = useRef(projectGroups);
   const persistedProjectScopeKeys = useUiStateStore((store) => store.sidebarProjectScopeKeys);
   const setPersistedProjectScopeKeys = useUiStateStore((store) => store.setSidebarProjectScopeKeys);
-  const [projectScopeMenuState, dispatchProjectScopeMenu] = useReducer(
-    reduceSidebarProjectScopeMenuState,
-    { open: false, query: "" },
-  );
-  const projectScopeFilter = useComboboxFilter();
   const allProjectSnapshotsReady = useAllEnvironmentProjectSnapshotsReady();
   const allProjectConfigsReady = useAtomValue(environmentProjects.projectConfigsReadyAtom);
-  // Safari may click after Ctrl+click opens settings; suppress that selection until the picker reopens.
-  const suppressNextScopeChangeRef = useRef(false);
-  const highlightedProjectScopeKeyRef = useRef<string | null>(null);
   // Hold dropped rows until server placement is confirmed; block another pickup from replacing the hold.
   const [optimisticDrop, setOptimisticDrop] = useState<SidebarOptimisticDrop | null>(null);
-  const threadSearchInputRef = useRef<HTMLInputElement>(null);
-  const [threadSearchQuery, setThreadSearchQuery] = useState("");
-  const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
+  const activitySearchInputRef = useRef<HTMLInputElement>(null);
+  const [activitySearchQuery, setActivitySearchQuery] = useState("");
   const localLastVisitedAtById = useUiStateStore((store) => store.threadLastVisitedAtById);
+  const markThreadVisitedLocal = useUiStateStore((store) => store.markThreadVisited);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
   const [projectsSectionOpen, setProjectsSectionOpen] = useState<boolean>(() =>
     readSidebarProjectsSectionOpen(),
   );
-  const [attentionFilterActive, setAttentionFilterActive] = useState(false);
-  const [inlineSearchVisible, setInlineSearchVisible] = useState(false);
+  const [orcaPrefs, setOrcaPrefs] = useState<OrcaProjectsPrefs>(() => readOrcaProjectsPrefs());
+  const [activityViewActive, setActivityViewActive] = useState(false);
+  const [selectedAddProjectEnvId, setSelectedAddProjectEnvId] = useState<EnvironmentId | null>(null);
+  const [cloneDialogEnvId, setCloneDialogEnvId] = useState<EnvironmentId | null>(null);
+  const [createProjectDialogEnvId, setCreateProjectDialogEnvId] = useState<EnvironmentId | null>(null);
+  const [browseFolderDialogEnvId, setBrowseFolderDialogEnvId] = useState<EnvironmentId | null>(null);
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
@@ -1074,7 +1051,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const renamingOriginalTitleRef = useRef("");
   const settlingThreadKeysRef = useRef(new Set<string>());
   const threadListRef = useRef<HTMLUListElement | null>(null);
-  const searchResultsListRef = useRef<HTMLUListElement | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
@@ -1096,7 +1072,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   } | null>(null);
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
-  const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
   const routeThreadRef = resolveActiveThreadRouteRef(
     routeTarget,
     routeDraftThread,
@@ -1147,11 +1122,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             ? asLaunchingThread(thread)
             : thread,
         );
+  const filteredProjectThreads = filterSidebarProjectThreads(
+    listedThreads,
+    orcaPrefs,
+    localLastVisitedAtById,
+  );
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
       : scopedThreadKey(resolveListedAncestorThreadRef(routeThreadRef, threads));
-  const isSearchingThreads = threadSearchQuery.trim().length > 0;
   // The open draft's first send names its thread in place; a finalized draft reached by
   // navigation resolves through its redirect instead, and still reveals.
   const routeKeyInPlace = routeDraftThread?.promotedTo != null;
@@ -1164,19 +1143,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     reveal: routeReveal,
     routeKey: routeRowThreadKey,
     routeKeyInPlace,
-    isSearching: isSearchingThreads,
+    isSearching: false,
     scopedProjectKeys: chosenScopeProjectKeys,
     delegatedUnderParent,
     findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
   const projectScopeKey = projectScopeKeys.length === 0 ? null : projectScopeKeys.join("\n");
-  const toggleProjectScopeKey = (key: string) =>
-    setProjectScopeKeys(
-      projectScopeKeys.includes(key)
-        ? projectScopeKeys.filter((candidate) => candidate !== key)
-        : [...projectScopeKeys, key],
-    );
   // The widened scope outlives the reveal, so it is written back to the persisted
   // scope. Route changes arrive from history, links and the palette, and only this
   // component holds the project groups that decide a widening, so no single
@@ -1195,34 +1168,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const departRouteThread = (threadKey: string) => setDepartingThreadKey(threadKey);
   const stayOnRouteThread = (threadKey: string) =>
     setDepartingThreadKey((current) => (current === threadKey ? null : current));
-  const showProjectEnvironments = projectGroupsSpanEnvironments(projectGroups);
-  // Pinning from a row keeps rows in place while the menu is open.
-  const projectScopeItems = useOrderWhileOpen(
-    lookupProjectScopeItems,
-    (item) => item.value,
-    projectScopeMenuState.open,
-  );
-  const selectedProjectScopeItem =
-    projectScopeKeys.length > 1
-      ? null
-      : (projectScopeItems.find((item) => item.value === (projectScopeKeys[0] ?? "all")) ??
-        projectScopeItems[0]!);
-  const filteredProjectScopeItems = filterSidebarProjectScopeItems({
-    items: projectScopeItems,
-    query: projectScopeMenuState.query,
-    matches: (item, query) =>
-      projectScopeFilter.contains(item, query, (candidate) => candidate.label),
-  });
   const scopedProjectGroups = revealWidensScope ? [] : chosenProjectGroups;
-  const scopedProjectRefs = scopedProjectGroups.flatMap((project) => project.memberProjectRefs);
   const scopedProjectKeys = revealWidensScope ? null : chosenScopeProjectKeys;
-  const threadSearch = useThreadSearch(
-    connectedEnvironmentIds,
-    threadSearchQuery,
-    scopedProjectGroups.length === 0
-      ? {}
-      : { projectIds: scopedProjectRefs.map((projectRef) => projectRef.projectId) },
-  );
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const draftTerminalLabels = useDraftTerminalLabels();
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
@@ -1269,20 +1216,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const {
     canPinProjectGroup: canPinProject,
     setProjectGroupPinned,
-    toggleProjectGroupPin,
   } = useProjectPin();
-  const handleProjectSettings = useStableCallback(
-    (
-      event: ReactMouseEvent<HTMLElement> | ReactKeyboardEvent<HTMLInputElement>,
-      projectGroup: SidebarProjectSnapshot,
-    ) => {
-      event.preventDefault();
-      event.stopPropagation();
-      suppressNextScopeChangeRef.current = true;
-      dispatchProjectScopeMenu({ type: "project-settings-opened" });
-      openProjectSettings(projectGroup);
-    },
-  );
   const startThreadInProjectFolder = useStableCallback((group: SidebarProjectSnapshot) => {
     if (isMobile) setOpenMobile(false);
     void handleNewThread(scopeProjectRef(group.environmentId, group.id));
@@ -1376,7 +1310,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,
-    threads: listedThreads,
+    threads: filteredProjectThreads,
     delegatedUnderParent,
     routeRowThreadKey,
     departingThreadKey,
@@ -1390,79 +1324,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
   });
 
-  // Ranked across environments as the palette ranks them, so one
-  // environment's list does not sit above another's better matches; rows
-  // already shown keep their places while slower environments answer.
-  const threadByMatchKey =
-    threadSearch.matches.length === 0
-      ? null
-      : new Map(
-          searchableThreads.map((thread) => [
-            threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-            thread,
-          ]),
-        );
-  const rankedServerMatches =
-    threadByMatchKey === null
-      ? []
-      : rankMessageMatches(
-          threadSearch.matches,
-          (match) => {
-            const thread = threadByMatchKey.get(threadSearchMatchKey(match));
-            return thread ? threadSearchSubject(thread, null) : undefined;
-          },
-          foldSearchQuery(threadSearchQuery),
-          // oxlint-disable-next-line react/purity -- Recency ranking samples the clock when the search matches change; the compiler recomputes it only then.
-          Date.now(),
-          // A list filter, as on mobile: a pick would move rows unexplained.
-          { picks: false },
-        );
-  const serverMatchByKey = new Map(
-    rankedServerMatches.map((match) => [threadSearchMatchKey(match), match] as const),
-  );
-  const [shownMessageOrder, setShownMessageOrder] = useState<ShownOrder | null>(null);
-  const messageOrder = nextShownOrder(
-    shownMessageOrder,
-    threadSearch.query,
-    [...serverMatchByKey.keys()],
-    Number.POSITIVE_INFINITY,
-  );
-  if (messageOrder !== shownMessageOrder) setShownMessageOrder(messageOrder);
-  const { titleMatches: threadTitleResults, contentMatches: threadContentResults } =
-    searchSidebarThreads(searchableThreads, threadSearchQuery, new Set(messageOrder.keys));
-  const threadSearchResults = [...threadTitleResults, ...threadContentResults];
-  // Only rows listed for their messages show one, and open find on it.
-  const threadSearchMatchByKey = new Map(
-    threadContentResults.flatMap((thread) => {
-      const key = threadSearchMatchKey({
-        environmentId: thread.environmentId,
-        threadId: thread.id,
-      });
-      const match = serverMatchByKey.get(key);
-      return match ? [[key, match] as const] : [];
-    }),
-  );
-  const threadSearchResultKeys = threadSearchResults.map((thread) =>
-    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-  );
-
-  // The highlight follows its thread, so rows that arrive late do not move
-  // it under Enter; a new query starts at the top.
-  const activeSearchResultIndex = Math.max(
-    0,
-    searchHighlightKey === null ? 0 : threadSearchResultKeys.indexOf(searchHighlightKey),
-  );
-  const setActiveSearchResultIndex = (index: number | ((index: number) => number)) =>
-    setSearchHighlightKey(
-      threadSearchResultKeys[
-        typeof index === "function" ? index(activeSearchResultIndex) : index
-      ] ?? null,
-    );
-  const moveSearchHighlight = (step: 1 | -1) => {
-    const count = threadSearchResults.length;
-    setActiveSearchResultIndex((activeSearchResultIndex + step + count) % count);
-  };
-
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   // Read changing maps/sets through refs so streamed events preserve row callbacks.
   const threadByKeyRef = useRef(threadByKey);
@@ -1475,8 +1336,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     draftTerminalLabels,
   );
   // Draft rows sit above the threads, so jumps and traversal reach them first.
-  // Search hides them, so they drop out while it is open.
-  const listedDraftIds = isSearchingThreads ? EMPTY_DRAFT_IDS : draftIds;
+  const listedDraftIds = draftIds;
   const draftIdByRowKey = new Map<string, DraftId>(listedDraftIds.map((id) => [`draft:${id}`, id]));
   const orderedRowKeys = [...draftIdByRowKey.keys(), ...orderedThreadKeys];
   const routeDraftRowKey = `draft:${routeDraftIdForRows}`;
@@ -1535,47 +1395,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       setOpenMobile(false);
     }
     void router.navigate({ to: "/draft/$draftId", params: { draftId } });
-  };
-
-  const clearThreadSearch = () => {
-    setThreadSearchQuery("");
-    setSearchHighlightKey(null);
-  };
-  const selectThreadSearchResult = (thread: EnvironmentThreadShell) => {
-    const ref = scopeThreadRef(thread.environmentId, thread.id);
-    // A row listed for a message match opens find on it, as the palette does.
-    const match = threadSearchMatchByKey.get(
-      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-    );
-    const query = threadSearch.query;
-    clearThreadSearch();
-    navigateToThread(ref);
-    if (match) openThreadFindOnQuery(scopedThreadKey(ref), findForMessageMatch(match, query));
-  };
-  const handleThreadSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (event.key === "Escape" && isSearchingThreads) {
-      event.preventDefault();
-      event.stopPropagation();
-      clearThreadSearch();
-      return;
-    }
-    if (threadSearchResults.length === 0) return;
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      moveSearchHighlight(1);
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      moveSearchHighlight(-1);
-      return;
-    }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const result = threadSearchResults[activeSearchResultIndex];
-      if (result) selectThreadSearchResult(result);
-    }
   };
 
   // The ref write stops the compiler memoizing this, and every row receives it.
@@ -1811,8 +1630,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     });
   };
   const pointerOutsideThreadList = (point: { x: number; y: number }) => {
-    // Search results replace the thread list, so only one of them is mounted.
-    const bounds = (threadListRef.current ?? searchResultsListRef.current)?.getBoundingClientRect();
+    const bounds = threadListRef.current?.getBoundingClientRect();
     return bounds !== undefined && (point.x < bounds.left || point.x > bounds.right);
   };
   // The path out of the list often crosses dnd-kit's edge zone, which autoscrolls the sidebar.
@@ -1821,8 +1639,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (scroll && scroll.viewport.scrollTop !== scroll.top) scroll.viewport.scrollTop = scroll.top;
   };
   const moveThreadContextDrag = (point: { x: number; y: number }) => {
-    // Search results cannot reorder, so their context preview starts inside the list.
-    const contextDrag = searchResultsListRef.current !== null || pointerOutsideThreadList(point);
+    const contextDrag = pointerOutsideThreadList(point);
     setDragState((current) =>
       current === null || current.contextDrag === contextDrag
         ? current
@@ -2962,10 +2779,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       })();
     },
   );
-  const handleSearchResultContextMenu = useStableCallback(
-    (threadRef: ScopedThreadRef, position: { x: number; y: number }, source: ContextMenuSource) =>
-      handleThreadContextMenu(threadRef, position, source, true),
-  );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window keydown for thread navigation shortcuts using the current thread list
   useEffect(() => {
@@ -3027,110 +2840,567 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       )
     : null;
 
-  const handleNewThreadClick = (event?: ReactMouseEvent) => {
-    const scopedProjectRef = resolveScopedNewThreadProjectRef({
-      shiftKey: event?.shiftKey ?? false,
-      // The folder sidebar's header button always opens the picker.
-      scopedProjectGroups: boringSidebarEnabled ? [] : scopedProjectGroups,
-      viewed: newThreadContext.activeThread ?? newThreadContext.activeDraftThread,
-    });
-    if (scopedProjectRef) {
-      if (isMobile) setOpenMobile(false);
-      void handleNewThread(scopedProjectRef);
-      return;
-    }
-    if (
-      shouldCreateNewThreadInCurrentProject(
-        event?.shiftKey ?? false,
-        scopeGroups.length,
-        projectGroups.length,
-      )
-    ) {
-      if (isMobile) setOpenMobile(false);
-      // With no current or open project, such as when every project is archived, pick one.
-      void startNewThreadFromContext({
-        activeDraftThread: newThreadContext.activeDraftThread,
-        activeThread: newThreadContext.activeThread ?? undefined,
-        defaultProjectRef: newThreadContext.defaultProjectRef,
-        handleNewThread,
-      }).then((started) => {
-        if (!started) openCommandPalette({ open: "new-thread-in" });
-      });
-      return;
-    }
-    if (isMobile) setOpenMobile(false);
-    openCommandPalette({ open: "new-thread-in" });
-  };
-
-  const inboxAttention = summarizeSidebarInboxAttention(
-    [...pinnedThreads, ...activeThreads, ...workingThreads].map((thread) => {
-      const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const effectiveThread = {
-        ...thread,
-        lastVisitedAt: resolveThreadLastVisitedAt(
-          thread.lastVisitedAt,
-          localLastVisitedAtById[key],
-        ),
-      };
-      const status = resolveSidebarRowStatus(effectiveThread);
+  const orcaEnvironments = useMemo<readonly OrcaEnvironmentOption[]>(() => {
+    const list = environmentPresentationsList.map((env): OrcaEnvironmentOption => {
+      const isPrimary = env.entry.target._tag === "PrimaryConnectionTarget";
+      const platformOs = env.serverConfig?.environment.platform.os ?? null;
       return {
-        key,
-        status,
-        isUnread: status === "ready" && hasUnseenCompletion(effectiveThread),
+        environmentId: env.environmentId,
+        rawLabel: env.label,
+        displayLabel: formatLocalEnvironmentDisplayLabel({
+          rawLabel: env.label,
+          platformOs,
+          isPrimary,
+          isZh: orcaCopy.isZh,
+        }),
+        machine: resolveEnvironmentMachineKind(env.serverConfig),
+        isPrimary,
+        isConnected: canCreateProjectInEnvironment(env.connection.phase),
+        platformOs,
+        addProjectBaseDirectory: env.serverConfig?.settings.addProjectBaseDirectory ?? null,
+        newProjectsRoot: env.serverConfig?.newProjectsRoot ?? null,
+        ghqCloneLayout: env.serverConfig?.settings.ghqCloneLayout === true,
       };
-    }),
+    });
+    list.sort((left, right) => {
+      if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
+      if (left.isConnected !== right.isConnected) return left.isConnected ? -1 : 1;
+      return left.displayLabel.localeCompare(right.displayLabel);
+    });
+    return list;
+  }, [environmentPresentationsList, orcaCopy.isZh]);
+
+  const effectiveAddProjectEnvId =
+    selectedAddProjectEnvId ??
+    orcaEnvironments.find((env) => env.isConnected)?.environmentId ??
+    orcaEnvironments[0]?.environmentId ??
+    null;
+
+  const orcaActivityItems = useMemo<readonly OrcaActivityItem[]>(() => {
+    return listedThreads.map((thread) => {
+      const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const envProviders =
+        providerEntriesByEnvironment.get(thread.environmentId) ?? EMPTY_PROVIDER_ENTRIES;
+      const providerEntry =
+        envProviders.get(thread.modelSelection?.instanceId ?? thread.providerInstanceId) ?? null;
+      const projectName =
+        projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? "";
+      return buildOrcaActivityItem({
+        thread,
+        localLastVisitedAt: localLastVisitedAtById[key],
+        projectName,
+        providerDriverKind: providerEntry?.driverKind ?? null,
+        providerLabel: formatAgentBrandName(
+          providerEntry?.driverKind ?? thread.providerInstanceId,
+          providerEntry?.displayName,
+        ),
+      });
+    });
+  }, [listedThreads, localLastVisitedAtById, projectDisplayNameByKey, providerEntriesByEnvironment]);
+
+  const orcaActivityBadge = useMemo(() => {
+    const scopeFiltered = filterOrcaActivityItems(
+      orcaActivityItems,
+      { ...orcaPrefs, unreadOnly: false },
+      "",
+    );
+    return summarizeOrcaActivityBadge(scopeFiltered);
+  }, [orcaActivityItems, orcaPrefs]);
+
+  const agentOptionsByEnvironment = useMemo(() => {
+    const map = new Map<EnvironmentId, readonly OrcaWorkspaceAgentOption[]>();
+    for (const [envId, entries] of providerEntriesByEnvironment) {
+      const options: OrcaWorkspaceAgentOption[] = [];
+      for (const entry of entries.values()) {
+        if (!entry.enabled) continue;
+        const primaryModel = entry.models[0];
+        const modelSlug = primaryModel?.slug ?? "";
+        const modelLabel = primaryModel?.name ?? modelSlug;
+        options.push({
+          id: `${entry.instanceId}:${modelSlug}`,
+          providerInstanceId: entry.instanceId,
+          driverKind: entry.driverKind,
+          model: modelSlug,
+          displayName: entry.displayName,
+          modelLabel,
+          online: true,
+        });
+      }
+      map.set(envId as EnvironmentId, options);
+    }
+    return map;
+  }, [providerEntriesByEnvironment]);
+
+  const fallbackAgentOptions = useMemo<readonly OrcaWorkspaceAgentOption[]>(
+    () => [
+      {
+        id: "claudeAgent:claude-opus-4-6",
+        providerInstanceId: "claudeAgent",
+        driverKind: "claudeAgent",
+        model: "claude-opus-4-6",
+        displayName: "Claude Code",
+        modelLabel: "Claude Opus 4.6",
+        online: true,
+      },
+      {
+        id: "codex:gpt-5.4",
+        providerInstanceId: "codex",
+        driverKind: "codex",
+        model: "gpt-5.4",
+        displayName: "Codex",
+        modelLabel: "GPT-5.4",
+        online: true,
+      },
+      {
+        id: "antigravity:gemini-2.5-pro",
+        providerInstanceId: "antigravity",
+        driverKind: "antigravity",
+        model: "gemini-2.5-pro",
+        displayName: "Antigravity",
+        modelLabel: "Gemini 2.5 Pro",
+        online: true,
+      },
+      {
+        id: "omp:default",
+        providerInstanceId: "omp",
+        driverKind: "omp",
+        model: "default",
+        displayName: "oh-my-pi",
+        modelLabel: "Default",
+        online: true,
+      },
+    ],
+    [],
   );
 
-  const hasExpandedFolders =
-    projectFolders !== null && projectFolders.some((folder) => !folder.collapsed);
+  const handleUpdateOrcaPrefs = useStableCallback((patch: Partial<OrcaProjectsPrefs>) => {
+    setOrcaPrefs((prev) => {
+      const next: OrcaProjectsPrefs = { ...prev, ...patch };
+      writeOrcaProjectsPrefs(next);
+      return next;
+    });
+  });
 
-  const handleToggleProjectsOpen = () => {
+  const handleResetOrcaActivityFilters = useStableCallback(() => {
+    setActivitySearchQuery("");
+    handleUpdateOrcaPrefs({
+      unreadOnly: DEFAULT_ORCA_PROJECTS_PREFS.unreadOnly,
+      hideAutomationCreated: DEFAULT_ORCA_PROJECTS_PREFS.hideAutomationCreated,
+      hideCliCreated: DEFAULT_ORCA_PROJECTS_PREFS.hideCliCreated,
+    });
+  });
+
+  const handleToggleProjectsOpen = useStableCallback(() => {
     setProjectsSectionOpen((prev) => {
       const next = !prev;
       writeSidebarProjectsSectionOpen(next);
       return next;
     });
-  };
+  });
 
-  const handleCollapseOrExpandAllFolders = () => {
-    if (!projectFolders || projectFolders.length === 0) return;
-    const expandNext = !hasExpandedFolders;
-    for (const folder of projectFolders) {
-      setProjectExpanded(sidebarFolderExpansionKeys(folder.group), expandNext);
-    }
-  };
+  const canToggleAllProjects =
+    (projectFolders !== null && projectFolders.length > 0) || projectGroups.length > 0;
+  const allProjectsCollapsed =
+    projectFolders !== null && projectFolders.length > 0
+      ? areAllProjectsCollapsed(projectFolders)
+      : !projectsSectionOpen;
 
-  const handleToggleFolderGrouping = () => {
-    void updateClientSettings({ boringSidebarEnabled: !boringSidebarEnabled });
-  };
-
-  const handleManageProjects = () => {
-    if (isMobile) setOpenMobile(false);
-    void router.navigate({ to: "/settings/projects" });
-  };
-
-  const handleToggleInlineSearch = () => {
-    setInlineSearchVisible((prev) => {
-      const next = !prev;
-      if (next) {
-        requestAnimationFrame(() => threadSearchInputRef.current?.focus());
-      } else {
-        clearThreadSearch();
+  const handleToggleCollapseAllProjects = useStableCallback(() => {
+    if (projectFolders !== null && projectFolders.length > 0) {
+      const nextExpanded = computeCollapseAllProjectsNextExpanded(projectFolders);
+      if (nextExpanded && !projectsSectionOpen) {
+        setProjectsSectionOpen(true);
+        writeSidebarProjectsSectionOpen(true);
       }
-      return next;
-    });
-  };
+      for (const folder of projectFolders) {
+        setProjectExpanded(sidebarFolderExpansionKeys(folder.group), nextExpanded);
+      }
+      return;
+    }
+    if (projectGroups.length > 0) {
+      const nextExpanded = !projectsSectionOpen;
+      setProjectsSectionOpen(nextExpanded);
+      writeSidebarProjectsSectionOpen(nextExpanded);
+      for (const group of projectGroups) {
+        setProjectExpanded(sidebarFolderExpansionKeys(group), nextExpanded);
+      }
+      return;
+    }
+    const nextExpanded = !projectsSectionOpen;
+    setProjectsSectionOpen(nextExpanded);
+    writeSidebarProjectsSectionOpen(nextExpanded);
+  });
 
-  const handleToggleAttentionFilter = () => {
-    setAttentionFilterActive((prev) => {
+  const handleToggleActivityView = useStableCallback(() => {
+    setActivityViewActive((prev) => {
       const next = !prev;
       if (next && !projectsSectionOpen) {
         setProjectsSectionOpen(true);
         writeSidebarProjectsSectionOpen(true);
       }
+      if (next && orcaPrefs.showSearch) {
+        requestAnimationFrame(() => activitySearchInputRef.current?.focus());
+      }
       return next;
     });
-  };
+  });
+
+  const handleMarkItemRead = useStableCallback((item: OrcaActivityItem) => {
+    const nowIso = new Date().toISOString();
+    markThreadVisitedLocal(item.key, nowIso);
+    void visitThreadCommand({
+      environmentId: item.thread.environmentId,
+      input: { threadId: item.thread.id, visitedAt: nowIso },
+    });
+  });
+
+  const handleMarkAllActivityRead = useStableCallback(() => {
+    const unreadItems = orcaActivityItems.filter((item) => item.isUnread);
+    if (unreadItems.length === 0) return;
+    const nowIso = new Date().toISOString();
+    for (const item of unreadItems) {
+      markThreadVisitedLocal(item.key, nowIso);
+      void visitThreadCommand({
+        environmentId: item.thread.environmentId,
+        input: { threadId: item.thread.id, visitedAt: nowIso },
+      });
+    }
+    toastManager.add({
+      type: "success",
+      title: orcaCopy.markedAllReadToast(unreadItems.length),
+    });
+  });
+
+  const handleClearCompletedActivities = useStableCallback(() => {
+    const clearableKeys = orcaActivityItems
+      .filter((item) => item.isCompleted && item.thread.settledOverride !== "settled")
+      .map((item) => item.key);
+    if (clearableKeys.length === 0) return;
+    settleThreads(clearableKeys);
+    toastManager.add({
+      type: "success",
+      title: orcaCopy.clearedCompletedToast(clearableKeys.length),
+    });
+  });
+
+  const addLocalFolderPathAsProject = useStableCallback(
+    async (input: { readonly environmentId: EnvironmentId; readonly path: string }) => {
+      const cwd = input.path.trim();
+      if (!cwd) return false;
+      const existing = findProjectByPath(
+        projects.filter((candidate) => candidate.environmentId === input.environmentId),
+        cwd,
+      );
+      if (existing) {
+        if (isMobile) setOpenMobile(false);
+        await handleNewThread(scopeProjectRef(existing.environmentId, existing.id));
+        return true;
+      }
+      if (!readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: gt("Cannot add project"),
+            description: gt("This connection cannot add projects."),
+          }),
+        );
+        return false;
+      }
+      const projectId = newProjectId();
+      const result = await createProject({
+        environmentId: input.environmentId,
+        input: {
+          projectId,
+          title: inferProjectTitleFromPath(cwd),
+          workspaceRoot: cwd,
+          createWorkspaceRootIfMissing: true,
+          defaultModelSelection: null,
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: gt("Failed to add project"),
+              description:
+                thrownErrorMessage(squashAtomCommandFailure(result), m) ?? gt("An error occurred."),
+            }),
+          );
+        }
+        return false;
+      }
+      if (isMobile) setOpenMobile(false);
+      await handleNewThread(scopeProjectRef(input.environmentId, projectId));
+      return true;
+    },
+  );
+
+  const handleBrowseFolder = useStableCallback((environmentId: EnvironmentId | null) => {
+    const targetEnvId = environmentId ?? effectiveAddProjectEnvId;
+    if (!targetEnvId) {
+      toastManager.add({ type: "error", title: orcaCopy.environmentUnavailable });
+      return;
+    }
+    const targetEnv = orcaEnvironments.find((env) => env.environmentId === targetEnvId) ?? null;
+    const api = readLocalApi();
+    if (isElectron && api && targetEnv?.isPrimary) {
+      void api.dialogs
+        .pickFolder(
+          targetEnv.addProjectBaseDirectory
+            ? { initialPath: targetEnv.addProjectBaseDirectory }
+            : undefined,
+        )
+        .then((picked) => {
+          if (!picked) return;
+          return addLocalFolderPathAsProject({ environmentId: targetEnvId, path: picked });
+        });
+      return;
+    }
+    setBrowseFolderDialogEnvId(targetEnvId);
+  });
+
+  const handleOpenCloneDialog = useStableCallback((environmentId: EnvironmentId | null) => {
+    const targetEnvId = environmentId ?? effectiveAddProjectEnvId;
+    if (!targetEnvId) {
+      toastManager.add({ type: "error", title: orcaCopy.environmentUnavailable });
+      return;
+    }
+    setCloneDialogEnvId(targetEnvId);
+  });
+
+  const handleOpenCreateProjectDialog = useStableCallback((environmentId: EnvironmentId | null) => {
+    const targetEnvId = environmentId ?? effectiveAddProjectEnvId;
+    if (!targetEnvId) {
+      toastManager.add({ type: "error", title: orcaCopy.environmentUnavailable });
+      return;
+    }
+    setCreateProjectDialogEnvId(targetEnvId);
+  });
+
+  const handlePickParentFolder = useStableCallback(async (): Promise<string | null> => {
+    const api = readLocalApi();
+    if (!isElectron || !api) return null;
+    return api.dialogs.pickFolder().catch(() => null);
+  });
+
+  const handleSubmitCloneProject = useStableCallback(
+    async (input: {
+      readonly environmentId: EnvironmentId;
+      readonly remoteUrl: string;
+      readonly destinationPath: string;
+    }): Promise<boolean> => {
+      if (
+        !readEnvironmentScope(input.environmentId, AuthSourceControlWriteScope) ||
+        !readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)
+      ) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: gt("Clone unavailable"),
+            description: gt(
+              "This connection needs permission to write source control and add projects.",
+            ),
+          }),
+        );
+        return false;
+      }
+      const projectId = newProjectId();
+      const result = await startProjectClone({
+        environmentId: input.environmentId,
+        input: {
+          projectId,
+          title: inferProjectTitleFromPath(input.destinationPath),
+          createdAt: new Date().toISOString(),
+          remoteUrl: input.remoteUrl,
+          destinationPath: input.destinationPath,
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: gt("Clone failed"),
+              description:
+                thrownErrorMessage(squashAtomCommandFailure(result), m) ?? gt("An error occurred."),
+            }),
+          );
+        }
+        return false;
+      }
+      if (isMobile) setOpenMobile(false);
+      void handleNewThread(scopeProjectRef(input.environmentId, projectId));
+      return true;
+    },
+  );
+
+  const handleSubmitCreateProject = useStableCallback(
+    async (input: {
+      readonly environmentId: EnvironmentId;
+      readonly name: string;
+      readonly parentDir: string | null;
+    }): Promise<boolean> => {
+      const targetEnv =
+        orcaEnvironments.find((env) => env.environmentId === input.environmentId) ?? null;
+      const defaultRoot = targetEnv?.newProjectsRoot ?? null;
+      const customParent = input.parentDir?.trim() ?? "";
+      if (defaultRoot && (!customParent || customParent === defaultRoot)) {
+        return createNewProject({
+          environmentId: input.environmentId,
+          name: input.name,
+          publishTo: null,
+        });
+      }
+      const sep = customParent.includes("\\") ? "\\" : "/";
+      const fullPath =
+        customParent.length > 0
+          ? `${customParent.replace(/[\\/]+$/, "")}${sep}${input.name}`
+          : input.name;
+      return addLocalFolderPathAsProject({
+        environmentId: input.environmentId,
+        path: fullPath,
+      });
+    },
+  );
+
+  const handleOpenCreateWorkspace = useStableCallback(() => {
+    setCreateWorkspaceOpen(true);
+  });
+
+  const handleOpenProviderSettings = useStableCallback(() => {
+    if (isMobile) setOpenMobile(false);
+    void router.navigate({ to: "/settings/providers" });
+  });
+
+  const handleSubmitCreateWorkspace = useStableCallback(
+    async (
+      payload: CreateWorkspacePayload,
+      resolvedAgent: OrcaWorkspaceAgentOption | null,
+    ): Promise<boolean> => {
+      const targetEnvId = payload.environmentId as EnvironmentId;
+      let targetProjectRef: ScopedProjectRef | null = null;
+      let fallbackTitle = payload.workspaceName ?? "New Workspace";
+
+      if (payload.isScratchProject) {
+        const scratch = await openScratchProject(targetEnvId);
+        if (!scratch) return false;
+        targetProjectRef = scopeProjectRef(scratch.environmentId, scratch.id);
+        fallbackTitle = payload.workspaceName ?? scratch.title;
+      } else {
+        const group =
+          projectGroups.find((candidate) => candidate.projectKey === payload.projectKey) ?? null;
+        if (!group) return false;
+        const memberOnEnv = group.memberProjects.find(
+          (member) => member.environmentId === targetEnvId,
+        );
+        targetProjectRef = memberOnEnv
+          ? scopeProjectRef(memberOnEnv.environmentId, memberOnEnv.id)
+          : scopeProjectRef(group.environmentId, group.id);
+        fallbackTitle = payload.workspaceName ?? group.displayName;
+      }
+
+      const explicitModelSelection =
+        resolvedAgent && resolvedAgent.model.length > 0
+          ? createModelSelection(
+              ProviderInstanceId.make(resolvedAgent.providerInstanceId),
+              resolvedAgent.model,
+            )
+          : null;
+
+      // Custom workspace title or "Create more" batch flow materializes a named server thread directly.
+      if (payload.workspaceName !== null || payload.createMore) {
+        const envProviders =
+          providerEntriesByEnvironment.get(targetProjectRef.environmentId) ?? EMPTY_PROVIDER_ENTRIES;
+        const firstProvider = [...envProviders.values()].find((entry) => entry.enabled) ?? null;
+        const fallbackModelSelection =
+          explicitModelSelection ??
+          (firstProvider && firstProvider.models[0]
+            ? createModelSelection(
+                ProviderInstanceId.make(firstProvider.instanceId),
+                firstProvider.models[0].slug,
+              )
+            : createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-opus-4-6"));
+
+        const threadId = newThreadId();
+        const created = await createThreadCommand({
+          environmentId: targetProjectRef.environmentId,
+          input: {
+            threadId,
+            projectId: targetProjectRef.projectId,
+            title: payload.workspaceName ?? fallbackTitle,
+            modelSelection: fallbackModelSelection,
+            runtimeMode: DEFAULT_RUNTIME_MODE,
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            branch: payload.branch,
+            worktreePath: null,
+          },
+        });
+        if (created._tag === "Failure") {
+          if (!isAtomCommandInterrupted(created)) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: gt("Could not create thread"),
+                description:
+                  thrownErrorMessage(squashAtomCommandFailure(created), m) ??
+                  gt("An error occurred."),
+              }),
+            );
+          }
+          return false;
+        }
+        const createdThreadRef = scopeThreadRef(targetProjectRef.environmentId, threadId);
+        if (payload.initialPrompt) {
+          useComposerDraftStore.getState().setPrompt(createdThreadRef, payload.initialPrompt);
+        }
+        if (payload.createMore) {
+          toastManager.add({
+            type: "success",
+            title: orcaCopy.workspaceCreatedToast(payload.workspaceName ?? fallbackTitle),
+          });
+          return true;
+        }
+        if (isMobile) setOpenMobile(false);
+        void navigateToThread(createdThreadRef);
+        return true;
+      }
+
+      const opened = await handleNewThread(targetProjectRef, {
+        envMode: payload.envMode,
+        branch: payload.branch,
+        ...(payload.initialPrompt ? { prompt: payload.initialPrompt } : {}),
+      });
+      if (opened && explicitModelSelection) {
+        useComposerDraftStore
+          .getState()
+          .setModelSelection(opened.draftId, explicitModelSelection, { replaceOptions: true });
+      }
+      if (isMobile) setOpenMobile(false);
+      return opened !== null;
+    },
+  );
+
+  // Global Orca sidebar shortcuts: `Ctrl+Shift+H` (collapse/expand all projects) & `Ctrl+N` (Create workspace).
+  // Registered in the capture phase ahead of bubble-phase global commands (such as `chat.new` / `composer.host`)
+  // so `Ctrl+N` deterministically opens `OrcaCreateWorkspaceDialog` instead of T3's command-dialog,
+  // while still yielding when focus is in an editable field or when the command palette / model picker is open.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to capture-phase shortcut dispatcher for Orca sidebar shortcuts
+  useEffect(() => {
+    const onOrcaShortcutKeyDown = createOrcaSidebarShortcutHandler({
+      isCommandPaletteOpen,
+      isModelPickerOpen,
+      onToggleCollapseAllProjects: handleToggleCollapseAllProjects,
+      onOpenCreateWorkspace: handleOpenCreateWorkspace,
+    });
+    return registerCommands(
+      {},
+      {
+        capture: true,
+        onKeyDown: onOrcaShortcutKeyDown,
+      },
+    );
+  }, [handleOpenCreateWorkspace, handleToggleCollapseAllProjects]);
 
   const handleLocateCurrentThread = useStableCallback(() => {
     if (!routeRowThreadKey) {
@@ -3144,11 +3414,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       setProjectsSectionOpen(true);
       writeSidebarProjectsSectionOpen(true);
     }
-    if (attentionFilterActive) {
-      setAttentionFilterActive(false);
-    }
-    if (isSearchingThreads) {
-      clearThreadSearch();
+    if (activityViewActive) {
+      setActivityViewActive(false);
     }
     const targetSection = sectionByThreadKey.get(routeRowThreadKey);
     if (targetSection === "working" && !workingShelfExpanded) toggleWorkingShelf();
@@ -3185,12 +3452,44 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     [handleLocateCurrentThread],
   );
 
-  const newThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.new") ??
-    (shouldCreateNewThreadInCurrentProject(false, scopeGroups.length, projectGroups.length)
-      ? shortcutLabelForCommand(keybindings, "chat.newLocal")
-      : undefined);
-  const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- connects Workspace Board lane '+' buttons to OrcaCreateWorkspaceDialog
+  useEffect(
+    () => subscribeOpenCreateWorkspace(handleOpenCreateWorkspace),
+    [handleOpenCreateWorkspace],
+  );
+
+  const defaultCreateWorkspaceProjectKey = useMemo(() => {
+    const activeThread = newThreadContext.activeThread ?? newThreadContext.activeDraftThread;
+    if (activeThread) {
+      const matched = projectGroups.find((group) =>
+        group.memberProjectRefs.some(
+          (ref) =>
+            ref.environmentId === activeThread.environmentId &&
+            ref.projectId === activeThread.projectId,
+        ),
+      );
+      if (matched) return matched.projectKey;
+    }
+    if (newThreadContext.defaultProjectRef) {
+      const matched = projectGroups.find((group) =>
+        group.memberProjectRefs.some(
+          (ref) =>
+            ref.environmentId === newThreadContext.defaultProjectRef?.environmentId &&
+            ref.projectId === newThreadContext.defaultProjectRef?.projectId,
+        ),
+      );
+      if (matched) return matched.projectKey;
+    }
+    return projectGroups[0]?.projectKey ?? null;
+  }, [newThreadContext.activeDraftThread, newThreadContext.activeThread, newThreadContext.defaultProjectRef, projectGroups]);
+
+  const cloneDialogEnv =
+    orcaEnvironments.find((env) => env.environmentId === cloneDialogEnvId) ?? null;
+  const createProjectDialogEnv =
+    orcaEnvironments.find((env) => env.environmentId === createProjectDialogEnvId) ?? null;
+  const browseFolderDialogEnv =
+    orcaEnvironments.find((env) => env.environmentId === browseFolderDialogEnvId) ?? null;
+
   return (
     <SidebarFolderDrop>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -3199,255 +3498,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className={cn("z-[1]", railCompact && "px-1.5")}>
-            <PrismuxSidebarQuickNav routeThreadRef={routeThreadRef} />
-            <SidebarThreadHeader
-              hasProjects={projectGroups.length > 0}
+            <PrismuxSidebarQuickNav
+              routeThreadRef={routeThreadRef}
+              showSearch={orcaPrefs.showSearch}
+            />
+            <OrcaProjectsHeader
               projectsOpen={projectsSectionOpen}
               onToggleProjectsOpen={handleToggleProjectsOpen}
-              attentionCount={inboxAttention.totalCount}
-              approvalCount={inboxAttention.approvalCount}
-              attentionFilterActive={attentionFilterActive}
-              onToggleAttentionFilter={handleToggleAttentionFilter}
-              folderGroupingEnabled={boringSidebarEnabled}
-              hasExpandedFolders={hasExpandedFolders}
-              hasFolders={projectFolders !== null && projectFolders.length > 0}
-              onToggleFolderGrouping={handleToggleFolderGrouping}
-              onCollapseOrExpandAllFolders={handleCollapseOrExpandAllFolders}
-              onManageProjects={handleManageProjects}
-              inlineSearchVisible={inlineSearchVisible}
-              onToggleInlineSearch={handleToggleInlineSearch}
-              projectScope={
-                <Combobox
-                  items={projectScopeItems}
-                  filteredItems={filteredProjectScopeItems}
-                  autoHighlight
-                  itemToStringLabel={(item) => item.label}
-                  isItemEqualToValue={(a, b) => a.value === b.value}
-                  open={projectScopeMenuState.open}
-                  onOpenChange={(open, eventDetails) => {
-                    if (eventDetails.isCanceled) return;
-                    if (open) suppressNextScopeChangeRef.current = false;
-                    dispatchProjectScopeMenu({ type: "open-changed", open });
-                  }}
-                  onItemHighlighted={(item) => {
-                    highlightedProjectScopeKeyRef.current = item?.value ?? null;
-                  }}
-                  value={selectedProjectScopeItem}
-                  onValueChange={(item, eventDetails) => {
-                    if (suppressNextScopeChangeRef.current) {
-                      suppressNextScopeChangeRef.current = false;
-                      return;
-                    }
-                    if (!item) return;
-                    if (item.value === "all") {
-                      setProjectScopeKeys([]);
-                    } else if (
-                      eventDetails.event instanceof MouseEvent &&
-                      eventDetails.event.shiftKey
-                    ) {
-                      // Canceling skips Base UI's commit, which would freeze the search query, and its close.
-                      eventDetails.cancel();
-                      toggleProjectScopeKey(item.value);
-                    } else {
-                      setProjectScopeKeys([item.value]);
-                    }
-                  }}
-                >
-                  <ComboboxTrigger
-                    render={
-                      <SidebarHeaderIconButton
-                        label={
-                          scopedProjectGroups.length > 0
-                            ? gt("Filter threads by project: {projects}", {
-                                projects: scopedProjectGroups
-                                  .map((project) => project.displayName)
-                                  .join(", "),
-                              })
-                            : gt("Filter threads by project")
-                        }
-                      />
-                    }
-                  >
-                    {scopedProjectGroups.length > 1 ? (
-                      <span className="flex shrink-0">
-                        {scopedProjectGroups.slice(0, 2).map((project, index) => (
-                          <span
-                            key={project.projectKey}
-                            className={
-                              index === 0
-                                ? "flex"
-                                : "-ml-1 flex rounded-[25%] bg-sidebar ring-2 ring-sidebar"
-                            }
-                          >
-                            <ProjectFavicon project={project} className="size-3.5" />
-                          </span>
-                        ))}
-                      </span>
-                    ) : scopedProjectGroups[0] ? (
-                      <span className="flex shrink-0">
-                        <ProjectFavicon project={scopedProjectGroups[0]} className="size-4" />
-                      </span>
-                    ) : (
-                      <SlidersHorizontalIcon className="size-3.5" />
-                    )}
-                  </ComboboxTrigger>
-                  {/* Refocusing the trigger after a pointer close shows its focus ring and opens its tooltip. */}
-                  <ComboboxPopup
-                    align="start"
-                    collisionAvoidance={{ side: "flip", align: "shift" }}
-                    className="w-[min(18rem,var(--available-width))] overflow-hidden"
-                    finalFocus={(closeType) => closeType === "keyboard"}
-                  >
-                    <ComboboxSearchInput
-                      aria-label={gt("Search projects")}
-                      placeholder={gt("Search projects...")}
-                      value={projectScopeMenuState.query}
-                      onKeyDown={(event) => {
-                        if (
-                          event.defaultPrevented ||
-                          event.nativeEvent.isComposing ||
-                          event.keyCode === 229
-                        ) {
-                          return;
-                        }
-                        const scopeKey = highlightedProjectScopeKeyRef.current;
-                        const project = scopeKey ? projectGroupByScopeKey.get(scopeKey) : null;
-                        // The thread pin shortcut pins the highlighted project here.
-                        if (
-                          project &&
-                          canPinProject(project) &&
-                          isProjectPinShortcut(event, keybindings)
-                        ) {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          toggleProjectGroupPin(project);
-                          return;
-                        }
-                        if (event.ctrlKey || event.altKey || event.metaKey) return;
-                        if (event.shiftKey && event.key === "Enter") {
-                          if (!project) return;
-                          event.preventDefault();
-                          toggleProjectScopeKey(project.projectKey);
-                          return;
-                        }
-                        if (
-                          event.key !== "ContextMenu" &&
-                          !(event.shiftKey && event.key === "F10")
-                        ) {
-                          return;
-                        }
-                        if (project) handleProjectSettings(event, project);
-                      }}
-                      onChange={(event) =>
-                        dispatchProjectScopeMenu({
-                          type: "query-changed",
-                          query: event.target.value,
-                        })
-                      }
-                    />
-                    <ComboboxEmpty>
-                      <T>No matching projects.</T>
-                    </ComboboxEmpty>
-                    <ComboboxList aria-multiselectable>
-                      {(item: (typeof projectScopeItems)[number]) => {
-                        const project = projectGroupByScopeKey.get(item.value) ?? null;
-                        const isSelected = project
-                          ? projectScopeKeys.includes(item.value)
-                          : projectScopeKeys.length === 0;
-                        return (
-                          <ComboboxItem
-                            key={item.value}
-                            hideIndicator
-                            value={item}
-                            aria-selected={isSelected}
-                            // The icon badge marks selection; Base UI's single value would shade one row.
-                            data-selected={undefined}
-                            onContextMenu={(event) => {
-                              if (project) handleProjectSettings(event, project);
-                            }}
-                          >
-                            <ProjectScopeRowIcon isSelected={isSelected}>
-                              {project ? (
-                                <ProjectFavicon project={project} className="size-4 shrink-0" />
-                              ) : (
-                                <FolderIcon className="size-4 shrink-0" />
-                              )}
-                            </ProjectScopeRowIcon>
-                            <span className="min-w-0 truncate text-sm">{item.label}</span>
-                            {project && showProjectEnvironments ? (
-                              <ProjectEnvironmentBadge
-                                group={project}
-                                primaryEnvironmentId={primaryEnvironmentId}
-                                machineByEnvironmentId={environmentMachineById}
-                              />
-                            ) : null}
-                            {project ? (
-                              <ProjectRowActions
-                                pin={
-                                  canPinProject(project) ? (
-                                    <ProjectPinButton
-                                      name={project.displayName}
-                                      pinned={project.pinned}
-                                      shortcutLabel={shortcutLabelForCommand(
-                                        keybindings,
-                                        "thread.pin",
-                                      )}
-                                      onToggle={() => toggleProjectGroupPin(project)}
-                                    />
-                                  ) : null
-                                }
-                                settings={
-                                  <Button
-                                    size="icon-xs"
-                                    variant="ghost-muted"
-                                    tabIndex={-1}
-                                    aria-hidden="true"
-                                    title={gt("Project settings for {project}", {
-                                      project: project.displayName,
-                                    })}
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                    onClick={(event) => {
-                                      void handleProjectSettings(event, project);
-                                    }}
-                                  >
-                                    <SettingsIcon className="size-3.5" />
-                                  </Button>
-                                }
-                              />
-                            ) : (
-                              // Keeps "All projects" as tall as the project rows.
-                              <span className="ml-auto size-7 shrink-0 sm:size-6" />
-                            )}
-                          </ComboboxItem>
-                        );
-                      }}
-                    </ComboboxList>
-                  </ComboboxPopup>
-                </Combobox>
-              }
-              onNewProject={openAddProjectCommandPalette}
-              onNewThread={handleNewThreadClick}
-              newThreadDisabled={projects.length === 0}
-              newThreadShortcutLabel={newThreadShortcutLabel}
-              newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
-              showNewThreadInProjectHint={
-                !shouldCreateNewThreadInCurrentProject(
-                  false,
-                  scopeGroups.length,
-                  projectGroups.length,
-                )
-              }
-              searchInputRef={threadSearchInputRef}
-              searchQuery={threadSearchQuery}
-              onSearchQueryChange={(value) => {
-                setThreadSearchQuery(value);
-                setSearchHighlightKey(null);
-              }}
-              onSearchKeyDown={handleThreadSearchKeyDown}
-              isSearching={isSearchingThreads}
-              searchResultCount={threadSearchResults.length}
-              activeSearchResultIndex={activeSearchResultIndex}
-              onClearSearch={clearThreadSearch}
+              canToggleAllProjects={canToggleAllProjects}
+              allProjectsCollapsed={allProjectsCollapsed}
+              onToggleCollapseAllProjects={handleToggleCollapseAllProjects}
+              activityViewActive={activityViewActive}
+              onToggleActivityView={handleToggleActivityView}
+              activityBadge={orcaActivityBadge}
+              prefs={orcaPrefs}
+              onUpdatePrefs={handleUpdateOrcaPrefs}
+              onMarkAllRead={handleMarkAllActivityRead}
+              onClearCompleted={handleClearCompletedActivities}
+              environments={orcaEnvironments}
+              selectedAddProjectEnvId={effectiveAddProjectEnvId}
+              onSelectAddProjectEnvId={setSelectedAddProjectEnvId}
+              onBrowseFolder={handleBrowseFolder}
+              onOpenCloneDialog={handleOpenCloneDialog}
+              onOpenCreateProjectDialog={handleOpenCreateProjectDialog}
+              onOpenCreateWorkspace={handleOpenCreateWorkspace}
             />
           </SidebarGroup>
         }
@@ -3479,9 +3553,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               >
                 {(() => {
                   const railCandidates = [...pinnedThreads, ...activeThreads, ...workingThreads];
-                  const railThreads = attentionFilterActive
+                  const activeAttentionKeys = new Set(
+                    orcaActivityItems
+                      .filter(
+                        (item) =>
+                          item.bucket === "attention" || item.bucket === "working" || item.isUnread,
+                      )
+                      .map((item) => item.key),
+                  );
+                  const railThreads = activityViewActive
                     ? railCandidates.filter((thread) =>
-                        inboxAttention.attentionKeys.has(threadShellKey(thread)),
+                        activeAttentionKeys.has(threadShellKey(thread)),
                       )
                     : railCandidates;
                   return railThreads.map((thread) => {
@@ -3562,115 +3644,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 })()}
               </ul>
             </TooltipProvider>
+          ) : activityViewActive ? (
+            projectsSectionOpen ? (
+              <OrcaActivityView
+                items={orcaActivityItems}
+                prefs={orcaPrefs}
+                query={activitySearchQuery}
+                onQueryChange={setActivitySearchQuery}
+                searchInputRef={activitySearchInputRef}
+                activeThreadKey={routeRowThreadKey}
+                onSelectThread={(threadRef) => {
+                  void navigateToThread(threadRef);
+                }}
+                onMarkItemRead={handleMarkItemRead}
+                onResetFilters={handleResetOrcaActivityFilters}
+              />
+            ) : null
           ) : (
             <>
-          {isSearchingThreads ? (
-            threadSearchResults.length > 0 ? (
-              <TooltipProvider
-                key="sidebar-thread-search-tooltips-150"
-                delay={150}
-                closeDelay={0}
-                timeout={400}
-              >
-                <DndContext
-                  sensors={dndSensors}
-                  autoScroll={false}
-                  onDragStart={(event) => {
-                    contextDragKeyRef.current = String(event.active.id);
-                  }}
-                >
-                  <ul
-                    ref={searchResultsListRef}
-                    id="sidebar-thread-search-results"
-                    role="listbox"
-                    aria-label={gt("Thread search results")}
-                    className="flex flex-col gap-px"
-                  >
-                    {threadSearchResults.map((thread, index) => {
-                      const threadKey = scopedThreadKey(
-                        scopeThreadRef(thread.environmentId, thread.id),
-                      );
-                      return (
-                        <SidebarSearchResultRow
-                          isSettled={settledThreadKeys.has(threadKey)}
-                          key={threadKey}
-                          thread={thread}
-                          project={
-                            projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
-                          }
-                          projectDisplayName={
-                            projectDisplayNameByKey.get(
-                              `${thread.environmentId}:${thread.projectId}`,
-                            ) ?? null
-                          }
-                          environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
-                          environmentMachine={
-                            environmentMachineById.get(thread.environmentId) ?? "server"
-                          }
-                          providerEntryByInstanceId={
-                            providerEntriesByEnvironment.get(thread.environmentId) ??
-                            EMPTY_PROVIDER_ENTRIES
-                          }
-                          isHighlighted={activeSearchResultIndex === index}
-                          isRouteActive={routeRowThreadKey === threadKey}
-                          resultId={threadSearchResultId(index)}
-                          searchMatch={
-                            threadSearchMatchByKey.get(
-                              threadSearchMatchKey({
-                                environmentId: thread.environmentId,
-                                threadId: thread.id,
-                              }),
-                            ) ?? null
-                          }
-                          searchQuery={threadSearchQuery}
-                          searchMatchQuery={threadSearch.query}
-                          onHighlight={() => setActiveSearchResultIndex(index)}
-                          onSelect={() => selectThreadSearchResult(thread)}
-                          onContextMenu={handleSearchResultContextMenu}
-                          onFileDropThreads={handleThreadFileDrop}
-                        />
-                      );
-                    })}
-                  </ul>
-                </DndContext>
-              </TooltipProvider>
-            ) : (
-              <p
-                role="status"
-                className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
-              >
-                {threadSearch.isPending
-                  ? gt("Searching thread messages…")
-                  : threadSearch.failed
-                    ? gt("Couldn't search thread messages")
-                    : gt("No threads found")}
-              </p>
-            )
-          ) : null}
-          {/* A scope can hide every active thread; say so even when its project still has settled ones. */}
-          {!isSearchingThreads &&
-          projectsSectionOpen &&
-          attentionFilterActive &&
-          inboxAttention.totalCount === 0 ? (
-            <div
-              data-testid="prismux-sidebar-attention-empty"
-              className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/75"
-            >
-              <span>
-                <T>All caught up — no pending approvals or unread threads</T>
-              </span>
-              <button
-                type="button"
-                onClick={handleToggleAttentionFilter}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-              >
-                <T>Show all threads</T>
-              </button>
-            </div>
-          ) : null}
-          {!isSearchingThreads &&
-          projectsSectionOpen &&
-          !attentionFilterActive &&
+          {projectsSectionOpen &&
           !hasProjectFolders &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
@@ -3687,7 +3679,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   </span>
                   <button
                     type="button"
-                    onClick={openAddProjectCommandPalette}
+                    onClick={() => handleBrowseFolder(effectiveAddProjectEnvId)}
                     className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
                     <PlusIcon className="-mx-0.5 size-3" />
@@ -3722,9 +3714,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               )}
             </div>
           ) : null}
-          {!isSearchingThreads &&
-          projectsSectionOpen &&
-          (!attentionFilterActive || inboxAttention.totalCount > 0) ? (
+          {projectsSectionOpen ? (
             <TooltipProvider
               key="sidebar-thread-tooltips-150"
               delay={150}
@@ -3743,12 +3733,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
                   <ul
                     ref={attachTreeRef}
+                    data-orca-compact={orcaPrefs.compactMode ? "true" : undefined}
                     // Presentation flattens VoiceOver's list interaction boundary while preserving descendant
                     // controls.
                     role="presentation"
                     className={cn(
                       "relative flex flex-col gap-px",
                       sidebarListItems.length > 0 && "flex-1",
+                      orcaPrefs.compactMode &&
+                        "[&_[data-sidebar-row]]:min-h-7 [&_[data-sidebar-row]]:py-0.5",
                       actionSweep !== null && "**:pointer-events-none",
                       // Projected rows (two boundary labels, two hints) extend the scroll range; a range that
                       // shrinks as the target changes clamps scrollTop and flips the target under a still pointer.
@@ -3877,30 +3870,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
-                      const items: ReactNode[] = attentionFilterActive
-                        ? []
-                        : [
-                            <SidebarDraftBlock
-                              key="draft-sessions"
-                              draftIds={draftIds}
-                              routeDraftComposer={routeDraftComposer}
-                              terminalLabels={draftTerminalLabels}
-                              jumpLabelByDraftId={draftJumpLabelById}
-                              projectByKey={projectByKey}
-                              projectDisplayNameByKey={projectDisplayNameByKey}
-                              routeDraftId={routeDraftIdForRows}
-                              onNavigateToDraft={navigateToDraft}
-                              onDraftContextMenu={handleDraftContextMenu}
-                            />,
-                          ];
+                      const items: ReactNode[] = [
+                        <SidebarDraftBlock
+                          key="draft-sessions"
+                          draftIds={draftIds}
+                          routeDraftComposer={routeDraftComposer}
+                          terminalLabels={draftTerminalLabels}
+                          jumpLabelByDraftId={draftJumpLabelById}
+                          projectByKey={projectByKey}
+                          projectDisplayNameByKey={projectDisplayNameByKey}
+                          routeDraftId={routeDraftIdForRows}
+                          onNavigateToDraft={navigateToDraft}
+                          onDraftContextMenu={handleDraftContextMenu}
+                        />,
+                      ];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
-                          if (
-                            attentionFilterActive &&
-                            !inboxAttention.attentionKeys.has(item.key)
-                          ) {
-                            continue;
-                          }
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
@@ -3908,14 +3893,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
                           for (const folder of projectFolders) {
-                            const visibleFolderThreads = attentionFilterActive
-                              ? folder.threads.filter((thread) =>
-                                  inboxAttention.attentionKeys.has(threadShellKey(thread)),
-                                )
-                              : folder.threads;
-                            if (attentionFilterActive && visibleFolderThreads.length === 0) {
-                              continue;
-                            }
                             items.push(
                               <SidebarProjectFolderHeader
                                 key={`project-folder:${folder.group.projectKey}`}
@@ -3927,7 +3904,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 onContextMenu={handleProjectFolderContextMenu}
                               />,
                             );
-                            for (const thread of visibleFolderThreads) {
+                            for (const thread of folder.threads) {
                               items.push(
                                 renderThreadRow(
                                   thread,
@@ -3939,7 +3916,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           }
                           continue;
                         }
-                        if (attentionFilterActive) continue;
                         switch (item.marker) {
                           case "pinned-header":
                             items.push(
@@ -4091,6 +4067,54 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         </SidebarGroup>
       </SidebarContent>
       <SidebarChromeFooter />
+
+      {/* Orca Create Workspace (`Ctrl+N`) & Add Project liquid-glass dialogs */}
+      <OrcaCreateWorkspaceDialog
+        open={createWorkspaceOpen}
+        onOpenChange={setCreateWorkspaceOpen}
+        projects={projectGroups}
+        defaultProjectKey={defaultCreateWorkspaceProjectKey}
+        environments={orcaEnvironments}
+        defaultEnvironmentId={effectiveAddProjectEnvId}
+        agentOptionsByEnvironment={agentOptionsByEnvironment}
+        fallbackAgentOptions={fallbackAgentOptions}
+        onOpenProviderSettings={handleOpenProviderSettings}
+        onBrowseFolder={handleBrowseFolder}
+        onOpenCloneDialog={handleOpenCloneDialog}
+        onOpenCreateProjectDialog={handleOpenCreateProjectDialog}
+        onSubmit={handleSubmitCreateWorkspace}
+      />
+
+      <OrcaCloneProjectDialog
+        open={cloneDialogEnvId !== null}
+        onOpenChange={(open) => {
+          if (!open) setCloneDialogEnvId(null);
+        }}
+        environment={cloneDialogEnv}
+        canPickLocalFolder={isElectron && cloneDialogEnv?.isPrimary === true}
+        onPickParentFolder={handlePickParentFolder}
+        onSubmitClone={handleSubmitCloneProject}
+      />
+
+      <OrcaCreateProjectDialog
+        open={createProjectDialogEnvId !== null}
+        onOpenChange={(open) => {
+          if (!open) setCreateProjectDialogEnvId(null);
+        }}
+        environment={createProjectDialogEnv}
+        canPickLocalFolder={isElectron && createProjectDialogEnv?.isPrimary === true}
+        onPickParentFolder={handlePickParentFolder}
+        onSubmitCreate={handleSubmitCreateProject}
+      />
+
+      <OrcaBrowseFolderFallbackDialog
+        open={browseFolderDialogEnvId !== null}
+        onOpenChange={(open) => {
+          if (!open) setBrowseFolderDialogEnvId(null);
+        }}
+        environment={browseFolderDialogEnv}
+        onSubmitFolderPath={addLocalFolderPathAsProject}
+      />
     </SidebarFolderDrop>
   );
 }

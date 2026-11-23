@@ -7,11 +7,14 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as NetService from "@t3tools/shared/Net";
+import type { PrismuxTrayAction, PrismuxTrayActionPayload } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Electron from "electron";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
+import * as IpcChannels from "../ipc/channels.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppActivation from "./DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
@@ -43,6 +46,14 @@ import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as PrismuxDaemonService from "../prismux/PrismuxDaemonService.ts";
+import {
+  destroySharedPrismuxTrayController,
+  initSharedPrismuxTrayController,
+  queuePendingPrismuxTrayAction,
+  resolvePrismuxTrayIconCandidatePaths,
+  takePendingPrismuxTrayAction,
+  updateSharedPrismuxTrayMobileUrl,
+} from "../prismux/PrismuxTrayController.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { msg } from "gt-i18n";
 import { m } from "../i18n/messages.ts";
@@ -151,7 +162,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      m(msg("T3 Code failed to start")),
+      m(msg("Prismux failed to start")),
       `Stage: ${stage}\n${message}${detail}`,
     );
   }
@@ -225,6 +236,7 @@ const startLocalBackend = Effect.gen(function* () {
   );
 
   if (!settings.localEnvironmentEnabled) {
+    updateSharedPrismuxTrayMobileUrl(null);
     yield* Effect.forkScoped(prismuxDaemon.start());
     yield* logBootstrapInfo("bootstrap skipping local environment (disabled in settings)");
     return false;
@@ -247,7 +259,7 @@ const startLocalBackend = Effect.gen(function* () {
       owner: Option.getOrNull(owner),
     });
     yield* (yield* ElectronDialog.ElectronDialog).showErrorBox(
-      m(msg("This T3 home is unavailable")),
+      m(msg("This Prismux home is unavailable")),
       DesktopHomeOwner.homeOwnedMessage(owner),
     );
     yield* (yield* ElectronApp.ElectronApp).quit;
@@ -273,6 +285,9 @@ const startLocalBackend = Effect.gen(function* () {
   }
   const serverExposureState = yield* serverExposure.configureFromSettings({ port: backendPort });
   const backendConfig = yield* serverExposure.backendConfig;
+  updateSharedPrismuxTrayMobileUrl(
+    serverExposureState.endpointUrl ?? backendConfig.httpBaseUrl.href,
+  );
   yield* logBootstrapInfo("bootstrap resolved backend endpoint", {
     baseUrl: backendConfig.httpBaseUrl.href,
   });
@@ -372,6 +387,115 @@ const bootstrap = Effect.fn("desktop.bootstrap")(function* (backendStarted: bool
   yield* Effect.forkScoped((yield* DesktopWslBackend.DesktopWslBackend).reconcile);
 });
 
+const configurePrismuxSystemTray = Effect.gen(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const desktopState = yield* DesktopState.DesktopState;
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const electronApp = yield* ElectronApp.ElectronApp;
+  const context = yield* Effect.context<
+    DesktopState.DesktopState | DesktopWindow.DesktopWindow | ElectronApp.ElectronApp
+  >();
+  const runPromise = Effect.runPromiseWith(context);
+
+  const openMainWindow = () => {
+    void runPromise(
+      Effect.gen(function* () {
+        if (yield* Ref.get(desktopState.quitting)) return;
+        yield* desktopWindow.revealOrCreateMain;
+      }).pipe(Effect.ignoreCause),
+    );
+  };
+
+  const sendTrayActionToWindow = (
+    window: Electron.BrowserWindow,
+    payload: PrismuxTrayActionPayload,
+  ) =>
+    Effect.sync(() => {
+      if (window.isDestroyed()) return;
+      try {
+        window.webContents.send(IpcChannels.PRISMUX_TRAY_ACTION_CHANNEL, payload);
+      } catch {
+        // Ignore send failures if window closed before delivery.
+      }
+    });
+
+  const dispatchTrayAction = (action: PrismuxTrayAction) => {
+    void runPromise(
+      Effect.gen(function* () {
+        if (yield* Ref.get(desktopState.quitting)) return;
+        const window = yield* desktopWindow.revealOrCreateMain;
+        if (window.isDestroyed()) return;
+        const payload: PrismuxTrayActionPayload = { action };
+        if (window.webContents.isLoadingMainFrame()) {
+          queuePendingPrismuxTrayAction(payload);
+          window.webContents.once("did-finish-load", () => {
+            void runPromise(
+              Effect.sleep("300 millis").pipe(
+                Effect.andThen(
+                  Effect.gen(function* () {
+                    const pending = takePendingPrismuxTrayAction();
+                    if (pending !== null) {
+                      yield* sendTrayActionToWindow(window, pending);
+                    }
+                  }),
+                ),
+                Effect.ignoreCause,
+              ),
+            );
+          });
+          return;
+        }
+        yield* sendTrayActionToWindow(window, payload);
+      }).pipe(Effect.ignoreCause),
+    );
+  };
+
+  const copyText = (text: string) => {
+    try {
+      const result = Electron.clipboard?.writeText(text) as unknown;
+      if (
+        result !== null &&
+        typeof result === "object" &&
+        "catch" in result &&
+        typeof (result as Promise<unknown>).catch === "function"
+      ) {
+        void (result as Promise<unknown>).catch(() => undefined);
+      }
+    } catch {
+      // Never crash main process on clipboard failure.
+    }
+  };
+
+  const quitApp = () => {
+    void runPromise(electronApp.quit.pipe(Effect.ignoreCause));
+  };
+
+  const iconCandidatePaths = resolvePrismuxTrayIconCandidatePaths({
+    platform: environment.platform,
+    ...(typeof environment.rootDir === "string" ? { rootDir: environment.rootDir } : {}),
+    ...(typeof environment.resolveResourcePathCandidates === "function"
+      ? { resolveResourcePathCandidates: environment.resolveResourcePathCandidates }
+      : {}),
+  });
+
+  yield* Effect.sync(() => {
+    try {
+      initSharedPrismuxTrayController({
+        platform: environment.platform,
+        iconCandidatePaths,
+        actions: {
+          openMainWindow,
+          dispatchTrayAction,
+          copyText,
+          quitApp,
+        },
+      });
+    } catch {
+      // Never block desktop startup in headless or tray-less environments.
+    }
+  });
+}).pipe(Effect.withSpan("desktop.prismux.tray"));
+
 const startup = Effect.gen(function* () {
   const appIdentity = yield* DesktopAppIdentity.DesktopAppIdentity;
   const applicationMenu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
@@ -451,6 +575,7 @@ const startup = Effect.gen(function* () {
   );
   yield* previewPasskeys.configure;
   yield* applicationMenu.configure;
+  yield* configurePrismuxSystemTray;
   // Portal identity is prepared pre-ready; MIME helpers must not gate the backend or window.
   yield* linuxUrlHandler.register.pipe(Effect.forkScoped);
   yield* bootstrap(backendStarted).pipe(
@@ -471,6 +596,7 @@ const scopedProgram = Effect.scoped(
     yield* Effect.addFinalizer(() =>
       // Quit can outrun layer finalizers; stop pooled backends here so they receive SIGTERM before OS teardown.
       stopAllPoolInstances().pipe(
+        Effect.ensuring(Effect.sync(() => destroySharedPrismuxTrayController())),
         Effect.ensuring(prismuxDaemon.stop),
         Effect.ensuring(rendererHistory.shutdown),
         Effect.ensuring(shutdown.markComplete),

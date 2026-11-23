@@ -161,13 +161,13 @@ function PreviewPanelShellFrame(
       onMouseDown={props.onMouseDown}
       onMouseUp={props.onMouseUp}
       className={cn(
-        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch bg-background",
+        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch",
         isInline
           ? maximized
-            ? // Maximizing meets the sidebar border or window edge; omit the duplicate border.
-              "flex-1"
-            : "shrink-0 border-l border-border"
-          : "w-full",
+            ? // Maximizing meets the sidebar border or window edge; omit any outer border.
+              "flex-1 bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent"
+            : "shrink-0 bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent"
+          : "w-full bg-background",
         collapsible &&
           "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
         collapsible && open && "[[data-panel-animations=true]_&]:starting:w-0!",
@@ -186,6 +186,7 @@ function PreviewPanelShellFrame(
             } as CSSProperties)
           : undefined
       }
+      data-pmx-glass-zone={isInline ? "rightSidebar" : undefined}
       data-preview-panel-mode={props.mode}
       data-preview-panel-maximized={maximized ? "true" : "false"}
     >
@@ -206,7 +207,7 @@ function PreviewPanelShellFrame(
           )}
           style={
             collapsible && !maximized
-              ? { width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - 1px)` }
+              ? { width: `var(${RESIZABLE_WIDTH_PROPERTY})` }
               : undefined
           }
         >

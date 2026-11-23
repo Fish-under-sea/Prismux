@@ -33,6 +33,10 @@ export const ModelListRow = memo(function ModelListRow(props: {
   unavailable?: boolean;
   jumpLabel?: string | null;
   disabledReason?: string | null;
+  /** Orca-style single-agent focused two-line card (hides repeated vendor icon, emphasizes selected fill). */
+  agentScoped?: boolean;
+  /** Soft muted second-line source label (e.g. `Codex · via OpenRouter`). */
+  sourceSubtitle?: string | undefined;
   onToggleFavorite: (instanceId: ProviderInstanceId, slug: string) => void;
 }) {
   const gt = useGT();
@@ -41,6 +45,11 @@ export const ModelListRow = memo(function ModelListRow(props: {
     name: props.name,
     subProvider: props.subProvider,
   };
+  const subtitle =
+    props.sourceSubtitle ??
+    (props.subProvider
+      ? `${props.providerDisplayName} · ${props.subProvider}`
+      : props.providerDisplayName);
 
   const row = (
     <ComboboxItem
@@ -49,29 +58,41 @@ export const ModelListRow = memo(function ModelListRow(props: {
       index={props.index}
       value={modelPickerModelKey(props.instanceId, props.slug)}
       disabled={Boolean(props.disabledReason)}
+      data-model-row-selected={props.isSelected ? "true" : "false"}
+      data-model-row-scoped={props.agentScoped ? "true" : undefined}
       className={cn(
         "group relative w-full !min-w-0 max-w-full cursor-pointer",
+        props.agentScoped &&
+          "rounded-lg px-2.5 py-2 transition-colors",
+        props.agentScoped &&
+          props.isSelected &&
+          "bg-foreground/[0.085] dark:bg-white/[0.1]",
         props.disabledReason &&
           "data-disabled:pointer-events-auto data-disabled:cursor-not-allowed",
       )}
     >
-      {/* One row shape in every tab: the logo names the provider, so Favorites needs no second line. */}
-      <ProviderInstanceIcon
-        driverKind={props.driverKind}
-        displayName={props.providerDisplayName}
-        accentColor={props.providerAccentColor}
-        acpRegistryAgentId={props.acpRegistryAgentId}
-        acpRegistryIconUrl={props.acpRegistryIconUrl}
-        showBadge={props.showInstanceBadge}
-        className="size-4"
-        iconClassName="size-4"
-        indicatorBackground="var(--popover)"
-        badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs"
-      />
+      {/* In multi-provider/favorites mode keep the vendor icon; in single-agent scoped mode omit repetition. */}
+      {props.agentScoped ? null : (
+        <ProviderInstanceIcon
+          driverKind={props.driverKind}
+          displayName={props.providerDisplayName}
+          accentColor={props.providerAccentColor}
+          acpRegistryAgentId={props.acpRegistryAgentId}
+          acpRegistryIconUrl={props.acpRegistryIconUrl}
+          showBadge={props.showInstanceBadge}
+          className="size-4"
+          iconClassName="size-4"
+          indicatorBackground="var(--popover)"
+          badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs"
+        />
+      )}
       <div className="flex min-w-0 flex-1 flex-col text-left">
         <div className="flex min-w-0 items-center gap-1.5">
           <div
-            className="min-w-0 truncate text-sm font-medium leading-snug text-foreground"
+            className={cn(
+              "min-w-0 truncate leading-snug text-foreground",
+              props.agentScoped ? "text-[13.5px] font-semibold" : "text-sm font-medium",
+            )}
             // Names the row in full on hover only when it is cut off.
             onPointerEnter={(event) => {
               const name = event.currentTarget;
@@ -96,11 +117,14 @@ export const ModelListRow = memo(function ModelListRow(props: {
             </Badge>
           ) : null}
         </div>
-        {props.subProvider || props.providerDisplayName ? (
-          <span className="min-w-0 truncate text-xs leading-4 text-muted-foreground/80">
-            {props.subProvider
-              ? `${props.providerDisplayName} · ${props.subProvider}`
-              : props.providerDisplayName}
+        {subtitle ? (
+          <span
+            className={cn(
+              "min-w-0 truncate leading-4 text-muted-foreground/80",
+              props.agentScoped ? "mt-0.5 text-[11.5px]" : "text-xs",
+            )}
+          >
+            {subtitle}
           </span>
         ) : null}
       </div>
