@@ -1,10 +1,13 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -12,7 +15,10 @@ import {
 } from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { compareSemver, parseSemver } from "@prismux/cordis-kernel";
 import {
   DEFAULT_APP_VERSION,
@@ -26,19 +32,75 @@ import {
   type UpdateAssetInfo,
   type UpdateChannel,
   type UpdateCheckResult,
+  type UpdateDownloadProgress,
   type UpdateDownloadResult,
+  type UpdateInstallState,
   type UpdatePackageKind,
   type UpdatePolicyConfig,
   type UpdatePolicyPatch,
+  type UpdaterSseEventPayload,
+  type UpdaterSseEventType,
   type UpdaterStatusSnapshot,
-  type UpdateSourceId
+  type UpdateSourceId,
+  type UpdateSplitArchivePart
 } from "@prismux/protocol";
+
+const execFileAsync = promisify(execFile);
 
 const POLICY_FILENAME = "updater-policy.json";
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const SOFTWARE_SHA256SUMS_RE =
+  /^prismux-(?!plugins?-)(?:.+?-)?sha256sums(?:\.txt)?$/i;
+
+/**
+ * Selects the software-dedicated checksum manifest from a release's assets:
+ * 1. Exact versioned `Prismux-<ver>-SHA256SUMS.txt`
+ * 2. Generic `Prismux-*-SHA256SUMS.txt` / `Prismux-SHA256SUMS.txt` (strictly excluding `prismux-plugin(s)-*`)
+ * 3. Legacy `SHA256SUMS.txt` / `SHA256SUMS`
+ */
+export function selectSoftwareChecksumAsset<T extends { name: string }>(
+  rawAssets: readonly T[],
+  version?: string
+): T | undefined {
+  if (version && version.trim().length > 0) {
+    const exactVersioned = `prismux-${version.trim().toLowerCase()}-sha256sums.txt`;
+    const exactMatch = rawAssets.find(
+      (item) => item.name.toLowerCase() === exactVersioned
+    );
+    if (exactMatch !== undefined) {
+      return exactMatch;
+    }
+  }
+
+  const dedicatedMatch = rawAssets.find((item) =>
+    SOFTWARE_SHA256SUMS_RE.test(item.name.trim())
+  );
+  if (dedicatedMatch !== undefined) {
+    return dedicatedMatch;
+  }
+
+  return rawAssets.find((item) => {
+    const lower = item.name.trim().toLowerCase();
+    return lower === "sha256sums.txt" || lower === "sha256sums";
+  });
+}
+const SPLIT_7Z_EXE_RE = /^(.+\.exe)\.7z\.(\d{3})$/i;
 const DEFAULT_MAX_REDIRECTS = 6;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_DELAYS_MS = [250, 750, 1500];
+const DEFAULT_EXTRACT_TIMEOUT_MS = 180_000;
+
+export const DEFAULT_AUTO_CHECK_INITIAL_DELAY_MS = 15_000;
+export const DEFAULT_AUTO_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+export type { UpdateDownloadProgress };
+
+export interface AppUpdaterTimerApi {
+  setTimeout: typeof setTimeout;
+  clearTimeout: typeof clearTimeout;
+  setInterval: typeof setInterval;
+  clearInterval: typeof clearInterval;
+}
 
 export interface AppUpdaterEndpoints {
   githubOwner: string;
@@ -65,6 +127,14 @@ export interface AppUpdaterOptions {
   maxRedirects?: number;
   maxRetries?: number;
   retryDelaysMs?: number[];
+  /** Optional explicit 7za/7z executable path (also reads `PRISMUX_7ZA_PATH`). */
+  sevenZipPath?: string;
+  /** Initial delay before first background auto-check (default 15s). */
+  autoCheckInitialDelayMs?: number;
+  /** Interval between background auto-checks (default 4h). */
+  autoCheckIntervalMs?: number;
+  /** Injectable timers for deterministic tests. */
+  timers?: AppUpdaterTimerApi;
 }
 
 export interface CheckForUpdatesOptions {
@@ -72,16 +142,12 @@ export interface CheckForUpdatesOptions {
   sourceOverride?: UpdateSourceId;
 }
 
-export interface UpdateDownloadProgress {
-  bytesDownloaded: number;
-  totalBytes: number | null;
-  source: UpdateSourceId;
-}
-
 export interface DownloadUpdateOptions {
   checkResult?: UpdateCheckResult;
   asset?: UpdateAssetInfo;
   kind?: UpdatePackageKind;
+  assetName?: string;
+  sourceOverride?: UpdateSourceId;
   destDir?: string;
   onProgress?: (progress: UpdateDownloadProgress) => void;
   maxRetries?: number;
@@ -195,6 +261,17 @@ function sanitizeAssetFileName(name: string): string {
   return trimmed;
 }
 
+function computePercent(
+  bytesDownloaded: number,
+  totalBytes: number | null
+): number | null {
+  if (totalBytes === null || totalBytes <= 0) {
+    return null;
+  }
+  const pct = (bytesDownloaded / totalBytes) * 100;
+  return Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
+}
+
 export function applyGhProxyPrefix(rawUrl: string, prefix: string): string {
   const trimmed = prefix.trim();
   if (trimmed.length === 0) {
@@ -207,6 +284,111 @@ export function applyGhProxyPrefix(rawUrl: string, prefix: string): string {
     return `${trimmed}${rawUrl}`;
   }
   return `${trimmed}/${rawUrl}`;
+}
+
+/**
+ * Resolves the `7za.exe` / `7z.exe` binary for extracting Gitee split `.7z.001..N`
+ * installer archives.
+ *
+ * Priority order:
+ * 1. Explicit `explicitPath` override
+ * 2. `PRISMUX_7ZA_PATH` environment variable
+ * 3. Bundled `process.resourcesPath/tools/7za.exe` (Electron packaged app)
+ * 4. Adjacent `<execDir>/resources/tools/7za.exe` & `<execDir>/tools/7za.exe`
+ * 5. Monorepo dev fallback `vendor/t3code/node_modules/7zip-bin/win/x64/7za.exe`
+ * 6. Standard Windows 7-Zip install paths (`C:\Program Files\7-Zip\7z.exe`, etc.)
+ * 7. PATH lookup (`7za.exe`, `7z.exe`, `7za`, `7z`)
+ */
+export function resolve7zaBinary(explicitPath?: string): string | null {
+  const candidates: string[] = [];
+
+  if (explicitPath && explicitPath.trim().length > 0) {
+    candidates.push(resolve(explicitPath.trim()));
+  }
+
+  const envPath = process.env["PRISMUX_7ZA_PATH"]?.trim();
+  if (envPath && envPath.length > 0) {
+    candidates.push(resolve(envPath));
+  }
+
+  const procResourcesPath = (
+    process as NodeJS.Process & { resourcesPath?: string }
+  ).resourcesPath;
+  const exeName = process.platform === "win32" ? "7za.exe" : "7za";
+  if (typeof procResourcesPath === "string" && procResourcesPath.trim().length > 0) {
+    candidates.push(join(procResourcesPath, "tools", exeName));
+    candidates.push(join(procResourcesPath, "tools", "7z.exe"));
+  }
+
+  const execDir = dirname(process.execPath);
+  candidates.push(join(execDir, "resources", "tools", exeName));
+  candidates.push(join(execDir, "tools", exeName));
+
+  // Walk upward from current module to locate repo-bundled resources or 7zip-bin in dev.
+  let cursor = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 6; depth += 1) {
+    candidates.push(join(cursor, "resources", "tools", exeName));
+    candidates.push(
+      join(
+        cursor,
+        "vendor",
+        "t3code",
+        "node_modules",
+        "7zip-bin",
+        "win",
+        "x64",
+        "7za.exe"
+      )
+    );
+    const parent = dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+
+  if (process.platform === "win32") {
+    candidates.push("C:\\Program Files\\7-Zip\\7za.exe");
+    candidates.push("C:\\Program Files\\7-Zip\\7z.exe");
+    candidates.push("C:\\Program Files (x86)\\7-Zip\\7za.exe");
+    candidates.push("C:\\Program Files (x86)\\7-Zip\\7z.exe");
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate) && statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // ignore inaccessible candidate
+    }
+  }
+
+  // Fallback: scan PATH entries synchronously (fast stat-only check, no shell spawn)
+  const pathEnv = process.env["PATH"] ?? process.env["Path"] ?? "";
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const binNames =
+    process.platform === "win32"
+      ? ["7za.exe", "7z.exe", "7za.cmd", "7z.cmd"]
+      : ["7za", "7z", "7zz"];
+  for (const dir of pathEnv.split(pathSep)) {
+    const trimmedDir = dir.trim();
+    if (!trimmedDir) {
+      continue;
+    }
+    for (const binName of binNames) {
+      const full = join(trimmedDir, binName);
+      try {
+        if (existsSync(full) && statSync(full).isFile()) {
+          return full;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return null;
 }
 
 function extractAssetName(asset: RawReleaseAsset, downloadUrl: string): string {
@@ -228,9 +410,14 @@ function extractAssetName(asset: RawReleaseAsset, downloadUrl: string): string {
 function classifyPackageAssetKind(
   assetName: string,
   version: string
-): UpdatePackageKind | null {
+): Exclude<UpdatePackageKind, "split-7z-exe"> | null {
   const lower = assetName.toLowerCase();
-  if (lower.endsWith(".sha256") || lower.endsWith(".sig") || lower.endsWith(".asc")) {
+  if (
+    lower.endsWith(".sha256") ||
+    lower.endsWith(".sig") ||
+    lower.endsWith(".asc") ||
+    SPLIT_7Z_EXE_RE.test(assetName)
+  ) {
     return null;
   }
   const portableExact = `prismux-portable-${version.toLowerCase()}-win-x64.zip`;
@@ -302,11 +489,188 @@ function parseSingleAssetSha256Text(
   return null;
 }
 
+function isStrictlyInsideDir(candidatePath: string, rootDir: string): boolean {
+  const realRoot = realpathSync(rootDir);
+  const realCandidate = realpathSync(candidatePath);
+  const rel = relative(realRoot, realCandidate);
+  return (
+    rel !== "" &&
+    !rel.startsWith("..") &&
+    !isAbsolute(rel) &&
+    !rel.split(/[\\/]/).includes("..")
+  );
+}
+
+function findExtractedExeFile(
+  extractDir: string,
+  expectedExeName: string
+): string | null {
+  const direct = join(extractDir, expectedExeName);
+  if (existsSync(direct) && statSync(direct).isFile()) {
+    if (!isStrictlyInsideDir(direct, extractDir)) {
+      throw new Error(`Extracted update path escaped isolation directory: ${direct}`);
+    }
+    return direct;
+  }
+
+  const expectedLower = expectedExeName.toLowerCase();
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: extractDir, depth: 0 }];
+  let fallbackExe: string | null = null;
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const entries = readdirSync(current.dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = join(current.dir, entry.name);
+      if (entry.isDirectory() && current.depth < 2) {
+        queue.push({ dir: full, depth: current.depth + 1 });
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!isStrictlyInsideDir(full, extractDir)) {
+        continue;
+      }
+      const lower = entry.name.toLowerCase();
+      if (lower === expectedLower) {
+        return full;
+      }
+      if (lower.endsWith(".exe") && fallbackExe === null) {
+        fallbackExe = full;
+      }
+    }
+  }
+
+  return fallbackExe;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function safeDecodeUriComponent(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+export interface GiteeWebParsedRelease {
+  tag_name: string;
+  name: string;
+  prerelease: boolean;
+  draft: false;
+  html_url: string;
+  assets: Array<{ name: string; browser_download_url: string }>;
+}
+
+/**
+ * Fallback parser for Gitee's public Web Releases HTML page
+ * (`https://gitee.com/<owner>/<repo>/releases`) when Gitee OpenAPI v5 returns
+ * HTTP 403/429 anonymous rate-limit responses from WAF (`ADAS`).
+ */
+export function parseGiteeWebReleasesHtml(
+  html: string,
+  webBase: string,
+  owner: string,
+  repo: string
+): GiteeWebParsedRelease[] {
+  const normalizedBase = normalizeBaseUrl(webBase);
+  const ownerEsc = escapeRegExp(owner);
+  const repoEsc = escapeRegExp(repo);
+  const downloadRe = new RegExp(
+    `href=["'](?:https?:\\/\\/[^"']+)?\\/${ownerEsc}\\/${repoEsc}\\/releases\\/download\\/([^"'/?#]+)\\/([^"'?#]+)["']`,
+    "gi"
+  );
+  const tagRe = new RegExp(
+    `href=["'](?:https?:\\/\\/[^"']+)?\\/${ownerEsc}\\/${repoEsc}\\/releases\\/tag\\/([^"'/?#]+)["']`,
+    "gi"
+  );
+
+  const tags = new Map<string, string>();
+  const assetsByTag = new Map<
+    string,
+    Map<string, { name: string; browser_download_url: string }>
+  >();
+
+  const registerTag = (rawTag: string): string | null => {
+    const decoded = safeDecodeUriComponent(rawTag).trim();
+    if (decoded.length === 0 || /[\s`<>]/.test(decoded)) {
+      return null;
+    }
+    const parsed = parseSemver(normalizeTagToVersion(decoded));
+    if (parsed === null) {
+      return null;
+    }
+    const key = decoded.toLowerCase();
+    if (!tags.has(key)) {
+      tags.set(key, decoded);
+    }
+    return tags.get(key)!;
+  };
+
+  for (const match of html.matchAll(tagRe)) {
+    registerTag(match[1]!);
+  }
+
+  for (const match of html.matchAll(downloadRe)) {
+    const canonicalTag = registerTag(match[1]!);
+    if (canonicalTag === null) {
+      continue;
+    }
+    const fileName = safeDecodeUriComponent(match[2]!).trim();
+    if (
+      fileName.length === 0 ||
+      fileName.includes("/") ||
+      fileName.includes("\\") ||
+      fileName.includes("..")
+    ) {
+      continue;
+    }
+    const tagKey = canonicalTag.toLowerCase();
+    let assetMap = assetsByTag.get(tagKey);
+    if (assetMap === undefined) {
+      assetMap = new Map<string, { name: string; browser_download_url: string }>();
+      assetsByTag.set(tagKey, assetMap);
+    }
+    const fileKey = fileName.toLowerCase();
+    if (!assetMap.has(fileKey)) {
+      assetMap.set(fileKey, {
+        name: fileName,
+        browser_download_url: `${normalizedBase}/${owner}/${repo}/releases/download/${encodeURIComponent(canonicalTag)}/${encodeURIComponent(fileName)}`
+      });
+    }
+  }
+
+  const records: GiteeWebParsedRelease[] = [];
+  for (const [tagKey, tagName] of tags.entries()) {
+    const parsed = parseSemver(normalizeTagToVersion(tagName));
+    if (parsed === null) {
+      continue;
+    }
+    const assetMap = assetsByTag.get(tagKey);
+    records.push({
+      tag_name: tagName,
+      name: tagName,
+      prerelease: parsed.prerelease.length > 0,
+      draft: false,
+      html_url: `${normalizedBase}/${owner}/${repo}/releases/tag/${encodeURIComponent(tagName)}`,
+      assets: assetMap ? [...assetMap.values()] : []
+    });
+  }
+
+  return records;
+}
+
 function openHttpWithRedirects(
   rawUrl: string,
   headers: Record<string, string>,
   timeoutMs: number,
-  maxRedirects: number
+  maxRedirects: number,
+  method: "GET" | "HEAD" = "GET",
+  followRedirects = true
 ): Promise<HttpOpenedResponse> {
   const attemptOpen = (
     targetUrl: string,
@@ -332,10 +696,11 @@ function openHttpWithRedirects(
       const req = transport.request(
         parsedUrl,
         {
-          method: "GET",
+          method,
           agent: false,
           headers: {
-            "user-agent": `Prismux-Updater/${DEFAULT_APP_VERSION}`,
+            "user-agent": `Mozilla/5.0 (compatible; Prismux-Updater/${DEFAULT_APP_VERSION})`,
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
             connection: "close",
             ...headers
           }
@@ -344,11 +709,12 @@ function openHttpWithRedirects(
           const statusCode = res.statusCode ?? 0;
           const location = res.headers.location;
           if (
-            statusCode === 301 ||
-            statusCode === 302 ||
-            statusCode === 303 ||
-            statusCode === 307 ||
-            statusCode === 308
+            followRedirects &&
+            (statusCode === 301 ||
+              statusCode === 302 ||
+              statusCode === 303 ||
+              statusCode === 307 ||
+              statusCode === 308)
           ) {
             if (typeof location !== "string" || location.trim().length === 0) {
               res.resume();
@@ -438,7 +804,9 @@ async function fetchText(
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function computeFileSha256(filePath: string): Promise<{ sha256: string; bytes: number }> {
+async function computeFileSha256(
+  filePath: string
+): Promise<{ sha256: string; bytes: number }> {
   const hash = createHash("sha256");
   let bytes = 0;
   const stream = createReadStream(filePath);
@@ -460,7 +828,9 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
-function closeWriteStream(stream: ReturnType<typeof createWriteStream>): Promise<void> {
+function closeWriteStream(
+  stream: ReturnType<typeof createWriteStream>
+): Promise<void> {
   return new Promise((resolvePromise) => {
     if (stream.closed) {
       resolvePromise();
@@ -471,7 +841,9 @@ function closeWriteStream(stream: ReturnType<typeof createWriteStream>): Promise
   });
 }
 
-function endWriteStream(stream: ReturnType<typeof createWriteStream>): Promise<void> {
+function endWriteStream(
+  stream: ReturnType<typeof createWriteStream>
+): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
     if (stream.closed) {
       resolvePromise();
@@ -584,6 +956,17 @@ function parseContentRangeHeader(
   return { start, end, total };
 }
 
+function unrefTimerHandle(handle: unknown): void {
+  if (
+    typeof handle === "object" &&
+    handle !== null &&
+    "unref" in handle &&
+    typeof (handle as { unref?: unknown }).unref === "function"
+  ) {
+    (handle as { unref: () => void }).unref();
+  }
+}
+
 export class AppUpdater {
   private readonly currentVersion: string;
   private readonly dataDir: string;
@@ -593,14 +976,26 @@ export class AppUpdater {
   private readonly maxRedirects: number;
   private readonly maxRetries: number;
   private readonly retryDelaysMs: number[];
+  private readonly sevenZipPathOverride: string | undefined;
+  private readonly autoCheckInitialDelayMs: number;
+  private readonly autoCheckIntervalMs: number;
+  private readonly timers: AppUpdaterTimerApi;
 
   private policy: UpdatePolicyConfig;
   private checking = false;
   private downloading = false;
+  private installState: UpdateInstallState = "idle";
+  private progress: UpdateDownloadProgress | null = null;
   private lastCheck: UpdateCheckResult | null = null;
   private lastDownload: UpdateDownloadResult | null = null;
   private lastProbe: SourceProbeReport | null = null;
   private lastError: string | null = null;
+
+  private readonly eventListeners = new Set<(event: UpdaterSseEventPayload) => void>();
+  private autoCheckStarted = false;
+  private autoCheckInitialTimer: ReturnType<typeof setTimeout> | undefined;
+  private autoCheckIntervalTimer: ReturnType<typeof setInterval> | undefined;
+  private nextAutoCheckAt: number | null = null;
 
   constructor(options: AppUpdaterOptions) {
     const currentVersion = (options.currentVersion ?? DEFAULT_APP_VERSION).trim();
@@ -617,6 +1012,21 @@ export class AppUpdater {
     this.maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    this.sevenZipPathOverride = options.sevenZipPath;
+    this.autoCheckInitialDelayMs = Math.max(
+      0,
+      options.autoCheckInitialDelayMs ?? DEFAULT_AUTO_CHECK_INITIAL_DELAY_MS
+    );
+    this.autoCheckIntervalMs = Math.max(
+      1_000,
+      options.autoCheckIntervalMs ?? DEFAULT_AUTO_CHECK_INTERVAL_MS
+    );
+    this.timers = options.timers ?? {
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval
+    };
 
     this.endpoints = {
       githubOwner: options.endpoints?.githubOwner ?? UPDATE_ENDPOINTS.githubOwner,
@@ -653,18 +1063,126 @@ export class AppUpdater {
     });
   }
 
+  getDownloadsDir(): string {
+    return this.downloadsDir;
+  }
+
+  resolve7zaPath(): string | null {
+    return resolve7zaBinary(this.sevenZipPathOverride);
+  }
+
   getStatus(): UpdaterStatusSnapshot {
     return {
+      ok: true,
       currentVersion: this.currentVersion,
       portableMode: this.portableMode,
       policy: { ...this.policy },
       checking: this.checking,
       downloading: this.downloading,
+      installState: this.installState,
+      progress: this.progress ? { ...this.progress } : null,
+      downloadedFilePath: this.lastDownload?.filePath ?? null,
+      downloadedSha256: this.lastDownload?.sha256 ?? null,
       lastCheck: this.lastCheck,
       lastDownload: this.lastDownload,
       lastProbe: this.lastProbe,
-      lastError: this.lastError
+      lastError: this.lastError,
+      autoCheckEnabled: this.policy.autoCheckEnabled !== false,
+      nextAutoCheckAt: this.nextAutoCheckAt
     };
+  }
+
+  subscribeEvents(
+    listener: (event: UpdaterSseEventPayload) => void
+  ): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
+  }
+
+  private emitEvent(type: UpdaterSseEventType, error?: string | null): void {
+    if (this.eventListeners.size === 0) {
+      return;
+    }
+    const status = this.getStatus();
+    const payload: UpdaterSseEventPayload = {
+      type,
+      timestamp: Date.now(),
+      installState: status.installState,
+      progress: status.progress,
+      downloadedFilePath: status.downloadedFilePath,
+      downloadedSha256: status.downloadedSha256,
+      portableMode: status.portableMode,
+      ...(error !== undefined ? { error } : {}),
+      status
+    };
+    for (const listener of Array.from(this.eventListeners)) {
+      try {
+        listener(payload);
+      } catch {
+        // Isolate subscriber errors so one broken SSE client never stalls updater.
+      }
+    }
+  }
+
+  /**
+   * Starts silent background update巡检: initial check 15s after start, then every 4h.
+   * Respects `policy.autoCheckEnabled` and can be safely stopped via `stopAutoCheck()`.
+   */
+  startAutoCheck(): void {
+    this.stopAutoCheck();
+    if (this.policy.autoCheckEnabled === false) {
+      return;
+    }
+
+    this.autoCheckStarted = true;
+    const runSilentCheck = () => {
+      if (this.checking || this.downloading) {
+        return;
+      }
+      void this.checkForUpdates().catch(() => {
+        // Background check failures are recorded on `lastError` without unhandled rejections.
+      });
+    };
+
+    const schedulePeriodic = () => {
+      this.nextAutoCheckAt = Date.now() + this.autoCheckIntervalMs;
+      this.autoCheckIntervalTimer = this.timers.setInterval(() => {
+        this.nextAutoCheckAt = Date.now() + this.autoCheckIntervalMs;
+        runSilentCheck();
+      }, this.autoCheckIntervalMs);
+      unrefTimerHandle(this.autoCheckIntervalTimer);
+    };
+
+    this.nextAutoCheckAt = Date.now() + this.autoCheckInitialDelayMs;
+    this.autoCheckInitialTimer = this.timers.setTimeout(() => {
+      this.autoCheckInitialTimer = undefined;
+      if (!this.autoCheckStarted) {
+        return;
+      }
+      runSilentCheck();
+      schedulePeriodic();
+    }, this.autoCheckInitialDelayMs);
+    unrefTimerHandle(this.autoCheckInitialTimer);
+  }
+
+  stopAutoCheck(): void {
+    this.autoCheckStarted = false;
+    this.nextAutoCheckAt = null;
+    if (this.autoCheckInitialTimer !== undefined) {
+      this.timers.clearTimeout(this.autoCheckInitialTimer);
+      this.autoCheckInitialTimer = undefined;
+    }
+    if (this.autoCheckIntervalTimer !== undefined) {
+      this.timers.clearInterval(this.autoCheckIntervalTimer);
+      this.autoCheckIntervalTimer = undefined;
+    }
+  }
+
+  dispose(): void {
+    this.stopAutoCheck();
+    this.eventListeners.clear();
   }
 
   getPolicy(): UpdatePolicyConfig {
@@ -686,26 +1204,99 @@ export class AppUpdater {
       ...(patch.pluginRegistryOverride !== undefined
         ? { pluginRegistryOverride: patch.pluginRegistryOverride }
         : {}),
-      ...(patch.timeoutMs !== undefined ? { timeoutMs: patch.timeoutMs } : {})
+      ...(patch.timeoutMs !== undefined ? { timeoutMs: patch.timeoutMs } : {}),
+      ...(patch.autoCheckEnabled !== undefined
+        ? { autoCheckEnabled: patch.autoCheckEnabled }
+        : {})
     };
     const validated = this.validatePolicy(merged);
+    const wasAutoStarted = this.autoCheckStarted;
     this.policy = validated;
     this.savePersistedPolicy(validated);
+
+    if (validated.autoCheckEnabled === false) {
+      this.stopAutoCheck();
+    } else if (wasAutoStarted && this.autoCheckInitialTimer === undefined && this.autoCheckIntervalTimer === undefined) {
+      this.startAutoCheck();
+    }
+    this.emitEvent("status");
     return { ...this.policy };
   }
 
   async probeSources(): Promise<SourceProbeReport> {
     const timeoutMs = Math.min(this.policy.timeoutMs, 8_000);
-    const githubUrl = `${this.endpoints.githubApiBase}/repos/${this.endpoints.githubOwner}/${this.endpoints.githubRepo}/releases?per_page=1`;
-    const giteeUrl = `${this.endpoints.giteeApiBase}/repos/${this.endpoints.giteeOwner}/${this.endpoints.giteeRepo}/releases?page=1&per_page=1`;
+    const githubApiUrl = `${this.endpoints.githubApiBase}/repos/${this.endpoints.githubOwner}/${this.endpoints.githubRepo}/releases?per_page=1`;
+    const githubWebLatestUrl = `${this.endpoints.githubWebBase}/${this.endpoints.githubOwner}/${this.endpoints.githubRepo}/releases/latest`;
+    const giteeApiUrl = `${this.endpoints.giteeApiBase}/repos/${this.endpoints.giteeOwner}/${this.endpoints.giteeRepo}/releases?page=1&per_page=1`;
+    const giteeWebLatestUrl = `${this.endpoints.giteeWebBase}/${this.endpoints.giteeOwner}/${this.endpoints.giteeRepo}/releases/latest`;
+    const giteeWebReleasesUrl = `${this.endpoints.giteeWebBase}/${this.endpoints.giteeOwner}/${this.endpoints.giteeRepo}/releases`;
+
+    const probeGithub = async (): Promise<SourceEndpointProbe> => {
+      const apiProbe = await this.probeSingleSource(
+        "github",
+        githubApiUrl,
+        { accept: "application/vnd.github+json" },
+        timeoutMs
+      );
+      if (
+        !apiProbe.reachable &&
+        (apiProbe.statusCode === 403 || apiProbe.statusCode === 429)
+      ) {
+        const webProbe = await this.probeSingleSource(
+          "github",
+          githubWebLatestUrl,
+          { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
+          timeoutMs,
+          "HEAD",
+          false
+        );
+        if (webProbe.reachable) {
+          return webProbe;
+        }
+      }
+      return apiProbe;
+    };
+
+    const probeGitee = async (): Promise<SourceEndpointProbe> => {
+      const apiProbe = await this.probeSingleSource(
+        "gitee",
+        giteeApiUrl,
+        { accept: "application/json" },
+        timeoutMs
+      );
+      if (
+        !apiProbe.reachable &&
+        (apiProbe.statusCode === 403 || apiProbe.statusCode === 429)
+      ) {
+        const latestProbe = await this.probeSingleSource(
+          "gitee",
+          giteeWebLatestUrl,
+          { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
+          timeoutMs,
+          "HEAD",
+          false
+        );
+        if (latestProbe.reachable) {
+          return latestProbe;
+        }
+        const webProbe = await this.probeSingleSource(
+          "gitee",
+          giteeWebReleasesUrl,
+          { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
+          timeoutMs,
+          "HEAD",
+          false
+        );
+        if (webProbe.reachable) {
+          return webProbe;
+        }
+      }
+      return apiProbe;
+    };
 
     const [githubProbe, giteeProbe] = await Promise.all([
-      this.probeSingleSource("github", githubUrl, {
-        accept: "application/vnd.github+json"
-      }, timeoutMs),
-      this.probeSingleSource("gitee", giteeUrl, {
-        accept: "application/json"
-      }, timeoutMs)
+      probeGithub(),
+      probeGitee()
     ]);
 
     let recommendedSource: UpdateSourceId = "github";
@@ -733,6 +1324,12 @@ export class AppUpdater {
     options?: CheckForUpdatesOptions
   ): Promise<UpdateCheckResult> {
     this.checking = true;
+    const prevInstallState = this.installState;
+    if (!this.downloading) {
+      this.installState = "checking";
+    }
+    this.emitEvent("checking");
+
     try {
       const includePrerelease =
         options?.channel === "stable"
@@ -770,6 +1367,19 @@ export class AppUpdater {
           );
           this.lastCheck = result;
           this.lastError = null;
+          if (!this.downloading) {
+            if (
+              prevInstallState === "ready" &&
+              this.lastDownload !== null &&
+              result.latestVersion === this.lastDownload.version &&
+              existsSync(this.lastDownload.filePath)
+            ) {
+              this.installState = "ready";
+            } else {
+              this.installState = result.hasUpdate ? "available" : "up-to-date";
+            }
+          }
+          this.emitEvent(result.hasUpdate ? "available" : "up-to-date");
           return result;
         } catch (error) {
           errors.push({
@@ -784,6 +1394,10 @@ export class AppUpdater {
         .join("; ");
       const errMessage = `Failed to check for updates from all sources (${summary}).`;
       this.lastError = errMessage;
+      if (!this.downloading) {
+        this.installState = "error";
+      }
+      this.emitEvent("error", errMessage);
       throw new Error(errMessage);
     } finally {
       this.checking = false;
@@ -794,9 +1408,20 @@ export class AppUpdater {
     options?: DownloadUpdateOptions
   ): Promise<UpdateDownloadResult> {
     this.downloading = true;
+    this.installState = "downloading";
+    this.lastError = null;
     try {
       const checkResult =
-        options?.checkResult ?? this.lastCheck ?? (await this.checkForUpdates());
+        options?.checkResult ??
+        (options?.sourceOverride !== undefined &&
+        this.lastCheck?.sourceUsed !== options.sourceOverride
+          ? await this.checkForUpdates({ sourceOverride: options.sourceOverride })
+          : this.lastCheck ??
+            (await this.checkForUpdates(
+              options?.sourceOverride !== undefined
+                ? { sourceOverride: options.sourceOverride }
+                : undefined
+            )));
       const primaryAsset = this.selectDownloadAsset(checkResult, options);
       if (primaryAsset === null) {
         throw new Error(
@@ -805,10 +1430,14 @@ export class AppUpdater {
       }
 
       const expectedSha = this.requireValidSha256(
-        primaryAsset.sha256,
-        primaryAsset.name
+        primaryAsset.expectedSha256 ?? primaryAsset.sha256,
+        primaryAsset.expectedExeName ?? primaryAsset.name
       );
-      const safeName = sanitizeAssetFileName(primaryAsset.name);
+      const targetAssetName =
+        primaryAsset.kind === "split-7z-exe"
+          ? primaryAsset.expectedExeName ?? primaryAsset.name
+          : primaryAsset.name;
+      const safeName = sanitizeAssetFileName(targetAssetName);
       const destDir = resolve(options?.destDir ?? this.downloadsDir);
       mkdirSync(destDir, { recursive: true });
       const targetPath = join(destDir, safeName);
@@ -822,24 +1451,67 @@ export class AppUpdater {
       let activeAsset = primaryAsset;
       let activeSha = expectedSha;
 
+      const emitProgress = (prog: UpdateDownloadProgress) => {
+        this.progress = prog;
+        if (prog.stage === "extracting") {
+          this.installState = "extracting";
+          this.emitEvent("extracting");
+        } else if (prog.stage === "verifying") {
+          this.installState = "verifying";
+          this.emitEvent("verifying");
+        } else if (prog.stage === "ready") {
+          this.installState = "ready";
+          this.emitEvent("ready");
+        } else if (prog.stage === "error") {
+          this.installState = "error";
+          this.emitEvent("error", prog.message ?? null);
+        } else {
+          this.installState = "downloading";
+          this.emitEvent("progress");
+        }
+        options?.onProgress?.(prog);
+      };
+
       try {
-        const result = await this.downloadAndVerifyAsset({
+        const result = await this.executeAssetDownload({
           asset: activeAsset,
           expectedSha256: activeSha,
           version: checkResult.latestVersion ?? this.currentVersion,
+          destDir,
           targetPath,
           partPath,
           usedFallbackSource,
           maxRetries,
           retryDelaysMs,
-          onProgress: options?.onProgress
+          onProgress: emitProgress
         });
         this.lastDownload = result;
         this.lastError = null;
+        this.installState = "ready";
+        this.progress = {
+          stage: "ready",
+          phase: "ready",
+          bytesDownloaded: result.bytesDownloaded,
+          totalBytes: result.totalBytes ?? result.bytesDownloaded,
+          percent: 100,
+          source: result.sourceUsed,
+          message: `校验完成，已就绪：${result.assetName}`,
+          updatedAt: Date.now()
+        };
+        this.emitEvent("ready");
         return result;
       } catch (primaryError) {
         if (primaryError instanceof UpdateIntegrityError) {
-          this.lastError = primaryError.message;
+          this.progress = {
+            stage: "error",
+            phase: "error",
+            bytesDownloaded: this.progress?.bytesDownloaded ?? 0,
+            totalBytes: this.progress?.totalBytes ?? null,
+            percent: this.progress?.percent ?? null,
+            source: activeSource,
+            message: primaryError.message,
+            updatedAt: Date.now()
+          };
           throw primaryError;
         }
 
@@ -873,32 +1545,41 @@ export class AppUpdater {
           );
         } catch (fallbackCheckError) {
           const combined = `Primary source ${activeSource} failed (${primaryError instanceof Error ? primaryError.message : String(primaryError)}); fallback source ${fallbackSource} check failed (${fallbackCheckError instanceof Error ? fallbackCheckError.message : String(fallbackCheckError)}).`;
-          this.lastError = combined;
           throw new Error(combined);
         }
 
         const fallbackAsset =
-          fallbackCheck.assets.find((item) => item.name === primaryAsset.name) ??
+          fallbackCheck.assets.find((item) => item.name === targetAssetName) ??
+          fallbackCheck.assets.find(
+            (item) => item.expectedExeName === targetAssetName
+          ) ??
           fallbackCheck.assets.find((item) => item.kind === primaryAsset.kind) ??
+          fallbackCheck.assets.find(
+            (item) =>
+              (primaryAsset.kind === "setup-exe" && item.kind === "split-7z-exe") ||
+              (primaryAsset.kind === "split-7z-exe" && item.kind === "setup-exe")
+          ) ??
           fallbackCheck.recommendedAsset;
 
         if (fallbackAsset === null || fallbackAsset === undefined) {
-          const msg = `Primary source ${activeSource} failed (${primaryError instanceof Error ? primaryError.message : String(primaryError)}); fallback source ${fallbackSource} had no matching asset for "${primaryAsset.name}".`;
-          this.lastError = msg;
+          const msg = `Primary source ${activeSource} failed (${primaryError instanceof Error ? primaryError.message : String(primaryError)}); fallback source ${fallbackSource} had no matching asset for "${targetAssetName}".`;
           throw new Error(msg);
         }
 
         const fallbackSha = this.requireValidSha256(
-          fallbackAsset.sha256,
-          fallbackAsset.name
+          fallbackAsset.expectedSha256 ?? fallbackAsset.sha256,
+          fallbackAsset.expectedExeName ?? fallbackAsset.name
         );
+        const fallbackTargetName =
+          fallbackAsset.kind === "split-7z-exe"
+            ? fallbackAsset.expectedExeName ?? fallbackAsset.name
+            : fallbackAsset.name;
         if (
           fallbackCheck.latestVersion === checkResult.latestVersion &&
-          fallbackAsset.name === primaryAsset.name &&
+          fallbackTargetName === targetAssetName &&
           fallbackSha !== expectedSha
         ) {
-          const msg = `Fallback source ${fallbackSource} SHA-256 for "${fallbackAsset.name}" disagrees with primary ${activeSource}.`;
-          this.lastError = msg;
+          const msg = `Fallback source ${fallbackSource} SHA-256 for "${fallbackTargetName}" disagrees with primary ${activeSource}.`;
           throw new Error(msg);
         }
 
@@ -907,24 +1588,67 @@ export class AppUpdater {
         activeAsset = fallbackAsset;
         activeSha = fallbackSha;
 
-        const fallbackResult = await this.downloadAndVerifyAsset({
+        const fallbackSafeName = sanitizeAssetFileName(fallbackTargetName);
+        const fallbackTargetPath = join(destDir, fallbackSafeName);
+        const fallbackPartPath = `${fallbackTargetPath}.part`;
+
+        const fallbackResult = await this.executeAssetDownload({
           asset: activeAsset,
           expectedSha256: activeSha,
-          version: fallbackCheck.latestVersion ?? checkResult.latestVersion ?? this.currentVersion,
-          targetPath,
-          partPath,
+          version:
+            fallbackCheck.latestVersion ??
+            checkResult.latestVersion ??
+            this.currentVersion,
+          destDir,
+          targetPath: fallbackTargetPath,
+          partPath: fallbackPartPath,
           usedFallbackSource,
           maxRetries,
           retryDelaysMs,
-          onProgress: options?.onProgress
+          onProgress: emitProgress
         });
         this.lastDownload = fallbackResult;
         this.lastError = null;
+        this.installState = "ready";
+        this.progress = {
+          stage: "ready",
+          phase: "ready",
+          bytesDownloaded: fallbackResult.bytesDownloaded,
+          totalBytes: fallbackResult.totalBytes ?? fallbackResult.bytesDownloaded,
+          percent: 100,
+          source: fallbackResult.sourceUsed,
+          message: `校验完成，已就绪：${fallbackResult.assetName}`,
+          updatedAt: Date.now()
+        };
+        this.emitEvent("ready");
         return fallbackResult;
       }
+    } catch (err) {
+      this.installState = "error";
+      this.lastError = err instanceof Error ? err.message : String(err);
+      this.emitEvent("error", this.lastError);
+      throw err;
     } finally {
       this.downloading = false;
     }
+  }
+
+  private async executeAssetDownload(params: {
+    asset: UpdateAssetInfo;
+    expectedSha256: string;
+    version: string;
+    destDir: string;
+    targetPath: string;
+    partPath: string;
+    usedFallbackSource: boolean;
+    maxRetries: number;
+    retryDelaysMs: number[];
+    onProgress: (progress: UpdateDownloadProgress) => void;
+  }): Promise<UpdateDownloadResult> {
+    if (params.asset.kind === "split-7z-exe") {
+      return this.downloadAndExtractSplit7zAsset(params);
+    }
+    return this.downloadAndVerifySingleAsset(params);
   }
 
   private validatePolicy(raw: UpdatePolicyConfig): UpdatePolicyConfig {
@@ -967,13 +1691,16 @@ export class AppUpdater {
     ) {
       throw new Error("timeoutMs must be a finite number between 100 and 300000.");
     }
+    const autoCheckEnabled =
+      raw.autoCheckEnabled === undefined ? true : Boolean(raw.autoCheckEnabled);
 
     return {
       routePreference: raw.routePreference as NetworkRoutePreference,
       includePrerelease: raw.includePrerelease,
       customGhProxyPrefix: cleanPrefix,
       pluginRegistryOverride: raw.pluginRegistryOverride,
-      timeoutMs: Math.round(raw.timeoutMs)
+      timeoutMs: Math.round(raw.timeoutMs),
+      autoCheckEnabled
     };
   }
 
@@ -1007,7 +1734,9 @@ export class AppUpdater {
     source: UpdateSourceId,
     url: string,
     headers: Record<string, string>,
-    timeoutMs: number
+    timeoutMs: number,
+    method: "GET" | "HEAD" = "GET",
+    followRedirects = true
   ): Promise<SourceEndpointProbe> {
     const startedAt = performance.now();
     try {
@@ -1015,7 +1744,9 @@ export class AppUpdater {
         url,
         headers,
         timeoutMs,
-        this.maxRedirects
+        this.maxRedirects,
+        method,
+        followRedirects
       );
       response.stream.resume();
       const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
@@ -1057,13 +1788,38 @@ export class AppUpdater {
         ? { accept: "application/vnd.github+json" }
         : { accept: "application/json" };
 
-    const rawText = await fetchText(
-      releasesUrl,
-      headers,
-      this.policy.timeoutMs,
-      this.maxRedirects
-    );
-    const parsedJson = JSON.parse(rawText) as unknown;
+    let parsedJson: unknown;
+    try {
+      const rawText = await fetchText(
+        releasesUrl,
+        headers,
+        this.policy.timeoutMs,
+        this.maxRedirects
+      );
+      parsedJson = JSON.parse(rawText) as unknown;
+    } catch (error) {
+      if (
+        source === "gitee" &&
+        error instanceof UpdateHttpError &&
+        (error.statusCode === 403 || error.statusCode === 429)
+      ) {
+        const giteeWebUrl = `${this.endpoints.giteeWebBase}/${this.endpoints.giteeOwner}/${this.endpoints.giteeRepo}/releases`;
+        const html = await fetchText(
+          giteeWebUrl,
+          { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
+          this.policy.timeoutMs,
+          this.maxRedirects
+        );
+        parsedJson = parseGiteeWebReleasesHtml(
+          html,
+          this.endpoints.giteeWebBase,
+          this.endpoints.giteeOwner,
+          this.endpoints.giteeRepo
+        );
+      } else {
+        throw error;
+      }
+    }
     if (!Array.isArray(parsedJson)) {
       throw new Error(`Expected JSON array of releases from ${source}.`);
     }
@@ -1193,14 +1949,55 @@ export class AppUpdater {
     };
   }
 
+  private async resolveSha256ForAssetName(
+    assetName: string,
+    release: ParsedReleaseCandidate,
+    source: UpdateSourceId,
+    sumsMap: Map<string, string>,
+    sumsSourceUrl: string | undefined
+  ): Promise<{ sha256: string | null; sha256SourceUrl?: string }> {
+    const companionName = `${assetName.toLowerCase()}.sha256`;
+    const companion = release.rawAssets.find(
+      (item) => item.name.toLowerCase() === companionName
+    );
+    if (companion !== undefined) {
+      const companionUrl = this.resolveSourceUrl(companion.downloadUrl, source);
+      try {
+        const companionText = await fetchText(
+          companionUrl,
+          {},
+          this.policy.timeoutMs,
+          this.maxRedirects,
+          256 * 1024
+        );
+        const parsedDigest = parseSingleAssetSha256Text(companionText, assetName);
+        if (isValidSha256Hex(parsedDigest)) {
+          return { sha256: parsedDigest, sha256SourceUrl: companionUrl };
+        }
+      } catch {
+        // Fall through to SHA256SUMS.txt
+      }
+    }
+
+    const fromSums = sumsMap.get(assetName.toLowerCase());
+    if (isValidSha256Hex(fromSums)) {
+      return {
+        sha256: fromSums,
+        ...(sumsSourceUrl !== undefined ? { sha256SourceUrl: sumsSourceUrl } : {})
+      };
+    }
+
+    return { sha256: null };
+  }
+
   private async resolveReleaseAssetsWithSha256(
     release: ParsedReleaseCandidate,
     source: UpdateSourceId
   ): Promise<UpdateAssetInfo[]> {
-    const checksumAsset = release.rawAssets.find((item) => {
-      const lower = item.name.toLowerCase();
-      return lower === "sha256sums.txt" || lower === "sha256sums";
-    });
+    const checksumAsset = selectSoftwareChecksumAsset(
+      release.rawAssets,
+      release.version
+    );
 
     let sumsMap = new Map<string, string>();
     let sumsSourceUrl: string | undefined;
@@ -1220,49 +2017,21 @@ export class AppUpdater {
     }
 
     const resolvedAssets: UpdateAssetInfo[] = [];
+
+    // 1. Standard single-file assets (.exe / portable .zip)
     for (const rawAsset of release.rawAssets) {
       const kind = classifyPackageAssetKind(rawAsset.name, release.version);
       if (kind === null) {
         continue;
       }
 
-      let sha256: string | null = null;
-      let sha256SourceUrl: string | undefined;
-
-      const companionName = `${rawAsset.name.toLowerCase()}.sha256`;
-      const companion = release.rawAssets.find(
-        (item) => item.name.toLowerCase() === companionName
+      const { sha256, sha256SourceUrl } = await this.resolveSha256ForAssetName(
+        rawAsset.name,
+        release,
+        source,
+        sumsMap,
+        sumsSourceUrl
       );
-      if (companion !== undefined) {
-        const companionUrl = this.resolveSourceUrl(companion.downloadUrl, source);
-        try {
-          const companionText = await fetchText(
-            companionUrl,
-            {},
-            this.policy.timeoutMs,
-            this.maxRedirects,
-            256 * 1024
-          );
-          const parsedDigest = parseSingleAssetSha256Text(
-            companionText,
-            rawAsset.name
-          );
-          if (isValidSha256Hex(parsedDigest)) {
-            sha256 = parsedDigest;
-            sha256SourceUrl = companionUrl;
-          }
-        } catch {
-          // Fall through to SHA256SUMS.txt
-        }
-      }
-
-      if (sha256 === null) {
-        const fromSums = sumsMap.get(rawAsset.name.toLowerCase());
-        if (isValidSha256Hex(fromSums)) {
-          sha256 = fromSums;
-          sha256SourceUrl = sumsSourceUrl;
-        }
-      }
 
       const effectiveUrl = this.resolveSourceUrl(rawAsset.downloadUrl, source);
       resolvedAssets.push({
@@ -1272,7 +2041,100 @@ export class AppUpdater {
         effectiveUrl,
         sizeBytes: rawAsset.sizeBytes,
         sha256,
-        ...(sha256SourceUrl !== undefined ? { sha256SourceUrl } : {}),
+        ...(sha256SourceUrl !== undefined
+          ? { sha256SourceUrl, sha256Url: sha256SourceUrl }
+          : {}),
+        source
+      });
+    }
+
+    // 2. Gitee split-7z multi-volume archives: `<name>.exe.7z.001..N`
+    const splitGroups = new Map<
+      string,
+      {
+        expectedExeName: string;
+        entries: Array<{
+          index: number;
+          name: string;
+          downloadUrl: string;
+          sizeBytes: number | null;
+        }>;
+      }
+    >();
+
+    for (const rawAsset of release.rawAssets) {
+      const match = SPLIT_7Z_EXE_RE.exec(rawAsset.name);
+      if (match === null) {
+        continue;
+      }
+      const expectedExeName = match[1]!;
+      const partIndex = Number.parseInt(match[2]!, 10);
+      if (!Number.isInteger(partIndex) || partIndex < 1) {
+        continue;
+      }
+      const key = expectedExeName.toLowerCase();
+      let group = splitGroups.get(key);
+      if (group === undefined) {
+        group = { expectedExeName, entries: [] };
+        splitGroups.set(key, group);
+      }
+      group.entries.push({
+        index: partIndex,
+        name: rawAsset.name,
+        downloadUrl: rawAsset.downloadUrl,
+        sizeBytes: rawAsset.sizeBytes
+      });
+    }
+
+    for (const group of splitGroups.values()) {
+      group.entries.sort((a, b) => a.index - b.index);
+      // Verify contiguous 1..N part indices without gaps or duplicates.
+      let contiguous = group.entries.length > 0;
+      for (let i = 0; i < group.entries.length; i += 1) {
+        if (group.entries[i]!.index !== i + 1) {
+          contiguous = false;
+          break;
+        }
+      }
+      if (!contiguous) {
+        continue;
+      }
+
+      const parts: UpdateSplitArchivePart[] = group.entries.map((entry) => ({
+        name: entry.name,
+        url: entry.downloadUrl,
+        effectiveUrl: this.resolveSourceUrl(entry.downloadUrl, source),
+        ...(entry.sizeBytes !== null ? { size: entry.sizeBytes } : {})
+      }));
+
+      const allHaveSize = group.entries.every((e) => e.sizeBytes !== null);
+      const totalBytes = allHaveSize
+        ? group.entries.reduce((acc, e) => acc + (e.sizeBytes ?? 0), 0)
+        : null;
+
+      const { sha256, sha256SourceUrl } = await this.resolveSha256ForAssetName(
+        group.expectedExeName,
+        release,
+        source,
+        sumsMap,
+        sumsSourceUrl
+      );
+
+      const firstPart = parts[0]!;
+      resolvedAssets.push({
+        name: group.expectedExeName,
+        kind: "split-7z-exe",
+        downloadUrl: firstPart.url,
+        effectiveUrl: firstPart.effectiveUrl ?? firstPart.url,
+        sizeBytes: totalBytes,
+        totalBytes,
+        sha256,
+        expectedSha256: sha256,
+        expectedExeName: group.expectedExeName,
+        ...(sha256SourceUrl !== undefined
+          ? { sha256SourceUrl, sha256Url: sha256SourceUrl }
+          : {}),
+        parts,
         source
       });
     }
@@ -1293,19 +2155,17 @@ export class AppUpdater {
     if (assets.length === 0) {
       return null;
     }
-    const preferredKind: UpdatePackageKind = this.portableMode
-      ? "portable-zip"
-      : "setup-exe";
-    const fallbackKind: UpdatePackageKind = this.portableMode
-      ? "setup-exe"
-      : "portable-zip";
+    const order: UpdatePackageKind[] = this.portableMode
+      ? ["portable-zip", "setup-exe", "split-7z-exe"]
+      : ["setup-exe", "split-7z-exe", "portable-zip"];
 
-    return (
-      assets.find((item) => item.kind === preferredKind) ??
-      assets.find((item) => item.kind === fallbackKind) ??
-      assets[0] ??
-      null
-    );
+    for (const kind of order) {
+      const matched = assets.find((item) => item.kind === kind);
+      if (matched !== undefined) {
+        return matched;
+      }
+    }
+    return assets[0] ?? null;
   }
 
   private selectDownloadAsset(
@@ -1315,12 +2175,31 @@ export class AppUpdater {
     if (options?.asset !== undefined) {
       return options.asset;
     }
+    if (options?.assetName !== undefined && options.assetName.trim().length > 0) {
+      const wanted = options.assetName.trim().toLowerCase();
+      const byName = checkResult.assets.find(
+        (item) =>
+          item.name.toLowerCase() === wanted ||
+          item.expectedExeName?.toLowerCase() === wanted
+      );
+      if (byName !== undefined) {
+        return byName;
+      }
+    }
     if (options?.kind !== undefined) {
       const matched = checkResult.assets.find(
         (item) => item.kind === options.kind
       );
       if (matched !== undefined) {
         return matched;
+      }
+      if (options.kind === "setup-exe") {
+        const splitMatch = checkResult.assets.find(
+          (item) => item.kind === "split-7z-exe"
+        );
+        if (splitMatch !== undefined) {
+          return splitMatch;
+        }
       }
     }
     if (!checkResult.hasUpdate) {
@@ -1336,7 +2215,8 @@ export class AppUpdater {
     sha256: string | null | undefined,
     assetName: string
   ): string {
-    const normalized = typeof sha256 === "string" ? sha256.trim().toLowerCase() : "";
+    const normalized =
+      typeof sha256 === "string" ? sha256.trim().toLowerCase() : "";
     if (!SHA256_HEX_RE.test(normalized)) {
       throw new Error(
         `Refusing to download or install update "${assetName}": missing valid 64-char SHA-256 checksum.`
@@ -1345,22 +2225,15 @@ export class AppUpdater {
     return normalized;
   }
 
-  private async downloadAndVerifyAsset(params: {
-    asset: UpdateAssetInfo;
-    expectedSha256: string;
-    version: string;
-    targetPath: string;
+  private async streamDownloadFileWithResume(params: {
+    url: string;
     partPath: string;
-    usedFallbackSource: boolean;
+    expectedSizeHint: number | null;
     maxRetries: number;
     retryDelaysMs: number[];
-    onProgress?: (progress: UpdateDownloadProgress) => void;
-  }): Promise<UpdateDownloadResult> {
-    const effectiveDownloadUrl = this.resolveSourceUrl(
-      params.asset.downloadUrl,
-      params.asset.source
-    );
-    const totalExpectedHint = params.asset.sizeBytes ?? null;
+    onChunkProgress: (bytesWrittenTotal: number, fileTotalHint: number | null) => void;
+    checkCompleteDigest?: string;
+  }): Promise<{ bytes: number; resumedFromBytes: number }> {
     let resumedFromBytes = 0;
 
     for (let attempt = 0; attempt <= params.maxRetries; attempt += 1) {
@@ -1374,7 +2247,7 @@ export class AppUpdater {
         }
 
         const response = await openHttpWithRedirects(
-          effectiveDownloadUrl,
+          params.url,
           headers,
           this.policy.timeoutMs,
           this.maxRedirects
@@ -1383,18 +2256,33 @@ export class AppUpdater {
         if (response.statusCode === 416) {
           response.stream.resume();
           if (existsSync(params.partPath)) {
-            const checkExisting = await computeFileSha256(params.partPath);
-            if (checkExisting.sha256 === params.expectedSha256) {
-              break;
+            if (params.checkCompleteDigest !== undefined) {
+              const checkExisting = await computeFileSha256(params.partPath);
+              if (checkExisting.sha256 === params.checkCompleteDigest) {
+                return {
+                  bytes: checkExisting.bytes,
+                  resumedFromBytes: checkExisting.bytes
+                };
+              }
+            } else if (
+              params.expectedSizeHint !== null &&
+              existingSize === params.expectedSizeHint
+            ) {
+              return {
+                bytes: existingSize,
+                resumedFromBytes: existingSize
+              };
             }
             rmSync(params.partPath, { force: true });
           }
-          throw new RetryableTransferError("Server returned 416; restarting from byte 0.");
+          throw new RetryableTransferError(
+            "Server returned 416; restarting from byte 0."
+          );
         }
 
         if (response.statusCode !== 200 && response.statusCode !== 206) {
           response.stream.resume();
-          throw new UpdateHttpError(response.statusCode, effectiveDownloadUrl);
+          throw new UpdateHttpError(response.statusCode, params.url);
         }
 
         let appendMode = false;
@@ -1419,13 +2307,14 @@ export class AppUpdater {
 
         const headerContentLength = response.headers["content-length"];
         const parsedContentLength =
-          typeof headerContentLength === "string" && /^\d+$/.test(headerContentLength)
+          typeof headerContentLength === "string" &&
+          /^\d+$/.test(headerContentLength)
             ? Number.parseInt(headerContentLength, 10)
             : null;
         const totalBytesForProgress =
           parsedContentLength !== null
             ? currentOffset + parsedContentLength
-            : totalExpectedHint;
+            : params.expectedSizeHint;
 
         const writeStream = createWriteStream(params.partPath, {
           flags: appendMode ? "a" : "w"
@@ -1444,11 +2333,10 @@ export class AppUpdater {
             }
             await writeChunkToStream(writeStream, buf);
             bytesWrittenThisAttempt += buf.length;
-            params.onProgress?.({
-              bytesDownloaded: currentOffset + bytesWrittenThisAttempt,
-              totalBytes: totalBytesForProgress,
-              source: params.asset.source
-            });
+            params.onChunkProgress(
+              currentOffset + bytesWrittenThisAttempt,
+              totalBytesForProgress
+            );
           }
         } catch (err) {
           streamError = err;
@@ -1476,7 +2364,10 @@ export class AppUpdater {
           );
         }
 
-        break;
+        const finalSize = existsSync(params.partPath)
+          ? statSync(params.partPath).size
+          : currentOffset + bytesWrittenThisAttempt;
+        return { bytes: finalSize, resumedFromBytes };
       } catch (error) {
         if (attempt < params.maxRetries && isRetryableDownloadError(error)) {
           const delayMs =
@@ -1490,9 +2381,64 @@ export class AppUpdater {
       }
     }
 
+    throw new Error(`Exhausted retries while downloading ${params.url}`);
+  }
+
+  private async downloadAndVerifySingleAsset(params: {
+    asset: UpdateAssetInfo;
+    expectedSha256: string;
+    version: string;
+    targetPath: string;
+    partPath: string;
+    usedFallbackSource: boolean;
+    maxRetries: number;
+    retryDelaysMs: number[];
+    onProgress: (progress: UpdateDownloadProgress) => void;
+  }): Promise<UpdateDownloadResult> {
+    const effectiveDownloadUrl = this.resolveSourceUrl(
+      params.asset.downloadUrl,
+      params.asset.source
+    );
+
+    const transfer = await this.streamDownloadFileWithResume({
+      url: effectiveDownloadUrl,
+      partPath: params.partPath,
+      expectedSizeHint: params.asset.sizeBytes ?? null,
+      maxRetries: params.maxRetries,
+      retryDelaysMs: params.retryDelaysMs,
+      checkCompleteDigest: params.expectedSha256,
+      onChunkProgress: (bytesDownloaded, totalBytes) => {
+        params.onProgress({
+          stage: "downloading",
+          phase: "downloading",
+          bytesDownloaded,
+          totalBytes,
+          percent: computePercent(bytesDownloaded, totalBytes),
+          source: params.asset.source,
+          partName: params.asset.name,
+          message: `正在下载 ${params.asset.name}...`,
+          updatedAt: Date.now()
+        });
+      }
+    });
+
     if (!existsSync(params.partPath)) {
-      throw new Error(`Partial update file missing after download: ${params.partPath}`);
+      throw new Error(
+        `Partial update file missing after download: ${params.partPath}`
+      );
     }
+
+    params.onProgress({
+      stage: "verifying",
+      phase: "verifying",
+      bytesDownloaded: transfer.bytes,
+      totalBytes: params.asset.sizeBytes ?? transfer.bytes,
+      percent: 100,
+      source: params.asset.source,
+      partName: params.asset.name,
+      message: "正在执行 SHA-256 完整性校验...",
+      updatedAt: Date.now()
+    });
 
     const computed = await computeFileSha256(params.partPath);
     if (computed.sha256 !== params.expectedSha256) {
@@ -1514,12 +2460,217 @@ export class AppUpdater {
       filePath: params.targetPath,
       bytesDownloaded: computed.bytes,
       totalBytes: params.asset.sizeBytes ?? computed.bytes,
-      resumedFromBytes,
+      resumedFromBytes: transfer.resumedFromBytes,
       sha256: computed.sha256,
       verified: true,
       sourceUsed: params.asset.source,
       usedFallbackSource: params.usedFallbackSource,
-      downloadUrl: effectiveDownloadUrl
+      downloadUrl: effectiveDownloadUrl,
+      packageKind: params.asset.kind
+    };
+  }
+
+  private async downloadAndExtractSplit7zAsset(params: {
+    asset: UpdateAssetInfo;
+    expectedSha256: string;
+    version: string;
+    destDir: string;
+    targetPath: string;
+    usedFallbackSource: boolean;
+    maxRetries: number;
+    retryDelaysMs: number[];
+    onProgress: (progress: UpdateDownloadProgress) => void;
+  }): Promise<UpdateDownloadResult> {
+    const parts = params.asset.parts ?? [];
+    if (parts.length === 0) {
+      throw new Error(
+        `Split-7z update asset "${params.asset.name}" contains no archive parts.`
+      );
+    }
+
+    const sevenZipExe = this.resolve7zaPath();
+    if (!sevenZipExe) {
+      throw new Error(
+        "未找到 7za.exe / 7z.exe，无法重组 Gitee 分卷安装包。请安装 7-Zip 或设置环境变量 PRISMUX_7ZA_PATH。"
+      );
+    }
+
+    const expectedExeName = sanitizeAssetFileName(
+      params.asset.expectedExeName ?? params.asset.name
+    );
+    const workHash = createHash("sha256")
+      .update(`${params.version}:${expectedExeName}:${params.expectedSha256}`)
+      .digest("hex")
+      .slice(0, 12);
+    const workDir = join(params.destDir, `.split-work-${workHash}`);
+    const extractDir = join(workDir, "extracted");
+    mkdirSync(workDir, { recursive: true });
+
+    const totalArchiveBytes =
+      params.asset.totalBytes ??
+      (parts.every((p) => typeof p.size === "number")
+        ? parts.reduce((sum, p) => sum + (p.size ?? 0), 0)
+        : null);
+
+    let completedPartsBytes = 0;
+    let totalResumedBytes = 0;
+    const downloadedPartPaths: string[] = [];
+
+    for (let i = 0; i < parts.length; i += 1) {
+      const part = parts[i]!;
+      const safePartName = sanitizeAssetFileName(part.name);
+      const finalPartPath = join(workDir, safePartName);
+      const tempPartPath = `${finalPartPath}.part`;
+      const effectivePartUrl =
+        part.effectiveUrl ??
+        this.resolveSourceUrl(part.url, params.asset.source);
+
+      // Reuse already-completed split volume if exact size matches (supports cross-attempt resume).
+      if (
+        existsSync(finalPartPath) &&
+        typeof part.size === "number" &&
+        statSync(finalPartPath).size === part.size
+      ) {
+        completedPartsBytes += part.size;
+        totalResumedBytes += part.size;
+        downloadedPartPaths.push(finalPartPath);
+        params.onProgress({
+          stage: "downloading",
+          phase: "downloading",
+          bytesDownloaded: completedPartsBytes,
+          totalBytes: totalArchiveBytes,
+          percent: computePercent(completedPartsBytes, totalArchiveBytes),
+          source: params.asset.source,
+          currentPart: i + 1,
+          totalParts: parts.length,
+          partName: safePartName,
+          message: `已复用分卷 ${i + 1}/${parts.length} (${safePartName})`,
+          updatedAt: Date.now()
+        });
+        continue;
+      }
+
+      const partBaseOffset = completedPartsBytes;
+      const transfer = await this.streamDownloadFileWithResume({
+        url: effectivePartUrl,
+        partPath: tempPartPath,
+        expectedSizeHint: part.size ?? null,
+        maxRetries: params.maxRetries,
+        retryDelaysMs: params.retryDelaysMs,
+        onChunkProgress: (partBytes, _partTotal) => {
+          const aggregateBytes = partBaseOffset + partBytes;
+          params.onProgress({
+            stage: "downloading",
+            phase: "downloading",
+            bytesDownloaded: aggregateBytes,
+            totalBytes: totalArchiveBytes,
+            percent: computePercent(aggregateBytes, totalArchiveBytes),
+            source: params.asset.source,
+            currentPart: i + 1,
+            totalParts: parts.length,
+            partName: safePartName,
+            message: `正在下载分卷 ${i + 1}/${parts.length} (${safePartName})...`,
+            updatedAt: Date.now()
+          });
+        }
+      });
+
+      rmSync(finalPartPath, { force: true });
+      renameSync(tempPartPath, finalPartPath);
+      completedPartsBytes += transfer.bytes;
+      totalResumedBytes += transfer.resumedFromBytes;
+      downloadedPartPaths.push(finalPartPath);
+    }
+
+    const firstVolumePath = downloadedPartPaths[0]!;
+    params.onProgress({
+      stage: "extracting",
+      phase: "extracting",
+      bytesDownloaded: completedPartsBytes,
+      totalBytes: totalArchiveBytes ?? completedPartsBytes,
+      percent: 100,
+      source: params.asset.source,
+      currentPart: parts.length,
+      totalParts: parts.length,
+      partName: expectedExeName,
+      message: `正在使用 7-Zip 无损合并解压 ${expectedExeName}...`,
+      updatedAt: Date.now()
+    });
+
+    rmSync(extractDir, { recursive: true, force: true });
+    mkdirSync(extractDir, { recursive: true });
+
+    try {
+      await execFileAsync(
+        sevenZipExe,
+        ["x", "-y", `-o${extractDir}`, firstVolumePath],
+        {
+          timeout: DEFAULT_EXTRACT_TIMEOUT_MS,
+          windowsHide: true,
+          maxBuffer: 4 * 1024 * 1024
+        }
+      );
+    } catch (error) {
+      rmSync(workDir, { recursive: true, force: true });
+      const detail =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `分卷 7z 解压失败（已自动清理残片）：${detail}`
+      );
+    }
+
+    const extractedExePath = findExtractedExeFile(extractDir, expectedExeName);
+    if (extractedExePath === null) {
+      rmSync(workDir, { recursive: true, force: true });
+      throw new Error(
+        `分卷解压后未找到目标安装包 "${expectedExeName}"（已清理临时残片）。`
+      );
+    }
+
+    params.onProgress({
+      stage: "verifying",
+      phase: "verifying",
+      bytesDownloaded: completedPartsBytes,
+      totalBytes: totalArchiveBytes ?? completedPartsBytes,
+      percent: 100,
+      source: params.asset.source,
+      currentPart: parts.length,
+      totalParts: parts.length,
+      partName: expectedExeName,
+      message: `正在校验整包 SHA-256 (${expectedExeName})...`,
+      updatedAt: Date.now()
+    });
+
+    const computed = await computeFileSha256(extractedExePath);
+    if (computed.sha256 !== params.expectedSha256) {
+      // Immediately wipe all fragments and extracted tampered artifacts!
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(params.targetPath, { force: true });
+      throw new UpdateIntegrityError(
+        expectedExeName,
+        params.expectedSha256,
+        computed.sha256
+      );
+    }
+
+    rmSync(params.targetPath, { force: true });
+    renameSync(extractedExePath, params.targetPath);
+    rmSync(workDir, { recursive: true, force: true });
+
+    return {
+      downloadedAt: Date.now(),
+      version: params.version,
+      assetName: expectedExeName,
+      filePath: params.targetPath,
+      bytesDownloaded: completedPartsBytes,
+      totalBytes: totalArchiveBytes ?? completedPartsBytes,
+      resumedFromBytes: totalResumedBytes,
+      sha256: computed.sha256,
+      verified: true,
+      sourceUsed: params.asset.source,
+      usedFallbackSource: params.usedFallbackSource,
+      downloadUrl: params.asset.effectiveUrl,
+      packageKind: "split-7z-exe"
     };
   }
 }

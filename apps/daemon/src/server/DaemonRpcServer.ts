@@ -50,6 +50,12 @@ import type {
 } from "../handoff/HandoffEngine.js";
 import type { LifecycleHookBus } from "../hooks/LifecycleHookBus.js";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
+import {
+  PortKillError,
+  type PortScannerService
+} from "../system/PortScannerService.js";
+import type { ResourceMonitorService } from "../system/ResourceMonitorService.js";
+import type { ServiceDiagnosticsService } from "../system/ServiceDiagnosticsService.js";
 import { SystemFontService } from "../system/SystemFontService.js";
 import type { T3RpcClient } from "../t3/T3RpcClient.js";
 import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
@@ -94,6 +100,9 @@ export interface DaemonRpcServerOptions {
   fontService?: SystemFontService;
   appearanceStore?: AppearanceConfigStore;
   businessService?: DaemonBusinessService;
+  diagnosticsService?: ServiceDiagnosticsService;
+  portScannerService?: PortScannerService;
+  resourceMonitorService?: ResourceMonitorService;
   startedAt?: number;
   onRequestShutdown?: (reason?: string) => void | Promise<void>;
 }
@@ -267,7 +276,7 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
     );
     res.setHeader(
       "access-control-allow-headers",
-      "Content-Type, Authorization, Range, X-Prismux-Token"
+      "Content-Type, Authorization, Range, X-Prismux-Token, Cache-Control, Last-Event-ID, Pragma, Accept"
     );
     res.setHeader(
       "access-control-expose-headers",
@@ -409,6 +418,9 @@ export class DaemonRpcServer {
   private readonly fontService: SystemFontService;
   private readonly appearanceStore: AppearanceConfigStore | undefined;
   private readonly businessService: DaemonBusinessService | undefined;
+  private readonly diagnosticsService: ServiceDiagnosticsService | undefined;
+  private readonly portScannerService: PortScannerService | undefined;
+  private readonly resourceMonitorService: ResourceMonitorService | undefined;
   private readonly startedAt: number;
   private readonly onRequestShutdown:
     | ((reason?: string) => void | Promise<void>)
@@ -421,6 +433,7 @@ export class DaemonRpcServer {
   private activeStopPromise: Promise<void> | undefined;
   private readonly activeSockets = new Set<WebSocket>();
   private readonly socketCleanups = new Map<WebSocket, () => void>();
+  private readonly activeSseCleanups = new Set<() => void>();
 
   constructor(options: DaemonRpcServerOptions) {
     this.host = options.host ?? "127.0.0.1";
@@ -444,6 +457,9 @@ export class DaemonRpcServer {
     this.fontService = options.fontService ?? new SystemFontService();
     this.appearanceStore = options.appearanceStore;
     this.businessService = options.businessService;
+    this.diagnosticsService = options.diagnosticsService;
+    this.portScannerService = options.portScannerService;
+    this.resourceMonitorService = options.resourceMonitorService;
     this.startedAt = options.startedAt ?? Date.now();
     this.onRequestShutdown = options.onRequestShutdown;
   }
@@ -575,6 +591,15 @@ export class DaemonRpcServer {
     this.httpServer = undefined;
     this.wss = undefined;
     this.boundPort = undefined;
+
+    for (const cleanupSse of Array.from(this.activeSseCleanups)) {
+      try {
+        cleanupSse();
+      } catch {
+        // Ignore cleanup errors during shutdown.
+      }
+    }
+    this.activeSseCleanups.clear();
 
     for (const ws of Array.from(this.activeSockets)) {
       const cleanup = this.socketCleanups.get(ws);
@@ -792,6 +817,20 @@ export class DaemonRpcServer {
         return;
       }
 
+      if (method === "GET" && requestUrl.pathname === "/v1/updater/events") {
+        const trustedCallerScope = this.authenticateHttpRequest(
+          req,
+          res,
+          requestUrl,
+          true
+        );
+        if (trustedCallerScope === null) {
+          return;
+        }
+        this.handleUpdaterSseStream(req, res);
+        return;
+      }
+
       if (method === "POST" && requestUrl.pathname === "/v1/updater/probe") {
         const trustedCallerScope = this.authenticateHttpRequest(req, res);
         if (trustedCallerScope === null) {
@@ -866,6 +905,15 @@ export class DaemonRpcServer {
       if (error instanceof WallpaperServiceError) {
         writeJsonResponse(res, error.statusCode, {
           ok: false,
+          error: { code: error.code, message: error.message }
+        });
+        return;
+      }
+      if (error instanceof PortKillError) {
+        writeJsonResponse(res, error.statusCode, {
+          ok: false,
+          killed: false,
+          message: error.message,
           error: { code: error.code, message: error.message }
         });
         return;
@@ -1260,6 +1308,210 @@ export class DaemonRpcServer {
       return true;
     }
 
+    if (method === "POST" && pathname === "/v1/sync/now") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.triggerSyncNow(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/sync/test") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.testSyncConnection(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/diagnostics/services") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/diagnostics/services.`
+        );
+      }
+      if (!this.diagnosticsService) {
+        throw new BusinessRouteError(
+          503,
+          "DIAGNOSTICS_UNAVAILABLE",
+          "ServiceDiagnosticsService is not configured."
+        );
+      }
+      const forceParam = requestUrl.searchParams.get("force")?.trim().toLowerCase();
+      const force = forceParam === "1" || forceParam === "true";
+      const report = await this.diagnosticsService.runDiagnostics(force);
+      writeJsonResponse(res, 200, report);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/system/ports") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/ports.`
+        );
+      }
+      if (!this.portScannerService) {
+        throw new BusinessRouteError(
+          503,
+          "PORT_SCANNER_UNAVAILABLE",
+          "PortScannerService is not configured."
+        );
+      }
+      const workspace = requestUrl.searchParams.get("workspace") ?? undefined;
+      const scanned = await this.portScannerService.scanPorts(workspace);
+      writeJsonResponse(res, 200, scanned);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/system/ports/kill") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to terminate system ports.`
+        );
+      }
+      if (!this.portScannerService) {
+        throw new BusinessRouteError(
+          503,
+          "PORT_SCANNER_UNAVAILABLE",
+          "PortScannerService is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      if (!isRecord(rawBody)) {
+        throw new PortKillError(400, "INVALID_PARAMS", "请求体必须是 JSON 对象。");
+      }
+      const signal =
+        typeof rawBody["signal"] === "string" ? rawBody["signal"] : undefined;
+      try {
+        const result = await this.portScannerService.killPid(
+          rawBody["pid"],
+          signal
+        );
+        writeJsonResponse(res, 200, result);
+      } catch (err) {
+        if (err instanceof PortKillError) {
+          writeJsonResponse(res, err.statusCode, {
+            ok: false,
+            pid: typeof rawBody["pid"] === "number" ? rawBody["pid"] : -1,
+            killed: false,
+            message: err.message,
+            error: { code: err.code, message: err.message }
+          });
+          return true;
+        }
+        throw err;
+      }
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/system/resources") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/resources.`
+        );
+      }
+      if (!this.resourceMonitorService) {
+        throw new BusinessRouteError(
+          503,
+          "RESOURCE_MONITOR_UNAVAILABLE",
+          "ResourceMonitorService is not configured."
+        );
+      }
+      const resources = await this.resourceMonitorService.getResources();
+      writeJsonResponse(res, 200, resources);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/system/pty/kill") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to terminate PTY sessions.`
+        );
+      }
+      if (!this.resourceMonitorService) {
+        throw new BusinessRouteError(
+          503,
+          "RESOURCE_MONITOR_UNAVAILABLE",
+          "ResourceMonitorService is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      if (!isRecord(rawBody)) {
+        writeJsonResponse(res, 400, {
+          ok: false,
+          sessionId: "",
+          killed: false,
+          removed: false,
+          message: "请求体必须是 JSON 对象。",
+          error: { code: "INVALID_PARAMS", message: "请求体必须是 JSON 对象。" }
+        });
+        return true;
+      }
+      const signal =
+        typeof rawBody["signal"] === "string" ? rawBody["signal"] : undefined;
+      const outcome = await this.resourceMonitorService.killPtySession(
+        rawBody["sessionId"],
+        signal
+      );
+      writeJsonResponse(res, outcome.statusCode, {
+        ...outcome.payload,
+        ...(outcome.payload.ok
+          ? {}
+          : {
+              error: {
+                code:
+                  outcome.statusCode === 404
+                    ? "PTY_NOT_FOUND"
+                    : "INVALID_PARAMS",
+                message: outcome.payload.message
+              }
+            })
+      });
+      return true;
+    }
+
     if (method === "GET" && pathname === "/v1/plugins/catalog") {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
@@ -1286,6 +1538,31 @@ export class DaemonRpcServer {
         );
       }
       const result = await this.businessService.getPluginsInstalled(
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/plugins/logs") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const pluginIdParam = requestUrl.searchParams.get("pluginId");
+      const limitParam = requestUrl.searchParams.get("limit");
+      const parsedLimit =
+        limitParam !== null && limitParam.trim().length > 0
+          ? Number.parseInt(limitParam, 10)
+          : null;
+      const result = await this.businessService.getPluginLogs(
+        pluginIdParam,
+        parsedLimit !== null && Number.isFinite(parsedLimit) ? parsedLimit : null,
         trustedCallerScope
       );
       writeJsonResponse(res, 200, result);
@@ -2174,6 +2451,90 @@ export class DaemonRpcServer {
     }
   }
 
+  private handleUpdaterSseStream(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): void {
+    const updater = this.requireAppUpdater();
+
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no"
+    });
+    res.flushHeaders?.();
+
+    let seq = 0;
+    let closed = false;
+
+    const sendEvent = (eventName: string, payload: unknown): void => {
+      if (closed || res.writableEnded || res.destroyed) {
+        return;
+      }
+      seq += 1;
+      try {
+        res.write(
+          `id: ${seq}\nevent: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`
+        );
+      } catch {
+        cleanup();
+      }
+    };
+
+    const unsubscribe = updater.subscribeEvents((evt) => {
+      sendEvent(evt.type, evt);
+    });
+
+    const keepaliveTimer = setInterval(() => {
+      if (closed || res.writableEnded || res.destroyed) {
+        cleanup();
+        return;
+      }
+      try {
+        res.write(": keepalive\n\n");
+      } catch {
+        cleanup();
+      }
+    }, 20_000);
+    keepaliveTimer.unref?.();
+
+    const cleanup = (): void => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      clearInterval(keepaliveTimer);
+      unsubscribe();
+      this.activeSseCleanups.delete(cleanup);
+      try {
+        if (!res.writableEnded) {
+          res.end();
+        }
+      } catch {
+        // Ignore stream shutdown errors.
+      }
+    };
+
+    this.activeSseCleanups.add(cleanup);
+    req.once("close", cleanup);
+    req.once("aborted", cleanup);
+    res.once("close", cleanup);
+    res.once("error", cleanup);
+
+    const initialStatus = updater.getStatus();
+    sendEvent("status", {
+      type: "status",
+      timestamp: Date.now(),
+      installState: initialStatus.installState,
+      progress: initialStatus.progress,
+      downloadedFilePath: initialStatus.downloadedFilePath,
+      downloadedSha256: initialStatus.downloadedSha256,
+      portableMode: initialStatus.portableMode,
+      status: initialStatus
+    });
+  }
+
   private requireAppUpdater(): AppUpdater {
     if (this.appUpdater === undefined) {
       throw new RpcDispatchError(
@@ -2271,6 +2632,9 @@ export class DaemonRpcServer {
     if (rawParams.timeoutMs !== undefined) {
       patch.timeoutMs = requirePositiveIntParam(rawParams, "timeoutMs");
     }
+    if (rawParams.autoCheckEnabled !== undefined) {
+      patch.autoCheckEnabled = requireBooleanParam(rawParams, "autoCheckEnabled");
+    }
 
     try {
       return updater.setPolicy(patch);
@@ -2292,10 +2656,15 @@ export class DaemonRpcServer {
     }
 
     const destDir = optionalStringParam(rawParams, "destDir");
+    const assetName = optionalStringParam(rawParams, "assetName");
     const kindRaw = optionalStringParam(rawParams, "kind");
     let kind: UpdatePackageKind | undefined;
     if (kindRaw !== undefined) {
-      if (kindRaw !== "setup-exe" && kindRaw !== "portable-zip") {
+      if (
+        kindRaw !== "setup-exe" &&
+        kindRaw !== "portable-zip" &&
+        kindRaw !== "split-7z-exe"
+      ) {
         throw new RpcDispatchError(
           "invalid_params",
           `Invalid update package kind: "${kindRaw}".`
@@ -2304,9 +2673,23 @@ export class DaemonRpcServer {
       kind = kindRaw;
     }
 
+    const sourceRaw = optionalStringParam(rawParams, "sourceOverride");
+    let sourceOverride: UpdateSourceId | undefined;
+    if (sourceRaw !== undefined) {
+      if (!(UPDATE_SOURCE_IDS as readonly string[]).includes(sourceRaw)) {
+        throw new RpcDispatchError(
+          "invalid_params",
+          `Invalid update sourceOverride: "${sourceRaw}".`
+        );
+      }
+      sourceOverride = sourceRaw as UpdateSourceId;
+    }
+
     return updater.downloadUpdate({
       ...(destDir !== undefined ? { destDir } : {}),
-      ...(kind !== undefined ? { kind } : {})
+      ...(assetName !== undefined ? { assetName } : {}),
+      ...(kind !== undefined ? { kind } : {}),
+      ...(sourceOverride !== undefined ? { sourceOverride } : {})
     });
   }
 }

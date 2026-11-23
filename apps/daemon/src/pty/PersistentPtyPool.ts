@@ -65,9 +65,23 @@ interface SubscriberHandle {
   deliver: (frame: PtyReplayFrame) => void;
 }
 
+export interface PtySessionRuntimeInfo {
+  ptyId: string;
+  pid: number | null;
+  command: string | null;
+  cwd: string;
+  group: "default" | "agent-scratch";
+  worktreeBranch?: string;
+  alive: boolean;
+  bufferBytes: number;
+  createdAt: number;
+  lastActivityAt: number;
+}
+
 interface PtySessionState {
   ptyId: string;
   cwd: string;
+  command?: string;
   group: "default" | "agent-scratch";
   worktreeBranch?: string;
   alive: boolean;
@@ -78,6 +92,8 @@ interface PtySessionState {
   lastSeq: number;
   cols: number;
   rows: number;
+  createdAt: number;
+  lastActivityAt: number;
   child?: ChildProcessWithoutNullStreams;
   closePromise?: Promise<void>;
   killInitiated: boolean;
@@ -242,6 +258,40 @@ export class PersistentPtyPool {
     return Array.from(this.sessions.values(), (state) => toDescriptor(state));
   }
 
+  listSessionRuntimeInfos(): PtySessionRuntimeInfo[] {
+    return Array.from(this.sessions.values(), (state) => ({
+      ptyId: state.ptyId,
+      pid: typeof state.child?.pid === "number" ? state.child.pid : null,
+      command: state.command ?? null,
+      cwd: state.cwd,
+      group: state.group,
+      ...(state.worktreeBranch !== undefined
+        ? { worktreeBranch: state.worktreeBranch }
+        : {}),
+      alive: state.alive,
+      bufferBytes: state.bufferBytes,
+      createdAt: state.createdAt,
+      lastActivityAt: state.lastActivityAt
+    }));
+  }
+
+  async killAndRemoveSession(
+    ptyId: string,
+    signal: NodeJS.Signals | number | (string & {}) = "SIGTERM"
+  ): Promise<{ existed: boolean; killed: boolean; removed: boolean }> {
+    const state = this.sessions.get(ptyId);
+    if (state === undefined) {
+      return { existed: false, killed: false, removed: false };
+    }
+    const killed = await this.kill(ptyId, signal);
+    for (const subscriber of state.subscribers) {
+      subscriber.active = false;
+    }
+    state.subscribers.clear();
+    const removed = this.sessions.delete(ptyId);
+    return { existed: true, killed, removed };
+  }
+
   getSession(ptyId: string): PtySessionDescriptor | undefined {
     const state = this.sessions.get(ptyId);
     return state === undefined ? undefined : toDescriptor(state);
@@ -334,17 +384,20 @@ export class PersistentPtyPool {
       existing !== undefined
         ? Object.assign(existing, {
             cwd,
+            command,
             group,
             worktreeBranch,
             alive: true,
             ringBufferBytes: limitBytes,
             cols,
             rows,
+            lastActivityAt: Date.now(),
             killInitiated: false
           })
         : this.createSessionState({
             ptyId,
             cwd,
+            command,
             group,
             worktreeBranch,
             alive: true,
@@ -482,6 +535,7 @@ export class PersistentPtyPool {
     };
     state.frames.push({ frame, byteLength: storedBytes });
     state.bufferBytes += storedBytes;
+    state.lastActivityAt = timestamp;
 
     for (const subscriber of Array.from(state.subscribers)) {
       if (subscriber.active) {
@@ -604,6 +658,7 @@ export class PersistentPtyPool {
     }
     try {
       child.stdin.write(data, "utf8");
+      state.lastActivityAt = Date.now();
       return true;
     } catch {
       return false;
@@ -838,6 +893,7 @@ export class PersistentPtyPool {
   private createSessionState(init: {
     ptyId: string;
     cwd: string;
+    command?: string;
     group: "default" | "agent-scratch";
     worktreeBranch?: string;
     alive: boolean;
@@ -845,9 +901,11 @@ export class PersistentPtyPool {
     cols: number;
     rows: number;
   }): PtySessionState {
+    const now = Date.now();
     return {
       ptyId: init.ptyId,
       cwd: init.cwd,
+      ...(init.command !== undefined ? { command: init.command } : {}),
       group: init.group,
       worktreeBranch: init.worktreeBranch,
       alive: init.alive,
@@ -858,6 +916,8 @@ export class PersistentPtyPool {
       lastSeq: 0,
       cols: init.cols,
       rows: init.rows,
+      createdAt: now,
+      lastActivityAt: now,
       killInitiated: false,
       subscribers: new Set<SubscriberHandle>()
     };

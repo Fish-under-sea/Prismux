@@ -134,8 +134,15 @@ function packOfficialPluginArchive(
       encoding: "utf8"
     }
   );
-  const archivePath = join(outDir, `${pluginId}-${version}.wb-plugin`);
-  return readFileSync(archivePath);
+  const canonicalName = pluginId.startsWith("prismux-plugin-")
+    ? `${pluginId}-${version}.wb-plugin`
+    : `prismux-plugin-${pluginId}-${version}.wb-plugin`;
+  const canonicalPath = join(outDir, canonicalName);
+  if (existsSync(canonicalPath)) {
+    return readFileSync(canonicalPath);
+  }
+  const legacyPath = join(outDir, `${pluginId}-${version}.wb-plugin`);
+  return readFileSync(legacyPath);
 }
 
 test("official catalog metadata verifies all 4 plugins and deterministic .wb-plugin market install mounts/unmounts with zero residual", async () => {

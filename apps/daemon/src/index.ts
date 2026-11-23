@@ -29,6 +29,9 @@ import { WorktreeSandbox } from "./sandbox/WorktreeSandbox.js";
 import { DaemonBusinessService } from "./server/DaemonBusinessRoutes.js";
 import { DaemonRpcServer } from "./server/DaemonRpcServer.js";
 import { PairingManager } from "./server/PairingManager.js";
+import { PortScannerService } from "./system/PortScannerService.js";
+import { ResourceMonitorService } from "./system/ResourceMonitorService.js";
+import { ServiceDiagnosticsService } from "./system/ServiceDiagnosticsService.js";
 import { SystemFontService } from "./system/SystemFontService.js";
 import { T3RpcClient } from "./t3/T3RpcClient.js";
 import {
@@ -51,6 +54,9 @@ export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
 export * from "./server/DaemonBusinessRoutes.js";
 export * from "./server/DaemonRpcServer.js";
+export * from "./system/PortScannerService.js";
+export * from "./system/ResourceMonitorService.js";
+export * from "./system/ServiceDiagnosticsService.js";
 export * from "./system/SystemFontService.js";
 export * from "./updater/AppUpdater.js";
 export * from "./wallpapers/WallpaperMediaService.js";
@@ -147,6 +153,7 @@ export interface DaemonStartOptions {
   defaultChiefModel?: string;
   officialCatalogPath?: string;
   steamRootsDiscoverer?: () => Promise<string[]>;
+  disableAutoUpdateCheck?: boolean;
   onShutdownRequested?: (reason?: string) => void | Promise<void>;
 }
 
@@ -182,6 +189,9 @@ export class PrismuxDaemon {
   readonly fontService: SystemFontService;
   readonly appearanceStore: AppearanceConfigStore;
   readonly businessService: DaemonBusinessService;
+  readonly portScannerService: PortScannerService;
+  readonly resourceMonitorService: ResourceMonitorService;
+  readonly diagnosticsService: ServiceDiagnosticsService;
   readonly t3Supervisor: T3ServerSupervisor | undefined;
   readonly t3RpcClient: T3RpcClient | undefined;
   readonly chiefManager: ChiefThreadManager;
@@ -255,8 +265,16 @@ export class PrismuxDaemon {
         }
       }
     });
+    const syncCredHandle = this.pluginCredentialStore.openForPlugin("sync-vault");
     this.syncVault = new SyncVaultEngine({
       machineId: this.machineId,
+      resolveSecret: async (secretRef: string) => {
+        const prefix = "sync-vault:";
+        const val = secretRef.startsWith(prefix)
+          ? await syncCredHandle.get(secretRef.slice(prefix.length))
+          : await syncCredHandle.get(secretRef);
+        return val ?? undefined;
+      },
       ...(options.portableRoot !== undefined
         ? {
             portable: {
@@ -310,9 +328,39 @@ export class PrismuxDaemon {
         : {})
     });
     this.fontService = new SystemFontService();
+    const daemonStartedAt = Date.now();
+    this.portScannerService = new PortScannerService({
+      ptyPool: this.ptyPool,
+      t3Supervisor: this.t3Supervisor
+    });
+    this.resourceMonitorService = new ResourceMonitorService({
+      ptyPool: this.ptyPool,
+      t3Supervisor: this.t3Supervisor
+    });
+    this.diagnosticsService = new ServiceDiagnosticsService({
+      dataDir: options.dataDir,
+      version: resolvedHostVersion,
+      headless: options.headless,
+      startedAt: daemonStartedAt,
+      memoryStore: this.memoryStore,
+      memoryDbPath: join(options.dataDir, "data", "memory.db"),
+      syncVault: this.syncVault,
+      t3Supervisor: this.t3Supervisor,
+      t3RpcClient: this.t3RpcClient,
+      t3ServerUrl: options.t3HealthUrl ?? options.t3Url,
+      t3Token: options.t3Token,
+      ptyPool: this.ptyPool,
+      resourceMonitor: this.resourceMonitorService,
+      appUpdater: this.appUpdater,
+      wallpaperService: this.wallpaperService,
+      overnightFactory: this.overnightFactory,
+      hookBus: this.hookBus,
+      sandbox: this.sandbox
+    });
     this.businessService = new DaemonBusinessService({
       dataDir: options.dataDir,
       hostVersion: resolvedHostVersion,
+      machineId: this.machineId,
       officialCatalogPath: options.officialCatalogPath,
       chiefManager: this.chiefManager,
       handoffEngine: this.handoffEngine,
@@ -351,6 +399,10 @@ export class PrismuxDaemon {
       fontService: this.fontService,
       appearanceStore: this.appearanceStore,
       businessService: this.businessService,
+      diagnosticsService: this.diagnosticsService,
+      portScannerService: this.portScannerService,
+      resourceMonitorService: this.resourceMonitorService,
+      startedAt: daemonStartedAt,
       onRequestShutdown: options.onShutdownRequested
     });
   }
@@ -638,6 +690,12 @@ export class PrismuxDaemon {
 
       this.readyInfo = info;
       this.running = true;
+      if (
+        !this.options.disableAutoUpdateCheck &&
+        process.env["PRISMUX_DISABLE_AUTO_UPDATE_CHECK"] !== "1"
+      ) {
+        this.appUpdater.startAutoCheck();
+      }
       return info;
     } catch (error) {
       await this.performStop();
@@ -646,6 +704,7 @@ export class PrismuxDaemon {
   }
 
   private async performStop(): Promise<void> {
+    this.appUpdater.stopAutoCheck();
     this.clearT3ConnectLoop();
     try {
       await this.rpcServer.stop();

@@ -37,14 +37,20 @@ import {
   type MemoryQueryResponse,
   type NetworkRoutePreference,
   type OfficialPluginCatalogEntry,
-  type PrismuxPluginModule
+  type PrismuxPluginModule,
+  type SyncChannelOperationResult,
+  type SyncNowResponse,
+  type SyncOperationChannel,
+  type SyncTestResponse
 } from "@prismux/protocol";
 import type {
   GitHubSyncConfig,
+  MergeableMemoryRecord,
   S3SyncConfig,
   SyncChannelKind,
   SyncDomainMatrix,
   SyncVaultEngine,
+  SyncVaultPayload,
   WebDavSyncConfig
 } from "@prismux/sync-vault";
 import type { ChiefThreadManager } from "../chief/ChiefThreadManager.js";
@@ -120,6 +126,7 @@ export interface PersistedSanitizedSyncConfig {
 export interface DaemonBusinessContext {
   dataDir: string;
   hostVersion: string;
+  machineId?: string;
   officialCatalogPath?: string;
   chiefManager?: ChiefThreadManager;
   handoffEngine?: HandoffEngine;
@@ -333,19 +340,38 @@ function isSyncDomainKey(
   );
 }
 
+export function getOfficialPluginArchiveCandidateFilenames(
+  pluginId: string,
+  version: string
+): string[] {
+  const canonicalName = pluginId.startsWith("prismux-plugin-")
+    ? `${pluginId}-${version}.wb-plugin`
+    : `prismux-plugin-${pluginId}-${version}.wb-plugin`;
+  const legacyName = `${pluginId}-${version}.wb-plugin`;
+  return canonicalName === legacyName
+    ? [canonicalName]
+    : [canonicalName, legacyName];
+}
+
 function findOfficialArchiveInSearchDirs(
   entry: OfficialPluginCatalogEntry,
   searchRoots: readonly string[]
 ): Buffer | null {
-  const filename = `${entry.id}-${entry.version}.wb-plugin`;
+  const filenames = getOfficialPluginArchiveCandidateFilenames(
+    entry.id,
+    entry.version
+  );
   for (const root of searchRoots) {
-    const candidates = [
-      join(root, "plugins-official", "dist", filename),
-      join(root, ".work", "plugin-dist", filename)
+    const dirs = [
+      join(root, "plugins-official", "dist"),
+      join(root, ".work", "plugin-dist")
     ];
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) {
-        return readFileSync(candidate);
+    for (const dir of dirs) {
+      for (const filename of filenames) {
+        const candidate = join(dir, filename);
+        if (existsSync(candidate)) {
+          return readFileSync(candidate);
+        }
       }
     }
   }
@@ -438,6 +464,18 @@ async function tryLoadDaemonPluginModule(
   }
 }
 
+export interface PluginRuntimeLogRecord {
+  id: string;
+  pluginId: string;
+  timestamp: number;
+  level: "info" | "warn" | "error";
+  source: string;
+  message: string;
+}
+
+const MAX_PLUGIN_LOGS_PER_PLUGIN = 200;
+const DEFAULT_PLUGIN_LOGS_LIMIT = 50;
+
 /**
  * Coordinates real-data HTTP endpoints for Chief Supervisor, Memory Engine,
  * Sync Vault, and Cordis Plugin marketplace/runtime inside `apps/daemon`.
@@ -445,10 +483,40 @@ async function tryLoadDaemonPluginModule(
 export class DaemonBusinessService {
   readonly syncConfigPath: string;
   private readonly ctx: DaemonBusinessContext;
+  private readonly pluginLogsById = new Map<string, PluginRuntimeLogRecord[]>();
+  private pluginLogSeq = 0;
 
   constructor(ctx: DaemonBusinessContext) {
     this.ctx = ctx;
     this.syncConfigPath = join(resolve(ctx.dataDir), "sync-config.json");
+  }
+
+  /**
+   * Appends a bounded runtime log entry for a plugin (newest-first on read).
+   */
+  recordPluginLog(
+    pluginId: string,
+    level: PluginRuntimeLogRecord["level"],
+    source: string,
+    message: string
+  ): PluginRuntimeLogRecord {
+    const normalizedId = pluginId.trim();
+    this.pluginLogSeq += 1;
+    const entry: PluginRuntimeLogRecord = {
+      id: `daemon-plugin-log-${this.pluginLogSeq}`,
+      pluginId: normalizedId,
+      timestamp: Date.now(),
+      level,
+      source,
+      message
+    };
+    const bucket = this.pluginLogsById.get(normalizedId) ?? [];
+    bucket.push(entry);
+    if (bucket.length > MAX_PLUGIN_LOGS_PER_PLUGIN) {
+      bucket.splice(0, bucket.length - MAX_PLUGIN_LOGS_PER_PLUGIN);
+    }
+    this.pluginLogsById.set(normalizedId, bucket);
+    return entry;
   }
 
   /**
@@ -647,11 +715,15 @@ export class DaemonBusinessService {
       offset += batch.length;
     }
 
+    const sqliteVecLoaded = this.ctx.memoryStore.isVectorSearchEnabled();
+    const retrievalMode = this.ctx.memoryStore.getRetrievalMode();
     return {
       ok: true,
       callerScope: trustedCallerScope,
       totalEntries,
-      vectorSearchEnabled: this.ctx.memoryStore.isVectorSearchEnabled(),
+      vectorSearchEnabled: sqliteVecLoaded,
+      sqliteVecLoaded,
+      retrievalMode,
       byNamespace,
       byKind,
       latestUpdatedAt,
@@ -1066,6 +1138,462 @@ export class DaemonBusinessService {
     return this.getSyncStatus(trustedCallerScope);
   }
 
+  private async scrubSyncErrorMessage(rawMessage: string): Promise<string> {
+    let message = rawMessage;
+    const secretsToScrub: string[] = [];
+    if (this.ctx.syncVault) {
+      try {
+        secretsToScrub.push(
+          ...(await this.ctx.syncVault.collectConfiguredRemoteSecrets())
+        );
+      } catch {
+        // ignore
+      }
+    }
+    const credHandle =
+      this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
+    if (credHandle) {
+      for (const key of [
+        "vault.passphrase",
+        "webdav.password",
+        "s3.secretAccessKey",
+        "github.token"
+      ]) {
+        try {
+          const val = await credHandle.get(key);
+          if (val && val.length > 0) {
+            secretsToScrub.push(val);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    for (const secret of secretsToScrub) {
+      if (secret.length >= 3) {
+        message = message.replaceAll(secret, "[REDACTED]");
+      }
+    }
+    // Redact common Authorization / token patterns in error text
+    message = message.replace(
+      /(authorization\s*[:=]\s*(?:basic|bearer|token)\s+)[^\s,;"']+/gi,
+      "$1[REDACTED]"
+    );
+    return message;
+  }
+
+  private parseRequestedSyncChannels(
+    rawBody: unknown,
+    fallback: SyncOperationChannel[]
+  ): SyncOperationChannel[] {
+    if (isPlainRecord(rawBody) && Array.isArray(rawBody["channels"])) {
+      const parsed = rawBody["channels"].filter(
+        (c): c is SyncOperationChannel =>
+          c === "webdav" || c === "s3" || c === "github"
+      );
+      if (parsed.length > 0) {
+        return [...new Set(parsed)];
+      }
+    }
+    return fallback;
+  }
+
+  private async buildLocalSyncPayload(): Promise<{
+    payload: SyncVaultPayload;
+    entryCount: number;
+  }> {
+    const privateMemory: MergeableMemoryRecord[] = [];
+    const workspaceMemory: MergeableMemoryRecord[] = [];
+    const socialMemory: MergeableMemoryRecord[] = [];
+
+    if (this.ctx.memoryStore) {
+      let offset = 0;
+      const pageSize = 1000;
+      while (true) {
+        const batch = await this.ctx.memoryStore.listEntries("owner_chief", {
+          limit: pageSize,
+          offset,
+          includeDeleted: true
+        });
+        for (const entry of batch) {
+          const record: MergeableMemoryRecord = {
+            id: entry.id,
+            namespace: entry.namespace,
+            kind: entry.kind,
+            title: entry.title,
+            content: entry.content,
+            sourceRef: entry.sourceRef ?? null,
+            importance: entry.importance,
+            machineId: entry.machineId,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+            deletedAt: entry.deletedAt ?? null
+          };
+          if (entry.namespace === "private/chief") {
+            privateMemory.push(record);
+          } else if (entry.namespace.startsWith("workspace/")) {
+            workspaceMemory.push(record);
+          } else if (entry.namespace.startsWith("social/qq-group-")) {
+            socialMemory.push(record);
+          }
+        }
+        if (batch.length < pageSize) {
+          break;
+        }
+        offset += batch.length;
+      }
+    }
+
+    const total =
+      privateMemory.length + workspaceMemory.length + socialMemory.length;
+    return {
+      payload: {
+        schemaVersion: 1,
+        sourceMachineId: this.ctx.machineId ?? "local",
+        exportedAt: Date.now(),
+        privateMemory,
+        workspaceMemory,
+        socialMemory
+      },
+      entryCount: total
+    };
+  }
+
+  /**
+   * Tests connectivity of configured SyncVault channels (`POST /v1/sync/test`)
+   * without ever exposing plaintext credentials or passphrases.
+   */
+  async testSyncConnection(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): Promise<SyncTestResponse> {
+    assertOwnerChief(trustedCallerScope, "/v1/sync/test");
+    if (!this.ctx.syncVault) {
+      throw new BusinessRouteError(
+        503,
+        "SYNC_UNAVAILABLE",
+        "SyncVaultEngine is not initialized."
+      );
+    }
+
+    const getSyncChannelCfg = (kind: SyncOperationChannel) =>
+      kind === "webdav"
+        ? this.ctx.syncVault!.getChannelConfig("webdav")
+        : kind === "s3"
+          ? this.ctx.syncVault!.getChannelConfig("s3")
+          : this.ctx.syncVault!.getChannelConfig("github");
+
+    const allKinds: SyncOperationChannel[] = ["webdav", "s3", "github"];
+    const configuredKinds = allKinds.filter(
+      (kind) => getSyncChannelCfg(kind) !== undefined
+    );
+    const targetChannels = this.parseRequestedSyncChannels(
+      rawBody,
+      configuredKinds.length > 0 ? configuredKinds : allKinds
+    );
+
+    const results: SyncChannelOperationResult[] = [];
+    for (const kind of targetChannels) {
+      const cfg = getSyncChannelCfg(kind);
+      if (!cfg) {
+        results.push({
+          channel: kind,
+          ok: false,
+          enabled: false,
+          configured: false,
+          reachable: false,
+          latencyMs: 0,
+          error: `同步通道「${kind}」尚未配置。`
+        });
+        continue;
+      }
+
+      const started = performance.now();
+      try {
+        const client =
+          kind === "webdav"
+            ? this.ctx.syncVault.getChannelClient("webdav")
+            : kind === "s3"
+              ? this.ctx.syncVault.getChannelClient("s3")
+              : this.ctx.syncVault.getChannelClient("github");
+        const headResult = await client.head();
+        const latencyMs = Math.max(0, Math.round(performance.now() - started));
+        results.push({
+          channel: kind,
+          ok: true,
+          enabled: cfg.enabled,
+          configured: true,
+          reachable: true,
+          exists: headResult.exists,
+          etag: headResult.etag,
+          latencyMs,
+          message: headResult.exists
+            ? "连接成功（远端已存在加密快照）"
+            : "连接成功（远端尚未上传首次快照）"
+        });
+      } catch (err) {
+        const latencyMs = Math.max(0, Math.round(performance.now() - started));
+        const safeErr = await this.scrubSyncErrorMessage(
+          err instanceof Error ? err.message : String(err)
+        );
+        results.push({
+          channel: kind,
+          ok: false,
+          enabled: cfg.enabled,
+          configured: true,
+          reachable: false,
+          latencyMs,
+          error: safeErr
+        });
+      }
+    }
+
+    const now = Date.now();
+    const configuredResults = results.filter((r) => r.configured);
+    const overallOk =
+      configuredResults.length > 0 && configuredResults.every((r) => r.ok);
+
+    return {
+      ok: overallOk,
+      testedAt: now,
+      timestamp: now,
+      channels: results,
+      results,
+      ...(configuredResults.length === 0
+        ? {
+            error: "尚未配置任何同步通道（WebDAV / S3 / GitHub）。",
+            message: "尚未配置任何同步通道。"
+          }
+        : {
+            message: overallOk
+              ? `全部 ${configuredResults.length} 个已配置同步通道连通性测试通过。`
+              : "部分同步通道连通性测试失败，请检查端点地址与认证凭据。"
+          })
+    };
+  }
+
+  /**
+   * Triggers an immediate end-to-end encrypted sync (`POST /v1/sync/now`).
+   */
+  async triggerSyncNow(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): Promise<SyncNowResponse> {
+    assertOwnerChief(trustedCallerScope, "/v1/sync/now");
+    if (!this.ctx.syncVault) {
+      throw new BusinessRouteError(
+        503,
+        "SYNC_UNAVAILABLE",
+        "SyncVaultEngine is not initialized."
+      );
+    }
+
+    const enabledChannels = this.ctx.syncVault.getEnabledChannels();
+    const targetChannels = this.parseRequestedSyncChannels(
+      rawBody,
+      enabledChannels
+    );
+    const now = Date.now();
+
+    if (targetChannels.length === 0) {
+      return {
+        ok: false,
+        syncedAt: now,
+        timestamp: now,
+        uploaded: 0,
+        downloaded: 0,
+        etag: null,
+        conflictDetected: false,
+        channels: [],
+        results: [],
+        error: "当前未启用任何同步通道，请先启用 WebDAV / S3 / GitHub 通道。",
+        message: "当前未启用任何同步通道。"
+      };
+    }
+
+    const credHandle =
+      this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
+    let passphrase =
+      isPlainRecord(rawBody) &&
+      typeof rawBody["passphrase"] === "string" &&
+      rawBody["passphrase"].length > 0
+        ? rawBody["passphrase"]
+        : undefined;
+    if (!passphrase && credHandle) {
+      const storedPass = await credHandle.get("vault.passphrase");
+      passphrase = storedPass ?? undefined;
+    }
+
+    if (!passphrase) {
+      throw new BusinessRouteError(
+        400,
+        "SYNC_PASSPHRASE_REQUIRED",
+        "未配置端到端加密口令（Passphrase），请先在「记忆与同步」设置加密口令后再执行同步。"
+      );
+    }
+
+    const { payload: localPayload, entryCount } =
+      await this.buildLocalSyncPayload();
+
+    const channelResults: SyncChannelOperationResult[] = [];
+    let primaryEtag: string | null = null;
+    let anyConflict = false;
+    let totalUploaded = 0;
+    let totalDownloaded = 0;
+
+    for (const kind of targetChannels) {
+      const cfg =
+        kind === "webdav"
+          ? this.ctx.syncVault.getChannelConfig("webdav")
+          : kind === "s3"
+            ? this.ctx.syncVault.getChannelConfig("s3")
+            : this.ctx.syncVault.getChannelConfig("github");
+      const started = performance.now();
+      if (!cfg || !cfg.enabled) {
+        channelResults.push({
+          channel: kind,
+          ok: false,
+          enabled: Boolean(cfg?.enabled),
+          configured: Boolean(cfg),
+          latencyMs: 0,
+          error: `同步通道「${kind}」未配置或未启用。`
+        });
+        continue;
+      }
+
+      try {
+        // Fetch current remote ETag (if present) for safe optimistic locking.
+        let expectedEtag: string | null = null;
+        try {
+          const client =
+            kind === "webdav"
+              ? this.ctx.syncVault.getChannelClient("webdav")
+              : kind === "s3"
+                ? this.ctx.syncVault.getChannelClient("s3")
+                : this.ctx.syncVault.getChannelClient("github");
+          const head = await client.head();
+          expectedEtag = head.exists ? head.etag : null;
+        } catch {
+          expectedEtag = null;
+        }
+
+        const outcome = await this.ctx.syncVault.syncNow({
+          channel: kind,
+          passphrase,
+          localPayload,
+          expectedEtag,
+          autoMergeOnConflict: true,
+          retryOnCleanMerge: true
+        });
+        const latencyMs = Math.max(0, Math.round(performance.now() - started));
+        const single = outcome.channelResults[0];
+        if (primaryEtag === null && outcome.etag !== null) {
+          primaryEtag = outcome.etag;
+        }
+        if (outcome.conflictDetected) {
+          anyConflict = true;
+        }
+        totalUploaded += entryCount;
+
+        // Apply any merged inbound records back into SQLite store cleanly.
+        let mergedInboundCount = 0;
+        if (outcome.mergedPayload && this.ctx.memoryStore) {
+          const mergedAll = [
+            ...(outcome.mergedPayload.privateMemory ?? []),
+            ...(outcome.mergedPayload.workspaceMemory ?? []),
+            ...(outcome.mergedPayload.socialMemory ?? [])
+          ];
+          for (const rec of mergedAll) {
+            if (
+              typeof rec.id === "string" &&
+              typeof rec.namespace === "string" &&
+              isValidMemoryNamespace(rec.namespace) &&
+              typeof rec["title"] === "string" &&
+              typeof rec["content"] === "string" &&
+              typeof rec["kind"] === "string" &&
+              (MEMORY_KINDS as readonly string[]).includes(rec["kind"])
+            ) {
+              if (rec.deletedAt != null) {
+                await this.ctx.memoryStore.softDelete(rec.id, rec.deletedAt);
+              } else {
+                await this.ctx.memoryStore.upsert({
+                  id: rec.id,
+                  namespace: rec.namespace,
+                  kind: rec["kind"] as MemoryKind,
+                  title: rec["title"],
+                  content: rec["content"],
+                  sourceRef:
+                    typeof rec["sourceRef"] === "string" ? rec["sourceRef"] : null,
+                  importance:
+                    typeof rec["importance"] === "number" ? rec["importance"] : 0.5,
+                  machineId:
+                    typeof rec["machineId"] === "string"
+                      ? rec["machineId"]
+                      : (this.ctx.machineId ?? "local")
+                });
+              }
+              mergedInboundCount += 1;
+            }
+          }
+          totalDownloaded += mergedInboundCount;
+        }
+
+        channelResults.push({
+          channel: kind,
+          ok: !outcome.conflictDetected,
+          enabled: true,
+          configured: true,
+          reachable: true,
+          etag: single?.etag ?? outcome.etag,
+          conflictDetected: outcome.conflictDetected,
+          degradedToHead: single?.degradedToHead,
+          commitSha: single?.commitSha,
+          latencyMs,
+          uploaded: entryCount,
+          downloaded: mergedInboundCount,
+          message: outcome.conflictDetected
+            ? "检测到远端并发写入冲突，请复核合并状态"
+            : "加密快照同步成功"
+        });
+      } catch (err) {
+        const latencyMs = Math.max(0, Math.round(performance.now() - started));
+        const safeErr = await this.scrubSyncErrorMessage(
+          err instanceof Error ? err.message : String(err)
+        );
+        channelResults.push({
+          channel: kind,
+          ok: false,
+          enabled: true,
+          configured: true,
+          reachable: false,
+          latencyMs,
+          error: safeErr
+        });
+      }
+    }
+
+    const finishedAt = Date.now();
+    const overallOk =
+      channelResults.length > 0 && channelResults.every((r) => r.ok);
+    const firstError = channelResults.find((r) => !r.ok)?.error;
+
+    return {
+      ok: overallOk,
+      syncedAt: finishedAt,
+      timestamp: finishedAt,
+      uploaded: totalUploaded,
+      downloaded: totalDownloaded,
+      etag: primaryEtag,
+      conflictDetected: anyConflict,
+      channels: channelResults,
+      results: channelResults,
+      ...(firstError !== undefined ? { error: firstError } : {}),
+      message: overallOk
+        ? `同步完成（共 ${channelResults.length} 个通道，上传 ${totalUploaded} 条记录）。`
+        : (firstError ?? "部分同步通道执行失败。")
+    };
+  }
+
   async getPluginsCatalog(
     trustedCallerScope: CallerScope
   ): Promise<Record<string, unknown>> {
@@ -1320,6 +1848,13 @@ export class DaemonBusinessService {
       mounted = this.ctx.pluginHost.isMounted(details.manifest.id);
     }
 
+    this.recordPluginLog(
+      details.manifest.id,
+      "info",
+      "daemon",
+      `已安装插件 ${details.manifest.id}@${details.manifest.version}（mounted=${String(mounted)}）。`
+    );
+
     return {
       ok: true,
       plugin: details,
@@ -1402,6 +1937,15 @@ export class DaemonBusinessService {
         updatedRecord;
     }
 
+    this.recordPluginLog(
+      pluginId,
+      "info",
+      "daemon",
+      enabled
+        ? `已启用插件 ${pluginId}（mounted=${String(mounted)}）。`
+        : `已停用插件 ${pluginId}（mounted=${String(mounted)}）。`
+    );
+
     return {
       ok: true,
       pluginId,
@@ -1461,10 +2005,70 @@ export class DaemonBusinessService {
       }
     }
 
+    this.recordPluginLog(
+      pluginId,
+      "info",
+      "daemon",
+      `已卸载插件 ${pluginId}。`
+    );
+
     return {
       ok: true,
       pluginId,
       uninstalled: true
+    };
+  }
+
+  /**
+   * Returns recent plugin runtime logs (always HTTP 200; returns empty `logs: []`
+   * when the plugin is uninstalled or has no recorded runtime entries yet).
+   */
+  async getPluginLogs(
+    rawPluginId: string | null,
+    rawLimit: number | null,
+    trustedCallerScope: CallerScope
+  ): Promise<{
+    ok: true;
+    pluginId: string | null;
+    logs: PluginRuntimeLogRecord[];
+  }> {
+    assertOwnerChief(trustedCallerScope, "/v1/plugins/logs");
+    const limit =
+      typeof rawLimit === "number" && Number.isFinite(rawLimit)
+        ? Math.min(Math.max(Math.trunc(rawLimit), 1), MAX_PLUGIN_LOGS_PER_PLUGIN)
+        : DEFAULT_PLUGIN_LOGS_LIMIT;
+
+    const normalizedId =
+      typeof rawPluginId === "string" && rawPluginId.trim().length > 0
+        ? rawPluginId.trim()
+        : null;
+
+    if (normalizedId !== null) {
+      const bucket = this.pluginLogsById.get(normalizedId);
+      if (!bucket || bucket.length === 0) {
+        return {
+          ok: true,
+          pluginId: normalizedId,
+          logs: []
+        };
+      }
+      const recent = bucket.slice(-limit).reverse();
+      return {
+        ok: true,
+        pluginId: normalizedId,
+        logs: recent
+      };
+    }
+
+    const allLogs: PluginRuntimeLogRecord[] = [];
+    for (const bucket of this.pluginLogsById.values()) {
+      allLogs.push(...bucket);
+    }
+    allLogs.sort((a, b) => b.timestamp - a.timestamp || b.id.localeCompare(a.id));
+    return {
+      ok: true,
+      pluginId: null,
+      logs: allLogs.slice(0, limit)
     };
   }
 

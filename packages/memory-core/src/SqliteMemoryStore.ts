@@ -146,6 +146,10 @@ export class SqliteMemoryStore implements MemoryStore {
     return this.vecEnabled;
   }
 
+  getRetrievalMode(): "fts5+sqlite-vec" | "fts5-only" {
+    return this.vecEnabled ? "fts5+sqlite-vec" : "fts5-only";
+  }
+
   async initialize(): Promise<void> {
     if (this.db !== undefined) {
       return;
@@ -195,6 +199,18 @@ export class SqliteMemoryStore implements MemoryStore {
           title,
           content,
           tokenize = 'trigram'
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_recall_snapshots (
+          session_id TEXT NOT NULL,
+          caller_scope TEXT NOT NULL,
+          query_text TEXT NOT NULL,
+          frozen_block TEXT NOT NULL,
+          entries_json TEXT NOT NULL,
+          revisions_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (session_id, caller_scope)
         );
       `);
 
@@ -397,6 +413,135 @@ export class SqliteMemoryStore implements MemoryStore {
       return null;
     }
     return entry;
+  }
+
+  /**
+   * Batch-fetches active memory entries by ID under strict physical scope isolation.
+   * For `qq_group:<gid>`, SQL unconditionally binds `namespace = 'social/qq-group-' || ? AND deleted_at IS NULL`.
+   */
+  async getEntriesByIds(
+    ids: readonly string[],
+    trustedCallerScope: CallerScope
+  ): Promise<MemoryEntry[]> {
+    const db = this.requireDb();
+    const uniqueIds = [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0))];
+    if (uniqueIds.length === 0) {
+      return [];
+    }
+
+    const scopeClause = this.buildScopeClause(trustedCallerScope, undefined, false);
+    if (scopeClause === null) {
+      return [];
+    }
+
+    const placeholders = uniqueIds.map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `SELECT id, namespace, kind, title, content, source_ref, importance, machine_id, created_at, updated_at, deleted_at
+         FROM memory_entries m
+         WHERE m.id IN (${placeholders})
+           AND ${scopeClause.sql}`
+      )
+      .all(...uniqueIds, ...scopeClause.params);
+
+    const entries = rows.map(mapRowToMemoryEntry);
+    if (scopeClause.kind === "qq_group") {
+      const expectedNamespace = `social/qq-group-${scopeClause.groupId}`;
+      return entries.filter((entry) => entry.namespace === expectedNamespace);
+    }
+    return entries;
+  }
+
+  /**
+   * Persists a session-level frozen prompt-cache recall snapshot keyed strictly by `(sessionId, callerScope)`.
+   */
+  saveRecallSnapshotRecord(record: {
+    sessionId: string;
+    callerScope: CallerScope;
+    queryText: string;
+    frozenBlock: string;
+    entriesJson: string;
+    revisionsJson: string;
+    createdAt: number;
+    updatedAt: number;
+  }): void {
+    const db = this.requireDb();
+    const verifiedScope = validateTrustedCallerScope(record.callerScope);
+    db.prepare(`
+      INSERT INTO memory_recall_snapshots (
+        session_id, caller_scope, query_text, frozen_block, entries_json, revisions_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, caller_scope) DO UPDATE SET
+        query_text = excluded.query_text,
+        frozen_block = excluded.frozen_block,
+        entries_json = excluded.entries_json,
+        revisions_json = excluded.revisions_json,
+        updated_at = excluded.updated_at
+    `).run(
+      record.sessionId,
+      verifiedScope,
+      record.queryText,
+      record.frozenBlock,
+      record.entriesJson,
+      record.revisionsJson,
+      record.createdAt,
+      record.updatedAt
+    );
+  }
+
+  /**
+   * Loads a persisted recall snapshot strictly bound to `(sessionId, trustedCallerScope)`.
+   */
+  loadRecallSnapshotRecord(
+    sessionId: string,
+    trustedCallerScope: CallerScope
+  ): {
+    sessionId: string;
+    callerScope: CallerScope;
+    queryText: string;
+    frozenBlock: string;
+    entriesJson: string;
+    revisionsJson: string;
+    createdAt: number;
+    updatedAt: number;
+  } | null {
+    const db = this.requireDb();
+    const verifiedScope = validateTrustedCallerScope(trustedCallerScope);
+    const row = db
+      .prepare(
+        `SELECT session_id, caller_scope, query_text, frozen_block, entries_json, revisions_json, created_at, updated_at
+         FROM memory_recall_snapshots
+         WHERE session_id = ? AND caller_scope = ?
+         LIMIT 1`
+      )
+      .get(sessionId, verifiedScope);
+    if (!row) {
+      return null;
+    }
+    return {
+      sessionId: String(row.session_id),
+      callerScope: validateTrustedCallerScope(String(row.caller_scope)),
+      queryText: String(row.query_text),
+      frozenBlock: String(row.frozen_block),
+      entriesJson: String(row.entries_json),
+      revisionsJson: String(row.revisions_json),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at)
+    };
+  }
+
+  deleteRecallSnapshotRecord(
+    sessionId: string,
+    trustedCallerScope: CallerScope
+  ): boolean {
+    const db = this.requireDb();
+    const verifiedScope = validateTrustedCallerScope(trustedCallerScope);
+    const res = db
+      .prepare(
+        "DELETE FROM memory_recall_snapshots WHERE session_id = ? AND caller_scope = ?"
+      )
+      .run(sessionId, verifiedScope);
+    return Number(res.changes) > 0;
   }
 
   async listEntries(

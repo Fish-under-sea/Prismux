@@ -11,6 +11,7 @@ export * from "./ulid.js";
 export * from "./CollectorAndGuard.js";
 export * from "./SqliteMemoryStore.js";
 export * from "./ObsidianImporter.js";
+export * from "./SessionMemoryRecallCache.js";
 
 export const MEMORY_CORE_MILESTONE = "M2" as const;
 
