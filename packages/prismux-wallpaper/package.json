@@ -1,6 +1,6 @@
 {
   "name": "@prismux/wallpaper",
-  "version": "0.1.1-preview.1",
+  "version": "0.1.2-preview.1",
   "private": true,
   "type": "module",
   "description": "Prismux multi-source wallpaper stage, right-sidebar QuickPanel, full settings view, and Node Steam Workshop 431960 + local wallpaper scanner.",

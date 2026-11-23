@@ -4,7 +4,7 @@
 
 ## 渲染命令
 
-在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.1.1-preview.1`）：
+在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.1.2-preview.1`）：
 
 ```powershell
 node scripts/render-readme.mjs
@@ -33,4 +33,4 @@ node scripts/render-readme.mjs
 ## 字体与素材许可边界
 
 - 像素字体 [`Jersey20-Regular.ttf`](./Jersey20-Regular.ttf) 遵循 [SIL Open Font License 1.1](./OFL-Jersey20.txt)。
-- 吉祥物 [`logo.png`](./logo.png) 与界面实景截图 [`01-workbench-glass-phone.png`](./01-workbench-glass-phone.png) / [`02-collapsed-rail-claude-slider-fast.png`](./02-collapsed-rail-claude-slider-fast.png) / [`03-usage-call-logs.png`](./03-usage-call-logs.png) / [`04-settings-about-updates.png`](./04-settings-about-updates.png) / [`05-settings-diagnostics.png`](./05-settings-diagnostics.png) / [`06-settings-plugins-drawer.png`](./06-settings-plugins-drawer.png) 归属本仓项目资产；排版模板与渲染工具代码遵循仓库根 MIT 许可。
+- 吉祥物 [`logo.png`](./logo.png) 与界面实景截图 [`01-workbench-split-agy-v2.png`](./01-workbench-split-agy-v2.png) / [`02-wallpaper-inline-zoned-glass-v2.png`](./02-wallpaper-inline-zoned-glass-v2.png) / [`03-scoped-model-picker-dsh-fish-v2.png`](./03-scoped-model-picker-dsh-fish-v2.png) / [`04-settings-zoned-glass-capsule-v2.png`](./04-settings-zoned-glass-capsule-v2.png) / [`05-orca-workspace-dialog-v2.png`](./05-orca-workspace-dialog-v2.png) / [`06-statusbar-resources-keepawake-v2.png`](./06-statusbar-resources-keepawake-v2.png) 归属本仓项目资产；排版模板与渲染工具代码遵循仓库根 MIT 许可。
