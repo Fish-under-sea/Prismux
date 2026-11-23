@@ -89,20 +89,6 @@ const localCliRemovedEnvironmentKeys = new Set([
   "CHROME_CRASHPAD_PIPE_NAME",
 ]);
 
-const LocalCliTokenSchema = Schema.Union([
-  Schema.Struct({
-    token: Schema.Struct({
-      access_token: Schema.optional(Schema.String),
-      refresh_token: Schema.optional(Schema.String),
-    }),
-  }),
-  Schema.Struct({
-    access_token: Schema.optional(Schema.String),
-    refresh_token: Schema.optional(Schema.String),
-  }),
-]);
-const decodeLocalCliToken = Schema.decodeUnknownOption(Schema.fromJsonString(LocalCliTokenSchema));
-
 export interface AntigravityProfile {
   readonly platform: NodeJS.Platform;
   readonly geminiHome: string;
@@ -173,51 +159,6 @@ export function antigravityAuthConfigIssue(auth: AntigravityAuthConfig): string 
 export function resolveAntigravityLocalCliDataDir(path: Path.Path, userHome: string): string {
   return path.join(userHome, ".gemini", "antigravity-cli");
 }
-
-export function resolveAntigravityLocalCliTokenPath(path: Path.Path, userHome: string): string {
-  return path.join(resolveAntigravityLocalCliDataDir(path, userHome), "antigravity-oauth-token");
-}
-
-export function hasAntigravityLocalCliToken(contents: string): boolean {
-  const decoded = decodeLocalCliToken(contents);
-  if (Option.isNone(decoded)) return false;
-  const payload = "token" in decoded.value ? decoded.value.token : decoded.value;
-  return (
-    (typeof payload.access_token === "string" && payload.access_token.trim().length > 0) ||
-    (typeof payload.refresh_token === "string" && payload.refresh_token.trim().length > 0)
-  );
-}
-
-export interface LocalAntigravityCliAuthStatus {
-  readonly authenticated: boolean;
-  readonly source: "file" | "keyring" | null;
-  readonly tokenPath: string;
-}
-
-/** Checks local `~/.gemini/antigravity-cli` OAuth token file and optional OS keyring without spawning `agy`. */
-export const detectLocalAntigravityCliAuth = Effect.fn("detectLocalAntigravityCliAuth")(
-  function* (input: {
-    readonly userHome: string;
-    readonly readKeyringSecret?: Effect.Effect<string | undefined>;
-  }): Effect.fn.Return<LocalAntigravityCliAuthStatus, never, FileSystem.FileSystem | Path.Path> {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const tokenPath = resolveAntigravityLocalCliTokenPath(path, input.userHome);
-    const fileContents = yield* fs
-      .readFileString(tokenPath)
-      .pipe(Effect.orElseSucceed(() => undefined));
-    if (fileContents !== undefined && hasAntigravityLocalCliToken(fileContents)) {
-      return { authenticated: true, source: "file", tokenPath };
-    }
-    if (input.readKeyringSecret !== undefined) {
-      const secret = yield* input.readKeyringSecret;
-      if (secret !== undefined && hasAntigravityLocalCliToken(secret)) {
-        return { authenticated: true, source: "keyring", tokenPath };
-      }
-    }
-    return { authenticated: false, source: null, tokenPath };
-  },
-);
 
 /**
  * `auth.type` names the selected method so a native logout clears only that method's credentials
@@ -561,7 +502,8 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
       platform,
       geminiHome,
       acpDirectory,
-      tokenPath: resolveAntigravityLocalCliTokenPath(path, userHome),
+      // Local agy CLI manages credentials exclusively inside `agy acp`; Prismux never reads token files.
+      tokenPath: "",
       tempDirectory,
       browserCommand: "",
       localCli: true,

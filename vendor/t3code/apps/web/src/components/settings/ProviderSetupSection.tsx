@@ -358,7 +358,7 @@ function ProviderSetupActions({
         <SettingsRow
           title={gt("Local agy CLI")}
           description={gt(
-            "Already signed in with agy CLI (~/.gemini/antigravity-cli)? Reuse it directly with the native Google Antigravity icon and limits.",
+            "Already signed in with agy CLI? Reuse it directly via the official agy acp channel with the native Google Antigravity icon.",
           )}
           control={
             <Button

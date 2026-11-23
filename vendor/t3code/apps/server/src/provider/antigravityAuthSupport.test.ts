@@ -27,7 +27,6 @@ import {
   type AntigravityAuthConfig,
   type AntigravityProfile,
   buildAntigravityAcpSpawnInput,
-  detectLocalAntigravityCliAuth,
   isAntigravitySignInRequiredError,
   makeAntigravityStderrHandler,
   makeAntigravityStdoutTransform,
@@ -35,7 +34,6 @@ import {
   parseAntigravityAuthorizationUrl,
   prepareAntigravityProfile,
   resolveAntigravityInstanceDirectories,
-  resolveAntigravityLocalCliTokenPath,
 } from "./antigravityAuthSupport.ts";
 
 const authorizationUrl =
@@ -934,7 +932,7 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
         },
       });
       expect(profile.localCli).toBe(true);
-      expect(profile.tokenPath).toBe(resolveAntigravityLocalCliTokenPath(path, userHome));
+      expect(profile.tokenPath).toBe("");
       expect(yield* fs.exists(path.join(profileDirectory, "antigravity-acp", "settings.json"))).toBe(
         false,
       );
@@ -958,35 +956,6 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       expect(spawn.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
       expect(spawn.env?.BROWSER).toBeUndefined();
       expect(spawn.env?.USERPROFILE).toBe(userHome);
-    }),
-  );
-
-  it.effect("detectLocalAntigravityCliAuth detects local token file and keyring fallback", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const userHome = yield* fs.makeTempDirectoryScoped();
-
-      const missing = yield* detectLocalAntigravityCliAuth({ userHome });
-      expect(missing.authenticated).toBe(false);
-      expect(missing.source).toBeNull();
-
-      const fromKeyring = yield* detectLocalAntigravityCliAuth({
-        userHome,
-        readKeyringSecret: Effect.succeed(
-          JSON.stringify({ token: { access_token: "test-token", refresh_token: "test-refresh" } }),
-        ),
-      });
-      expect(fromKeyring).toMatchObject({ authenticated: true, source: "keyring" });
-
-      const tokenPath = resolveAntigravityLocalCliTokenPath(path, userHome);
-      yield* fs.makeDirectory(path.dirname(tokenPath), { recursive: true });
-      yield* fs.writeFileString(
-        tokenPath,
-        JSON.stringify({ token: { access_token: "test-token", expiry: "2099-01-01T00:00:00Z" } }),
-      );
-      const fromFile = yield* detectLocalAntigravityCliAuth({ userHome });
-      expect(fromFile).toMatchObject({ authenticated: true, source: "file", tokenPath });
     }),
   );
 });

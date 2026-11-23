@@ -12519,5 +12519,9 @@
   "d7929997ab65ec68": "本机 agy CLI",
   "3144d651e4a616c3": "正在使用本机 agy CLI。",
   "7113020ca6ec6a00": "使用 PATH 中的本机 agy CLI，或下方指定的自定义可执行文件路径。",
-  "9f4ead624b414e42": "已通过 agy CLI（~/.gemini/antigravity-cli）登录？可直接复用并保留原生 Google Antigravity 图标与额度显示。"
+  "9f4ead624b414e42": "已通过 agy CLI（~/.gemini/antigravity-cli）登录？可直接复用并保留原生 Google Antigravity 图标与额度显示。",
+  "550329e185c54d42": "已通过 agy CLI 登录？可直接经由官方 agy acp 通道复用并保留原生 Google Antigravity 图标。",
+  "e26820b05f551add": "正在通过官方 ACP 复用本机 agy CLI（{plan}）。查看配额或余额请在终端运行 agy 并输入 /usage 或 /credits。",
+  "cc4b7705b1c55480": "正在通过官方 ACP 复用本机 agy CLI 登录态。查看配额或余额请在终端运行 agy 并输入 /usage 或 /credits。",
+  "143041d61d3ccecc": "在 {environment} 上通过官方 ACP 连接本机 agy CLI 以加载模型。请先在终端运行 'agy' 或 'agy acp --login' 完成登录。"
 }

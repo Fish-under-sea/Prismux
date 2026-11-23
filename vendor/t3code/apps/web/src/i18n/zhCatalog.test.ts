@@ -143,11 +143,29 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(
       m(
         msg(
-          "Already signed in with agy CLI (~/.gemini/antigravity-cli)? Reuse it directly with the native Google Antigravity icon and limits.",
+          "Already signed in with agy CLI? Reuse it directly via the official agy acp channel with the native Google Antigravity icon.",
         ),
       ),
+    ).toBe("已通过 agy CLI 登录？可直接经由官方 agy acp 通道复用并保留原生 Google Antigravity 图标。");
+    expect(
+      m(
+        msg(
+          "Reusing local agy CLI via official ACP ({plan}). Check quotas or credits with /usage or /credits in agy.",
+        ),
+        { plan: "Google AI Ultra" },
+      ),
     ).toBe(
-      "已通过 agy CLI（~/.gemini/antigravity-cli）登录？可直接复用并保留原生 Google Antigravity 图标与额度显示。",
+      "正在通过官方 ACP 复用本机 agy CLI（Google AI Ultra）。查看配额或余额请在终端运行 agy 并输入 /usage 或 /credits。",
+    );
+    expect(
+      m(
+        msg(
+          "Connect local agy CLI via official ACP on {environment} to load models. Sign in in a terminal with 'agy' or 'agy acp --login'.",
+        ),
+        { environment: "Local" },
+      ),
+    ).toBe(
+      "在 Local 上通过官方 ACP 连接本机 agy CLI 以加载模型。请先在终端运行 'agy' 或 'agy acp --login' 完成登录。",
     );
     // JSX `<T>` entry in zh.json
     expect(zhCatalog["a1761e822ab06189"]).toBe("使用本机 agy CLI");

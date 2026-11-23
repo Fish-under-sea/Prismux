@@ -42,7 +42,10 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 import { resolveUsageLimitsAfterProbe } from "@t3tools/provider-core/server/usageLimits";
 
-import { antigravityThinkingConfig } from "./acp/AntigravityAcpSupport.ts";
+import {
+  antigravitySessionTierName,
+  antigravityThinkingConfig,
+} from "./acp/AntigravityAcpSupport.ts";
 
 const EMPTY_MODEL_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAX_WORKSPACE_SNAPSHOTS = 32;
@@ -170,7 +173,6 @@ interface AntigravityProviderOptions {
   readonly supportsTextGeneration: Effect.Effect<boolean>;
   readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
   readonly clearUsage?: Effect.Effect<void>;
-  readonly detectLocalAuth?: Effect.Effect<boolean>;
   readonly hydrateCatalog?: Effect.Effect<void>;
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   readonly auth?: { readonly type: string; readonly label: string };
@@ -204,7 +206,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const usesCredentials =
     options.auth?.type === "gemini-api-key" || options.auth?.type === "agent-platform";
   const signInMessage = usesLocalCli
-    ? "Local agy CLI is not signed in. Run 'agy login' in a terminal, then sync models."
+    ? "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then sync models."
     : usesCredentials
       ? `Connect with ${options.auth.label} to use Antigravity and load models.`
       : SIGN_IN_MESSAGE;
@@ -337,36 +339,16 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
               : `Antigravity did not respond to its local health check within ${timeoutMs / 1_000} seconds.`;
     const supportsTextGeneration =
       initialized !== undefined ? yield* options.supportsTextGeneration : false;
-    const localCliAuthenticated =
-      initialized !== undefined && usesLocalCli && options.detectLocalAuth !== undefined
-        ? yield* options.detectLocalAuth.pipe(Effect.orElseSucceed(() => false))
-        : undefined;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     const applyCheck = (state: AntigravityProviderState) => {
       if (state.authRevision !== before.authRevision) return state;
       const { message: _previousMessage, ...draft } = state.draft;
-      const nextAuth =
-        localCliAuthenticated === true
-          ? {
-              status: "authenticated" as const,
-              type: "local-cli",
-              label: options.auth?.label ?? "Local agy CLI",
-              canLogout: false,
-            }
-          : localCliAuthenticated === false
-            ? {
-                status: "unauthenticated" as const,
-                type: "local-cli",
-                label: options.auth?.label ?? "Local agy CLI",
-                canLogout: false,
-              }
-            : draft.auth;
-      const authenticated = nextAuth.status === "authenticated";
+      const authenticated = draft.auth.status === "authenticated";
       const message =
         errorMessage ??
         (authenticated
           ? undefined
-          : nextAuth.status === "unauthenticated"
+          : draft.auth.status === "unauthenticated"
             ? signInMessage
             : authUncheckedMessage);
       return {
@@ -376,7 +358,6 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           installed: !missingInstallation,
           // Lightweight custom-launcher probes lack versions; preserve the real handshake's version.
           version: version === "unknown" ? draft.version : version || draft.version,
-          auth: nextAuth,
           status: errorMessage ? "error" : authenticated ? "ready" : "warning",
           checkedAt: updatedAt,
           usageLimits: missingInstallation ? undefined : draft.usageLimits,
@@ -392,7 +373,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           ...(initialized !== undefined
             ? {
                 supportsTextGeneration:
-                  supportsTextGeneration && nextAuth.status !== "unauthenticated",
+                  supportsTextGeneration && draft.auth.status !== "unauthenticated",
               }
             : {}),
           ...(message ? { message } : {}),
@@ -410,7 +391,6 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     if (
       initialized !== undefined &&
       usesLocalCli &&
-      localCliAuthenticated === true &&
       next.draft.models.length === 0 &&
       !hydratedCatalogOnce &&
       options.hydrateCatalog !== undefined
@@ -467,6 +447,9 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       const { message: _previousMessage, ...draft } = state.draft;
       const workspaces = draft.workspaceSnapshots ?? [];
       const workspace = cwd ? workspaces.find((entry) => entry.cwd === cwd) : undefined;
+      const baseAuthLabel = options.auth?.label ?? "Google account";
+      const tierName = antigravitySessionTierName(started.sessionSetupResult);
+      const authLabel = tierName ? `${baseAuthLabel} · ${tierName}` : baseAuthLabel;
       const next = {
         authRevision: state.authRevision + 1,
         draft: {
@@ -477,7 +460,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           auth: {
             status: "authenticated",
             type: options.auth?.type ?? "oauth-personal",
-            label: options.auth?.label ?? "Google account",
+            label: authLabel,
             ...(usesLocalCli ? { canLogout: false } : {}),
           },
           checkedAt: updatedAt,

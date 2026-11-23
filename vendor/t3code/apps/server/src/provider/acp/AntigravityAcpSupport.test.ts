@@ -19,6 +19,7 @@ import {
   antigravityPermissionDisposition,
   antigravitySessionMeta,
   antigravitySessionMode,
+  antigravitySessionTierName,
   buildAntigravityPrompt,
 } from "./AntigravityAcpSupport.ts";
 
@@ -84,9 +85,24 @@ describe("Antigravity release gates", () => {
           ? { antigravity: { systemPrompt: { append: "<pull_request_linking/>" } } }
           : undefined,
       );
-      expect(antigravityClientInfo(version).name).toBe(ownName ? "t3-code" : "zed");
+      expect(antigravityClientInfo(version).name).toBe("prismux");
+      expect(antigravityClientInfo(version).title).toBe("Prismux");
     },
   );
+
+  it("extracts official subscription tier name from ACP session/new _meta", () => {
+    expect(
+      antigravitySessionTierName({
+        _meta: {
+          antigravity: {
+            tier: { name: "Google AI Ultra", id: "g1-ultra-tier", upgradeUri: "" },
+          },
+        },
+      }),
+    ).toBe("Google AI Ultra");
+    expect(antigravitySessionTierName({ _meta: undefined })).toBeUndefined();
+    expect(antigravitySessionTierName(undefined)).toBeUndefined();
+  });
 });
 
 describe("Antigravity Auto", () => {

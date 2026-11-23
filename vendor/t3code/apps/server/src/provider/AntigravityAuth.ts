@@ -161,7 +161,7 @@ function safeAuthFailure(
     }
     if (isAcpRequestError(error.value)) {
       if (localCli && error.value.code === -32000) {
-        return "Local agy CLI is not signed in. Run 'agy login' in a terminal, then reconnect.";
+        return "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then reconnect.";
       }
       if (error.value.errorMessage.includes("SUBSCRIPTION_REQUIRED")) {
         return "Google requires an eligible Antigravity subscription for this account.";
@@ -178,7 +178,7 @@ function safeAuthFailure(
     }
   }
   if (localCli) {
-    return "Could not connect to local agy CLI. Check that 'agy login' succeeded and try again.";
+    return "Could not connect to local agy CLI. Sign in with 'agy' or 'agy acp --login' and try again.";
   }
   return usesBrowser
     ? "Google sign-in failed. Start sign-in again."

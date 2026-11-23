@@ -83,6 +83,10 @@ export function ProviderAuthenticationSection({
   const usesCredentials =
     provider.driver === "antigravity" &&
     (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
+  const localCliPlan =
+    usesLocalCli && provider.auth.label
+      ? provider.auth.label.replace(/^Local agy CLI(?:\s*·\s*)?/, "").trim()
+      : "";
   const accountDescription = active
     ? auth?.phase === "starting"
       ? (auth.message ??
@@ -104,16 +108,26 @@ export function ProviderAuthenticationSection({
             : gt("Finish signing in in your browser.")
     : signedIn
       ? usesLocalCli
-        ? gt("Reusing local agy CLI sign-in (~/.gemini/antigravity-cli).")
+        ? localCliPlan
+          ? gt(
+              "Reusing local agy CLI via official ACP ({plan}). Check quotas or credits with /usage or /credits in agy.",
+              { plan: localCliPlan },
+            )
+          : gt(
+              "Reusing local agy CLI via official ACP. Check quotas or credits with /usage or /credits in agy.",
+            )
         : gt("Signed in.")
       : isDiscovering
         ? gt("Discovering sign-in methods…")
         : needsExternalSetup
           ? gt("No in-app sign-in advertised. Follow the provider's docs to finish setup.")
           : usesLocalCli
-            ? gt("Reuse local agy CLI sign-in (~/.gemini/antigravity-cli) on {environment} to load models.", {
-                environment: environmentLabel,
-              })
+            ? gt(
+                "Connect local agy CLI via official ACP on {environment} to load models. Sign in in a terminal with 'agy' or 'agy acp --login'.",
+                {
+                  environment: environmentLabel,
+                },
+              )
             : usesCredentials
               ? gt("Connect on {environment} to load models.", { environment: environmentLabel })
               : gt("Sign in on {environment}.", { environment: environmentLabel });

@@ -12502,5 +12502,9 @@
   "d7929997ab65ec68": "Local agy CLI",
   "3144d651e4a616c3": "Using local agy CLI.",
   "7113020ca6ec6a00": "Uses local agy CLI on PATH or the custom binary path below.",
-  "9f4ead624b414e42": "Already signed in with agy CLI (~/.gemini/antigravity-cli)? Reuse it directly with the native Google Antigravity icon and limits."
+  "9f4ead624b414e42": "Already signed in with agy CLI (~/.gemini/antigravity-cli)? Reuse it directly with the native Google Antigravity icon and limits.",
+  "550329e185c54d42": "Already signed in with agy CLI? Reuse it directly via the official agy acp channel with the native Google Antigravity icon.",
+  "e26820b05f551add": "Reusing local agy CLI via official ACP ({plan}). Check quotas or credits with /usage or /credits in agy.",
+  "cc4b7705b1c55480": "Reusing local agy CLI via official ACP. Check quotas or credits with /usage or /credits in agy.",
+  "143041d61d3ccecc": "Connect local agy CLI via official ACP on {environment} to load models. Sign in in a terminal with 'agy' or 'agy acp --login'."
 }

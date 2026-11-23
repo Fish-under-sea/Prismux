@@ -45,7 +45,6 @@ import {
   antigravityAuthUsesBrowser,
   antigravityAuthUsesLocalCli,
   buildAntigravityAcpSpawnInput,
-  detectLocalAntigravityCliAuth,
   isAntigravitySignInRequiredError,
   prepareAntigravityProfile,
   resolveAntigravityInstanceDirectories,
@@ -73,10 +72,7 @@ import {
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityProvider } from "../AntigravityProvider.ts";
-import {
-  makeAntigravityUsageProbe,
-  readAntigravityCliKeyringSecret,
-} from "../antigravityUsageLimits.ts";
+import { makeAntigravityUsageProbe } from "../antigravityUsageLimits.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
@@ -148,7 +144,6 @@ export const AntigravityDriver: ProviderDriver<
     const digest = yield* Digest.Digest;
     const random = yield* SecureRandom.SecureRandom;
     const fileSystem = yield* FileSystem.FileSystem;
-    const httpClient = yield* HttpClient.HttpClient;
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const host = yield* ProviderHost.ProviderHost;
@@ -171,7 +166,6 @@ export const AntigravityDriver: ProviderDriver<
     const usesLocalCli = antigravityAuthUsesLocalCli(auth.authMethod);
     const processEnvironment = yield* mergeProviderInstanceEnvironment(environment);
     const hostPlatform = yield* HostProcess.Platform;
-    const hostArchitecture = yield* HostProcess.Architecture;
     const userHome = resolveAntigravityUserHome(
       hostPlatform,
       processEnvironment,
@@ -620,33 +614,15 @@ export const AntigravityDriver: ProviderDriver<
       profileDirectory,
       userHome,
       authMethod: auth.authMethod,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
-      Effect.provideService(Digest.Digest, digest),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-    );
-    const detectLocalAuth = usesLocalCli
-      ? detectLocalAntigravityCliAuth({
-          userHome,
-          readKeyringSecret: readAntigravityCliKeyringSecret(hostPlatform, hostArchitecture).pipe(
-            Effect.orElseSucceed(() => undefined),
-          ),
-        }).pipe(
-          Effect.map((result) => result.authenticated),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        )
-      : undefined;
+    });
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,
       stampIdentity: classifyModels,
       probe,
       probeUsage: usage.probe,
       clearUsage: usage.clear,
-      ...(detectLocalAuth
+      ...(usesLocalCli
         ? {
-            detectLocalAuth,
             hydrateCatalog: Effect.suspend(
               (): Effect.Effect<void> => refreshModels().pipe(Effect.ignore),
             ),
@@ -761,7 +737,7 @@ export const AntigravityDriver: ProviderDriver<
               instanceId,
               detail: isAntigravitySignInRequiredError(cause)
                 ? usesLocalCli
-                  ? "Local agy CLI is not signed in. Run 'agy login' in a terminal, then refresh models."
+                  ? "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then refresh models."
                   : "Sign in to Antigravity in provider settings before refreshing models."
                 : cause._tag === "ProviderSetupError" &&
                     (cause.operation === "configure" || cause.operation === "start")
