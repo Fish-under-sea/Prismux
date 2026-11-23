@@ -335,6 +335,20 @@
                     : appearanceMode === "system"
                       ? true
                       : appearanceMode === "dark";
+          // Seed T3's theme & appearance-mode storage on brand-new cold starts (or dark/glass
+          // Prismux profiles lacking T3 keys) before main.tsx evaluates `useTheme.ts` at module
+          // load, preventing Light-OS hosts from stripping `.dark` before DOMContentLoaded.
+          if (
+            isDark &&
+            !hasExplicitLightPreference &&
+            storedTheme === null &&
+            storedAppearanceMode === null
+          ) {
+            try {
+              window.localStorage.setItem("t3code:theme", "dark");
+              window.localStorage.setItem(THEME_APPEARANCE_MODE_STORAGE_KEY, "dark");
+            } catch {}
+          }
           const effectiveIsThemed = halfThemeId !== null || isThemed;
           const effectiveThemeId = halfThemeId ?? themeId;
           const effectiveCustomTheme = halfThemeId !== null ? halfCustomTheme : customTheme;

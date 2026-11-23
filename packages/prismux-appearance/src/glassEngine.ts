@@ -746,6 +746,7 @@ const MANAGED_ROOT_ATTRS: readonly string[] = [
   'data-pmx-gpu',
   'data-pmx-reduced-transparency',
   'data-pmx-wallpaper',
+  'data-pmx-wallpaper-visible',
   'data-prismux-theme',
   'data-prismux-mode',
   'data-prismux-glass',
@@ -927,6 +928,7 @@ export function applyPrismuxAppearanceToDocument(
     syncAttr(el, 'data-pmx-gpu', gpuFlag);
     syncAttr(el, 'data-pmx-reduced-transparency', reducedTransFlag);
     syncAttr(el, 'data-pmx-wallpaper', wallpaperFlag);
+    syncAttr(el, 'data-pmx-wallpaper-visible', wallpaperFlag);
 
     // Mirror official Prismux UI/UX mandate §2.6 attributes for plugins.
     syncAttr(el, 'data-prismux-theme', runtime.polarity);

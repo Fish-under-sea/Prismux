@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { WallpaperStore } from "./store.js";
-import { useWallpaperStore } from "./store.js";
+import {
+  findWallpaperById,
+  normalizeWallpaperFadeOpacity,
+  normalizeWallpaperScrim,
+  useWallpaperStore,
+} from "./store.js";
 import type {
   BuiltinScenePresetId,
   ThemeMode,
@@ -97,41 +102,41 @@ void main() {
 
   if (u_scene < 0.5) {
     // Scene 0: Aurora Prism (极光棱镜)
-    vec3 base = u_theme < 0.5 ? vec3(0.91, 0.95, 0.99) : vec3(0.035, 0.062, 0.125);
-    vec3 mid = u_theme < 0.5 ? vec3(0.75, 0.86, 0.99) : vec3(0.075, 0.175, 0.345);
-    vec3 glow = mix(vec3(0.32, 0.72, 1.0), u_tint, 0.35);
-    col = mix(base, mid, ribbon * 0.85);
-    col += glow * waveBand * (0.52 + u_audio.x * 0.32) * u_intensity;
-    col += vec3(0.68, 0.88, 1.0) * caustic * (0.18 + u_audio.z * 0.20) * u_intensity;
+    vec3 base = u_theme < 0.5 ? vec3(0.91, 0.95, 0.99) : vec3(0.052, 0.095, 0.195);
+    vec3 mid = u_theme < 0.5 ? vec3(0.75, 0.86, 0.99) : vec3(0.115, 0.265, 0.495);
+    vec3 glow = mix(vec3(0.36, 0.78, 1.0), u_tint, 0.35);
+    col = mix(base, mid, ribbon * 0.88);
+    col += glow * waveBand * (0.62 + u_audio.x * 0.32) * u_intensity;
+    col += vec3(0.72, 0.90, 1.0) * caustic * (0.22 + u_audio.z * 0.20) * u_intensity;
   } else if (u_scene < 1.5) {
     // Scene 1: Midnight Abyss (午夜深海)
-    vec3 base = u_theme < 0.5 ? vec3(0.88, 0.96, 0.97) : vec3(0.015, 0.068, 0.105);
-    vec3 mid = u_theme < 0.5 ? vec3(0.64, 0.87, 0.90) : vec3(0.038, 0.185, 0.265);
-    vec3 bio = mix(vec3(0.14, 0.86, 0.76), u_tint, 0.30);
+    vec3 base = u_theme < 0.5 ? vec3(0.88, 0.96, 0.97) : vec3(0.025, 0.098, 0.155);
+    vec3 mid = u_theme < 0.5 ? vec3(0.64, 0.87, 0.90) : vec3(0.065, 0.265, 0.385);
+    vec3 bio = mix(vec3(0.18, 0.92, 0.82), u_tint, 0.30);
     float rays = exp(-abs(p.x * 0.7 + p.y * 0.45 + (q - 0.5) * 0.6) * 3.2);
     col = mix(base, mid, ribbon * 0.90);
-    col += bio * (waveBand * 0.44 + rays * 0.28 + u_audio.y * 0.18) * u_intensity;
-    col += vec3(0.45, 0.94, 0.88) * caustic * (0.20 + u_audio.z * 0.22) * u_intensity;
+    col += bio * (waveBand * 0.52 + rays * 0.34 + u_audio.y * 0.18) * u_intensity;
+    col += vec3(0.48, 0.96, 0.90) * caustic * (0.24 + u_audio.z * 0.22) * u_intensity;
   } else if (u_scene < 2.5) {
     // Scene 2: Liquid Silk (液态绸光)
-    vec3 base = u_theme < 0.5 ? vec3(0.93, 0.93, 0.99) : vec3(0.062, 0.068, 0.152);
-    vec3 mid = u_theme < 0.5 ? vec3(0.81, 0.82, 0.98) : vec3(0.155, 0.172, 0.385);
-    vec3 pearl = mix(vec3(0.75, 0.72, 1.0), u_tint, 0.32);
+    vec3 base = u_theme < 0.5 ? vec3(0.93, 0.93, 0.99) : vec3(0.092, 0.098, 0.225);
+    vec3 mid = u_theme < 0.5 ? vec3(0.81, 0.82, 0.98) : vec3(0.225, 0.245, 0.525);
+    vec3 pearl = mix(vec3(0.78, 0.75, 1.0), u_tint, 0.32);
     float fold = pow(max(0.0, sin((p.x * 2.4 + p.y * 1.9 + r * 1.8) * 2.2 - t * 0.9)), 3.0);
-    col = mix(base, mid, ribbon * 0.82);
-    col += pearl * (fold * 0.45 + waveBand * 0.30) * u_intensity;
-    col += vec3(0.56, 0.82, 1.0) * caustic * 0.16 * u_intensity;
+    col = mix(base, mid, ribbon * 0.85);
+    col += pearl * (fold * 0.52 + waveBand * 0.36) * u_intensity;
+    col += vec3(0.60, 0.85, 1.0) * caustic * 0.20 * u_intensity;
   } else {
     // Scene 3: Cyber Twilight (赛博暮光)
-    vec3 base = u_theme < 0.5 ? vec3(0.97, 0.92, 0.96) : vec3(0.075, 0.042, 0.135);
-    vec3 mid = u_theme < 0.5 ? vec3(0.93, 0.78, 0.88) : vec3(0.245, 0.095, 0.335);
-    vec3 horizon = mix(vec3(0.98, 0.52, 0.36), u_tint, 0.28);
-    vec3 magenta = vec3(0.92, 0.32, 0.66);
+    vec3 base = u_theme < 0.5 ? vec3(0.97, 0.92, 0.96) : vec3(0.115, 0.062, 0.205);
+    vec3 mid = u_theme < 0.5 ? vec3(0.93, 0.78, 0.88) : vec3(0.325, 0.135, 0.445);
+    vec3 horizon = mix(vec3(1.0, 0.56, 0.40), u_tint, 0.28);
+    vec3 magenta = vec3(0.96, 0.36, 0.70);
     float dusk = exp(-abs(p.y + 0.18 - (q - 0.5) * 0.25) * 3.8);
-    col = mix(base, mid, ribbon * 0.85);
-    col += horizon * dusk * (0.56 + u_audio.x * 0.28) * u_intensity;
-    col += magenta * waveBand * (0.34 + u_audio.y * 0.24) * u_intensity;
-    col += vec3(1.0, 0.82, 0.65) * caustic * 0.12 * u_intensity;
+    col = mix(base, mid, ribbon * 0.88);
+    col += horizon * dusk * (0.64 + u_audio.x * 0.28) * u_intensity;
+    col += magenta * waveBand * (0.42 + u_audio.y * 0.24) * u_intensity;
+    col += vec3(1.0, 0.84, 0.68) * caustic * 0.16 * u_intensity;
   }
 
   // Subtle star shimmer on dark/glass themes
@@ -613,6 +618,39 @@ interface VideoStageProps {
   onError: (msg: string | null) => void;
 }
 
+function tryPlayVideoElement(video: HTMLVideoElement): void {
+  const playPromise = video.play();
+  if (playPromise && typeof playPromise.catch === "function") {
+    playPromise.catch(() => {
+      // Unconditionally fall back to muted autoplay when Chromium autoplay policy blocks unmuted start
+      video.defaultMuted = true;
+      video.muted = true;
+      video.setAttribute("muted", "");
+      const retry = video.play();
+      if (retry && typeof retry.catch === "function") {
+        retry.catch(() => {});
+      }
+    });
+  }
+}
+
+function formatVideoMediaError(err: MediaError | null): string {
+  if (!err) return "视频壁纸解码失败，请检查文件编码或格式";
+  const detail = err.message ? `（${err.message}）` : "";
+  switch (err.code) {
+    case 1:
+      return `视频加载被中断${detail}`;
+    case 2:
+      return `视频媒体流读取失败（网络或鉴权异常）${detail}`;
+    case 3:
+      return `视频解码失败，请检查编码格式${detail}`;
+    case 4:
+      return `当前媒体格式或编码不受支持${detail}`;
+    default:
+      return `视频壁纸播放失败（code=${err.code}）${detail}`;
+  }
+}
+
 function VideoStage({
   src,
   poster,
@@ -627,53 +665,90 @@ function VideoStage({
 }: VideoStageProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const stateRef = useRef({
+    paused,
+    muted,
+    volume,
+    playbackRate,
+    loop,
+    poster,
+    mediaStyle,
+    onEnded,
+    onError,
+  });
+  stateRef.current = {
+    paused,
+    muted,
+    volume,
+    playbackRate,
+    loop,
+    poster,
+    mediaStyle,
+    onEnded,
+    onError,
+  };
 
   useEffect(() => {
     const container = hostRef.current;
     if (!container) return;
 
+    const latest = stateRef.current;
     // Adopt prewarmed metadata element when available (instant start without double decode)
     const adopted = consumePrewarmedVideo(src);
     const video = adopted ?? document.createElement("video");
     videoRef.current = video;
 
+    const effectiveMuted = latest.muted || latest.volume <= 0;
     video.className = "pmx-wp-stage__media";
     video.playsInline = true;
     video.setAttribute("playsinline", "");
+    video.autoplay = !latest.paused;
     video.preload = "auto";
-    video.loop = loop;
-    video.muted = muted || volume <= 0;
-    video.volume = Math.max(0, Math.min(1, volume));
+    video.loop = latest.loop;
+    video.defaultMuted = effectiveMuted;
+    video.muted = effectiveMuted;
+    if (effectiveMuted) {
+      video.setAttribute("muted", "");
+    } else {
+      video.removeAttribute("muted");
+    }
+    video.volume = Math.max(0, Math.min(1, latest.volume));
     try {
-      video.playbackRate = playbackRate;
+      video.playbackRate = latest.playbackRate;
     } catch {
       // Ignore unsupported rate
     }
-    if (poster) {
-      video.poster = poster;
+    if (latest.poster) {
+      video.poster = latest.poster;
+    } else {
+      video.removeAttribute("poster");
     }
+    Object.assign(video.style, latest.mediaStyle);
+
     if (!adopted || video.src !== src) {
       video.src = src;
     }
 
     const handleContextMenu = (e: Event) => e.preventDefault();
-    const handleEnded = () => onEnded();
-    const handleError = () => onError("视频壁纸解码失败，请检查文件编码或格式");
-    const handleCanPlay = () => onError(null);
+    const handleEnded = () => stateRef.current.onEnded();
+    const handleError = () => stateRef.current.onError(formatVideoMediaError(video.error));
+    const handleReadyToPlay = () => {
+      stateRef.current.onError(null);
+      if (!stateRef.current.paused && video.paused) {
+        tryPlayVideoElement(video);
+      }
+    };
 
     video.addEventListener("contextmenu", handleContextMenu);
     video.addEventListener("ended", handleEnded);
     video.addEventListener("error", handleError);
-    video.addEventListener("canplay", handleCanPlay);
+    video.addEventListener("loadeddata", handleReadyToPlay);
+    video.addEventListener("canplay", handleReadyToPlay);
 
     container.replaceChildren(video);
 
-    if (!paused) {
-      video.play().catch(() => {
-        // Fallback muted autoplay if browser blocks unmuted playback
-        video.muted = true;
-        video.play().catch(() => {});
-      });
+    if (!latest.paused) {
+      tryPlayVideoElement(video);
     } else {
       video.pause();
     }
@@ -682,7 +757,8 @@ function VideoStage({
       video.removeEventListener("contextmenu", handleContextMenu);
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
-      video.removeEventListener("canplay", handleCanPlay);
+      video.removeEventListener("loadeddata", handleReadyToPlay);
+      video.removeEventListener("canplay", handleReadyToPlay);
       try {
         video.pause();
         video.removeAttribute("src");
@@ -698,8 +774,15 @@ function VideoStage({
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+    const effectiveMuted = muted || volume <= 0;
     video.loop = loop;
-    video.muted = muted || volume <= 0;
+    video.defaultMuted = effectiveMuted;
+    video.muted = effectiveMuted;
+    if (effectiveMuted) {
+      video.setAttribute("muted", "");
+    } else {
+      video.removeAttribute("muted");
+    }
     video.volume = Math.max(0, Math.min(1, volume));
     try {
       video.playbackRate = playbackRate;
@@ -708,8 +791,8 @@ function VideoStage({
     }
     if (paused) {
       video.pause();
-    } else {
-      video.play().catch(() => {});
+    } else if (video.paused) {
+      tryPlayVideoElement(video);
     }
   }, [paused, muted, volume, playbackRate, loop]);
 
@@ -764,12 +847,14 @@ function WebWallpaperStage({
     postProps();
   }, [userProps, paused, fpsLimit]);
 
+  const isLoopbackHttp = /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(src);
+
   return (
     <iframe
       ref={iframeRef}
       src={src}
       title="Prismux Web Wallpaper"
-      sandbox="allow-scripts"
+      sandbox={isLoopbackHttp ? "allow-scripts allow-same-origin" : "allow-scripts"}
       className="pmx-wp-stage__media pmx-wp-stage__iframe"
       style={mediaStyle}
       onLoad={postProps}
@@ -890,12 +975,15 @@ export function WallpaperStage({
 }: WallpaperStageProps) {
   const snap = useWallpaperStore(store);
   const { settings, wallpapers } = snap;
-  const [docHidden, setDocHidden] = useState(false);
+  const [docHidden, setDocHidden] = useState(
+    () => typeof document !== "undefined" && document.hidden,
+  );
   const [winBlurred, setWinBlurred] = useState(false);
 
   // Respect page visibility & optional blur-pause power settings
   useEffect(() => {
     if (typeof document === "undefined") return;
+    setDocHidden(document.hidden);
     const onVis = () => setDocHidden(document.hidden);
     const onBlur = () => setWinBlurred(true);
     const onFocus = () => setWinBlurred(false);
@@ -910,7 +998,7 @@ export function WallpaperStage({
   }, []);
 
   const currentWallpaper = useMemo(
-    () => wallpapers.find((w) => w.id === settings.selectedId) ?? null,
+    () => findWallpaperById(wallpapers, settings.selectedId),
     [wallpapers, settings.selectedId],
   );
 
@@ -975,7 +1063,8 @@ export function WallpaperStage({
   const activeGroup = settings.rotationGroups.find((g) => g.id === settings.rotationGroupId);
   const videoLoop = !(settings.rotationEnabled && activeGroup?.trigger === "videoEnd");
   const transitionMs = settings.switchTransition === "cut" ? 0 : 420;
-  const nativeFadeOpacity = Math.max(0, Math.min(0.9, settings.wallpaperOpacity / 100));
+  const nativeFadeOpacity = normalizeWallpaperFadeOpacity(settings.wallpaperOpacity, 0) / 100;
+  const scrimOpacity = normalizeWallpaperScrim(settings.scrim, 0.15);
   const nativeFadeColor = settings.themeMode === "light" ? "#ffffff" : "#0b0f19";
 
   // Extract shader user properties if present
@@ -1087,10 +1176,10 @@ export function WallpaperStage({
         />
       )}
 
-      {settings.scrim > 0 && (
+      {scrimOpacity > 0 && (
         <div
           className="pmx-wp-stage__scrim"
-          style={{ opacity: Math.max(0, Math.min(0.9, settings.scrim)) }}
+          style={{ opacity: scrimOpacity }}
         />
       )}
     </div>

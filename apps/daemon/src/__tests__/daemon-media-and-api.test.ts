@@ -17,6 +17,8 @@ import { gzipSync } from "node:zlib";
 import { CHIEF_PROVIDER_KINDS, OFFICIAL_PLUGIN_IDS } from "@prismux/protocol";
 import { WebSocketServer } from "ws";
 import {
+  AppearanceConfigStore,
+  createDefaultAppearanceConfig,
   PrismuxDaemon,
   parseWindowsRegistryFontOutput,
   SystemFontService
@@ -295,6 +297,7 @@ test("Steam 431960 scan, built-in scenes, custom import, HTTP 206 streaming, and
   assert.equal(mediaFullRes.status, 200);
   assert.equal(mediaFullRes.headers.get("accept-ranges"), "bytes");
   assert.equal(mediaFullRes.headers.get("content-type"), "video/mp4");
+  assert.equal(mediaFullRes.headers.get("cross-origin-resource-policy"), "cross-origin");
   const fullBuf = Buffer.from(await mediaFullRes.arrayBuffer());
   assert.deepEqual(fullBuf, fakeMp4Bytes);
 
@@ -324,7 +327,29 @@ test("Steam 431960 scan, built-in scenes, custom import, HTTP 206 streaming, and
   assert.equal(previewRes.status, 200);
   assert.equal(previewRes.headers.get("content-type"), "image/png");
 
-  // Web wallpaper static asset + path traversal defense
+  // Web wallpaper static asset + scoped subresource cookie auth + path traversal defense
+  const webEntryRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web/9002002/index.html?token=${encodeURIComponent(authToken)}`
+  );
+  assert.equal(webEntryRes.status, 200);
+  const setCookieHeader = webEntryRes.headers.get("set-cookie") ?? "";
+  assert.match(setCookieHeader, /prismux_wp_token=/);
+  assert.match(setCookieHeader, /Path=\/v1\/wallpapers\/web\//);
+  const webCookiePair = setCookieHeader.split(";")[0] ?? "";
+
+  const webCssViaCookie = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web/9002002/styles/app.css`,
+    { headers: { Cookie: webCookiePair } }
+  );
+  assert.equal(webCssViaCookie.status, 200);
+  assert.equal(webCssViaCookie.headers.get("content-type"), "text/css; charset=utf-8");
+  assert.match(await webCssViaCookie.text(), /#101828/);
+
+  const webCssUnauth = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web/9002002/styles/app.css`
+  );
+  assert.equal(webCssUnauth.status, 401);
+
   const webCssRes = await fetch(
     `${ready.httpUrl}/v1/wallpapers/web/9002002/styles/app.css`,
     { headers: { Authorization: `Bearer ${authToken}` } }
@@ -618,6 +643,71 @@ test("Appearance atomic persistence, restart recovery, corrupt JSON fallback, an
   };
   assert.equal(recovered.recoveredFromCorruption, true);
   assert.equal(recovered.themeMode, "dark");
+});
+
+test("AppearanceConfigStore aligns wallpaper defaults and auto-normalizes legacy opacity/scrim without blackout", async () => {
+  const freshDefaults = createDefaultAppearanceConfig();
+  assert.equal(freshDefaults.wallpaper.wallpaperOpacity, 0);
+  assert.equal(freshDefaults.wallpaper.scrim, 0.15);
+
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-appearance-norm-"));
+  tempDirs.push(dataDir);
+
+  // 1. Fresh store with no existing file must not emit legacy 100 / 35 values
+  const freshStore = new AppearanceConfigStore({ dataDir });
+  const freshLoaded = freshStore.get();
+  assert.equal(freshLoaded.recoveredFromCorruption, false);
+  assert.equal(freshLoaded.config.wallpaper.wallpaperOpacity, 0);
+  assert.equal(freshLoaded.config.wallpaper.scrim, 0.15);
+
+  // 2. Legacy appearance.json on disk (wallpaperOpacity: 100, scrim: 35) auto-normalizes on load
+  const legacyDir = mkdtempSync(join(tmpdir(), "prismux-appearance-legacy-"));
+  tempDirs.push(legacyDir);
+  writeFileSync(
+    join(legacyDir, "appearance.json"),
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        wallpaper: {
+          selectedId: "builtin-aurora-prism",
+          wallpaperOpacity: 100,
+          scrim: 35
+        }
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  const legacyStore = new AppearanceConfigStore({ dataDir: legacyDir });
+  const legacyLoaded = legacyStore.get();
+  assert.equal(legacyLoaded.recoveredFromCorruption, false);
+  assert.equal(legacyLoaded.config.wallpaper.wallpaperOpacity, 0);
+  assert.equal(legacyLoaded.config.wallpaper.scrim, 0.35);
+
+  // 3. Out-of-range patch (>90 opacity, >1 scrim) is clamped & persisted cleanly without 99% blackout
+  const clamped = legacyStore.update({
+    wallpaper: {
+      wallpaperOpacity: 95,
+      scrim: 150
+    }
+  });
+  assert.equal(clamped.wallpaper.wallpaperOpacity, 0);
+  assert.equal(clamped.wallpaper.scrim, 0.9);
+
+  const reloaded = new AppearanceConfigStore({ dataDir: legacyDir }).get();
+  assert.equal(reloaded.config.wallpaper.wallpaperOpacity, 0);
+  assert.equal(reloaded.config.wallpaper.scrim, 0.9);
+
+  // 4. Valid modern values within [0..90] and [0..0.9] are preserved intact
+  const modern = legacyStore.update({
+    wallpaper: {
+      wallpaperOpacity: 25,
+      scrim: 0.25
+    }
+  });
+  assert.equal(modern.wallpaper.wallpaperOpacity, 25);
+  assert.equal(modern.wallpaper.scrim, 0.25);
 });
 
 test("Real business HTTP APIs: chief, memory stats/search with qq_group isolation, secret-free sync config, scriptless plugins, and PUT /v1/updater/policy", async () => {
@@ -968,13 +1058,13 @@ export function apply(ctx) {
     currentVersion: string;
     policy: { routePreference: string; includePrerelease: boolean };
   };
-  assert.equal(updaterStatus.currentVersion, "0.1.0-alpha.1");
+  assert.equal(updaterStatus.currentVersion, "0.1.0-alpha.2");
   assert.equal(updaterStatus.policy.routePreference, "domestic");
   assert.equal(updaterStatus.policy.includePrerelease, false);
 
   const healthCheckRes = await fetch(`${ready.httpUrl}/health`);
   assert.equal(healthCheckRes.status, 200);
-  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.0-alpha.1");
+  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.0-alpha.2");
 });
 
 test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electron protocol CORS + PRISMUX_CATALOG_PATH resolution", async () => {
@@ -1002,7 +1092,7 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
       plugins: OFFICIAL_PLUGIN_IDS.map((id) => ({
         id,
         packageName: `@prismux/plugin-${id}`,
-        version: "0.1.0-alpha.1",
+        version: "0.1.0-alpha.2",
         description: `Catalog entry ${id}`,
         engines: { prismux: ">=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0" },
         realms: ["daemon"],

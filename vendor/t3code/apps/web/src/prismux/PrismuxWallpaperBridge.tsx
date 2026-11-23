@@ -1,31 +1,16 @@
 import {
-  CelestialThemeCapsule,
-  FloatingColorPopover,
-} from "@prismux/appearance";
-import {
   WallpaperQuickPanel,
   WallpaperStage,
   useWallpaperStore,
-  type AppearanceBridge,
-  type ColorTriggerRenderContext,
-  type ThemeHeroRenderContext,
   type WallpaperItem,
 } from "@prismux/wallpaper";
 import { Image as ImageIcon, Sparkles } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback } from "react";
 
 import { Toggle } from "../components/ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { cn } from "../lib/utils";
 import { usePrismuxRuntime } from "./PrismuxRuntimeProvider";
-
-interface ActivePopoverState {
-  anchorEl: HTMLElement;
-  label: string;
-  value: string;
-  onChange: (hex: string) => void;
-  onClear?: () => void;
-}
 
 /**
  * Z-0 Fullscreen Wallpaper Stage (0 Token visual layer).
@@ -75,77 +60,11 @@ export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop()
 });
 
 /**
- * Native right-panel `"wallpaper"` surface integrating @prismux/wallpaper's QuickPanel
- * with @prismux/appearance's 1:1 FISH-Dock CelestialThemeCapsule (compact) and FloatingColorPopover.
+ * Native right-panel `"wallpaper"` surface mounting @prismux/wallpaper's deduplicated 2-tab QuickPanel
+ * (壁纸 / 播放) with direct shortcuts to /settings/appearance and /settings/wallpaper.
  */
 export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPanel() {
-  const { wallpaperStore, wallpaperHost, setThemeMode } = usePrismuxRuntime();
-  const [activePopover, setActivePopover] = useState<ActivePopoverState | null>(null);
-
-  const renderThemeHero = useCallback(
-    (ctx: ThemeHeroRenderContext) => (
-      <CelestialThemeCapsule
-        mode={ctx.themeMode}
-        onChange={ctx.onChangeThemeMode}
-        size="compact"
-      />
-    ),
-    [],
-  );
-
-  const renderColorTrigger = useCallback((ctx: ColorTriggerRenderContext) => {
-    const swatchColor = ctx.value?.trim() || "";
-    return (
-      <button
-        type="button"
-        className="pmx-wp-btn inline-flex items-center gap-1.5 px-2 text-xs"
-        aria-label={ctx.label}
-        title={ctx.label}
-        onClick={(event) => {
-          const anchorEl = event.currentTarget;
-          setActivePopover((prev) =>
-            prev?.anchorEl === anchorEl
-              ? null
-              : {
-                  anchorEl,
-                  label: ctx.label,
-                  value: swatchColor,
-                  onChange: ctx.onChange,
-                  ...(ctx.onClear ? { onClear: ctx.onClear } : {}),
-                },
-          );
-        }}
-      >
-        <span
-          aria-hidden="true"
-          style={{
-            width: 14,
-            height: 14,
-            borderRadius: 4,
-            border: "1px solid rgba(255,255,255,0.28)",
-            background: swatchColor
-              ? swatchColor
-              : "conic-gradient(from 0deg, #ff5e7e, #ffbd4a, #4cd964, #5e9bff, #c084fc, #ff5e7e)",
-            display: "inline-block",
-            flexShrink: 0,
-          }}
-        />
-        <span className="font-mono text-[11px] opacity-85">
-          {swatchColor ? swatchColor.toUpperCase() : "默认"}
-        </span>
-      </button>
-    );
-  }, []);
-
-  const appearanceBridge = useMemo<AppearanceBridge>(
-    () => ({
-      onThemeModeChange: setThemeMode,
-      renderThemeHero,
-      renderThemeCapsule: renderThemeHero,
-      renderColorTrigger,
-    }),
-    [renderColorTrigger, renderThemeHero, setThemeMode],
-  );
+  const { wallpaperStore, wallpaperHost } = usePrismuxRuntime();
 
   return (
     <div
@@ -156,25 +75,7 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
         store={wallpaperStore}
         adapter={wallpaperHost}
         dock="official"
-        appearanceBridge={appearanceBridge}
-        renderThemeHero={renderThemeHero}
         className="min-h-0 flex-1"
-      />
-      <FloatingColorPopover
-        open={activePopover !== null}
-        value={activePopover?.value ?? ""}
-        anchorEl={activePopover?.anchorEl ?? null}
-        {...(activePopover?.label ? { title: activePopover.label } : {})}
-        allowClear={Boolean(activePopover?.onClear)}
-        onChange={(hex) => {
-          activePopover?.onChange(hex);
-          setActivePopover((prev) => (prev ? { ...prev, value: hex } : null));
-        }}
-        onClear={() => {
-          activePopover?.onClear?.();
-          setActivePopover((prev) => (prev ? { ...prev, value: "" } : null));
-        }}
-        onClose={() => setActivePopover(null)}
       />
     </div>
   );

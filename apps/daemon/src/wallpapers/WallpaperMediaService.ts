@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  copyFileSync,
   createReadStream,
   existsSync,
   mkdirSync,
@@ -32,6 +33,7 @@ const execFileAsync = promisify(execFile);
 
 export const WALLPAPER_ENGINE_APP_ID = "431960" as const;
 export const MAX_IMPORT_DECODED_BYTES = 24 * 1024 * 1024;
+export const MAX_IMPORT_SOURCE_FILE_BYTES = 512 * 1024 * 1024;
 export const DEFAULT_CHUNK_BYTES = 1024 * 1024;
 
 export type WallpaperMediaType = "scene" | "web" | "video" | "image";
@@ -152,13 +154,15 @@ const ALLOWED_IMAGE_EXTENSIONS = new Set<string>([
   ".png",
   ".webp",
   ".gif",
-  ".bmp"
+  ".bmp",
+  ".avif"
 ]);
 
 const ALLOWED_VIDEO_EXTENSIONS = new Set<string>([
   ".mp4",
   ".webm",
-  ".mov"
+  ".mov",
+  ".m4v"
 ]);
 
 const ALLOWED_IMPORT_EXTENSIONS = new Set<string>([
@@ -173,6 +177,7 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".webp": "image/webp",
   ".gif": "image/gif",
   ".bmp": "image/bmp",
+  ".avif": "image/avif",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
   ".mp4": "video/mp4",
@@ -1020,11 +1025,11 @@ export class WallpaperMediaService {
           "sourcePath must refer to a regular file."
         );
       }
-      if (st.size <= 0 || st.size > MAX_IMPORT_DECODED_BYTES) {
+      if (st.size <= 0 || st.size > MAX_IMPORT_SOURCE_FILE_BYTES) {
         throw new WallpaperServiceError(
           400,
           "INVALID_FILE_SIZE",
-          `Imported wallpaper size must be between 1 byte and ${MAX_IMPORT_DECODED_BYTES} bytes.`
+          `Imported wallpaper size must be between 1 byte and ${MAX_IMPORT_SOURCE_FILE_BYTES} bytes.`
         );
       }
       const ext = extname(resolvedSrc).toLowerCase();
@@ -1045,8 +1050,7 @@ export class WallpaperMediaService {
         : `${preferredName}${ext}`;
       destPath = ensureUniqueDestPath(this.customWallpaperDir, finalName);
 
-      const bytes = readFileSync(resolvedSrc);
-      this.atomicWriteBytes(destPath, bytes);
+      this.atomicCopyFile(resolvedSrc, destPath);
     } else if (
       typeof request.fileName === "string" &&
       request.fileName.trim().length > 0 &&
@@ -1582,6 +1586,7 @@ export class WallpaperMediaService {
       "accept-ranges": "bytes",
       "content-type": contentType,
       "cache-control": cacheControl,
+      "cross-origin-resource-policy": "cross-origin",
       etag
     };
 
@@ -1648,6 +1653,26 @@ export class WallpaperMediaService {
       }
     });
     stream.pipe(res);
+  }
+
+  private atomicCopyFile(srcPath: string, destPath: string): void {
+    const dir = dirname(destPath);
+    mkdirSync(dir, { recursive: true });
+    const tmpPath = join(
+      dir,
+      `.tmp-${basename(destPath)}-${process.pid}-${randomUUID()}`
+    );
+    try {
+      copyFileSync(srcPath, tmpPath);
+      renameSync(tmpPath, destPath);
+    } catch (err) {
+      try {
+        rmSync(tmpPath, { force: true });
+      } catch {
+        // ignore cleanup failure
+      }
+      throw err;
+    }
   }
 
   private atomicWriteBytes(destPath: string, bytes: Uint8Array): void {

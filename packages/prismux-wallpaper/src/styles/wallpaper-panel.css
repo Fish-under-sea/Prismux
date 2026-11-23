@@ -1143,12 +1143,15 @@
 
 .pmx-wp-qp__foot {
   display: flex;
+  gap: 6px;
   padding-top: 10px;
   border-top: 1px solid var(--pmx-wp-border);
 }
 
 .pmx-wp-qp__settings {
   flex: 1;
+  min-width: 0;
+  padding: 0 8px;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1162,11 +1165,15 @@
 
 .pmx-wp-card-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--pmx-wp-border);
   flex-wrap: wrap;
+}
+
+.pmx-wp-card-head__action {
+  margin-left: auto;
 }
 
 .pmx-wp-card-name {

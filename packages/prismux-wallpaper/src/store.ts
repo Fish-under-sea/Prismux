@@ -509,6 +509,77 @@ export interface WallpaperStore {
   dispose: () => void;
 }
 
+function builtinSceneCanonicalKey(raw: string): string | null {
+  const key = raw.trim().toLowerCase();
+  if (!key.startsWith("builtin:") && !key.startsWith("builtin-")) return null;
+  if (key.includes("aurora")) return "aurora-prism";
+  if (key.includes("midnight") || key.includes("abyss") || key.includes("tide")) {
+    return "midnight-abyss";
+  }
+  if (key.includes("silk") || key.includes("liquid")) return "liquid-silk";
+  if (key.includes("twilight") || key.includes("dusk") || key.includes("cyber")) {
+    return "cyber-twilight";
+  }
+  return null;
+}
+
+/**
+ * Resolves a wallpaper by exact id, with seamless alias fallback between
+ * `@prismux/wallpaper` (`builtin:aurora-prism`) and `@prismux/daemon` (`builtin-aurora-prism`) builtin IDs.
+ */
+export function findWallpaperById(
+  wallpapers: readonly WallpaperItem[],
+  selectedId: string | null | undefined,
+): WallpaperItem | null {
+  if (!selectedId) return null;
+  const exact = wallpapers.find((w) => w.id === selectedId);
+  if (exact) return exact;
+  const canonical = builtinSceneCanonicalKey(selectedId);
+  if (!canonical) return null;
+  return (
+    wallpapers.find(
+      (w) =>
+        w.source === "builtin" &&
+        (w.builtinSceneId === canonical || builtinSceneCanonicalKey(w.id) === canonical),
+    ) ?? null
+  );
+}
+
+/**
+ * Normalizes `wallpaperOpacity` (0..90 native-fade %) and `scrim` (0..0.9 dark veil fraction)
+ * so legacy Daemon defaults (`wallpaperOpacity: 100`, `scrim: 35`) never produce a 99% blackout wall.
+ */
+export function normalizeWallpaperFadeOpacity(raw: unknown, fallback = 0): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+  if (raw > 90) return 0;
+  return Math.max(0, Math.min(90, raw));
+}
+
+export function normalizeWallpaperScrim(raw: unknown, fallback = 0.15): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+  const fraction = raw > 1 ? raw / 100 : raw;
+  return Math.max(0, Math.min(0.9, fraction));
+}
+
+export function normalizeWallpaperSettingsPatch(
+  patch: Partial<WallpaperSettingsState>,
+): Partial<WallpaperSettingsState> {
+  let next: Partial<WallpaperSettingsState> = patch;
+  if ("wallpaperOpacity" in patch && patch.wallpaperOpacity !== undefined) {
+    const normalized = normalizeWallpaperFadeOpacity(patch.wallpaperOpacity, 0);
+    if (normalized !== patch.wallpaperOpacity) {
+      next = { ...next, wallpaperOpacity: normalized };
+    }
+  }
+  if ("scrim" in patch && patch.scrim !== undefined) {
+    const normalized = normalizeWallpaperScrim(patch.scrim, 0.15);
+    if (normalized !== patch.scrim) {
+      next = { ...next, scrim: normalized };
+    }
+  }
+  return next;
+}
+
 function matchBuiltinTemplate(
   item: WallpaperItem,
   builtins: readonly WallpaperItem[],
@@ -558,9 +629,12 @@ export function createWallpaperStore(
   const storage = getBrowserStorage(options.storage);
   const includeBuiltins = options.includeBuiltins !== false;
   const defaults = createDefaultSettings();
+  const normalizedInputSettings = options.settings
+    ? normalizeWallpaperSettingsPatch(options.settings)
+    : undefined;
   const initialSettings: WallpaperSettingsState = {
     ...defaults,
-    ...options.settings,
+    ...normalizedInputSettings,
     glassColor: {
       ...defaults.glassColor,
       ...(options.settings?.glassColor ?? {}),
@@ -581,6 +655,12 @@ export function createWallpaperStore(
   }
 
   const initialWallpapers = mergeWallpapers(options.wallpapers ?? [], includeBuiltins);
+  if (initialSettings.selectedId) {
+    const resolvedInitial = findWallpaperById(initialWallpapers, initialSettings.selectedId);
+    if (resolvedInitial && resolvedInitial.id !== initialSettings.selectedId) {
+      initialSettings.selectedId = resolvedInitial.id;
+    }
+  }
   const initialPropsMap: Record<string, UserPropDef[]> = {};
   for (const w of initialWallpapers) {
     if (w.userProperties?.length) {
@@ -667,15 +747,16 @@ export function createWallpaperStore(
     },
 
     updateSettings(patch) {
+      const normalizedPatch = normalizeWallpaperSettingsPatch(patch);
       const nextSettings: WallpaperSettingsState = {
         ...snapshot.settings,
-        ...patch,
+        ...normalizedPatch,
       };
       commit({ ...snapshot, settings: nextSettings }, true);
       if (
-        "rotationEnabled" in patch ||
-        "rotationGroupId" in patch ||
-        "rotationGroups" in patch
+        "rotationEnabled" in normalizedPatch ||
+        "rotationGroupId" in normalizedPatch ||
+        "rotationGroups" in normalizedPatch
       ) {
         syncRotationTimer();
       }
@@ -1023,9 +1104,17 @@ export function createWallpaperStore(
           nextPropsMap[w.id] = w.userProperties;
         }
       }
+      let nextSettings = snapshot.settings;
+      if (nextSettings.selectedId && !merged.some((w) => w.id === nextSettings.selectedId)) {
+        const aliasMatch = findWallpaperById(merged, nextSettings.selectedId);
+        if (aliasMatch) {
+          nextSettings = { ...nextSettings, selectedId: aliasMatch.id };
+        }
+      }
       commit(
         {
           ...snapshot,
+          settings: nextSettings,
           wallpapers: merged,
           propsMap: nextPropsMap,
           steamRoots: meta?.steamRoots ?? snapshot.steamRoots,

@@ -13,7 +13,6 @@ import {
   RATING_TIER_VALUES,
   TYPE_TIER_VALUES,
 } from "./defaults.js";
-import { AppearanceSections } from "./renderers/AppearanceSections.js";
 import { cardKeyDown, SwitchRow } from "./renderers/controls.js";
 import {
   PlaybackAudioSection,
@@ -25,6 +24,7 @@ import {
   computeVirtualWindow,
   filterPlayableWallpapers,
   filterVisibleWallpapers,
+  findWallpaperById,
   resolveRotationCandidates,
   useWallpaperStore,
 } from "./store.js";
@@ -36,23 +36,25 @@ import type {
   WallpaperHostAdapter,
   WallpaperItem,
   WallpaperSettingsState,
-  WallpaperSettingsTabId,
 } from "./types.js";
 import { schedulePrewarmVideo } from "./videoPrewarm.js";
 
 export interface WallpaperQuickPanelProps {
   store: WallpaperStore;
   adapter?: WallpaperHostAdapter;
+  /** @deprecated Appearance controls moved exclusively to /settings/appearance (Issue #3). */
   appearanceBridge?: AppearanceBridge;
+  /** @deprecated Appearance controls moved exclusively to /settings/appearance (Issue #3). */
   renderThemeHero?: (ctx: ThemeHeroRenderContext) => ReactNode;
   /** Host layout dock mode: 'official' (fixed-height right sidebar) or 'drawer' (ancestor scrolls). */
   dock?: "official" | "drawer";
   className?: string;
 }
 
-const QP_TABS: readonly { id: QuickPanelTabId; label: string }[] = [
+type FocusedQuickPanelTabId = Exclude<QuickPanelTabId, "appearance">;
+
+const QP_TABS: readonly { id: FocusedQuickPanelTabId; label: string }[] = [
   { id: "wallpaper", label: "壁纸" },
-  { id: "appearance", label: "外观" },
   { id: "playback", label: "播放" },
 ];
 
@@ -198,21 +200,18 @@ function formatTypeMeta(w: WallpaperItem, settings: WallpaperSettingsState): str
 }
 
 /**
- * Right-sidebar QuickPanel (1:1 architectural replica of dsh-wallpaper-engine QuickPanel):
+ * Focused Right-sidebar QuickPanel (strictly deduplicated from /settings/appearance per Issue #3):
  *   - Top rotating 40px vinyl card (`clip-path: circle(50%)` + `::after` central ring hole)
  *   - Rotation bar (group select + next + auto-rotation toggle)
- *   - Sliding-pill 3-tab bar (`壁纸 / 外观 / 播放`)
+ *   - Sliding-pill 2-tab bar (`壁纸 / 播放`)
  *   - In-pane `壁纸属性` drill-down toggle button
  *   - Virtual-scrolled Cards/List library with deterministic 2-row filter bar
- *   - Bottom Audio section
- *   - Shared AppearanceSections (`surface="sidebar"`) & PlaybackSections (`surface="sidebar"`)
- *   - Dynamic deep-link footer
+ *   - Bottom Audio section & Shared PlaybackSections (`surface="sidebar"`)
+ *   - Dual shortcut footer: `外观与玻璃 ›` (/settings/appearance) & `壁纸引擎设置 ›` (/settings/wallpaper)
  */
 export function WallpaperQuickPanel({
   store,
   adapter,
-  appearanceBridge,
-  renderThemeHero,
   dock = "official",
   className,
 }: WallpaperQuickPanelProps) {
@@ -221,7 +220,7 @@ export function WallpaperQuickPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const current = useMemo(
-    () => wallpapers.find((w) => w.id === settings.selectedId) ?? null,
+    () => findWallpaperById(wallpapers, settings.selectedId),
     [wallpapers, settings.selectedId],
   );
 
@@ -270,34 +269,9 @@ export function WallpaperQuickPanel({
   const vTopH = isMeasured ? vwin.topSpacerHeight : 0;
   const vBtmH = isMeasured ? vwin.bottomSpacerHeight : 0;
 
-  // Lazy load system fonts only when user opens Appearance -> Font section with fontCustom enabled
-  useEffect(() => {
-    if (ui.qpTab === "appearance" && ui.fontOpen && settings.fontCustom) {
-      void store.refreshSystemFonts(adapter, false);
-    }
-  }, [ui.qpTab, ui.fontOpen, settings.fontCustom, adapter, store]);
-
-  const tabIdx = Math.max(0, QP_TABS.findIndex((t) => t.id === ui.qpTab));
-  const showPropsDrill = ui.qpTab === "wallpaper" && snap.propsPanelOpen && propsAvailable;
-
-  const foot: { label: string; target: WallpaperSettingsTabId | ""; title: string } =
-    ui.qpTab === "appearance"
-      ? {
-          label: "更多外观设置 ›",
-          target: "appearance",
-          title: "打开完整设置页「外观」分区（主题预设与全部外观配置）",
-        }
-      : ui.qpTab === "playback"
-        ? {
-            label: "更多播放设置 ›",
-            target: "playback",
-            title: "打开完整设置页「播放」分区（帧率上限与完整画面配置）",
-          }
-        : {
-            label: "壁纸引擎设置 ›",
-            target: "",
-            title: "打开完整壁纸引擎设置页（本地导入 / 轮播分组 / Steam 目录）",
-          };
+  const effectiveTab: FocusedQuickPanelTabId = ui.qpTab === "playback" ? "playback" : "wallpaper";
+  const tabIdx = Math.max(0, QP_TABS.findIndex((t) => t.id === effectiveTab));
+  const showPropsDrill = effectiveTab === "wallpaper" && snap.propsPanelOpen && propsAvailable;
 
   const handleCardPointer = (w: WallpaperItem, immediate: boolean) => {
     if (w.type === "video" && w.mediaUrl) {
@@ -496,7 +470,7 @@ export function WallpaperQuickPanel({
         />
       </div>
 
-      {/* ③ 滑动胶囊三档页签（壁纸 / 外观 / 播放） */}
+      {/* ③ 滑动胶囊双档页签（壁纸 / 播放） */}
       <div className="pmx-wp-tabs pmx-wp-qp__tabs" role="tablist" aria-label="壁纸面板分区">
         <span
           className="pmx-wp-tabs__pill"
@@ -511,9 +485,9 @@ export function WallpaperQuickPanel({
             key={t.id}
             type="button"
             role="tab"
-            aria-selected={ui.qpTab === t.id}
+            aria-selected={effectiveTab === t.id}
             className={
-              "pmx-wp-tabs__tab" + (ui.qpTab === t.id ? " pmx-wp-tabs__tab--active" : "")
+              "pmx-wp-tabs__tab" + (effectiveTab === t.id ? " pmx-wp-tabs__tab--active" : "")
             }
             onClick={() => store.setUiState("qpTab", t.id)}
           >
@@ -532,7 +506,7 @@ export function WallpaperQuickPanel({
           aria-expanded={snap.propsPanelOpen}
           title="调节壁纸作者提供的自定义属性（改动立即生效）"
           onClick={() => {
-            if (ui.qpTab === "wallpaper") {
+            if (effectiveTab === "wallpaper") {
               store.setPropsPanelOpen(!snap.propsPanelOpen);
             } else {
               store.setUiState("qpTab", "wallpaper");
@@ -548,22 +522,14 @@ export function WallpaperQuickPanel({
       <div
         className={
           "pmx-wp-qp__tabbody" +
-          (ui.qpTab === "wallpaper" ? " pmx-wp-qp__tabbody--library" : "")
+          (effectiveTab === "wallpaper" ? " pmx-wp-qp__tabbody--library" : "")
         }
       >
         {showPropsDrill ? (
           <div className="pmx-wp-qp__propsview pmx-wp-qp__propsview--drill">
             <UserPropsDrillPanel store={store} adapter={adapter} />
           </div>
-        ) : ui.qpTab === "appearance" ? (
-          <AppearanceSections
-            store={store}
-            surface="sidebar"
-            adapter={adapter}
-            appearanceBridge={appearanceBridge}
-            renderThemeHero={renderThemeHero}
-          />
-        ) : ui.qpTab === "playback" ? (
+        ) : effectiveTab === "playback" ? (
           <>
             <PlaybackEffectsSection
               store={store}
@@ -767,15 +733,25 @@ export function WallpaperQuickPanel({
         )}
       </div>
 
-      {/* ⑤ 动态深链底栏 */}
+      {/* ⑤ 双并列深链底栏（外观与玻璃 + 壁纸引擎设置） */}
       <div className="pmx-wp-qp__foot">
         <button
           type="button"
           className="pmx-wp-btn pmx-wp-qp__settings"
-          title={foot.title}
-          onClick={() => adapter?.openSettingsSection?.(foot.target)}
+          title="打开设置页「外观」分区（主题胶囊、液态玻璃、侧边栏圆角、全局配色与字体）"
+          onClick={() => adapter?.openSettingsSection?.("appearance")}
         >
-          {foot.label}
+          外观与玻璃 ›
+        </button>
+        <button
+          type="button"
+          className="pmx-wp-btn pmx-wp-qp__settings"
+          title="打开完整壁纸引擎设置页（本地导入 / 画面播放 / 轮播分组 / Steam 目录）"
+          onClick={() =>
+            adapter?.openSettingsSection?.(effectiveTab === "playback" ? "playback" : "")
+          }
+        >
+          壁纸引擎设置 ›
         </button>
       </div>
     </div>

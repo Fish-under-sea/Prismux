@@ -143,6 +143,31 @@ function extractBearerToken(req: IncomingMessage): string | null {
   return token !== undefined && token.length > 0 ? token : null;
 }
 
+const WEB_WALLPAPER_AUTH_COOKIE = "prismux_wp_token";
+
+function extractCookieValue(req: IncomingMessage, cookieName: string): string | null {
+  const rawCookie = req.headers.cookie;
+  if (typeof rawCookie !== "string" || rawCookie.length === 0) {
+    return null;
+  }
+  const pairs = rawCookie.split(";");
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx <= 0) continue;
+    const key = pair.slice(0, eqIdx).trim();
+    if (key !== cookieName) continue;
+    const rawVal = pair.slice(eqIdx + 1).trim();
+    if (rawVal.length === 0) return null;
+    try {
+      const decoded = decodeURIComponent(rawVal).trim();
+      return decoded.length > 0 ? decoded : null;
+    } catch {
+      return rawVal;
+    }
+  }
+  return null;
+}
+
 function extractRequestToken(
   req: IncomingMessage,
   requestUrl: URL,
@@ -160,6 +185,12 @@ function extractRequestToken(
     const queryToken = requestUrl.searchParams.get("token")?.trim();
     if (queryToken !== undefined && queryToken.length > 0) {
       return queryToken;
+    }
+    if (requestUrl.pathname.startsWith("/v1/wallpapers/web/")) {
+      const cookieToken = extractCookieValue(req, WEB_WALLPAPER_AUTH_COOKIE);
+      if (cookieToken !== null) {
+        return cookieToken;
+      }
     }
   }
   return null;
@@ -1024,6 +1055,15 @@ export class DaemonRpcServer {
     ) {
       if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
         return true;
+      }
+      const webQueryToken = requestUrl.searchParams.get("token")?.trim();
+      if (webQueryToken && webQueryToken.length > 0) {
+        // Scope cookie strictly to /v1/wallpapers/web/ so relative subresources (JS/CSS/assets) inside
+        // Steam Web wallpaper iframes authenticate seamlessly without exposing token to other routes.
+        res.setHeader(
+          "set-cookie",
+          `${WEB_WALLPAPER_AUTH_COOKIE}=${encodeURIComponent(webQueryToken)}; HttpOnly; SameSite=Lax; Path=/v1/wallpapers/web/`
+        );
       }
       if (!this.wallpaperService) {
         throw new BusinessRouteError(

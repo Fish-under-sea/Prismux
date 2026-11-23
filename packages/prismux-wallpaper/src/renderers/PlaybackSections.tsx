@@ -6,7 +6,12 @@ import {
   SCENE_LIVE_FPS_VALUES,
 } from "../defaults.js";
 import type { WallpaperStore } from "../store.js";
-import { useWallpaperStore } from "../store.js";
+import {
+  findWallpaperById,
+  normalizeWallpaperFadeOpacity,
+  normalizeWallpaperScrim,
+  useWallpaperStore,
+} from "../store.js";
 import type { ObjectFitMode, RenderSurface } from "../types.js";
 import { CtlText, SectionHead, SliderRow, SwitchRow } from "./controls.js";
 
@@ -34,7 +39,7 @@ export function PlaybackEffectsSection({
   const snap = useWallpaperStore(store);
   const { settings, wallpapers } = snap;
   const sidebarSurface = surface === "sidebar";
-  const current = wallpapers.find((w) => w.id === settings.selectedId) ?? null;
+  const current = findWallpaperById(wallpapers, settings.selectedId);
 
   if (!current) {
     return (
@@ -169,23 +174,23 @@ export function PlaybackEffectsSection({
       ) : null}
 
       <SliderRow
-        label="壁纸透明度"
+        label="原生底色淡化"
         min={0}
         max={90}
         step={5}
-        value={settings.wallpaperOpacity}
+        value={normalizeWallpaperFadeOpacity(settings.wallpaperOpacity, 0)}
         unit="%"
-        tooltip="壁纸向原生主题底色淡出（浅色纯白 / 深色深蓝）"
+        tooltip="0% 为 100% 清晰原图；调高会向原生主题底色淡出（浅色纯白 / 深色深蓝）"
         onChange={(v) => store.setSetting("wallpaperOpacity", v)}
       />
       <SliderRow
-        label="暗化"
+        label="遮罩暗度"
         min={0}
         max={90}
         step={5}
-        value={Math.round(settings.scrim * 100)}
+        value={Math.round(normalizeWallpaperScrim(settings.scrim, 0.15) * 100)}
         unit="%"
-        tooltip="在壁纸之上叠加柔和暗幕以增强前景对比度"
+        tooltip="在壁纸之上叠加柔和暗幕以增强前景文字对比度"
         onChange={(pct) => store.setSetting("scrim", pct / 100)}
       />
 

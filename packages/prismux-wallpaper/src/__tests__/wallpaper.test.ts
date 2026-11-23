@@ -22,6 +22,9 @@ import {
   createWallpaperStore,
   filterPlayableWallpapers,
   filterVisibleWallpapers,
+  findWallpaperById,
+  normalizeWallpaperFadeOpacity,
+  normalizeWallpaperScrim,
   pickNextWallpaperId,
 } from "../store.js";
 import type { StorageLike } from "../store.js";
@@ -688,6 +691,45 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.equal(list[0]!.builtinSceneId, "aurora-prism");
     assert.equal(list[1]!.builtinSceneId, "midnight-abyss");
     assert.ok((list[0]!.userProperties?.length ?? 0) >= 4);
+    assert.equal(
+      store.getSnapshot().settings.selectedId,
+      "builtin-aurora-prism",
+      "default builtin:aurora-prism selectedId must auto-migrate to daemon builtin-aurora-prism",
+    );
+    assert.equal(
+      findWallpaperById(list, "builtin:midnight-abyss")?.id,
+      "builtin-midnight-tide",
+      "findWallpaperById must bridge colon/hyphen builtin aliases",
+    );
+    store.dispose();
+  });
+
+  it("normalizes legacy daemon wallpaperOpacity (100 -> 0) and scrim (35 -> 0.35) to prevent 99% blackout", () => {
+    assert.equal(normalizeWallpaperFadeOpacity(100), 0);
+    assert.equal(normalizeWallpaperFadeOpacity(45), 45);
+    assert.equal(normalizeWallpaperScrim(35), 0.35);
+    assert.equal(normalizeWallpaperScrim(0.2), 0.2);
+    assert.equal(normalizeWallpaperScrim(95), 0.9);
+
+    const store = createWallpaperStore({
+      includeBuiltins: true,
+      storage: createMemoryStorage(),
+      settings: {
+        wallpaperOpacity: 100,
+        scrim: 35,
+      },
+    });
+    assert.equal(store.getSnapshot().settings.wallpaperOpacity, 0);
+    assert.equal(store.getSnapshot().settings.scrim, 0.35);
+
+    store.updateSettings({ wallpaperOpacity: 100, scrim: 40 });
+    assert.equal(store.getSnapshot().settings.wallpaperOpacity, 0);
+    assert.equal(store.getSnapshot().settings.scrim, 0.4);
+
+    store.updateSettings({ wallpaperOpacity: 25, scrim: 0.2 });
+    assert.equal(store.getSnapshot().settings.wallpaperOpacity, 25);
+    assert.equal(store.getSnapshot().settings.scrim, 0.2);
+
     store.dispose();
   });
 });

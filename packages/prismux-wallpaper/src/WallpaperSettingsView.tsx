@@ -6,7 +6,6 @@ import {
   RATING_TIER_VALUES,
   TYPE_TIER_VALUES,
 } from "./defaults.js";
-import { AppearanceSections } from "./renderers/AppearanceSections.js";
 import {
   cardKeyDown,
   ConfirmRow,
@@ -24,6 +23,7 @@ import type { WallpaperStore } from "./store.js";
 import {
   computeFilterCounts,
   filterVisibleWallpapers,
+  findWallpaperById,
   useWallpaperStore,
 } from "./store.js";
 import type {
@@ -40,21 +40,30 @@ import { schedulePrewarmVideo } from "./videoPrewarm.js";
 export interface WallpaperSettingsViewProps {
   store: WallpaperStore;
   adapter?: WallpaperHostAdapter;
+  /** @deprecated Appearance controls moved exclusively to /settings/appearance (Issue #3). */
   appearanceBridge?: AppearanceBridge;
+  /** @deprecated Appearance controls moved exclusively to /settings/appearance (Issue #3). */
   renderThemeHero?: (ctx: ThemeHeroRenderContext) => ReactNode;
   initialTab?: WallpaperSettingsTabId;
   activeTab?: WallpaperSettingsTabId;
   onTabChange?: (tab: WallpaperSettingsTabId) => void;
+  /** Optional explicit shortcut callback to jump directly to /settings/appearance. */
+  onOpenAppearanceSettings?: () => void;
   className?: string;
 }
 
-const SETTINGS_TABS: readonly { id: WallpaperSettingsTabId; label: string }[] = [
+type FocusedWallpaperSettingsTabId = Exclude<WallpaperSettingsTabId, "appearance">;
+
+const SETTINGS_TABS: readonly { id: FocusedWallpaperSettingsTabId; label: string }[] = [
   { id: "library", label: "壁纸库" },
-  { id: "appearance", label: "外观" },
-  { id: "playback", label: "播放" },
+  { id: "playback", label: "画面与播放" },
   { id: "rotation", label: "轮播与隐藏" },
   { id: "system", label: "系统与目录" },
 ];
+
+function normalizeFocusedTab(tab: WallpaperSettingsTabId): FocusedWallpaperSettingsTabId {
+  return tab === "appearance" ? "library" : tab;
+}
 
 interface RotationDraft {
   id: string | null;
@@ -66,41 +75,32 @@ interface RotationDraft {
 }
 
 /**
- * Full 5-tab Settings Page Wallpaper View:
+ * Focused 4-tab Settings Page Wallpaper View (strictly deduplicated from /settings/appearance per Issue #3):
  *   1. 壁纸库 (library): Vinyl hero, local image/video import, filter bar with counts, batch hide, inline props
- *   2. 外观 (appearance): Reuses the exact same AppearanceSections (`surface="settings"`)
- *   3. 播放 (playback): Reuses the exact same PlaybackEffectsSection & PlaybackAudioSection (`surface="settings"`)
- *   4. 轮播与隐藏 (rotation): Rotation group CRUD + Hidden wallpapers restore manager
- *   5. 系统与目录 (system): Steam Workshop 431960 directory & local wallpaper directory config, refresh, full reset
+ *   2. 画面与播放 (playback): Reuses PlaybackEffectsSection & PlaybackAudioSection (`surface="settings"`)
+ *   3. 轮播与隐藏 (rotation): Rotation group CRUD + Hidden wallpapers restore manager
+ *   4. 系统与目录 (system): Steam Workshop 431960 directory & local wallpaper directory config, refresh, wallpaper reset
  */
 export function WallpaperSettingsView({
   store,
   adapter,
-  appearanceBridge,
-  renderThemeHero,
   initialTab = "library",
   activeTab: controlledTab,
   onTabChange,
+  onOpenAppearanceSettings,
   className,
 }: WallpaperSettingsViewProps) {
   const snap = useWallpaperStore(store);
   const { settings, wallpapers } = snap;
-  const [internalTab, setInternalTab] = useState<WallpaperSettingsTabId>(initialTab);
-  const tab = controlledTab ?? internalTab;
+  const [internalTab, setInternalTab] = useState<FocusedWallpaperSettingsTabId>(() =>
+    normalizeFocusedTab(initialTab),
+  );
+  const tab: FocusedWallpaperSettingsTabId = normalizeFocusedTab(controlledTab ?? internalTab);
 
-  const setTab = (next: WallpaperSettingsTabId) => {
+  const setTab = (next: FocusedWallpaperSettingsTabId) => {
     setInternalTab(next);
     onTabChange?.(next);
   };
-
-  // Settings-surface local section collapse states (defaults: detail/glass/corners open, uiColor/font closed)
-  const [secOpen, setSecOpen] = useState({
-    detailOpen: true,
-    glassUiOpen: true,
-    cornersOpen: true,
-    uiColorOpen: false,
-    fontOpen: false,
-  });
 
   const [batchMode, setBatchMode] = useState(false);
   const [batchSelected, setBatchSelected] = useState<string[]>([]);
@@ -113,7 +113,7 @@ export function WallpaperSettingsView({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const current = useMemo(
-    () => wallpapers.find((w) => w.id === settings.selectedId) ?? null,
+    () => findWallpaperById(wallpapers, settings.selectedId),
     [wallpapers, settings.selectedId],
   );
 
@@ -273,14 +273,30 @@ export function WallpaperSettingsView({
     >
       {/* 顶部标题卡 */}
       <div className="pmx-wp-card-head">
-        <span className="pmx-wp-card-name">壁纸引擎与视觉工作台</span>
+        <span className="pmx-wp-card-name">壁纸引擎</span>
         <span className="pmx-wp-card-badge">{visibleList.length} 个可播放</span>
+        {onOpenAppearanceSettings || adapter?.openSettingsSection ? (
+          <button
+            type="button"
+            className="pmx-wp-btn pmx-wp-btn--mini pmx-wp-card-head__action"
+            title="主题模式、液态玻璃、侧边栏圆角、全局配色与字体设置"
+            onClick={() => {
+              if (onOpenAppearanceSettings) {
+                onOpenAppearanceSettings();
+              } else {
+                adapter?.openSettingsSection?.("appearance");
+              }
+            }}
+          >
+            前往外观与玻璃设置 ›
+          </button>
+        ) : null}
         <span className="pmx-wp-card-desc">
           支持 Steam Workshop 431960 · 本地图片/视频 · 内置 WebWallGL 着色器（0 Token）
         </span>
       </div>
 
-      {/* 5 页签滑动胶囊导航 */}
+      {/* 4 页签滑动胶囊导航 */}
       <div className="pmx-wp-tabs" role="tablist" aria-label="壁纸设置分区">
         <span
           className="pmx-wp-tabs__pill"
@@ -633,25 +649,7 @@ export function WallpaperSettingsView({
         </div>
       ) : null}
 
-      {/* ── Tab 2: 外观（100% 共享 AppearanceSections）── */}
-      {tab === "appearance" ? (
-        <div className="pmx-wp-tabpanel">
-          <AppearanceSections
-            store={store}
-            surface="settings"
-            adapter={adapter}
-            appearanceBridge={appearanceBridge}
-            renderThemeHero={renderThemeHero}
-            settingsSectionOpen={{
-              ...secOpen,
-              onToggle: (key) => setSecOpen((prev) => ({ ...prev, [key]: !prev[key] })),
-            }}
-          />
-          {renderTabReset("appearance")}
-        </div>
-      ) : null}
-
-      {/* ── Tab 3: 播放（100% 共享 PlaybackSections）── */}
+      {/* ── Tab 2: 画面与播放（100% 共享 PlaybackSections）── */}
       {tab === "playback" ? (
         <div className="pmx-wp-tabpanel">
           <PlaybackEffectsSection
@@ -1018,10 +1016,10 @@ export function WallpaperSettingsView({
 
           <div className="pmx-wp-section">
             <div className="pmx-wp-section-head">
-              <span className="pmx-wp-section-reset-label">重置全部壁纸与外观设置</span>
+              <span className="pmx-wp-section-reset-label">重置全部壁纸与播放设置</span>
             </div>
             <span className="pmx-wp-hint">
-              把全部配置恢复为出厂默认值；你导入的本地图片和视频源文件不会被删除。
+              把壁纸库筛选、画面与播放、轮播、隐藏列表和目录偏好恢复为出厂默认值；主题/液态玻璃设置与已导入源文件不受影响。
             </span>
             <div className="pmx-wp-row">
               <button
@@ -1035,9 +1033,12 @@ export function WallpaperSettingsView({
             </div>
             <ConfirmRow
               armed={armedConfirm === "resetAll"}
-              prompt="确定要将所有壁纸与外观设置恢复为出厂默认吗？此操作不可撤销。"
+              prompt="确定要将所有壁纸与播放设置恢复为出厂默认吗？此操作不可撤销。"
               onConfirm={() => {
-                store.resetAllSettings();
+                store.resetTab("library");
+                store.resetTab("playback");
+                store.resetTab("rotation");
+                store.resetTab("system");
                 setArmedConfirm(null);
               }}
               onCancel={() => setArmedConfirm(null)}

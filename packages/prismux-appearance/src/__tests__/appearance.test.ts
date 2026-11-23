@@ -470,6 +470,8 @@ describe('Default/custom merge boundaries & document application', () => {
     assert.equal(html.attrs.get('data-prismux-glass'), '1');
     assert.equal(html.attrs.get('data-pmx-gpu'), '0');
     assert.equal(html.attrs.get('data-prismux-gpu'), '0');
+    assert.equal(html.attrs.get('data-pmx-wallpaper'), '1');
+    assert.equal(html.attrs.get('data-pmx-wallpaper-visible'), '1');
     assert.equal(html.attrs.get('data-pmx-sidebar-glass'), '1');
     assert.equal(html.attrs.get('data-pmx-right-sidebar-fullclear'), '1');
     assert.equal(html.attrs.get('data-pmx-thinking-mode'), 'glass');
@@ -559,5 +561,22 @@ describe('T3 glass bridge CSS specificity & solid fallback invariants', () => {
     assert.match(popoverCss, /backdrop-filter:\s*blur\(24px\)\s*saturate\(1\.5\)/);
     assert.match(popoverCss, /\.cp-sv\s*\{[^}]*overflow:\s*visible/s);
     assert.match(popoverCss, /\.cp-sv-white\s*\{[^}]*border-radius:\s*inherit/s);
+
+    // Issue #4: Non-glass Light & Dark wallpaper reveal (unblurred readability veil) + solid fallbacks.
+    assert.match(
+      bridgeCss,
+      /html:is\(\[data-pmx-wallpaper='1'\],\s*\[data-pmx-wallpaper-visible='1'\]\)\[data-pmx-glass='0'\]:not/,
+    );
+    assert.match(bridgeCss, /--pmx-wallpaper-veil:\s*rgba\(10,\s*14,\s*22,/);
+    assert.match(bridgeCss, /--pmx-wallpaper-veil:\s*rgba\(248,\s*250,\s*255,/);
+    assert.match(bridgeCss, /--background:\s*var\(--pmx-wallpaper-veil\);/);
+    assert.match(bridgeCss, /--app-chrome-background:\s*var\(--pmx-wallpaper-veil\);/);
+    assert.match(bridgeCss, /\[data-chat-column\]\s*\.bg-background:not/);
+    const fallbackSection = bridgeCss.slice(
+      bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
+    );
+    assert.match(fallbackSection, /--pmx-wallpaper-veil:\s*#000000;/);
+    assert.match(fallbackSection, /--pmx-wallpaper-veil:\s*#ffffff;/);
+    assert.match(fallbackSection, /--pmx-wallpaper-veil:\s*var\(--background\);/);
   });
 });

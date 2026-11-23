@@ -12,6 +12,7 @@ import {
   createBuiltinWallpapers,
   createDefaultSettings,
   createWallpaperStore,
+  normalizeWallpaperSettingsPatch,
   type SystemFontsResult,
   type UserPropDef,
   type UserPropType,
@@ -459,16 +460,23 @@ function extractAppearanceConfigFromDaemonPayload(
 ): {
   appearance: AppearanceConfig;
   wallpaperPatch: Partial<WallpaperSettingsState> | null;
+  wallpaperMigrated: boolean;
 } {
   const { ok: _ok, recoveredFromCorruption: _recovered, wallpaper, ...rest } = raw;
   const appearance = normalizeAppearanceConfig(
     rest as DeepPartialAppearanceConfig,
     fallback,
   );
-  const wallpaperPatch = isPlainRecord(wallpaper)
-    ? (wallpaper as Partial<WallpaperSettingsState>)
-    : null;
-  return { appearance, wallpaperPatch };
+  if (!isPlainRecord(wallpaper)) {
+    return { appearance, wallpaperPatch: null, wallpaperMigrated: false };
+  }
+  const rawPatch = wallpaper as Partial<WallpaperSettingsState>;
+  const wallpaperPatch = normalizeWallpaperSettingsPatch(rawPatch);
+  const wallpaperMigrated =
+    wallpaperPatch.wallpaperOpacity !== rawPatch.wallpaperOpacity ||
+    wallpaperPatch.scrim !== rawPatch.scrim ||
+    wallpaperPatch.selectedId !== rawPatch.selectedId;
+  return { appearance, wallpaperPatch, wallpaperMigrated };
 }
 
 const PrismuxRuntimeContext = createContext<PrismuxRuntimeContextValue | null>(null);
@@ -540,7 +548,8 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   const lastSyncedWallpaperRef = useRef<WallpaperSettingsState | null>(null);
 
   if (wallpaperStoreRef.current === null) {
-    const cachedWs = readLocalJson<Partial<WallpaperSettingsState>>(WALLPAPER_STORAGE_KEY);
+    const rawCachedWs = readLocalJson<Partial<WallpaperSettingsState>>(WALLPAPER_STORAGE_KEY);
+    const cachedWs = rawCachedWs ? normalizeWallpaperSettingsPatch(rawCachedWs) : null;
     const baseDefaults = createDefaultSettings();
     const mergedInitial: WallpaperSettingsState = {
       ...baseDefaults,
@@ -727,7 +736,51 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       syncT3DarkClass: false,
     });
     syncBrowserChromeTheme();
+    // Defense-in-depth for Issue #4: in non-glass Light/Dark modes, T3 Code's
+    // syncBrowserChromeTheme() stamps an inline background-color on html/body
+    // that would hide the Z-0 wallpaper stage. Clear it whenever wallpaper is active.
+    if (wallpaperActive && !reducedTransparency && typeof document !== "undefined") {
+      document.documentElement.style.removeProperty("background-color");
+      document.body?.style.removeProperty("background-color");
+    }
   }, [appearance, reducedTransparency, wallpaperSelectedId]);
+
+  // Guard against subsequent T3 Code theme mutations re-stamping inline background-color on html/body
+  // while a wallpaper is active in Light/Dark/Glass mode.
+  useEffect(() => {
+    const wallpaperActive = Boolean(wallpaperSelectedId);
+    if (!wallpaperActive || reducedTransparency || typeof document === "undefined") {
+      return;
+    }
+    const stripInlineBackground = () => {
+      if (document.documentElement.style.getPropertyValue("background-color")) {
+        document.documentElement.style.removeProperty("background-color");
+      }
+      if (document.body?.style.getPropertyValue("background-color")) {
+        document.body.style.removeProperty("background-color");
+      }
+    };
+    stripInlineBackground();
+    if (typeof MutationObserver === "undefined") {
+      return;
+    }
+    const observer = new MutationObserver(() => {
+      stripInlineBackground();
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style"],
+    });
+    if (document.body) {
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+    }
+    return () => {
+      observer.disconnect();
+    };
+  }, [reducedTransparency, wallpaperSelectedId]);
 
   // Subscribe to Electron window occlusion + browser document.visibilitychange to enforce 0 FPS pause.
   useEffect(() => {
@@ -743,11 +796,26 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
 
     const handleVisibility = () => {
       docHidden = document.visibilityState === "hidden";
+      if (!docHidden) {
+        bridgeOccluded = false;
+      }
+      recompute();
+    };
+
+    const handleWindowFocus = () => {
+      docHidden =
+        typeof document !== "undefined" ? document.visibilityState === "hidden" : false;
+      if (!docHidden) {
+        bridgeOccluded = false;
+      }
       recompute();
     };
 
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", handleVisibility);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", handleWindowFocus);
     }
 
     const prismuxBridge =
@@ -778,6 +846,9 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       cancelled = true;
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", handleVisibility);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", handleWindowFocus);
       }
       unsubscribeOcclusion?.();
     };
@@ -849,7 +920,13 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       steamRootOverride?: string;
       customDir?: string;
     }): Promise<WallpaperInventoryResult> => {
-      const info = await prismuxDaemonClient.getConnectionInfo();
+      const info = await prismuxDaemonClient.getConnectionInfo(
+        Boolean(opts?.forceRefresh) || !daemonReadyRef.current,
+      );
+      if (info.ready !== daemonReadyRef.current) {
+        daemonReadyRef.current = info.ready;
+        setDaemonInfo(info);
+      }
       if (!info.ready) {
         return {
           wallpapers: createBuiltinWallpapers(),
@@ -1013,7 +1090,24 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     let cancelled = false;
 
     const hydrate = async () => {
-      const info = await prismuxDaemonClient.getConnectionInfo(true);
+      const hasDesktopBridge =
+        typeof window !== "undefined" &&
+        typeof window.desktopBridge?.prismux?.getDaemonInfo === "function";
+
+      let info = await prismuxDaemonClient.getConnectionInfo(true);
+      // On Windows cold boot, PrismuxDaemonService takes ~1.0–1.6s (longer under AV scan)
+      // to spawn and pass /health. Wait in a bounded loop instead of permanently staying offline.
+      if (!info.ready && hasDesktopBridge) {
+        const maxRetries = 40;
+        for (let attempt = 0; attempt < maxRetries && !cancelled && !info.ready; attempt += 1) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 300);
+          });
+          if (cancelled) return;
+          info = await prismuxDaemonClient.getConnectionInfo(true);
+        }
+      }
+
       if (cancelled) return;
       setDaemonInfo(info);
       daemonReadyRef.current = info.ready;
@@ -1024,11 +1118,16 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       }
 
       // 1. Hydrate appearance + wallpaper settings from Daemon.
+      let migratedWallpaperConfig = false;
       try {
         const raw = await prismuxDaemonClient.getAppearance();
         if (!cancelled && isPlainRecord(raw)) {
-          const { appearance: remoteAppearance, wallpaperPatch } =
-            extractAppearanceConfigFromDaemonPayload(raw, appearanceRef.current);
+          const {
+            appearance: remoteAppearance,
+            wallpaperPatch,
+            wallpaperMigrated,
+          } = extractAppearanceConfigFromDaemonPayload(raw, appearanceRef.current);
+          migratedWallpaperConfig = wallpaperMigrated;
           syncingRef.current = true;
           try {
             appearanceRef.current = remoteAppearance;
@@ -1061,6 +1160,12 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
 
       if (cancelled) return;
 
+      // Persist self-healed legacy wallpaper values (e.g. wallpaperOpacity: 100 → 0, scrim: 35 → 0.35)
+      // back to Daemon so future boots start cleanly.
+      if (migratedWallpaperConfig) {
+        scheduleDaemonSave(appearanceRef.current, wallpaperStore.getSnapshot().settings);
+      }
+
       // 2. Hydrate wallpaper inventory, chief thread status, and system fonts in parallel.
       void wallpaperStore.refreshLibrary(wallpaperHost, false);
       void wallpaperStore.refreshSystemFonts(wallpaperHost, false);
@@ -1083,7 +1188,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     return () => {
       cancelled = true;
     };
-  }, [syncHostPolarity, wallpaperHost, wallpaperStore]);
+  }, [scheduleDaemonSave, syncHostPolarity, wallpaperHost, wallpaperStore]);
 
   const contextValue = useMemo<PrismuxRuntimeContextValue>(
     () => ({

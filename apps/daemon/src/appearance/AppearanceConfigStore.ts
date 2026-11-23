@@ -232,6 +232,34 @@ function normalizeObjectFit(
     : fallback;
 }
 
+function normalizeWallpaperOpacity(value: unknown, fallback: number): number {
+  const safeFallback =
+    typeof fallback === "number" && Number.isFinite(fallback)
+      ? fallback > 90
+        ? 0
+        : Math.max(0, Math.min(90, fallback))
+      : 0;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return safeFallback;
+  }
+  if (value > 90) {
+    return 0;
+  }
+  return Math.max(0, Math.min(90, value));
+}
+
+function normalizeWallpaperScrim(value: unknown, fallback: number): number {
+  const safeFallback =
+    typeof fallback === "number" && Number.isFinite(fallback)
+      ? Math.max(0, Math.min(0.9, fallback > 1 ? fallback / 100 : fallback))
+      : 0.15;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return safeFallback;
+  }
+  const fraction = value > 1 ? value / 100 : value;
+  return Math.max(0, Math.min(0.9, fraction));
+}
+
 export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
   return {
     schemaVersion: 1,
@@ -300,8 +328,8 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
       flipX: false,
       flipY: false,
       wallpaperBlur: 0,
-      wallpaperOpacity: 100,
-      scrim: 35,
+      wallpaperOpacity: 0,
+      scrim: 0.15,
       sceneLive: true,
       sceneLiveFps: 30,
       pauseOnHidden: true,
@@ -684,13 +712,11 @@ export function mergeAppearanceConfig(
         64,
         base.wallpaper.wallpaperBlur
       ),
-      wallpaperOpacity: clampNumber(
+      wallpaperOpacity: normalizeWallpaperOpacity(
         wallpaperPatch["wallpaperOpacity"],
-        0,
-        100,
         base.wallpaper.wallpaperOpacity
       ),
-      scrim: clampNumber(wallpaperPatch["scrim"], 0, 100, base.wallpaper.scrim),
+      scrim: normalizeWallpaperScrim(wallpaperPatch["scrim"], base.wallpaper.scrim),
       sceneLive: readBoolean(
         wallpaperPatch["sceneLive"],
         base.wallpaper.sceneLive
