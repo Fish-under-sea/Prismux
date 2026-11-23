@@ -12,6 +12,22 @@ import type {
   PluginRealm,
   PrismuxPluginModule
 } from "@prismux/protocol";
+import {
+  DECLARATIVE_UI_MODE,
+  DeclarativeAtomStore,
+  assertJsonSafeProps,
+  isDeclarativePanelSpecLike,
+  validateDeclarativePanelSpec,
+  validateDeclarativeUiTree,
+  type DeclarativeActionInvocation,
+  type DeclarativeAtomListener,
+  type DeclarativeAtomStorage,
+  type DeclarativeAtomValue,
+  type DeclarativePanelHandlers,
+  type DeclarativeUiNode,
+  type DeclarativeUiPanelSpec,
+  type JsonSafeRecord
+} from "./DeclarativeUi.js";
 
 export interface PluginResourceCounts {
   routes: number;
@@ -48,6 +64,30 @@ export interface RegisteredPanelEntry {
   panelId: string;
   title: string;
   component?: unknown;
+  ui?: typeof DECLARATIVE_UI_MODE;
+}
+
+export interface RegisteredDeclarativePanelEntry {
+  pluginId: string;
+  panelId: string;
+  title: string;
+  spec: DeclarativeUiPanelSpec;
+  atoms: Readonly<Record<string, DeclarativeAtomValue>>;
+}
+
+export interface DeclarativePanelHandle {
+  readonly panelId: string;
+  getAtom(key: string): DeclarativeAtomValue | undefined;
+  setAtom(key: string, value: DeclarativeAtomValue): void;
+  getAtoms(): Record<string, DeclarativeAtomValue>;
+  subscribeAtom(key: string, listener: DeclarativeAtomListener): () => void;
+  updateTree(nextRoot: DeclarativeUiNode): void;
+}
+
+export interface DeclarativeRuntimeCounts {
+  declarativePanels: number;
+  atomSubscriptions: number;
+  actionHandlers: number;
 }
 
 export interface RegisteredStyleEntry {
@@ -65,6 +105,11 @@ export interface RegisteredTimerEntry {
 
 export interface CordisPluginContext extends PluginContext {
   registerStyle(styleId: string, cssText: string): void;
+  registerDeclarativePanel(
+    panelId: string,
+    spec: DeclarativeUiPanelSpec,
+    handlers?: DeclarativePanelHandlers
+  ): DeclarativePanelHandle;
   setInterval(fn: () => void, intervalMs: number): ReturnType<typeof setInterval>;
   setTimeout(fn: () => void, delayMs: number): ReturnType<typeof setTimeout>;
   registerTimer(
@@ -81,6 +126,11 @@ export interface CordisPluginModule {
 export interface CordisPluginHostAdapters {
   onRegisterRoute?: (entry: RegisteredRouteEntry) => (() => void) | void;
   onRegisterPanel?: (entry: RegisteredPanelEntry) => (() => void) | void;
+  onRegisterDeclarativePanel?: (
+    entry: RegisteredDeclarativePanelEntry
+  ) => (() => void) | void;
+  onUpdateDeclarativePanel?: (entry: RegisteredDeclarativePanelEntry) => void;
+  declarativeAtomStorage?: DeclarativeAtomStorage;
   onRegisterStyle?: (entry: RegisteredStyleEntry) => (() => void) | void;
   loggerFactory?: (pluginId: string, realm: PluginRealm) => PluginLogger;
 }
@@ -183,6 +233,15 @@ export class ReversibleEffectScope {
 
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
+interface DeclarativePanelRuntimeRecord {
+  pluginId: string;
+  panelId: string;
+  title: string;
+  spec: DeclarativeUiPanelSpec;
+  atomStore: DeclarativeAtomStore;
+  onAction?: (invocation: DeclarativeActionInvocation) => void | Promise<void>;
+}
+
 /**
  * Dual-realm (`daemon` / `ui`) reversible Cordis plugin host with real resource registries
  * and atomic LIFO cleanup on unmount, uninstall, or `apply()` failure rollback.
@@ -196,6 +255,7 @@ export class CordisPluginHost {
   private readonly routes = new Map<string, RegisteredRouteEntry>();
   private readonly hooks = new Map<string, RegisteredPluginHookEntry>();
   private readonly panels = new Map<string, RegisteredPanelEntry>();
+  private readonly declarativePanels = new Map<string, DeclarativePanelRuntimeRecord>();
   private readonly styles = new Map<string, RegisteredStyleEntry>();
   private readonly timers = new Map<string, { entry: RegisteredTimerEntry; cancel: () => void }>();
   private readonly customEffects = new Map<string, Set<string>>();
@@ -237,6 +297,106 @@ export class CordisPluginHost {
 
   getPanels(): readonly RegisteredPanelEntry[] {
     return Array.from(this.panels.values());
+  }
+
+  private toDeclarativePanelEntry(
+    record: DeclarativePanelRuntimeRecord
+  ): RegisteredDeclarativePanelEntry {
+    return {
+      pluginId: record.pluginId,
+      panelId: record.panelId,
+      title: record.title,
+      spec: record.spec,
+      atoms: record.atomStore.getSnapshot()
+    };
+  }
+
+  getDeclarativePanels(pluginId?: string): readonly RegisteredDeclarativePanelEntry[] {
+    const out: RegisteredDeclarativePanelEntry[] = [];
+    for (const record of this.declarativePanels.values()) {
+      if (pluginId === undefined || record.pluginId === pluginId) {
+        out.push(this.toDeclarativePanelEntry(record));
+      }
+    }
+    return out;
+  }
+
+  getDeclarativePanel(panelId: string): RegisteredDeclarativePanelEntry | undefined {
+    const record = this.declarativePanels.get(panelId);
+    return record ? this.toDeclarativePanelEntry(record) : undefined;
+  }
+
+  getDeclarativePanelAtoms(panelId: string): Record<string, DeclarativeAtomValue> {
+    const record = this.declarativePanels.get(panelId);
+    if (!record) {
+      throw new Error(`Declarative panel "${panelId}" is not registered.`);
+    }
+    return record.atomStore.getSnapshot();
+  }
+
+  setDeclarativePanelAtom(
+    panelId: string,
+    key: string,
+    value: DeclarativeAtomValue
+  ): void {
+    const record = this.declarativePanels.get(panelId);
+    if (!record) {
+      throw new Error(`Declarative panel "${panelId}" is not registered.`);
+    }
+    record.atomStore.set(key, value);
+    this.adapters.onUpdateDeclarativePanel?.(this.toDeclarativePanelEntry(record));
+  }
+
+  async dispatchDeclarativeAction(
+    panelId: string,
+    actionId: string,
+    payload?: JsonSafeRecord
+  ): Promise<void> {
+    const record = this.declarativePanels.get(panelId);
+    if (!record) {
+      throw new Error(`Declarative panel "${panelId}" is not registered.`);
+    }
+    if (
+      record.spec.actions &&
+      record.spec.actions.length > 0 &&
+      !record.spec.actions.some((item) => item.id === actionId)
+    ) {
+      throw new Error(
+        `Declarative action "${actionId}" is not declared on panel "${panelId}".`
+      );
+    }
+    const cleanPayload =
+      payload !== undefined ? assertJsonSafeProps(payload, "$.action.payload") : undefined;
+    if (record.onAction) {
+      await record.onAction({
+        panelId: record.panelId,
+        pluginId: record.pluginId,
+        actionId,
+        ...(cleanPayload !== undefined ? { payload: cleanPayload } : {}),
+        atomsSnapshot: record.atomStore.getSnapshot()
+      });
+    }
+  }
+
+  getDeclarativeRuntimeCounts(pluginId?: string): DeclarativeRuntimeCounts {
+    let declarativePanels = 0;
+    let atomSubscriptions = 0;
+    let actionHandlers = 0;
+    for (const record of this.declarativePanels.values()) {
+      if (pluginId !== undefined && record.pluginId !== pluginId) {
+        continue;
+      }
+      declarativePanels += 1;
+      atomSubscriptions += record.atomStore.getSubscriptionCount();
+      if (record.onAction !== undefined) {
+        actionHandlers += 1;
+      }
+    }
+    return {
+      declarativePanels,
+      atomSubscriptions,
+      actionHandlers
+    };
   }
 
   getStyles(): readonly RegisteredStyleEntry[] {
@@ -428,11 +588,18 @@ export class CordisPluginHost {
             `Panel "${panelId}" is already registered by plugin "${existing.pluginId}".`
           );
         }
+        let normalizedComponent = definition.component;
+        let uiMode: typeof DECLARATIVE_UI_MODE | undefined;
+        if (isDeclarativePanelSpecLike(definition.component)) {
+          normalizedComponent = validateDeclarativePanelSpec(definition.component);
+          uiMode = DECLARATIVE_UI_MODE;
+        }
         const entry: RegisteredPanelEntry = {
           pluginId,
           panelId,
           title: definition.title,
-          component: definition.component
+          component: normalizedComponent,
+          ...(uiMode !== undefined ? { ui: uiMode } : {})
         };
         this.panels.set(panelId, entry);
         const adapterCleanup = this.adapters.onRegisterPanel?.(entry);
@@ -440,6 +607,117 @@ export class CordisPluginHost {
           this.panels.delete(panelId);
           adapterCleanup?.();
         });
+      },
+
+      registerDeclarativePanel: (panelId, rawSpec, handlers): DeclarativePanelHandle => {
+        if (
+          typeof panelId !== "string" ||
+          panelId.trim().length === 0 ||
+          panelId.includes("..") ||
+          !SAFE_ID_PATTERN.test(panelId)
+        ) {
+          throw new Error(`Invalid declarative panel ID "${String(panelId)}".`);
+        }
+        const existing = this.panels.get(panelId) ?? this.declarativePanels.get(panelId);
+        if (existing !== undefined) {
+          throw new Error(
+            `Panel "${panelId}" is already registered by plugin "${existing.pluginId}".`
+          );
+        }
+
+        const validatedSpec = validateDeclarativePanelSpec(rawSpec);
+        const title = validatedSpec.title ?? panelId;
+        const persistedInitial = this.adapters.declarativeAtomStorage?.load(
+          pluginId,
+          panelId
+        );
+        const atomStore = new DeclarativeAtomStore(
+          validatedSpec.atoms,
+          persistedInitial,
+          this.adapters.declarativeAtomStorage
+            ? (persisted) => {
+                this.adapters.declarativeAtomStorage?.save(pluginId, panelId, persisted);
+              }
+            : undefined
+        );
+
+        const runtimeRecord: DeclarativePanelRuntimeRecord = {
+          pluginId,
+          panelId,
+          title,
+          spec: validatedSpec,
+          atomStore,
+          ...(handlers?.onAction ? { onAction: handlers.onAction } : {})
+        };
+
+        const panelEntry: RegisteredPanelEntry = {
+          pluginId,
+          panelId,
+          title,
+          ui: DECLARATIVE_UI_MODE,
+          component: validatedSpec
+        };
+
+        this.panels.set(panelId, panelEntry);
+        this.declarativePanels.set(panelId, runtimeRecord);
+
+        const panelAdapterCleanup = this.adapters.onRegisterPanel?.(panelEntry);
+        const declarativeAdapterCleanup = this.adapters.onRegisterDeclarativePanel?.(
+          this.toDeclarativePanelEntry(runtimeRecord)
+        );
+
+        // Register deterministic cleanup through ctx.effect() for zero residual state on unload.
+        ctx.effect(() => {
+          this.declarativePanels.delete(panelId);
+          this.panels.delete(panelId);
+          runtimeRecord.onAction = undefined;
+          atomStore.dispose();
+          declarativeAdapterCleanup?.();
+          panelAdapterCleanup?.();
+        });
+
+        if (handlers?.onAtomChange) {
+          const unsubscribeAll = atomStore.subscribeAll(handlers.onAtomChange);
+          ctx.effect(() => {
+            unsubscribeAll();
+          });
+        }
+
+        return {
+          panelId,
+          getAtom: (key) => atomStore.get(key),
+          setAtom: (key, value) => {
+            atomStore.set(key, value);
+            this.adapters.onUpdateDeclarativePanel?.(
+              this.toDeclarativePanelEntry(runtimeRecord)
+            );
+          },
+          getAtoms: () => atomStore.getSnapshot(),
+          subscribeAtom: (key, listener) => {
+            let active = true;
+            const unsubscribe = atomStore.subscribe(key, listener);
+            const safeUnsub = () => {
+              if (!active) return;
+              active = false;
+              unsubscribe();
+            };
+            ctx.effect(safeUnsub);
+            return safeUnsub;
+          },
+          updateTree: (nextRoot) => {
+            const validatedRoot = validateDeclarativeUiTree(nextRoot);
+            const nextSpec: DeclarativeUiPanelSpec = {
+              ...runtimeRecord.spec,
+              root: validatedRoot
+            };
+            const revalidatedSpec = validateDeclarativePanelSpec(nextSpec);
+            runtimeRecord.spec = revalidatedSpec;
+            panelEntry.component = revalidatedSpec;
+            this.adapters.onUpdateDeclarativePanel?.(
+              this.toDeclarativePanelEntry(runtimeRecord)
+            );
+          }
+        };
       },
 
       registerStyle: (styleId, cssText): void => {
@@ -547,6 +825,10 @@ export class CordisPluginHost {
       return false;
     }
     if (!Array.isArray(manifest.permissions)) {
+      return false;
+    }
+    const uiMode = (manifest as PluginManifest & { ui?: unknown }).ui;
+    if (uiMode !== undefined && uiMode !== DECLARATIVE_UI_MODE) {
       return false;
     }
     return typeof manifest.modelVisible === "boolean";

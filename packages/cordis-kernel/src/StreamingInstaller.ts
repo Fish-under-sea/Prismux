@@ -1202,6 +1202,12 @@ function validateExtractedManifest(raw: Record<string, unknown>): PluginManifest
   if (typeof modelVisibleRaw !== "boolean") {
     throw new Error("plugin.manifest.json field \"modelVisible\" must be a boolean.");
   }
+  const uiRaw = raw["ui"];
+  if (uiRaw !== undefined && uiRaw !== "components") {
+    throw new Error(
+      `plugin.manifest.json field "ui" only supports "components" when specified, got "${String(uiRaw)}".`
+    );
+  }
 
   return {
     id,
@@ -1211,8 +1217,9 @@ function validateExtractedManifest(raw: Record<string, unknown>): PluginManifest
     modelVisible: modelVisibleRaw,
     behaviors: isPlainRecord(raw["behaviors"])
       ? (raw["behaviors"] as PluginManifest["behaviors"])
-      : undefined
-  };
+      : undefined,
+    ...(uiRaw === "components" ? { ui: "components" as const } : {})
+  } as PluginManifest;
 }
 
 function resolvePluginRootInStaging(
