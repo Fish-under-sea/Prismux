@@ -41,18 +41,34 @@ export interface PackPluginOptions {
   pluginDir: string;
   outDir?: string;
   updateCatalogPath?: string;
+  emitChecksum?: boolean;
 }
 
 export interface PackPluginResult {
   id: string;
   version: string;
   archivePath: string;
-  checksumPath: string;
+  checksumPath: string | null;
   sha256: string;
   bytes: number;
   tarBytes: number;
   fileCount: number;
   catalogUpdated: boolean;
+}
+
+/**
+ * Formats canonical plugin archive filenames aligned with npm naming
+ * (`prismux-plugin-<id>-<version>.wb-plugin`) without duplicating prefixes.
+ */
+export function formatPluginArchiveFilename(
+  pluginId: string,
+  version: string,
+): string {
+  const cleanId = pluginId.trim();
+  const baseName = cleanId.startsWith('prismux-plugin-')
+    ? cleanId
+    : `prismux-plugin-${cleanId}`;
+  return `${baseName}-${version}.wb-plugin`;
 }
 
 export interface ParsedTarEntry {
@@ -599,10 +615,11 @@ export function packPlugin(options: PackPluginOptions): PackPluginResult {
     );
   }
 
-  const archiveFilename = `${manifest.id}-${manifest.version}.wb-plugin`;
-  const checksumFilename = `${manifest.id}-${manifest.version}.sha256`;
+  const archiveFilename = formatPluginArchiveFilename(manifest.id, manifest.version);
+  const checksumFilename = archiveFilename.replace(/\.wb-plugin$/, '.sha256');
   const archivePath = resolve(outDir, archiveFilename);
-  const checksumPath = resolve(outDir, checksumFilename);
+  const checksumPath =
+    options.emitChecksum === false ? null : resolve(outDir, checksumFilename);
 
   const relArchive = relative(outDir, archivePath);
   if (relArchive.startsWith('..') || isAbsolute(relArchive)) {
@@ -612,7 +629,9 @@ export function packPlugin(options: PackPluginOptions): PackPluginResult {
   const sha256 = createHash('sha256').update(gzippedBuffer).digest('hex');
 
   writeBufferAtomic(archivePath, gzippedBuffer);
-  writeBufferAtomic(checksumPath, `${sha256}  ${archiveFilename}\n`);
+  if (checksumPath !== null) {
+    writeBufferAtomic(checksumPath, `${sha256}  ${archiveFilename}\n`);
+  }
 
   let catalogUpdated = false;
   if (options.updateCatalogPath) {
@@ -710,7 +729,11 @@ export function runPackPluginCli(
       io.log(
         `Packed ${result.id}@${result.version} (${result.fileCount} files, ${result.bytes} bytes) -> ${result.archivePath}`,
       );
-      io.log(`SHA-256: ${result.sha256} (${result.checksumPath})`);
+      io.log(
+        result.checksumPath
+          ? `SHA-256: ${result.sha256} (${result.checksumPath})`
+          : `SHA-256: ${result.sha256}`,
+      );
       if (result.catalogUpdated) {
         io.log(`Catalog updated: ${parsed.options.updateCatalogPath}`);
       }

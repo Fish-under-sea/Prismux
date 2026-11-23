@@ -5,10 +5,10 @@
     {
       "id": "qq",
       "packageName": "@prismux/plugin-qq",
-      "version": "0.1.0-alpha.3",
+      "version": "0.1.1-preview.1",
       "description": "OneBot v11 QQ private Chief Supervisor bridge and isolated group companion plugin.",
       "engines": {
-        "prismux": ">=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
+        "prismux": ">=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
       },
       "realms": [
         "daemon",
@@ -21,17 +21,17 @@
         "hooks:subscribe"
       ],
       "modelVisible": false,
-      "sha256": "ba6f307528f32edfbf0dd174a1bfa2be7c8d4a1c4a9f22a080ee8483cb7bd28f",
-      "bytes": 72311,
+      "sha256": "7d2bca4fb575c6e2840a23622a9cb34d65322c2182809a8abc2655b537798e95",
+      "bytes": 72310,
       "status": "verified"
     },
     {
       "id": "pet",
       "packageName": "@prismux/plugin-pet",
-      "version": "0.1.0-alpha.3",
+      "version": "0.1.1-preview.1",
       "description": "Desktop mascot / pet plugin with instance binding, lease tokens, playback progress, and staged handover.",
       "engines": {
-        "prismux": ">=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
+        "prismux": ">=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
       },
       "realms": [
         "ui",
@@ -43,17 +43,17 @@
         "hooks:subscribe"
       ],
       "modelVisible": false,
-      "sha256": "b249044eee5666cf279cb99af1fafec8310b328f5183864bcc1d714ba00d43e5",
-      "bytes": 26865,
+      "sha256": "02743610f02fbd5f07febc6122eddd0c8c034c5248546b0e6ef9bd89da92b08b",
+      "bytes": 26861,
       "status": "verified"
     },
     {
       "id": "fishdock-hook",
       "packageName": "@prismux/plugin-fishdock-hook",
-      "version": "0.1.0-alpha.3",
+      "version": "0.1.1-preview.1",
       "description": "Bridge plugin pushing PreToolUse approvals, email alerts, and factory completions to FISH-Dock Dynamic Island.",
       "engines": {
-        "prismux": ">=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
+        "prismux": ">=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
       },
       "realms": [
         "daemon"
@@ -64,17 +64,17 @@
         "notifications:push"
       ],
       "modelVisible": false,
-      "sha256": "b3fec9a26034ccacc19acd6e36a11179a7ef76c6c749d90756512704a6da06f9",
-      "bytes": 36977,
+      "sha256": "309b7318f5567b8831331e07788d9dc96003328c5c33ea69b638c860596080b2",
+      "bytes": 36985,
       "status": "verified"
     },
     {
       "id": "ssh",
       "packageName": "@prismux/plugin-ssh",
-      "version": "0.1.0-alpha.3",
+      "version": "0.1.1-preview.1",
       "description": "Optional SSH host pool, Web PTY, and SFTP operations plugin.",
       "engines": {
-        "prismux": ">=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
+        "prismux": ">=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
       },
       "realms": [
         "daemon",
@@ -88,8 +88,8 @@
         "ui:panel"
       ],
       "modelVisible": false,
-      "sha256": "54c90bdb7d09d4472145c70aaa8b463028e9dce6ed953aa8c31e1f4aca782265",
-      "bytes": 31639,
+      "sha256": "f384f700adb2bc95041bd17030a53cddf56e2d43a36cc14b0056699b89aedb49",
+      "bytes": 31640,
       "status": "verified"
     }
   ]

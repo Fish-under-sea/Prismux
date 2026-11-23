@@ -21,6 +21,7 @@ import {
 } from '../rename-brand.ts';
 import {
   extractTarEntries,
+  formatPluginArchiveFilename,
   packPlugin,
   parsePackPluginArgs,
   runPackPluginCli,
@@ -39,7 +40,10 @@ import {
 } from '../sync-t3-upstream.ts';
 import {
   OFFICIAL_PLUGIN_IDS,
+  RELEASE_CATALOG_FILENAME,
   assertStageContainsNoOfficialPlugins,
+  formatPluginsSumsFilename,
+  formatSoftwareSumsFilename,
   toWindowsProductVersion,
 } from '../build-release-packages.ts';
 import {
@@ -47,7 +51,10 @@ import {
   formatNpmPluginPackageName,
 } from '../build-npm-plugin-packages.ts';
 import {
+  buildReleaseNotesTemplate,
+  collectReleaseArtifactFiles,
   extractGiteeTokenFromCredentialsText,
+  formatReleaseTitle,
   normalizeReleaseTag,
 } from '../publish-gitee-release.ts';
 import {
@@ -348,6 +355,7 @@ describe('pack-plugin', () => {
     assert.equal(result.fileCount, 4);
     assert.equal(result.catalogUpdated, true);
     assert.ok(existsSync(result.archivePath));
+    assert.ok(result.checksumPath !== null);
     assert.ok(existsSync(result.checksumPath));
 
     const archiveBytes = readFileSync(result.archivePath);
@@ -355,9 +363,20 @@ describe('pack-plugin', () => {
 
     const expectedSha256 = createHash('sha256').update(archiveBytes).digest('hex');
     assert.equal(result.sha256, expectedSha256);
+    assert.equal(result.archivePath, join(outDir, 'prismux-plugin-demo-0.2.0.wb-plugin'));
+    assert.equal(result.checksumPath, join(outDir, 'prismux-plugin-demo-0.2.0.sha256'));
 
-    const checksumContent = readFileSync(result.checksumPath, 'utf8');
-    assert.equal(checksumContent, `${expectedSha256}  demo-0.2.0.wb-plugin\n`);
+    const checksumContent = readFileSync(result.checksumPath!, 'utf8');
+    assert.equal(checksumContent, `${expectedSha256}  prismux-plugin-demo-0.2.0.wb-plugin\n`);
+
+    assert.equal(
+      formatPluginArchiveFilename('qq', '0.1.1-preview.1'),
+      'prismux-plugin-qq-0.1.1-preview.1.wb-plugin',
+    );
+    assert.equal(
+      formatPluginArchiveFilename('prismux-plugin-qq', '0.1.1-preview.1'),
+      'prismux-plugin-qq-0.1.1-preview.1.wb-plugin',
+    );
 
     // Gunzip roundtrip and parse tar entries
     const extractedTar = gunzipSync(archiveBytes);
@@ -849,8 +868,8 @@ describe('release-and-npm-packages', () => {
     execFileSync(process.execPath, [installerBin, '--out', exportDir], {
       encoding: 'utf8',
     });
-    const exportedArchive = join(exportDir, `qq-${version}.wb-plugin`);
-    const exportedShaFile = join(exportDir, `qq-${version}.wb-plugin.sha256`);
+    const exportedArchive = join(exportDir, `prismux-plugin-qq-${version}.wb-plugin`);
+    const exportedShaFile = join(exportDir, `prismux-plugin-qq-${version}.wb-plugin.sha256`);
     assert.ok(existsSync(exportedArchive));
     assert.ok(existsSync(exportedShaFile));
     assert.equal(
@@ -859,7 +878,7 @@ describe('release-and-npm-packages', () => {
     );
     assert.equal(
       readFileSync(exportedShaFile, 'utf8'),
-      `${scopedBuilt[0]?.sha256}  qq-${version}.wb-plugin\n`,
+      `${scopedBuilt[0]?.sha256}  prismux-plugin-qq-${version}.wb-plugin\n`,
     );
     assert.throws(() => {
       execFileSync(process.execPath, [installerBin, '--out', exportDir], {
@@ -894,7 +913,7 @@ describe('release-and-npm-packages', () => {
     });
 
     // Tamper archive and verify bin/install.mjs refuses installation
-    const archiveFile = join(scopedOut, 'qq', `qq-${version}.wb-plugin`);
+    const archiveFile = join(scopedOut, 'qq', `prismux-plugin-qq-${version}.wb-plugin`);
     const bytes = readFileSync(archiveFile);
     const tamperIdx = Math.floor(bytes.length / 2);
     const prevByte = bytes[tamperIdx];
@@ -930,6 +949,104 @@ describe('release-and-npm-packages', () => {
       extractGiteeTokenFromCredentialsText(credSample),
       'synthetic-gitee-cred-sample',
     );
+  });
+
+  it('collects consolidated release artifacts without *.sha256 fragments and renders download guide templates', () => {
+    const dir = createTempDir('prismux-release-collect-');
+    const pluginsDir = join(dir, 'plugins');
+    const splitDir = join(dir, '.gitee-split');
+    const version = '0.1.1-preview.1';
+
+    writeBinaryFile(join(dir, `Prismux-Setup-${version}-win-x64.exe`), Buffer.alloc(1024, 1));
+    writeTextFile(join(dir, `Prismux-Setup-${version}-win-x64.exe.sha256`), 'legacy-fragment');
+    writeTextFile(join(dir, `Prismux-${version}-SHA256SUMS.txt`), 'abc  Prismux-Setup.exe\n');
+    writeTextFile(join(dir, 'SHA256SUMS.txt'), 'legacy-sums\n');
+    writeBinaryFile(join(pluginsDir, `prismux-plugin-qq-${version}.wb-plugin`), Buffer.from('qq'));
+    writeTextFile(join(pluginsDir, `prismux-plugin-qq-${version}.sha256`), 'legacy-plugin-sha');
+    writeTextFile(join(dir, RELEASE_CATALOG_FILENAME), '{"schemaVersion":1,"plugins":[]}\n');
+    writeTextFile(join(dir, formatPluginsSumsFilename(version)), 'def  plugin.wb-plugin\n');
+    writeBinaryFile(join(splitDir, `Prismux-Setup-${version}-win-x64.exe.7z.001`), Buffer.from('p1'));
+    writeBinaryFile(join(splitDir, `Prismux-Setup-${version}-win-x64.exe.7z.002`), Buffer.from('p2'));
+    writeTextFile(join(splitDir, `Prismux-${version}-SHA256SUMS.txt`), 'split-sums\n');
+
+    const ghFiles = collectReleaseArtifactFiles(dir);
+    assert.deepEqual(
+      ghFiles.map((f) => f.slice(f.lastIndexOf('\\') + 1).slice(f.lastIndexOf('/') + 1)),
+      [
+        `Prismux-Setup-${version}-win-x64.exe`,
+        `Prismux-${version}-SHA256SUMS.txt`,
+        `prismux-plugin-qq-${version}.wb-plugin`,
+        RELEASE_CATALOG_FILENAME,
+        `prismux-plugins-${version}-SHA256SUMS.txt`,
+      ],
+    );
+    const ghSumsFile = ghFiles.find((f) => f.endsWith(`Prismux-${version}-SHA256SUMS.txt`));
+    assert.equal(readFileSync(ghSumsFile!, 'utf8'), 'abc  Prismux-Setup.exe\n');
+
+    const giteeFiles = collectReleaseArtifactFiles(dir, {
+      maxAssetBytes: 512,
+      preferSplitVolumes: true,
+    });
+    assert.deepEqual(
+      giteeFiles.map((f) => f.slice(f.lastIndexOf('\\') + 1).slice(f.lastIndexOf('/') + 1)),
+      [
+        `Prismux-Setup-${version}-win-x64.exe.7z.001`,
+        `Prismux-Setup-${version}-win-x64.exe.7z.002`,
+        `Prismux-${version}-SHA256SUMS.txt`,
+        `prismux-plugin-qq-${version}.wb-plugin`,
+        RELEASE_CATALOG_FILENAME,
+        `prismux-plugins-${version}-SHA256SUMS.txt`,
+      ],
+    );
+    const giteeSumsFile = giteeFiles.find((f) => f.endsWith(`Prismux-${version}-SHA256SUMS.txt`));
+    assert.equal(readFileSync(giteeSumsFile!, 'utf8'), 'split-sums\n');
+
+    const ghNotes = buildReleaseNotesTemplate({
+      platform: 'github',
+      version,
+      installerFilename: `Prismux-Setup-${version}-win-x64.exe`,
+      installerBytes: 218804484,
+      installerSha256: 'b9ee'.repeat(16),
+      plugins: [
+        {
+          id: 'qq',
+          archiveFilename: `prismux-plugin-qq-${version}.wb-plugin`,
+          bytes: 72310,
+          sha256: '61cf'.repeat(16),
+        },
+      ],
+    });
+    assert.equal(formatReleaseTitle('0.1.1-preview.1'), 'Prismux v0.1.1 Preview 1');
+    assert.equal(formatReleaseTitle('0.1.1-alpha.1'), 'Prismux v0.1.1 Preview 1');
+    assert.equal(formatReleaseTitle('0.1.1-beta.2'), 'Prismux v0.1.1 Beta 2');
+    assert.equal(formatReleaseTitle('0.1.1-rc.3'), 'Prismux v0.1.1 RC 3');
+    assert.equal(formatReleaseTitle('0.1.1'), 'Prismux v0.1.1');
+    assert.ok(ghNotes.includes('# Prismux v0.1.1 Preview 1'));
+    assert.equal(ghNotes.includes('公测版'), false);
+    assert.equal(ghNotes.includes('内测版'), false);
+    assert.ok(ghNotes.includes('下载指南：我应该下载哪个文件？'));
+    assert.ok(ghNotes.includes('macOS'));
+    assert.ok(ghNotes.includes('Linux'));
+    assert.ok(ghNotes.includes(`https://github.com/Fish-under-sea/Prismux/releases/download/v${version}/Prismux-Setup-${version}-win-x64.exe`));
+    assert.ok(ghNotes.includes(`https://github.com/Fish-under-sea/Prismux/releases/download/v${version}/prismux-plugin-qq-${version}.wb-plugin`));
+    assert.ok(ghNotes.includes(RELEASE_CATALOG_FILENAME));
+    assert.ok(ghNotes.includes(formatPluginsSumsFilename(version)));
+
+    const giteeNotes = buildReleaseNotesTemplate({
+      platform: 'gitee',
+      version,
+      installerFilename: `Prismux-Setup-${version}-win-x64.exe`,
+      installerBytes: 218804484,
+      installerSha256: 'b9ee'.repeat(16),
+      plugins: [],
+      splitParts: [
+        { name: `Prismux-Setup-${version}-win-x64.exe.7z.001`, bytes: 83886080, sha256: 'a'.repeat(64) },
+        { name: `Prismux-Setup-${version}-win-x64.exe.7z.002`, bytes: 83886080, sha256: 'b'.repeat(64) },
+      ],
+    });
+    assert.ok(giteeNotes.includes(`7z x Prismux-Setup-${version}-win-x64.exe.7z.001`));
+    assert.ok(giteeNotes.includes(formatSoftwareSumsFilename(version)));
+    assert.ok(giteeNotes.includes(`https://gitee.com/Fish-under-sea/Prismux/releases/download/v${version}/Prismux-Setup-${version}-win-x64.exe.7z.001`));
   });
 });
 
@@ -1042,16 +1159,18 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     assert.ok(invocations[3]!.args.includes('nsis'));
 
     const expectedExe = join(outDir, 'Prismux-Setup-0.1.0-alpha.1.exe');
+    const expectedSoftwareSums = join(outDir, formatSoftwareSumsFilename('0.1.0-alpha.1'));
     assert.equal(result.installerExePath, expectedExe);
+    assert.equal(result.checksumPath, expectedSoftwareSums);
     assert.ok(existsSync(expectedExe));
     assert.deepEqual(verifiedPaths, [expectedExe]);
-    assert.ok(existsSync(`${expectedExe}.sha256`));
+    assert.equal(existsSync(`${expectedExe}.sha256`), false);
+    assert.ok(existsSync(expectedSoftwareSums));
     assert.ok(
-      readFileSync(`${expectedExe}.sha256`, 'utf8').includes(
+      readFileSync(expectedSoftwareSums, 'utf8').includes(
         `${result.installerSha256}  Prismux-Setup-0.1.0-alpha.1.exe`,
       ),
     );
-    assert.ok(existsSync(join(outDir, 'SHA256SUMS.txt')));
 
     // Verify --skip-rust reuses existing monitor binary cleanly without calling cargo
     const skipInvocations: DesktopCommandInvocation[] = [];
@@ -1144,8 +1263,15 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     assert.equal(releaseRes.plugins.length, 4);
     assert.equal(releaseRes.unscopedNpmPackages.length, 4);
     assert.equal(releaseRes.scopedNpmPackages.length, 4);
-    assert.ok(existsSync(join(outDir, 'plugins', `qq-${version}.wb-plugin`)));
+    assert.ok(existsSync(join(outDir, 'plugins', `prismux-plugin-qq-${version}.wb-plugin`)));
+    assert.equal(existsSync(join(outDir, 'plugins', `prismux-plugin-qq-${version}.sha256`)), false);
+    assert.ok(existsSync(join(outDir, RELEASE_CATALOG_FILENAME)));
     assert.ok(existsSync(releaseRes.sumsPath));
+    assert.ok(existsSync(releaseRes.pluginsSumsPath));
+    assert.equal(
+      readFileSync(releaseRes.pluginsSumsPath, 'utf8').includes(RELEASE_CATALOG_FILENAME),
+      true,
+    );
 
     const updatedCatalog = JSON.parse(readFileSync(catalogPath, 'utf8')) as {
       plugins: Array<{ id: string; version: string; engines: { prismux: string }; status: string }>;

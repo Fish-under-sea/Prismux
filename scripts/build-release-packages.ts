@@ -24,6 +24,16 @@ export const OFFICIAL_PLUGIN_IDS = [
   'ssh',
 ] as const;
 
+export const RELEASE_CATALOG_FILENAME = 'prismux-plugins-official.json' as const;
+
+export function formatSoftwareSumsFilename(version: string): string {
+  return `Prismux-${version}-SHA256SUMS.txt`;
+}
+
+export function formatPluginsSumsFilename(version: string): string {
+  return `prismux-plugins-${version}-SHA256SUMS.txt`;
+}
+
 const WORKSPACE_DAEMON_PACKAGES = [
   'protocol',
   'cordis-kernel',
@@ -155,6 +165,21 @@ export function writeSha256File(artifactPath: string): string {
   return digest;
 }
 
+export function writeConsolidatedSha256File(
+  outPath: string,
+  filePaths: readonly string[],
+): string {
+  const lines: string[] = [];
+  for (const filePath of filePaths) {
+    if (!existsSync(filePath)) {
+      throw new Error(`Missing artifact for consolidated SHA256SUMS: ${filePath}`);
+    }
+    lines.push(`${sha256File(filePath)}  ${basename(filePath)}`);
+  }
+  writeFileSync(outPath, `${lines.join('\n')}\n`, 'utf8');
+  return outPath;
+}
+
 export function cleanPreviousReleaseArtifacts(outDir: string): void {
   if (!existsSync(outDir)) {
     mkdirSync(outDir, { recursive: true });
@@ -166,7 +191,10 @@ export function cleanPreviousReleaseArtifacts(outDir: string): void {
       name.endsWith('.zip') ||
       name.endsWith('.wb-plugin') ||
       name.endsWith('.sha256') ||
-      name === 'SHA256SUMS.txt'
+      name === 'SHA256SUMS.txt' ||
+      name.endsWith('-SHA256SUMS.txt') ||
+      name === RELEASE_CATALOG_FILENAME ||
+      name === 'official.json'
     ) {
       rmSync(join(outDir, name), { force: true });
     }
@@ -411,7 +439,7 @@ export function buildReleasePackages(options: BuildReleaseOptions = {}): BuildRe
     { cwd: repoRoot, stdio: 'inherit' },
   );
   verifyArchiveWithSevenZip(sevenZipPath, setupExePath);
-  const setupSha256 = writeSha256File(setupExePath);
+  const setupSha256 = sha256File(setupExePath);
 
   const portableStageDir = join(dirname(stageDir), `${basename(stageDir)}-portable`);
   rmSync(portableStageDir, { recursive: true, force: true });
@@ -438,7 +466,7 @@ export function buildReleasePackages(options: BuildReleaseOptions = {}): BuildRe
   });
   rmSync(portableStageDir, { recursive: true, force: true });
   verifyArchiveWithSevenZip(sevenZipPath, portableZipPath);
-  const portableSha256 = writeSha256File(portableZipPath);
+  const portableSha256 = sha256File(portableZipPath);
 
   const plugins: PackPluginResult[] = [];
   for (const id of OFFICIAL_PLUGIN_IDS) {
@@ -446,17 +474,28 @@ export function buildReleasePackages(options: BuildReleaseOptions = {}): BuildRe
       pluginDir: join(repoRoot, 'plugins-official', `plugin-${id}`),
       outDir,
       updateCatalogPath,
+      emitChecksum: false,
     });
     plugins.push(packed);
   }
 
-  const summaryLines = [
-    `${setupSha256}  ${setupFilename}`,
-    `${portableSha256}  ${portableFilename}`,
-    ...plugins.map((item) => `${item.sha256}  ${basename(item.archivePath)}`),
+  const releaseCatalogCopyPath = join(outDir, RELEASE_CATALOG_FILENAME);
+  if (existsSync(updateCatalogPath)) {
+    cpSync(updateCatalogPath, releaseCatalogCopyPath);
+  }
+
+  const sumsPath = writeConsolidatedSha256File(
+    join(outDir, formatSoftwareSumsFilename(version)),
+    [setupExePath, portableZipPath],
+  );
+  const pluginManifestTargets = [
+    ...plugins.map((item) => item.archivePath),
+    ...(existsSync(releaseCatalogCopyPath) ? [releaseCatalogCopyPath] : []),
   ];
-  const sumsPath = join(outDir, 'SHA256SUMS.txt');
-  writeFileSync(sumsPath, `${summaryLines.join('\n')}\n`, 'utf8');
+  writeConsolidatedSha256File(
+    join(outDir, formatPluginsSumsFilename(version)),
+    pluginManifestTargets,
+  );
 
   return {
     version,

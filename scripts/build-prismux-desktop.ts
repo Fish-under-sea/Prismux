@@ -11,11 +11,13 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
+  formatSoftwareSumsFilename,
   readRepoVersion,
   resolveRustEnv,
   resolveSevenZipPath,
+  sha256File,
   verifyArchiveWithSevenZip,
-  writeSha256File,
+  writeConsolidatedSha256File,
 } from './build-release-packages.ts';
 
 export const ROOT_DESKTOP_BUILD_FILTERS = [
@@ -407,12 +409,10 @@ export function buildPrismuxDesktop(
     const sevenZipPath = resolveSevenZipPath();
     verifySevenZip(sevenZipPath, installerExePath);
 
-    installerSha256 = writeSha256File(installerExePath);
-    checksumPath = `${installerExePath}.sha256`;
-    writeFileSync(
-      join(outDir, 'SHA256SUMS.txt'),
-      `${installerSha256}  ${archivedFilename}\n`,
-      'utf8',
+    installerSha256 = sha256File(installerExePath);
+    checksumPath = writeConsolidatedSha256File(
+      join(outDir, formatSoftwareSumsFilename(version)),
+      [installerExePath],
     );
     executedSteps.push('nsis-installer');
   }

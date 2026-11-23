@@ -11,6 +11,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { OFFICIAL_PLUGIN_IDS, readRepoVersion } from './build-release-packages.ts';
+import { formatPluginArchiveFilename } from './pack-plugin.ts';
 
 export interface BuildNpmPackagesOptions {
   repoRoot?: string;
@@ -272,10 +273,18 @@ export function buildNpmPluginPackages(
     }
 
     const manifestPath = join(srcPluginDir, 'plugin.manifest.json');
-    const archiveFilename = `${id}-${version}.wb-plugin`;
+    const canonicalArchive = formatPluginArchiveFilename(id, version);
+    const legacyArchive = `${id}-${version}.wb-plugin`;
+    const canonicalPath = join(releaseDir, canonicalArchive);
+    const legacyPath = join(releaseDir, legacyArchive);
+    const archiveFilename = existsSync(canonicalPath)
+      ? canonicalArchive
+      : existsSync(legacyPath)
+        ? legacyArchive
+        : canonicalArchive;
     const archivePath = join(releaseDir, archiveFilename);
     if (!existsSync(archivePath)) {
-      throw new Error(`Missing packed plugin archive for "${id}": ${archivePath}`);
+      throw new Error(`Missing packed plugin archive for "${id}": ${canonicalPath}`);
     }
 
     const archiveBytes = readFileSync(archivePath);
@@ -302,7 +311,7 @@ export function buildNpmPluginPackages(
     const prismuxEngine =
       typeof enginesRaw['prismux'] === 'string' && enginesRaw['prismux'].trim().length > 0
         ? enginesRaw['prismux'].trim()
-        : '>=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0';
+        : '>=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0';
 
     const generatedPackageJson = {
       name: packageName,

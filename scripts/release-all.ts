@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -10,7 +10,14 @@ import {
   buildPrismuxDesktop,
   type BuildPrismuxDesktopResult,
 } from './build-prismux-desktop.ts';
-import { OFFICIAL_PLUGIN_IDS, readRepoVersion } from './build-release-packages.ts';
+import {
+  OFFICIAL_PLUGIN_IDS,
+  RELEASE_CATALOG_FILENAME,
+  formatPluginsSumsFilename,
+  formatSoftwareSumsFilename,
+  readRepoVersion,
+  writeConsolidatedSha256File,
+} from './build-release-packages.ts';
 import { packPlugin, type PackPluginResult } from './pack-plugin.ts';
 
 export interface ReleaseAllOptions {
@@ -33,6 +40,8 @@ export interface ReleaseAllResult {
   unscopedNpmPackages: BuiltNpmPluginPackage[];
   scopedNpmPackages: BuiltNpmPluginPackage[];
   sumsPath: string;
+  pluginsSumsPath: string;
+  catalogPath: string | null;
 }
 
 /**
@@ -75,8 +84,15 @@ export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult
       pluginDir: join(repoRoot, 'plugins-official', `plugin-${id}`),
       outDir: pluginsOutDir,
       ...(shouldUpdateCatalog ? { updateCatalogPath: catalogPath } : {}),
+      emitChecksum: false,
     });
     plugins.push(packed);
+  }
+
+  let releaseCatalogPath: string | null = null;
+  if (existsSync(catalogPath)) {
+    releaseCatalogPath = join(outDir, RELEASE_CATALOG_FILENAME);
+    cpSync(catalogPath, releaseCatalogPath);
   }
 
   const unscopedNpmPackages = buildNpmPluginPackages({
@@ -94,18 +110,37 @@ export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult
     version,
   });
 
-  const sumLines: string[] = [];
-  if (desktop?.installerExePath && desktop.installerSha256) {
-    sumLines.push(
-      `${desktop.installerSha256}  ${basename(desktop.installerExePath)}`,
-    );
+  const softwareFiles: string[] = [];
+  if (desktop?.installerExePath && existsSync(desktop.installerExePath)) {
+    softwareFiles.push(desktop.installerExePath);
   }
-  for (const plugin of plugins) {
-    sumLines.push(`${plugin.sha256}  plugins/${basename(plugin.archivePath)}`);
+  const sumsPath = writeConsolidatedSha256File(
+    join(outDir, formatSoftwareSumsFilename(version)),
+    softwareFiles,
+  );
+
+  const splitDir = join(outDir, '.gitee-split');
+  if (existsSync(splitDir)) {
+    const splitParts = readdirSync(splitDir)
+      .sort((a, b) => a.localeCompare(b))
+      .filter((part) => /\.7z\.\d{3}$/i.test(part))
+      .map((part) => join(splitDir, part));
+    if (splitParts.length > 0) {
+      writeConsolidatedSha256File(
+        join(splitDir, formatSoftwareSumsFilename(version)),
+        [...softwareFiles, ...splitParts],
+      );
+    }
   }
 
-  const sumsPath = join(outDir, 'SHA256SUMS.txt');
-  writeFileSync(sumsPath, `${sumLines.join('\n')}\n`, 'utf8');
+  const pluginTargets = [
+    ...plugins.map((item) => item.archivePath),
+    ...(releaseCatalogPath ? [releaseCatalogPath] : []),
+  ];
+  const pluginsSumsPath = writeConsolidatedSha256File(
+    join(outDir, formatPluginsSumsFilename(version)),
+    pluginTargets,
+  );
 
   return {
     version,
@@ -115,6 +150,8 @@ export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult
     unscopedNpmPackages,
     scopedNpmPackages,
     sumsPath,
+    pluginsSumsPath,
+    catalogPath: releaseCatalogPath,
   };
 }
 
