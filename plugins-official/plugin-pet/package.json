@@ -1,6 +1,6 @@
 {
   "name": "@prismux/plugin-pet",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "private": true,
   "type": "module",
   "description": "Official optional desktop pet / mascot plugin with lease locking and staged handover for Prismux.",
