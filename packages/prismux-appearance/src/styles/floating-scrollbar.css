@@ -1,0 +1,203 @@
+/* ============================================================================
+ * Prismux Global Floating Non-Layout-Shifting Pointer-Aware Auto-Hide Scrollbars
+ *
+ * DESIGN CONTRACT:
+ * 1. Zero layout shift: constant transparent 8px scrollbar track with 2px transparent
+ *    border + `background-clip: content-box` yields a whisper-thin 4px floating pill
+ *    thumb (`border-radius: 999px`) whose width NEVER mutates between idle/active states,
+ *    guaranteeing 0px content jitter across chat, settings, sidebars, diffs & modals.
+ * 2. Zero dead gutter: `scrollbar-gutter: auto` eliminates forced empty margins when
+ *    containers do not overflow.
+ * 3. Pointer-aware isolation: idle thumbs are 100% transparent; ONLY the nearest
+ *    scrollable container under the pointer (`[data-pmx-scroll-active='1']`) or an
+ *    actively scrolled container (`[data-pmx-scroll-scrolling='1']`) illuminates.
+ * 4. Low-presence ink: dark / dark-glass `rgba(255, 255, 255, 0.16)` (hover `0.34`),
+ *    light / light-glass `rgba(15, 23, 42, 0.16)` (hover `0.34`), zero arrows/track fill.
+ * ========================================================================== */
+
+html[data-pmx-floating-scrollbars='1'],
+html:not(.dark)[data-pmx-floating-scrollbars='1'],
+html[data-pmx-theme='light'][data-pmx-floating-scrollbars='1'] {
+  --pmx-scrollbar-size: 8px;
+  --pmx-scrollbar-thumb-active: rgba(15, 23, 42, 0.16);
+  --pmx-scrollbar-thumb-hover: rgba(15, 23, 42, 0.34);
+  --pmx-scrollbar-thumb-pressed: rgba(15, 23, 42, 0.44);
+  --app-scrollbar-width: var(--pmx-scrollbar-size);
+  --app-scrollbar-thumb: var(--pmx-scrollbar-thumb-active);
+  --app-scrollbar-thumb-hover: var(--pmx-scrollbar-thumb-hover);
+}
+
+html.dark[data-pmx-floating-scrollbars='1'],
+html[data-pmx-theme='dark'][data-pmx-floating-scrollbars='1'] {
+  --pmx-scrollbar-size: 8px;
+  --pmx-scrollbar-thumb-active: rgba(255, 255, 255, 0.16);
+  --pmx-scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
+  --pmx-scrollbar-thumb-pressed: rgba(255, 255, 255, 0.44);
+  --app-scrollbar-width: var(--pmx-scrollbar-size);
+  --app-scrollbar-thumb: var(--pmx-scrollbar-thumb-active);
+  --app-scrollbar-thumb-hover: var(--pmx-scrollbar-thumb-hover);
+}
+
+/* Remove legacy forced gutter reservations so non-overflowing panels keep 100% width. */
+html[data-pmx-floating-scrollbars='1'] * {
+  scrollbar-gutter: auto !important;
+}
+
+/* Native Chromium / Electron scrollbars (never touch iframes, Base UI ScrollArea viewports,
+ * or explicitly hidden scrollbar strips). */
+html[data-pmx-floating-scrollbars='1']
+  :where(
+    :not(iframe):not([data-slot='scroll-area-viewport']):not(.scrollbar-none):not(
+      [data-pmx-no-floating-scrollbar='1']
+    )
+  )::-webkit-scrollbar {
+  width: var(--pmx-scrollbar-size, 8px);
+  height: var(--pmx-scrollbar-size, 8px);
+  background: transparent;
+}
+
+html[data-pmx-floating-scrollbars='1']
+  :where(
+    :not(iframe):not([data-slot='scroll-area-viewport']):not(.scrollbar-none):not(
+      [data-pmx-no-floating-scrollbar='1']
+    )
+  )::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+html[data-pmx-floating-scrollbars='1']
+  :where(
+    :not(iframe):not([data-slot='scroll-area-viewport']):not(.scrollbar-none):not(
+      [data-pmx-no-floating-scrollbar='1']
+    )
+  )::-webkit-scrollbar-track,
+html[data-pmx-floating-scrollbars='1']
+  :where(
+    :not(iframe):not([data-slot='scroll-area-viewport']):not(.scrollbar-none):not(
+      [data-pmx-no-floating-scrollbar='1']
+    )
+  )::-webkit-scrollbar-track-piece,
+html[data-pmx-floating-scrollbars='1']
+  :where(
+    :not(iframe):not([data-slot='scroll-area-viewport']):not(.scrollbar-none):not(
+      [data-pmx-no-floating-scrollbar='1']
+    )
+  )::-webkit-scrollbar-corner {
+  background: transparent;
+  border: none;
+}
+
+/* Idle state: completely transparent 4px floating pill geometry (0px layout shift). */
+html[data-pmx-floating-scrollbars='1']
+  :where(
+    :not(iframe):not([data-slot='scroll-area-viewport']):not(.scrollbar-none):not(
+      [data-pmx-no-floating-scrollbar='1']
+    )
+  )::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  min-height: 28px;
+  min-width: 28px;
+}
+
+/* Dynamically reveal ONLY on the nearest pointer-active or actively scrolling container. */
+html[data-pmx-floating-scrollbars='1']
+  :is([data-pmx-scroll-active='1'], [data-pmx-scroll-scrolling='1']):not(iframe):not(
+    [data-slot='scroll-area-viewport']
+  ):not(.scrollbar-none):not([data-pmx-no-floating-scrollbar='1'])::-webkit-scrollbar-thumb {
+  background-color: var(--pmx-scrollbar-thumb-active, rgba(255, 255, 255, 0.16));
+}
+
+html[data-pmx-floating-scrollbars='1']
+  :is([data-pmx-scroll-active='1'], [data-pmx-scroll-scrolling='1']):not(iframe):not(
+    [data-slot='scroll-area-viewport']
+  ):not(.scrollbar-none):not([data-pmx-no-floating-scrollbar='1'])::-webkit-scrollbar-thumb:hover {
+  background-color: var(--pmx-scrollbar-thumb-hover, rgba(255, 255, 255, 0.34));
+}
+
+html[data-pmx-floating-scrollbars='1']
+  :is([data-pmx-scroll-active='1'], [data-pmx-scroll-scrolling='1']):not(iframe):not(
+    [data-slot='scroll-area-viewport']
+  ):not(.scrollbar-none):not([data-pmx-no-floating-scrollbar='1'])::-webkit-scrollbar-thumb:active {
+  background-color: var(--pmx-scrollbar-thumb-pressed, rgba(255, 255, 255, 0.44));
+}
+
+/* Synchronize Base UI <ScrollArea> zero-footprint overlay scrollbars to the exact same
+ * 4px floating low-presence pill & pointer-aware auto-hide rules. */
+html[data-pmx-floating-scrollbars='1'] [data-slot='scroll-area-scrollbar'] {
+  opacity: 0;
+  padding: 2px;
+  transition: opacity 220ms ease;
+}
+
+html[data-pmx-floating-scrollbars='1']
+  [data-slot='scroll-area-scrollbar'][data-orientation='vertical'] {
+  width: var(--pmx-scrollbar-size, 8px);
+}
+
+html[data-pmx-floating-scrollbars='1']
+  [data-slot='scroll-area-scrollbar'][data-orientation='horizontal'] {
+  height: var(--pmx-scrollbar-size, 8px);
+}
+
+html[data-pmx-floating-scrollbars='1']
+  [data-slot='scroll-area']:has(
+    > [data-slot='scroll-area-viewport']:is(
+      [data-pmx-scroll-active='1'],
+      [data-pmx-scroll-scrolling='1']
+    )
+  )
+  > [data-slot='scroll-area-scrollbar'],
+html[data-pmx-floating-scrollbars='1']
+  [data-slot='scroll-area-scrollbar']:is([data-hovering], [data-scrolling]) {
+  opacity: 1;
+  transition-delay: 0ms;
+  transition-duration: 120ms;
+}
+
+html[data-pmx-floating-scrollbars='1'] [data-slot='scroll-area-thumb'] {
+  border-radius: 999px;
+  background-color: var(--pmx-scrollbar-thumb-active, rgba(255, 255, 255, 0.16));
+}
+
+html[data-pmx-floating-scrollbars='1'] [data-slot='scroll-area-thumb']:hover {
+  background-color: var(--pmx-scrollbar-thumb-hover, rgba(255, 255, 255, 0.34));
+}
+
+html[data-pmx-floating-scrollbars='1'] [data-slot='scroll-area-thumb']:active {
+  background-color: var(--pmx-scrollbar-thumb-pressed, rgba(255, 255, 255, 0.44));
+}
+
+/* Firefox fallback only (never applied in Chromium so ::-webkit-scrollbar stays authoritative). */
+@supports not selector(::-webkit-scrollbar) {
+  html[data-pmx-floating-scrollbars='1']
+    :where(:not(iframe):not([data-slot='scroll-area-viewport']):not(.scrollbar-none)) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  html[data-pmx-floating-scrollbars='1']
+    :is([data-pmx-scroll-active='1'], [data-pmx-scroll-scrolling='1']):not(iframe):not(
+      [data-slot='scroll-area-viewport']
+    ):not(.scrollbar-none) {
+    scrollbar-color: var(--pmx-scrollbar-thumb-active, rgba(255, 255, 255, 0.16)) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-pmx-floating-scrollbars='1'] [data-slot='scroll-area-scrollbar'] {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-pmx-floating-scrollbars='1']
+    :is([data-pmx-scroll-active='1'], [data-pmx-scroll-scrolling='1'])::-webkit-scrollbar-thumb,
+  html[data-pmx-floating-scrollbars='1'] [data-slot='scroll-area-thumb'] {
+    background-color: ButtonText !important;
+  }
+}

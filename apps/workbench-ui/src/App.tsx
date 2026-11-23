@@ -77,7 +77,10 @@ const PROVIDER_DISPLAY_NAMES: Record<ChiefProviderKind, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   antigravity: "Antigravity",
+  omp: "oh-my-pi",
+  gemini: "Gemini CLI",
   opencode: "OpenCode",
+  cursor: "Cursor",
   acp: "ACP"
 };
 

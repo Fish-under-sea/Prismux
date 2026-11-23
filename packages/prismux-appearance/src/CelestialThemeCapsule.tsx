@@ -28,6 +28,8 @@ export interface CelestialThemeCapsuleProps {
   onChange: (nextMode: ThemeMode) => void;
   /** 'default' (34px FISH-Dock full-width) or 'compact' (28px sidebar-friendly). */
   size?: 'default' | 'compact';
+  /** Shorthand compact sidebar toggle (takes precedence over `size` when explicitly provided). */
+  compact?: boolean;
   /** Disables interaction and shows inline disabledReason when provided. */
   disabled?: boolean;
   /** Explicit human-readable explanation rendered when disabled. */
@@ -58,6 +60,7 @@ export function CelestialThemeCapsule({
   mode,
   onChange,
   size = 'default',
+  compact,
   disabled = false,
   disabledReason,
   ariaLabel = '外观模式切换',
@@ -65,6 +68,8 @@ export function CelestialThemeCapsule({
   showLabels = true,
   className,
 }: CelestialThemeCapsuleProps) {
+  const effectiveSize: 'default' | 'compact' =
+    compact !== undefined ? (compact ? 'compact' : 'default') : size;
   const trackRef = useRef<HTMLDivElement | null>(null);
   const hitRefs = useRef<Array<HTMLButtonElement | null>>([null, null, null]);
   const physRef = useRef<CelestialPhysicsState>(createCelestialPhysicsState(mode));
@@ -91,7 +96,7 @@ export function CelestialThemeCapsule({
     [labels?.dark, labels?.glass, labels?.light],
   );
 
-  const trackHeightPx = size === 'compact' ? 28 : 34;
+  const trackHeightPx = effectiveSize === 'compact' ? 28 : 34;
   const halfTrackPx = trackHeightPx / 2;
 
   const paintNow = useCallback(() => {
@@ -370,7 +375,7 @@ export function CelestialThemeCapsule({
   const rootClassName = [
     'pmx-theme-pill',
     'dock-theme-pill',
-    size === 'compact' ? 'is-compact' : '',
+    effectiveSize === 'compact' ? 'is-compact' : '',
     disabled ? 'is-disabled' : '',
     isDraggingUI ? 'is-dragging' : '',
     className ?? '',
@@ -384,13 +389,13 @@ export function CelestialThemeCapsule({
       role="radiogroup"
       aria-label={ariaLabel}
       aria-disabled={disabled || undefined}
-      data-size={size}
+      data-size={effectiveSize}
     >
       <div
         ref={trackRef}
         className="dtp-track"
         data-mode={mode}
-        data-size={size}
+        data-size={effectiveSize}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
         onPointerDown={handlePointerDown}
@@ -445,7 +450,7 @@ export function CelestialThemeCapsule({
         </span>
 
         {/* Layer 8-10: 3D physical orb (Sun / 3-Crater Moon / Crystal Glass + TIR + 0.8px Specular Rim) */}
-        <span className="dtp-orb" aria-hidden="true">
+        <span className="dtp-orb" data-dtp-orb="" aria-hidden="true">
           <i className="dtp-face dtp-face-sun" />
           <i className="dtp-face dtp-face-moon">
             <b className="dtp-crater c1" />
@@ -501,6 +506,7 @@ export function CelestialThemeCapsule({
                 type="button"
                 className={`dtp-label-btn${on ? ' on' : ''}`}
                 data-dock-theme={m}
+                data-dtp-stop={m}
                 aria-pressed={on}
                 disabled={disabled}
                 onClick={() => commitMode(m)}

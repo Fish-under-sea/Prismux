@@ -322,7 +322,16 @@ export interface GlassPresetsRenderContext {
   onApplyPatch: (patch: Partial<WallpaperSettingsState>) => void;
 }
 
-/** Pluggable bridge so @prismux/appearance can mount CelestialThemeCapsule / FloatingColorPopover seamlessly without hard coupling. */
+export interface InlineAppearanceRenderContext {
+  /** Returns to the wallpaper library / playback view inside the right sidebar without route navigation. */
+  onBack: () => void;
+  /** Optional secondary shortcut to open the full /settings/appearance page. */
+  onOpenFullSettings?: () => void;
+  /** True when mounted inside the compact right-sidebar panel (320-420px). */
+  compact: boolean;
+}
+
+/** Pluggable bridge so @prismux/appearance can mount CelestialThemeCapsule / InlineAppearanceStudio seamlessly without hard coupling. */
 export interface AppearanceBridge {
   onAppearanceChange?: (settings: WallpaperSettingsState) => void;
   onThemeModeChange?: (mode: ThemeMode) => void;
@@ -330,6 +339,8 @@ export interface AppearanceBridge {
   renderThemeCapsule?: (ctx: ThemeHeroRenderContext) => ReactNode;
   renderColorTrigger?: (ctx: ColorTriggerRenderContext) => ReactNode;
   renderGlassPresets?: (ctx: GlassPresetsRenderContext) => ReactNode;
+  /** Renders the live in-place Appearance & Liquid Glass studio inside WallpaperQuickPanel. */
+  renderInlineAppearance?: (ctx: InlineAppearanceRenderContext) => ReactNode;
 }
 
 export interface WallpaperHostAdapter {

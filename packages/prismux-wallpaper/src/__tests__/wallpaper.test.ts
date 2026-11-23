@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
+import {
+  closeInlineAppearanceInStore,
+  openInlineAppearanceInStore,
+  resolveQuickPanelTab,
+} from "../WallpaperQuickPanel.js";
 import {
   importLocalWallpaperFile,
   isPathInsideDir,
@@ -27,6 +33,7 @@ import {
   normalizeWallpaperScrim,
   pickNextWallpaperId,
 } from "../store.js";
+import { createDefaultSettings } from "../defaults.js";
 import type { StorageLike } from "../store.js";
 import type { WallpaperItem } from "../types.js";
 import { weColorToHex, weEvalCondition, weHexToColor } from "../userProps.js";
@@ -731,5 +738,97 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.equal(store.getSnapshot().settings.scrim, 0.2);
 
     store.dispose();
+  });
+
+  it("switches into in-place appearance studio without route navigation and preserves wallpaper filters on return", async () => {
+    const storage = createMemoryStorage();
+    const routedSections: string[] = [];
+    const store = createWallpaperStore({
+      wallpapers: sampleWallpapers,
+      includeBuiltins: false,
+      storage,
+    });
+
+    // Apply search + orientation filter in wallpaper view
+    store.setQpSearch("Alpine");
+    store.setSetting("orientationFilter", "landscape");
+    assert.equal(resolveQuickPanelTab(store.getSnapshot().ui.qpTab), "wallpaper");
+
+    // Clicking "外观与玻璃" switches in-panel tab to "appearance" and NEVER triggers route navigation
+    openInlineAppearanceInStore(store);
+    assert.equal(resolveQuickPanelTab(store.getSnapshot().ui.qpTab), "appearance");
+    assert.deepEqual(routedSections, [], "opening inline appearance must not navigate to /settings/appearance");
+
+    // Returning via "← 返回壁纸" restores wallpaper tab while keeping search & filters intact
+    closeInlineAppearanceInStore(store, "wallpaper");
+    assert.equal(resolveQuickPanelTab(store.getSnapshot().ui.qpTab), "wallpaper");
+    assert.equal(store.getSnapshot().qpSearch, "Alpine");
+    assert.equal(store.getSnapshot().settings.orientationFilter, "landscape");
+
+    // Also supports returning to playback tab when entered from playback
+    store.setUiState("qpTab", "playback");
+    openInlineAppearanceInStore(store);
+    assert.equal(resolveQuickPanelTab(store.getSnapshot().ui.qpTab), "appearance");
+    closeInlineAppearanceInStore(store, "playback");
+    assert.equal(resolveQuickPanelTab(store.getSnapshot().ui.qpTab), "playback");
+
+    // Verify WallpaperQuickPanel source wires bottom "外观与玻璃" to handleOpenInlineAppearance (NOT openSettingsSection)
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const panelSrc = await readFile(join(pkgRoot, "src", "WallpaperQuickPanel.tsx"), "utf8");
+    const triggerMatch = panelSrc.match(
+      /data-pmx-inline-appearance-trigger="1"[\s\S]{0,240}?onClick=\{([^}]+)\}/,
+    );
+    assert.ok(triggerMatch, "bottom inline appearance trigger must exist");
+    assert.equal(
+      triggerMatch[1]?.trim(),
+      "handleOpenInlineAppearance",
+      "bottom 外观与玻璃 button must open inline studio rather than navigating away",
+    );
+    assert.match(panelSrc, /data-pmx-inline-appearance="1"/);
+    assert.match(panelSrc, /← 返回壁纸/);
+
+    // Verify stylesheet keeps QuickPanel transparent over rightSidebar glass & provides light/dark contrast tokens
+    const panelCss = await readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8");
+    assert.match(panelCss, /html\[data-pmx-glass='1'\] \.pmx-wp-qp\s*\{[\s\S]*?background:\s*transparent/);
+    assert.match(panelCss, /html:not\(\.dark\) \.pmx-wp-qp/);
+    assert.match(panelCss, /html\.dark \.pmx-wp-qp/);
+    assert.match(panelCss, /html\.dark\[data-pmx-glass='1'\] \.pmx-wp-qp/);
+    assert.match(panelCss, /\.pmx-wp-text::placeholder/);
+    assert.match(panelCss, /--pmx-wp-glass-text-shadow/);
+    assert.match(panelCss, /--pmx-glass-zone-overlays-bg/);
+    assert.match(panelCss, /prefers-reduced-motion:\s*reduce/);
+    assert.match(panelCss, /prefers-reduced-transparency:\s*reduce/);
+
+    store.dispose();
+  });
+
+  it("preserves 1:1 native wallpaper color fidelity by default (filter: none, achromatic scrim, no oversaturated fallback)", async () => {
+    const defaults = createDefaultSettings();
+    assert.equal(defaults.backgroundBrightness, 100);
+    assert.equal(defaults.backgroundContrast, 100);
+    assert.equal(defaults.backgroundSaturate, 100);
+    assert.equal(defaults.wallpaperBlur, 0);
+    assert.equal(defaults.wallpaperOpacity, 0);
+
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const stageSrc = await readFile(join(pkgRoot, "src", "WallpaperStage.tsx"), "utf8");
+    const panelCss = await readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8");
+
+    // WallpaperStage must emit explicit filter: "none" when sliders are at native 100%/0px defaults
+    assert.match(
+      stageSrc,
+      /filter:\s*filterParts\.length > 0 \? filterParts\.join\(" "\) : "none"/,
+    );
+    // Native fade color must stay strictly achromatic (#ffffff / #000000) with zero warm/blue cast
+    assert.match(
+      stageSrc,
+      /const nativeFadeColor = settings\.themeMode === "light" \? "#ffffff" : "#000000";/,
+    );
+    // Stage media & scrim enforce normal blend mode, filter: none default, pure black scrim, and natural 1.1 menu saturation
+    assert.match(panelCss, /\.pmx-wp-stage__media\s*\{[^}]*filter:\s*none;[^}]*mix-blend-mode:\s*normal;/s);
+    assert.match(panelCss, /\.pmx-wp-stage__scrim\s*\{[^}]*background:\s*#000000;/s);
+    assert.doesNotMatch(panelCss, /backdrop-filter:[^;]*saturate\(1\.[4-9]/);
   });
 });

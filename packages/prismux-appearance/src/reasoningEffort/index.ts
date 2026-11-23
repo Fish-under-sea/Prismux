@@ -13,6 +13,8 @@ export {
 } from './modelTheme.js';
 
 export {
+  CANONICAL_EFFORT_LABELS,
+  formatEffortLabel,
   formatReasoningEffortLabel,
   formatReasoningEffortShortLabel,
   getEffortPresetForFamily,

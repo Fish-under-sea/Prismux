@@ -566,7 +566,7 @@ export function PrismuxReasoningEffortSlider({
                   commitIndex(idx);
                 }}
               >
-                {stops.length >= 6 ? stop.shortLabel : stop.label}
+                {stop.label}
               </button>
             );
           })}

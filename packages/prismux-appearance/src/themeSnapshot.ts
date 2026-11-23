@@ -45,6 +45,7 @@ const ALLOWED_APPEARANCE_KEYS = new Set<keyof AppearanceConfig>([
   'rightSidebarGlass',
   'rightSidebarFullClear',
   'perSurfaceOverrides',
+  'glassZones',
   'sidebarCornerRadius',
   'sidebarSquareCorners',
   'rightSidebarCornerRadius',

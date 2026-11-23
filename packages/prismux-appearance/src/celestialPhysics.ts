@@ -13,20 +13,20 @@ export const CELESTIAL_LED_ANGLES: Readonly<Record<ThemeMode, number>> = {
   glass: 302,
 };
 
-/** Exact FISH-Dock spring parameters (underdamped orb, critically damped LED arc). */
+/** Crisp mandate-calibrated spring parameters (260-320ms landing, subtle underdamped orb, critically damped LED arc). */
 export const CELESTIAL_SPRING = {
-  kOrb: 135,
-  zetaOrb: 0.62,
-  cOrb: 2 * 0.62 * Math.sqrt(135),
-  kLed: 75,
-  cLed: 2 * Math.sqrt(75),
+  kOrb: 560,
+  zetaOrb: 0.8,
+  cOrb: 2 * 0.8 * Math.sqrt(560),
+  kLed: 380,
+  cLed: 2 * Math.sqrt(380),
   substeps: 4,
   maxDt: 0.05,
   rubberBandDamping: 0.22,
   momentumHorizonSec: 0.14,
   releaseVelocityScale: 0.72,
   maxDragVelocity: 5.5,
-  settlePosEps: 0.0005,
+  settlePosEps: 0.0004,
   settleVelEps: 0.0005,
   settleLedDegEps: 0.1,
   settleLedVelEps: 0.1,
@@ -62,6 +62,63 @@ export interface CelestialPaintVars {
   spinSunDeg: number;
   spinMoonDeg: number;
   spinGlassDeg: number;
+}
+
+export interface CelestialGeometryMetrics {
+  trackHeightPx: number;
+  padPx: number;
+  orbDiameterPx: number;
+}
+
+/**
+ * Exact track/orb geometry matching `celestial-capsule.css` (`--dtp-h`, `--dtp-pad`, `--dtp-orb`).
+ * Note: `2 * padPx + orbDiameterPx === trackHeightPx`, so `padPx + orbDiameterPx / 2 === trackHeightPx / 2`.
+ */
+export function getCelestialGeometryMetrics(compact = false): CelestialGeometryMetrics {
+  return compact
+    ? { trackHeightPx: 28, padPx: 3, orbDiameterPx: 22 }
+    : { trackHeightPx: 34, padPx: 4, orbDiameterPx: 26 };
+}
+
+/**
+ * Exact horizontal center X (px relative to track left edge) of the sliding orb at normalized position `p`.
+ * - light (p=0): `padPx + orbDiameterPx / 2` (17px default, 14px compact)
+ * - dark  (p=0.5): `trackWidthPx / 2` (50%)
+ * - glass (p=1): `trackWidthPx - padPx - orbDiameterPx / 2` (100% - 17px default, 100% - 14px compact)
+ */
+export function computeCelestialOrbCenterX(
+  p: number,
+  trackWidthPx: number,
+  compact = false,
+): number {
+  const { trackHeightPx, padPx, orbDiameterPx } = getCelestialGeometryMetrics(compact);
+  const safeW = Math.max(trackHeightPx, trackWidthPx);
+  const span = safeW - trackHeightPx;
+  return padPx + orbDiameterPx / 2 + span * p;
+}
+
+/**
+ * Exact horizontal center X (px relative to track left edge) of each mode's label button under
+ * the `1fr auto 1fr` + `min-width: var(--dtp-h)` layout.
+ * - Normal labels (`labelWidthPx <= trackHeightPx`, e.g. '浅色'/'深色'/'玻璃') achieve 0.0px delta vs orb center.
+ * - Unusually wide custom labels stay clamped inside `[0, trackWidthPx]` without horizontal overflow clipping.
+ */
+export function computeCelestialLabelCenterX(
+  mode: ThemeMode,
+  trackWidthPx: number,
+  compact = false,
+  labelWidthPx = 0,
+): number {
+  const { trackHeightPx } = getCelestialGeometryMetrics(compact);
+  const safeW = Math.max(trackHeightPx, trackWidthPx);
+  const effectiveEdgeBtnW = Math.min(safeW, Math.max(trackHeightPx, Math.max(0, labelWidthPx)));
+  if (mode === 'light') {
+    return effectiveEdgeBtnW / 2;
+  }
+  if (mode === 'glass') {
+    return safeW - effectiveEdgeBtnW / 2;
+  }
+  return safeW / 2;
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -185,7 +242,7 @@ export function stepCelestialPhysics(
   const pressTarget = state.pressed ? 1 : 0;
   state.hover += (hoverTarget - state.hover) * rate;
   state.press += (pressTarget - state.press) * rate;
-  state.kick *= Math.pow(0.04, dt);
+  state.kick *= Math.pow(0.001, dt);
 
   const settled =
     !state.dragging &&

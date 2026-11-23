@@ -74,6 +74,75 @@ export interface ObsidianImportResult {
   warnings: string[];
 }
 
+export const OBSIDIAN_CURATED_KINDS = [
+  "preference",
+  "decision",
+  "project",
+  "knowledge",
+  "experience"
+] as const;
+
+export type ObsidianCuratedKind = (typeof OBSIDIAN_CURATED_KINDS)[number];
+
+export type ObsidianCurationSource = "agent" | "structured-fallback";
+
+export interface ObsidianCuratedItem {
+  id: string;
+  title: string;
+  summary: string;
+  kind: ObsidianCuratedKind;
+  namespace: MemoryNamespace;
+  tags: string[];
+  sourceFile: string;
+  selected: boolean;
+  curationSource: ObsidianCurationSource;
+  importance?: number;
+  redactedSecretCount?: number;
+}
+
+export interface ObsidianImportPlanRequest {
+  vaultPath: string;
+  namespace?: MemoryNamespace;
+  targetNamespace?: MemoryNamespace;
+  useAgentCuration?: boolean;
+  provider?: string;
+  model?: string;
+}
+
+export interface ObsidianImportPlanStats {
+  scannedFiles: number;
+  curatedCount: number;
+  deduplicatedCount: number;
+  filteredNoiseCount: number;
+  redactedSecretCount: number;
+  skippedFiles: number;
+}
+
+export interface ObsidianImportPlanResponse {
+  ok: boolean;
+  vaultPath: string;
+  defaultNamespace: MemoryNamespace;
+  useAgentCuration: boolean;
+  curationSource: ObsidianCurationSource;
+  curatorLabel?: string;
+  items: ObsidianCuratedItem[];
+  stats: ObsidianImportPlanStats;
+  warnings: string[];
+}
+
+export interface ObsidianImportCommitRequest {
+  items: ObsidianCuratedItem[];
+}
+
+export interface ObsidianImportCommitResponse {
+  ok: boolean;
+  committedCount: number;
+  skippedCount: number;
+  redactedSecretCount: number;
+  entryIds: string[];
+  warnings: string[];
+}
+
 export function isValidMemoryNamespace(value: string): value is MemoryNamespace {
   if (value === "private/chief") {
     return true;

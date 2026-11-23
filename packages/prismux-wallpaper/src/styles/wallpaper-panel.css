@@ -36,6 +36,8 @@
   display: block;
   object-fit: cover;
   border: 0;
+  filter: none;
+  mix-blend-mode: normal;
   will-change: transform, opacity;
 }
 
@@ -48,6 +50,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
+  mix-blend-mode: normal;
 }
 
 .pmx-wp-stage__scrim {
@@ -61,30 +64,56 @@
   --pmx-wp-radius: 8px;
   --pmx-wp-accent: var(--pmx-accent, var(--primary, #4f8cff));
   --pmx-wp-accent-ink: var(--pmx-accent-ink, #ffffff);
-  --pmx-wp-ink: var(--pmx-ink, var(--foreground, inherit));
-  --pmx-wp-ink-2: var(--pmx-ink-secondary, var(--muted-foreground, rgba(148, 163, 184, 0.92)));
-  --pmx-wp-ink-3: var(--pmx-ink-tertiary, rgba(148, 163, 184, 0.7));
-  --pmx-wp-border: var(--pmx-border, var(--border, rgba(148, 163, 184, 0.24)));
-  --pmx-wp-surface-1: var(--pmx-surface-1, rgba(148, 163, 184, 0.08));
-  --pmx-wp-surface-2: var(--pmx-surface-2, rgba(148, 163, 184, 0.14));
-  --pmx-wp-surface-3: var(--pmx-surface-3, rgba(255, 255, 255, 0.16));
+  --pmx-wp-ink: var(--pmx-text-color, var(--pmx-ink, var(--foreground, #f5f7fb)));
+  --pmx-wp-ink-2: var(--pmx-muted-color, var(--pmx-ink-secondary, var(--muted-foreground, #cbd5e1)));
+  --pmx-wp-ink-3: var(--pmx-muted-color, var(--pmx-ink-tertiary, #94a3b8));
+  --pmx-wp-border: var(--pmx-glass-border, var(--pmx-border, var(--border, rgba(255, 255, 255, 0.15))));
+  --pmx-wp-surface-1: var(--pmx-surface-1, rgba(255, 255, 255, 0.065));
+  --pmx-wp-surface-2: var(--pmx-surface-2, rgba(255, 255, 255, 0.13));
+  --pmx-wp-surface-3: var(--pmx-surface-3, rgba(255, 255, 255, 0.19));
+  --pmx-wp-rim-top: rgba(255, 255, 255, 0.16);
   --pmx-wp-popup-bg: var(--pmx-popup-bg, var(--popover, #181c26));
-  --pmx-wp-popup-ink: var(--pmx-popup-ink, var(--popover-foreground, #f1f5f9));
+  --pmx-wp-popup-ink: var(--pmx-popup-ink, var(--popover-foreground, #f5f7fb));
   --pmx-wp-ease: cubic-bezier(0.16, 1, 0.3, 1);
   --pmx-wp-dur-fast: 120ms;
   --pmx-wp-dur: 200ms;
 
   font-size: 13px;
   color: var(--pmx-wp-ink);
+  background: transparent;
   box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: light) {
-  .pmx-wp-qp,
-  .pmx-wp-settings {
-    --pmx-wp-popup-bg: var(--pmx-popup-bg, var(--popover, #ffffff));
-    --pmx-wp-popup-ink: var(--pmx-popup-ink, var(--popover-foreground, #0f172a));
-  }
+html:not(.dark) .pmx-wp-qp,
+html:not(.dark) .pmx-wp-settings,
+html[data-pmx-theme='light'] .pmx-wp-qp,
+html[data-pmx-theme='light'] .pmx-wp-settings {
+  --pmx-wp-ink: var(--pmx-text-color, var(--foreground, #0f172a));
+  --pmx-wp-ink-2: var(--pmx-muted-color, #334155);
+  --pmx-wp-ink-3: var(--pmx-muted-color, #475569);
+  --pmx-wp-border: var(--pmx-glass-border, rgba(15, 23, 42, 0.14));
+  --pmx-wp-surface-1: rgba(255, 255, 255, 0.44);
+  --pmx-wp-surface-2: rgba(255, 255, 255, 0.66);
+  --pmx-wp-surface-3: rgba(255, 255, 255, 0.86);
+  --pmx-wp-rim-top: rgba(255, 255, 255, 0.72);
+  --pmx-wp-popup-bg: var(--pmx-popup-bg, var(--popover, #ffffff));
+  --pmx-wp-popup-ink: var(--pmx-popup-ink, var(--popover-foreground, #0f172a));
+}
+
+html.dark .pmx-wp-qp,
+html.dark .pmx-wp-settings,
+html[data-pmx-theme='dark'] .pmx-wp-qp,
+html[data-pmx-theme='dark'] .pmx-wp-settings {
+  --pmx-wp-ink: var(--pmx-text-color, var(--foreground, #f5f7fb));
+  --pmx-wp-ink-2: var(--pmx-muted-color, #cbd5e1);
+  --pmx-wp-ink-3: var(--pmx-muted-color, #94a3b8);
+  --pmx-wp-border: var(--pmx-glass-border, rgba(255, 255, 255, 0.15));
+  --pmx-wp-surface-1: rgba(255, 255, 255, 0.065);
+  --pmx-wp-surface-2: rgba(255, 255, 255, 0.13);
+  --pmx-wp-surface-3: rgba(255, 255, 255, 0.19);
+  --pmx-wp-rim-top: rgba(255, 255, 255, 0.18);
+  --pmx-wp-popup-bg: var(--pmx-popup-bg, var(--popover, #161a26));
+  --pmx-wp-popup-ink: var(--pmx-popup-ink, var(--popover-foreground, #f5f7fb));
 }
 
 /* ── Shared Flat Controls (.pmx-wp-btn / select / input / slider / switch) ── */
@@ -214,6 +243,11 @@
   color: var(--pmx-wp-ink);
   font: inherit;
   font-size: 0.82em;
+}
+
+.pmx-wp-text::placeholder {
+  color: var(--pmx-wp-placeholder, var(--pmx-wp-ink-3));
+  opacity: 1;
 }
 
 .pmx-wp-hint {
@@ -708,6 +742,8 @@
   padding: 6px;
   border-radius: 10px;
   border: 1px solid var(--pmx-wp-border);
+  overflow: hidden;
+  background-clip: padding-box;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -746,14 +782,32 @@
 .pmx-wp-qp {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
+  background: transparent;
 }
 
 .pmx-wp-qp--official {
   height: 100%;
   padding: 12px;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+}
+
+.pmx-wp-qp--official.pmx-wp-qp--appearance {
+  padding: 10px 0;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.pmx-wp-qp--official.pmx-wp-qp--appearance > .pmx-wp-qp__tabs {
+  margin-inline: 12px;
+  width: auto;
+}
+
+.pmx-wp-qp--official.pmx-wp-qp--appearance > .pmx-wp-qp__foot {
+  margin-inline: 12px;
 }
 
 .pmx-wp-qp--official .pmx-wp-qp__current,
@@ -778,11 +832,163 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
-.pmx-wp-qp--official .pmx-wp-qp__tabbody--library {
+.pmx-wp-qp--official .pmx-wp-qp__tabbody--library,
+.pmx-wp-qp--official .pmx-wp-qp__tabbody--appearance {
   overflow: hidden;
+}
+
+.pmx-wp-qp__tabbody--appearance {
+  gap: 0;
+}
+
+.pmx-wp-qp__inline-appearance {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  animation: pmx-wp-tab-in 180ms var(--pmx-wp-ease);
+}
+
+.pmx-wp-qp__inline-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 12px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--pmx-wp-border);
+  background: var(--pmx-wp-surface-1);
+}
+
+.pmx-wp-qp__inline-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pmx-wp-qp__inline-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pmx-wp-ink);
+}
+
+/* ── Right-Sidebar Liquid Glass Surface Polish (Single-Pass, Zero Solid Sludge) ── */
+/* Hosted inside [data-pmx-glass-zone='rightSidebar']: outer shell owns backdrop-filter;
+   inner QuickPanel remains transparent with crisp frosted control cards & Fresnel top rims. */
+html[data-pmx-glass='1'] .pmx-wp-qp {
+  background: transparent;
+}
+
+/* High-contrast glass ink & gentle text-shadow so auxiliary hints/placeholders stay
+   crisp (>= 4.5:1) even over bright warm golden wallpapers. */
+html.dark[data-pmx-glass='1'] .pmx-wp-qp,
+html.dark[data-pmx-glass='1'] .pmx-wp-settings,
+html[data-pmx-theme='dark'][data-pmx-glass='1'] .pmx-wp-qp,
+html[data-pmx-theme='dark'][data-pmx-glass='1'] .pmx-wp-settings {
+  --pmx-wp-ink: var(--pmx-text-color, rgba(255, 255, 255, 0.96));
+  --pmx-wp-ink-2: var(--pmx-muted-color, rgba(248, 250, 252, 0.9));
+  --pmx-wp-ink-3: var(--pmx-muted-color, rgba(241, 245, 249, 0.85));
+  --pmx-wp-placeholder: rgba(241, 245, 249, 0.8);
+  --pmx-wp-glass-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.58);
+  --pmx-wp-surface-1: rgba(12, 16, 26, 0.26);
+  --pmx-wp-surface-2: rgba(18, 24, 38, 0.38);
+  --pmx-wp-surface-3: rgba(28, 36, 54, 0.5);
+  --pmx-wp-border: var(--pmx-glass-border, rgba(255, 255, 255, 0.2));
+}
+
+html:not(.dark)[data-pmx-glass='1'] .pmx-wp-qp,
+html:not(.dark)[data-pmx-glass='1'] .pmx-wp-settings,
+html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-wp-qp,
+html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-wp-settings {
+  --pmx-wp-ink: var(--pmx-text-color, #0f172a);
+  --pmx-wp-ink-2: var(--pmx-muted-color, #1e293b);
+  --pmx-wp-ink-3: var(--pmx-muted-color, #334155);
+  --pmx-wp-placeholder: rgba(30, 41, 59, 0.78);
+  --pmx-wp-glass-text-shadow: 0 1px 1px rgba(255, 255, 255, 0.55);
+}
+
+html[data-pmx-glass='1'] .pmx-wp-qp :is(
+  .pmx-wp-qp__title,
+  .pmx-wp-qp__meta,
+  .pmx-wp-ctl-label,
+  .pmx-wp-ctl-hint,
+  .pmx-wp-label,
+  .pmx-wp-hint,
+  .pmx-wp-value,
+  .pmx-wp-tabs__tab,
+  .pmx-wp-qp__item-title,
+  .pmx-wp-qp__item-type,
+  .pmx-wp-menu-btn,
+  .pmx-wp-btn:not(.pmx-wp-btn--primary),
+  .pmx-wp-select,
+  .pmx-wp-text
+) {
+  text-shadow: var(--pmx-wp-glass-text-shadow, none);
+}
+
+html[data-pmx-glass='1'] .pmx-wp-qp__current {
+  padding: 8px 10px;
+  border-radius: 11px;
+  border: 1px solid var(--pmx-wp-border);
+  background: var(--pmx-wp-surface-1);
+  box-shadow: inset 0 1px 0 var(--pmx-wp-rim-top);
+}
+
+html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-btn:not(.pmx-wp-btn--primary):not(.pmx-wp-rate--active),
+html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-select,
+html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-text {
+  background-color: var(--pmx-wp-surface-1);
+  box-shadow: inset 0 1px 0 var(--pmx-wp-rim-top);
+}
+
+html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-btn:not(.pmx-wp-btn--primary):not(.pmx-wp-rate--active):hover:not(:disabled),
+html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-select:hover:not(:disabled) {
+  background-color: var(--pmx-wp-surface-2);
+}
+
+html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-tabs {
+  box-shadow: inset 0 1px 0 var(--pmx-wp-rim-top);
+}
+
+html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-menu-list {
+  background-color: var(--pmx-glass-zone-overlays-bg, var(--pmx-wp-popup-bg));
+  -webkit-backdrop-filter: var(--pmx-glass-zone-overlays-backdrop, blur(18px) saturate(1.1));
+  backdrop-filter: var(--pmx-glass-zone-overlays-backdrop, blur(18px) saturate(1.1));
+  border-color: var(--pmx-glass-zone-overlays-border, var(--pmx-wp-border));
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-pmx-glass='1'] .pmx-wp-qp {
+    --pmx-wp-glass-text-shadow: none;
+  }
+
+  html[data-pmx-glass='1'] .pmx-wp-qp .pmx-wp-menu-list {
+    background-color: var(--pmx-wp-popup-bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  .pmx-wp-qp {
+  --pmx-wp-glass-text-shadow: none;
+}
+
+html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  .pmx-wp-qp
+  .pmx-wp-menu-list {
+  background-color: var(--pmx-wp-popup-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .pmx-wp-qp--official .pmx-wp-qp__library {
@@ -1673,7 +1879,8 @@
 @media (prefers-reduced-motion: reduce) {
   .pmx-wp-qp__thumb img,
   .pmx-wp-vinyl,
-  .pmx-wp-tabpanel {
+  .pmx-wp-tabpanel,
+  .pmx-wp-qp__inline-appearance {
     animation: none !important;
   }
 

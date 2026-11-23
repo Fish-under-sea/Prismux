@@ -52,7 +52,10 @@ const PROVIDER_LABELS: Record<ChiefProviderKind, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   antigravity: "Antigravity (gemini-4-neon)",
+  omp: "oh-my-pi",
+  gemini: "Gemini CLI",
   opencode: "OpenCode",
+  cursor: "Cursor",
   acp: "ACP 通用代理"
 };
 

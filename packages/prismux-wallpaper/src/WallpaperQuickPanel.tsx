@@ -30,6 +30,7 @@ import {
 } from "./store.js";
 import type {
   AppearanceBridge,
+  InlineAppearanceRenderContext,
   OrientationFilter,
   QuickPanelTabId,
   ThemeHeroRenderContext,
@@ -42,21 +43,40 @@ import { schedulePrewarmVideo } from "./videoPrewarm.js";
 export interface WallpaperQuickPanelProps {
   store: WallpaperStore;
   adapter?: WallpaperHostAdapter;
-  /** @deprecated Appearance controls moved exclusively to /settings/appearance (Issue #3). */
+  /** Pluggable bridge for injecting inline appearance UI without circular dependencies. */
   appearanceBridge?: AppearanceBridge;
-  /** @deprecated Appearance controls moved exclusively to /settings/appearance (Issue #3). */
+  /** Direct render slot for the in-place Appearance & Liquid Glass studio inside the right panel. */
+  renderInlineAppearance?: (ctx: InlineAppearanceRenderContext) => ReactNode;
+  /** @deprecated Retained for backwards compatibility only. */
   renderThemeHero?: (ctx: ThemeHeroRenderContext) => ReactNode;
   /** Host layout dock mode: 'official' (fixed-height right sidebar) or 'drawer' (ancestor scrolls). */
   dock?: "official" | "drawer";
   className?: string;
 }
 
-type FocusedQuickPanelTabId = Exclude<QuickPanelTabId, "appearance">;
-
-const QP_TABS: readonly { id: FocusedQuickPanelTabId; label: string }[] = [
+const QP_TABS: readonly { id: QuickPanelTabId; label: string }[] = [
   { id: "wallpaper", label: "壁纸" },
   { id: "playback", label: "播放" },
+  { id: "appearance", label: "外观与玻璃" },
 ];
+
+export function resolveQuickPanelTab(tab: QuickPanelTabId | string | undefined): QuickPanelTabId {
+  if (tab === "playback" || tab === "appearance") return tab;
+  return "wallpaper";
+}
+
+export function openInlineAppearanceInStore(
+  store: Pick<WallpaperStore, "setUiState">,
+): void {
+  store.setUiState("qpTab", "appearance");
+}
+
+export function closeInlineAppearanceInStore(
+  store: Pick<WallpaperStore, "setUiState">,
+  returnTab: "wallpaper" | "playback" = "wallpaper",
+): void {
+  store.setUiState("qpTab", returnTab === "playback" ? "playback" : "wallpaper");
+}
 
 function findScrollContainer(el: HTMLElement): HTMLElement | null {
   for (
@@ -82,6 +102,8 @@ function useQuickPanelVirtualWindow(
   itemHeight: number,
   gap: number,
   cardsView: boolean,
+  active: boolean,
+  restoreScrollTopRef?: RefObject<number>,
 ) {
   const [win, setWin] = useState(() => ({
     start: 0,
@@ -97,6 +119,7 @@ function useQuickPanelVirtualWindow(
   metaRef.current = { count, itemHeight, gap, cardsView };
 
   useEffect(() => {
+    if (!active) return;
     const el = listRef.current;
     if (!el || typeof window === "undefined") return;
 
@@ -176,8 +199,19 @@ function useQuickPanelVirtualWindow(
     };
 
     const ro = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
-    el.scrollTop = 0;
-    measure();
+    const savedTop = restoreScrollTopRef?.current ?? 0;
+    if (savedTop > 0) {
+      el.scrollTop = savedTop;
+      if (restoreScrollTopRef) restoreScrollTopRef.current = 0;
+      measure();
+      rafId = requestAnimationFrame(() => {
+        el.scrollTop = savedTop;
+        measure();
+      });
+    } else {
+      el.scrollTop = 0;
+      measure();
+    }
     ro?.observe(el);
     window.addEventListener("resize", schedule);
 
@@ -187,7 +221,7 @@ function useQuickPanelVirtualWindow(
       ro?.disconnect();
       window.removeEventListener("resize", schedule);
     };
-  }, [listRef, count, itemHeight, gap, cardsView]);
+  }, [listRef, count, itemHeight, gap, cardsView, active, restoreScrollTopRef]);
 
   return win;
 }
@@ -200,24 +234,34 @@ function formatTypeMeta(w: WallpaperItem, settings: WallpaperSettingsState): str
 }
 
 /**
- * Focused Right-sidebar QuickPanel (strictly deduplicated from /settings/appearance per Issue #3):
+ * Right-sidebar QuickPanel with in-place real-time Appearance & Liquid Glass Studio:
  *   - Top rotating 40px vinyl card (`clip-path: circle(50%)` + `::after` central ring hole)
  *   - Rotation bar (group select + next + auto-rotation toggle)
- *   - Sliding-pill 2-tab bar (`壁纸 / 播放`)
+ *   - Sliding-pill 3-tab bar (`壁纸 / 播放 / 外观与玻璃`)
+ *   - Clicking bottom `外观与玻璃` switches in-place (NEVER navigates away to /settings/appearance)
  *   - In-pane `壁纸属性` drill-down toggle button
- *   - Virtual-scrolled Cards/List library with deterministic 2-row filter bar
+ *   - Virtual-scrolled Cards/List library with deterministic 2-row filter bar & scroll preservation
  *   - Bottom Audio section & Shared PlaybackSections (`surface="sidebar"`)
- *   - Dual shortcut footer: `外观与玻璃 ›` (/settings/appearance) & `壁纸引擎设置 ›` (/settings/wallpaper)
  */
 export function WallpaperQuickPanel({
   store,
   adapter,
+  appearanceBridge,
+  renderInlineAppearance,
   dock = "official",
   className,
 }: WallpaperQuickPanelProps) {
   const snap = useWallpaperStore(store);
   const { settings, ui, wallpapers } = snap;
   const listRef = useRef<HTMLDivElement | null>(null);
+  const lastMediaTabRef = useRef<"wallpaper" | "playback">("wallpaper");
+  const savedScrollTopRef = useRef<number>(0);
+
+  const effectiveTab: QuickPanelTabId = resolveQuickPanelTab(ui.qpTab);
+  const isAppearanceView = effectiveTab === "appearance";
+  if (effectiveTab === "wallpaper" || effectiveTab === "playback") {
+    lastMediaTabRef.current = effectiveTab;
+  }
 
   const current = useMemo(
     () => findWallpaperById(wallpapers, settings.selectedId),
@@ -258,7 +302,17 @@ export function WallpaperQuickPanel({
   const cardsView = ui.qpView === "cards";
   const vItemH = cardsView ? QP_CARD_H : QP_ROW_H;
   const vGap = cardsView ? QP_CARD_GAP : QP_ROW_GAP;
-  const vwin = useQuickPanelVirtualWindow(listRef, filtered.length, vItemH, vGap, cardsView);
+  const showPropsDrill = effectiveTab === "wallpaper" && snap.propsPanelOpen && propsAvailable;
+  const listActive = effectiveTab === "wallpaper" && !showPropsDrill;
+  const vwin = useQuickPanelVirtualWindow(
+    listRef,
+    filtered.length,
+    vItemH,
+    vGap,
+    cardsView,
+    listActive,
+    savedScrollTopRef,
+  );
 
   const isMeasured = vwin.measured && vwin.cards === cardsView && vwin.cols > 0;
   const vStart = isMeasured ? Math.min(vwin.start, filtered.length) : 0;
@@ -269,9 +323,30 @@ export function WallpaperQuickPanel({
   const vTopH = isMeasured ? vwin.topSpacerHeight : 0;
   const vBtmH = isMeasured ? vwin.bottomSpacerHeight : 0;
 
-  const effectiveTab: FocusedQuickPanelTabId = ui.qpTab === "playback" ? "playback" : "wallpaper";
   const tabIdx = Math.max(0, QP_TABS.findIndex((t) => t.id === effectiveTab));
-  const showPropsDrill = effectiveTab === "wallpaper" && snap.propsPanelOpen && propsAvailable;
+
+  const inlineAppearanceSlot =
+    renderInlineAppearance ??
+    appearanceBridge?.renderInlineAppearance ??
+    adapter?.appearanceBridge?.renderInlineAppearance;
+
+  const handleOpenInlineAppearance = () => {
+    if (effectiveTab !== "appearance") {
+      lastMediaTabRef.current = effectiveTab;
+      if (listRef.current) {
+        savedScrollTopRef.current = listRef.current.scrollTop;
+      }
+    }
+    openInlineAppearanceInStore(store);
+  };
+
+  const handleBackToWallpaper = () => {
+    closeInlineAppearanceInStore(store, lastMediaTabRef.current);
+  };
+
+  const handleOpenFullAppearanceSettings = adapter?.openSettingsSection
+    ? () => adapter.openSettingsSection?.("appearance")
+    : undefined;
 
   const handleCardPointer = (w: WallpaperItem, immediate: boolean) => {
     if (w.type === "video" && w.mediaUrl) {
@@ -364,16 +439,21 @@ export function WallpaperQuickPanel({
   return (
     <div
       className={
-        `pmx-wp-qp pmx-wp-qp--${dock}` + (className ? ` ${className}` : "")
+        `pmx-wp-qp pmx-wp-qp--${dock}` +
+        (isAppearanceView ? " pmx-wp-qp--appearance" : "") +
+        (className ? ` ${className}` : "")
       }
       data-pmx-quick-panel="1"
+      data-pmx-qp-view={effectiveTab}
     >
-      {/* ① 当前壁纸顶卡（旋转黑胶圆盘 + 播放/刷新/清除） */}
-      <div
-        className={
-          "pmx-wp-qp__current" + (playbackLive ? " pmx-wp-qp__current--playing" : "")
-        }
-      >
+      {/* ① 当前壁纸顶卡与轮播条（外观与玻璃就地视图下收起以释放实时调节空间） */}
+      {!isAppearanceView ? (
+        <>
+          <div
+            className={
+              "pmx-wp-qp__current" + (playbackLive ? " pmx-wp-qp__current--playing" : "")
+            }
+          >
         <span className="pmx-wp-qp__thumb">
           {current?.previewUrl ? (
             <img
@@ -469,8 +549,10 @@ export function WallpaperQuickPanel({
           onChange={(on) => store.setSetting("rotationEnabled", on)}
         />
       </div>
+        </>
+      ) : null}
 
-      {/* ③ 滑动胶囊双档页签（壁纸 / 播放） */}
+      {/* ③ 滑动胶囊三档页签（壁纸 / 播放 / 外观与玻璃） */}
       <div className="pmx-wp-tabs pmx-wp-qp__tabs" role="tablist" aria-label="壁纸面板分区">
         <span
           className="pmx-wp-tabs__pill"
@@ -486,10 +568,17 @@ export function WallpaperQuickPanel({
             type="button"
             role="tab"
             aria-selected={effectiveTab === t.id}
+            data-pmx-qp-tab={t.id}
             className={
               "pmx-wp-tabs__tab" + (effectiveTab === t.id ? " pmx-wp-tabs__tab--active" : "")
             }
-            onClick={() => store.setUiState("qpTab", t.id)}
+            onClick={() => {
+              if (t.id === "appearance") {
+                handleOpenInlineAppearance();
+              } else {
+                store.setUiState("qpTab", t.id);
+              }
+            }}
           >
             {t.label}
           </button>
@@ -497,7 +586,7 @@ export function WallpaperQuickPanel({
       </div>
 
       {/* ③b 壁纸属性页内下钻开关按钮 */}
-      {propsAvailable ? (
+      {!isAppearanceView && propsAvailable ? (
         <button
           type="button"
           className={
@@ -522,10 +611,40 @@ export function WallpaperQuickPanel({
       <div
         className={
           "pmx-wp-qp__tabbody" +
-          (effectiveTab === "wallpaper" ? " pmx-wp-qp__tabbody--library" : "")
+          (effectiveTab === "wallpaper" ? " pmx-wp-qp__tabbody--library" : "") +
+          (isAppearanceView ? " pmx-wp-qp__tabbody--appearance" : "")
         }
       >
-        {showPropsDrill ? (
+        {isAppearanceView ? (
+          <div className="pmx-wp-qp__inline-appearance" data-pmx-inline-appearance="1">
+            {inlineAppearanceSlot ? (
+              inlineAppearanceSlot({
+                onBack: handleBackToWallpaper,
+                ...(handleOpenFullAppearanceSettings
+                  ? { onOpenFullSettings: handleOpenFullAppearanceSettings }
+                  : {}),
+                compact: true,
+              })
+            ) : (
+              <div className="pmx-wp-qp__inline-fallback">
+                <div className="pmx-wp-qp__inline-head">
+                  <button
+                    type="button"
+                    className="pmx-wp-btn pmx-wp-btn--mini"
+                    data-pmx-inline-appearance-back="1"
+                    onClick={handleBackToWallpaper}
+                  >
+                    ← 返回壁纸
+                  </button>
+                  <span className="pmx-wp-qp__inline-title">外观与玻璃</span>
+                </div>
+                <p className="pmx-wp-hint">
+                  在当前侧边栏实时调节主题与分区液态玻璃，改动即时生效且不遮挡主界面与壁纸。
+                </p>
+              </div>
+            )}
+          </div>
+        ) : showPropsDrill ? (
           <div className="pmx-wp-qp__propsview pmx-wp-qp__propsview--drill">
             <UserPropsDrillPanel store={store} adapter={adapter} />
           </div>
@@ -733,19 +852,33 @@ export function WallpaperQuickPanel({
         )}
       </div>
 
-      {/* ⑤ 双并列深链底栏（外观与玻璃 + 壁纸引擎设置） */}
+      {/* ⑤ 底栏：壁纸态点击「外观与玻璃」就地切入实时调节面板（不跳转设置页）；内嵌态保留次级完整外观与壁纸设置入口 */}
       <div className="pmx-wp-qp__foot">
+        {isAppearanceView ? (
+          <button
+            type="button"
+            className="pmx-wp-btn pmx-wp-qp__settings"
+            data-pmx-open-full-appearance="1"
+            title="打开完整外观设置页（字体、配色与主题快照）"
+            onClick={() => adapter?.openSettingsSection?.("appearance")}
+          >
+            更多外观设置 ↗
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="pmx-wp-btn pmx-wp-qp__settings"
+            data-pmx-inline-appearance-trigger="1"
+            title="就地展开外观与分区液态玻璃实时调节（不跳转设置页）"
+            onClick={handleOpenInlineAppearance}
+          >
+            外观与玻璃
+          </button>
+        )}
         <button
           type="button"
           className="pmx-wp-btn pmx-wp-qp__settings"
-          title="打开设置页「外观」分区（主题胶囊、液态玻璃、侧边栏圆角、全局配色与字体）"
-          onClick={() => adapter?.openSettingsSection?.("appearance")}
-        >
-          外观与玻璃 ›
-        </button>
-        <button
-          type="button"
-          className="pmx-wp-btn pmx-wp-qp__settings"
+          data-pmx-open-wallpaper-settings="1"
           title="打开完整壁纸引擎设置页（本地导入 / 画面播放 / 轮播分组 / Steam 目录）"
           onClick={() =>
             adapter?.openSettingsSection?.(effectiveTab === "playback" ? "playback" : "")

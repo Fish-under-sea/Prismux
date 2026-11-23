@@ -24,6 +24,58 @@ export type GlassSurfaceId =
   | 'filePreview'
   | 'sidebarContent';
 
+/**
+ * Five unified workbench liquid-glass zones exposed for real-time per-zone customization:
+ * - `shellFrame`: Monolithic closed picture-frame shell (Left Sidebar + Top Bar + Bottom Status Bar + Right Edge)
+ * - `rightSidebar`: Expandable right feature sidebar (defaults to following `shellFrame`, independently tunable)
+ * - `mainCanvas`: Central rounded inner workspace canvas (defaults crystal-clear with 0px blur & zero tint shift)
+ * - `composer`: Message composer & cards
+ * - `overlays`: Modals, popovers, dropdowns & settings panels
+ */
+export type GlassZoneId =
+  | 'shellFrame'
+  | 'rightSidebar'
+  | 'mainCanvas'
+  | 'composer'
+  | 'overlays';
+
+/** Legacy 6-zone ids automatically migrated into `shellFrame` for 100% backward compatibility. */
+export type LegacyGlassZoneId = 'leftSidebar' | 'chromeBars';
+
+/** Zone identifier input accepted by mutators/normalizers (canonical 5-zone or legacy aliases). */
+export type GlassZoneIdInput = GlassZoneId | LegacyGlassZoneId;
+
+export type GlassZoneMode = 'inherit' | 'custom' | 'solid';
+
+export interface GlassZoneConfig {
+  /** 'inherit' follows global glass settings (or shellFrame for rightSidebar), 'custom' uses independent sliders, 'solid' disables glass for opaque fill. */
+  mode: GlassZoneMode;
+  /** Surface fill opacity percentage (0-100; overlays enforces >= 68% readability floor). */
+  opacity?: number;
+  /** Backdrop blur radius in px (0-48). */
+  blurPx?: number;
+  /** Optional backdrop color saturation percentage (80-240). Omit to inherit zone default. */
+  saturation?: number;
+  /** Optional independent tint hex (#rrggbb) or '' to inherit global glass tint. */
+  tint?: string;
+}
+
+export type GlassZonesConfig = Record<GlassZoneId, GlassZoneConfig>;
+
+export interface GlassZoneDescriptor {
+  readonly id: GlassZoneId;
+  readonly cssName: string;
+  readonly title: string;
+  readonly compactTitle?: string;
+  readonly shortLabel: string;
+  readonly note: string;
+  readonly compactNote?: string;
+  readonly defaultRegion: GlassRegionId;
+  readonly defaultSaturation: number;
+  readonly minOpacity: number;
+  readonly pinnedInCompact?: boolean;
+}
+
 export interface GlassRegionValues {
   /** Surface fill opacity percentage (0-100; 100 = solid, 0 = full clear with rim). */
   op: number;
@@ -120,6 +172,8 @@ export interface AppearanceConfig {
   rightSidebarFullClear: boolean;
   /** Optional per-surface independent overrides. */
   perSurfaceOverrides: Partial<Record<GlassSurfaceId, GlassSurfaceOverride>>;
+  /** Five unified workbench glass zones (shellFrame, rightSidebar, mainCanvas, composer, overlays). */
+  glassZones: GlassZonesConfig;
   /** Unified sidebar corner radius ('native' | 6 | 12 | 20). */
   sidebarCornerRadius: SidebarCornerRadius;
   /** 4-corner explicit square (0px) overrides for left/primary sidebar. */
@@ -139,19 +193,21 @@ export interface AppearanceConfig {
 export type DeepPartialAppearanceConfig = {
   [K in keyof AppearanceConfig]?: K extends 'glassRegions'
     ? { [R in GlassRegionId]?: Partial<GlassRegionValues> }
-    : K extends 'sidebarSquareCorners' | 'rightSidebarSquareCorners'
-      ? Partial<SidebarSquareCorners>
-      : K extends 'uiColorCustom'
-        ? Partial<UiCustomColors>
-        : K extends 'typography'
-          ? {
-              light?: Partial<ThemeTypographyPalette>;
-              dark?: Partial<ThemeTypographyPalette>;
-              fontFamily?: string;
-              codeFontFamily?: string;
-              fontWeight?: number;
-            }
-          : AppearanceConfig[K];
+    : K extends 'glassZones'
+      ? { [Z in GlassZoneIdInput]?: Partial<GlassZoneConfig> }
+      : K extends 'sidebarSquareCorners' | 'rightSidebarSquareCorners'
+        ? Partial<SidebarSquareCorners>
+        : K extends 'uiColorCustom'
+          ? Partial<UiCustomColors>
+          : K extends 'typography'
+            ? {
+                light?: Partial<ThemeTypographyPalette>;
+                dark?: Partial<ThemeTypographyPalette>;
+                fontFamily?: string;
+                codeFontFamily?: string;
+                fontWeight?: number;
+              }
+            : AppearanceConfig[K];
 };
 
 export const WB_THEME_FORMAT = 'prismux.wb-theme' as const;
@@ -189,6 +245,102 @@ export const GLASS_REGION_LIMITS = {
   fidelityMin: 0,
   fidelityMax: 100,
 } as const;
+
+export const GLASS_ZONE_LIMITS = {
+  opacityMin: 0,
+  opacityMax: 100,
+  /** Built-in readability floor for overlays (modals, menus, drawers) guaranteeing >= 4.5:1 text contrast. */
+  overlaysOpacityMin: 68,
+  blurMin: 0,
+  blurMax: 48,
+  saturationMin: 80,
+  saturationMax: 240,
+  /** Natural native frosted-glass saturation baseline (105%-115%) avoiding warm/vivid color distortion. */
+  defaultSaturation: 110,
+} as const;
+
+export const GLASS_ZONE_IDS: readonly GlassZoneId[] = [
+  'shellFrame',
+  'rightSidebar',
+  'mainCanvas',
+  'composer',
+  'overlays',
+] as const;
+
+export const GLASS_ZONE_CSS_NAMES: Readonly<Record<GlassZoneId, string>> = {
+  shellFrame: 'shell-frame',
+  rightSidebar: 'right-sidebar',
+  mainCanvas: 'main-canvas',
+  composer: 'composer',
+  overlays: 'overlays',
+};
+
+export const GLASS_ZONE_META: readonly GlassZoneDescriptor[] = [
+  {
+    id: 'shellFrame',
+    cssName: 'shell-frame',
+    title: '窗口外框（左侧边栏、顶栏与底栏）',
+    compactTitle: '窗口外框',
+    shortLabel: '窗口外框',
+    note: '左侧边栏、顶部标签栏、底部状态栏与右侧细边连体统一调节，零拼接色差',
+    compactNote: '左侧边栏、顶栏、底栏与右细边统一连体',
+    defaultRegion: 'surface',
+    defaultSaturation: 110,
+    minOpacity: GLASS_ZONE_LIMITS.opacityMin,
+    pinnedInCompact: true,
+  },
+  {
+    id: 'rightSidebar',
+    cssName: 'right-sidebar',
+    title: '右侧功能边栏',
+    compactTitle: '右侧功能边栏',
+    shortLabel: '右侧栏',
+    note: '展开壁纸、差异、文件、终端、浏览器与手机模拟面板时独立微调（默认跟随外框）',
+    compactNote: '展开功能面板独立微调，默认跟随外框',
+    defaultRegion: 'surface',
+    defaultSaturation: 110,
+    minOpacity: GLASS_ZONE_LIMITS.opacityMin,
+    pinnedInCompact: true,
+  },
+  {
+    id: 'mainCanvas',
+    cssName: 'main-canvas',
+    title: '主内容画布',
+    shortLabel: '主画布',
+    note: '中央圆角画窗，默认清透 1:1 还原原生壁纸色彩',
+    defaultRegion: 'surface',
+    defaultSaturation: 105,
+    minOpacity: GLASS_ZONE_LIMITS.opacityMin,
+  },
+  {
+    id: 'composer',
+    cssName: 'composer',
+    title: '输入框与卡片',
+    shortLabel: '输入框',
+    note: '消息输入框、工具卡与控制条',
+    defaultRegion: 'card',
+    defaultSaturation: 108,
+    minOpacity: GLASS_ZONE_LIMITS.opacityMin,
+  },
+  {
+    id: 'overlays',
+    cssName: 'overlays',
+    title: '弹窗与设置面板',
+    shortLabel: '弹窗层',
+    note: '弹窗、下拉菜单与设置面板（内置高可读下限）',
+    defaultRegion: 'overlay',
+    defaultSaturation: 108,
+    minOpacity: GLASS_ZONE_LIMITS.overlaysOpacityMin,
+  },
+] as const;
+
+export const DEFAULT_GLASS_ZONES: GlassZonesConfig = {
+  shellFrame: { mode: 'inherit' },
+  rightSidebar: { mode: 'inherit' },
+  mainCanvas: { mode: 'inherit' },
+  composer: { mode: 'inherit' },
+  overlays: { mode: 'inherit' },
+};
 
 /**
  * Exact 4-region liquid glass presets calibrated against FISH-Dock production curves.
@@ -270,6 +422,13 @@ export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
   rightSidebarGlass: true,
   rightSidebarFullClear: false,
   perSurfaceOverrides: {},
+  glassZones: {
+    shellFrame: { mode: 'inherit' },
+    rightSidebar: { mode: 'inherit' },
+    mainCanvas: { mode: 'inherit' },
+    composer: { mode: 'inherit' },
+    overlays: { mode: 'inherit' },
+  },
   sidebarCornerRadius: 'native',
   sidebarSquareCorners: {
     tl: false,

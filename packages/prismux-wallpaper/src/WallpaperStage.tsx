@@ -1041,7 +1041,7 @@ export function WallpaperStage({
       objectFit,
       objectPosition: `${settings.layerPositionX}% ${settings.layerPositionY}%`,
       transform: `translate3d(${tx}%, ${ty}%, 0) scale(${sx}, ${sy})`,
-      filter: filterParts.length > 0 ? filterParts.join(" ") : undefined,
+      filter: filterParts.length > 0 ? filterParts.join(" ") : "none",
     };
   }, [
     settings.objectFit,
@@ -1065,7 +1065,7 @@ export function WallpaperStage({
   const transitionMs = settings.switchTransition === "cut" ? 0 : 420;
   const nativeFadeOpacity = normalizeWallpaperFadeOpacity(settings.wallpaperOpacity, 0) / 100;
   const scrimOpacity = normalizeWallpaperScrim(settings.scrim, 0.15);
-  const nativeFadeColor = settings.themeMode === "light" ? "#ffffff" : "#0b0f19";
+  const nativeFadeColor = settings.themeMode === "light" ? "#ffffff" : "#000000";
 
   // Extract shader user properties if present
   const propMap = new Map(resolvedProps.map((p) => [p.name, p.value]));

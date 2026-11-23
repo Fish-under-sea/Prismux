@@ -1,8 +1,13 @@
 import {
   DEFAULT_APPEARANCE_CONFIG,
+  DEFAULT_GLASS_ZONES,
   DEFAULT_TYPOGRAPHY_FALLBACKS,
   GLASS_PRESETS,
   GLASS_REGION_LIMITS,
+  GLASS_ZONE_CSS_NAMES,
+  GLASS_ZONE_IDS,
+  GLASS_ZONE_LIMITS,
+  GLASS_ZONE_META,
   type AccentMode,
   type AppearanceConfig,
   type BaseThemePolarity,
@@ -13,6 +18,12 @@ import {
   type GlassRegionsConfig,
   type GlassSurfaceId,
   type GlassSurfaceOverride,
+  type GlassZoneConfig,
+  type GlassZoneDescriptor,
+  type GlassZoneId,
+  type GlassZoneIdInput,
+  type GlassZoneMode,
+  type GlassZonesConfig,
   type SidebarCornerRadius,
   type SidebarSquareCorners,
   type ThemeMode,
@@ -38,6 +49,8 @@ export const READABILITY_FLOOR_LIGHT = 0.5;
 export const READABILITY_FLOOR_DARK = 0.59;
 export const DEFAULT_LIGHT_GLASS_TINT = '#ffffff';
 export const DEFAULT_DARK_GLASS_TINT = '#0d1524';
+/** Default inner workspace stage corner radius token (`--pmx-inner-stage-radius`). */
+export const DEFAULT_INNER_STAGE_RADIUS_PX = 14;
 const CLAMP_CONTRAST_TARGET = 4.6; // +0.1 rounding margin for 8-bit hex quantization
 
 export interface StyleDeclarationLike {
@@ -84,6 +97,31 @@ export interface ResolvedSurfaceGlass {
   fidelity: number;
 }
 
+export interface ResolvedGlassZone {
+  id: GlassZoneId;
+  cssName: string;
+  /** User-configured zone mode ('inherit' | 'custom' | 'solid'). */
+  mode: GlassZoneMode;
+  /** Effective zone mode after reconciling legacy gates and active glass state. */
+  effectiveMode: GlassZoneMode;
+  /** Effective fill opacity percentage (0-100; 100 when solid). */
+  opacity: number;
+  /** Effective backdrop blur radius in px (0-48; 0 when solid). */
+  blurPx: number;
+  /** Effective backdrop color saturation percentage (80-240; 100 when solid). */
+  saturation: number;
+  /** Clamped surface tint hex (#rrggbb). */
+  tint: string;
+  /** Computed CSS background color (`rgba(...)` when translucent, `rgb(...)` when solid). */
+  bgCss: string;
+  /** Computed CSS `backdrop-filter` string (`blur(...) saturate(...) ...` or `'none'`). */
+  backdropCss: string;
+  /** Computed CSS border color string. */
+  borderCss: string;
+  /** Computed CSS Fresnel specular sheen gradient or `'none'`. */
+  sheenCss: string;
+}
+
 export interface ResolvedAppearanceRuntime {
   config: AppearanceConfig;
   polarity: BaseThemePolarity;
@@ -99,6 +137,7 @@ export interface ResolvedAppearanceRuntime {
   readabilityFloorBase: number;
   readabilityFloor: number;
   surfaces: Record<GlassSurfaceId, ResolvedSurfaceGlass>;
+  zones: Record<GlassZoneId, ResolvedGlassZone>;
 }
 
 const VALID_THEME_MODES = new Set<ThemeMode>(['light', 'dark', 'glass']);
@@ -121,6 +160,10 @@ const VALID_SURFACE_IDS: readonly GlassSurfaceId[] = [
 ] as const;
 
 const REGION_IDS: readonly GlassRegionId[] = ['surface', 'card', 'overlay', 'control'] as const;
+const VALID_ZONE_MODES = new Set<GlassZoneMode>(['inherit', 'custom', 'solid']);
+const ZONE_META_BY_ID: Readonly<Record<GlassZoneId, GlassZoneDescriptor>> = Object.fromEntries(
+  GLASS_ZONE_META.map((item) => [item.id, item]),
+) as Record<GlassZoneId, GlassZoneDescriptor>;
 
 /**
  * Pure brightness-clamping algorithm ensuring that when `fidelity === 100`,
@@ -302,6 +345,85 @@ function sanitizeSurfaceOverrides(
   return result;
 }
 
+function sanitizeGlassZoneEntry(
+  id: GlassZoneId,
+  raw: Partial<GlassZoneConfig> | undefined,
+  fallback: GlassZoneConfig,
+): GlassZoneConfig {
+  const meta = ZONE_META_BY_ID[id];
+  const src = raw && typeof raw === 'object' ? raw : fallback;
+  const mode: GlassZoneMode =
+    src.mode && VALID_ZONE_MODES.has(src.mode) ? src.mode : fallback.mode;
+  const clean: GlassZoneConfig = { mode };
+
+  const opacityRaw = src.opacity !== undefined ? src.opacity : fallback.opacity;
+  if (opacityRaw !== undefined && Number.isFinite(Number(opacityRaw))) {
+    clean.opacity = Math.round(
+      clampNumber(Number(opacityRaw), meta.minOpacity, GLASS_ZONE_LIMITS.opacityMax),
+    );
+  }
+
+  const blurRaw = src.blurPx !== undefined ? src.blurPx : fallback.blurPx;
+  if (blurRaw !== undefined && Number.isFinite(Number(blurRaw))) {
+    clean.blurPx = Math.round(
+      clampNumber(Number(blurRaw), GLASS_ZONE_LIMITS.blurMin, GLASS_ZONE_LIMITS.blurMax),
+    );
+  }
+
+  const satRaw = src.saturation !== undefined ? src.saturation : fallback.saturation;
+  if (satRaw !== undefined && Number.isFinite(Number(satRaw))) {
+    clean.saturation = Math.round(
+      clampNumber(
+        Number(satRaw),
+        GLASS_ZONE_LIMITS.saturationMin,
+        GLASS_ZONE_LIMITS.saturationMax,
+      ),
+    );
+  }
+
+  const tintRaw = src.tint !== undefined ? src.tint : fallback.tint;
+  if (typeof tintRaw === 'string') {
+    const normalizedTint = tintRaw === '' ? '' : normalizeHex(tintRaw, true);
+    if (normalizedTint) {
+      clean.tint = normalizedTint;
+    }
+  }
+
+  return clean;
+}
+
+/**
+ * Maps legacy 6-zone ids (`leftSidebar`, `chromeBars`) into the unified `shellFrame` zone
+ * while preserving canonical 5-zone ids (`shellFrame`, `rightSidebar`, `mainCanvas`, `composer`, `overlays`).
+ */
+export function canonicalizeGlassZoneId(id: GlassZoneIdInput): GlassZoneId {
+  if (id === 'leftSidebar' || id === 'chromeBars') return 'shellFrame';
+  return id;
+}
+
+function sanitizeGlassZones(
+  raw: Partial<Record<GlassZoneIdInput, Partial<GlassZoneConfig>>> | undefined,
+  base: GlassZonesConfig = DEFAULT_GLASS_ZONES,
+): GlassZonesConfig {
+  const legacyLeft = raw?.leftSidebar;
+  const legacyChrome = raw?.chromeBars;
+  const rawShellFrame =
+    raw?.shellFrame ??
+    (legacyLeft?.mode && legacyLeft.mode !== 'inherit'
+      ? legacyLeft
+      : legacyChrome?.mode && legacyChrome.mode !== 'inherit'
+        ? legacyChrome
+        : legacyLeft ?? legacyChrome);
+
+  return {
+    shellFrame: sanitizeGlassZoneEntry('shellFrame', rawShellFrame, base.shellFrame),
+    rightSidebar: sanitizeGlassZoneEntry('rightSidebar', raw?.rightSidebar, base.rightSidebar),
+    mainCanvas: sanitizeGlassZoneEntry('mainCanvas', raw?.mainCanvas, base.mainCanvas),
+    composer: sanitizeGlassZoneEntry('composer', raw?.composer, base.composer),
+    overlays: sanitizeGlassZoneEntry('overlays', raw?.overlays, base.overlays),
+  };
+}
+
 /**
  * Merges and validates any partial config onto a base AppearanceConfig (defaulting to factory defaults).
  */
@@ -330,12 +452,52 @@ export function normalizeAppearanceConfig(
       ? src.glassPreset
       : base.glassPreset;
 
-  const glassRegions: GlassRegionsConfig = {
-    surface: sanitizeRegionValues(src.glassRegions?.surface, base.glassRegions.surface),
-    card: sanitizeRegionValues(src.glassRegions?.card, base.glassRegions.card),
-    overlay: sanitizeRegionValues(src.glassRegions?.overlay, base.glassRegions.overlay),
-    control: sanitizeRegionValues(src.glassRegions?.control, base.glassRegions.control),
+  const isNamedActivePreset =
+    glassPreset === 'light' || glassPreset === 'balanced' || glassPreset === 'clear';
+  const presetFallbackRegions =
+    isNamedActivePreset && src.glassPreset === glassPreset
+      ? GLASS_PRESETS[glassPreset]
+      : base.glassRegions;
+
+  const rawRegions: GlassRegionsConfig = {
+    surface: sanitizeRegionValues(src.glassRegions?.surface, presetFallbackRegions.surface),
+    card: sanitizeRegionValues(src.glassRegions?.card, presetFallbackRegions.card),
+    overlay: sanitizeRegionValues(src.glassRegions?.overlay, presetFallbackRegions.overlay),
+    control: sanitizeRegionValues(src.glassRegions?.control, presetFallbackRegions.control),
   };
+
+  // Backfill stale zero/off-state region residue (`{ op: 0|100, blur: 0 }`) when a named
+  // active preset (`light` | `balanced` | `clear`) is selected so default glass never drops to blur: 0px.
+  const isStaleZeroOrOffRegion = (r: GlassRegionValues): boolean =>
+    r.blur === 0 && (r.op === 0 || r.op === 100);
+
+  let glassRegions: GlassRegionsConfig = rawRegions;
+  if (isNamedActivePreset) {
+    const namedTpl = GLASS_PRESETS[glassPreset];
+    const allRegionsZeroBlur = REGION_IDS.every((id) => isStaleZeroOrOffRegion(rawRegions[id]));
+    const explicitNamedPreset = src.glassPreset === glassPreset;
+    if (allRegionsZeroBlur) {
+      glassRegions = {
+        surface: { ...namedTpl.surface },
+        card: { ...namedTpl.card },
+        overlay: { ...namedTpl.overlay },
+        control: { ...namedTpl.control },
+      };
+    } else if (explicitNamedPreset) {
+      glassRegions = {
+        surface: isStaleZeroOrOffRegion(rawRegions.surface)
+          ? { ...namedTpl.surface }
+          : rawRegions.surface,
+        card: isStaleZeroOrOffRegion(rawRegions.card) ? { ...namedTpl.card } : rawRegions.card,
+        overlay: isStaleZeroOrOffRegion(rawRegions.overlay)
+          ? { ...namedTpl.overlay }
+          : rawRegions.overlay,
+        control: isStaleZeroOrOffRegion(rawRegions.control)
+          ? { ...namedTpl.control }
+          : rawRegions.control,
+      };
+    }
+  }
 
   const glassColor =
     src.glassColor !== undefined
@@ -387,6 +549,11 @@ export function normalizeAppearanceConfig(
 
   const perSurfaceOverrides = sanitizeSurfaceOverrides(
     src.perSurfaceOverrides !== undefined ? src.perSurfaceOverrides : base.perSurfaceOverrides,
+  );
+
+  const glassZones = sanitizeGlassZones(
+    src.glassZones,
+    base.glassZones ?? DEFAULT_GLASS_ZONES,
   );
 
   const sidebarCornerRadius = sanitizeCornerRadius(
@@ -509,6 +676,7 @@ export function normalizeAppearanceConfig(
     rightSidebarGlass,
     rightSidebarFullClear,
     perSurfaceOverrides,
+    glassZones,
     sidebarCornerRadius,
     sidebarSquareCorners,
     ...(rightSidebarCornerRadius !== undefined ? { rightSidebarCornerRadius } : {}),
@@ -558,6 +726,150 @@ export function updateGlassRegion(
 }
 
 /**
+ * Updates a single unified workbench glass zone (`shellFrame`, `rightSidebar`,
+ * `mainCanvas`, `composer`, `overlays`), seamlessly migrating legacy `leftSidebar`/`chromeBars`
+ * callers onto `shellFrame`.
+ * When switching into `'custom'` without explicit opacity/blur values, seeds them from
+ * the zone's current effective inherited values so there is zero visual jump.
+ */
+export function updateGlassZone(
+  config: AppearanceConfig,
+  zoneIdInput: GlassZoneIdInput,
+  patch: Partial<GlassZoneConfig>,
+): AppearanceConfig {
+  const zoneId = canonicalizeGlassZoneId(zoneIdInput);
+  const normalized = normalizeAppearanceConfig(config);
+  const existing = normalized.glassZones[zoneId];
+  const nextMode: GlassZoneMode =
+    patch.mode && VALID_ZONE_MODES.has(patch.mode) ? patch.mode : existing.mode;
+
+  let seededPatch: Partial<GlassZoneConfig> = { ...patch, mode: nextMode };
+  if (
+    nextMode === 'custom' &&
+    (existing.opacity === undefined || existing.blurPx === undefined) &&
+    (patch.opacity === undefined || patch.blurPx === undefined)
+  ) {
+    const rt = resolveAppearanceRuntime(normalized);
+    const currentZone = rt.zones[zoneId];
+    const meta = ZONE_META_BY_ID[zoneId];
+    const fallbackOpacity =
+      currentZone.effectiveMode === 'solid'
+        ? Math.max(meta.minOpacity, normalized.glassRegions[meta.defaultRegion].op)
+        : currentZone.opacity;
+    const fallbackBlur =
+      currentZone.effectiveMode === 'solid'
+        ? normalized.glassRegions[meta.defaultRegion].blur
+        : currentZone.blurPx;
+    seededPatch = {
+      opacity: existing.opacity ?? fallbackOpacity,
+      blurPx: existing.blurPx ?? fallbackBlur,
+      saturation: existing.saturation ?? meta.defaultSaturation,
+      ...patch,
+      mode: 'custom',
+    };
+  }
+
+  const nextEntry = sanitizeGlassZoneEntry(zoneId, seededPatch, existing);
+
+  // When explicitly setting a zone back to 'inherit', also reconcile legacy gates for that zone
+  // so "恢复跟随全局" always genuinely follows global glass state.
+  let leftSidebarGlass = normalized.leftSidebarGlass;
+  let rightSidebarGlass = normalized.rightSidebarGlass;
+  let rightSidebarFullClear = normalized.rightSidebarFullClear;
+  let titlebarGlass = normalized.titlebarGlass;
+  let perSurfaceOverrides = normalized.perSurfaceOverrides;
+
+  if (nextMode === 'inherit') {
+    if (zoneId === 'shellFrame') {
+      leftSidebarGlass = true;
+      titlebarGlass = true;
+      if (perSurfaceOverrides.leftSidebar?.mode === 'custom') {
+        perSurfaceOverrides = { ...perSurfaceOverrides, leftSidebar: { mode: 'inherit' } };
+      }
+      if (perSurfaceOverrides.titlebar?.mode === 'custom') {
+        perSurfaceOverrides = { ...perSurfaceOverrides, titlebar: { mode: 'inherit' } };
+      }
+    } else if (zoneId === 'rightSidebar') {
+      rightSidebarGlass = true;
+      rightSidebarFullClear = false;
+      if (perSurfaceOverrides.rightSidebar?.mode === 'custom') {
+        perSurfaceOverrides = { ...perSurfaceOverrides, rightSidebar: { mode: 'inherit' } };
+      }
+    }
+  }
+
+  return {
+    ...normalized,
+    leftSidebarGlass,
+    rightSidebarGlass,
+    rightSidebarFullClear,
+    titlebarGlass,
+    perSurfaceOverrides,
+    glassZones: {
+      ...normalized.glassZones,
+      [zoneId]: nextEntry,
+    },
+  };
+}
+
+/** Resets a single glass zone cleanly back to `'inherit'` (following global glass / shellFrame). */
+export function resetGlassZone(
+  config: AppearanceConfig,
+  zoneIdInput: GlassZoneIdInput,
+): AppearanceConfig {
+  const zoneId = canonicalizeGlassZoneId(zoneIdInput);
+  const normalized = normalizeAppearanceConfig(config);
+  const next = updateGlassZone(normalized, zoneId, { mode: 'inherit' });
+  return {
+    ...next,
+    glassZones: {
+      ...next.glassZones,
+      [zoneId]: { mode: 'inherit' },
+    },
+  };
+}
+
+/** Resets all 5 glass zones (plus legacy surface gates) back to `'inherit'`. */
+export function resetAllGlassZones(config: AppearanceConfig): AppearanceConfig {
+  const normalized = normalizeAppearanceConfig(config);
+  return {
+    ...normalized,
+    leftSidebarGlass: true,
+    rightSidebarGlass: true,
+    rightSidebarFullClear: false,
+    titlebarGlass: true,
+    perSurfaceOverrides: {},
+    glassZones: {
+      shellFrame: { mode: 'inherit' },
+      rightSidebar: { mode: 'inherit' },
+      mainCanvas: { mode: 'inherit' },
+      composer: { mode: 'inherit' },
+      overlays: { mode: 'inherit' },
+    },
+  };
+}
+
+/** Counts how many of the 5 workbench zones diverge from `'inherit'` (`'custom'` or `'solid'`). */
+export function countCustomizedGlassZones(config: AppearanceConfig): number {
+  const normalized = normalizeAppearanceConfig(config);
+  let count = 0;
+  for (const id of GLASS_ZONE_IDS) {
+    const entry = normalized.glassZones[id];
+    if (entry.mode !== 'inherit') {
+      count += 1;
+      continue;
+    }
+    if (
+      (id === 'shellFrame' && (!normalized.leftSidebarGlass || !normalized.titlebarGlass)) ||
+      (id === 'rightSidebar' && (!normalized.rightSidebarGlass || normalized.rightSidebarFullClear))
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
  * Transitions themeMode using FISH-Dock UX rule:
  * switching into 'glass' while preset is 'off' automatically restores 'balanced' so glass is immediately visible.
  */
@@ -582,9 +894,16 @@ export function resolveBasePolarity(config: AppearanceConfig): BaseThemePolarity
 
 export function isGlassVisuallyActive(config: AppearanceConfig): boolean {
   if (config.themeMode !== 'glass') return false;
-  return REGION_IDS.some((id) => {
+  const anyRegionActive = REGION_IDS.some((id) => {
     const r = config.glassRegions[id];
     return r.op < 100 || r.blur > 0;
+  });
+  if (anyRegionActive) return true;
+  if (!config.glassZones) return false;
+  return GLASS_ZONE_IDS.some((id) => {
+    const z = config.glassZones[id];
+    if (!z || z.mode !== 'custom') return false;
+    return (z.opacity !== undefined && z.opacity < 100) || (z.blurPx !== undefined && z.blurPx > 0);
   });
 }
 
@@ -614,6 +933,257 @@ function resolveSurfaceGlassValue(
       : activeTint;
 
   return { op, blur, tint, fidelity };
+}
+
+function buildZoneBorderCss(isDark: boolean, fresnelScalar: number): string {
+  if (isDark) {
+    const a = clampNumber(0.1 + 0.12 * fresnelScalar, 0.08, 0.28);
+    return `rgba(255, 255, 255, ${a.toFixed(3)})`;
+  }
+  const a = clampNumber(0.1 + 0.08 * fresnelScalar, 0.08, 0.24);
+  return `rgba(15, 23, 42, ${a.toFixed(3)})`;
+}
+
+function buildZoneSheenCss(isDark: boolean, fresnelScalar: number, id: GlassZoneId): string {
+  if (fresnelScalar <= 0.01) return 'none';
+  // Monolithic outer-frame zones (shellFrame & rightSidebar) share a height-invariant
+  // uniform specular glaze so the left sidebar, top bar, bottom status bar, right edge,
+  // right sidebar, and 14px concave corner fillets merge with 0.0 RGB discontinuity.
+  const isOuterFrameZone = id === 'shellFrame' || id === 'rightSidebar';
+  if (isOuterFrameZone) {
+    const glaze = (isDark ? 0.028 : 0.09) * fresnelScalar;
+    return `linear-gradient(180deg, rgba(255, 255, 255, ${glaze.toFixed(4)}) 0%, rgba(255, 255, 255, ${glaze.toFixed(4)}) 100%)`;
+  }
+  if (isDark) {
+    const top = (id === 'mainCanvas' ? 0.045 : 0.065) * fresnelScalar;
+    const mid = (id === 'mainCanvas' ? 0.0 : 0.016) * fresnelScalar;
+    const bot = (id === 'mainCanvas' ? 0.02 : 0.032) * fresnelScalar;
+    return `linear-gradient(180deg, rgba(255, 255, 255, ${top.toFixed(4)}) 0%, rgba(255, 255, 255, ${mid.toFixed(4)}) 46%, rgba(255, 255, 255, ${bot.toFixed(4)}) 100%)`;
+  }
+  const top = (id === 'mainCanvas' ? 0.16 : 0.24) * fresnelScalar;
+  const bot = (id === 'mainCanvas' ? 0.04 : 0.08) * fresnelScalar;
+  return `linear-gradient(180deg, rgba(255, 255, 255, ${top.toFixed(4)}) 0%, rgba(255, 255, 255, 0) 48%, rgba(255, 255, 255, ${bot.toFixed(4)}) 100%)`;
+}
+
+function resolveZoneGlassValue(
+  config: AppearanceConfig,
+  id: GlassZoneId,
+  isDark: boolean,
+  glassActive: boolean,
+  activeTint: string,
+  surfaces: Record<GlassSurfaceId, ResolvedSurfaceGlass>,
+  shellFrameResolved?: ResolvedGlassZone,
+): ResolvedGlassZone {
+  const meta = ZONE_META_BY_ID[id];
+  const cssName = GLASS_ZONE_CSS_NAMES[id];
+  const zoneCfg = config.glassZones[id] ?? { mode: 'inherit' };
+  const fidelityScalar = clampNumber(config.glassFidelity / 100, 0, 1);
+  const fresnelScalar = clampNumber(config.fresnelStrength / 100, 0, 1);
+
+  let effectiveMode: GlassZoneMode = zoneCfg.mode;
+  if (effectiveMode === 'inherit') {
+    if (
+      (id === 'shellFrame' && (!config.leftSidebarGlass || !config.titlebarGlass)) ||
+      (id === 'rightSidebar' && !config.rightSidebarGlass)
+    ) {
+      effectiveMode = 'solid';
+    }
+  }
+
+  // Right feature sidebar follows the monolithic `shellFrame` by default when in pure `'inherit'` mode
+  // (unless legacy `rightSidebarFullClear` or `perSurfaceOverrides.rightSidebar` overrides it).
+  if (
+    id === 'rightSidebar' &&
+    glassActive &&
+    effectiveMode === 'inherit' &&
+    !config.rightSidebarFullClear &&
+    config.perSurfaceOverrides.rightSidebar?.mode !== 'custom' &&
+    shellFrameResolved &&
+    shellFrameResolved.effectiveMode !== 'inherit'
+  ) {
+    return {
+      id,
+      cssName,
+      mode: zoneCfg.mode,
+      effectiveMode: 'inherit',
+      opacity: shellFrameResolved.opacity,
+      blurPx: shellFrameResolved.blurPx,
+      saturation: shellFrameResolved.saturation,
+      tint: shellFrameResolved.tint,
+      bgCss: shellFrameResolved.bgCss,
+      backdropCss: shellFrameResolved.backdropCss,
+      borderCss: shellFrameResolved.borderCss,
+      sheenCss: shellFrameResolved.sheenCss,
+    };
+  }
+
+  let tint = activeTint;
+  if (zoneCfg.mode === 'custom' && zoneCfg.tint) {
+    tint = clampSurfaceColorForContrast(zoneCfg.tint, isDark, config.glassFidelity);
+  } else if (zoneCfg.mode === 'inherit') {
+    if (id === 'shellFrame') {
+      if (config.perSurfaceOverrides.leftSidebar?.mode === 'custom') {
+        tint = surfaces.leftSidebar.tint;
+      } else if (config.perSurfaceOverrides.titlebar?.mode === 'custom') {
+        tint = surfaces.titlebar.tint;
+      }
+    } else if (id === 'rightSidebar' && config.perSurfaceOverrides.rightSidebar?.mode === 'custom') {
+      tint = surfaces.rightSidebar.tint;
+    } else if (id === 'mainCanvas' && config.perSurfaceOverrides.conversation?.mode === 'custom') {
+      tint = surfaces.conversation.tint;
+    }
+  }
+
+  const rgb = hexToRgb(tint);
+  const solidBg = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+  const solidBorder = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 23, 42, 0.14)';
+
+  if (!glassActive || effectiveMode === 'solid') {
+    return {
+      id,
+      cssName,
+      mode: zoneCfg.mode,
+      effectiveMode: 'solid',
+      opacity: 100,
+      blurPx: 0,
+      saturation: 100,
+      tint,
+      bgCss: solidBg,
+      backdropCss: 'none',
+      borderCss: solidBorder,
+      sheenCss: 'none',
+    };
+  }
+
+  // Compute inherited baseline opacity & blur for this zone.
+  const baseRegion = config.glassRegions[meta.defaultRegion];
+  let inheritedRawOp = baseRegion.op;
+  let inheritedBlur = baseRegion.blur;
+
+  if (id === 'shellFrame') {
+    if (config.perSurfaceOverrides.leftSidebar?.mode === 'custom') {
+      inheritedRawOp = surfaces.leftSidebar.op;
+      inheritedBlur = surfaces.leftSidebar.blur;
+    } else if (config.perSurfaceOverrides.titlebar?.mode === 'custom') {
+      inheritedRawOp = surfaces.titlebar.op;
+      inheritedBlur = surfaces.titlebar.blur;
+    }
+  } else if (id === 'rightSidebar' && config.perSurfaceOverrides.rightSidebar?.mode === 'custom') {
+    inheritedRawOp = surfaces.rightSidebar.op;
+    inheritedBlur = surfaces.rightSidebar.blur;
+  } else if (id === 'overlays' && config.perSurfaceOverrides.settingsWindow?.mode === 'custom') {
+    inheritedRawOp = surfaces.settingsWindow.op;
+    inheritedBlur = surfaces.settingsWindow.blur;
+  } else if (id === 'mainCanvas') {
+    if (config.perSurfaceOverrides.conversation?.mode === 'custom') {
+      inheritedRawOp = surfaces.conversation.op;
+      inheritedBlur = surfaces.conversation.blur;
+    } else {
+      // Arc / AGY 2.0 crystal-clear framed stage window: default mainCanvas reveals Z-0 wallpaper
+      // sharply with 0px blur while the surrounding monolithic frame carries the frosted liquid glass.
+      // Users still retain full freedom to dial custom blur/opacity or solid in 5-zone controls.
+      inheritedBlur = 0;
+    }
+  }
+
+  let inheritedAlpha: number;
+  if (id === 'rightSidebar' && effectiveMode === 'inherit' && config.rightSidebarFullClear) {
+    inheritedAlpha = 0;
+  } else if (id === 'mainCanvas') {
+    if (config.perSurfaceOverrides.conversation?.mode === 'custom') {
+      const floor = 0.14 * fidelityScalar;
+      inheritedAlpha = floor + ((inheritedRawOp * 0.55) / 100) * (1 - floor);
+    } else {
+      // Whisper-light strictly achromatic clear veil: clear ~4%, balanced ~6%, light ~8% (0px blur, zero tint shift).
+      inheritedAlpha = clampNumber(0.02 + (inheritedRawOp / 100) * 0.1, 0.02, 0.12);
+    }
+  } else if (id === 'composer') {
+    const floor = 0.34 * fidelityScalar;
+    inheritedAlpha = floor + (inheritedRawOp / 100) * (1 - floor);
+  } else if (id === 'overlays') {
+    const floor = GLASS_ZONE_LIMITS.overlaysOpacityMin / 100;
+    inheritedAlpha = clampNumber(floor + (inheritedRawOp / 100) * 0.24, floor, 0.96);
+  } else {
+    // Unified outer-frame optics (shellFrame & rightSidebar): identical opacity, blur,
+    // saturation & glaze in inherit mode so the closed outer frame forms a single seamless bezel.
+    const floor = 0.22 * fidelityScalar;
+    inheritedAlpha = floor + (inheritedRawOp / 100) * (1 - floor);
+  }
+
+  const inheritedOpacity = Math.round(
+    clampNumber(inheritedAlpha * 100, meta.minOpacity, GLASS_ZONE_LIMITS.opacityMax),
+  );
+  const clampedInheritedBlur = Math.round(
+    clampNumber(inheritedBlur, GLASS_ZONE_LIMITS.blurMin, GLASS_ZONE_LIMITS.blurMax),
+  );
+
+  const opacity =
+    effectiveMode === 'custom' && zoneCfg.opacity !== undefined
+      ? Math.round(clampNumber(zoneCfg.opacity, meta.minOpacity, GLASS_ZONE_LIMITS.opacityMax))
+      : inheritedOpacity;
+
+  const blurPx =
+    effectiveMode === 'custom' && zoneCfg.blurPx !== undefined
+      ? Math.round(clampNumber(zoneCfg.blurPx, GLASS_ZONE_LIMITS.blurMin, GLASS_ZONE_LIMITS.blurMax))
+      : clampedInheritedBlur;
+
+  const saturation =
+    effectiveMode === 'custom' && zoneCfg.saturation !== undefined
+      ? Math.round(
+          clampNumber(
+            zoneCfg.saturation,
+            GLASS_ZONE_LIMITS.saturationMin,
+            GLASS_ZONE_LIMITS.saturationMax,
+          ),
+        )
+      : meta.defaultSaturation;
+
+  const fullClearLegacy =
+    id === 'rightSidebar' && effectiveMode === 'inherit' && config.rightSidebarFullClear;
+  const clearMainCanvasDefault =
+    id === 'mainCanvas' &&
+    effectiveMode === 'inherit' &&
+    config.perSurfaceOverrides.conversation?.mode !== 'custom' &&
+    blurPx === 0;
+
+  const alpha = clampNumber(opacity / 100, meta.minOpacity / 100, 1);
+  const bgRgb = clearMainCanvasDefault
+    ? isDark
+      ? { r: 0, g: 0, b: 0 }
+      : { r: 255, g: 255, b: 255 }
+    : rgb;
+  const bgCss =
+    alpha >= 0.999
+      ? solidBg
+      : alpha <= 0.001
+        ? 'rgba(0, 0, 0, 0)'
+        : `rgba(${bgRgb.r}, ${bgRgb.g}, ${bgRgb.b}, ${alpha.toFixed(3)})`;
+
+  const backdropCss =
+    blurPx > 0
+      ? `blur(${blurPx}px) saturate(${(saturation / 100).toFixed(2)})`
+      : 'none';
+
+  const sheenCss =
+    fullClearLegacy || clearMainCanvasDefault || (alpha >= 0.999 && blurPx === 0)
+      ? 'none'
+      : buildZoneSheenCss(isDark, fresnelScalar, id);
+  const borderCss = buildZoneBorderCss(isDark, fresnelScalar);
+
+  return {
+    id,
+    cssName,
+    mode: zoneCfg.mode,
+    effectiveMode,
+    opacity,
+    blurPx,
+    saturation,
+    tint,
+    bgCss,
+    backdropCss,
+    borderCss,
+    sheenCss,
+  };
 }
 
 export function resolveAppearanceRuntime(
@@ -686,6 +1256,51 @@ export function resolveAppearanceRuntime(
     ),
   };
 
+  const shellFrameZone = resolveZoneGlassValue(
+    config,
+    'shellFrame',
+    isDark,
+    glassActive,
+    activeGlassTint,
+    surfaces,
+  );
+  const zones: Record<GlassZoneId, ResolvedGlassZone> = {
+    shellFrame: shellFrameZone,
+    rightSidebar: resolveZoneGlassValue(
+      config,
+      'rightSidebar',
+      isDark,
+      glassActive,
+      activeGlassTint,
+      surfaces,
+      shellFrameZone,
+    ),
+    mainCanvas: resolveZoneGlassValue(
+      config,
+      'mainCanvas',
+      isDark,
+      glassActive,
+      activeGlassTint,
+      surfaces,
+    ),
+    composer: resolveZoneGlassValue(
+      config,
+      'composer',
+      isDark,
+      glassActive,
+      activeGlassTint,
+      surfaces,
+    ),
+    overlays: resolveZoneGlassValue(
+      config,
+      'overlays',
+      isDark,
+      glassActive,
+      activeGlassTint,
+      surfaces,
+    ),
+  };
+
   return {
     config,
     polarity,
@@ -701,6 +1316,7 @@ export function resolveAppearanceRuntime(
     readabilityFloorBase,
     readabilityFloor,
     surfaces,
+    zones,
   };
 }
 
@@ -722,6 +1338,29 @@ function syncAttr(el: ElementLike, name: string, value: string | null): void {
     el.setAttribute(name, value);
   }
 }
+
+const LEGACY_SHELL_FRAME_CSS_NAMES = ['left-sidebar', 'chrome-bars'] as const;
+
+const ZONE_ROOT_ATTRS: readonly string[] = [
+  ...GLASS_ZONE_IDS.map((id) => `data-pmx-zone-${GLASS_ZONE_CSS_NAMES[id]}-mode`),
+  ...LEGACY_SHELL_FRAME_CSS_NAMES.map((name) => `data-pmx-zone-${name}-mode`),
+];
+
+const ZONE_CSS_VARS: readonly string[] = [
+  ...GLASS_ZONE_IDS.map((id) => GLASS_ZONE_CSS_NAMES[id]),
+  ...LEGACY_SHELL_FRAME_CSS_NAMES,
+].flatMap((cssName) => {
+  const prefix = `--pmx-glass-zone-${cssName}`;
+  return [
+    `${prefix}-bg`,
+    `${prefix}-blur`,
+    `${prefix}-saturation`,
+    `${prefix}-opacity`,
+    `${prefix}-border`,
+    `${prefix}-backdrop`,
+    `${prefix}-sheen`,
+  ];
+});
 
 const MANAGED_ROOT_ATTRS: readonly string[] = [
   'data-pmx-theme',
@@ -751,6 +1390,7 @@ const MANAGED_ROOT_ATTRS: readonly string[] = [
   'data-prismux-mode',
   'data-prismux-glass',
   'data-prismux-gpu',
+  ...ZONE_ROOT_ATTRS,
 ] as const;
 
 const MANAGED_CSS_VARS: readonly string[] = [
@@ -829,6 +1469,7 @@ const MANAGED_CSS_VARS: readonly string[] = [
   '--pmx-sidebar-content-color',
   '--pmx-sidebar-radius',
   '--pmx-right-sidebar-radius',
+  '--pmx-inner-stage-radius',
   '--pmx-ui-send',
   '--pmx-ui-link',
   '--pmx-ui-file-icon',
@@ -846,6 +1487,7 @@ const MANAGED_CSS_VARS: readonly string[] = [
   '--pmx-font-sans',
   '--pmx-font-mono',
   '--pmx-font-weight',
+  ...ZONE_CSS_VARS,
 ] as const;
 
 /**
@@ -889,22 +1531,37 @@ export function applyPrismuxAppearanceToDocument(
   const cleanMuted = normalizeHex(activeTypo.mutedColor, true);
   const cleanCaret = normalizeHex(cfg.caretColor, true);
 
+  const forceSolidZones =
+    !runtime.glassActive || opts.gpuAvailable === false || opts.reducedTransparency === true;
+
   for (const el of targets) {
     syncAttr(el, 'data-pmx-theme', runtime.polarity);
     syncAttr(el, 'data-pmx-mode', cfg.themeMode);
     syncAttr(el, 'data-pmx-glass', glassFlag);
-    syncAttr(el, 'data-pmx-sidebar-glass', runtime.glassActive && cfg.leftSidebarGlass ? '1' : '0');
+    syncAttr(
+      el,
+      'data-pmx-sidebar-glass',
+      runtime.glassActive && runtime.zones.shellFrame.effectiveMode !== 'solid' ? '1' : '0',
+    );
     syncAttr(
       el,
       'data-pmx-right-sidebar-glass',
-      runtime.glassActive && cfg.rightSidebarGlass ? '1' : '0',
+      runtime.glassActive && runtime.zones.rightSidebar.effectiveMode !== 'solid' ? '1' : '0',
     );
     syncAttr(
       el,
       'data-pmx-right-sidebar-fullclear',
-      runtime.glassActive && cfg.rightSidebarFullClear ? '1' : '0',
+      runtime.glassActive &&
+        cfg.rightSidebarFullClear &&
+        cfg.glassZones.rightSidebar.mode === 'inherit'
+        ? '1'
+        : '0',
     );
-    syncAttr(el, 'data-pmx-titlebar-glass', runtime.glassActive && cfg.titlebarGlass ? '1' : '0');
+    syncAttr(
+      el,
+      'data-pmx-titlebar-glass',
+      runtime.glassActive && runtime.zones.shellFrame.effectiveMode !== 'solid' ? '1' : '0',
+    );
     syncAttr(el, 'data-pmx-thinking-mode', runtime.glassActive ? cfg.thinkingMode : 'off');
     syncAttr(
       el,
@@ -929,6 +1586,20 @@ export function applyPrismuxAppearanceToDocument(
     syncAttr(el, 'data-pmx-reduced-transparency', reducedTransFlag);
     syncAttr(el, 'data-pmx-wallpaper', wallpaperFlag);
     syncAttr(el, 'data-pmx-wallpaper-visible', wallpaperFlag);
+
+    // Per-zone effective mode attributes (`inherit` | `custom` | `solid`) + legacy shellFrame aliases.
+    for (const zoneId of GLASS_ZONE_IDS) {
+      const zone = runtime.zones[zoneId];
+      syncAttr(
+        el,
+        `data-pmx-zone-${zone.cssName}-mode`,
+        forceSolidZones ? 'solid' : zone.effectiveMode,
+      );
+    }
+    const shellFrameModeAttr = forceSolidZones ? 'solid' : runtime.zones.shellFrame.effectiveMode;
+    for (const legacyCssName of LEGACY_SHELL_FRAME_CSS_NAMES) {
+      syncAttr(el, `data-pmx-zone-${legacyCssName}-mode`, shellFrameModeAttr);
+    }
 
     // Mirror official Prismux UI/UX mandate §2.6 attributes for plugins.
     syncAttr(el, 'data-prismux-theme', runtime.polarity);
@@ -1016,13 +1687,69 @@ export function applyPrismuxAppearanceToDocument(
 
   // Unconditional per-surface resolved variables (Contract ①: always write resolved value).
   const sf = runtime.surfaces;
-  s.setProperty('--pmx-left-sidebar-fill', `${sf.leftSidebar.op}%`);
-  s.setProperty('--pmx-left-sidebar-blur', `${sf.leftSidebar.blur}px`);
-  s.setProperty('--pmx-titlebar-fill', `${sf.titlebar.op}%`);
-  s.setProperty('--pmx-titlebar-blur', `${sf.titlebar.blur}px`);
-  s.setProperty('--pmx-right-sidebar-fill', `${sf.rightSidebar.op}%`);
-  s.setProperty('--pmx-right-sidebar-blur', `${sf.rightSidebar.blur}px`);
-  s.setProperty('--pmx-right-sidebar-tint', sf.rightSidebar.tint);
+  const shellZoneCfg = cfg.glassZones.shellFrame;
+  const rightZoneCfg = cfg.glassZones.rightSidebar;
+  s.setProperty(
+    '--pmx-left-sidebar-fill',
+    `${shellZoneCfg.mode === 'custom' ? runtime.zones.shellFrame.opacity : sf.leftSidebar.op}%`,
+  );
+  s.setProperty(
+    '--pmx-left-sidebar-blur',
+    `${shellZoneCfg.mode === 'custom' ? runtime.zones.shellFrame.blurPx : sf.leftSidebar.blur}px`,
+  );
+  s.setProperty(
+    '--pmx-titlebar-fill',
+    `${shellZoneCfg.mode === 'custom' ? runtime.zones.shellFrame.opacity : sf.titlebar.op}%`,
+  );
+  s.setProperty(
+    '--pmx-titlebar-blur',
+    `${shellZoneCfg.mode === 'custom' ? runtime.zones.shellFrame.blurPx : sf.titlebar.blur}px`,
+  );
+  s.setProperty(
+    '--pmx-right-sidebar-fill',
+    `${rightZoneCfg.mode === 'custom' ? runtime.zones.rightSidebar.opacity : sf.rightSidebar.op}%`,
+  );
+  s.setProperty(
+    '--pmx-right-sidebar-blur',
+    `${rightZoneCfg.mode === 'custom' ? runtime.zones.rightSidebar.blurPx : sf.rightSidebar.blur}px`,
+  );
+  s.setProperty('--pmx-right-sidebar-tint', runtime.zones.rightSidebar.tint);
+
+  // Unified 5-zone liquid glass CSS custom properties (+ mirrored legacy left-sidebar/chrome-bars aliases).
+  const solidFallbackBorder = runtime.isDark
+    ? 'rgba(255, 255, 255, 0.12)'
+    : 'rgba(15, 23, 42, 0.14)';
+  const writeZoneCssProps = (cssName: string, zone: ResolvedGlassZone): void => {
+    const prefix = `--pmx-glass-zone-${cssName}`;
+    if (forceSolidZones) {
+      const rgb = hexToRgb(zone.tint);
+      s.setProperty(`${prefix}-bg`, `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`);
+      s.setProperty(`${prefix}-blur`, '0px');
+      s.setProperty(`${prefix}-saturation`, '1');
+      s.setProperty(`${prefix}-opacity`, '1.000');
+      s.setProperty(`${prefix}-border`, solidFallbackBorder);
+      s.setProperty(`${prefix}-backdrop`, 'none');
+      s.setProperty(`${prefix}-sheen`, 'none');
+    } else {
+      s.setProperty(`${prefix}-bg`, zone.bgCss);
+      s.setProperty(`${prefix}-blur`, `${zone.blurPx}px`);
+      s.setProperty(`${prefix}-saturation`, (zone.saturation / 100).toFixed(2));
+      s.setProperty(`${prefix}-opacity`, (zone.opacity / 100).toFixed(3));
+      s.setProperty(`${prefix}-border`, zone.borderCss);
+      s.setProperty(`${prefix}-backdrop`, zone.backdropCss);
+      s.setProperty(`${prefix}-sheen`, zone.sheenCss);
+    }
+  };
+  for (const zoneId of GLASS_ZONE_IDS) {
+    const zone = runtime.zones[zoneId];
+    writeZoneCssProps(zone.cssName, zone);
+  }
+  for (const legacyCssName of LEGACY_SHELL_FRAME_CSS_NAMES) {
+    writeZoneCssProps(legacyCssName, runtime.zones.shellFrame);
+  }
+
+  // Default inner workspace stage corner radius token (fixed 14px; no corner slider UI).
+  s.setProperty('--pmx-inner-stage-radius', `${DEFAULT_INNER_STAGE_RADIUS_PX}px`);
 
   const convFid = clampNumber(sf.conversation.fidelity / 100, 0, 1);
   s.setProperty('--pmx-conversation-tint', sf.conversation.tint);

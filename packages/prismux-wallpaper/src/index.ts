@@ -5,7 +5,12 @@ export * from "./userProps.js";
 export * from "./videoPrewarm.js";
 export { WallpaperStage } from "./WallpaperStage.js";
 export type { WallpaperStageProps } from "./WallpaperStage.js";
-export { WallpaperQuickPanel } from "./WallpaperQuickPanel.js";
+export {
+  WallpaperQuickPanel,
+  resolveQuickPanelTab,
+  openInlineAppearanceInStore,
+  closeInlineAppearanceInStore,
+} from "./WallpaperQuickPanel.js";
 export type { WallpaperQuickPanelProps } from "./WallpaperQuickPanel.js";
 export { WallpaperSettingsView } from "./WallpaperSettingsView.js";
 export type { WallpaperSettingsViewProps } from "./WallpaperSettingsView.js";

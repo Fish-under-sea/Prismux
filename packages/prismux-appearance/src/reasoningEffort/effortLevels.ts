@@ -1,6 +1,10 @@
 /**
- * Effort stop presets and bilingual formatting helpers for the Prismux
- * model-aware reasoning-effort slider.
+ * Effort stop presets and canonical English formatting helpers for the Prismux
+ * model-aware reasoning-effort slider and composer badges.
+ *
+ * Reasoning-effort tier labels stay in standard English (`Minimal`, `Low`,
+ * `Medium`, `High`, `XHigh`, `Max`, `Ultracode`) across all UI locales so
+ * users always see unambiguous provider-native effort levels.
  *
  * Adapted with MIT attribution from HaoyueQin/dsh-better-reasoning-effort & dsh-fish.
  */
@@ -12,9 +16,9 @@ export type ReasoningEffortLocale = 'zh' | 'en';
 export interface ReasoningEffortOption {
   /** Canonical effort identifier passed through to backend / provider options (e.g. "low", "high", "xhigh", "max", "ultracode"). */
   readonly value: string;
-  /** Human-readable full label; falls back to localized canonical label if omitted. */
+  /** Human-readable display label; defaults to canonical English effort label if omitted. */
   readonly label?: string | undefined;
-  /** Compact short label used in dense stop buttons or composer pills; falls back to localized short label. */
+  /** Compact pill label; defaults to canonical English effort label if omitted. */
   readonly shortLabel?: string | undefined;
   /** Optional tooltip / description copy. */
   readonly description?: string | undefined;
@@ -27,26 +31,23 @@ export interface NormalizedReasoningEffortOption {
   readonly description?: string;
 }
 
-interface EffortDictionaryEntry {
-  readonly zh: string;
-  readonly zhShort: string;
-  readonly en: string;
-  readonly enShort: string;
-}
-
-const CANONICAL_EFFORT_DICTIONARY: Readonly<Record<string, EffortDictionaryEntry>> = {
-  off: { zh: '关闭', zhShort: '关', en: 'Off', enShort: 'Off' },
-  none: { zh: '无', zhShort: '无', en: 'None', enShort: 'None' },
-  minimal: { zh: '最小', zhShort: '最小', en: 'Minimal', enShort: 'Min' },
-  low: { zh: '低', zhShort: '低', en: 'Low', enShort: 'Low' },
-  medium: { zh: '中', zhShort: '中', en: 'Medium', enShort: 'Med' },
-  high: { zh: '高', zhShort: '高', en: 'High', enShort: 'High' },
-  xhigh: { zh: '极高', zhShort: '极高', en: 'Extra High', enShort: 'XHigh' },
-  max: { zh: '最大', zhShort: '最大', en: 'Max', enShort: 'Max' },
-  ultracode: { zh: 'Ultracode', zhShort: 'Ultra', en: 'Ultracode', enShort: 'Ultra' },
-  ultrathink: { zh: '极致', zhShort: '极致', en: 'Ultrathink', enShort: 'Ultra' },
-  extreme: { zh: '极致', zhShort: '极致', en: 'Extreme', enShort: 'Ext' },
-  auto: { zh: '自动', zhShort: '自动', en: 'Auto', enShort: 'Auto' },
+/** Canonical English effort-level labels shared across slider stops, badges, composer triggers & settings. */
+export const CANONICAL_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  off: 'Off',
+  none: 'None',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  extra_high: 'XHigh',
+  'extra-high': 'XHigh',
+  'extra high': 'XHigh',
+  max: 'Max',
+  ultracode: 'Ultracode',
+  ultrathink: 'Ultrathink',
+  extreme: 'Extreme',
+  auto: 'Auto',
 };
 
 const FAMILY_DEFAULT_LEVEL_VALUES: Readonly<Record<ReasoningModelFamily, readonly string[]>> = {
@@ -66,30 +67,34 @@ function capitalizeToken(raw: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
-/** Return localized display label for an effort value (e.g. "xhigh" -> "极高" / "Extra High"). */
-export function formatReasoningEffortLabel(
-  value: string,
-  locale: ReasoningEffortLocale = 'zh',
-): string {
-  const key = value.trim().toLowerCase();
-  const hit = CANONICAL_EFFORT_DICTIONARY[key];
+/**
+ * Return the canonical English label for an effort level (e.g. "minimal" -> "Minimal",
+ * "low" -> "Low", "medium" -> "Medium", "high" -> "High", "xhigh" -> "XHigh",
+ * "max" -> "Max", "ultracode" -> "Ultracode").
+ */
+export function formatEffortLabel(level: string): string {
+  const key = level.trim().toLowerCase();
+  const hit = CANONICAL_EFFORT_LABELS[key];
   if (hit) {
-    return locale === 'en' ? hit.en : hit.zh;
+    return hit;
   }
-  return capitalizeToken(value);
+  return capitalizeToken(level);
 }
 
-/** Return localized short badge/pill label for an effort value (e.g. "medium" -> "中" / "Med"). */
+/** Return canonical English display label for an effort value regardless of UI locale. */
+export function formatReasoningEffortLabel(
+  value: string,
+  _locale: ReasoningEffortLocale = 'en',
+): string {
+  return formatEffortLabel(value);
+}
+
+/** Return canonical English short pill label for an effort value regardless of UI locale. */
 export function formatReasoningEffortShortLabel(
   value: string,
-  locale: ReasoningEffortLocale = 'zh',
+  _locale: ReasoningEffortLocale = 'en',
 ): string {
-  const key = value.trim().toLowerCase();
-  const hit = CANONICAL_EFFORT_DICTIONARY[key];
-  if (hit) {
-    return locale === 'en' ? hit.enShort : hit.zhShort;
-  }
-  return capitalizeToken(value);
+  return formatEffortLabel(value);
 }
 
 /** Return the default discrete effort stops for a recognized model family. */

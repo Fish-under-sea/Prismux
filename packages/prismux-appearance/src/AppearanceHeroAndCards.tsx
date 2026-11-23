@@ -8,6 +8,7 @@ import {
 } from 'react';
 import {
   DEFAULT_APPEARANCE_CONFIG,
+  DEFAULT_GLASS_ZONES,
   DEFAULT_TYPOGRAPHY_FALLBACKS,
   GLASS_REGION_LIMITS,
   type AppearanceConfig,
@@ -15,7 +16,6 @@ import {
   type GlassPreset,
   type GlassRegionId,
   type GlassSurfaceId,
-  type GlassSurfaceOverride,
   type SidebarCornerRadius,
   type SidebarSquareCorners,
   type ThemeMode,
@@ -36,6 +36,7 @@ import {
 import { normalizeHex } from './colorUtils.js';
 import { CelestialThemeCapsule } from './CelestialThemeCapsule.js';
 import { FloatingColorPopover } from './FloatingColorPopover.js';
+import { GlassZoneConfigurator } from './GlassZoneConfigurator.js';
 
 export type ActiveColorPickerSlot =
   | { kind: 'accent' }
@@ -69,54 +70,10 @@ const GLASS_PRESET_LABELS: Record<GlassPreset, string> = {
 };
 
 const GLASS_REGION_META: ReadonlyArray<{ id: GlassRegionId; title: string; note: string }> = [
-  { id: 'surface', title: '主界面与侧栏', note: '侧边栏、顶栏与工作台底板' },
-  { id: 'card', title: '卡片与内容', note: '对话卡片、分组面板与代码块底' },
-  { id: 'overlay', title: '浮层与弹窗', note: '审批弹层、下拉菜单与浮窗' },
-  { id: 'control', title: '交互控件', note: '按钮、输入框与分段开关' },
-];
-
-type PerSurfaceControlId = 'leftSidebar' | 'titlebar' | 'rightSidebar' | 'conversation';
-
-const PER_SURFACE_META: ReadonlyArray<{
-  id: PerSurfaceControlId;
-  title: string;
-  note: string;
-  supportsOpBlur: boolean;
-  supportsColor: boolean;
-  supportsFidelity: boolean;
-}> = [
-  {
-    id: 'leftSidebar',
-    title: '左侧栏',
-    note: '会话列表与项目导航侧栏',
-    supportsOpBlur: true,
-    supportsColor: false,
-    supportsFidelity: false,
-  },
-  {
-    id: 'titlebar',
-    title: '顶栏与标题栏',
-    note: '顶部工作区标题条与快捷操作栏',
-    supportsOpBlur: true,
-    supportsColor: false,
-    supportsFidelity: false,
-  },
-  {
-    id: 'rightSidebar',
-    title: '右侧栏',
-    note: '壁纸、Diff、文件与终端右侧面板',
-    supportsOpBlur: true,
-    supportsColor: true,
-    supportsFidelity: false,
-  },
-  {
-    id: 'conversation',
-    title: '内容面与消息气泡',
-    note: '对话流卡片独立着色与对比度保真',
-    supportsOpBlur: false,
-    supportsColor: true,
-    supportsFidelity: true,
-  },
+  { id: 'surface', title: '全局底板基准', note: '未独立定制的侧栏与顶底栏默认继承值' },
+  { id: 'card', title: '卡片与输入基准', note: '对话卡片、输入框与代码块默认继承值' },
+  { id: 'overlay', title: '浮层与弹窗基准', note: '审批弹层、下拉菜单与抽屉默认继承值' },
+  { id: 'control', title: '交互控件基准', note: '按钮、输入框与分段开关默认继承值' },
 ];
 
 const UI_COLOR_ROWS: ReadonlyArray<{
@@ -271,8 +228,9 @@ export interface LiquidGlassCardProps {
 }
 
 /**
- * FISH-Dock 1:1 Liquid Glass card: 5 presets + accent & glass tint + fidelity + 4-region sliders
- * + thinking mode + chrome gates + default-collapsed per-surface fine tuning (left/titlebar/right/content).
+ * Liquid Glass card: 5 global presets + accent & glass tint + fidelity & dim +
+ * unified 5-zone fine-grained glass configurator (shellFrame / rightSidebar / mainCanvas /
+ * composer / overlays) + optional collapsed global inherit baseline & thinking mode.
  */
 export function LiquidGlassCard({
   config,
@@ -281,10 +239,10 @@ export function LiquidGlassCard({
   activeSlot = null,
   onOpenColorPicker,
   alwaysShow = false,
+  compact = false,
   className,
 }: LiquidGlassCardProps) {
-  // Default collapsed per Issue #3 spec so the main appearance card stays breathable and clean.
-  const [perSurfaceOpen, setPerSurfaceOpen] = useState(false);
+  const [globalBaselineOpen, setGlobalBaselineOpen] = useState(false);
   const hidden = !alwaysShow && config.themeMode !== 'glass';
   if (hidden) return null;
 
@@ -310,29 +268,6 @@ export function LiquidGlassCard({
     { id: 'native', label: '原生实色' },
   ];
 
-  const customSurfaceCount = PER_SURFACE_META.filter(
-    (s) => config.perSurfaceOverrides[s.id]?.mode === 'custom',
-  ).length;
-
-  const updateSurfaceOverride = (
-    surfaceId: PerSurfaceControlId,
-    patch: Partial<GlassSurfaceOverride>,
-  ) => {
-    const existing = config.perSurfaceOverrides[surfaceId];
-    const nextEntry: GlassSurfaceOverride = {
-      mode: existing?.mode ?? 'inherit',
-      ...existing,
-      ...patch,
-    };
-    onChange({
-      ...config,
-      perSurfaceOverrides: {
-        ...config.perSurfaceOverrides,
-        [surfaceId]: nextEntry,
-      },
-    });
-  };
-
   return (
     <section
       data-glass-card
@@ -341,7 +276,7 @@ export function LiquidGlassCard({
       <div className="ilook-box-head">
         <span className="ilook-box-title">液态玻璃</span>
         <span className="ilook-box-note">
-          四区域独立调节不透明度与模糊；内置可读性下限，禁 GPU 时自动回落实底。
+          全局预设一键统调，5 大工作台分区精细控制（窗口外框连体统一，右侧功能边栏、主画布、输入框与弹窗独立可控）；禁 GPU 时自动回落实底。
         </span>
       </div>
 
@@ -464,7 +399,7 @@ export function LiquidGlassCard({
           </div>
         </div>
 
-        {/* Readability Fidelity Slider */}
+        {/* Readability Fidelity & Wallpaper Dim Sliders */}
         <div className="ilook-slider-row">
           <span className="ilook-slider-lbl">保真度</span>
           <span className="ilook-rng">
@@ -483,308 +418,120 @@ export function LiquidGlassCard({
             <span className="rv">{config.glassFidelity}%</span>
           </span>
         </div>
-      </div>
 
-      {/* 4-Region Sliders: surface / card / overlay / control */}
-      {GLASS_REGION_META.map((reg) => {
-        const val = config.glassRegions[reg.id];
-        return (
-          <div key={reg.id} className="glass-reg">
-            <div className="glass-reg-head">
-              <span className="glass-reg-t">{reg.title}</span>
-              <span className="glass-reg-d">{reg.note}</span>
-            </div>
-            <div className="ilook-slider-row">
-              <span className="ilook-slider-lbl">不透明度</span>
-              <span className="ilook-rng">
-                <input
-                  type="range"
-                  className="rng"
-                  min={GLASS_REGION_LIMITS.opMin}
-                  max={GLASS_REGION_LIMITS.opMax}
-                  step={1}
-                  aria-label={`${reg.title}不透明度`}
-                  value={val.op}
-                  onChange={(e) =>
-                    onChange(updateGlassRegion(config, reg.id, { op: Number(e.target.value) }))
-                  }
-                />
-                <span className="rv">{val.op}%</span>
-              </span>
-            </div>
-            <div className="ilook-slider-row">
-              <span className="ilook-slider-lbl">模糊</span>
-              <span className="ilook-rng">
-                <input
-                  type="range"
-                  className="rng"
-                  min={GLASS_REGION_LIMITS.blurMin}
-                  max={GLASS_REGION_LIMITS.blurMax}
-                  step={1}
-                  aria-label={`${reg.title}模糊半径`}
-                  value={val.blur}
-                  onChange={(e) =>
-                    onChange(updateGlassRegion(config, reg.id, { blur: Number(e.target.value) }))
-                  }
-                />
-                <span className="rv">{val.blur}px</span>
-              </span>
-            </div>
-          </div>
-        );
-      })}
-
-      {/* Chrome Surface Master Gates & Thinking Block Mode */}
-      <div className="glass-reg">
-        <div className="ilook-accent-row">
-          <div className="grow">
-            <div className="glass-reg-t">壳层玻璃开关与思考块</div>
-            <div className="glass-reg-d">分别控制左栏、顶栏、右栏的玻璃质感与右侧栏全透。</div>
-          </div>
-          <div className="pmx-chip-group" role="group" aria-label="独立壳层玻璃开关">
-            <button
-              type="button"
-              className={`pbtn sm${config.leftSidebarGlass ? ' al' : ''}`}
-              aria-pressed={config.leftSidebarGlass}
-              onClick={() =>
-                onChange({ ...config, leftSidebarGlass: !config.leftSidebarGlass })
+        <div className="ilook-slider-row">
+          <span className="ilook-slider-lbl">底图压暗</span>
+          <span className="ilook-rng">
+            <input
+              type="range"
+              className="rng"
+              min={0}
+              max={100}
+              step={1}
+              aria-label="壁纸底图压暗浓度"
+              value={config.wallpaperDim}
+              onChange={(e) =>
+                onChange({ ...config, wallpaperDim: Number(e.target.value) })
               }
-            >
-              左侧栏玻璃
-            </button>
-            <button
-              type="button"
-              className={`pbtn sm${config.titlebarGlass ? ' al' : ''}`}
-              aria-pressed={config.titlebarGlass}
-              onClick={() => onChange({ ...config, titlebarGlass: !config.titlebarGlass })}
-            >
-              标题栏玻璃
-            </button>
-            <button
-              type="button"
-              className={`pbtn sm${config.rightSidebarGlass ? ' al' : ''}`}
-              aria-pressed={config.rightSidebarGlass}
-              onClick={() =>
-                onChange({ ...config, rightSidebarGlass: !config.rightSidebarGlass })
-              }
-            >
-              右侧栏玻璃
-            </button>
-            <button
-              type="button"
-              className={`pbtn sm${config.rightSidebarFullClear ? ' al' : ''}`}
-              aria-pressed={config.rightSidebarFullClear}
-              onClick={() =>
-                onChange({
-                  ...config,
-                  rightSidebarFullClear: !config.rightSidebarFullClear,
-                })
-              }
-            >
-              侧栏全透明
-            </button>
-          </div>
-        </div>
-
-        <div className="ilook-accent-row" style={{ marginTop: 4 }}>
-          <span className="ilook-typo-lbl">对话思考块玻璃</span>
-          <div className="seg" role="group" aria-label="思考块玻璃模式">
-            {thinkingOptions.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                className={config.thinkingMode === opt.id ? 'on' : ''}
-                aria-pressed={config.thinkingMode === opt.id}
-                onClick={() => onChange({ ...config, thinkingMode: opt.id })}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+            />
+            <span className="rv">{config.wallpaperDim}%</span>
+          </span>
         </div>
       </div>
 
-      {/* Default-Collapsed Per-Surface Fine-Tuning Disclosure (Left / Titlebar / Right / Content) */}
+      {/* Decoupled 6-Zone Fine-Grained Glass Control */}
+      <div className="glass-reg">
+        <GlassZoneConfigurator
+          config={config}
+          onChange={onChange}
+          compact={compact}
+          showSaturation
+        />
+      </div>
+
+      {/* Collapsed Advanced Global Baseline & Thinking Block Controls */}
       <div className="glass-reg">
         <div className="ilook-accent-row">
           <div className="grow">
-            <span className="glass-reg-t">各面独立精细调节</span>
+            <span className="glass-reg-t">全局继承基准与思考块</span>
             <span className="glass-reg-d" style={{ marginLeft: 8 }}>
-              {customSurfaceCount > 0 ? `已独立覆盖 ${customSurfaceCount} 面` : '左栏 / 顶栏 / 右栏 / 内容面均跟随全局'}
+              微调未独立覆盖分区的全局默认曲线与对话思考块质感
             </span>
           </div>
           <button
             type="button"
             className="pbtn sm"
             data-pmx-per-surface-toggle
-            aria-expanded={perSurfaceOpen}
-            onClick={() => setPerSurfaceOpen((prev) => !prev)}
+            aria-expanded={globalBaselineOpen}
+            onClick={() => setGlobalBaselineOpen((prev) => !prev)}
           >
-            {perSurfaceOpen ? '收起' : '展开'}
+            {globalBaselineOpen ? '收起' : '展开'}
           </button>
         </div>
 
-        {perSurfaceOpen ? (
+        {globalBaselineOpen ? (
           <div className="pmx-advanced-grid" data-pmx-per-surface-panel>
-            {PER_SURFACE_META.map((surface) => {
-              const entry = config.perSurfaceOverrides[surface.id];
-              const isCustom = entry?.mode === 'custom';
-              const opVal = entry?.op ?? config.glassRegions.surface.op;
-              const blurVal = entry?.blur ?? config.glassRegions.surface.blur;
-              const fidelityVal = entry?.fidelity ?? config.glassFidelity;
-              const colorVal = normalizeHex(entry?.color ?? '', true);
-              const fallbackTint =
-                polarity === 'dark' ? config.glassDarkColor : config.glassColor;
-              const colorOpen = isSameSlot(activeSlot, {
-                kind: 'surfaceColor',
-                surfaceId: surface.id,
-              });
+            <div className="ilook-accent-row">
+              <span className="ilook-typo-lbl">对话思考块玻璃</span>
+              <div className="seg" role="group" aria-label="思考块玻璃模式">
+                {thinkingOptions.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={config.thinkingMode === opt.id ? 'on' : ''}
+                    aria-pressed={config.thinkingMode === opt.id}
+                    onClick={() => onChange({ ...config, thinkingMode: opt.id })}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
+            {GLASS_REGION_META.map((reg) => {
+              const val = config.glassRegions[reg.id];
               return (
-                <div key={surface.id} className="pmx-sub-box">
-                  <div className="ilook-accent-row">
-                    <div className="grow">
-                      <div className="glass-reg-t">{surface.title}</div>
-                      <div className="glass-reg-d">{surface.note}</div>
-                    </div>
-                    <div className="seg" role="group" aria-label={`${surface.title}调节模式`}>
-                      <button
-                        type="button"
-                        className={!isCustom ? 'on' : ''}
-                        aria-pressed={!isCustom}
-                        onClick={() => updateSurfaceOverride(surface.id, { mode: 'inherit' })}
-                      >
-                        跟随全局
-                      </button>
-                      <button
-                        type="button"
-                        className={isCustom ? 'on' : ''}
-                        aria-pressed={isCustom}
-                        onClick={() =>
-                          updateSurfaceOverride(surface.id, {
-                            mode: 'custom',
-                            ...(surface.supportsOpBlur ? { op: opVal, blur: blurVal } : {}),
-                            ...(surface.supportsFidelity ? { fidelity: fidelityVal } : {}),
-                          })
-                        }
-                      >
-                        独立调节
-                      </button>
-                    </div>
+                <div key={reg.id} className="pmx-sub-box">
+                  <div className="glass-reg-head">
+                    <span className="glass-reg-t">{reg.title}</span>
+                    <span className="glass-reg-d">{reg.note}</span>
                   </div>
-
-                  {isCustom ? (
-                    <div className="pmx-sub-controls">
-                      {surface.supportsOpBlur ? (
-                        <>
-                          <div className="ilook-slider-row">
-                            <span className="ilook-slider-lbl">不透明度</span>
-                            <span className="ilook-rng">
-                              <input
-                                type="range"
-                                className="rng"
-                                min={GLASS_REGION_LIMITS.opMin}
-                                max={GLASS_REGION_LIMITS.opMax}
-                                step={1}
-                                aria-label={`${surface.title}不透明度`}
-                                value={opVal}
-                                onChange={(e) =>
-                                  updateSurfaceOverride(surface.id, {
-                                    mode: 'custom',
-                                    op: Number(e.target.value),
-                                  })
-                                }
-                              />
-                              <span className="rv">{opVal}%</span>
-                            </span>
-                          </div>
-                          <div className="ilook-slider-row">
-                            <span className="ilook-slider-lbl">模糊</span>
-                            <span className="ilook-rng">
-                              <input
-                                type="range"
-                                className="rng"
-                                min={GLASS_REGION_LIMITS.blurMin}
-                                max={GLASS_REGION_LIMITS.surfaceBlurMax}
-                                step={1}
-                                aria-label={`${surface.title}模糊半径`}
-                                value={blurVal}
-                                onChange={(e) =>
-                                  updateSurfaceOverride(surface.id, {
-                                    mode: 'custom',
-                                    blur: Number(e.target.value),
-                                  })
-                                }
-                              />
-                              <span className="rv">{blurVal}px</span>
-                            </span>
-                          </div>
-                        </>
-                      ) : null}
-
-                      {surface.supportsFidelity ? (
-                        <div className="ilook-slider-row">
-                          <span className="ilook-slider-lbl">保真度</span>
-                          <span className="ilook-rng">
-                            <input
-                              type="range"
-                              className="rng"
-                              min={GLASS_REGION_LIMITS.fidelityMin}
-                              max={GLASS_REGION_LIMITS.fidelityMax}
-                              step={5}
-                              aria-label={`${surface.title}保真度`}
-                              value={fidelityVal}
-                              onChange={(e) =>
-                                updateSurfaceOverride(surface.id, {
-                                  mode: 'custom',
-                                  fidelity: Number(e.target.value),
-                                })
-                              }
-                            />
-                            <span className="rv">{fidelityVal}%</span>
-                          </span>
-                        </div>
-                      ) : null}
-
-                      {surface.supportsColor ? (
-                        <div className="ilook-typo-row">
-                          <span className="ilook-typo-lbl">独立着色</span>
-                          <div className="ilook-typo-actions">
-                            <button
-                              type="button"
-                              className={`typo-pill-btn${colorOpen ? ' on' : ''}`}
-                              aria-expanded={colorOpen}
-                              onClick={(e) =>
-                                onOpenColorPicker({
-                                  slot: { kind: 'surfaceColor', surfaceId: surface.id },
-                                  title: `${surface.title}着色`,
-                                  value: colorVal,
-                                  fallbackColor: fallbackTint,
-                                  anchorEl: e.currentTarget,
-                                })
-                              }
-                            >
-                              <i
-                                className="typo-dot"
-                                style={{ background: colorVal || fallbackTint }}
-                              />
-                              <span className="typo-hex mono">{colorVal || '跟随'}</span>
-                            </button>
-                            <button
-                              type="button"
-                              className={`pbtn sm typo-clear-btn${colorVal ? '' : ' is-ghost'}`}
-                              disabled={!colorVal}
-                              onClick={() =>
-                                updateSurfaceOverride(surface.id, { mode: 'custom', color: '' })
-                              }
-                            >
-                              清除
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
+                  <div className="ilook-slider-row">
+                    <span className="ilook-slider-lbl">不透明度</span>
+                    <span className="ilook-rng">
+                      <input
+                        type="range"
+                        className="rng"
+                        min={GLASS_REGION_LIMITS.opMin}
+                        max={GLASS_REGION_LIMITS.opMax}
+                        step={1}
+                        aria-label={`${reg.title}不透明度`}
+                        value={val.op}
+                        onChange={(e) =>
+                          onChange(updateGlassRegion(config, reg.id, { op: Number(e.target.value) }))
+                        }
+                      />
+                      <span className="rv">{val.op}%</span>
+                    </span>
+                  </div>
+                  <div className="ilook-slider-row">
+                    <span className="ilook-slider-lbl">模糊</span>
+                    <span className="ilook-rng">
+                      <input
+                        type="range"
+                        className="rng"
+                        min={GLASS_REGION_LIMITS.blurMin}
+                        max={GLASS_REGION_LIMITS.blurMax}
+                        step={1}
+                        aria-label={`${reg.title}模糊半径`}
+                        value={val.blur}
+                        onChange={(e) =>
+                          onChange(updateGlassRegion(config, reg.id, { blur: Number(e.target.value) }))
+                        }
+                      />
+                      <span className="rv">{val.blur}px</span>
+                    </span>
+                  </div>
                 </div>
               );
             })}
@@ -1601,6 +1348,14 @@ export function ThemeSnapshotCard({
         overlay: { ...DEFAULT_APPEARANCE_CONFIG.glassRegions.overlay },
         control: { ...DEFAULT_APPEARANCE_CONFIG.glassRegions.control },
       },
+      perSurfaceOverrides: {},
+      glassZones: {
+        shellFrame: { ...DEFAULT_GLASS_ZONES.shellFrame },
+        rightSidebar: { ...DEFAULT_GLASS_ZONES.rightSidebar },
+        mainCanvas: { ...DEFAULT_GLASS_ZONES.mainCanvas },
+        composer: { ...DEFAULT_GLASS_ZONES.composer },
+        overlays: { ...DEFAULT_GLASS_ZONES.overlays },
+      },
       sidebarSquareCorners: { ...DEFAULT_APPEARANCE_CONFIG.sidebarSquareCorners },
       uiColorCustom: { ...DEFAULT_APPEARANCE_CONFIG.uiColorCustom },
       typography: {
@@ -1669,6 +1424,7 @@ export interface AppearanceHeroAndCardsProps {
   systemAccent?: string;
   size?: 'default' | 'compact';
   alwaysShowGlassCard?: boolean;
+  /** @deprecated Corner radius controls removed in favor of fixed default inner-stage radius (`--pmx-inner-stage-radius: 14px`). */
   showCornersCard?: boolean;
   showUiColorsCard?: boolean;
   showSnapshotCard?: boolean;
@@ -1697,7 +1453,7 @@ export function AppearanceHeroAndCards({
   systemAccent = '#0078d4',
   size = 'default',
   alwaysShowGlassCard = false,
-  showCornersCard = true,
+  showCornersCard: _deprecatedShowCornersCard = false,
   showUiColorsCard = true,
   showSnapshotCard = true,
   systemFonts = [],
@@ -1812,10 +1568,6 @@ export function AppearanceHeroAndCards({
         alwaysShow={alwaysShowGlassCard}
         compact={size === 'compact'}
       />
-
-      {showCornersCard ? (
-        <SidebarCornersCard config={config} onChange={onChange} />
-      ) : null}
 
       {showUiColorsCard ? (
         <UiColorsCard

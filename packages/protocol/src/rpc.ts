@@ -250,7 +250,13 @@ export interface RpcMethodMap {
     result: { slot: ChiefThreadSlotState };
   };
   "chief.switchProvider": {
-    params: { provider: ChiefProviderKind; model?: string };
+    params: {
+      provider: ChiefProviderKind;
+      model?: string;
+      reasoningEffort?: string;
+      defaultEffort?: string;
+      secretaryName?: string;
+    };
     result: { slot: ChiefThreadSlotState };
   };
   "t3.status": {
