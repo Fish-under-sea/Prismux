@@ -845,3 +845,85 @@ it.effect(
       expect(yield* fs.exists(`${baseDir}/tools`)).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+describe("Windows Android environment diagnostics", () => {
+  const runInspect = (input: {
+    readonly files: ReadonlyArray<string>;
+    readonly env: NodeJS.ProcessEnv;
+    readonly adbStdout?: string;
+    readonly avdStdout?: string;
+  }) =>
+    LocalDeviceHost.inspectAndroidEnvironment.pipe(
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, input.env),
+      Effect.provideService(
+        FileSystem.FileSystem,
+        FileSystem.makeNoop({
+          exists: (file) => Effect.succeed(input.files.includes(file)),
+        }),
+      ),
+      Effect.provideService(ProcessRunner.ProcessRunner, {
+        run: (cmd) =>
+          Effect.succeed(
+            cmd.args.includes("devices")
+              ? processOutput(0, input.adbStdout ?? "List of devices attached\n")
+              : processOutput(0, input.avdStdout ?? ""),
+          ),
+      }),
+      Effect.provide(NodePath.layerWin32),
+    );
+
+  it.effect(
+    "classifies missing_sdk, missing_adb, no_avd, usb_device_ready, and emulator_ready with Chinese guidance",
+    () =>
+      Effect.gen(function* () {
+        const sdkRoot = "C:\\Users\\Fish\\AppData\\Local\\Android\\Sdk";
+        const baseEnv = {
+          USERPROFILE: "C:\\Users\\Fish",
+          LOCALAPPDATA: "C:\\Users\\Fish\\AppData\\Local",
+        };
+
+        const missingSdk = yield* runInspect({ files: [], env: baseEnv });
+        expect(missingSdk.status).toBe("missing_sdk");
+        expect(missingSdk.guidanceZh).toContain("未检测到 Android SDK");
+
+        const missingAdb = yield* runInspect({
+          files: [`${sdkRoot}\\emulator\\emulator.exe`],
+          env: { ANDROID_HOME: sdkRoot },
+        });
+        expect(missingAdb.status).toBe("missing_adb");
+        expect(missingAdb.sdkRoot).toBe(sdkRoot);
+        expect(missingAdb.guidanceZh).toContain("platform-tools");
+
+        const noAvd = yield* runInspect({
+          files: [`${sdkRoot}\\platform-tools\\adb.exe`, `${sdkRoot}\\emulator\\emulator.exe`],
+          env: baseEnv,
+          adbStdout: "List of devices attached\n\n",
+          avdStdout: "",
+        });
+        expect(noAvd.status).toBe("no_avd");
+        expect(noAvd.sdkRoot).toBe(sdkRoot);
+        expect(noAvd.guidanceZh).toContain("AVD");
+
+        const usbReady = yield* runInspect({
+          files: [`${sdkRoot}\\platform-tools\\adb.exe`, `${sdkRoot}\\emulator\\emulator.exe`],
+          env: { ANDROID_SDK_ROOT: sdkRoot },
+          adbStdout: "List of devices attached\nR5CR1234567\tdevice\nemulator-5554\tdevice\n",
+          avdStdout: "Pixel_8_API_35\n",
+        });
+        expect(usbReady.status).toBe("usb_device_ready");
+        expect(usbReady.usbDevices).toEqual(["R5CR1234567"]);
+        expect(usbReady.guidanceZh).toContain("USB 真机");
+
+        const emulatorReady = yield* runInspect({
+          files: [`${sdkRoot}\\platform-tools\\adb.exe`, `${sdkRoot}\\emulator\\emulator.exe`],
+          env: baseEnv,
+          adbStdout: "List of devices attached\n",
+          avdStdout: "INFO | Storing crashdata\nPixel_8_API_35\nMedium_Phone_API_36\n",
+        });
+        expect(emulatorReady.status).toBe("emulator_ready");
+        expect(emulatorReady.avds).toEqual(["Pixel_8_API_35", "Medium_Phone_API_36"]);
+        expect(emulatorReady.guidanceZh).toContain("模拟器环境就绪");
+      }),
+  );
+});

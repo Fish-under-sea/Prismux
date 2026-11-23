@@ -7,11 +7,12 @@ import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type UsageProviderKind,
+  type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { CircleAlertIcon, ChevronDownIcon, InfoIcon, SlidersHorizontalIcon } from "lucide-react";
 import { T, useGT, useLocale, useMessages, Var } from "gt-react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
@@ -106,6 +107,56 @@ import {
   saveUsagePagePreferences,
   type UsagePagePreferences,
 } from "./usagePagePreferences";
+import {
+  USAGE_CALL_LOG_MESSAGES,
+  UsageCallLogsSection,
+} from "./UsageCallLogsSection";
+import {
+  computeUsageCallSummaryMetrics,
+  formatCacheHitRate,
+  formatTps,
+  formatTtft,
+  useUsageCallLogs,
+  type BackendUsageCallLogLike,
+} from "./usageCallTelemetryStore";
+
+function extractBackendCallLogs(
+  environments: readonly EnvironmentUsageStatus[],
+  hiddenProviders: ReadonlySet<UsageProviderKind>,
+): readonly BackendUsageCallLogLike[] {
+  const collected: BackendUsageCallLogLike[] = [];
+  for (const env of environments) {
+    const summary = env.summary as
+      | (UsageSummary & { readonly callLogs?: readonly BackendUsageCallLogLike[] | undefined })
+      | null;
+    const rawLogs = summary?.callLogs;
+    if (!Array.isArray(rawLogs)) continue;
+    for (const entry of rawLogs) {
+      if (!entry || hiddenProviders.has(entry.provider as UsageProviderKind)) continue;
+      collected.push(entry);
+    }
+  }
+  return collected;
+}
+
+function resolveWindowStartMs(window: UsageSummaryInput): number | null {
+  if (window.sinceTime) {
+    const parsed = Date.parse(window.sinceTime);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (window.sinceDay) {
+    const parsed = Date.parse(`${window.sinceDay}T00:00:00`);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function isCallLogsHashActive(): boolean {
+  if (typeof globalThis.window === "undefined") return false;
+  const hash = globalThis.window.location.hash.toLowerCase();
+  const search = globalThis.window.location.search.toLowerCase();
+  return hash === "#calls" || hash === "#call-logs" || search.includes("tab=calls");
+}
 
 function isUsageMetric(value: string | null | undefined): value is UsageMetric {
   return METRIC_OPTIONS.some((option) => option.value === value);
@@ -175,7 +226,13 @@ function UsageModelDialogHost({
 }
 
 export function UsagePage() {
-  const [preferences, setPreferences] = useState(readUsagePagePreferences);
+  const [preferences, setPreferences] = useState<UsagePagePreferences>(() => {
+    const saved = readUsagePagePreferences();
+    if (isCallLogsHashActive() && saved.metric === "limits") {
+      return { ...saved, metric: "tokens" };
+    }
+    return saved;
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hour12 = usePrimarySettings((settings) => resolveHour12(settings.timestampFormat));
   const gt = useGT();
@@ -631,8 +688,39 @@ function UsageOverview({
   const gt = useGT();
   const locale = useLocale();
   const m = useMessages();
-  const [breakdown, setBreakdown] = useState<"model" | "time">("model");
+  const [breakdown, setBreakdown] = useState<"model" | "time" | "calls">(() =>
+    isCallLogsHashActive() ? "calls" : "model",
+  );
   const shownHourly = shownWindow.resolution === "hour";
+  const backendCallLogs = useMemo(
+    () => extractBackendCallLogs(selectedEnvironments, hiddenProviders),
+    [hiddenProviders, selectedEnvironments],
+  );
+  const mergedCallLogs = useUsageCallLogs(backendCallLogs);
+  const windowCallLogs = useMemo(() => {
+    const sinceMs = resolveWindowStartMs(shownWindow);
+    return mergedCallLogs.filter((log) => {
+      if (hiddenProviders.has(log.provider as UsageProviderKind)) return false;
+      if (sinceMs !== null && log.timestamp < sinceMs) return false;
+      return true;
+    });
+  }, [hiddenProviders, mergedCallLogs, shownWindow]);
+  const callSummary = useMemo(
+    () =>
+      computeUsageCallSummaryMetrics(windowCallLogs, {
+        uncachedInputTokens: merged.uncachedInputTokens,
+        cachedInputTokens: merged.cachedInputTokens,
+        cacheCreationTokens: merged.cacheCreationTokens,
+        outputTokens: merged.outputTokens,
+      }),
+    [
+      merged.cacheCreationTokens,
+      merged.cachedInputTokens,
+      merged.outputTokens,
+      merged.uncachedInputTokens,
+      windowCallLogs,
+    ],
+  );
   const loading = usageLoading(showingKept, selectedEnvironments, refreshingUsage, hiddenProviders);
   // Copy the primitive; JSX reads of loading.partial would merge all derivations into one compiler cache
   // scope.
@@ -830,7 +918,7 @@ function UsageOverview({
         <h2 className="text-sm font-medium text-foreground">
           <T>Totals</T>
         </h2>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 py-1 md:grid-cols-5">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 py-1 sm:grid-cols-4">
           <Metric
             loading={loadingPartial}
             label={gt("Processed tokens")}
@@ -855,6 +943,21 @@ function UsageOverview({
             loading={loadingPartial}
             label={gt("Cache savings")}
             value={formatUsd(merged.costQuality.cacheSavingsUsd, locale)}
+          />
+          <Metric
+            loading={loadingPartial}
+            label={m(USAGE_CALL_LOG_MESSAGES.avgTtft)}
+            value={formatTtft(callSummary.avgTtftMs)}
+          />
+          <Metric
+            loading={loadingPartial}
+            label={m(USAGE_CALL_LOG_MESSAGES.avgSpeed)}
+            value={formatTps(callSummary.avgTps)}
+          />
+          <Metric
+            loading={loadingPartial}
+            label={m(USAGE_CALL_LOG_MESSAGES.cacheHitRate)}
+            value={formatCacheHitRate(callSummary.cacheHitRate)}
           />
         </dl>
       </section>
@@ -900,13 +1003,16 @@ function UsageOverview({
             value={[breakdown]}
             onValueChange={(next) => {
               const value = next[0];
-              if (value === "model" || value === "time") setBreakdown(value);
+              if (value === "model" || value === "time" || value === "calls") {
+                setBreakdown(value);
+              }
             }}
           >
             {(
               [
                 { value: "model", label: gt("Model") },
                 { value: "time", label: shownHourly ? gt("Hour") : gt("Day") },
+                { value: "calls", label: m(USAGE_CALL_LOG_MESSAGES.tabCallLogs) },
               ] as const
             ).map((option) => (
               <Toggle key={option.value} value={option.value}>
@@ -916,7 +1022,13 @@ function UsageOverview({
           </ToggleGroup>
         </div>
 
-        {breakdown === "model" ? (
+        {breakdown === "calls" ? (
+          <UsageCallLogsSection
+            logs={windowCallLogs}
+            timeZone={shownWindow.timeZone}
+            hour12={hour12}
+          />
+        ) : breakdown === "model" ? (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-right text-xs text-muted-foreground">

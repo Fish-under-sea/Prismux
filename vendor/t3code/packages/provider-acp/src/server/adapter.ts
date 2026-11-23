@@ -550,14 +550,29 @@ export interface AcpAdapterV2Flavor {
    * Native steering: `send` queues a message into the running turn and returns the
    * agent's id for it, which `injectedSteerId` reads from the update that delivers it.
    * No id means the running turn reads the message once the agent accepts it.
+   * Returning `{ injected, promptRequired }` allows dialects like OMP (`_session/steering`)
+   * to signal whether the host must dispatch a follow-up `session/prompt`.
    */
   readonly steering?: {
+    readonly supported?: (
+      initializeResult: AcpSessionRuntime.AcpSessionRuntimeStartResult["initializeResult"],
+    ) => boolean;
     readonly send: (
       runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
       sessionId: string,
       text: string,
       images: ReadonlyArray<EffectAcpSchema.ContentBlock>,
-    ) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
+      options?: { readonly queue?: "steering" | "followUp" },
+    ) => Effect.Effect<
+      | string
+      | {
+          readonly steerId?: string | undefined;
+          readonly injected?: boolean | undefined;
+          readonly promptRequired?: boolean | undefined;
+        }
+      | undefined,
+      EffectAcpErrors.AcpError
+    >;
     readonly injectedSteerId?: (
       notification: EffectAcpSchema.SessionNotification,
     ) => string | undefined;
@@ -8035,12 +8050,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         rememberTerminalEnvironment(started.sessionId, yield* readMcpContext(input.threadId));
         yield* runtime.drainEvents;
         const steersWithPrompt = flavor.steersWithPrompt?.(started.initializeResult) === true;
+        const steersNatively = flavor.steering?.supported?.(started.initializeResult) === true;
         const capabilities = negotiatedCapabilities(
           yield* readCapabilities,
           started,
           flavor.modelOptionArrivesLate === true,
           flavor.forkFromTurn?.supported(started.initializeResult) === true,
-          steersWithPrompt,
+          steersWithPrompt || steersNatively,
         );
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
@@ -10106,9 +10122,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             function* (turnInput) {
               if (steersWithPrompt) return yield* steerWithPrompt(turnInput);
               const steering = flavor.steering;
+              const currentSetup = yield* Ref.get(activeSessionSetup);
+              const steeringSupported =
+                steering !== undefined &&
+                (steering.supported === undefined ||
+                  (currentSetup !== null && steering.supported(currentSetup.initializeResult)));
               // A text-only steer leaves attachments to the orchestrator's restart.
               if (
-                steering === undefined ||
+                !steeringSupported ||
                 (turnInput.message.attachments.length > 0 &&
                   flavor.capabilities.turns.activeSteeringAcceptsAttachments === false)
               ) {
@@ -10141,12 +10162,26 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 resolveAttachmentPath: host.resolveAttachmentPath,
                 resolveExtractedTextPath: host.resolveExtractedTextPath,
               });
-              const steerId = yield* steering.send(
+              const steerOutcome = yield* steering.send(
                 runtime,
                 context.nativeThreadId,
                 text,
                 yield* imageAttachmentBlocks(turnInput.message.attachments),
               );
+              if (
+                steerOutcome !== undefined &&
+                typeof steerOutcome === "object" &&
+                steerOutcome.promptRequired === true &&
+                steerOutcome.injected !== true
+              ) {
+                return yield* steerWithPrompt(turnInput);
+              }
+              const steerId =
+                typeof steerOutcome === "string"
+                  ? steerOutcome
+                  : typeof steerOutcome === "object"
+                    ? steerOutcome.steerId
+                    : undefined;
               if (steerId === undefined) return;
               const injected = steerInjection(steerId);
               // The agent reads a steer at its next step. One that lands after the last

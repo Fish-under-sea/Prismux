@@ -46,14 +46,18 @@ export const PreviewRenderedViewportSize = Schema.Struct({
 export type PreviewRenderedViewportSize = typeof PreviewRenderedViewportSize.Type;
 
 export const PREVIEW_VIEWPORT_PRESET_IDS = [
+  "iphone-16-pro",
   "iphone-se",
+  "pixel-8",
+  "xiaomi-huawei-360",
+  "foldable-unfolded",
+  "ipad-mini",
   "iphone-xr",
   "iphone-12-pro",
   "iphone-14-pro-max",
   "pixel-7",
   "samsung-galaxy-s8-plus",
   "samsung-galaxy-s20-ultra",
-  "ipad-mini",
   "ipad-air",
   "ipad-pro",
   "surface-pro-7",
@@ -75,7 +79,6 @@ const LEGACY_PREVIEW_VIEWPORT_PRESET_IDS = [
   "laptop-1280x800",
   "ipad-pro-11",
   "iphone-15-pro",
-  "pixel-8",
   "galaxy-s24",
 ] as const;
 

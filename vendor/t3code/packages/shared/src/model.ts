@@ -5,6 +5,7 @@ import {
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderOptionChoice,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
@@ -593,4 +594,241 @@ export function applyClaudePromptEffortPrefix(
     return trimmed;
   }
   return `Ultrathink:\n${trimmed}`;
+}
+
+/**
+ * Canonical reasoning-control option IDs across supported providers:
+ * - Codex: `reasoningEffort`
+ * - Claude: `effort` (plus optional `ultracode` boolean toggle)
+ * - OpenCode: `variant`
+ * - Cursor: `reasoning_effort`
+ * - Antigravity / OMP / ACP: `thought_level` / `thinking_level` (or `role: "reasoning"`)
+ * - Pi / Claude Haiku 4.5: `thinking`
+ */
+export const MODEL_REASONING_EFFORT_OPTION_IDS = [
+  "reasoningEffort",
+  "effort",
+  "reasoning",
+  "variant",
+  "reasoning_effort",
+  "thinking_level",
+  "thought_level",
+  "thinking",
+] as const;
+
+const MODEL_REASONING_EFFORT_OPTION_ID_SET: ReadonlySet<string> = new Set(
+  MODEL_REASONING_EFFORT_OPTION_IDS,
+);
+
+export function isReasoningEffortDescriptor(descriptor: ProviderOptionDescriptor): boolean {
+  return (
+    (descriptor.type === "select" && descriptor.role === "reasoning") ||
+    MODEL_REASONING_EFFORT_OPTION_ID_SET.has(descriptor.id)
+  );
+}
+
+export function getReasoningEffortDescriptor(
+  caps: ModelCapabilities | null | undefined,
+  selections?: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): ProviderOptionDescriptor | null {
+  if (!caps) return null;
+  const descriptors = getProviderOptionDescriptors({ caps, selections });
+  const explicitRole = descriptors.find(
+    (descriptor) => descriptor.type === "select" && descriptor.role === "reasoning",
+  );
+  if (explicitRole) return explicitRole;
+  for (const id of MODEL_REASONING_EFFORT_OPTION_IDS) {
+    const select = descriptors.find(
+      (descriptor) => descriptor.type === "select" && descriptor.id === id,
+    );
+    if (select) return select;
+  }
+  return (
+    descriptors.find((descriptor) => descriptor.type === "boolean" && descriptor.id === "thinking") ??
+    null
+  );
+}
+
+export function getReasoningEffortLevels(
+  caps: ModelCapabilities | null | undefined,
+  options?: { readonly includePromptInjected?: boolean },
+): ReadonlyArray<ProviderOptionChoice> {
+  const descriptor = getReasoningEffortDescriptor(caps);
+  if (descriptor?.type !== "select") return [];
+  if (options?.includePromptInjected === true || !descriptor.promptInjectedValues?.length) {
+    return descriptor.options;
+  }
+  return descriptor.options.filter(
+    (choice) => !descriptor.promptInjectedValues?.includes(choice.id),
+  );
+}
+
+export function getUltracodeDescriptor(
+  caps: ModelCapabilities | null | undefined,
+  selections?: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): Extract<ProviderOptionDescriptor, { type: "boolean" }> | null {
+  if (!caps) return null;
+  const descriptors = getProviderOptionDescriptors({ caps, selections });
+  return (
+    descriptors.find(
+      (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "boolean" }> =>
+        descriptor.type === "boolean" && descriptor.id === "ultracode",
+    ) ?? null
+  );
+}
+
+const DEFAULT_SERVICE_TIER_CHOICE_ID = "default";
+
+export function isFastServiceTierChoice(
+  choice: Pick<ProviderOptionChoice, "id" | "label">,
+): boolean {
+  const id = choice.id.trim().toLowerCase();
+  const label = choice.label.trim().toLowerCase();
+  return id === "fast" || id === "priority" || label === "fast";
+}
+
+export function isUltrafastServiceTierChoice(
+  choice: Pick<ProviderOptionChoice, "id" | "label">,
+): boolean {
+  const id = choice.id.trim().toLowerCase();
+  const label = choice.label.trim().toLowerCase();
+  return id === "ultrafast" || label === "ultrafast";
+}
+
+export type FastModeControlDescriptor =
+  | {
+      readonly kind: "boolean";
+      readonly optionId: "fastMode";
+      readonly descriptor: Extract<ProviderOptionDescriptor, { type: "boolean" }>;
+      readonly isSingleFastToggle: true;
+    }
+  | {
+      readonly kind: "serviceTier";
+      readonly optionId: "serviceTier";
+      readonly descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>;
+      readonly standardChoice: ProviderOptionChoice;
+      readonly fastChoice: ProviderOptionChoice | null;
+      readonly ultrafastChoice: ProviderOptionChoice | null;
+      readonly speedChoices: ReadonlyArray<ProviderOptionChoice>;
+      readonly isSingleFastToggle: boolean;
+    };
+
+/**
+ * Resolves a model's speed / Fast Mode control across providers:
+ * - Claude & Cursor expose a boolean `fastMode` descriptor.
+ * - Codex & Pi extensions expose a `serviceTier` select descriptor (`default` + `fast`/`priority`/`ultrafast`/`flex`).
+ */
+export function getFastModeDescriptor(
+  caps: ModelCapabilities | null | undefined,
+  selections?: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): FastModeControlDescriptor | null {
+  if (!caps) return null;
+  const descriptors = getProviderOptionDescriptors({ caps, selections });
+  const booleanFast = descriptors.find(
+    (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "boolean" }> =>
+      descriptor.type === "boolean" && descriptor.id === "fastMode",
+  );
+  if (booleanFast) {
+    return {
+      kind: "boolean",
+      optionId: "fastMode",
+      descriptor: booleanFast,
+      isSingleFastToggle: true,
+    };
+  }
+  const serviceTier = descriptors.find(
+    (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
+      descriptor.type === "select" && descriptor.id === "serviceTier",
+  );
+  if (!serviceTier) return null;
+  const standardChoice =
+    serviceTier.options.find((choice) => choice.id === DEFAULT_SERVICE_TIER_CHOICE_ID) ?? {
+      id: DEFAULT_SERVICE_TIER_CHOICE_ID,
+      label: "Standard",
+    };
+  const speedChoices = serviceTier.options.filter(
+    (choice) => choice.id !== DEFAULT_SERVICE_TIER_CHOICE_ID,
+  );
+  if (speedChoices.length === 0) return null;
+  const fastChoice = speedChoices.find(isFastServiceTierChoice) ?? null;
+  const ultrafastChoice = speedChoices.find(isUltrafastServiceTierChoice) ?? null;
+  return {
+    kind: "serviceTier",
+    optionId: "serviceTier",
+    descriptor: serviceTier,
+    standardChoice,
+    fastChoice,
+    ultrafastChoice,
+    speedChoices,
+    isSingleFastToggle: speedChoices.length === 1 && fastChoice !== null,
+  };
+}
+
+/** Whether the model exposes a Fast / Ultrafast mode option (`fastMode` toggle or Fast `serviceTier`). */
+export function supportsFastMode(caps: ModelCapabilities | null | undefined): boolean {
+  const control = getFastModeDescriptor(caps);
+  if (!control) return false;
+  return (
+    control.kind === "boolean" ||
+    control.fastChoice !== null ||
+    control.ultrafastChoice !== null
+  );
+}
+
+/** Returns the underlying provider option key (`"fastMode"` or `"serviceTier"`) when Fast Mode is supported. */
+export function getFastModeOptionKey(
+  caps: ModelCapabilities | null | undefined,
+): "fastMode" | "serviceTier" | null {
+  if (!supportsFastMode(caps)) return null;
+  return getFastModeDescriptor(caps)?.optionId ?? null;
+}
+
+/**
+ * Returns `"ultrafast"`, `"fast"`, or `false` for the current selection.
+ * For boolean `fastMode`, requires an explicit or reported `true` (never treating an unselected
+ * provider default `currentValue: true` as user-enabled).
+ */
+export function isFastModeActive(
+  caps: ModelCapabilities | null | undefined,
+  selection?: ModelSelection | null,
+  reportedSelection?: ModelSelection | null,
+): "fast" | "ultrafast" | false {
+  const control = getFastModeDescriptor(caps, selection?.options);
+  if (!control) return false;
+  if (control.kind === "boolean") {
+    return getProviderOptionStatedValue("fastMode", selection, reportedSelection) === true
+      ? "fast"
+      : false;
+  }
+  const current = getProviderOptionCurrentValue(control.descriptor, selection, reportedSelection);
+  if (typeof current !== "string" || current === control.standardChoice.id) {
+    return false;
+  }
+  if (control.ultrafastChoice && current === control.ultrafastChoice.id) {
+    return "ultrafast";
+  }
+  if (control.fastChoice && current === control.fastChoice.id) {
+    return "fast";
+  }
+  return false;
+}
+
+/**
+ * Builds the canonical `ProviderOptionSelection` toggle entry for turning Fast Mode on or off
+ * across both boolean `fastMode` (Claude/Cursor) and select `serviceTier` (Codex/Pi) models.
+ */
+export function buildFastModeSelectionUpdate(
+  caps: ModelCapabilities | null | undefined,
+  enabled: boolean,
+): ProviderOptionSelection | null {
+  const control = getFastModeDescriptor(caps);
+  if (!control) return null;
+  if (control.kind === "boolean") {
+    return { id: "fastMode", value: enabled };
+  }
+  if (!enabled) {
+    return { id: "serviceTier", value: control.standardChoice.id };
+  }
+  const target = control.fastChoice ?? control.ultrafastChoice;
+  return target ? { id: "serviceTier", value: target.id } : null;
 }

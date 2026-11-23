@@ -5,17 +5,18 @@ import {
   WorkspaceBreadcrumbItem,
   WorkspaceBreadcrumbSeparator,
 } from "../WorkspaceBreadcrumb";
-import { SETTINGS_SECTION_LABELS } from "./settingsSearch";
+import { SETTINGS_NAV_LABELS, SETTINGS_SECTION_LABELS } from "./settingsSearch";
 
 const SETTINGS_LABEL = msg("Settings");
 
 const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = {
   ...SETTINGS_SECTION_LABELS,
-  "/settings/diagnostics": msg("Diagnostics"),
+  "/settings/about": SETTINGS_NAV_LABELS["/settings/about"],
+  "/settings/diagnostics": SETTINGS_SECTION_LABELS["/settings/diagnostics"],
   "/settings/open-source-licenses": msg("Open source licenses"),
 };
 
-function settingsBreadcrumbLabel(pathname: string): string | null {
+export function settingsBreadcrumbLabel(pathname: string): string | null {
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
   return SETTINGS_BREADCRUMB_LABELS[normalizedPathname] ?? null;
 }

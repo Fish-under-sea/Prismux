@@ -100,7 +100,7 @@ describe("Antigravity release gates", () => {
         },
       }),
     ).toBe("Google AI Ultra");
-    expect(antigravitySessionTierName({ _meta: undefined })).toBeUndefined();
+    expect(antigravitySessionTierName({})).toBeUndefined();
     expect(antigravitySessionTierName(undefined)).toBeUndefined();
   });
 });

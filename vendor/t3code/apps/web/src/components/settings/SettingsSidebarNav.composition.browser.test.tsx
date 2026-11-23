@@ -4,7 +4,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import { SidebarProvider } from "../ui/sidebar";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
-import { settingsNavGroups, SETTINGS_SECTION_LABELS } from "./settingsSearch";
+import { settingsNavGroups, SETTINGS_NAV_LABELS } from "./settingsSearch";
 
 vi.mock("./useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [
@@ -79,7 +79,7 @@ it("moves Tab through every settings section", async () => {
 
   const sections = settingsNavGroups(false)
     .flatMap((group) => group.paths)
-    .map((to) => SETTINGS_SECTION_LABELS[to]);
+    .map((to) => SETTINGS_NAV_LABELS[to]);
   const tabbed: string[] = [];
   for (let step = 0; step < sections.length; step += 1) {
     await userEvent.tab();
@@ -94,7 +94,11 @@ it.each([1280, 390])("names each group by a heading outside it at %ipx wide", as
   await page.viewport(width, 800);
   await using _screen = await renderNav();
 
-  for (const name of ["Agents", "Code", "Connections"]) {
+  for (const name of [
+    "Agents & workspace",
+    "Extensions, memory & connections",
+    "System & about",
+  ]) {
     const heading = page.getByRole("heading", { name, level: 3 });
     await expect.element(heading).toBeInTheDocument();
     const group = page.getByRole("group", { name }).element();
@@ -111,4 +115,53 @@ it.each([1280, 390])("names each group by a heading outside it at %ipx wide", as
     expect(heading?.tagName, `the group starting at ${first} has no heading`).toBe("H3");
   }
   expect(page.getByRole("tree").query()).toBeNull();
+});
+
+it("highlights Appearance & Wallpaper for legacy /settings/wallpaper deep links and separates slide vs crossfade hover pills", async () => {
+  await page.viewport(1280, 800);
+  await using _screen = await render(
+    <SidebarProvider defaultOpen>
+      <SettingsSidebarNav pathname="/settings/wallpaper" />
+    </SidebarProvider>,
+    { router: "/settings/wallpaper" },
+  );
+
+  const appearanceButton = document.querySelector<HTMLButtonElement>(
+    '[data-settings-section="/settings/appearance"]',
+  );
+  expect(appearanceButton?.getAttribute("aria-current")).toBe("page");
+  expect(appearanceButton?.getAttribute("data-active")).toBe("true");
+
+  const chatButton = document.querySelector<HTMLButtonElement>(
+    '[data-settings-section="/settings/chat"]',
+  )!;
+  const generalButton = document.querySelector<HTMLButtonElement>(
+    '[data-settings-section="/settings/general"]',
+  )!;
+  const providersButton = document.querySelector<HTMLButtonElement>(
+    '[data-settings-section="/settings/providers"]',
+  )!;
+
+  await act(() => {
+    generalButton.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, pointerType: "mouse" }));
+  });
+  await act(() => {
+    chatButton.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, pointerType: "mouse" }));
+  });
+  const group1HoverPill = document.querySelector<HTMLElement>(
+    '[data-settings-nav-pill="hover"][data-pill-group="general-appearance"]',
+  );
+  expect(group1HoverPill?.getAttribute("data-pill-mode")).toBe("slide");
+  expect(group1HoverPill?.getAttribute("data-pill-visible")).toBe("true");
+
+  await act(() => {
+    providersButton.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, pointerType: "mouse" }));
+  });
+  const group2HoverPill = document.querySelector<HTMLElement>(
+    '[data-settings-nav-pill="hover"][data-pill-group="agents-workspace"]',
+  );
+  expect(group1HoverPill?.getAttribute("data-pill-mode")).toBe("crossfade");
+  expect(group1HoverPill?.getAttribute("data-pill-visible")).toBe("false");
+  expect(group2HoverPill?.getAttribute("data-pill-mode")).toBe("crossfade");
+  expect(group2HoverPill?.getAttribute("data-pill-visible")).toBe("true");
 });

@@ -51,6 +51,9 @@ import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { EnvironmentsMap } from "./EnvironmentsMap";
 import { LinkedEnvironmentsSettings } from "./LinkedEnvironmentsSettings";
+import { ScopedSwitch } from "./ScopedSwitch";
+import { useOptionalSettingsScope } from "./SettingsScopeContext";
+import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { addEnvironmentPrefillAtom } from "~/state/linkedThreadView";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -177,6 +180,41 @@ function LocalVersionStatusLabel() {
 }
 
 /** Environments lists the machines this app connects to; access covers who may reach one of them. */
+function LinkedEnvironmentsToggleSection() {
+  const scope = useOptionalSettingsScope();
+  if (scope === null) return null;
+  return <ScopedLinkedEnvironmentsToggleSection />;
+}
+
+function ScopedLinkedEnvironmentsToggleSection() {
+  const searchableSetting = useSearchableSetting();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const gt = useGT();
+  return (
+    <SettingsSection id="multi-environment-linking" title={gt("Multi-environment linking")}>
+      <SettingsRow
+        serverScoped
+        {...searchableSetting("linked-environments-beta")}
+        settingKeys={["linkedEnvironmentsEnabled"]}
+        description={gt(
+          "Let agents here work on your other machines, and theirs here. Turn it on for each machine, then link them below. While off, nothing new starts over a link; running tasks finish.",
+        )}
+        control={
+          <ScopedSwitch
+            settingKeys={["linkedEnvironmentsEnabled"]}
+            checked={settings.linkedEnvironmentsEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ linkedEnvironmentsEnabled: Boolean(checked) })
+            }
+            aria-label={gt("Linked environments")}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function ConnectionsSettings({ view }: { readonly view: "environments" | "access" }) {
   return view === "access" ? (
     <AccessSettings />
@@ -1125,7 +1163,7 @@ function ConnectionsSettingsContent({
         {desktopWslState.enabled ? (
           <SettingsRow
             title={gt("WSL only")}
-            description={gt("Run only the WSL backend. T3 Code restarts when this changes.")}
+            description={gt("Run only the WSL backend. Prismux restarts when this changes.")}
             className="bg-muted/20 pl-7 sm:pl-8"
             control={
               <Switch
@@ -1396,21 +1434,6 @@ function ConnectionsSettingsContent({
             ) : canManageLocalBackend ? (
               renderDisabledNetworkAccessRow()
             ) : null}
-            {canReadRelay || canManageRelay ? (
-              <CloudLinkRow
-                environmentId={accessEnvironmentId}
-                canReadRelay={canReadRelay}
-                canManageRelay={canManageRelay}
-                connectDeviceApproval={
-                  accessServerConfig?.settings.requireConnectDeviceApproval === undefined
-                    ? null
-                    : {
-                        required: accessServerConfig.settings.requireConnectDeviceApproval,
-                        canManage: canWriteAccess,
-                      }
-                }
-              />
-            ) : null}
             {accessServerConfig?.environment.capabilities.previewTunnelSetting ? (
               <SettingsRow
                 title={searchableSetting("preview-tunnel").title}
@@ -1498,22 +1521,6 @@ function ConnectionsSettingsContent({
               </ScrollArea>
             </FoldedSettingsSection>
           ) : null}
-          {canReadAccess &&
-          connectDevices !== null &&
-          (connectDeviceRequests.length > 0 || connectDevices.length > 0) ? (
-            <ConnectDeviceApprovalSettings
-              environmentId={accessEnvironmentId}
-              requests={connectDeviceRequests}
-              devices={connectDevices}
-              canWrite={canWriteAccess}
-              requestRevoke={requestConnectRevoke}
-            />
-          ) : null}
-          <RevokeConnectDeviceDialog
-            request={pendingConnectRevoke}
-            onClose={() => setPendingConnectRevoke(null)}
-            requireApproval={requireConnectApproval}
-          />
           <AlertDialog
             open={pendingDesktopServerExposureMode !== null && canManageLocalBackend}
             onOpenChange={(open) => {
@@ -1531,11 +1538,15 @@ function ConnectionsSettingsContent({
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
                     ? gt(
-                        "Let your other devices connect to T3 Code over the network. Pair devices to give them access. T3 Code will restart.",
+                        "Let your other devices connect to Prismux over the network. Pair devices to give them access. Prismux will restart.",
                       )
-                    : gt(
-                        "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Code will restart.",
-                      )}
+                    : hasCloudPublicConfig()
+                      ? gt(
+                          "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. Prismux will restart.",
+                        )
+                      : gt(
+                          "Devices connected over your local network will disconnect. Existing Tailscale HTTPS tunnels keep working. Prismux will restart.",
+                        )}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1594,14 +1605,14 @@ function ConnectionsSettingsContent({
                   {pendingWslChange?.kind === "disable"
                     ? pendingWslChange.wasWslOnly
                       ? gt(
-                          "T3 Code will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL.",
+                          "Prismux will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL.",
                         )
                       : gt(
-                          "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in T3 Code until you re-enable WSL.",
+                          "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in Prismux until you re-enable WSL.",
                         )
                     : pendingWslChange?.kind === "distro"
                       ? gt(
-                          "T3 Code will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted.",
+                          "Prismux will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted.",
                         )
                       : pendingWslChange?.kind === "enable"
                         ? gt(
@@ -1609,10 +1620,10 @@ function ConnectionsSettingsContent({
                           )
                         : pendingWslChange?.nextValue
                           ? gt(
-                              "T3 Code will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again.",
+                              "Prismux will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again.",
                             )
                           : gt(
-                              "T3 Code will restart and bring the Windows backend back up alongside WSL.",
+                              "Prismux will restart and bring the Windows backend back up alongside WSL.",
                             )}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -1701,7 +1712,7 @@ function ConnectionsSettingsContent({
                   <T>Disable Tailscale HTTPS?</T>
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  <T>T3 Code will restart the local backend without Tailscale Serve.</T>
+                  <T>Prismux will restart the local backend without Tailscale Serve.</T>
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1742,7 +1753,7 @@ function ConnectionsSettingsContent({
                 </DialogTitle>
                 <DialogDescription>
                   <T>
-                    T3 Code will restart the local backend with Tailscale Serve enabled and ask
+                    Prismux will restart the local backend with Tailscale Serve enabled and ask
                     Tailscale to proxy HTTPS traffic to this backend.
                   </T>
                 </DialogDescription>
@@ -1931,6 +1942,7 @@ function ConnectionsSettingsContent({
           }}
         />
       ) : null}
+      <LinkedEnvironmentsToggleSection />
       {environmentsView === "list"
         ? peerLinkHosts.map((environment, index) => (
             <LinkedEnvironmentsSettings

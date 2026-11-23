@@ -5,6 +5,7 @@ import { resolveProviderCatalog, type ModelManifestData } from "./ModelManifest.
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   capClaudeCatalogEffort,
+  claudeReportedModels,
   type ClaudeModelCatalog,
   formatClaudeVersionUpgradeMessage,
   getClaudeCatalogModelCapabilities,
@@ -19,6 +20,7 @@ import {
   scopeClaudeModelCatalog,
   scopeClaudeUpgradeMessageToChannel,
   withClaudeCodeModelRoutes,
+  withClaudeReportedFastMode,
 } from "./ClaudeModelCatalog.ts";
 
 const manifest = (): ModelManifestData => ({
@@ -561,6 +563,64 @@ describe("Claude model catalog", () => {
     assert.strictEqual(
       maxLabel([{ maxEffortLevel: "medium" }, perModel({ opus: "high" })]),
       "Max (capped to Medium)",
+    );
+  });
+
+  it("propagates supportsFastMode from live Claude CLI reports for both new and catalog models", () => {
+    const reported = [
+      {
+        value: "gateway/claude-fast-preview",
+        displayName: "Claude Fast Preview",
+        description: "",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] as Array<
+          "low" | "medium" | "high" | "xhigh" | "max"
+        >,
+        supportsFastMode: true,
+      },
+      {
+        value: "sonnet",
+        displayName: "Claude Sonnet 5.5",
+        description: "",
+        resolvedModel: "claude-sonnet-5-5",
+        supportsFastMode: true,
+      },
+    ];
+
+    const extraModels = claudeReportedModels(BUNDLED_CLAUDE_MODEL_CATALOG, [], reported);
+    assert.strictEqual(extraModels.length, 1);
+    assert.deepStrictEqual(
+      extraModels[0]?.capabilities?.optionDescriptors?.map(({ id, type }) => `${id}:${type}`),
+      ["effort:select", "fastMode:boolean"],
+    );
+
+    const merged = withClaudeReportedFastMode(
+      BUNDLED_CLAUDE_MODEL_CATALOG.models.map((entry) => entry.model),
+      reported,
+    );
+    const sonnet55 = merged.find((model) => model.slug === "claude-sonnet-5-5");
+    assert.isTrue(
+      sonnet55?.capabilities?.optionDescriptors?.some(
+        (descriptor) => descriptor.id === "fastMode" && descriptor.type === "boolean",
+      ),
+    );
+    // Models NOT flagged with supportsFastMode stay unchanged.
+    const sonnet46 = merged.find((model) => model.slug === "claude-sonnet-4-6");
+    assert.isFalse(
+      sonnet46?.capabilities?.optionDescriptors?.some((descriptor) => descriptor.id === "fastMode"),
+    );
+
+    // Routed catalog used by compileClaudeModelSelection also carries reported fastMode capability.
+    const routed = withClaudeCodeModelRoutes(BUNDLED_CLAUDE_MODEL_CATALOG, reported);
+    assert.isTrue(
+      getClaudeCatalogModelCapabilities(routed, "claude-sonnet-5-5").optionDescriptors?.some(
+        (descriptor) => descriptor.id === "fastMode" && descriptor.type === "boolean",
+      ),
+    );
+    assert.isTrue(
+      getClaudeCatalogModelCapabilities(routed, "gateway/claude-fast-preview").optionDescriptors?.some(
+        (descriptor) => descriptor.id === "fastMode" && descriptor.type === "boolean",
+      ),
     );
   });
 });

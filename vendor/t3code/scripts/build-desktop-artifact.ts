@@ -4,6 +4,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
 // plist is CommonJS; Node cannot load its named exports from an ES module.
 import Plist from "plist";
 
@@ -47,6 +48,7 @@ import { resolveTaggedSourceVersion } from "./lib/tagged-source-version.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -750,6 +752,8 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "sidecar-invalid",
   "unpacked-native-missing",
   "resource-monitor-missing",
+  "seven-zip-missing",
+  "official-plugins-preinstalled",
   "wsl-runtime-missing",
   "wsl-runtime-invalid",
   "file-limit-exceeded",
@@ -776,6 +780,12 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
     if (this.reason === "resource-monitor-missing") {
       return "Windows packaged payload is missing the resource monitor executable.";
     }
+    if (this.reason === "seven-zip-missing") {
+      return "Windows packaged payload is missing resources/tools/7za.exe or its size is invalid.";
+    }
+    if (this.reason === "official-plugins-preinstalled") {
+      return `Windows packaged payload violates the zero-preinstalled official plugins policy: ${(this.missingFiles ?? []).join(", ")}.`;
+    }
     if (this.reason === "wsl-runtime-missing") {
       return "Windows packaged payload is missing the WSL runtime archive or SHA-256 sidecar.";
     }
@@ -789,6 +799,22 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
       return "Windows packaged payload is missing resources/server.asar.";
     }
     return `Windows packaged application directory was not found at ${this.packagedAppDir}.`;
+  }
+}
+
+export class WindowsSevenZipToolError extends Schema.TaggedError<WindowsSevenZipToolError>()(
+  "WindowsSevenZipToolError",
+  {
+    reason: Schema.Literals(["missing", "invalid-size"]),
+    searchedPaths: Schema.Array(Schema.String),
+    sizeBytes: Schema.optionalKey(Schema.Number),
+  },
+) {
+  override get message(): string {
+    if (this.reason === "invalid-size") {
+      return `Staged 7za.exe has unexpected size (${String(this.sizeBytes ?? 0)} bytes); expected between ${String(WINDOWS_SEVEN_ZIP_MIN_BYTES)} and ${String(WINDOWS_SEVEN_ZIP_MAX_BYTES)} bytes.`;
+    }
+    return `Could not locate 7za.exe / 7z.exe in any candidate path: ${this.searchedPaths.join(", ")}.`;
   }
 }
 
@@ -1065,6 +1091,20 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
 }
 
 export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 300;
+export const WINDOWS_SEVEN_ZIP_MIN_BYTES = 100_000;
+export const WINDOWS_SEVEN_ZIP_MAX_BYTES = 20 * 1024 * 1024;
+export const PRISMUX_OFFICIAL_PLUGIN_DIRS = [
+  "plugin-qq",
+  "plugin-pet",
+  "plugin-fishdock-hook",
+  "plugin-ssh",
+] as const;
+export const WINDOWS_TOOLS_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/tools",
+    to: "tools",
+  },
+] as const;
 export const PRISMUX_DAEMON_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/prismux-daemon",
@@ -2833,7 +2873,7 @@ const PRISMUX_DAEMON_WORKSPACE_PACKAGES = [
 const copyPrismuxJsTree = Effect.fn("desktopArtifact.copyPrismuxJsTree")(function* (
   sourceDir: string,
   targetDir: string,
-): Effect.fn.Return<void, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> {
+): Effect.fn.Return<void, PlatformError, FileSystem.FileSystem | Path.Path> {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(targetDir, { recursive: true });
@@ -2851,6 +2891,226 @@ const copyPrismuxJsTree = Effect.fn("desktopArtifact.copyPrismuxJsTree")(functio
       yield* fs.copyFile(sourcePath, targetPath);
     }
   }
+});
+
+const isTransientWindowsCleanupError = (cause: unknown): boolean => {
+  const inspect = (value: unknown, depth: number): boolean => {
+    if (depth > 6 || !value) return false;
+    if (Cause.isCause(value)) {
+      return inspect(Cause.squash(value), depth + 1);
+    }
+    if (typeof value !== "object") return false;
+    const record = value as {
+      code?: unknown;
+      reason?: { code?: unknown; cause?: unknown };
+      cause?: unknown;
+      message?: unknown;
+    };
+    const code =
+      typeof record.code === "string"
+        ? record.code
+        : typeof record.reason?.code === "string"
+          ? record.reason.code
+          : "";
+    if (code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY" || code === "EACCES") {
+      return true;
+    }
+    if (
+      typeof record.message === "string" &&
+      /\b(EBUSY|EPERM|ENOTEMPTY|EACCES)\b/.test(record.message)
+    ) {
+      return true;
+    }
+    return inspect(record.reason?.cause, depth + 1) || inspect(record.cause, depth + 1);
+  };
+  return inspect(cause, 0);
+};
+
+export const removeDirectoryWithRetry = Effect.fn("desktopArtifact.removeDirectoryWithRetry")(
+  function* (
+    targetDir: string,
+    options?: {
+      readonly maxAttempts?: number;
+      readonly retryDelayMs?: number;
+      readonly removeFn?: (dir: string) => Effect.Effect<void, PlatformError | Error>;
+    },
+  ) {
+    const fs = yield* FileSystem.FileSystem;
+    const maxAttempts = Math.max(1, options?.maxAttempts ?? 3);
+    const retryDelayMs = Math.max(0, options?.retryDelayMs ?? 500);
+    const removeFn =
+      options?.removeFn ?? ((dir: string) => fs.remove(dir, { recursive: true, force: true }));
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const exit = yield* Effect.exit(removeFn(targetDir));
+      if (Exit.isSuccess(exit)) {
+        return { removed: true, attempts: attempt } as const;
+      }
+      lastError = exit.cause;
+      if (!isTransientWindowsCleanupError(lastError)) {
+        yield* Effect.logWarning(
+          `[desktop-artifact] Failed to clean temporary staging directory ${targetDir} (${String(lastError)}); keeping artifact build result.`,
+        );
+        return { removed: false, attempts: attempt, deferred: true } as const;
+      }
+      if (attempt < maxAttempts && retryDelayMs > 0) {
+        yield* Effect.sleep(Duration.millis(retryDelayMs * attempt));
+      }
+    }
+
+    yield* Effect.logWarning(
+      `[desktop-artifact] Deferred temporary directory cleanup for ${targetDir} after ${String(maxAttempts)} attempts (Windows Defender/file lock EBUSY/EPERM); built installer artifacts remain valid.`,
+    );
+    return { removed: false, attempts: maxAttempts, deferred: true } as const;
+  },
+);
+
+export function resolveWindowsSevenZipCandidates(input: {
+  readonly repoRoot: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+}): ReadonlyArray<string> {
+  const candidates: string[] = [];
+  const envOverride = input.env?.PRISMUX_7ZA_PATH?.trim();
+  if (envOverride) {
+    candidates.push(envOverride);
+  }
+  const archFolder = input.arch === "arm64" ? "arm64" : "x64";
+  candidates.push(
+    NodePath.join(input.repoRoot, "node_modules", "7zip-bin", "win", archFolder, "7za.exe"),
+  );
+  if (archFolder !== "x64") {
+    candidates.push(NodePath.join(input.repoRoot, "node_modules", "7zip-bin", "win", "x64", "7za.exe"));
+  }
+  candidates.push(
+    "C:\\Program Files\\7-Zip\\7za.exe",
+    "C:\\Program Files\\7-Zip\\7z.exe",
+    "C:\\Program Files (x86)\\7-Zip\\7za.exe",
+    "C:\\Program Files (x86)\\7-Zip\\7z.exe",
+  );
+  return candidates;
+}
+
+export const stageWindowsSevenZipTool = Effect.fn("desktopArtifact.stageWindowsSevenZipTool")(
+  function* (input: {
+    readonly repoRoot: string;
+    readonly arch: typeof BuildArch.Type;
+    readonly targetDir: string;
+    readonly candidates?: ReadonlyArray<string>;
+    readonly env?: Readonly<Record<string, string | undefined>>;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const candidates =
+      input.candidates ??
+      resolveWindowsSevenZipCandidates({
+        repoRoot: input.repoRoot,
+        arch: input.arch,
+        env: input.env ?? process.env,
+      });
+
+    let matchedPath: string | undefined;
+    let matchedSizeBytes = 0;
+    for (const candidate of candidates) {
+      const stat = yield* fs.stat(candidate).pipe(Effect.orElseSucceed(() => null));
+      if (stat?.type === "File") {
+        matchedPath = candidate;
+        matchedSizeBytes = Number(stat.size);
+        break;
+      }
+    }
+
+    if (!matchedPath) {
+      return yield* new WindowsSevenZipToolError({
+        reason: "missing",
+        searchedPaths: [...candidates],
+      });
+    }
+
+    if (
+      matchedSizeBytes < WINDOWS_SEVEN_ZIP_MIN_BYTES ||
+      matchedSizeBytes > WINDOWS_SEVEN_ZIP_MAX_BYTES
+    ) {
+      return yield* new WindowsSevenZipToolError({
+        reason: "invalid-size",
+        searchedPaths: [matchedPath],
+        sizeBytes: matchedSizeBytes,
+      });
+    }
+
+    yield* fs.makeDirectory(input.targetDir, { recursive: true });
+    const targetExePath = path.join(input.targetDir, "7za.exe");
+    yield* fs.copyFile(matchedPath, targetExePath);
+
+    let bundledSiblingDll = false;
+    // Standard 7-Zip's 7z.exe depends on sibling 7z.dll to extract archives; copy it beside 7za.exe.
+    if (path.basename(matchedPath).toLowerCase() === "7z.exe") {
+      const siblingDll = path.join(path.dirname(matchedPath), "7z.dll");
+      const dllStat = yield* fs.stat(siblingDll).pipe(Effect.orElseSucceed(() => null));
+      if (dllStat?.type === "File") {
+        yield* fs.copyFile(siblingDll, path.join(input.targetDir, "7z.dll"));
+        bundledSiblingDll = true;
+      }
+    }
+
+    const copiedStat = yield* fs.stat(targetExePath);
+    const copiedBytes = Number(copiedStat.size);
+    if (
+      copiedBytes < WINDOWS_SEVEN_ZIP_MIN_BYTES ||
+      copiedBytes > WINDOWS_SEVEN_ZIP_MAX_BYTES
+    ) {
+      return yield* new WindowsSevenZipToolError({
+        reason: "invalid-size",
+        searchedPaths: [targetExePath],
+        sizeBytes: copiedBytes,
+      });
+    }
+
+    yield* Effect.log(
+      `[desktop-artifact] Staged 7za.exe from ${matchedPath} (${String(copiedBytes)} bytes${bundledSiblingDll ? " + 7z.dll" : ""}).`,
+    );
+    return {
+      sourcePath: matchedPath,
+      targetExePath,
+      sizeBytes: copiedBytes,
+      bundledSiblingDll,
+    } as const;
+  },
+);
+
+export const findForbiddenPreinstalledOfficialPlugins = Effect.fn(
+  "desktopArtifact.findForbiddenPreinstalledOfficialPlugins",
+)(function* (rootDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const violations: string[] = [];
+
+  const scan = (currentDir: string, relativePrefix: string): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      const entries = yield* fs.readDirectory(currentDir).pipe(Effect.orElseSucceed(() => []));
+      for (const entry of entries) {
+        const lower = entry.toLowerCase();
+        const relPath = relativePrefix ? `${relativePrefix}/${entry}` : entry;
+        if (
+          (PRISMUX_OFFICIAL_PLUGIN_DIRS as ReadonlyArray<string>).includes(lower) ||
+          lower.endsWith(".wb-plugin")
+        ) {
+          violations.push(relPath);
+          continue;
+        }
+        const fullPath = path.join(currentDir, entry);
+        const stat = yield* fs.stat(fullPath).pipe(Effect.orElseSucceed(() => null));
+        if (stat?.type === "Directory") {
+          yield* scan(fullPath, relPath);
+        }
+      }
+    });
+
+  if (yield* fs.exists(rootDir).pipe(Effect.orElseSucceed(() => false))) {
+    yield* scan(rootDir, "");
+  }
+  return violations;
 });
 
 const stagePrismuxDaemon = Effect.fn("desktopArtifact.stagePrismuxDaemon")(function* (input: {
@@ -2874,10 +3134,13 @@ const stagePrismuxDaemon = Effect.fn("desktopArtifact.stagePrismuxDaemon")(funct
   yield* fs.makeDirectory(input.targetDir, { recursive: true });
   yield* fs.makeDirectory(input.depsTargetDir, { recursive: true });
   yield* copyPrismuxJsTree(daemonDistDir, input.targetDir);
-  yield* fs.writeFileString(
-    path.join(input.targetDir, "package.json"),
-    `${JSON.stringify({ name: "@prismux/daemon", version: input.appVersion, private: true, type: "module" }, null, 2)}\n`,
-  );
+  const daemonManifestJson = yield* encodeJsonString({
+    name: "@prismux/daemon",
+    version: input.appVersion,
+    private: true,
+    type: "module",
+  });
+  yield* fs.writeFileString(path.join(input.targetDir, "package.json"), `${daemonManifestJson}\n`);
 
   // Stage into a separate non-node_modules source folder so electron-builder copies it into
   // resources/prismux-daemon/node_modules without filtering (strictly excludes plugins-official/*).
@@ -2944,6 +3207,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
   prismuxDaemonBundled = false,
+  windowsToolsBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
@@ -2972,6 +3236,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(prismuxDaemonBundled ? PRISMUX_DAEMON_EXTRA_RESOURCES : []),
+      ...(platform === "win" && windowsToolsBundled ? WINDOWS_TOOLS_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "mac" ? MAC_APPLE_SPEECH_EXTRA_RESOURCES : []),
@@ -3422,9 +3687,10 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   }
   if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) return;
 
-  const probeRoot = yield* fs.makeTempDirectoryScoped({
+  const probeRoot = yield* fs.makeTempDirectory({
     prefix: "t3code-windows-primary-native-probe-",
   });
+  yield* Effect.addFinalizer(() => removeDirectoryWithRetry(probeRoot).pipe(Effect.asVoid));
   const fffEntryPath = path.join(input.asarPath, "node_modules/@ff-labs/fff-node/dist/index.js");
   const probeEnv = { ...process.env };
   delete probeEnv.ELECTRON_NO_ASAR;
@@ -3513,6 +3779,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly targetArch: typeof BuildArch.Type;
   readonly appVersion: string;
   readonly expectWslRuntime?: boolean;
+  readonly expectSevenZipTool?: boolean;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
 }) {
@@ -3604,6 +3871,31 @@ export const validateWindowsPackagedPayload = Effect.fn(
       reason: "resource-monitor-missing",
       packagedAppDir,
       missingFiles: ["resource-monitor/t3-resource-monitor.exe"],
+    });
+  }
+
+  if (input.expectSevenZipTool === true) {
+    const sevenZipPath = path.join(resourcesDir, "tools", "7za.exe");
+    const sevenZipStat = yield* fs.stat(sevenZipPath).pipe(Effect.orElseSucceed(() => null));
+    const sevenZipSize = sevenZipStat?.type === "File" ? Number(sevenZipStat.size) : 0;
+    if (
+      sevenZipSize < WINDOWS_SEVEN_ZIP_MIN_BYTES ||
+      sevenZipSize > WINDOWS_SEVEN_ZIP_MAX_BYTES
+    ) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "seven-zip-missing",
+        packagedAppDir,
+        missingFiles: ["tools/7za.exe"],
+      });
+    }
+  }
+
+  const forbiddenPlugins = yield* findForbiddenPreinstalledOfficialPlugins(resourcesDir);
+  if (forbiddenPlugins.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "official-plugins-preinstalled",
+      packagedAppDir,
+      missingFiles: forbiddenPlugins,
     });
   }
 
@@ -3872,10 +4164,12 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     options.version ?? resolveTaggedSourceVersion(repoRoot, serverPackageJson.version);
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
-  const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
-  const stageRoot = yield* mkdir({
+  const stageRoot = yield* fs.makeTempDirectory({
     prefix: `t3code-desktop-${options.platform}-stage-`,
   });
+  if (!options.keepStage) {
+    yield* Effect.addFinalizer(() => removeDirectoryWithRetry(stageRoot).pipe(Effect.asVoid));
+  }
 
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
@@ -4042,6 +4336,15 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     depsTargetDir: path.join(stageProdResourcesDir, "prismux-daemon-deps"),
     appVersion,
   });
+  let windowsToolsBundled = false;
+  if (options.platform === "win") {
+    yield* stageWindowsSevenZipTool({
+      repoRoot,
+      arch: options.arch,
+      targetDir: path.join(stageProdResourcesDir, "tools"),
+    });
+    windowsToolsBundled = true;
+  }
 
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
@@ -4131,6 +4434,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
       prismuxDaemonBundled,
+      windowsToolsBundled,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -4301,6 +4605,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         platform: options.platform,
         runtimeArchivePath: options.wslRuntime,
       }),
+      expectSevenZipTool: windowsToolsBundled,
       verbose: options.verbose,
     });
   }

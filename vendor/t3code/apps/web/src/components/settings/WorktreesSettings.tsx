@@ -56,6 +56,44 @@ function StartFromRemoteRow() {
   );
 }
 
+/** Shows only when every machine in scope is a Mac, since only macOS servers honor it. */
+function FastWorktreeCheckoutRow() {
+  const searchableSetting = useSearchableSetting();
+  const { scope, connectedEnvironments } = useSettingsScope();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const gt = useGT();
+  if (
+    scope.kind === "project" ||
+    scope.kind === "checkout" ||
+    connectedEnvironments.length === 0 ||
+    connectedEnvironments.some(
+      (environment) =>
+        environment.serverConfig?.environment.capabilities.fastWorktreeCheckout !== true,
+    )
+  ) {
+    return null;
+  }
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("worktree-fast-checkout")}
+      settingKeys={["fastWorktreeCheckout"]}
+      description={gt(
+        "On a Mac, clone new worktrees from a checkout cached in the Prismux home folder instead of writing every file. Uses Git’s normal checkout when it can’t. Turning it off deletes the cache.",
+      )}
+      control={
+        <ScopedSwitch
+          settingKeys={["fastWorktreeCheckout"]}
+          checked={settings.fastWorktreeCheckout}
+          onCheckedChange={(checked) => updateSettings({ fastWorktreeCheckout: Boolean(checked) })}
+          aria-label={gt("Fast worktree checkout")}
+        />
+      }
+    />
+  );
+}
+
 export function WorktreesSettingsPanel() {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
@@ -70,6 +108,7 @@ export function WorktreesSettingsPanel() {
       >
         {!isProjectScope && <WorktreesDirectoryRow />}
         <StartFromRemoteRow />
+        <FastWorktreeCheckoutRow />
         <AdvancedSettings targetIds={[searchableSetting("worktree-submodules").id]}>
           <WorktreeSubmodulesRow />
         </AdvancedSettings>

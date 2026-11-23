@@ -724,7 +724,7 @@ function ConfiguredCloudLinkRow({
     <>
       {showSwitch ? (
         <SettingsRow
-          title={setting("t3-connect").title}
+          title={gt("T3 Connect")}
           description={
             connectDenial !== undefined && !managedTunnelActive
               ? connectDenial
@@ -771,20 +771,20 @@ function ConfiguredCloudLinkRow({
         </SettingsRow>
       ) : linkRevoked ? (
         <SettingsRow
-          title={setting("t3-connect").title}
+          title={gt("T3 Connect")}
           description={gt(
             "This environment was removed from T3 Connect. Run `t3 connect link` on the host to link it again.",
           )}
         />
       ) : (
         <SettingsRow
-          title={setting("t3-connect").title}
+          title={gt("T3 Connect")}
           description={gt("Run `t3 connect link` on the host, then restart T3 Code there.")}
         />
       )}
       {signedOut && showSwitch ? null : (
         <SettingsRow
-          title={setting("publish-agent-activity").title}
+          title={gt("Publish agent activity")}
           description={
             signedOut
               ? gt("Sign in to send activity to mobile notifications and Live Activities.")
@@ -808,7 +808,7 @@ function ConfiguredCloudLinkRow({
       )}
       {managedTunnelActive && !signedOut ? (
         <SettingsRow
-          title={setting("hold-webhooks-while-offline").title}
+          title={gt("Hold webhooks while offline")}
           description={gt(
             "Keep webhook requests for up to 24 hours while this environment is offline, then deliver them. Off: T3 Connect only forwards requests and stores nothing.",
           )}
@@ -826,7 +826,7 @@ function ConfiguredCloudLinkRow({
       ) : null}
       {managedTunnelActive && connectDeviceApproval ? (
         <SettingsRow
-          title={setting("connect-device-approval").title}
+          title={gt("Require approval for new devices")}
           description={gt(
             "Devices that sign in to your T3 Connect account wait until someone already connected here approves them.",
           )}
@@ -923,6 +923,7 @@ export function CloudRemoteEnvironmentRows({
   readonly only?: EnvironmentId;
 }) {
   if (only !== undefined) {
+    if (!hasCloudPublicConfig()) return null;
     return (
       <CloudEnvironmentConnectRows
         only={only}

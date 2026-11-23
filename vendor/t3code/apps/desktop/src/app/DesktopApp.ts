@@ -304,6 +304,7 @@ const startLocalBackend = Effect.gen(function* () {
   yield* Effect.forkScoped(
     prismuxDaemon.start({
       t3Url: PrismuxDaemonService.normalizeT3WebSocketUrl(backendConfig.httpBaseUrl.href),
+      t3HttpUrl: PrismuxDaemonService.normalizeT3HttpUrl(backendConfig.httpBaseUrl.href),
       ...(localT3Token ? { t3Token: localT3Token } : {}),
     }),
   );

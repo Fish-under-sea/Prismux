@@ -40,11 +40,49 @@ import type { AppRouter } from "../router";
 import {
   prismuxDaemonClient,
   type DaemonConnectionInfo,
+  type DaemonKillStalePtyResponse,
+  type DaemonKillSystemPortResponse,
+  type DaemonSystemResourcesResponse,
+  type DaemonUpdaterStatusResponse,
   type DaemonWallpaperItemDto,
   type PrismuxDaemonClient,
 } from "./daemonClient";
+import {
+  createPortsPollingController,
+  INITIAL_PORTS_SCAN_STATE,
+  type PortsPollingController,
+  type PortsScanState,
+} from "./statusBar/portsPolling";
 
 export type PrismuxDialMode = "agent" | "oracle" | "review";
+
+export interface PrismuxUpdaterBadgeState {
+  readonly currentVersion: string | null;
+  readonly latestVersion: string | null;
+  readonly hasUpdate: boolean;
+  readonly installState:
+    | "idle"
+    | "checking"
+    | "available"
+    | "up-to-date"
+    | "downloading"
+    | "extracting"
+    | "verifying"
+    | "ready"
+    | "installing"
+    | "error";
+  readonly downloadPercent: number | null;
+  readonly portableMode: boolean;
+  readonly downloadedFilePath: string | null;
+  readonly downloadedSha256: string | null;
+  readonly sourceUsed: string | null;
+  readonly checking: boolean;
+}
+
+export interface PrismuxPortsPopoverRequest {
+  readonly id: number;
+  readonly workspace?: string | null;
+}
 
 export interface PrismuxRuntimeContextValue {
   daemon: PrismuxDaemonClient;
@@ -62,6 +100,18 @@ export interface PrismuxRuntimeContextValue {
   chiefProvider: string;
   dialMode: PrismuxDialMode;
   switchChief: (next: { provider?: string; dialMode?: PrismuxDialMode }) => Promise<void>;
+  portsState: PortsScanState;
+  refreshSystemPorts: (workspace?: string) => Promise<void>;
+  killSystemPort: (pid: number) => Promise<DaemonKillSystemPortResponse>;
+  systemResources: DaemonSystemResourcesResponse | null;
+  resourcesLoading: boolean;
+  resourcesError: string | null;
+  refreshSystemResources: () => Promise<void>;
+  killStalePty: (sessionId: string) => Promise<DaemonKillStalePtyResponse>;
+  updaterBadge: PrismuxUpdaterBadgeState;
+  refreshUpdaterStatus: () => Promise<void>;
+  portsPopoverRequest: PrismuxPortsPopoverRequest | null;
+  requestOpenPortsPopover: (workspace?: string | null) => void;
 }
 
 const APPEARANCE_STORAGE_KEY = "prismux.appearance.v1";
@@ -479,6 +529,137 @@ function extractAppearanceConfigFromDaemonPayload(
   return { appearance, wallpaperPatch, wallpaperMigrated };
 }
 
+const DEFAULT_UPDATER_BADGE: PrismuxUpdaterBadgeState = Object.freeze({
+  currentVersion: null,
+  latestVersion: null,
+  hasUpdate: false,
+  installState: "idle",
+  downloadPercent: null,
+  portableMode: false,
+  downloadedFilePath: null,
+  downloadedSha256: null,
+  sourceUsed: null,
+  checking: false,
+});
+
+const RESOURCES_POLL_INTERVAL_MS = 30_000;
+
+function deriveUpdaterBadgeFromPayload(
+  raw: unknown,
+  prev: PrismuxUpdaterBadgeState,
+): PrismuxUpdaterBadgeState {
+  if (!isPlainRecord(raw)) return prev;
+  const status = raw as DaemonUpdaterStatusResponse;
+  const lastCheck = isPlainRecord(status.lastCheck) ? status.lastCheck : null;
+  const lastDownload = isPlainRecord(status.lastDownload) ? status.lastDownload : null;
+  const progress = isPlainRecord(status.progress) ? status.progress : null;
+
+  const currentVersion =
+    typeof status.currentVersion === "string" && status.currentVersion.trim().length > 0
+      ? status.currentVersion.trim()
+      : prev.currentVersion;
+  const latestVersion =
+    typeof lastCheck?.latestVersion === "string" && lastCheck.latestVersion.trim().length > 0
+      ? lastCheck.latestVersion.trim()
+      : typeof status.version === "string" && status.version.trim().length > 0
+        ? status.version.trim()
+        : prev.latestVersion;
+  const hasUpdate =
+    typeof lastCheck?.hasUpdate === "boolean"
+      ? lastCheck.hasUpdate
+      : typeof status.hasUpdate === "boolean"
+        ? status.hasUpdate
+        : prev.hasUpdate;
+  const checking =
+    typeof status.checking === "boolean" ? status.checking : prev.checking;
+  const portableMode =
+    typeof status.portableMode === "boolean" ? status.portableMode : prev.portableMode;
+  const downloadedFilePath =
+    typeof status.downloadedFilePath === "string"
+      ? status.downloadedFilePath
+      : typeof lastDownload?.filePath === "string"
+        ? lastDownload.filePath
+        : prev.downloadedFilePath;
+  const downloadedSha256 =
+    typeof status.downloadedSha256 === "string"
+      ? status.downloadedSha256
+      : typeof lastDownload?.sha256 === "string"
+        ? lastDownload.sha256
+        : prev.downloadedSha256;
+  const sourceUsed =
+    typeof lastCheck?.sourceUsed === "string"
+      ? lastCheck.sourceUsed
+      : typeof lastDownload?.sourceUsed === "string"
+        ? lastDownload.sourceUsed
+        : prev.sourceUsed;
+
+  const rawPercent =
+    typeof progress?.percent === "number" && Number.isFinite(progress.percent)
+      ? Math.max(0, Math.min(100, Math.round(progress.percent)))
+      : typeof status.percent === "number" && Number.isFinite(status.percent)
+        ? Math.max(0, Math.min(100, Math.round(status.percent)))
+        : typeof progress?.bytesDownloaded === "number" &&
+            typeof progress?.totalBytes === "number" &&
+            progress.totalBytes > 0
+          ? Math.max(0, Math.min(100, Math.round((progress.bytesDownloaded / progress.totalBytes) * 100)))
+          : prev.downloadPercent;
+
+  const rawStage =
+    typeof status.installState === "string"
+      ? status.installState
+      : typeof progress?.stage === "string"
+        ? progress.stage
+        : typeof progress?.phase === "string"
+          ? progress.phase
+          : typeof status.stage === "string"
+            ? status.stage
+            : null;
+
+  let installState: PrismuxUpdaterBadgeState["installState"] = prev.installState;
+  if (
+    rawStage === "idle" ||
+    rawStage === "checking" ||
+    rawStage === "available" ||
+    rawStage === "up-to-date" ||
+    rawStage === "downloading" ||
+    rawStage === "extracting" ||
+    rawStage === "verifying" ||
+    rawStage === "ready" ||
+    rawStage === "installing" ||
+    rawStage === "error"
+  ) {
+    installState = rawStage;
+  } else if (downloadedFilePath && downloadedSha256) {
+    installState = "ready";
+  } else if (status.downloading === true) {
+    installState = "downloading";
+  } else if (checking) {
+    installState = "checking";
+  } else if (hasUpdate) {
+    installState = "available";
+  } else if (lastCheck !== null) {
+    installState = "up-to-date";
+  }
+
+  return {
+    currentVersion,
+    latestVersion,
+    hasUpdate: hasUpdate || installState === "ready",
+    installState,
+    downloadPercent:
+      installState === "downloading" || installState === "extracting" || installState === "verifying"
+        ? rawPercent
+        : installState === "ready"
+          ? 100
+          : null,
+    portableMode,
+    downloadedFilePath,
+    downloadedSha256,
+    sourceUsed,
+    checking,
+  };
+}
+
 const PrismuxRuntimeContext = createContext<PrismuxRuntimeContextValue | null>(null);
 
 export interface PrismuxRuntimeProviderProps {
@@ -502,6 +683,20 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [chiefProvider, setChiefProvider] = useState<string>("codex");
   const [dialMode, setDialMode] = useState<PrismuxDialMode>("agent");
+  const [portsState, setPortsState] = useState<PortsScanState>(INITIAL_PORTS_SCAN_STATE);
+  const [systemResources, setSystemResources] = useState<DaemonSystemResourcesResponse | null>(
+    null,
+  );
+  const [resourcesLoading, setResourcesLoading] = useState<boolean>(false);
+  const [resourcesError, setResourcesError] = useState<string | null>(null);
+  const [updaterBadge, setUpdaterBadge] = useState<PrismuxUpdaterBadgeState>(DEFAULT_UPDATER_BADGE);
+  const [portsPopoverRequest, setPortsPopoverRequest] = useState<PrismuxPortsPopoverRequest | null>(
+    null,
+  );
+  const portsControllerRef = useRef<PortsPollingController | null>(null);
+  const occludedRef = useRef<boolean>(occluded);
+  occludedRef.current = occluded;
+  const portsRequestSeqRef = useRef<number>(0);
   const [reducedTransparency, setReducedTransparency] = useState<boolean>(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
       return false;
@@ -1190,6 +1385,169 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     };
   }, [scheduleDaemonSave, syncHostPolarity, wallpaperHost, wallpaperStore]);
 
+  const refreshSystemPorts = useCallback(async (workspace?: string): Promise<void> => {
+    const controller = portsControllerRef.current;
+    if (controller) {
+      await controller.refreshNow(workspace);
+      return;
+    }
+    if (!daemonReadyRef.current) return;
+    try {
+      const res = await prismuxDaemonClient.fetchSystemPorts(workspace);
+      const list = Array.isArray(res?.ports) ? res.ports : [];
+      setPortsState({
+        ports: list,
+        loading: false,
+        error: null,
+        failureStreak: 0,
+        lastScannedAt: Date.now(),
+      });
+    } catch (err) {
+      setPortsState((prev) => {
+        const nextStreak = prev.failureStreak + 1;
+        return {
+          ports: nextStreak >= 2 ? [] : prev.ports,
+          loading: false,
+          error: err instanceof Error ? err.message : String(err),
+          failureStreak: nextStreak,
+          lastScannedAt: prev.lastScannedAt,
+        };
+      });
+    }
+  }, []);
+
+  const killSystemPort = useCallback(
+    async (pid: number): Promise<DaemonKillSystemPortResponse> => {
+      const result = await prismuxDaemonClient.killSystemPort(pid);
+      void refreshSystemPorts();
+      return result;
+    },
+    [refreshSystemPorts],
+  );
+
+  const refreshSystemResources = useCallback(async (): Promise<void> => {
+    if (!daemonReadyRef.current) return;
+    setResourcesLoading(true);
+    try {
+      const res = await prismuxDaemonClient.fetchSystemResources();
+      setSystemResources(res);
+      setResourcesError(null);
+    } catch (err) {
+      setResourcesError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResourcesLoading(false);
+    }
+  }, []);
+
+  const killStalePty = useCallback(
+    async (sessionId: string): Promise<DaemonKillStalePtyResponse> => {
+      const result = await prismuxDaemonClient.killStalePty(sessionId);
+      void refreshSystemResources();
+      return result;
+    },
+    [refreshSystemResources],
+  );
+
+  const refreshUpdaterStatus = useCallback(async (): Promise<void> => {
+    if (!daemonReadyRef.current) return;
+    try {
+      const status = await prismuxDaemonClient.fetchUpdaterStatus();
+      setUpdaterBadge((prev) => deriveUpdaterBadgeFromPayload(status, prev));
+    } catch {
+      // Ignore transient updater poll failures.
+    }
+  }, []);
+
+  const requestOpenPortsPopover = useCallback((workspace?: string | null) => {
+    portsRequestSeqRef.current += 1;
+    setPortsPopoverRequest({
+      id: portsRequestSeqRef.current,
+      ...(workspace !== undefined ? { workspace } : {}),
+    });
+  }, []);
+
+  // Shared 30s silent port polling controller (auto-pauses when window is occluded/hidden, 2-failure debounce).
+  useEffect(() => {
+    if (!daemonInfo.ready) {
+      portsControllerRef.current?.stop();
+      portsControllerRef.current = null;
+      return;
+    }
+
+    const controller = createPortsPollingController({
+      fetcher: async (workspace) => {
+        const res = await prismuxDaemonClient.fetchSystemPorts(workspace);
+        return Array.isArray(res?.ports) ? res.ports : [];
+      },
+      isPaused: () =>
+        occludedRef.current ||
+        (typeof document !== "undefined" && document.visibilityState === "hidden"),
+      onStateChange: (next) => setPortsState(next),
+    });
+    portsControllerRef.current = controller;
+    controller.start();
+
+    return () => {
+      controller.stop();
+      if (portsControllerRef.current === controller) {
+        portsControllerRef.current = null;
+      }
+    };
+  }, [daemonInfo.ready]);
+
+  // Synchronize occlusion/visibility pause state into the active ports controller.
+  useEffect(() => {
+    const isHidden =
+      occluded || (typeof document !== "undefined" && document.visibilityState === "hidden");
+    portsControllerRef.current?.setPaused(isHidden);
+  }, [occluded]);
+
+  // Shared silent system resources polling (auto-paused when occluded/hidden).
+  useEffect(() => {
+    if (!daemonInfo.ready || occluded) return;
+    void refreshSystemResources();
+    const timer = setInterval(() => {
+      if (
+        occludedRef.current ||
+        (typeof document !== "undefined" && document.visibilityState === "hidden")
+      ) {
+        return;
+      }
+      void refreshSystemResources();
+    }, RESOURCES_POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [daemonInfo.ready, occluded, refreshSystemResources]);
+
+  // Subscribe to Daemon unified updater status & SSE events for non-intrusive update badge.
+  useEffect(() => {
+    if (!daemonInfo.ready) return;
+    let cancelled = false;
+
+    void prismuxDaemonClient
+      .fetchUpdaterStatus()
+      .then((status) => {
+        if (cancelled) return;
+        setUpdaterBadge((prev) => deriveUpdaterBadgeFromPayload(status, prev));
+      })
+      .catch(() => {});
+
+    const unsubscribe = prismuxDaemonClient.subscribeUpdaterEvents((evt) => {
+      if (cancelled) return;
+      if (isPlainRecord(evt.data)) {
+        const payload =
+          isPlainRecord(evt.data.status) ? evt.data.status : evt.data;
+        setUpdaterBadge((prev) => deriveUpdaterBadgeFromPayload(payload, prev));
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [daemonInfo.ready]);
+
   const contextValue = useMemo<PrismuxRuntimeContextValue>(
     () => ({
       daemon: prismuxDaemonClient,
@@ -1205,6 +1563,18 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       chiefProvider,
       dialMode,
       switchChief,
+      portsState,
+      refreshSystemPorts,
+      killSystemPort,
+      systemResources,
+      resourcesLoading,
+      resourcesError,
+      refreshSystemResources,
+      killStalePty,
+      updaterBadge,
+      refreshUpdaterStatus,
+      portsPopoverRequest,
+      requestOpenPortsPopover,
     }),
     [
       daemonInfo,
@@ -1219,6 +1589,18 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       chiefProvider,
       dialMode,
       switchChief,
+      portsState,
+      refreshSystemPorts,
+      killSystemPort,
+      systemResources,
+      resourcesLoading,
+      resourcesError,
+      refreshSystemResources,
+      killStalePty,
+      updaterBadge,
+      refreshUpdaterStatus,
+      portsPopoverRequest,
+      requestOpenPortsPopover,
     ],
   );
 
@@ -1227,6 +1609,10 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       {children}
     </PrismuxRuntimeContext.Provider>
   );
+}
+
+export function useOptionalPrismuxRuntime(): PrismuxRuntimeContextValue | null {
+  return useContext(PrismuxRuntimeContext);
 }
 
 export function usePrismuxRuntime(): PrismuxRuntimeContextValue {

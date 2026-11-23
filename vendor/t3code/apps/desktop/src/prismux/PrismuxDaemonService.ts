@@ -64,6 +64,55 @@ export function normalizeT3WebSocketUrl(rawUrl: string): string {
   }
 }
 
+export function normalizeT3HttpUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (trimmed.length === 0) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "ws:") {
+      parsed.protocol = "http:";
+    } else if (parsed.protocol === "wss:") {
+      parsed.protocol = "https:";
+    }
+    if (parsed.pathname === "/ws" || parsed.pathname === "/rpc") {
+      parsed.pathname = "/";
+    }
+    return parsed.origin;
+  } catch {
+    return trimmed;
+  }
+}
+
+export function buildPrismuxDaemonChildEnv(input: {
+  readonly hostEnv: NodeJS.ProcessEnv;
+  readonly catalogPath: string;
+  readonly mainPid: number;
+  readonly t3HttpUrl?: string | undefined;
+  readonly t3WsUrl?: string | undefined;
+}): NodeJS.ProcessEnv {
+  const normalizedHttpUrl = input.t3HttpUrl
+    ? normalizeT3HttpUrl(input.t3HttpUrl)
+    : input.t3WsUrl
+      ? normalizeT3HttpUrl(input.t3WsUrl)
+      : undefined;
+  const normalizedWsUrl = input.t3WsUrl ? normalizeT3WebSocketUrl(input.t3WsUrl) : undefined;
+  return {
+    ...input.hostEnv,
+    ELECTRON_RUN_AS_NODE: "1",
+    PRISMUX_CATALOG_PATH: input.catalogPath,
+    PRISMUX_MAIN_PID: String(input.mainPid),
+    ...(normalizedHttpUrl
+      ? {
+          PRISMUX_T3_SERVER_URL: normalizedHttpUrl,
+          T3CODE_SERVER_URL: normalizedHttpUrl,
+        }
+      : {}),
+    ...(normalizedWsUrl ? { PRISMUX_T3_WS_URL: normalizedWsUrl } : {}),
+  };
+}
+
 function appendTailBuffer(current: string, chunk: string, maxChars: number): string {
   const combined = current + chunk;
   return combined.length <= maxChars ? combined : combined.slice(combined.length - maxChars);
@@ -71,6 +120,7 @@ function appendTailBuffer(current: string, chunk: string, maxChars: number): str
 
 export interface PrismuxDaemonStartInput {
   readonly t3Url?: string | undefined;
+  readonly t3HttpUrl?: string | undefined;
   readonly t3Token?: string | undefined;
 }
 
@@ -309,7 +359,16 @@ const make = Effect.gen(function* () {
           "--auth-token",
           token,
         ];
-        const normalizedT3Url = input?.t3Url ? normalizeT3WebSocketUrl(input.t3Url) : undefined;
+        const normalizedT3Url = input?.t3Url
+          ? normalizeT3WebSocketUrl(input.t3Url)
+          : input?.t3HttpUrl
+            ? normalizeT3WebSocketUrl(input.t3HttpUrl)
+            : undefined;
+        const normalizedT3HttpUrl = input?.t3HttpUrl
+          ? normalizeT3HttpUrl(input.t3HttpUrl)
+          : input?.t3Url
+            ? normalizeT3HttpUrl(input.t3Url)
+            : undefined;
         if (normalizedT3Url) {
           args.push("--t3-url", normalizedT3Url);
         }
@@ -330,11 +389,13 @@ const make = Effect.gen(function* () {
             );
 
         // Only set ELECTRON_RUN_AS_NODE on the isolated daemon child env; never mutate parent process.env.
-        const childEnv: NodeJS.ProcessEnv = {
-          ...hostEnv,
-          ELECTRON_RUN_AS_NODE: "1",
-          PRISMUX_CATALOG_PATH: catalogPath,
-        };
+        const childEnv = buildPrismuxDaemonChildEnv({
+          hostEnv,
+          catalogPath,
+          mainPid: process.pid,
+          t3HttpUrl: normalizedT3HttpUrl,
+          t3WsUrl: normalizedT3Url,
+        });
 
         const child = yield* Effect.try({
           try: () =>

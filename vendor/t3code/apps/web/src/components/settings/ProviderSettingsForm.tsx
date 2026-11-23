@@ -312,7 +312,7 @@ export function deriveProviderSettingsFields(
               ? { description: packageFieldText(annotatedDescription, resolve) }
               : {}),
           ...(isLocalAcp && key === "commandPath"
-            ? { placeholder: resolve(msg("e.g. dsh")) }
+            ? { placeholder: resolve(msg("e.g. omp")) }
             : formAnnotation.placeholder !== undefined
               ? { placeholder: packageFieldText(formAnnotation.placeholder, resolve) }
               : {}),

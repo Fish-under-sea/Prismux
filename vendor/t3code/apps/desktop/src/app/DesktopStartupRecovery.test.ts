@@ -17,7 +17,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 
 import { createInitialDesktopUpdateState } from "../updates/updateMachine.ts";
-import { listen, resolveStartupRecoveryOffer } from "./DesktopStartupRecovery.ts";
+import { listen, RELEASES_URL, resolveStartupRecoveryOffer } from "./DesktopStartupRecovery.ts";
 
 const updateState = (patch: Partial<DesktopUpdateState>): DesktopUpdateState => ({
   ...createInitialDesktopUpdateState(
@@ -88,6 +88,7 @@ describe("resolveStartupRecoveryOffer", () => {
   });
 
   it("falls back to the releases page when this version never started", () => {
+    expect(RELEASES_URL).toBe("https://github.com/Fish-under-sea/Prismux/releases");
     expect(resolveStartupRecoveryOffer(updateState({ status: "disabled" }), "0.1.3")).toEqual({
       _tag: "Releases",
     });

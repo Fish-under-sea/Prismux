@@ -1,9 +1,11 @@
 import type { ModelSelection, ProviderInstanceId, RuntimeMode } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { T, useGT, useMessages } from "gt-react";
-import { type ComponentProps, memo, useId, useRef, useState } from "react";
+import { ChevronDownIcon } from "lucide-react";
+import { type ComponentProps, memo, useId, useRef } from "react";
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
+import { cn } from "~/lib/utils";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
@@ -11,7 +13,11 @@ import { focusRequestedPermission, useComposerMenuProps } from "./composerEventS
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import { resolveRuntimeModeOption, runtimeModeConfig } from "./runtimeModeConfig";
+import {
+  isFullAccessRuntimeMode,
+  resolveRuntimeModeOption,
+  runtimeModeConfig,
+} from "./runtimeModeConfig";
 import { useComposerMenuState } from "./useComposerMenuState";
 
 export type RuntimeModeOption = {
@@ -23,7 +29,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   size?: "sm" | "xs";
   hidden?: boolean;
-  /** How the permissions chip shows: hidden while the thread matches the user's default. */
+  /** How the permissions trigger shows: Orca's default is icon + chevron (`icon`). */
   accessDisplay?: "label" | "icon" | "hidden";
   /** Draw the icon in the label color, not muted (the mode differs from the user's default). */
   emphasized?: boolean;
@@ -32,7 +38,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   const gt = useGT();
   const messages = useMessages();
   const size = props.size ?? "sm";
-  const accessDisplay = props.accessDisplay ?? "label";
+  const accessDisplay = props.accessDisplay ?? "icon";
   const composerFloatingLayerProps = useComposerMenuProps();
   const [open, setOpen] = useComposerMenuState(props.hidden);
   const permissionsChipRef = useRef<HTMLButtonElement>(null);
@@ -40,7 +46,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
     props.runtimeModeOptions.find((option) => option.mode === props.runtimeMode) ??
     resolveRuntimeModeOption("approval-required", messages);
   const RuntimeModeIcon = runtimeModeOption.icon;
-  // The chip opens the same Permissions toggle used in the model picker and the overflow menu.
+  const fullAccess = isFullAccessRuntimeMode(props.runtimeMode);
   const permissionsTooltip = gt("Permissions: {mode}. {description}", {
     mode: runtimeModeOption.label,
     description: runtimeModeOption.description,
@@ -61,9 +67,15 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
                 <ComposerControl
                   ref={permissionsChipRef}
                   data-composer-shortcut="composer.mode"
+                  data-composer-permission-shield="true"
+                  data-permission-mode={props.runtimeMode}
                   size={size}
-                  // Mirrors the model trigger's trailing pe-1 so the gaps on both sides of the chip match.
-                  className="ps-1.5"
+                  className={cn(
+                    "gap-1 px-1.5 data-popup-open:bg-accent",
+                    fullAccess
+                      ? "text-amber-600 hover:bg-amber-500/12 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
                   aria-label={gt("Permissions: {mode}", { mode: runtimeModeOption.label })}
                 />
               }
@@ -73,19 +85,37 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
           <ComposerControlIcon
             icon={RuntimeModeIcon}
             size={size}
-            // Match the label, not full foreground: the chip's presence already marks the mode.
-            {...(props.emphasized ? { className: "text-current" } : {})}
+            className={cn(
+              fullAccess
+                ? "text-amber-600 dark:text-amber-400"
+                : props.emphasized
+                  ? "text-current"
+                  : undefined,
+            )}
           />
           <span
             data-composer-control-label
-            className={accessDisplay === "icon" ? "sr-only" : undefined}
+            className={cn(
+              accessDisplay === "icon" ? "sr-only" : "text-xs font-medium",
+              fullAccess && "text-amber-600 dark:text-amber-400",
+            )}
           >
             {runtimeModeOption.label}
           </span>
+          <ChevronDownIcon
+            aria-hidden="true"
+            data-composer-control-chevron
+            className="size-3 opacity-70"
+          />
         </TooltipTrigger>
         <TooltipPopup side="top">{permissionsTooltip}</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="start" {...composerFloatingLayerProps}>
+      <MenuPopup
+        side="top"
+        align="start"
+        className="w-[min(19.5rem,calc(100vw-1.5rem))] p-1"
+        {...composerFloatingLayerProps}
+      >
         <ComposerPermissionsSection
           runtimeMode={props.runtimeMode}
           runtimeModeOptions={props.runtimeModeOptions}
@@ -99,10 +129,9 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
 });
 
 /**
- * Permission modes as one horizontal toggle, with the shown mode named below.
- * Each segment is a real menu radio item, so arrow keys reach it from the rest of the menu
- * and a pick closes the menu. Lives inside a Menu: the permissions chip, the model picker,
- * or the overflow menu.
+ * Orca-aligned 4-tier vertical permission mode radio list:
+ * left selection dot + mode icon + bold title + muted description, with amber highlight for Full access.
+ * Each row is a real menuitemradio for full keyboard navigation (Up/Down and Left/Right).
  */
 export function ComposerPermissionsSection(props: {
   runtimeMode: RuntimeMode;
@@ -110,17 +139,10 @@ export function ComposerPermissionsSection(props: {
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const gt = useGT();
-  const messages = useMessages();
-  // Hover or keyboard focus previews a mode's name and description before a pick.
-  const [previewMode, setPreviewMode] = useState<RuntimeMode | null>(null);
-  const shownMode = previewMode ?? props.runtimeMode;
-  const shown =
-    props.runtimeModeOptions.find((option) => option.mode === shownMode) ??
-    resolveRuntimeModeOption("approval-required", messages);
   const descriptionId = useId();
   return (
-    <div data-composer-permissions className="grid w-72 gap-1.5 px-2 py-1.5">
-      <div className="font-medium text-muted-foreground text-xs">
+    <div data-composer-permissions className="flex w-full min-w-68 flex-col gap-0.5 py-0.5">
+      <div className="px-2.5 pt-1 pb-1 font-medium text-muted-foreground text-xs">
         <T>Permissions</T>
       </div>
       <MenuPrimitive.RadioGroup
@@ -129,8 +151,7 @@ export function ComposerPermissionsSection(props: {
         onValueChange={(value: RuntimeMode) => {
           if (value !== props.runtimeMode) props.onRuntimeModeChange(value);
         }}
-        className="flex rounded-lg bg-input/40 p-0.5"
-        // Menus navigate with Up/Down only; the row reads horizontally, so Left/Right move too.
+        className="flex flex-col gap-0.5"
         onKeyDown={(event) => {
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
           const items = Array.from(
@@ -146,6 +167,9 @@ export function ComposerPermissionsSection(props: {
       >
         {props.runtimeModeOptions.map((option) => {
           const OptionIcon = option.icon;
+          const selected = option.mode === props.runtimeMode;
+          const fullAccess = isFullAccessRuntimeMode(option.mode);
+          const descriptionText = option.disabledReason ?? option.description;
           return (
             <MenuPrimitive.RadioItem
               key={option.mode}
@@ -155,38 +179,53 @@ export function ComposerPermissionsSection(props: {
               aria-label={option.label}
               aria-describedby={`${descriptionId}-${option.mode}`}
               closeOnClick
-              onPointerEnter={() => setPreviewMode(option.mode)}
-              onPointerLeave={() => setPreviewMode(null)}
-              onFocus={() => setPreviewMode(option.mode)}
-              onBlur={() => setPreviewMode(null)}
-              className="flex h-6 flex-1 cursor-pointer items-center justify-center text-muted-foreground outline-none first:rounded-l-md last:rounded-r-md data-disabled:cursor-not-allowed data-disabled:opacity-40 data-checked:bg-input/72 data-checked:text-foreground data-highlighted:text-foreground not-data-checked:data-highlighted:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              data-permission-option={option.mode}
+              className={cn(
+                "group/perm flex w-full cursor-pointer items-start gap-2 rounded-lg px-2 py-2 text-left outline-none transition-colors",
+                "hover:bg-accent/80 data-highlighted:bg-accent/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                "data-disabled:cursor-not-allowed data-disabled:opacity-45",
+                selected && "bg-accent/55",
+              )}
             >
-              <OptionIcon aria-hidden="true" className="size-3.5" />
+              {/* Left selection indicator dot matching Orca Figure 2 */}
+              <span
+                aria-hidden="true"
+                className="mt-1.5 flex size-3 shrink-0 items-center justify-center"
+              >
+                <span
+                  className={cn(
+                    "size-1.5 rounded-full transition-opacity",
+                    selected
+                      ? fullAccess
+                        ? "bg-amber-600 opacity-100 dark:bg-amber-400"
+                        : "bg-foreground opacity-100"
+                      : "opacity-0",
+                  )}
+                />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 text-sm leading-5 font-semibold",
+                    fullAccess
+                      ? "text-amber-700 dark:text-amber-400"
+                      : "text-foreground",
+                  )}
+                >
+                  <OptionIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                  <span className="truncate">{option.label}</span>
+                </div>
+                <div
+                  id={`${descriptionId}-${option.mode}`}
+                  className="mt-0.5 text-xs leading-4 font-normal text-muted-foreground"
+                >
+                  {descriptionText}
+                </div>
+              </div>
             </MenuPrimitive.RadioItem>
           );
         })}
       </MenuPrimitive.RadioGroup>
-      {/* Static per-mode descriptions for screen readers; the preview below is visual only. */}
-      {props.runtimeModeOptions.map((option) => (
-        <span key={option.mode} id={`${descriptionId}-${option.mode}`} className="sr-only">
-          {option.disabledReason ?? option.description}
-        </span>
-      ))}
-      <div className="grid gap-0.5" aria-hidden="true">
-        <span
-          className={
-            shownMode === props.runtimeMode
-              ? "text-foreground text-sm"
-              : "text-muted-foreground text-sm"
-          }
-        >
-          {shown.label}
-        </span>
-        {/* Two lines reserved so the menu does not shift while you preview modes. */}
-        <span className="min-h-8 text-muted-foreground text-xs leading-4">
-          {shown.disabledReason ?? shown.description}
-        </span>
-      </div>
     </div>
   );
 }

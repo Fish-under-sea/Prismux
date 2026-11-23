@@ -1,7 +1,8 @@
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m, type MessageResolver } from "../i18n/messages";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import {
   threadRuntimeIsActive,
   type EnvironmentThreadShell,
@@ -21,16 +22,23 @@ import type {
   EnvironmentId,
   IssueTrackerKind,
   PreviewSessionSnapshot,
+  PreviewViewportSetting,
   ProjectId,
   PullRequestState,
   ResolvedKeybindingsConfig,
   ThreadId,
 } from "@t3tools/contracts";
+import {
+  DEFAULT_MOBILE_SIMULATOR_PRESET_ID,
+  findPreviewViewportPreset,
+  resolvePreviewViewport,
+} from "@t3tools/shared/previewViewport";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabelsCopy";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
   closestCenter,
   DndContext,
+  type Announcements,
   type DragEndEvent,
   PointerSensor,
   useSensor,
@@ -46,12 +54,17 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   FileDiff,
   Files,
   Globe2,
   Image as ImageIcon,
   MessagesSquare,
+  MoreHorizontal,
+  Network,
   Plus,
+  RotateCcw,
+  TabletSmartphone,
   TerminalSquare,
   Volume2Icon,
   VolumeOffIcon,
@@ -70,7 +83,13 @@ import {
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import { linkedThreadTitle } from "~/linkedThreadSurface";
-import type { RightPanelSurface } from "~/rightPanelStore";
+import {
+  DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER,
+  resolveRightPanelActivityBarLayout,
+  useRightPanelStore,
+  type RightPanelActivityItemId,
+  type RightPanelSurface,
+} from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { issueStatePresentation } from "~/components/issue/issuePresentation";
 import { issueEnvironment } from "~/state/issues";
@@ -92,6 +111,17 @@ import {
   MenuTrigger,
 } from "~/components/ui/menu";
 import { useBrowserDefaults } from "~/browser/browserDefaults";
+import { BrowserDeviceToolbar } from "~/browser/BrowserDeviceToolbar";
+import {
+  PhoneBezelChassis,
+  resolvePhoneBezelChassisLayout,
+  savePhoneBezelEnabled,
+} from "~/browser/HostedBrowserWebview";
+import { openUrlInPreview } from "~/browser/openFileInPreview";
+import { useOptionalPrismuxRuntime } from "~/prismux/PrismuxRuntimeProvider";
+import { resolvePortOpenUrl } from "~/prismux/statusBar/portsPolling";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { previewEnvironment } from "~/state/preview";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
@@ -341,6 +371,7 @@ function SurfaceMenuItem(props: {
 
 function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
+  onAddMobileSimulator: () => void;
   onAddBrowserInProfile: (profileId: string) => void;
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onAddTerminal: () => void;
@@ -375,6 +406,15 @@ function RightPanelEmptyState(props: {
       available: props.browserAvailable,
       disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
       onClick: props.onAddBrowser,
+    },
+    {
+      label: msg("手机模拟器"),
+      description: msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"),
+      icon: TabletSmartphone,
+      shortcut: "I",
+      available: props.browserAvailable,
+      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
+      onClick: props.onAddMobileSimulator,
     },
     {
       label: msg("Terminal"),
@@ -1146,6 +1186,526 @@ function RightPanelTab(
   );
 }
 
+interface RightPanelActivityAction {
+  readonly id: RightPanelActivityItemId;
+  readonly label: string;
+  readonly icon: typeof Globe2;
+  readonly available: boolean;
+  readonly active: boolean;
+  readonly onClick: () => void;
+}
+
+const ACTIVITY_BAR_DRAG_MODIFIERS = [restrictToHorizontalAxis];
+
+/**
+ * Modeled after Orca `right-sidebar/activity-bar/activity-bar-drag-announcements.ts`:
+ * Announces human-readable tab labels instead of internal IDs for screen readers.
+ */
+function buildActivityBarDragAnnouncements(
+  actions: readonly RightPanelActivityAction[],
+): Announcements {
+  const title = (id: string | number): string =>
+    actions.find((item) => item.id === id)?.label ?? String(id);
+  return {
+    onDragStart: ({ active }) => `已拿起「${title(active.id)}」标签`,
+    onDragOver: ({ active, over }) =>
+      over ? `正在将「${title(active.id)}」拖到「${title(over.id)}」上方` : undefined,
+    onDragEnd: ({ active }) => `已放置「${title(active.id)}」标签`,
+    onDragCancel: ({ active }) => `已取消移动「${title(active.id)}」标签`,
+  };
+}
+
+/**
+ * Modeled after Orca `right-sidebar/activity-bar/sortable-activity-button.tsx`:
+ * Uses `@dnd-kit/sortable` with `PointerSensor` distance threshold (`5px`) so normal clicks
+ * never misfire as drags and horizontal reordering animates smoothly via `CSS.Translate`.
+ */
+function SortableActivityBarButton(props: {
+  readonly item: RightPanelActivityAction;
+  readonly compact: boolean;
+}) {
+  const { item, compact } = props;
+  const Icon = item.icon;
+  const {
+    attributes: { "aria-pressed": _dndAriaPressed, ...sortableAttributes },
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: item.id });
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            ref={setNodeRef}
+            type="button"
+            data-activity-item={item.id}
+            data-activity-compact={compact ? "true" : "false"}
+            aria-label={item.label}
+            aria-pressed={item.active}
+            disabled={!item.available}
+            onClick={(event) => {
+              item.onClick();
+              if (event.detail > 0) event.currentTarget.blur();
+            }}
+            style={{
+              transform: CSS.Translate.toString(transform),
+              transition,
+            }}
+            {...sortableAttributes}
+            {...listeners}
+            className={cn(
+              "inline-flex h-5.5 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md text-[11px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              compact ? "w-6.5 px-0" : "max-w-21 px-1.5",
+              item.active
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+              !item.available && "cursor-not-allowed opacity-45",
+              isDragging && "relative z-20 opacity-60 shadow-sm ring-1 ring-primary/60",
+            )}
+          />
+        }
+      >
+        <Icon aria-hidden className="size-3 shrink-0" />
+        {!compact ? <span className="truncate">{item.label}</span> : null}
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {item.label}（拖拽调整顺序）
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function RightPanelActivityBar(props: {
+  readonly actions: readonly RightPanelActivityAction[];
+  readonly isCustomOrder: boolean;
+  readonly onReorder: (
+    fromId: RightPanelActivityItemId,
+    toId: RightPanelActivityItemId,
+  ) => void;
+  readonly onResetOrder: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const [availableWidth, setAvailableWidth] = useState<number>(0);
+
+  // PointerSensor distance=5px matches Orca `right-sidebar-top-activity-bar.tsx` so clicks stay crisp.
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+  );
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes ResizeObserver on a stable ref to avoid React 19 inline-ref churn
+  useEffect(() => {
+    const node = stripRef.current;
+    if (!node) return;
+    const measure = () => {
+      const nextWidth = Math.round(node.clientWidth);
+      setAvailableWidth((prev) => (prev === nextWidth ? prev : nextWidth));
+    };
+    measure();
+    return observeResize(node, measure);
+  }, []);
+
+  const { visible, overflow, compactIds } = resolveRightPanelActivityBarLayout(
+    props.actions,
+    availableWidth,
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    props.onReorder(
+      active.id as RightPanelActivityItemId,
+      over.id as RightPanelActivityItemId,
+    );
+  };
+
+  if (props.actions.length === 0) return null;
+
+  const announcements = buildActivityBarDragAnnouncements(props.actions);
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      modifiers={ACTIVITY_BAR_DRAG_MODIFIERS}
+      accessibility={{ announcements }}
+      onDragEnd={handleDragEnd}
+    >
+      <div
+        ref={containerRef}
+        role="toolbar"
+        aria-label="右侧表面快捷栏（支持拖拽排序）"
+        data-testid="right-panel-activity-bar"
+        className="flex h-7 shrink-0 items-center gap-1 overflow-hidden border-b border-border/60 px-2 [-webkit-app-region:no-drag]"
+      >
+        <div ref={stripRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+          <SortableContext
+            items={visible.map((item) => item.id)}
+            strategy={horizontalListSortingStrategy}
+          >
+            {visible.map((item) => (
+              <SortableActivityBarButton
+                key={item.id}
+                item={item}
+                compact={compactIds.has(item.id)}
+              />
+            ))}
+          </SortableContext>
+        </div>
+
+        {overflow.length > 0 || props.isCustomOrder ? (
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  aria-label="更多右侧表面与排序选项"
+                  data-testid="right-panel-activity-overflow"
+                  className="shrink-0"
+                  size="icon-xs"
+                  variant="ghost-muted"
+                />
+              }
+            >
+              <MoreHorizontal className="size-3.5" />
+            </MenuTrigger>
+            <MenuPopup align="end" side="bottom" sideOffset={4}>
+              {overflow.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <MenuItem
+                    key={item.id}
+                    disabled={!item.available}
+                    onClick={item.onClick}
+                  >
+                    <Icon className="size-3.5" />
+                    <span>{item.label}</span>
+                  </MenuItem>
+                );
+              })}
+              {props.isCustomOrder ? (
+                <MenuItem onClick={props.onResetOrder}>
+                  <RotateCcw className="size-3.5" />
+                  <span>重置默认排序</span>
+                </MenuItem>
+              ) : null}
+            </MenuPopup>
+          </Menu>
+        ) : null}
+      </div>
+    </DndContext>
+  );
+}
+
+function normalizeSimulatorQuickUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^(?:localhost|127\.0\.0\.1|\[::1\]|\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:\/|$)/i.test(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  if (/^:\d+(?:\/|$)/.test(trimmed)) {
+    return `http://127.0.0.1${trimmed}`;
+  }
+  return `https://${trimmed}`;
+}
+
+/**
+ * Interactive Phone Simulator stage displayed immediately when clicking "手机模拟"
+ * on a blank/idle preview tab (before any URL is loaded). Sits cleanly below the URL
+ * address bar (`[data-surface-subheader]`) and strictly above the 24px bottom status bar.
+ */
+export function PhoneSimulatorBlankStage() {
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number }>({
+    width: 460,
+    height: 680,
+  });
+  const [topOffset, setTopOffset] = useState<number>(40);
+  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  const [draftUrl, setDraftUrl] = useState("");
+  const [navError, setNavError] = useState<string | null>(null);
+  const [openingUrl, setOpeningUrl] = useState(false);
+
+  const pendingSetting = useRightPanelStore((state) => state.pendingMobileSimulatorSetting);
+  const setPendingSetting = useRightPanelStore((state) => state.setPendingMobileSimulatorSetting);
+  const setIdleActive = useRightPanelStore((state) => state.setMobileSimulatorIdleActive);
+  const bezelEnabled = useRightPanelStore((state) => state.mobileSimulatorBezelEnabled);
+  const setBezelEnabled = useRightPanelStore((state) => state.setMobileSimulatorBezelEnabled);
+  const colorScheme = useRightPanelStore((state) => state.mobileSimulatorColorScheme);
+  const setColorScheme = useRightPanelStore((state) => state.setMobileSimulatorColorScheme);
+  const runtime = useOptionalPrismuxRuntime();
+
+  const currentSetting: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }> =
+    pendingSetting ??
+    (resolvePreviewViewport({
+      mode: "preset",
+      preset: DEFAULT_MOBILE_SIMULATOR_PRESET_ID,
+    }) as Exclude<PreviewViewportSetting, { readonly _tag: "fill" }>);
+
+  const activePreset =
+    currentSetting._tag === "preset"
+      ? (findPreviewViewportPreset(currentSetting.presetId) ?? null)
+      : null;
+
+  // Stable useRef + useEffect ResizeObserver with strict equality guards (prevents React 19 error #185 loop).
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes ResizeObserver on stable stageRef to fit blank Phone Simulator below the URL bar
+  useEffect(() => {
+    const node = stageRef.current;
+    if (!node) return;
+    const measure = () => {
+      const parent = node.closest<HTMLElement>("[data-right-panel-surface-content]");
+      const subheader = parent?.querySelector<HTMLElement>("[data-surface-subheader]");
+      if (parent && subheader) {
+        const parentRect = parent.getBoundingClientRect();
+        const subRect = subheader.getBoundingClientRect();
+        const computedOffset = Math.max(0, Math.round(subRect.bottom - parentRect.top));
+        if (computedOffset > 0 && computedOffset < 120) {
+          setTopOffset((prev) => (prev === computedOffset ? prev : computedOffset));
+        }
+      }
+      const nextWidth = Math.max(120, Math.round(node.clientWidth));
+      const nextHeight = Math.max(160, Math.round(node.clientHeight));
+      setStageSize((prev) =>
+        prev.width === nextWidth && prev.height === nextHeight
+          ? prev
+          : { width: nextWidth, height: nextHeight },
+      );
+    };
+    measure();
+    return observeResize(node, measure);
+  }, []);
+
+  const handleToolbarChange = async (next: PreviewViewportSetting) => {
+    if (next._tag === "fill") {
+      setIdleActive(false);
+      setPendingSetting(null);
+      return;
+    }
+    setPendingSetting(next);
+  };
+
+  const handleOpenUrl = async (rawUrl: string) => {
+    const normalized = normalizeSimulatorQuickUrl(rawUrl);
+    if (!normalized) return;
+    setNavError(null);
+    setOpeningUrl(true);
+    // Keep chosen preset + orientation armed so HostedBrowserWebview applies it immediately on mount.
+    setPendingSetting(currentSetting);
+    try {
+      const parent = stageRef.current?.closest<HTMLElement>("[data-right-panel-surface-content]");
+      const threadKey =
+        parent?.querySelector<HTMLElement>("[data-preview-view]")?.getAttribute("data-thread-key") ??
+        null;
+      const threadRef = threadKey ? parseScopedThreadKey(threadKey) : null;
+      if (threadRef) {
+        await openUrlInPreview({
+          threadRef,
+          url: normalized,
+          openPreview: (input) => runAtomCommand(appAtomRegistry, previewEnvironment.open, input),
+        });
+      }
+    } catch (error) {
+      setNavError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpeningUrl(false);
+    }
+  };
+
+  // Deduplicate live localhost listening ports for one-click mobile preview shortcuts.
+  const localPorts = (() => {
+    const rawPorts = runtime?.portsState.ports ?? [];
+    const seen = new Set<number>();
+    const list: Array<(typeof rawPorts)[number]> = [];
+    for (const entry of rawPorts) {
+      if (seen.has(entry.port)) continue;
+      seen.add(entry.port);
+      list.push(entry);
+      if (list.length >= 6) break;
+    }
+    return list;
+  })();
+
+  const effectiveBezelStyle = activePreset?.bezelStyle ?? "dynamic-island";
+  const showBezel = bezelEnabled && effectiveBezelStyle !== "none";
+  const chassisLayout = resolvePhoneBezelChassisLayout(
+    stageSize,
+    currentSetting,
+    1,
+    effectiveBezelStyle,
+  );
+  const isLightScreen = colorScheme === "light";
+
+  const screenGuideContent = (
+    <div
+      className={cn(
+        "flex h-full w-full flex-col justify-between overflow-y-auto p-3.5 text-xs",
+        isLightScreen
+          ? "bg-gradient-to-b from-slate-50 to-slate-100 text-slate-900"
+          : "bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100",
+      )}
+    >
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1">
+          <div className="inline-flex w-fit items-center gap-1 rounded-full border border-emerald-500/35 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
+            <TabletSmartphone aria-hidden className="size-3" />
+            <span>Prismux 手机模拟器已就绪</span>
+          </div>
+          <div className="text-sm font-semibold">
+            {activePreset?.label ?? "自定义移动视口"}
+          </div>
+          <div className="font-mono text-[11px] opacity-70 tabular-nums">
+            {currentSetting.width} × {currentSetting.height}
+            {activePreset ? ` · @${activePreset.deviceScaleFactor}x` : ""}
+            {" · "}
+            {chassisLayout.isLandscape ? "横屏" : "竖屏"}
+          </div>
+        </div>
+
+        <form
+          className="flex flex-col gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleOpenUrl(draftUrl);
+          }}
+        >
+          <input
+            type="text"
+            value={draftUrl}
+            onChange={(event) => setDraftUrl(event.target.value)}
+            placeholder="输入网址或 :5173 回车预览…"
+            aria-label="手机模拟器快速预览网址"
+            data-testid="phone-simulator-quick-url-input"
+            className={cn(
+              "h-7 w-full rounded-md border px-2 text-xs outline-none focus:ring-2 focus:ring-sky-500/50",
+              isLightScreen
+                ? "border-slate-300 bg-white text-slate-900 placeholder:text-slate-400"
+                : "border-white/15 bg-white/8 text-white placeholder:text-slate-400",
+            )}
+          />
+          <button
+            type="submit"
+            disabled={openingUrl || draftUrl.trim().length === 0}
+            className="inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-md bg-sky-600 px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <ExternalLink aria-hidden className="size-3" />
+            <span>{openingUrl ? "加载中…" : "在手机模拟器中打开"}</span>
+          </button>
+          {navError ? (
+            <div role="alert" className="text-[11px] text-rose-400">
+              {navError}
+            </div>
+          ) : null}
+        </form>
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1 text-[11px] font-medium opacity-75">
+            <Network aria-hidden className="size-3" />
+            <span>本机监听端口一键预览</span>
+          </div>
+          {localPorts.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {localPorts.map((entry) => {
+                const url = resolvePortOpenUrl(entry);
+                return (
+                  <button
+                    key={`${entry.pid}:${entry.port}`}
+                    type="button"
+                    onClick={() => void handleOpenUrl(url)}
+                    className={cn(
+                      "inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 font-mono text-[10px] transition-colors",
+                      isLightScreen
+                        ? "border-slate-300 bg-white text-slate-800 hover:bg-slate-100"
+                        : "border-white/15 bg-white/8 text-slate-100 hover:bg-white/15",
+                    )}
+                    title={`在手机模拟器中预览 ${url}`}
+                  >
+                    <span className="font-semibold text-emerald-500">:{entry.port}</span>
+                    <span className="max-w-20 truncate opacity-75">{entry.processName}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[11px] leading-relaxed opacity-65">
+              启动本地开发服务器后将自动显示快捷端口，也可直接在上方地址栏或输入框打开任意页面。
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="pt-2 text-[10px] opacity-60">
+        加载网页后自动同步 Electron CDP 触摸 / DPR / 移动端 UA 仿真
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      ref={stageRef}
+      data-testid="prismux-phone-simulator-blank-stage"
+      className="absolute inset-x-0 bottom-0 z-20 flex flex-col overflow-hidden bg-background/95 backdrop-blur-sm"
+      style={{ top: topOffset }}
+    >
+      <BrowserDeviceToolbar
+        setting={currentSetting}
+        width={stageSize.width}
+        aspectRatio={aspectRatio}
+        onAspectRatioChange={setAspectRatio}
+        onChange={handleToolbarChange}
+        bezelEnabled={bezelEnabled}
+        onBezelEnabledChange={(next) => {
+          setBezelEnabled(next);
+          savePhoneBezelEnabled(next);
+        }}
+        emulatedColorScheme={colorScheme}
+        onEmulatedColorSchemeChange={setColorScheme}
+      />
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-muted/25">
+        {showBezel ? (
+          <PhoneBezelChassis
+            interactive
+            bezelStyle={effectiveBezelStyle}
+            colorScheme={colorScheme}
+            label={activePreset?.label ?? "Phone"}
+            layout={{
+              ...chassisLayout,
+              // Frame coordinates inside the flex-1 body beneath the toolbar (toolbar offset = 0 here).
+              frameY: Math.max(
+                8,
+                Math.floor(
+                  (Math.max(chassisLayout.frameHeight, stageSize.height - 38) -
+                    chassisLayout.frameHeight) /
+                    2,
+                ),
+              ),
+            }}
+          >
+            {screenGuideContent}
+          </PhoneBezelChassis>
+        ) : (
+          <div className="flex h-full w-full items-center justify-center p-3">
+            <div
+              className="overflow-hidden rounded-xl border border-border shadow-lg"
+              style={{
+                width: chassisLayout.screenWidth,
+                height: chassisLayout.screenHeight,
+              }}
+            >
+              {screenGuideContent}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function RightPanelTabs(props: RightPanelTabsProps) {
   const gt = useGT();
   const messages = useMessages();
@@ -1227,6 +1787,105 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     });
   };
 
+  const activityBarOrder = useRightPanelStore((state) => state.activityBarOrder);
+  const reorderActivityBar = useRightPanelStore((state) => state.reorderActivityBar);
+  const resetActivityBarOrder = useRightPanelStore((state) => state.resetActivityBarOrder);
+  const isCustomActivityBarOrder = activityBarOrder.some(
+    (id, index) => id !== DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER[index],
+  );
+  const requestMobileSimulatorLaunch = useRightPanelStore(
+    (state) => state.requestMobileSimulatorLaunch,
+  );
+  const mobileSimulatorIdleActive = useRightPanelStore(
+    (state) => state.mobileSimulatorIdleActive,
+  );
+  const focusedPreviewSession =
+    focusedSurface?.kind === "preview" && focusedSurface.resourceId
+      ? (props.previewSessions[focusedSurface.resourceId] ?? null)
+      : null;
+  const isFocusedPreviewBlank =
+    focusedSurface?.kind === "preview" &&
+    (focusedPreviewSession === null || focusedPreviewSession.navStatus._tag === "Idle");
+
+  const handleOpenMobileSimulator = useStableCallback(() => {
+    if (!props.browserAvailable) return;
+    requestMobileSimulatorLaunch();
+    const existingPreview = props.surfaces.find((surface) => surface.kind === "preview");
+    if (existingPreview) {
+      props.onActivate(existingPreview);
+      return;
+    }
+    props.onAddBrowser();
+  });
+
+  const activityActionMap: Record<RightPanelActivityItemId, RightPanelActivityAction | null> = {
+    "mobile-simulator": {
+      id: "mobile-simulator",
+      label: "手机模拟",
+      icon: TabletSmartphone,
+      available: props.browserAvailable,
+      active: focusedSurface?.kind === "preview",
+      onClick: handleOpenMobileSimulator,
+    },
+    preview: {
+      id: "preview",
+      label: messages(msg("Browser")),
+      icon: Globe2,
+      available: props.browserAvailable,
+      active: focusedSurface?.kind === "preview" && !mobileSimulatorIdleActive,
+      onClick: () => {
+        useRightPanelStore.getState().setMobileSimulatorIdleActive(false);
+        props.onAddBrowser();
+      },
+    },
+    wallpaper: props.onAddWallpaper
+      ? {
+          id: "wallpaper",
+          label: "壁纸",
+          icon: ImageIcon,
+          available: props.wallpaperAvailable !== false,
+          active: focusedSurface?.kind === "wallpaper",
+          onClick: props.onAddWallpaper,
+        }
+      : null,
+    diff: {
+      id: "diff",
+      label: messages(msg("Diff")),
+      icon: FileDiff,
+      available: props.diffAvailable,
+      active: focusedSurface?.kind === "diff",
+      onClick: props.onAddDiff,
+    },
+    terminal: {
+      id: "terminal",
+      label: messages(msg("Terminal")),
+      icon: TerminalSquare,
+      available: props.terminalAvailable,
+      active: focusedSurface?.kind === "terminal",
+      onClick: props.onAddTerminal,
+    },
+    device: {
+      id: "device",
+      label: messages(msg("Device")),
+      icon: Smartphone,
+      available: props.deviceAvailable,
+      active: focusedSurface?.kind === "device",
+      onClick: props.onAddDevice,
+    },
+    files: {
+      id: "files",
+      label: messages(msg("Files")),
+      icon: Files,
+      available: props.filesAvailable,
+      active: focusedSurface?.kind === "files" || focusedSurface?.kind === "file",
+      onClick: props.onAddFiles,
+    },
+  };
+
+  const orderedActivityActions = activityBarOrder
+    .map((id) => activityActionMap[id])
+    .filter((item): item is RightPanelActivityAction => item !== null);
+
   const addSurfaceActions = [
     {
       label: msg("Browser"),
@@ -1235,6 +1894,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.browserAvailable,
       disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
       onClick: props.onAddBrowser,
+    },
+    {
+      label: msg("手机模拟器"),
+      icon: TabletSmartphone,
+      shortcut: "I",
+      available: props.browserAvailable,
+      disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
+      onClick: handleOpenMobileSimulator,
     },
     {
       label: msg("Terminal"),
@@ -1704,6 +2371,37 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 <T>Scroll tabs right</T>
               </TooltipPopup>
             </Tooltip>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    aria-label="全部已打开标签"
+                    data-testid="right-panel-tabs-overflow-menu"
+                    size="icon-xs"
+                    variant="ghost"
+                  />
+                }
+              >
+                <ChevronDown className="size-3.5" />
+              </MenuTrigger>
+              <MenuPopup align="end" side="bottom" sideOffset={4} className="max-w-56">
+                {props.surfaces.map((surface) => (
+                  <MenuItem
+                    key={surface.id}
+                    onClick={() => props.onActivate(surface)}
+                  >
+                    <span className="min-w-0 truncate">
+                      {surfaceTitle(
+                        surface,
+                        props.previewSessions,
+                        props.terminalLabelsById,
+                        messages,
+                      )}
+                    </span>
+                  </MenuItem>
+                ))}
+              </MenuPopup>
+            </Menu>
           </div>
         ) : null}
         {props.layoutControls}
@@ -1717,10 +2415,22 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           />
         ) : null}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col" data-right-panel-surface-content>
+      {props.open !== false ? (
+        <RightPanelActivityBar
+          actions={orderedActivityActions}
+          isCustomOrder={isCustomActivityBarOrder}
+          onReorder={reorderActivityBar}
+          onResetOrder={resetActivityBarOrder}
+        />
+      ) : null}
+      <div
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+        data-right-panel-surface-content
+      >
         {props.activeSurfaceId === null ? (
           <RightPanelEmptyState
             onAddBrowser={props.onAddBrowser}
+            onAddMobileSimulator={handleOpenMobileSimulator}
             onAddBrowserInProfile={props.onAddBrowserInProfile}
             browserProfiles={browserProfiles}
             onAddTerminal={props.onAddTerminal}
@@ -1743,7 +2453,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             sideChatDisabledReason={props.sideChatDisabledReason ?? null}
           />
         ) : (
-          props.children
+          <>
+            {props.children}
+            {isFocusedPreviewBlank && mobileSimulatorIdleActive ? (
+              <PhoneSimulatorBlankStage />
+            ) : null}
+          </>
         )}
       </div>
     </PreviewPanelShell>

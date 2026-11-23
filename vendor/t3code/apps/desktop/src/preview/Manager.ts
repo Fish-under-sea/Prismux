@@ -11,6 +11,7 @@ import type {
   DesktopPreviewAnnotationVoiceConfig,
   DesktopPreviewAnnotationVoiceState,
   DesktopPreviewColorScheme,
+  DesktopPreviewDeviceEmulation,
   DesktopPreviewFavicon,
   DesktopPreviewFindResultEvent,
   DesktopPreviewOpenLinkEvent,
@@ -116,6 +117,7 @@ export interface PreviewTabState {
   zoomFactor: number;
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
+  deviceEmulation?: DesktopPreviewDeviceEmulation | null;
   audioMuted: boolean;
   audible: boolean;
   controller: "human" | "agent" | "none";
@@ -124,6 +126,12 @@ export interface PreviewTabState {
   serverTab?: { readonly threadId: string; readonly tabId: string };
   updatedAt: string;
 }
+
+export {
+  applyPreviewDeviceEmulation,
+  type PreviewCdpDebuggerLike,
+} from "./DesktopBrowserHost.ts";
+import { applyPreviewDeviceEmulation } from "./DesktopBrowserHost.ts";
 
 const ZOOM_LEVELS: ReadonlyArray<number> = [
   0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
@@ -916,8 +924,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (!tab || tab.webContentsId == null) return;
     const wc = webContents.fromId(tab.webContentsId);
     if (!wc || wc.isDestroyed()) return;
+    // During mobile CDP emulation, keep guest zoom pinned to 1.0 so host CSS `transform: scale()`
+    // is the sole visual scaling layer and never stacks with WebContents zoom.
+    const effectiveZoomFactor = tab.deviceEmulation?.enabled
+      ? DEFAULT_ZOOM_FACTOR
+      : tab.zoomFactor;
     yield* attempt({ operation: "assertTabZoom", tabId, webContentsId: wc.id }, () =>
-      wc.setZoomFactor(tab.zoomFactor),
+      wc.setZoomFactor(effectiveZoomFactor),
     ).pipe(Effect.ignore);
   });
 
@@ -1162,6 +1175,118 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  const fallbackEmulationOriginalUserAgents = new Map<number, string>();
+
+  const clearFallbackDeviceEmulation = (wc: Electron.WebContents): void => {
+    if (!fallbackEmulationOriginalUserAgents.has(wc.id)) return;
+    const originalUa = fallbackEmulationOriginalUserAgents.get(wc.id);
+    fallbackEmulationOriginalUserAgents.delete(wc.id);
+    if (wc.isDestroyed()) return;
+    if (typeof wc.disableDeviceEmulation === "function") {
+      wc.disableDeviceEmulation();
+    }
+    if (
+      typeof originalUa === "string" &&
+      originalUa.length > 0 &&
+      typeof wc.setUserAgent === "function"
+    ) {
+      wc.setUserAgent(originalUa);
+    }
+  };
+
+  const applyFallbackDeviceEmulation = (
+    wc: Electron.WebContents,
+    emulation: DesktopPreviewDeviceEmulation | null | undefined,
+  ): void => {
+    if (wc.isDestroyed() || wc.getType() !== "webview") return;
+    if (emulation && emulation.enabled) {
+      const width = Math.max(1, Math.round(emulation.width ?? 393));
+      const height = Math.max(1, Math.round(emulation.height ?? 852));
+      // Use `deviceScaleFactor: 0` so Chromium inherits the host display's native DPR, matching
+      // CDP `Emulation.setDeviceMetricsOverride` and preventing OOPIF DPI magnification clipping.
+      const deviceScaleFactor = 0;
+      if (!fallbackEmulationOriginalUserAgents.has(wc.id)) {
+        const currentUa = typeof wc.getUserAgent === "function" ? wc.getUserAgent() : "";
+        fallbackEmulationOriginalUserAgents.set(wc.id, currentUa);
+      }
+      if (typeof wc.enableDeviceEmulation === "function") {
+        wc.enableDeviceEmulation({
+          screenPosition: emulation.mobile !== false ? "mobile" : "desktop",
+          screenSize: { width, height },
+          viewPosition: { x: 0, y: 0 },
+          deviceScaleFactor,
+          viewSize: { width, height },
+          scale: 1,
+        });
+      }
+      if (emulation.userAgent && typeof wc.setUserAgent === "function") {
+        wc.setUserAgent(emulation.userAgent);
+      }
+      return;
+    }
+    clearFallbackDeviceEmulation(wc);
+  };
+
+  const applyDeviceEmulation = Effect.fn("PreviewManager.applyDeviceEmulation")(function* (
+    tabId: string,
+    wc: Electron.WebContents,
+    emulation: DesktopPreviewDeviceEmulation | null | undefined,
+    fallbackColorScheme: DesktopPreviewColorScheme,
+  ) {
+    // Strictly guard against ever attaching or sending Emulation commands to the host BrowserWindow.
+    if (wc.isDestroyed() || wc.getType() !== "webview") return;
+    if (emulation?.enabled) {
+      yield* attempt(
+        { operation: "applyDeviceEmulation.resetGuestZoom", tabId, webContentsId: wc.id },
+        () => wc.setZoomFactor(DEFAULT_ZOOM_FACTOR),
+      ).pipe(Effect.ignore);
+    }
+    const controlOption = yield* ensureControlSession(wc).pipe(
+      Effect.option,
+      Effect.timeoutOption("1500 millis"),
+      Effect.map(Option.flatten),
+    );
+    if (Option.isNone(controlOption)) {
+      yield* attempt(
+        { operation: "applyDeviceEmulation.fallback", tabId, webContentsId: wc.id },
+        () => applyFallbackDeviceEmulation(wc, emulation),
+      ).pipe(Effect.ignore);
+      if (!emulation?.enabled) {
+        yield* assertTabZoom(tabId);
+      }
+      return;
+    }
+    yield* attempt(
+      { operation: "applyDeviceEmulation.clearFallback", tabId, webContentsId: wc.id },
+      () => clearFallbackDeviceEmulation(wc),
+    ).pipe(Effect.ignore);
+    yield* attemptPromise({ operation: "applyDeviceEmulation", tabId, webContentsId: wc.id }, () =>
+      applyPreviewDeviceEmulation(controlOption.value.debugger, emulation, fallbackColorScheme),
+    ).pipe(
+      Effect.timeoutOption("2 seconds"),
+      Effect.catch(() =>
+        attempt(
+          { operation: "applyDeviceEmulation.fallbackAfterCdp", tabId, webContentsId: wc.id },
+          () => applyFallbackDeviceEmulation(wc, emulation),
+        ).pipe(Effect.ignore),
+      ),
+    );
+    if (!emulation?.enabled) {
+      yield* assertTabZoom(tabId);
+    }
+  });
+
+  const reapplyTabDeviceEmulation = Effect.fn("PreviewManager.reapplyTabDeviceEmulation")(
+    function* (tabId: string, wc: Electron.WebContents) {
+      if (wc.isDestroyed()) return;
+      const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+      if (!tab || tab.webContentsId !== wc.id || !tab.deviceEmulation?.enabled) return;
+      yield* applyDeviceEmulation(tabId, wc, tab.deviceEmulation, tab.colorScheme).pipe(
+        Effect.ignore,
+      );
+    },
+  );
+
   const cancelPickElement = Effect.fn("PreviewManager.cancelPickElement")(function* (
     tabId: string,
   ) {
@@ -1258,7 +1383,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (Option.isSome(next)) yield* emitIfCurrent(tabId, next.value);
     });
     const sync = () => runFork(syncState(true));
-    const syncNavigation = () => runFork(syncState(false, true));
+    const syncNavigation = () => {
+      runFork(syncState(false, true));
+      runFork(reapplyTabDeviceEmulation(tabId, wc));
+    };
     const syncInPageNavigation = () => runFork(syncState(false));
     const restoreRecordingCursor = () =>
       runFork(
@@ -1272,13 +1400,24 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               session?.recordingInputOptions,
               tab?.controller,
             );
+            if (tab?.deviceEmulation?.enabled) {
+              yield* applyDeviceEmulation(tabId, wc, tab.deviceEmulation, tab.colorScheme).pipe(
+                Effect.ignore,
+              );
+            }
           }
         }),
       );
+    const finishLoadReapplyEmulation = () => {
+      runFork(reapplyTabDeviceEmulation(tabId, wc));
+    };
     const navigationStarted = (
       event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
     ) => {
-      if (event.isMainFrame && !event.isSameDocument) cancelFaviconCapture();
+      if (event.isMainFrame && !event.isSameDocument) {
+        cancelFaviconCapture();
+        runFork(reapplyTabDeviceEmulation(tabId, wc));
+      }
     };
     const audioStateChanged = (
       event: Electron.Event<Electron.WebContentsAudioStateChangedEventParams>,
@@ -1646,6 +1785,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("did-start-loading", sync);
         wc.off("did-stop-loading", sync);
         wc.off("dom-ready", restoreRecordingCursor);
+        wc.off("did-finish-load", finishLoadReapplyEmulation);
         wc.off("did-fail-load", failed as never);
         wc.off("audio-state-changed", audioStateChanged);
         wc.off("found-in-page", foundInPage as never);
@@ -1669,6 +1809,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-start-loading", sync);
         wc.on("did-stop-loading", sync);
         wc.on("dom-ready", restoreRecordingCursor);
+        wc.on("did-finish-load", finishLoadReapplyEmulation);
         wc.on("did-fail-load", failed as never);
         wc.on("audio-state-changed", audioStateChanged);
         wc.on("found-in-page", foundInPage as never);
@@ -1832,6 +1973,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (closedTab.serverTab) {
       browserHost.setShown(closedTab.serverTab, undefined);
       browserHost.setCaptureDrawn(closedTab.serverTab, undefined);
+      browserHost.setDeviceEmulation(closedTab.serverTab, null);
     }
     if (closedTab.webContentsId != null) {
       yield* Effect.all(
@@ -1909,6 +2051,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* keepFrameCaptureWebContentsUnthrottled(tabId, wc);
     if (tab.webContentsId === webContentsId && currentAttachment?.webContents === wc) {
       yield* assertTabZoom(tabId);
+      runFork(reapplyTabDeviceEmulation(tabId, wc));
       yield* attempt({ operation: "registerWebview.sendTheme", tabId, webContentsId }, () => {
         wc.send(ANNOTATION_THEME_CHANNEL, annotationTheme);
         wc.send(ANNOTATION_SEND_ENABLED_CHANNEL, annotationSendEnabled.get(tabId) === true);
@@ -2021,6 +2164,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       latestNavStatus.url === pendingUrl &&
       wc.getURL() !== pendingUrl
     ) {
+      yield* reapplyTabDeviceEmulation(tabId, wc);
       runFork(
         attemptPromise({ operation: "registerWebview.loadPendingUrl", tabId, webContentsId }, () =>
           wc.loadURL(pendingUrl),
@@ -2104,6 +2248,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
     wc.once("destroyed", () => {
       guestLoadFailures.delete(webContentsId);
+      fallbackEmulationOriginalUserAgents.delete(webContentsId);
       runFork(
         Effect.gen(function* () {
           yield* hideDestroyedGuest(webContentsId);
@@ -2165,6 +2310,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         zoomFactor: current?.zoomFactor ?? DEFAULT_ZOOM_FACTOR,
         pictureInPicture: current?.pictureInPicture ?? false,
         colorScheme: current?.colorScheme ?? "system",
+        ...(current?.deviceEmulation !== undefined
+          ? { deviceEmulation: current.deviceEmulation }
+          : {}),
         // Keep audibility until Chromium replaces the document; clearing it here can lose the final transition.
         audioMuted: current?.audioMuted ?? false,
         audible: current?.audible ?? false,
@@ -2190,6 +2338,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       return;
     }
     yield* leaveBusyPage(wc);
+    if (pending.deviceEmulation?.enabled) {
+      yield* reapplyTabDeviceEmulation(tabId, wc);
+    }
     if (wc.getURL() === url) {
       yield* attempt({ operation: "navigate.reload", tabId, webContentsId: wc.id }, () =>
         wc.reload(),
@@ -2519,8 +2670,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const reapplyZoom = Effect.fn("PreviewManager.reapplyZoom")(function* () {
-    const tabIds = Array.from((yield* SynchronizedRef.get(tabsRef)).keys());
-    yield* Effect.forEach(tabIds, assertTabZoom, { discard: true });
+    const tabs = yield* SynchronizedRef.get(tabsRef);
+    for (const [tabId, tab] of tabs.entries()) {
+      yield* assertTabZoom(tabId);
+      if (tab.deviceEmulation?.enabled && tab.webContentsId != null) {
+        const wc = webContents.fromId(tab.webContentsId);
+        if (wc && !wc.isDestroyed()) {
+          yield* reapplyTabDeviceEmulation(tabId, wc);
+        }
+      }
+    }
   });
 
   const applyZoom = Effect.fn("PreviewManager.applyZoom")(function* (
@@ -2534,9 +2693,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (tab.webContentsId != null) {
       const wc = webContents.fromId(tab.webContentsId);
       if (wc && !wc.isDestroyed()) {
+        const appliedZoom = tab.deviceEmulation?.enabled ? DEFAULT_ZOOM_FACTOR : next;
         yield* attempt({ operation: "applyZoom", tabId, webContentsId: wc.id }, () =>
-          wc.setZoomFactor(next),
+          wc.setZoomFactor(appliedZoom),
         );
+        if (tab.deviceEmulation?.enabled) {
+          yield* reapplyTabDeviceEmulation(tabId, wc);
+        }
       }
     }
     yield* update(tabId, { zoomFactor: next });
@@ -2580,6 +2743,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           debugger: control.debugger,
           cookiesCleared: () => runPromise(browserSession.cookiesCleared(wc.session)),
         });
+        browserHost.setDeviceEmulation(afterAttach.serverTab, afterAttach.deviceEmulation ?? null);
         // CDP cannot recover a failure that happened before it attached.
         const { navStatus } = afterAttach;
         if (navStatus.kind === "LoadFailed") {
@@ -2590,7 +2754,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           });
         }
       }
-      if (afterAttach.colorScheme !== "system") {
+      if (afterAttach.deviceEmulation?.enabled) {
+        yield* attemptPromise(
+          { operation: "applyDeviceEmulation", tabId, webContentsId: wc.id },
+          () =>
+            applyPreviewDeviceEmulation(
+              control.debugger,
+              afterAttach.deviceEmulation,
+              afterAttach.colorScheme,
+            ),
+        );
+      } else if (afterAttach.colorScheme !== "system") {
         yield* attemptPromise({ operation: "applyColorScheme", tabId, webContentsId: wc.id }, () =>
           control.debugger.sendCommand("Emulation.setEmulatedMedia", {
             features: [
@@ -2638,8 +2812,18 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (!tab) {
       return yield* new PreviewTabNotFoundError({ tabId });
     }
-    if (tab.colorScheme !== colorScheme) {
-      yield* update(tabId, { colorScheme });
+    const nextDeviceEmulation =
+      tab.deviceEmulation?.enabled === true
+        ? { ...tab.deviceEmulation, colorScheme }
+        : tab.deviceEmulation;
+    if (tab.colorScheme !== colorScheme || nextDeviceEmulation !== tab.deviceEmulation) {
+      yield* update(tabId, {
+        colorScheme,
+        ...(nextDeviceEmulation !== undefined ? { deviceEmulation: nextDeviceEmulation } : {}),
+      });
+      if (tab.serverTab && nextDeviceEmulation?.enabled) {
+        browserHost.setDeviceEmulation(tab.serverTab, nextDeviceEmulation);
+      }
     }
     // registerWebview may swap guests during the update; apply to the current one.
     const webContentsId = (yield* SynchronizedRef.get(tabsRef)).get(tabId)?.webContentsId;
@@ -2647,6 +2831,28 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) return;
     yield* applyColorScheme(tabId, wc, colorScheme);
+  });
+
+  const setDeviceEmulation = Effect.fn("PreviewManager.setDeviceEmulation")(function* (
+    tabId: string,
+    emulation: DesktopPreviewDeviceEmulation | null,
+  ) {
+    const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+    if (!tab) {
+      return yield* new PreviewTabNotFoundError({ tabId });
+    }
+    const normalized: DesktopPreviewDeviceEmulation | null =
+      emulation && emulation.enabled ? emulation : null;
+    yield* update(tabId, { deviceEmulation: normalized });
+    if (tab.serverTab) {
+      browserHost.setDeviceEmulation(tab.serverTab, normalized);
+    }
+    const latestTab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+    const webContentsId = latestTab?.webContentsId;
+    if (webContentsId == null) return;
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) return;
+    yield* applyDeviceEmulation(tabId, wc, normalized, latestTab?.colorScheme ?? "system");
   });
 
   const setShown = Effect.fn("PreviewManager.setShown")(function* (tabId: string, shown: boolean) {
@@ -3770,6 +3976,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setShown,
     setCaptureDrawn,
     setColorScheme,
+    setDeviceEmulation,
     setMainWindow,
     setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) =>
       Effect.sync(() => {
@@ -3976,6 +4183,10 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       colorScheme: DesktopPreviewColorScheme,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setDeviceEmulation: (
+      tabId: string,
+      emulation: DesktopPreviewDeviceEmulation | null,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly setZoomFactor: (
       tabId: string,
       zoomFactor: number,
@@ -4145,6 +4356,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     findInPage: operations.findInPage,
     stopFindInPage: operations.stopFindInPage,
     setColorScheme: operations.setColorScheme,
+    setDeviceEmulation: operations.setDeviceEmulation,
     setZoomFactor: operations.setZoomFactor,
     setAudioMuted: operations.setAudioMuted,
     setShown: operations.setShown,

@@ -4,16 +4,24 @@ import { ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
   buildExplicitProviderOptionSelectionsFromDescriptors,
+  buildFastModeSelectionUpdate,
   buildProviderOptionSelectionsFromDescriptors,
   createModelCapabilities,
   createModelSelection,
   DEFAULT_VARIANT_CHOICE_ID,
+  getFastModeDescriptor,
+  getFastModeOptionKey,
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
+  getReasoningEffortDescriptor,
+  getReasoningEffortLevels,
+  getUltracodeDescriptor,
+  isFastModeActive,
   readCustomModelEntries,
   modelSelectionsEqual,
   pickModelSelection,
+  supportsFastMode,
   withImplicitFastModeDefault,
 } from "./model.ts";
 
@@ -282,5 +290,194 @@ describe("withImplicitFastModeDefault", () => {
     expect(withImplicitFastModeDefault(caps, [{ id: "fastMode", value: true }])).toEqual([
       { id: "fastMode", value: true },
     ]);
+  });
+});
+
+describe("unified fastMode and reasoning capability helpers", () => {
+  it("resolves Claude boolean fastMode, effort levels (excluding prompt-injected), and ultracode", () => {
+    const claudeCaps = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "effort",
+          label: "Reasoning",
+          type: "select",
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium", isDefault: true },
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra High" },
+            { id: "max", label: "Max" },
+            { id: "ultrathink", label: "Ultrathink" },
+          ],
+          promptInjectedValues: ["ultrathink"],
+        },
+        { id: "ultracode", label: "Ultracode", type: "boolean" },
+        { id: "fastMode", label: "Fast Mode", type: "boolean", currentValue: true },
+      ],
+    });
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+
+    expect(supportsFastMode(claudeCaps)).toBe(true);
+    expect(getFastModeOptionKey(claudeCaps)).toBe("fastMode");
+    expect(getFastModeDescriptor(claudeCaps)?.isSingleFastToggle).toBe(true);
+    // Unselected Cursor/provider default currentValue: true must not appear user-enabled.
+    expect(isFastModeActive(claudeCaps, createModelSelection(claudeId, "claude-opus-5-5"))).toBe(
+      false,
+    );
+    expect(
+      isFastModeActive(
+        claudeCaps,
+        createModelSelection(claudeId, "claude-opus-5-5", [{ id: "fastMode", value: true }]),
+      ),
+    ).toBe("fast");
+    expect(buildFastModeSelectionUpdate(claudeCaps, true)).toEqual({ id: "fastMode", value: true });
+    expect(buildFastModeSelectionUpdate(claudeCaps, false)).toEqual({
+      id: "fastMode",
+      value: false,
+    });
+    expect(getReasoningEffortDescriptor(claudeCaps)?.id).toBe("effort");
+    expect(getReasoningEffortLevels(claudeCaps).map((choice) => choice.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      getReasoningEffortLevels(claudeCaps, { includePromptInjected: true }).map(
+        (choice) => choice.id,
+      ),
+    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultrathink"]);
+    expect(getUltracodeDescriptor(claudeCaps)?.id).toBe("ultracode");
+  });
+
+  it("resolves Codex serviceTier speed controls for single-fast, multi-tier, and flex-only models", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const singleFastCaps = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "reasoningEffort",
+          label: "Reasoning",
+          type: "select",
+          options: [
+            { id: "minimal", label: "Minimal" },
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium", isDefault: true },
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra High" },
+            { id: "max", label: "Max" },
+            { id: "ultra", label: "Ultra" },
+          ],
+          currentValue: "medium",
+        },
+        {
+          id: "serviceTier",
+          label: "Service Tier",
+          type: "select",
+          options: [
+            { id: "default", label: "Standard", isDefault: true },
+            { id: "priority", label: "Fast" },
+          ],
+          currentValue: "default",
+        },
+      ],
+    });
+
+    expect(supportsFastMode(singleFastCaps)).toBe(true);
+    expect(getFastModeOptionKey(singleFastCaps)).toBe("serviceTier");
+    const singleControl = getFastModeDescriptor(singleFastCaps);
+    expect(singleControl?.kind).toBe("serviceTier");
+    expect(singleControl?.isSingleFastToggle).toBe(true);
+    expect(buildFastModeSelectionUpdate(singleFastCaps, true)).toEqual({
+      id: "serviceTier",
+      value: "priority",
+    });
+    expect(buildFastModeSelectionUpdate(singleFastCaps, false)).toEqual({
+      id: "serviceTier",
+      value: "default",
+    });
+    expect(
+      isFastModeActive(
+        singleFastCaps,
+        createModelSelection(codexId, "gpt-6-astra", [{ id: "serviceTier", value: "priority" }]),
+      ),
+    ).toBe("fast");
+    expect(getReasoningEffortLevels(singleFastCaps).map((choice) => choice.id)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+
+    const multiTierCaps = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "serviceTier",
+          label: "Service Tier",
+          type: "select",
+          options: [
+            { id: "default", label: "Standard", isDefault: true },
+            { id: "priority", label: "Fast" },
+            { id: "ultrafast", label: "Ultrafast" },
+          ],
+          currentValue: "default",
+        },
+      ],
+    });
+    expect(supportsFastMode(multiTierCaps)).toBe(true);
+    expect(getFastModeDescriptor(multiTierCaps)?.isSingleFastToggle).toBe(false);
+    expect(
+      isFastModeActive(
+        multiTierCaps,
+        createModelSelection(codexId, "gpt-6.1-sol", [{ id: "serviceTier", value: "ultrafast" }]),
+      ),
+    ).toBe("ultrafast");
+
+    const flexOnlyCaps = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "serviceTier",
+          label: "Service Tier",
+          type: "select",
+          options: [
+            { id: "default", label: "Standard", isDefault: true },
+            { id: "flex", label: "Flex" },
+          ],
+          currentValue: "default",
+        },
+      ],
+    });
+    expect(supportsFastMode(flexOnlyCaps)).toBe(false);
+    expect(getFastModeOptionKey(flexOnlyCaps)).toBeNull();
+    expect(getFastModeDescriptor(flexOnlyCaps)?.kind).toBe("serviceTier");
+  });
+
+  it("prefers role=reasoning for ACP / Antigravity / OMP models and falls back to boolean thinking", () => {
+    const acpCaps = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "custom_thought",
+          label: "Thinking",
+          type: "select",
+          role: "reasoning",
+          options: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+          currentValue: "high",
+        },
+      ],
+    });
+    expect(getReasoningEffortDescriptor(acpCaps)?.id).toBe("custom_thought");
+    expect(supportsFastMode(acpCaps)).toBe(false);
+
+    const haikuCaps = createModelCapabilities({
+      optionDescriptors: [{ id: "thinking", label: "Thinking", type: "boolean", currentValue: true }],
+    });
+    expect(getReasoningEffortDescriptor(haikuCaps)?.id).toBe("thinking");
+    expect(getReasoningEffortLevels(haikuCaps)).toEqual([]);
   });
 });

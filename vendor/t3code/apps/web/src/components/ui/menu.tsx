@@ -1,12 +1,38 @@
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { CheckIcon, ChevronRightIcon, SearchIcon } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 import { cn } from "~/lib/utils";
 import { buttonVariants } from "./button";
 import { renderClosingPositioner } from "./closing-positioner";
 import { Input, type InputProps } from "./input";
 import { Spinner } from "./spinner";
+import { useSubmenuAimCone, type SubmenuAimConeHandle } from "./submenuAimCone";
+
+const ParentMenuAimContext = React.createContext<SubmenuAimConeHandle | null>(null);
+
+interface SubmenuInstanceContextValue {
+  readonly id: string;
+  readonly setTriggerElement: (el: HTMLElement | null) => void;
+  readonly setPopupElement: (el: HTMLElement | null) => void;
+}
+
+const SubmenuInstanceContext = React.createContext<SubmenuInstanceContextValue | null>(null);
+
+function composeRefs<T>(
+  ...refs: readonly (React.Ref<T> | ((node: T | null) => void) | undefined)[]
+): React.RefCallback<T> {
+  return (node) => {
+    for (const ref of refs) {
+      if (!ref) continue;
+      if (typeof ref === "function") {
+        ref(node);
+      } else {
+        (ref as React.MutableRefObject<T | null>).current = node;
+      }
+    }
+  };
+}
 
 const Menu = MenuPrimitive.Root;
 
@@ -29,6 +55,7 @@ function MenuPopup({
   anchor,
   keepMounted = false,
   width = "default",
+  onPointerMoveCapture,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -40,6 +67,8 @@ function MenuPopup({
   keepMounted?: boolean;
   width?: "default" | "content";
 }) {
+  const aimCone = useSubmenuAimCone();
+
   return (
     <MenuPrimitive.Portal keepMounted={keepMounted}>
       <MenuPrimitive.Positioner
@@ -64,9 +93,15 @@ function MenuPopup({
             className,
           )}
           data-slot="menu-popup"
+          onPointerMoveCapture={(event) => {
+            aimCone.handleParentPointerMoveCapture(event);
+            onPointerMoveCapture?.(event);
+          }}
           {...props}
         >
-          <div className="max-h-(--available-height) w-full overflow-y-auto p-1">{children}</div>
+          <ParentMenuAimContext value={aimCone}>
+            <div className="max-h-(--available-height) w-full overflow-y-auto p-1">{children}</div>
+          </ParentMenuAimContext>
         </MenuPrimitive.Popup>
       </MenuPrimitive.Positioner>
     </MenuPrimitive.Portal>
@@ -319,8 +354,97 @@ function MenuItemDetail({ className, ...props }: React.ComponentProps<"span">) {
   );
 }
 
-function MenuSub(props: MenuPrimitive.SubmenuRoot.Props) {
-  return <MenuPrimitive.SubmenuRoot data-slot="menu-sub" {...props} />;
+function MenuSub({
+  open: openProp,
+  defaultOpen = false,
+  onOpenChange,
+  children,
+  ...props
+}: MenuPrimitive.SubmenuRoot.Props) {
+  const submenuId = React.useId();
+  const parentAim = React.useContext(ParentMenuAimContext);
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
+  const isControlled = openProp !== undefined;
+  const open = isControlled ? openProp : uncontrolledOpen;
+  const triggerElRef = React.useRef<HTMLElement | null>(null);
+  const popupElRef = React.useRef<HTMLElement | null>(null);
+  const onOpenChangeRef = React.useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+
+  const forceClose = React.useCallback(() => {
+    if (!isControlled) {
+      setUncontrolledOpen(false);
+    }
+  }, [isControlled]);
+
+  React.useEffect(() => {
+    if (!parentAim) return;
+    if (open) {
+      parentAim.registerActiveSubmenu({
+        id: submenuId,
+        getTriggerElement: () => triggerElRef.current,
+        getPopupElement: () => popupElRef.current,
+        close: forceClose,
+      });
+      return () => {
+        parentAim.unregisterActiveSubmenu(submenuId);
+      };
+    }
+    parentAim.unregisterActiveSubmenu(submenuId);
+    return undefined;
+  }, [forceClose, open, parentAim, submenuId]);
+
+  const instanceCtx = React.useMemo<SubmenuInstanceContextValue>(
+    () => ({
+      id: submenuId,
+      setTriggerElement: (el) => {
+        triggerElRef.current = el;
+      },
+      setPopupElement: (el) => {
+        popupElRef.current = el;
+      },
+    }),
+    [submenuId],
+  );
+
+  const handleOpenChange: NonNullable<MenuPrimitive.SubmenuRoot.Props["onOpenChange"]> = (
+    nextOpen,
+    eventDetails,
+  ) => {
+    if (!nextOpen && parentAim && eventDetails.reason === "trigger-hover") {
+      const ev = eventDetails.event as
+        | { readonly pointerType?: string; readonly clientX?: number; readonly clientY?: number }
+        | undefined;
+      const deferred = parentAim.shouldDeferSubmenuClose(submenuId, ev ?? null, () => {
+        if (!isControlled) {
+          setUncontrolledOpen(false);
+        }
+        onOpenChangeRef.current?.(false, eventDetails);
+      });
+      if (deferred) {
+        eventDetails.cancel();
+        return;
+      }
+    }
+
+    if (!isControlled) {
+      setUncontrolledOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen, eventDetails);
+  };
+
+  return (
+    <SubmenuInstanceContext value={instanceCtx}>
+      <MenuPrimitive.SubmenuRoot
+        data-slot="menu-sub"
+        open={open}
+        onOpenChange={handleOpenChange}
+        {...props}
+      >
+        {children}
+      </MenuPrimitive.SubmenuRoot>
+    </SubmenuInstanceContext>
+  );
 }
 
 function MenuSubTrigger({
@@ -328,13 +452,21 @@ function MenuSubTrigger({
   inset,
   density = "default",
   children,
+  ref,
   ...props
 }: MenuPrimitive.SubmenuTrigger.Props & {
   inset?: boolean;
   density?: "default" | "touch";
 }) {
+  const submenuCtx = React.useContext(SubmenuInstanceContext);
+  const mergedRef = React.useMemo(
+    () => composeRefs<HTMLDivElement>(ref as React.Ref<HTMLDivElement> | undefined, submenuCtx?.setTriggerElement),
+    [ref, submenuCtx],
+  );
+
   return (
     <MenuPrimitive.SubmenuTrigger
+      ref={mergedRef}
       className={cn(
         // Exclude the last SVG so leading-icon margin rules cannot remove the chevron's ms-auto alignment.
         "[&>svg:not(:last-child)]:-mx-0.5 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-base text-foreground outline-none data-disabled:cursor-not-allowed data-disabled:pointer-events-none data-highlighted:bg-accent data-popup-open:bg-accent data-inset:ps-8 data-highlighted:text-accent-foreground data-popup-open:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground [&>svg:not(:last-child):not([class*='opacity-'])]:opacity-80 [&_svg]:pointer-events-none [&>svg]:shrink-0",
@@ -357,6 +489,7 @@ function MenuSubPopup({
   sideOffset = 0,
   alignOffset,
   align = "start",
+  ref,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -364,9 +497,15 @@ function MenuSubPopup({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
 }) {
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
+  const submenuCtx = React.useContext(SubmenuInstanceContext);
+  const mergedRef = React.useMemo(
+    () => composeRefs<HTMLDivElement>(ref as React.Ref<HTMLDivElement> | undefined, submenuCtx?.setPopupElement),
+    [ref, submenuCtx],
+  );
 
   return (
     <MenuPopup
+      ref={mergedRef}
       align={align}
       alignOffset={alignOffset ?? defaultAlignOffset}
       className={className}

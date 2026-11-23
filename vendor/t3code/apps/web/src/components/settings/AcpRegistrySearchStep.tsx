@@ -30,6 +30,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group"
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic";
+import { validateSafeHttpsUrl } from "./prismuxProviderMeta";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { providerClients } from "./providerDriverMeta";
@@ -282,7 +283,7 @@ function AcpRegistryAgentRow({
 }) {
   const gt = useGT();
   const progressLabel = agent.distribution === "binary" ? gt("Downloading") : gt("Preparing");
-  const aboutUrl = agent.website || agent.repository;
+  const aboutUrl = validateSafeHttpsUrl(agent.website) ?? validateSafeHttpsUrl(agent.repository);
   return (
     <article className="min-w-0 py-2.5">
       <div className="flex min-w-0 items-center justify-between gap-3">
@@ -312,7 +313,7 @@ function AcpRegistryAgentRow({
                     size="icon-xs"
                     variant="ghost-muted"
                     aria-label={gt("About {name}", { name: agent.name })}
-                    render={<a href={aboutUrl} target="_blank" rel="noreferrer" />}
+                    render={<a href={aboutUrl} target="_blank" rel="noopener noreferrer" />}
                   >
                     <ExternalLinkIcon />
                   </Button>

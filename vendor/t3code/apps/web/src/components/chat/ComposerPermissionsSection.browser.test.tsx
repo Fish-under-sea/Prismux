@@ -47,23 +47,23 @@ it("reaches Permissions with arrow keys, previews, and picks with Enter", async 
   await userEvent.tab();
   await expect.element(trigger).toHaveFocus();
   await userEvent.keyboard("{ArrowDown}");
-  const supervised = page.getByRole("menuitemradio", { name: "Supervised" });
+  const supervised = page.getByRole("menuitemradio", { name: "Ask for approval" });
   await expect.element(supervised).toHaveFocus();
   await expect
     .element(supervised)
-    .toHaveAccessibleDescription("Ask before commands and file changes.");
+    .toHaveAccessibleDescription("Asks before edits and commands your settings don't allow");
 
   await userEvent.keyboard("{ArrowRight}");
   await expect
-    .element(page.getByRole("menuitemradio", { name: "Auto-accept edits" }))
+    .element(page.getByRole("menuitemradio", { name: "Accept edits" }))
     .toHaveFocus();
   await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
-  await expect.element(page.getByRole("menuitemradio", { name: "Supervised" })).toHaveFocus();
+  await expect.element(page.getByRole("menuitemradio", { name: "Ask for approval" })).toHaveFocus();
 
   await userEvent.keyboard("{ArrowDown}{Enter}");
   await expect.element(screen.getByRole("status")).toHaveTextContent("auto-accept-edits");
   await expect
-    .element(page.getByRole("menuitemradio", { name: "Supervised" }))
+    .element(page.getByRole("menuitemradio", { name: "Ask for approval" }))
     .not.toBeInTheDocument();
   await expect.element(trigger).toHaveFocus();
 });
@@ -91,7 +91,7 @@ it("returns focus to the editor after a pick", async () => {
   await using screen = await render(ui, { router: false }); // no routes involved
   await userEvent.tab();
   await userEvent.keyboard("{ArrowDown}");
-  await expect.element(page.getByRole("menuitemradio", { name: "Supervised" })).toHaveFocus();
+  await expect.element(page.getByRole("menuitemradio", { name: "Ask for approval" })).toHaveFocus();
   await userEvent.keyboard("{Enter}");
   await expect.element(screen.getByRole("status")).toHaveTextContent("approval-required");
   await vi.waitFor(() => expect(handle.focusAtEnd).toHaveBeenCalled());
@@ -176,7 +176,7 @@ function PermissionsChip() {
 it("returns focus to the editor when picking the default hides the chip", async () => {
   const { handle, ui } = withComposer(<PermissionsChip />);
   await using screen = await render(ui, { router: false }); // no routes involved
-  await userEvent.click(screen.getByRole("button", { name: "Permissions: Supervised" }));
+  await userEvent.click(screen.getByRole("button", { name: "Permissions: Ask for approval" }));
   await userEvent.click(page.getByRole("menuitemradio", { name: "Full access" }));
   await vi.waitFor(() => expect(handle.focusAtEnd).toHaveBeenCalled());
   await expect.element(screen.getByRole("button", { name: "Model" })).not.toHaveFocus();
@@ -201,17 +201,17 @@ it("opens permissions directly from the context strip and applies a supported mo
     .element(page.getByRole("menuitemradio", { name: "Full access" }))
     .toHaveAttribute("aria-checked", "true");
   await expect
-    .element(page.getByRole("menuitemradio", { name: "Auto", exact: true }))
+    .element(page.getByRole("menuitemradio", { name: "Approve for me", exact: true }))
     .not.toBeInTheDocument();
-  await userEvent.click(page.getByRole("menuitemradio", { name: "Supervised" }));
-  const trigger = screen.getByRole("button", { name: "Permissions: Supervised" });
+  await userEvent.click(page.getByRole("menuitemradio", { name: "Ask for approval" }));
+  const trigger = screen.getByRole("button", { name: "Permissions: Ask for approval" });
   await expect.element(trigger).toBeVisible();
   await expect
-    .element(page.getByRole("menuitemradio", { name: "Supervised" }))
+    .element(page.getByRole("menuitemradio", { name: "Ask for approval" }))
     .not.toBeInTheDocument();
   await userEvent.click(trigger);
   await expect
-    .element(page.getByRole("menuitemradio", { name: "Supervised" }))
+    .element(page.getByRole("menuitemradio", { name: "Ask for approval" }))
     .toHaveAttribute("aria-checked", "true");
   await userEvent.keyboard("{Escape}");
   await expect.element(trigger).toHaveFocus();

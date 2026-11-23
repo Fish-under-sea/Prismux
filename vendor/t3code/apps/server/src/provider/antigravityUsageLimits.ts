@@ -8,7 +8,7 @@ import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageL
  * Official Antigravity ACP (`agy acp`) exposes account tier (`_meta.antigravity.tier`) and
  * per-session context usage (`usage_update`), but does not expose account quota windows or AI
  * Credits balances. To stay 100% compliant with official ACP and avoid reading local OAuth tokens
- * or calling undocumented `cloudcode-pa` `v1internal` endpoints with forged client headers,
+ * or calling undocumented external private vendor endpoints with forged client headers,
  * Prismux never probes Antigravity quotas out-of-band.
  */
 export const ANTIGRAVITY_ACP_QUOTA_UNSUPPORTED_MESSAGE =

@@ -606,6 +606,21 @@ export interface DesktopPreviewFavicon {
   capturedAt: number;
 }
 
+export const DesktopPreviewDeviceEmulationSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  presetId: Schema.optionalKey(Schema.String),
+  width: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  height: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  deviceScaleFactor: Schema.optionalKey(Schema.Number.check(Schema.isGreaterThan(0))),
+  scale: Schema.optionalKey(Schema.Number.check(Schema.isGreaterThan(0))),
+  mobile: Schema.optionalKey(Schema.Boolean),
+  hasTouch: Schema.optionalKey(Schema.Boolean),
+  maxTouchPoints: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  userAgent: Schema.optionalKey(Schema.String),
+  colorScheme: Schema.optionalKey(DesktopPreviewColorSchemeSchema),
+});
+export type DesktopPreviewDeviceEmulation = typeof DesktopPreviewDeviceEmulationSchema.Type;
+
 export interface DesktopPreviewTabState {
   tabId: string;
   webContentsId: number | null;
@@ -615,6 +630,7 @@ export interface DesktopPreviewTabState {
   zoomFactor: number;
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
+  deviceEmulation?: DesktopPreviewDeviceEmulation | null;
   audioMuted: boolean;
   /** Chromium reports playback even when audioMuted is true. */
   audible: boolean;
@@ -1032,6 +1048,11 @@ export const DesktopPreviewSetColorSchemeInputSchema = Schema.Struct({
   colorScheme: DesktopPreviewColorSchemeSchema,
 });
 
+export const DesktopPreviewSetDeviceEmulationInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  emulation: Schema.NullOr(DesktopPreviewDeviceEmulationSchema),
+});
+
 export const DesktopPreviewSetZoomFactorInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   zoomFactor: Schema.Number.check(Schema.isGreaterThan(0)),
@@ -1117,6 +1138,31 @@ export const PrismuxWindowOcclusionSchema = Schema.Struct({
 });
 export type PrismuxWindowOcclusion = typeof PrismuxWindowOcclusionSchema.Type;
 
+export const PrismuxInstallDownloadedUpdateRequestSchema = Schema.Struct({
+  filePath: Schema.String,
+  expectedSha256: Schema.String,
+  silent: Schema.optionalKey(Schema.Boolean),
+});
+export type PrismuxInstallDownloadedUpdateRequest =
+  typeof PrismuxInstallDownloadedUpdateRequestSchema.Type;
+
+export const PrismuxInstallDownloadedUpdateModeSchema = Schema.Literals([
+  "installer-launched",
+  "portable-opened",
+]);
+export type PrismuxInstallDownloadedUpdateMode =
+  typeof PrismuxInstallDownloadedUpdateModeSchema.Type;
+
+export const PrismuxInstallDownloadedUpdateResultSchema = Schema.Struct({
+  ok: Schema.Literal(true),
+  mode: PrismuxInstallDownloadedUpdateModeSchema,
+  filePath: Schema.String,
+  sha256: Schema.String,
+  message: Schema.String,
+});
+export type PrismuxInstallDownloadedUpdateResult =
+  typeof PrismuxInstallDownloadedUpdateResultSchema.Type;
+
 export interface PrismuxDesktopBridge {
   getDaemonInfo: () => Promise<PrismuxDaemonInfo>;
   getWindowOcclusion: () => Promise<PrismuxWindowOcclusion>;
@@ -1124,6 +1170,9 @@ export interface PrismuxDesktopBridge {
   pickWallpaperFiles: () => Promise<string[]>;
   pickWallpaperDirectory: () => Promise<string | null>;
   setUpdateFeedUrl: (url: string) => Promise<void>;
+  installDownloadedUpdate: (
+    request: PrismuxInstallDownloadedUpdateRequest,
+  ) => Promise<PrismuxInstallDownloadedUpdateResult>;
 }
 
 export interface DesktopBridge {
@@ -1365,6 +1414,10 @@ export interface DesktopPreviewBridge {
   setZoomFactor: (tabId: string, zoomFactor: number) => Promise<void>;
   hardReload: (tabId: string) => Promise<void>;
   setColorScheme: (tabId: string, colorScheme: DesktopPreviewColorScheme) => Promise<void>;
+  setDeviceEmulation?: (
+    tabId: string,
+    emulation: DesktopPreviewDeviceEmulation | null,
+  ) => Promise<void>;
   setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
   findInPage: (
     tabId: string,

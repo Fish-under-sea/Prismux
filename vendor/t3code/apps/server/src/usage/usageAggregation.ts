@@ -1,6 +1,7 @@
 // @effect-diagnostics globalDate:off
 import type {
   UsageBucket,
+  UsageCallLog,
   UsageCategoryCost,
   UsageDay,
   UsageModelFilter,
@@ -11,6 +12,111 @@ import type {
 
 import { EMPTY_TOTALS, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import { cacheSavingsUsd, lookupRate, priceUsage, type RateTable } from "./usagePricing.ts";
+
+export const DEFAULT_MAX_USAGE_CALL_LOGS = 500;
+
+export interface UsageRecordTiming {
+  readonly ttftMs?: number | null | undefined;
+  readonly durationMs?: number | null | undefined;
+}
+
+/**
+ * Computes actual cache hit rate in `[0, 1]` matching `UsageModelDialog` semantics
+ * (cache writes count as misses), or `null` when total input tokens is `0`.
+ */
+export function computeUsageCacheHitRate(
+  uncachedInputTokens: number,
+  cachedInputTokens: number,
+  cacheCreationTokens = 0,
+): number | null {
+  const uncached =
+    Number.isFinite(uncachedInputTokens) && uncachedInputTokens > 0 ? uncachedInputTokens : 0;
+  const cached =
+    Number.isFinite(cachedInputTokens) && cachedInputTokens > 0 ? cachedInputTokens : 0;
+  const created =
+    Number.isFinite(cacheCreationTokens) && cacheCreationTokens > 0 ? cacheCreationTokens : 0;
+  const totalInput = uncached + cached + created;
+  if (totalInput <= 0) return null;
+  const ratio = Math.min(1, Math.max(0, cached / totalInput));
+  return Math.round(ratio * 10_000) / 10_000;
+}
+
+/**
+ * Computes real output throughput (`tok/s`) using post-TTFT generation duration when
+ * `durationMs > ttftMs`, or `null` whenever real timing or output tokens are unavailable.
+ */
+export function computeUsageOutputTps(
+  outputTokens: number,
+  durationMs: number | null | undefined,
+  ttftMs?: number | null | undefined,
+): number | null {
+  if (!Number.isFinite(outputTokens) || outputTokens <= 0) return null;
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+  const normalizedTtft =
+    typeof ttftMs === "number" && Number.isFinite(ttftMs) && ttftMs >= 0 ? ttftMs : null;
+  const generationMs =
+    normalizedTtft !== null && durationMs > normalizedTtft ? durationMs - normalizedTtft : durationMs;
+  if (generationMs <= 0) return null;
+  return Math.round((outputTokens / (generationMs / 1000)) * 100) / 100;
+}
+
+function readOptionalTiming(
+  record: UsageRecord,
+  explicit?: UsageRecordTiming,
+): { readonly ttftMs: number | null; readonly durationMs: number | null } {
+  const extended = record as UsageRecord & UsageRecordTiming;
+  const rawTtft = explicit?.ttftMs ?? extended.ttftMs;
+  const rawDuration = explicit?.durationMs ?? extended.durationMs;
+  const ttftMs =
+    typeof rawTtft === "number" && Number.isFinite(rawTtft) && rawTtft >= 0
+      ? Math.round(rawTtft * 100) / 100
+      : null;
+  const durationMs =
+    typeof rawDuration === "number" && Number.isFinite(rawDuration) && rawDuration > 0
+      ? Math.round(rawDuration * 100) / 100
+      : null;
+  return { ttftMs, durationMs };
+}
+
+export function buildUsageCallLog(input: {
+  readonly record: UsageRecord;
+  readonly id: string;
+  readonly costUsd: number;
+  readonly timing?: UsageRecordTiming | undefined;
+}): UsageCallLog {
+  const { record, id, costUsd, timing } = input;
+  const { ttftMs, durationMs } = readOptionalTiming(record, timing);
+  const inputTokens = Math.max(0, Math.trunc(record.totals.uncachedInputTokens));
+  const cachedInputTokens = Math.max(0, Math.trunc(record.totals.cachedInputTokens));
+  const cacheCreationTokens = Math.max(0, Math.trunc(record.totals.cacheCreationTokens));
+  const outputTokens = Math.max(0, Math.trunc(record.totals.outputTokens));
+  const tps = computeUsageOutputTps(outputTokens, durationMs, ttftMs);
+  const cacheHitRate = computeUsageCacheHitRate(
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+  );
+  const threadId = record.sessionId.trim();
+  return {
+    id,
+    timestamp: new Date(record.timestampMs).toISOString(),
+    provider: record.provider,
+    model: record.model,
+    ...(threadId.length > 0 ? { threadId } : {}),
+    ttftMs,
+    durationMs,
+    tps,
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    cacheHitRate,
+    costUsd: roundUsd(costUsd),
+    speed: record.speed,
+  };
+}
 
 // en-CA gives ISO-ordered parts in the requested zone; Date getters are host-local.
 function makeDayFormatter(timeZone: string): (timestampMs: number) => string {
@@ -75,6 +181,8 @@ export interface AggregateOptions {
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
+  /** Maximum number of newest call-level entries returned in `callLogs` (defaults to 500; 0 disables). */
+  readonly maxCallLogs?: number;
 }
 
 export function resolveModelAliases(
@@ -138,6 +246,7 @@ export function canonicalModelFilter(
 
 export interface AggregateResult {
   readonly buckets: readonly UsageBucket[];
+  readonly callLogs: readonly UsageCallLog[];
   readonly duplicatesDropped: number;
   readonly outOfWindow: number;
 }
@@ -208,14 +317,35 @@ function smallestGrokCopy(held: UsageRecord, copy: UsageRecord): UsageRecord {
 
 interface Contribution {
   record: UsageRecord;
+  timing: UsageRecordTiming | undefined;
   /** Null when the first copy fell outside the window. */
   readonly bucket: MutableBucket | null;
+}
+
+interface PendingCallLog {
+  readonly timestampMs: number;
+  readonly entry: UsageCallLog;
+}
+
+function mergeRecordTiming(
+  held: UsageRecordTiming | undefined,
+  incoming: UsageRecordTiming | undefined,
+): UsageRecordTiming | undefined {
+  if (incoming === undefined) return held;
+  if (held === undefined) return incoming;
+  return {
+    ttftMs: held.ttftMs ?? incoming.ttftMs,
+    durationMs: held.durationMs ?? incoming.durationMs,
+  };
 }
 
 /** Deduplicates across the whole scan; Claude copies records into resumed/forked transcripts. */
 export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
   readonly #seen = new Map<string, Contribution>();
+  readonly #callLogs: PendingCallLog[] = [];
+  readonly #callLogOccurrences = new Map<string, number>();
+  readonly #maxCallLogs: number;
   readonly #toDay: (timestampMs: number) => string;
   readonly #hourlyWindow: { readonly sinceTimeMs: number; readonly untilTimeMs: number } | null;
   readonly #options: AggregateOptions;
@@ -232,6 +362,10 @@ export class UsageAggregator {
 
   constructor(options: AggregateOptions) {
     this.#options = options;
+    this.#maxCallLogs = Math.max(
+      0,
+      Math.trunc(options.maxCallLogs ?? DEFAULT_MAX_USAGE_CALL_LOGS),
+    );
     this.#toDay = makeDayFormatter(options.timeZone);
     if (options.resolution === "hour") {
       if (options.sinceTimeMs === undefined || options.untilTimeMs === undefined) {
@@ -246,7 +380,7 @@ export class UsageAggregator {
     }
   }
 
-  add(input: UsageRecord, sourcePath?: string): boolean {
+  add(input: UsageRecord, sourcePath?: string, timing?: UsageRecordTiming): boolean {
     if (!keepsUsageRecord(this.#options.modelFilter, input)) return false;
     const record = this.#mapModel(input);
     if (record.dedupeKey !== null) {
@@ -258,19 +392,20 @@ export class UsageAggregator {
             record.provider === "grok"
               ? smallestGrokCopy(held.record, record)
               : mergeUsageCopies(held.record, record);
+          held.timing = mergeRecordTiming(held.timing, timing);
         }
         return false;
       }
     }
 
     const bucket = this.#placeInWindow(record, sourcePath ?? "");
-    if (record.dedupeKey !== null) this.#seen.set(record.dedupeKey, { record, bucket });
+    if (record.dedupeKey !== null) this.#seen.set(record.dedupeKey, { record, timing, bucket });
     if (bucket === null) {
       this.#outOfWindow += 1;
       return false;
     }
     // Keyed usage is counted in finish(), once all its copies are merged.
-    if (record.dedupeKey === null) this.#accumulate(bucket, record);
+    if (record.dedupeKey === null) this.#accumulate(bucket, record, timing);
     if (record.sessionId.length > 0) bucket.sessions.add(record.sessionId);
     return true;
   }
@@ -299,7 +434,27 @@ export class UsageAggregator {
     return this.#bucketFor(day, hourIndex, record.provider, record.model, source);
   }
 
-  #accumulate(bucket: MutableBucket, record: UsageRecord): void {
+  #callLogId(record: UsageRecord): string {
+    const dedupe = record.dedupeKey?.trim();
+    const base =
+      dedupe && dedupe.length > 0
+        ? `${record.provider}:${dedupe}`
+        : `${record.provider}:${record.sessionId.trim() || "-"}:${record.timestampMs}:${record.model}:${record.totals.uncachedInputTokens}:${record.totals.cachedInputTokens}:${record.totals.cacheCreationTokens}:${record.totals.outputTokens}`;
+    const occurrence = (this.#callLogOccurrences.get(base) ?? 0) + 1;
+    this.#callLogOccurrences.set(base, occurrence);
+    return occurrence === 1 ? base : `${base}#${occurrence}`;
+  }
+
+  #trimCallLogs(): void {
+    this.#callLogs.sort(
+      (a, b) => b.timestampMs - a.timestampMs || a.entry.id.localeCompare(b.entry.id),
+    );
+    if (this.#callLogs.length > this.#maxCallLogs) {
+      this.#callLogs.length = this.#maxCallLogs;
+    }
+  }
+
+  #accumulate(bucket: MutableBucket, record: UsageRecord, timing?: UsageRecordTiming): void {
     const priced = priceUsage(this.#options.rates, record, this.#options.priceOverrides);
 
     const totals = bucket.totals;
@@ -340,6 +495,21 @@ export class UsageAggregator {
         record.totals.outputTokens;
     }
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
+
+    if (this.#maxCallLogs > 0) {
+      this.#callLogs.push({
+        timestampMs: record.timestampMs,
+        entry: buildUsageCallLog({
+          record,
+          id: this.#callLogId(record),
+          costUsd: priced.costUsd,
+          timing,
+        }),
+      });
+      if (this.#callLogs.length > this.#maxCallLogs * 4) {
+        this.#trimCallLogs();
+      }
+    }
   }
 
   // Aliases use the target's rate. Only an unpriced target goes through the provider's own rate naming.
@@ -400,10 +570,13 @@ export class UsageAggregator {
   }
 
   finish(): AggregateResult {
-    for (const { record, bucket } of this.#seen.values()) {
-      if (bucket !== null) this.#accumulate(bucket, record);
+    for (const { record, timing, bucket } of this.#seen.values()) {
+      if (bucket !== null) this.#accumulate(bucket, record, timing);
     }
     this.#seen.clear();
+    if (this.#callLogs.length > 0) {
+      this.#trimCallLogs();
+    }
     const buckets: UsageBucket[] = [];
     for (const [key, bucket] of this.#buckets) {
       const [day = "", hourStart = "", provider = "", model = "", sourcePath = ""] =
@@ -451,6 +624,7 @@ export class UsageAggregator {
 
     return {
       buckets,
+      callLogs: this.#callLogs.map((item) => item.entry),
       duplicatesDropped: this.#duplicatesDropped,
       outOfWindow: this.#outOfWindow,
     };

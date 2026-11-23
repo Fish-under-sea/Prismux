@@ -25,12 +25,18 @@ import {
   writeLocalStorageValue,
 } from "~/hooks/useLocalStorage";
 import { resolveSidebarState, type ResponsiveSidebarState } from "./sidebarState";
+import {
+  planSidebarMotionTransition,
+  resolveSidebarMotionVisualState,
+  SIDEBAR_ICON_RAIL_WIDTH_PX,
+  type SidebarCollapseMotionPhase,
+} from "../sidebar/sidebarIconRailMotion";
 import * as Schema from "effect/Schema";
 import { announceSidebarVisibility } from "~/lib/accessibilityAnnouncements";
 
 const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing) * 3)";
-const SIDEBAR_WIDTH_ICON = "3rem";
+const SIDEBAR_WIDTH_ICON = `${SIDEBAR_ICON_RAIL_WIDTH_PX}px`;
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 const SIDEBAR_TITLEBAR_CONTROL_SIZE = "max-sm:[--workspace-titlebar-control-size:--spacing(8)]";
 
@@ -46,6 +52,11 @@ type SidebarContextProps = {
   toggleSidebar: () => void;
   /** Runs before the desktop sidebar collapses. */
   onCollapse: (listener: () => void) => () => void;
+  /** Spec 2 two-stage icon-rail collapse choreography state. */
+  motionPhase: SidebarCollapseMotionPhase;
+  isWidthNarrow: boolean;
+  isTextHidden: boolean;
+  isIconRail: boolean;
 };
 
 type SidebarResizableOptions = {
@@ -215,6 +226,40 @@ function SidebarProvider({
   }
 
   const state = resolveSidebarState({ isMobile, open, openMobile });
+  const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const panelAnimationDurationMs = useClientSettings(
+    (settings) => settings.panelAnimationDurationMs,
+  );
+  const reducedMotion = prefersReducedMotion || panelAnimationDurationMs <= 0;
+  const [motionPhase, setMotionPhase] = React.useState<SidebarCollapseMotionPhase>(() =>
+    open ? "expanded" : "collapsed",
+  );
+  const motionPhaseRef = React.useRef<SidebarCollapseMotionPhase>(motionPhase);
+  motionPhaseRef.current = motionPhase;
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- choreographs Spec 2 two-stage icon-rail collapse (text fade -> width narrow) and expand (width widen -> text fade-in)
+  React.useEffect(() => {
+    if (isMobile) {
+      setMotionPhase(open ? "expanded" : "collapsed");
+      return;
+    }
+    const plan = planSidebarMotionTransition({
+      targetOpen: open,
+      currentPhase: motionPhaseRef.current,
+      reducedMotion,
+    });
+    setMotionPhase(plan.immediatePhase);
+    if (plan.delayedPhase === null || plan.delayMs <= 0) return;
+    const delayed = plan.delayedPhase;
+    const timer = window.setTimeout(() => {
+      setMotionPhase(delayed);
+    }, plan.delayMs);
+    return () => window.clearTimeout(timer);
+  }, [isMobile, open, reducedMotion]);
+
+  const visualMotion = resolveSidebarMotionVisualState(
+    isMobile ? (open ? "expanded" : "collapsed") : motionPhase,
+  );
 
   const contextValue: SidebarContextProps = {
     isMobile,
@@ -227,6 +272,10 @@ function SidebarProvider({
     state,
     toggleSidebar: store.toggle,
     onCollapse: store.onCollapse,
+    motionPhase: visualMotion.phase,
+    isWidthNarrow: visualMotion.isWidthNarrow,
+    isTextHidden: visualMotion.isTextHidden,
+    isIconRail: visualMotion.isIconRail,
   };
 
   return (
@@ -237,6 +286,7 @@ function SidebarProvider({
           SIDEBAR_TITLEBAR_CONTROL_SIZE,
           className,
         )}
+        data-sidebar-motion-phase={visualMotion.phase}
         data-sidebar-state={state}
         data-slot="sidebar-wrapper"
         style={
@@ -293,7 +343,16 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
 }) {
-  const { isMobile, state, openMobile, setOpenMobile, setMobileSheetMounted } = useSidebar();
+  const {
+    isMobile,
+    state,
+    openMobile,
+    setOpenMobile,
+    setMobileSheetMounted,
+    motionPhase,
+    isWidthNarrow,
+    isTextHidden,
+  } = useSidebar();
   const gt = useGT();
   // Not usePanelAnimationSettings: its navigation suppression would snap the sheet shut mid-exit when an item navigates.
   const panelAnimationDurationMs = useClientSettings(
@@ -302,6 +361,7 @@ function Sidebar({
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const panelAnimationsActive = panelAnimationDurationMs > 0 && !prefersReducedMotion;
   const offcanvasCollapsed = !isMobile && collapsible === "offcanvas" && state === "collapsed";
+  const isVisuallyCollapsed = collapsible === "icon" ? isWidthNarrow : state === "collapsed";
 
   const resolvedResizable = resolveSidebarResizable({ collapsible, isMobile, resizable });
   const instanceContextValue: SidebarInstanceContextProps = { side, resizable: resolvedResizable };
@@ -378,8 +438,11 @@ function Sidebar({
     <SidebarInstanceContext value={instanceContextValue}>
       <div
         className="group peer hidden text-sidebar-foreground md:block"
-        data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-collapsible={isVisuallyCollapsed ? collapsible : ""}
         data-collapsible-mode={collapsible}
+        data-sidebar-motion-phase={motionPhase}
+        data-sidebar-text-hidden={isTextHidden ? "true" : "false"}
+        data-sidebar-width-narrow={isWidthNarrow ? "true" : "false"}
         inert={offcanvasCollapsed}
         data-side={side}
         data-slot="sidebar"
@@ -389,7 +452,9 @@ function Sidebar({
         <div
           className={cn(
             "relative w-(--sidebar-width) bg-transparent",
-            "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+            collapsible === "icon"
+              ? "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:duration-[150ms] [[data-panel-animations=true]_&]:ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none"
+              : "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
             "group-data-[collapsible=offcanvas]:w-0",
             "group-data-[side=right]:rotate-180",
             variant === "floating" || variant === "inset"
@@ -401,7 +466,9 @@ function Sidebar({
         <div
           className={cn(
             "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) md:flex",
-            "[[data-panel-animations=true]_&]:transition-[left,right,width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+            collapsible === "icon"
+              ? "[[data-panel-animations=true]_&]:transition-[left,right,width] [[data-panel-animations=true]_&]:duration-[150ms] [[data-panel-animations=true]_&]:ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none"
+              : "[[data-panel-animations=true]_&]:transition-[left,right,width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -414,7 +481,7 @@ function Sidebar({
           {...props}
         >
           <div
-            className="flex h-full w-full flex-col bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
+            className="flex h-full w-full flex-col overflow-x-hidden bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
             data-sidebar="sidebar"
             data-slot="sidebar-inner"
           >
@@ -703,7 +770,7 @@ function SidebarContent({
       >
         <div
           className={cn(
-            "flex w-full min-w-0 flex-col [overflow-anchor:none] group-data-[collapsible=icon]:overflow-hidden [&>[data-sidebar=group]+[data-sidebar=group]]:pt-0",
+            "flex w-full min-w-0 flex-col [overflow-anchor:none] group-data-[collapsible=icon]:overflow-x-hidden [&>[data-sidebar=group]+[data-sidebar=group]]:pt-0",
             fixedHeader && "[&>[data-sidebar=group]:first-child]:pt-0",
             className,
           )}
@@ -753,7 +820,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full cursor-pointer items-center gap-[var(--sidebar-control-gap)] overflow-hidden text-left outline-hidden ring-ring transition-[width,height,padding] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset active:bg-sidebar-row-active active:text-sidebar-foreground disabled:pointer-events-none disabled:opacity-64 aria-disabled:pointer-events-none aria-disabled:opacity-64 data-[active=true]:bg-sidebar-row-selected data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground data-[state=open]:hover:bg-sidebar-row-hover data-[state=open]:hover:text-sidebar-foreground group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-[var(--sidebar-content-inset)]! [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-[var(--sidebar-icon-color)] hover:[&>svg]:text-sidebar-foreground active:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-foreground",
+  "peer/menu-button flex w-full cursor-pointer items-center gap-[var(--sidebar-control-gap)] overflow-hidden text-left outline-hidden ring-ring transition-[width,height,padding] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset active:bg-sidebar-row-active active:text-sidebar-foreground disabled:pointer-events-none disabled:opacity-64 aria-disabled:pointer-events-none aria-disabled:opacity-64 data-[active=true]:bg-sidebar-row-selected data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground data-[state=open]:hover:bg-sidebar-row-hover data-[state=open]:hover:text-sidebar-foreground group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:justify-center! group-data-[collapsible=icon]:p-0! [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-[var(--sidebar-icon-color)] hover:[&>svg]:text-sidebar-foreground active:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-foreground",
   {
     defaultVariants: {
       size: "default",

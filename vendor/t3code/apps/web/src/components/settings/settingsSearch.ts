@@ -99,10 +99,10 @@ export interface SettingsSearchAvailability {
 }
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
-  "/settings/diagnostics": msg("Diagnostics"),
+  "/settings/diagnostics": msg("Service Diagnostics"),
   "/settings/projects": msg("Projects"),
   "/settings/general": msg("General"),
-  "/settings/appearance": msg("Appearance"),
+  "/settings/appearance": msg("Appearance & Wallpaper"),
   "/settings/chat": msg("Chat"),
   "/settings/diffs": msg("Diffs & pull requests"),
   "/settings/keybindings": msg("Keybindings"),
@@ -131,77 +131,109 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
 /** Sidebar labels; an entry of its own lets a translator shorten one below its page title. */
 export const SETTINGS_NAV_LABELS: Readonly<Record<SettingsPath, string>> = {
   ...SETTINGS_SECTION_LABELS,
+  "/settings/about": msg("About & Updates"),
   "/settings/source-control": msg("Source control & issues", {
     $context: "settings navigation item",
   }),
   "/settings/access": msg("Sharing & access", { $context: "settings navigation item" }),
 };
 
-type SettingsNavGroup = {
+export type SettingsNavGroupId =
+  | "general-appearance"
+  | "agents-workspace"
+  | "extensions-data"
+  | "system-about";
+
+export type SettingsNavGroup = {
+  readonly id: SettingsNavGroupId;
   readonly heading: string;
   readonly headingHidden?: true;
   readonly paths: ReadonlyArray<SettingsPath>;
 };
 
-/** Sidebar order. A group with a hidden heading is set apart on screen by space alone. */
+/**
+ * Deduplicated 4-group sidebar hierarchy separated by crisp horizontal dividers:
+ * - `/settings/wallpaper` is merged into `/settings/appearance` (legacy deep link highlights it).
+ * - `/settings/updates` is merged into `/settings/about` (legacy deep link redirects to `#prismux-updates`).
+ * - `/settings/labs` redirects into official pages; `/settings/archived` stays in Group 2.
+ */
 const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
-    heading: msg("Preferences"),
+    id: "general-appearance",
+    heading: msg("General & appearance"),
     headingHidden: true,
     paths: [
       "/settings/general",
       "/settings/appearance",
       "/settings/chat",
-      "/settings/diffs",
       "/settings/keybindings",
       "/settings/voice",
       "/settings/snap-shot",
     ],
   },
   {
-    heading: msg("Prismux"),
-    paths: [
-      "/settings/wallpaper",
-      "/settings/plugins",
-      "/settings/memory-sync",
-      "/settings/updates",
-    ],
-  },
-  {
-    heading: msg("Agents"),
+    id: "agents-workspace",
+    heading: msg("Agents & workspace"),
     paths: [
       "/settings/providers",
       "/settings/threads",
+      "/settings/archived",
       "/settings/browser",
       "/settings/devices",
       "/settings/scheduled-tasks",
+      "/settings/projects",
+      "/settings/worktrees",
+      "/settings/diffs",
+      "/settings/source-control",
     ],
   },
   {
-    heading: msg("Code"),
-    paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
+    id: "extensions-data",
+    heading: msg("Extensions, memory & connections"),
+    paths: [
+      "/settings/plugins",
+      "/settings/memory-sync",
+      "/settings/connections",
+      "/settings/access",
+      "/settings/secrets",
+    ],
   },
   {
-    heading: msg("Connections"),
-    paths: ["/settings/connections", "/settings/access", "/settings/secrets"],
-  },
-  {
-    heading: msg("More"),
-    headingHidden: true,
-    paths: ["/settings/maintenance", "/settings/labs", "/settings/about", "/settings/archived"],
+    id: "system-about",
+    heading: msg("System & about"),
+    paths: ["/settings/diagnostics", "/settings/maintenance", "/settings/about"],
   },
 ];
 
-const SETTINGS_NAV_GROUPS_WITHOUT_SECRETS = ALL_SETTINGS_NAV_GROUPS.map((group) => ({
-  ...group,
-  paths: group.paths.filter((path) => path !== "/settings/secrets"),
-}));
+function filterNavGroups(
+  includeSecrets: boolean,
+  includeSnapShots: boolean,
+): ReadonlyArray<SettingsNavGroup> {
+  return ALL_SETTINGS_NAV_GROUPS.map((group) => ({
+    ...group,
+    paths: group.paths.filter(
+      (path) =>
+        (includeSecrets || path !== "/settings/secrets") &&
+        (includeSnapShots || path !== "/settings/snap-shot"),
+    ),
+  }));
+}
 
-/** Sidebar groups; Secrets shows only when some environment's server enables secret providers. */
-export function settingsNavGroups(hasSecretProvidersEnvironment: boolean) {
-  return hasSecretProvidersEnvironment
-    ? ALL_SETTINGS_NAV_GROUPS
-    : SETTINGS_NAV_GROUPS_WITHOUT_SECRETS;
+const CACHED_NAV_GROUPS = {
+  "00": filterNavGroups(false, false),
+  "01": filterNavGroups(false, true),
+  "10": filterNavGroups(true, false),
+  "11": filterNavGroups(true, true),
+} as const;
+
+/** Sidebar groups; Secrets requires server support and SnapShots shows on macOS only by default. */
+export function settingsNavGroups(
+  hasSecretProvidersEnvironment: boolean,
+  showSnapShots: boolean =
+    typeof navigator !== "undefined" && isMacPlatform(navigator.platform),
+): ReadonlyArray<SettingsNavGroup> {
+  const key = `${hasSecretProvidersEnvironment ? "1" : "0"}${showSnapShots ? "1" : "0"}` as const;
+  return CACHED_NAV_GROUPS[key];
 }
 
 export function keybindingSearchAnchorId<Command extends KeybindingCommand>(command: Command) {
@@ -515,20 +547,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
   },
-  {
-    id: "boring-sidebar",
-    title: msg("Boring sidebar (group by project)"),
-    to: "/settings/labs",
-    searchTerms: [msg("beta folders project tree classic sidebar")],
-  },
-  {
-    id: "boring-sidebar-multiline",
-    title: msg("Two-line folder rows"),
-    to: "/settings/labs",
-    // Shown inside the boring sidebar row only while it is on, so search lands on the parent.
-    targetId: "boring-sidebar",
-    searchTerms: [msg("beta boring sidebar folder rows multiline branch pull request details")],
-  },
 
   {
     id: "tool-call-visibility",
@@ -561,39 +579,23 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
-    id: "guest-links",
-    title: msg("Guest links"),
-    to: "/settings/labs",
-    scope: "environment",
-    searchTerms: [msg("beta share guest invite link teammate watch t3 connect tunnel")],
-  },
-  {
     id: "linked-environments-beta",
     title: msg("Linked environments"),
-    to: "/settings/labs",
+    to: "/settings/connections",
     scope: "environment",
     searchTerms: [msg("beta link another machine vps peer agents work there delegate")],
   },
   {
     id: "prompt-suggestions-beta",
     title: msg("Suggest next prompt"),
-    to: "/settings/labs",
+    to: "/settings/chat",
     scope: "environment",
     searchTerms: [msg("beta tab autocomplete predict next message claude codex ghost text")],
   },
   {
-    id: "simlock-hosts",
-    title: msg("Simlock device hosts (alpha)"),
-    to: "/settings/labs",
-    scope: "environment",
-    searchTerms: [
-      msg("beta alpha simlock callstack simulator emulator ios android pool lease gateway"),
-    ],
-  },
-  {
     id: "worktree-fast-checkout",
     title: msg("Fast worktree checkout"),
-    to: "/settings/labs",
+    to: "/settings/worktrees",
     scope: "environment",
     fastWorktreeCheckoutOnly: true,
     searchTerms: [msg("beta fast worktree checkout clone apfs copy-on-write cache macos speed")],
@@ -847,7 +849,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-update-checks",
     title: msg("Provider update checks"),
-    to: "/settings/maintenance",
+    to: "/settings/providers",
     searchTerms: [
       msg("installed cli versions newer available codex claude cursor grok fx kiro opencode"),
     ],
@@ -972,7 +974,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "update-track",
     title: msg("Update track"),
     to: "/settings/about",
-    searchTerms: [msg("release channel stable latest nightly prerelease")],
+    searchTerms: [msg("release channel stable latest prerelease")],
     releaseChannelOnly: true,
   },
   {
@@ -984,9 +986,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "mobile-app",
-    title: msg("Mobile app"),
+    title: msg("Mobile web access"),
     to: "/settings/about",
-    searchTerms: [msg("phone tablet iPhone iPad iOS Android App Store Google Play QR")],
+    searchTerms: [msg("phone tablet iPhone iPad iOS Android QR LAN Tailscale web mobile access")],
   },
   {
     id: "welcome-page",
@@ -1012,7 +1014,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "diagnostics",
     title: msg("Diagnostics"),
-    to: "/settings/maintenance",
+    to: "/settings/diagnostics",
     searchTerms: [msg("logs traces processes resource history failures spans cpu memory")],
   },
   {
@@ -1032,12 +1034,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("SnapShots"),
     searchTerms: [msg("window capture screenshot")],
     to: "/settings/snap-shot",
+    macOnly: true,
   },
   {
     id: "snap-shot-accessibility",
     title: msg("Include app text"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
+    macOnly: true,
     searchTerms: [
       msg("capture accessibility data text UI structure elements privacy omit agent context"),
     ],
@@ -1047,24 +1051,28 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Capture shortcut"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
+    macOnly: true,
   },
   {
     id: "snap-shot-sound",
     title: msg("Capture sound"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
+    macOnly: true,
   },
   {
     id: "snap-shot-flash",
     title: msg("Capture flash"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
+    macOnly: true,
   },
   {
     id: "snap-shot-animations",
     title: msg("Capture animations"),
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
+    macOnly: true,
   },
   {
     id: "providers",
@@ -1124,11 +1132,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "device-sources",
     title: msg("Device sources"),
     to: "/settings/devices",
-    searchTerms: [
-      msg(
-        "device hosts ssh remote mac mini identity key connection eas expo cloud simlock pool gateway local simulators",
-      ),
-    ],
+    searchTerms: [msg("device hosts ssh remote mac mini identity key connection local simulators")],
   },
   {
     id: "agent-device-access",
@@ -1397,46 +1401,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     wslAvailableOnly: true,
   },
   {
-    id: "t3-connect",
-    localEnvironmentOnly: true,
-    title: msg("T3 Connect"),
-    to: "/settings/access",
-    targetId: "connections-environment",
-    searchTerms: [msg("managed tunnel cloud other devices remote tunnels limit t3 chat")],
-    desktopOnly: true,
-    cloudOnly: true,
-  },
-  {
-    id: "connect-device-approval",
-    title: msg("Require approval for new devices"),
-    to: "/settings/access",
-    targetId: "connections-environment",
-    searchTerms: [
-      msg("t3 connect devices approve deny trust revoke pairing code security account"),
-    ],
-    cloudOnly: true,
-    managedTunnelOnly: true,
-  },
-  {
-    id: "hold-webhooks-while-offline",
-    localEnvironmentOnly: true,
-    title: msg("Hold webhooks while offline"),
-    to: "/settings/access",
-    targetId: "connections-environment",
-    searchTerms: [msg("webhook automations offline queue mailbox t3 connect")],
-    cloudOnly: true,
-    managedTunnelOnly: true,
-  },
-  {
-    id: "publish-agent-activity",
-    localEnvironmentOnly: true,
-    title: msg("Publish agent activity"),
-    to: "/settings/access",
-    targetId: "connections-environment",
-    searchTerms: [msg("mobile push notifications live activities cloud tunnel")],
-    cloudOnly: true,
-  },
-  {
     id: "preview-tunnel",
     title: msg("Preview tunnel"),
     to: "/settings/access",
@@ -1467,7 +1431,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "remote-environments",
     title: msg("Environments"),
     to: "/settings/connections",
-    searchTerms: [msg("add pair backend host code ssh config agent tunnel saved t3 connect")],
+    searchTerms: [msg("add pair backend host code ssh config agent tunnel saved")],
   },
   {
     id: "load-balancing",
@@ -1539,9 +1503,19 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "prismux-updates",
     title: msg("Prismux Updates"),
-    to: "/settings/updates",
+    to: "/settings/about",
     searchTerms: [
       msg("updates upgrade dual source gitee github npmmirror mirror release probe speed test"),
+    ],
+  },
+  {
+    id: "prismux-diagnostics",
+    title: msg("Service Diagnostics"),
+    to: "/settings/diagnostics",
+    searchTerms: [
+      msg(
+        "diagnostics health check services sqlite-vec fts5 7za adb steam agy claude codex omp overnight factory hooks sandbox",
+      ),
     ],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
@@ -1583,7 +1557,9 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
 const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
   "/settings/integrations": "/settings/browser",
   "/settings/storage": "/settings/maintenance",
-  "/settings/beta": "/settings/labs",
+  "/settings/beta": "/settings/general",
+  "/settings/labs": "/settings/general",
+  "/settings/updates": "/settings/about",
 };
 const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/settings/general",

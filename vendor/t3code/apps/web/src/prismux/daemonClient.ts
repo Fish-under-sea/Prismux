@@ -118,6 +118,8 @@ export interface DaemonMemoryStatsResponse {
   callerScope: string;
   totalEntries: number;
   vectorSearchEnabled: boolean;
+  retrievalMode?: "fts5+sqlite-vec" | "fts5-only";
+  sqliteVecLoaded?: boolean;
   byNamespace: Record<string, number>;
   byKind: Record<string, number>;
   latestUpdatedAt: number | null;
@@ -224,12 +226,302 @@ export interface DaemonInstalledPluginsResponse {
   totalCount: number;
 }
 
-export interface DaemonUpdaterStatusResponse {
+export type DaemonDiagnosticsStatus = "ok" | "degraded" | "error";
+
+export interface DaemonDiagnosticsItemDto {
+  id: string;
+  category: string;
+  name: string;
+  status: DaemonDiagnosticsStatus;
+  summary: string;
+  detail?: string;
+  fixAction?: string;
+  fixCommand?: string;
+  settingsRoute?: string;
+  version?: string | null;
+  latencyMs?: number | null;
+  [key: string]: unknown;
+}
+
+export interface DaemonDiagnosticsGroupDto {
+  id: string;
+  label?: string;
+  title?: string;
+  status?: DaemonDiagnosticsStatus;
+  items: DaemonDiagnosticsItemDto[];
+  [key: string]: unknown;
+}
+
+export interface DaemonDiagnosticsServicesResponse {
+  ok?: boolean;
+  checkedAt: number;
+  durationMs?: number;
+  cached?: boolean;
+  groups?: DaemonDiagnosticsGroupDto[];
+  items: DaemonDiagnosticsItemDto[];
+  summary?: {
+    total?: number;
+    ok?: number;
+    degraded?: number;
+    error?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface DaemonSyncTriggerRequest {
+  channels?: Array<"webdav" | "s3" | "github">;
+  direction?: "both" | "upload" | "download";
+  force?: boolean;
+  [key: string]: unknown;
+}
+
+export interface DaemonSyncChannelResultDto {
+  channel: string;
   ok: boolean;
+  latencyMs?: number | null;
+  message?: string;
+  error?: string;
+  uploaded?: number;
+  downloaded?: number;
+  [key: string]: unknown;
+}
+
+export interface DaemonSyncNowResponse {
+  ok: boolean;
+  syncedAt?: number;
+  timestamp?: number;
+  uploaded?: number;
+  downloaded?: number;
+  channels?: DaemonSyncChannelResultDto[] | Record<string, unknown>;
+  results?: DaemonSyncChannelResultDto[] | Record<string, unknown>;
+  error?: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export interface DaemonSyncTestRequest {
+  channels?: Array<"webdav" | "s3" | "github">;
+  [key: string]: unknown;
+}
+
+export interface DaemonSyncTestResponse {
+  ok: boolean;
+  testedAt?: number;
+  timestamp?: number;
+  channels?: DaemonSyncChannelResultDto[] | Record<string, unknown>;
+  results?: DaemonSyncChannelResultDto[] | Record<string, unknown>;
+  error?: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export type DaemonUpdateChannel = "stable" | "prerelease";
+
+export type DaemonUpdatePackageKind = "setup-exe" | "portable-zip" | "split-7z-exe";
+
+export interface DaemonUpdateSplitPartDto {
+  name: string;
+  url: string;
+  size?: number;
+}
+
+export interface DaemonUpdateAssetDto {
+  name: string;
+  kind: DaemonUpdatePackageKind | string;
+  downloadUrl?: string;
+  effectiveUrl: string;
+  sizeBytes?: number | null;
+  totalBytes?: number | null;
+  sha256?: string | null;
+  expectedSha256?: string | null;
+  sha256Url?: string;
+  sha256SourceUrl?: string;
+  expectedExeName?: string;
+  parts?: DaemonUpdateSplitPartDto[];
+  source: "github" | "gitee" | string;
+  [key: string]: unknown;
+}
+
+export interface DaemonUpdateDownloadProgressDto {
+  stage?: "idle" | "downloading" | "extracting" | "verifying" | "ready" | "error" | string;
+  phase?: string;
+  percent?: number | null;
+  bytesDownloaded?: number;
+  totalBytes?: number | null;
+  currentPart?: number;
+  totalParts?: number;
+  partName?: string;
+  message?: string;
+  updatedAt?: number;
+  [key: string]: unknown;
+}
+
+export interface DaemonUpdateDownloadResultDto {
+  downloadedAt?: number;
+  version?: string;
+  assetName?: string;
+  filePath: string;
+  bytesDownloaded?: number;
+  totalBytes?: number | null;
+  resumedFromBytes?: number;
+  sha256: string;
+  verified?: boolean;
+  sourceUsed?: "github" | "gitee" | string;
+  usedFallbackSource?: boolean;
+  downloadUrl?: string;
+  [key: string]: unknown;
+}
+
+export interface DaemonUpdaterStatusResponse {
+  ok?: boolean;
   currentVersion?: string;
+  portableMode?: boolean;
   policy?: Record<string, unknown>;
   route?: Record<string, unknown>;
+  checking?: boolean;
+  downloading?: boolean;
+  installState?: string;
+  progress?: DaemonUpdateDownloadProgressDto | null;
+  downloadedFilePath?: string | null;
+  downloadedSha256?: string | null;
   lastCheck?: Record<string, unknown> | null;
+  lastDownload?: DaemonUpdateDownloadResultDto | null;
+  lastProbe?: Record<string, unknown> | null;
+  lastError?: string | null;
+  [key: string]: unknown;
+}
+
+export interface DaemonUpdaterDownloadRequest {
+  kind?: DaemonUpdatePackageKind;
+  destDir?: string;
+  sourceOverride?: "github" | "gitee";
+  assetName?: string;
+  [key: string]: unknown;
+}
+
+export interface DaemonUpdaterEvent {
+  event: string;
+  id?: string;
+  data: unknown;
+  rawData: string;
+  receivedAt: number;
+}
+
+export interface DaemonUpdaterEventsOptions {
+  onError?: (error: unknown) => void;
+  onOpen?: () => void;
+  reconnectDelayMs?: number;
+  maxReconnectDelayMs?: number;
+  maxReconnectAttempts?: number;
+  signal?: AbortSignal;
+}
+
+export interface DaemonSystemPortEntryDto {
+  id?: string;
+  port: number;
+  pid: number;
+  processName: string;
+  host?: string;
+  bindHost?: string;
+  connectHost?: string;
+  address?: string;
+  protocol?: string;
+  serviceProtocol?: "http" | "https" | "unknown";
+  url?: string;
+  cwd?: string | null;
+  scope: "workspace" | "external";
+  workspace?: string | null;
+  attributionConfidence?: "cwd" | "command" | "none";
+  isContainer?: boolean;
+  protected: boolean;
+  protectedReason?: string;
+  [key: string]: unknown;
+}
+
+export interface DaemonSystemPortsResponse {
+  ok?: boolean;
+  scannedAt?: number;
+  workspace?: string | null;
+  unavailableReason?: string | null;
+  ports: DaemonSystemPortEntryDto[];
+  [key: string]: unknown;
+}
+
+export interface DaemonKillSystemPortResponse {
+  ok: boolean;
+  pid: number;
+  killed?: boolean;
+  message?: string;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface DaemonPtyResourceDto {
+  sessionId: string;
+  pid?: number | null;
+  workspace?: string | null;
+  cwd?: string | null;
+  command?: string | null;
+  title?: string | null;
+  cpuPercent?: number | null;
+  memoryBytes?: number | null;
+  stale?: boolean;
+  alive?: boolean;
+  idleMs?: number | null;
+  [key: string]: unknown;
+}
+
+export interface DaemonWorkspaceResourceDto {
+  workspace: string;
+  label?: string;
+  cpuPercent?: number | null;
+  memoryBytes?: number | null;
+  ptyCount?: number;
+  ptys?: DaemonPtyResourceDto[];
+  [key: string]: unknown;
+}
+
+export interface DaemonSystemResourcesResponse {
+  ok?: boolean;
+  collectedAt?: number;
+  totalCpuPercent?: number | null;
+  totalMemoryBytes?: number | null;
+  totalPrivateMemoryBytes?: number | null;
+  hostMemoryTotalBytes?: number | null;
+  processMemoryMetric?: "working-set" | "footprint" | "rss" | string;
+  orphanCount?: number;
+  hasLocalSamples?: boolean;
+  history?: number[];
+  host?: {
+    cpuPercent?: number | null;
+    memoryBytes?: number | null;
+    totalMemoryBytes?: number | null;
+    [key: string]: unknown;
+  };
+  daemon?: {
+    pid?: number;
+    cpuPercent?: number | null;
+    memoryBytes?: number | null;
+    [key: string]: unknown;
+  };
+  t3Server?: {
+    pid?: number | null;
+    cpuPercent?: number | null;
+    memoryBytes?: number | null;
+    [key: string]: unknown;
+  };
+  workspaces?: DaemonWorkspaceResourceDto[];
+  ptys?: DaemonPtyResourceDto[];
+  [key: string]: unknown;
+}
+
+export interface DaemonKillStalePtyResponse {
+  ok: boolean;
+  sessionId: string;
+  killed?: boolean;
+  message?: string;
+  error?: string;
   [key: string]: unknown;
 }
 
@@ -540,6 +832,51 @@ export class PrismuxDaemonClient {
     });
   }
 
+  triggerSyncNow(payload?: DaemonSyncTriggerRequest): Promise<DaemonSyncNowResponse> {
+    return this.requestJson<DaemonSyncNowResponse>("/v1/sync/now", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    });
+  }
+
+  testSyncConnection(payload?: DaemonSyncTestRequest): Promise<DaemonSyncTestResponse> {
+    return this.requestJson<DaemonSyncTestResponse>("/v1/sync/test", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    });
+  }
+
+  fetchDiagnosticsServices(force = false): Promise<DaemonDiagnosticsServicesResponse> {
+    const suffix = force ? "?force=1" : "";
+    return this.requestJson<DaemonDiagnosticsServicesResponse>(
+      `/v1/diagnostics/services${suffix}`,
+    );
+  }
+
+  fetchSystemPorts(workspace?: string): Promise<DaemonSystemPortsResponse> {
+    const trimmed = workspace?.trim();
+    const suffix = trimmed ? `?workspace=${encodeURIComponent(trimmed)}` : "";
+    return this.requestJson<DaemonSystemPortsResponse>(`/v1/system/ports${suffix}`);
+  }
+
+  killSystemPort(pid: number): Promise<DaemonKillSystemPortResponse> {
+    return this.requestJson<DaemonKillSystemPortResponse>("/v1/system/ports/kill", {
+      method: "POST",
+      body: JSON.stringify({ pid }),
+    });
+  }
+
+  fetchSystemResources(): Promise<DaemonSystemResourcesResponse> {
+    return this.requestJson<DaemonSystemResourcesResponse>("/v1/system/resources");
+  }
+
+  killStalePty(sessionId: string): Promise<DaemonKillStalePtyResponse> {
+    return this.requestJson<DaemonKillStalePtyResponse>("/v1/system/pty/kill", {
+      method: "POST",
+      body: JSON.stringify({ sessionId }),
+    });
+  }
+
   getPluginCatalog(): Promise<DaemonPluginCatalogResponse> {
     return this.requestJson<DaemonPluginCatalogResponse>("/v1/plugins/catalog");
   }
@@ -572,8 +909,18 @@ export class PrismuxDaemonClient {
     });
   }
 
-  getUpdaterStatus(): Promise<DaemonUpdaterStatusResponse> {
+  fetchUpdaterStatus(): Promise<DaemonUpdaterStatusResponse> {
     return this.requestJson<DaemonUpdaterStatusResponse>("/v1/updater/status");
+  }
+
+  getUpdaterStatus(): Promise<DaemonUpdaterStatusResponse> {
+    return this.fetchUpdaterStatus();
+  }
+
+  probeUpdaterSources<T = Record<string, unknown>>(): Promise<T> {
+    return this.requestJson<T>("/v1/updater/probe", {
+      method: "POST",
+    });
   }
 
   checkForUpdates<T = Record<string, unknown>>(payload?: Record<string, unknown>): Promise<T> {
@@ -583,12 +930,245 @@ export class PrismuxDaemonClient {
     });
   }
 
+  downloadUpdate(
+    payload?: DaemonUpdaterDownloadRequest,
+  ): Promise<DaemonUpdateDownloadResultDto> {
+    return this.requestJson<DaemonUpdateDownloadResultDto>("/v1/updater/download", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    });
+  }
+
   updateUpdaterPolicy<T = Record<string, unknown>>(payload: Record<string, unknown>): Promise<T> {
     return this.requestJson<T>("/v1/updater/policy", {
-      method: "PUT",
+      method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  subscribeUpdaterEvents(
+    onEvent: (event: DaemonUpdaterEvent) => void,
+    options: DaemonUpdaterEventsOptions = {},
+  ): () => void {
+    const initialDelay = Math.max(250, options.reconnectDelayMs ?? 1500);
+    const maxDelay = Math.max(initialDelay, options.maxReconnectDelayMs ?? 15_000);
+    const maxAttempts = options.maxReconnectAttempts ?? Number.POSITIVE_INFINITY;
+
+    let disposed = false;
+    let attempt = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let activeAbort: AbortController | null = null;
+
+    const cleanup = () => {
+      if (disposed) return;
+      disposed = true;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      activeAbort?.abort();
+      activeAbort = null;
+    };
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        disposed = true;
+        return cleanup;
+      }
+      options.signal.addEventListener("abort", cleanup, { once: true });
+    }
+
+    const emitSseBlock = (block: string) => {
+      const lines = block.split(/\r?\n/);
+      let eventName = "message";
+      let eventId: string | undefined;
+      const dataLines: string[] = [];
+
+      for (const line of lines) {
+        if (!line || line.startsWith(":")) {
+          continue;
+        }
+        const colonIdx = line.indexOf(":");
+        const field = colonIdx === -1 ? line : line.slice(0, colonIdx);
+        let value = colonIdx === -1 ? "" : line.slice(colonIdx + 1);
+        if (value.startsWith(" ")) {
+          value = value.slice(1);
+        }
+        if (field === "event" && value.length > 0) {
+          eventName = value;
+        } else if (field === "id") {
+          eventId = value;
+        } else if (field === "data") {
+          dataLines.push(value);
+        }
+      }
+
+      if (dataLines.length === 0) {
+        return;
+      }
+      const rawData = dataLines.join("\n");
+      let parsed: unknown = rawData;
+      try {
+        parsed = JSON.parse(rawData);
+      } catch {
+        // Plain-text SSE payload is delivered as raw string.
+      }
+      onEvent({
+        event: eventName,
+        ...(eventId !== undefined ? { id: eventId } : {}),
+        data: parsed,
+        rawData,
+        receivedAt: Date.now(),
+      });
+    };
+
+    const scheduleReconnect = () => {
+      if (disposed || attempt >= maxAttempts) {
+        return;
+      }
+      const delay = Math.min(maxDelay, Math.round(initialDelay * 2 ** Math.min(attempt, 5)));
+      attempt += 1;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        void connect();
+      }, delay);
+    };
+
+    const connect = async () => {
+      if (disposed) return;
+
+      let info = await this.getConnectionInfo(false);
+      if (!info.ready || !info.baseUrl) {
+        info = await this.getConnectionInfo(true);
+      }
+      if (disposed) return;
+
+      if (!info.ready || !info.baseUrl) {
+        options.onError?.(
+          new PrismuxDaemonError("Prismux Daemon is unavailable for updater SSE stream.", {
+            status: 503,
+            code: "DAEMON_UNAVAILABLE",
+          }),
+        );
+        scheduleReconnect();
+        return;
+      }
+
+      const controller = new AbortController();
+      activeAbort = controller;
+
+      const tokenQuery = info.token ? `?token=${encodeURIComponent(info.token)}` : "";
+      const url = `${info.baseUrl}/v1/updater/events${tokenQuery}`;
+      // Use only CORS-safelisted Accept header + Fetch `cache: "no-store"` (token travels in query,
+      // authenticated by DaemonRpcServer `allowQueryToken=true`) so Electron's `t3code://app` origin
+      // opens the SSE stream as a zero-preflight simple GET request without `Cache-Control` CORS errors.
+      const headers = new Headers({
+        Accept: "text/event-stream",
+      });
+
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          headers,
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          throw new PrismuxDaemonError(
+            `Updater SSE stream failed (${response.status} ${response.statusText})`,
+            {
+              status: response.status,
+              code: `HTTP_${response.status}`,
+            },
+          );
+        }
+
+        attempt = 0;
+        options.onOpen?.();
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (!disposed) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split(/\r?\n\r?\n/);
+          buffer = blocks.pop() ?? "";
+          for (const block of blocks) {
+            if (block.trim().length > 0) {
+              emitSseBlock(block);
+            }
+          }
+        }
+
+        buffer += decoder.decode();
+        if (buffer.trim().length > 0) {
+          emitSseBlock(buffer);
+        }
+      } catch (error) {
+        if (!disposed) {
+          options.onError?.(error);
+        }
+      } finally {
+        if (activeAbort === controller) {
+          activeAbort = null;
+        }
+        if (!disposed) {
+          scheduleReconnect();
+        }
+      }
+    };
+
+    void connect();
+
+    return () => {
+      if (options.signal) {
+        options.signal.removeEventListener("abort", cleanup);
+      }
+      cleanup();
+    };
   }
 }
 
 export const prismuxDaemonClient = new PrismuxDaemonClient();
+
+export const fetchDiagnosticsServices = (
+  force?: boolean,
+): Promise<DaemonDiagnosticsServicesResponse> =>
+  prismuxDaemonClient.fetchDiagnosticsServices(force);
+
+export const triggerSyncNow = (
+  payload?: DaemonSyncTriggerRequest,
+): Promise<DaemonSyncNowResponse> => prismuxDaemonClient.triggerSyncNow(payload);
+
+export const testSyncConnection = (
+  payload?: DaemonSyncTestRequest,
+): Promise<DaemonSyncTestResponse> => prismuxDaemonClient.testSyncConnection(payload);
+
+export const fetchUpdaterStatus = (): Promise<DaemonUpdaterStatusResponse> =>
+  prismuxDaemonClient.fetchUpdaterStatus();
+
+export const subscribeUpdaterEvents = (
+  onEvent: (event: DaemonUpdaterEvent) => void,
+  options?: DaemonUpdaterEventsOptions,
+): (() => void) => prismuxDaemonClient.subscribeUpdaterEvents(onEvent, options);
+
+export const downloadUpdate = (
+  payload?: DaemonUpdaterDownloadRequest,
+): Promise<DaemonUpdateDownloadResultDto> => prismuxDaemonClient.downloadUpdate(payload);
+
+export const fetchSystemPorts = (workspace?: string): Promise<DaemonSystemPortsResponse> =>
+  prismuxDaemonClient.fetchSystemPorts(workspace);
+
+export const killSystemPort = (pid: number): Promise<DaemonKillSystemPortResponse> =>
+  prismuxDaemonClient.killSystemPort(pid);
+
+export const fetchSystemResources = (): Promise<DaemonSystemResourcesResponse> =>
+  prismuxDaemonClient.fetchSystemResources();
+
+export const killStalePty = (sessionId: string): Promise<DaemonKillStalePtyResponse> =>
+  prismuxDaemonClient.killStalePty(sessionId);

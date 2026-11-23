@@ -20,7 +20,7 @@ import {
   ProviderInstanceId,
   UsageDay,
   type UsageSource,
-  type UsageSummary,
+  UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
@@ -4254,6 +4254,61 @@ describe("UsageService", () => {
         orphanedAt,
         `interruption left the next matching request pending at scheduler check ${orphanedAt}`,
       );
+    }),
+  );
+
+  it.effect("returns schema-valid per-call callLogs from real local transcripts with null timings", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      const earlier = `${JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-08-01T10:00:00Z",
+        requestId: "req_1",
+        sessionId: "session-call-1",
+        message: {
+          id: "msg_1",
+          model: "claude-fable-5",
+          usage: { input_tokens: 10, output_tokens: 25 },
+        },
+      })}\n`;
+      const later = `${JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-08-01T10:05:00Z",
+        requestId: "req_2",
+        sessionId: "session-call-2",
+        message: {
+          id: "msg_2",
+          model: "claude-fable-5",
+          usage: { input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 40 },
+        },
+      })}\n`;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, earlier + later));
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(layerService({ prefix: "usage-service-call-logs-test", home, settings })),
+      );
+      const summary = yield* service.readSummary(WINDOW);
+
+      const decoded = yield* Schema.decodeEffect(UsageSummary)(summary);
+      assert.strictEqual(decoded.callLogs?.length, 2);
+      const newest = decoded.callLogs?.[0];
+      assert.isDefined(newest);
+      assert.strictEqual(newest?.timestamp, "2026-08-01T10:05:00.000Z");
+      assert.strictEqual(newest?.provider, "claude");
+      assert.strictEqual(newest?.model, "claude-fable-5");
+      assert.strictEqual(newest?.threadId, "session-call-2");
+      assert.strictEqual(newest?.inputTokens, 10);
+      assert.strictEqual(newest?.cachedInputTokens, 90);
+      assert.strictEqual(newest?.cacheCreationTokens, 0);
+      assert.strictEqual(newest?.outputTokens, 40);
+      assert.strictEqual(newest?.cacheHitRate, 0.9);
+      assert.strictEqual(newest?.ttftMs, null);
+      assert.strictEqual(newest?.durationMs, null);
+      assert.strictEqual(newest?.tps, null);
+
+      // Backwards compatibility: older server payloads without `callLogs` still decode cleanly.
+      const { callLogs: _omit, ...legacySummary } = summary;
+      const decodedLegacy = yield* Schema.decodeEffect(UsageSummary)(legacySummary);
+      assert.isUndefined(decodedLegacy.callLogs);
     }),
   );
 });

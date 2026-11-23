@@ -35,6 +35,20 @@ import { useTimelineRewind } from "./chat/useTimelineRewind";
 import { useThreadLifecycle } from "./chat/useThreadLifecycle";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { PrismuxTopbarControls } from "../prismux/PrismuxWallpaperBridge";
+import {
+  buildContinueInTerminalPlan,
+  buildSessionContinuationSourceFromMessages,
+  type ContinueInTerminalPlan,
+} from "./chat/continueInTerminal.logic";
+import { AgentSessionContinuationDialog } from "./chat/AgentSessionContinuationDialog";
+import { supportsDualLaunchMode } from "./settings/prismuxProviderMeta";
+import {
+  resolveEffectiveLaunchMode,
+  useProviderLaunchModePreferences,
+} from "./settings/prismuxProviderMode";
+import { MessageSquareIcon, MessageSquarePlusIcon, TerminalIcon } from "lucide-react";
+import { Button } from "./ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
 import { useComposerSend } from "./chat/useComposerSend";
 import { useComposerResume } from "./chat/useComposerResume";
@@ -207,7 +221,6 @@ import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { GuestPendingMessages } from "./chat/GuestShareControls";
 import { useDeviceState } from "~/state/device";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
-import { ComposerContextPermissions } from "./ComposerContextPermissions";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { isEditableFocused } from "../lib/editableFocus";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
@@ -355,6 +368,8 @@ import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { modelFallbackBannerItem } from "./chat/ComposerUsageLimits";
 import { ComposerSurface } from "./chat/ComposerSurface";
+import { ComposerLiveTelemetryStrip } from "./chat/ComposerLiveTelemetryStrip";
+import { useSessionCallTelemetry } from "./chat/useSessionCallTelemetry";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { hasAvailableCompactionProvider } from "./chat/compaction.logic";
 import {
@@ -1565,6 +1580,15 @@ export default function ChatView(props: ChatViewProps) {
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
+  useSessionCallTelemetry({
+    threadId: activeThreadId ?? threadId,
+    provider: selectedProvider ?? null,
+    model: reportedModelSelection?.model ?? activeThread?.modelSelection?.model ?? null,
+    serverProjection,
+    activeContextWindow,
+    isWorking,
+    activeWorkStartedAt,
+  });
   const activeRunPreparing = activeActivityRun?.status === "preparing";
   const sendQueuesBehindSetup =
     isServerThread && (activeRunPreparing || activeActivityRun?.status === "starting");
@@ -2004,6 +2028,7 @@ export default function ChatView(props: ChatViewProps) {
     lastInvokedScriptByProjectId,
     runProjectScriptStable,
     runShellCommandStable,
+    setTerminalOpenStable,
     splitPanelTerminalStable,
     splitPanelTerminalVerticalStable,
     toggleTerminalVisibilityStable,
@@ -3383,6 +3408,122 @@ export default function ChatView(props: ChatViewProps) {
   const openChiefSettingsStable = useStableCallback(() => {
     void navigate({ to: "/settings/memory-sync" as never });
   });
+  const { state: launchModePreferences } = useProviderLaunchModePreferences();
+  const [terminalHostedByThreadKey, setTerminalHostedByThreadKey] = useState<
+    Record<string, boolean>
+  >({});
+  const [dismissedCliHintByThreadKey, setDismissedCliHintByThreadKey] = useState<
+    Record<string, boolean>
+  >({});
+  const activeInstanceConfig = activeProviderInstanceId
+    ? settings.providerInstances?.[activeProviderInstanceId]
+    : undefined;
+  const activeContinueCwd =
+    activeThread?.worktreePath ?? gitCwd ?? activeProject?.workspaceRoot ?? null;
+  const continueInTerminalPlan = buildContinueInTerminalPlan({
+    driver: selectedProvider,
+    instanceId: activeProviderInstanceId,
+    config: activeInstanceConfig?.config,
+    displayName:
+      activeInstanceConfig?.displayName ?? activeProviderStatus?.displayName ?? null,
+    cwd: activeContinueCwd,
+    projection: serverProjection,
+  });
+  const dualModeSupported = selectedProvider
+    ? supportsDualLaunchMode({
+        driver: selectedProvider,
+        instanceId: activeProviderInstanceId,
+        config: activeInstanceConfig?.config,
+      })
+    : false;
+  const preferredLaunchMode = resolveEffectiveLaunchMode(
+    launchModePreferences,
+    activeProviderInstanceId,
+    dualModeSupported,
+  );
+  const isTerminalHosted = Boolean(
+    activeThreadKey && terminalHostedByThreadKey[activeThreadKey] && terminalUiState.terminalOpen,
+  );
+  const showCliPreferenceBanner =
+    !isServerThread &&
+    isDraftHeroState &&
+    preferredLaunchMode === "cli" &&
+    continueInTerminalPlan !== null &&
+    Boolean(activeThreadKey && !dismissedCliHintByThreadKey[activeThreadKey]) &&
+    !isTerminalHosted;
+  const handleContinueInTerminalStable = useStableCallback(() => {
+    if (!continueInTerminalPlan || !activeThreadKey) return;
+    // Contract invariant: never interrupt, kill, or archive the existing Chat thread.
+    void runProjectScriptStable(continueInTerminalPlan.script, {
+      cwd: continueInTerminalPlan.cwd,
+      worktreePath: activeThread?.worktreePath ?? null,
+      preferNewTerminal: true,
+      rememberAsLastInvoked: false,
+      shellHistory: "preserve",
+    });
+    setTerminalHostedByThreadKey((prev) => ({ ...prev, [activeThreadKey]: true }));
+    toastManager.add({
+      type: "info",
+      title: gt("Continuing in terminal"),
+      description: continueInTerminalPlan.supportsResume
+        ? gt("Started {command} in a persistent PTY. Your Chat thread stays intact.", {
+            command: continueInTerminalPlan.command,
+          })
+        : gt("Opened {label} in a persistent PTY at the session workspace. Your Chat thread stays intact.", {
+            label: continueInTerminalPlan.label,
+          }),
+    });
+  });
+  const handleReturnToChatViewStable = useStableCallback(() => {
+    if (!activeThreadKey) return;
+    setTerminalHostedByThreadKey((prev) => ({ ...prev, [activeThreadKey]: false }));
+    setTerminalOpenStable(false);
+    focusComposerStable();
+  });
+  const [continuationDialogOpen, setContinuationDialogOpen] = useState(false);
+  const continuationCandidates = providerStatuses.map((status) => ({
+    instanceId: status.instanceId,
+    driver: status.driver,
+    label:
+      settings.providerInstances?.[status.instanceId]?.displayName?.trim() ||
+      status.displayName?.trim() ||
+      status.driver,
+    installed: status.installed,
+    config: settings.providerInstances?.[status.instanceId]?.config,
+    documentationUrl: status.setup?.documentationUrl ?? null,
+  }));
+  const continuationSource =
+    timelineMessages.length > 0
+      ? buildSessionContinuationSourceFromMessages({
+          sourceDriver: selectedProvider ?? null,
+          sourceAgentLabel:
+            activeInstanceConfig?.displayName ?? activeProviderStatus?.displayName ?? null,
+          sourceTitle: activeThread?.title ?? null,
+          sourceWorkingDirectory: activeContinueCwd,
+          messages: timelineMessages,
+        })
+      : null;
+  const handleLaunchContinuationInTerminalStable = useStableCallback(
+    (plan: ContinueInTerminalPlan) => {
+      if (!activeThreadKey) return;
+      void runProjectScriptStable(plan.script, {
+        cwd: plan.cwd,
+        worktreePath: activeThread?.worktreePath ?? null,
+        preferNewTerminal: true,
+        rememberAsLastInvoked: false,
+        shellHistory: "preserve",
+      });
+      setTerminalHostedByThreadKey((prev) => ({ ...prev, [activeThreadKey]: true }));
+      toastManager.add({
+        type: "info",
+        title: gt("Handed off to {label}", { label: plan.label }),
+        description: gt(
+          "Copied hand-off context and opened {command} in a persistent PTY. Your original Chat thread stays unchanged.",
+          { command: plan.command },
+        ),
+      });
+    },
+  );
   // Above the early return, where React Compiler can cache it for the side chat pane.
   const sideChatParentPanel = {
     hostRef: scopeThreadRef(environmentId, threadId),
@@ -3551,6 +3692,90 @@ export default function ChatView(props: ChatViewProps) {
                 : {})}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
             />
+            {continueInTerminalPlan || continuationSource ? (
+              <div className="mr-1.5 flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+                {continueInTerminalPlan ? (
+                  isTerminalHosted ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="secondary"
+                            data-action="return-to-chat-view"
+                            onClick={handleReturnToChatViewStable}
+                            className="h-7 gap-1.5 px-2 text-xs"
+                          >
+                            <MessageSquareIcon className="size-3.5" />
+                            <span className="hidden lg:inline">{gt("Return to chat")}</span>
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup side="bottom">
+                        {gt("Switch back to structured Chat view")}
+                      </TooltipPopup>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            data-action="continue-in-terminal"
+                            onClick={handleContinueInTerminalStable}
+                            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            <TerminalIcon className="size-3.5" />
+                            <span className="hidden lg:inline">{gt("Continue in terminal")}</span>
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup side="bottom">
+                        {gt(
+                          "Open {command} in a persistent terminal at the session workspace without closing this Chat thread.",
+                          { command: continueInTerminalPlan.command },
+                        )}
+                      </TooltipPopup>
+                    </Tooltip>
+                  )
+                ) : null}
+                {continuationSource ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          data-action="hand-off-to-agent"
+                          onClick={() => setContinuationDialogOpen(true)}
+                          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                          aria-label={gt("Hand off to agent")}
+                        >
+                          <MessageSquarePlusIcon className="size-3.5" />
+                          <span className="hidden xl:inline">{gt("Hand off to agent")}</span>
+                        </Button>
+                      }
+                    />
+                    <TooltipPopup side="bottom">
+                      {gt("Hand off this session to another agent without modifying the original thread.")}
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : null}
+              </div>
+            ) : null}
+            <AgentSessionContinuationDialog
+              open={continuationDialogOpen}
+              onOpenChange={setContinuationDialogOpen}
+              source={continuationSource}
+              sourceInstanceId={activeProviderInstanceId}
+              cwd={activeContinueCwd}
+              candidates={continuationCandidates}
+              onLaunchInTerminal={handleLaunchContinuationInTerminalStable}
+            />
             <PrismuxTopbarControls
               wallpaperOpen={rightPanelOpen && activeRightPanelSurface?.kind === "wallpaper"}
               wallpaperAvailable={activeThreadRef !== null}
@@ -3599,6 +3824,46 @@ export default function ChatView(props: ChatViewProps) {
               setThreadError={setThreadError}
               setThreadErrorBannerDismissTick={setThreadErrorBannerDismissTick}
             />
+            {showCliPreferenceBanner && continueInTerminalPlan ? (
+              <div
+                data-cli-launch-banner
+                className="mx-auto mt-2 flex w-full max-w-3xl flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-2 text-xs"
+              >
+                <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+                  <TerminalIcon className="size-3.5 shrink-0 text-primary" />
+                  <span className="truncate">
+                    {gt("{provider} is set to CLI mode for new sessions.", {
+                      provider: continueInTerminalPlan.label,
+                    })}
+                  </span>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="default"
+                    onClick={handleContinueInTerminalStable}
+                  >
+                    <TerminalIcon className="size-3" />
+                    {gt("Launch in terminal")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      if (!activeThreadKey) return;
+                      setDismissedCliHintByThreadKey((prev) => ({
+                        ...prev,
+                        [activeThreadKey]: true,
+                      }));
+                    }}
+                  >
+                    {gt("Stay in Chat")}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
             <div
               {...conversationArea}
               className="relative flex min-h-0 flex-1 flex-col bg-background"
@@ -3771,7 +4036,7 @@ export default function ChatView(props: ChatViewProps) {
                   >
                     <ChildThreadApprovals threadRef={activeThreadRef} />
                     <div className="relative">
-                      <ComposerSurface.Shell contextRow={showComposerContextStrip}>
+                      <ComposerSurface.Shell contextRow={showComposerContextStrip || !embedded}>
                         <ComposerSurface.Host
                           inert={queuedRunEdit.isSaving}
                           aria-busy={queuedRunEdit.isSaving}
@@ -3915,9 +4180,7 @@ export default function ChatView(props: ChatViewProps) {
                                   (activeThreadShell ?? activeThread)?.pullRequests
                                 }
                                 onComposerOverlayHeightChange={publishComposerOverlayHeightStable}
-                                permissionsShownInStrip={
-                                  showComposerContextStrip && !isServerThread
-                                }
+                                permissionsShownInStrip={false}
                                 promptRef={promptRef}
                                 composerImagesRef={composerImagesRef}
                                 composerFilesRef={composerFilesRef}
@@ -4009,23 +4272,25 @@ export default function ChatView(props: ChatViewProps) {
                                       : undefined
                                   }
                                   availableEnvironments={logicalProjectEnvironments}
-                                  {...(isServerThread
-                                    ? {}
-                                    : {
-                                        trailing: (
-                                          <ComposerContextPermissions
-                                            environmentId={environmentId}
-                                            runtimeMode={runtimeMode}
-                                            supportedRuntimeModes={
-                                              activeProviderStatus?.supportedRuntimeModes
-                                            }
-                                            onRuntimeModeChange={handleRuntimeModeChangeStable}
-                                          />
-                                        ),
-                                      })}
+                                  trailing={
+                                    <ComposerLiveTelemetryStrip
+                                      threadId={activeThreadId ?? threadId}
+                                      contextWindow={activeContextWindow}
+                                    />
+                                  }
                                 />
                               </div>
                             )}
+                            {!showComposerContextStrip && !embedded ? (
+                              <div className="pointer-events-auto">
+                                <ComposerSurface.ContextStrip className="justify-end text-xs">
+                                  <ComposerLiveTelemetryStrip
+                                    threadId={activeThreadId ?? threadId}
+                                    contextWindow={activeContextWindow}
+                                  />
+                                </ComposerSurface.ContextStrip>
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       </ComposerSurface.Shell>

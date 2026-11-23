@@ -885,10 +885,7 @@ function DeviceIntegrationSettings() {
           agentAccessEnabled={settings.enableAgentDeviceAccess}
         />
       </SettingsSection>
-      <DeviceSourcesSettings
-        supportsEas={state.supportsEasHosts === true}
-        supportsSimlock={state.supportsSimlockHosts === true}
-      />
+      <DeviceSourcesSettings supportsEas={false} supportsSimlock={false} />
     </>
   );
 }

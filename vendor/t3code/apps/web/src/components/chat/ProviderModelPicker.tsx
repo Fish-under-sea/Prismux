@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { RegistryContext } from "@effect/atom-react";
 import { T, useGT } from "gt-react";
+import { ChevronDownIcon } from "lucide-react";
 import {
   createContext,
   memo,
@@ -128,6 +129,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    */
   effortColumn?: ReactNode;
   footer?: ReactNode;
+  /**
+   * Orca-style stacked unified footer rendered below the model list (holds model-aware
+   * reasoning effort slider + segmented pills + Codex/Claude Fast Mode speed row).
+   */
+  unifiedFooter?: ReactNode;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
@@ -155,7 +161,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   // Touch opens on the popup itself so the on-screen keyboard stays down until the search is tapped.
   const isCoarsePointer = useMediaQuery({ pointer: "coarse" });
   const size = props.size ?? "sm";
-  const docked = props.effortColumn !== undefined;
+  const hasUnifiedFooter = props.unifiedFooter !== undefined;
+  const docked = props.effortColumn !== undefined || hasUnifiedFooter;
 
   const activeEntry =
     props.instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null;
@@ -201,7 +208,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     const level =
       column?.querySelector<HTMLElement>(
         '[data-effort-level][aria-checked="true"]:not(:disabled)',
-      ) ?? column?.querySelector<HTMLElement>("[data-effort-level]:not(:disabled)");
+      ) ??
+      column?.querySelector<HTMLElement>("[data-effort-level]:not(:disabled)") ??
+      column?.querySelector<HTMLElement>('[role="slider"]:not([aria-disabled="true"])') ??
+      column?.querySelector<HTMLElement>('input[type="range"]:not(:disabled)');
     // No aria-checked here: an On switch is checked but is not where focus belongs.
     const row =
       level ??
@@ -322,6 +332,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       {...(docked
         ? {
             docked,
+            ...(hasUnifiedFooter ? { unifiedLayout: true } : {}),
             onFocusEffort: () => void focusEffort("any"),
             // Inside the fixed height, so switching to or from a ChatGPT plan never resizes it.
             ...(props.selectedModels === undefined
@@ -446,6 +457,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               <T context="badge on a model that cannot be selected">Unavailable</T>
             </Badge>
           ) : null}
+          {props.isComposerOwned ? (
+            <ChevronDownIcon
+              aria-hidden="true"
+              data-composer-control-chevron
+              className="size-3 shrink-0 opacity-65"
+            />
+          ) : null}
         </span>
       </PopoverTrigger>
       <PopoverPopup
@@ -469,7 +487,19 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         padding="none"
         touchBackdrop
       >
-        {props.effortColumn ? (
+        {hasUnifiedFooter ? (
+          <DockedPickerContext value={{ modelLabel: triggerTitle }}>
+            <div className="flex max-h-(--available-height) w-[min(25.5rem,calc(100vw-1rem))] flex-col overflow-hidden">
+              {picker}
+              <div
+                data-model-picker-effort
+                className="shrink-0 border-t border-border/70 bg-muted/35 empty:hidden"
+              >
+                {props.unifiedFooter}
+              </div>
+            </div>
+          </DockedPickerContext>
+        ) : props.effortColumn ? (
           <DockedPickerContext value={{ modelLabel: triggerTitle }}>
             <div className="flex max-h-(--available-height) flex-col">
               {/* One fixed height, so a model with more options never resizes the popup. Short

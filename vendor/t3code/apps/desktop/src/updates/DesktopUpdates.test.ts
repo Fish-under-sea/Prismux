@@ -1504,3 +1504,56 @@ describe("DesktopUpdates under a managed policy", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 });
+
+describe("Prismux updater channel convergence and upstream feed guard", () => {
+  it("rejects legacy pingdotgg/t3code feed entries while allowing Prismux feeds", () => {
+    assert.isTrue(
+      DesktopUpdates.isLegacyUpstreamT3CodeFeed({
+        provider: "github",
+        owner: "pingdotgg",
+        repo: "t3code",
+      }),
+    );
+    assert.isTrue(
+      DesktopUpdates.isLegacyUpstreamT3CodeFeed({
+        provider: "generic",
+        url: "https://github.com/pingdotgg/t3code/releases/latest/download",
+      }),
+    );
+    assert.isFalse(
+      DesktopUpdates.isLegacyUpstreamT3CodeFeed({
+        provider: "github",
+        owner: "Fish-under-sea",
+        repo: "Prismux",
+      }),
+    );
+  });
+
+  it.effect(
+    "cleanly disables electron-updater and blocks nightly when app-update.yml is absent",
+    () => {
+      const harness = makeHarness({
+        env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" },
+        savedChannel: "nightly",
+      });
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          yield* TestClock.adjust("10 minutes");
+
+          const state = yield* updates.getState;
+          assert.isFalse(state.enabled);
+          assert.equal(state.status, "disabled");
+          assert.equal(state.channel, "latest");
+          assert.equal(harness.checkCount(), 0);
+          assert.equal(harness.listenerCount(), 0);
+
+          const error = yield* updates.setChannel("nightly").pipe(Effect.flip);
+          assert.equal(error._tag, "DesktopUpdateChannelManagedError");
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
+});

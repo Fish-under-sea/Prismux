@@ -1,5 +1,6 @@
 import type { DeviceToolVersions } from "@t3tools/contracts";
 // npm exposes entry files before extraction completes; their presence does not prove a usable tree.
+import * as NodeOs from "node:os";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -16,6 +17,107 @@ const DEVICE_HUB_PACKAGE = "expo-device-hub";
 export const DEVICE_HUB_VERSION = DEVICE_TOOL_VERSIONS[DEVICE_HUB_PACKAGE];
 const AGENT_DEVICE_PACKAGE = "agent-device";
 export const AGENT_DEVICE_VERSION = DEVICE_TOOL_VERSIONS[AGENT_DEVICE_PACKAGE];
+
+export const PRISMUX_NPM_MIRROR_REGISTRY = "https://registry.npmmirror.com";
+export const PRISMUX_NPM_OFFICIAL_REGISTRY = "https://registry.npmjs.org";
+
+export interface PrismuxRegistryConfig {
+  readonly pluginRegistryOverride?: string | undefined;
+  readonly routePreference?: string | undefined;
+}
+
+const normalizeRegistryUrl = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/\/+$/u, "");
+  return /^https?:\/\/[^\s/]+/iu.test(trimmed) ? trimmed : undefined;
+};
+
+const extractStringProperty = (record: Record<string, unknown>, key: string): string | undefined => {
+  const direct = record[key];
+  if (typeof direct === "string" && direct.trim().length > 0) return direct.trim();
+  for (const nestedKey of ["updater", "network", "plugins", "device"]) {
+    const nested = record[nestedKey];
+    if (typeof nested === "object" && nested !== null && !Array.isArray(nested)) {
+      const value = (nested as Record<string, unknown>)[key];
+      if (typeof value === "string" && value.trim().length > 0) return value.trim();
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Resolves the ordered npm registry list for Prismux device toolchain installation:
+ * defaults to `https://registry.npmmirror.com` with automatic fallback to
+ * `https://registry.npmjs.org`, honoring `pluginRegistryOverride` / `routePreference`.
+ */
+export function buildDeviceNpmRegistryOrder(
+  config: PrismuxRegistryConfig = {},
+): ReadonlyArray<string> {
+  const route = config.routePreference?.trim().toLowerCase();
+  const preferOfficial = route === "global" || route === "official" || route === "direct";
+  const defaults = preferOfficial
+    ? [PRISMUX_NPM_OFFICIAL_REGISTRY, PRISMUX_NPM_MIRROR_REGISTRY]
+    : [PRISMUX_NPM_MIRROR_REGISTRY, PRISMUX_NPM_OFFICIAL_REGISTRY];
+  const override = normalizeRegistryUrl(config.pluginRegistryOverride);
+  const ordered = override ? [override, ...defaults] : defaults;
+  return [...new Set(ordered)];
+}
+
+const decodeJsonRecord = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+
+export const readPrismuxRegistryConfig = Effect.fn("DeviceToolchain.readPrismuxRegistryConfig")(
+  function* (options?: {
+    readonly prismuxHomeDir?: string | undefined;
+    readonly env?: Readonly<Record<string, string | undefined>>;
+  }): Effect.fn.Return<PrismuxRegistryConfig, never, FileSystem.FileSystem | Path.Path> {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const env = options?.env ?? process.env;
+    const homeDir = env.HOME?.trim() || env.USERPROFILE?.trim() || NodeOs.homedir();
+    const prismuxDir =
+      options?.prismuxHomeDir?.trim() ||
+      env.PRISMUX_HOME?.trim() ||
+      path.join(homeDir, ".prismux");
+
+    let pluginRegistryOverride = normalizeRegistryUrl(env.PRISMUX_PLUGIN_REGISTRY);
+    let routePreference = env.PRISMUX_ROUTE_PREFERENCE?.trim() || undefined;
+
+    for (const fileName of ["config.json", "updater-policy.json", "settings.json"]) {
+      const filePath = path.join(prismuxDir, fileName);
+      const raw = yield* fs.readFileString(filePath).pipe(Effect.option);
+      if (Option.isNone(raw)) continue;
+      const decoded = decodeJsonRecord(raw.value);
+      if (Option.isNone(decoded)) continue;
+      const parsed = decoded.value;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+      const record = parsed as Record<string, unknown>;
+      if (pluginRegistryOverride === undefined) {
+        pluginRegistryOverride = normalizeRegistryUrl(
+          extractStringProperty(record, "pluginRegistryOverride"),
+        );
+      }
+      if (routePreference === undefined) {
+        routePreference = extractStringProperty(record, "routePreference");
+      }
+      if (pluginRegistryOverride !== undefined && routePreference !== undefined) break;
+    }
+
+    return {
+      ...(pluginRegistryOverride === undefined ? {} : { pluginRegistryOverride }),
+      ...(routePreference === undefined ? {} : { routePreference }),
+    };
+  },
+);
+
+export const resolveDeviceNpmRegistries = Effect.fn("DeviceToolchain.resolveDeviceNpmRegistries")(
+  function* (options?: {
+    readonly prismuxHomeDir?: string | undefined;
+    readonly env?: Readonly<Record<string, string | undefined>>;
+  }): Effect.fn.Return<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> {
+    const config = yield* readPrismuxRegistryConfig(options);
+    return buildDeviceNpmRegistryOrder(config);
+  },
+);
 
 const INSTALL_TIMEOUT = Duration.minutes(10);
 const installLock = Semaphore.makeUnsafe(1);
@@ -43,7 +145,7 @@ export class DeviceToolchainInstallError extends Schema.TaggedError<DeviceToolch
 ) {
   override get message(): string {
     if (this.reason === "npm_not_found")
-      return "Device support needs npm, which is not on the T3 server's PATH. Install npm (it comes with Node.js from nodejs.org), restart T3 Code, then retry.";
+      return "Device support needs npm, which is not on the Prismux server's PATH. Install npm (it comes with Node.js from nodejs.org), restart Prismux, then retry.";
     const suffix = this.exitCode === undefined ? "" : ` (exit code ${this.exitCode})`;
     return `Installing ${this.tool} failed while ${this.step}${suffix}.`;
   }
@@ -125,45 +227,84 @@ const installTool = Effect.fn("DeviceToolchain.installTool")(function* (
     .pipe(Effect.mapError(fail("preparing the install directory")));
 
   return yield* Effect.gen(function* () {
-    const installArgs = [
-      "install",
-      "--prefix",
-      stagingDir,
-      "--no-fund",
-      "--no-audit",
-      `${spec.name}@${spec.version}`,
-    ];
-    const result = yield* runner
-      .run({ command: "npm", args: installArgs, timeout: INSTALL_TIMEOUT })
-      .pipe(
-        Effect.catchTags({
-          ProcessSpawnError: (error) =>
-            isCommandNotFound(error)
-              ? runner.run({
-                  command: "pnpm",
-                  args: ["--package=npm@11", "dlx", "npm", ...installArgs],
-                  timeout: INSTALL_TIMEOUT,
+    const registries = yield* resolveDeviceNpmRegistries();
+    let lastFailedResult: ProcessRunner.ProcessRunOutput | undefined;
+    let lastError: DeviceToolchainInstallError | undefined;
+    let succeeded = false;
+
+    for (const [attemptIndex, registry] of registries.entries()) {
+      if (attemptIndex > 0) {
+        yield* fs
+          .remove(path.join(stagingDir, "node_modules"), { recursive: true, force: true })
+          .pipe(Effect.ignore);
+      }
+      const installArgs = [
+        "install",
+        "--prefix",
+        stagingDir,
+        "--registry",
+        registry,
+        "--no-fund",
+        "--no-audit",
+        `${spec.name}@${spec.version}`,
+      ];
+      const attempt = yield* runner
+        .run({ command: "npm", args: installArgs, timeout: INSTALL_TIMEOUT })
+        .pipe(
+          Effect.catchTags({
+            ProcessSpawnError: (error) =>
+              isCommandNotFound(error)
+                ? runner.run({
+                    command: "pnpm",
+                    args: ["--package=npm@11", "dlx", "npm", ...installArgs],
+                    timeout: INSTALL_TIMEOUT,
+                  })
+                : Effect.fail(error),
+          }),
+          Effect.mapError((cause) =>
+            isCommandNotFound(cause)
+              ? new DeviceToolchainInstallError({
+                  tool: spec.name,
+                  step: "running npm install",
+                  reason: "npm_not_found",
+                  cause,
                 })
-              : Effect.fail(error),
-        }),
-        Effect.mapError((cause) =>
-          isCommandNotFound(cause)
-            ? new DeviceToolchainInstallError({
-                tool: spec.name,
-                step: "running npm install",
-                reason: "npm_not_found",
-                cause,
-              })
-            : fail("running npm install")(cause),
-        ),
+              : fail("running npm install")(cause),
+          ),
+          Effect.result,
+        );
+
+      if (attempt._tag === "Failure") {
+        if (attempt.failure.reason === "npm_not_found") {
+          return yield* attempt.failure;
+        }
+        lastError = attempt.failure;
+        continue;
+      }
+
+      if (attempt.success.code === 0) {
+        succeeded = true;
+        break;
+      }
+      lastFailedResult = attempt.success;
+    }
+
+    if (!succeeded) {
+      if (lastFailedResult !== undefined) {
+        return yield* new DeviceToolchainInstallError({
+          tool: spec.name,
+          step: "running npm install",
+          exitCode: Number(lastFailedResult.code),
+          cause: lastFailedResult,
+        });
+      }
+      return yield* (
+        lastError ??
+        new DeviceToolchainInstallError({
+          tool: spec.name,
+          step: "running npm install",
+        })
       );
-    if (result.code !== 0) {
-      return yield* new DeviceToolchainInstallError({
-        tool: spec.name,
-        step: "running npm install",
-        exitCode: Number(result.code),
-        cause: result,
-      });
     }
     const stagedEntry = path.join(stagingDir, "node_modules", spec.name, ...spec.entry);
     if (!(yield* fs.exists(stagedEntry).pipe(Effect.orElseSucceed(() => false)))) {

@@ -104,6 +104,56 @@ interface RunningHost {
   readonly helpers: DeviceHost.DeviceHostReady["helpers"];
 }
 
+export type AndroidEnvironmentStatus =
+  | "missing_sdk"
+  | "missing_adb"
+  | "no_avd"
+  | "usb_device_ready"
+  | "emulator_ready";
+
+export interface AndroidEnvironmentDiagnostics {
+  readonly status: AndroidEnvironmentStatus;
+  readonly sdkRoot: string | null;
+  readonly adbPath: string | null;
+  readonly emulatorPath: string | null;
+  readonly avdmanagerPath: string | null;
+  readonly hasLegacyAvdmanager: boolean;
+  readonly usbDevices: ReadonlyArray<string>;
+  readonly avds: ReadonlyArray<string>;
+  readonly guidanceZh: string;
+}
+
+export function parseAdbUsbDevices(stdout: string): ReadonlyArray<string> {
+  const devices: Array<string> = [];
+  for (const rawLine of stdout.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("List of devices") || line.startsWith("*")) continue;
+    const [serial, state] = line.split(/\s+/u);
+    if (!serial || state !== "device") continue;
+    if (serial.startsWith("emulator-")) continue;
+    devices.push(serial);
+  }
+  return devices;
+}
+
+export function parseEmulatorAvdList(stdout: string): ReadonlyArray<string> {
+  const avds: Array<string> = [];
+  for (const rawLine of stdout.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (
+      !line ||
+      line.startsWith("INFO") ||
+      line.startsWith("WARNING") ||
+      line.startsWith("ERROR") ||
+      line.includes("|")
+    ) {
+      continue;
+    }
+    avds.push(line);
+  }
+  return avds;
+}
+
 const platformReason = Effect.fn("LocalDeviceHost.platformReason")(function* (
   platform: DevicePlatform,
 ): Effect.fn.Return<string | null, never, FileSystem.FileSystem | Path.Path> {
@@ -115,15 +165,15 @@ const platformReason = Effect.fn("LocalDeviceHost.platformReason")(function* (
   }
   const sdk = yield* androidSdk;
   if (!sdk.root)
-    return "Android SDK was not found. Install it with Android Studio or set ANDROID_HOME to your SDK directory.";
+    return "Android SDK was not found. Install it with Android Studio or set ANDROID_HOME to your SDK directory. 未检测到 Android SDK，请安装 Android Studio（默认位于 %LOCALAPPDATA%\\Android\\Sdk）或配置 ANDROID_HOME / ANDROID_SDK_ROOT。";
   if (!sdk.adb)
-    return `Android SDK Platform-Tools are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
+    return `Android SDK Platform-Tools are missing from ${sdk.root}. Install them in Android Studio's SDK Manager. 已检测到 SDK，但缺少 platform-tools（adb），请在 SDK Manager 中安装 Android SDK Platform-Tools。`;
   if (!sdk.emulator)
-    return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
+    return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager. 已检测到 SDK，但缺少 Android Emulator，请在 SDK Manager 中安装或连接 USB 真机调试。`;
   if (!sdk.avdmanager) {
     if (sdk.legacyAvdmanager)
       return `The Android SDK command-line tools in ${sdk.root} appear to be an older, unsupported version. Install Android SDK Command-line Tools (latest) in Android Studio's SDK Manager under SDK Tools.`;
-    return `Android SDK Command-line Tools (latest) are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
+    return `Android SDK Command-line Tools (latest) are missing from ${sdk.root}. Install them in Android Studio's SDK Manager. 请在 SDK Manager -> SDK Tools 中安装 Android SDK Command-line Tools (latest)。`;
   }
   return null;
 });
@@ -140,24 +190,46 @@ const androidSdk = Effect.gen(function* () {
   );
   const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
   const adbBinary = windows ? "adb.exe" : "adb";
+  const emulatorBinary = windows ? "emulator.exe" : "emulator";
   const avdmanagerBinary = windows ? "avdmanager.bat" : "avdmanager";
   const inspect = Effect.fnUntraced(function* (root: string) {
-    const adb = yield* exists(path.join(root, "platform-tools", adbBinary));
-    const emulator = yield* exists(
-      path.join(root, "emulator", windows ? "emulator.exe" : "emulator"),
-    );
-    const avdmanager = yield* exists(
-      path.join(root, "cmdline-tools", "latest", "bin", avdmanagerBinary),
-    );
+    const adbPath = path.join(root, "platform-tools", adbBinary);
+    const emulatorPath = path.join(root, "emulator", emulatorBinary);
+    const avdmanagerPath = path.join(root, "cmdline-tools", "latest", "bin", avdmanagerBinary);
+    const adb = yield* exists(adbPath);
+    const emulator = yield* exists(emulatorPath);
+    const avdmanager = yield* exists(avdmanagerPath);
     const legacyAvdmanager =
       !avdmanager && (yield* exists(path.join(root, "tools", "bin", avdmanagerBinary)));
-    return { root, adb, emulator, avdmanager, legacyAvdmanager };
+    return {
+      root,
+      adb,
+      emulator,
+      avdmanager,
+      legacyAvdmanager,
+      adbPath: adb ? adbPath : null,
+      emulatorPath: emulator ? emulatorPath : null,
+      avdmanagerPath: avdmanager ? avdmanagerPath : null,
+    };
   });
+  const localAppData = environment.LOCALAPPDATA?.trim();
   const candidates = [
-    ...explicit,
-    path.join(home, "Library", "Android", "sdk"),
-    path.join(home, "Android", "Sdk"),
-    path.join(environment.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "Android", "Sdk"),
+    ...new Set(
+      (windows
+        ? [
+            ...explicit,
+            ...(localAppData ? [path.join(localAppData, "Android", "Sdk")] : []),
+            ...(home ? [path.join(home, "AppData", "Local", "Android", "Sdk")] : []),
+            ...(home ? [path.join(home, "Android", "Sdk")] : []),
+          ]
+        : [
+            ...explicit,
+            path.join(home, "Library", "Android", "sdk"),
+            path.join(home, "Android", "Sdk"),
+            path.join(localAppData ?? path.join(home, "AppData", "Local"), "Android", "Sdk"),
+          ]
+      ).filter((candidate) => candidate.length > 0),
+    ),
   ];
   for (const root of candidates) {
     const sdk = yield* inspect(root);
@@ -175,7 +247,134 @@ const androidSdk = Effect.gen(function* () {
   }
   // No real SDK anywhere: report what the configured root is missing.
   if (explicit[0]) return yield* inspect(explicit[0]);
-  return { root: null, adb: false, emulator: false, avdmanager: false, legacyAvdmanager: false };
+  return {
+    root: null,
+    adb: false,
+    emulator: false,
+    avdmanager: false,
+    legacyAvdmanager: false,
+    adbPath: null,
+    emulatorPath: null,
+    avdmanagerPath: null,
+  };
+});
+
+/**
+ * Inspects the local Android SDK, adb USB devices, and AVDs, returning a structured
+ * status (`missing_sdk` | `missing_adb` | `no_avd` | `usb_device_ready` | `emulator_ready`)
+ * paired with Chinese troubleshooting guidance.
+ */
+export const inspectAndroidEnvironment: Effect.Effect<
+  AndroidEnvironmentDiagnostics,
+  never,
+  FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
+> = Effect.gen(function* () {
+  const sdk = yield* androidSdk;
+  if (!sdk.root) {
+    return {
+      status: "missing_sdk",
+      sdkRoot: null,
+      adbPath: null,
+      emulatorPath: null,
+      avdmanagerPath: null,
+      hasLegacyAvdmanager: false,
+      usbDevices: [],
+      avds: [],
+      guidanceZh:
+        "未检测到 Android SDK。请安装 Android Studio（Windows 默认路径为 %LOCALAPPDATA%\\Android\\Sdk），或在环境变量中设置 ANDROID_HOME / ANDROID_SDK_ROOT 后重试。",
+    } satisfies AndroidEnvironmentDiagnostics;
+  }
+
+  if (!sdk.adb || !sdk.adbPath) {
+    return {
+      status: "missing_adb",
+      sdkRoot: sdk.root,
+      adbPath: null,
+      emulatorPath: sdk.emulatorPath,
+      avdmanagerPath: sdk.avdmanagerPath,
+      hasLegacyAvdmanager: sdk.legacyAvdmanager,
+      usbDevices: [],
+      avds: [],
+      guidanceZh: `已在 ${sdk.root} 找到 Android SDK，但缺少 platform-tools（adb）。请打开 Android Studio -> SDK Manager -> SDK Tools 勾选并安装 "Android SDK Platform-Tools"。`,
+    } satisfies AndroidEnvironmentDiagnostics;
+  }
+
+  const runner = yield* ProcessRunner.ProcessRunner;
+  const environment = yield* HostProcess.Environment;
+  const platform = yield* HostProcess.Platform;
+  const path = yield* Path.Path;
+  const env = deviceHostEnvironment(environment, sdk.root, platform, path);
+
+  const adbResult = yield* runner
+    .run({
+      command: sdk.adbPath,
+      args: ["devices"],
+      env,
+      timeout: Duration.seconds(5),
+      timeoutBehavior: "timedOutResult",
+    })
+    .pipe(Effect.orElseSucceed(() => null));
+  const usbDevices =
+    adbResult && adbResult.code === 0 ? parseAdbUsbDevices(adbResult.stdout) : [];
+
+  const emulatorResult =
+    sdk.emulator && sdk.emulatorPath
+      ? yield* runner
+          .run({
+            command: sdk.emulatorPath,
+            args: ["-list-avds"],
+            env,
+            timeout: Duration.seconds(5),
+            timeoutBehavior: "timedOutResult",
+          })
+          .pipe(Effect.orElseSucceed(() => null))
+      : null;
+  const avds =
+    emulatorResult && emulatorResult.code === 0
+      ? parseEmulatorAvdList(emulatorResult.stdout)
+      : [];
+
+  if (usbDevices.length > 0) {
+    return {
+      status: "usb_device_ready",
+      sdkRoot: sdk.root,
+      adbPath: sdk.adbPath,
+      emulatorPath: sdk.emulatorPath,
+      avdmanagerPath: sdk.avdmanagerPath,
+      hasLegacyAvdmanager: sdk.legacyAvdmanager,
+      usbDevices,
+      avds,
+      guidanceZh: `已检测到 ${usbDevices.length} 台可用 Android USB 真机（${usbDevices.join(", ")}），可直接启动真机预览与调试。`,
+    } satisfies AndroidEnvironmentDiagnostics;
+  }
+
+  if (sdk.emulator && avds.length > 0) {
+    return {
+      status: "emulator_ready",
+      sdkRoot: sdk.root,
+      adbPath: sdk.adbPath,
+      emulatorPath: sdk.emulatorPath,
+      avdmanagerPath: sdk.avdmanagerPath,
+      hasLegacyAvdmanager: sdk.legacyAvdmanager,
+      usbDevices,
+      avds,
+      guidanceZh: `Android 模拟器环境就绪，已检测到 ${avds.length} 个虚拟设备（${avds.join(", ")}）。`,
+    } satisfies AndroidEnvironmentDiagnostics;
+  }
+
+  return {
+    status: "no_avd",
+    sdkRoot: sdk.root,
+    adbPath: sdk.adbPath,
+    emulatorPath: sdk.emulatorPath,
+    avdmanagerPath: sdk.avdmanagerPath,
+    hasLegacyAvdmanager: sdk.legacyAvdmanager,
+    usbDevices,
+    avds,
+    guidanceZh: sdk.emulator
+      ? `Android SDK 与 adb 已就绪（${sdk.root}），但未检测到可用的虚拟设备（AVD）或 USB 真机。请在 Android Studio -> Device Manager 新建至少一个 AVD，或使用数据线连接开启「USB 调试」的手机。`
+      : `已在 ${sdk.root} 检测到 adb，但未安装 Android Emulator 且未连接 USB 真机。请在 SDK Manager 中安装 Android Emulator 并创建 AVD，或通过 USB 连接开启「USB 调试」的手机。`,
+  } satisfies AndroidEnvironmentDiagnostics;
 });
 
 const deviceHostEnvironment = (
@@ -959,6 +1158,9 @@ export const layer = Layer.effect(DeviceHost.DeviceHost, make());
 export const __testing = {
   AgentDeviceDaemonFile,
   androidSdk,
+  inspectAndroidEnvironment,
+  parseAdbUsbDevices,
+  parseEmulatorAvdList,
   platformReason,
   deviceHostEnvironment,
   hubEnvironment,

@@ -4,9 +4,12 @@ import {
   DesktopBrowserCommand,
   DesktopBrowserEvent,
   type DesktopBrowserEvent as DesktopBrowserEventType,
+  type DesktopPreviewColorScheme,
+  type DesktopPreviewDeviceEmulation,
   type PreviewAutomationLoadError,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -89,9 +92,239 @@ interface AttachedTab {
     params: unknown,
     sessionId: string,
   ) => void;
+  readonly onStartNavigation: (
+    event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
+  ) => void;
   readonly onNewDocument: () => void;
+  readonly onDocumentReadyOrLoaded: () => void;
   /** Stops waiting for the first page; set until the tab is announced. */
   stopWaiting: (() => void) | null;
+}
+
+export interface PreviewCdpDebuggerLike {
+  readonly sendCommand: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+}
+
+function inferEmulatedUserAgentPlatform(userAgent: string): string | undefined {
+  if (/iPhone/i.test(userAgent)) return "iPhone";
+  if (/iPad/i.test(userAgent)) return "iPad";
+  if (/Android/i.test(userAgent)) return "Linux armv81";
+  return undefined;
+}
+
+export const CDP_EMULATION_COMMAND_TIMEOUT_MS = 1_500;
+
+const ENABLE_TOUCH_FEATURE_DETECTION_SCRIPT = `(() => {
+  const key = "__prismuxTouchEmulated";
+  if (!("ontouchstart" in window)) {
+    Object.defineProperty(window, "ontouchstart", {
+      value: null,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperty(window, key, { value: true, configurable: true });
+  }
+  window.dispatchEvent(new Event("resize"));
+})()`;
+
+const DISABLE_TOUCH_FEATURE_DETECTION_SCRIPT = `(() => {
+  const key = "__prismuxTouchEmulated";
+  if (window[key]) {
+    delete window.ontouchstart;
+    delete window[key];
+  }
+  window.dispatchEvent(new Event("resize"));
+})()`;
+
+class CdpEmulationCommandError extends Schema.TaggedError<CdpEmulationCommandError>()(
+  "CdpEmulationCommandError",
+  {
+    method: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+function sendCdpCommandWithTimeout(
+  cdpDebugger: PreviewCdpDebuggerLike,
+  method: string,
+  params?: Record<string, unknown>,
+  timeoutMs = CDP_EMULATION_COMMAND_TIMEOUT_MS,
+): Promise<unknown> {
+  return Effect.runPromise(
+    Effect.tryPromise({
+      try: () => cdpDebugger.sendCommand(method, params),
+      catch: (cause) =>
+        new CdpEmulationCommandError({
+          method,
+          detail:
+            cause instanceof Error
+              ? cause.message
+              : `CDP command ${method} failed: ${String(cause)}`,
+        }),
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: Duration.millis(timeoutMs),
+        orElse: () =>
+          Effect.fail(
+            new CdpEmulationCommandError({
+              method,
+              detail: `CDP command ${method} timed out after ${timeoutMs}ms`,
+            }),
+          ),
+      }),
+    ),
+  );
+}
+
+/**
+ * Applies or cleanly restores Electron CDP mobile device emulation overrides.
+ * When `emulation` is null or disabled, all metrics/touch/userAgent overrides are cleared
+ * and `prefers-color-scheme` is restored to `fallbackColorScheme`.
+ *
+ * Note: Intentionally does NOT call `Emulation.setEmitTouchEventsForMouse`, because on
+ * Electron 44 OOPIF `<webview>` guests it attaches Chromium's TouchEmulator to the shared
+ * BrowserWindow input router and deadlocks host toolbar mouse click acknowledgements.
+ */
+export async function applyPreviewDeviceEmulation(
+  cdpDebugger: PreviewCdpDebuggerLike,
+  emulation: DesktopPreviewDeviceEmulation | null | undefined,
+  fallbackColorScheme: DesktopPreviewColorScheme = "system",
+  commandTimeoutMs = CDP_EMULATION_COMMAND_TIMEOUT_MS,
+): Promise<void> {
+  if (emulation && emulation.enabled) {
+    const width = Math.max(1, Math.round(emulation.width ?? 393));
+    const height = Math.max(1, Math.round(emulation.height ?? 852));
+    // Always pass `deviceScaleFactor: 0` so Chromium inherits the host display's native DPR
+    // (`guestDpr / hostDpr === 1.0`). Overriding `deviceScaleFactor` (e.g., 3x on a 150% DPI
+    // Windows host) causes Electron 44's OOPIF `<webview>` compositor to magnify guest pixels by
+    // `guestDpr / hostDpr` (2.0x), clipping the right and bottom edges inside the bezel slot.
+    const deviceScaleFactor = 0;
+    // Keep CDP emulation scale pinned to 1: visual fitting into the phone bezel slot is owned
+    // exclusively by the host `<webview>` CSS transform (`transform: scale(fitScale)`), avoiding
+    // OOPIF clipping and preventing double scaling.
+    const scale = 1;
+    const mobile = emulation.mobile !== false;
+    const hasTouch = emulation.hasTouch !== false;
+    const maxTouchPoints = hasTouch ? Math.max(1, Math.round(emulation.maxTouchPoints ?? 5)) : 1;
+    const userAgent = emulation.userAgent ?? "";
+    const platform = inferEmulatedUserAgentPlatform(userAgent);
+    const effectiveColorScheme = emulation.colorScheme ?? fallbackColorScheme;
+    const screenOrientation =
+      width > height
+        ? { type: "landscapePrimary", angle: 90 }
+        : { type: "portraitPrimary", angle: 0 };
+
+    await sendCdpCommandWithTimeout(
+      cdpDebugger,
+      "Emulation.setDeviceMetricsOverride",
+      {
+        width,
+        height,
+        deviceScaleFactor,
+        mobile,
+        scale,
+        screenWidth: width,
+        screenHeight: height,
+        positionX: 0,
+        positionY: 0,
+        screenOrientation,
+      },
+      commandTimeoutMs,
+    );
+    await sendCdpCommandWithTimeout(
+      cdpDebugger,
+      "Emulation.setTouchEmulationEnabled",
+      {
+        enabled: hasTouch,
+        ...(hasTouch ? { maxTouchPoints } : {}),
+      },
+      commandTimeoutMs,
+    );
+    await sendCdpCommandWithTimeout(
+      cdpDebugger,
+      "Emulation.setUserAgentOverride",
+      {
+        userAgent,
+        ...(platform !== undefined ? { platform } : {}),
+      },
+      commandTimeoutMs,
+    );
+    await sendCdpCommandWithTimeout(
+      cdpDebugger,
+      "Emulation.setEmulatedMedia",
+      {
+        features: [
+          {
+            name: "prefers-color-scheme",
+            value: effectiveColorScheme === "system" ? "" : effectiveColorScheme,
+          },
+        ],
+      },
+      commandTimeoutMs,
+    );
+    if (hasTouch) {
+      await sendCdpCommandWithTimeout(
+        cdpDebugger,
+        "Runtime.evaluate",
+        {
+          expression: ENABLE_TOUCH_FEATURE_DETECTION_SCRIPT,
+          silent: true,
+        },
+        commandTimeoutMs,
+      ).catch(() => undefined);
+    }
+    return;
+  }
+
+  await sendCdpCommandWithTimeout(
+    cdpDebugger,
+    "Emulation.clearDeviceMetricsOverride",
+    {},
+    commandTimeoutMs,
+  );
+  await sendCdpCommandWithTimeout(
+    cdpDebugger,
+    "Emulation.setTouchEmulationEnabled",
+    {
+      enabled: false,
+    },
+    commandTimeoutMs,
+  );
+  await sendCdpCommandWithTimeout(
+    cdpDebugger,
+    "Emulation.setUserAgentOverride",
+    {
+      userAgent: "",
+    },
+    commandTimeoutMs,
+  );
+  await sendCdpCommandWithTimeout(
+    cdpDebugger,
+    "Emulation.setEmulatedMedia",
+    {
+      features: [
+        {
+          name: "prefers-color-scheme",
+          value: fallbackColorScheme === "system" ? "" : fallbackColorScheme,
+        },
+      ],
+    },
+    commandTimeoutMs,
+  );
+  await sendCdpCommandWithTimeout(
+    cdpDebugger,
+    "Runtime.evaluate",
+    {
+      expression: DISABLE_TOUCH_FEATURE_DETECTION_SCRIPT,
+      silent: true,
+    },
+    commandTimeoutMs,
+  ).catch(() => undefined);
 }
 
 export class DesktopBrowserHost extends Context.Service<
@@ -105,6 +338,11 @@ export class DesktopBrowserHost extends Context.Service<
     readonly setShown: (key: DesktopBrowserTabKey, shown: boolean | undefined) => void;
     /** Whether the client draws the guest at full detail while it is captured. */
     readonly setCaptureDrawn: (key: DesktopBrowserTabKey, drawn: boolean | undefined) => void;
+    /** Tracks active mobile device emulation so navigations/reloads preserve CDP overrides. */
+    readonly setDeviceEmulation: (
+      key: DesktopBrowserTabKey,
+      emulation: DesktopPreviewDeviceEmulation | null | undefined,
+    ) => void;
     readonly humanStartedDownload: (source: Electron.WebContents) => boolean;
     /** Whether what the page does now follows the agent's input, not a viewer's. */
     readonly agentLedPage: (source: Electron.WebContents) => boolean;
@@ -144,7 +382,19 @@ export const make = Effect.gen(function* () {
   const shownTabs = new Map<string, boolean>();
   const drawnTabs = new Set<string>();
   const drawWaiters = new Map<string, Set<() => void>>();
+  const emulatedTabs = new Map<string, DesktopPreviewDeviceEmulation>();
   const emit = (event: DesktopBrowserEventType) => runFork(PubSub.publish(outbox, event));
+
+  const reapplyStoredDeviceEmulation = (tab: AttachedTab) => {
+    if (tab.debuggee.webContents.isDestroyed()) return;
+    const emulation = emulatedTabs.get(keyOf(tab.key));
+    if (!emulation?.enabled) return;
+    void applyPreviewDeviceEmulation(
+      tab.debuggee.debugger,
+      emulation,
+      emulation.colorScheme ?? "system",
+    ).catch(() => undefined);
+  };
 
   const nextScreenshot = (tab: AttachedTab) => {
     tab.screenshotTurn = null;
@@ -513,7 +763,10 @@ export const make = Effect.gen(function* () {
     tab.stopWaiting?.();
     tab.relay = null;
     tab.debuggee.debugger.off("message", tab.onMessage);
+    tab.debuggee.webContents.off("did-start-navigation", tab.onStartNavigation);
     tab.debuggee.webContents.off("did-navigate", tab.onNewDocument);
+    tab.debuggee.webContents.off("dom-ready", tab.onDocumentReadyOrLoaded);
+    tab.debuggee.webContents.off("did-finish-load", tab.onDocumentReadyOrLoaded);
     syncPainting(tab);
     if (announced) emit({ type: "detached", ...key });
   };
@@ -548,6 +801,11 @@ export const make = Effect.gen(function* () {
         }
         tab.relay?.event(method, params, sessionId);
       },
+      onStartNavigation: (event) => {
+        if (event.isMainFrame && !event.isSameDocument) {
+          reapplyStoredDeviceEmulation(tab);
+        }
+      },
       // A screenshot pending when the page loads a new document, a reload included, can
       // stay unanswered. A crashed page lands here once it reloads, well after its renderer died.
       onNewDocument: () => {
@@ -555,12 +813,20 @@ export const make = Effect.gen(function* () {
         tab.capturing.clear();
         dropFocusHolds(tab);
         if (tab.screenshotTurn !== null) nextScreenshot(tab);
+        reapplyStoredDeviceEmulation(tab);
+      },
+      onDocumentReadyOrLoaded: () => {
+        reapplyStoredDeviceEmulation(tab);
       },
       stopWaiting: null,
     };
     tabs.set(id, tab);
     debuggee.debugger.on("message", tab.onMessage);
+    debuggee.webContents.on("did-start-navigation", tab.onStartNavigation);
     debuggee.webContents.on("did-navigate", tab.onNewDocument);
+    debuggee.webContents.on("dom-ready", tab.onDocumentReadyOrLoaded);
+    debuggee.webContents.on("did-finish-load", tab.onDocumentReadyOrLoaded);
+    reapplyStoredDeviceEmulation(tab);
     const announce = () => {
       emit({ type: "attached", ...key });
       const shown = shownTabs.get(id);
@@ -625,6 +891,29 @@ export const make = Effect.gen(function* () {
     drawnTabs.add(id);
     for (const done of drawWaiters.get(id) ?? []) done();
     drawWaiters.delete(id);
+  };
+
+  const setDeviceEmulation = (
+    key: DesktopBrowserTabKey,
+    emulation: DesktopPreviewDeviceEmulation | null | undefined,
+  ) => {
+    const id = keyOf(key);
+    const hadEmulation = emulatedTabs.has(id);
+    if (!emulation || !emulation.enabled) {
+      emulatedTabs.delete(id);
+      const attachedTab = tabs.get(id);
+      if (hadEmulation && attachedTab && !attachedTab.debuggee.webContents.isDestroyed()) {
+        void applyPreviewDeviceEmulation(attachedTab.debuggee.debugger, null).catch(
+          () => undefined,
+        );
+      }
+      return;
+    }
+    emulatedTabs.set(id, emulation);
+    const attachedTab = tabs.get(id);
+    if (attachedTab) {
+      reapplyStoredDeviceEmulation(attachedTab);
+    }
   };
 
   const loadFailed: DesktopBrowserHost["Service"]["loadFailed"] = (key, failure) => {
@@ -704,6 +993,7 @@ export const make = Effect.gen(function* () {
     loadFailed,
     setShown,
     setCaptureDrawn,
+    setDeviceEmulation,
     placeDownload,
     humanStartedDownload,
     agentLedPage,

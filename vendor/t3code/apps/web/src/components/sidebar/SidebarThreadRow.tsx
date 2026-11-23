@@ -51,6 +51,7 @@ import {
   FolderGit2Icon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
+  NetworkIcon,
   PinIcon,
   PinOffIcon,
   ShieldQuestionIcon,
@@ -133,6 +134,17 @@ import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
 import { ThreadDetailsIssueRows } from "../chat/ThreadDetailsIssueRows";
 import { IssueGlyph, issueStatePresentation } from "../issue/issuePresentation";
+import { ensureLocalApi } from "../../localApi";
+import type { DaemonSystemPortEntryDto } from "../../prismux/daemonClient";
+import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
+import {
+  findWorkspaceListeningPorts,
+  formatPortMicroBadgeLabel,
+  resolveAgentRuntimeLamp,
+  resolvePrimaryPortUrl,
+  stopActivationKeyPropagation,
+  type AgentRuntimeLampInfo,
+} from "./sidebarMicroIndicators";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -267,6 +279,8 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
+  agentLamp,
+  workspacePorts,
 }: {
   thread: SidebarThreadSummary;
   project: ProjectFaviconProject | null;
@@ -284,6 +298,8 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
+  agentLamp: AgentRuntimeLampInfo;
+  workspacePorts: readonly DaemonSystemPortEntryDto[];
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
   const worktreePath = thread.worktreePath?.trim();
@@ -380,6 +396,28 @@ function SidebarThreadTooltip({
             />
             <div className="min-w-0 truncate text-foreground/75">
               {terminalProcessLabel(terminalProcessCount, m)}
+            </div>
+          </div>
+        ) : null}
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            aria-hidden
+            className={cn("size-2 shrink-0 rounded-full", agentLamp.dotClassName)}
+          />
+          <div className="min-w-0 truncate text-foreground/75">
+            {gt("Agent status: {status}", { status: m(agentLamp.labelMessage) })}
+          </div>
+        </div>
+        {workspacePorts.length > 0 ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <NetworkIcon aria-hidden className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <div className="min-w-0 truncate font-mono text-foreground/80 tabular-nums">
+              {gt("Listening ports: {ports}", {
+                ports: workspacePorts
+                  .slice(0, 3)
+                  .map((entry) => `:${entry.port} (${entry.processName})`)
+                  .join(", "),
+              })}
             </div>
           </div>
         ) : null}
@@ -740,6 +778,28 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   };
 
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
+  const prismuxRuntime = useOptionalPrismuxRuntime();
+  const workspacePorts = findWorkspaceListeningPorts(
+    prismuxRuntime?.portsState.ports ?? [],
+    gitCwd,
+  );
+  const portBadgeLabel = formatPortMicroBadgeLabel(workspacePorts);
+  const primaryPortUrl = resolvePrimaryPortUrl(workspacePorts);
+  const handlePortBadgeClick = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (workspacePorts.length === 1 && primaryPortUrl && !event.shiftKey) {
+      try {
+        void ensureLocalApi().shell.openExternal(primaryPortUrl).catch(() => {
+          window.open(primaryPortUrl, "_blank", "noopener,noreferrer");
+        });
+      } catch {
+        window.open(primaryPortUrl, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+    prismuxRuntime?.requestOpenPortsPopover(gitCwd);
+  };
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
     thread.linkedPullRequest,
@@ -773,6 +833,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
+  const agentLamp = resolveAgentRuntimeLamp(status);
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -884,6 +945,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
+      agentLamp={agentLamp}
+      workspacePorts={workspacePorts}
     />
   );
 
@@ -1011,14 +1074,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   };
 
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-lg border border-transparent text-left outline-none select-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" &&
       !props.isActive &&
       "[&:not(:hover):not(:focus-within)_*:not(.live-activity-focus_*)]:text-secondary-label",
     props.isActive
-      ? "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
+      ? "border-sidebar-border/65 bg-sidebar-row-active text-sidebar-foreground shadow-[0_1px_2px_rgb(0_0_0/6%)] dark:shadow-[0_1px_3px_rgb(0_0_0/28%)]"
       : isSelected || props.sweepAction !== null
-        ? "bg-sidebar-row-selected text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
+        ? "border-sidebar-border/60 bg-sidebar-row-selected text-sidebar-foreground"
         : hasUnsentDraft
           ? cn(draftSurfaceClassName, "text-sidebar-foreground")
           : shouldRecede
@@ -1259,6 +1322,58 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     )
   ) : null;
 
+  const agentLampStatusText = messages(agentLamp.labelMessage);
+  const agentLampAriaLabel = gt("Agent status: {status}", { status: agentLampStatusText });
+  const agentLampIndicator = (
+    <span
+      role="img"
+      aria-label={agentLampAriaLabel}
+      data-testid={`sidebar-agent-lamp-${thread.id}`}
+      data-agent-lamp={agentLamp.state}
+      title={agentLampAriaLabel}
+      className="inline-flex size-2 shrink-0 items-center justify-center"
+    >
+      <span aria-hidden className={cn("size-1.5 rounded-full", agentLamp.dotClassName)} />
+    </span>
+  );
+
+  const portMicroBadge = portBadgeLabel ? (
+    <button
+      type="button"
+      data-testid={`sidebar-port-badge-${thread.id}`}
+      aria-label={
+        workspacePorts.length === 1
+          ? gt("Open workspace port {port} (Shift+click to inspect ports)", {
+              port: portBadgeLabel,
+            })
+          : gt(
+              "{count, plural, one {Inspect {count} listening workspace port} other {Inspect {count} listening workspace ports}}",
+              { count: workspacePorts.length },
+            )
+      }
+      title={
+        workspacePorts.length === 1 && primaryPortUrl
+          ? gt("Click to open {url} · Shift+click to inspect ports", {
+              url: primaryPortUrl,
+            })
+          : gt(
+              "{count, plural, one {Click to inspect {count} listening workspace port} other {Click to inspect {count} listening workspace ports}}",
+              { count: workspacePorts.length },
+            )
+      }
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={stopActivationKeyPropagation}
+      onClick={(event) => {
+        handlePortBadgeClick(event);
+        if (event.detail > 0) event.currentTarget.blur();
+      }}
+      className="inline-flex h-4 shrink-0 cursor-pointer items-center gap-0.5 rounded-sm bg-emerald-600/15 px-1 font-mono text-[10px] leading-none font-semibold text-emerald-800 tabular-nums transition-colors hover:bg-emerald-600/25 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring dark:bg-emerald-400/18 dark:text-emerald-200 dark:hover:bg-emerald-400/28"
+    >
+      <NetworkIcon aria-hidden className="size-2.5 shrink-0" />
+      <span>{portBadgeLabel}</span>
+    </button>
+  ) : null;
+
   const diff = latestRunDiff(thread);
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
@@ -1266,7 +1381,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     prBadge === null &&
     issueBadge === null &&
     diff === null &&
-    runningTerminalIds.length === 0;
+    runningTerminalIds.length === 0 &&
+    portMicroBadge === null;
   const metaLine = metaLineEmpty ? null : (
     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
       {props.environmentLabel !== null ? (
@@ -1281,6 +1397,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ) : (
         <span className="flex-1" />
       )}
+      {portMicroBadge}
       {terminalStatusIcon}
       {prBadge}
       {issueBadge}
@@ -1367,10 +1484,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   ) : null}
                 </span>
               )}
+              {agentLampIndicator}
               {draftIndicator}
               {title}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
+              {multiline ? null : portMicroBadge}
               {multiline ? null : terminalStatusIcon}
               {multiline ? null : issueBadge}
               {isRegeneratingTitle ? (
@@ -1558,6 +1677,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             )}
           >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
+              {agentLampIndicator}
               {draftIndicator}
               {props.project ? (
                 <ProjectFavicon project={props.project} className="size-4 shrink-0" />
@@ -1793,6 +1913,11 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     return leaseRowRef(row);
   };
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
+  const prismuxRuntime = useOptionalPrismuxRuntime();
+  const workspacePorts = findWorkspaceListeningPorts(
+    prismuxRuntime?.portsState.ports ?? [],
+    gitCwd,
+  );
   const branchTarget =
     leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
       ? { environmentId: thread.environmentId, cwd: gitCwd }
@@ -1961,6 +2086,8 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}
+          agentLamp={resolveAgentRuntimeLamp(resolveSidebarRowStatus(thread))}
+          workspacePorts={workspacePorts}
         />
       </Tooltip>
     </li>

@@ -340,3 +340,51 @@ it("reports native quota only for an OpenAI login on a native route", () => {
   assert.strictEqual(codexCustomEndpoint({ openai_base_url: "https://chatgpt.com/x" }), undefined);
   assert.strictEqual(codexCustomEndpoint({}), undefined);
 });
+
+it("normalizes fallback additionalSpeedTiers labels and full Codex reasoning effort levels", () => {
+  const capabilities = mapCodexModelCapabilities({
+    additionalSpeedTiers: ["priority", "ultrafast", "flex"],
+    defaultReasoningEffort: "medium",
+    description: "Test model",
+    displayName: "GPT-6 Astra",
+    hidden: false,
+    id: "gpt-6-astra",
+    isDefault: true,
+    model: "gpt-6-astra",
+    supportedReasoningEfforts: [
+      { reasoningEffort: "minimal", description: "" },
+      { reasoningEffort: "low", description: "" },
+      { reasoningEffort: "medium", description: "" },
+      { reasoningEffort: "high", description: "" },
+      { reasoningEffort: "xhigh", description: "" },
+      { reasoningEffort: "max", description: "" },
+      { reasoningEffort: "ultra", description: "" },
+    ],
+  });
+
+  const reasoning = capabilities.optionDescriptors?.find((d) => d.id === "reasoningEffort");
+  assert.strictEqual(reasoning?.type, "select");
+  if (reasoning?.type === "select") {
+    assert.deepStrictEqual(
+      reasoning.options.map((option) => `${option.id}:${option.label}`),
+      [
+        "minimal:Minimal",
+        "low:Low",
+        "medium:Medium",
+        "high:High",
+        "xhigh:Extra High",
+        "max:Max",
+        "ultra:Ultra",
+      ],
+    );
+  }
+
+  const speed = capabilities.optionDescriptors?.find((d) => d.id === "serviceTier");
+  assert.strictEqual(speed?.type, "select");
+  if (speed?.type === "select") {
+    assert.deepStrictEqual(
+      speed.options.map((option) => `${option.id}:${option.label}`),
+      ["default:Standard", "priority:Fast", "ultrafast:Ultrafast", "flex:Flex"],
+    );
+  }
+});

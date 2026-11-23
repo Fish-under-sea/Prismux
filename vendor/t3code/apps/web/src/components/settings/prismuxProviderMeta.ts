@@ -1,0 +1,400 @@
+/**
+ * Issue #6 + Issue #7: Official Agent/CLI homepage metadata, strict `https:` URL validation,
+ * official CLI update guidance (no silent closed-source binary downloads), and one-click `omp` preset.
+ */
+
+export interface PrismuxAgentCliMeta {
+  readonly id: string;
+  readonly displayName: string;
+  readonly cliCommand: string;
+  readonly homepageUrl: string;
+  readonly updateCommandHint: string;
+  readonly loginHint?: string;
+  readonly supportsCliMode: boolean;
+  readonly supportsResume: boolean;
+  readonly buildResumeCommand: (input: {
+    readonly command: string;
+    readonly sessionId?: string | null;
+  }) => string;
+}
+
+export const OMP_LOCAL_ACP_PRESET = {
+  id: "omp",
+  label: "OMP (oh-my-pi)",
+  instanceId: "omp",
+  command: "omp",
+  args: ["acp"] as readonly string[],
+  homepageUrl: "https://omp.sh",
+} as const;
+
+const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._:@/-]{1,128}$/;
+
+/**
+ * Strictly validates that an external URL uses the `https:` protocol and contains no control characters.
+ * Rejects `http:`, `javascript:`, `data:`, `file:`, `vbscript:`, or malformed strings.
+ */
+export function validateSafeHttpsUrl(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:") return null;
+    if (!parsed.hostname) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function openSafeExternalHttpsUrl(rawUrl: string | null | undefined): boolean {
+  const safeUrl = validateSafeHttpsUrl(rawUrl);
+  if (!safeUrl || typeof window === "undefined") return false;
+  if (window.desktopBridge?.openExternal) {
+    void window.desktopBridge.openExternal(safeUrl);
+    return true;
+  }
+  window.open(safeUrl, "_blank", "noopener,noreferrer");
+  return true;
+}
+
+export interface SafeAnchorClickEvent {
+  readonly button: number;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly currentTarget: { readonly href: string; readonly protocol: string };
+  readonly preventDefault: () => void;
+}
+
+/**
+ * Aligned with stablyai/orca `openAppHttpLinkFromAnchor`, tightened to Prismux's `https:`-only red line.
+ * Intercepts plain left-clicks to route through Electron's safe `openExternal` bridge while preserving
+ * native middle-click / modifier-click / context-menu link behavior.
+ */
+export function openSafeExternalHttpsFromAnchor(event: SafeAnchorClickEvent): boolean {
+  const plainLeftClick =
+    event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+  if (!plainLeftClick) return false;
+  const safeUrl = validateSafeHttpsUrl(event.currentTarget.href);
+  if (!safeUrl) {
+    event.preventDefault();
+    return false;
+  }
+  event.preventDefault();
+  return openSafeExternalHttpsUrl(safeUrl);
+}
+
+/**
+ * Resolves the canonical CLI executable process family for quota/process deduplication
+ * (aligned with stablyai/orca `TUI_AGENT_CONFIG[agent].expectedProcess`).
+ */
+export function resolveAgentCliProcessFamily(input: {
+  readonly driver: string;
+  readonly instanceId?: string | null;
+  readonly config?: unknown;
+}): string {
+  const meta = resolveAgentCliMeta(input);
+  if (meta?.cliCommand) {
+    return meta.cliCommand.toLowerCase();
+  }
+  return input.driver.trim().toLowerCase();
+}
+
+export function quoteShellToken(token: string): string {
+  if (/^[a-zA-Z0-9._:/\\-]+$/.test(token)) {
+    return token;
+  }
+  return `"${token.replace(/(["\\$`])/g, "\\$1")}"`;
+}
+
+export function sanitizeResumeSessionId(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed || !SAFE_SESSION_ID_PATTERN.test(trimmed)) return null;
+  return trimmed;
+}
+
+export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliMeta>> = {
+  antigravity: {
+    id: "antigravity",
+    displayName: "Google Antigravity",
+    cliCommand: "agy",
+    homepageUrl: "https://antigravity.google/",
+    updateCommandHint: "agy update",
+    loginHint: "agy acp --login",
+    supportsCliMode: true,
+    supportsResume: false,
+    buildResumeCommand: ({ command }) => quoteShellToken(command || "agy"),
+  },
+  agy: {
+    id: "agy",
+    displayName: "Google Antigravity",
+    cliCommand: "agy",
+    homepageUrl: "https://antigravity.google/",
+    updateCommandHint: "agy update",
+    loginHint: "agy acp --login",
+    supportsCliMode: true,
+    supportsResume: false,
+    buildResumeCommand: ({ command }) => quoteShellToken(command || "agy"),
+  },
+  claudeAgent: {
+    id: "claudeAgent",
+    displayName: "Claude Code",
+    cliCommand: "claude",
+    homepageUrl: "https://docs.anthropic.com/en/docs/claude-code/overview",
+    updateCommandHint: "claude update",
+    supportsCliMode: true,
+    supportsResume: true,
+    buildResumeCommand: ({ command, sessionId }) => {
+      const exe = quoteShellToken(command || "claude");
+      const safeId = sanitizeResumeSessionId(sessionId);
+      return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : `${exe} --continue`;
+    },
+  },
+  claude: {
+    id: "claude",
+    displayName: "Claude Code",
+    cliCommand: "claude",
+    homepageUrl: "https://docs.anthropic.com/en/docs/claude-code/overview",
+    updateCommandHint: "claude update",
+    supportsCliMode: true,
+    supportsResume: true,
+    buildResumeCommand: ({ command, sessionId }) => {
+      const exe = quoteShellToken(command || "claude");
+      const safeId = sanitizeResumeSessionId(sessionId);
+      return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : `${exe} --continue`;
+    },
+  },
+  codex: {
+    id: "codex",
+    displayName: "Codex",
+    cliCommand: "codex",
+    homepageUrl: "https://github.com/openai/codex",
+    updateCommandHint: "npm install -g @openai/codex@latest",
+    supportsCliMode: true,
+    supportsResume: true,
+    buildResumeCommand: ({ command, sessionId }) => {
+      const exe = quoteShellToken(command || "codex");
+      const safeId = sanitizeResumeSessionId(sessionId);
+      return safeId ? `${exe} resume ${quoteShellToken(safeId)}` : exe;
+    },
+  },
+  omp: {
+    id: "omp",
+    displayName: "OMP (oh-my-pi)",
+    cliCommand: "omp",
+    homepageUrl: "https://omp.sh",
+    updateCommandHint: "omp update",
+    supportsCliMode: true,
+    supportsResume: true,
+    buildResumeCommand: ({ command, sessionId }) => {
+      const exe = quoteShellToken(command || "omp");
+      const safeId = sanitizeResumeSessionId(sessionId);
+      return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : exe;
+    },
+  },
+  opencode: {
+    id: "opencode",
+    displayName: "OpenCode",
+    cliCommand: "opencode",
+    homepageUrl: "https://opencode.ai",
+    updateCommandHint: "opencode upgrade",
+    supportsCliMode: true,
+    supportsResume: true,
+    buildResumeCommand: ({ command, sessionId }) => {
+      const exe = quoteShellToken(command || "opencode");
+      const safeId = sanitizeResumeSessionId(sessionId);
+      return safeId ? `${exe} --session ${quoteShellToken(safeId)}` : exe;
+    },
+  },
+  gemini: {
+    id: "gemini",
+    displayName: "Gemini CLI",
+    cliCommand: "gemini",
+    homepageUrl: "https://github.com/google-gemini/gemini-cli",
+    updateCommandHint: "npm install -g @google/gemini-cli@latest",
+    supportsCliMode: true,
+    supportsResume: true,
+    buildResumeCommand: ({ command, sessionId }) => {
+      const exe = quoteShellToken(command || "gemini");
+      const safeId = sanitizeResumeSessionId(sessionId);
+      return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : exe;
+    },
+  },
+  pi: {
+    id: "pi",
+    displayName: "Pi",
+    cliCommand: "pi",
+    homepageUrl: "https://github.com/badlogic/pi-mono",
+    updateCommandHint: "npm install -g @mariozechner/pi-coding-agent@latest",
+    supportsCliMode: true,
+    supportsResume: true,
+    buildResumeCommand: ({ command, sessionId }) => {
+      const exe = quoteShellToken(command || "pi");
+      const safeId = sanitizeResumeSessionId(sessionId);
+      return safeId ? `${exe} --continue ${quoteShellToken(safeId)}` : exe;
+    },
+  },
+  cursor: {
+    id: "cursor",
+    displayName: "Cursor",
+    cliCommand: "cursor-agent",
+    homepageUrl: "https://cursor.com/cli",
+    updateCommandHint: "cursor-agent update",
+    supportsCliMode: true,
+    supportsResume: false,
+    buildResumeCommand: ({ command }) => quoteShellToken(command || "cursor-agent"),
+  },
+  kiro: {
+    id: "kiro",
+    displayName: "Kiro",
+    cliCommand: "kiro-cli",
+    homepageUrl: "https://kiro.dev",
+    updateCommandHint: "kiro-cli update",
+    supportsCliMode: true,
+    supportsResume: false,
+    buildResumeCommand: ({ command }) => quoteShellToken(command || "kiro-cli"),
+  },
+  grok: {
+    id: "grok",
+    displayName: "Grok CLI",
+    cliCommand: "grok",
+    homepageUrl: "https://x.ai",
+    updateCommandHint: "npm install -g @vibe-kit/grok-cli@latest",
+    supportsCliMode: true,
+    supportsResume: false,
+    buildResumeCommand: ({ command }) => quoteShellToken(command || "grok"),
+  },
+};
+
+function readConfigField(config: unknown, key: string): string | null {
+  if (config === null || typeof config !== "object") return null;
+  const value = (config as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeExecutableBasename(rawPath: string | null): string | null {
+  if (!rawPath) return null;
+  const segments = rawPath.split(/[\\/]/).filter(Boolean);
+  const last = segments.at(-1) ?? rawPath;
+  return last.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
+}
+
+export function resolveAgentCliMeta(input: {
+  readonly driver: string;
+  readonly instanceId?: string | null;
+  readonly config?: unknown;
+  readonly displayName?: string | null;
+}): PrismuxAgentCliMeta | null {
+  const direct = PRISMUX_AGENT_CLI_CATALOG[input.driver];
+  if (direct) return direct;
+
+  if (input.driver === "acpRegistry") {
+    const commandPath = readConfigField(input.config, "commandPath");
+    const agentId = readConfigField(input.config, "agentId")?.toLowerCase() ?? null;
+    const exeName = normalizeExecutableBasename(commandPath);
+    if (exeName === "omp" || agentId === "omp" || input.instanceId?.toLowerCase().startsWith("omp")) {
+      return PRISMUX_AGENT_CLI_CATALOG.omp ?? null;
+    }
+    if (exeName === "agy" || agentId === "antigravity" || agentId === "agy") {
+      return PRISMUX_AGENT_CLI_CATALOG.antigravity ?? null;
+    }
+    if (exeName && PRISMUX_AGENT_CLI_CATALOG[exeName]) {
+      return PRISMUX_AGENT_CLI_CATALOG[exeName] ?? null;
+    }
+    if (agentId && PRISMUX_AGENT_CLI_CATALOG[agentId]) {
+      return PRISMUX_AGENT_CLI_CATALOG[agentId] ?? null;
+    }
+    const source = readConfigField(input.config, "source");
+    if (source === "local" && commandPath) {
+      return {
+        id: agentId ?? exeName ?? "local-acp",
+        displayName: input.displayName?.trim() || commandPath,
+        cliCommand: commandPath,
+        homepageUrl: "",
+        updateCommandHint: "",
+        supportsCliMode: true,
+        supportsResume: false,
+        buildResumeCommand: ({ command }) => quoteShellToken(command || commandPath),
+      };
+    }
+    return null;
+  }
+
+  return null;
+}
+
+export function resolveSafeAgentHomepageUrl(input: {
+  readonly driver: string;
+  readonly instanceId?: string | null;
+  readonly config?: unknown;
+  readonly displayName?: string | null;
+  readonly documentationUrl?: string | null;
+  readonly websiteUrl?: string | null;
+}): string | null {
+  const candidates = [
+    input.websiteUrl,
+    input.documentationUrl,
+    readConfigField(input.config, "homepageUrl"),
+    resolveAgentCliMeta(input)?.homepageUrl,
+  ];
+  for (const candidate of candidates) {
+    const safe = validateSafeHttpsUrl(candidate);
+    if (safe) return safe;
+  }
+  return null;
+}
+
+export function supportsDualLaunchMode(input: {
+  readonly driver: string;
+  readonly instanceId?: string | null;
+  readonly config?: unknown;
+}): boolean {
+  const meta = resolveAgentCliMeta(input);
+  return meta?.supportsCliMode === true;
+}
+
+export function buildContinueInTerminalCommand(input: {
+  readonly driver: string;
+  readonly instanceId?: string | null;
+  readonly config?: unknown;
+  readonly displayName?: string | null;
+  readonly sessionId?: string | null;
+  readonly binaryPath?: string | null;
+}): {
+  readonly command: string;
+  readonly cliCommand: string;
+  readonly label: string;
+  readonly supportsResume: boolean;
+} {
+  const meta = resolveAgentCliMeta(input);
+  const configuredBinary =
+    input.binaryPath?.trim() ||
+    readConfigField(input.config, "binaryPath") ||
+    readConfigField(input.config, "commandPath");
+  if (!meta) {
+    const fallbackExe = configuredBinary || input.driver || "sh";
+    return {
+      command: quoteShellToken(fallbackExe),
+      cliCommand: fallbackExe,
+      label: input.displayName?.trim() || fallbackExe,
+      supportsResume: false,
+    };
+  }
+  const executable = configuredBinary || meta.cliCommand;
+  return {
+    command: meta.buildResumeCommand({
+      command: executable,
+      sessionId: input.sessionId ?? null,
+    }),
+    cliCommand: executable,
+    label: input.displayName?.trim() || meta.displayName,
+    supportsResume: meta.supportsResume && sanitizeResumeSessionId(input.sessionId) !== null,
+  };
+}

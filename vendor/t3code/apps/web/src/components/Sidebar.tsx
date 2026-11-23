@@ -72,9 +72,10 @@ import {
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
-  ListFilterIcon,
+  MessageSquareIcon,
   PlusIcon,
   SettingsIcon,
+  SlidersHorizontalIcon,
 } from "lucide-react";
 import {
   useEffect,
@@ -136,7 +137,7 @@ import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings } from "../hooks/useSettings";
+import { updateClientSettings, useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -183,6 +184,7 @@ import {
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
+  hasUnseenCompletion,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -195,11 +197,13 @@ import {
   planSidebarThreadDrop,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
+  resolveSidebarRowStatus,
   resolveSidebarSweepKeys,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
   resolveSidebarThreadSection,
   resolveSidebarReorderableThreadKeys,
+  resolveThreadLastVisitedAt,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
   resolveScopedNewThreadProjectRef,
@@ -255,9 +259,17 @@ import {
   useComboboxFilter,
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
+import { PrismuxSidebarQuickNav } from "./sidebar/PrismuxSidebarQuickNav";
+import {
+  readSidebarProjectsSectionOpen,
+  subscribeLocateActiveSidebarThread,
+  summarizeSidebarInboxAttention,
+  writeSidebarProjectsSectionOpen,
+} from "./sidebar/prismuxSidebarQuickNav.logic";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { resolveAgentRuntimeLamp } from "./sidebar/sidebarMicroIndicators";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
-import { TooltipProvider } from "./ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -931,7 +943,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   } = useSidebarLookups();
   const delegatedUnderParent = useDelegatedUnderParent();
   const router = useRouter();
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, setOpenMobile, isIconRail, isTextHidden } = useSidebar();
+  const railCompact = !isMobile && isIconRail;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -1035,6 +1048,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
+  const localLastVisitedAtById = useUiStateStore((store) => store.threadLastVisitedAtById);
+  const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
+  const [projectsSectionOpen, setProjectsSectionOpen] = useState<boolean>(() =>
+    readSidebarProjectsSectionOpen(),
+  );
+  const [attentionFilterActive, setAttentionFilterActive] = useState(false);
+  const [inlineSearchVisible, setInlineSearchVisible] = useState(false);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
@@ -3042,6 +3062,129 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     openCommandPalette({ open: "new-thread-in" });
   };
 
+  const inboxAttention = summarizeSidebarInboxAttention(
+    [...pinnedThreads, ...activeThreads, ...workingThreads].map((thread) => {
+      const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const effectiveThread = {
+        ...thread,
+        lastVisitedAt: resolveThreadLastVisitedAt(
+          thread.lastVisitedAt,
+          localLastVisitedAtById[key],
+        ),
+      };
+      const status = resolveSidebarRowStatus(effectiveThread);
+      return {
+        key,
+        status,
+        isUnread: status === "ready" && hasUnseenCompletion(effectiveThread),
+      };
+    }),
+  );
+
+  const hasExpandedFolders =
+    projectFolders !== null && projectFolders.some((folder) => !folder.collapsed);
+
+  const handleToggleProjectsOpen = () => {
+    setProjectsSectionOpen((prev) => {
+      const next = !prev;
+      writeSidebarProjectsSectionOpen(next);
+      return next;
+    });
+  };
+
+  const handleCollapseOrExpandAllFolders = () => {
+    if (!projectFolders || projectFolders.length === 0) return;
+    const expandNext = !hasExpandedFolders;
+    for (const folder of projectFolders) {
+      setProjectExpanded(sidebarFolderExpansionKeys(folder.group), expandNext);
+    }
+  };
+
+  const handleToggleFolderGrouping = () => {
+    void updateClientSettings({ boringSidebarEnabled: !boringSidebarEnabled });
+  };
+
+  const handleManageProjects = () => {
+    if (isMobile) setOpenMobile(false);
+    void router.navigate({ to: "/settings/projects" });
+  };
+
+  const handleToggleInlineSearch = () => {
+    setInlineSearchVisible((prev) => {
+      const next = !prev;
+      if (next) {
+        requestAnimationFrame(() => threadSearchInputRef.current?.focus());
+      } else {
+        clearThreadSearch();
+      }
+      return next;
+    });
+  };
+
+  const handleToggleAttentionFilter = () => {
+    setAttentionFilterActive((prev) => {
+      const next = !prev;
+      if (next && !projectsSectionOpen) {
+        setProjectsSectionOpen(true);
+        writeSidebarProjectsSectionOpen(true);
+      }
+      return next;
+    });
+  };
+
+  const handleLocateCurrentThread = useStableCallback(() => {
+    if (!routeRowThreadKey) {
+      toastManager.add({
+        type: "info",
+        title: gt("No active thread to locate"),
+      });
+      return;
+    }
+    if (!projectsSectionOpen) {
+      setProjectsSectionOpen(true);
+      writeSidebarProjectsSectionOpen(true);
+    }
+    if (attentionFilterActive) {
+      setAttentionFilterActive(false);
+    }
+    if (isSearchingThreads) {
+      clearThreadSearch();
+    }
+    const targetSection = sectionByThreadKey.get(routeRowThreadKey);
+    if (targetSection === "working" && !workingShelfExpanded) toggleWorkingShelf();
+    if (targetSection === "snoozed" && !snoozedShelfExpanded) toggleSnoozedShelf();
+    if (targetSection === "settled" && !settledShelfExpanded) toggleSettledShelf();
+    if (projectFolders !== null) {
+      for (const folder of projectFolders) {
+        const containsRoute =
+          folder.threads.some((t) => threadShellKey(t) === routeRowThreadKey) ||
+          folder.hiddenThreads.some((t) => threadShellKey(t) === routeRowThreadKey);
+        if (containsRoute && folder.collapsed) {
+          setProjectExpanded(sidebarFolderExpansionKeys(folder.group), true);
+          break;
+        }
+      }
+    }
+    requestAnimationFrame(() => {
+      const listRoot = threadListRef.current ?? sidebarContentRef.current;
+      if (!listRoot) return;
+      const rows = listRoot.querySelectorAll<HTMLElement>("[data-sidebar-row]");
+      for (const row of rows) {
+        if (row.dataset.sidebarRow === routeRowThreadKey) {
+          row.scrollIntoView({ block: "center", behavior: "smooth" });
+          row.focus({ preventScroll: true });
+          break;
+        }
+      }
+    });
+  });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- connects bottom toolbar locate button to active sidebar row scroll
+  useEffect(
+    () => subscribeLocateActiveSidebarThread(handleLocateCurrentThread),
+    [handleLocateCurrentThread],
+  );
+
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
     (shouldCreateNewThreadInCurrentProject(false, scopeGroups.length, projectGroups.length)
@@ -3055,9 +3198,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         ref={sidebarContentRef}
         className="min-h-full"
         fixedHeader={
-          <SidebarGroup className="z-[1]">
+          <SidebarGroup className={cn("z-[1]", railCompact && "px-1.5")}>
+            <PrismuxSidebarQuickNav routeThreadRef={routeThreadRef} />
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
+              projectsOpen={projectsSectionOpen}
+              onToggleProjectsOpen={handleToggleProjectsOpen}
+              attentionCount={inboxAttention.totalCount}
+              approvalCount={inboxAttention.approvalCount}
+              attentionFilterActive={attentionFilterActive}
+              onToggleAttentionFilter={handleToggleAttentionFilter}
+              folderGroupingEnabled={boringSidebarEnabled}
+              hasExpandedFolders={hasExpandedFolders}
+              hasFolders={projectFolders !== null && projectFolders.length > 0}
+              onToggleFolderGrouping={handleToggleFolderGrouping}
+              onCollapseOrExpandAllFolders={handleCollapseOrExpandAllFolders}
+              onManageProjects={handleManageProjects}
+              inlineSearchVisible={inlineSearchVisible}
+              onToggleInlineSearch={handleToggleInlineSearch}
               projectScope={
                 <Combobox
                   items={projectScopeItems}
@@ -3130,7 +3288,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         <ProjectFavicon project={scopedProjectGroups[0]} className="size-4" />
                       </span>
                     ) : (
-                      <ListFilterIcon className="size-4" />
+                      <SlidersHorizontalIcon className="size-3.5" />
                     )}
                   </ComboboxTrigger>
                   {/* Refocusing the trigger after a pointer close shows its focus ring and opens its tooltip. */}
@@ -3294,7 +3452,118 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           </SidebarGroup>
         }
       >
-        <SidebarGroup className="flex-1" role="presentation">
+        <SidebarGroup
+          className={cn(
+            "flex-1",
+            railCompact
+              ? "items-center px-1.5"
+              : cn(
+                  "transition-opacity duration-[90ms] ease-out motion-reduce:transition-none",
+                  isTextHidden && "pointer-events-none opacity-0",
+                ),
+          )}
+          role="presentation"
+        >
+          {railCompact ? (
+            <TooltipProvider
+              key="sidebar-rail-thread-tooltips"
+              delay={120}
+              closeDelay={0}
+              timeout={400}
+            >
+              <ul
+                ref={attachTreeRef}
+                role="presentation"
+                data-testid="prismux-sidebar-rail-threads"
+                className="flex w-full flex-col items-center gap-1"
+              >
+                {(() => {
+                  const railCandidates = [...pinnedThreads, ...activeThreads, ...workingThreads];
+                  const railThreads = attentionFilterActive
+                    ? railCandidates.filter((thread) =>
+                        inboxAttention.attentionKeys.has(threadShellKey(thread)),
+                      )
+                    : railCandidates;
+                  return railThreads.map((thread) => {
+                    const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+                    const threadKey = scopedThreadKey(threadRef);
+                    const isRouteActive = routeRowThreadKey === threadKey;
+                    const project =
+                      projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null;
+                    const projectDisplayName =
+                      projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+                      null;
+                    const effectiveThread = {
+                      ...thread,
+                      lastVisitedAt: resolveThreadLastVisitedAt(
+                        thread.lastVisitedAt,
+                        localLastVisitedAtById[threadKey],
+                      ),
+                    };
+                    const rowStatus = resolveSidebarRowStatus(effectiveThread);
+                    const agentLamp = resolveAgentRuntimeLamp(rowStatus);
+                    const isUnread =
+                      rowStatus === "ready" && hasUnseenCompletion(effectiveThread);
+                    const statusText = messages(agentLamp.labelMessage);
+                    const tooltipTitle = projectDisplayName
+                      ? `${thread.title} · ${projectDisplayName}`
+                      : thread.title;
+                    return (
+                      <li key={threadKey} className="list-none">
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                data-sidebar-row={threadKey}
+                                aria-label={`${tooltipTitle} (${statusText})`}
+                                aria-current={isRouteActive ? "page" : undefined}
+                                onClick={() => navigateToThread(threadRef)}
+                                className={cn(
+                                  "relative flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-transparent text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                                  isRouteActive &&
+                                    "border-sidebar-border/65 bg-sidebar-row-active text-sidebar-foreground shadow-[0_1px_2px_rgb(0_0_0/6%)]",
+                                )}
+                              />
+                            }
+                          >
+                            {project ? (
+                              <ProjectFavicon project={project} className="size-4 shrink-0" />
+                            ) : (
+                              <MessageSquareIcon aria-hidden className="size-3.5 shrink-0" />
+                            )}
+                            {agentLamp.state !== "idle" || isUnread ? (
+                              <span
+                                aria-hidden
+                                data-rail-dot="true"
+                                className={cn(
+                                  "pointer-events-none absolute right-1 bottom-1 size-1.5 rounded-full ring-2 ring-sidebar",
+                                  agentLamp.state !== "idle"
+                                    ? agentLamp.dotClassName
+                                    : "bg-primary",
+                                )}
+                              />
+                            ) : null}
+                          </TooltipTrigger>
+                          <TooltipPopup side="right" sideOffset={8} className="max-w-64">
+                            <div className="flex flex-col gap-0.5 text-left">
+                              <span className="truncate font-medium">{thread.title}</span>
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                {projectDisplayName
+                                  ? `${projectDisplayName} · ${statusText}`
+                                  : statusText}
+                              </span>
+                            </div>
+                          </TooltipPopup>
+                        </Tooltip>
+                      </li>
+                    );
+                  });
+                })()}
+              </ul>
+            </TooltipProvider>
+          ) : (
+            <>
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -3380,6 +3649,28 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ) : null}
           {/* A scope can hide every active thread; say so even when its project still has settled ones. */}
           {!isSearchingThreads &&
+          projectsSectionOpen &&
+          attentionFilterActive &&
+          inboxAttention.totalCount === 0 ? (
+            <div
+              data-testid="prismux-sidebar-attention-empty"
+              className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/75"
+            >
+              <span>
+                <T>All caught up — no pending approvals or unread threads</T>
+              </span>
+              <button
+                type="button"
+                onClick={handleToggleAttentionFilter}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+              >
+                <T>Show all threads</T>
+              </button>
+            </div>
+          ) : null}
+          {!isSearchingThreads &&
+          projectsSectionOpen &&
+          !attentionFilterActive &&
           !hasProjectFolders &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
@@ -3431,7 +3722,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               )}
             </div>
           ) : null}
-          {!isSearchingThreads ? (
+          {!isSearchingThreads &&
+          projectsSectionOpen &&
+          (!attentionFilterActive || inboxAttention.totalCount > 0) ? (
             <TooltipProvider
               key="sidebar-thread-tooltips-150"
               delay={150}
@@ -3584,22 +3877,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
-                      const items: ReactNode[] = [
-                        <SidebarDraftBlock
-                          key="draft-sessions"
-                          draftIds={draftIds}
-                          routeDraftComposer={routeDraftComposer}
-                          terminalLabels={draftTerminalLabels}
-                          jumpLabelByDraftId={draftJumpLabelById}
-                          projectByKey={projectByKey}
-                          projectDisplayNameByKey={projectDisplayNameByKey}
-                          routeDraftId={routeDraftIdForRows}
-                          onNavigateToDraft={navigateToDraft}
-                          onDraftContextMenu={handleDraftContextMenu}
-                        />,
-                      ];
+                      const items: ReactNode[] = attentionFilterActive
+                        ? []
+                        : [
+                            <SidebarDraftBlock
+                              key="draft-sessions"
+                              draftIds={draftIds}
+                              routeDraftComposer={routeDraftComposer}
+                              terminalLabels={draftTerminalLabels}
+                              jumpLabelByDraftId={draftJumpLabelById}
+                              projectByKey={projectByKey}
+                              projectDisplayNameByKey={projectDisplayNameByKey}
+                              routeDraftId={routeDraftIdForRows}
+                              onNavigateToDraft={navigateToDraft}
+                              onDraftContextMenu={handleDraftContextMenu}
+                            />,
+                          ];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
+                          if (
+                            attentionFilterActive &&
+                            !inboxAttention.attentionKeys.has(item.key)
+                          ) {
+                            continue;
+                          }
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
@@ -3607,6 +3908,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
                           for (const folder of projectFolders) {
+                            const visibleFolderThreads = attentionFilterActive
+                              ? folder.threads.filter((thread) =>
+                                  inboxAttention.attentionKeys.has(threadShellKey(thread)),
+                                )
+                              : folder.threads;
+                            if (attentionFilterActive && visibleFolderThreads.length === 0) {
+                              continue;
+                            }
                             items.push(
                               <SidebarProjectFolderHeader
                                 key={`project-folder:${folder.group.projectKey}`}
@@ -3618,7 +3927,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 onContextMenu={handleProjectFolderContextMenu}
                               />,
                             );
-                            for (const thread of folder.threads) {
+                            for (const thread of visibleFolderThreads) {
                               items.push(
                                 renderThreadRow(
                                   thread,
@@ -3630,6 +3939,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           }
                           continue;
                         }
+                        if (attentionFilterActive) continue;
                         switch (item.marker) {
                           case "pinned-header":
                             items.push(
@@ -3776,6 +4086,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               </DndContext>
             </TooltipProvider>
           ) : null}
+            </>
+          )}
         </SidebarGroup>
       </SidebarContent>
       <SidebarChromeFooter />

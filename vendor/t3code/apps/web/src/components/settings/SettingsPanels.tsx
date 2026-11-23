@@ -1,14 +1,10 @@
-import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
-import { m as resolveMessage } from "~/i18n/messages";
-import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
-import { PRIVACY_POLICY_URL } from "../../legalLinks";
+import { PRISMUX_REPOSITORY_URL, PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  type DesktopUpdateChannel,
   IDLE_COMPACTION_MODES,
   type IdleCompactionMode,
   globalIdleCompaction,
@@ -27,31 +23,17 @@ import {
   ScreenReaderAnnouncements,
   ToolCallVisibility,
 } from "@t3tools/contracts/settings";
-import {
-  managedUpdatesDenial,
-  managedUpdatesMessage,
-} from "@t3tools/client-runtime/contract-labels";
-import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { createModelSelection, pickModelSelection } from "@t3tools/shared/model";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
-import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import { APP_VERSION } from "../../branding";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
-import {
-  canCheckForUpdate,
-  getDesktopUpdateButtonTooltip,
-  getDesktopUpdateDisabledReason,
-  getDesktopUpdateInstallConfirmationMessage,
-  isDesktopUpdateButtonDisabled,
-  resolveDesktopUpdateButtonAction,
-} from "../../components/desktopUpdate.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
-import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import {
   readAppearanceModePreference,
   readThemeHalves,
@@ -69,7 +51,6 @@ import { scopedIdleCompaction } from "./scopedSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
-import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
   getTextGenerationModelOptionsByInstance,
@@ -81,10 +62,10 @@ import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
 import {
   useEnvironmentProviders,
-  useEnvironments,
   usePrimaryEnvironmentId,
 } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
@@ -92,7 +73,6 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   autoSettleDaysField,
   cancelAutoSettleDaysField,
@@ -122,15 +102,11 @@ import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
-import { UpdateTrackSwitchDialog } from "./UpdateTrackSwitchDialog";
-import { environmentIdsKey } from "~/state/environmentAtomList";
-import { environmentSessionStatesAtom } from "~/state/session";
-import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
-import { canUpdateServer } from "../ServerUpdateAction";
-import { downloadLocalUpdate } from "../sidebar/SidebarUpdatePill";
-import { useUpdateEverythingRun } from "../sidebar/updateEverythingRun";
-import { awaitsTrackSwitch, channelSwitchLabel } from "../sidebar/updateEverything.logic";
-import { isHostedByThisApp } from "../sidebar/useUpdateEverything";
+import {
+  prismuxDaemonClient,
+  type DaemonUpdaterStatusResponse,
+} from "../../prismux/daemonClient";
+import { PrismuxUpdatesSettingsPage } from "../../prismux/settings/PrismuxUpdatesSettingsPage";
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
   turn: msg("Wait for the full response"),
@@ -167,301 +143,190 @@ const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
 };
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+function resolvePrismuxUpdaterSummary(
+  status: DaemonUpdaterStatusResponse | null,
+  gt: ReturnType<typeof useGT>,
+): {
+  readonly version: string;
+  readonly channelLabel: string;
+  readonly summary: string;
+  readonly badgeVariant: "info" | "success" | "warning" | "outline";
+  readonly badgeLabel: string;
+} {
+  const version =
+    typeof status?.currentVersion === "string" && status.currentVersion.trim().length > 0
+      ? status.currentVersion.trim()
+      : APP_VERSION;
+  const policy =
+    status?.policy && typeof status.policy === "object"
+      ? (status.policy as Record<string, unknown>)
+      : null;
+  const includePrerelease =
+    policy?.channel === "prerelease" ||
+    (policy?.channel !== "stable" && policy?.includePrerelease !== false);
+  const channelLabel = includePrerelease ? gt("Prerelease") : gt("Stable");
+
+  if (!status) {
+    return {
+      version,
+      channelLabel,
+      summary: gt("Managed by Prismux Unified Updater (GitHub / Gitee dual-source)."),
+      badgeVariant: "outline",
+      badgeLabel: gt("Unified Updater"),
+    };
+  }
+
+  const lastCheck =
+    status.lastCheck && typeof status.lastCheck === "object"
+      ? (status.lastCheck as Record<string, unknown>)
+      : null;
+  const latestVersion =
+    typeof lastCheck?.latestVersion === "string" ? lastCheck.latestVersion : null;
+  const hasUpdate = lastCheck?.hasUpdate === true && latestVersion !== null;
+  const progress = status.progress;
+  const stage = progress?.stage ?? progress?.phase ?? status.installState ?? null;
+
+  if (status.downloadedFilePath && status.downloadedSha256) {
+    return {
+      version,
+      channelLabel,
+      summary: latestVersion
+        ? gt("Update v{version} is verified and ready to install.", { version: latestVersion })
+        : gt("Downloaded installer is verified and ready to install."),
+      badgeVariant: "success",
+      badgeLabel: gt("Ready to install"),
+    };
+  }
+  if (
+    status.downloading ||
+    stage === "downloading" ||
+    stage === "extracting" ||
+    stage === "verifying"
+  ) {
+    const pct =
+      typeof progress?.percent === "number" && Number.isFinite(progress.percent)
+        ? Math.round(progress.percent)
+        : null;
+    return {
+      version,
+      channelLabel,
+      summary:
+        stage === "extracting"
+          ? gt("Extracting split update archive…")
+          : stage === "verifying"
+            ? gt("Verifying SHA-256 checksum…")
+            : pct !== null
+              ? gt("Downloading update ({percent}%)…", { percent: pct })
+              : gt("Downloading update…"),
+      badgeVariant: "info",
+      badgeLabel: gt("Updating"),
+    };
+  }
+  if (status.checking) {
+    return {
+      version,
+      channelLabel,
+      summary: gt("Checking GitHub & Gitee releases…"),
+      badgeVariant: "info",
+      badgeLabel: gt("Checking…"),
+    };
+  }
+  if (hasUpdate && latestVersion) {
+    return {
+      version,
+      channelLabel,
+      summary: gt("New version v{version} is available on the {channel} channel.", {
+        version: latestVersion,
+        channel: channelLabel,
+      }),
+      badgeVariant: "warning",
+      badgeLabel: `v${latestVersion}`,
+    };
+  }
+  if (lastCheck) {
+    return {
+      version,
+      channelLabel,
+      summary: gt("Up to date on the {channel} channel.", { channel: channelLabel }),
+      badgeVariant: "success",
+      badgeLabel: gt("Up to Date"),
+    };
+  }
+  return {
+    version,
+    channelLabel,
+    summary: gt("Managed by Prismux Unified Updater ({channel} channel).", {
+      channel: channelLabel,
+    }),
+    badgeVariant: "outline",
+    badgeLabel: channelLabel,
+  };
+}
+
 function AboutVersionSection() {
   const setting = useSearchableSetting();
   const gt = useGT();
-  const messages = useMessages();
-  const updateState = useDesktopUpdateState();
-  const [switchChannel, setSwitchChannel] = useState<DesktopUpdateChannel | null>(null);
-  const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
-  const { environments } = useEnvironments();
-  const sessionStates = useAtomValue(
-    environmentSessionStatesAtom(
-      environmentIdsKey(environments.map(({ environmentId }) => environmentId)),
-    ),
-  );
-  // A second run would replace the first run's progress and local download.
-  const updateRun = useUpdateEverythingRun();
-  const checkProviderUpdates = useCheckProviderUpdates();
+  const [updaterStatus, setUpdaterStatus] = useState<DaemonUpdaterStatusResponse | null>(null);
 
-  const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
-  const selectedUpdateChannel = updateState?.channel ?? "latest";
-  // The desktop updates this machine, whose policy the primary environment reports.
-  const primaryPolicy = usePrimaryManagedPolicy();
-  const updatesDenial = hasDesktopBridge
-    ? managedUpdatesDenial(primaryPolicy, messages)
-    : undefined;
-  const nightlyDeniedBy =
-    hasDesktopBridge && primaryPolicy?.limits?.updates?.allowNightly === false
-      ? primaryPolicy.organization
-      : undefined;
-  const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
-  // A switch that failed part way leaves this app or a server on the other track.
-  // With its updater off, a switch cannot move this app, so it is not counted.
-  const appOffTrack =
-    updateState?.enabled !== false && desktopUpdateChannelOf(APP_VERSION) !== selectedUpdateChannel;
-  const unswitchedMachines =
-    (appOffTrack ? 1 : 0) +
-    environments.filter(
-      (environment, index) =>
-        environment.connection.phase === "connected" &&
-        canUpdateServer(sessionStates[index]!) &&
-        awaitsTrackSwitch(
-          {
-            serverConfig: environment.serverConfig,
-            hostedByThisApp: isHostedByThisApp(environment),
-          },
-          selectedUpdateChannel,
-        ),
-    ).length;
-
-  const handleButtonClick = async () => {
-    const bridge = window.desktopBridge;
-    if (!bridge) return;
-
-    const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-
-    if (action === "download") {
-      void downloadLocalUpdate(bridge, { notifyDownloaded: false });
-      return;
-    }
-
-    if (action === "install") {
-      if (isUpdateActionPending) return;
-      setIsUpdateActionPending(true);
-      let confirmed = false;
-      try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(
-            updateState ?? { availableVersion: null, downloadedVersion: null },
-          ),
-          { initialFocus: "confirm" },
-        );
-      } catch (error) {
-        setIsUpdateActionPending(false);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: gt("Could not confirm update"),
-            description:
-              error instanceof Error
-                ? (thrownErrorMessage(error, resolveMessage) ?? error.message)
-                : gt("Update confirmation failed."),
-          }),
-        );
-        return;
-      }
-      if (!confirmed) {
-        setIsUpdateActionPending(false);
-        return;
-      }
-      void bridge
-        .installUpdate()
-        .catch((error: unknown) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: gt("Could not install update"),
-              description:
-                error instanceof Error
-                  ? (thrownErrorMessage(error, resolveMessage) ?? error.message)
-                  : gt("Install failed."),
-            }),
-          );
-        })
-        .finally(() => setIsUpdateActionPending(false));
-      return;
-    }
-
-    if (typeof bridge.checkForUpdate !== "function") return;
-    void checkProviderUpdates();
-    void bridge
-      .checkForUpdate()
-      .then((result) => {
-        if (!result.checked) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: gt("Could not check for updates"),
-              description:
-                updatesDenial ??
-                result.state.message ??
-                gt("Automatic updates are not available in this build."),
-            }),
-          );
-        }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads unified Prismux daemon updater status and subscribes to live SSE updates
+  useEffect(() => {
+    let active = true;
+    void prismuxDaemonClient
+      .fetchUpdaterStatus()
+      .then((res) => {
+        if (active) setUpdaterStatus(res);
       })
-      .catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: gt("Could not check for updates"),
-            description:
-              error instanceof Error
-                ? (thrownErrorMessage(error, resolveMessage) ?? error.message)
-                : gt("Update check failed."),
-          }),
-        );
-      });
-  };
+      .catch(() => {});
 
-  const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState, messages) : null;
-  const buttonDisabled =
-    action === "none"
-      ? !canCheckForUpdate(updateState)
-      : isDesktopUpdateButtonDisabled(updateState);
+    const unsubscribe = prismuxDaemonClient.subscribeUpdaterEvents(
+      (evt) => {
+        if (!active) return;
+        const data =
+          evt.data && typeof evt.data === "object"
+            ? (evt.data as Record<string, unknown>)
+            : null;
+        if (!data) return;
+        if (typeof data.currentVersion === "string" || "lastCheck" in data || "policy" in data) {
+          setUpdaterStatus((prev) => ({ ...(prev ?? {}), ...data }));
+        } else if (
+          typeof data.stage === "string" ||
+          typeof data.phase === "string" ||
+          typeof data.percent === "number"
+        ) {
+          setUpdaterStatus((prev) => ({
+            ...(prev ?? {}),
+            downloading:
+              data.stage === "downloading" ||
+              data.stage === "extracting" ||
+              data.stage === "verifying",
+            progress: data,
+          }));
+        }
+      },
+      { maxReconnectAttempts: 3 },
+    );
 
-  const actionLabel: Record<string, string> = { download: gt("Download"), install: gt("Install") };
-  const statusLabel: Record<string, string> = {
-    checking: gt("Checking…"),
-    downloading: gt("Downloading…"),
-    // Off its track, "up to date" only means no switch is pending; Review moves it.
-    ...(appOffTrack ? {} : { "up-to-date": gt("Up to Date") }),
-  };
-  const buttonLabel =
-    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? gt("Check for Updates");
-  const description =
-    action === "download" || action === "install"
-      ? gt("Update available.")
-      : (getDesktopUpdateDisabledReason(updateState, updatesDenial, messages) ??
-        gt("Current version of the application."));
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const presenter = resolvePrismuxUpdaterSummary(updaterStatus, gt);
 
   return (
-    <>
-      <SettingsRow
-        id={setting("app-version").id}
-        title={<AboutVersionTitle />}
-        description={description}
-        managed={updatesDenial}
-        control={
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={buttonDisabled || isUpdateActionPending}
-                  onClick={handleButtonClick}
-                >
-                  {buttonLabel}
-                </Button>
-              }
-            />
-            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
-          </Tooltip>
-        }
-      />
-      {hasDesktopBridge ? (
-        <SettingsRow
-          {...setting("update-track")}
-          description={
-            nightlyDeniedBy !== undefined ? (
-              selectedUpdateChannel === "nightly" ? (
-                gt(
-                  "{policy} Nightly builds are not available; switch to Stable to keep getting updates.",
-                  { policy: managedUpdatesMessage(nightlyDeniedBy, messages) },
-                )
-              ) : (
-                gt("{policy} Nightly builds are not available.", {
-                  policy: managedUpdatesMessage(nightlyDeniedBy, messages),
-                })
-              )
-            ) : unswitchedMachines > 0 ? (
-              <>
-                {gt(
-                  "{count, plural, one {{count} machine still runs {track}.} other {{count} machines still run {track}.}}",
-                  {
-                    count: unswitchedMachines,
-                    track: channelSwitchLabel(
-                      selectedUpdateChannel === "nightly" ? "latest" : "nightly",
-                      messages,
-                    ),
-                  },
-                )}{" "}
-                {/* The dialog moves what it can and says why it skips the rest. */}
-                <Button
-                  size="xs"
-                  variant="link"
-                  disabled={updateRun !== null}
-                  onClick={() => setSwitchChannel(selectedUpdateChannel)}
-                >
-                  <T>Review</T>
-                </Button>
-              </>
-            ) : (
-              gt(
-                "Switches this app and every connected machine whose database the target release supports.",
-              )
-            )
-          }
-          managed={updatesDenial}
-          control={
-            <Select
-              value={selectedUpdateChannel}
-              onValueChange={(value) => {
-                if (value !== selectedUpdateChannel) {
-                  setSwitchChannel(value as DesktopUpdateChannel);
-                }
-              }}
-            >
-              <SelectTrigger
-                size="sm"
-                className="w-full sm:w-40"
-                aria-label={gt("Update track")}
-                disabled={switchChannel !== null || updateRun !== null}
-              >
-                <SelectValue>{channelSwitchLabel(selectedUpdateChannel, messages)}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="latest">
-                  <T>Stable</T>
-                </SelectItem>
-                <SelectItem
-                  hideIndicator
-                  value="nightly"
-                  disabled={nightlyDeniedBy !== undefined && selectedUpdateChannel !== "nightly"}
-                >
-                  <T>Nightly</T>
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      ) : selectedHostedAppChannel ? (
-        <SettingsRow
-          {...setting("update-track")}
-          description={gt("Switches the hosted app release channel.")}
-          control={
-            <Select
-              value={selectedHostedAppChannel}
-              onValueChange={(value) => {
-                if (value === selectedHostedAppChannel) return;
-                window.location.assign(
-                  buildHostedChannelSelectionUrl({ channel: value as HostedAppChannel }),
-                );
-              }}
-            >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Update track")}>
-                <SelectValue>{HOSTED_APP_CHANNEL_LABEL}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="latest">
-                  <T>Latest</T>
-                </SelectItem>
-                <SelectItem hideIndicator value="nightly">
-                  <T>Nightly</T>
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      ) : null}
-      {hasDesktopBridge ? <CliCommandSettingsRow /> : null}
-      {switchChannel === null ? null : (
-        <UpdateTrackSwitchDialog channel={switchChannel} onClose={() => setSwitchChannel(null)} />
-      )}
-    </>
+    <SettingsRow
+      id={setting("app-version").id}
+      title={
+        <span className="inline-flex flex-wrap items-center gap-2">
+          <AboutVersionTitle version={presenter.version} />
+          <Badge variant={presenter.badgeVariant} size="sm" className="tabular-nums">
+            {presenter.badgeLabel}
+          </Badge>
+        </span>
+      }
+      description={presenter.summary}
+    />
   );
 }
 
@@ -843,22 +708,94 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="notifications" title={gt("Notifications")}>
-        <NotificationSettings />
+      <SettingsSection id="display" title={gt("Display")}>
         <SettingsRow
-          {...setting("in-app-notifications")}
-          description={
-            <T>
-              Show a toast when another thread finishes, fails, or needs input or approval while
-              this app has focus.
-            </T>
+          {...setting("language")}
+          description={<T>System default follows your browser or OS language.</T>}
+          resetAction={
+            settings.language !== DEFAULT_UNIFIED_SETTINGS.language ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset language to default")}
+                onClick={() =>
+                  updateSettings({
+                    language: DEFAULT_UNIFIED_SETTINGS.language,
+                  })
+                }
+              />
+            ) : null
           }
           control={
-            <Switch
-              checked={settings.inAppNotificationsEnabled}
-              onCheckedChange={(checked) => updateSettings({ inAppNotificationsEnabled: checked })}
-              aria-label={gt("In-app notifications")}
-            />
+            <Select
+              value={languageValue}
+              onValueChange={(value) => {
+                if (value) {
+                  updateSettings({ language: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Language")}>
+                <SelectValue>
+                  {languageValue === SYSTEM_LANGUAGE
+                    ? m(TIMESTAMP_FORMAT_LABELS.locale)
+                    : nativeLanguageName(languageValue)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value={SYSTEM_LANGUAGE}>
+                  {m(TIMESTAMP_FORMAT_LABELS.locale)}
+                </SelectItem>
+                {SUPPORTED_LOCALES.map((locale) => (
+                  <SelectItem hideIndicator key={locale} value={locale}>
+                    {nativeLanguageName(locale)}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
+          {...setting("time-format")}
+          description={<T>System default follows your browser or OS clock preference.</T>}
+          resetAction={
+            settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset time format to default")}
+                onClick={() =>
+                  updateSettings({
+                    timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.timestampFormat}
+              onValueChange={(value) => {
+                if (value === "locale" || value === "12-hour" || value === "24-hour") {
+                  updateSettings({ timestampFormat: value });
+                }
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-40"
+                aria-label={gt("Timestamp format")}
+              >
+                <SelectValue>{m(TIMESTAMP_FORMAT_LABELS[settings.timestampFormat])}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="locale">
+                  {m(TIMESTAMP_FORMAT_LABELS.locale)}
+                </SelectItem>
+                <SelectItem hideIndicator value="12-hour">
+                  {m(TIMESTAMP_FORMAT_LABELS["12-hour"])}
+                </SelectItem>
+                <SelectItem hideIndicator value="24-hour">
+                  {m(TIMESTAMP_FORMAT_LABELS["24-hour"])}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
       </SettingsSection>
@@ -944,7 +881,7 @@ export function GeneralSettingsPanel() {
           description={
             <T>
               Fold working and monitoring threads into a Working section. They return to the top of
-              the inbox when they need you. The boring sidebar in Labs has no Working section.
+              the inbox when they need you.
             </T>
           }
           resetAction={
@@ -967,6 +904,26 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label={gt("Working section")}
+            />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection id="notifications" title={gt("Notifications")}>
+        <NotificationSettings />
+        <SettingsRow
+          {...setting("in-app-notifications")}
+          description={
+            <T>
+              Show a toast when another thread finishes, fails, or needs input or approval while
+              this app has focus.
+            </T>
+          }
+          control={
+            <Switch
+              checked={settings.inAppNotificationsEnabled}
+              onCheckedChange={(checked) => updateSettings({ inAppNotificationsEnabled: checked })}
+              aria-label={gt("In-app notifications")}
             />
           }
         />
@@ -1120,98 +1077,6 @@ export function GeneralSettingsPanel() {
         ) : null}
       </SettingsSection>
 
-      <SettingsSection id="display" title={gt("Display")}>
-        <SettingsRow
-          {...setting("language")}
-          description={<T>System default follows your browser or OS language.</T>}
-          resetAction={
-            settings.language !== DEFAULT_UNIFIED_SETTINGS.language ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset language to default")}
-                onClick={() =>
-                  updateSettings({
-                    language: DEFAULT_UNIFIED_SETTINGS.language,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={languageValue}
-              onValueChange={(value) => {
-                if (value) {
-                  updateSettings({ language: value });
-                }
-              }}
-            >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Language")}>
-                <SelectValue>
-                  {languageValue === SYSTEM_LANGUAGE
-                    ? m(TIMESTAMP_FORMAT_LABELS.locale)
-                    : nativeLanguageName(languageValue)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value={SYSTEM_LANGUAGE}>
-                  {m(TIMESTAMP_FORMAT_LABELS.locale)}
-                </SelectItem>
-                {SUPPORTED_LOCALES.map((locale) => (
-                  <SelectItem hideIndicator key={locale} value={locale}>
-                    {nativeLanguageName(locale)}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
-        <SettingsRow
-          {...setting("time-format")}
-          description={<T>System default follows your browser or OS clock preference.</T>}
-          resetAction={
-            settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset time format to default")}
-                onClick={() =>
-                  updateSettings({
-                    timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.timestampFormat}
-              onValueChange={(value) => {
-                if (value === "locale" || value === "12-hour" || value === "24-hour") {
-                  updateSettings({ timestampFormat: value });
-                }
-              }}
-            >
-              <SelectTrigger
-                size="sm"
-                className="w-full sm:w-40"
-                aria-label={gt("Timestamp format")}
-              >
-                <SelectValue>{m(TIMESTAMP_FORMAT_LABELS[settings.timestampFormat])}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="locale">
-                  {m(TIMESTAMP_FORMAT_LABELS.locale)}
-                </SelectItem>
-                <SelectItem hideIndicator value="12-hour">
-                  {m(TIMESTAMP_FORMAT_LABELS["12-hour"])}
-                </SelectItem>
-                <SelectItem hideIndicator value="24-hour">
-                  {m(TIMESTAMP_FORMAT_LABELS["24-hour"])}
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      </SettingsSection>
-
       {primaryEnvironmentId === null ? null : (
         <SettingsSection id="onboarding" title={gt("Onboarding")}>
           <SettingsRow
@@ -1322,6 +1187,24 @@ export function ChatSettingsPanel() {
             </Select>
           }
         />
+        <SettingsRow
+          serverScoped
+          {...setting("prompt-suggestions-beta")}
+          settingKeys={["promptSuggestionsEnabled"]}
+          description={gt(
+            "Show a predicted next message in the empty composer after a Claude or Codex turn. Tab uses it. Each is an extra cached request on your plan. Needs Codex 0.165+. Claude threads update on restart.",
+          )}
+          control={
+            <ScopedSwitch
+              settingKeys={["promptSuggestionsEnabled"]}
+              checked={settings.promptSuggestionsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ promptSuggestionsEnabled: Boolean(checked) })
+              }
+              aria-label={gt("Suggest next prompt")}
+            />
+          }
+        />
         <AdvancedSettings targetIds={[setting("skills-in-slash-menu").id]}>
           <SettingsRow
             {...setting("skills-in-slash-menu")}
@@ -1353,7 +1236,7 @@ export function ChatSettingsPanel() {
         </AdvancedSettings>
       </SettingsSection>
 
-      <SettingsSection id="follow-ups" title={gt("Follow-ups")}>
+      <SettingsSection id="follow-ups" title={gt("Follow-ups & subagents")}>
         <SettingsRow
           {...setting("follow-up-behavior")}
           description={
@@ -1413,9 +1296,6 @@ export function ChatSettingsPanel() {
             </Select>
           }
         />
-      </SettingsSection>
-
-      <SettingsSection id="side-threads" title={gt("Subagents and side chats")}>
         <SettingsRow
           {...setting("side-thread-open-target")}
           description={
@@ -1472,11 +1352,8 @@ export function ChatSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection id="activity" title={gt("Activity")}>
+      <SettingsSection id="activity" title={gt("Activity & accessibility")}>
         <ToolCallVisibilityRow />
-      </SettingsSection>
-
-      <SettingsSection id="screen-reader" title={gt("Screen reader")}>
         <ScreenReaderAnnouncementsRow />
         <ScreenReaderWindowTitleRow />
       </SettingsSection>
@@ -1854,6 +1731,52 @@ export function DiffsSettingsPanel() {
 }
 
 /** The Providers panel can render without a settings scope, as its tests do; this row needs one. */
+export function ProviderUpdateChecksRow() {
+  return useOptionalSettingsScope() === null ? null : <ScopedProviderUpdateChecksRow />;
+}
+
+function ScopedProviderUpdateChecksRow() {
+  const setting = useSearchableSetting();
+  const gt = useGT();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+
+  return (
+    <SettingsRow
+      serverScoped
+      settingKeys={["enableProviderUpdateChecks"]}
+      {...setting("provider-update-checks")}
+      description={gt(
+        "Check installed provider CLIs for newer available versions and fetch model catalog updates. When off, new models may not appear.",
+      )}
+      resetAction={
+        settings.enableProviderUpdateChecks !==
+        DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset provider update checks to default")}
+            onClick={() =>
+              updateSettings({
+                enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <ScopedSwitch
+          settingKeys={["enableProviderUpdateChecks"]}
+          checked={settings.enableProviderUpdateChecks}
+          onCheckedChange={(checked) =>
+            updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
+          }
+          aria-label={gt("Check provider versions")}
+        />
+      }
+    />
+  );
+}
+
+/** The Providers panel can render without a settings scope, as its tests do; this row needs one. */
 export function CompactIdleThreadsRow() {
   return useOptionalSettingsScope() === null ? null : <ScopedCompactIdleThreadsRow />;
 }
@@ -2059,51 +1982,6 @@ export function ThreadsSettingsPanel() {
 
       <ProjectDefaultsSettings category="general" />
 
-      {!isProjectScope ? (
-        <SettingsSection id="snooze" title={gt("Snooze")}>
-          <SnoozePresetsRow />
-        </SettingsSection>
-      ) : null}
-
-      <SettingsSection id="usage-limits" title={gt("Usage limits")}>
-        <SettingsRow
-          serverScoped
-          {...setting("auto-resume-limited-threads")}
-          description={gt(
-            "Automatically resume threads when their usage limits reset. You can cancel auto-resume in each thread.",
-          )}
-          settingKeys={["autoResumeLimitedThreads"]}
-          control={
-            <ScopedSwitch
-              settingKeys={["autoResumeLimitedThreads"]}
-              checked={settings.autoResumeLimitedThreads}
-              onCheckedChange={(checked) =>
-                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
-              }
-              aria-label={gt("Resume after usage limits")}
-            />
-          }
-        />
-        <SettingsRow
-          serverScoped
-          {...setting("snooze-limited-threads")}
-          description={gt(
-            "Snooze threads until their usage limits reset. Enable auto-resume to continue the agent after the reset.",
-          )}
-          settingKeys={["snoozeLimitedThreads"]}
-          control={
-            <ScopedSwitch
-              settingKeys={["snoozeLimitedThreads"]}
-              checked={settings.snoozeLimitedThreads}
-              onCheckedChange={(checked) =>
-                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
-              }
-              aria-label={gt("Snooze until limits reset")}
-            />
-          }
-        />
-      </SettingsSection>
-
       {hasServerTargets ? (
         <SettingsSection id="auto-settle" title={gt("Auto-settle")}>
           <SettingsRow
@@ -2208,6 +2086,51 @@ export function ThreadsSettingsPanel() {
           ) : null}
         </SettingsSection>
       ) : null}
+
+      {!isProjectScope ? (
+        <SettingsSection id="snooze" title={gt("Snooze")}>
+          <SnoozePresetsRow />
+        </SettingsSection>
+      ) : null}
+
+      <SettingsSection id="usage-limits" title={gt("Usage limits")}>
+        <SettingsRow
+          serverScoped
+          {...setting("auto-resume-limited-threads")}
+          description={gt(
+            "Automatically resume threads when their usage limits reset. You can cancel auto-resume in each thread.",
+          )}
+          settingKeys={["autoResumeLimitedThreads"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["autoResumeLimitedThreads"]}
+              checked={settings.autoResumeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
+              }
+              aria-label={gt("Resume after usage limits")}
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...setting("snooze-limited-threads")}
+          description={gt(
+            "Snooze threads until their usage limits reset. Enable auto-resume to continue the agent after the reset.",
+          )}
+          settingKeys={["snoozeLimitedThreads"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["snoozeLimitedThreads"]}
+              checked={settings.snoozeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
+              }
+              aria-label={gt("Snooze until limits reset")}
+            />
+          }
+        />
+      </SettingsSection>
 
       <SettingsSection id="text-generation" title={gt("Text generation")}>
         <SettingsRow
@@ -2383,29 +2306,28 @@ export function MaintenanceSettingsPanel() {
   const gt = useGT();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const { scope, environment, connectedEnvironments } = useSettingsScope();
-  const environmentId = environment?.environmentId ?? null;
-  const isEnvironmentScope = scope.environmentIds.length === 1 && environmentId !== null;
+  const { connectedEnvironments } = useSettingsScope();
   const hasServerTargets = connectedEnvironments.length > 0;
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="updates" title={gt("Updates")}>
+      <SettingsSection id="background" title={gt("Background & recovery")}>
+        <BackgroundActivitySettingsRow />
         <SettingsRow
           serverScoped
-          settingKeys={["enableProviderUpdateChecks"]}
-          {...setting("provider-update-checks")}
+          settingKeys={["keepAwakeWhileAgentsWork"]}
+          {...setting("keep-awake-while-agents-work")}
           description={gt(
-            "Check installed provider CLIs for newer available versions and fetch model catalog updates. When off, new models may not appear.",
+            "Stop the computer from going to sleep while agents are working, and let it sleep once they finish. Closing a laptop lid still puts it to sleep.",
           )}
           resetAction={
-            settings.enableProviderUpdateChecks !==
-            DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks ? (
+            settings.keepAwakeWhileAgentsWork !==
+            DEFAULT_UNIFIED_SETTINGS.keepAwakeWhileAgentsWork ? (
               <SettingResetButton
-                ariaLabel={gt("Reset provider update checks to default")}
+                ariaLabel={gt("Reset keep awake while agents work to default")}
                 onClick={() =>
                   updateSettings({
-                    enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+                    keepAwakeWhileAgentsWork: DEFAULT_UNIFIED_SETTINGS.keepAwakeWhileAgentsWork,
                   })
                 }
               />
@@ -2413,12 +2335,12 @@ export function MaintenanceSettingsPanel() {
           }
           control={
             <ScopedSwitch
-              settingKeys={["enableProviderUpdateChecks"]}
-              checked={settings.enableProviderUpdateChecks}
+              settingKeys={["keepAwakeWhileAgentsWork"]}
+              checked={settings.keepAwakeWhileAgentsWork}
               onCheckedChange={(checked) =>
-                updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
+                updateSettings({ keepAwakeWhileAgentsWork: Boolean(checked) })
               }
-              aria-label={gt("Check provider versions")}
+              aria-label={gt("Keep awake while agents work")}
             />
           }
         />
@@ -2463,64 +2385,7 @@ export function MaintenanceSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection id="background" title={gt("Background activity")}>
-        <BackgroundActivitySettingsRow />
-        <SettingsRow
-          serverScoped
-          settingKeys={["keepAwakeWhileAgentsWork"]}
-          {...setting("keep-awake-while-agents-work")}
-          description={gt(
-            "Stop the computer from going to sleep while agents are working, and let it sleep once they finish. Closing a laptop lid still puts it to sleep.",
-          )}
-          resetAction={
-            settings.keepAwakeWhileAgentsWork !==
-            DEFAULT_UNIFIED_SETTINGS.keepAwakeWhileAgentsWork ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset keep awake while agents work to default")}
-                onClick={() =>
-                  updateSettings({
-                    keepAwakeWhileAgentsWork: DEFAULT_UNIFIED_SETTINGS.keepAwakeWhileAgentsWork,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <ScopedSwitch
-              settingKeys={["keepAwakeWhileAgentsWork"]}
-              checked={settings.keepAwakeWhileAgentsWork}
-              onCheckedChange={(checked) =>
-                updateSettings({ keepAwakeWhileAgentsWork: Boolean(checked) })
-              }
-              aria-label={gt("Keep awake while agents work")}
-            />
-          }
-        />
-      </SettingsSection>
-
       <StorageCleanupSections />
-
-      <SettingsSection id="diagnostics-section" title={gt("Diagnostics")}>
-        <SettingsRow
-          {...setting("diagnostics")}
-          description={
-            isEnvironmentScope
-              ? gt("Inspect processes, resource use, and logs on this environment.")
-              : gt("Inspect processes, resource use, and logs on one environment at a time.")
-          }
-          control={
-            <Button
-              render={
-                <Link to="/settings/diagnostics" search={{ machine: environmentId ?? undefined }} />
-              }
-              size="sm"
-              variant="outline"
-            >
-              <T>View diagnostics</T>
-            </Button>
-          }
-        />
-      </SettingsSection>
     </SettingsPageContainer>
   );
 }
@@ -2532,9 +2397,10 @@ export function AboutSettingsPanel() {
   const primaryPolicy = usePrimaryManagedPolicy();
   // The Welcome page sets up this computer, so it needs one.
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   const telemetryOff = managedTelemetryOffMessage(primaryPolicy, messages);
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer width="wide">
       <SettingsSection id="about" title={gt("App")}>
         {primaryPolicy ? (
           <SettingsRow
@@ -2558,17 +2424,13 @@ export function AboutSettingsPanel() {
             }
           />
         ) : null}
-        {isElectron || HOSTED_APP_CHANNEL ? (
-          <AboutVersionSection />
-        ) : (
-          <>
-            <SettingsRow
-              id={setting("app-version").id}
-              title={<AboutVersionTitle />}
-              description={gt("Current version of the application.")}
-            />
-          </>
-        )}
+        <AboutVersionSection />
+      </SettingsSection>
+
+      <PrismuxUpdatesSettingsPage embedded />
+
+      <SettingsSection id="about-access" title={gt("CLI, mobile access & onboarding")}>
+        {hasDesktopBridge ? <CliCommandSettingsRow /> : null}
         <MobileAppSettingsRow />
         {primaryEnvironmentId === null ? null : (
           <SettingsRow
@@ -2587,10 +2449,25 @@ export function AboutSettingsPanel() {
 
       <SettingsSection id="legal" title={gt("Legal")}>
         <SettingsRow
+          title={gt("Project repository")}
+          description={gt("Prismux source code, releases, and issue tracker on GitHub.")}
+          control={
+            <Button
+              render={
+                <a href={PRISMUX_REPOSITORY_URL} target="_blank" rel="noreferrer noopener" />
+              }
+              size="sm"
+              variant="outline"
+            >
+              <T>Open GitHub</T>
+            </Button>
+          }
+        />
+        <SettingsRow
           {...setting("privacy-policy")}
           description={
             telemetryOff === undefined
-              ? gt("How we handle your data, including the anonymous usage data T3 Code collects.")
+              ? gt("How we handle your data, including local-first privacy commitments in Prismux.")
               : gt("How we handle your data. {telemetryOff}", { telemetryOff })
           }
           control={
@@ -2605,7 +2482,7 @@ export function AboutSettingsPanel() {
         />
         <SettingsRow
           {...setting("open-source-licenses")}
-          description={gt("Notices for dependencies, assets, and optional tools used by T3 Code.")}
+          description={gt("Notices for dependencies, assets, and optional tools used by Prismux.")}
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}

@@ -40,6 +40,13 @@ import {
 } from "@t3tools/provider-acp/server/sessionConfig";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import {
+  extractOmpMissingApiKeyDetails,
+  fetchOmpUsageLimits,
+  formatOmpMissingApiKeyGuidance,
+} from "./ompAcp.ts";
+import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
+import type { ServerProviderUsageLimits } from "@t3tools/contracts";
 
 const MAX_AUTH_METHODS = 32;
 const MAX_MODELS = 256;
@@ -371,6 +378,17 @@ export function acpRegistryProbeFailure(
   authMethods: ReadonlyArray<AcpRegistryProbeAuthMethod> = [],
   authAction?: AcpRegistryUrlAuthAction,
 ): AcpRegistryOperationError {
+  const ompMissingKey = extractOmpMissingApiKeyDetails(error);
+  if (ompMissingKey !== undefined) {
+    const terminalAuth = authMethods.find((method) => method.type === "terminal");
+    return new AcpRegistryOperationError({
+      reason: "authentication_failed",
+      message: formatOmpMissingApiKeyGuidance(ompMissingKey, terminalAuth?.command),
+      cause: error,
+      ...(authMethods.length > 0 ? { authMethods } : {}),
+      ...(authAction === undefined ? {} : { authAction }),
+    });
+  }
   const detail = error._tag === "AcpTransportError" && error.detail ? error.detail : error.message;
   const authenticationFailed =
     (error._tag === "AcpRequestError" && error.code === -32000) ||
@@ -385,6 +403,90 @@ export function acpRegistryProbeFailure(
     ...(authAction === undefined ? {} : { authAction }),
   });
 }
+
+/**
+ * Queries OMP usage limits over pure ACP `extRequest("_omp/usage", {})`.
+ * Never reads local CLI credential directories or calls external vendor endpoints directly.
+ */
+export const probeOmpAcpUsageLimits = Effect.fn("AcpRegistryProbe.probeOmpUsageLimits")(function* (
+  input: AcpRegistryConfigurationProbeInput & { readonly checkedAt: string },
+): Effect.fn.Return<
+  ServerProviderUsageLimits,
+  never,
+  | AcpRegistrySupport.AcpRegistryCatalog
+  | ChildProcessSpawner.ChildProcessSpawner
+  | SecureRandom.SecureRandom
+> {
+  const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const random = yield* SecureRandom.SecureRandom;
+  const probeTimeoutMs = resolveProviderProbeTimeoutMs(
+    "acp_registry",
+    PROBE_TIMEOUT_MS,
+    input.environment,
+  );
+
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const resolved = yield* catalog.resolve(input.settings, input.cwd, input.environment);
+      const runtimeContext = yield* Layer.build(
+        AcpSessionRuntime.layer({
+          spawn: resolved.spawn,
+          cwd: input.cwd,
+          clientCapabilities: {
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+          },
+          clientInfo: { name: "prismux-omp-usage-probe", version: "0.0.0" },
+          authenticateOnAuthRequired: false,
+          ...(input.settings.authMethodId ? { authMethodId: input.settings.authMethodId } : {}),
+        }).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Layer.succeed(SecureRandom.SecureRandom, random),
+            ),
+          ),
+        ),
+      );
+      const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+        Effect.provide(runtimeContext),
+      );
+      yield* runtime.initialize();
+      const initialLimits = yield* fetchOmpUsageLimits(runtime, input.checkedAt);
+      if (initialLimits.windows.length > 0 || initialLimits.unavailable !== undefined) {
+        return initialLimits;
+      }
+      // OMP `acp-agent.ts:1690` reads usage from the first active session when no initial session exists.
+      const started = yield* runtime.start();
+      const limits = yield* fetchOmpUsageLimits(runtime, input.checkedAt);
+      if (started.initializeResult.agentCapabilities?.sessionCapabilities?.close != null) {
+        yield* runtime.closeSession().pipe(Effect.timeoutOption("5 seconds"), Effect.ignore);
+      }
+      return limits;
+    }),
+  ).pipe(
+    Effect.timeoutOption(Duration.millis(probeTimeoutMs)),
+    Effect.map(
+      Option.getOrElse(() =>
+        makeUnavailableUsageLimits({
+          checkedAt: input.checkedAt,
+          reason: "probeFailed",
+          message: "Timed out querying OMP usage limits via _omp/usage.",
+        }),
+      ),
+    ),
+    Effect.catch((error) =>
+      Effect.succeed(
+        makeUnavailableUsageLimits({
+          checkedAt: input.checkedAt,
+          reason: "probeFailed",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    ),
+  );
+});
 
 export interface AcpRegistryConfigurationProbeInput {
   readonly instanceId: ProviderInstanceId;

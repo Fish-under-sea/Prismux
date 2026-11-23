@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
+  ActivityIcon,
   AlertTriangleIcon,
+  ArrowRightIcon,
   BotIcon,
   CheckCircle2Icon,
   CloudIcon,
@@ -13,6 +16,8 @@ import {
   SearchIcon,
   ShieldCheckIcon,
   UploadIcon,
+  WifiIcon,
+  XCircleIcon,
 } from "lucide-react";
 
 import { Badge } from "../../components/ui/badge";
@@ -45,14 +50,44 @@ interface ChiefStateView {
   readonly updatedAt: number | null;
 }
 
+type MemoryRetrievalModeValue = "fts5+sqlite-vec" | "fts5-only";
+
 interface MemoryStatsView {
   readonly callerScope: string;
   readonly totalEntries: number;
   readonly vectorSearchEnabled: boolean;
+  readonly sqliteVecLoaded: boolean;
+  readonly retrievalMode: MemoryRetrievalModeValue;
   readonly byNamespace: Readonly<Record<string, number>>;
   readonly byKind: Readonly<Record<string, number>>;
   readonly latestUpdatedAt: number | null;
   readonly dbPath: string;
+}
+
+interface SyncChannelReportItem {
+  readonly channel: string;
+  readonly ok: boolean;
+  readonly enabled: boolean;
+  readonly configured: boolean;
+  readonly reachable?: boolean;
+  readonly latencyMs: number | null;
+  readonly uploaded?: number;
+  readonly downloaded?: number;
+  readonly conflictDetected?: boolean;
+  readonly message?: string;
+  readonly error?: string;
+}
+
+interface SyncOperationReport {
+  readonly kind: "sync" | "test";
+  readonly ok: boolean;
+  readonly timestamp: number;
+  readonly uploaded?: number;
+  readonly downloaded?: number;
+  readonly conflictDetected?: boolean;
+  readonly etag?: string | null;
+  readonly message: string;
+  readonly channels: readonly SyncChannelReportItem[];
 }
 
 interface MemoryHitView {
@@ -190,6 +225,88 @@ function parseSyncMatrix(raw: unknown): SyncMatrixState {
   return next;
 }
 
+function parseSyncChannelResults(raw: unknown): SyncChannelReportItem[] {
+  const root = asRecord(raw);
+  const candidate = Array.isArray(root?.channels)
+    ? root.channels
+    : Array.isArray(root?.results)
+      ? root.results
+      : asRecord(root?.channels)
+        ? Object.entries(asRecord(root?.channels)!).map(([channel, value]) => ({
+            channel,
+            ...(asRecord(value) ?? {}),
+          }))
+        : asRecord(root?.results)
+          ? Object.entries(asRecord(root?.results)!).map(([channel, value]) => ({
+              channel,
+              ...(asRecord(value) ?? {}),
+            }))
+          : [];
+
+  const parsed: SyncChannelReportItem[] = [];
+  for (const item of candidate) {
+    const rec = asRecord(item);
+    if (!rec) continue;
+    const channel = asString(rec.channel, "unknown");
+    const latencyRaw = rec.latencyMs;
+    const uploadedRaw = rec.uploaded;
+    const downloadedRaw = rec.downloaded;
+    const messageRaw = asString(rec.message);
+    const errorRaw = asString(rec.error);
+    parsed.push({
+      channel,
+      ok: asBoolean(rec.ok, false),
+      enabled: asBoolean(rec.enabled, true),
+      configured: asBoolean(rec.configured, true),
+      ...(typeof rec.reachable === "boolean" ? { reachable: rec.reachable } : {}),
+      latencyMs:
+        typeof latencyRaw === "number" && Number.isFinite(latencyRaw)
+          ? Math.max(0, Math.round(latencyRaw))
+          : null,
+      ...(typeof uploadedRaw === "number" && Number.isFinite(uploadedRaw)
+        ? { uploaded: uploadedRaw }
+        : {}),
+      ...(typeof downloadedRaw === "number" && Number.isFinite(downloadedRaw)
+        ? { downloaded: downloadedRaw }
+        : {}),
+      ...(typeof rec.conflictDetected === "boolean"
+        ? { conflictDetected: rec.conflictDetected }
+        : {}),
+      ...(messageRaw ? { message: messageRaw } : {}),
+      ...(errorRaw ? { error: errorRaw } : {}),
+    });
+  }
+  return parsed;
+}
+
+function formatOperationTimestamp(timestampMs: number): string {
+  try {
+    return new Date(timestampMs).toLocaleString([], {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return String(timestampMs);
+  }
+}
+
+function channelDisplayName(channel: string): string {
+  switch (channel) {
+    case "webdav":
+      return "WebDAV";
+    case "s3":
+      return "S3 对象存储";
+    case "github":
+      return "GitHub 私有仓库";
+    default:
+      return channel;
+  }
+}
+
 /**
  * MP-04: /settings/memory-sync
  * Unified real-data control center for:
@@ -270,6 +387,9 @@ export function PrismuxMemorySyncSettingsPage() {
     hasSecret: false,
   });
   const [savingSync, setSavingSync] = useState(false);
+  const [syncingNow, setSyncingNow] = useState(false);
+  const [testingSync, setTestingSync] = useState(false);
+  const [syncOperationReport, setSyncOperationReport] = useState<SyncOperationReport | null>(null);
 
   const hydrateSyncResponse = useCallback((syncRes: unknown) => {
     const syncRoot = asRecord(syncRes);
@@ -364,10 +484,20 @@ export function PrismuxMemorySyncSettingsPage() {
 
       if (statsRes.status === "fulfilled") {
         const root = asRecord(statsRes.value);
+        const vectorSearchEnabled = asBoolean(root?.vectorSearchEnabled, false);
+        const sqliteVecLoaded = asBoolean(root?.sqliteVecLoaded, vectorSearchEnabled);
+        const retrievalMode: MemoryRetrievalModeValue =
+          root?.retrievalMode === "fts5+sqlite-vec" || root?.retrievalMode === "fts5-only"
+            ? root.retrievalMode
+            : sqliteVecLoaded
+              ? "fts5+sqlite-vec"
+              : "fts5-only";
         setMemoryStats({
           callerScope: asString(root?.callerScope, "owner_chief"),
           totalEntries: asNumber(root?.totalEntries, 0),
-          vectorSearchEnabled: asBoolean(root?.vectorSearchEnabled, false),
+          vectorSearchEnabled,
+          sqliteVecLoaded,
+          retrievalMode,
           byNamespace: asNumberRecord(root?.byNamespace),
           byKind: asNumberRecord(root?.byKind),
           latestUpdatedAt: typeof root?.latestUpdatedAt === "number" ? root.latestUpdatedAt : null,
@@ -558,6 +688,107 @@ export function PrismuxMemorySyncSettingsPage() {
     }
   }, [daemon, github, hydrateSyncResponse, passphraseInput, s3, syncMatrix, webdav]);
 
+  const handleTriggerSyncNow = useCallback(async () => {
+    setSyncingNow(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = await daemon.triggerSyncNow({
+        direction: "both",
+        ...(passphraseInput.length > 0 ? { passphrase: passphraseInput } : {}),
+      });
+      const timestamp =
+        typeof res.syncedAt === "number"
+          ? res.syncedAt
+          : typeof res.timestamp === "number"
+            ? res.timestamp
+            : Date.now();
+      const channels = parseSyncChannelResults(res);
+      const uploaded = typeof res.uploaded === "number" ? res.uploaded : undefined;
+      const downloaded = typeof res.downloaded === "number" ? res.downloaded : undefined;
+      const conflictDetected =
+        typeof res.conflictDetected === "boolean" ? res.conflictDetected : undefined;
+      const etag = typeof res.etag === "string" ? res.etag : null;
+      const message =
+        res.message ||
+        res.error ||
+        (res.ok ? "端到端加密同步已完成。" : "加密同步未全部成功，请检查通道详情。");
+      setSyncOperationReport({
+        kind: "sync",
+        ok: Boolean(res.ok),
+        timestamp,
+        ...(uploaded !== undefined ? { uploaded } : {}),
+        ...(downloaded !== undefined ? { downloaded } : {}),
+        ...(conflictDetected !== undefined ? { conflictDetected } : {}),
+        etag,
+        message,
+        channels,
+      });
+      if (res.ok) {
+        setStatusMsg(message);
+        await loadAll();
+      } else {
+        setErrorMsg(message);
+      }
+    } catch (err) {
+      const msgText = err instanceof Error ? err.message : String(err);
+      setErrorMsg(msgText);
+      setSyncOperationReport({
+        kind: "sync",
+        ok: false,
+        timestamp: Date.now(),
+        message: msgText,
+        channels: [],
+      });
+    } finally {
+      setSyncingNow(false);
+    }
+  }, [daemon, loadAll, passphraseInput]);
+
+  const handleTestSyncConnection = useCallback(async () => {
+    setTestingSync(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = await daemon.testSyncConnection({});
+      const timestamp =
+        typeof res.testedAt === "number"
+          ? res.testedAt
+          : typeof res.timestamp === "number"
+            ? res.timestamp
+            : Date.now();
+      const channels = parseSyncChannelResults(res);
+      const message =
+        res.message ||
+        res.error ||
+        (res.ok ? "已启用通道全部连通。" : "部分或全部同步通道未连通，请检查配置。");
+      setSyncOperationReport({
+        kind: "test",
+        ok: Boolean(res.ok),
+        timestamp,
+        message,
+        channels,
+      });
+      if (res.ok) {
+        setStatusMsg(message);
+      } else {
+        setErrorMsg(message);
+      }
+    } catch (err) {
+      const msgText = err instanceof Error ? err.message : String(err);
+      setErrorMsg(msgText);
+      setSyncOperationReport({
+        kind: "test",
+        ok: false,
+        timestamp: Date.now(),
+        message: msgText,
+        channels: [],
+      });
+    } finally {
+      setTestingSync(false);
+    }
+  }, [daemon]);
+
   return (
     <SettingsPageContainer width="wide">
       <div id="prismux-memory-sync" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 bg-card/70 px-4 py-3">
@@ -704,8 +935,12 @@ export function PrismuxMemorySyncSettingsPage() {
         id="prismux-memory-engine"
         title="单文件 SQLite 混合记忆库（WAL + FTS5 + sqlite-vec）"
         headerAction={
-          <Badge variant={memoryStats?.vectorSearchEnabled ? "success" : "secondary"}>
-            {memoryStats?.vectorSearchEnabled ? "sqlite-vec 向量已启用" : "FTS5 纯词法模式"}
+          <Badge
+            variant={memoryStats?.retrievalMode === "fts5+sqlite-vec" ? "success" : "warning"}
+          >
+            {memoryStats?.retrievalMode === "fts5+sqlite-vec"
+              ? "FTS5 + sqlite-vec 混合态"
+              : "FTS5 降级态"}
           </Badge>
         }
       >
@@ -717,7 +952,7 @@ export function PrismuxMemorySyncSettingsPage() {
             <div className="rounded-lg border border-border/70 bg-background/50 px-3 py-2">
               <div className="text-[11px] text-muted-foreground">记忆总条目</div>
               <div className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">
-                {memoryStats?.totalEntries ?? 0}
+                {memoryStats ? memoryStats.totalEntries : "—"}
               </div>
             </div>
             <div className="rounded-lg border border-border/70 bg-background/50 px-3 py-2">
@@ -732,6 +967,45 @@ export function PrismuxMemorySyncSettingsPage() {
                 {memoryStats?.dbPath ?? "~/.prismux/data/memory.db"}
               </div>
             </div>
+          </div>
+
+          <div
+            data-memory-retrieval-mode={memoryStats?.retrievalMode ?? "unknown"}
+            className={
+              memoryStats?.retrievalMode === "fts5+sqlite-vec"
+                ? "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs"
+                : "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs"
+            }
+          >
+            <div className="flex min-w-0 items-start gap-2">
+              <ActivityIcon
+                className={
+                  memoryStats?.retrievalMode === "fts5+sqlite-vec"
+                    ? "mt-0.5 size-3.5 shrink-0 text-emerald-500"
+                    : "mt-0.5 size-3.5 shrink-0 text-amber-500"
+                }
+              />
+              <div className="min-w-0 space-y-0.5">
+                <div className="font-medium text-foreground">
+                  {memoryStats?.retrievalMode === "fts5+sqlite-vec"
+                    ? "当前检索态：FTS5 + sqlite-vec 混合检索已就绪"
+                    : "当前检索态：FTS5 降级态（未加载 sqlite-vec 扩展）"}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {memoryStats?.retrievalMode === "fts5+sqlite-vec"
+                    ? "sqlite-vec 原生扩展已加载，支持词法 + 向量混合语义召回。"
+                    : "当前环境未加载 sqlite-vec（如缺失 vec0.dll），系统已自动平滑回退为纯 FTS5 全文词法检索，所有记忆读写均正常且无数据兼容风险。"}
+                </div>
+              </div>
+            </div>
+            <Button
+              size="xs"
+              variant="outline"
+              render={<Link to="/settings/diagnostics" />}
+            >
+              <span>服务体检</span>
+              <ArrowRightIcon className="size-3" />
+            </Button>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -921,6 +1195,126 @@ export function PrismuxMemorySyncSettingsPage() {
         <p className="px-4 py-2.5 text-xs text-muted-foreground">
           本地加密密封后再上传至 WebDAV / S3 / GitHub 独立通道；支持 If-Match 乐观锁与 60s 停滞看门狗。敏感口令与 Token 仅支持只写更新，绝不回显明文。
         </p>
+        <SettingsRow
+          title="即时同步与通道连通性"
+          description="手动执行一次端到端加密同步，或对已启用的 WebDAV / S3 / GitHub 通道进行脱敏连通性探测。"
+          control={
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={testingSync || syncingNow || savingSync}
+                onClick={() => {
+                  void handleTestSyncConnection();
+                }}
+              >
+                <WifiIcon className="size-3.5" />
+                {testingSync ? "检测连通中…" : "测试通道连通性"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={syncingNow || testingSync || savingSync}
+                onClick={() => {
+                  void handleTriggerSyncNow();
+                }}
+              >
+                <RefreshCwIcon className={syncingNow ? "size-3.5 animate-spin" : "size-3.5"} />
+                {syncingNow ? "加密同步中…" : "立即加密同步"}
+              </Button>
+            </div>
+          }
+        >
+          {syncOperationReport ? (
+            <div
+              data-sync-operation-kind={syncOperationReport.kind}
+              className={
+                syncOperationReport.ok
+                  ? "mt-2.5 mb-2 space-y-2 rounded-lg border border-emerald-500/35 bg-emerald-500/5 px-3 py-2.5 text-xs"
+                  : "mt-2.5 mb-2 space-y-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-xs"
+              }
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 font-medium text-foreground">
+                  {syncOperationReport.ok ? (
+                    <CheckCircle2Icon className="size-3.5 text-emerald-500" />
+                  ) : (
+                    <XCircleIcon className="size-3.5 text-destructive" />
+                  )}
+                  <span>
+                    {syncOperationReport.kind === "sync" ? "加密同步结果" : "通道连通性结果"}
+                  </span>
+                  <Badge variant={syncOperationReport.ok ? "success" : "error"} className="text-[10px]">
+                    {syncOperationReport.ok ? "成功" : "异常"}
+                  </Badge>
+                  {syncOperationReport.conflictDetected ? (
+                    <Badge variant="warning" className="text-[10px]">
+                      检测到并发冲突
+                    </Badge>
+                  ) : null}
+                </div>
+                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {formatOperationTimestamp(syncOperationReport.timestamp)}
+                </span>
+              </div>
+
+              <p className="text-[11px] text-foreground/90">{syncOperationReport.message}</p>
+
+              {syncOperationReport.kind === "sync" &&
+              (syncOperationReport.uploaded !== undefined ||
+                syncOperationReport.downloaded !== undefined ||
+                syncOperationReport.etag) ? (
+                <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {syncOperationReport.uploaded !== undefined ? (
+                    <span>上传：{syncOperationReport.uploaded}</span>
+                  ) : null}
+                  {syncOperationReport.downloaded !== undefined ? (
+                    <span>下载：{syncOperationReport.downloaded}</span>
+                  ) : null}
+                  {syncOperationReport.etag ? (
+                    <span className="truncate">ETag：{syncOperationReport.etag}</span>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {syncOperationReport.channels.length > 0 ? (
+                <div className="grid gap-1.5 sm:grid-cols-3">
+                  {syncOperationReport.channels.map((ch) => (
+                    <div
+                      key={ch.channel}
+                      className="rounded-md border border-border/60 bg-background/65 px-2.5 py-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="font-medium text-foreground">
+                          {channelDisplayName(ch.channel)}
+                        </span>
+                        <Badge
+                          variant={
+                            !ch.enabled ? "secondary" : ch.ok ? "success" : "error"
+                          }
+                          className="text-[10px]"
+                        >
+                          {!ch.enabled ? "未启用" : ch.ok ? "正常" : "失败"}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
+                        {ch.latencyMs !== null ? <span>{ch.latencyMs} ms</span> : null}
+                        {ch.uploaded !== undefined ? <span>↑{ch.uploaded}</span> : null}
+                        {ch.downloaded !== undefined ? <span>↓{ch.downloaded}</span> : null}
+                      </div>
+                      {ch.error || ch.message ? (
+                        <p className="mt-0.5 break-all text-[10px] text-muted-foreground">
+                          {ch.error ?? ch.message}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </SettingsRow>
         <SettingsRow
           title="端到端主加密口令（Passphrase）"
           description={

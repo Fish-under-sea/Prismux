@@ -164,6 +164,7 @@ export function scopeClaudeModelCatalog(
 }
 
 const CLAUDE_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  minimal: "Minimal",
   low: "Low",
   medium: "Medium",
   high: "High",
@@ -171,8 +172,57 @@ const CLAUDE_EFFORT_LABELS: Readonly<Record<string, string>> = {
   max: "Max",
 };
 
+const CLAUDE_FAST_MODE_DESCRIPTOR = {
+  id: "fastMode",
+  label: "Fast Mode",
+  type: "boolean",
+} as const;
+
+type ClaudeReportedModelInfo = Pick<ClaudeModelInfo, "value" | "resolvedModel"> &
+  Partial<
+    Pick<
+      ClaudeModelInfo,
+      "displayName" | "supportsEffort" | "supportedEffortLevels" | "supportsFastMode"
+    >
+  >;
+
 function stripClaudeContextWindowSuffix(value: string): string {
   return value.replace(/\[[^\]]*\]$/, "").trim();
+}
+
+function appendFastModeDescriptorIfMissing(
+  capabilities: ModelCapabilities | null,
+): ModelCapabilities {
+  const existing = capabilities?.optionDescriptors ?? [];
+  if (existing.some((descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode")) {
+    return capabilities ?? { optionDescriptors: existing };
+  }
+  return {
+    optionDescriptors: [...existing, CLAUDE_FAST_MODE_DESCRIPTOR],
+  };
+}
+
+function buildClaudeReportedOptionDescriptors(
+  info: Pick<ClaudeReportedModelInfo, "supportsEffort" | "supportedEffortLevels" | "supportsFastMode">,
+): ModelCapabilities["optionDescriptors"] {
+  const efforts = info.supportsEffort ? (info.supportedEffortLevels ?? []) : [];
+  return [
+    ...(efforts.length
+      ? [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select" as const,
+            // `default` is not an effort, so choosing it sends none and Claude Code picks.
+            options: [
+              { id: "default", label: "Default", isDefault: true },
+              ...efforts.map((id) => ({ id, label: CLAUDE_EFFORT_LABELS[id] ?? id })),
+            ],
+          },
+        ]
+      : []),
+    ...(info.supportsFastMode === true ? [CLAUDE_FAST_MODE_DESCRIPTOR] : []),
+  ];
 }
 
 export function claudeReportedModels(
@@ -197,30 +247,57 @@ export function claudeReportedModels(
       .filter((id) => id.length > 0);
     if (ids.some((id) => known.has(id))) continue;
     for (const id of ids) known.add(id);
-    const efforts = info.supportsEffort ? (info.supportedEffortLevels ?? []) : [];
     models.push({
       slug,
       name: info.displayName.trim() || slug,
       isCustom: false,
       capabilities: {
-        optionDescriptors: efforts.length
-          ? [
-              {
-                id: "effort",
-                label: "Reasoning",
-                type: "select",
-                // `default` is not an effort, so choosing it sends none and Claude Code picks.
-                options: [
-                  { id: "default", label: "Default", isDefault: true },
-                  ...efforts.map((id) => ({ id, label: CLAUDE_EFFORT_LABELS[id] ?? id })),
-                ],
-              },
-            ]
-          : [],
+        optionDescriptors: buildClaudeReportedOptionDescriptors(info),
       },
     });
   }
   return models;
+}
+
+/**
+ * Merges live `supportsFastMode: true` declarations reported by Claude Code CLI onto catalog
+ * models whose static manifest profile did not yet advertise Fast Mode.
+ */
+export function withClaudeReportedFastMode(
+  models: ReadonlyArray<ServerProviderModel>,
+  reported: ReadonlyArray<ClaudeReportedModelInfo> | undefined,
+): ReadonlyArray<ServerProviderModel> {
+  if (!reported?.length) return models;
+  const fastModeIds = new Set<string>();
+  for (const info of reported) {
+    if (info.supportsFastMode !== true || info.value === "default") continue;
+    for (const raw of [info.value, info.resolvedModel ?? ""]) {
+      const stripped = stripClaudeContextWindowSuffix(raw);
+      if (!stripped) continue;
+      fastModeIds.add(stripped.toLowerCase());
+      const firstParty = stripClaudeBackendDecoration(stripped);
+      if (firstParty) fastModeIds.add(firstParty.toLowerCase());
+    }
+  }
+  if (fastModeIds.size === 0) return models;
+  let changed = false;
+  const updated = models.map((model) => {
+    const candidates = [model.slug, ...(model.aliases ?? [])].map((id) =>
+      stripClaudeContextWindowSuffix(id).toLowerCase(),
+    );
+    if (!candidates.some((id) => fastModeIds.has(id))) return model;
+    const hasFastMode =
+      model.capabilities?.optionDescriptors?.some(
+        (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+      ) ?? false;
+    if (hasFastMode) return model;
+    changed = true;
+    return {
+      ...model,
+      capabilities: appendFastModeDescriptorIfMissing(model.capabilities),
+    };
+  });
+  return changed ? updated : models;
 }
 
 export function resolveClaudeCatalogModel(
@@ -254,24 +331,75 @@ function stripClaudeBackendDecoration(wireModel: string): string {
  */
 export function withClaudeCodeModelRoutes(
   catalog: ClaudeModelCatalog,
-  reportedModels: ReadonlyArray<Pick<ClaudeModelInfo, "value" | "resolvedModel">>,
+  reportedModels: ReadonlyArray<ClaudeReportedModelInfo>,
 ): ClaudeModelCatalog {
   const apiModels = new Map<string, string>();
+  const fastModeSlugs = new Set<string>();
+  const reportedExtraModels: Array<ClaudeCatalogModel> = [];
+  const seenExtraSlugs = new Set<string>();
   for (const reported of reportedModels) {
     if (reported.value === "default") continue;
     const wireModel = stripClaudeContextWindowSuffix(reported.resolvedModel ?? reported.value);
     const firstPartyModel = stripClaudeBackendDecoration(wireModel);
-    if (firstPartyModel === wireModel) continue;
-    const entry = resolveClaudeCatalogModel(catalog, firstPartyModel);
-    if (!entry || apiModels.has(entry.model.slug)) continue;
-    apiModels.set(entry.model.slug, stripClaudeContextWindowSuffix(reported.value));
+    const catalogEntry =
+      resolveClaudeCatalogModel(catalog, firstPartyModel) ??
+      resolveClaudeCatalogModel(catalog, stripClaudeContextWindowSuffix(reported.value));
+    if (firstPartyModel !== wireModel && catalogEntry && !apiModels.has(catalogEntry.model.slug)) {
+      apiModels.set(catalogEntry.model.slug, stripClaudeContextWindowSuffix(reported.value));
+    }
+    if (reported.supportsFastMode === true) {
+      if (catalogEntry) {
+        const hasFastMode =
+          catalogEntry.model.capabilities?.optionDescriptors?.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ) ?? false;
+        if (!hasFastMode) {
+          fastModeSlugs.add(catalogEntry.model.slug);
+        }
+      } else {
+        const slug = reported.value.trim();
+        if (slug && !seenExtraSlugs.has(slug.toLowerCase())) {
+          seenExtraSlugs.add(slug.toLowerCase());
+          reportedExtraModels.push({
+            model: {
+              slug,
+              name: reported.displayName?.trim() || slug,
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: buildClaudeReportedOptionDescriptors(reported),
+              },
+            },
+            runtime: {},
+            compatibility: {},
+          });
+        }
+      }
+    }
   }
-  if (apiModels.size === 0) return catalog;
+  if (apiModels.size === 0 && fastModeSlugs.size === 0 && reportedExtraModels.length === 0) {
+    return catalog;
+  }
   return {
-    models: catalog.models.map((entry) => {
-      const apiModel = apiModels.get(entry.model.slug);
-      return apiModel ? { ...entry, apiModel } : entry;
-    }),
+    models: [
+      ...catalog.models.map((entry) => {
+        const apiModel = apiModels.get(entry.model.slug);
+        const needsFastMode = fastModeSlugs.has(entry.model.slug);
+        if (!apiModel && !needsFastMode) return entry;
+        return {
+          ...entry,
+          ...(apiModel ? { apiModel } : {}),
+          ...(needsFastMode
+            ? {
+                model: {
+                  ...entry.model,
+                  capabilities: appendFastModeDescriptorIfMissing(entry.model.capabilities),
+                },
+              }
+            : {}),
+        };
+      }),
+      ...reportedExtraModels,
+    ],
   };
 }
 

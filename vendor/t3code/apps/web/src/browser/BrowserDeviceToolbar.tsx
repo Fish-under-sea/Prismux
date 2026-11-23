@@ -2,10 +2,26 @@ import {
   PREVIEW_VIEWPORT_MAX_AREA,
   PREVIEW_VIEWPORT_MAX_DIMENSION,
   PREVIEW_VIEWPORT_MIN_DIMENSION,
+  type DesktopPreviewColorScheme,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
-import { PREVIEW_VIEWPORT_PRESETS, resolvePreviewViewport } from "@t3tools/shared/previewViewport";
-import { Link2, Unlink2, X } from "lucide-react";
+import {
+  CURATED_MOBILE_VIEWPORT_PRESETS,
+  DEFAULT_MOBILE_SIMULATOR_PRESET_ID,
+  findPreviewViewportPreset,
+  PREVIEW_VIEWPORT_PRESETS,
+  resolvePreviewViewport,
+} from "@t3tools/shared/previewViewport";
+import {
+  FrameIcon,
+  Link2,
+  MonitorIcon,
+  MoonIcon,
+  SmartphoneIcon,
+  SunIcon,
+  Unlink2,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import { msg, T, useGT, useMessages } from "gt-react";
 
@@ -28,6 +44,12 @@ import { commitViewportAndAspectRatio } from "./browserDeviceToolbarState";
 import { ScreenRotationIcon } from "./ScreenRotationIcon";
 
 const RESPONSIVE_VALUE = "responsive";
+const CURATED_MOBILE_ID_SET = new Set<string>(
+  CURATED_MOBILE_VIEWPORT_PRESETS.map((preset) => preset.id),
+);
+const OTHER_STANDARD_PRESETS = PREVIEW_VIEWPORT_PRESETS.filter(
+  (preset) => !CURATED_MOBILE_ID_SET.has(preset.id),
+);
 const SELECT_ITEMS = [
   {
     value: RESPONSIVE_VALUE,
@@ -36,12 +58,23 @@ const SELECT_ITEMS = [
   ...PREVIEW_VIEWPORT_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
 ];
 
+const COLOR_SCHEME_CYCLE: readonly DesktopPreviewColorScheme[] = ["system", "light", "dark"];
+
+function nextColorScheme(current: DesktopPreviewColorScheme): DesktopPreviewColorScheme {
+  const index = COLOR_SCHEME_CYCLE.indexOf(current);
+  return COLOR_SCHEME_CYCLE[(index + 1) % COLOR_SCHEME_CYCLE.length] ?? "system";
+}
+
 interface Props {
   readonly setting: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }>;
   readonly width: number;
   readonly aspectRatio: number | null;
   readonly onAspectRatioChange: (aspectRatio: number | null) => void;
   readonly onChange: (setting: PreviewViewportSetting) => Promise<void>;
+  readonly bezelEnabled?: boolean;
+  readonly onBezelEnabledChange?: (enabled: boolean) => void;
+  readonly emulatedColorScheme?: DesktopPreviewColorScheme;
+  readonly onEmulatedColorSchemeChange?: (scheme: DesktopPreviewColorScheme) => void;
 }
 
 export function BrowserDeviceToolbar({
@@ -50,6 +83,10 @@ export function BrowserDeviceToolbar({
   aspectRatio,
   onAspectRatioChange,
   onChange,
+  bezelEnabled = true,
+  onBezelEnabledChange,
+  emulatedColorScheme = "system",
+  onEmulatedColorSchemeChange,
 }: Props) {
   const gt = useGT();
   const m = useMessages();
@@ -68,6 +105,9 @@ export function BrowserDeviceToolbar({
     PREVIEW_VIEWPORT_PRESETS.some((preset) => preset.id === setting.presetId)
       ? setting.presetId
       : RESPONSIVE_VALUE;
+  const activePreset =
+    setting._tag === "preset" ? (findPreviewViewportPreset(setting.presetId) ?? null) : null;
+  const isPhoneSimulatorActive = Boolean(activePreset?.mobile);
   const typedWidth = Number(presentedSize.width);
   const typedHeight = Number(presentedSize.height);
   const { width: customWidth, height: customHeight } =
@@ -172,6 +212,25 @@ export function BrowserDeviceToolbar({
     onAspectRatioChange(aspectRatio === null ? customWidth / customHeight : null);
   };
 
+  const activatePhoneSimulator = () => {
+    const targetPreset =
+      findPreviewViewportPreset(DEFAULT_MOBILE_SIMULATOR_PRESET_ID) ??
+      CURATED_MOBILE_VIEWPORT_PRESETS[0];
+    if (!targetPreset) return;
+    onBezelEnabledChange?.(true);
+    apply(
+      resolvePreviewViewport({ mode: "preset", preset: targetPreset.id }),
+      aspectRatio === null ? null : targetPreset.width / targetPreset.height,
+    );
+  };
+
+  const colorSchemeLabel =
+    emulatedColorScheme === "dark"
+      ? "深色媒体模拟"
+      : emulatedColorScheme === "light"
+        ? "浅色媒体模拟"
+        : "跟随宿主明暗";
+
   return (
     <div
       className="sticky left-0 top-0 z-50 flex items-center gap-0.5 overflow-x-auto border-b border-border/70 bg-background/95 px-1.5 shadow-xs backdrop-blur-md [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -194,7 +253,30 @@ export function BrowserDeviceToolbar({
         applyCustomSize();
       }}
     >
-      {width >= 560 ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant={isPhoneSimulatorActive ? "secondary" : "ghost"}
+              size="xs"
+              type="button"
+              data-testid="browser-phone-simulator-shortcut"
+              aria-label="手机模拟器快捷模式（iPhone 16 Pro）"
+              aria-pressed={isPhoneSimulatorActive}
+              disabled={pending}
+              onClick={activatePhoneSimulator}
+              className="mr-0.5 shrink-0 gap-1 px-1.5 text-[11px]"
+            />
+          }
+        >
+          <SmartphoneIcon aria-hidden className="size-3 shrink-0" />
+          {width >= 420 ? <span>手机模拟器</span> : null}
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          一键切换至 iPhone 16 Pro 真机模拟（含机身外壳与移动端触摸/UA 仿真）
+        </TooltipPopup>
+      </Tooltip>
+      {width >= 660 ? (
         <span className="mr-0.5 shrink-0 text-2xs font-medium text-muted-foreground">
           <T>Dimensions</T>
         </span>
@@ -217,10 +299,23 @@ export function BrowserDeviceToolbar({
         <SelectPopup align="start" alignItemWithTrigger={false}>
           <SelectItem value={RESPONSIVE_VALUE}>{m(SELECT_ITEMS[0]!.label)}</SelectItem>
           <SelectGroup>
+            <SelectGroupLabel>精选手机模拟器</SelectGroupLabel>
+            {CURATED_MOBILE_VIEWPORT_PRESETS.map((preset) => (
+              <SelectItem key={preset.id} value={preset.id}>
+                <span className="flex w-full items-center justify-between gap-4">
+                  <span>{preset.label}</span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {preset.detail}
+                  </span>
+                </span>
+              </SelectItem>
+            ))}
+          </SelectGroup>
+          <SelectGroup>
             <SelectGroupLabel>
               <T context="group of standard device sizes">Standard</T>
             </SelectGroupLabel>
-            {PREVIEW_VIEWPORT_PRESETS.map((preset) => (
+            {OTHER_STANDARD_PRESETS.map((preset) => (
               <SelectItem key={preset.id} value={preset.id}>
                 <span className="flex w-full items-center justify-between gap-5">
                   <span>{preset.label}</span>
@@ -332,6 +427,62 @@ export function BrowserDeviceToolbar({
       >
         <ScreenRotationIcon />
       </Button>
+      {onBezelEnabledChange ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant={bezelEnabled ? "secondary" : "ghost"}
+                size="icon-xs"
+                type="button"
+                data-testid="browser-bezel-toggle"
+                aria-label={bezelEnabled ? "隐藏拟真机身外壳" : "显示拟真机身外壳"}
+                aria-pressed={bezelEnabled}
+                disabled={pending || !activePreset || activePreset.bezelStyle === "none"}
+                onClick={() => onBezelEnabledChange(!bezelEnabled)}
+              />
+            }
+          >
+            <FrameIcon aria-hidden className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {bezelEnabled ? "隐藏拟真手机机身外壳" : "显示拟真手机机身外壳"}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {onEmulatedColorSchemeChange ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant={emulatedColorScheme !== "system" ? "secondary" : "ghost"}
+                size="icon-xs"
+                type="button"
+                data-testid="browser-color-scheme-toggle"
+                aria-label={`切换媒体明暗仿真（当前：${colorSchemeLabel}）`}
+                disabled={pending}
+                onClick={() => onEmulatedColorSchemeChange(nextColorScheme(emulatedColorScheme))}
+              />
+            }
+          >
+            {emulatedColorScheme === "dark" ? (
+              <MoonIcon aria-hidden className="size-3.5" />
+            ) : emulatedColorScheme === "light" ? (
+              <SunIcon aria-hidden className="size-3.5" />
+            ) : (
+              <MonitorIcon aria-hidden className="size-3.5" />
+            )}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            浅/深色媒体特征模拟：{colorSchemeLabel}（点击切换）
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {activePreset && width >= 540 ? (
+        <span className="shrink-0 rounded-sm border border-border/70 bg-muted/60 px-1 py-0.5 font-mono text-[10px] font-medium text-muted-foreground tabular-nums">
+          @{activePreset.deviceScaleFactor}x
+        </span>
+      ) : null}
       <span className="sticky right-0 ml-auto flex bg-background/95">
         <Button
           variant="ghost"

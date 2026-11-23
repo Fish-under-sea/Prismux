@@ -3,7 +3,8 @@ import { m as resolveMessage } from "~/i18n/messages";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
-import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
+import { ArrowUpCircleIcon, CheckIcon, ChevronDownIcon, ExternalLinkIcon, TerminalIcon } from "lucide-react";
 import { useState } from "react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import type { MessageResolver } from "../../i18n/messages";
@@ -65,6 +66,20 @@ import { AddManagedCodexAccountDialog } from "./CodexSetupSection";
 import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { ProviderEnvironmentSection } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
+import { serverEnvironment } from "../../state/server";
+import {
+  OMP_LOCAL_ACP_PRESET,
+  openSafeExternalHttpsFromAnchor,
+  resolveAgentCliMeta,
+  resolveSafeAgentHomepageUrl,
+  validateSafeHttpsUrl,
+} from "./prismuxProviderMeta";
+import { AgentInstallPrompt } from "./AgentInstallPrompt";
+import {
+  getProviderVersionAdvisoryPresentation,
+  getProviderVersionLabel,
+} from "./providerStatus";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -97,15 +112,21 @@ function ProviderOptionGrid({
   value,
   disabled,
   onValueChange,
+  liveProvidersByDriver,
+  onCopyUpdateCommand,
   ...labelProps
 }: {
   readonly options: ReadonlyArray<ProviderClientDefinition>;
   readonly value: ProviderDriverKind;
   readonly disabled: boolean;
   readonly onValueChange: (value: string) => void;
+  readonly liveProvidersByDriver?: ReadonlyMap<string, import("@t3tools/contracts").ServerProvider>;
+  readonly onCopyUpdateCommand?: (command: string, label: string) => void;
   readonly "aria-label"?: string;
   readonly "aria-labelledby"?: string;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   return (
     <RadioGroup
       {...labelProps}
@@ -114,33 +135,105 @@ function ProviderOptionGrid({
       onValueChange={onValueChange}
       className="grid grid-cols-1 sm:grid-cols-2"
     >
-      {options.map((option) => (
-        <RadioPrimitive.Root
-          key={option.driverKind}
-          value={option.driverKind}
-          className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-inset data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
-        >
-          <ProviderInstanceIcon
-            driverKind={option.driverKind}
-            displayName={option.label}
-            iconClassName="size-4"
-          />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-            {option.label}
-          </span>
-          <RadioPrimitive.Indicator
-            className="grid size-5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground"
-            aria-hidden
+      {options.map((option) => {
+        const liveProvider = liveProvidersByDriver?.get(option.driverKind);
+        const isNotInstalled = liveProvider !== undefined && !liveProvider.installed;
+        const safeHomepageUrl = resolveSafeAgentHomepageUrl({
+          driver: option.driverKind,
+          displayName: option.label,
+          documentationUrl: liveProvider?.setup?.documentationUrl ?? null,
+        });
+        const cliMeta = resolveAgentCliMeta({
+          driver: option.driverKind,
+          displayName: option.label,
+        });
+        const versionAdvisory = liveProvider
+          ? getProviderVersionAdvisoryPresentation(
+              liveProvider.versionAdvisory,
+              liveProvider.compatibilityAdvisory,
+              true,
+              m,
+            )
+          : null;
+        const updateCmd = versionAdvisory?.updateCommand ?? cliMeta?.updateCommandHint ?? null;
+        const latestVerLabel = liveProvider?.versionAdvisory?.latestVersion
+          ? getProviderVersionLabel(liveProvider.versionAdvisory.latestVersion)
+          : null;
+        const installedVerLabel = liveProvider?.version
+          ? getProviderVersionLabel(liveProvider.version)
+          : null;
+        const updateTooltip =
+          installedVerLabel && latestVerLabel
+            ? gt("{installed} → {latest} · Copy official CLI update command: {command}", {
+                installed: installedVerLabel,
+                latest: latestVerLabel,
+                command: updateCmd ?? "",
+              })
+            : gt("Copy official CLI update command: {command}", { command: updateCmd ?? "" });
+        return (
+          <RadioPrimitive.Root
+            key={option.driverKind}
+            value={option.driverKind}
+            className="relative flex cursor-pointer flex-col gap-1.5 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-inset data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
           >
-            <CheckIcon className="size-3.5 shrink-0" />
-          </RadioPrimitive.Indicator>
-          {option.badgeLabel ? (
-            <Badge variant="warning" size="sm">
-              {option.badgeLabel}
-            </Badge>
-          ) : null}
-        </RadioPrimitive.Root>
-      ))}
+            <div className="flex w-full items-center gap-3">
+              <ProviderInstanceIcon
+                driverKind={option.driverKind}
+                displayName={option.label}
+                iconClassName="size-4"
+              />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                {option.label}
+              </span>
+              {versionAdvisory && updateCmd ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCopyUpdateCommand?.(updateCmd, option.label);
+                  }}
+                  title={updateTooltip}
+                  className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/35 bg-primary/10 px-1.5 text-2xs font-medium text-primary hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <ArrowUpCircleIcon className="size-3 shrink-0" />
+                  <span className="tabular-nums">{latestVerLabel ?? gt("Update")}</span>
+                </button>
+              ) : null}
+              <RadioPrimitive.Indicator
+                className="grid size-5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground"
+                aria-hidden
+              >
+                <CheckIcon className="size-3.5 shrink-0" />
+              </RadioPrimitive.Indicator>
+              {option.badgeLabel ? (
+                <Badge variant="warning" size="sm">
+                  {option.badgeLabel}
+                </Badge>
+              ) : null}
+            </div>
+            {isNotInstalled ? (
+              <div className="flex items-center justify-between gap-2 pl-7 text-2xs">
+                <span className="text-muted-foreground">{gt("CLI not installed")}</span>
+                {safeHomepageUrl ? (
+                  <a
+                    href={safeHomepageUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openSafeExternalHttpsFromAnchor(event);
+                    }}
+                    className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span>{gt("Install guide")}</span>
+                    <ExternalLinkIcon className="size-3 shrink-0" />
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
+          </RadioPrimitive.Root>
+        );
+      })}
     </RadioGroup>
   );
 }
@@ -166,6 +259,22 @@ export function AddProviderInstanceDialog({
   const gt = useGT();
   const m = useMessages();
   const settings = useEnvironmentSettings(environmentId);
+  const liveProviders = useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? [];
+  const liveProvidersByDriver = new Map<string, (typeof liveProviders)[number]>();
+  for (const provider of liveProviders) {
+    if (!liveProvidersByDriver.has(provider.driver)) {
+      liveProvidersByDriver.set(provider.driver, provider);
+    }
+  }
+  const { copyToClipboard: copyCliUpdateCommand } = useCopyToClipboard<{ label: string }>({
+    onCopy: ({ label: providerLabel }) => {
+      toastManager.add({
+        type: "success",
+        title: gt("{provider} update command copied", { provider: providerLabel }),
+        description: gt("Run it in your terminal to update the official CLI."),
+      });
+    },
+  });
   const secretSources = useSecretSources(environmentId);
   const persistProviderInstance = usePersistEnvironmentProviderInstanceMutation(environmentId);
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
@@ -379,6 +488,36 @@ export function AddProviderInstanceDialog({
     setHasAttemptedSubmit(false);
   };
 
+  const handleOmpLocalAcpPreset = () => {
+    const nextInstanceId = deriveAvailableInstanceId(
+      () => OMP_LOCAL_ACP_PRESET.instanceId,
+      OMP_LOCAL_ACP_PRESET.label,
+      existingIds,
+    );
+    setDriver(ACP_REGISTRY_DRIVER_KIND);
+    setSelectedAcp(null);
+    setIsManualAcpConfiguration(true);
+    setShowMoreProviders(true);
+    setConfigByDriver((existing) => ({
+      ...existing,
+      [ACP_REGISTRY_DRIVER_KIND]: {
+        source: "local",
+        commandPath: OMP_LOCAL_ACP_PRESET.command,
+        commandArgs: [...OMP_LOCAL_ACP_PRESET.args],
+        homepageUrl: OMP_LOCAL_ACP_PRESET.homepageUrl,
+      },
+    }));
+    setIdentityByDriver((existing) =>
+      updateProviderIdentityDraft(existing, ACP_REGISTRY_DRIVER_KIND, {
+        label: OMP_LOCAL_ACP_PRESET.label,
+        instanceIdOverride: nextInstanceId,
+      }),
+    );
+    setLocalEnvironment([]);
+    setHasAttemptedSubmit(false);
+    setWizardStep(1);
+  };
+
   // A policy that owns this driver's launch settings also rules out ChatGPT's own runtime.
   const driverLocks = managedInstanceLocks(managedPolicy, driver, m);
 
@@ -503,8 +642,86 @@ export function AddProviderInstanceDialog({
                   value={driver}
                   disabled={isPreparingRegistryAgent}
                   onValueChange={selectDriver}
+                  liveProvidersByDriver={liveProvidersByDriver}
+                  onCopyUpdateCommand={(cmd, providerLabel) =>
+                    copyCliUpdateCommand(cmd, { label: providerLabel })
+                  }
                   aria-labelledby="add-instance-driver-label"
                 />
+                {acpRegistryAllowed ? (
+                  <div
+                    data-preset="omp-local-acp"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/25 px-3 py-2.5 text-xs"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5 font-medium text-foreground">
+                        <TerminalIcon className="size-3.5 text-primary" />
+                        <span>{OMP_LOCAL_ACP_PRESET.label}</span>
+                        <Badge variant="outline" size="sm" className="font-mono text-2xs">
+                          {OMP_LOCAL_ACP_PRESET.command} {OMP_LOCAL_ACP_PRESET.args.join(" ")}
+                        </Badge>
+                      </div>
+                      <p className="mt-0.5 text-2xs text-muted-foreground">
+                        <T>One-click local ACP preset for oh-my-pi with live steering and usage support.</T>
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {validateSafeHttpsUrl(OMP_LOCAL_ACP_PRESET.homepageUrl) ? (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          render={
+                            <a
+                              href={OMP_LOCAL_ACP_PRESET.homepageUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(event) => {
+                                openSafeExternalHttpsFromAnchor(event);
+                              }}
+                            />
+                          }
+                        >
+                          <span>{gt("Install guide")}</span>
+                          <ExternalLinkIcon className="size-3" />
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        disabled={isPreparingRegistryAgent}
+                        onClick={handleOmpLocalAcpPreset}
+                      >
+                        <T>Use omp ACP preset</T>
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                {(() => {
+                  const selectedLive = liveProvidersByDriver.get(driver);
+                  if (!selectedLive || selectedLive.installed) return null;
+                  const activeOption = providerClients.definitions.find(
+                    (option) => option.driverKind === driver,
+                  );
+                  const activeLabel = activeOption?.label ?? String(driver);
+                  const selectedMeta = resolveAgentCliMeta({
+                    driver,
+                    displayName: activeLabel,
+                  });
+                  const selectedHomepage = resolveSafeAgentHomepageUrl({
+                    driver,
+                    displayName: activeLabel,
+                    documentationUrl: selectedLive.setup?.documentationUrl ?? null,
+                  });
+                  return (
+                    <AgentInstallPrompt
+                      compact
+                      label={activeLabel}
+                      homepageUrl={selectedHomepage}
+                      loginHint={selectedMeta?.loginHint ?? null}
+                    />
+                  );
+                })()}
                 <MultipleAccountsNote environmentId={environmentId} driver={driver} />
               </div>
 
@@ -527,6 +744,10 @@ export function AddProviderInstanceDialog({
                         value={driver}
                         disabled={isPreparingRegistryAgent}
                         onValueChange={selectDriver}
+                        liveProvidersByDriver={liveProvidersByDriver}
+                        onCopyUpdateCommand={(cmd, providerLabel) =>
+                          copyCliUpdateCommand(cmd, { label: providerLabel })
+                        }
                         aria-label={gt("More providers")}
                       />
                       {!acpRegistryAllowed ? null : (
@@ -619,29 +840,29 @@ export function AddProviderInstanceDialog({
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-2 text-2xs">
-                    {selectedAcp.website ? (
+                    {validateSafeHttpsUrl(selectedAcp.website) ? (
                       <a
                         aria-label={gt("Open documentation for {name} ({id})", {
                           name: selectedAcp.name,
                           id: selectedAcp.id,
                         })}
                         className="text-muted-foreground hover:text-foreground"
-                        href={selectedAcp.website}
-                        rel="noreferrer"
+                        href={validateSafeHttpsUrl(selectedAcp.website)!}
+                        rel="noopener noreferrer"
                         target="_blank"
                       >
                         <T>Docs</T>
                       </a>
                     ) : null}
-                    {selectedAcp.repository ? (
+                    {validateSafeHttpsUrl(selectedAcp.repository) ? (
                       <a
                         aria-label={gt("Open source for {name} ({id})", {
                           name: selectedAcp.name,
                           id: selectedAcp.id,
                         })}
                         className="text-muted-foreground hover:text-foreground"
-                        href={selectedAcp.repository}
-                        rel="noreferrer"
+                        href={validateSafeHttpsUrl(selectedAcp.repository)!}
+                        rel="noopener noreferrer"
                         target="_blank"
                       >
                         {gt("Source", { $context: "link to source code" })}

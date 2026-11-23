@@ -1,18 +1,26 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ContextMenuSource } from "@t3tools/contracts";
-import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
+import { ChevronDownIcon, NetworkIcon, SquarePenIcon } from "lucide-react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { memo } from "react";
+import { memo, type MouseEvent as ReactMouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { contextMenuSourceOf } from "../../contextMenuSource";
+import { ensureLocalApi } from "../../localApi";
+import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  findWorkspaceListeningPorts,
+  formatPortMicroBadgeLabel,
+  resolvePrimaryPortUrl,
+  stopActivationKeyPropagation,
+} from "./sidebarMicroIndicators";
 
 const FOLDER_DOT_CLASS_NAME = {
   attention: "bg-warning",
@@ -55,6 +63,28 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   const { group, collapsed, hiddenThreads } = props;
   const rowId = sidebarFolderRowId(group.projectKey);
   const localLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
+  const prismuxRuntime = useOptionalPrismuxRuntime();
+  const folderPorts = findWorkspaceListeningPorts(
+    prismuxRuntime?.portsState.ports ?? [],
+    group.workspaceRoot,
+  );
+  const folderPortLabel = formatPortMicroBadgeLabel(folderPorts);
+  const folderPrimaryUrl = resolvePrimaryPortUrl(folderPorts);
+  const handleFolderPortClick = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (folderPorts.length === 1 && folderPrimaryUrl && !event.shiftKey) {
+      try {
+        void ensureLocalApi().shell.openExternal(folderPrimaryUrl).catch(() => {
+          window.open(folderPrimaryUrl, "_blank", "noopener,noreferrer");
+        });
+      } catch {
+        window.open(folderPrimaryUrl, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+    prismuxRuntime?.requestOpenPortsPopover(group.workspaceRoot);
+  };
   const dot = collapsed
     ? resolveSidebarFolderDot(
         hiddenThreads.map((thread) => ({
@@ -92,6 +122,38 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90">
           {group.displayName}
         </span>
+        {folderPortLabel ? (
+          <span
+            role="button"
+            tabIndex={0}
+            data-testid={`sidebar-folder-port-badge-${group.projectKey}`}
+            title={
+              folderPorts.length === 1 && folderPrimaryUrl
+                ? gt("Click to open {url} · Shift+click to inspect ports", {
+                    url: folderPrimaryUrl,
+                  })
+                : gt(
+                    "{count, plural, one {Click to inspect {count} listening workspace port} other {Click to inspect {count} listening workspace ports}}",
+                    { count: folderPorts.length },
+                  )
+            }
+            onClick={(event) => {
+              handleFolderPortClick(event);
+              if (event.detail > 0) event.currentTarget.blur();
+            }}
+            onKeyDown={(event) => {
+              stopActivationKeyPropagation(event);
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                prismuxRuntime?.requestOpenPortsPopover(group.workspaceRoot);
+              }
+            }}
+            className="inline-flex h-4 shrink-0 cursor-pointer items-center gap-0.5 rounded-sm bg-emerald-600/15 px-1 font-mono text-[10px] leading-none font-semibold text-emerald-800 tabular-nums transition-colors hover:bg-emerald-600/25 group-hover/project-folder:invisible dark:bg-emerald-400/18 dark:text-emerald-200"
+          >
+            <NetworkIcon aria-hidden className="size-2.5 shrink-0" />
+            <span>{folderPortLabel}</span>
+          </span>
+        ) : null}
         {dot ? (
           <span className={cn("size-1.5 shrink-0 rounded-full", FOLDER_DOT_CLASS_NAME[dot])}>
             <span className="sr-only">{m(FOLDER_DOT_LABEL[dot])}</span>

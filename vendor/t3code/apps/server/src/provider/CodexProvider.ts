@@ -181,6 +181,13 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 
 const DEFAULT_SERVICE_TIER_ID = "default";
 
+const CODEX_SPEED_TIER_LABELS: Readonly<Record<string, string>> = {
+  fast: "Fast",
+  priority: "Fast",
+  ultrafast: "Ultrafast",
+  flex: "Flex",
+};
+
 const SERVICE_TIER_DESCRIPTIONS: Readonly<Record<string, string>> = {
   ultrafast: "Even faster, more expensive",
 };
@@ -275,7 +282,7 @@ export function mapCodexModelCapabilities(
       ? model.serviceTiers
       : (model.additionalSpeedTiers ?? []).map((id) => ({
           id,
-          name: id === "fast" ? "Fast" : id,
+          name: CODEX_SPEED_TIER_LABELS[id] ?? id,
           description: "",
         }));
   const catalogDefaultServiceTier = serviceTiers.some(

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
+import {
+  computeUsageCacheHitRate,
+  computeUsageOutputTps,
+  resolveModelAliases,
+  UsageAggregator,
+} from "./usageAggregation.ts";
 import type { RateTable } from "./usagePricing.ts";
 import type { UsageRecord } from "@t3tools/provider-core/server/usage";
 
@@ -312,5 +317,128 @@ describe("resolveModelAliases", () => {
       ["shared", "example-model"],
       ["validAfterLoops", "example-model"],
     ]);
+  });
+});
+
+describe("UsageCallLog aggregation and telemetry math", () => {
+  it("computes real cache hit rate and output TPS without fabricating missing timings", () => {
+    expect(computeUsageCacheHitRate(100, 900, 0)).toBe(0.9);
+    expect(computeUsageCacheHitRate(100, 800, 100)).toBe(0.8);
+    expect(computeUsageCacheHitRate(0, 0, 0)).toBeNull();
+
+    // Post-TTFT generation window when durationMs > ttftMs
+    expect(computeUsageOutputTps(100, 2500, 500)).toBe(50);
+    // Total duration fallback when ttftMs is absent
+    expect(computeUsageOutputTps(100, 2000, null)).toBe(50);
+    // Strictly null when real timing or output tokens are missing
+    expect(computeUsageOutputTps(100, null, null)).toBeNull();
+    expect(computeUsageOutputTps(100, 0, null)).toBeNull();
+    expect(computeUsageOutputTps(0, 2000, 200)).toBeNull();
+  });
+
+  it("emits deduplicated, newest-first bounded callLogs with null timings when transcripts lack them", () => {
+    const aggregator = new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-31",
+      rates,
+      maxCallLogs: 2,
+    });
+    const t1 = Date.parse("2026-08-07T04:05:10.000Z");
+    const t2 = Date.parse("2026-08-07T04:06:10.000Z");
+    const t3 = Date.parse("2026-08-07T04:07:10.000Z");
+
+    aggregator.add(record({ timestampMs: t1, sessionId: "", dedupeKey: null }));
+    // Partial copy + completed copy sharing dedupeKey collapse into one merged callLog entry
+    aggregator.add(
+      record({
+        timestampMs: t2,
+        sessionId: "thread-2",
+        dedupeKey: "msg_2",
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 800,
+          cacheCreationTokens: 100,
+          outputTokens: 10,
+          reasoningTokens: 0,
+        },
+      }),
+      undefined,
+      { ttftMs: 400, durationMs: 2400 },
+    );
+    aggregator.add(
+      record({
+        timestampMs: t2,
+        sessionId: "thread-2",
+        dedupeKey: "msg_2",
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 800,
+          cacheCreationTokens: 100,
+          outputTokens: 100,
+          reasoningTokens: 0,
+        },
+      }),
+    );
+    aggregator.add(
+      record({
+        timestampMs: t3,
+        sessionId: "thread-3",
+        dedupeKey: null,
+        speed: "fast",
+        totals: {
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 40,
+          reasoningTokens: 0,
+        },
+      }),
+    );
+
+    const { callLogs } = aggregator.finish();
+    expect(callLogs).toHaveLength(2);
+    // Newest first (t3, then t2; t1 evicted by maxCallLogs: 2)
+    expect(callLogs[0]).toMatchObject({
+      timestamp: "2026-08-07T04:07:10.000Z",
+      provider: "claude",
+      model: "claude-fable-5",
+      threadId: "thread-3",
+      ttftMs: null,
+      durationMs: null,
+      tps: null,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 40,
+      cacheHitRate: null,
+      speed: "fast",
+    });
+    expect(callLogs[1]).toMatchObject({
+      id: "claude:msg_2",
+      timestamp: "2026-08-07T04:06:10.000Z",
+      provider: "claude",
+      model: "claude-fable-5",
+      threadId: "thread-2",
+      ttftMs: 400,
+      durationMs: 2400,
+      tps: 50,
+      inputTokens: 100,
+      cachedInputTokens: 800,
+      cacheCreationTokens: 100,
+      outputTokens: 100,
+      cacheHitRate: 0.8,
+      speed: "standard",
+    });
+  });
+
+  it("omits threadId when sessionId is blank", () => {
+    const { callLogs } = aggregate([record({ sessionId: "   " })]);
+    expect(callLogs).toHaveLength(1);
+    expect(callLogs[0]).not.toHaveProperty("threadId");
+    expect(callLogs[0]?.ttftMs).toBeNull();
+    expect(callLogs[0]?.durationMs).toBeNull();
+    expect(callLogs[0]?.tps).toBeNull();
+    expect(callLogs[0]?.cacheHitRate).toBeCloseTo(1000 / 1110, 4);
   });
 });

@@ -87,7 +87,6 @@ import {
   extendReplacementRangeForTrailingSpace,
   replaceTextRange,
 } from "../../composer-logic";
-import { DEFAULT_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { deriveComposerSendState, getAntigravitySendBlockReason } from "../ChatView.logic";
 import { threadHasStarted } from "../../lib/chatThreadActions";
 import {
@@ -220,7 +219,10 @@ import {
   ComposerRestingImagePreviews,
 } from "./ComposerAttachmentStrip";
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
-import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
+import {
+  ComposerFooterModeControls,
+  ComposerFooterPrimaryActions,
+} from "./ComposerFooterControls";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
@@ -298,6 +300,8 @@ import { ComposerControlsBar } from "./ComposerControlsBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
 import { promptSuggestionToAccept, usePromptSuggestion } from "./usePromptSuggestion";
 import { useFreshSessionArmed } from "./freshSessionArms";
+
+const ORCA_COMPOSER_PLACEHOLDER = msg("Ask anything, @ to mention files, / for commands");
 
 function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
   const armed = Date.now() <= deadline.current;
@@ -2635,7 +2639,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       handleRuntimeModeChange={handleRuntimeModeChange}
       composerControlsCollapsed={composerControlsCollapsed}
       effortDisplay={settings.effortDisplay}
-      permissionsShownInStrip={props.permissionsShownInStrip}
+      permissionsShownInStrip={
+        props.permissionsShownInStrip || (!composerControlsCollapsed && !showProviderUnavailable)
+      }
       composerControlsHidden={composerControlsHidden}
       restingHiddenBlockCount={restingHiddenBlockCount}
       iconOnlyBlockCount={iconOnlyBlockCount}
@@ -3885,7 +3891,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             ? gt("Choose a project above to start a thread")
                             : showProviderUnavailable
                               ? gt("Enable a provider in Settings to send a message")
-                              : (offeredPromptSuggestion ?? m(DEFAULT_COMPOSER_PLACEHOLDER))
+                              : (offeredPromptSuggestion ?? m(ORCA_COMPOSER_PLACEHOLDER))
                     }
                     placeholderSuffix={
                       offeredPromptSuggestion !== null ? (
@@ -3962,15 +3968,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <div
                 data-chat-composer-footer="true"
                 className={cn(
-                  "flex min-w-0 flex-nowrap items-center overflow-visible px-2 pb-2",
+                  "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-2.5 pb-2 pt-0.5",
                   pendingUserInputs.length > 0 && "pt-2",
                   showMobilePendingAnswerActions &&
                     speechInput.state.phase === "idle" &&
                     "hidden sm:flex",
                 )}
               >
-                {composerAttachButton && !dictationTakesFooter ? (
-                  <div className="me-2">{composerAttachButton}</div>
+                {!dictationTakesFooter ? (
+                  <div
+                    data-chat-composer-actions="left"
+                    className="flex shrink-0 items-center gap-0.5"
+                  >
+                    {composerAttachButton}
+                    {!showProviderUnavailable && compatibleRuntimeModeOptions.length > 0 ? (
+                      <ComposerFooterModeControls
+                        runtimeMode={compatibleRuntimeMode}
+                        runtimeModeOptions={compatibleRuntimeModeOptions}
+                        size="sm"
+                        hidden={dictationTakesFooter || composerControlsCollapsed}
+                        accessDisplay="icon"
+                        emphasized={compatibleRuntimeMode !== props.defaultRuntimeMode}
+                        onRuntimeModeChange={handleRuntimeModeChange}
+                      />
+                    ) : null}
+                  </div>
                 ) : null}
                 <div
                   data-chat-composer-actions="right"

@@ -102,6 +102,7 @@ import { ExpandableText } from "./ExpandableText";
 import { IntervalSecondsField } from "./IntervalSecondsField";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
+import { Badge } from "../ui/badge";
 import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
@@ -110,7 +111,7 @@ import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSectio
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import { providerClients } from "./providerDriverMeta";
 import { useSearchableSetting } from "./settingsSearch";
-import { CompactIdleThreadsRow } from "./SettingsPanels";
+import { CompactIdleThreadsRow, ProviderUpdateChecksRow } from "./SettingsPanels";
 import {
   backgroundActivityOverrideSettings,
   buildProviderInstanceUpdatePatch,
@@ -135,6 +136,12 @@ import {
   resolveRemoteOperateAccess,
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
+import { supportsDualLaunchMode } from "./prismuxProviderMeta";
+import {
+  resolveEffectiveLaunchMode,
+  useProviderLaunchModePreferences,
+  type ProviderLaunchMode,
+} from "./prismuxProviderMode";
 
 function providerInstanceName(instance: ProviderInstanceConfig): string {
   return (
@@ -578,6 +585,11 @@ export function EnvironmentProviderSettings({
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
   const settings = useEnvironmentSettings(environmentId);
+  const {
+    state: launchModeState,
+    setGlobalDefaultMode,
+    setInstanceMode,
+  } = useProviderLaunchModePreferences();
   const managedPolicy = useManagedPolicy(environmentId);
   // A policy that allows no provider leaves nothing to add.
   const canAddProvider =
@@ -963,6 +975,11 @@ export function EnvironmentProviderSettings({
 
   const stableUpdateModelPreferences = useStableCallback(updateModelPreferences);
   const stableToggleModelFavorite = useStableCallback(toggleModelFavorite);
+  const stableSetInstanceLaunchMode = useStableCallback(
+    (instanceId: ProviderInstanceId, mode: ProviderLaunchMode | null) => {
+      setInstanceMode(instanceId, mode);
+    },
+  );
   const actions: ProviderInstanceRowActions = {
     acceptUrlAuthentication,
     runProviderUpdate,
@@ -974,6 +991,7 @@ export function EnvironmentProviderSettings({
     updateModelPreferences: stableUpdateModelPreferences,
     toggleModelFavorite: stableToggleModelFavorite,
     selectInstance: setSelectedInstanceId,
+    setInstanceLaunchMode: stableSetInstanceLaunchMode,
   };
   // resolveModelPreferences falls back to a fresh `[]`; keep it stable for the rows.
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
@@ -982,6 +1000,18 @@ export function EnvironmentProviderSettings({
   const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
     const showProjectOverride =
       representativeProjectId !== undefined && supportsProjectProviderOverrides;
+    const dualModeSupported = supportsDualLaunchMode({
+      driver: row.driver,
+      instanceId: row.instanceId,
+      config: row.explicitInstance?.config,
+    });
+    const effectiveLaunchMode = resolveEffectiveLaunchMode(
+      launchModeState,
+      row.instanceId,
+      dualModeSupported,
+    );
+    const isLaunchModeOverridden =
+      dualModeSupported && launchModeState.perInstanceMode[row.instanceId] !== undefined;
     return (
       <ProviderInstanceRow
         key={row.instanceId}
@@ -1015,6 +1045,8 @@ export function EnvironmentProviderSettings({
               )
             : false
         }
+        launchMode={effectiveLaunchMode}
+        isLaunchModeOverridden={isLaunchModeOverridden}
         modelPreferences={settings.providerModelPreferences?.[row.instanceId]}
         favorites={favorites}
         actions={actions}
@@ -1022,35 +1054,82 @@ export function EnvironmentProviderSettings({
     );
   };
 
+  const liveProvidersByInstanceId = new Map(
+    serverProviders.map((candidate) => [candidate.instanceId, candidate] as const),
+  );
+  const installedProviderCount = rows.filter(
+    (row) => liveProvidersByInstanceId.get(row.instanceId)?.installed === true,
+  ).length;
+  const allProvidersProbed =
+    rows.length > 0 && rows.every((row) => liveProvidersByInstanceId.has(row.instanceId));
+
   return (
     <>
+      <SettingsSection id="provider-defaults" title={gt("Defaults & CLI updates")}>
+        <SettingsRow
+          title={gt("Default launch mode")}
+          description={gt(
+            "Choose whether newly started provider sessions default to integrated Chat or terminal CLI mode.",
+          )}
+          control={
+            <ToggleGroup
+              aria-label={gt("Global default launch mode")}
+              data-global-launch-mode-toggle
+              variant="segmented"
+              value={[launchModeState.globalDefaultMode]}
+              onValueChange={(next) => {
+                const picked = next[0];
+                if (picked === "chat" || picked === "cli") {
+                  setGlobalDefaultMode(picked);
+                }
+              }}
+            >
+              <Toggle value="chat">Chat</Toggle>
+              <Toggle value="cli">CLI</Toggle>
+            </ToggleGroup>
+          }
+        />
+        <ProviderUpdateChecksRow />
+      </SettingsSection>
+
       <SettingsSection
         {...searchableSetting("providers")}
         variant="plain"
         titleAction={
-          canAddProvider ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-xs"
-                    variant="ghost-muted"
-                    onClick={() => setIsAddInstanceDialogOpen(true)}
-                    aria-label={gt("Add provider")}
-                  >
-                    <PlusIcon />
-                  </Button>
-                }
-              />
-              <TooltipPopup side="top">
-                <T>Add provider</T>
-              </TooltipPopup>
-            </Tooltip>
-          ) : null
+          <div className="flex items-center gap-1.5">
+            {allProvidersProbed ? (
+              <Badge
+                variant={installedProviderCount > 0 ? "info" : "outline"}
+                size="sm"
+                className="font-mono text-2xs tabular-nums"
+              >
+                {gt("{count} detected", { count: installedProviderCount })}
+              </Badge>
+            ) : null}
+            {canAddProvider ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost-muted"
+                      onClick={() => setIsAddInstanceDialogOpen(true)}
+                      aria-label={gt("Add provider")}
+                    >
+                      <PlusIcon />
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="top">
+                  <T>Add provider</T>
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+          </div>
         }
         headerAction={
           // The ghost button's padding would inset its label, so pull the text to the card edge.
-          <div className="-me-2 flex min-w-0 items-center gap-2">
+          <div className="-me-2 flex min-w-0 flex-wrap items-center gap-2">
             <ProviderUpdatesAction />
             <Tooltip>
               <TooltipTrigger
@@ -1101,7 +1180,7 @@ export function EnvironmentProviderSettings({
           divided={false}
           className={cn(
             providerCardHeightClassName,
-            "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[17rem_minmax(0,1fr)]",
+            "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[20.5rem_minmax(0,1fr)]",
           )}
         >
           <div className="border-b border-border/60 bg-muted/10 @min-[48rem]/providers:flex @min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-col @min-[48rem]/providers:border-r @min-[48rem]/providers:border-b-0">
@@ -1111,6 +1190,28 @@ export function EnvironmentProviderSettings({
               className="@min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-1"
             >
               <div className="divide-y divide-border/50">
+                {allProvidersProbed && installedProviderCount === 0 && !isRefreshingProviders ? (
+                  <div
+                    data-slot="empty-agent-detection-banner"
+                    className="flex items-center justify-between gap-2 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground sm:px-4"
+                  >
+                    <span className="min-w-0 leading-snug">
+                      {gt(
+                        "No agents detected. If one is installed, the probe may have timed out.",
+                      )}
+                    </span>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      disabled={!canRefreshProviders}
+                      onClick={() => void refreshProviders()}
+                    >
+                      <RefreshIcon refreshing={isRefreshingProviders} />
+                      <span>{gt("Refresh")}</span>
+                    </Button>
+                  </div>
+                ) : null}
                 {rows.map((row) => renderProviderInstance(row, "list"))}
                 {canAddProvider ? (
                   <button
@@ -1282,6 +1383,10 @@ interface ProviderInstanceRowActions {
   readonly updateModelPreferences: ReturnType<typeof useUpdateEnvironmentModelPreferences>;
   readonly toggleModelFavorite: ReturnType<typeof useToggleEnvironmentModelFavorite>;
   readonly selectInstance: (instanceId: ProviderInstanceId) => void;
+  readonly setInstanceLaunchMode: (
+    instanceId: ProviderInstanceId,
+    mode: ProviderLaunchMode | null,
+  ) => void;
 }
 
 const NO_MODELS: ReadonlyArray<string> = [];
@@ -1304,6 +1409,8 @@ function ProviderInstanceRow({
   showProjectOverride,
   projectOverrideValue,
   projectOverrideEffectiveEnabled,
+  launchMode,
+  isLaunchModeOverridden,
   modelPreferences,
   favorites,
   actions,
@@ -1324,6 +1431,8 @@ function ProviderInstanceRow({
   readonly showProjectOverride: boolean;
   readonly projectOverrideValue: boolean | undefined;
   readonly projectOverrideEffectiveEnabled: boolean;
+  readonly launchMode: ProviderLaunchMode;
+  readonly isLaunchModeOverridden: boolean;
   readonly modelPreferences:
     | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
     | undefined;
@@ -1374,6 +1483,10 @@ function ProviderInstanceRow({
       secretSources={secretSources}
       acpProjects={acpProjects}
       projectOverride={projectOverride}
+      launchMode={launchMode}
+      isLaunchModeOverridden={isLaunchModeOverridden}
+      onLaunchModeChange={(nextMode) => actions.setInstanceLaunchMode(instanceId, nextMode)}
+      onLaunchModeReset={() => actions.setInstanceLaunchMode(instanceId, null)}
       onAcceptUrlAuth={
         readOnly ? undefined : (action) => actions.acceptUrlAuthentication(instanceId, action)
       }

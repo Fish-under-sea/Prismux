@@ -285,6 +285,22 @@ export function describeUpdateErrorCause(cause: unknown): string {
   }
 }
 
+const LEGACY_UPSTREAM_FEED_PATTERN = /(?:^|\/)pingdotgg\/t3code(?:$|\/|\b)/i;
+
+/**
+ * Rejects stale upstream `pingdotgg/t3code` electron-updater feeds so Prismux never polls
+ * or pops up invalid upstream update prompts.
+ */
+export function isLegacyUpstreamT3CodeFeed(config: Readonly<Record<string, string>>): boolean {
+  const owner = config.owner?.trim().toLowerCase();
+  const repo = config.repo?.trim().toLowerCase();
+  if (owner === "pingdotgg" && repo === "t3code") {
+    return true;
+  }
+  const url = config.url?.trim() ?? "";
+  return LEGACY_UPSTREAM_FEED_PATTERN.test(url);
+}
+
 function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
   const entries: Record<string, string> = {};
   for (const line of raw.split("\n")) {
@@ -295,7 +311,11 @@ function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYm
   }
 
   return decodeAppUpdateYmlConfig(entries).pipe(
-    Effect.map((config) => (config.provider ? Option.some(config) : Option.none())),
+    Effect.map((config) =>
+      config.provider && !isLegacyUpstreamT3CodeFeed(config)
+        ? Option.some(config)
+        : Option.none(),
+    ),
     Effect.orElseSucceed(() => Option.none<AppUpdateYmlConfig>()),
   );
 }
@@ -472,10 +492,11 @@ export const make = Effect.gen(function* () {
       : false;
 
   const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
-    Effect.map(
-      (appUpdateYmlConfig) =>
-        Option.isSome(appUpdateYmlConfig) || mockUpdates || policy.feedUrl !== undefined,
-    ),
+    Effect.map((appUpdateYmlConfig) => {
+      const policyFeedValid =
+        policy.feedUrl !== undefined && !LEGACY_UPSTREAM_FEED_PATTERN.test(policy.feedUrl);
+      return Option.isSome(appUpdateYmlConfig) || mockUpdates || policyFeedValid;
+    }),
   );
 
   const resolveDisabledReason = Effect.gen(function* () {
@@ -1304,7 +1325,10 @@ export const make = Effect.gen(function* () {
           provider: "generic",
           url: `http://localhost:${config.mockUpdateServerPort}`,
         } as ElectronUpdater.ElectronUpdaterFeedUrl);
-      } else if (policy.feedUrl !== undefined) {
+      } else if (
+        policy.feedUrl !== undefined &&
+        !LEGACY_UPSTREAM_FEED_PATTERN.test(policy.feedUrl)
+      ) {
         // The administrator's mirror replaces the GitHub feed baked into app-update.yml.
         yield* electronUpdater.setFeedURL({
           provider: "generic",
@@ -1313,13 +1337,18 @@ export const make = Effect.gen(function* () {
       }
 
       const settings = yield* desktopSettings.get;
+      const hasFeedConfig = yield* hasUpdateFeedConfig;
+      // Without app-update.yml / managed feed, converge away from upstream nightly to avoid stale prompts.
+      const effectiveChannel: DesktopUpdateChannel = hasFeedConfig
+        ? settings.updateChannel
+        : "latest";
       const disabledReason = yield* resolveDisabledReason;
       // A blocked nightly channel still lets the user switch back to stable, so it stays updatable.
       yield* Ref.set(desktopState.canInstallUpdates, Option.isNone(disabledReason));
       yield* setState(
         yield* baseUpdateState(
-          settings.updateChannel,
-          Option.orElse(disabledReason, () => channelBlockedReason(settings.updateChannel)),
+          effectiveChannel,
+          Option.orElse(disabledReason, () => channelBlockedReason(effectiveChannel)),
         ),
       );
       if (Option.isSome(disabledReason)) {
@@ -1329,7 +1358,7 @@ export const make = Effect.gen(function* () {
 
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
-      yield* applyAutoUpdaterChannel(settings.updateChannel);
+      yield* applyAutoUpdaterChannel(effectiveChannel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
@@ -1370,10 +1399,18 @@ export const make = Effect.gen(function* () {
       options?: { readonly minimumVersion?: string | undefined },
     ) {
       yield* Effect.annotateCurrentSpan({ channel: nextChannel });
+      const hasFeedConfig = yield* hasUpdateFeedConfig;
+      if (nextChannel === "nightly" && !hasFeedConfig) {
+        return yield* new DesktopUpdateChannelManagedError({
+          channel: nextChannel,
+          policyMessage:
+            "Prismux disables the upstream nightly electron-updater channel when no update feed is configured.",
+        });
+      }
       if (Option.isSome(channelBlockedReason(nextChannel))) {
         return yield* new DesktopUpdateChannelManagedError({
           channel: nextChannel,
-          policyMessage: policy.message ?? "Your administrator manages T3 Code updates.",
+          policyMessage: policy.message ?? "Your administrator manages Prismux updates.",
         });
       }
       // A background check holds the updater only briefly, so wait it out instead of refusing.

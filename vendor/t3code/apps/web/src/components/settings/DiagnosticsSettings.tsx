@@ -51,6 +51,7 @@ import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
+import { PrismuxDiagnosticsSection } from "../../prismux/settings/PrismuxDiagnosticsSection";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
 
@@ -990,7 +991,8 @@ function DiagnosticsSettingsBody() {
 
   if (!canReadDiagnostics) {
     return (
-      <SettingsPageContainer>
+      <SettingsPageContainer width="expanded" className="gap-8">
+        <PrismuxDiagnosticsSection variant="full" />
         <p className="text-sm text-muted-foreground">
           {environmentId === null
             ? gt("Connect an environment to see diagnostics.")
@@ -1004,6 +1006,7 @@ function DiagnosticsSettingsBody() {
 
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
+      <PrismuxDiagnosticsSection variant="full" />
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
       <SettingsSection

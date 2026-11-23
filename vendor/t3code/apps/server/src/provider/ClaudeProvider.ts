@@ -76,6 +76,7 @@ import {
   formatClaudeVersionUpgradeMessage,
   resolveClaudeModelsForVersion,
   resolveClaudeUpdateRequiredModels,
+  withClaudeReportedFastMode,
   withUltracodeToggle,
 } from "./ClaudeModelCatalog.ts";
 
@@ -791,7 +792,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     modelCatalog,
     claudeProviderModels(
       [
-        ...resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
+        ...withClaudeReportedFastMode(
+          resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
+          capabilities?.models,
+        ),
         ...claudeReportedModels(modelCatalog, claudeSettings.customModels, capabilities?.models),
       ],
       claudeSettings.customModels,

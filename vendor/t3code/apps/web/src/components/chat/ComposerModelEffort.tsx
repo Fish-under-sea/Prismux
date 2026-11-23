@@ -1,4 +1,11 @@
 import {
+  PrismuxReasoningEffortSlider,
+  formatReasoningEffortLabel,
+  formatReasoningEffortShortLabel,
+  type ReasoningEffortLocale,
+  type ReasoningEffortOption,
+} from "@prismux/appearance";
+import {
   buildTraitsTriggerDisplay,
   getDescriptorStringValue,
   isReasoningControl,
@@ -6,9 +13,15 @@ import {
 } from "@t3tools/client-runtime/model-traits";
 import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
-import { getProviderOptionCurrentLabel } from "@t3tools/shared/model";
-import { msg, T, useGT, useMessages } from "gt-react";
-import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon } from "lucide-react";
+import {
+  getFastModeDescriptor,
+  getProviderOptionCurrentLabel,
+  isFastModeActive,
+  isFastServiceTierChoice,
+  isUltrafastServiceTierChoice,
+} from "@t3tools/shared/model";
+import { msg, T, useGT, useLocale, useMessages } from "gt-react";
+import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon, ZapIcon } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, use, useRef, useState } from "react";
 
 import { m, type MessageResolver } from "~/i18n/messages";
@@ -88,6 +101,7 @@ export function describeComposerEffort(
   effortDisplay: EffortDisplay,
   size: ComposerControlSize,
   resolve: MessageResolver = m,
+  locale?: string,
 ): { suffix: ReactNode; detail: string | null } {
   if (!traits) return { suffix: null, detail: null };
   const visibility = getTraitsSectionVisibility({ ...traits, resolve });
@@ -133,9 +147,15 @@ export function describeComposerEffort(
         })()
       : null;
   const effectiveGlyph = glyph ?? fallbackUnobservedGlyph;
+  const isZhLocale = typeof locale === "string" && locale.toLowerCase().startsWith("zh");
   // Workflow levels such as Ultracode always show their name; the setting names every level.
+  const localizedEffortShortLabel =
+    isZhLocale && currentReasoningValue
+      ? formatReasoningEffortShortLabel(currentReasoningValue, "zh")
+      : null;
   const word = effectiveGlyph
-    ? (effectiveGlyph.special ?? (effortDisplay === "label" ? effectiveGlyph.label : null))
+    ? (effectiveGlyph.special ??
+      (effortDisplay === "label" ? (localizedEffortShortLabel ?? effectiveGlyph.label) : null))
     : !reasoning
       ? null
       : reasoning.type === "boolean"
@@ -143,13 +163,26 @@ export function describeComposerEffort(
           ? resolve(msg("{option} On", { option: reasoning.label }))
           : resolve(msg("{option} Off", { option: reasoning.label }))
         : ultrathink
-          ? "Ultrathink"
-          : (getProviderOptionCurrentLabel(
+          ? isZhLocale
+            ? "极致"
+            : "Ultrathink"
+          : (localizedEffortShortLabel ??
+            getProviderOptionCurrentLabel(
               reasoning,
               modelSelection,
               traits.reportedModelSelection,
-            ) ?? (selectableProviderOptionChoices(reasoning).length > 0 ? reasoning.label : null));
-  const fast = display.speedLabel === "Fast" || display.speedLabel === "Ultrafast";
+            ) ??
+            (selectableProviderOptionChoices(reasoning).length > 0 ? reasoning.label : null));
+  const fastModeState = isFastModeActive(
+    visibility.caps,
+    modelSelection,
+    traits.reportedModelSelection,
+  );
+  const fast =
+    fastModeState !== false ||
+    display.speedLabel === "Fast" ||
+    display.speedLabel === "Ultrafast";
+  const ultrafast = fastModeState === "ultrafast" || display.speedLabel === "Ultrafast";
   // Agent options such as modes live in the picker; the trigger adds only the context window.
   const contextWindow =
     visibility.contextWindowDescriptor &&
@@ -181,7 +214,7 @@ export function describeComposerEffort(
             size={size}
           />
         ) : null}
-        {fast ? <FastBolt ultra={display.speedLabel === "Ultrafast"} /> : null}
+        {fast ? <FastBolt ultra={ultrafast} /> : null}
         {display.ultracode ? (
           <WorkflowIcon aria-hidden="true" data-composer-control-icon className="size-3" />
         ) : null}
@@ -750,6 +783,350 @@ export function ComposerPickerFooter(props: {
         options={props.runtimeModeOptions}
         onChange={props.onRuntimeModeChange}
       />
+    </div>
+  );
+}
+
+const KNOWN_CANONICAL_EFFORT_IDS = new Set([
+  "off",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultracode",
+  "ultrathink",
+  "extreme",
+  "auto",
+]);
+
+function formatChoiceForSlider(
+  choice: { readonly id: string; readonly label: string; readonly description?: string | undefined },
+  locale: ReasoningEffortLocale,
+): ReasoningEffortOption {
+  const isCanonical = KNOWN_CANONICAL_EFFORT_IDS.has(choice.id.trim().toLowerCase());
+  const label = isCanonical
+    ? formatReasoningEffortLabel(choice.id, locale)
+    : choice.label || formatReasoningEffortLabel(choice.id, locale);
+  const shortLabel = isCanonical
+    ? formatReasoningEffortShortLabel(choice.id, locale)
+    : choice.label || formatReasoningEffortShortLabel(choice.id, locale);
+  return {
+    value: choice.id,
+    label,
+    shortLabel,
+    ...(choice.description !== undefined ? { description: choice.description } : {}),
+  };
+}
+
+function UnifiedSpeedRow(props: {
+  traitsInput: TraitsSelectionInput;
+  traits: TraitsSelection;
+}) {
+  const gt = useGT();
+  const { traitsInput, traits } = props;
+  const { speedSelect, fastToggle } = splitSpeed(
+    traits.selectDescriptors,
+    traits.booleanDescriptors,
+  );
+  const fastModeControl = getFastModeDescriptor(traits.caps, traitsInput.modelOptions);
+  if (traits.modelIsUnavailable || !fastModeControl) return null;
+
+  const speedLabel = gt("Speed", { $context: "model speed setting" });
+  const fastText = gt("Fast", { $context: "response speed" });
+
+  // Single-click Orca-style "⚡ Fast" pill toggle (Claude fastMode boolean OR 2-tier Codex serviceTier).
+  if (fastModeControl.kind === "boolean" && fastToggle) {
+    const active = fastToggle.currentValue === true;
+    return (
+      <div
+        data-composer-speed-row="true"
+        className="flex min-h-7 items-center justify-between gap-3 pt-2 border-t border-border/55"
+      >
+        <span className="font-medium text-muted-foreground text-xs">{speedLabel}</span>
+        <button
+          type="button"
+          aria-pressed={active}
+          data-composer-fast-mode-toggle="true"
+          data-checked={active || undefined}
+          onClick={() => traits.changeBoolean(fastToggle.id, !active)}
+          className={cn(
+            "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+            active
+              ? "border-amber-500/55 bg-amber-500/15 text-amber-700 hover:bg-amber-500/20 dark:border-amber-400/50 dark:bg-amber-400/18 dark:text-amber-300"
+              : "border-border/75 bg-background/60 text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground",
+          )}
+        >
+          <ZapIcon
+            aria-hidden="true"
+            className={cn("size-3.5 shrink-0", active && "fill-current")}
+          />
+          <span>{fastText}</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (fastModeControl.kind === "serviceTier" && speedSelect) {
+    const currentValue = traits.selectValue(speedSelect);
+    if (fastModeControl.isSingleFastToggle && fastModeControl.fastChoice) {
+      const fastChoiceId = fastModeControl.fastChoice.id;
+      const standardChoiceId = fastModeControl.standardChoice.id;
+      const active = currentValue === fastChoiceId;
+      return (
+        <div
+          data-composer-speed-row="true"
+          className="flex min-h-7 items-center justify-between gap-3 pt-2 border-t border-border/55"
+        >
+          <span className="font-medium text-muted-foreground text-xs">{speedLabel}</span>
+          <button
+            type="button"
+            aria-pressed={active}
+            data-composer-fast-mode-toggle="true"
+            data-checked={active || undefined}
+            onClick={() =>
+              traits.changeSelect(speedSelect, active ? standardChoiceId : fastChoiceId)
+            }
+            className={cn(
+              "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+              active
+                ? "border-amber-500/55 bg-amber-500/15 text-amber-700 hover:bg-amber-500/20 dark:border-amber-400/50 dark:bg-amber-400/18 dark:text-amber-300"
+                : "border-border/75 bg-background/60 text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground",
+            )}
+          >
+            <ZapIcon
+              aria-hidden="true"
+              className={cn("size-3.5 shrink-0", active && "fill-current")}
+            />
+            <span>{fastText}</span>
+          </button>
+        </div>
+      );
+    }
+
+    const choices = [fastModeControl.standardChoice, ...fastModeControl.speedChoices];
+    return (
+      <div
+        data-composer-speed-row="true"
+        className="flex min-h-7 flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/55"
+      >
+        <span className="font-medium text-muted-foreground text-xs">{speedLabel}</span>
+        <div
+          role="radiogroup"
+          aria-label={speedLabel}
+          className="flex rounded-full border border-border/70 bg-background/50 p-0.5"
+        >
+          {choices.map((choice) => {
+            const checked = currentValue === choice.id;
+            const isUltra = isUltrafastServiceTierChoice(choice);
+            const isFastTier = isFastServiceTierChoice(choice);
+            const displayLabel = isFastTier && !isUltra ? fastText : choice.label;
+            return (
+              <button
+                key={choice.id}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                data-checked={checked || undefined}
+                onClick={() => traits.changeSelect(speedSelect, choice.id)}
+                className={cn(
+                  "inline-flex h-6 cursor-pointer items-center gap-1 rounded-full px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  checked
+                    ? isFastTier
+                      ? "bg-amber-500/18 text-amber-700 dark:bg-amber-400/20 dark:text-amber-300"
+                      : "bg-accent text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {isFastTier ? <FastBolt ultra={isUltra} /> : null}
+                <span>{displayLabel}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Orca-aligned unified bottom section of the Model Picker popover:
+ * 1. Model-aware dynamic `<PrismuxReasoningEffortSlider />` (pixel-matrix radiation + 8-family running sprite + discrete clickable stops)
+ * 2. Codex & Claude Fast Mode `Speed` (`⚡ Fast`) capsule row (hidden when unsupported)
+ * 3. Any extra provider-specific options (Ultracode, Context Window, Agent Mode) preserved below.
+ */
+export function ComposerUnifiedOptionsFooter(props: { traits: TraitsSelectionInput | null }) {
+  const gt = useGT();
+  const locale = useLocale();
+  const messages = useMessages();
+  const picker = use(DockedPickerContext);
+  if (!props.traits) return null;
+  return (
+    <ComposerUnifiedOptionsFooterBody
+      traitsInput={props.traits}
+      modelLabel={picker.modelLabel}
+      locale={locale}
+      gt={gt}
+      messages={messages}
+    />
+  );
+}
+
+function ComposerUnifiedOptionsFooterBody(props: {
+  traitsInput: TraitsSelectionInput;
+  modelLabel: string;
+  locale: string;
+  gt: ReturnType<typeof useGT>;
+  messages: ReturnType<typeof useMessages>;
+}) {
+  const { traitsInput, modelLabel, locale, gt, messages } = props;
+  const traits = useTraitsSelection(traitsInput);
+  const sliderLocale: ReasoningEffortLocale = locale.toLowerCase().startsWith("zh") ? "zh" : "en";
+  const { effort, others } = columnControls(traits.selectDescriptors, traits.booleanDescriptors);
+  const { ultracodeToggle } = splitSpeed(traits.selectDescriptors, traits.booleanDescriptors);
+  const fastModeControl = getFastModeDescriptor(traits.caps, traitsInput.modelOptions);
+
+  if (traits.modelIsUnavailable) {
+    const readOnlyRows = traits.descriptors
+      .map((descriptor) => ({ descriptor, value: traits.currentLabel(descriptor) }))
+      .filter((entry): entry is { descriptor: ProviderOptionDescriptor; value: string } =>
+        Boolean(entry.value),
+      );
+    if (readOnlyRows.length === 0) return null;
+    return (
+      <div className="flex flex-col gap-1.5 px-3 py-2.5">
+        {readOnlyRows.map(({ descriptor, value }) => (
+          <div key={descriptor.id} className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">{descriptor.label}</span>
+            <span className="truncate font-medium text-foreground">{value}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const hasEffort = effort !== null;
+  const hasFastMode = fastModeControl !== null;
+  const hasUltracode = ultracodeToggle !== null;
+  const hasOthers = others.length > 0;
+  if (!hasEffort && !hasFastMode && !hasUltracode && !hasOthers) {
+    return null;
+  }
+
+  const locked =
+    effort?.descriptor.id === traits.primarySelectDescriptor?.id && traits.ultrathinkInBodyText;
+
+  let sliderOptions: ReadonlyArray<ReasoningEffortOption> | null = null;
+  let sliderValue: string | null = null;
+  let handleSliderChange: ((nextValue: string) => void) | undefined;
+
+  if (effort?.kind === "select") {
+    const choices = selectableProviderOptionChoices(effort.descriptor);
+    if (choices.length > 0) {
+      sliderOptions = choices.map((choice) => formatChoiceForSlider(choice, sliderLocale));
+      sliderValue = traits.selectValue(effort.descriptor);
+      handleSliderChange = (nextValue: string) => traits.changeSelect(effort.descriptor, nextValue);
+    }
+  } else if (effort?.kind === "boolean") {
+    const on = effort.descriptor.currentValue === true;
+    sliderOptions = [
+      {
+        value: "off",
+        label: gt("Off", { $context: "option state" }),
+        shortLabel: sliderLocale === "zh" ? "关" : "Off",
+      },
+      {
+        value: "on",
+        label: gt("On", { $context: "option state" }),
+        shortLabel: sliderLocale === "zh" ? "开" : "On",
+      },
+    ];
+    sliderValue = on ? "on" : "off";
+    handleSliderChange = (nextValue: string) =>
+      traits.changeBoolean(effort.descriptor.id, nextValue === "on");
+  }
+
+  return (
+    <div data-composer-unified-options="true" className="flex flex-col gap-2 px-3 py-2.5">
+      {sliderOptions && sliderOptions.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <PrismuxReasoningEffortSlider
+            modelId={traitsInput.model}
+            modelName={modelLabel}
+            provider={traitsInput.provider}
+            options={sliderOptions}
+            value={sliderValue}
+            disabled={locked}
+            locale={sliderLocale}
+            label={gt("Reasoning effort")}
+            showStops
+            showRunner
+            compact
+            ariaLabel={gt("Reasoning effort")}
+            onChange={handleSliderChange}
+          />
+          {locked ? (
+            <div className="text-xs text-muted-foreground/85">
+              {messages(ULTRATHINK_IN_BODY_NOTE)}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <UnifiedSpeedRow traitsInput={traitsInput} traits={traits} />
+
+      {hasUltracode && ultracodeToggle ? (
+        <div className="flex min-h-7 items-center justify-between gap-3 pt-1.5 border-t border-border/55">
+          <span className="font-medium text-muted-foreground text-xs">{ultracodeToggle.label}</span>
+          <button
+            type="button"
+            aria-pressed={ultracodeToggle.currentValue === true}
+            data-checked={ultracodeToggle.currentValue === true || undefined}
+            onClick={() =>
+              traits.changeBoolean(ultracodeToggle.id, !(ultracodeToggle.currentValue === true))
+            }
+            className={cn(
+              "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+              ultracodeToggle.currentValue === true
+                ? "border-primary/50 bg-primary/14 text-foreground"
+                : "border-border/75 bg-background/60 text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <WorkflowIcon aria-hidden="true" className="size-3.5" />
+            <span>
+              {ultracodeToggle.currentValue === true
+                ? gt("On", { $context: "option state" })
+                : gt("Off", { $context: "option state" })}
+            </span>
+          </button>
+        </div>
+      ) : null}
+
+      {hasOthers ? (
+        <div className="flex flex-col gap-0.5 pt-1.5 border-t border-border/55">
+          {others.map((control, index) =>
+            control.kind === "boolean" ? (
+              <OptionSwitchRow
+                key={control.descriptor.id}
+                descriptor={control.descriptor}
+                traits={traits}
+                tabStop={index === 0}
+              />
+            ) : (
+              <OptionMenuRow
+                key={control.descriptor.id}
+                descriptor={control.descriptor}
+                traits={traits}
+                tabStop={index === 0}
+              />
+            ),
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

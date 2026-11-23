@@ -414,6 +414,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     hardReload: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_HARD_RELOAD_CHANNEL, { tabId }),
     setColorScheme: (tabId, colorScheme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
+    setDeviceEmulation: (tabId, emulation) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_DEVICE_EMULATION_CHANNEL, { tabId, emulation }),
     setAudioMuted: (tabId, audioMuted) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     findInPage: (tabId, text, { forward, newSession }) =>
@@ -597,5 +599,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PRISMUX_PICK_WALLPAPER_DIRECTORY_CHANNEL),
     setUpdateFeedUrl: (url) =>
       ipcRenderer.invoke(IpcChannels.PRISMUX_SET_UPDATE_FEED_URL_CHANNEL, url),
+    installDownloadedUpdate: (request) =>
+      ipcRenderer.invoke(IpcChannels.PRISMUX_INSTALL_DOWNLOADED_UPDATE_CHANNEL, request),
   },
 } satisfies DesktopBridge);

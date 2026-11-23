@@ -1,6 +1,8 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { msg, useGT, useMessages } from "gt-react";
+import { ChevronRightIcon, ImageIcon } from "lucide-react";
 import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
@@ -23,6 +25,7 @@ import { useCustomThemes } from "../../hooks/useCustomThemes";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ThemeLibrary } from "./ThemeSettings";
@@ -151,6 +154,8 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPageContainer>
       <PrismuxAppearanceIntegration />
+
+      <TypographySection />
 
       <SettingsSection id="appearance-interface" title={gt("Interface")}>
         <SettingsRow
@@ -480,8 +485,6 @@ export function AppearanceSettingsPanel() {
         </AdvancedSettings>
       </SettingsSection>
 
-      <TypographySection />
-
       {/* Native T3 Code palette library folded under Advanced to avoid duplicating Prismux's Celestial theme switcher */}
       <SettingsSection id="appearance" title={gt("Colors & themes")}>
         <AdvancedSettings targetIds={[searchableSetting("theme").id]}>
@@ -501,6 +504,22 @@ export function AppearanceSettingsPanel() {
             />
           </div>
         </AdvancedSettings>
+      </SettingsSection>
+
+      <SettingsSection id="appearance-wallpaper-engine" title={gt("Wallpaper Engine")}>
+        <SettingsRow
+          title={gt("Live wallpaper & Steam Workshop 431960")}
+          description={gt(
+            "Manage WebWallGL scenes, video/image wallpapers, Steam Workshop 431960 scans, rotation, and 0 FPS occlusion pause.",
+          )}
+          control={
+            <Button size="sm" variant="outline" render={<Link to="/settings/wallpaper" />}>
+              <ImageIcon className="size-3.5" />
+              {gt("Open Wallpaper Engine")}
+              <ChevronRightIcon className="size-3.5" />
+            </Button>
+          }
+        />
       </SettingsSection>
     </SettingsPageContainer>
   );

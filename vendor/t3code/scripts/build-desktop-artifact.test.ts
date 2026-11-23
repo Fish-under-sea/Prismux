@@ -62,10 +62,14 @@ import {
   WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
   WINDOWS_SERVER_ASAR_RESOURCE,
+  WINDOWS_SEVEN_ZIP_MIN_BYTES,
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_NAME,
   WSL_RUNTIME_ARCHIVE_NAME,
+  findForbiddenPreinstalledOfficialPlugins,
+  removeDirectoryWithRetry,
+  stageWindowsSevenZipTool,
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
 import {
@@ -1564,7 +1568,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "io.prismux.desktop",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -1587,7 +1591,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.io.prismux.desktop</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -1973,4 +1977,79 @@ it.effect.skipIf(!symlinksSupported)("preserves relative links when replacing di
     assert.equal(yield* fs.readLink(path.join(output, app, "Current")), "New.plist");
     assert.equal(yield* fs.readFileString(path.join(output, app, "Current")), "rebuilt-app");
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect("stages 7za.exe with sibling 7z.dll and rejects undersized binaries", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-7za-stage-" });
+    const sevenZipDir = path.join(root, "7-Zip");
+    const targetDir = path.join(root, "tools");
+    yield* fs.makeDirectory(sevenZipDir, { recursive: true });
+    const fakeExe = path.join(sevenZipDir, "7z.exe");
+    const fakeDll = path.join(sevenZipDir, "7z.dll");
+    yield* fs.writeFile(fakeExe, new Uint8Array(WINDOWS_SEVEN_ZIP_MIN_BYTES + 1024));
+    yield* fs.writeFile(fakeDll, new Uint8Array(4096));
+
+    const staged = yield* stageWindowsSevenZipTool({
+      repoRoot: root,
+      arch: "x64",
+      targetDir,
+      candidates: [path.join(root, "missing-7za.exe"), fakeExe],
+    });
+    assert.equal(staged.sourcePath, fakeExe);
+    assert.isTrue(staged.bundledSiblingDll);
+    assert.isTrue(yield* fs.exists(path.join(targetDir, "7za.exe")));
+    assert.isTrue(yield* fs.exists(path.join(targetDir, "7z.dll")));
+
+    const tinyExe = path.join(sevenZipDir, "tiny-7za.exe");
+    yield* fs.writeFile(tinyExe, new Uint8Array(128));
+    const tinyError = yield* stageWindowsSevenZipTool({
+      repoRoot: root,
+      arch: "x64",
+      targetDir: path.join(root, "tools-tiny"),
+      candidates: [tinyExe],
+    }).pipe(Effect.flip);
+    assert.equal(tinyError._tag, "WindowsSevenZipToolError");
+    assert.equal(tinyError.reason, "invalid-size");
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect("enforces zero preinstalled official plugins while allowing catalog metadata", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-plugin-zero-" });
+    const catalogDir = path.join(root, "prismux-daemon", "catalog");
+    yield* fs.makeDirectory(catalogDir, { recursive: true });
+    yield* fs.writeFileString(path.join(catalogDir, "official.json"), '{"plugins":[]}');
+    assert.deepEqual(yield* findForbiddenPreinstalledOfficialPlugins(root), []);
+
+    yield* fs.makeDirectory(path.join(root, "prismux-daemon", "plugin-qq"), { recursive: true });
+    yield* fs.writeFileString(path.join(root, "bundled.wb-plugin"), "archive");
+    const violations = yield* findForbiddenPreinstalledOfficialPlugins(root);
+    assert.sameMembers(violations, ["prismux-daemon/plugin-qq", "bundled.wb-plugin"]);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect("retries EBUSY/EPERM cleanup 3 times then degrades gracefully without failing", () =>
+  Effect.gen(function* () {
+    let attempts = 0;
+    const result = yield* removeDirectoryWithRetry("/fake/locked-stage", {
+      maxAttempts: 3,
+      retryDelayMs: 0,
+      removeFn: () =>
+        Effect.suspend(() => {
+          attempts += 1;
+          const error = Object.assign(new Error("EBUSY: resource busy or locked"), {
+            code: "EBUSY",
+          });
+          return Effect.fail(error);
+        }),
+    });
+    assert.equal(attempts, 3);
+    assert.isFalse(result.removed);
+    assert.isTrue(result.deferred);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

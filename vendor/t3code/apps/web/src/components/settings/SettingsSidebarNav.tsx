@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  ActivityIcon,
   ArchiveIcon,
   FlaskConicalIcon,
   BotIcon,
@@ -41,9 +42,13 @@ import { resolveEventKeys } from "@t3tools/shared/keybindings";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
 
+import { hasCloudPublicConfig } from "../../cloud/publicConfig";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { observeResize } from "../../lib/observeResize";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   SidebarContent,
   SidebarFooter,
@@ -63,6 +68,17 @@ import {
   type SettingsPath,
   type SettingsSearchItem,
 } from "./settingsSearch";
+import {
+  areGeometryMapsEqual,
+  buildIndicatorPillStyle,
+  createInitialIndicatorState,
+  findSettingsNavTarget,
+  resolveSettingsNavActivePath,
+  transitionIndicatorState,
+  type SettingsNavIndicatorMachineState,
+  type SettingsNavIndicatorTarget,
+  type SettingsNavItemGeometry,
+} from "./settingsSidebarMotion";
 import {
   useAvailableSettingsSearchItems,
   useHasSecretProvidersEnvironment,
@@ -97,7 +113,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
   "/settings/general": Settings2Icon,
-  "/settings/diagnostics": WrenchIcon,
+  "/settings/diagnostics": ActivityIcon,
   "/settings/voice": MicIcon,
   "/settings/appearance": PaletteIcon,
   "/settings/chat": MessageSquareTextIcon,
@@ -125,12 +141,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/updates": DownloadCloudIcon,
 };
 
-// Detail pages without a nav entry highlight the page that links to them.
-const SETTINGS_DETAIL_PAGE_PARENTS: Readonly<Record<string, SettingsPath>> = {
-  "/settings/diagnostics": "/settings/maintenance",
-  "/settings/open-source-licenses": "/settings/about",
-};
-
 // Attached only to the highlighted result, so it runs whenever the highlight lands on a row.
 function scrollResultIntoView(row: HTMLElement | null) {
   row?.scrollIntoView({ block: "nearest" });
@@ -141,20 +151,47 @@ function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   return <Icon className="size-4 h-5 shrink-0 text-(--sidebar-icon-color)" />;
 }
 
+function measureItemGeometry(
+  menuElement: HTMLElement,
+  itemElement: HTMLElement,
+): SettingsNavItemGeometry {
+  if (itemElement.offsetParent === menuElement && itemElement.offsetHeight > 0) {
+    return {
+      y: itemElement.offsetTop,
+      height: itemElement.offsetHeight,
+    };
+  }
+  const menuRect = menuElement.getBoundingClientRect();
+  const itemRect = itemElement.getBoundingClientRect();
+  return {
+    y: Math.round(itemRect.top - menuRect.top),
+    height: Math.round(itemRect.height),
+  };
+}
+
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const gt = useGT();
   const m = useMessages();
   const navArea = workspaceAreaProps("settings-nav", 0, gt("Settings sections"));
   const navigate = useNavigate();
   const currentHash = useLocation({ select: (location) => location.hash });
-  const activePath = SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname;
+  const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const isCompactRail = useMediaQuery("max-md");
+  const cloudEnabled = hasCloudPublicConfig();
+  const activePath = resolveSettingsNavActivePath(pathname);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const groupsContainerRef = useRef<HTMLDivElement>(null);
+  const menuRefs = useRef<Map<string, HTMLUListElement>>(new Map());
+  const itemRefs = useRef<Map<SettingsPath, HTMLLIElement>>(new Map());
+  const itemGeometriesRef = useRef<Readonly<Record<string, SettingsNavItemGeometry>>>({});
   const [query, setQuery] = useState("");
   // Below md the nav is an icon rail; searching expands it over the page.
   const [compactSearchOpen, setCompactSearchOpen] = useState(false);
   const [activeResultIndex, setActiveResultIndex] = useState(0);
   const searchableItems = useAvailableSettingsSearchItems();
-  const navGroups = settingsNavGroups(useHasSecretProvidersEnvironment());
+  const hasSecretProviders = useHasSecretProvidersEnvironment();
+  const navGroups = settingsNavGroups(hasSecretProviders);
+  const activeTarget = findSettingsNavTarget(navGroups, pathname);
   const results = searchSettings(query, searchableItems, m);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
@@ -163,6 +200,75 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   if (activeResultIndex > maxResultIndex) {
     setActiveResultIndex(maxResultIndex);
   }
+
+  const [itemGeometries, setItemGeometries] = useState<
+    Readonly<Record<string, SettingsNavItemGeometry>>
+  >({});
+  const [suppressMotionForLayout, setSuppressMotionForLayout] = useState(false);
+
+  const activeTargetKey = activeTarget ? `${activeTarget.groupId}:${activeTarget.path}` : "";
+  const [trackedActiveKey, setTrackedActiveKey] = useState(activeTargetKey);
+  const [activeIndicator, setActiveIndicator] = useState<SettingsNavIndicatorMachineState>(() =>
+    createInitialIndicatorState(navGroups, activeTarget, "instant"),
+  );
+  if (trackedActiveKey !== activeTargetKey) {
+    setTrackedActiveKey(activeTargetKey);
+    setSuppressMotionForLayout(false);
+    setActiveIndicator((prev) =>
+      transitionIndicatorState(prev, activeTarget, {
+        groups: navGroups,
+        reducedMotion: prefersReducedMotion,
+        initialMode: "instant",
+      }),
+    );
+  }
+
+  const [hoverIndicator, setHoverIndicator] = useState<SettingsNavIndicatorMachineState>(() =>
+    createInitialIndicatorState(navGroups, null, "enter"),
+  );
+
+  const updateHoverTarget = (nextTarget: SettingsNavIndicatorTarget | null) => {
+    setSuppressMotionForLayout(false);
+    setHoverIndicator((prev) => {
+      if (
+        prev.current?.groupId === nextTarget?.groupId &&
+        prev.current?.path === nextTarget?.path
+      ) {
+        return prev;
+      }
+      return transitionIndicatorState(prev, nextTarget, {
+        groups: navGroups,
+        reducedMotion: prefersReducedMotion,
+        initialMode: "enter",
+      });
+    });
+  };
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observeResize commits measured slot geometry before paint with value-equality guard
+  useEffect(() => {
+    if (isSearching) return;
+    const container = groupsContainerRef.current;
+    if (!container) return;
+    const measure = () => {
+      const next: Record<string, SettingsNavItemGeometry> = {};
+      for (const group of navGroups) {
+        const menuElement = menuRefs.current.get(group.id);
+        if (!menuElement) continue;
+        for (const path of group.paths) {
+          const itemElement = itemRefs.current.get(path);
+          if (!itemElement) continue;
+          next[path] = measureItemGeometry(menuElement, itemElement);
+        }
+      }
+      if (areGeometryMapsEqual(itemGeometriesRef.current, next)) {
+        return;
+      }
+      itemGeometriesRef.current = next;
+      setSuppressMotionForLayout(true);
+      setItemGeometries(next);
+    };
+    return observeResize(container, measure);
+  }, [isSearching, navGroups]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window keydown listener for the find and slash search shortcuts
   useEffect(() => {
@@ -221,6 +327,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const clearSearch = () => {
     setQuery("");
     setActiveResultIndex(0);
+    updateHoverTarget(null);
   };
   const handleSearchResultClick = (item: SettingsSearchItem) => {
     clearSearch();
@@ -266,6 +373,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     }
   };
 
+  const hasMeasuredGeometry = Object.values(itemGeometries).some((entry) => entry.height > 0);
+
   return (
     <nav
       {...navArea}
@@ -285,7 +394,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 !compactSearchOpen && "max-md:hidden",
               )}
             >
-              <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+              <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground" />
               {/* Native search inputs clear on Escape even during IME composition. */}
               <SidebarInput
                 ref={searchInputRef}
@@ -293,8 +402,12 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 type="text"
                 value={query}
                 onChange={(event) => {
-                  setQuery(event.currentTarget.value);
+                  const nextQuery = event.currentTarget.value;
+                  setQuery(nextQuery);
                   setActiveResultIndex(0);
+                  if (nextQuery.trim().length > 0) {
+                    updateHoverTarget(null);
+                  }
                 }}
                 onKeyDown={handleSearchKeyDown}
                 onFocus={() => setCompactSearchOpen(true)}
@@ -368,7 +481,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                         <span className="block truncate text-sm font-medium text-sidebar-foreground">
                           {m(item.title)}
                         </span>
-                        <span className="block truncate text-2xs text-sidebar-muted-foreground/75">
+                        <span className="block truncate text-2xs text-sidebar-muted-foreground">
                           {m(SETTINGS_SECTION_LABELS[item.to])}
                         </span>
                       </span>
@@ -377,7 +490,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 ))}
               </SidebarMenu>
             ) : (
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3">
                 {compactSearchOpen ? null : (
                   <SidebarMenu className="md:hidden">
                     <SidebarMenuItem>
@@ -390,33 +503,137 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                     </SidebarMenuItem>
                   </SidebarMenu>
                 )}
-                <div onKeyDown={handleSettingsSectionKeyDown} className="flex flex-col gap-4">
-                  {navGroups.map((group, index) => (
-                    <div
-                      key={group.heading}
-                      className="flex flex-col gap-1 max-md:border-t max-md:border-sidebar-border max-md:pt-4 max-md:first:border-t-0 max-md:first:pt-0"
-                    >
-                      <h3
-                        id={`settings-nav-group-${index}`}
+                <div
+                  ref={groupsContainerRef}
+                  onKeyDown={handleSettingsSectionKeyDown}
+                  onPointerLeave={() => updateHoverTarget(null)}
+                  onBlur={(event) => {
+                    const nextFocus = event.relatedTarget;
+                    if (
+                      !(nextFocus instanceof Node) ||
+                      !event.currentTarget.contains(nextFocus)
+                    ) {
+                      updateHoverTarget(null);
+                    }
+                  }}
+                  className="flex flex-col gap-3"
+                >
+                  {navGroups.map((group, index) => {
+                    const groupActiveState = activeIndicator.groupStates[group.id];
+                    const groupHoverState = hoverIndicator.groupStates[group.id];
+                    const activeGeom = groupActiveState?.path
+                      ? itemGeometries[groupActiveState.path]
+                      : undefined;
+                    const hoverGeom = groupHoverState?.path
+                      ? itemGeometries[groupHoverState.path]
+                      : undefined;
+                    const activePillStyle = buildIndicatorPillStyle({
+                      state: groupActiveState,
+                      geometry: activeGeom,
+                      kind: "active",
+                      reducedMotion: prefersReducedMotion,
+                      disableMotion: suppressMotionForLayout,
+                    });
+                    const hoverPillStyle = buildIndicatorPillStyle({
+                      state: groupHoverState,
+                      geometry: hoverGeom,
+                      kind: "hover",
+                      reducedMotion: prefersReducedMotion,
+                      disableMotion: suppressMotionForLayout,
+                    });
+
+                    return (
+                      <div
+                        key={group.id}
+                        data-settings-nav-group={group.id}
                         className={cn(
-                          "px-2 text-xs font-medium text-sidebar-muted-foreground/80",
-                          group.headingHidden ? "sr-only" : !compactSearchOpen && "max-md:sr-only",
+                          "flex flex-col gap-1",
+                          index > 0 && "border-t border-sidebar-border/80 pt-3",
                         )}
                       >
-                        {m(group.heading)}
-                      </h3>
-                      {/* The heading stays outside the group it names so NVDA does not read the name twice. */}
-                      <div role="group" aria-labelledby={`settings-nav-group-${index}`}>
-                        <SidebarMenu>
-                          {group.paths.map((to) => {
-                            const Icon = SETTINGS_SECTION_ICONS[to];
-                            const isActive = activePath === to || activePath.startsWith(`${to}/`);
-                            return (
-                              <SidebarMenuItem key={to}>
-                                <SidebarMenuButton
+                        <h3
+                          id={`settings-nav-group-${index}`}
+                          className={cn(
+                            "px-2.5 pb-0.5 text-xs font-medium text-sidebar-muted-foreground",
+                            group.headingHidden
+                              ? "sr-only"
+                              : !compactSearchOpen && "max-md:sr-only",
+                          )}
+                        >
+                          {m(group.heading)}
+                        </h3>
+                        {/* The heading stays outside the group it names so NVDA does not read the name twice. */}
+                        <div role="group" aria-labelledby={`settings-nav-group-${index}`}>
+                          <SidebarMenu
+                            ref={(node) => {
+                              if (node) {
+                                menuRefs.current.set(group.id, node);
+                              } else {
+                                menuRefs.current.delete(group.id);
+                              }
+                            }}
+                            className="relative isolate"
+                          >
+                            {/* Layer 0: Intra-group sliding / cross-group crossfading Hover Pill */}
+                            <span
+                              aria-hidden="true"
+                              data-settings-nav-pill="hover"
+                              data-pill-group={group.id}
+                              data-pill-mode={groupHoverState?.mode ?? "idle"}
+                              data-pill-visible={
+                                groupHoverState?.visible && hoverGeom && hoverGeom.height > 0
+                                  ? "true"
+                                  : "false"
+                              }
+                              style={hoverPillStyle}
+                              className="pointer-events-none absolute inset-x-0 top-0 z-0 rounded-lg bg-sidebar-row-hover ring-1 ring-inset ring-sidebar-foreground/6 motion-reduce:transition-none"
+                            />
+                            {/* Layer 1: Intra-group sliding / cross-group crossfading Active Pill */}
+                            <span
+                              aria-hidden="true"
+                              data-settings-nav-pill="active"
+                              data-pill-group={group.id}
+                              data-pill-mode={groupActiveState?.mode ?? "idle"}
+                              data-pill-visible={
+                                groupActiveState?.visible && activeGeom && activeGeom.height > 0
+                                  ? "true"
+                                  : "false"
+                              }
+                              style={activePillStyle}
+                              className="pointer-events-none absolute inset-x-0 top-0 z-[1] rounded-lg bg-sidebar-row-selected shadow-xs ring-1 ring-inset ring-sidebar-border/80 motion-reduce:transition-none"
+                            >
+                              <span
+                                aria-hidden="true"
+                                className="absolute inset-y-1.5 start-0.5 w-0.5 rounded-full bg-primary"
+                              />
+                            </span>
+                            {group.paths.map((to) => {
+                              const Icon = SETTINGS_SECTION_ICONS[to];
+                              const isActive = activePath === to || activePath.startsWith(`${to}/`);
+                              const label = m(SETTINGS_NAV_LABELS[to]);
+                              const navButton = (
+                                <button
+                                  type="button"
+                                  data-sidebar="menu-button"
+                                  data-slot="sidebar-menu-button"
+                                  data-active={isActive}
                                   data-settings-section={to}
+                                  data-settings-group={group.id}
                                   aria-current={isActive ? "page" : undefined}
-                                  isActive={isActive}
+                                  className={cn(
+                                    "peer/menu-button flex h-8 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-lg px-2.5 py-1.5 text-left text-sm font-medium text-sidebar-muted-foreground outline-hidden ring-ring transition-colors duration-150 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset active:translate-y-px active:text-sidebar-foreground data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground motion-reduce:transition-none motion-reduce:active:translate-y-0 [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-(--sidebar-icon-color) hover:[&>svg]:text-sidebar-foreground active:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-foreground",
+                                    !hasMeasuredGeometry &&
+                                      "hover:bg-sidebar-row-hover active:bg-sidebar-row-active data-[active=true]:bg-sidebar-row-selected",
+                                  )}
+                                  onPointerEnter={(event) => {
+                                    if (event.pointerType === "touch") return;
+                                    updateHoverTarget({ groupId: group.id, path: to });
+                                  }}
+                                  onFocus={(event) => {
+                                    if (event.currentTarget.matches(":focus-visible")) {
+                                      updateHoverTarget({ groupId: group.id, path: to });
+                                    }
+                                  }}
                                   onClick={() => handleSectionClick(to)}
                                 >
                                   <Icon />
@@ -426,30 +643,54 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                                       !compactSearchOpen && "max-md:sr-only",
                                     )}
                                   >
-                                    {m(SETTINGS_NAV_LABELS[to])}
+                                    {label}
                                   </span>
-                                </SidebarMenuButton>
-                              </SidebarMenuItem>
-                            );
-                          })}
-                        </SidebarMenu>
+                                </button>
+                              );
+                              return (
+                                <SidebarMenuItem
+                                  key={to}
+                                  ref={(node) => {
+                                    if (node) {
+                                      itemRefs.current.set(to, node);
+                                    } else {
+                                      itemRefs.current.delete(to);
+                                    }
+                                  }}
+                                  className="z-[2]"
+                                >
+                                  {isCompactRail && !compactSearchOpen ? (
+                                    <Tooltip>
+                                      <TooltipTrigger render={navButton} />
+                                      <TooltipPopup side="right">{label}</TooltipPopup>
+                                    </Tooltip>
+                                  ) : (
+                                    navButton
+                                  )}
+                                </SidebarMenuItem>
+                              );
+                            })}
+                          </SidebarMenu>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
           </div>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="max-md:hidden">
-        <Suspense fallback={null}>
-          <T3ConnectSidebarSignIn />
-        </Suspense>
-        <Suspense fallback={null}>
-          <T3ConnectSidebarAvatar />
-        </Suspense>
-      </SidebarFooter>
+      {cloudEnabled ? (
+        <SidebarFooter className="max-md:hidden">
+          <Suspense fallback={null}>
+            <T3ConnectSidebarSignIn />
+          </Suspense>
+          <Suspense fallback={null}>
+            <T3ConnectSidebarAvatar />
+          </Suspense>
+        </SidebarFooter>
+      ) : null}
     </nav>
   );
 }

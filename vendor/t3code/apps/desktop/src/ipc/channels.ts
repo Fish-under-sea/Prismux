@@ -97,6 +97,7 @@ export const PREVIEW_RESET_ZOOM_CHANNEL = "desktop:preview-reset-zoom";
 export const PREVIEW_SET_ZOOM_FACTOR_CHANNEL = "desktop:preview-set-zoom-factor";
 export const PREVIEW_HARD_RELOAD_CHANNEL = "desktop:preview-hard-reload";
 export const PREVIEW_SET_COLOR_SCHEME_CHANNEL = "desktop:preview-set-color-scheme";
+export const PREVIEW_SET_DEVICE_EMULATION_CHANNEL = "desktop:preview-set-device-emulation";
 export const PREVIEW_SET_AUDIO_MUTED_CHANNEL = "desktop:preview-set-audio-muted";
 export const PREVIEW_FIND_IN_PAGE_CHANNEL = "desktop:preview-find-in-page";
 export const PREVIEW_STOP_FIND_IN_PAGE_CHANNEL = "desktop:preview-stop-find-in-page";
@@ -161,3 +162,5 @@ export const PRISMUX_WINDOW_OCCLUSION_CHANNEL = "desktop:prismux:window-occlusio
 export const PRISMUX_PICK_WALLPAPER_FILES_CHANNEL = "desktop:prismux:pick-wallpaper-files";
 export const PRISMUX_PICK_WALLPAPER_DIRECTORY_CHANNEL = "desktop:prismux:pick-wallpaper-directory";
 export const PRISMUX_SET_UPDATE_FEED_URL_CHANNEL = "desktop:prismux:set-update-feed-url";
+export const PRISMUX_INSTALL_DOWNLOADED_UPDATE_CHANNEL =
+  "desktop:prismux:install-downloaded-update";

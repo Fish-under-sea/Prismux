@@ -1,7 +1,8 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { managedUpdatesDenial } from "@t3tools/client-runtime/contract-labels";
 import { type DesktopBridge, type DesktopUpdateState } from "@t3tools/contracts";
-import { TriangleAlertIcon } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { DownloadCloudIcon, TriangleAlertIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { type ComponentProps, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -11,6 +12,7 @@ import { m } from "../../i18n/messages";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
+import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -196,7 +198,90 @@ export async function installLocalUpdate(
   }
 }
 
+function PrismuxDaemonUpdateBadge() {
+  const runtime = useOptionalPrismuxRuntime();
+  const navigate = useNavigate();
+  const badge = runtime?.updaterBadge;
+
+  if (!badge) return null;
+  const activeStage =
+    badge.installState === "downloading" ||
+    badge.installState === "extracting" ||
+    badge.installState === "verifying" ||
+    badge.installState === "ready";
+  if (!badge.hasUpdate && !activeStage) return null;
+
+  const versionText = badge.latestVersion ? `v${badge.latestVersion.replace(/^v/i, "")}` : null;
+  const label =
+    badge.installState === "ready"
+      ? versionText
+        ? `${versionText} 就绪`
+        : "更新就绪"
+      : badge.installState === "downloading"
+        ? badge.downloadPercent !== null
+          ? `下载 ${badge.downloadPercent}%`
+          : "下载更新中"
+        : badge.installState === "extracting"
+          ? "解压中"
+          : badge.installState === "verifying"
+            ? "校验中"
+            : versionText
+              ? `新版本 ${versionText}`
+              : "发现新版本";
+
+  const detail =
+    badge.installState === "ready"
+      ? "Prismux 新版本已下载并完成 SHA-256 校验，点击前往「软件更新」一键安装。"
+      : activeStage
+        ? "Prismux 后台更新正在进行，点击查看进度详情。"
+        : `检测到 Prismux 新版本${versionText ? ` ${versionText}` : ""}，点击前往「软件更新」。`;
+
+  return (
+    <SidebarMenuItem className="ml-auto shrink-0">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              data-testid="prismux-update-badge"
+              aria-label={detail}
+              onClick={() => void navigate({ to: "/settings/updates" as never })}
+              className={cn(
+                "inline-flex h-7 max-w-32 cursor-pointer items-center gap-1 rounded-full border px-2 text-[11px] font-medium tabular-nums outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                badge.installState === "ready"
+                  ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-800 hover:bg-emerald-500/25 dark:text-emerald-200"
+                  : activeStage
+                    ? "border-sky-500/50 bg-sky-500/15 text-sky-800 hover:bg-sky-500/25 dark:text-sky-200"
+                    : "border-amber-500/50 bg-amber-500/15 text-amber-900 hover:bg-amber-500/25 dark:text-amber-200",
+              )}
+            />
+          }
+        >
+          <DownloadCloudIcon aria-hidden className="size-3 shrink-0" />
+          <span className="truncate">{label}</span>
+        </TooltipTrigger>
+        <TooltipPopup align="center" side="top">
+          <div className="max-w-56 text-left text-xs">{detail}</div>
+        </TooltipPopup>
+      </Tooltip>
+    </SidebarMenuItem>
+  );
+}
+
 export function SidebarUpdatePill() {
+  const runtime = useOptionalPrismuxRuntime();
+  const badge = runtime?.updaterBadge;
+  const showPrismuxBadge = Boolean(
+    badge &&
+      (badge.hasUpdate ||
+        badge.installState === "downloading" ||
+        badge.installState === "extracting" ||
+        badge.installState === "verifying" ||
+        badge.installState === "ready"),
+  );
+  if (showPrismuxBadge) {
+    return <PrismuxDaemonUpdateBadge />;
+  }
   return <SidebarUpdateControl />;
 }
 

@@ -114,6 +114,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { PrismuxDiagnosticsSection } from "../../prismux/settings/PrismuxDiagnosticsSection";
 import { cn } from "../../lib/utils";
 import { formatRelativeTime } from "../../timestampFormat";
 
@@ -313,6 +314,7 @@ export function WelcomePage({
                 isImporting={isImporting}
               />
               {showPhone ? <PhoneSection environmentId={environmentId} /> : null}
+              <PrismuxDiagnosticsSection variant="compact" />
             </div>
             <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
               {agentReady ? (

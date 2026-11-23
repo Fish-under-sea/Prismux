@@ -4,10 +4,10 @@ import { msg } from "gt-react";
 import { m, type MessageResolver } from "~/i18n/messages";
 import {
   type LucideIcon,
-  LockIcon,
-  PenLineIcon,
+  FilePenLineIcon,
+  HandIcon,
+  ShieldAlertIcon,
   ShieldCheckIcon,
-  ShieldOffIcon,
 } from "lucide-react";
 
 export const runtimeModeConfig: Record<
@@ -15,27 +15,30 @@ export const runtimeModeConfig: Record<
   { label: string; description: string; icon: LucideIcon }
 > = {
   "approval-required": {
-    label: msg("Supervised", { $context: "permission mode, agent asks before acting" }),
-    description: msg("Ask before commands and file changes."),
-    icon: LockIcon,
+    label: msg("Ask for approval"),
+    description: msg("Asks before edits and commands your settings don't allow"),
+    icon: HandIcon,
   },
   "auto-accept-edits": {
-    label: msg("Auto-accept edits"),
-    description: msg("Auto-approve edits, ask before other actions."),
-    icon: PenLineIcon,
+    label: msg("Accept edits"),
+    description: msg("Approves file edits and file commands; asks for the rest"),
+    icon: FilePenLineIcon,
   },
   auto: {
-    label: msg("Auto", { $context: "permission mode, provider approves routine actions" }),
-    description: msg("Supported providers approve routine actions; others still ask."),
+    label: msg("Approve for me"),
+    description: msg("Reviews approval requests for you"),
     icon: ShieldCheckIcon,
   },
   "full-access": {
     label: msg("Full access"),
-    description: msg("Allow commands and edits without prompts."),
-    // An open lock reads like a closed one at small sizes; a crossed shield does not.
-    icon: ShieldOffIcon,
+    description: msg("Never asks before edits or commands"),
+    icon: ShieldAlertIcon,
   },
 };
+
+export function isFullAccessRuntimeMode(mode: RuntimeMode): boolean {
+  return mode === "full-access";
+}
 
 export const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
 

@@ -38,7 +38,7 @@ import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcome
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { Button } from "../components/ui/button";
-import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
+import { StandalonePage } from "../components/ui/standalone-page";
 import { AnchoredToastProvider, ToastProvider } from "../components/ui/toast";
 import { isElectron } from "../env";
 import { useClientSettings } from "../hooks/useSettings";
@@ -61,7 +61,9 @@ import { readProject } from "../state/entities";
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+import { cn } from "../lib/utils";
 import { PrismuxWallpaperBackdrop } from "../prismux/PrismuxWallpaperBridge";
+import { PrismuxStatusBar } from "../prismux/PrismuxStatusBar";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -209,14 +211,24 @@ function RootRouteBranch() {
       {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
     </>
   );
+  const showStatusBar = !isWelcome;
   const appShell = (
-    <div className="relative z-[1] h-dvh w-full">
-      <CommandPalette>
-        {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
-        <AppSidebarLayout showSidebar={!isWelcome}>
-          <Outlet />
-        </AppSidebarLayout>
-      </CommandPalette>
+    <div
+      className={cn(
+        "relative z-[1] flex h-dvh w-full flex-col overflow-hidden",
+        showStatusBar &&
+          "[&_[data-slot=sidebar-wrapper]]:!h-full [&_[data-slot=sidebar-wrapper]]:!min-h-0 [&_[data-slot=sidebar-inset]]:!h-full [&_[data-slot=sidebar-inset]]:!min-h-0 [&_[data-slot=sidebar-container]]:!bottom-6 [&_[data-slot=sidebar-container]]:!h-[calc(100dvh-1.5rem)]",
+      )}
+    >
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CommandPalette>
+          {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
+          <AppSidebarLayout showSidebar={!isWelcome}>
+            <Outlet />
+          </AppSidebarLayout>
+        </CommandPalette>
+      </div>
+      {showStatusBar ? <PrismuxStatusBar /> : null}
     </div>
   );
 
@@ -257,7 +269,21 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
 
   return (
     <StandalonePage>
-      <StandalonePageHeader title={gt("Something went wrong.")} description={message} />
+      <div className="flex items-baseline justify-between gap-3 text-muted-foreground">
+        <span className="inline-flex items-center gap-2" role="img" aria-label={APP_DISPLAY_NAME}>
+          <img
+            src="/prismux-logo.png"
+            alt=""
+            aria-hidden
+            className="size-4 shrink-0 rounded-[4px] object-cover"
+          />
+          <span className="text-lg font-semibold tracking-tight text-foreground">
+            {APP_DISPLAY_NAME}
+          </span>
+        </span>
+      </div>
+      <h1 className="mt-6 text-xl leading-tight font-semibold">{gt("Something went wrong.")}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">{message}</p>
 
       <div className="mt-5 flex flex-wrap gap-2">
         <Button

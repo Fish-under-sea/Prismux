@@ -4,13 +4,18 @@ import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   DownloadCloudIcon,
+  DownloadIcon,
   ExternalLinkIcon,
+  FolderOpenIcon,
   GlobeIcon,
+  LayersIcon,
   RefreshCwIcon,
+  RotateCwIcon,
   SaveIcon,
   ShieldCheckIcon,
 } from "lucide-react";
 
+import { APP_VERSION } from "../../branding";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -21,76 +26,36 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
-import { Switch } from "../../components/ui/switch";
 import {
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
 } from "../../components/settings/settingsLayout";
+import {
+  openSafeExternalHttpsUrl,
+  validateSafeHttpsUrl,
+} from "../../components/settings/prismuxProviderMeta";
+import {
+  type DaemonUpdateChannel,
+  type DaemonUpdatePackageKind,
+} from "../daemonClient";
 import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
-
-type RoutePreference = "auto" | "domestic" | "global";
-type PluginRegistryOverride = "auto" | "npmmirror" | "npmjs";
-type UpdateSourceId = "github" | "gitee";
-
-interface SourceProbeView {
-  readonly source: UpdateSourceId;
-  readonly url: string;
-  readonly reachable: boolean;
-  readonly statusCode: number | null;
-  readonly latencyMs: number | null;
-  readonly error?: string;
-}
-
-interface ProbeReportView {
-  readonly probedAt: number;
-  readonly recommendedSource: UpdateSourceId;
-  readonly recommendedRoute: "domestic" | "global";
-  readonly sources: readonly SourceProbeView[];
-}
-
-interface UpdateAssetView {
-  readonly name: string;
-  readonly kind: string;
-  readonly effectiveUrl: string;
-  readonly sizeBytes: number | null;
-  readonly sha256: string | null;
-  readonly source: UpdateSourceId;
-}
-
-interface UpdateCheckView {
-  readonly checkedAt: number;
-  readonly currentVersion: string;
-  readonly hasUpdate: boolean;
-  readonly latestVersion: string | null;
-  readonly tagName: string | null;
-  readonly releaseName: string | null;
-  readonly releaseNotes: string | null;
-  readonly publishedAt: string | null;
-  readonly htmlUrl: string | null;
-  readonly sourceUsed: UpdateSourceId;
-  readonly usedFallbackSource: boolean;
-  readonly assets: readonly UpdateAssetView[];
-}
-
-interface UpdaterPolicyView {
-  readonly routePreference: RoutePreference;
-  readonly includePrerelease: boolean;
-  readonly customGhProxyPrefix: string;
-  readonly pluginRegistryOverride: PluginRegistryOverride;
-  readonly timeoutMs: number;
-}
-
-interface UpdaterStatusView {
-  readonly currentVersion: string;
-  readonly portableMode: boolean;
-  readonly policy: UpdaterPolicyView;
-  readonly checking: boolean;
-  readonly downloading: boolean;
-  readonly lastCheck: UpdateCheckView | null;
-  readonly lastProbe: ProbeReportView | null;
-  readonly lastError: string | null;
-}
+import {
+  applyUpdaterSseEvent,
+  describeUpdaterProgressStage,
+  parseCheckResult,
+  parseProbeReport,
+  parseUpdaterStatusPayload,
+  resolveRuntimeVersion,
+  selectRecommendedUpdateAsset,
+  type PluginRegistryOverride,
+  type ProbeReportView,
+  type RoutePreference,
+  type UpdateAssetView,
+  type UpdateCheckView,
+  type UpdaterStatusView,
+  type UpdateSourceId,
+} from "./prismuxUpdates.logic";
 
 const GITHUB_FEED_URL = "https://github.com/Fish-under-sea/Prismux/releases/latest";
 const GITEE_FEED_URL = "https://gitee.com/Fish-under-sea/Prismux/releases/latest";
@@ -107,115 +72,10 @@ const REGISTRY_LABELS: Readonly<Record<PluginRegistryOverride, string>> = {
   npmjs: "强制使用 registry.npmjs.org（国际官方）",
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asString(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value : fallback;
-}
-
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function asNullableNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function asRoutePreference(value: unknown): RoutePreference {
-  return value === "domestic" || value === "global" || value === "auto" ? value : "auto";
-}
-
-function asRegistryOverride(value: unknown): PluginRegistryOverride {
-  return value === "npmmirror" || value === "npmjs" || value === "auto" ? value : "auto";
-}
-
-function asSourceId(value: unknown): UpdateSourceId {
-  return value === "gitee" ? "gitee" : "github";
-}
-
-function parseProbeReport(raw: unknown): ProbeReportView | null {
-  const rec = asRecord(raw);
-  if (!rec) return null;
-  const rawSources = Array.isArray(rec.sources) ? rec.sources : [];
-  const sources: SourceProbeView[] = [];
-  for (const item of rawSources) {
-    const s = asRecord(item);
-    if (!s) continue;
-    sources.push({
-      source: asSourceId(s.source),
-      url: asString(s.url),
-      reachable: asBoolean(s.reachable, false),
-      statusCode: asNullableNumber(s.statusCode),
-      latencyMs: asNullableNumber(s.latencyMs),
-      ...(typeof s.error === "string" ? { error: s.error } : {}),
-    });
-  }
-  return {
-    probedAt: typeof rec.probedAt === "number" ? rec.probedAt : Date.now(),
-    recommendedSource: asSourceId(rec.recommendedSource),
-    recommendedRoute: rec.recommendedRoute === "domestic" ? "domestic" : "global",
-    sources,
-  };
-}
-
-function parseCheckResult(raw: unknown): UpdateCheckView | null {
-  const rec = asRecord(raw);
-  if (!rec) return null;
-  const rawAssets = Array.isArray(rec.assets) ? rec.assets : [];
-  const assets: UpdateAssetView[] = [];
-  for (const item of rawAssets) {
-    const a = asRecord(item);
-    if (!a) continue;
-    assets.push({
-      name: asString(a.name),
-      kind: asString(a.kind),
-      effectiveUrl: asString(a.effectiveUrl || a.downloadUrl),
-      sizeBytes: asNullableNumber(a.sizeBytes),
-      sha256: typeof a.sha256 === "string" ? a.sha256 : null,
-      source: asSourceId(a.source),
-    });
-  }
-  return {
-    checkedAt: typeof rec.checkedAt === "number" ? rec.checkedAt : Date.now(),
-    currentVersion: asString(rec.currentVersion, "0.1.0-alpha.1"),
-    hasUpdate: asBoolean(rec.hasUpdate, false),
-    latestVersion: typeof rec.latestVersion === "string" ? rec.latestVersion : null,
-    tagName: typeof rec.tagName === "string" ? rec.tagName : null,
-    releaseName: typeof rec.releaseName === "string" ? rec.releaseName : null,
-    releaseNotes: typeof rec.releaseNotes === "string" ? rec.releaseNotes : null,
-    publishedAt: typeof rec.publishedAt === "string" ? rec.publishedAt : null,
-    htmlUrl: typeof rec.htmlUrl === "string" ? rec.htmlUrl : null,
-    sourceUsed: asSourceId(rec.sourceUsed),
-    usedFallbackSource: asBoolean(rec.usedFallbackSource, false),
-    assets,
-  };
-}
-
-function parseStatus(raw: unknown): UpdaterStatusView | null {
-  const root = asRecord(raw);
-  if (!root) return null;
-  const policyRec = asRecord(root.policy);
-  return {
-    currentVersion: asString(root.currentVersion, "0.1.0-alpha.1"),
-    portableMode: asBoolean(root.portableMode, false),
-    policy: {
-      routePreference: asRoutePreference(policyRec?.routePreference),
-      includePrerelease: asBoolean(policyRec?.includePrerelease, true),
-      customGhProxyPrefix: asString(policyRec?.customGhProxyPrefix),
-      pluginRegistryOverride: asRegistryOverride(policyRec?.pluginRegistryOverride),
-      timeoutMs: typeof policyRec?.timeoutMs === "number" ? policyRec.timeoutMs : 15000,
-    },
-    checking: asBoolean(root.checking, false),
-    downloading: asBoolean(root.downloading, false),
-    lastCheck: parseCheckResult(root.lastCheck),
-    lastProbe: parseProbeReport(root.lastProbe),
-    lastError: typeof root.lastError === "string" ? root.lastError : null,
-  };
-}
+const CHANNEL_LABELS: Readonly<Record<DaemonUpdateChannel, string>> = {
+  stable: "稳定正式版（Stable）",
+  prerelease: "公测版（Prerelease · Alpha / Beta）",
+};
 
 function formatSize(bytes: number | null): string {
   if (bytes === null || bytes <= 0) return "未知大小";
@@ -223,14 +83,29 @@ function formatSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function asPackageKind(raw: string): DaemonUpdatePackageKind | undefined {
+  if (raw === "setup-exe" || raw === "portable-zip" || raw === "split-7z-exe") {
+    return raw;
+  }
+  return undefined;
+}
+
 /**
- * MP-04: /settings/updates
- * Real-data Dual-Source Updater & Network Routing Console:
- * - Connects to /v1/updater/status, /v1/updater/probe, /v1/updater/check, /v1/updater/policy
- * - Synchronizes Electron auto-updater feed URL via desktopBridge.prismux.setUpdateFeedUrl
- * - Displays GitHub vs Gitee probe latency, latest release metadata & SHA-256 verification info
+ * MP-04 / Pillar 1: /settings/updates
+ * Unified Dual-Source In-App Updater:
+ * - Zero hardcoded fallback version (reads real Daemon / runtime APP_VERSION)
+ * - Converged two-channel track: `stable` | `prerelease` (no `nightly`)
+ * - In-app streaming download via POST /v1/updater/download + GET /v1/updater/events SSE
+ *   (including Gitee 3-part `.7z.001..N` download -> extract -> SHA-256 verification)
+ * - Verified one-click install & restart via desktopBridge.prismux.installDownloadedUpdate
+ *   (or safe folder reveal + manual overwrite guide in portable mode)
+ * - Safe `https:` browser download fallback preserved
  */
-export function PrismuxUpdatesSettingsPage() {
+export function PrismuxUpdatesSettingsPage({
+  embedded = false,
+}: {
+  readonly embedded?: boolean;
+} = {}) {
   const { daemon, daemonInfo } = usePrismuxRuntime();
 
   const [status, setStatus] = useState<UpdaterStatusView | null>(null);
@@ -239,12 +114,14 @@ export function PrismuxUpdatesSettingsPage() {
 
   const [routePreference, setRoutePreference] = useState<RoutePreference>("auto");
   const [registryOverride, setRegistryOverride] = useState<PluginRegistryOverride>("auto");
-  const [includePrerelease, setIncludePrerelease] = useState(true);
+  const [updateChannel, setUpdateChannel] = useState<DaemonUpdateChannel>("prerelease");
   const [customGhProxyPrefix, setCustomGhProxyPrefix] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [probing, setProbing] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -270,14 +147,15 @@ export function PrismuxUpdatesSettingsPage() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await daemon.requestJson<unknown>("/v1/updater/status");
-      const parsed = parseStatus(res);
+      const res = await daemon.fetchUpdaterStatus();
+      const parsed = parseUpdaterStatusPayload(res, APP_VERSION);
       if (parsed) {
         setStatus(parsed);
         setRoutePreference(parsed.policy.routePreference);
         setRegistryOverride(parsed.policy.pluginRegistryOverride);
-        setIncludePrerelease(parsed.policy.includePrerelease);
+        setUpdateChannel(parsed.policy.channel);
         setCustomGhProxyPrefix(parsed.policy.customGhProxyPrefix);
+        setDownloading(parsed.downloading);
         if (parsed.lastProbe) setProbe(parsed.lastProbe);
         if (parsed.lastCheck) setCheckResult(parsed.lastCheck);
       }
@@ -292,14 +170,34 @@ export function PrismuxUpdatesSettingsPage() {
     void loadStatus();
   }, [loadStatus]);
 
+  // Subscribe to real-time SSE download / extract / SHA-256 verification / ready events.
+  useEffect(() => {
+    const unsubscribe = daemon.subscribeUpdaterEvents(
+      (event) => {
+        setStatus((prev) => {
+          const next = applyUpdaterSseEvent(prev, event, APP_VERSION);
+          if (next) {
+            setDownloading(next.downloading);
+            if (next.lastCheck) setCheckResult(next.lastCheck);
+            if (next.lastProbe) setProbe(next.lastProbe);
+            if (next.progress?.stage === "error" && next.lastError) {
+              setErrorMsg(next.lastError);
+            }
+          }
+          return next;
+        });
+      },
+      { maxReconnectAttempts: 5 },
+    );
+    return unsubscribe;
+  }, [daemon]);
+
   const handleProbeOnly = useCallback(async () => {
     setProbing(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const res = await daemon.requestJson<unknown>("/v1/updater/probe", {
-        method: "POST",
-      });
+      const res = await daemon.probeUpdaterSources<unknown>();
       const parsed = parseProbeReport(res);
       if (parsed) {
         setProbe(parsed);
@@ -322,9 +220,7 @@ export function PrismuxUpdatesSettingsPage() {
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const probeRes = await daemon.requestJson<unknown>("/v1/updater/probe", {
-        method: "POST",
-      });
+      const probeRes = await daemon.probeUpdaterSources<unknown>();
       const parsedProbe = parseProbeReport(probeRes);
       if (parsedProbe) {
         setProbe(parsedProbe);
@@ -333,19 +229,17 @@ export function PrismuxUpdatesSettingsPage() {
         }
       }
 
-      const checkRes = await daemon.requestJson<unknown>("/v1/updater/check", {
-        method: "POST",
-        body: JSON.stringify({
-          channel: includePrerelease ? "prerelease" : "stable",
-        }),
+      const checkRes = await daemon.checkForUpdates<unknown>({
+        channel: updateChannel,
+        includePrerelease: updateChannel === "prerelease",
       });
-      const parsedCheck = parseCheckResult(checkRes);
+      const parsedCheck = parseCheckResult(checkRes, status?.currentVersion ?? APP_VERSION);
       if (parsedCheck) {
         setCheckResult(parsedCheck);
         setStatusMsg(
           parsedCheck.hasUpdate && parsedCheck.latestVersion
             ? `发现新版本 v${parsedCheck.latestVersion}（来源：${parsedCheck.sourceUsed}）。`
-            : `当前版本 v${parsedCheck.currentVersion} 已是最新（已核验 ${parsedCheck.sourceUsed}）。`,
+            : `当前版本 ${parsedCheck.currentVersion ? `v${parsedCheck.currentVersion}` : "当前构建"} 已是最新（已核验 ${parsedCheck.sourceUsed}）。`,
         );
       }
     } catch (err) {
@@ -353,24 +247,110 @@ export function PrismuxUpdatesSettingsPage() {
     } finally {
       setChecking(false);
     }
-  }, [applyElectronFeedUrl, daemon, includePrerelease, routePreference]);
+  }, [applyElectronFeedUrl, daemon, routePreference, status?.currentVersion, updateChannel]);
+
+  const handleStartDownload = useCallback(
+    async (asset?: UpdateAssetView | null) => {
+      setDownloading(true);
+      setErrorMsg(null);
+      setStatusMsg(null);
+      try {
+        const target =
+          asset ??
+          checkResult?.recommendedAsset ??
+          selectRecommendedUpdateAsset(checkResult?.assets ?? [], status?.portableMode ?? false);
+        const kind = target ? asPackageKind(target.kind) : undefined;
+        const result = await daemon.downloadUpdate({
+          ...(kind ? { kind } : {}),
+          ...(target?.name ? { assetName: target.name } : {}),
+          ...(target?.source === "github" || target?.source === "gitee"
+            ? { sourceOverride: target.source }
+            : {}),
+        });
+        setStatus((prev) =>
+          prev
+            ? {
+                ...prev,
+                downloading: false,
+                installState: "ready",
+                downloadedFilePath: result.filePath,
+                downloadedSha256: result.sha256,
+                progress: {
+                  stage: "ready",
+                  percent: 100,
+                  bytesDownloaded: result.bytesDownloaded ?? result.totalBytes ?? 0,
+                  totalBytes: result.totalBytes ?? result.bytesDownloaded ?? null,
+                  currentPart: null,
+                  totalParts: null,
+                  partName: null,
+                  message: "SHA-256 校验通过，安装包已就绪",
+                  updatedAt: Date.now(),
+                },
+                lastError: null,
+              }
+            : prev,
+        );
+        setStatusMsg(
+          `安装包已下载并通过 SHA-256 强校验（${result.sha256.slice(0, 16)}…），现在可以执行安装。`,
+        );
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      } finally {
+        setDownloading(false);
+      }
+    },
+    [checkResult?.assets, checkResult?.recommendedAsset, daemon, status?.portableMode],
+  );
+
+  const handleInstallDownloaded = useCallback(async () => {
+    const filePath = status?.downloadedFilePath;
+    const expectedSha256 = status?.downloadedSha256;
+    if (!filePath || !expectedSha256) {
+      setErrorMsg("尚未检测到已通过 SHA-256 校验的安装包，请先完成软件内下载。");
+      return;
+    }
+    const bridge = window.desktopBridge?.prismux;
+    if (!bridge?.installDownloadedUpdate) {
+      setErrorMsg("当前运行环境不支持桌面端一键安装桥接，请使用下方浏览器下载链接手动安装。");
+      return;
+    }
+    setInstalling(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const result = await bridge.installDownloadedUpdate({
+        filePath,
+        expectedSha256,
+      });
+      if (result.mode === "portable-opened") {
+        setStatusMsg(
+          result.message ||
+            "便携模式已打开已校验安装包所在目录：请关闭 Prismux 后覆盖程序文件并保留 data/ 目录。",
+        );
+      } else {
+        setStatusMsg(result.message || "正在启动已校验安装包并优雅重启 Prismux…");
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInstalling(false);
+    }
+  }, [status?.downloadedFilePath, status?.downloadedSha256]);
 
   const handleSavePolicy = useCallback(async () => {
     setSavingPolicy(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      await daemon.requestJson<unknown>("/v1/updater/policy", {
-        method: "POST",
-        body: JSON.stringify({
-          routePreference,
-          includePrerelease,
-          customGhProxyPrefix: customGhProxyPrefix.trim(),
-          pluginRegistryOverride: registryOverride,
-        }),
+      await daemon.updateUpdaterPolicy({
+        routePreference,
+        channel: updateChannel,
+        includePrerelease: updateChannel === "prerelease",
+        customGhProxyPrefix: customGhProxyPrefix.trim(),
+        pluginRegistryOverride: registryOverride,
       });
       await applyElectronFeedUrl(routePreference, probe?.recommendedSource);
-      setStatusMsg("双源更新策略已保存，并已同步 Electron 更新源地址。");
+      setStatusMsg("双源更新策略已保存，并已同步更新通道配置。");
       await loadStatus();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -381,34 +361,55 @@ export function PrismuxUpdatesSettingsPage() {
     applyElectronFeedUrl,
     customGhProxyPrefix,
     daemon,
-    includePrerelease,
     loadStatus,
     probe?.recommendedSource,
     registryOverride,
     routePreference,
+    updateChannel,
   ]);
 
   const openExternal = useCallback((url: string) => {
-    if (window.desktopBridge?.openExternal) {
-      void window.desktopBridge.openExternal(url);
-      return;
+    if (!openSafeExternalHttpsUrl(url)) {
+      setErrorMsg("已拦截非 https 外部链接。");
     }
-    window.open(url, "_blank", "noopener,noreferrer");
   }, []);
 
-  return (
-    <SettingsPageContainer width="wide">
+  const runtimeVersion = resolveRuntimeVersion(status?.currentVersion, APP_VERSION);
+  const progress = status?.progress ?? null;
+  const isTransferActive =
+    downloading ||
+    progress?.stage === "downloading" ||
+    progress?.stage === "extracting" ||
+    progress?.stage === "verifying";
+  const hasVerifiedPackage = Boolean(status?.downloadedFilePath && status?.downloadedSha256);
+  const portableMode = status?.portableMode === true;
+  const recommendedAsset =
+    checkResult?.recommendedAsset ??
+    selectRecommendedUpdateAsset(checkResult?.assets ?? [], portableMode);
+  const safeReleaseHtmlUrl = validateSafeHttpsUrl(checkResult?.htmlUrl);
+  const progressPercent =
+    progress?.percent !== null && progress?.percent !== undefined
+      ? Math.max(0, Math.min(100, Math.round(progress.percent)))
+      : progress?.stage === "ready"
+        ? 100
+        : null;
+
+  const content = (
+    <>
       {/* Version & Quick Check Header */}
       <SettingsSection
         id="prismux-updates"
-        title="Prismux 双源更新中心"
+        title="Prismux 双源内更新中心"
         headerAction={
-          <div className="flex items-center gap-1.5">
-            <Badge variant="info" className="font-mono">
-              v{status?.currentVersion ?? "0.1.0-alpha.1"}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="info" className="font-mono tabular-nums">
+              {runtimeVersion ? `v${runtimeVersion}` : "版本探测中"}
             </Badge>
             <Badge variant="outline">
-              {status?.portableMode ? "便携模式 (Portable)" : "标准安装版"}
+              {updateChannel === "stable" ? "稳定正式版" : "公测版"}
+            </Badge>
+            <Badge variant="outline">
+              {portableMode ? "便携模式 (Portable)" : "标准安装版"}
             </Badge>
             <Badge variant={daemonInfo.ready ? "success" : "warning"}>
               {daemonInfo.ready ? "Daemon 在线" : "Daemon 未连接"}
@@ -417,17 +418,17 @@ export function PrismuxUpdatesSettingsPage() {
         }
       >
         <p className="px-4 py-2.5 text-xs text-muted-foreground">
-          支持 GitHub Releases 与 Gitee Releases 自动测速容灾、SHA-256 强制完整性校验，以及国内 npmmirror / 国际 npmjs 插件源协同路由。
+          支持 GitHub Releases 与 Gitee Releases（含 3 分卷无损重组）软件内直连下载、整包 SHA-256 强制校验与一键重启升级，同时协同国内 npmmirror / 国际 npmjs 插件源。
         </p>
         <SettingsRow
           title="测速并检查最新版本"
-          description="并行探测 GitHub 与 Gitee Releases API 延迟，选择最优线路拉取最新发行版元信息与 SHA-256 校验值。"
+          description="并行探测 GitHub 与 Gitee Releases 延迟，按所选通道（稳定正式版 / 公测版）拉取最新发行版与校验摘要。"
           control={
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
-                disabled={probing || checking || loading}
+                disabled={probing || checking || loading || isTransferActive}
                 onClick={() => {
                   void handleProbeOnly();
                 }}
@@ -437,7 +438,7 @@ export function PrismuxUpdatesSettingsPage() {
               </Button>
               <Button
                 size="sm"
-                disabled={checking || probing || loading}
+                disabled={checking || probing || loading || isTransferActive}
                 onClick={() => {
                   void handleProbeAndCheck();
                 }}
@@ -467,6 +468,125 @@ export function PrismuxUpdatesSettingsPage() {
           >
             <CheckCircle2Icon className="size-4 shrink-0" />
             <span className="min-w-0 flex-1">{statusMsg}</span>
+          </div>
+        ) : null}
+
+        {/* In-App Download Progress & Verified Install Ready Card */}
+        {isTransferActive || hasVerifiedPackage ? (
+          <div
+            data-updater-transfer-card
+            className="mx-4 my-3 space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-3.5 text-xs"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-medium text-foreground">
+                {hasVerifiedPackage && !isTransferActive ? (
+                  <ShieldCheckIcon className="size-4 text-emerald-500" />
+                ) : (
+                  <RefreshCwIcon className="size-4 animate-spin text-primary" />
+                )}
+                <span>
+                  {isTransferActive
+                    ? describeUpdaterProgressStage(progress)
+                    : "安装包 SHA-256 校验通过，已就绪"}
+                </span>
+              </div>
+              {progressPercent !== null ? (
+                <span className="font-mono font-semibold tabular-nums text-foreground">
+                  {progressPercent}%
+                </span>
+              ) : null}
+            </div>
+
+            {isTransferActive ? (
+              <div className="space-y-1.5">
+                <div
+                  role="progressbar"
+                  aria-label="Prismux 更新下载与校验进度"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={progressPercent ?? 0}
+                  className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                >
+                  <div
+                    className="h-full bg-primary transition-[width] duration-200"
+                    style={{ width: `${progressPercent ?? 15}%` }}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground tabular-nums">
+                  <span>
+                    {progress?.stage === "downloading"
+                      ? `已下载 ${formatSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatSize(progress.totalBytes)}` : ""}`
+                      : progress?.stage === "extracting"
+                        ? "正在通过内置 7za.exe 无损合并分卷…"
+                        : progress?.stage === "verifying"
+                          ? "正在逐字节比对 SHA-256 摘要…"
+                          : progress?.message ?? "处理中…"}
+                  </span>
+                  {progress?.totalParts && progress.totalParts > 1 ? (
+                    <span className="inline-flex items-center gap-1 font-mono">
+                      <LayersIcon className="size-3" />
+                      分卷 {progress.currentPart ?? 1}/{progress.totalParts}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {hasVerifiedPackage && !isTransferActive ? (
+              <div className="space-y-2.5">
+                <div className="rounded-lg border border-border/60 bg-background/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+                  <div className="truncate text-foreground" title={status?.downloadedFilePath ?? ""}>
+                    文件：{status?.downloadedFilePath}
+                  </div>
+                  <div className="mt-0.5 truncate">
+                    SHA-256：{status?.downloadedSha256}
+                  </div>
+                </div>
+
+                {portableMode ? (
+                  <div className="space-y-2 rounded-lg border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-foreground">
+                    <div className="font-medium">便携模式覆盖升级指引</div>
+                    <ol className="list-decimal space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+                      <li>点击下方按钮打开已校验安装包所在目录；</li>
+                      <li>完全关闭正在运行的 Prismux，解压或覆盖主程序文件；</li>
+                      <li>保留原目录中的 <code className="font-mono text-foreground">data/</code> 文件夹，所有记忆与配置零丢失。</li>
+                    </ol>
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Button
+                    size="sm"
+                    disabled={installing}
+                    data-action={portableMode ? "open-portable-update-dir" : "install-and-restart"}
+                    onClick={() => {
+                      void handleInstallDownloaded();
+                    }}
+                  >
+                    {portableMode ? (
+                      <FolderOpenIcon className="size-3.5" />
+                    ) : (
+                      <RotateCwIcon className={installing ? "size-3.5 animate-spin" : "size-3.5"} />
+                    )}
+                    {installing
+                      ? "正在执行…"
+                      : portableMode
+                        ? "打开已校验安装包所在目录"
+                        : "一键安装并重启"}
+                  </Button>
+                  {safeReleaseHtmlUrl ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => openExternal(safeReleaseHtmlUrl)}
+                    >
+                      去浏览器打开下载
+                      <ExternalLinkIcon className="size-3" />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -501,7 +621,10 @@ export function PrismuxUpdatesSettingsPage() {
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
-                    <Badge variant={src.reachable ? "success" : "destructive"}>
+                    <Badge
+                      variant={src.reachable ? "success" : "destructive"}
+                      className="tabular-nums"
+                    >
                       {src.reachable
                         ? src.latencyMs !== null
                           ? `${Math.round(src.latencyMs)} ms`
@@ -524,23 +647,38 @@ export function PrismuxUpdatesSettingsPage() {
                 <span className="text-sm font-medium text-foreground">
                   {checkResult.hasUpdate && checkResult.latestVersion
                     ? `发现新版本：v${checkResult.latestVersion}`
-                    : `已是最新版本（v${checkResult.currentVersion}）`}
+                    : `已是最新版本${checkResult.currentVersion ? `（v${checkResult.currentVersion}）` : ""}`}
                 </span>
                 <Badge variant="outline">来源：{checkResult.sourceUsed}</Badge>
                 {checkResult.usedFallbackSource ? (
                   <Badge variant="warning">已自动切换备用源</Badge>
                 ) : null}
               </div>
-              {checkResult.htmlUrl ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => openExternal(checkResult.htmlUrl!)}
-                >
-                  查看发行说明
-                  <ExternalLinkIcon className="size-3" />
-                </Button>
-              ) : null}
+              <div className="flex flex-wrap items-center gap-2">
+                {checkResult.hasUpdate && recommendedAsset && !hasVerifiedPackage ? (
+                  <Button
+                    size="xs"
+                    disabled={isTransferActive}
+                    data-action="download-update-in-app"
+                    onClick={() => {
+                      void handleStartDownload(recommendedAsset);
+                    }}
+                  >
+                    <DownloadIcon className="size-3" />
+                    {isTransferActive ? "下载中…" : "软件内下载更新"}
+                  </Button>
+                ) : null}
+                {safeReleaseHtmlUrl ? (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => openExternal(safeReleaseHtmlUrl)}
+                  >
+                    去浏览器打开下载
+                    <ExternalLinkIcon className="size-3" />
+                  </Button>
+                ) : null}
+              </div>
             </div>
 
             {checkResult.releaseNotes ? (
@@ -552,7 +690,7 @@ export function PrismuxUpdatesSettingsPage() {
             {checkResult.assets.length > 0 ? (
               <div className="space-y-1.5">
                 <div className="text-[11px] font-medium text-muted-foreground">
-                  可用安装包资产（下载前强制校验 SHA-256）
+                  可用安装包资产（下载后强制整包校验 SHA-256）
                 </div>
                 {checkResult.assets.map((asset) => (
                   <div
@@ -560,22 +698,42 @@ export function PrismuxUpdatesSettingsPage() {
                     className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-xs"
                   >
                     <div className="min-w-0">
-                      <div className="truncate font-mono text-foreground">{asset.name}</div>
-                      <div className="text-[11px] text-muted-foreground">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="truncate font-mono text-foreground">{asset.name}</span>
+                        {asset.kind === "split-7z-exe" ? (
+                          <Badge variant="secondary" size="sm">
+                            Gitee {asset.parts.length || 3} 分卷自动重组
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground tabular-nums">
                         {formatSize(asset.sizeBytes)}
                         {asset.sha256 ? ` · SHA-256: ${asset.sha256.slice(0, 16)}…` : ""}
                       </div>
                     </div>
-                    {asset.effectiveUrl ? (
+                    <div className="flex shrink-0 items-center gap-1.5">
                       <Button
                         size="xs"
-                        variant="outline"
-                        onClick={() => openExternal(asset.effectiveUrl)}
+                        variant="secondary"
+                        disabled={isTransferActive}
+                        onClick={() => {
+                          void handleStartDownload(asset);
+                        }}
                       >
-                        下载资产
-                        <ExternalLinkIcon className="size-3" />
+                        <DownloadIcon className="size-3" />
+                        软件内下载
                       </Button>
-                    ) : null}
+                      {asset.effectiveUrl ? (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => openExternal(asset.effectiveUrl!)}
+                        >
+                          浏览器下载
+                          <ExternalLinkIcon className="size-3" />
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -585,10 +743,37 @@ export function PrismuxUpdatesSettingsPage() {
       </SettingsSection>
 
       {/* Routing & Registry Policy */}
-      <SettingsSection id="prismux-updates-policy" title="双源路由与插件镜像策略">
+      <SettingsSection id="prismux-updates-policy" title="更新通道、双源路由与插件镜像策略">
         <p className="px-4 py-2.5 text-xs text-muted-foreground">
-          调整更新下载主线路与社区插件 npm 镜像源；保存后立即持久化到 Daemon 并同步桌面端更新 Feed。
+          收敛为「稳定正式版」与「公测版」双通道；调整更新主线路与社区插件 npm 镜像源后将立即持久化至 Daemon。
         </p>
+
+        <SettingsRow
+          id="update-track"
+          title="软件更新通道"
+          description="选择接收稳定正式版（Stable）或包含 Alpha / Beta 早期特性的公测版（Prerelease）。"
+          control={
+            <div className="w-full sm:w-72">
+              <Select
+                value={updateChannel}
+                onValueChange={(val) => {
+                  if (val === "stable" || val === "prerelease") {
+                    setUpdateChannel(val);
+                  }
+                }}
+              >
+                <SelectTrigger size="sm" aria-label="软件更新通道">
+                  <SelectValue>{CHANNEL_LABELS[updateChannel]}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="stable">{CHANNEL_LABELS.stable}</SelectItem>
+                  <SelectItem value="prerelease">{CHANNEL_LABELS.prerelease}</SelectItem>
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
+
         <SettingsRow
           title="软件更新路线偏好"
           description="国内网络环境推荐「自动切换」或「国内优先（Gitee Releases + npmmirror）」。"
@@ -642,18 +827,6 @@ export function PrismuxUpdatesSettingsPage() {
         />
 
         <SettingsRow
-          title="接收 Alpha / Beta 预发布版本"
-          description="开启后将检查包含预发布标签（如 v0.1.0-alpha.x）的早期构建。"
-          control={
-            <Switch
-              aria-label="接收预发布版本"
-              checked={includePrerelease}
-              onCheckedChange={(checked) => setIncludePrerelease(Boolean(checked))}
-            />
-          }
-        />
-
-        <SettingsRow
           title="自定义 GitHub 加速前缀（可选）"
           description="仅当选择 GitHub 线路且需要中转加速时填写（例如 https://gh-proxy.com/），留空则直连。"
           control={
@@ -692,6 +865,12 @@ export function PrismuxUpdatesSettingsPage() {
           </Button>
         </div>
       </SettingsSection>
-    </SettingsPageContainer>
+    </>
   );
+
+  if (embedded) {
+    return content;
+  }
+
+  return <SettingsPageContainer width="wide">{content}</SettingsPageContainer>;
 }

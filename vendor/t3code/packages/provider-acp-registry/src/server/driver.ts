@@ -59,8 +59,10 @@ import {
   listAcpRegistryProviders,
   logoutAcpRegistry,
   probeAcpRegistryConfiguration,
+  probeOmpAcpUsageLimits,
   setAcpRegistryProvider,
 } from "./probe.ts";
+import { isOmpSettings } from "./ompAcp.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
@@ -814,6 +816,28 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       return { provider: enriched, generation: cacheState.generation };
     });
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
+    const isOmpInstance = isOmpSettings(effectiveConfig);
+    const checkOmpUsageLimits = Effect.gen(function* () {
+      const checkedAt = DateTime.formatIso(yield* DateTime.now);
+      const probeEffect = probeOmpAcpUsageLimits({
+        instanceId,
+        settings: effectiveConfig,
+        cwd: host.paths.cwd,
+        environment: processEnvironment,
+        checkedAt,
+      }).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(SecureRandom.SecureRandom, random),
+      );
+      if (Option.isSome(runtimeCoordinator)) {
+        const key =
+          effectiveConfig.source === "local" ? `local:${instanceId}` : effectiveConfig.agentId;
+        const result = yield* runtimeCoordinator.value.runBackgroundProbe(key, probeEffect);
+        return Option.getOrUndefined(result);
+      }
+      return yield* probeEffect;
+    });
     const snapshot = yield* makeManagedServerProvider<
       ProviderSnapshotSettings<AcpRegistrySettings>
     >({
@@ -824,6 +848,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       // Inspection may fetch the registry when its disk cache is missing; creation must not wait on that.
       initialSnapshot: () => buildInitialAcpRegistrySnapshot(readinessInput),
       checkProvider,
+      ...(isOmpInstance ? { checkUsageLimits: checkOmpUsageLimits } : {}),
       enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
         snapshot,
         getSnapshot,

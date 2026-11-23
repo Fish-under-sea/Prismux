@@ -170,4 +170,108 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     // JSX `<T>` entry in zh.json
     expect(zhCatalog["a1761e822ab06189"]).toBe("使用本机 agy CLI");
   });
+
+  it("translates v0.1.1-alpha.1 diagnostics, updates, mobile web, voice mirror, and Issue #6/#7 copy", () => {
+    expect(m(msg("Service Diagnostics"))).toBe("服务体检");
+    expect(m(msg("Prismux Service Diagnostics"))).toBe("Prismux 服务体检中心");
+    expect(m(msg("FTS5 + sqlite-vec hybrid"))).toBe("FTS5 + sqlite-vec 混合态");
+    expect(m(msg("FTS5 degraded mode"))).toBe("FTS5 降级态");
+    expect(m(msg("Mobile Web access"))).toBe("手机扫码访问本机 Prismux Web");
+    expect(m(msg("Whisper model download mirror (HF_ENDPOINT)"))).toBe(
+      "Whisper 模型国内下载镜像（HF_ENDPOINT）",
+    );
+    expect(m(msg("Continue in terminal"))).toBe("在终端中继续");
+    expect(m(msg("Return to chat"))).toBe("切回对话视图");
+    expect(m(msg("Default launch mode"))).toBe("默认启动模式");
+    expect(m(msg("Install guide"))).toBe("官方安装指南");
+    expect(m(msg("CLI not installed"))).toBe("未安装 CLI");
+    expect(m(msg("Hand off to another agent"))).toBe("交接给其他智能体");
+    expect(m(msg("Latest status (recommended)"))).toBe("最新进展摘要（推荐）");
+    expect(m(msg("Full transcript"))).toBe("完整对话记录");
+    expect(
+      m(msg("Install the {provider} CLI to open it in a terminal."), { provider: "Codex" }),
+    ).toBe("请先安装 Codex CLI，才能在终端中打开它。");
+    expect(m(msg("{agent} isn't installed on this machine."), { agent: "OMP" })).toBe(
+      "本机尚未安装 OMP。",
+    );
+    expect(m(msg("Run Prismux's CLI as `t3` from any terminal."))).toBe(
+      "在任意终端中以 `t3` 运行 Prismux 命令行工具。",
+    );
+    expect(
+      m(
+        msg("Another t3 at {path} runs first in a new terminal. Remove it to use Prismux's.", {
+          path: "/usr/local/bin/t3",
+        }),
+      ),
+    ).toBe("新终端中将优先运行位于 /usr/local/bin/t3 的另一个 t3。请先移除它以使用 Prismux 的版本。");
+    expect(m(msg("手机模拟器"))).toBe("手机模拟器");
+    expect(m(msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"))).toBe(
+      "零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。",
+    );
+    // JSX `<T>` entries in zh.json
+    expect(zhCatalog["d9de785e4e7e3489"]).toBe("前往软件更新");
+    expect(zhCatalog["62efb97188343665"]).toBe("开启局域网访问");
+    expect(zhCatalog["d18fbf732abd8379"]).toBe("使用 omp 一键预设");
+    expect(searchSettings("服务体检", SETTINGS_SEARCH_ITEMS, m)[0]?.id).toBe(
+      "prismux-diagnostics",
+    );
+  });
+
+  it("translates Orca composer (#313), sidebar + icon rail (#315/Spec 2), settings nav (Spec 1), live telemetry (Spec 3), and usage call logs (Spec 4A)", () => {
+    // #313 Orca composer & 4-tier permission shield
+    expect(m(msg("Ask anything, @ to mention files, / for commands"))).toBe(
+      "随心输入，@ 引用文件，/ 使用命令",
+    );
+    expect(m(msg("Ask for approval"))).toBe("请求批准");
+    expect(m(msg("Accept edits"))).toBe("接受编辑");
+    expect(m(msg("Approve for me"))).toBe("替我批准");
+    expect(m(msg("Never asks before edits or commands"))).toBe("编辑或运行命令前从不询问");
+    expect(m(msg("More models ({count})"), { count: 4 })).toBe("更多模型 (4)");
+    expect(m(msg("Show fewer models"))).toBe("收起更多模型");
+
+    // #315 & Spec 2 Orca left sidebar + icon rail
+    expect(m(msg("Service diagnostics", { $context: "sidebar quick navigation" }))).toBe("服务体检");
+    expect(m(msg("Automations", { $context: "sidebar quick navigation" }))).toBe("自动化");
+    expect(m(msg("Prismux Mobile", { $context: "sidebar quick navigation" }))).toBe("Prismux 手机端");
+    expect(m(msg("Plugins", { $context: "sidebar quick navigation" }))).toBe("插件中心");
+    expect(m(msg("Locate current thread"))).toBe("定位当前会话");
+    expect(m(msg("Wallpaper & appearance"))).toBe("壁纸与外观");
+    expect(m(msg("Collapse sidebar"))).toBe("折叠侧边栏");
+    expect(m(msg("Expand sidebar"))).toBe("展开侧边栏");
+    expect(m(msg("Notifications & pending approvals"))).toBe("通知与待审批");
+    expect(zhCatalog["c9e6702d622a8ef6"]).toBe("Prismux GitHub 仓库");
+    expect(zhCatalog["a819ac2e9d61e812"]).toBe("反馈问题");
+
+    // Spec 1 Settings nav groups, merged Appearance & Wallpaper, About & Updates, and internal re-grouping
+    expect(m(msg("Appearance & Wallpaper"))).toBe("外观与壁纸");
+    expect(m(msg("About & Updates"))).toBe("关于与更新");
+    expect(m(msg("General & appearance"))).toBe("常用与外观");
+    expect(m(msg("Agents & workspace"))).toBe("智能体与工作区");
+    expect(m(msg("Extensions, memory & connections"))).toBe("扩展、记忆与连接");
+    expect(m(msg("System & about"))).toBe("系统与关于");
+    expect(m(msg("Follow-ups & subagents"))).toBe("自动续跑与子线程");
+    expect(m(msg("Activity & accessibility"))).toBe("活动与辅助功能");
+    expect(m(msg("Background & recovery"))).toBe("后台防休眠与重启续跑");
+    expect(m(msg("CLI, mobile access & onboarding"))).toBe("命令行、移动访问与引导");
+    expect(m(msg("Defaults & CLI updates"))).toBe("默认模式与 CLI 更新检测");
+    expect(m(msg("Live wallpaper & Steam Workshop 431960"))).toBe("动态壁纸引擎与 Steam 431960");
+    expect(m(msg("Multi-environment linking"))).toBe("多环境联动");
+    expect(zhCatalog["d62a257591810bd5"]).toBe("前往聊天设置");
+    expect(zhCatalog["f3e68622c75839ac"]).toBe("前往工作树设置");
+    expect(zhCatalog["be0677cf0324fc67"]).toBe("前往环境设置");
+    expect(zhCatalog["cdfd32ad4d328c61"]).toBe(
+      "将运行中与监控中的会话收纳到「进行中」分组，需要你介入时会自动回到收件箱顶部。",
+    );
+
+    // Spec 3 Live session telemetry strip
+    expect(m(msg("Context {percent}"), { percent: "42%" })).toBe("上下文 42%");
+    expect(m(msg("Cache hit {rate}"), { rate: "88%" })).toBe("缓存命中 88%");
+    expect(m(msg("Live session telemetry"))).toBe("实时会话遥测");
+
+    // Spec 4A Usage page summary metrics & Call Logs
+    expect(m(msg("Avg TTFT"))).toBe("平均首字响应");
+    expect(m(msg("Avg speed"))).toBe("平均速度");
+    expect(m(msg("Cache hit rate"))).toBe("实际缓存命中率");
+    expect(m(msg("Call Logs"))).toBe("调用日志");
+  });
 });

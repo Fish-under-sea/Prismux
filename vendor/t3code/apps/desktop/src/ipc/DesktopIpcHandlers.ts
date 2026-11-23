@@ -95,6 +95,7 @@ import {
 import {
   getPrismuxDaemonInfo,
   getPrismuxWindowOcclusion,
+  installPrismuxDownloadedUpdate,
   pickPrismuxWallpaperDirectory,
   pickPrismuxWallpaperFiles,
   setPrismuxUpdateFeedUrl,
@@ -203,4 +204,5 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(pickPrismuxWallpaperFiles);
   yield* ipc.handle(pickPrismuxWallpaperDirectory);
   yield* ipc.handle(setPrismuxUpdateFeedUrl);
+  yield* ipc.handle(installPrismuxDownloadedUpdate);
 });

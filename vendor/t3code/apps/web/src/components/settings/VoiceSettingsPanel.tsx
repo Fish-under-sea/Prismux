@@ -41,7 +41,10 @@ import {
   ArrowDownUpIcon,
   AudioLinesIcon,
   CheckIcon,
+  CopyIcon,
   DownloadIcon,
+  GlobeIcon,
+  InfoIcon,
   LanguagesIcon,
   KeyRoundIcon,
   LaptopIcon,
@@ -59,9 +62,10 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { msg, T, useGT, useLocale, useMessages, Var } from "gt-react";
 
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { supportsAppleSpeechLocale, useAppleSpeechLocales } from "../../speech/appleSpeech";
-import { cn } from "~/lib/utils";
+import { cn, isWindowsPlatform } from "~/lib/utils";
 import {
   listAudioInputs,
   updateMicrophoneOrder,
@@ -1317,10 +1321,93 @@ function TranscriptionTest(props: {
   );
 }
 
+const HF_MIRROR_URL = "https://hf-mirror.com";
+const HF_MIRROR_POWERSHELL_SESSION_CMD = `$env:HF_ENDPOINT="${HF_MIRROR_URL}"`;
+const HF_MIRROR_POWERSHELL_USER_CMD = `[Environment]::SetEnvironmentVariable("HF_ENDPOINT", "${HF_MIRROR_URL}", "User")`;
+
+function PrismuxVoiceMirrorGuideRow() {
+  const gt = useGT();
+  const isWindows = isWindowsPlatform(typeof navigator === "undefined" ? "" : navigator.platform);
+  const { copyToClipboard: copySessionCmd, isCopied: copiedSession } = useCopyToClipboard({
+    target: {
+      target: "HF_ENDPOINT command",
+      unavailableMessage: msg("Clipboard API is unavailable while copying command."),
+      failureMessage: msg("Failed to copy HF_ENDPOINT command to the clipboard."),
+    },
+    timeout: 1_500,
+  });
+  const { copyToClipboard: copyUserCmd, isCopied: copiedUser } = useCopyToClipboard({
+    target: {
+      target: "HF_ENDPOINT persistent command",
+      unavailableMessage: msg("Clipboard API is unavailable while copying command."),
+      failureMessage: msg("Failed to copy HF_ENDPOINT command to the clipboard."),
+    },
+    timeout: 1_500,
+  });
+
+  return (
+    <SettingsRow
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          <GlobeIcon aria-hidden className="size-3.5 text-muted-foreground" />
+          <span>{gt("Whisper model download mirror (HF_ENDPOINT)")}</span>
+        </span>
+      }
+      description={gt(
+        "If HuggingFace downloads are slow or unreachable in mainland China, set HF_ENDPOINT to https://hf-mirror.com and restart Prismux before downloading local Whisper models.",
+      )}
+    >
+      <div className="mt-2.5 space-y-2 pb-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2">
+          <span className="shrink-0 font-medium text-muted-foreground">
+            {isWindows ? gt("PowerShell (current session):") : gt("Shell export:")}
+          </span>
+          <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
+            {isWindows ? HF_MIRROR_POWERSHELL_SESSION_CMD : `export HF_ENDPOINT=${HF_MIRROR_URL}`}
+          </code>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() =>
+              copySessionCmd(
+                isWindows ? HF_MIRROR_POWERSHELL_SESSION_CMD : `export HF_ENDPOINT=${HF_MIRROR_URL}`,
+              )
+            }
+          >
+            {copiedSession ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+            {copiedSession ? gt("Copied") : gt("Copy")}
+          </Button>
+        </div>
+        {isWindows ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2">
+            <span className="shrink-0 font-medium text-muted-foreground">
+              {gt("Windows user env (persistent):")}
+            </span>
+            <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
+              {HF_MIRROR_POWERSHELL_USER_CMD}
+            </code>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => copyUserCmd(HF_MIRROR_POWERSHELL_USER_CMD)}
+            >
+              {copiedUser ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+              {copiedUser ? gt("Copied") : gt("Copy")}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </SettingsRow>
+  );
+}
+
 export function VoiceSettingsPanel() {
   const messages = useMessages();
   const setting = useSearchableSetting();
   const gt = useGT();
+  const isWindows = isWindowsPlatform(typeof navigator === "undefined" ? "" : navigator.platform);
   const cleanupEnabled = useCleanupGrant() !== null;
   const settings = useClientSettings();
   const settingsScope = useOptionalSettingsScope();
@@ -1516,7 +1603,7 @@ export function VoiceSettingsPanel() {
           control={
             <div className="flex w-full min-w-0 items-center gap-1.5 @min-[32rem]/settings-row:w-auto">
               <Select
-                value={destinationValue}
+                value={isWindows && !appleSpeechAvailable && destination.device ? OFF : destinationValue}
                 onValueChange={(value) => {
                   if (!value) return;
                   const cloud = cloudChoices.find((choice) => choice.value === value);
@@ -1545,7 +1632,7 @@ export function VoiceSettingsPanel() {
                 >
                   <SelectValue>
                     <span className="flex min-w-0 items-center gap-2">
-                      {destination.device ? (
+                      {destination.device && !(isWindows && !appleSpeechAvailable) ? (
                         <LaptopIcon aria-hidden className="size-4" />
                       ) : destination.cloudProvider ? (
                         <CloudSpeechLogo provider={destination.cloudProvider} />
@@ -1555,7 +1642,7 @@ export function VoiceSettingsPanel() {
                         <MicOffIcon aria-hidden className="size-4" />
                       )}
                       <span className="truncate">
-                        {destination.device
+                        {destination.device && !(isWindows && !appleSpeechAvailable)
                           ? appleSpeechLabel
                           : destination.cloudProvider
                             ? CLOUD_SPEECH_LABELS[destination.cloudProvider]
@@ -1579,7 +1666,7 @@ export function VoiceSettingsPanel() {
                       <T>Off</T>
                     </span>
                   </SelectItem>
-                  {(appleSpeechAvailable || destination.device) && (
+                  {!isWindows && (appleSpeechAvailable || destination.device) && (
                     <SelectGroup>
                       <SelectGroupLabel>
                         <T>On this Mac</T>
@@ -1781,6 +1868,7 @@ export function VoiceSettingsPanel() {
             projectName={project?.title ?? null}
           />
         ) : null}
+        <PrismuxVoiceMirrorGuideRow />
         {prepared && <AdvancedSpeechSettings prepared={prepared} catalog={catalog} />}
       </SettingsSection>
 

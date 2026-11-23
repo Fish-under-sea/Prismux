@@ -86,6 +86,14 @@ import {
   getProviderVersionLabel,
   providerAuthLabel,
 } from "./providerStatus";
+import {
+  openSafeExternalHttpsFromAnchor,
+  resolveAgentCliMeta,
+  resolveSafeAgentHomepageUrl,
+  supportsDualLaunchMode,
+} from "./prismuxProviderMeta";
+import { AgentInstallPrompt } from "./AgentInstallPrompt";
+import type { ProviderLaunchMode } from "./prismuxProviderMode";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
@@ -735,6 +743,10 @@ interface ProviderInstanceCardProps {
   readonly environmentId?: EnvironmentId | undefined;
   readonly secretSources?: ReadonlyArray<SecretSource>;
   readonly projectOverride?: ProjectOverrideControl | undefined;
+  readonly launchMode?: ProviderLaunchMode | undefined;
+  readonly isLaunchModeOverridden?: boolean | undefined;
+  readonly onLaunchModeChange?: ((mode: ProviderLaunchMode) => void) | undefined;
+  readonly onLaunchModeReset?: (() => void) | undefined;
   readonly acpProjects?:
     | ReadonlyArray<{
         readonly id: ProjectId;
@@ -807,6 +819,10 @@ export function ProviderInstanceCard({
   acpProjects = EMPTY_ACP_PROJECTS,
   secretSources = NO_SECRET_SOURCES,
   projectOverride,
+  launchMode = "chat",
+  isLaunchModeOverridden = false,
+  onLaunchModeChange,
+  onLaunchModeReset,
 }: ProviderInstanceCardProps) {
   const gt = useGT();
   const m = useMessages();
@@ -857,6 +873,31 @@ export function ProviderInstanceCard({
   const urlAuthAction = liveProvider?.auth.action;
   const displayName =
     instance.displayName?.trim() || driverOption?.label || String(instance.driver);
+  const cliMeta = resolveAgentCliMeta({
+    driver: instance.driver,
+    instanceId,
+    config: instance.config,
+    displayName,
+  });
+  const safeHomepageUrl = resolveSafeAgentHomepageUrl({
+    driver: instance.driver,
+    instanceId,
+    config: instance.config,
+    displayName,
+    documentationUrl: liveProvider?.setup?.documentationUrl ?? null,
+  });
+  const dualModeSupported = supportsDualLaunchMode({
+    driver: instance.driver,
+    instanceId,
+    config: instance.config,
+  });
+  const isMissingCli = liveProvider !== undefined && !liveProvider.installed;
+  const effectiveUpdateCommand =
+    updateCommand ?? (versionAdvisory && cliMeta?.updateCommandHint ? cliMeta.updateCommandHint : null);
+  const latestVersionBadge =
+    liveProvider?.versionAdvisory?.latestVersion
+      ? getProviderVersionLabel(liveProvider.versionAdvisory.latestVersion)
+      : null;
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
   const managedPolicy = useManagedPolicy(environmentId);
   const instanceLocks = managedInstanceLocks(managedPolicy, instance.driver, m);
@@ -1061,30 +1102,50 @@ export function ProviderInstanceCard({
               render={
                 <Button
                   type="button"
-                  size={mode === "list" ? "icon-micro" : "icon-xs"}
-                  variant="ghost-muted"
-                  className={mode === "list" ? "pointer-events-auto relative shrink-0" : undefined}
+                  size={mode === "list" ? "xs" : "xs"}
+                  variant="outline"
+                  className={cn(
+                    "pointer-events-auto relative h-5 shrink-0 gap-1 rounded-full px-1.5 text-2xs font-medium",
+                    hasCompatibilityWarning
+                      ? "border-warning/50 bg-warning/10 text-warning-foreground"
+                      : "border-primary/35 bg-primary/10 text-primary hover:bg-primary/15",
+                  )}
+                  onClick={(event) => event.stopPropagation()}
                   aria-label={gt("{status}, view details", {
                     status: updateProgress ? gt("Updating") : versionAdvisory.title,
                   })}
                 >
                   {updateProgress ? (
-                    <Spinner tone="muted" {...(mode === "list" ? { size: "sm" as const } : {})} />
+                    <Spinner tone="muted" size="sm" />
                   ) : (
                     <VersionAdvisoryIcon
                       className={cn(
-                        mode === "list" && "size-3.5",
+                        "size-3 shrink-0",
                         hasCompatibilityWarning && "text-warning",
                       )}
                     />
                   )}
+                  <span className="max-w-20 truncate tabular-nums">
+                    {updateProgress
+                      ? gt("Updating")
+                      : latestVersionBadge
+                        ? latestVersionBadge
+                        : gt("Update")}
+                  </span>
                 </Button>
               }
             />
           }
         />
         <TooltipPopup side="top">
-          {updateProgress ? gt("Updating") : versionAdvisory.title}
+          {updateProgress
+            ? gt("Updating")
+            : liveProvider?.version && liveProvider?.versionAdvisory?.latestVersion
+              ? gt("{installed} → {latest}", {
+                  installed: getProviderVersionLabel(liveProvider.version),
+                  latest: getProviderVersionLabel(liveProvider.versionAdvisory.latestVersion),
+                })
+              : versionAdvisory.title}
         </TooltipPopup>
       </Tooltip>
       <PopoverPopup side="bottom" align="end" width="md" aria-label={versionAdvisory.title}>
@@ -1102,7 +1163,40 @@ export function ProviderInstanceCard({
               {versionAdvisory.detail}
             </p>
           </div>
-          {onRunVersionAction ? (
+          {effectiveUpdateCommand ? (
+            <div className="space-y-1.5">
+              <p className="text-2xs text-muted-foreground">
+                <T>Run the official CLI update command in your terminal:</T>
+              </p>
+              <div className="flex min-w-0 items-center gap-1 rounded-md border border-border/70 bg-muted/40 py-0.5 pr-0.5 pl-2">
+                <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
+                  {effectiveUpdateCommand}
+                </code>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost-muted"
+                        className="shrink-0"
+                        onClick={() =>
+                          copyToClipboard(effectiveUpdateCommand, { providerName: displayName })
+                        }
+                        aria-label={gt("Copy update command")}
+                      >
+                        <CopyIcon className="size-3" />
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup side="top">
+                    <T>Copy command</T>
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
+            </div>
+          ) : null}
+          {onRunVersionAction && instance.driver === "acpRegistry" ? (
             <Button
               type="button"
               size="xs"
@@ -1121,6 +1215,28 @@ export function ProviderInstanceCard({
                   : gt("Update now")}
             </Button>
           ) : null}
+          {safeHomepageUrl ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="w-full justify-between"
+              render={
+                <a
+                  href={safeHomepageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => {
+                    openSafeExternalHttpsFromAnchor(event);
+                  }}
+                />
+              }
+            >
+              <span>
+                <T>Official installation &amp; release notes</T>
+              </span>
+              <ExternalLinkIcon className="size-3" />
+            </Button>
+          ) : null}
           {updateProgress || updateProblem ? (
             <p
               aria-live="polite"
@@ -1132,43 +1248,113 @@ export function ProviderInstanceCard({
               {updateProgress ?? updateProblem}
             </p>
           ) : null}
-          {onRunVersionAction && updateCommand ? (
-            <div className="flex items-center gap-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
-              <span aria-hidden className="h-px flex-1 bg-border" />
-              <T>or, update manually using</T>
-              <span aria-hidden className="h-px flex-1 bg-border" />
-            </div>
-          ) : null}
-          {updateCommand ? (
-            <div className="flex min-w-0 items-center gap-1 rounded-md border border-border/70 bg-muted/40 py-0.5 pr-0.5 pl-2">
-              <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
-                {updateCommand}
-              </code>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      size="icon-xs"
-                      variant="ghost-muted"
-                      className="shrink-0"
-                      onClick={() => copyToClipboard(updateCommand, { providerName: displayName })}
-                      aria-label={gt("Copy update command")}
-                    >
-                      <CopyIcon className="size-3" />
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="top">
-                  <T>Copy command</T>
-                </TooltipPopup>
-              </Tooltip>
-            </div>
-          ) : null}
         </div>
       </PopoverPopup>
     </Popover>
   ) : null;
+
+  const cliMissingForLaunchMode = isMissingCli;
+  const effectiveDisplayedLaunchMode = cliMissingForLaunchMode ? "chat" : launchMode;
+  const cliModeButton = (
+    <button
+      type="button"
+      role="radio"
+      tabIndex={effectiveDisplayedLaunchMode === "cli" && !cliMissingForLaunchMode ? 0 : -1}
+      disabled={cliMissingForLaunchMode}
+      aria-checked={effectiveDisplayedLaunchMode === "cli"}
+      className={cn(
+        "inline-flex h-5 items-center justify-center rounded-sm px-1 font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        cliMissingForLaunchMode
+          ? "cursor-not-allowed text-muted-foreground/40"
+          : effectiveDisplayedLaunchMode === "cli"
+            ? "bg-background text-foreground shadow-2xs"
+            : "text-muted-foreground hover:text-foreground",
+      )}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (!cliMissingForLaunchMode) {
+          onLaunchModeChange?.("cli");
+        }
+      }}
+    >
+      CLI
+    </button>
+  );
+
+  const launchModeControlSlot =
+    onLaunchModeChange !== undefined ? (
+      dualModeSupported ? (
+        <div
+          role="radiogroup"
+          aria-label={gt("{provider} default launch mode", { provider: displayName })}
+          data-provider-mode-toggle={instanceId}
+          data-cli-missing={cliMissingForLaunchMode ? "true" : "false"}
+          className="inline-grid h-6 w-[5.25rem] shrink-0 grid-cols-2 items-center rounded-md border border-border/70 bg-muted/40 p-0.5 text-2xs"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft" || event.key === "Home") {
+              event.preventDefault();
+              event.stopPropagation();
+              onLaunchModeChange("chat");
+              const firstRadio = event.currentTarget.querySelector<HTMLButtonElement>(
+                'button[role="radio"]:not(:disabled)',
+              );
+              firstRadio?.focus();
+            } else if (
+              (event.key === "ArrowRight" || event.key === "End") &&
+              !cliMissingForLaunchMode
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              onLaunchModeChange("cli");
+              const radios = event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                'button[role="radio"]:not(:disabled)',
+              );
+              radios.item(radios.length - 1)?.focus();
+            }
+          }}
+        >
+          <button
+            type="button"
+            role="radio"
+            tabIndex={effectiveDisplayedLaunchMode === "chat" ? 0 : -1}
+            aria-checked={effectiveDisplayedLaunchMode === "chat"}
+            className={cn(
+              "inline-flex h-5 items-center justify-center rounded-sm px-1 font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              effectiveDisplayedLaunchMode === "chat"
+                ? "bg-background text-foreground shadow-2xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={(event) => {
+              event.stopPropagation();
+              onLaunchModeChange("chat");
+            }}
+          >
+            Chat
+          </button>
+          {cliMissingForLaunchMode ? (
+            <Tooltip>
+              <TooltipTrigger render={cliModeButton} />
+              <TooltipPopup side="top">
+                {gt("Install the {provider} CLI to open it in a terminal.", {
+                  provider: displayName,
+                })}
+              </TooltipPopup>
+            </Tooltip>
+          ) : (
+            cliModeButton
+          )}
+        </div>
+      ) : (
+        <span
+          aria-hidden="true"
+          data-provider-mode-placeholder={instanceId}
+          className="inline-flex h-6 w-[5.25rem] shrink-0 items-center justify-center rounded-md border border-transparent text-2xs text-muted-foreground/40 select-none max-sm:hidden"
+        >
+          —
+        </span>
+      )
+    ) : null;
 
   if (mode === "list") {
     return (
@@ -1203,7 +1389,7 @@ export function ProviderInstanceCard({
               ) : null}
               {versionAdvisoryNode}
             </span>
-            <span className="mt-0.5 flex items-start gap-1.5 text-xs leading-normal text-muted-foreground/80">
+            <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs leading-normal text-muted-foreground/80">
               {statusDotNode && !updateProgress ? (
                 <span className="flex h-[1.45em] shrink-0 items-center">{statusDotNode}</span>
               ) : null}
@@ -1223,10 +1409,26 @@ export function ProviderInstanceCard({
                   )}
                 </span>
               </ProviderStatusDiagnostic>
+              {isMissingCli && safeHomepageUrl ? (
+                <a
+                  href={safeHomepageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openSafeExternalHttpsFromAnchor(event);
+                  }}
+                  className="pointer-events-auto relative inline-flex items-center gap-0.5 rounded-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <span>{gt("Install guide")}</span>
+                  <ExternalLinkIcon className="size-3 shrink-0" />
+                </a>
+              ) : null}
             </span>
           </span>
         </div>
-        <span className="pointer-events-none relative flex h-5 shrink-0 items-center gap-1 *:pointer-events-auto">
+        <span className="pointer-events-none relative flex h-6 shrink-0 items-center gap-2 *:pointer-events-auto">
+          {launchModeControlSlot}
           {projectOverride?.value !== undefined ? (
             <span className="flex items-center">
               <ProjectOverrideInheritance
@@ -1302,6 +1504,16 @@ export function ProviderInstanceCard({
         <p aria-live="polite" className="text-xs leading-snug [overflow-wrap:anywhere]">
           {restartNotice}
         </p>
+      ) : null}
+      {isMissingCli ? (
+        <div className="pt-1.5">
+          <AgentInstallPrompt
+            compact
+            label={displayName}
+            homepageUrl={safeHomepageUrl}
+            loginHint={cliMeta?.loginHint ?? null}
+          />
+        </div>
       ) : null}
       {urlAuthAction && onAcceptUrlAuth ? (
         <div className="grid max-w-xl gap-1.5 pt-1 text-xs">
@@ -1389,6 +1601,25 @@ export function ProviderInstanceCard({
             </div>
           }
         />
+        {dualModeSupported && onLaunchModeChange ? (
+          <SettingsRow
+            title={gt("Default launch mode")}
+            description={gt(
+              "Choose whether new sessions for this provider open in structured Chat view or interactive CLI terminal mode. Applies to new sessions only; existing sessions keep their original view.",
+            )}
+            resetAction={
+              isLaunchModeOverridden && onLaunchModeReset ? (
+                <SettingResetButton
+                  ariaLabel={gt("Reset {provider} launch mode to global default", {
+                    provider: displayName,
+                  })}
+                  onClick={onLaunchModeReset}
+                />
+              ) : null
+            }
+            control={launchModeControlSlot}
+          />
+        ) : null}
       </SettingsSection>
 
       {setup || environmentFields.length > 0 ? (

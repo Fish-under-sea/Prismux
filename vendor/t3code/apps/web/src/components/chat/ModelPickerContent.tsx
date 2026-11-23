@@ -366,6 +366,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   searchInputRef: RefObject<HTMLInputElement | null>;
   /** Sits beside an effort column: fills the shared row, and stacks above it on narrow screens. */
   docked?: boolean;
+  /** Stacked Orca-style single-column popover with reasoning slider & speed row below. */
+  unifiedLayout?: boolean;
   /** Right at the end of the search text moves into the popup's effort column. */
   onFocusEffort?: () => void;
   /** Closes the list column, inside the popup's fixed height. */
@@ -960,12 +962,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       <div
         ref={pickerContentRef}
         className={cn(
-          "relative flex w-screen max-w-90 flex-row overflow-hidden",
-          props.docked ? "max-sm:h-56 max-sm:w-full max-sm:max-w-none" : "max-h-86.5",
+          "relative flex flex-row overflow-hidden",
+          props.unifiedLayout
+            ? "h-[min(17.5rem,42vh)] w-full max-w-none"
+            : props.docked
+              ? "w-screen max-w-90 max-sm:h-56 max-sm:w-full max-sm:max-w-none"
+              : "max-h-86.5 w-screen max-w-90",
         )}
-        // Docked, the popup sets the height; a minimum here would overflow short windows.
+        // Docked or unified, the popup sets the height; a minimum here would overflow short windows.
         style={
-          props.docked
+          props.docked || props.unifiedLayout
             ? undefined
             : isSearching
               ? { height: searchHeight }
@@ -1156,9 +1162,18 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     >
                       <span className="text-sm leading-snug text-muted-foreground group-hover:text-foreground group-data-highlighted:text-foreground">
                         {legacySection.isExpanded
-                          ? gt("Show less", { $context: "collapses the list of older models" })
-                          : gt("Show more", { $context: "expands the list of older models" })}
+                          ? gt("Show fewer models")
+                          : gt("More models ({count})", {
+                              count: legacySection.legacyModels.length,
+                            })}
                       </span>
+                      <ChevronRightIcon
+                        aria-hidden="true"
+                        className={cn(
+                          "ms-auto size-3.5 shrink-0 text-muted-foreground transition-transform",
+                          legacySection.isExpanded && "rotate-90",
+                        )}
+                      />
                     </ComboboxItem>
                   );
                 }

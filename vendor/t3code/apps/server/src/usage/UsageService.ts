@@ -1182,6 +1182,7 @@ export const make = Effect.gen(function* () {
       pricing: summaryPricing,
       scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
       ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
+      callLogs: aggregated.callLogs,
     } satisfies UsageSummary;
     return { summary, fromMemory };
   });

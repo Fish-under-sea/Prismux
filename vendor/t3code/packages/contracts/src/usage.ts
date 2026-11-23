@@ -148,6 +148,35 @@ export const UsageSummaryInput = Schema.Struct({
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 
+export const UsageSpeedKind = Schema.Literals(["standard", "fast", "ultrafast"]);
+export type UsageSpeedKind = typeof UsageSpeedKind.Type;
+
+/**
+ * Individual model invocation telemetry derived strictly from real local transcripts/sessions.
+ * Timing fields (`ttftMs`, `durationMs`, `tps`) are `null` whenever transcripts lack real
+ * request/first-token/completion timestamps. `inputTokens` is uncached prompt input tokens;
+ * `cacheHitRate` is in `[0, 1]` (`cachedInputTokens / (inputTokens + cachedInputTokens + cacheCreationTokens)`),
+ * or `null` when total input tokens is `0`.
+ */
+export const UsageCallLog = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  timestamp: TrimmedNonEmptyString,
+  provider: UsageProviderKind,
+  model: TrimmedNonEmptyString,
+  threadId: Schema.optional(TrimmedNonEmptyString),
+  ttftMs: Schema.NullOr(Schema.Number),
+  durationMs: Schema.NullOr(Schema.Number),
+  tps: Schema.NullOr(Schema.Number),
+  inputTokens: NonNegativeInt,
+  cachedInputTokens: NonNegativeInt,
+  cacheCreationTokens: NonNegativeInt,
+  outputTokens: NonNegativeInt,
+  cacheHitRate: Schema.NullOr(Schema.Number),
+  costUsd: Schema.optional(Schema.Number),
+  speed: Schema.optional(UsageSpeedKind),
+});
+export type UsageCallLog = typeof UsageCallLog.Type;
+
 export const UsageSummary = Schema.Struct({
   contractVersion: Schema.Number,
   readAt: Schema.String,
@@ -160,6 +189,8 @@ export const UsageSummary = Schema.Struct({
   scanDurationMs: NonNegativeInt,
   /** The filter the server applied; absent means unfiltered, including servers that predate filters. */
   modelFilter: Schema.optional(UsageModelFilter),
+  /** Most recent bounded per-call telemetry entries inside the requested window (newest first). */
+  callLogs: Schema.optional(ForwardCompatibleArray(UsageCallLog)),
 });
 export type UsageSummary = typeof UsageSummary.Type;
 

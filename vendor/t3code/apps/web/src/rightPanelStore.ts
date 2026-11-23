@@ -3,7 +3,20 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, RunId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  RunId,
+  ThreadId,
+  type DesktopPreviewColorScheme,
+  type PreviewViewportPresetId,
+  type PreviewViewportSetting,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
+import {
+  DEFAULT_MOBILE_SIMULATOR_PRESET_ID,
+  findPreviewViewportPreset,
+  resolvePreviewViewport,
+} from "@t3tools/shared/previewViewport";
 import { msg } from "gt-react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -130,6 +143,237 @@ export function decodeThreadSurface(surface: object): ThreadSurface | null {
   const { kind, threadId } = surface as Record<string, unknown>;
   if ((kind !== "thread" && kind !== "side-chat") || typeof threadId !== "string") return null;
   return threadId === "" ? null : threadSurface(ThreadId.make(threadId));
+}
+
+export const DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER = [
+  "mobile-simulator",
+  "preview",
+  "wallpaper",
+  "diff",
+  "terminal",
+  "device",
+  "files",
+] as const;
+
+export type RightPanelActivityItemId = (typeof DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER)[number];
+
+export const RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v1";
+
+export interface ActivityOrderStorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+function getDefaultActivityStorage(): ActivityOrderStorageLike | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeRightPanelActivityOrder(raw: unknown): RightPanelActivityItemId[] {
+  const validSet = new Set<string>(DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER);
+  const next: RightPanelActivityItemId[] = [];
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (
+        typeof item === "string" &&
+        validSet.has(item) &&
+        !next.includes(item as RightPanelActivityItemId)
+      ) {
+        next.push(item as RightPanelActivityItemId);
+      }
+    }
+  }
+  for (const fallback of DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER) {
+    if (!next.includes(fallback)) {
+      next.push(fallback);
+    }
+  }
+  return next;
+}
+
+export function loadRightPanelActivityOrder(
+  storage: ActivityOrderStorageLike | null = getDefaultActivityStorage(),
+): RightPanelActivityItemId[] {
+  if (!storage) return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
+  try {
+    const raw = storage.getItem(RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY);
+    if (!raw) return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
+    return normalizeRightPanelActivityOrder(JSON.parse(raw));
+  } catch {
+    return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
+  }
+}
+
+export function saveRightPanelActivityOrder(
+  order: readonly RightPanelActivityItemId[],
+  storage: ActivityOrderStorageLike | null = getDefaultActivityStorage(),
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(
+      RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY,
+      JSON.stringify(normalizeRightPanelActivityOrder(order)),
+    );
+  } catch {
+    // Ignore storage quota or private browsing errors.
+  }
+}
+
+export function reorderRightPanelActivityItems(
+  order: readonly RightPanelActivityItemId[],
+  fromId: RightPanelActivityItemId,
+  toId: RightPanelActivityItemId,
+): RightPanelActivityItemId[] {
+  const normalized = normalizeRightPanelActivityOrder(order);
+  const fromIndex = normalized.indexOf(fromId);
+  const toIndex = normalized.indexOf(toId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return normalized;
+  }
+  const next = [...normalized];
+  const [moved] = next.splice(fromIndex, 1);
+  if (!moved) return normalized;
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+export function partitionActivityBarOverflow<T>(
+  items: readonly T[],
+  availableWidth: number,
+  itemSlotWidth = 30,
+  overflowTriggerWidth = 28,
+): { readonly visible: readonly T[]; readonly overflow: readonly T[] } {
+  if (items.length === 0) return { visible: [], overflow: [] };
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
+    return { visible: items, overflow: [] };
+  }
+  const fullWidth = items.length * itemSlotWidth;
+  if (fullWidth <= availableWidth) {
+    return { visible: items, overflow: [] };
+  }
+  const budgetForItems = Math.max(0, availableWidth - overflowTriggerWidth);
+  const visibleCount = Math.max(0, Math.floor(budgetForItems / itemSlotWidth));
+  return {
+    visible: items.slice(0, visibleCount),
+    overflow: items.slice(visibleCount),
+  };
+}
+
+export interface ActivityBarLayoutItem {
+  readonly id: RightPanelActivityItemId;
+  readonly label: string;
+  readonly active?: boolean;
+}
+
+export interface RightPanelActivityBarLayout<T extends ActivityBarLayoutItem> {
+  readonly visible: readonly T[];
+  readonly overflow: readonly T[];
+  /** Non-active items shrunk to icon-only before any item spills into `More`. */
+  readonly compactIds: ReadonlySet<RightPanelActivityItemId>;
+}
+
+const ACTIVITY_BAR_LABELED_CHROME_PX = 28;
+const ACTIVITY_BAR_CHAR_PX = 9;
+const ACTIVITY_BAR_COMPACT_WIDTH_PX = 26;
+const ACTIVITY_BAR_MORE_WIDTH_PX = 28;
+const ACTIVITY_BAR_GAP_PX = 4;
+
+/**
+ * Two-stage compact-before-overflow Activity Bar layout modeled after Orca
+ * `right-sidebar/activity-bar/activity-bar-overflow.ts`:
+ * 1. If every item fits with its label, show all labeled (`compactIds` empty).
+ * 2. Else collapse non-active items to icon-only (`compactIds`), keeping the active item's label;
+ *    if all items fit now, show all with zero overflow.
+ * 3. Else pin the active item + reserve the `More` trigger width and pack remaining items in order.
+ */
+export function resolveRightPanelActivityBarLayout<T extends ActivityBarLayoutItem>(
+  items: readonly T[],
+  availableWidth: number,
+  stripPadding = 16,
+): RightPanelActivityBarLayout<T> {
+  const compactIds = new Set<RightPanelActivityItemId>();
+  if (items.length === 0) {
+    return { visible: [], overflow: [], compactIds };
+  }
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
+    return { visible: [...items], overflow: [], compactIds };
+  }
+
+  const labeledWidth = (item: T): number =>
+    Math.min(84, ACTIVITY_BAR_LABELED_CHROME_PX + item.label.length * ACTIVITY_BAR_CHAR_PX);
+  const itemWidth = (item: T, compact: boolean): number =>
+    (compact ? ACTIVITY_BAR_COMPACT_WIDTH_PX : labeledWidth(item)) + ACTIVITY_BAR_GAP_PX;
+
+  let totalWidth = items.reduce((sum, item) => sum + itemWidth(item, false), 0);
+  if (stripPadding + totalWidth <= availableWidth) {
+    return { visible: [...items], overflow: [], compactIds };
+  }
+
+  const activeItem = items.find((item) => item.active);
+  for (const item of items) {
+    if (item.id !== activeItem?.id) {
+      compactIds.add(item.id);
+      totalWidth += itemWidth(item, true) - itemWidth(item, false);
+    }
+  }
+  if (compactIds.size > 0 && stripPadding + totalWidth <= availableWidth) {
+    return { visible: [...items], overflow: [], compactIds };
+  }
+
+  // Stage 3: pin the active item + More trigger, then pack remaining items in order.
+  const visibleIds = new Set<RightPanelActivityItemId>();
+  let used = stripPadding + ACTIVITY_BAR_MORE_WIDTH_PX;
+  if (activeItem) {
+    visibleIds.add(activeItem.id);
+    used += itemWidth(activeItem, false);
+  }
+  for (const item of items) {
+    if (item.id === activeItem?.id) continue;
+    const width = itemWidth(item, compactIds.has(item.id));
+    if (used + width > availableWidth) {
+      break;
+    }
+    used += width;
+    visibleIds.add(item.id);
+  }
+  if (visibleIds.size === 0 && items[0]) {
+    visibleIds.add(items[0].id);
+  }
+
+  return {
+    visible: items.filter((item) => visibleIds.has(item.id)),
+    overflow: items.filter((item) => !visibleIds.has(item.id)),
+    compactIds,
+  };
+}
+
+/**
+ * Modeled after Orca `right-sidebar/activity-bar/activity-bar-arrangement.ts`:
+ * Reorders visible strip items among strip slots first, leaving overflowed items in place
+ * so dragging a strip item never unexpectedly ejects another strip item into `More`.
+ */
+export function moveStripActivityItems(
+  fullOrder: readonly RightPanelActivityItemId[],
+  stripIds: ReadonlySet<RightPanelActivityItemId>,
+  fromId: RightPanelActivityItemId,
+  toId: RightPanelActivityItemId,
+): RightPanelActivityItemId[] | null {
+  const normalized = normalizeRightPanelActivityOrder(fullOrder);
+  const strip = normalized.filter((id) => stripIds.has(id));
+  const fromIndex = strip.indexOf(fromId);
+  const toIndex = strip.indexOf(toId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return null;
+  }
+  const nextStrip = [...strip];
+  const [moved] = nextStrip.splice(fromIndex, 1);
+  if (!moved) return null;
+  nextStrip.splice(toIndex, 0, moved);
+  return [...nextStrip, ...normalized.filter((id) => !stripIds.has(id))];
 }
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
@@ -274,6 +518,29 @@ interface RightPanelStoreState {
   ) => void;
   toggleThreadPanel: (ref: ScopedThreadRef, presentation: ThreadPanelPresentation) => void;
   removeThread: (ref: ScopedThreadRef) => void;
+  /** Persisted drag-and-drop ordering of right sidebar Activity Bar surface shortcuts. */
+  activityBarOrder: RightPanelActivityItemId[];
+  reorderActivityBar: (
+    fromId: RightPanelActivityItemId,
+    toId: RightPanelActivityItemId,
+  ) => void;
+  resetActivityBarOrder: () => void;
+  /** Transient launch intent & blank-stage state for one-click Phone Simulator mode (iPhone 16 Pro + bezel). */
+  pendingMobileSimulatorPresetId: PreviewViewportPresetId | null;
+  pendingMobileSimulatorSetting: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }> | null;
+  mobileSimulatorLaunchSeq: number;
+  mobileSimulatorIdleActive: boolean;
+  mobileSimulatorBezelEnabled: boolean;
+  mobileSimulatorColorScheme: DesktopPreviewColorScheme;
+  requestMobileSimulatorLaunch: (presetId?: PreviewViewportPresetId) => void;
+  consumeMobileSimulatorLaunch: () => PreviewViewportPresetId | null;
+  consumeMobileSimulatorSetting: () => Exclude<PreviewViewportSetting, { readonly _tag: "fill" }> | null;
+  setMobileSimulatorIdleActive: (active: boolean) => void;
+  setPendingMobileSimulatorSetting: (
+    setting: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }> | null,
+  ) => void;
+  setMobileSimulatorBezelEnabled: (enabled: boolean) => void;
+  setMobileSimulatorColorScheme: (scheme: DesktopPreviewColorScheme) => void;
 }
 
 const EMPTY_THREAD_STATE: ThreadRightPanelState = {
@@ -1382,6 +1649,82 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             closeRevisionByThreadKey,
           };
         }),
+      activityBarOrder: loadRightPanelActivityOrder(),
+      reorderActivityBar: (fromId, toId) =>
+        set((state) => {
+          const next = reorderRightPanelActivityItems(state.activityBarOrder, fromId, toId);
+          saveRightPanelActivityOrder(next);
+          return { activityBarOrder: next };
+        }),
+      resetActivityBarOrder: () =>
+        set(() => {
+          const next = [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
+          saveRightPanelActivityOrder(next);
+          return { activityBarOrder: next };
+        }),
+      pendingMobileSimulatorPresetId: null,
+      pendingMobileSimulatorSetting: null,
+      mobileSimulatorLaunchSeq: 0,
+      mobileSimulatorIdleActive: false,
+      mobileSimulatorBezelEnabled: true,
+      mobileSimulatorColorScheme: "system",
+      requestMobileSimulatorLaunch: (presetId = DEFAULT_MOBILE_SIMULATOR_PRESET_ID) =>
+        set((state) => {
+          let resolvedSetting: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }> | null =
+            null;
+          try {
+            const candidate = resolvePreviewViewport({ mode: "preset", preset: presetId });
+            if (candidate._tag !== "fill") {
+              resolvedSetting = candidate;
+            }
+          } catch {
+            resolvedSetting = null;
+          }
+          return {
+            pendingMobileSimulatorPresetId: presetId,
+            pendingMobileSimulatorSetting: resolvedSetting,
+            mobileSimulatorIdleActive: true,
+            mobileSimulatorBezelEnabled: true,
+            mobileSimulatorLaunchSeq: state.mobileSimulatorLaunchSeq + 1,
+          };
+        }),
+      consumeMobileSimulatorLaunch: () => {
+        const preset = get().pendingMobileSimulatorPresetId;
+        if (preset === null) return null;
+        set({ pendingMobileSimulatorPresetId: null });
+        return preset;
+      },
+      consumeMobileSimulatorSetting: () => {
+        const state = get();
+        const setting = state.pendingMobileSimulatorSetting;
+        if (setting !== null) {
+          set({
+            pendingMobileSimulatorSetting: null,
+            pendingMobileSimulatorPresetId: null,
+          });
+          return setting;
+        }
+        const preset = state.pendingMobileSimulatorPresetId;
+        if (preset === null) return null;
+        set({ pendingMobileSimulatorPresetId: null });
+        try {
+          const candidate = resolvePreviewViewport({ mode: "preset", preset });
+          return candidate._tag !== "fill" ? candidate : null;
+        } catch {
+          return null;
+        }
+      },
+      setMobileSimulatorIdleActive: (active) => set({ mobileSimulatorIdleActive: active }),
+      setPendingMobileSimulatorSetting: (setting) =>
+        set({
+          pendingMobileSimulatorSetting: setting,
+          pendingMobileSimulatorPresetId:
+            setting?._tag === "preset"
+              ? (findPreviewViewportPreset(setting.presetId)?.id ?? null)
+              : null,
+        }),
+      setMobileSimulatorBezelEnabled: (enabled) => set({ mobileSimulatorBezelEnabled: enabled }),
+      setMobileSimulatorColorScheme: (scheme) => set({ mobileSimulatorColorScheme: scheme }),
     }),
     {
       name: RIGHT_PANEL_STORAGE_KEY,

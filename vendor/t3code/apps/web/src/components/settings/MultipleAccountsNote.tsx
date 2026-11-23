@@ -6,8 +6,9 @@ import { InfoIcon } from "lucide-react";
 import { serverEnvironment } from "../../state/server";
 import { Alert, AlertDescription } from "../ui/alert";
 
-const MULTIPLE_ACCOUNTS_FAQ_URL =
-  "https://github.com/pingdotgg/t3code/blob/main/docs/user/faq.md#can-i-add-a-bunch-of-accounts-for-one-provider";
+import { PRISMUX_REPOSITORY_URL } from "../../legalLinks";
+
+const MULTIPLE_ACCOUNTS_FAQ_URL = `${PRISMUX_REPOSITORY_URL}#faq`;
 
 const PROVIDER_NAMES = new Map<string, string>([
   ["codex", "Codex"],
@@ -36,7 +37,7 @@ export function MultipleAccountsNote({
       <AlertDescription>
         <p>
           <T>
-            We do not recommend managing multiple <Var>{providerName}</Var> accounts in T3 Code.{" "}
+            We do not recommend managing multiple <Var>{providerName}</Var> accounts in Prismux.{" "}
             <a
               href={MULTIPLE_ACCOUNTS_FAQ_URL}
               target="_blank"

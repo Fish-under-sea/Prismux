@@ -71,7 +71,13 @@ export const resolveClaudeModelSettingsKey = Effect.fn("resolveClaudeModelSettin
   );
 });
 
-type ReportedModel = Pick<ClaudeModelInfo, "value" | "resolvedModel">;
+type ReportedModel = Pick<ClaudeModelInfo, "value" | "resolvedModel"> &
+  Partial<
+    Pick<
+      ClaudeModelInfo,
+      "displayName" | "supportsEffort" | "supportedEffortLevels" | "supportsFastMode"
+    >
+  >;
 
 /**
  * Claude Code's reported model ids, applied to a turn only where its cwd resolves model settings
