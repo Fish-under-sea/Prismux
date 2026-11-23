@@ -12,7 +12,7 @@
 </picture>
 
 <p>
-  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.1"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-version-en-dark.png"><img src="assets/readme/stat-version-en-light.png" alt="VERSION: 0.1.0-alpha.1 (T3 Base · Win x64)" width="23%"></picture></a>
+  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.2"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-version-en-dark.png"><img src="assets/readme/stat-version-en-light.png" alt="VERSION: 0.1.0-alpha.2 (T3 Base · Win x64)" width="23%"></picture></a>
   <a href="#preview"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-visual-en-dark.png"><img src="assets/readme/stat-visual-en-light.png" alt="VISUAL: 0 TOKEN (360° Fresnel Glass)" width="23%"></picture></a>
   <a href="#features"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-memory-en-dark.png"><img src="assets/readme/stat-memory-en-light.png" alt="MEMORY: SQLITE VEC (Single-File Isolation)" width="23%"></picture></a>
   <a href="#plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-plugins-en-dark.png"><img src="assets/readme/stat-plugins-en-light.png" alt="PLUGINS: 4 PLUGINS (Zero Preinstall)" width="23%"></picture></a>
@@ -24,14 +24,14 @@
   <img src="https://img.shields.io/badge/TypeScript-5.8-8fd6a0?style=flat-square&amp;logo=typescript&amp;logoColor=white&amp;labelColor=5a544a" alt="TypeScript 5.8">
   <img src="https://img.shields.io/badge/Electron-44-8fd6a0?style=flat-square&amp;logo=electron&amp;logoColor=white&amp;labelColor=5a544a" alt="Electron 44">
   <img src="https://img.shields.io/badge/License-MIT-8fd6a0?style=flat-square&amp;labelColor=5a544a" alt="License MIT">
-  <img src="https://img.shields.io/badge/Release-v0.1.0--alpha.1-f08a5d?style=flat-square&amp;labelColor=5a544a" alt="Release v0.1.0-alpha.1">
+  <img src="https://img.shields.io/badge/Release-v0.1.0--alpha.2-f08a5d?style=flat-square&amp;labelColor=5a544a" alt="Release v0.1.0-alpha.2">
 </p>
 
-<p><strong>Prismux · Minimalist Liquid-Glass AI Super Workbench &amp; 24/7 Secretary</strong><br>Built on a minimal-invasion T3 Code runtime (Electron 44 + <code>apps/server</code> + <code>apps/web</code> via 6 registered mount points), uniting a 1:1 FISH-Dock Celestial tri-state optical capsule, a <code>dsh-wallpaper-engine</code>-style right wallpaper sidebar, single-file query-isolated SQLite memory, four strictly optional plugins, and dual-route auto-updates.</p>
+<p><strong>Prismux · Minimalist Liquid-Glass AI Super Workbench &amp; 24/7 Secretary</strong><br>Built on a minimal-invasion T3 Code runtime (Electron 44 + <code>apps/server</code> + <code>apps/web</code>), uniting a 1:1 FISH-Dock Celestial tri-state capsule, live 4K video wallpapers across Light / Dark / Liquid-Glass modes, local <code>agy</code> CLI sign-in reuse for Antigravity, isolated single-file SQLite memory, four strictly optional plugins, and dual-route updates.</p>
 
 <p>
   <a href="#install"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-download-en-dark.png"><img src="assets/readme/key-download-en-light.png" alt="Downloads" height="40"></picture></a>
-  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.1"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-release-en-dark.png"><img src="assets/readme/key-release-en-light.png" alt="Changelog" height="40"></picture></a>
+  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.2"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-release-en-dark.png"><img src="assets/readme/key-release-en-light.png" alt="Changelog" height="40"></picture></a>
   <a href="https://github.com/Fish-under-sea/Prismux/issues"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-issues-en-dark.png"><img src="assets/readme/key-issues-en-light.png" alt="Issues" height="40"></picture></a>
 </p>
 
@@ -39,41 +39,55 @@
 
 <h2 id="intro"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-intro-en-dark.png"><img src="assets/readme/section-intro-en-light.png" alt="INTRO · Overview" width="100%"></picture></h2>
 
-Prismux is an AI Super Workbench and 24/7 headless secretary built around **a real T3 Code core, an isolated 0-Token visual layer, and strictly on-demand plugins**. Starting with `v0.1.0-alpha.1`, the desktop client runs directly on a managed **T3 Code fork** (Electron 44 + `apps/server` + `apps/web` integrated through the 6 minimal-invasion mount points in [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md)), unified with `@prismux/appearance`, `@prismux/wallpaper`, `@prismux/daemon`, and single-file SQLite memory.
+Prismux is an AI Super Workbench and 24/7 headless secretary built around **a real T3 Code core, an isolated 0-Token visual layer, and strictly on-demand plugins**. Powered by a managed **T3 Code fork** (Electron 44 + `apps/server` + `apps/web` integrated via [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md) with zero changes to `vendor/t3code/pnpm-lock.yaml`), `v0.1.0-alpha.2` delivers four major user-reported improvements and onboarding polish:
 
-- **6 Minimal-Invasion Mount Points on T3 Code**: Heavy Prismux business logic and UI engines stay isolated in root `packages/*` and `apps/daemon`, while [`vendor/t3code`](vendor/t3code) carries only thin glue hooks with **zero changes to `vendor/t3code/pnpm-lock.yaml`** and retains [`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json) for periodic upstream merges.
-- **Zero Heavy External Services**: No PostgreSQL, Qdrant, MinIO, or Obsidian desktop client required—memory, logs, and encrypted secrets reside in `~/.prismux/` (or an adjacent `data/` directory in portable mode).
-- **Four Official Plugins Never Preinstalled**: `qq`, `pet`, `fishdock-hook`, and `ssh` ship separately as `.wb-plugin` archives and script-free npm packages, installed only on demand and cleanly reversible via `ctx.effect()`.
+- **Branded `/welcome` Onboarding Restored**: First-time desktop launches enter the Prismux-branded `/welcome` setup wizard (Ciallo mascot, offline cloud-hide, zero white flash), with a "Reopen onboarding" button under General and About settings.
+- **End-to-End Live Wallpaper Playback & Dual-Mode Transparency**: Fixed legacy 99% scrim blackout, cold-start daemon timing, and non-glass background occlusion so Steam `431960` 4K videos, local media, and WebWallGL shaders render cleanly in Dark, Light, and Liquid-Glass modes while dropping to 0 FPS when occluded.
+- **Zero-Duplicate Appearance & Wallpaper Settings + Full Chinese Localization**: Consolidated all 6 appearance cards into `/settings/appearance`, streamlined `/settings/wallpaper` (4 tabs) and the right sidebar (`Wallpaper / Playback`), and shipped full `gt-react` `zh.json` translations across all 10 locales.
+- **Built-In Antigravity Local `agy` CLI Sign-In & Thinking Level Sync**: Reuses `~/.gemini/antigravity-cli` directly without overriding `GEMINI_HOME`, preserves the native Google Antigravity icon and quota meters, and probes per-model `thought_level` options so composer reasoning controls stay synced across model switches.
+- **Four Official Plugins Never Preinstalled**: `qq`, `pet`, `fishdock-hook`, and `ssh` ship solely as independent `.wb-plugin` archives and script-free npm packages, with zero external database servers (`~/.prismux/` or portable `data/`).
 
-The current public alpha is **`v0.1.0-alpha.1`**, distributed via `Prismux-Setup-0.1.0-alpha.1-win-x64.exe` on both GitHub Releases and Gitee Releases.
+The current pre-release is **`v0.1.0-alpha.2`**, shipping `Prismux-Setup-0.1.0-alpha.2-win-x64.exe` across GitHub Releases and Gitee Releases.
 
 <h2 id="preview"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-preview-en-dark.png"><img src="assets/readme/section-preview-en-light.png" alt="PREVIEW · Visual Preview" width="100%"></picture></h2>
 
-> All screenshots below are captured directly from the running **Prismux `v0.1.0-alpha.1` Electron 44 Windows binary (`1440×900`)** during R3 desktop sign-off—no synthetic mockups:
+> All screenshots below are captured directly from the running **Prismux `v0.1.0-alpha.2` Electron 44 Windows binary (`1440×900`)** during R2 sign-off—no mockups:
 
 <table>
   <tr>
     <td width="50%" align="center" valign="top">
-      <img src="assets/readme/preview-workbench-glass.png" width="100%" alt="Prismux liquid glass workbench and right wallpaper appearance sidebar">
+      <img src="assets/readme/preview-workbench-wallpaper.png" width="100%" alt="Prismux 4K video wallpaper playback in dark mode with streamlined two-tab sidebar">
       <br>
-      <sub><strong>Liquid-Glass Workbench &amp; Right Wallpaper Sidebar</strong>: Seamless frosted-glass left rail, top-bar <code>Chief</code> slot pill and wallpaper toggle, plus the embedded <code>dsh-wallpaper-engine</code>-style sidebar (40px spinning vinyl, sliding <code>Wallpaper / Appearance / Playback</code> tabs, Steam <code>431960</code> preview, and ordered 6-section controls).</sub>
+      <sub><strong>4K Video Wallpaper Playback (Dark Mode) &amp; Two-Tab Sidebar</strong>: Steam <code>431960</code> 4K H.264 video plays via <code>206</code> streaming directly behind the dark workbench while the deduplicated right sidebar focuses on <code>Wallpaper / Playback</code> with direct links to Appearance &amp; Wallpaper Settings.</sub>
     </td>
     <td width="50%" align="center" valign="top">
-      <img src="assets/readme/preview-celestial-appearance.png" width="100%" alt="Prismux 1:1 FISH-Dock Celestial tri-state optical capsule and floating color popover">
+      <img src="assets/readme/preview-workbench-glass.png" width="100%" alt="Prismux liquid glass mode over live 4K video wallpaper">
       <br>
-      <sub><strong>1:1 FISH-Dock Celestial Capsule &amp; Zero-Bleed Color Popover</strong>: Complete 11-layer optical tri-state capsule with 60fps 4-substep spring physics, live wallpaper status strip, 4-region glass presets, WCAG ≥ 4.5:1 contrast clamping, and sharp 244px color popover (<strong>0 LLM tokens</strong>).</sub>
+      <sub><strong>Liquid-Glass Mode over Live 4K Video</strong>: Real <code>backdrop-filter</code> frosted diffusion, 360° Fresnel glass borders, and a seamless left sidebar layered over live video while maintaining ≥ 4.5:1 text contrast.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center" valign="top">
-      <img src="assets/readme/preview-plugins-market.png" width="100%" alt="Prismux Cordis Plugin Center with zero preinstalled official plugins notice">
+      <img src="assets/readme/preview-celestial-appearance.png" width="100%" alt="Prismux Simplified Chinese settings sidebar, Celestial capsule and unified 6-card Appearance settings">
       <br>
-      <sub><strong>Cordis Plugin Center · Zero Official Preinstall</strong>: Prominent clean-core notice and live catalog verification for <code>qq</code>, <code>pet</code>, <code>fishdock-hook</code>, and <code>ssh</code> (<code>@0.1.0-alpha.1</code>), displaying top-level <code>engines.prismux</code> SemVer ranges, <code>SHA-256</code> hashes, and <code>0 Token · Not Preinstalled</code> badges.</sub>
+      <sub><strong>Localized Settings Sidebar &amp; Unified 6-Card Appearance Hub</strong>: Full Simplified Chinese sidebar navigation for the <code>Prismux</code> group alongside the 1:1 FISH-Dock Celestial tri-state capsule and consolidated glass/corners/palette/font controls (<strong>0 LLM tokens</strong>).</sub>
     </td>
     <td width="50%" align="center" valign="top">
-      <img src="assets/readme/preview-dual-updater.png" width="100%" alt="Prismux v0.1.0-alpha.1 dual-route update center">
+      <img src="assets/readme/preview-onboarding-welcome.png" width="100%" alt="Prismux Welcome to Prismux onboarding screen">
       <br>
-      <sub><strong><code>v0.1.0-alpha.1</code> Dual-Route Update Center</strong>: Live daemon-backed updater showing runtime version and portable status, concurrent latency probing across <strong>GitHub ↔ Gitee</strong> and <strong>npmjs ↔ npmmirror</strong>, plus custom mirror prefixes.</sub>
+      <sub><strong><code>Welcome to Prismux</code> First-Run Onboarding</strong>: Branded welcome screen with the Ciallo logo, automatic Claude / Codex readiness checks, project history import, and zero-block offline flow into the workbench.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/readme/preview-antigravity-local-cli.png" width="100%" alt="Prismux built-in Antigravity one-click local agy CLI reuse">
+      <br>
+      <sub><strong>Built-In Antigravity Local <code>agy</code> CLI Reuse</strong>: One-click "Use local agy CLI" setup reusing <code>~/.gemini/antigravity-cli</code> with the native Google Antigravity icon, quota limits, and per-model <code>thought_level</code> sync.</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/readme/preview-dual-updater.png" width="100%" alt="Prismux v0.1.0-alpha.2 dual-route update center">
+      <br>
+      <sub><strong><code>v0.1.0-alpha.2</code> Dual-Route Update Center</strong>: Live daemon-backed updater displaying runtime version and portable status, racing <strong>GitHub ↔ Gitee</strong> and <strong>npmjs ↔ npmmirror</strong> with optional mirror prefixes.</sub>
     </td>
   </tr>
 </table>
@@ -83,9 +97,9 @@ The current public alpha is **`v0.1.0-alpha.1`**, distributed via `Prismux-Setup
 <table>
   <tr>
     <td width="50%" valign="top">
-      <strong>1. T3 Code 6-Mount Core &amp; 24/7 Headless Daemon</strong>
-      <p>The Electron 44 desktop app (<code>PrismuxDaemonService</code>) supervises <code>@prismux/daemon</code> across the app lifecycle while confining <code>ELECTRON_RUN_AS_NODE=1</code> strictly to the daemon child environment, zero-step bypassing <code>/welcome</code> on cold desktop start.</p>
-      <p>Hot-swap Claude Code, Codex, Antigravity, or OpenCode in the <code>Chief Thread Slot</code> from the top bar or Settings—attaching <code>prismux-memory</code> and <code>prismux-orchestrator</code> tools automatically.</p>
+      <strong>1. T3 Code Mount Core, Local <code>agy</code> CLI &amp; 24/7 Daemon</strong>
+      <p>The Electron 44 desktop app (<code>PrismuxDaemonService</code>) supervises <code>@prismux/daemon</code> with <code>ELECTRON_RUN_AS_NODE=1</code> strictly scoped to the daemon child process, opens the branded <code>/welcome</code> wizard on fresh runs, and lets you hot-swap Claude, Codex, Antigravity, or OpenCode in the <code>Chief Thread Slot</code>.</p>
+      <p>Built-in Antigravity supports <code>local-cli</code> mode to reuse <code>~/.gemini/antigravity-cli</code> with native branding and quota display while probing per-model <code>thought_level</code> capabilities so composer controls update cleanly on model switches.</p>
     </td>
     <td width="50%" valign="top">
       <strong>2. Five Core Primitives (Zero Bloat Panels)</strong>
@@ -106,9 +120,9 @@ The current public alpha is **`v0.1.0-alpha.1`**, distributed via `Prismux-Setup
       <p><code>OvernightFactory</code> automates Gmail OAuth2 / IMAP <code>#factory</code> ingestion → memory-enriched Handoff → sandboxed <code>git worktree</code> coding &amp; branch commit → read-only Oracle <code>review</code> → HTML morning report with diff &amp; <code>prismux://review/&lt;threadId&gt;</code> deep link.</p>
     </td>
     <td width="50%" valign="top">
-      <strong>4. 1:1 Celestial Capsule, Liquid Glass &amp; 0-FPS Wallpapers</strong>
-      <p><code>@prismux/appearance</code> replicates FISH-Dock's 11-layer Celestial capsule and 244px color popover, bridging into T3 Code via <code>t3-glass-bridge.css</code> (with 3 solid fallback layers and WCAG ≥ 4.5:1 contrast clamping) at <strong>0 LLM token overhead</strong>.</p>
-      <p><code>@prismux/wallpaper</code> + daemon HTTP <code>206</code> Range streaming integrate Steam <code>431960</code> discovery, local image/video imports, 4 built-in WebWallGL shaders, and instant <strong>0 FPS</strong> suspension via <code>onWindowOcclusionChange</code>.</p>
+      <strong>4. 1:1 Celestial Capsule, Dual-Mode Wallpapers &amp; 0-FPS</strong>
+      <p><code>@prismux/appearance</code> replicates FISH-Dock's 11-layer Celestial capsule and 244px color popover, consolidating all 6 appearance cards into <code>/settings/appearance</code> with 3 solid fallback layers and WCAG ≥ 4.5:1 contrast clamping at <strong>0 LLM tokens</strong>.</p>
+      <p><code>@prismux/wallpaper</code> + daemon HTTP <code>206</code> streaming render Steam <code>431960</code> 4K videos, local imports (up to 512 MB), and 4 WebWallGL shaders cleanly across Dark, Light, and Glass modes, suspending to <strong>0 FPS</strong> when occluded.</p>
     </td>
   </tr>
   <tr>
@@ -118,9 +132,9 @@ The current public alpha is **`v0.1.0-alpha.1`**, distributed via `Prismux-Setup
       <p><code>@prismux/sync-vault</code> seals <code>.prismux-backup</code> payloads using Argon2id + AEAD across independent WebDAV, S3 (<code>path-style</code>), and GitHub channels with <code>If-Match</code> optimistic locking, a <code>60 s</code> stall watchdog, and portable <code>data/</code> mode.</p>
     </td>
     <td width="50%" valign="top">
-      <strong>6. Dual-Route Auto-Switching In-App &amp; Plugin Updater</strong>
-      <p><code>AppUpdater</code> coordinates with Electron's native <code>setUpdateFeedUrl</code> and the Settings Update page to provide <code>Auto Probe / Domestic First / Global First</code> routing.</p>
-      <p>Desktop updates race and failover between <strong>GitHub Releases ↔ Gitee Releases</strong> with mandatory 64-hex <code>.sha256</code> verification (deleting <code>.part</code> files immediately on mismatch), <code>Range</code> resume, and custom prefixes; plugin installs fail over cleanly between <strong>npmjs ↔ npmmirror</strong> without touching <code>git</code> or lifecycle scripts.</p>
+      <strong>6. Dual-Route Auto-Switching Updates &amp; 10-Locale i18n</strong>
+      <p><code>AppUpdater</code> coordinates Electron's native <code>setUpdateFeedUrl</code> with the Update Center for <code>Auto / Domestic First / Global First</code> routing across <strong>GitHub ↔ Gitee</strong> and <strong>npm ↔ npmmirror</strong>, verifying 64-hex <code>.sha256</code> digests before installation.</p>
+      <p>Backed by a synchronized 10-locale <code>gt-react</code> catalog (<code>zh.json</code> complete for all Prismux panels, search items, onboarding, and local CLI prompts).</p>
     </td>
   </tr>
 </table>
@@ -128,44 +142,44 @@ The current public alpha is **`v0.1.0-alpha.1`**, distributed via `Prismux-Setup
 <h2 id="plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-plugins-en-dark.png"><img src="assets/readme/section-plugins-en-light.png" alt="PLUGINS · Optional Plugins" width="100%"></picture></h2>
 
 > [!NOTE]
-> **Four Official Plugins Are Never Preinstalled**: Neither `Prismux-Setup-0.1.0-alpha.1-win-x64.exe` nor the unpacked desktop bundle contains any directory from `plugins-official/` (verified at 0 hits across the packaged tree). Each official plugin ships separately as a verified `.wb-plugin` archive and script-free npm single package, installs on demand, and rolls back cleanly with `ctx.effect()`.
+> **Four Official Plugins Are Never Preinstalled**: Neither `Prismux-Setup-0.1.0-alpha.2-win-x64.exe` nor the unpacked desktop bundle contains any directory from `plugins-official/` (verified at 0 hits across the packaged tree). Each official plugin ships separately as a verified `.wb-plugin` archive and script-free npm single package, installs on demand, and rolls back cleanly with `ctx.effect()`.
 
 | Plugin ID | Archive (`.wb-plugin`) | npm Package (Unscoped / GitHub Packages) | Realms | Capabilities &amp; Isolation |
 | :--- | :--- | :--- | :--- | :--- |
-| `qq` | `qq-0.1.0-alpha.1.wb-plugin` | `prismux-plugin-qq`<br><code>@fish-under-sea/prismux-plugin-qq</code> | `daemon`, `ui` | OneBot v11 forward/reverse WebSocket probe (NapCatQQ / Lagrange.Core); owner DMs route to the Chief slot while authorized QQ groups use anti-spam pacing locked to <code>social/qq-group-&lt;gid&gt;</code> |
-| `pet` | `pet-0.1.0-alpha.1.wb-plugin` | `prismux-plugin-pet`<br><code>@fish-under-sea/prismux-plugin-pet</code> | `ui`, `daemon` | Desktop mascot bridge implementing targeted instance binding, expiring Lease Tokens, read-only playback subscriptions, and staged motion/bubble handover |
-| `fishdock-hook` | `fishdock-hook-0.1.0-alpha.1.wb-plugin` | `prismux-plugin-fishdock-hook`<br><code>@fish-under-sea/prismux-plugin-fishdock-hook</code> | `daemon` | Bridges `PreToolUse` risk approvals, priority mail alerts, and Overnight Factory completions to FISH-Dock Dynamic Island cards with instant approve/reject actions |
-| `ssh` | `ssh-0.1.0-alpha.1.wb-plugin` | `prismux-plugin-ssh`<br><code>@fish-under-sea/prismux-plugin-ssh</code> | `daemon`, `ui` | Optional remote ops plugin offering an isolated SSH host pool, Web PTY session bridging, path validation, and SFTP file browsing |
+| `qq` | `qq-0.1.0-alpha.2.wb-plugin` | `prismux-plugin-qq`<br><code>@fish-under-sea/prismux-plugin-qq</code> | `daemon`, `ui` | OneBot v11 forward/reverse WebSocket probe (NapCatQQ / Lagrange.Core); owner DMs route to the Chief slot while authorized QQ groups use anti-spam pacing locked to <code>social/qq-group-&lt;gid&gt;</code> |
+| `pet` | `pet-0.1.0-alpha.2.wb-plugin` | `prismux-plugin-pet`<br><code>@fish-under-sea/prismux-plugin-pet</code> | `ui`, `daemon` | Desktop mascot bridge implementing targeted instance binding, expiring Lease Tokens, read-only playback subscriptions, and staged motion/bubble handover |
+| `fishdock-hook` | `fishdock-hook-0.1.0-alpha.2.wb-plugin` | `prismux-plugin-fishdock-hook`<br><code>@fish-under-sea/prismux-plugin-fishdock-hook</code> | `daemon` | Bridges `PreToolUse` risk approvals, priority mail alerts, and Overnight Factory completions to FISH-Dock Dynamic Island cards with instant approve/reject actions |
+| `ssh` | `ssh-0.1.0-alpha.2.wb-plugin` | `prismux-plugin-ssh`<br><code>@fish-under-sea/prismux-plugin-ssh</code> | `daemon`, `ui` | Optional remote ops plugin offering an isolated SSH host pool, Web PTY session bridging, path validation, and SFTP file browsing |
 
 <h2 id="install"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-install-en-dark.png"><img src="assets/readme/section-install-en-light.png" alt="INSTALL · Download &amp; Updates" width="100%"></picture></h2>
 
 ### Dual-Route Release Channels (GitHub Releases ↔ Gitee Releases)
 
-| Channel | Best For | Release &amp; Direct Download URLs |
+| Channel | Best For | Release &amp; Download Details |
 | :--- | :--- | :--- |
-| **GitHub Releases** (Global) | Direct global network / GitHub CLI environments | [Release (`v0.1.0-alpha.1`)](https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.1) · [Direct `Prismux-Setup-0.1.0-alpha.1-win-x64.exe`](https://github.com/Fish-under-sea/Prismux/releases/download/v0.1.0-alpha.1/Prismux-Setup-0.1.0-alpha.1-win-x64.exe) |
-| **Gitee Releases** (Mainland China Mirror) | High-speed direct downloads inside mainland China | [Release (`v0.1.0-alpha.1`)](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.1) · [Direct `Prismux-Setup-0.1.0-alpha.1-win-x64.exe`](https://gitee.com/Fish-under-sea/Prismux/releases/download/v0.1.0-alpha.1/Prismux-Setup-0.1.0-alpha.1-win-x64.exe) |
+| **GitHub Releases** (Global) | Direct global network / GitHub CLI environments | [Release (`v0.1.0-alpha.2`)](https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.2) · [Direct `Prismux-Setup-0.1.0-alpha.2-win-x64.exe`](https://github.com/Fish-under-sea/Prismux/releases/download/v0.1.0-alpha.2/Prismux-Setup-0.1.0-alpha.2-win-x64.exe) |
+| **Gitee Releases** (Mainland China Mirror) | High-speed direct downloads inside mainland China | [Release (`v0.1.0-alpha.2`)](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.1.0-alpha.2) (includes all checksum/plugin files plus 80 MB split `.7z.001..003` volumes for 100 MB attachment limit compatibility) |
 | **In-App Update Center** (Recommended) | Concurrent latency probing, `Range` resume &amp; mandatory `.sha256` checks | Open Settings → **Prismux Updates** (`/settings/updates`) to switch between `Auto / Domestic First / Global First` |
 
 ### Release Assets &amp; Integrity Verification (Windows x64)
 
 | Release Asset | Filename | Details &amp; Isolation |
 | :--- | :--- | :--- |
-| **Windows Installer (Electron 44 NSIS)** | `Prismux-Setup-0.1.0-alpha.1-win-x64.exe` | Full T3 Code Electron 44 desktop app with bundled `resources/prismux-daemon/` and `t3-resource-monitor.exe`; supports `/D=<dir>` custom install paths; keeps state in `~/.prismux/` (plus portable `data/` mode support); **zero preinstalled official plugins** |
-| **4 Official Plugin Archives** | `*-0.1.0-alpha.1.wb-plugin` | Deterministic ustar + gzip bundles for `qq`, `pet`, `fishdock-hook`, and `ssh` alongside `official.json` for on-demand import via `/settings/plugins` |
-| **Integrity Checksums** | `SHA256SUMS.txt` &amp; per-asset `.sha256` | Verify manual downloads with `Get-FileHash Prismux-Setup-0.1.0-alpha.1-win-x64.exe -Algorithm SHA256` or `7z t` |
+| **Windows Installer (Electron 44 NSIS)** | `Prismux-Setup-0.1.0-alpha.2-win-x64.exe` | Full T3 Code Electron 44 desktop app with bundled `resources/prismux-daemon/` and `t3-resource-monitor.exe`; supports `/D=<dir>` custom install paths; keeps state in `~/.prismux/` (plus portable `data/` mode support); **zero preinstalled official plugins** |
+| **4 Official Plugin Archives** | `*-0.1.0-alpha.2.wb-plugin` | Deterministic ustar + gzip bundles for `qq`, `pet`, `fishdock-hook`, and `ssh` alongside `official.json` for on-demand import via `/settings/plugins` |
+| **Integrity Checksums** | `SHA256SUMS.txt` &amp; per-asset `.sha256` | Verify manual downloads with `Get-FileHash Prismux-Setup-0.1.0-alpha.2-win-x64.exe -Algorithm SHA256` or `7z t` |
 
 <h2 id="packages"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-packages-en-dark.png"><img src="assets/readme/section-packages-en-light.png" alt="PACKAGES · npm &amp; Mirrors" width="100%"></picture></h2>
 
-Each official plugin is also published as a **script-free (`preinstall / install / postinstall` disabled)** single npm package bundling its SHA-256-verified `<id>-0.1.0-alpha.1.wb-plugin` archive and overwrite-safe copy CLI (`prismux-plugin-<id>`). Inside the Plugin Center, Track 2 streams tarballs directly over HTTPS with automatic failover between **`registry.npmjs.org` ↔ `registry.npmmirror.com`** and zero local `git` invocation.
+Each official plugin is also published as a **script-free (`preinstall / install / postinstall` disabled)** single npm package bundling its SHA-256-verified `<id>-0.1.0-alpha.2.wb-plugin` archive and overwrite-safe copy CLI (`prismux-plugin-<id>`). Inside the Plugin Center, Track 2 streams tarballs directly over HTTPS with automatic failover between **`registry.npmjs.org` ↔ `registry.npmmirror.com`** and zero local `git` invocation.
 
 ```powershell
 # 1. Install and extract a verified .wb-plugin archive from npmjs
-npm install prismux-plugin-qq@0.1.0-alpha.1
+npm install prismux-plugin-qq@0.1.0-alpha.2
 npx prismux-plugin-qq --out ./plugins-stage
 
 # 2. Use the npmmirror domestic registry in mainland China
-npm install prismux-plugin-qq@0.1.0-alpha.1 --registry=https://registry.npmmirror.com
+npm install prismux-plugin-qq@0.1.0-alpha.2 --registry=https://registry.npmmirror.com
 npx prismux-plugin-qq --out ./plugins-stage
 ```
 
@@ -212,13 +226,13 @@ prismux/
 ├── README.md / README.en.md             # Bilingual project homepages
 ├── UPSTREAM_LOCK.json                   # pingdotgg/t3code baseline SHA, managed-fork mode & manifest pointer
 ├── pnpm-workspace.yaml                  # 12 TS workspace packages (excludes vendor/t3code & desktop-tauri)
-├── package.json                         # Root orchestration scripts (v0.1.0-alpha.1)
+├── package.json                         # Root orchestration scripts (v0.1.0-alpha.2)
 ├── tsconfig.base.json                   # Shared strict TypeScript 5.8+ baseline (ES2024 + NodeNext)
 ├── assets/
 │   ├── logo.png                         # Transparent 1024×1024 mascot master icon
-│   └── readme/                          # Pixel-art headers, section banners, R3 screenshots & templates
+│   └── readme/                          # Pixel-art headers, section banners, R2 screenshots & templates
 ├── docs/
-│   ├── t3code-patch-manifest.md         # Authoritative registry of MP-01 ~ MP-06 T3 Code mount points
+│   ├── t3code-patch-manifest.md         # Authoritative registry of MP-01 ~ MP-07 T3 Code mounts & extensions
 │   ├── agents/                          # Per-developer local environment profiles & templates
 │   ├── releases/v0.0.1-alpha.1.md       # Archived initial prototype alpha release notes
 │   └── specs/
@@ -234,14 +248,14 @@ prismux/
 │   ├── render-readme.mjs                # Edge CDP pixel-header & section-banner renderer
 │   └── __tests__/scripts.test.ts        # node:test regression suite
 ├── vendor/
-│   └── t3code/                          # T3 Code base (Electron 44 + server + web), customized strictly at MP-01 ~ MP-06
+│   └── t3code/                          # T3 Code base (Electron 44 + server + web), tracked by MP-01 ~ MP-07
 ├── packages/                            # 6 core workspace packages
 │   ├── protocol/                        # @prismux/protocol: brand, RPC, hooks, memory, plugin & updater types
 │   ├── cordis-kernel/                   # @prismux/cordis-kernel: dual-realm host, SemVer, dual-route installer & 0600 secrets
 │   ├── memory-core/                     # @prismux/memory-core: SQLite WAL + FTS5 + sqlite-vec & query isolation
 │   ├── sync-vault/                      # @prismux/sync-vault: Argon2id + AEAD sync, optimistic locks & 60 s watchdog
-│   ├── prismux-appearance/              # @prismux/appearance: 1:1 FISH-Dock Celestial capsule, color popover & T3 glass bridge
-│   └── prismux-wallpaper/               # @prismux/wallpaper: right wallpaper sidebar, 5-tab settings, Z-0 stage & Steam 431960
+│   ├── prismux-appearance/              # @prismux/appearance: 1:1 FISH-Dock Celestial capsule, 6 cards & T3 glass bridge
+│   └── prismux-wallpaper/               # @prismux/wallpaper: 2-tab sidebar, 4-tab settings, Z-0 stage & Steam 431960
 ├── apps/                                # Headless daemon (+ retiring prototype & historical shell)
 │   ├── daemon/                          # @prismux/daemon: 24h supervisor, Chief slot, 5 primitives, 206 media gateway & factory
 │   ├── workbench-ui/                    # @prismux/workbench-ui: [retiring prototype] v0.0.1 shell superseded by T3 Code base
@@ -259,7 +273,7 @@ prismux/
 <details>
 <summary><strong>Expand: Five Non-Negotiable Engineering Guardrails</strong></summary>
 
-1. **Minimal-Invasion Layering on T3 Code**: `vendor/t3code/` changes are strictly bounded to the 6 registered mount points (MP-01 ~ MP-06) in [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md) with zero changes to `vendor/t3code/pnpm-lock.yaml`; all heavy domain logic and visual engines reside in root `packages/*` and `apps/daemon`.
+1. **Minimal-Invasion Layering on T3 Code**: `vendor/t3code/` changes remain strictly registered under MP-01 ~ MP-07 in [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md) with zero changes to `vendor/t3code/pnpm-lock.yaml`; heavy domain logic and visual engines reside in root `packages/*` and `apps/daemon`.
 2. **Never reintroduce the 5 eliminated bloat modules**: Task Board, AgentTeam DAG, Skill Lens, Visual Companion, and Session Archive remain permanently excluded in favor of the five core primitives.
 3. **Single-file hybrid memory & physical isolation**: All memories reside in `~/.prismux/data/memory.db` (SQLite WAL + FTS5 + `sqlite-vec`) with zero PostgreSQL / Qdrant / MinIO / Obsidian client dependencies, enforced at transport level via `_callerScope`.
 4. **Four official plugins are never preinstalled**: `qq`, `pet`, `fishdock-hook`, and `ssh` remain isolated in `plugins-official/` and are excluded from desktop installers, installed strictly on demand.
@@ -272,11 +286,11 @@ prismux/
 
 | Milestone | Scope Delivered | Status |
 | :--- | :--- | :--- |
-| **M1** | Monorepo scaffold, T3 Code baseline lock, `apps/daemon` supervision, env sanitization, Chief Thread Slot & `2 MB` ring-buffered `PersistentPtyPool` | Complete &amp; Verified |
+| **M1** | Monorepo scaffold, T3 Code baseline lock, `apps/daemon` supervision, env sanitization, Chief Thread Slot &amp; `2 MB` ring-buffered `PersistentPtyPool` | Complete &amp; Verified |
 | **M2** | Single-file SQLite WAL + FTS5 + `sqlite-vec` memory, Obsidian importer, `forwardIdentity` isolation, `LifecycleHookBus` (`onFailure: "block"`), `HandoffEngine` (`Dial`) &amp; `WorktreeSandbox` | Complete &amp; Verified |
 | **M3** | `cordis-kernel` (top-level `engines.prismux`, zero-leak `ctx.effect()`, script-free npm tarball installer, `managed` lock) &amp; `sync-vault` (Argon2id + AEAD, `If-Match`, `60 s` stall watchdog, portable `data/`) | Complete &amp; Verified |
-| **M4 / v0.1.0** | `@prismux/appearance` + `@prismux/wallpaper` extraction, T3 Code Electron 44 MP-01 ~ MP-06 integration, zero-step desktop cold start, NSIS installer &amp; R3 live desktop verification | Complete &amp; R3 Signed Off |
-| **M5** | `OvernightFactory` end-to-end closed loop, deterministic `.wb-plugin` packaging/verification (`0.1.0-alpha.1`) for `qq`, `pet`, `fishdock-hook`, and `ssh`, plus dual-route auto-updates | Complete &amp; Verified |
+| **M4 / v0.1.0** | `@prismux/appearance` + `@prismux/wallpaper` extraction, T3 Code Electron 44 MP-01 ~ MP-07 integration (dual-mode live wallpapers, deduplicated settings, 10-locale `zh.json`, `/welcome` onboarding, local `agy` CLI &amp; `thought_level` sync), R2 desktop sign-off | Complete &amp; R2 Signed Off |
+| **M5** | `OvernightFactory` end-to-end closed loop, deterministic `.wb-plugin` packaging/verification (`0.1.0-alpha.2`) for `qq`, `pet`, `fishdock-hook`, and `ssh`, plus dual-route auto-updates | Complete &amp; Verified |
 
 </details>
 
@@ -287,7 +301,7 @@ prismux/
 | Document | Purpose |
 | :--- | :--- |
 | [`AGENTS.md`](AGENTS.md) | Cross-machine engineering rules, five guardrails, script/plugin contracts &amp; commit conventions |
-| [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md) | Authoritative registry of MP-01 ~ MP-06 mount points, line coordinates &amp; upstream merge guide |
+| [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md) | Authoritative registry of MP-01 ~ MP-07 mounts, Provider extensions &amp; upstream merge guide |
 | [`docs/specs/ui-ux-design-mandate.md`](docs/specs/ui-ux-design-mandate.md) | UI/UX craftsmanship, Celestial tri-state capsule, four-region glass sync &amp; installer mandate |
 | [`docs/specs/master-prompt-v1.3.md`](docs/specs/master-prompt-v1.3.md) | Full-stack autonomous build specification (architectural constitution) |
 | [`docs/agents/README.md`](docs/agents/README.md) | Contributor local environment profile naming rules, template &amp; maintenance workflow |
