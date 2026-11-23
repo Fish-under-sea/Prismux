@@ -1,21 +1,33 @@
+import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowRightIcon, ImageIcon, PaletteIcon } from "lucide-react";
+import { ChevronRightIcon, ImageIcon, PaletteIcon } from "lucide-react";
 import { AppearanceHeroAndCards, type AppearanceConfig } from "@prismux/appearance";
 import { useWallpaperStore } from "@prismux/wallpaper";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { SettingsRow, SettingsSection } from "../../components/settings/settingsLayout";
+import { SettingsSection } from "../../components/settings/settingsLayout";
 import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
 
 /**
- * MP-04: Integrates @prismux/appearance into T3 Code's AppearanceSettingsPanel.
+ * MP-04 / Issue #3: Unified Prismux Appearance settings hub inside /settings/appearance.
+ * Consolidates all 6 appearance cards (Theme Hero, Liquid Glass + Per-Surface fold,
+ * Sidebar Corners, Global UI & Caret Colors, System Fonts & Typography Colors, .wb-theme Snapshot)
+ * while linking cleanly to /settings/wallpaper for pure wallpaper management.
  */
 export function PrismuxAppearanceIntegration() {
   const navigate = useNavigate();
-  const { appearance, setAppearance, setThemeMode, wallpaperStore, daemonInfo } =
-    usePrismuxRuntime();
+  const {
+    appearance,
+    setAppearance,
+    setThemeMode,
+    wallpaperStore,
+    daemonInfo,
+    systemFonts,
+    refreshSystemFonts,
+  } = usePrismuxRuntime();
   const wallpaperSnap = useWallpaperStore(wallpaperStore);
+  const [fontsLoading, setFontsLoading] = useState(false);
 
   const selectedId = wallpaperSnap.settings.selectedId;
   const activeWallpaper = selectedId
@@ -34,8 +46,16 @@ export function PrismuxAppearanceIntegration() {
     void navigate({ to: "/settings/wallpaper" });
   };
 
+  const handleRefreshSystemFonts = () => {
+    if (fontsLoading) return;
+    setFontsLoading(true);
+    void refreshSystemFonts(true).finally(() => {
+      setFontsLoading(false);
+    });
+  };
+
   const wallpaperSlot = (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-background/60 px-3 py-2 text-xs">
+    <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-background/60 px-3 py-2 text-xs">
       <div className="flex min-w-0 items-center gap-2">
         <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate text-foreground">
@@ -48,8 +68,8 @@ export function PrismuxAppearanceIntegration() {
         ) : null}
       </div>
       <Button size="xs" variant="outline" onClick={handleOpenWallpaperSettings}>
-        管理壁纸引擎
-        <ArrowRightIcon className="size-3" />
+        前往壁纸引擎
+        <ChevronRightIcon className="size-3.5" />
       </Button>
     </div>
   );
@@ -67,31 +87,24 @@ export function PrismuxAppearanceIntegration() {
         }
       >
         <p className="px-4 pt-3 text-xs leading-relaxed text-muted-foreground">
-          1:1 FISH-Dock 光学天体三态胶囊（浅色 / 深色 / 玻璃）、360° Fresnel 液态玻璃质感、WCAG ≥
-          4.5:1 对比度钳制与主题快照。纯宿主视觉层，对模型 0 Token 开销。
+          统一管理光学天体三态胶囊、360° Fresnel 液态玻璃与各面独立调节、侧边栏圆角、全局 UI
+          配色、本机系统字体与主题快照。纯宿主视觉层，对模型 0 Token 开销。
         </p>
         <div className="p-3 sm:p-4">
           <AppearanceHeroAndCards
             config={appearance}
             onChange={handleAppearanceChange}
             alwaysShowGlassCard
+            showCornersCard
+            showUiColorsCard
             showSnapshotCard
+            systemFonts={systemFonts}
+            systemFontsLoading={fontsLoading}
+            onRefreshSystemFonts={handleRefreshSystemFonts}
             themeName="Prismux Liquid Glass"
             wallpaperSlot={wallpaperSlot}
           />
         </div>
-
-        <SettingsRow
-          title="壁纸引擎与多源舞台"
-          description="配置 Steam Workshop (431960) 动态壁纸、本地图片/视频导入、WebWallGL 着色器、轮播分组与遮挡 0 FPS 挂起策略。"
-          control={
-            <Button size="sm" variant="outline" onClick={handleOpenWallpaperSettings}>
-              <ImageIcon className="size-3.5" />
-              打开壁纸设置
-              <ArrowRightIcon className="size-3.5" />
-            </Button>
-          }
-        />
       </SettingsSection>
     </div>
   );

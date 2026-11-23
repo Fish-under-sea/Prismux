@@ -152,24 +152,6 @@ export function AppearanceSettingsPanel() {
     <SettingsPageContainer>
       <PrismuxAppearanceIntegration />
 
-      <SettingsSection id="appearance" title={gt("Colors & themes")} variant="plain" hideTitle>
-        <div id={searchableSetting("theme").id}>
-          <ThemeLibrary
-            appearanceMode={appearanceMode}
-            customThemes={customThemes}
-            initialAppearance={resolvedTheme}
-            refreshTheme={refreshTheme}
-            isImportOpen={isImportThemeOpen}
-            setAppearanceMode={setAppearanceMode}
-            setTheme={setTheme}
-            setThemeHalf={setThemeHalf}
-            theme={theme}
-            themeHalves={themeHalves}
-            onImportOpenChange={setIsImportThemeOpen}
-          />
-        </div>
-      </SettingsSection>
-
       <SettingsSection id="appearance-interface" title={gt("Interface")}>
         <SettingsRow
           {...searchableSetting("setting-appearance-contrast")}
@@ -214,52 +196,6 @@ export function AppearanceSettingsPanel() {
                 style={appearanceContrastSliderStyle}
                 type="range"
                 value={settings.appearanceContrast}
-              />
-            </div>
-          }
-        />
-
-        <SettingsRow
-          {...searchableSetting("setting-glass-opacity")}
-          description={gt("Higher values make menus, dialogs, and the composer more solid.")}
-          resetAction={
-            settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset glass opacity to default")}
-                onClick={() =>
-                  updateSettings({ glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex w-full items-center gap-3 sm:w-52">
-              <output
-                className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
-                htmlFor="glass-opacity"
-              >
-                {settings.glassOpacity}%
-              </output>
-              <input
-                aria-label={gt("Glass opacity")}
-                className="settings-slider min-w-0 flex-1"
-                id="glass-opacity"
-                max={MAX_GLASS_OPACITY}
-                min={MIN_GLASS_OPACITY}
-                onChange={(event) => {
-                  const glassOpacity = Number(event.currentTarget.value);
-                  if (
-                    Number.isInteger(glassOpacity) &&
-                    glassOpacity >= MIN_GLASS_OPACITY &&
-                    glassOpacity <= MAX_GLASS_OPACITY
-                  ) {
-                    updateSettings({ glassOpacity });
-                  }
-                }}
-                step={5}
-                style={glassOpacitySliderStyle}
-                type="range"
-                value={settings.glassOpacity}
               />
             </div>
           }
@@ -366,6 +302,7 @@ export function AppearanceSettingsPanel() {
         />
         <AdvancedSettings
           targetIds={[
+            searchableSetting("setting-glass-opacity").id,
             searchableSetting("panel-animations").id,
             searchableSetting("environment-identification").id,
             // Environment identification's search result lands on this section.
@@ -373,6 +310,51 @@ export function AppearanceSettingsPanel() {
             searchableSetting("composer-context").id,
           ]}
         >
+          <SettingsRow
+            {...searchableSetting("setting-glass-opacity")}
+            description={gt("Higher values make menus, dialogs, and the composer more solid.")}
+            resetAction={
+              settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
+                <SettingResetButton
+                  ariaLabel={gt("Reset glass opacity to default")}
+                  onClick={() =>
+                    updateSettings({ glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center gap-3 sm:w-52">
+                <output
+                  className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+                  htmlFor="glass-opacity"
+                >
+                  {settings.glassOpacity}%
+                </output>
+                <input
+                  aria-label={gt("Glass opacity")}
+                  className="settings-slider min-w-0 flex-1"
+                  id="glass-opacity"
+                  max={MAX_GLASS_OPACITY}
+                  min={MIN_GLASS_OPACITY}
+                  onChange={(event) => {
+                    const glassOpacity = Number(event.currentTarget.value);
+                    if (
+                      Number.isInteger(glassOpacity) &&
+                      glassOpacity >= MIN_GLASS_OPACITY &&
+                      glassOpacity <= MAX_GLASS_OPACITY
+                    ) {
+                      updateSettings({ glassOpacity });
+                    }
+                  }}
+                  step={5}
+                  style={glassOpacitySliderStyle}
+                  type="range"
+                  value={settings.glassOpacity}
+                />
+              </div>
+            }
+          />
           <SettingsRow
             {...searchableSetting("panel-animations")}
             description={gt("Set how fast panels open and close.")}
@@ -499,6 +481,27 @@ export function AppearanceSettingsPanel() {
       </SettingsSection>
 
       <TypographySection />
+
+      {/* Native T3 Code palette library folded under Advanced to avoid duplicating Prismux's Celestial theme switcher */}
+      <SettingsSection id="appearance" title={gt("Colors & themes")}>
+        <AdvancedSettings targetIds={[searchableSetting("theme").id]}>
+          <div id={searchableSetting("theme").id} className="p-3 sm:p-4">
+            <ThemeLibrary
+              appearanceMode={appearanceMode}
+              customThemes={customThemes}
+              initialAppearance={resolvedTheme}
+              refreshTheme={refreshTheme}
+              isImportOpen={isImportThemeOpen}
+              setAppearanceMode={setAppearanceMode}
+              setTheme={setTheme}
+              setThemeHalf={setThemeHalf}
+              theme={theme}
+              themeHalves={themeHalves}
+              onImportOpenChange={setIsImportThemeOpen}
+            />
+          </div>
+        </AdvancedSettings>
+      </SettingsSection>
     </SettingsPageContainer>
   );
 }

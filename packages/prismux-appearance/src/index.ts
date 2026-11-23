@@ -113,14 +113,18 @@ export {
 export {
   AppearanceHeroAndCards,
   LiquidGlassCard,
+  SidebarCornersCard,
   ThemeHeroCard,
   ThemeSnapshotCard,
   TypographyCard,
+  UiColorsCard,
   type ActiveColorPickerSlot,
   type AppearanceHeroAndCardsProps,
   type ColorPickerOpenRequest,
   type LiquidGlassCardProps,
+  type SidebarCornersCardProps,
   type ThemeHeroCardProps,
   type ThemeSnapshotCardProps,
   type TypographyCardProps,
+  type UiColorsCardProps,
 } from './AppearanceHeroAndCards.js';

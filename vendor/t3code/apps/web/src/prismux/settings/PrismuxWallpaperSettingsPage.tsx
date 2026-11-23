@@ -1,13 +1,9 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { ImageIcon, RefreshCwIcon } from "lucide-react";
-import { CelestialThemeCapsule, FloatingColorPopover } from "@prismux/appearance";
 import {
   WallpaperSettingsView,
   useWallpaperStore,
-  type AppearanceBridge,
-  type ColorTriggerRenderContext,
-  type ThemeHeroRenderContext,
   type WallpaperSettingsTabId,
 } from "@prismux/wallpaper";
 
@@ -18,7 +14,6 @@ import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
 
 const VALID_TABS: ReadonlySet<WallpaperSettingsTabId> = new Set([
   "library",
-  "appearance",
   "playback",
   "rotation",
   "system",
@@ -39,23 +34,15 @@ function resolveTabFromLocation(hash: string, searchStr: string): WallpaperSetti
   return null;
 }
 
-interface ColorPopoverSession {
-  key: string;
-  label: string;
-  value: string;
-  anchorEl: HTMLElement;
-  onChange: (hex: string) => void;
-  onClear?: () => void;
-}
-
 /**
- * MP-04: /settings/wallpaper mounts @prismux/wallpaper's 5-tab settings view.
+ * MP-04: /settings/wallpaper mounts @prismux/wallpaper's deduplicated 4-tab settings view
+ * (壁纸库 / 画面与播放 / 轮播与隐藏 / 系统与目录), linking appearance/glass controls to /settings/appearance.
  */
 export function PrismuxWallpaperSettingsPage() {
-  const { wallpaperStore, wallpaperHost, appearance, setThemeMode, daemonInfo, occluded } =
-    usePrismuxRuntime();
+  const { wallpaperStore, wallpaperHost, daemonInfo, occluded } = usePrismuxRuntime();
   const snap = useWallpaperStore(wallpaperStore);
   const location = useLocation();
+  const navigate = useNavigate();
 
   const routeTab = resolveTabFromLocation(location.hash, location.searchStr);
   const routeKey = `${location.hash}|${location.searchStr}`;
@@ -66,7 +53,6 @@ export function PrismuxWallpaperSettingsPage() {
   const activeTab: WallpaperSettingsTabId =
     manualTab && manualTab.routeKey === routeKey ? manualTab.tab : (routeTab ?? "library");
   const [refreshing, setRefreshing] = useState(false);
-  const [colorPopover, setColorPopover] = useState<ColorPopoverSession | null>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads initial daemon wallpaper inventory once when opened
   useEffect(() => {
@@ -82,61 +68,6 @@ export function PrismuxWallpaperSettingsPage() {
     } finally {
       setRefreshing(false);
     }
-  };
-
-  const renderThemeHero = (ctx: ThemeHeroRenderContext) => (
-    <div className="py-1">
-      <CelestialThemeCapsule
-        mode={appearance.themeMode}
-        onChange={(nextMode) => {
-          setThemeMode(nextMode);
-          ctx.onChangeThemeMode(nextMode);
-        }}
-        size={ctx.surface === "sidebar" ? "compact" : "default"}
-      />
-    </div>
-  );
-
-  const appearanceBridge: AppearanceBridge = {
-    ...wallpaperHost.appearanceBridge,
-    onThemeModeChange: (nextMode) => {
-      setThemeMode(nextMode);
-      wallpaperHost.appearanceBridge?.onThemeModeChange?.(nextMode);
-    },
-    renderThemeHero,
-    renderColorTrigger: (ctx: ColorTriggerRenderContext) => {
-      const displayColor = ctx.value || "#5e9bff";
-      return (
-        <button
-          type="button"
-          className="inline-flex h-7 items-center gap-2 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground shadow-xs transition-colors hover:bg-accent"
-          aria-label={`选择颜色：${ctx.label}`}
-          onClick={(event) => {
-            const target = event.currentTarget;
-            setColorPopover((prev) =>
-              prev && prev.key === ctx.label && prev.anchorEl === target
-                ? null
-                : {
-                    key: ctx.label,
-                    label: ctx.label,
-                    value: ctx.value,
-                    anchorEl: target,
-                    onChange: ctx.onChange,
-                    ...(ctx.onClear ? { onClear: ctx.onClear } : {}),
-                  },
-            );
-          }}
-        >
-          <span
-            className="size-3.5 shrink-0 rounded-full border border-border/80 shadow-inner"
-            style={{ backgroundColor: displayColor }}
-          />
-          <span className="font-mono text-2xs uppercase tabular-nums text-muted-foreground">
-            {ctx.value || "自动"}
-          </span>
-        </button>
-      );
-    },
   };
 
   return (
@@ -174,28 +105,11 @@ export function PrismuxWallpaperSettingsPage() {
       <WallpaperSettingsView
         store={wallpaperStore}
         adapter={wallpaperHost}
-        appearanceBridge={appearanceBridge}
-        renderThemeHero={renderThemeHero}
         activeTab={activeTab}
         onTabChange={(tab) => setManualTab({ routeKey, tab })}
-      />
-
-      <FloatingColorPopover
-        open={colorPopover !== null}
-        value={colorPopover?.value ?? ""}
-        fallbackColor="#5e9bff"
-        anchorEl={colorPopover?.anchorEl ?? null}
-        title={colorPopover?.label ?? "选择颜色"}
-        allowClear={Boolean(colorPopover?.onClear)}
-        onChange={(hex) => {
-          colorPopover?.onChange(hex);
-          setColorPopover((prev) => (prev ? { ...prev, value: hex } : null));
+        onOpenAppearanceSettings={() => {
+          void navigate({ to: "/settings/appearance" });
         }}
-        onClear={() => {
-          colorPopover?.onClear?.();
-          setColorPopover((prev) => (prev ? { ...prev, value: "" } : null));
-        }}
-        onClose={() => setColorPopover(null)}
       />
     </SettingsPageContainer>
   );
