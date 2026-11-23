@@ -279,18 +279,27 @@ export function WelcomePage({
         {isElectron ? <WorkspacePageHeader electron /> : null}
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pt-12 pb-8 sm:pt-20">
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-              <T>Welcome to T3 Code</T>
-            </h1>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              <T>
-                Setting up{" "}
-                <span className="text-foreground">
-                  <Var>{label}</Var>
-                </span>
-                .
-              </T>
-            </p>
+            <div className="flex items-center gap-3.5">
+              <img
+                alt={gt("Prismux")}
+                className="size-10 shrink-0 rounded-xl object-cover shadow-xs ring-1 ring-border/60"
+                src="/prismux-logo.png"
+              />
+              <div className="min-w-0">
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                  <T>Welcome to Prismux</T>
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  <T>
+                    Setting up{" "}
+                    <span className="text-foreground">
+                      <Var>{label}</Var>
+                    </span>
+                    .
+                  </T>
+                </p>
+              </div>
+            </div>
             <div className="mt-10 border-t border-border/60">
               <AgentsSection
                 environmentId={environmentId}
@@ -350,7 +359,7 @@ function TelemetryNotice({ environmentId }: { readonly environmentId: Environmen
     <p className="mt-auto pt-12 text-2xs leading-relaxed text-muted-foreground/70">
       {telemetryOff === undefined ? (
         <T>
-          T3 Code collects anonymous usage data to improve the app. To opt out, see the{" "}
+          Prismux collects anonymous usage data to improve the app. To opt out, see the{" "}
           <a
             className="underline decoration-current/40 underline-offset-2 hover:text-muted-foreground"
             href={PRIVACY_POLICY_URL}
@@ -989,7 +998,7 @@ function PhoneSection({ environmentId }: { readonly environmentId: EnvironmentId
             <SmartphoneIcon className="size-4" />
           </RowIcon>
           <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-            <T>Use T3 Code on your phone</T>
+            <T>Use Prismux on your phone</T>
           </span>
           <CollapsibleTrigger render={<Button variant="ghost-muted" size="xs" />}>
             {open ? gt("Hide") : gt("Set up")}
@@ -1015,7 +1024,7 @@ function PhoneSection({ environmentId }: { readonly environmentId: EnvironmentId
                 size={124}
                 level="M"
                 marginSize={2}
-                title={gt("T3 Code app for iPhone and Android")}
+                title={gt("Prismux app for iPhone and Android")}
               />
             </div>
           </div>

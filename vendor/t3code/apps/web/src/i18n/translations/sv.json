@@ -3153,7 +3153,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "på datorn som öppnade den här sidan"]
+      "c": [
+        " ",
+        "på datorn som öppnade den här sidan"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3165,7 +3168,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· den som kör den får den här åtkomsten"]
+      "c": [
+        " ",
+        "· den som kör den får den här åtkomsten"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Godkänn bara en inloggning som du själv precis har startat.",
@@ -6099,7 +6105,6 @@
   "26dca8ee72dc5d74": "Kunde inte läsa inställningarna",
   "52e7a660ce883609": "Ansluter fortfarande",
   "9a50b20569f2c9e7": "Dina sparade inställningar kunde inte läsas in.",
-  "0d22cd9e3b9d94f0": "T3 Code kunde inte bekräfta den här arbetsytan.",
   "573a9e6b17f4e9e3": "Läs in igen",
   "d6c31ff9bb97570e": "Sökgränsen nåddes. Vissa projekt eller konversationer kan saknas.",
   "da6f86321113fb7b": "Den här anslutningen kan inte importera projekt eller trådhistorik.",
@@ -6136,7 +6141,6 @@
   "bd2304f25f6f999e": "{selected, plural, one {{selected} av {total} markerad} other {{selected} av {total} markerade}}",
   "228cd9fd55a55070": "Kunde inte kontrollera projekten igen. {error}",
   "1cc599c5f5874014": "Telefon",
-  "0f7c08d8284fee68": "T3 Code-appen för iPhone och Android",
   "431bee88ecc944e4": "Kontrollera T3 Connect",
   "c747696796f64468": "T3 Connect är på, men appen kan inte nå den här datorn.",
   "96557a906f6167b9": "Inloggad. Dela den här datorn så att appen kan nå den.",
@@ -6151,7 +6155,6 @@
   "a0fd24f965eb070b": "Kunde inte importera trådhistorik.",
   "a506c135c2183ac3": "{count, plural, one {{count} mapp} other {{count} mappar}}",
   "efc48b9736a534bc": "nu",
-  "edf393ff951b533a": "Välkommen till T3 Code",
   "3cc77f9daa7eeafd": [
     "Konfigurerar",
     " ",
@@ -6168,16 +6171,6 @@
   ],
   "216ab7514aea1d61": "Starta utan agent",
   "501ce2d99da8bfd1": "Konfigurera en agent för att starta.",
-  "71f3822326109c8e": [
-    "T3 Code samlar in anonym användningsdata för att förbättra appen. Se",
-    " ",
-    {
-      "t": "a",
-      "i": 1,
-      "c": "integritetspolicyn"
-    },
-    " för att välja bort det."
-  ],
   "b33f35083757b42c": [
     "Se",
     " ",
@@ -6219,7 +6212,6 @@
     },
     "-historik"
   ],
-  "0070a15f6b693068": "Använd T3 Code på telefonen",
   "37c66042ce1906da": "Skanna med telefonen för att skaffa appen.",
   "1b4364ef89b07f35": "Kunde inte kontrollera T3 Connect.",
   "7b10d40dd15938e5": "Din telefon kan nå den här datorn. Logga in i appen med samma konto.",
@@ -10172,7 +10164,6 @@
   "6ebd73c7bfb58bb7": "App",
   "6939d310de8dfe5b": "Organisation",
   "c424bee294b9f778": "Miljön hanteras av {organization}. Vissa inställningar och funktioner följer dess policy.",
-  "82d9538af590f58c": "Se dina agenter, importera projekt och konfigurera din telefon.",
   "6a48fd0a37e725a1": "Juridiskt",
   "d6d3ea46ac979e1c": "Hur vi hanterar dina data, inklusive de anonyma användningsdata som T3 Code samlar in.",
   "e741b1ab9396053a": "Hur vi hanterar dina data. {telemetryOff}",
@@ -10203,7 +10194,6 @@
   "126a28a1ad4b2d57": "Anslut en miljö för att välja dess modell för textgenerering.",
   "5fe5a45199fa9c07": "Inga leverantörer för textgenerering tillgängliga.",
   "99ceba64591c9257": "Visa diagnostik",
-  "eb576a5feda7b535": "Öppna",
   "66647e8c8123a51f": "Visa policy",
   "6d59e1e516e53d17": "Visa licenser",
   "941d08db15f62d17": "Arkiverat",
@@ -11964,7 +11954,6 @@
   "9c73aa0c2e2b4e7d": "Välj kortkommando",
   "300a948f90c4d75c": "Gå tillbaka",
   "2a50e229df85d553": "Gå framåt",
-  "8aa6404c8018ea67": "T3 Code start",
   "8e9626aa27cb188a": "Ärenden",
   "9d2fc1003e82feb1": "Användning",
   "20283eb1dd6119f9": "{count, plural, one {{count} bilaga} other {{count} bilagor}}",
@@ -12464,5 +12453,52 @@
   "27d76249d09eb69f": "Granskningsguiden är klar",
   "faa3bb26abb39c93": "Granskningsguiden misslyckades",
   "b7df38b7d8792d78": "Öppna guiden",
-  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide"
+  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide",
+  "bbd0b4be79f4fd38": "Wallpaper panel is available from an active thread.",
+  "9aecb557a8c08a3b": "Available from an active thread.",
+  "7cf99304c59c09bc": "壁纸",
+  "ed7aea99fe71b461": "切换动态壁纸、液态玻璃与外观主题。",
+  "8048cc9eecd3702f": "Prismux kunde inte bekräfta den här arbetsytan.",
+  "40c142d6d919886e": "Prismux-appen för iPhone och Android",
+  "43686eb6ef8468ad": "Välkommen till Prismux",
+  "25db20a0210577c5": [
+    "Prismux samlar in anonym användningsdata för att förbättra appen. Se",
+    " ",
+    {
+      "t": "a",
+      "i": 1,
+      "c": "integritetspolicyn"
+    },
+    " för att välja bort det."
+  ],
+  "646a12cf30df6e72": "Använd Prismux på telefonen",
+  "b42f7acc484c0a7b": "Onboarding",
+  "d49b30e9824ecfa8": "Getting started",
+  "c75334b7ab5be7f1": "Reopen the Prismux welcome guide to set up agents or import existing projects.",
+  "267bdb24bf6000b7": "Reopen onboarding",
+  "26f0d48daf67e163": "Wallpaper",
+  "c1b7649ac731ed07": "Plugins",
+  "3a188f0723ccf030": "Memory & Sync",
+  "e1ef4bcf8496d241": "Prismux Updates",
+  "3eca94f85088bdf9": "Prismux",
+  "692e6ca9b352296c": "Wallpaper Engine",
+  "0e76d2ce2345ff32": "wallpaper background steam workshop 431960 webwallgl rotation video live stage",
+  "fae57e65d2329a84": "Plugin Center",
+  "889f8982f97df498": "plugins extensions qq pet ssh fishdock cordis npm marketplace official zero preinstalled",
+  "e211bd3501999f9b": "memory sync chief thread slot secretary sqlite obsidian webdav s3 github magpie e2ee encrypted",
+  "d9d8bbcf81d23e45": "updates upgrade dual source gitee github npmmirror mirror release probe speed test",
+  "37617d86f3f074c4": "Prismux start",
+  "a1761e822ab06189": "Use local agy CLI",
+  "65fbe110749f0118": "Connecting to local agy CLI…",
+  "24be7fa0f572515e": "Checking local agy CLI and loading models…",
+  "86b8f49050712134": "Reusing local agy CLI sign-in (~/.gemini/antigravity-cli).",
+  "dcd00462541631b4": "Reuse local agy CLI sign-in (~/.gemini/antigravity-cli) on {environment} to load models.",
+  "31afdb568119183e": "Sync models",
+  "d74ddd900827c725": "Retry sync",
+  "cfe713905a4a753e": "Connect local CLI",
+  "54f2ed7e7b4ba16f": "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
+  "d7929997ab65ec68": "Local agy CLI",
+  "3144d651e4a616c3": "Using local agy CLI.",
+  "7113020ca6ec6a00": "Uses local agy CLI on PATH or the custom binary path below.",
+  "9f4ead624b414e42": "Already signed in with agy CLI (~/.gemini/antigravity-cli)? Reuse it directly with the native Google Antigravity icon and limits."
 }

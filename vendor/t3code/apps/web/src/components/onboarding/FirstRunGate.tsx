@@ -5,7 +5,6 @@ import { Atom } from "effect/reactivity";
 import { useGT } from "gt-react";
 import { useEffect, useState } from "react";
 
-import { isElectron } from "../../env";
 import {
   ensureClientSettingsHydrated,
   useClientSettings,
@@ -89,14 +88,9 @@ export function FirstRunGate({
   const serverWelcome = useAtomValue(primaryServerWelcomeAtom);
   const primaryShellLive = useAtomValue(primaryShellLiveAtom);
   const workspaceEvidenceLive = useAtomValue(workspaceEvidenceLiveAtom);
-  // Prismux desktop cold-starts directly into the workbench without blocking on /welcome.
-  const bypassDesktopOnboarding = isElectron && !hostedStatic;
-  const effectiveEnabled = enabled && !bypassDesktopOnboarding;
   const [gateState, setGateState] = useState<FirstRunGateState>(() => ({
     decision:
-      bypassDesktopOnboarding ||
-      (!effectiveEnabled && !hostedStatic) ||
-      (hydrated && onboardingCompletedAt !== null)
+      (!enabled && !hostedStatic) || (hydrated && onboardingCompletedAt !== null)
         ? "app"
         : "pending",
     stalled: false,
@@ -119,27 +113,25 @@ export function FirstRunGate({
       threads: soleThread === null ? [] : [soleThread],
     });
 
-  const { decision: nextDecision, persistCompletion } = bypassDesktopOnboarding
-    ? { decision: "app" as const, persistCompletion: true }
-    : hostedStatic
-      ? resolveHostedFirstRunDecision(hydrated)
-      : resolveFirstRunDecision({
-          enabled: effectiveEnabled,
-          hydrated,
-          completed: onboardingCompletedAt !== null,
-          bootstrapped,
-          authoritative: primaryShellLive,
-          workspaceAuthoritative: workspaceEvidenceLive,
-          workspaceProvenanceAuthoritative: isFirstRunWorkspaceProvenanceAuthoritative({
-            welcomeReceived: serverWelcome !== null,
-            bootstrapStatus: serverWelcome?.bootstrapStatus ?? null,
-          }),
-          catalogReady: environmentCatalogReady,
-          serverConfigAvailable: serverConfig !== null,
-          workspaceFresh,
-          projectCount: projects.length,
-          threadCount,
-        });
+  const { decision: nextDecision, persistCompletion } = hostedStatic
+    ? resolveHostedFirstRunDecision(hydrated)
+    : resolveFirstRunDecision({
+        enabled,
+        hydrated,
+        completed: onboardingCompletedAt !== null,
+        bootstrapped,
+        authoritative: primaryShellLive,
+        workspaceAuthoritative: workspaceEvidenceLive,
+        workspaceProvenanceAuthoritative: isFirstRunWorkspaceProvenanceAuthoritative({
+          welcomeReceived: serverWelcome !== null,
+          bootstrapStatus: serverWelcome?.bootstrapStatus ?? null,
+        }),
+        catalogReady: environmentCatalogReady,
+        serverConfigAvailable: serverConfig !== null,
+        workspaceFresh,
+        projectCount: projects.length,
+        threadCount,
+      });
 
   if (hydrated) {
     const transitioned = transitionFirstRunGateState(gateState, {
@@ -207,7 +199,7 @@ function FirstRunRecovery({
         <p className="mt-2 text-sm text-muted-foreground">
           {settingsReadFailed
             ? gt("Your saved settings could not be loaded.")
-            : gt("T3 Code could not confirm this workspace.")}
+            : gt("Prismux could not confirm this workspace.")}
         </p>
         <Button
           className="mt-5"

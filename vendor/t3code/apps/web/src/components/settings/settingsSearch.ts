@@ -1512,25 +1512,37 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "prismux-wallpaper",
     title: msg("Wallpaper Engine"),
     to: "/settings/wallpaper",
-    searchTerms: [msg("壁纸 steam workshop 431960 webwallgl rotation video stage 轮播 动态壁纸")],
+    searchTerms: [
+      msg("wallpaper background steam workshop 431960 webwallgl rotation video live stage"),
+    ],
   },
   {
     id: "prismux-plugins",
     title: msg("Plugin Center"),
     to: "/settings/plugins",
-    searchTerms: [msg("插件 qq pet ssh fishdock cordis npm marketplace 官方插件 零预装")],
+    searchTerms: [
+      msg(
+        "plugins extensions qq pet ssh fishdock cordis npm marketplace official zero preinstalled",
+      ),
+    ],
   },
   {
     id: "prismux-memory-sync",
     title: msg("Memory & Sync"),
     to: "/settings/memory-sync",
-    searchTerms: [msg("记忆 同步 chief slot 主秘书 sqlite obsidian webdav s3 magpie e2ee 加密")],
+    searchTerms: [
+      msg(
+        "memory sync chief thread slot secretary sqlite obsidian webdav s3 github magpie e2ee encrypted",
+      ),
+    ],
   },
   {
     id: "prismux-updates",
     title: msg("Prismux Updates"),
     to: "/settings/updates",
-    searchTerms: [msg("更新 双源 gitee npmmirror mirror release probe 测速 镜像")],
+    searchTerms: [
+      msg("updates upgrade dual source gitee github npmmirror mirror release probe speed test"),
+    ],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
 
@@ -1732,11 +1744,12 @@ export function searchSettings(
   return settingsForThisPlatform(items)
     .flatMap((item, index) => {
       const title = normalizeSearchText(decodeMsg(item.title));
+      const localizedTitle = normalizeSearchText(translate(item.title));
       const fields = [
         title,
         normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
         // The labels as displayed, so search also works in the active language.
-        normalizeSearchText(translate(item.title)),
+        localizedTitle,
         normalizeSearchText(translate(SETTINGS_SECTION_LABELS[item.to])),
         ...(item.searchTerms ?? []).map(normalizeSearchText),
         ...(item.searchTerms ?? []).map((term) => normalizeSearchText(translate(term))),
@@ -1745,13 +1758,14 @@ export function searchSettings(
 
       const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
       const rank =
-        title === normalizedQuery
+        title === normalizedQuery || localizedTitle === normalizedQuery
           ? 5
-          : title.startsWith(normalizedQuery)
+          : title.startsWith(normalizedQuery) || localizedTitle.startsWith(normalizedQuery)
             ? 4
-            : title.includes(normalizedQuery)
+            : title.includes(normalizedQuery) || localizedTitle.includes(normalizedQuery)
               ? 3
-              : queryTokens.every((token) => title.includes(token))
+              : queryTokens.every((token) => title.includes(token)) ||
+                  queryTokens.every((token) => localizedTitle.includes(token))
                 ? 2
                 : exactPhraseField >= 0
                   ? 1

@@ -833,6 +833,7 @@ export function GeneralSettingsPanel() {
   const setting = useSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
   );
@@ -1210,6 +1211,23 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      {primaryEnvironmentId === null ? null : (
+        <SettingsSection id="onboarding" title={gt("Onboarding")}>
+          <SettingsRow
+            id="reopen-onboarding"
+            title={gt("Getting started")}
+            description={gt(
+              "Reopen the Prismux welcome guide to set up agents or import existing projects.",
+            )}
+            control={
+              <Button size="sm" variant="outline" render={<Link to="/welcome" />}>
+                <T>Reopen onboarding</T>
+              </Button>
+            }
+          />
+        </SettingsSection>
+      )}
     </SettingsPageContainer>
   );
 }
@@ -2555,10 +2573,12 @@ export function AboutSettingsPanel() {
         {primaryEnvironmentId === null ? null : (
           <SettingsRow
             {...setting("welcome-page")}
-            description={gt("See your agents, import projects, and set up your phone.")}
+            description={gt(
+              "Reopen the Prismux welcome guide to set up agents or import existing projects.",
+            )}
             control={
               <Button size="sm" variant="outline" render={<Link to="/welcome" />}>
-                <T context="verb, opens a page">Open</T>
+                <T>Reopen onboarding</T>
               </Button>
             }
           />

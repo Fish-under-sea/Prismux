@@ -3153,7 +3153,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "on the computer that opened this page"]
+      "c": [
+        " ",
+        "on the computer that opened this page"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3165,7 +3168,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· whoever runs it gets this access"]
+      "c": [
+        " ",
+        "· whoever runs it gets this access"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Only approve a sign-in you just started.",
@@ -6100,7 +6106,6 @@
   "26dca8ee72dc5d74": "Could not read settings",
   "52e7a660ce883609": "Still connecting",
   "9a50b20569f2c9e7": "Your saved settings could not be loaded.",
-  "0d22cd9e3b9d94f0": "T3 Code could not confirm this workspace.",
   "573a9e6b17f4e9e3": "Reload",
   "d6c31ff9bb97570e": "Scan limit reached. Some projects or conversations may be missing.",
   "da6f86321113fb7b": "This connection cannot import projects or thread history.",
@@ -6137,7 +6142,6 @@
   "bd2304f25f6f999e": "{selected, plural, one {{selected} of {total} selected} other {{selected} of {total} selected}}",
   "228cd9fd55a55070": "Could not check projects again. {error}",
   "1cc599c5f5874014": "Phone",
-  "0f7c08d8284fee68": "T3 Code app for iPhone and Android",
   "431bee88ecc944e4": "Check T3 Connect",
   "c747696796f64468": "T3 Connect is on, but the app cannot reach this computer.",
   "96557a906f6167b9": "Signed in. Share this computer so the app can reach it.",
@@ -6152,7 +6156,6 @@
   "a0fd24f965eb070b": "Could not import thread history.",
   "a506c135c2183ac3": "{count, plural, one {{count} folder} other {{count} folders}}",
   "efc48b9736a534bc": "now",
-  "edf393ff951b533a": "Welcome to T3 Code",
   "3cc77f9daa7eeafd": [
     "Setting up",
     " ",
@@ -6169,16 +6172,6 @@
   ],
   "216ab7514aea1d61": "Start without an agent",
   "501ce2d99da8bfd1": "Set up one agent to start.",
-  "71f3822326109c8e": [
-    "T3 Code collects anonymous usage data to improve the app. To opt out, see the",
-    " ",
-    {
-      "t": "a",
-      "i": 1,
-      "c": "privacy policy"
-    },
-    "."
-  ],
   "b33f35083757b42c": [
     "See the",
     " ",
@@ -6220,7 +6213,6 @@
     },
     " history"
   ],
-  "0070a15f6b693068": "Use T3 Code on your phone",
   "37c66042ce1906da": "Scan with your phone to get the app.",
   "1b4364ef89b07f35": "Could not check T3 Connect.",
   "7b10d40dd15938e5": "Your phone can reach this computer. Sign in to the app with the same account.",
@@ -10174,7 +10166,6 @@
   "6ebd73c7bfb58bb7": "App",
   "6939d310de8dfe5b": "Organization",
   "c424bee294b9f778": "This environment is managed by {organization}. Some settings and features follow its policy.",
-  "82d9538af590f58c": "See your agents, import projects, and set up your phone.",
   "6a48fd0a37e725a1": "Legal",
   "d6d3ea46ac979e1c": "How we handle your data, including the anonymous usage data T3 Code collects.",
   "e741b1ab9396053a": "How we handle your data. {telemetryOff}",
@@ -10205,7 +10196,6 @@
   "126a28a1ad4b2d57": "Connect an environment to choose its text generation model.",
   "5fe5a45199fa9c07": "No text generation providers available.",
   "99ceba64591c9257": "View diagnostics",
-  "eb576a5feda7b535": "Open",
   "66647e8c8123a51f": "View policy",
   "6d59e1e516e53d17": "View licenses",
   "941d08db15f62d17": "Archived",
@@ -11966,7 +11956,6 @@
   "9c73aa0c2e2b4e7d": "Choose shortcut",
   "300a948f90c4d75c": "Go back",
   "2a50e229df85d553": "Go forward",
-  "8aa6404c8018ea67": "T3 Code home",
   "8e9626aa27cb188a": "Issues",
   "9d2fc1003e82feb1": "Usage",
   "20283eb1dd6119f9": "{count, plural, one {{count} attachment} other {{count} attachments}}",
@@ -12466,5 +12455,52 @@
   "27d76249d09eb69f": "Review guide ready",
   "faa3bb26abb39c93": "Review guide failed",
   "b7df38b7d8792d78": "Open guide",
-  "9e91e9a77b664e4e": "Could not start a review guide"
+  "9e91e9a77b664e4e": "Could not start a review guide",
+  "bbd0b4be79f4fd38": "Wallpaper panel is available from an active thread.",
+  "9aecb557a8c08a3b": "Available from an active thread.",
+  "7cf99304c59c09bc": "壁纸",
+  "ed7aea99fe71b461": "切换动态壁纸、液态玻璃与外观主题。",
+  "8048cc9eecd3702f": "Prismux could not confirm this workspace.",
+  "40c142d6d919886e": "Prismux app for iPhone and Android",
+  "43686eb6ef8468ad": "Welcome to Prismux",
+  "25db20a0210577c5": [
+    "Prismux collects anonymous usage data to improve the app. To opt out, see the",
+    " ",
+    {
+      "t": "a",
+      "i": 1,
+      "c": "privacy policy"
+    },
+    "."
+  ],
+  "646a12cf30df6e72": "Use Prismux on your phone",
+  "b42f7acc484c0a7b": "Onboarding",
+  "d49b30e9824ecfa8": "Getting started",
+  "c75334b7ab5be7f1": "Reopen the Prismux welcome guide to set up agents or import existing projects.",
+  "267bdb24bf6000b7": "Reopen onboarding",
+  "26f0d48daf67e163": "Wallpaper",
+  "c1b7649ac731ed07": "Plugins",
+  "3a188f0723ccf030": "Memory & Sync",
+  "e1ef4bcf8496d241": "Prismux Updates",
+  "3eca94f85088bdf9": "Prismux",
+  "692e6ca9b352296c": "Wallpaper Engine",
+  "0e76d2ce2345ff32": "wallpaper background steam workshop 431960 webwallgl rotation video live stage",
+  "fae57e65d2329a84": "Plugin Center",
+  "889f8982f97df498": "plugins extensions qq pet ssh fishdock cordis npm marketplace official zero preinstalled",
+  "e211bd3501999f9b": "memory sync chief thread slot secretary sqlite obsidian webdav s3 github magpie e2ee encrypted",
+  "d9d8bbcf81d23e45": "updates upgrade dual source gitee github npmmirror mirror release probe speed test",
+  "37617d86f3f074c4": "Prismux home",
+  "a1761e822ab06189": "Use local agy CLI",
+  "65fbe110749f0118": "Connecting to local agy CLI…",
+  "24be7fa0f572515e": "Checking local agy CLI and loading models…",
+  "86b8f49050712134": "Reusing local agy CLI sign-in (~/.gemini/antigravity-cli).",
+  "dcd00462541631b4": "Reuse local agy CLI sign-in (~/.gemini/antigravity-cli) on {environment} to load models.",
+  "31afdb568119183e": "Sync models",
+  "d74ddd900827c725": "Retry sync",
+  "cfe713905a4a753e": "Connect local CLI",
+  "54f2ed7e7b4ba16f": "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
+  "d7929997ab65ec68": "Local agy CLI",
+  "3144d651e4a616c3": "Using local agy CLI.",
+  "7113020ca6ec6a00": "Uses local agy CLI on PATH or the custom binary path below.",
+  "9f4ead624b414e42": "Already signed in with agy CLI (~/.gemini/antigravity-cli)? Reuse it directly with the native Google Antigravity icon and limits."
 }

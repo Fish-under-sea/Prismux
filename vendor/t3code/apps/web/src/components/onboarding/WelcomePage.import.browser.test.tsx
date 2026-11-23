@@ -814,3 +814,17 @@ it("says the phone is set up only once this computer is shared with the signed-i
   await vi.waitFor(() => expect(pageText()).toContain("Your phone can reach this computer."));
   expect(pageText()).not.toContain("Check T3 Connect");
 });
+
+it("renders Prismux branding with logo and hides cloud phone setup when offline", async () => {
+  using _now = setup();
+  state.cloud = false;
+  await using _screen = await mountWelcome();
+
+  expect(pageText()).toContain("Welcome to Prismux");
+  expect(pageText()).not.toContain("Welcome to T3 Code");
+  expect(pageText()).not.toContain("T3 Code collects anonymous usage data");
+  expect(pageText()).not.toContain("Sign in to T3 Connect");
+  const logo = document.querySelector<HTMLImageElement>('img[src="/prismux-logo.png"]');
+  expect(logo).not.toBeNull();
+  expect(logo?.alt).toBe("Prismux");
+});

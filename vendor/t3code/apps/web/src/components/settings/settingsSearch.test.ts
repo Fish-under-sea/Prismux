@@ -253,6 +253,30 @@ describe("searchSettings", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  it("ranks localized exact title matches first for Prismux sections", () => {
+    const zhLabels: Record<string, string> = {
+      Wallpaper: "壁纸引擎",
+      "Wallpaper Engine": "壁纸引擎",
+      Plugins: "插件中心",
+      "Plugin Center": "插件中心",
+      "Memory & Sync": "记忆与同步",
+      "Prismux Updates": "软件更新",
+    };
+    const translate = (message: string) => zhLabels[message] ?? message;
+    expect(searchSettings("壁纸引擎", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
+      "prismux-wallpaper",
+    );
+    expect(searchSettings("插件中心", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
+      "prismux-plugins",
+    );
+    expect(searchSettings("记忆与同步", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
+      "prismux-memory-sync",
+    );
+    expect(searchSettings("软件更新", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
+      "prismux-updates",
+    );
+  });
 });
 
 describe("settings search targets", () => {
