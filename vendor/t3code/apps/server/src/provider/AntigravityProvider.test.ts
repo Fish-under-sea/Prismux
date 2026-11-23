@@ -139,6 +139,8 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly enabled?: boolean;
     readonly safe?: boolean;
     readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
+    readonly detectLocalAuth?: Effect.Effect<boolean>;
+    readonly hydrateCatalog?: Effect.Effect<void>;
     readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   } = {},
 ) {
@@ -156,6 +158,8 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
       ...(options.auth ? { auth: options.auth } : {}),
       ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
+      ...(options.detectLocalAuth ? { detectLocalAuth: options.detectLocalAuth } : {}),
+      ...(options.hydrateCatalog ? { hydrateCatalog: options.hydrateCatalog } : {}),
       ...(options.rememberedRuntimeModes
         ? { rememberedRuntimeModes: options.rememberedRuntimeModes }
         : {}),
@@ -884,6 +888,78 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
       yield* harness.provider.onSessionStarted(started);
       expect((yield* republished)?.usageLimits).toEqual(failed);
+    }),
+  );
+
+  it.effect("local-cli mode auto-detects ready state, disables logout, and hydrates catalog once", () =>
+    Effect.gen(function* () {
+      const hydrated = yield* Ref.make(0);
+      const hydratedDone = yield* Deferred.make<void>();
+      const readyHarness = yield* makeHarness({
+        auth: { type: "local-cli", label: "Local agy CLI" },
+        detectLocalAuth: Effect.succeed(true),
+        hydrateCatalog: Ref.update(hydrated, (count) => count + 1).pipe(
+          Effect.andThen(Deferred.succeed(hydratedDone, undefined)),
+          Effect.asVoid,
+        ),
+      });
+      yield* readyHarness.initialize;
+      yield* Deferred.await(hydratedDone);
+      expect(yield* readyHarness.provider.snapshot.getSnapshot).toMatchObject({
+        installed: true,
+        status: "ready",
+        auth: {
+          status: "authenticated",
+          type: "local-cli",
+          label: "Local agy CLI",
+          canLogout: false,
+        },
+      });
+      expect(yield* Ref.get(hydrated)).toBe(1);
+
+      const unsignedHydrated = yield* Ref.make(0);
+      const unsignedHarness = yield* makeHarness({
+        auth: { type: "local-cli", label: "Local agy CLI" },
+        detectLocalAuth: Effect.succeed(false),
+        hydrateCatalog: Ref.update(unsignedHydrated, (count) => count + 1),
+      });
+      yield* unsignedHarness.initialize;
+      expect(yield* unsignedHarness.provider.snapshot.getSnapshot).toMatchObject({
+        installed: true,
+        status: "warning",
+        auth: {
+          status: "unauthenticated",
+          type: "local-cli",
+          label: "Local agy CLI",
+          canLogout: false,
+        },
+      });
+      expect(yield* Ref.get(unsignedHydrated)).toBe(0);
+    }),
+  );
+
+  it.effect("keeps existing models when a partial config update omits the model option", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* harness.initialize;
+      yield* harness.provider.onSessionStarted(started);
+      const before = (yield* harness.provider.snapshot.getSnapshot).models;
+      expect(before.length).toBeGreaterThan(0);
+
+      yield* harness.provider.onConfigOptionsUpdated([
+        {
+          id: "thought_level",
+          name: "Thinking",
+          category: "thought_level",
+          type: "select",
+          currentValue: "high",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "high", name: "High" },
+          ],
+        },
+      ]);
+      expect((yield* harness.provider.snapshot.getSnapshot).models).toEqual(before);
     }),
   );
 });

@@ -162,6 +162,12 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
     ),
   ],
   [
+    "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
+    msg(
+      "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
+    ),
+  ],
+  [
     "Google accounts use your subscription; API keys and Agent Platform bill usage.",
     msg("Google accounts use your subscription; API keys and Agent Platform bill usage."),
   ],
@@ -249,6 +255,7 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   ["Before the cache expires (beta)", msg("Before the cache expires (beta)")],
   ["Never", msg("Never", { $context: "option, never compact idle threads" })],
   ["Use default", msg("Use default")],
+  ["Local agy CLI", msg("Local agy CLI")],
   ["Google account", msg("Google account")],
   ["Gemini API key", msg("Gemini API key")],
   ["Local command", msg("Local command")],

@@ -27,6 +27,7 @@ import {
   type AntigravityAuthConfig,
   type AntigravityProfile,
   buildAntigravityAcpSpawnInput,
+  detectLocalAntigravityCliAuth,
   isAntigravitySignInRequiredError,
   makeAntigravityStderrHandler,
   makeAntigravityStdoutTransform,
@@ -34,6 +35,7 @@ import {
   parseAntigravityAuthorizationUrl,
   prepareAntigravityProfile,
   resolveAntigravityInstanceDirectories,
+  resolveAntigravityLocalCliTokenPath,
 } from "./antigravityAuthSupport.ts";
 
 const authorizationUrl =
@@ -902,6 +904,89 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
         expect(Result.isFailure(result)).toBe(true);
         expect(yield* fs.exists(profileDirectory)).toBe(false);
       }
+    }),
+  );
+
+  it.effect("local-cli mode spawns plain `agy acp` without overriding GEMINI_HOME or keyring env", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const userHome = path.join(root, "home");
+      const profileDirectory = path.join(root, "profile");
+      const auth: AntigravityAuthConfig = {
+        authMethod: "local-cli",
+        apiKey: "",
+        gcpProject: "",
+        gcpLocation: "",
+      };
+      const profile = yield* prepareAntigravityProfile({
+        profileDirectory,
+        userHome,
+        platform: "win32",
+        auth,
+        baseEnv: {
+          USERPROFILE: userHome,
+          ELECTRON_RUN_AS_NODE: "1",
+          AGY_ACP_FORCE_FILE_STORAGE: "1",
+          CHROME_CRASHPAD_PIPE_NAME: "\\\\.\\pipe\\stale",
+          PATH: "C:\\Windows\\System32",
+        },
+      });
+      expect(profile.localCli).toBe(true);
+      expect(profile.tokenPath).toBe(resolveAntigravityLocalCliTokenPath(path, userHome));
+      expect(yield* fs.exists(path.join(profileDirectory, "antigravity-acp", "settings.json"))).toBe(
+        false,
+      );
+
+      const spawn = buildAntigravityAcpSpawnInput({
+        installation: { executablePath: "C:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe" },
+        profile,
+        cwd: root,
+        auth,
+        baseEnv: {
+          USERPROFILE: userHome,
+          ELECTRON_RUN_AS_NODE: "1",
+          AGY_ACP_FORCE_FILE_STORAGE: "1",
+          PATH: "C:\\Windows\\System32",
+        },
+      });
+      expect(spawn.args).toEqual(["acp"]);
+      expect(spawn.env?.GEMINI_HOME).toBeUndefined();
+      expect(spawn.env?.AGY_ACP_FORCE_FILE_STORAGE).toBeUndefined();
+      expect(spawn.env?.SSH_CONNECTION).toBeUndefined();
+      expect(spawn.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      expect(spawn.env?.BROWSER).toBeUndefined();
+      expect(spawn.env?.USERPROFILE).toBe(userHome);
+    }),
+  );
+
+  it.effect("detectLocalAntigravityCliAuth detects local token file and keyring fallback", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const userHome = yield* fs.makeTempDirectoryScoped();
+
+      const missing = yield* detectLocalAntigravityCliAuth({ userHome });
+      expect(missing.authenticated).toBe(false);
+      expect(missing.source).toBeNull();
+
+      const fromKeyring = yield* detectLocalAntigravityCliAuth({
+        userHome,
+        readKeyringSecret: Effect.succeed(
+          JSON.stringify({ token: { access_token: "test-token", refresh_token: "test-refresh" } }),
+        ),
+      });
+      expect(fromKeyring).toMatchObject({ authenticated: true, source: "keyring" });
+
+      const tokenPath = resolveAntigravityLocalCliTokenPath(path, userHome);
+      yield* fs.makeDirectory(path.dirname(tokenPath), { recursive: true });
+      yield* fs.writeFileString(
+        tokenPath,
+        JSON.stringify({ token: { access_token: "test-token", expiry: "2099-01-01T00:00:00Z" } }),
+      );
+      const fromFile = yield* detectLocalAntigravityCliAuth({ userHome });
+      expect(fromFile).toMatchObject({ authenticated: true, source: "file", tokenPath });
     }),
   );
 });

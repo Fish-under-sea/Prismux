@@ -865,6 +865,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
 export const ANTIGRAVITY_AUTH_METHODS = [
+  { value: "local-cli", label: "Local agy CLI" },
   { value: "oauth-personal", label: "Google account" },
   { value: "oauth-business", label: "Gemini Enterprise" },
   { value: "gemini-api-key", label: "Gemini API key" },
@@ -886,7 +887,7 @@ export const AntigravitySettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Sign-in method",
         description:
-          "Google accounts use your subscription; API keys and Agent Platform bill usage.",
+          "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
         providerSettingsForm: {
           control: "select",
           options: ANTIGRAVITY_AUTH_METHODS,

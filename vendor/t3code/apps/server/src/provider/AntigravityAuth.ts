@@ -112,6 +112,8 @@ export interface AntigravityAuthOptions<
   readonly onSignedOut: Effect.Effect<void>;
   readonly forwardCallback?: (callback: URL) => Effect.Effect<void, ProviderSetupError>;
   readonly usesBrowser?: boolean;
+  /** Reuses local `~/.gemini/antigravity-cli` sign-in without destructive logout. */
+  readonly localCli?: boolean;
   /** Undefined when the runtime signs in through ACP `authenticate` and T3's browser helper. */
   readonly codeLogin?: (input: {
     readonly onAuthorizationUrl: (url: string) => Effect.Effect<void, AcpErrors.AcpError>;
@@ -137,7 +139,11 @@ function visibleSnapshot(snapshot: AuthSnapshot, ownerSessionId: string): Provid
   };
 }
 
-function safeAuthFailure(cause: Cause.Cause<unknown>, usesBrowser: boolean): string {
+function safeAuthFailure(
+  cause: Cause.Cause<unknown>,
+  usesBrowser: boolean,
+  localCli: boolean,
+): string {
   const error = Cause.findErrorOption(cause);
   if (Option.isSome(error)) {
     if (isSetupError(error.value)) {
@@ -154,6 +160,9 @@ function safeAuthFailure(cause: Cause.Cause<unknown>, usesBrowser: boolean): str
       return `Antigravity exited unexpectedly${reason}. Start sign-in again.`;
     }
     if (isAcpRequestError(error.value)) {
+      if (localCli && error.value.code === -32000) {
+        return "Local agy CLI is not signed in. Run 'agy login' in a terminal, then reconnect.";
+      }
       if (error.value.errorMessage.includes("SUBSCRIPTION_REQUIRED")) {
         return "Google requires an eligible Antigravity subscription for this account.";
       }
@@ -168,6 +177,9 @@ function safeAuthFailure(cause: Cause.Cause<unknown>, usesBrowser: boolean): str
       }
     }
   }
+  if (localCli) {
+    return "Could not connect to local agy CLI. Check that 'agy login' succeeded and try again.";
+  }
   return usesBrowser
     ? "Google sign-in failed. Start sign-in again."
     : "Antigravity could not authenticate with the configured credentials.";
@@ -181,6 +193,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
   const random = yield* SecureRandom.SecureRandom;
   const instanceScope = yield* Scope.Scope;
   const usesBrowser = options.usesBrowser ?? true;
+  const localCli = options.localCli ?? false;
   const lock = yield* Semaphore.make(1);
   const closed = yield* Deferred.make<void>();
   const emptyState: ProviderAuthState = {
@@ -278,10 +291,12 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
           authorizationUrl: null,
           expiresAt: null,
           message: Exit.isSuccess(result)
-            ? usesBrowser
-              ? "Signed in with Google."
-              : "Connected to Antigravity."
-            : safeAuthFailure(result.cause, usesBrowser),
+            ? localCli
+              ? "Connected via local agy CLI."
+              : usesBrowser
+                ? "Signed in with Google."
+                : "Connected to Antigravity."
+            : safeAuthFailure(result.cause, usesBrowser, localCli),
         });
       }),
     );
@@ -462,7 +477,11 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
               phase: "starting",
               flowId,
               expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAtMillis)),
-              message: usesBrowser ? "Starting Google sign-in." : "Checking credentials.",
+              message: localCli
+                ? "Connecting to local agy CLI."
+                : usesBrowser
+                  ? "Starting Google sign-in."
+                  : "Checking credentials.",
             };
             const flow: AuthFlow = {
               id: flowId,
@@ -609,6 +628,11 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
           const result = yield* restore(
             Effect.gen(function* () {
               yield* stopSessions.pipe(Effect.ensuring(stopRemaining));
+              if (localCli) {
+                // Keep the user's global `~/.gemini/antigravity-cli` sign-in intact.
+                yield* options.onSignedOut;
+                return;
+              }
               const runtime = yield* options.makeRuntime({});
               const initialized = yield* runtime.initialize();
               if (!initialized.agentCapabilities?.auth?.logout) {
@@ -636,7 +660,9 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
                   ...emptyState,
                   phase: Exit.isSuccess(result) ? "idle" : "failed",
                   message: Exit.isSuccess(result)
-                    ? "Signed out of Google."
+                    ? localCli
+                      ? "Disconnected local agy CLI session."
+                      : "Signed out of Google."
                     : "Antigravity sign-out failed. Try again.",
                 },
               });

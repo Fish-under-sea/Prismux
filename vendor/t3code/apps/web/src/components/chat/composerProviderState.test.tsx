@@ -7,7 +7,9 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { getComposerProviderState, getComposerReasoningStep } from "./composerProviderState";
+import { describeComposerEffort } from "./ComposerModelEffort";
 import { readPromptUltrathink } from "./TraitsPicker";
+import { resolveModelSwitchOptions } from "./useComposerSelection";
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
@@ -397,5 +399,143 @@ describe("getComposerReasoningStep", () => {
         selections(["reasoningEffort", to]),
       );
     }
+  });
+});
+
+describe("resolveModelSwitchOptions and unobserved effort display", () => {
+  const neonModel: ServerProviderModel = {
+    slug: "gemini-4-neon",
+    name: "Gemini 4 Neon",
+    isCustom: false,
+    capabilities: {
+      optionDescriptors: [
+        {
+          id: "thought_level",
+          label: "Thinking",
+          type: "select",
+          role: "reasoning",
+          currentValue: "high",
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra High" },
+          ],
+        },
+      ],
+    },
+  };
+  const argonModel: ServerProviderModel = {
+    slug: "gemini-4-argon",
+    name: "Gemini 4 Argon",
+    isCustom: false,
+    capabilities: {
+      optionDescriptors: [
+        {
+          id: "thought_level",
+          label: "Thinking",
+          type: "select",
+          role: "reasoning",
+          currentValue: "medium",
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+        },
+      ],
+    },
+  };
+  const unobservedModel: ServerProviderModel = {
+    slug: "claude-opus-5.5",
+    name: "Claude Opus 5.5",
+    isCustom: false,
+    capabilities: {
+      optionDescriptors: [
+        {
+          id: "thought_level",
+          label: "Thinking",
+          type: "select",
+          role: "reasoning",
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("drops stale remembered levels and uses each target model's observed thinking default", () => {
+    expect(
+      resolveModelSwitchOptions({
+        targetModel: argonModel,
+        rememberedOptions: selections(["thought_level", "xhigh"]),
+        threadOptions: undefined,
+        previousOptions: selections(["thought_level", "xhigh"]),
+        sameInstance: true,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveModelSwitchOptions({
+        targetModel: argonModel,
+        rememberedOptions: selections(["thought_level", "low"]),
+        threadOptions: undefined,
+        previousOptions: selections(["thought_level", "xhigh"]),
+        sameInstance: true,
+      }),
+    ).toEqual(selections(["thought_level", "low"]));
+
+    expect(
+      resolveModelSwitchOptions({
+        targetModel: argonModel,
+        rememberedOptions: undefined,
+        threadOptions: undefined,
+        previousOptions: selections(["thought_level", "high"]),
+        sameInstance: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("carries a compatible reasoning level onto a model whose thought_level default is unobserved", () => {
+    expect(
+      resolveModelSwitchOptions({
+        targetModel: unobservedModel,
+        rememberedOptions: undefined,
+        threadOptions: undefined,
+        previousOptions: selections(["thought_level", "high"]),
+        sameInstance: true,
+      }),
+    ).toEqual(selections(["thought_level", "high"]));
+
+    expect(
+      resolveModelSwitchOptions({
+        targetModel: unobservedModel,
+        rememberedOptions: undefined,
+        threadOptions: undefined,
+        previousOptions: selections(["thought_level", "xhigh"]),
+        sameInstance: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the effort indicator visible when switching to a model with an unobserved reasoning default", () => {
+    const baseTraits = {
+      provider: ProviderDriverKind.make("antigravity"),
+      instanceId: ProviderInstanceId.make("antigravity"),
+      models: [neonModel, unobservedModel],
+      model: unobservedModel.slug,
+      modelOptions: undefined,
+      onModelOptionsChange: () => {},
+    };
+    const bars = describeComposerEffort(baseTraits, "bars", "sm");
+    expect(bars.suffix).not.toBeNull();
+    expect(bars.detail).toBe("Thinking");
+
+    const label = describeComposerEffort(baseTraits, "label", "sm");
+    expect(label.suffix).not.toBeNull();
+    expect(label.detail).toBe("Thinking");
   });
 });

@@ -783,6 +783,26 @@ export function AddProviderInstanceDialog({
                     />
                   )}
                 </>
+              ) : wizardStep === 0 && driver === "antigravity" ? (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => navigateToStep(1)}>
+                    <T>Configure manually</T>
+                  </Button>
+                  {driverLocks?.configKeys.has("authMethod") ? null : (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setConfigByDriver((existing) => ({
+                          ...existing,
+                          [driver]: { ...existing[driver], authMethod: "local-cli" },
+                        }));
+                        navigateToStep(1);
+                      }}
+                    >
+                      <T>Use local agy CLI</T>
+                    </Button>
+                  )}
+                </>
               ) : wizardStep < (isAcpRegistry ? 1 : 2) ? (
                 <Button
                   size="sm"

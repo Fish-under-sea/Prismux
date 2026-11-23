@@ -28,7 +28,11 @@ import {
   unknownRecord,
   type AcpRuntimePolicy,
 } from "@t3tools/provider-acp/server/clientPolicy";
-import type { AcpSessionModeState } from "@t3tools/provider-acp/server/runtimeModel";
+import {
+  findModelConfigOption,
+  type AcpSessionModeState,
+} from "@t3tools/provider-acp/server/runtimeModel";
+import { isAcpThoughtLevelOption } from "@t3tools/provider-acp/server/sessionConfig";
 import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
 import packageJson from "../../../package.json" with { type: "json" };
 import { normalizeAntigravitySessionUpdate } from "./AntigravityProtocol.ts";
@@ -118,11 +122,19 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
   EffectAcpErrors.AcpError,
   SecureRandom.SecureRandom | Scope.Scope
 > {
+  const usesLocalCli = input.authMethod === "local-cli";
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...input,
-      authMethodId: input.authMethod ?? "oauth-personal",
-      authenticateEagerly: true,
+      ...(usesLocalCli
+        ? {
+            authenticateEagerly: false,
+            authenticateOnAuthRequired: false,
+          }
+        : {
+            authMethodId: input.authMethod ?? "oauth-personal",
+            authenticateEagerly: true,
+          }),
       resumeMethod: "resume",
       cancelBehavior: "wait-for-prompt",
       clientInfo: antigravityClientInfo(input.runtimeVersion),
@@ -235,11 +247,21 @@ export function antigravityRuntimeModeForSessionMode(modeId: string): RuntimeMod
   }
 }
 
+export function findAntigravityModelConfigOption(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+) {
+  if (!configOptions) return undefined;
+  const byCategory = findModelConfigOption(configOptions);
+  if (byCategory?.type === "select") return byCategory;
+  const byId = configOptions.find((option) => option.id === "model");
+  return byId?.type === "select" ? byId : undefined;
+}
+
 export function antigravityModelOptions(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
 ) {
-  const model = configOptions.find((option) => option.id === "model");
-  if (model?.type !== "select") return [];
+  const model = findAntigravityModelConfigOption(configOptions);
+  if (!model) return [];
   return model.options.flatMap((entry) => ("value" in entry ? [entry] : entry.options));
 }
 
@@ -247,7 +269,7 @@ export function antigravityModelOptions(
 export function antigravityThinkingConfig(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
 ) {
-  const option = configOptions?.find((candidate) => candidate.category === "thought_level");
+  const option = configOptions?.find(isAcpThoughtLevelOption);
   return option?.type === "select" ? option : undefined;
 }
 
@@ -270,8 +292,8 @@ function resolveAntigravityModel(input: {
   readonly model: string | null | undefined;
   readonly defaultModel?: string | undefined;
 }): string | undefined {
-  const modelConfig = input.configOptions.find((option) => option.id === "model");
-  const current = modelConfig?.type === "select" ? modelConfig.currentValue : undefined;
+  const modelConfig = findAntigravityModelConfigOption(input.configOptions);
+  const current = modelConfig?.currentValue;
   if (input.model && input.model !== ANTIGRAVITY_DEFAULT_MODEL) return input.model;
   const options = antigravityModelOptions(input.configOptions);
   return input.defaultModel &&
@@ -293,8 +315,8 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
     readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
   }): Effect.fn.Return<string | undefined, E> {
     const configOptions = yield* input.runtime.getConfigOptions;
-    const modelConfig = configOptions.find((option) => option.id === "model");
-    const current = modelConfig?.type === "select" ? modelConfig.currentValue : undefined;
+    const modelConfig = findAntigravityModelConfigOption(configOptions);
+    const current = modelConfig?.currentValue;
     const resolved = resolveAntigravityModel({
       configOptions,
       model: input.model,
@@ -308,7 +330,7 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
       : legacyAntigravityFamily(configOptions, resolved);
     if (legacyFamily !== undefined) {
       yield* input.runtime
-        .setConfigOption("model", resolved, { allowUnlistedValue: true })
+        .setConfigOption(modelConfig?.id ?? "model", resolved, { allowUnlistedValue: true })
         .pipe(Effect.mapError(input.mapError));
       return legacyFamily;
     }

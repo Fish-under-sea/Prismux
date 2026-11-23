@@ -8,11 +8,15 @@ import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import {
   type EnvironmentId,
   type ModelSelection,
+  type ProviderOptionDescriptor,
+  type ProviderOptionSelection,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderModel,
   type ThreadId,
   RuntimeMode,
 } from "@t3tools/contracts";
+import { isReasoningSelect } from "@t3tools/client-runtime/model-traits";
 import type { deriveThreadStructureRuntime } from "@t3tools/client-runtime/state/thread-execution";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type SetStateAction } from "react";
@@ -60,6 +64,61 @@ interface ComposerSelectionInput {
     SetStateAction<Record<string, boolean>>
   >;
   readonly scheduleComposerFocus: () => void;
+}
+
+function filterValidModelOptions(
+  options: ReadonlyArray<ProviderOptionSelection> | undefined,
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+): ReadonlyArray<ProviderOptionSelection> | undefined {
+  if (!options || options.length === 0) return undefined;
+  const byId = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor] as const));
+  const valid = options.filter((selection) => {
+    const descriptor = byId.get(selection.id);
+    if (!descriptor) return false;
+    if (descriptor.type === "boolean") return typeof selection.value === "boolean";
+    return (
+      typeof selection.value === "string" &&
+      descriptor.options.some((choice) => choice.id === selection.value)
+    );
+  });
+  return valid.length > 0 ? valid : undefined;
+}
+
+/**
+ * Resolves options when switching to `targetModel` so stale levels from another model never linger,
+ * while unobserved reasoning descriptors can inherit a compatible explicit reasoning selection.
+ */
+export function resolveModelSwitchOptions(input: {
+  readonly targetModel: ServerProviderModel | undefined;
+  readonly rememberedOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
+  readonly threadOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
+  readonly previousOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
+  readonly sameInstance: boolean;
+}): ReadonlyArray<ProviderOptionSelection> | undefined {
+  const descriptors = input.targetModel?.capabilities?.optionDescriptors;
+  const sanitize = (options: ReadonlyArray<ProviderOptionSelection> | undefined) =>
+    descriptors !== undefined ? filterValidModelOptions(options, descriptors) : options;
+
+  const remembered = sanitize(input.rememberedOptions);
+  if (remembered !== undefined && remembered.length > 0) return remembered;
+
+  const fromThread = sanitize(input.threadOptions);
+  if (fromThread !== undefined && fromThread.length > 0) return fromThread;
+
+  if (!input.sameInstance || !descriptors || !input.previousOptions?.length) {
+    return undefined;
+  }
+  const carried = input.previousOptions.filter((selection) => {
+    if (typeof selection.value !== "string") return false;
+    const descriptor = descriptors.find((candidate) => candidate.id === selection.id);
+    return (
+      descriptor !== undefined &&
+      isReasoningSelect(descriptor) &&
+      descriptor.currentValue === undefined &&
+      descriptor.options.some((choice) => choice.id === selection.value)
+    );
+  });
+  return carried.length > 0 ? carried : undefined;
 }
 
 /**
@@ -200,19 +259,29 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     const rememberedOptions =
       useComposerDraftStore.getState().stickyOptionsByModelByProvider[instanceId]?.[resolvedModel];
     const threadSelection = activeThread.modelSelection;
-    // This pick replaces the stored options, so the thread's own model carries them over.
-    const pickOptions =
-      rememberedOptions !== undefined && rememberedOptions.length > 0
-        ? rememberedOptions
-        : threadSelection.instanceId === instanceId &&
-            entry !== undefined &&
-            isSameModel(
-              { providers: providerStatuses, selectedProvider: entry.driver, settings },
-              threadSelection,
-              { instanceId, model: resolvedModel },
-            )
-          ? threadSelection.options
-          : undefined;
+    const targetModel = entry?.models.find(
+      (candidate) =>
+        candidate.slug === resolvedModel || candidate.aliases?.includes(resolvedModel),
+    );
+    const threadOptionsForModel =
+      threadSelection.instanceId === instanceId &&
+      entry !== undefined &&
+      isSameModel(
+        { providers: providerStatuses, selectedProvider: entry.driver, settings },
+        threadSelection,
+        { instanceId, model: resolvedModel },
+      )
+        ? threadSelection.options
+        : undefined;
+    // This pick replaces the stored options, so the thread's own model carries them over,
+    // while stale levels from an older catalog are dropped cleanly.
+    const pickOptions = resolveModelSwitchOptions({
+      targetModel,
+      rememberedOptions,
+      threadOptions: threadOptionsForModel,
+      previousOptions: shownSelection.options,
+      sameInstance: shownSelection.instanceId === instanceId,
+    });
     const nextModelSelection: ModelSelection =
       pickOptions !== undefined && pickOptions.length > 0
         ? { instanceId, model: resolvedModel, options: [...pickOptions] }

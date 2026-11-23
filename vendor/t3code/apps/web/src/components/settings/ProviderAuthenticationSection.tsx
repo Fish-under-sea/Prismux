@@ -78,30 +78,45 @@ export function ProviderAuthenticationSection({
     !signedIn &&
     (provider.setup?.canAuthenticate === false ||
       (provider.driver === "acpRegistry" && auth?.methods?.length === 0));
+  const usesLocalCli =
+    provider.driver === "antigravity" && provider.auth.type === "local-cli";
   const usesCredentials =
     provider.driver === "antigravity" &&
     (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
   const accountDescription = active
     ? auth?.phase === "starting"
-      ? (auth.message ?? (usesCredentials ? gt("Connecting…") : gt("Starting sign-in…")))
+      ? (auth.message ??
+        (usesLocalCli
+          ? gt("Connecting to local agy CLI…")
+          : usesCredentials
+            ? gt("Connecting…")
+            : gt("Starting sign-in…")))
       : auth?.phase === "verifying"
-        ? usesCredentials
-          ? gt("Checking credentials and loading models…")
-          : gt("Checking your account…")
+        ? usesLocalCli
+          ? gt("Checking local agy CLI and loading models…")
+          : usesCredentials
+            ? gt("Checking credentials and loading models…")
+            : gt("Checking your account…")
         : interaction?.type === "terminal"
           ? gt("Complete sign-in in the terminal below.")
           : interaction?.type === "credentials"
             ? gt("Enter your credentials below.")
             : gt("Finish signing in in your browser.")
     : signedIn
-      ? gt("Signed in.")
+      ? usesLocalCli
+        ? gt("Reusing local agy CLI sign-in (~/.gemini/antigravity-cli).")
+        : gt("Signed in.")
       : isDiscovering
         ? gt("Discovering sign-in methods…")
         : needsExternalSetup
           ? gt("No in-app sign-in advertised. Follow the provider's docs to finish setup.")
-          : usesCredentials
-            ? gt("Connect on {environment} to load models.", { environment: environmentLabel })
-            : gt("Sign in on {environment}.", { environment: environmentLabel });
+          : usesLocalCli
+            ? gt("Reuse local agy CLI sign-in (~/.gemini/antigravity-cli) on {environment} to load models.", {
+                environment: environmentLabel,
+              })
+            : usesCredentials
+              ? gt("Connect on {environment} to load models.", { environment: environmentLabel })
+              : gt("Sign in on {environment}.", { environment: environmentLabel });
   const statusMessage = auth?.phase === "failed" ? auth.message : null;
   const disabled = readOnly || pending || query.error !== null || isDiscovering;
   const draftId = `${auth?.flowId ?? ""}:${interaction?.id ?? ""}`;
@@ -321,14 +336,20 @@ export function ProviderAuthenticationSection({
                 }
               >
                 {signedIn
-                  ? gt("Change account")
+                  ? usesLocalCli
+                    ? gt("Sync models")
+                    : gt("Change account")
                   : auth?.phase === "failed" || auth?.phase === "cancelled"
-                    ? usesCredentials
-                      ? gt("Retry connection")
-                      : gt("Retry sign-in")
-                    : usesCredentials
-                      ? gt("Connect")
-                      : gt("Sign in")}
+                    ? usesLocalCli
+                      ? gt("Retry sync")
+                      : usesCredentials
+                        ? gt("Retry connection")
+                        : gt("Retry sign-in")
+                    : usesLocalCli
+                      ? gt("Connect local CLI")
+                      : usesCredentials
+                        ? gt("Connect")
+                        : gt("Sign in")}
               </Button>
             ) : null}
             {!active && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate) ? (

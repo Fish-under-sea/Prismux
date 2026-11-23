@@ -36,6 +36,7 @@ interface ProviderSetupSectionProps {
   readonly enabled: boolean;
   readonly readOnly: boolean;
   readonly onEnable: () => void;
+  readonly onUseLocalCli?: (() => void) | undefined;
 }
 
 export function readAntigravityAuthMethod(config: unknown): AntigravityAuthMethod {
@@ -92,6 +93,7 @@ export function ProviderSetupSection(props: ProviderSetupSectionProps) {
           binaryPath={props.binaryPath}
           authMethod={props.authMethod ?? "oauth-personal"}
           enabled={props.enabled}
+          onUseLocalCli={props.onUseLocalCli}
         />
       )}
     </section>
@@ -105,9 +107,11 @@ function ProviderSetupActions({
   provider,
   enabled,
   binaryPath,
+  authMethod,
+  onUseLocalCli,
 }: Pick<
   ProviderSetupSectionProps,
-  "environmentId" | "environmentLabel" | "instanceId" | "enabled" | "binaryPath"
+  "environmentId" | "environmentLabel" | "instanceId" | "enabled" | "binaryPath" | "onUseLocalCli"
 > & {
   readonly provider: ServerProvider;
   readonly authMethod: AntigravityAuthMethod;
@@ -137,6 +141,7 @@ function ProviderSetupActions({
     installation?.phase === "downloading" ||
     installation?.phase === "extracting" ||
     installation?.phase === "verifying";
+  const usesLocalCli = authMethod === "local-cli";
   const usesCustomBinary = Boolean(binaryPath?.trim());
   const installed =
     provider.installed || (!usesCustomBinary && installation?.installedVersion != null);
@@ -159,7 +164,9 @@ function ProviderSetupActions({
           : installation?.phase === "verifying"
             ? gt("Checking the downloaded runtime.")
             : installed
-              ? gt("Installed.")
+              ? usesLocalCli && !installation?.installedVersion
+                ? gt("Using local agy CLI.")
+                : gt("Installed.")
               : usesCustomBinary
                 ? enabled
                   ? gt("The configured Antigravity runtime is unavailable.")
@@ -222,7 +229,11 @@ function ProviderSetupActions({
       <SettingsRow
         title={gt("Runtime")}
         className="@max-lg/setup:[&>div:first-child]:flex @max-lg/setup:[&>div:first-child]:items-stretch @max-lg/setup:[&>div:first-child]:gap-3"
-        description={gt("Install and manage Antigravity.")}
+        description={
+          usesLocalCli
+            ? gt("Uses local agy CLI on PATH or the custom binary path below.")
+            : gt("Install and manage Antigravity.")
+        }
         status={
           <div className="space-y-2">
             {usesCustomBinary ? (
@@ -339,6 +350,28 @@ function ProviderSetupActions({
         provider={provider}
         readOnly={false}
       />
+
+      {!usesLocalCli &&
+      authMethod === "oauth-personal" &&
+      provider.auth.status !== "authenticated" &&
+      onUseLocalCli ? (
+        <SettingsRow
+          title={gt("Local agy CLI")}
+          description={gt(
+            "Already signed in with agy CLI (~/.gemini/antigravity-cli)? Reuse it directly with the native Google Antigravity icon and limits.",
+          )}
+          control={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={actionsDisabled || authActive}
+              onClick={onUseLocalCli}
+            >
+              <T>Use local agy CLI</T>
+            </Button>
+          }
+        />
+      ) : null}
 
       {error || queryError ? (
         <div className="grid gap-2 px-3 py-3 sm:px-4">

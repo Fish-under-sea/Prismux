@@ -43,6 +43,7 @@ import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRunti
 
 const MAX_AUTH_METHODS = 32;
 const MAX_MODELS = 256;
+const MAX_PROBED_THINKING_MODELS = 24;
 const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 1_024;
@@ -52,6 +53,8 @@ const COMMAND_ADVERTISEMENT_GRACE = "500 millis";
 // Agents that fetch their catalog after session setup (Qoder CLI, OpenCode)
 // settle it in seconds, not milliseconds; commands arrive much sooner.
 const MODEL_ADVERTISEMENT_GRACE = "5 seconds";
+const PER_MODEL_THINKING_PROBE_TIMEOUT = "4 seconds";
+const TOTAL_THINKING_PROBE_TIMEOUT = "15 seconds";
 const PROBE_SESSION_DELETE_TIMEOUT = "5 seconds";
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -60,6 +63,16 @@ const boundedText = (value: string, maximumLength: number): string =>
 
 const boundedOpaqueValue = (value: string, maximumLength: number): string | undefined =>
   value.length > 0 && value === value.trim() && value.length <= maximumLength ? value : undefined;
+
+function extractReasoningDescriptor(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+): NonNullable<AcpRegistryProbeModel["reasoningEffort"]> | null {
+  return (
+    acpProviderOptionDescriptors({ configOptions, modeState: undefined }).find(
+      (descriptor) => descriptor.type === "select" && descriptor.role === "reasoning",
+    ) ?? null
+  );
+}
 
 /**
  * The session's reasoning option with the levels a model advertises in `_meta`, in the
@@ -594,11 +607,72 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       );
 
       // config_option_update replaces the full option set, so an empty notice is authoritative.
-      const liveConfiguration = normalizeAcpRegistryLiveConfiguration(
-        (yield* Ref.get(configOptionsRef)) ?? (yield* runtime.getConfigOptions),
+      const initialConfigOptions =
+        (yield* Ref.get(configOptionsRef)) ?? (yield* runtime.getConfigOptions);
+      let liveConfiguration = normalizeAcpRegistryLiveConfiguration(
+        initialConfigOptions,
         (yield* runtime.getModeState) ?? parseSessionModeState(started.sessionSetupResult),
         started.sessionSetupResult.models,
       );
+
+      // ACP reports thought_level only for the active model unless each model advertises it in
+      // `_meta`. For compact model-select catalogs (e.g., agy acp, Mistral Vibe), cycle once to
+      // observe every model's thinking levels while keeping the probe bounded.
+      const isLocalAgy =
+        input.settings.source === "local" &&
+        /^agy(\.exe|\.cmd)?$/i.test(input.settings.commandPath.split(/[\\/]/).pop() ?? "");
+      const shouldProbePerModelThinking =
+        liveConfiguration.modelsFromModelSelect === true &&
+        liveConfiguration.currentModelId !== null &&
+        liveConfiguration.models.length > 1 &&
+        liveConfiguration.models.length <= MAX_PROBED_THINKING_MODELS &&
+        liveConfiguration.models.every(
+          (model) =>
+            model.id === liveConfiguration.currentModelId || model.reasoningEffort === undefined,
+        ) &&
+        (initialConfigOptions.some(isAcpThoughtLevelOption) ||
+          started.initializeResult.agentInfo?.name === "antigravity-acp" ||
+          isLocalAgy);
+
+      if (shouldProbePerModelThinking && liveConfiguration.currentModelId !== null) {
+        const initialModelId = liveConfiguration.currentModelId;
+        const observedReasoning = new Map<string, AcpRegistryProbeModel["reasoningEffort"]>([
+          [initialModelId, extractReasoningDescriptor(initialConfigOptions)],
+        ]);
+        let switched = false;
+        yield* Effect.gen(function* () {
+          for (const model of liveConfiguration.models) {
+            if (model.id === initialModelId) continue;
+            yield* Ref.set(configOptionsRef, undefined);
+            const switchedModel = yield* runtime.setModel(model.id).pipe(
+              Effect.timeoutOption(PER_MODEL_THINKING_PROBE_TIMEOUT),
+              Effect.map(Option.isSome),
+              Effect.orElseSucceed(() => false),
+            );
+            if (!switchedModel) continue;
+            switched = true;
+            const latestOptions =
+              (yield* Ref.get(configOptionsRef)) ?? (yield* runtime.getConfigOptions);
+            const latestModelId = findModelConfigOption(latestOptions)?.currentValue;
+            if (latestModelId === undefined || latestModelId === model.id) {
+              observedReasoning.set(model.id, extractReasoningDescriptor(latestOptions));
+            }
+          }
+        }).pipe(Effect.timeoutOption(TOTAL_THINKING_PROBE_TIMEOUT));
+        if (switched) {
+          yield* runtime
+            .setModel(initialModelId)
+            .pipe(Effect.timeoutOption(PER_MODEL_THINKING_PROBE_TIMEOUT), Effect.ignore);
+        }
+        liveConfiguration = {
+          ...liveConfiguration,
+          models: liveConfiguration.models.map((model) =>
+            observedReasoning.has(model.id)
+              ? { ...model, reasoningEffort: observedReasoning.get(model.id) ?? null }
+              : model,
+          ),
+        };
+      }
 
       return {
         resolved,

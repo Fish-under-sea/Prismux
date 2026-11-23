@@ -25,7 +25,10 @@ const choiceId = (value: string): string | undefined =>
 /** Mistral Vibe 3.1 sends its reasoning level under `thinking`, a category ACP reserves but never defined. */
 export const isAcpThoughtLevelOption = (option: EffectAcpSchema.SessionConfigOption): boolean =>
   option.category === "thought_level" ||
-  (option.category === "thinking" && option.type === "select");
+  (option.type === "select" &&
+    (option.category === "thinking" ||
+      option.id === "thought_level" ||
+      option.id === "thinking_level"));
 
 export function flattenSelectChoices(
   options: EffectAcpSchema.SessionConfigSelectOptions,

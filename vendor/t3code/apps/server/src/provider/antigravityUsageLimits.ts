@@ -26,6 +26,7 @@ const PROD_ENDPOINT = "https://cloudcode-pa.googleapis.com";
 // The ACP runtime meters consumer tiers on the daily host and GCP-terms tiers on prod.
 // The sign-in method stands in for the tier.
 const ENDPOINTS = {
+  "local-cli": [DAILY_ENDPOINT, PROD_ENDPOINT],
   "oauth-personal": [DAILY_ENDPOINT, PROD_ENDPOINT],
   "oauth-business": [PROD_ENDPOINT, DAILY_ENDPOINT],
 };
@@ -228,7 +229,10 @@ export function readWindowsCliCredential(
 }
 
 // Loaded lazily: a native binding that fails to load must not take the provider down.
-const readCliKeyringSecret = (platform: NodeJS.Platform, architecture: NodeJS.Architecture) =>
+export const readAntigravityCliKeyringSecret = (
+  platform: NodeJS.Platform,
+  architecture: NodeJS.Architecture,
+) =>
   Effect.tryPromise({
     try: async () => {
       const secret =
@@ -319,6 +323,7 @@ function modelWindows(models: typeof Models.Type) {
 
 export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(function* (input: {
   readonly profileDirectory: string;
+  readonly userHome?: string;
   readonly authMethod: AntigravitySettings["authMethod"];
   readonly readKeyringSecret?: Effect.Effect<string | undefined, AntigravityKeyringError>;
 }) {
@@ -328,13 +333,14 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const crypto = yield* Digest.Digest;
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
+  const homeDirectory = input.userHome ?? (yield* HostProcess.HomeDirectory);
   const tokenPath = path.join(input.profileDirectory, "antigravity-acp", "acp_token.json");
-  const cliTokenPath = path.join(
-    input.profileDirectory,
-    "antigravity-acp",
-    "antigravity-oauth-token",
-  );
-  const readKeyringSecret = input.readKeyringSecret ?? readCliKeyringSecret(platform, architecture);
+  const cliTokenPath =
+    input.authMethod === "local-cli"
+      ? path.join(homeDirectory, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+      : path.join(input.profileDirectory, "antigravity-acp", "antigravity-oauth-token");
+  const readKeyringSecret =
+    input.readKeyringSecret ?? readAntigravityCliKeyringSecret(platform, architecture);
   let cached:
     | { fingerprint: string; account: string; accessToken: string; expiresAt: number }
     | undefined;
@@ -350,26 +356,35 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const read = Effect.gen(function* () {
     const startedGeneration = generation;
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    if (input.authMethod !== "oauth-personal" && input.authMethod !== "oauth-business") {
+    if (
+      input.authMethod !== "local-cli" &&
+      input.authMethod !== "oauth-personal" &&
+      input.authMethod !== "oauth-business"
+    ) {
       return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     }
     const now = yield* Clock.currentTimeMillis;
     let accessToken: string;
     let account: string;
     let projectId: string | undefined;
-    if (!(yield* fs.exists(tokenPath))) {
+    const usesLegacyTokenFile = input.authMethod !== "local-cli" && (yield* fs.exists(tokenPath));
+    if (!usesLegacyTokenFile) {
       cached = undefined;
       // Google account instances bypass the keyring, whose one entry every profile shares.
+      // Local agy CLI and Gemini Enterprise read the CLI token file first, then fall back to keyring.
       const stored = (yield* fs.exists(cliTokenPath))
         ? yield* fs.readFileString(cliTokenPath)
-        : input.authMethod === "oauth-business"
+        : input.authMethod === "oauth-business" || input.authMethod === "local-cli"
           ? yield* readKeyringSecret
           : undefined;
       if (stored === undefined) {
         return makeUnavailableUsageLimits({
           checkedAt,
           reason: "unsupported",
-          message: "Sign in with Google to see Antigravity limits.",
+          message:
+            input.authMethod === "local-cli"
+              ? "Sign in with local agy CLI to see Antigravity limits."
+              : "Sign in with Google to see Antigravity limits.",
         });
       }
       const { token } = yield* decodeCliToken(stored);

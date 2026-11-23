@@ -170,6 +170,8 @@ interface AntigravityProviderOptions {
   readonly supportsTextGeneration: Effect.Effect<boolean>;
   readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
   readonly clearUsage?: Effect.Effect<void>;
+  readonly detectLocalAuth?: Effect.Effect<boolean>;
+  readonly hydrateCatalog?: Effect.Effect<void>;
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   readonly auth?: { readonly type: string; readonly label: string };
   /** Modes the last session advertised, saved because initialize alone does not report them. */
@@ -198,14 +200,19 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   settings: AntigravitySettings,
   options: AntigravityProviderOptions,
 ) {
+  const usesLocalCli = options.auth?.type === "local-cli";
   const usesCredentials =
     options.auth?.type === "gemini-api-key" || options.auth?.type === "agent-platform";
-  const signInMessage = usesCredentials
-    ? `Connect with ${options.auth.label} to use Antigravity and load models.`
-    : SIGN_IN_MESSAGE;
-  const authUncheckedMessage = usesCredentials
-    ? `Antigravity is installed. Connect with ${options.auth.label} to load models.`
-    : AUTH_UNCHECKED_MESSAGE;
+  const signInMessage = usesLocalCli
+    ? "Local agy CLI is not signed in. Run 'agy login' in a terminal, then sync models."
+    : usesCredentials
+      ? `Connect with ${options.auth.label} to use Antigravity and load models.`
+      : SIGN_IN_MESSAGE;
+  const authUncheckedMessage = usesLocalCli
+    ? "Antigravity is installed. Connect with Local agy CLI to load models."
+    : usesCredentials
+      ? `Antigravity is installed. Connect with ${options.auth.label} to load models.`
+      : AUTH_UNCHECKED_MESSAGE;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const initialDraft = {
     ...buildServerProvider({
@@ -264,6 +271,8 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   // The quota read can take 30 seconds, so it never blocks readiness or a session start.
   // One read runs at a time; sign-in and sign-out interrupt it so a stale account never lands.
   const usageRead = yield* FiberHandle.make();
+  const catalogHydration = yield* FiberHandle.make();
+  let hydratedCatalogOnce = false;
   const republish = yield* Deferred.make<Effect.Effect<ServerProvider>>();
   const scope = yield* Effect.scope;
   const refreshUsage = Effect.fn("AntigravityProvider.refreshUsage")(function* () {
@@ -328,16 +337,36 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
               : `Antigravity did not respond to its local health check within ${timeoutMs / 1_000} seconds.`;
     const supportsTextGeneration =
       initialized !== undefined ? yield* options.supportsTextGeneration : false;
+    const localCliAuthenticated =
+      initialized !== undefined && usesLocalCli && options.detectLocalAuth !== undefined
+        ? yield* options.detectLocalAuth.pipe(Effect.orElseSucceed(() => false))
+        : undefined;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     const applyCheck = (state: AntigravityProviderState) => {
       if (state.authRevision !== before.authRevision) return state;
       const { message: _previousMessage, ...draft } = state.draft;
-      const authenticated = draft.auth.status === "authenticated";
+      const nextAuth =
+        localCliAuthenticated === true
+          ? {
+              status: "authenticated" as const,
+              type: "local-cli",
+              label: options.auth?.label ?? "Local agy CLI",
+              canLogout: false,
+            }
+          : localCliAuthenticated === false
+            ? {
+                status: "unauthenticated" as const,
+                type: "local-cli",
+                label: options.auth?.label ?? "Local agy CLI",
+                canLogout: false,
+              }
+            : draft.auth;
+      const authenticated = nextAuth.status === "authenticated";
       const message =
         errorMessage ??
         (authenticated
           ? undefined
-          : draft.auth.status === "unauthenticated"
+          : nextAuth.status === "unauthenticated"
             ? signInMessage
             : authUncheckedMessage);
       return {
@@ -347,6 +376,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           installed: !missingInstallation,
           // Lightweight custom-launcher probes lack versions; preserve the real handshake's version.
           version: version === "unknown" ? draft.version : version || draft.version,
+          auth: nextAuth,
           status: errorMessage ? "error" : authenticated ? "ready" : "warning",
           checkedAt: updatedAt,
           usageLimits: missingInstallation ? undefined : draft.usageLimits,
@@ -362,7 +392,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           ...(initialized !== undefined
             ? {
                 supportsTextGeneration:
-                  supportsTextGeneration && draft.auth.status !== "unauthenticated",
+                  supportsTextGeneration && nextAuth.status !== "unauthenticated",
               }
             : {}),
           ...(message ? { message } : {}),
@@ -377,6 +407,21 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       return [checked, stored === state ? Option.none() : Option.some(stored)];
     });
     if (initialized !== undefined) yield* refreshUsage();
+    if (
+      initialized !== undefined &&
+      usesLocalCli &&
+      localCliAuthenticated === true &&
+      next.draft.models.length === 0 &&
+      !hydratedCatalogOnce &&
+      options.hydrateCatalog !== undefined
+    ) {
+      hydratedCatalogOnce = true;
+      yield* FiberHandle.run(
+        catalogHydration,
+        options.hydrateCatalog.pipe(Effect.ignoreCause({ log: true })),
+        { onlyIfMissing: true, startImmediately: false },
+      );
+    }
     return yield* options.stampIdentity(next.draft);
   });
 
@@ -433,6 +478,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
             status: "authenticated",
             type: options.auth?.type ?? "oauth-personal",
             label: options.auth?.label ?? "Google account",
+            ...(usesLocalCli ? { canLogout: false } : {}),
           },
           checkedAt: updatedAt,
           models: buildAntigravityModelsFromSession(started.sessionSetupResult, thinkingLevels),
@@ -463,6 +509,10 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
   ) {
     observeThinkingLevels(configOptions);
+    const hasModelOption = configOptions.some(
+      (option) => option.id === "model" || option.category === "model",
+    );
+    if (!hasModelOption && configOptions.length > 0) return;
     const models = buildAntigravityModelsFromSession({ configOptions }, thinkingLevels);
     yield* SubscriptionRef.update(metadata, (state) => {
       if (state.draft.auth.status !== "authenticated") return state;
@@ -507,6 +557,8 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* () {
     yield* resetUsage;
+    yield* FiberHandle.clear(catalogHydration);
+    hydratedCatalogOnce = false;
     if (!settings.enabled) return;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     const previousModes = yield* SubscriptionRef.modify(metadata, (state) => [
@@ -517,7 +569,8 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           ...state.draft,
           auth: {
             status: "unauthenticated",
-            ...(usesCredentials ? options.auth : {}),
+            ...(usesCredentials || usesLocalCli ? options.auth : {}),
+            ...(usesLocalCli ? { canLogout: false } : {}),
           },
           status: "warning",
           message: signInMessage,

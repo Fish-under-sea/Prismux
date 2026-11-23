@@ -98,16 +98,22 @@ export interface AntigravityExecutable {
   readonly managedVersionDirectory: string | null;
 }
 
+export interface AntigravityResolveOptions {
+  readonly preferPath?: boolean;
+}
+
 interface AntigravityInstallationService {
   readonly managedDirectory: string;
   readonly resolve: (
     binaryPath?: string,
     environment?: NodeJS.ProcessEnv,
+    options?: AntigravityResolveOptions,
   ) => Effect.Effect<AntigravityExecutable, AntigravityInstallationError>;
   /** Hold the lease until the spawned process has exited. */
   readonly acquire: (
     binaryPath?: string,
     environment?: NodeJS.ProcessEnv,
+    options?: AntigravityResolveOptions,
   ) => Effect.Effect<AntigravityExecutable, AntigravityInstallationError, Scope.Scope>;
   readonly compatibility: (
     version: string,
@@ -637,6 +643,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   const resolveUnlocked = Effect.fn("AntigravityInstallation.resolveUnlocked")(function* (
     binaryPath?: string,
     processEnvironment?: NodeJS.ProcessEnv,
+    resolveOptions?: AntigravityResolveOptions,
   ) {
     const override = expandHomePath(binaryPath?.trim() ?? "", yield* HostProcess.HomeDirectory);
     if (override) {
@@ -649,6 +656,12 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         "The custom Antigravity executable is missing or not executable, or it is not the agy CLI.",
       );
     }
+    if (resolveOptions?.preferPath === true) {
+      for (const candidate of yield* commandCandidates("agy", processEnvironment)) {
+        const selected = yield* fromExternal(candidate, "path");
+        if (selected) return selected;
+      }
+    }
     if (yield* fs.exists(activePath)) {
       yield* ensureRealManagedRoot("resolve");
       const active = yield* readRecord(activePath, ActiveRelease);
@@ -660,9 +673,11 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         );
       return installed;
     }
-    for (const candidate of yield* commandCandidates("agy", processEnvironment)) {
-      const selected = yield* fromExternal(candidate, "path");
-      if (selected) return selected;
+    if (resolveOptions?.preferPath !== true) {
+      for (const candidate of yield* commandCandidates("agy", processEnvironment)) {
+        const selected = yield* fromExternal(candidate, "path");
+        if (selected) return selected;
+      }
     }
     return yield* installationError(
       "resolve",
@@ -675,7 +690,11 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   const resolve: AntigravityInstallationService["resolve"] = Effect.fn(
     "AntigravityInstallation.resolve",
   )(
-    function* (binaryPath?: string, processEnvironment?: NodeJS.ProcessEnv) {
+    function* (
+      binaryPath?: string,
+      processEnvironment?: NodeJS.ProcessEnv,
+      resolveOptions?: AntigravityResolveOptions,
+    ) {
       const override = expandHomePath(binaryPath?.trim() ?? "", yield* HostProcess.HomeDirectory);
       if (override) {
         const external = yield* findVerifiedExternal(
@@ -684,7 +703,14 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         );
         if (external !== null) return external;
       }
-      const lookup = resolveUnlocked(binaryPath, processEnvironment);
+      if (!override && resolveOptions?.preferPath === true) {
+        const external = yield* findVerifiedExternal(
+          yield* commandCandidates("agy", processEnvironment),
+          "path",
+        );
+        if (external !== null) return external;
+      }
+      const lookup = resolveUnlocked(binaryPath, processEnvironment, resolveOptions);
       if (!(yield* fs.exists(managedDirectory))) return yield* lookup;
       return yield* withManagedLock("resolve", lookup).pipe(
         Effect.catch((cause) =>
@@ -709,11 +735,15 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     ),
   );
 
-  const acquire = (binaryPath?: string, processEnvironment?: NodeJS.ProcessEnv) =>
+  const acquire = (
+    binaryPath?: string,
+    processEnvironment?: NodeJS.ProcessEnv,
+    resolveOptions?: AntigravityResolveOptions,
+  ) =>
     Effect.acquireRelease(
       gate.withPermit(
         Effect.gen(function* () {
-          const executable = yield* resolve(binaryPath, processEnvironment);
+          const executable = yield* resolve(binaryPath, processEnvironment, resolveOptions);
           const directory = executable.managedVersionDirectory;
           if (directory) leases.set(directory, (leases.get(directory) ?? 0) + 1);
           return executable;

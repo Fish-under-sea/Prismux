@@ -1188,4 +1188,176 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
       );
     }),
   );
+
+  it.effect(
+    "probes per-model thought_level across all models for model-select ACP agents like agy acp",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-agy-probe-" });
+        const agentPath = path.join(directory, "agy-fake.mjs");
+        const agyAgentSource = `
+import { createInterface } from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+const thinkingByModel = {
+  "gemini-4-neon": {
+    id: "thought_level",
+    name: "Thinking",
+    category: "thought_level",
+    type: "select",
+    currentValue: "high",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "medium", name: "Medium" },
+      { value: "high", name: "High" },
+      { value: "xhigh", name: "Extra High" },
+    ],
+  },
+  "gemini-4-argon": {
+    id: "thought_level",
+    name: "Thinking",
+    category: "thought_level",
+    type: "select",
+    currentValue: "medium",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "medium", name: "Medium" },
+      { value: "high", name: "High" },
+    ],
+  },
+  "claude-opus-5.5": {
+    id: "thought_level",
+    name: "Thinking",
+    category: "thought_level",
+    type: "select",
+    currentValue: "high",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "high", name: "High" },
+    ],
+  },
+  "fast-plain": null,
+};
+let currentModel = "gemini-4-neon";
+const configFor = (modelId) => {
+  const modelOpt = {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: modelId,
+    options: [
+      { value: "gemini-4-neon", name: "Gemini 4 Neon" },
+      { value: "gemini-4-argon", name: "Gemini 4 Argon" },
+      { value: "claude-opus-5.5", name: "Claude Opus 5.5" },
+      { value: "fast-plain", name: "Fast Plain" },
+    ],
+  };
+  const thinking = thinkingByModel[modelId];
+  return thinking ? [modelOpt, thinking] : [modelOpt];
+};
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method, params } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") {
+    send({
+      id,
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: [],
+        agentInfo: { name: "antigravity-acp", version: "1.6.0" },
+      },
+    });
+  } else if (method === "session/new") {
+    send({
+      id,
+      result: { sessionId: "agy-probe", configOptions: configFor(currentModel) },
+    });
+    send({
+      method: "session/update",
+      params: {
+        sessionId: "agy-probe",
+        update: { sessionUpdate: "available_commands_update", availableCommands: [] },
+      },
+    });
+  } else if (method === "session/set_config_option") {
+    if (params?.configId === "model" && typeof params?.value === "string") {
+      currentModel = params.value;
+    }
+    send({ id, result: { configOptions: configFor(currentModel) } });
+  } else {
+    send({ id, result: {} });
+  }
+});
+`;
+        yield* fileSystem.writeFileString(agentPath, agyAgentSource);
+
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId: identity.instanceId,
+          displayName: "Local agy",
+          enabled: true,
+          environment: [],
+          config: decodeSettings({ source: "local", commandPath: "agy.exe" }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "agy",
+              version: null,
+              distribution: "local",
+            }),
+            resolve: () =>
+              Effect.succeed({
+                distribution: "local" as const,
+                spawn: { command: process.execPath, args: [agentPath] },
+              }),
+          }),
+        );
+
+        const probed = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) => snapshot.models.length === 4),
+          Stream.runHead,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* instance.snapshot.refresh;
+        const snapshot = Option.getOrThrow(yield* Fiber.join(probed));
+
+        const describe = (slug: string) => {
+          const model = snapshot.models.find((entry) => entry.slug === slug);
+          const thinking = model?.capabilities?.optionDescriptors?.find(
+            (descriptor) => descriptor.id === "thought_level",
+          );
+          return thinking?.type === "select"
+            ? {
+                default: model?.isDefault ?? false,
+                currentValue: thinking.currentValue,
+                levels: thinking.options.map((choice) => choice.id),
+              }
+            : { default: model?.isDefault ?? false, currentValue: undefined, levels: [] };
+        };
+
+        expect(describe("gemini-4-neon")).toEqual({
+          default: true,
+          currentValue: "high",
+          levels: ["low", "medium", "high", "xhigh"],
+        });
+        expect(describe("gemini-4-argon")).toEqual({
+          default: false,
+          currentValue: "medium",
+          levels: ["low", "medium", "high"],
+        });
+        expect(describe("claude-opus-5.5")).toEqual({
+          default: false,
+          currentValue: "high",
+          levels: ["low", "high"],
+        });
+        expect(describe("fast-plain")).toEqual({
+          default: false,
+          currentValue: undefined,
+          levels: [],
+        });
+      }),
+  );
 });

@@ -1407,6 +1407,22 @@ function ProviderInstanceRow({
             enabled={resolveProviderInstanceEnabled(instance)}
             readOnly={readOnly}
             onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
+            onUseLocalCli={
+              readOnly
+                ? undefined
+                : () =>
+                    actions.enableInstance(instanceId, {
+                      ...instance,
+                      enabled: true,
+                      config: {
+                        ...(instance.config !== null && typeof instance.config === "object"
+                          ? instance.config
+                          : {}),
+                        enabled: true,
+                        authMethod: "local-cli",
+                      },
+                    })
+            }
           />
         ) : mode === "editor" && codexSetupMode === "managed" ? (
           <CodexSetupSection

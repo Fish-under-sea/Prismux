@@ -81,6 +81,28 @@ const removedEnvironmentKeys = new Set([
   "CHROME_CRASHPAD_PIPE_NAME",
 ]);
 
+const localCliRemovedEnvironmentKeys = new Set([
+  "AGY_ACP_FORCE_FILE_STORAGE",
+  "AGY_CLI_DISABLE_AUTO_UPDATE",
+  "PYTHONUNBUFFERED",
+  "ELECTRON_RUN_AS_NODE",
+  "CHROME_CRASHPAD_PIPE_NAME",
+]);
+
+const LocalCliTokenSchema = Schema.Union([
+  Schema.Struct({
+    token: Schema.Struct({
+      access_token: Schema.optional(Schema.String),
+      refresh_token: Schema.optional(Schema.String),
+    }),
+  }),
+  Schema.Struct({
+    access_token: Schema.optional(Schema.String),
+    refresh_token: Schema.optional(Schema.String),
+  }),
+]);
+const decodeLocalCliToken = Schema.decodeUnknownOption(Schema.fromJsonString(LocalCliTokenSchema));
+
 export interface AntigravityProfile {
   readonly platform: NodeJS.Platform;
   readonly geminiHome: string;
@@ -89,6 +111,7 @@ export interface AntigravityProfile {
   readonly tempDirectory: string;
   readonly browserCommand: string;
   readonly caBundlePath?: string;
+  readonly localCli?: boolean;
 }
 
 export interface AntigravityAuthConfig {
@@ -105,12 +128,18 @@ const ANTIGRAVITY_PERSONAL_AUTH: AntigravityAuthConfig = {
   gcpLocation: "",
 };
 
+export function antigravityAuthUsesLocalCli(authMethod: AntigravityAuthMethod): boolean {
+  return authMethod === "local-cli";
+}
+
 export function antigravityAuthUsesBrowser(authMethod: AntigravityAuthMethod): boolean {
   return authMethod === "oauth-personal" || authMethod === "oauth-business";
 }
 
 export function antigravityAuthLabel(authMethod: AntigravityAuthMethod): string {
   switch (authMethod) {
+    case "local-cli":
+      return "Local agy CLI";
     case "oauth-personal":
       return "Google account";
     case "oauth-business":
@@ -124,6 +153,8 @@ export function antigravityAuthLabel(authMethod: AntigravityAuthMethod): string 
 
 export function antigravityAuthConfigIssue(auth: AntigravityAuthConfig): string | null {
   switch (auth.authMethod) {
+    case "local-cli":
+      return null;
     case "oauth-personal":
       return null;
     case "oauth-business":
@@ -138,6 +169,55 @@ export function antigravityAuthConfigIssue(auth: AntigravityAuthConfig): string 
         : "Agent Platform needs an API key, or a GCP project and location, in the Antigravity provider settings.";
   }
 }
+
+export function resolveAntigravityLocalCliDataDir(path: Path.Path, userHome: string): string {
+  return path.join(userHome, ".gemini", "antigravity-cli");
+}
+
+export function resolveAntigravityLocalCliTokenPath(path: Path.Path, userHome: string): string {
+  return path.join(resolveAntigravityLocalCliDataDir(path, userHome), "antigravity-oauth-token");
+}
+
+export function hasAntigravityLocalCliToken(contents: string): boolean {
+  const decoded = decodeLocalCliToken(contents);
+  if (Option.isNone(decoded)) return false;
+  const payload = "token" in decoded.value ? decoded.value.token : decoded.value;
+  return (
+    (typeof payload.access_token === "string" && payload.access_token.trim().length > 0) ||
+    (typeof payload.refresh_token === "string" && payload.refresh_token.trim().length > 0)
+  );
+}
+
+export interface LocalAntigravityCliAuthStatus {
+  readonly authenticated: boolean;
+  readonly source: "file" | "keyring" | null;
+  readonly tokenPath: string;
+}
+
+/** Checks local `~/.gemini/antigravity-cli` OAuth token file and optional OS keyring without spawning `agy`. */
+export const detectLocalAntigravityCliAuth = Effect.fn("detectLocalAntigravityCliAuth")(
+  function* (input: {
+    readonly userHome: string;
+    readonly readKeyringSecret?: Effect.Effect<string | undefined>;
+  }): Effect.fn.Return<LocalAntigravityCliAuthStatus, never, FileSystem.FileSystem | Path.Path> {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const tokenPath = resolveAntigravityLocalCliTokenPath(path, input.userHome);
+    const fileContents = yield* fs
+      .readFileString(tokenPath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (fileContents !== undefined && hasAntigravityLocalCliToken(fileContents)) {
+      return { authenticated: true, source: "file", tokenPath };
+    }
+    if (input.readKeyringSecret !== undefined) {
+      const secret = yield* input.readKeyringSecret;
+      if (secret !== undefined && hasAntigravityLocalCliToken(secret)) {
+        return { authenticated: true, source: "keyring", tokenPath };
+      }
+    }
+    return { authenticated: false, source: null, tokenPath };
+  },
+);
 
 /**
  * `auth.type` names the selected method so a native logout clears only that method's credentials
@@ -205,6 +285,28 @@ function antigravityEnvironment(
   auth: AntigravityAuthConfig,
   runtimeTempDirectory?: string,
 ) {
+  if (antigravityAuthUsesLocalCli(auth.authMethod) || profile.localCli === true) {
+    const environment: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(baseEnv)) {
+      if (!localCliRemovedEnvironmentKeys.has(key.toUpperCase())) environment[key] = value;
+    }
+    const tempDirectory = runtimeTempDirectory ?? profile.tempDirectory;
+    return {
+      ...environment,
+      ...(profile.caBundlePath !== undefined &&
+      baseEnv.SSL_CERT_FILE === undefined &&
+      baseEnv.SSL_CERT_DIR === undefined
+        ? { SSL_CERT_FILE: profile.caBundlePath }
+        : {}),
+      AGY_CLI_DISABLE_AUTO_UPDATE: "1",
+      PYTHONUNBUFFERED: "1",
+      ...(tempDirectory
+        ? profile.platform === "win32"
+          ? { TEMP: tempDirectory, TMP: tempDirectory }
+          : { TMPDIR: tempDirectory }
+        : {}),
+    };
+  }
   const environment: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(baseEnv)) {
     // Windows treats environment keys as case-insensitive. Remove aliases too.
@@ -411,6 +513,62 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
       input.baseEnv ?? process.env,
       yield* HostProcess.HomeDirectory,
     );
+
+  let caBundlePath: string | undefined;
+  if (platform === "linux") {
+    // Bundled Python may look for certificates at paths absent on this distribution.
+    // Relative paths would resolve differently when the agent runs in the project directory.
+    for (const candidate of [
+      (input.baseEnv ?? process.env).NIX_SSL_CERT_FILE,
+      "/etc/ssl/certs/ca-bundle.crt",
+      "/etc/ssl/certs/ca-certificates.crt",
+      "/etc/pki/tls/certs/ca-bundle.crt",
+      "/etc/ssl/cert.pem",
+    ]) {
+      if (
+        candidate &&
+        path.isAbsolute(candidate) &&
+        (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false)))
+      ) {
+        caBundlePath = candidate;
+        break;
+      }
+    }
+  }
+
+  if (antigravityAuthUsesLocalCli(auth.authMethod)) {
+    const geminiHome = path.join(userHome, ".gemini");
+    const acpDirectory = resolveAntigravityLocalCliDataDir(path, userHome);
+    const tempDirectory =
+      input.tempDirectory ?? path.join(path.resolve(input.profileDirectory), "tmp");
+    yield* fs
+      .makeDirectory(tempDirectory, { recursive: true, mode: 0o700 })
+      .pipe(
+        Effect.mapError(() =>
+          authSupportError("The Antigravity runtime temp directory could not be created."),
+        ),
+      );
+    if (platform !== "win32") {
+      yield* fs
+        .chmod(tempDirectory, 0o700)
+        .pipe(
+          Effect.mapError(() =>
+            authSupportError("The Antigravity runtime temp directory permissions could not be set."),
+          ),
+        );
+    }
+    return {
+      platform,
+      geminiHome,
+      acpDirectory,
+      tokenPath: resolveAntigravityLocalCliTokenPath(path, userHome),
+      tempDirectory,
+      browserCommand: "",
+      localCli: true,
+      ...(caBundlePath === undefined ? {} : { caBundlePath }),
+    } satisfies AntigravityProfile;
+  }
+
   const runtimeExecutablePath =
     input.runtimeExecutablePath ??
     (yield* resolveNodeExecutable("Antigravity sign-in", input.baseEnv).pipe(
@@ -441,27 +599,6 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
   const geminiHome = path.resolve(input.profileDirectory);
   const acpDirectory = path.join(geminiHome, "antigravity-acp");
   const tempDirectory = input.tempDirectory ?? path.join(acpDirectory, "tmp");
-  let caBundlePath: string | undefined;
-  if (platform === "linux") {
-    // Bundled Python may look for certificates at paths absent on this distribution.
-    // Relative paths would resolve differently when the agent runs in the project directory.
-    for (const candidate of [
-      (input.baseEnv ?? process.env).NIX_SSL_CERT_FILE,
-      "/etc/ssl/certs/ca-bundle.crt",
-      "/etc/ssl/certs/ca-certificates.crt",
-      "/etc/pki/tls/certs/ca-bundle.crt",
-      "/etc/ssl/cert.pem",
-    ]) {
-      if (
-        candidate &&
-        path.isAbsolute(candidate) &&
-        (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false)))
-      ) {
-        caBundlePath = candidate;
-        break;
-      }
-    }
-  }
   const profile: AntigravityProfile = {
     platform,
     geminiHome,
@@ -551,21 +688,25 @@ export function buildAntigravityAcpSpawnInput(input: {
   readonly auth?: AntigravityAuthConfig;
   readonly runtimeTempDirectory?: string;
 }): AcpSessionRuntime.AcpSpawnInput {
+  const auth = input.auth ?? ANTIGRAVITY_PERSONAL_AUTH;
+  const usesLocalCli = antigravityAuthUsesLocalCli(auth.authMethod) || input.profile.localCli === true;
   return {
     command: input.installation.executablePath,
-    args: [
-      "acp",
-      "--gemini-dir",
-      input.profile.geminiHome,
-      "--app-data-dir",
-      // The CLI joins this beneath gemini-dir, including when the value is absolute.
-      "antigravity-acp",
-    ],
+    args: usesLocalCli
+      ? ["acp"]
+      : [
+          "acp",
+          "--gemini-dir",
+          input.profile.geminiHome,
+          "--app-data-dir",
+          // The CLI joins this beneath gemini-dir, including when the value is absolute.
+          "antigravity-acp",
+        ],
     cwd: input.cwd,
     env: antigravityEnvironment(
       input.profile,
       input.baseEnv ?? process.env,
-      input.auth ?? ANTIGRAVITY_PERSONAL_AUTH,
+      auth,
       input.runtimeTempDirectory,
     ),
     extendEnv: false,

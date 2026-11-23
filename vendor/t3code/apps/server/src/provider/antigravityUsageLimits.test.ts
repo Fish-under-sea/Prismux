@@ -70,7 +70,8 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     userId?: string;
     userInfoAt?: number;
     missingToken?: boolean;
-    authMethod?: "oauth-personal" | "oauth-business" | "gemini-api-key";
+    userHome?: string;
+    authMethod?: "local-cli" | "oauth-personal" | "oauth-business" | "gemini-api-key";
     keyringSecret?: string;
     /** Reads the OS keyring instead of `keyringSecret`. */
     nativeKeyring?: boolean;
@@ -139,6 +140,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
   );
   const usage = yield* makeAntigravityUsageProbe({
     profileDirectory,
+    ...(options.userHome ? { userHome: options.userHome } : {}),
     authMethod: options.authMethod ?? "oauth-personal",
     ...(options.nativeKeyring ? {} : { readKeyringSecret: Effect.succeed(options.keyringSecret) }),
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
@@ -781,6 +783,51 @@ describe("Antigravity subscription limits", () => {
         expect((yield* probe).unavailable?.reason).toBe("unsupported");
         expect(requests).toEqual([]);
       }
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("reads local agy CLI token file and keyring fallback in local-cli mode", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-09T12:00:00Z")));
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const userHome = yield* fs.makeTempDirectoryScoped();
+      const cliDir = path.join(userHome, ".gemini", "antigravity-cli");
+      yield* fs.makeDirectory(cliDir, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(cliDir, "antigravity-oauth-token"),
+        JSON.stringify({
+          token: {
+            access_token: "access-token",
+            refresh_token: "refresh-local",
+            expiry: "2026-10-09T14:00:00Z",
+          },
+        }),
+      );
+
+      const fromFile = yield* fixture({
+        authMethod: "local-cli",
+        userHome,
+        missingToken: true,
+        userId: "google-local-cli",
+      });
+      const fileLimits = yield* fromFile.probe;
+      expect(fileLimits.unavailable).toBeUndefined();
+      expect(fileLimits.windows).toHaveLength(4);
+
+      const emptyHome = yield* fs.makeTempDirectoryScoped();
+      const fromKeyring = yield* fixture({
+        authMethod: "local-cli",
+        userHome: emptyHome,
+        missingToken: true,
+        userId: "google-local-keyring",
+        keyringSecret: JSON.stringify({
+          token: { access_token: "access-token", expiry: "2026-10-09T14:00:00Z" },
+        }),
+      });
+      const keyringLimits = yield* fromKeyring.probe;
+      expect(keyringLimits.unavailable).toBeUndefined();
+      expect(keyringLimits.windows).toHaveLength(4);
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

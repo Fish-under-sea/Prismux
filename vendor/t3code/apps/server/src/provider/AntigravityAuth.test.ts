@@ -63,6 +63,7 @@ const makeHarness = Effect.fn("makeAuthTestHarness")(function* (
     readonly beforeInitialize?: Effect.Effect<void>;
     readonly forwardCallback?: Effect.Effect<void, ProviderSetupError>;
     readonly codeLogin?: boolean;
+    readonly localCli?: boolean;
   } = {},
 ) {
   const loginCodes: string[] = [];
@@ -137,6 +138,7 @@ const makeHarness = Effect.fn("makeAuthTestHarness")(function* (
       Effect.sync(() => {
         forwarded += 1;
       }),
+    ...(options.localCli ? { usesBrowser: false, localCli: true } : {}),
     codeLogin: ({ onAuthorizationUrl }) =>
       Effect.gen(function* () {
         if (!options.codeLogin) return undefined;
@@ -663,6 +665,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AntigravityAuth"
       assert.isTrue(Exit.isFailure(result));
       assert.deepEqual(harness.events, ["process-open", "initialize", "process-close"]);
       assert.deepEqual(harness.catalog(), ["previous-account-model"]);
+    }),
+  );
+
+  it.effect("local-cli logout disconnects locally without wiping global agy CLI sign-in", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ localCli: true });
+      const result = yield* harness.auth.controller.logout(Effect.void);
+      assert.equal(result.phase, "idle");
+      assert.equal(result.message, "Disconnected local agy CLI session.");
+      assert.deepEqual(harness.events, ["catalog-cleared"]);
+      assert.deepEqual(harness.catalog(), []);
     }),
   );
 });

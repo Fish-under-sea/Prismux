@@ -112,18 +112,30 @@ export function describeComposerEffort(
     columnControls(visibility.selectDescriptors, visibility.booleanDescriptors).effort
       ?.descriptor ?? null;
   const ultrathink = visibility.ultrathinkPromptControlled && reasoning === primary;
-  const glyph =
+  const currentReasoningValue =
     reasoning?.type === "select"
-      ? resolveEffortGlyph(
-          reasoning,
-          ultrathink
-            ? "ultrathink"
-            : getDescriptorStringValue(reasoning, modelSelection, traits.reportedModelSelection),
-        )
+      ? ultrathink
+        ? "ultrathink"
+        : getDescriptorStringValue(reasoning, modelSelection, traits.reportedModelSelection)
       : null;
+  const glyph =
+    reasoning?.type === "select" ? resolveEffortGlyph(reasoning, currentReasoningValue) : null;
+  const fallbackUnobservedGlyph =
+    !glyph && reasoning?.type === "select" && currentReasoningValue === null
+      ? (() => {
+          const choices = selectableProviderOptionChoices(reasoning);
+          if (choices.length < 2) return null;
+          const firstChoice = choices[0]!;
+          const sample = resolveEffortGlyph(reasoning, firstChoice.id);
+          return sample
+            ? { count: sample.count, filled: 0, special: null, label: reasoning.label }
+            : null;
+        })()
+      : null;
+  const effectiveGlyph = glyph ?? fallbackUnobservedGlyph;
   // Workflow levels such as Ultracode always show their name; the setting names every level.
-  const word = glyph
-    ? (glyph.special ?? (effortDisplay === "label" ? glyph.label : null))
+  const word = effectiveGlyph
+    ? (effectiveGlyph.special ?? (effortDisplay === "label" ? effectiveGlyph.label : null))
     : !reasoning
       ? null
       : reasoning.type === "boolean"
@@ -136,7 +148,7 @@ export function describeComposerEffort(
               reasoning,
               modelSelection,
               traits.reportedModelSelection,
-            ) ?? (reasoning.id === "thinking" ? reasoning.label : null));
+            ) ?? (selectableProviderOptionChoices(reasoning).length > 0 ? reasoning.label : null));
   const fast = display.speedLabel === "Fast" || display.speedLabel === "Ultrafast";
   // Agent options such as modes live in the picker; the trigger adds only the context window.
   const contextWindow =
@@ -146,10 +158,10 @@ export function describeComposerEffort(
       modelSelection,
       traits.reportedModelSelection,
     );
-  if (!word && !glyph && !fast && !display.ultracode && !contextWindow)
+  if (!word && !effectiveGlyph && !fast && !display.ultracode && !contextWindow)
     return { suffix: null, detail: display.label };
   return {
-    detail: display.label,
+    detail: display.label || (word ?? effectiveGlyph?.label ?? null),
     suffix: (
       <span
         className={cn(
@@ -162,8 +174,12 @@ export function describeComposerEffort(
           <span data-composer-control-label className="max-w-24 truncate">
             {word}
           </span>
-        ) : glyph ? (
-          <EffortGlyph count={glyph.count} filled={glyph.filled} size={size} />
+        ) : effectiveGlyph ? (
+          <EffortGlyph
+            count={effectiveGlyph.count}
+            filled={effectiveGlyph.filled}
+            size={size}
+          />
         ) : null}
         {fast ? <FastBolt ultra={display.speedLabel === "Ultrafast"} /> : null}
         {display.ultracode ? (

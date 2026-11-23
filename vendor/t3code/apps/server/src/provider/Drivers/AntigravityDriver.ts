@@ -43,7 +43,9 @@ import {
   antigravityAuthConfigIssue,
   antigravityAuthLabel,
   antigravityAuthUsesBrowser,
+  antigravityAuthUsesLocalCli,
   buildAntigravityAcpSpawnInput,
+  detectLocalAntigravityCliAuth,
   isAntigravitySignInRequiredError,
   prepareAntigravityProfile,
   resolveAntigravityInstanceDirectories,
@@ -52,7 +54,7 @@ import {
 import {
   antigravityModelOptions,
   antigravitySessionMode,
-  antigravityThinkingConfig,
+  findAntigravityModelConfigOption,
   makeAntigravityAcpRuntime,
   type AntigravityAcpRuntimeInput,
 } from "../acp/AntigravityAcpSupport.ts";
@@ -71,7 +73,10 @@ import {
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityProvider } from "../AntigravityProvider.ts";
-import { makeAntigravityUsageProbe } from "../antigravityUsageLimits.ts";
+import {
+  makeAntigravityUsageProbe,
+  readAntigravityCliKeyringSecret,
+} from "../antigravityUsageLimits.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
@@ -163,12 +168,16 @@ export const AntigravityDriver: ProviderDriver<
       gcpLocation: settings.gcpLocation,
     };
     const authConfigIssue = antigravityAuthConfigIssue(auth);
+    const usesLocalCli = antigravityAuthUsesLocalCli(auth.authMethod);
     const processEnvironment = yield* mergeProviderInstanceEnvironment(environment);
+    const hostPlatform = yield* HostProcess.Platform;
+    const hostArchitecture = yield* HostProcess.Architecture;
     const userHome = resolveAntigravityUserHome(
-      yield* HostProcess.Platform,
+      hostPlatform,
       processEnvironment,
       yield* HostProcess.HomeDirectory,
     );
+    const localGeminiHome = path.join(userHome, ".gemini");
     const directories = yield* resolveAntigravityInstanceDirectories(
       host.paths.stateDir,
       instanceId,
@@ -242,17 +251,19 @@ export const AntigravityDriver: ProviderDriver<
           detail: authConfigIssue,
         });
       }
-      const executable = yield* installation.acquire(settings.binaryPath, processEnvironment).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderSetupError({
-              instanceId,
-              operation: "resolve",
-              detail: cause.detail,
-              cause,
-            }),
-        ),
-      );
+      const executable = yield* installation
+        .acquire(settings.binaryPath, processEnvironment, { preferPath: usesLocalCli })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderSetupError({
+                instanceId,
+                operation: "resolve",
+                detail: cause.detail,
+                cause,
+              }),
+          ),
+        );
       const profile = yield* prepareAntigravityProfile({
         profileDirectory,
         baseEnv: processEnvironment,
@@ -391,21 +402,30 @@ export const AntigravityDriver: ProviderDriver<
           ),
         );
       let sessionId: string | undefined;
-      yield* Effect.addFinalizer(() =>
-        removeAntigravitySessionFiles({
-          profileDirectory,
-          sessionId,
-          cwd,
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
+      if (!usesLocalCli) {
+        yield* Effect.addFinalizer(() =>
+          removeAntigravitySessionFiles({
+            profileDirectory,
+            sessionId,
+            cwd,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          ),
+        );
+      }
       const runtime = yield* makeRuntime({
         cwd,
         mcpServers: [],
         ...(input.onAuthorizationUrl ? { onAuthorizationUrl: input.onAuthorizationUrl } : {}),
       });
+      if (usesLocalCli) {
+        yield* Effect.addFinalizer(() =>
+          sessionId
+            ? runtime.deleteSession(sessionId).pipe(Effect.timeoutOption("5 seconds"), Effect.ignore)
+            : Effect.void,
+        );
+      }
       return {
         ...runtime,
         start: () =>
@@ -497,9 +517,9 @@ export const AntigravityDriver: ProviderDriver<
       started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
       runtime: Pick<
         AcpSessionRuntime.AcpSessionRuntime["Service"],
-        "getEvents" | "drainEvents" | "setModel"
+        "getEvents" | "drainEvents" | "getConfigOptions" | "setModel"
       >,
-    ) {
+    ): Effect.fn.Return<void, never, Scope.Scope> {
       yield* provider.onSessionStarted(started);
       yield* authFlow.onSignedInElsewhere;
       yield* Stream.runForEach(runtime.getEvents(), (event) => {
@@ -514,11 +534,28 @@ export const AntigravityDriver: ProviderDriver<
           : Effect.void;
       }).pipe(Effect.forkScoped);
       // Thinking levels differ per model and are reported only for the selected one.
+      // Probe every advertised model even if the initial default model has no thought_level option.
       const configOptions = started.sessionSetupResult.configOptions ?? [];
-      const current = configOptions.find((option) => option.id === "model")?.currentValue;
-      if (antigravityThinkingConfig(configOptions) !== undefined && typeof current === "string") {
-        for (const model of [...antigravityModelOptions(configOptions), { value: current }]) {
-          yield* runtime.setModel(model.value).pipe(Effect.ignore);
+      const modelOption = findAntigravityModelConfigOption(configOptions);
+      const current = modelOption?.currentValue;
+      const allModels = antigravityModelOptions(configOptions);
+      if (typeof current === "string" && allModels.length > 1) {
+        let switched = false;
+        for (const model of allModels) {
+          if (model.value === current) continue;
+          const switchedModel = yield* runtime.setModel(model.value).pipe(
+            Effect.timeoutOption("5 seconds"),
+            Effect.map(Option.isSome),
+            Effect.orElseSucceed(() => false),
+          );
+          if (switchedModel) {
+            switched = true;
+            yield* provider.onConfigOptionsUpdated(yield* runtime.getConfigOptions);
+          }
+        }
+        if (switched) {
+          yield* runtime.setModel(current).pipe(Effect.timeoutOption("5 seconds"), Effect.ignore);
+          yield* provider.onConfigOptionsUpdated(yield* runtime.getConfigOptions);
         }
       }
       yield* runtime.drainEvents;
@@ -534,6 +571,7 @@ export const AntigravityDriver: ProviderDriver<
         ),
       onSignedOut: Effect.suspend(() => provider.onSignedOut),
       usesBrowser: antigravityAuthUsesBrowser(auth.authMethod),
+      localCli: usesLocalCli,
       codeLogin,
     });
 
@@ -549,17 +587,19 @@ export const AntigravityDriver: ProviderDriver<
           detail: authConfigIssue,
         });
       }
-      const executable = yield* installation.resolve(settings.binaryPath, processEnvironment).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderSetupError({
-              instanceId,
-              operation: "resolve",
-              detail: cause.detail,
-              cause,
-            }),
-        ),
-      );
+      const executable = yield* installation
+        .resolve(settings.binaryPath, processEnvironment, { preferPath: usesLocalCli })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderSetupError({
+                instanceId,
+                operation: "resolve",
+                detail: cause.detail,
+                cause,
+              }),
+          ),
+        );
       return {
         protocolVersion: 1,
         agentCapabilities: {
@@ -578,6 +618,7 @@ export const AntigravityDriver: ProviderDriver<
 
     const usage = yield* makeAntigravityUsageProbe({
       profileDirectory,
+      userHome,
       authMethod: auth.authMethod,
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -585,12 +626,32 @@ export const AntigravityDriver: ProviderDriver<
       Effect.provideService(Digest.Digest, digest),
       Effect.provideService(HttpClient.HttpClient, httpClient),
     );
+    const detectLocalAuth = usesLocalCli
+      ? detectLocalAntigravityCliAuth({
+          userHome,
+          readKeyringSecret: readAntigravityCliKeyringSecret(hostPlatform, hostArchitecture).pipe(
+            Effect.orElseSucceed(() => undefined),
+          ),
+        }).pipe(
+          Effect.map((result) => result.authenticated),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        )
+      : undefined;
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,
       stampIdentity: classifyModels,
       probe,
       probeUsage: usage.probe,
       clearUsage: usage.clear,
+      ...(detectLocalAuth
+        ? {
+            detectLocalAuth,
+            hydrateCatalog: Effect.suspend(
+              (): Effect.Effect<void> => refreshModels().pipe(Effect.ignore),
+            ),
+          }
+        : {}),
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
       ...(rememberedRuntimeModes ? { rememberedRuntimeModes } : {}),
       rememberRuntimeModes: (modes) =>
@@ -602,7 +663,9 @@ export const AntigravityDriver: ProviderDriver<
           Effect.provideService(Path.Path, path),
           Effect.catch(() => Effect.logWarning("Could not save Antigravity permission modes.")),
         ),
-      supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
+      supportsTextGeneration: isAntigravityTextGenerationAvailable(
+        usesLocalCli ? localGeminiHome : profileDirectory,
+      ).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
         Effect.orElseSucceed(() => false),
@@ -630,7 +693,7 @@ export const AntigravityDriver: ProviderDriver<
           (snapshot) => snapshot.slashCommands?.some((command) => command.name === "goal") === true,
         ),
       ),
-      profileDirectory,
+      ...(usesLocalCli ? {} : { profileDirectory }),
       onSessionStarted: (started, cwd) =>
         provider.onSessionStarted(started, cwd).pipe(Effect.andThen(authFlow.onSignedInElsewhere)),
       onSessionEvent: (event, cwd) => {
@@ -650,7 +713,7 @@ export const AntigravityDriver: ProviderDriver<
         }),
     });
     const textGeneration = yield* makeAntigravityTextGeneration({
-      profileDirectory,
+      profileDirectory: usesLocalCli ? localGeminiHome : profileDirectory,
       defaultModel,
       withProcess: authFlow.withProcess,
       makeRuntime: (cwd) =>
@@ -697,7 +760,9 @@ export const AntigravityDriver: ProviderDriver<
               driver: DRIVER,
               instanceId,
               detail: isAntigravitySignInRequiredError(cause)
-                ? "Sign in to Antigravity in provider settings before refreshing models."
+                ? usesLocalCli
+                  ? "Local agy CLI is not signed in. Run 'agy login' in a terminal, then refresh models."
+                  : "Sign in to Antigravity in provider settings before refreshing models."
                 : cause._tag === "ProviderSetupError" &&
                     (cause.operation === "configure" || cause.operation === "start")
                   ? cause.detail
@@ -722,7 +787,11 @@ export const AntigravityDriver: ProviderDriver<
       snapshotForCwd: (cwd) =>
         !enabled
           ? provider.snapshot.getSnapshot
-          : discoverAntigravitySkills({ cwd, userHome, profileDirectory }).pipe(
+          : discoverAntigravitySkills({
+              cwd,
+              userHome,
+              profileDirectory: usesLocalCli ? localGeminiHome : profileDirectory,
+            }).pipe(
               Effect.provideService(FileSystem.FileSystem, fileSystem),
               Effect.provideService(Path.Path, path),
               Effect.flatMap((skills) => provider.snapshotForCwd(cwd, skills)),
