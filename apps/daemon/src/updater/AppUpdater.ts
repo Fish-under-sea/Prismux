@@ -992,6 +992,7 @@ export class AppUpdater {
   private lastError: string | null = null;
 
   private readonly eventListeners = new Set<(event: UpdaterSseEventPayload) => void>();
+  private autoCheckLifecycleEnabled = false;
   private autoCheckStarted = false;
   private autoCheckInitialTimer: ReturnType<typeof setTimeout> | undefined;
   private autoCheckIntervalTimer: ReturnType<typeof setInterval> | undefined;
@@ -1131,6 +1132,7 @@ export class AppUpdater {
    * Respects `policy.autoCheckEnabled` and can be safely stopped via `stopAutoCheck()`.
    */
   startAutoCheck(): void {
+    this.autoCheckLifecycleEnabled = true;
     this.stopAutoCheck();
     if (this.policy.autoCheckEnabled === false) {
       return;
@@ -1181,6 +1183,7 @@ export class AppUpdater {
   }
 
   dispose(): void {
+    this.autoCheckLifecycleEnabled = false;
     this.stopAutoCheck();
     this.eventListeners.clear();
   }
@@ -1210,13 +1213,18 @@ export class AppUpdater {
         : {})
     };
     const validated = this.validatePolicy(merged);
-    const wasAutoStarted = this.autoCheckStarted;
+    const shouldResumeAutoCheck =
+      this.autoCheckLifecycleEnabled || this.autoCheckStarted;
     this.policy = validated;
     this.savePersistedPolicy(validated);
 
     if (validated.autoCheckEnabled === false) {
       this.stopAutoCheck();
-    } else if (wasAutoStarted && this.autoCheckInitialTimer === undefined && this.autoCheckIntervalTimer === undefined) {
+    } else if (
+      shouldResumeAutoCheck &&
+      this.autoCheckInitialTimer === undefined &&
+      this.autoCheckIntervalTimer === undefined
+    ) {
       this.startAutoCheck();
     }
     this.emitEvent("status");

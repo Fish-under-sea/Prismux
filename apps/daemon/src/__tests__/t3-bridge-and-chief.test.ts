@@ -847,4 +847,53 @@ describe("ChiefThreadManager", () => {
       await server.close();
     }
   });
+
+  it("persists reasoningEffort across daemon restarts, normalizes aliases, and clears back to provider default", async () => {
+    const dataDir = createTempDir("prismux-chief-effort-");
+    const manager = new ChiefThreadManager({
+      dataDir,
+      defaultProvider: "codex"
+    });
+    const initSlot = await manager.init();
+    assert.equal(initSlot.activeProvider, "codex");
+    assert.equal(initSlot.reasoningEffort, undefined);
+
+    // Switch via T3 alias ("claudeAgent") with explicit model + reasoningEffort.
+    const switchedClaude = await manager.switchProvider(
+      "claudeAgent" as unknown as "claude-code",
+      "claude-opus-4-6",
+      "ultracode"
+    );
+    assert.equal(switchedClaude.activeProvider, "claude-code");
+    assert.equal(switchedClaude.model, "claude-opus-4-6");
+    assert.equal(switchedClaude.reasoningEffort, "ultracode");
+    assert.equal(switchedClaude.switchHistory.at(-1)?.reasoningEffort, "ultracode");
+
+    // Re-instantiate from disk and confirm reasoningEffort survives restart.
+    const restarted = new ChiefThreadManager({ dataDir });
+    const recovered = await restarted.init();
+    assert.equal(recovered.activeProvider, "claude-code");
+    assert.equal(recovered.model, "claude-opus-4-6");
+    assert.equal(recovered.reasoningEffort, "ultracode");
+
+    // Switch via oh-my-pi alias ("pi") and clear reasoningEffort back to provider default.
+    const switchedOmp = await restarted.switchProvider(
+      "pi" as unknown as "omp",
+      undefined,
+      ""
+    );
+    assert.equal(switchedOmp.activeProvider, "omp");
+    assert.equal(switchedOmp.model, undefined);
+    assert.equal(switchedOmp.reasoningEffort, undefined);
+
+    // Legacy disk file using `defaultEffort` is recovered seamlessly into `reasoningEffort`.
+    const slotPath = join(dataDir, CHIEF_SLOT_FILENAME);
+    const persisted = JSON.parse(readFileSync(slotPath, "utf8")) as Record<string, unknown>;
+    delete persisted["reasoningEffort"];
+    persisted["defaultEffort"] = "xhigh";
+    writeFileSync(slotPath, JSON.stringify(persisted, null, 2), "utf8");
+
+    const legacyRestored = await new ChiefThreadManager({ dataDir }).init();
+    assert.equal(legacyRestored.reasoningEffort, "xhigh");
+  });
 });

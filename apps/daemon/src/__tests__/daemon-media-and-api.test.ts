@@ -758,18 +758,64 @@ test("Real business HTTP APIs: chief, memory stats/search with qq_group isolatio
     body: JSON.stringify({
       provider: targetProvider,
       model: "claude-sonnet-4-5",
-      dialMode: "oracle"
+      dialMode: "oracle",
+      reasoningEffort: "xhigh"
     })
   });
   assert.equal(switchRes.status, 200);
   const switched = (await switchRes.json()) as {
-    slot: { threadId: string; activeProvider: string; model?: string };
+    slot: {
+      threadId: string;
+      activeProvider: string;
+      provider?: string;
+      model?: string;
+      reasoningEffort?: string;
+      defaultEffort?: string;
+    };
     dialMode: string;
   };
   assert.equal(switched.slot.threadId, chiefData.slot.threadId);
   assert.equal(switched.slot.activeProvider, targetProvider);
+  assert.equal(switched.slot.provider, targetProvider);
   assert.equal(switched.slot.model, "claude-sonnet-4-5");
+  assert.equal(switched.slot.reasoningEffort, "xhigh");
+  assert.equal(switched.slot.defaultEffort, "xhigh");
   assert.equal(switched.dialMode, "oracle");
+
+  const reloadedChiefRes = await fetch(`${ready.httpUrl}/v1/chief`, {
+    headers: { Authorization: `Bearer ${ownerToken}` }
+  });
+  assert.equal(reloadedChiefRes.status, 200);
+  const reloadedChief = (await reloadedChiefRes.json()) as {
+    slot: {
+      activeProvider: string;
+      provider?: string;
+      reasoningEffort?: string;
+      defaultEffort?: string;
+    };
+  };
+  assert.equal(reloadedChief.slot.activeProvider, targetProvider);
+  assert.equal(reloadedChief.slot.provider, targetProvider);
+  assert.equal(reloadedChief.slot.reasoningEffort, "xhigh");
+  assert.equal(reloadedChief.slot.defaultEffort, "xhigh");
+
+  const aliasSwitchRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${ownerToken}`
+    },
+    body: JSON.stringify({
+      provider: "oh-my-pi",
+      defaultEffort: "high"
+    })
+  });
+  assert.equal(aliasSwitchRes.status, 200);
+  const aliasSwitched = (await aliasSwitchRes.json()) as {
+    slot: { activeProvider: string; reasoningEffort?: string };
+  };
+  assert.equal(aliasSwitched.slot.activeProvider, "omp");
+  assert.equal(aliasSwitched.slot.reasoningEffort, "high");
 
   const invalidSwitchRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
     method: "POST",
@@ -780,6 +826,16 @@ test("Real business HTTP APIs: chief, memory stats/search with qq_group isolatio
     body: JSON.stringify({ provider: "invalid-provider-name" })
   });
   assert.equal(invalidSwitchRes.status, 400);
+
+  const invalidEffortRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${ownerToken}`
+    },
+    body: JSON.stringify({ provider: "codex", reasoningEffort: "bad effort!!" })
+  });
+  assert.equal(invalidEffortRes.status, 400);
 
   // 2. Memory stats & search + strict qq_group physical SQL isolation
   for (const item of [
@@ -942,7 +998,7 @@ test("Real business HTTP APIs: chief, memory stats/search with qq_group isolatio
       version: "1.0.0",
       type: "module",
       main: "./index.mjs",
-      engines: { prismux: ">=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0" },
+      engines: { prismux: ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0" },
       scripts: { postinstall: "echo SHOULD_NOT_EXECUTE && exit 1" }
     }),
     "package/plugin.manifest.json": JSON.stringify({
@@ -1058,13 +1114,13 @@ export function apply(ctx) {
     currentVersion: string;
     policy: { routePreference: string; includePrerelease: boolean };
   };
-  assert.equal(updaterStatus.currentVersion, "0.1.1-preview.1");
+  assert.equal(updaterStatus.currentVersion, "0.1.2-preview.1");
   assert.equal(updaterStatus.policy.routePreference, "domestic");
   assert.equal(updaterStatus.policy.includePrerelease, false);
 
   const healthCheckRes = await fetch(`${ready.httpUrl}/health`);
   assert.equal(healthCheckRes.status, 200);
-  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.1-preview.1");
+  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.2-preview.1");
 });
 
 test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electron protocol CORS + PRISMUX_CATALOG_PATH resolution", async () => {
@@ -1092,9 +1148,9 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
       plugins: OFFICIAL_PLUGIN_IDS.map((id) => ({
         id,
         packageName: `@prismux/plugin-${id}`,
-        version: "0.1.1-preview.1",
+        version: "0.1.2-preview.1",
         description: `Catalog entry ${id}`,
-        engines: { prismux: ">=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0" },
+        engines: { prismux: ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0" },
         realms: ["daemon"],
         permissions: ["hooks:subscribe"],
         modelVisible: false,

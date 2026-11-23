@@ -21,13 +21,23 @@ import {
   type CordisPluginModule,
   type InstalledPluginDetails
 } from "@prismux/cordis-kernel";
-import type { SqliteMemoryStore } from "@prismux/memory-core";
+import {
+  commitObsidianImportPlan,
+  planObsidianImport,
+  type ObsidianAgentCurator,
+  type SqliteMemoryStore
+} from "@prismux/memory-core";
 import {
   CHIEF_PROVIDER_KINDS,
+  DEFAULT_CHIEF_SECRETARY_NAME,
   DIAL_MODES,
   MEMORY_KINDS,
   isValidMemoryNamespace,
+  normalizeChiefProviderKind,
+  normalizeChiefReasoningEffort,
+  normalizeChiefSecretaryName,
   type CallerScope,
+  type ChiefAgentsMdResponse,
   type ChiefProviderKind,
   type DialMode,
   type InstalledPluginRecord,
@@ -36,6 +46,9 @@ import {
   type MemoryQueryRequest,
   type MemoryQueryResponse,
   type NetworkRoutePreference,
+  type ObsidianCuratedItem,
+  type ObsidianImportCommitResponse,
+  type ObsidianImportPlanResponse,
   type OfficialPluginCatalogEntry,
   type PrismuxPluginModule,
   type SyncChannelOperationResult,
@@ -53,8 +66,14 @@ import type {
   SyncVaultPayload,
   WebDavSyncConfig
 } from "@prismux/sync-vault";
+import { createChiefObsidianAgentCurator } from "../chief/ChiefObsidianCurator.js";
 import type { ChiefThreadManager } from "../chief/ChiefThreadManager.js";
 import type { HandoffEngine } from "../handoff/HandoffEngine.js";
+import {
+  normalizeHostMetricsReport,
+  type HostMetricsIngestResult,
+  type ResourceMonitorService
+} from "../system/ResourceMonitorService.js";
 import type { T3RpcClient } from "../t3/T3RpcClient.js";
 import { isPathStrictlyInsideDir } from "../wallpapers/WallpaperMediaService.js";
 
@@ -133,10 +152,12 @@ export interface DaemonBusinessContext {
   t3RpcClient?: T3RpcClient;
   memoryStore?: SqliteMemoryStore;
   memoryDbPath?: string;
+  obsidianAgentCurator?: ObsidianAgentCurator;
   syncVault?: SyncVaultEngine;
   pluginHost?: CordisPluginHost;
   pluginInstaller?: CordisStreamingInstaller;
   pluginCredentialStore?: EncryptedPluginCredentialStore;
+  resourceMonitorService?: ResourceMonitorService;
   onMountPlugin?: (
     record: InstalledPluginRecord,
     module: PrismuxPluginModule | CordisPluginModule
@@ -226,17 +247,39 @@ function assertOwnerChief(
 }
 
 function parseProvider(value: unknown): ChiefProviderKind {
-  if (
-    typeof value === "string" &&
-    (CHIEF_PROVIDER_KINDS as readonly string[]).includes(value)
-  ) {
-    return value as ChiefProviderKind;
+  const normalized = normalizeChiefProviderKind(value);
+  if (normalized !== null) {
+    return normalized;
   }
   throw new BusinessRouteError(
     400,
     "INVALID_PROVIDER",
     `provider must be one of: ${CHIEF_PROVIDER_KINDS.join(", ")}.`
   );
+}
+
+function parseReasoningEffort(value: unknown): string | undefined {
+  const normalized = normalizeChiefReasoningEffort(value);
+  if (normalized === null) {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_REASONING_EFFORT",
+      "reasoningEffort must be a valid effort token or empty."
+    );
+  }
+  return normalized;
+}
+
+function parseSecretaryName(value: unknown): string | undefined {
+  const normalized = normalizeChiefSecretaryName(value);
+  if (normalized === null) {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_SECRETARY_NAME",
+      "secretaryName must be a string up to 32 characters."
+    );
+  }
+  return normalized;
 }
 
 function parseDialMode(value: unknown): DialMode {
@@ -628,7 +671,17 @@ export class DaemonBusinessService {
       this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? "agent";
     return {
       ok: true,
-      slot,
+      slot: {
+        ...slot,
+        provider: slot.activeProvider,
+        secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
+        agentsMdPath: slot.agentsMdPath,
+        ...(slot.reasoningEffort !== undefined
+          ? { defaultEffort: slot.reasoningEffort }
+          : {})
+      },
+      secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
+      agentsMdPath: slot.agentsMdPath,
       dialMode,
       availableProviders: [...CHIEF_PROVIDER_KINDS],
       availableDialModes: [...DIAL_MODES],
@@ -665,17 +718,254 @@ export class DaemonBusinessService {
       rawBody["dialMode"] !== undefined
         ? parseDialMode(rawBody["dialMode"])
         : undefined;
+    const reasoningEffort = parseReasoningEffort(
+      rawBody["reasoningEffort"] !== undefined
+        ? rawBody["reasoningEffort"]
+        : rawBody["defaultEffort"]
+    );
+    const secretaryName = parseSecretaryName(rawBody["secretaryName"]);
 
-    const slot = await this.ctx.chiefManager.switchProvider(provider, model);
+    const slot = await this.ctx.chiefManager.switchProvider(
+      provider,
+      model,
+      reasoningEffort,
+      secretaryName !== undefined ? { secretaryName } : undefined
+    );
     if (dialMode !== undefined && this.ctx.handoffEngine) {
       this.ctx.handoffEngine.setDialMode(slot.threadId, dialMode);
     }
 
     return {
       ok: true,
-      slot,
+      slot: {
+        ...slot,
+        provider: slot.activeProvider,
+        secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
+        agentsMdPath: slot.agentsMdPath,
+        ...(slot.reasoningEffort !== undefined
+          ? { defaultEffort: slot.reasoningEffort }
+          : {})
+      },
+      secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
+      agentsMdPath: slot.agentsMdPath,
       dialMode: this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? "agent"
     };
+  }
+
+  updateChiefProfile(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): Record<string, unknown> {
+    assertOwnerChief(trustedCallerScope, "/v1/chief/profile");
+    if (!this.ctx.chiefManager) {
+      throw new BusinessRouteError(
+        503,
+        "CHIEF_UNAVAILABLE",
+        "ChiefThreadManager is not initialized."
+      );
+    }
+    if (!isPlainRecord(rawBody)) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "Request body must be a JSON object."
+      );
+    }
+    const secretaryName = parseSecretaryName(rawBody["secretaryName"]);
+    const slot = this.ctx.chiefManager.updateProfile(
+      secretaryName !== undefined ? { secretaryName } : {}
+    );
+    return {
+      ok: true,
+      slot: {
+        ...slot,
+        provider: slot.activeProvider,
+        secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
+        agentsMdPath: slot.agentsMdPath,
+        ...(slot.reasoningEffort !== undefined
+          ? { defaultEffort: slot.reasoningEffort }
+          : {})
+      },
+      secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
+      agentsMdPath: slot.agentsMdPath,
+      dialMode: this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? "agent"
+    };
+  }
+
+  getChiefAgentsMd(trustedCallerScope: CallerScope): ChiefAgentsMdResponse {
+    assertOwnerChief(trustedCallerScope, "/v1/chief/agents-md");
+    if (!this.ctx.chiefManager) {
+      throw new BusinessRouteError(
+        503,
+        "CHIEF_UNAVAILABLE",
+        "ChiefThreadManager is not initialized."
+      );
+    }
+    return this.ctx.chiefManager.getAgentsMd();
+  }
+
+  saveChiefAgentsMd(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): ChiefAgentsMdResponse {
+    assertOwnerChief(trustedCallerScope, "/v1/chief/agents-md");
+    if (!this.ctx.chiefManager) {
+      throw new BusinessRouteError(
+        503,
+        "CHIEF_UNAVAILABLE",
+        "ChiefThreadManager is not initialized."
+      );
+    }
+    if (!isPlainRecord(rawBody)) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "Request body must be a JSON object."
+      );
+    }
+    const reset = rawBody["reset"] === true;
+    const content = typeof rawBody["content"] === "string" ? rawBody["content"] : undefined;
+    if (!reset && content === undefined) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "Request body must include string 'content' or 'reset: true'."
+      );
+    }
+    return this.ctx.chiefManager.saveAgentsMd({
+      ...(content !== undefined ? { content } : {}),
+      ...(reset ? { reset: true } : {})
+    });
+  }
+
+  async planObsidianVaultImport(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): Promise<ObsidianImportPlanResponse> {
+    assertOwnerChief(trustedCallerScope, "/v1/memory/import-obsidian/plan");
+    if (!isPlainRecord(rawBody)) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "Request body must be a JSON object."
+      );
+    }
+
+    const vaultPath =
+      typeof rawBody["vaultPath"] === "string" ? rawBody["vaultPath"].trim() : "";
+    if (!vaultPath) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "vaultPath is required."
+      );
+    }
+
+    const rawNamespace =
+      typeof rawBody["namespace"] === "string" && rawBody["namespace"].trim().length > 0
+        ? rawBody["namespace"].trim()
+        : typeof rawBody["targetNamespace"] === "string" &&
+            rawBody["targetNamespace"].trim().length > 0
+          ? rawBody["targetNamespace"].trim()
+          : undefined;
+    let namespace: MemoryNamespace | undefined;
+    if (rawNamespace !== undefined) {
+      if (!isValidMemoryNamespace(rawNamespace)) {
+        throw new BusinessRouteError(
+          400,
+          "INVALID_NAMESPACE",
+          `Invalid namespace: "${rawNamespace}".`
+        );
+      }
+      namespace = rawNamespace;
+    }
+
+    const useAgentCuration = rawBody["useAgentCuration"] !== false;
+    const provider =
+      typeof rawBody["provider"] === "string" && rawBody["provider"].trim().length > 0
+        ? rawBody["provider"].trim()
+        : undefined;
+    const model =
+      typeof rawBody["model"] === "string" && rawBody["model"].trim().length > 0
+        ? rawBody["model"].trim()
+        : undefined;
+
+    const slot = this.ctx.chiefManager ? (() => {
+      try {
+        return this.ctx.chiefManager.getSlot();
+      } catch {
+        return null;
+      }
+    })() : null;
+    const defaultCuratorLabel = slot
+      ? `${slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME} · ${slot.activeProvider}`
+      : undefined;
+
+    const agentCurator =
+      this.ctx.obsidianAgentCurator ??
+      createChiefObsidianAgentCurator({
+        ...(this.ctx.chiefManager ? { chiefManager: this.ctx.chiefManager } : {})
+      });
+
+    try {
+      return await planObsidianImport(
+        {
+          vaultPath,
+          ...(namespace !== undefined ? { namespace } : {}),
+          useAgentCuration,
+          ...(provider !== undefined ? { provider } : {}),
+          ...(model !== undefined ? { model } : {})
+        },
+        {
+          agentCurator,
+          ...(defaultCuratorLabel ? { curatorLabel: defaultCuratorLabel } : {})
+        }
+      );
+    } catch (error: unknown) {
+      const errCode =
+        isPlainRecord(error) && typeof error["code"] === "string"
+          ? error["code"]
+          : undefined;
+      if (errCode === "ENOENT" || errCode === "ENOTDIR") {
+        throw new BusinessRouteError(
+          400,
+          "VAULT_NOT_FOUND",
+          `Obsidian Vault 目录不存在或无法访问：${vaultPath}`
+        );
+      }
+      throw new BusinessRouteError(
+        400,
+        "OBSIDIAN_PLAN_FAILED",
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  async commitObsidianVaultImport(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): Promise<ObsidianImportCommitResponse> {
+    assertOwnerChief(trustedCallerScope, "/v1/memory/import-obsidian/commit");
+    if (!this.ctx.memoryStore) {
+      throw new BusinessRouteError(
+        503,
+        "MEMORY_UNAVAILABLE",
+        "SqliteMemoryStore is not configured."
+      );
+    }
+    if (!isPlainRecord(rawBody) || !Array.isArray(rawBody["items"])) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "Request body must contain an 'items' array."
+      );
+    }
+    const items = rawBody["items"] as ObsidianCuratedItem[];
+    return commitObsidianImportPlan(
+      this.ctx.memoryStore,
+      this.ctx.machineId ?? "prismux-local",
+      { items }
+    );
   }
 
   async getMemoryStats(
@@ -2070,6 +2360,29 @@ export class DaemonBusinessService {
       pluginId: null,
       logs: allLogs.slice(0, limit)
     };
+  }
+
+  ingestHostResourceMetrics(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): HostMetricsIngestResult {
+    assertOwnerChief(trustedCallerScope, "/v1/resources/host-metrics");
+    if (!this.ctx.resourceMonitorService) {
+      throw new BusinessRouteError(
+        503,
+        "RESOURCE_MONITOR_UNAVAILABLE",
+        "ResourceMonitorService is not configured."
+      );
+    }
+    const normalized = normalizeHostMetricsReport(rawBody);
+    if (!normalized) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_HOST_METRICS",
+        "Request body must contain valid mainPid, electronProcesses, or t3Server metrics."
+      );
+    }
+    return this.ctx.resourceMonitorService.ingestHostMetrics(normalized);
   }
 
   private async getMergedInstalledPlugins(): Promise<

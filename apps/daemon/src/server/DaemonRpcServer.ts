@@ -54,7 +54,10 @@ import {
   PortKillError,
   type PortScannerService
 } from "../system/PortScannerService.js";
-import type { ResourceMonitorService } from "../system/ResourceMonitorService.js";
+import {
+  normalizeHostMetricsReport,
+  type ResourceMonitorService
+} from "../system/ResourceMonitorService.js";
 import type { ServiceDiagnosticsService } from "../system/ServiceDiagnosticsService.js";
 import { SystemFontService } from "../system/SystemFontService.js";
 import type { T3RpcClient } from "../t3/T3RpcClient.js";
@@ -1240,6 +1243,100 @@ export class DaemonRpcServer {
       return true;
     }
 
+    if (
+      (method === "PUT" || method === "POST") &&
+      pathname === "/v1/chief/profile"
+    ) {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = this.businessService.updateChiefProfile(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/chief/agents-md") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const result = this.businessService.getChiefAgentsMd(trustedCallerScope);
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "PUT" && pathname === "/v1/chief/agents-md") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = this.businessService.saveChiefAgentsMd(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/memory/import-obsidian/plan") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.planObsidianVaultImport(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/memory/import-obsidian/commit") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.commitObsidianVaultImport(
+        rawBody,
+        trustedCallerScope
+      );
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
     if (method === "GET" && pathname === "/v1/memory/stats") {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
@@ -1455,8 +1552,55 @@ export class DaemonRpcServer {
           "ResourceMonitorService is not configured."
         );
       }
-      const resources = await this.resourceMonitorService.getResources();
+      const refreshParam =
+        requestUrl.searchParams.get("refresh") ?? requestUrl.searchParams.get("force");
+      const forceRefresh =
+        refreshParam === "1" || refreshParam === "true" || refreshParam === "yes";
+      const resources = await this.resourceMonitorService.getResources({ forceRefresh });
       writeJsonResponse(res, 200, resources);
+      return true;
+    }
+
+    if (
+      method === "POST" &&
+      (pathname === "/v1/resources/host-metrics" ||
+        pathname === "/v1/system/resources/host-metrics")
+    ) {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to access ${pathname}.`
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      if (this.businessService) {
+        const result = this.businessService.ingestHostResourceMetrics(
+          rawBody,
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (!this.resourceMonitorService) {
+        throw new BusinessRouteError(
+          503,
+          "RESOURCE_MONITOR_UNAVAILABLE",
+          "ResourceMonitorService is not configured."
+        );
+      }
+      const normalized = normalizeHostMetricsReport(rawBody);
+      if (!normalized) {
+        throw new BusinessRouteError(
+          400,
+          "INVALID_HOST_METRICS",
+          "Request body must contain valid mainPid, electronProcesses, or t3Server metrics."
+        );
+      }
+      const result = this.resourceMonitorService.ingestHostMetrics(normalized);
+      writeJsonResponse(res, 200, result);
       return true;
     }
 
@@ -2140,7 +2284,16 @@ export class DaemonRpcServer {
             "provider"
           ) as ChiefProviderKind;
           const model = optionalStringParam(params, "model");
-          const slot = await this.chiefManager.switchProvider(provider, model);
+          const reasoningEffort =
+            optionalStringParam(params, "reasoningEffort") ??
+            optionalStringParam(params, "defaultEffort");
+          const secretaryName = optionalStringParam(params, "secretaryName");
+          const slot = await this.chiefManager.switchProvider(
+            provider,
+            model,
+            reasoningEffort,
+            secretaryName !== undefined ? { secretaryName } : undefined
+          );
           return {
             response: {
               id: envelope.id,
@@ -2288,12 +2441,27 @@ export class DaemonRpcServer {
             );
           }
 
+          let effectiveAdditionalContext = additionalContext;
+          try {
+            const chiefSlot = this.chiefManager.getSlot();
+            if (sourceThreadId === chiefSlot.threadId) {
+              const chiefCtx = this.chiefManager.buildChiefSystemContext();
+              effectiveAdditionalContext = effectiveAdditionalContext
+                ? `${effectiveAdditionalContext}\n\n${chiefCtx.systemPrompt}`
+                : chiefCtx.systemPrompt;
+            }
+          } catch {
+            // Chief slot not initialized; continue with caller-supplied additionalContext.
+          }
+
           const result = await this.handoffEngine.executeHandoff({
             sourceThreadId,
             ...(targetDialMode !== undefined ? { targetDialMode } : {}),
             ...(targetWorkspace !== undefined ? { targetWorkspace } : {}),
             ...(targetBranch !== undefined ? { targetBranch } : {}),
-            ...(additionalContext !== undefined ? { additionalContext } : {}),
+            ...(effectiveAdditionalContext !== undefined
+              ? { additionalContext: effectiveAdditionalContext }
+              : {}),
             ...(transcript !== undefined ? { transcript } : {})
           });
           return {

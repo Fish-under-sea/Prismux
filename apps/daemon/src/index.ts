@@ -50,6 +50,7 @@ export * from "./sandbox/WorktreeSandbox.js";
 export * from "./workflows/OvernightFactory.js";
 export * from "./t3/T3ServerSupervisor.js";
 export * from "./t3/T3RpcClient.js";
+export * from "./chief/ChiefObsidianCurator.js";
 export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
 export * from "./server/DaemonBusinessRoutes.js";
@@ -335,7 +336,11 @@ export class PrismuxDaemon {
     });
     this.resourceMonitorService = new ResourceMonitorService({
       ptyPool: this.ptyPool,
-      t3Supervisor: this.t3Supervisor
+      t3Supervisor: this.t3Supervisor,
+      t3RpcClient: this.t3RpcClient,
+      ...(options.t3HealthUrl !== undefined || options.t3Url !== undefined
+        ? { t3ServerUrl: options.t3HealthUrl ?? options.t3Url }
+        : {})
     });
     this.diagnosticsService = new ServiceDiagnosticsService({
       dataDir: options.dataDir,
@@ -371,6 +376,7 @@ export class PrismuxDaemon {
       pluginHost: this.pluginHost,
       pluginInstaller: this.pluginInstaller,
       pluginCredentialStore: this.pluginCredentialStore,
+      resourceMonitorService: this.resourceMonitorService,
       onMountPlugin: (record, mod) => this.mountPluginModule(record, mod),
       onTogglePlugin: (pluginId, enabled) => this.togglePlugin(pluginId, enabled),
       onUninstallPlugin: (pluginId) => this.uninstallPlugin(pluginId)
@@ -690,6 +696,7 @@ export class PrismuxDaemon {
 
       this.readyInfo = info;
       this.running = true;
+      this.resourceMonitorService.start();
       if (
         !this.options.disableAutoUpdateCheck &&
         process.env["PRISMUX_DISABLE_AUTO_UPDATE_CHECK"] !== "1"
@@ -704,6 +711,7 @@ export class PrismuxDaemon {
   }
 
   private async performStop(): Promise<void> {
+    this.resourceMonitorService.stop();
     this.appUpdater.stopAutoCheck();
     this.clearT3ConnectLoop();
     try {

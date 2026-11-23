@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -33,7 +33,12 @@ import {
   PortScannerService,
   parseWindowsNetstatOutput
 } from "../system/PortScannerService.js";
-import { ResourceMonitorService } from "../system/ResourceMonitorService.js";
+import {
+  ResourceMonitorService,
+  parseWindowsProcessTreeTsv,
+  type ExtendedSystemResourcesResponse,
+  type OsProcessSnapshotEntry
+} from "../system/ResourceMonitorService.js";
 import {
   ServiceDiagnosticsService,
   normalizeT3HttpProbeUrl
@@ -1808,5 +1813,224 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
     assert.equal(giteeWebGetHits, 1);
   } finally {
     await closeMockServer(mockServer.server);
+  }
+});
+
+test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 Server + Agent/Terminal descendants without double counting", async () => {
+  const sampleTsv = [
+    "1000\t1\tPrismux.exe\t150000000\t100000000\t10000000\t20000000\t\"C:\\Program Files\\Prismux\\Prismux.exe\"",
+    "2000\t1000\tnode.exe\t120000000\t88000000\t5000000\t15000000\tnode vendor\\t3code\\apps\\server\\dist\\index.mjs --mode desktop",
+    "2100\t2000\tpwsh.exe\t64000000\t42000000\t2000000\t4000000\tpwsh.exe -NoLogo",
+    "2101\t2100\tnode.exe\t95000000\t71000000\t3000000\t9000000\tnode C:\\Users\\Fish\\AppData\\Roaming\\npm\\claude.js",
+    `${process.pid}\t1000\tnode.exe\t82000000\t55000000\t1000000\t2000000\tnode apps\\daemon\\dist\\cli.js`,
+    `99999\t${process.pid}\tpowershell.exe\t30000000\t20000000\t100000\t200000\tpowershell.exe -Command # PRISMUX_RES_PROBE Get-CimInstance Win32_Process`
+  ].join("\r\n");
+
+  const parsedTree = parseWindowsProcessTreeTsv(sampleTsv);
+  assert.equal(parsedTree.size, 6);
+  assert.equal(parsedTree.get(2000)?.cpuSeconds, 2.0);
+
+  let tick = 0;
+  const pool = new PersistentPtyPool();
+  const monitor = new ResourceMonitorService({
+    ptyPool: pool,
+    mainPid: 1000,
+    treeCacheTtlMs: 0,
+    sampleProcessTree: async () => {
+      tick += 1;
+      const entries = new Map<number, OsProcessSnapshotEntry>();
+      for (const [pid, row] of parsedTree) {
+        const cpuBoost = tick === 1 ? 0 : pid === 2000 ? 0.4 : pid === 2101 ? 0.6 : 0.1;
+        entries.set(pid, {
+          ...row,
+          cpuSeconds: (row.cpuSeconds ?? 0) + cpuBoost
+        });
+      }
+      return entries;
+    }
+  });
+
+  try {
+    // 1. Before Electron pushes, OS process tree auto-discovers T3 Server + pwsh + Claude Code and excludes self probe
+    const autoSnap = await monitor.getResources({ forceRefresh: true });
+    assert.equal(autoSnap.t3Server?.pid, 2000);
+    assert.equal(autoSnap.t3Server?.hostedBy, "electron");
+    assert.equal(autoSnap.t3Server?.memoryBytes, 120_000_000);
+    assert.ok(autoSnap.processes.some((p) => p.pid === 2101 && p.category === "agent" && p.name === "Claude Code"));
+    assert.ok(autoSnap.processes.some((p) => p.pid === 2100 && p.category === "terminal" && p.name === "PowerShell 7"));
+    assert.ok(!autoSnap.processes.some((p) => p.pid === 99999), "Self probe must be excluded");
+
+    // 2. Push real Electron app.getAppMetrics() (Browser + Tab + GPU + Network) + T3 Server PID
+    const ingest = monitor.ingestHostMetrics({
+      collectedAt: Date.now(),
+      mainPid: 1000,
+      cpuCores: 8,
+      cpuScale: "single-core",
+      t3Server: {
+        pid: 2000,
+        ready: true,
+        desiredRunning: true,
+        state: "running",
+        hostedBy: "electron",
+        httpUrl: "http://127.0.0.1:3773"
+      },
+      electronProcesses: [
+        { pid: 1000, type: "Browser", cpuPercent: 8.0, workingSetBytes: 155_000_000, privateMemoryBytes: 102_000_000 },
+        { pid: 1001, type: "Tab", name: "Workbench", cpuPercent: 24.0, workingSetBytes: 240_000_000, privateMemoryBytes: 195_000_000 },
+        { pid: 1002, type: "GPU", cpuPercent: 16.0, workingSetBytes: 130_000_000, privateMemoryBytes: 98_000_000 },
+        { pid: 1003, type: "Utility", name: "Network Service", cpuPercent: 4.0, workingSetBytes: 45_000_000, privateMemoryBytes: 30_000_000 }
+      ]
+    });
+    assert.equal(ingest.ok, true);
+    assert.equal(ingest.acceptedProcesses, 4);
+    assert.equal(ingest.t3ServerPid, 2000);
+
+    // Push a second time to mark Electron CPU% as warmed past initial 0-call
+    monitor.ingestHostMetrics({
+      collectedAt: Date.now(),
+      mainPid: 1000,
+      cpuCores: 8,
+      cpuScale: "single-core",
+      t3Server: {
+        pid: 2000,
+        ready: true,
+        desiredRunning: true,
+        state: "running",
+        hostedBy: "electron",
+        httpUrl: "http://127.0.0.1:3773"
+      },
+      electronProcesses: [
+        { pid: 1000, type: "Browser", cpuPercent: 8.0, workingSetBytes: 155_000_000, privateMemoryBytes: 102_000_000 },
+        { pid: 1001, type: "Tab", name: "Workbench", cpuPercent: 24.0, workingSetBytes: 240_000_000, privateMemoryBytes: 195_000_000 },
+        { pid: 1002, type: "GPU", cpuPercent: 16.0, workingSetBytes: 130_000_000, privateMemoryBytes: 98_000_000 },
+        { pid: 1003, type: "Utility", name: "Network Service", cpuPercent: 4.0, workingSetBytes: 45_000_000, privateMemoryBytes: 30_000_000 }
+      ]
+    });
+
+    await new Promise((r) => setTimeout(r, 80));
+    const fused = await monitor.getResources({ forceRefresh: true });
+    assert.equal(fused.hostMetricsSource, "hybrid");
+    assert.equal(fused.desktop?.processCount, 4);
+    assert.equal(fused.desktop?.memoryBytes, 155_000_000 + 240_000_000 + 130_000_000 + 45_000_000);
+    // 8 + 24 + 16 + 4 = 52 single-core % / 8 cores = 6.5% total-system CPU%
+    assert.equal(fused.desktop?.cpuPercent, 6.5);
+    assert.equal(fused.t3Server?.pid, 2000);
+    assert.ok(fused.t3Server?.cpuPercent !== null && fused.t3Server.cpuPercent > 0);
+    assert.equal(fused.t3Server?.memoryBytes, 120_000_000);
+    assert.equal(fused.activeAgentCount, 1);
+    assert.ok(fused.activeTerminalCount >= 1);
+    // Total memory sums all unique PIDs without double-counting Main/Daemon/T3
+    const expectedTotalMem =
+      155_000_000 + 240_000_000 + 130_000_000 + 45_000_000 + // Electron 4 procs
+      120_000_000 + // T3 Server
+      82_000_000 + // Daemon
+      64_000_000 + // pwsh
+      95_000_000; // Claude Code
+    assert.equal(fused.totalMemoryBytes, expectedTotalMem);
+    assert.ok(fused.totalCpuPercent !== null && fused.totalCpuPercent >= 6.5);
+  } finally {
+    monitor.stop();
+    await pool.dispose();
+  }
+});
+
+test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows process-tree sampling returns real non-zero metrics", async () => {
+  const dataDir = makeTempDir("prismux-live-res-");
+  const authToken = "live-res-owner-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    dataDir,
+    host: "127.0.0.1",
+    port: 0,
+    authToken,
+    disableAutoUpdateCheck: true
+  });
+
+  // Spawn a real lightweight child process performing brief CPU activity so live OS tree sampling observes real RAM & CPU
+  const busyChild = spawn(
+    process.execPath,
+    [
+      "-e",
+      "const end = Date.now() + 8000; function spin(){ const t = Date.now() + 25; while(Date.now() < t){} if(Date.now() < end) setTimeout(spin, 15); } spin();"
+    ],
+    { stdio: "ignore", windowsHide: true }
+  );
+
+  try {
+    const ready = await daemon.start();
+    const headers = {
+      authorization: `Bearer ${authToken}`,
+      "content-type": "application/json"
+    };
+
+    // 1. Reject malformed payload with 400
+    const badRes = await fetch(`${ready.httpUrl}/v1/resources/host-metrics`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({})
+    });
+    assert.equal(badRes.status, 400);
+
+    // 2. Accept valid Electron host metrics + real child PID reported as T3 Server
+    assert.ok(typeof busyChild.pid === "number" && busyChild.pid > 0);
+    const postRes = await fetch(`${ready.httpUrl}/v1/resources/host-metrics`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        collectedAt: Date.now(),
+        mainPid: process.pid,
+        cpuScale: "single-core",
+        t3Server: {
+          pid: busyChild.pid,
+          ready: true,
+          desiredRunning: true,
+          state: "running",
+          hostedBy: "electron",
+          httpUrl: "http://127.0.0.1:3773"
+        },
+        electronProcesses: []
+      })
+    });
+    assert.equal(postRes.status, 200);
+    const postJson = (await postRes.json()) as { ok: boolean; t3ServerPid: number | null };
+    assert.equal(postJson.ok, true);
+    assert.equal(postJson.t3ServerPid, busyChild.pid);
+
+    // 3. Real OS live sampling pass 1 (primes baseline) + pass 2 (computes real delta CPU%)
+    const firstRes = await fetch(`${ready.httpUrl}/v1/system/resources?refresh=1`, { headers });
+    assert.equal(firstRes.status, 200);
+    const snap1 = (await firstRes.json()) as ExtendedSystemResourcesResponse;
+    assert.equal(snap1.ok, true);
+    assert.ok(snap1.daemon.memoryBytes > 10 * 1024 * 1024, `Expected real daemon RAM, got ${snap1.daemon.memoryBytes}`);
+    assert.ok(snap1.t3Server !== null, "Expected t3Server to be populated");
+    assert.equal(snap1.t3Server?.pid, busyChild.pid);
+    assert.ok(
+      typeof snap1.t3Server?.memoryBytes === "number" && snap1.t3Server.memoryBytes > 5 * 1024 * 1024,
+      `Expected real T3 Server RAM > 5MB, got ${String(snap1.t3Server?.memoryBytes)}`
+    );
+
+    await new Promise((r) => setTimeout(r, 450));
+    const secondRes = await fetch(`${ready.httpUrl}/v1/system/resources?refresh=1`, { headers });
+    assert.equal(secondRes.status, 200);
+    const snap2 = (await secondRes.json()) as ExtendedSystemResourcesResponse;
+    assert.equal(snap2.ok, true);
+    assert.ok(snap2.totalMemoryBytes > snap2.daemon.memoryBytes, "Total RAM must exceed daemon-only RAM");
+    assert.ok(
+      typeof snap2.t3Server?.cpuPercent === "number" && snap2.t3Server.cpuPercent > 0,
+      `Expected live T3 Server CPU% > 0, got ${String(snap2.t3Server?.cpuPercent)}`
+    );
+    assert.ok(
+      typeof snap2.totalCpuPercent === "number" && snap2.totalCpuPercent > 0,
+      `Expected live total CPU% > 0, got ${String(snap2.totalCpuPercent)}`
+    );
+    assert.ok(snap2.processes.some((p) => p.pid === busyChild.pid && p.role === "t3-server"));
+    assert.ok(snap2.processes.some((p) => p.pid === process.pid && p.role === "daemon"));
+  } finally {
+    try {
+      busyChild.kill("SIGKILL");
+    } catch {
+      // already exited
+    }
+    await daemon.stop();
   }
 });

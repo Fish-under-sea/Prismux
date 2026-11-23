@@ -545,7 +545,7 @@ export class ServiceDiagnosticsService {
       {
         id: "host.t3_server",
         category: "host_core",
-        name: "T3 Server",
+        name: "Prismux Server",
         run: () => this.checkT3Server(perCheckTimeout)
       },
       {
@@ -933,7 +933,7 @@ export class ServiceDiagnosticsService {
       return {
         id: "host.t3_server",
         category: "host_core",
-        name: "T3 Server",
+        name: "Prismux Server",
         status: "ok",
         summary: `已连接${sup?.pid ? `（PID ${sup.pid}）` : ""}`,
         detail: rpc?.wsUrl ? `RPC: ${rpc.wsUrl}` : undefined
@@ -994,7 +994,7 @@ export class ServiceDiagnosticsService {
           return {
             id: "host.t3_server",
             category: "host_core",
-            name: "T3 Server",
+            name: "Prismux Server",
             status: "ok",
             ...(probed.latencyMs !== null ? { latencyMs: probed.latencyMs } : {}),
             summary: sup?.pid
@@ -1010,7 +1010,7 @@ export class ServiceDiagnosticsService {
         return {
           id: "host.t3_server",
           category: "host_core",
-          name: "T3 Server",
+          name: "Prismux Server",
           status: "degraded",
           summary: `进程已启动（PID ${sup.pid ?? "?"}），HTTP/RPC 就绪探测中`,
           detail: lastProbeError ?? rpc?.lastError ?? sup.lastError
@@ -1026,9 +1026,9 @@ export class ServiceDiagnosticsService {
       return {
         id: "host.t3_server",
         category: "host_core",
-        name: "T3 Server",
+        name: "Prismux Server",
         status: "degraded",
-        summary: `T3 Server 未响应（${firstHost}）`,
+        summary: `Prismux Server 未响应（${firstHost}）`,
         detail:
           lastProbeError ??
           sup?.lastError ??
@@ -1041,7 +1041,7 @@ export class ServiceDiagnosticsService {
       return {
         id: "host.t3_server",
         category: "host_core",
-        name: "T3 Server",
+        name: "Prismux Server",
         status: "degraded",
         summary: `进程已启动（PID ${sup.pid ?? "?"}），RPC 重连中`,
         detail: rpc?.lastError ?? sup.lastError
@@ -1050,9 +1050,9 @@ export class ServiceDiagnosticsService {
     return {
       id: "host.t3_server",
       category: "host_core",
-      name: "T3 Server",
+      name: "Prismux Server",
       status: "degraded",
-      summary: "独立模式或未附加 T3 Server 监督器",
+      summary: "独立模式或未附加 Prismux Server 监督器",
       detail: sup?.lastError ?? rpc?.lastError ?? "可由桌面宿主托管连接"
     };
   }
