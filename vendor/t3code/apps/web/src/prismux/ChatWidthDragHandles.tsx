@@ -11,13 +11,14 @@ import {
 import { createPortal } from "react-dom";
 
 import {
-  CHAT_CANVAS_SAFE_GUTTER_PX,
   CHAT_RAIL_HANDLE_WIDTH_PX,
+  CHAT_WIDTH_KEYBOARD_STEP_PX,
   DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX,
-  MAX_CHAT_WIDTH_PCT,
-  MIN_CHAT_WIDTH_PCT,
+  MAX_CHAT_CONTENT_WIDTH_PX,
+  MIN_CHAT_CONTENT_WIDTH_PX,
   computeRailHandleOffsets,
   computeSymmetricDragWidth,
+  measureAvailableColumnWidth,
   resolveChatContentMaxWidthCss,
   type ChatWidthSettingMode,
 } from "./chatWidthController";
@@ -25,12 +26,12 @@ import {
 export interface ChatWidthDragHandlesProps {
   /** Reference to the `[data-pmx-glass-zone="mainCanvas"]` inner stage container. */
   readonly stageRef: RefObject<HTMLDivElement | null>;
-  /** Current persisted width percentage (`0` = default 960px, `45..100` = custom %). */
-  readonly widthPct: number;
+  /** Current persisted width in exact pixels (`0` = default 960px, `480..2400` = custom px). */
+  readonly widthPx: number;
   /** Optional T3 `chatWidth` setting fallback (`comfortable` / `wide` / `full`). */
   readonly settingMode?: ChatWidthSettingMode;
-  /** Commits the finalized percentage (`0` resets to default). */
-  readonly onCommitWidthPct: (nextPct: number) => void;
+  /** Commits the finalized pixel width (`0` resets to default). */
+  readonly onCommitWidthPx: (nextWidthPx: number) => void;
   /** Disabled for embedded split/side chats or maximized right panels. */
   readonly disabled?: boolean;
 }
@@ -52,15 +53,16 @@ function findTrackedColumn(stage: HTMLElement): HTMLElement | null {
 /**
  * Full-height invisible vertical drag rails flanking the centered conversation & composer column.
  * - Hover/focus reveals a glowing accent vertical bar aligned to the pointer's Y coordinate (`--pmx-rail-y`).
- * - Dragging symmetrically updates `--pmx-chat-content-max-width` & `--chat-content-max-width` at 60fps.
+ * - Dragging symmetrically updates `--pmx-chat-content-max-width` & `--chat-content-max-width` at 60fps
+ *   using exact `min(100%, <N>px)` values so nested containers never compound-shrink.
  * - Double-clicking (or pressing `Home`/`0`) restores the default elongated 960px AGY width.
  * - Automatically coordinates with left sidebar drag/collapse & right panel animations via ResizeObserver.
  */
 export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
   stageRef,
-  widthPct,
+  widthPx,
   settingMode,
-  onCommitWidthPct,
+  onCommitWidthPx,
   disabled = false,
 }: ChatWidthDragHandlesProps) {
   const leftHandleRef = useRef<HTMLDivElement | null>(null);
@@ -68,16 +70,46 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
   const draggingSideRef = useRef<"left" | "right" | null>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const resetBadgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const observedColumnRef = useRef<HTMLElement | null>(null);
+  const observedParentRef = useRef<HTMLElement | null>(null);
   const [draggingSide, setDraggingSide] = useState<"left" | "right" | null>(null);
   const [badge, setBadge] = useState<ActiveBadgeState | null>(null);
 
+  const resolveStage = useCallback((): HTMLElement | null => {
+    return (
+      stageRef.current ??
+      leftHandleRef.current?.closest<HTMLElement>('[data-pmx-inner-stage="1"]') ??
+      leftHandleRef.current?.parentElement ??
+      null
+    );
+  }, [stageRef]);
+
   const syncRailPositions = useCallback(() => {
-    const stage = stageRef.current;
+    const stage = resolveStage();
     const leftEl = leftHandleRef.current;
     const rightEl = rightHandleRef.current;
     if (!stage || !leftEl || !rightEl) return;
 
     const column = findTrackedColumn(stage);
+    const observer = resizeObserverRef.current;
+    if (observer && column !== observedColumnRef.current) {
+      if (observedColumnRef.current) {
+        observer.unobserve(observedColumnRef.current);
+      }
+      if (observedParentRef.current) {
+        observer.unobserve(observedParentRef.current);
+      }
+      observedColumnRef.current = column;
+      observedParentRef.current = column?.parentElement ?? null;
+      if (column) {
+        observer.observe(column);
+        if (column.parentElement && column.parentElement !== stage) {
+          observer.observe(column.parentElement);
+        }
+      }
+    }
+
     if (!column) {
       leftEl.style.display = "none";
       rightEl.style.display = "none";
@@ -103,12 +135,14 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
     leftEl.style.right = "auto";
     rightEl.style.left = `${offsets.rightX}px`;
     rightEl.style.right = "auto";
-  }, [stageRef]);
+  }, [resolveStage]);
 
   // Keep rail handles glued to column edges across window, sidebar, right-panel, and width changes.
+  // Uses `useEffect` (not `useLayoutEffect`) so ancestor `stageRef` (e.g. `PrismuxStageFrame.innerRef`)
+  // is guaranteed attached before observers bind, with DOM ancestor fallback via `resolveStage()`.
   useEffect(() => {
     if (disabled) return;
-    const stage = stageRef.current;
+    const stage = resolveStage();
     if (!stage) return;
 
     let rafId = 0;
@@ -120,15 +154,16 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
       });
     };
 
-    syncRailPositions();
-
-    const column = findTrackedColumn(stage);
     let observer: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
       observer = new ResizeObserver(scheduleSync);
+      resizeObserverRef.current = observer;
       observer.observe(stage);
-      if (column) observer.observe(column);
     }
+
+    syncRailPositions();
+    // Catch any sibling layout inset update (e.g. ChatCanvas measuring inline Overview panel on mount).
+    scheduleSync();
 
     // Coordinate smoothly while left sidebar or right panel width CSS transition runs.
     let animRaf = 0;
@@ -170,12 +205,15 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
       if (rafId && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
       if (animRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(animRaf);
       observer?.disconnect();
+      resizeObserverRef.current = null;
+      observedColumnRef.current = null;
+      observedParentRef.current = null;
       window.removeEventListener("resize", scheduleSync);
       document.removeEventListener("transitionstart", onTransitionStart, true);
       document.removeEventListener("transitionend", onTransitionEnd, true);
       document.removeEventListener("transitioncancel", onTransitionEnd, true);
     };
-  }, [disabled, stageRef, syncRailPositions, widthPct, settingMode]);
+  }, [disabled, resolveStage, syncRailPositions, widthPx, settingMode]);
 
   useEffect(() => {
     return () => {
@@ -211,26 +249,26 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
     (ev: React.MouseEvent<HTMLDivElement>) => {
       ev.preventDefault();
       ev.stopPropagation();
-      const stage = stageRef.current;
+      const stage = resolveStage();
       const defaultCss = resolveChatContentMaxWidthCss(0, settingMode);
       if (stage) {
         stage.style.setProperty("--pmx-chat-content-max-width", defaultCss);
         stage.style.setProperty("--chat-content-max-width", defaultCss);
       }
       document.documentElement.style.setProperty("--pmx-chat-content-max-width", defaultCss);
-      onCommitWidthPct(0);
+      onCommitWidthPx(0);
       flashResetBadge(ev.clientX, ev.clientY);
       if (typeof requestAnimationFrame === "function") {
         requestAnimationFrame(syncRailPositions);
       }
     },
-    [flashResetBadge, onCommitWidthPct, settingMode, stageRef, syncRailPositions],
+    [flashResetBadge, onCommitWidthPx, resolveStage, settingMode, syncRailPositions],
   );
 
   const handlePointerDown = useCallback(
     (side: "left" | "right", ev: ReactPointerEvent<HTMLDivElement>) => {
       if (ev.button !== 0) return;
-      const stage = stageRef.current;
+      const stage = resolveStage();
       if (!stage) return;
       ev.preventDefault();
       ev.stopPropagation();
@@ -242,52 +280,60 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
       }
 
       const handleEl = ev.currentTarget;
+      const pointerId = ev.pointerId;
+      const initialButtons = ev.buttons;
       const column = findTrackedColumn(stage);
-      const stageInnerW = Math.max(360, stage.clientWidth - CHAT_CANVAS_SAFE_GUTTER_PX);
-      const startW =
-        column?.getBoundingClientRect().width ||
-        Math.min(DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX, stageInnerW);
+      const availableInnerW = measureAvailableColumnWidth(stage, column);
+      const measuredColumnW = column?.getBoundingClientRect().width ?? 0;
+      const fallbackStartW =
+        widthPx >= MIN_CHAT_CONTENT_WIDTH_PX
+          ? Math.min(widthPx, availableInnerW)
+          : Math.min(DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX, availableInnerW);
+      const startW = measuredColumnW >= 240 ? Math.round(measuredColumnW) : fallbackStartW;
       const startX = ev.clientX;
       let moveClientX = ev.clientX;
       let moveClientY = ev.clientY;
-      let latestPct =
-        widthPct >= MIN_CHAT_WIDTH_PCT
-          ? widthPct
-          : Math.min(MAX_CHAT_WIDTH_PCT, Math.max(MIN_CHAT_WIDTH_PCT, Math.round((startW / stageInnerW) * 100)));
+      let latestTargetPx = startW;
+      let didMove = false;
       let moveRaf = 0;
+      let finished = false;
+
+      const prevBodyUserSelect = document.body.style.userSelect;
+      const prevBodyCursor = document.body.style.cursor;
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "ew-resize";
+
+      try {
+        handleEl.setPointerCapture(pointerId);
+      } catch {
+        // Synthetic test environments may not implement pointer capture.
+      }
 
       draggingSideRef.current = side;
       setDraggingSide(side);
 
       const applyLiveFrame = () => {
         moveRaf = 0;
+        const liveAvailableW = measureAvailableColumnWidth(stage, column);
         const { targetPx, pct } = computeSymmetricDragWidth({
           side,
           startWidthPx: startW,
           deltaX: moveClientX - startX,
-          containerInnerWidthPx: stageInnerW,
+          containerInnerWidthPx: liveAvailableW,
         });
-        latestPct = pct;
-        const livePx = `${targetPx}px`;
-        stage.style.setProperty("--pmx-chat-content-max-width", livePx);
-        stage.style.setProperty("--chat-content-max-width", livePx);
-        document.documentElement.style.setProperty("--pmx-chat-content-max-width", livePx);
+        latestTargetPx = targetPx;
+        const liveCss = resolveChatContentMaxWidthCss(targetPx, settingMode);
+        stage.style.setProperty("--pmx-chat-content-max-width", liveCss);
+        stage.style.setProperty("--chat-content-max-width", liveCss);
+        document.documentElement.style.setProperty("--pmx-chat-content-max-width", liveCss);
         const hr = handleEl.getBoundingClientRect();
         handleEl.style.setProperty("--pmx-rail-y", `${Math.round(moveClientY - hr.top)}px`);
         syncRailPositions();
         setBadge({
           left: moveClientX,
           top: Math.max(40, moveClientY - 12),
-          text: `对话宽度 ${pct}% · ${targetPx}px`,
+          text: `对话宽度 ${targetPx}px · ${pct}%`,
         });
-      };
-
-      const onMove = (mv: PointerEvent) => {
-        moveClientX = mv.clientX;
-        moveClientY = mv.clientY;
-        if (!moveRaf && typeof requestAnimationFrame === "function") {
-          moveRaf = requestAnimationFrame(applyLiveFrame);
-        }
       };
 
       const teardown = () => {
@@ -296,54 +342,122 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
           moveRaf = 0;
         }
         window.removeEventListener("pointermove", onMove, true);
-        window.removeEventListener("pointerup", finishDrag, true);
-        window.removeEventListener("pointercancel", finishDrag, true);
+        window.removeEventListener("pointerup", onUp, true);
+        window.removeEventListener("pointercancel", onCancel, true);
+        window.removeEventListener("blur", onCancel);
+        try {
+          if (handleEl.hasPointerCapture?.(pointerId)) {
+            handleEl.releasePointerCapture(pointerId);
+          }
+        } catch {
+          // Ignore pointer capture release failures.
+        }
+        document.body.style.userSelect = prevBodyUserSelect;
+        document.body.style.cursor = prevBodyCursor;
         draggingSideRef.current = null;
         setDraggingSide(null);
         setBadge(null);
         dragCleanupRef.current = null;
       };
 
-      const finishDrag = () => {
-        applyLiveFrame();
+      const commitDrag = () => {
+        if (finished) return;
+        finished = true;
+        if (didMove) {
+          applyLiveFrame();
+        }
         teardown();
-        const committedCss = resolveChatContentMaxWidthCss(latestPct, settingMode);
+        if (!didMove) {
+          return;
+        }
+        const committedCss = resolveChatContentMaxWidthCss(latestTargetPx, settingMode);
         stage.style.setProperty("--pmx-chat-content-max-width", committedCss);
         stage.style.setProperty("--chat-content-max-width", committedCss);
         document.documentElement.style.setProperty("--pmx-chat-content-max-width", committedCss);
-        onCommitWidthPct(latestPct);
+        onCommitWidthPx(latestTargetPx);
         if (typeof requestAnimationFrame === "function") {
           requestAnimationFrame(syncRailPositions);
         }
       };
 
+      const onMove = (mv: PointerEvent) => {
+        if (mv.pointerId !== pointerId) return;
+        if (initialButtons > 0 && mv.buttons === 0) {
+          commitDrag();
+          return;
+        }
+        moveClientX = mv.clientX;
+        moveClientY = mv.clientY;
+        if (Math.abs(moveClientX - startX) >= 1) {
+          didMove = true;
+        }
+        if (!moveRaf) {
+          if (typeof requestAnimationFrame === "function") {
+            moveRaf = requestAnimationFrame(applyLiveFrame);
+          } else {
+            applyLiveFrame();
+          }
+        }
+      };
+
+      const onUp = (up: PointerEvent) => {
+        if (up.pointerId !== pointerId) return;
+        if (Number.isFinite(up.clientX)) {
+          moveClientX = up.clientX;
+          moveClientY = up.clientY;
+          if (Math.abs(moveClientX - startX) >= 1) {
+            didMove = true;
+          }
+        }
+        commitDrag();
+      };
+
+      const onCancel = () => {
+        commitDrag();
+      };
+
       dragCleanupRef.current = teardown;
       window.addEventListener("pointermove", onMove, true);
-      window.addEventListener("pointerup", finishDrag, true);
-      window.addEventListener("pointercancel", finishDrag, true);
-      applyLiveFrame();
+      window.addEventListener("pointerup", onUp, true);
+      window.addEventListener("pointercancel", onCancel, true);
+      window.addEventListener("blur", onCancel);
     },
-    [onCommitWidthPct, settingMode, stageRef, syncRailPositions, widthPct],
+    [onCommitWidthPx, resolveStage, settingMode, syncRailPositions, widthPx],
   );
 
   const handleKeyDown = useCallback(
     (side: "left" | "right", ev: KeyboardEvent<HTMLDivElement>) => {
       if (ev.key === "Home" || ev.key === "0") {
         ev.preventDefault();
-        onCommitWidthPct(0);
+        onCommitWidthPx(0);
         return;
       }
       if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
       ev.preventDefault();
-      const basePct = widthPct >= MIN_CHAT_WIDTH_PCT ? widthPct : 72;
-      const expand = (side === "right" && ev.key === "ArrowRight") || (side === "left" && ev.key === "ArrowLeft");
-      const nextPct = Math.min(
-        MAX_CHAT_WIDTH_PCT,
-        Math.max(MIN_CHAT_WIDTH_PCT, basePct + (expand ? 4 : -4)),
+      const stage = resolveStage();
+      const column = stage ? findTrackedColumn(stage) : null;
+      const availableW = stage
+        ? measureAvailableColumnWidth(stage, column)
+        : MAX_CHAT_CONTENT_WIDTH_PX;
+      const measuredW = column?.getBoundingClientRect().width ?? 0;
+      const basePx =
+        measuredW >= 240
+          ? Math.round(measuredW)
+          : widthPx >= MIN_CHAT_CONTENT_WIDTH_PX
+            ? widthPx
+            : DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX;
+      const expand =
+        (side === "right" && ev.key === "ArrowRight") ||
+        (side === "left" && ev.key === "ArrowLeft");
+      const maxPx = Math.min(MAX_CHAT_CONTENT_WIDTH_PX, availableW);
+      const minPx = Math.min(MIN_CHAT_CONTENT_WIDTH_PX, maxPx);
+      const nextPx = Math.max(
+        minPx,
+        Math.min(maxPx, basePx + (expand ? CHAT_WIDTH_KEYBOARD_STEP_PX : -CHAT_WIDTH_KEYBOARD_STEP_PX)),
       );
-      onCommitWidthPct(nextPct);
+      onCommitWidthPx(nextPx);
     },
-    [onCommitWidthPct, widthPct],
+    [onCommitWidthPx, resolveStage, widthPx],
   );
 
   if (disabled) return null;
@@ -358,10 +472,11 @@ export const ChatWidthDragHandles = memo(function ChatWidthDragHandles({
           tabIndex={0}
           aria-orientation="vertical"
           aria-label="左右拖动调整对话内容宽度（双击还原默认宽度）"
-          aria-valuemin={MIN_CHAT_WIDTH_PCT}
-          aria-valuemax={MAX_CHAT_WIDTH_PCT}
-          aria-valuenow={widthPct >= MIN_CHAT_WIDTH_PCT ? widthPct : undefined}
+          aria-valuemin={MIN_CHAT_CONTENT_WIDTH_PX}
+          aria-valuemax={MAX_CHAT_CONTENT_WIDTH_PX}
+          aria-valuenow={widthPx >= MIN_CHAT_CONTENT_WIDTH_PX ? widthPx : DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX}
           title="左右拖动调整对话宽度（双击还原默认）"
+          className="[-webkit-app-region:no-drag]"
           data-pmx-chat-width-handle=""
           data-side={side}
           data-mode="rail"

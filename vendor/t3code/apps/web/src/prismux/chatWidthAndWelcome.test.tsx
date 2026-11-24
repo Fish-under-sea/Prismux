@@ -23,56 +23,149 @@ import {
   resolveWelcomeWatermarkBrand,
 } from "./AgyWelcomeHero";
 import {
+  CHAT_WIDTH_PX_STORAGE_KEY,
+  CHAT_WIDTH_STORAGE_KEY,
   DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX,
+  MAX_CHAT_CONTENT_WIDTH_PX,
   MIN_CHAT_CONTENT_WIDTH_PX,
-  clampChatWidthPct,
+  clampChatWidthPx,
   computeRailHandleOffsets,
   computeSymmetricDragWidth,
-  parseStoredChatWidthPct,
+  measureAvailableColumnWidth,
+  parseStoredChatWidthPx,
+  readStoredChatWidthPx,
   resolveChatContentMaxWidthCss,
+  writeStoredChatWidthPx,
 } from "./chatWidthController";
 import { ChatWidthDragHandles } from "./ChatWidthDragHandles";
 
-describe("chatWidthController — symmetric drag width & rail alignment", () => {
-  it("resolves default elongated AGY width (960px) and container-relative custom clamp", () => {
+describe("chatWidthController — symmetric drag width, nesting safety & rail alignment", () => {
+  it("resolves idempotent pixel min(100%, <N>px) CSS values so nested composer containers never compound-shrink", () => {
     expect(resolveChatContentMaxWidthCss(0)).toBe(
       `min(100%, ${DEFAULT_CHAT_CONTENT_MAX_WIDTH_PX}px)`,
     );
     expect(resolveChatContentMaxWidthCss(0, "wide")).toBe("min(100%, 1152px)");
-    expect(resolveChatContentMaxWidthCss(0, "full")).toBe("calc(100% - 36px)");
-    expect(resolveChatContentMaxWidthCss(78)).toBe("clamp(480px, 78%, calc(100% - 36px))");
+    expect(resolveChatContentMaxWidthCss(0, "full")).toBe("100%");
+    // Custom widths MUST emit length-based min(100%, Npx) — never percentage clamp() that collapses across 4 nested layers.
+    expect(resolveChatContentMaxWidthCss(1080)).toBe("min(100%, 1080px)");
+    expect(resolveChatContentMaxWidthCss(720)).toBe("min(100%, 720px)");
+    expect(resolveChatContentMaxWidthCss(1080)).not.toContain("clamp(");
+    expect(resolveChatContentMaxWidthCss(720)).not.toMatch(/\b\d{2}%/);
   });
 
-  it("clamps stored percentages safely into 0 (default) or [45, 100]", () => {
-    expect(clampChatWidthPct(0)).toBe(0);
-    expect(clampChatWidthPct(-20)).toBe(0);
-    expect(clampChatWidthPct(10)).toBe(45);
-    expect(clampChatWidthPct(76.6)).toBe(77);
-    expect(clampChatWidthPct(140)).toBe(100);
-    expect(parseStoredChatWidthPct(null)).toBe(0);
-    expect(parseStoredChatWidthPct("not-a-number")).toBe(0);
-    expect(parseStoredChatWidthPct("84")).toBe(84);
+  it("clamps pixel widths safely and self-heals illegal, corrupted, or legacy percentage cache values", () => {
+    expect(clampChatWidthPx(0)).toBe(0);
+    expect(clampChatWidthPx(-200)).toBe(0);
+    expect(clampChatWidthPx(Number.NaN)).toBe(0);
+    expect(clampChatWidthPx(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(clampChatWidthPx(300)).toBe(MIN_CHAT_CONTENT_WIDTH_PX);
+    expect(clampChatWidthPx(1042.6)).toBe(1043);
+    expect(clampChatWidthPx(9999)).toBe(MAX_CHAT_CONTENT_WIDTH_PX);
+
+    // Illegal / corrupted / legacy-percentage cache values self-heal to 0 (default 960px)
+    expect(parseStoredChatWidthPx(null)).toBe(0);
+    expect(parseStoredChatWidthPx(undefined)).toBe(0);
+    expect(parseStoredChatWidthPx("")).toBe(0);
+    expect(parseStoredChatWidthPx("not-a-number")).toBe(0);
+    expect(parseStoredChatWidthPx("NaN")).toBe(0);
+    expect(parseStoredChatWidthPx("Infinity")).toBe(0);
+    expect(parseStoredChatWidthPx("-400")).toBe(0);
+    expect(parseStoredChatWidthPx("{}")).toBe(0);
+    // Legacy percentage like "78" or tiny bogus value "45" self-heals instead of trapping user at 480px
+    expect(parseStoredChatWidthPx("78")).toBe(0);
+    expect(parseStoredChatWidthPx("45")).toBe(0);
+    // Plausible pixel values clamp safely
+    expect(parseStoredChatWidthPx("360")).toBe(MIN_CHAT_CONTENT_WIDTH_PX);
+    expect(parseStoredChatWidthPx("1080")).toBe(1080);
+    expect(parseStoredChatWidthPx("5000")).toBe(MAX_CHAT_CONTENT_WIDTH_PX);
   });
 
-  it("computes symmetric 2x drag deltas for both left and right edges with safe clamping", () => {
+  it("reads/writes localStorage cleanly, clears stale v1 pct cache, and self-heals corrupt v2 entries", () => {
+    const store = new Map<string, string>();
+    const fakeStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, val: string) => {
+        store.set(key, val);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    };
+    const prevWindow = (globalThis as Record<string, unknown>).window;
+    (globalThis as Record<string, unknown>).window = {
+      localStorage: fakeStorage,
+      dispatchEvent: vi.fn(),
+    };
+    try {
+      // Legacy v1 broken percentage cache gets purged and returns default 0
+      store.set(CHAT_WIDTH_STORAGE_KEY, "68");
+      expect(readStoredChatWidthPx()).toBe(0);
+      expect(store.has(CHAT_WIDTH_STORAGE_KEY)).toBe(false);
+
+      // Corrupted v2 cache self-heals by deleting itself and returning 0
+      store.set(CHAT_WIDTH_PX_STORAGE_KEY, "corrupt-width");
+      expect(readStoredChatWidthPx()).toBe(0);
+      expect(store.has(CHAT_WIDTH_PX_STORAGE_KEY)).toBe(false);
+
+      // Out-of-bounds v2 cache normalizes in place
+      store.set(CHAT_WIDTH_PX_STORAGE_KEY, "380");
+      expect(readStoredChatWidthPx()).toBe(MIN_CHAT_CONTENT_WIDTH_PX);
+      expect(store.get(CHAT_WIDTH_PX_STORAGE_KEY)).toBe(String(MIN_CHAT_CONTENT_WIDTH_PX));
+
+      // Write valid width persists cleanly and clears v1
+      store.set(CHAT_WIDTH_STORAGE_KEY, "55");
+      expect(writeStoredChatWidthPx(1120)).toBe(1120);
+      expect(store.get(CHAT_WIDTH_PX_STORAGE_KEY)).toBe("1120");
+      expect(store.has(CHAT_WIDTH_STORAGE_KEY)).toBe(false);
+      expect(readStoredChatWidthPx()).toBe(1120);
+
+      // Reset to 0 removes storage key
+      expect(writeStoredChatWidthPx(0)).toBe(0);
+      expect(store.has(CHAT_WIDTH_PX_STORAGE_KEY)).toBe(false);
+    } finally {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+  });
+
+  it("computes symmetric 2x drag deltas for both left/right handles (outward widens, inward narrows), sequential drags & bounds", () => {
+    // Right handle dragged outward (+60px) -> widens by +120px
     const expandRight = computeSymmetricDragWidth({
       side: "right",
       startWidthPx: 800,
       deltaX: 60,
-      containerInnerWidthPx: 1200,
+      containerInnerWidthPx: 1400,
     });
     expect(expandRight.targetPx).toBe(920);
-    expect(expandRight.pct).toBe(77);
+    expect(expandRight.pct).toBe(66);
 
+    // Right handle dragged inward (-80px) -> narrows by -160px (never collapses to 480)
+    const shrinkRight = computeSymmetricDragWidth({
+      side: "right",
+      startWidthPx: expandRight.targetPx,
+      deltaX: -80,
+      containerInnerWidthPx: 1400,
+    });
+    expect(shrinkRight.targetPx).toBe(760);
+
+    // Left handle dragged outward (-60px) -> widens by +120px
     const expandLeft = computeSymmetricDragWidth({
       side: "left",
-      startWidthPx: 800,
+      startWidthPx: shrinkRight.targetPx,
       deltaX: -60,
-      containerInnerWidthPx: 1200,
+      containerInnerWidthPx: 1400,
     });
-    expect(expandLeft.targetPx).toBe(920);
-    expect(expandLeft.pct).toBe(77);
+    expect(expandLeft.targetPx).toBe(880);
 
+    // Left handle dragged inward (+50px) -> narrows by -100px
+    const shrinkLeft = computeSymmetricDragWidth({
+      side: "left",
+      startWidthPx: expandLeft.targetPx,
+      deltaX: 50,
+      containerInnerWidthPx: 1400,
+    });
+    expect(shrinkLeft.targetPx).toBe(780);
+
+    // Clamps cleanly at minimum (480px) without going negative
     const clampedMin = computeSymmetricDragWidth({
       side: "right",
       startWidthPx: 600,
@@ -80,8 +173,9 @@ describe("chatWidthController — symmetric drag width & rail alignment", () => 
       containerInnerWidthPx: 1200,
     });
     expect(clampedMin.targetPx).toBe(MIN_CHAT_CONTENT_WIDTH_PX);
-    expect(clampedMin.pct).toBe(45);
+    expect(clampedMin.pct).toBe(40);
 
+    // Clamps cleanly at container inner width maximum
     const clampedMax = computeSymmetricDragWidth({
       side: "right",
       startWidthPx: 960,
@@ -90,6 +184,39 @@ describe("chatWidthController — symmetric drag width & rail alignment", () => 
     });
     expect(clampedMax.targetPx).toBe(1100);
     expect(clampedMax.pct).toBe(100);
+
+    // Ultra-narrow viewport (< 480px): minPx never exceeds maxPx (no inverted clamp)
+    const ultraNarrow = computeSymmetricDragWidth({
+      side: "right",
+      startWidthPx: 400,
+      deltaX: 50,
+      containerInnerWidthPx: 400,
+    });
+    expect(ultraNarrow.targetPx).toBe(400);
+    expect(ultraNarrow.pct).toBe(100);
+  });
+
+  it("measures true available column width accounting for lane horizontal padding", () => {
+    const fakeParent = {
+      clientWidth: 1152,
+      getBoundingClientRect: () => ({ width: 1152 }),
+    } as unknown as HTMLElement;
+    const fakeColumn = { parentElement: fakeParent } as unknown as HTMLElement;
+    const fakeStage = {
+      clientWidth: 1152,
+      getBoundingClientRect: () => ({ width: 1152 }),
+    } as unknown as HTMLElement;
+    const prevGetComputedStyle = (globalThis as Record<string, unknown>).getComputedStyle;
+    (globalThis as Record<string, unknown>).getComputedStyle = () => ({
+      paddingLeft: "48px",
+      paddingRight: "48px",
+    });
+    try {
+      expect(measureAvailableColumnWidth(fakeStage, fakeColumn)).toBe(1056);
+      expect(measureAvailableColumnWidth(fakeStage, null)).toBe(1116);
+    } finally {
+      (globalThis as Record<string, unknown>).getComputedStyle = prevGetComputedStyle;
+    }
   });
 
   it("computes rail handle positions flush with centered column edges and hides on tiny viewports", () => {
@@ -115,8 +242,8 @@ describe("chatWidthController — symmetric drag width & rail alignment", () => 
     const html = renderToStaticMarkup(
       <ChatWidthDragHandles
         stageRef={{ current: null }}
-        widthPct={0}
-        onCommitWidthPct={vi.fn()}
+        widthPx={0}
+        onCommitWidthPx={vi.fn()}
       />,
     );
     expect(html).toContain('data-pmx-chat-width-handle=""');
@@ -124,6 +251,7 @@ describe("chatWidthController — symmetric drag width & rail alignment", () => 
     expect(html).toContain('data-side="right"');
     expect(html).toContain('data-mode="rail"');
     expect(html).toContain('role="separator"');
+    expect(html).toContain("[-webkit-app-region:no-drag]");
   });
 });
 

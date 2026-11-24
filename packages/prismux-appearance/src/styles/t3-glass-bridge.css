@@ -1150,6 +1150,223 @@ html[data-pmx-theme='light'][data-pmx-glass='1'] [data-slot='tabs-trigger'][aria
     inset 0 1px 0 rgba(255, 255, 255, 0.98);
 }
 
+/* Unified Top-Right Toolbar Icon Toggles (`壁纸 → 概览 → 下侧栏 → 右侧栏`):
+ * Replaces harsh solid-blue square borders with Apple Liquid Glass / Linear-grade frosted pill
+ * relief, 1px specular top rim, sharp 100% icon contrast, and a centered 12px x 2px bottom micro-bar.
+ * Only the Wallpaper Sparkles SVG carries the animated RGB prism gradient; all sibling icons stay
+ * crisp monochrome neutral foreground for clear visual hierarchy. */
+@keyframes pmx-wallpaper-rgb-flow {
+  0% {
+    filter: hue-rotate(0deg) saturate(1.18) brightness(1.04);
+  }
+  100% {
+    filter: hue-rotate(360deg) saturate(1.18) brightness(1.04);
+  }
+}
+
+@keyframes pmx-wallpaper-rgb-flow-light {
+  0% {
+    filter: hue-rotate(0deg) saturate(1.24) brightness(0.92);
+  }
+  100% {
+    filter: hue-rotate(360deg) saturate(1.24) brightness(0.92);
+  }
+}
+
+html [data-pmx-topbar-icon-toggle='1'],
+html[data-theme-id] [data-pmx-topbar-icon-toggle='1'] {
+  position: relative;
+  border-radius: 7px;
+  border: 1px solid transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  color: rgba(15, 23, 42, 0.62) !important;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 180ms ease,
+    color 150ms ease,
+    transform 110ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html [data-pmx-topbar-icon-toggle='1']::before {
+  display: none !important;
+  content: none !important;
+}
+
+/* Centered 12px x 2px luminous bottom indicator capsule (hidden until active) */
+html [data-pmx-topbar-icon-toggle='1']::after {
+  content: '' !important;
+  position: absolute !important;
+  left: 50% !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: 2px !important;
+  width: 12px !important;
+  height: 2px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border-radius: 9999px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%) scaleX(0.35);
+  background: rgba(15, 23, 42, 0.62);
+  box-shadow: 0 0 4px rgba(15, 23, 42, 0.16);
+  transition:
+    opacity 160ms ease,
+    transform 190ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 160ms ease,
+    box-shadow 180ms ease;
+}
+
+html [data-pmx-topbar-icon-toggle='1']:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+html [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]) {
+  background-color: rgba(15, 23, 42, 0.065) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+}
+
+html [data-pmx-topbar-icon-toggle='1'] svg:not([data-pmx-wallpaper-icon='1']) {
+  opacity: 0.88;
+  transition: opacity 150ms ease;
+}
+
+html [data-pmx-topbar-icon-toggle='1']:hover svg:not([data-pmx-wallpaper-icon='1']) {
+  opacity: 1;
+}
+
+/* Light & Light Glass active state: warm porcelain float + subtle shadow + hairline slate rim */
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html:not(.dark)[data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html:not(.dark)[data-theme-id] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) {
+  background-color: rgba(255, 255, 255, 0.88) !important;
+  border-color: rgba(15, 23, 42, 0.11) !important;
+  color: #0f172a !important;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96) !important;
+}
+
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg,
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg {
+  opacity: 1 !important;
+}
+
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after,
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after {
+  opacity: 1;
+  transform: translateX(-50%) scaleX(1);
+}
+
+/* Dark & Dark Glass rest/hover/active states: frosted translucent white relief + 1px specular top rim */
+html.dark [data-pmx-topbar-icon-toggle='1'],
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1'],
+html.dark[data-theme-id] [data-pmx-topbar-icon-toggle='1'] {
+  color: rgba(248, 250, 252, 0.68) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]),
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]),
+html.dark[data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]),
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]) {
+  background-color: rgba(255, 255, 255, 0.085) !important;
+  color: rgba(255, 255, 255, 0.94) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled),
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.17) !important;
+}
+
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled),
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html.dark[data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html.dark[data-theme-id] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) {
+  background-color: rgba(255, 255, 255, 0.13) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  color: #ffffff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 4px rgba(0, 0, 0, 0.24) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg,
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg {
+  opacity: 1 !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']::after,
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']::after {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.55);
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after,
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after {
+  opacity: 1;
+  transform: translateX(-50%) scaleX(1);
+}
+
+/* Wallpaper Sparkles button: RGB prism dynamic gradient SVG + soft prism aura on hover/active */
+html [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'] {
+  opacity: 1 !important;
+  will-change: filter;
+  animation: pmx-wallpaper-rgb-flow-light 5.5s linear infinite;
+  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.dark [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'],
+html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'] {
+  animation: pmx-wallpaper-rgb-flow 5.5s linear infinite;
+}
+
+html [data-pmx-topbar-toggle-kind='wallpaper']:hover:not(:disabled) [data-pmx-wallpaper-icon='1'] {
+  transform: scale(1.06);
+}
+
+html [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']) [data-pmx-wallpaper-icon='1'] {
+  transform: scale(1.04);
+}
+
+html.dark [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html.dark[data-pmx-glass='1'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 0 12px -2px rgba(129, 140, 248, 0.32),
+    0 1px 4px rgba(0, 0, 0, 0.24) !important;
+}
+
+html:not(.dark) [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html[data-pmx-theme='light'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']) {
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.09),
+    0 0 10px -2px rgba(99, 102, 241, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96) !important;
+}
+
+html [data-pmx-topbar-toggle-kind='wallpaper']::after {
+  background: linear-gradient(90deg, #0284c7, #6366f1, #db2777, #d97706);
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.36);
+}
+
+html.dark [data-pmx-topbar-toggle-kind='wallpaper']::after,
+html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper']::after {
+  background: linear-gradient(90deg, #38bdf8, #818cf8, #ec4899, #f59e0b);
+  box-shadow: 0 0 7px rgba(236, 72, 153, 0.52);
+}
+
 /* Explicit solid mode for workPanels zone: crisp opaque surface with zero blur & zero sheen */
 html[data-pmx-glass='1'][data-pmx-zone-work-panels-mode='solid'] [data-pmx-glass-zone='workPanels'],
 html[data-pmx-glass='1'][data-pmx-zone-work-panels-mode='solid'] [data-pmx-work-panel='1'] {
@@ -1971,8 +2188,17 @@ html[data-pmx-glass='1']
   [data-pmx-composer-layout='agy'],
   [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
   [data-pmx-sidebar-peek='1'],
-  [data-pmx-chat-width-handle]::after {
+  [data-pmx-chat-width-handle]::after,
+  [data-pmx-topbar-icon-toggle='1'],
+  [data-pmx-topbar-icon-toggle='1']::after {
     transition-duration: 0.01ms !important;
+  }
+
+  html [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'],
+  html.dark [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'],
+  html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'] {
+    animation: none !important;
+    filter: saturate(1.16);
   }
 }
 

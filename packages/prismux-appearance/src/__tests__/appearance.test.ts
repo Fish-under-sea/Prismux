@@ -2779,4 +2779,24 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     assert.match(cardsCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \.pmx-appearance \.seg > button\.on[\s\S]*?color:\s*#0f172a;/);
     assert.match(cardsCss, /\.pmx-appearance \.pmx-gz-pill\.on[\s\S]*?font-weight:\s*600;/);
   });
+
+  it('replaces harsh blue active boxes on topbar icon toggles with Liquid Glass relief + micro-bar and animates RGB Wallpaper Sparkles with reduced-motion fallback', () => {
+    const bridgeCss = fs.readFileSync(new URL('../../src/styles/t3-glass-bridge.css', import.meta.url), 'utf8');
+
+    assert.match(bridgeCss, /@keyframes pmx-wallpaper-rgb-flow\b/);
+    assert.match(bridgeCss, /@keyframes pmx-wallpaper-rgb-flow-light\b/);
+    assert.match(bridgeCss, /\[data-pmx-topbar-icon-toggle='1'\]::after[\s\S]*?width:\s*12px\s*!important;[\s\S]*?height:\s*2px\s*!important;/);
+    assert.match(
+      bridgeCss,
+      /html\.dark\[data-pmx-glass='1'\] \[data-pmx-topbar-icon-toggle='1'\]:is\(\[data-pressed\], \[aria-pressed='true'\], \[data-popup-open\]\)[\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.13\)\s*!important;/,
+    );
+    assert.match(
+      bridgeCss,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\] \[data-pmx-topbar-icon-toggle='1'\]:is\(\[data-pressed\], \[aria-pressed='true'\], \[data-popup-open\]\)[\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.88\)\s*!important;/,
+    );
+    assert.match(
+      bridgeCss,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-topbar-toggle-kind='wallpaper'\] \[data-pmx-wallpaper-icon='1'\][\s\S]*?animation:\s*none\s*!important;/,
+    );
+  });
 });

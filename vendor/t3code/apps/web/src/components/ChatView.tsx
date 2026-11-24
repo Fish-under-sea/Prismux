@@ -3786,13 +3786,13 @@ export default function ChatView(props: ChatViewProps) {
               onToggleWallpaper={toggleWallpaperSurfaceStable}
               onOpenChiefSettings={openChiefSettingsStable}
             />
+            <PanelLayoutControls {...panelToggleControlProps} showThreadPanelControl={false} />
             {rightPanelOpen && !shouldUsePlanSidebarSheet ? (
               <RightPanelMaximizeControl
                 maximized={rightPanelMaximized}
                 onToggle={toggleRightPanelMaximizedStable}
               />
             ) : null}
-            <PanelLayoutControls {...panelToggleControlProps} showThreadPanelControl={false} />
           </>,
           topbarPortal.slotElement,
         )
@@ -4486,9 +4486,9 @@ export default function ChatView(props: ChatViewProps) {
           </ThreadFindCanvas>
           <ChatWidthDragHandles
             stageRef={mainCanvasStageRef}
-            widthPct={chatWidthController.widthPct}
+            widthPx={chatWidthController.widthPx}
             settingMode={settings.chatWidth}
-            onCommitWidthPct={chatWidthController.commitWidthPct}
+            onCommitWidthPx={chatWidthController.commitWidthPx}
             disabled={embedded || rightPanelMaximized}
           />
     </>

@@ -6,8 +6,7 @@ import {
   type InlineAppearanceRenderContext,
   type WallpaperItem,
 } from "@prismux/wallpaper";
-import { Sparkles } from "lucide-react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useId } from "react";
 
 import { PopoverCreateHandle, PopoverTrigger } from "../components/ui/popover";
 import { Toggle } from "../components/ui/toggle";
@@ -104,6 +103,70 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
 });
 
 /**
+ * Bespoke RGB prism-gradient Sparkles icon for the topbar Wallpaper toggle button.
+ * - Uses a unique `useId()` `<linearGradient>` with seamless multi-stop RGB spectrum
+ *   (`#38bdf8 -> #6366f1 -> #ec4899 -> #f59e0b -> #22c55e -> #38bdf8`).
+ * - Pure CSS GPU-friendly hue-flow animation (`t3-glass-bridge.css`) keeps it silky across
+ *   Light / Dark / Glass while gracefully settling on the static RGB gradient under
+ *   `prefers-reduced-motion: reduce`.
+ */
+export const PrismuxWallpaperSparklesIcon = memo(function PrismuxWallpaperSparklesIcon({
+  className,
+  active = false,
+}: {
+  readonly className?: string;
+  readonly active?: boolean;
+}) {
+  const rawId = useId();
+  const gradientId = `pmx-wallpaper-rgb-${rawId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const strokeUrl = `url(#${gradientId})`;
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth={1.9}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+      data-pmx-wallpaper-icon="1"
+      data-pmx-rgb-gradient="1"
+      data-active={active ? "1" : "0"}
+      className={cn("lucide lucide-sparkles pmx-wallpaper-rgb-sparkles", className)}
+    >
+      <defs>
+        <linearGradient
+          id={gradientId}
+          x1="2"
+          y1="2"
+          x2="22"
+          y2="22"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0%" stopColor="#38bdf8" />
+          <stop offset="22%" stopColor="#6366f1" />
+          <stop offset="46%" stopColor="#ec4899" />
+          <stop offset="70%" stopColor="#f59e0b" />
+          <stop offset="88%" stopColor="#22c55e" />
+          <stop offset="100%" stopColor="#38bdf8" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
+        stroke={strokeUrl}
+        fill={strokeUrl}
+        fillOpacity={active ? 0.3 : 0.16}
+      />
+      <path d="M20 3v4" stroke={strokeUrl} />
+      <path d="M22 5h-4" stroke={strokeUrl} />
+      <path d="M4 17v2" stroke={strokeUrl} />
+      <path d="M5 18H3" stroke={strokeUrl} />
+    </svg>
+  );
+});
+
+/**
  * 1:1 Overview panel icon (rounded square frame + 3 left-aligned rounded horizontal bars,
  * with the 3rd bar shorter). Hand-crafted `viewBox="0 0 20 20"` for pixel-crisp rendering.
  */
@@ -143,7 +206,7 @@ export interface PrismuxTopbarControlsProps {
   readonly overviewPopoverHandle?: ReturnType<typeof PopoverCreateHandle>;
   readonly overviewShortcutLabel?: string | null;
   readonly onToggleOverview?: () => void;
-  /** Independent right-sidebar wallpaper quick-toggle button (Sparkles icon) beside Overview. */
+  /** Independent right-sidebar wallpaper quick-toggle button (RGB Sparkles icon) before Overview. */
   readonly wallpaperOpen?: boolean;
   readonly wallpaperAvailable?: boolean;
   readonly inlineRightPanelOwnsTitleBar?: boolean;
@@ -153,12 +216,14 @@ export interface PrismuxTopbarControlsProps {
 }
 
 /**
- * Unified single-topbar Prismux controls:
- * - Minimalist Chief Thread Slot breathing brand pill (`<PrismuxChiefStatusPill />`)
- * - AGY + Codex Overview panel (`ThreadDetailsPanel`) toggle button (rounded list-box SVG, `Ctrl+Shift+B`)
- * - Independent Wallpaper Quick Sidebar toggle button (`Sparkles` 4-point star icon)
- * Strictly marks interactive controls `[-webkit-app-region:no-drag]` and uses clean flow layout
- * (zero brittle `mr-28` hacks) so it sits flush alongside right-panel toggles & Electron WCO buttons.
+ * Unified single-topbar Prismux controls (strict left-to-right order before Bottom & Right Panel):
+ * 1. Minimalist Chief Thread Slot breathing brand pill (`<PrismuxChiefStatusPill />`)
+ * 2. Wallpaper quick-toggle button (`PrismuxWallpaperSparklesIcon`, dynamic RGB prism gradient)
+ * 3. AGY + Codex Overview panel (`ThreadDetailsPanel`) toggle button (rounded list-box SVG, `Ctrl+Shift+B`)
+ * Followed in `ChatView` by Bottom Panel (下侧栏) and Right Panel (右侧栏), producing:
+ *   壁纸 → 概览 → 下侧栏 → 右侧栏
+ * Strictly marks interactive controls `[-webkit-app-region:no-drag]` and opts into the refined
+ * Apple Liquid Glass frosted active state (`data-pmx-topbar-icon-toggle="1"`).
  */
 export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
   overviewOpen = false,
@@ -178,11 +243,13 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
 
   const overviewToggleButton = (
     <Toggle
-      className="size-6.5 shrink-0 [-webkit-app-region:no-drag]"
+      className="size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
       pressed={overviewOpen}
       onPressedChange={overviewPresentation === "popover" ? undefined : onToggleOverview}
       aria-label="概览"
       data-pmx-overview-toggle="1"
+      data-pmx-topbar-icon-toggle="1"
+      data-pmx-topbar-toggle-kind="overview"
       variant="ghost"
       size="sm"
     >
@@ -201,6 +268,30 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
         className="h-6.5 px-2 text-[11px]"
       />
 
+      {onToggleWallpaper ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className="size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
+              pressed={wallpaperOpen}
+              onPressedChange={onToggleWallpaper}
+              aria-label="壁纸快速开启"
+              data-pmx-wallpaper-toggle="1"
+              data-pmx-topbar-icon-toggle="1"
+              data-pmx-topbar-toggle-kind="wallpaper"
+              variant="ghost"
+              size="sm"
+              disabled={!wallpaperAvailable}
+            >
+              <PrismuxWallpaperSparklesIcon className="size-4" active={wallpaperOpen} />
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {wallpaperAvailable ? "壁纸快速开启" : "打开会话后可使用壁纸边栏"}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+
       {usesOverviewMode ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" data-thread-panel-toggle="" />}>
@@ -212,31 +303,6 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
           </TooltipTrigger>
           <TooltipPopup side="bottom">
             {overviewShortcutLabel ? `概览 (${overviewShortcutLabel})` : "概览"}
-          </TooltipPopup>
-        </Tooltip>
-      ) : null}
-
-      {onToggleWallpaper ? (
-        <Tooltip>
-          <TooltipTrigger render={<span className="flex shrink-0" />}>
-            <Toggle
-              className={cn(
-                "size-6.5 shrink-0 [-webkit-app-region:no-drag]",
-                isGlassActive && !wallpaperOpen && "text-primary",
-              )}
-              pressed={wallpaperOpen}
-              onPressedChange={onToggleWallpaper}
-              aria-label="壁纸快速开启"
-              data-pmx-wallpaper-toggle="1"
-              variant="ghost"
-              size="sm"
-              disabled={!wallpaperAvailable}
-            >
-              <Sparkles className="size-3.5" data-pmx-wallpaper-icon="1" aria-hidden />
-            </Toggle>
-          </TooltipTrigger>
-          <TooltipPopup side="bottom">
-            {wallpaperAvailable ? "壁纸快速开启" : "打开会话后可使用壁纸边栏"}
           </TooltipPopup>
         </Tooltip>
       ) : null}

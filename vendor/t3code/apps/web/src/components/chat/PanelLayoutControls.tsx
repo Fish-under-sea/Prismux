@@ -61,10 +61,12 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   const gt = useGT();
   const threadPanelToggle = (
     <Toggle
-      className="relative shrink-0 [-webkit-app-region:no-drag]"
+      className="relative size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
       pressed={threadPanelOpen}
       onPressedChange={threadPanelPresentation === "popover" ? undefined : onToggleThreadPanel}
       aria-label={gt("Toggle thread details panel")}
+      data-pmx-topbar-icon-toggle="1"
+      data-pmx-topbar-toggle-kind="overview"
       variant="ghost"
       size="sm"
     >
@@ -98,10 +100,13 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>
             <Toggle
-              className="shrink-0 [-webkit-app-region:no-drag]"
+              className="size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
               pressed={terminalOpen}
               onPressedChange={onToggleTerminal}
               aria-label={gt("Toggle terminal drawer")}
+              data-bottom-panel-toggle=""
+              data-pmx-topbar-icon-toggle="1"
+              data-pmx-topbar-toggle-kind="bottom"
               variant="ghost"
               size="sm"
               disabled={!terminalAvailable}
@@ -122,11 +127,13 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>
             <Toggle
-              className="shrink-0 [-webkit-app-region:no-drag]"
+              className="size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
               pressed={rightPanelOpen}
               onPressedChange={onToggleRightPanel}
               aria-label={gt("Toggle right panel")}
               data-right-panel-toggle
+              data-pmx-topbar-icon-toggle="1"
+              data-pmx-topbar-toggle-kind="right"
               variant="ghost"
               size="sm"
               disabled={!rightPanelAvailable}
@@ -161,10 +168,13 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
       <TooltipTrigger
         render={
           <Toggle
-            className="shrink-0 [-webkit-app-region:no-drag]"
+            className="size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
             pressed={maximized}
             onPressedChange={onToggle}
             aria-label={label}
+            data-right-panel-maximize-toggle=""
+            data-pmx-topbar-icon-toggle="1"
+            data-pmx-topbar-toggle-kind="maximize"
             variant="ghost"
             size="sm"
           >

@@ -208,8 +208,8 @@ export function NoProjectsHero() {
 
           <ChatWidthDragHandles
             stageRef={stageRef}
-            widthPct={chatWidth.widthPct}
-            onCommitWidthPct={chatWidth.commitWidthPct}
+            widthPx={chatWidth.widthPx}
+            onCommitWidthPx={chatWidth.commitWidthPx}
           />
         </PrismuxStageFrame>
       </div>

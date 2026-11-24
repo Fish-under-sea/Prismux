@@ -10,9 +10,14 @@ import {
   openInlineAppearanceInStore,
   type WallpaperHostAdapter,
 } from "@prismux/wallpaper";
+import { GTProvider, initializeGT } from "gt-react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import {
+  PanelLayoutControls,
+  RightPanelMaximizeControl,
+} from "../components/chat/PanelLayoutControls";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { PrismuxWallpaperQuickPanel, PrismuxTopbarControls } from "./PrismuxWallpaperBridge";
 import { PrismuxRuntimeProvider } from "./PrismuxRuntimeProvider";
@@ -101,22 +106,41 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
     }
   });
 
-  it("mounts PrismuxWallpaperQuickPanel and unified single-topbar PrismuxTopbarControls (Chief Pill + Overview list-box SVG + independent Sparkles Wallpaper toggle)", () => {
+  it("mounts unified topbar controls in strict order (壁纸 → 概览 → 下侧栏 → 右侧栏) with RGB gradient Wallpaper Sparkles and Liquid Glass toggles", () => {
+    initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
     const html = renderToStaticMarkup(
-      <TooltipProvider>
-        <PrismuxRuntimeProvider>
-          <PrismuxTopbarControls
-            overviewOpen={true}
-            overviewShortcutLabel="Ctrl+Shift+B"
-            onToggleOverview={() => {}}
-            wallpaperOpen={false}
-            wallpaperAvailable={true}
-            onToggleWallpaper={() => {}}
-            onOpenChiefSettings={() => {}}
-          />
-          <PrismuxWallpaperQuickPanel />
-        </PrismuxRuntimeProvider>
-      </TooltipProvider>,
+      <GTProvider locale="zh" translations={{}}>
+        <TooltipProvider>
+          <PrismuxRuntimeProvider>
+            <PrismuxTopbarControls
+              overviewOpen={true}
+              overviewShortcutLabel="Ctrl+Shift+B"
+              onToggleOverview={() => {}}
+              wallpaperOpen={true}
+              wallpaperAvailable={true}
+              onToggleWallpaper={() => {}}
+              onOpenChiefSettings={() => {}}
+            />
+            <PanelLayoutControls
+              showThreadPanelControl={false}
+              terminalAvailable={true}
+              terminalOpen={false}
+              terminalShortcutLabel="Ctrl+J"
+              threadPanelOpen={true}
+              threadPanelPresentation="inline"
+              threadPanelShortcutLabel="Ctrl+Shift+B"
+              rightPanelAvailable={true}
+              rightPanelOpen={true}
+              rightPanelShortcutLabel="Ctrl+Shift+R"
+              onToggleTerminal={() => {}}
+              onToggleThreadPanel={() => {}}
+              onToggleRightPanel={() => {}}
+            />
+            <RightPanelMaximizeControl maximized={false} onToggle={() => {}} />
+            <PrismuxWallpaperQuickPanel />
+          </PrismuxRuntimeProvider>
+        </TooltipProvider>
+      </GTProvider>,
     );
 
     // Topbar uses minimalist PrismuxChiefStatusPill (canonical brand name, no noisy AGENT tag)
@@ -126,25 +150,54 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
     expect(html).not.toContain(">AGENT<");
     expect(html).not.toContain(">Agent<");
 
-    // Overview toggle uses crisp 20x20 rounded square + 3 left-aligned bars (3rd shorter) SVG
+    // Wallpaper Sparkles icon uses unique useId() RGB prism <linearGradient> with 6 seamless RGB stops
+    expect(html).toContain('data-pmx-wallpaper-toggle="1"');
+    expect(html).toContain('aria-label="壁纸快速开启"');
+    expect(html).toContain('data-pmx-wallpaper-icon="1"');
+    expect(html).toContain('data-pmx-rgb-gradient="1"');
+    expect(html).toContain("lucide-sparkles");
+    expect(html).toContain("pmx-wallpaper-rgb-sparkles");
+    const gradMatch = html.match(/<linearGradient[^>]*id="(pmx-wallpaper-rgb-[^"]+)"/);
+    expect(gradMatch).not.toBeNull();
+    const gradId = gradMatch![1];
+    expect(html).toContain(`stroke="url(#${gradId})"`);
+    for (const stopColor of ["#38bdf8", "#6366f1", "#ec4899", "#f59e0b", "#22c55e"]) {
+      expect(html).toContain(`stop-color="${stopColor}"`);
+    }
+
+    // Overview toggle uses crisp 20x20 rounded square + 3 left-aligned bars (3rd shorter) monochrome SVG
     expect(html).toContain('data-pmx-overview-toggle="1"');
     expect(html).toContain("data-thread-panel-toggle");
     expect(html).toContain('aria-label="概览"');
     expect(html).toContain('data-pmx-overview-icon="1"');
     expect(html).toContain('viewBox="0 0 20 20"');
     expect(html).toContain("M6.1 6.9H13.9M6.1 10H13.9M6.1 13.1H10.5");
-
-    // Independent Wallpaper quick-toggle button sits right beside Overview with the Sparkles icon
-    expect(html).toContain('data-pmx-wallpaper-toggle="1"');
-    expect(html).toContain('aria-label="壁纸快速开启"');
-    expect(html).toContain('data-pmx-wallpaper-icon="1"');
-    expect(html).toContain("lucide-sparkles");
     expect(html).not.toContain("mr-28");
 
-    // Overview toggle must appear before Wallpaper quick-toggle in DOM order
-    expect(html.indexOf('data-pmx-overview-toggle="1"')).toBeLessThan(
-      html.indexOf('data-pmx-wallpaper-toggle="1"'),
-    );
+    // All 4 core buttons + maximize opt into Apple Liquid Glass frosted active state (no harsh blue box)
+    expect(html).toContain('data-pmx-topbar-icon-toggle="1"');
+    expect(html).toContain('data-pmx-topbar-toggle-kind="wallpaper"');
+    expect(html).toContain('data-pmx-topbar-toggle-kind="overview"');
+    expect(html).toContain('data-pmx-topbar-toggle-kind="bottom"');
+    expect(html).toContain('data-pmx-topbar-toggle-kind="right"');
+    expect(html).toContain('data-pmx-topbar-toggle-kind="maximize"');
+
+    // Only Wallpaper icon uses the RGB gradient (exactly 1 RGB gradient SVG)
+    expect(html.match(/data-pmx-rgb-gradient="1"/g)).toHaveLength(1);
+
+    // Strict left-to-right DOM order: 主秘书胶囊 → 壁纸 → 概览 → 下侧栏 → 右侧栏 → 最大化
+    const idxChief = html.indexOf("data-pmx-chief-badge");
+    const idxWallpaper = html.indexOf('data-pmx-wallpaper-toggle="1"');
+    const idxOverview = html.indexOf('data-pmx-overview-toggle="1"');
+    const idxBottom = html.indexOf('data-bottom-panel-toggle=""');
+    const idxRight = html.indexOf("data-right-panel-toggle");
+    const idxMax = html.indexOf('data-right-panel-maximize-toggle=""');
+    expect(idxChief).toBeGreaterThan(-1);
+    expect(idxWallpaper).toBeGreaterThan(idxChief);
+    expect(idxOverview).toBeGreaterThan(idxWallpaper);
+    expect(idxBottom).toBeGreaterThan(idxOverview);
+    expect(idxRight).toBeGreaterThan(idxBottom);
+    expect(idxMax).toBeGreaterThan(idxRight);
 
     // Right sidebar mounts WallpaperQuickPanel cleanly
     expect(html).toContain("data-pmx-right-sidebar");
