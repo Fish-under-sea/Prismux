@@ -745,7 +745,7 @@ async function main(): Promise<void> {
 
   if (values.help || !values.dir) {
     console.log(
-      'Usage: node scripts/publish-gitee-release.ts --dir <release-dir> [--tag v0.1.2-preview.2] [--notes <md-path>] [--force] [--latest]',
+      'Usage: node scripts/publish-gitee-release.ts --dir <release-dir> [--tag v0.1.2-preview.3] [--notes <md-path>] [--force] [--latest]',
     );
     if (!values.help) {
       process.exitCode = 1;
