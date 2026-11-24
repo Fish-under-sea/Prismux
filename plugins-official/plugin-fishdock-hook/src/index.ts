@@ -43,7 +43,7 @@ function readBundledManifestVersion(fallback: string): string {
 
 export const manifest: PluginManifest = {
   id: "fishdock-hook",
-  version: readBundledManifestVersion("0.1.2-preview.3"),
+  version: readBundledManifestVersion("0.1.2-preview.4"),
   realms: ["daemon"],
   permissions: ["network:outbound", "hooks:subscribe", "notifications:push"],
   modelVisible: false,
