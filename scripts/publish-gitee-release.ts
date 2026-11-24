@@ -303,9 +303,7 @@ export interface ReleaseNotesTemplateInput {
 
 const OFFICIAL_PLUGIN_SUMMARY_ZH: Record<string, string> = {
   qq: 'OneBot v11 私聊主秘书调度 + 群聊物理隔离陪聊',
-  pet: '带租约锁与分阶段交还的桌面宠物桥接联动',
   'fishdock-hook': 'FISH-Dock 灵动岛审批卡片、重要邮件与夜间工场回执',
-  ssh: '按需远程运维（隔离主机池、Web PTY 终端与 SFTP 文件浏览）',
 };
 
 export function collectReleaseArtifactFiles(
@@ -489,7 +487,7 @@ export function buildReleaseNotesTemplate(input: ReleaseNotesTemplateInput): str
   const lines: string[] = [
     `# ${releaseTitle}`,
     '',
-    `> 标准 SemVer / Tag：\`${tag}\`（\`${input.version}\`）。**官方四大插件（\`qq\` / \`pet\` / \`fishdock-hook\` / \`ssh\`）严格保持默认零预装**：桌面安装包内不包含任何官方插件，需要时可从下方单独下载 \`.wb-plugin\` 或通过内置插件中心 / npm 单包按需安装。`,
+    `> 标准 SemVer / Tag：\`${tag}\`（\`${input.version}\`）。**官方两大插件（\`qq\` / \`fishdock-hook\`）严格保持默认零预装**（原 \`pet\` / \`ssh\` 插件已停用：已被 Prismux 内置功能取代）：桌面安装包内不包含任何官方插件，需要时可从下方单独下载 \`.wb-plugin\` 或通过内置插件中心 / npm 单包按需安装。`,
     '',
     '## 📦 下载指南：我应该下载哪个文件？',
     '',
@@ -747,7 +745,7 @@ async function main(): Promise<void> {
 
   if (values.help || !values.dir) {
     console.log(
-      'Usage: node scripts/publish-gitee-release.ts --dir <release-dir> [--tag v0.1.2-preview.1] [--notes <md-path>] [--force] [--latest]',
+      'Usage: node scripts/publish-gitee-release.ts --dir <release-dir> [--tag v0.1.2-preview.2] [--notes <md-path>] [--force] [--latest]',
     );
     if (!values.help) {
       process.exitCode = 1;

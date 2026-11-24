@@ -1114,13 +1114,13 @@ export function apply(ctx) {
     currentVersion: string;
     policy: { routePreference: string; includePrerelease: boolean };
   };
-  assert.equal(updaterStatus.currentVersion, "0.1.2-preview.1");
+  assert.equal(updaterStatus.currentVersion, "0.1.2-preview.2");
   assert.equal(updaterStatus.policy.routePreference, "domestic");
   assert.equal(updaterStatus.policy.includePrerelease, false);
 
   const healthCheckRes = await fetch(`${ready.httpUrl}/health`);
   assert.equal(healthCheckRes.status, 200);
-  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.2-preview.1");
+  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.2-preview.2");
 });
 
 test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electron protocol CORS + PRISMUX_CATALOG_PATH resolution", async () => {
@@ -1148,7 +1148,7 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
       plugins: OFFICIAL_PLUGIN_IDS.map((id) => ({
         id,
         packageName: `@prismux/plugin-${id}`,
-        version: "0.1.2-preview.1",
+        version: "0.1.2-preview.2",
         description: `Catalog entry ${id}`,
         engines: { prismux: ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0" },
         realms: ["daemon"],
@@ -1211,7 +1211,7 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
   });
   assert.equal(wpRes.status, 200);
 
-  // 2. Verify PRISMUX_CATALOG_PATH loads all 4 official plugins while 0 are preinstalled
+  // 2. Verify PRISMUX_CATALOG_PATH loads active official plugins (qq, fishdock-hook) while 0 are preinstalled
   const catRes = await fetch(`${ready.httpUrl}/v1/plugins/catalog`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -1227,7 +1227,7 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
   };
   assert.equal(catPayload.officialCatalogPath, customCatalogPath);
   assert.equal(catPayload.installedCount, 0);
-  assert.equal(catPayload.plugins.length, 4);
+  assert.equal(catPayload.plugins.length, OFFICIAL_PLUGIN_IDS.length);
 
   const instRes = await fetch(`${ready.httpUrl}/v1/plugins/installed`, {
     headers: { Authorization: `Bearer ${authToken}` }

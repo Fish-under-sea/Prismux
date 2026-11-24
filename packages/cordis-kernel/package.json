@@ -1,6 +1,6 @@
 {
   "name": "@prismux/cordis-kernel",
-  "version": "0.1.2-preview.1",
+  "version": "0.1.2-preview.2",
   "private": true,
   "type": "module",
   "description": "Reversible Cordis-inspired dual-realm plugin kernel and scriptless streaming installer for Prismux.",

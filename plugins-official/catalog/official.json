@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-22T00:00:00Z",
+  "generatedAt": "2026-11-24T00:00:00Z",
   "plugins": [
     {
       "id": "qq",
       "packageName": "@prismux/plugin-qq",
-      "version": "0.1.2-preview.1",
+      "version": "0.1.2-preview.2",
       "description": "OneBot v11 QQ private Chief Supervisor bridge and isolated group companion plugin.",
       "engines": {
         "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
@@ -21,36 +21,14 @@
         "hooks:subscribe"
       ],
       "modelVisible": false,
-      "sha256": "757b90a67ef9f69fc0fabe5df86b7413abcc89c9201477f4ab17057af6e7f5e7",
-      "bytes": 72315,
-      "status": "verified"
-    },
-    {
-      "id": "pet",
-      "packageName": "@prismux/plugin-pet",
-      "version": "0.1.2-preview.1",
-      "description": "Desktop mascot / pet plugin with instance binding, lease tokens, playback progress, and staged handover.",
-      "engines": {
-        "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
-      },
-      "realms": [
-        "ui",
-        "daemon"
-      ],
-      "permissions": [
-        "pet:lease",
-        "ui:panel",
-        "hooks:subscribe"
-      ],
-      "modelVisible": false,
-      "sha256": "d4bdda90980a49934af023722335a35627e69abf9867d9e65ff9a1e20920d908",
-      "bytes": 26867,
+      "sha256": "5ac85b0fe296f0b0d984c96f16fed4aebf78077f10a1d1acd17b4c400a2ff00d",
+      "bytes": 72959,
       "status": "verified"
     },
     {
       "id": "fishdock-hook",
       "packageName": "@prismux/plugin-fishdock-hook",
-      "version": "0.1.2-preview.1",
+      "version": "0.1.2-preview.2",
       "description": "Bridge plugin pushing PreToolUse approvals, email alerts, and factory completions to FISH-Dock Dynamic Island.",
       "engines": {
         "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
@@ -64,33 +42,35 @@
         "notifications:push"
       ],
       "modelVisible": false,
-      "sha256": "68dcf8e00951f1021df9e02e1d9eb5925735fdaaf6d01e09fd6aff621c88fae4",
-      "bytes": 36987,
+      "sha256": "bbbf935ed3deec7d7c5e391def2b7e1eb45135bfaafdc1c6b4793e8750bf94de",
+      "bytes": 37456,
       "status": "verified"
+    }
+  ],
+  "retiredPlugins": [
+    {
+      "id": "pet",
+      "packageName": "@prismux/plugin-pet",
+      "titleZh": "桌宠联动（pet）",
+      "titleEn": "Desktop Pet Bridge (pet)",
+      "status": "deprecated",
+      "replacedByBuiltin": true,
+      "noticeZh": "已停用：已被 Prismux 内置功能取代",
+      "noticeEn": "Deprecated: Replaced by Prismux built-in capabilities",
+      "detailZh": "原桌宠联动插件已从官方目录与构建链路移除，相关交互与状态反馈由 Prismux 内置工作台体验承接，不再提供独立安装包。",
+      "detailEn": "The standalone desktop pet plugin has been retired from the official catalog and release pipeline; interactive feedback is superseded by built-in Prismux workbench capabilities."
     },
     {
       "id": "ssh",
       "packageName": "@prismux/plugin-ssh",
-      "version": "0.1.2-preview.1",
-      "description": "Optional SSH host pool, Web PTY, and SFTP operations plugin.",
-      "engines": {
-        "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
-      },
-      "realms": [
-        "daemon",
-        "ui"
-      ],
-      "permissions": [
-        "network:outbound",
-        "pty:spawn",
-        "fs:read",
-        "fs:write",
-        "ui:panel"
-      ],
-      "modelVisible": false,
-      "sha256": "42de90641b9b1c3bb1e8a73380441dd2bc3151ac7b3932b7bc3f9c29086f7482",
-      "bytes": 31645,
-      "status": "verified"
+      "titleZh": "SSH 远程主机终端（ssh）",
+      "titleEn": "SSH Remote Terminal (ssh)",
+      "status": "deprecated",
+      "replacedByBuiltin": true,
+      "noticeZh": "已停用：已被 Prismux 内置功能取代",
+      "noticeEn": "Deprecated: Replaced by Prismux built-in capabilities",
+      "detailZh": "原 SSH 插件已从官方目录与构建链路移除，远程终端与主机连接由 Prismux 内置终端与工作区能力取代，不再提供独立安装包。",
+      "detailEn": "The standalone SSH plugin has been retired from the official catalog and release pipeline; remote terminal workflows are superseded by built-in Prismux terminal and workspace capabilities."
     }
   ]
 }

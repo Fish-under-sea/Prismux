@@ -1,6 +1,6 @@
 {
   "name": "@prismux/protocol",
-  "version": "0.1.2-preview.1",
+  "version": "0.1.2-preview.2",
   "private": true,
   "type": "module",
   "description": "Shared strong-typed RPC, lifecycle hook, memory, handoff, and plugin contracts for Prismux.",
