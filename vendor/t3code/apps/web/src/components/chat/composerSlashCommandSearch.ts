@@ -8,8 +8,11 @@ import {
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
 import {
   classifyComposerSkillCategory,
+  isHiddenSlashCommand,
+  resolveBundledSkillCommandPresentation,
   resolveSkillPresentation,
   resolveSlashCommandPresentation,
+  type ComposerSkillCategory,
 } from "./composerSlashCatalog";
 import { scoreProviderSkill } from "../../providerSkillSearch";
 
@@ -23,20 +26,43 @@ export type ComposerSkillGroupToggleItem = Extract<
   { type: "skill-group-toggle" }
 >;
 
-/** Provider commands, `/side`, `/btw` and `/clear` work only at the message start. */
+function getSlashItemSkillCategory(item: SlashSearchItem): ComposerSkillCategory | null {
+  if (item.type === "skill") {
+    return classifyComposerSkillCategory(resolveProviderSkillSourceKind(item.skill));
+  }
+  if (item.type === "provider-slash-command" && item.skillCategory !== undefined) {
+    return item.skillCategory;
+  }
+  return null;
+}
+
+function isHiddenSlashSearchItem(item: SlashSearchItem): boolean {
+  if (item.type === "provider-slash-command") {
+    return isHiddenSlashCommand(item.command.name);
+  }
+  if (item.type === "slash-command") {
+    return isHiddenSlashCommand(item.command);
+  }
+  return false;
+}
+
+/** Provider commands, `/side`, `/btw`, `/compact`, `/browser`, and `/clear` work only at the message start. */
 export function slashCommandItemsForPromptPosition(
   items: ReadonlyArray<SlashSearchItem>,
   isAtPromptStart: boolean,
 ): SlashSearchItem[] {
+  const visible = items.filter((item) => !isHiddenSlashSearchItem(item));
   if (isAtPromptStart) {
-    return [...items];
+    return visible;
   }
-  return items.filter(
+  return visible.filter(
     (item) =>
       item.type === "skill" ||
       (item.type === "slash-command" &&
         item.command !== "side" &&
         item.command !== "btw" &&
+        item.command !== "compact" &&
+        item.command !== "browser" &&
         item.command !== "clear"),
   );
 }
@@ -49,20 +75,21 @@ export function orderSlashCommandItems(items: ReadonlyArray<SlashSearchItem>): S
   const builtinSkills: SlashSearchItem[] = [];
 
   for (const item of items) {
+    if (isHiddenSlashSearchItem(item)) continue;
+    const skillCategory = getSlashItemSkillCategory(item);
+    if (skillCategory === "personal") {
+      personalSkills.push(item);
+      continue;
+    }
+    if (skillCategory === "builtin") {
+      builtinSkills.push(item);
+      continue;
+    }
     if (item.type === "slash-command") {
       builtInCommands.push(item);
       continue;
     }
-    if (item.type === "provider-slash-command") {
-      providerCommands.push(item);
-      continue;
-    }
-    const category = classifyComposerSkillCategory(resolveProviderSkillSourceKind(item.skill));
-    if (category === "personal") {
-      personalSkills.push(item);
-    } else {
-      builtinSkills.push(item);
-    }
+    providerCommands.push(item);
   }
 
   return [...builtInCommands, ...providerCommands, ...personalSkills, ...builtinSkills];
@@ -82,8 +109,20 @@ function stripSkillSearchPrefix(query: string): string {
 }
 
 function scoreSlashCommandItem(item: SlashSearchItem, query: string): number | null {
-  if (item.type === "skill") {
-    const presentation = resolveSkillPresentation(item.skill, item.description);
+  if (isHiddenSlashSearchItem(item)) {
+    return null;
+  }
+
+  const skillCategory = getSlashItemSkillCategory(item);
+  if (skillCategory !== null) {
+    const presentation =
+      item.type === "skill"
+        ? resolveSkillPresentation(item.skill, item.description)
+        : resolveBundledSkillCommandPresentation(
+            item.type === "provider-slash-command" ? item.command.name : item.command,
+            item.description,
+            skillCategory,
+          );
     if (query === "skill" || query === "技能") {
       return 0;
     }
@@ -99,16 +138,51 @@ function scoreSlashCommandItem(item: SlashSearchItem, query: string): number | n
       return 0;
     }
 
-    const scores: Array<number | null> = [scoreProviderSkill(item.skill, skillQuery)];
-    if (presentation.isLocalized && presentation.description) {
+    const scores: Array<number | null> =
+      item.type === "skill"
+        ? [scoreProviderSkill(item.skill, skillQuery)]
+        : [
+            scoreQueryMatch({
+              value: presentation.nativeName.toLowerCase(),
+              query: skillQuery,
+              exactBase: 0,
+              prefixBase: 2,
+              boundaryBase: 4,
+              includesBase: 6,
+              fuzzyBase: 100,
+              boundaryMarkers: ["-", "_", "/"],
+            }),
+          ];
+    const originalSkillDescription = item.description.trim().toLowerCase();
+    const presentationDescription = presentation.description.trim().toLowerCase();
+    if (
+      presentationDescription &&
+      (presentation.isLocalized || item.type === "provider-slash-command")
+    ) {
       scores.push(
         scoreQueryMatch({
-          value: presentation.description.toLowerCase(),
+          value: presentationDescription,
           query: skillQuery,
           exactBase: 20,
           prefixBase: 22,
           boundaryBase: 24,
           includesBase: 26,
+        }),
+      );
+    }
+    if (
+      item.type === "provider-slash-command" &&
+      originalSkillDescription &&
+      originalSkillDescription !== presentationDescription
+    ) {
+      scores.push(
+        scoreQueryMatch({
+          value: originalSkillDescription,
+          query: skillQuery,
+          exactBase: 24,
+          prefixBase: 26,
+          boundaryBase: 28,
+          includesBase: 30,
         }),
       );
     }
@@ -127,6 +201,10 @@ function scoreSlashCommandItem(item: SlashSearchItem, query: string): number | n
       return Math.min(...validScores);
     }
     return "skill".startsWith(query) || "技能".startsWith(query) ? Number.MAX_SAFE_INTEGER : null;
+  }
+
+  if (item.type === "skill") {
+    return null;
   }
 
   const rawCommandName = item.type === "slash-command" ? item.command : item.command.name;
@@ -214,12 +292,9 @@ export function searchSlashCommandItems(
       continue;
     }
 
+    const itemSkillCategory = getSlashItemSkillCategory(item);
     const skillTier =
-      item.type === "skill"
-        ? classifyComposerSkillCategory(resolveProviderSkillSourceKind(item.skill)) === "personal"
-          ? "2"
-          : "3"
-        : null;
+      itemSkillCategory !== null ? (itemSkillCategory === "personal" ? "2" : "3") : null;
 
     insertRankedSearchResult(
       ranked,
@@ -230,8 +305,8 @@ export function searchSlashCommandItems(
           item.type === "slash-command"
             ? `0\u0000${item.command}`
             : item.type === "provider-slash-command"
-              ? `1\u0000${item.command.name}\u0000${item.provider}`
-              : `${skillTier}\u0000${item.skill.name}\u0000${item.provider}`,
+              ? `${skillTier ?? "1"}\u0000${item.command.name}\u0000${item.provider}`
+              : `${skillTier ?? "3"}\u0000${item.skill.name}\u0000${item.provider}`,
       },
       Number.POSITIVE_INFINITY,
     );
@@ -262,11 +337,11 @@ export function buildComposerSlashMenuItems(input: {
   const builtinSkills: SlashSearchItem[] = [];
 
   for (const item of ordered) {
-    if (item.type !== "skill") {
+    const category = getSlashItemSkillCategory(item);
+    if (category === null) {
       nativeItems.push(item);
       continue;
     }
-    const category = classifyComposerSkillCategory(resolveProviderSkillSourceKind(item.skill));
     if (category === "personal") {
       personalSkills.push(item);
     } else {

@@ -57,6 +57,11 @@ import type { ModelEsque } from "./providerIconUtils";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import {
   classifyComposerSkillCategory,
+  classifyProviderSlashCommandAsSkill,
+  isEgoBrowserIdentifier,
+  isHiddenSlashCommand,
+  normalizeSlashCommandKey,
+  resolveBundledSkillCommandPresentation,
   resolveSkillPresentation,
   resolveSlashCommandPresentation,
 } from "./composerSlashCatalog";
@@ -107,6 +112,313 @@ function collectLinkedEnvironmentItems(input: {
     }));
 }
 
+export function buildComposerSlashTriggerItems(input: {
+  readonly query: string;
+  readonly isAtPromptStart: boolean;
+  readonly sideChatAvailable: boolean;
+  readonly sideChatOffered?: boolean | undefined;
+  readonly sideChatDisabledReason: string | null;
+  readonly freshSessionAvailable: boolean;
+  readonly compactSlashCommandAvailable: boolean;
+  readonly selectedProvider: ProviderDriverKind;
+  readonly selectedProviderSkills: ServerProvider["skills"];
+  readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
+  readonly showSkillsInSlashMenu: boolean;
+  readonly slashSkillsExpanded: boolean;
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly labels: {
+    readonly switchModel: string;
+    readonly askSideQuestion: string;
+    readonly compactConversation: string;
+    readonly invokeBrowser: string;
+    readonly freshSession: string;
+    readonly runProviderCommand: string;
+    readonly formatScopedSkill: (scope: string) => string;
+  };
+}): ComposerCommandItem[] {
+  const query = input.query.trim().toLowerCase();
+  const rawSlashMenuSkills = getProviderSkillsForSlashMenu(
+    input.selectedProviderSkills,
+    input.showSkillsInSlashMenu,
+  );
+  const egoBrowserSkill =
+    input.selectedProviderSkills.find(
+      (skill) => skill.enabled && isEgoBrowserIdentifier(skill.name),
+    ) ?? null;
+  const egoBrowserSlashCommand =
+    input.selectedProviderSlashCommands.find((command) => isEgoBrowserIdentifier(command.name)) ??
+    null;
+  const nativeBrowserSlashCommand =
+    input.selectedProviderSlashCommands.find(
+      (command) => normalizeSlashCommandKey(command.name) === "browser",
+    ) ?? null;
+
+  // Detect cross-provider `ego-browser` for universal `/browser` promotion, and collect personal
+  // skill names so user skills leaked into `slashCommands` fold cleanly under `个人技能`.
+  let crossProviderEgoBrowserName: string | null = null;
+  const knownPersonalSkillNames = new Set<string>();
+  for (const skill of input.selectedProviderSkills) {
+    if (
+      !isEgoBrowserIdentifier(skill.name) &&
+      classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) === "personal"
+    ) {
+      knownPersonalSkillNames.add(normalizeSlashCommandKey(skill.name));
+    }
+  }
+  for (const entry of input.instanceEntries) {
+    const providerSkills = [
+      ...entry.snapshot.skills,
+      ...(entry.snapshot.workspaceSnapshots?.flatMap((ws) => ws.skills) ?? []),
+    ];
+    for (const skill of providerSkills) {
+      if (isEgoBrowserIdentifier(skill.name)) {
+        if (skill.enabled && crossProviderEgoBrowserName === null) {
+          crossProviderEgoBrowserName = skill.name;
+        }
+        continue;
+      }
+      if (classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) === "personal") {
+        knownPersonalSkillNames.add(normalizeSlashCommandKey(skill.name));
+      }
+    }
+    if (crossProviderEgoBrowserName === null) {
+      const providerSlashCommands = [
+        ...entry.snapshot.slashCommands,
+        ...(entry.snapshot.workspaceSnapshots?.flatMap((ws) => ws.slashCommands) ?? []),
+      ];
+      const matchedEgoCommand = providerSlashCommands.find((command) =>
+        isEgoBrowserIdentifier(command.name),
+      );
+      if (matchedEgoCommand) {
+        crossProviderEgoBrowserName = matchedEgoCommand.name;
+      }
+    }
+  }
+
+  const browserDispatchMode = egoBrowserSkill
+    ? ("ego-skill" as const)
+    : egoBrowserSlashCommand
+      ? ("ego-command" as const)
+      : nativeBrowserSlashCommand
+        ? ("native-command" as const)
+        : crossProviderEgoBrowserName
+          ? ("ego-skill" as const)
+          : null;
+  const hasBrowserControl = browserDispatchMode !== null;
+  const usesEgoBrowser =
+    browserDispatchMode === "ego-skill" || browserDispatchMode === "ego-command";
+  const resolvedEgoBrowserName =
+    egoBrowserSkill?.name ??
+    egoBrowserSlashCommand?.name ??
+    crossProviderEgoBrowserName ??
+    "ego-browser";
+
+  const showUniversalBtw = (input.sideChatOffered ?? input.sideChatAvailable) || input.sideChatAvailable;
+  const btwDescriptionOverride =
+    input.sideChatDisabledReason === null
+      ? undefined
+      : !input.sideChatAvailable
+        ? "在不打断主线程的前提下发起旁路支线提问（发送首条消息后可用）"
+        : input.sideChatDisabledReason;
+  const compactDescriptionOverride = input.compactSlashCommandAvailable
+    ? undefined
+    : "总结并压缩当前对话历史，释放上下文窗口（有对话记录后可用）";
+  const browserDescription = usesEgoBrowser
+    ? "调用 ego-browser 操控真实浏览器，打开网页、填写表单、截屏与交互测试"
+    : resolveSlashCommandPresentation("browser", input.labels.invokeBrowser).description;
+
+  const builtInSlashCommandItems = [
+    {
+      id: "slash:model",
+      type: "slash-command",
+      command: "model",
+      label: "/model",
+      description: resolveSlashCommandPresentation("model", input.labels.switchModel).description,
+    },
+    ...(showUniversalBtw
+      ? ([
+          {
+            id: "slash:btw",
+            type: "slash-command",
+            command: "btw",
+            label: "/btw",
+            description: resolveSlashCommandPresentation(
+              "btw",
+              input.labels.askSideQuestion,
+              btwDescriptionOverride,
+            ).description,
+            ...(btwDescriptionOverride ? { descriptionOverride: btwDescriptionOverride } : {}),
+          },
+          // Keep `/side` searchable when explicitly typed without duplicating `/btw` on bare `/`.
+          ...(query.length > 0 && ("side".includes(query) || "侧聊".includes(query))
+            ? ([
+                {
+                  id: "slash:side",
+                  type: "slash-command",
+                  command: "side",
+                  label: "/side",
+                  description: resolveSlashCommandPresentation(
+                    "side",
+                    input.labels.askSideQuestion,
+                    btwDescriptionOverride,
+                  ).description,
+                  ...(btwDescriptionOverride
+                    ? { descriptionOverride: btwDescriptionOverride }
+                    : {}),
+                },
+              ] as const)
+            : []),
+        ] as const)
+      : []),
+    {
+      id: "slash:compact",
+      type: "slash-command",
+      command: "compact",
+      label: "/compact",
+      description: resolveSlashCommandPresentation(
+        "compact",
+        input.labels.compactConversation,
+        compactDescriptionOverride,
+      ).description,
+      ...(compactDescriptionOverride ? { descriptionOverride: compactDescriptionOverride } : {}),
+    },
+    ...(browserDispatchMode !== null
+      ? ([
+          {
+            id: "slash:browser",
+            type: "slash-command",
+            command: "browser",
+            label: "/browser",
+            description: browserDescription,
+            descriptionOverride: browserDescription,
+            browserDispatchMode,
+            ...(usesEgoBrowser ? { egoBrowserSkillName: resolvedEgoBrowserName } : {}),
+          },
+        ] as const)
+      : []),
+    ...(input.freshSessionAvailable
+      ? ([
+          {
+            id: "slash:clear",
+            type: "slash-command",
+            command: "clear",
+            label: "/clear",
+            description: resolveSlashCommandPresentation("clear", input.labels.freshSession)
+              .description,
+          },
+        ] as const)
+      : []),
+  ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+
+  // Promote `ego-browser` out of the skills folder into top-level `浏览器操控`.
+  const slashMenuSkills = rawSlashMenuSkills.filter((skill) => !isEgoBrowserIdentifier(skill.name));
+  const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
+    input.selectedProviderSlashCommands,
+    rawSlashMenuSkills,
+  )
+    .filter((command) => {
+      const normalized = normalizeSlashCommandKey(command.name);
+      if (isHiddenSlashCommand(normalized)) return false;
+      if (isEgoBrowserIdentifier(normalized)) return false;
+      if (normalized === "browser" && hasBrowserControl) return false;
+      if (normalized === "compact") return false;
+      if (normalized === "model") return false;
+      if ((normalized === "btw" || normalized === "side") && showUniversalBtw) return false;
+      if (normalized === "clear" && input.freshSessionAvailable) return false;
+      return true;
+    })
+    .map((command) => {
+      const fallbackDescription =
+        command.description ?? command.input?.hint ?? input.labels.runProviderCommand;
+      const skillCategory = classifyProviderSlashCommandAsSkill(
+        command.name,
+        command.description ?? "",
+        knownPersonalSkillNames,
+      );
+      return {
+        id: `provider-slash-command:${input.selectedProvider}:${command.name}`,
+        type: "provider-slash-command" as const,
+        provider: input.selectedProvider,
+        command,
+        label: `/${command.name}`,
+        description:
+          skillCategory !== null
+            ? resolveBundledSkillCommandPresentation(
+                command.name,
+                fallbackDescription,
+                skillCategory,
+              ).description
+            : resolveSlashCommandPresentation(command.name, fallbackDescription).description,
+        ...(skillCategory !== null ? { skillCategory } : {}),
+      };
+    });
+  const skillItems = slashMenuSkills.map((skill) => {
+    const fallbackDescription =
+      skill.shortDescription ??
+      skill.description ??
+      (skill.scope ? input.labels.formatScopedSkill(skill.scope) : "");
+    return {
+      id: `skill:${input.selectedProvider}:${skill.name}`,
+      type: "skill" as const,
+      provider: input.selectedProvider,
+      skill,
+      label: `/skill:${skill.name}`,
+      description: resolveSkillPresentation(skill, fallbackDescription).description,
+    };
+  });
+  const slashCommandItems = slashCommandItemsForPromptPosition(
+    [...builtInSlashCommandItems, ...providerSlashCommandItems, ...skillItems],
+    input.isAtPromptStart,
+  );
+  return buildComposerSlashMenuItems({
+    items: slashCommandItems,
+    query,
+    skillsExpanded: input.slashSkillsExpanded,
+  });
+}
+
+export function buildComposerSkillTriggerItems(input: {
+  readonly query: string;
+  readonly selectedProvider: ProviderDriverKind;
+  readonly selectedProviderSkills: ServerProvider["skills"];
+  readonly labels: {
+    readonly runProviderSkill: string;
+    readonly formatScopedSkill: (scope: string) => string;
+  };
+}): ComposerCommandItem[] {
+  const visibleSkills = input.selectedProviderSkills.filter(
+    (skill) => !isEgoBrowserIdentifier(skill.name),
+  );
+  const searchedSkills = searchProviderSkills(visibleSkills, input.query);
+  const orderedSkills =
+    input.query.trim().length === 0
+      ? [
+          ...searchedSkills.filter(
+            (skill) =>
+              classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) === "personal",
+          ),
+          ...searchedSkills.filter(
+            (skill) =>
+              classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) === "builtin",
+          ),
+        ]
+      : searchedSkills;
+  return orderedSkills.map((skill) => {
+    const fallbackDescription =
+      skill.shortDescription ??
+      skill.description ??
+      (skill.scope ? input.labels.formatScopedSkill(skill.scope) : input.labels.runProviderSkill);
+    return {
+      id: `skill:${input.selectedProvider}:${skill.name}`,
+      type: "skill" as const,
+      provider: input.selectedProvider,
+      skill,
+      label: formatProviderSkillDisplayName(skill),
+      description: resolveSkillPresentation(skill, fallbackDescription).description,
+    };
+  });
+}
+
 /** Builds the @, /, $ and # suggestion lists, running the searches each trigger needs. */
 export function useComposerMenuItems({
   composerTrigger,
@@ -118,6 +430,7 @@ export function useComposerMenuItems({
   pullRequestRepository,
   threadPullRequests,
   sideChatAvailable,
+  sideChatOffered,
   sideChatDisabledReason,
   freshSessionAvailable,
   compactSlashCommandAvailable,
@@ -139,6 +452,7 @@ export function useComposerMenuItems({
   readonly pullRequestRepository: string | null;
   readonly threadPullRequests: ReadonlyArray<ThreadPullRequestLink> | undefined;
   readonly sideChatAvailable: boolean;
+  readonly sideChatOffered?: boolean | undefined;
   readonly sideChatDisabledReason: string | null;
   readonly freshSessionAvailable: boolean;
   readonly compactSlashCommandAvailable: boolean;
@@ -314,141 +628,40 @@ export function useComposerMenuItems({
       ];
     }
     if (composerTrigger.kind === "slash-command") {
-      const builtInSlashCommandItems = [
-        {
-          id: "slash:model",
-          type: "slash-command",
-          command: "model",
-          label: "/model",
-          description: resolveSlashCommandPresentation(
-            "model",
-            gt("Switch response model for this thread"),
-          ).description,
-        },
-        ...(sideChatAvailable
-          ? ([
-              {
-                id: "slash:side",
-                type: "slash-command",
-                command: "side",
-                label: "/side",
-                description: resolveSlashCommandPresentation(
-                  "side",
-                  gt("Ask a side question in a new side chat"),
-                  sideChatDisabledReason,
-                ).description,
-                ...(sideChatDisabledReason ? { descriptionOverride: sideChatDisabledReason } : {}),
-              },
-              {
-                id: "slash:btw",
-                type: "slash-command",
-                command: "btw",
-                label: "/btw",
-                description: resolveSlashCommandPresentation(
-                  "btw",
-                  gt("Same as /side"),
-                  sideChatDisabledReason,
-                ).description,
-                ...(sideChatDisabledReason ? { descriptionOverride: sideChatDisabledReason } : {}),
-              },
-            ] as const)
-          : []),
-        ...(freshSessionAvailable
-          ? ([
-              {
-                id: "slash:clear",
-                type: "slash-command",
-                command: "clear",
-                label: "/clear",
-                description: resolveSlashCommandPresentation(
-                  "clear",
-                  gt("Start a fresh session; earlier messages stay visible"),
-                ).description,
-              },
-            ] as const)
-          : []),
-      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const slashMenuSkills = getProviderSkillsForSlashMenu(
+      return buildComposerSlashTriggerItems({
+        query: composerTrigger.query,
+        isAtPromptStart: composerTrigger.rangeStart === 0,
+        sideChatAvailable,
+        sideChatOffered,
+        sideChatDisabledReason,
+        freshSessionAvailable,
+        compactSlashCommandAvailable,
+        selectedProvider,
         selectedProviderSkills,
-        showSkillsInSlashMenu,
-      );
-      const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
         selectedProviderSlashCommands,
-        slashMenuSkills,
-      ).map((command) => {
-        const fallbackDescription =
-          command.description ?? command.input?.hint ?? gt("Run provider command");
-        return {
-          id: `provider-slash-command:${selectedProvider}:${command.name}`,
-          type: "provider-slash-command" as const,
-          provider: selectedProvider,
-          command,
-          label: `/${command.name}`,
-          description: resolveSlashCommandPresentation(command.name, fallbackDescription)
-            .description,
-        };
-      });
-      const query = composerTrigger.query.trim().toLowerCase();
-      const skillItems = slashMenuSkills.map((skill) => {
-        const fallbackDescription =
-          skill.shortDescription ??
-          skill.description ??
-          (skill.scope ? gt("{scope} skill", { scope: skill.scope }) : "");
-        return {
-          id: `skill:${selectedProvider}:${skill.name}`,
-          type: "skill" as const,
-          provider: selectedProvider,
-          skill,
-          label: `/skill:${skill.name}`,
-          description: resolveSkillPresentation(skill, fallbackDescription).description,
-        };
-      });
-      // T3's `/clear` replaces the provider's, which would clear a session T3 still treats as live.
-      const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
-        (item) =>
-          (item.command.name !== "compact" || compactSlashCommandAvailable) &&
-          (item.command.name !== "clear" || !freshSessionAvailable),
-      );
-      const slashCommandItems = slashCommandItemsForPromptPosition(
-        [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
-        composerTrigger.rangeStart === 0,
-      );
-      return buildComposerSlashMenuItems({
-        items: slashCommandItems,
-        query,
-        skillsExpanded: slashSkillsExpanded,
+        showSkillsInSlashMenu,
+        slashSkillsExpanded,
+        instanceEntries: modelMentions.instanceEntries,
+        labels: {
+          switchModel: gt("Switch response model for this thread"),
+          askSideQuestion: gt("Ask a side question in a new side chat"),
+          compactConversation: gt("Summarize the conversation and reduce context usage"),
+          invokeBrowser: gt("Invoke a browser agent for web tasks."),
+          freshSession: gt("Start a fresh session; earlier messages stay visible"),
+          runProviderCommand: gt("Run provider command"),
+          formatScopedSkill: (scope) => gt("{scope} skill", { scope }),
+        },
       });
     }
     if (composerTrigger.kind === "skill") {
-      const searchedSkills = searchProviderSkills(selectedProviderSkills, composerTrigger.query);
-      const orderedSkills =
-        composerTrigger.query.trim().length === 0
-          ? [
-              ...searchedSkills.filter(
-                (skill) =>
-                  classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) ===
-                  "personal",
-              ),
-              ...searchedSkills.filter(
-                (skill) =>
-                  classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) ===
-                  "builtin",
-              ),
-            ]
-          : searchedSkills;
-      return orderedSkills.map((skill) => {
-        const fallbackDescription =
-          skill.shortDescription ??
-          skill.description ??
-          (skill.scope ? gt("{scope} skill", { scope: skill.scope }) : gt("Run provider skill"));
-        return {
-          id: `skill:${selectedProvider}:${skill.name}`,
-          type: "skill" as const,
-          provider: selectedProvider,
-          skill,
-          label: formatProviderSkillDisplayName(skill),
-          description: resolveSkillPresentation(skill, fallbackDescription).description,
-        };
+      return buildComposerSkillTriggerItems({
+        query: composerTrigger.query,
+        selectedProvider,
+        selectedProviderSkills,
+        labels: {
+          runProviderSkill: gt("Run provider skill"),
+          formatScopedSkill: (scope) => gt("{scope} skill", { scope }),
+        },
       });
     }
     if (

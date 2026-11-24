@@ -89,6 +89,14 @@ describe("ComposerCommandMenu rendering & grouping", () => {
         description: "Launch swarm",
       },
       {
+        id: "provider-slash-command:codex:teamwork",
+        type: "provider-slash-command",
+        provider: codex,
+        command: { name: "teamwork", description: "Coordinate team" },
+        label: "/teamwork",
+        description: "Coordinate team",
+      },
+      {
         id: "provider-slash-command:codex:schedule",
         type: "provider-slash-command",
         provider: codex,
@@ -117,10 +125,13 @@ describe("ComposerCommandMenu rendering & grouping", () => {
     ];
 
     const html = renderMenu({ items, triggerKind: "slash-command" });
-    expect(html).toContain("🐝");
+    // Exactly one bee icon (exclusively for `/swarm`, NEVER for `/teamwork`)
+    expect(html.match(/data-slash-icon="swarm-bee"/g)).toHaveLength(1);
     expect(html).toContain("蜂群");
     expect(html).toContain("swarm");
     expect(html).toContain("启动多智能体蜂群协作");
+    expect(html).toContain("团队协作");
+    expect(html).toContain("teamwork");
     expect(html).toContain("定时任务");
     expect(html).toContain("schedule");
     expect(html).toContain("切换模型");
@@ -259,7 +270,82 @@ describe("ComposerCommandMenu rendering & grouping", () => {
     expect(html).toContain("主机");
   });
 
-  it("wires slashSkillsExpanded toggle state cleanly inside ChatComposer.tsx", () => {
+  it("folds Claude Code bundled-skill slash commands into 自带技能 with localized Chinese descriptions", () => {
+    const claude = ProviderDriverKind.make("claudeAgent");
+    const items: ComposerCommandItem[] = [
+      {
+        id: "slash:model",
+        type: "slash-command",
+        command: "model",
+        label: "/model",
+        description: "切换模型",
+      },
+      {
+        id: "slash:btw",
+        type: "slash-command",
+        command: "btw",
+        label: "/btw",
+        description: "在不打断主线程的前提下发起旁路支线提问",
+      },
+      {
+        id: "slash:compact",
+        type: "slash-command",
+        command: "compact",
+        label: "/compact",
+        description: "总结并压缩当前对话历史，释放上下文窗口",
+      },
+      {
+        id: "slash:browser",
+        type: "slash-command",
+        command: "browser",
+        label: "/browser",
+        description: "调用 ego-browser 操控真实浏览器，打开网页、填写表单、截屏与交互测试",
+        browserDispatchMode: "ego-skill",
+        egoBrowserSkillName: "ego-browser",
+      },
+      {
+        id: "slash:skills-folder",
+        type: "skill-group-toggle",
+        expanded: true,
+        personalCount: 0,
+        builtinCount: 2,
+        totalCount: 2,
+        label: "收起技能",
+        description: "个人 0 · 自带 2",
+      },
+      {
+        id: "provider-slash-command:claudeAgent:deep-research",
+        type: "provider-slash-command",
+        provider: claude,
+        command: { name: "deep-research", description: "Deep research harness" },
+        label: "/deep-research",
+        description: "Deep research harness",
+        skillCategory: "builtin",
+      },
+      {
+        id: "provider-slash-command:claudeAgent:simplify",
+        type: "provider-slash-command",
+        provider: claude,
+        command: { name: "simplify", description: "Review the changed code" },
+        label: "/simplify",
+        description: "Review the changed code",
+        skillCategory: "builtin",
+      },
+    ];
+
+    const groups = groupComposerCommandMenuItems(items, "slash-command");
+    expect(groups.map((group) => group.label)).toEqual([null, "自带技能"]);
+    const html = renderMenu({ items, triggerKind: "slash-command" });
+    expect(html).toContain("旁路提问");
+    expect(html).toContain("上下文压缩");
+    expect(html).toContain("浏览器操控");
+    expect(html).toContain("deep-research");
+    expect(html).toContain("多路并行联网检索");
+    expect(html).toContain("simplify");
+    expect(html).toContain("审查近期代码改动并精简冗余逻辑");
+  });
+
+  it("wires slashSkillsExpanded toggle and logo-only ModelPicker agent switcher cleanly", () => {
     const chatDir = NodePath.dirname(
       new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
     );
@@ -268,5 +354,20 @@ describe("ComposerCommandMenu rendering & grouping", () => {
     expect(source).toContain('composerTriggerKind !== "slash-command" && slashSkillsExpanded');
     expect(source).toContain("slashSkillsExpanded,");
     expect(source).toContain('if (item.type === "skill-group-toggle")');
+
+    const pickerSource = NodeFS.readFileSync(
+      NodePath.join(chatDir, "ModelPickerContent.tsx"),
+      "utf8",
+    );
+    expect(pickerSource).toContain('data-model-picker-agent-switcher-list="true"');
+    expect(pickerSource).not.toContain("切换代理");
+    expect(pickerSource).not.toContain("data-model-picker-switch-agent-toggle");
+    // Verify switcher chips are logo-only (no visible text span next to AgentBrandLogo)
+    const switcherBlockMatch = pickerSource.match(
+      /data-model-picker-agent-switcher-list="true"[\s\S]*?<\/div>\s*<\/div>/,
+    );
+    expect(switcherBlockMatch?.[0]).toContain("<AgentBrandLogo");
+    expect(switcherBlockMatch?.[0]).not.toContain("{brandLabel}</span>");
+    expect(switcherBlockMatch?.[0]).toContain("aria-label={brandLabel}");
   });
 });

@@ -10,7 +10,7 @@ import {
   type ServerProvider,
   type ServerProviderSkill,
 } from "@t3tools/contracts";
-import { ClockIcon, TerminalIcon, UserRoundIcon, FolderIcon, BlocksIcon, SettingsIcon } from "lucide-react";
+import { ClockIcon, TerminalIcon, UserRoundIcon, UsersIcon, FolderIcon, BlocksIcon, SettingsIcon } from "lucide-react";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ProviderInstanceEntry } from "../../providerInstances";
@@ -20,6 +20,10 @@ import {
   BUILTIN_SKILL_ZH_DESCRIPTIONS,
   SLASH_COMMAND_CATALOG,
   classifyComposerSkillCategory,
+  classifyProviderSlashCommandAsSkill,
+  isEgoBrowserIdentifier,
+  isHiddenSlashCommand,
+  resolveBundledSkillCommandPresentation,
   resolveSkillPresentation,
   resolveSlashCommandPresentation,
 } from "./composerSlashCatalog";
@@ -29,6 +33,10 @@ import {
   searchSlashCommandItems,
   type SlashSearchItem,
 } from "./composerSlashCommandSearch";
+import {
+  buildComposerSkillTriggerItems,
+  buildComposerSlashTriggerItems,
+} from "./useComposerMenuItems";
 import type { ModelEsque } from "./providerIconUtils";
 
 function makeSkill(
@@ -183,19 +191,125 @@ describe("composerSlashCatalog — native slash commands", () => {
     }
 
     const swarm = resolveSlashCommandPresentation("swarm");
-    expect(swarm.icon).toEqual({ kind: "emoji", emoji: "🐝" });
+    expect(swarm.icon).toEqual({ kind: "swarm-bee" });
     expect(swarm.zhTitle).toBe("蜂群");
     expect(swarm.nativeName).toBe("swarm");
     expect(swarm.description).toContain("多智能体蜂群协作");
+
+    // teamwork must NOT use bee icon
+    const teamwork = resolveSlashCommandPresentation("teamwork");
+    expect(teamwork.icon).toEqual({ kind: "lucide", icon: UsersIcon });
+    expect(teamwork.zhTitle).toBe("团队协作");
 
     const schedule = resolveSlashCommandPresentation("schedule");
     expect(schedule.icon).toEqual({ kind: "lucide", icon: ClockIcon });
     expect(schedule.zhTitle).toBe("定时任务");
     expect(schedule.nativeName).toBe("schedule");
 
-    const usageLimits = resolveSlashCommandPresentation("/usage-limits");
-    expect(usageLimits.zhTitle).toBe("用量限额");
-    expect(usageLimits.nativeName).toBe("usage-limits");
+    // Usage limits, AGY doc/meta commands & Claude internal/junk commands are hidden across ALL agents
+    const hiddenCommands = [
+      "usage-limits",
+      "usage_limits",
+      "usage",
+      "limits",
+      "rate-limits",
+      "rate_limits",
+      "agy-customizations",
+      "antigravity-guide",
+      "run-workflow",
+      "run_workflow",
+      "__remote-workflow",
+      "workflow-launch-exec",
+      "agents",
+      "heapdump",
+      "color",
+      "focus",
+      "design-consent",
+      "design-revoke",
+    ];
+    for (const hiddenCmd of hiddenCommands) {
+      expect(isHiddenSlashCommand(hiddenCmd)).toBe(true);
+      expect(isHiddenSlashCommand(`/${hiddenCmd}`)).toBe(true);
+    }
+    expect(isHiddenSlashCommand("btw")).toBe(false);
+    expect(isHiddenSlashCommand("compact")).toBe(false);
+    expect(isHiddenSlashCommand("browser")).toBe(false);
+    expect(isHiddenSlashCommand("swarm")).toBe(false);
+    expect(isHiddenSlashCommand("teamwork")).toBe(false);
+
+    // ego-browser promotion identifier
+    expect(isEgoBrowserIdentifier("ego-browser")).toBe(true);
+    expect(isEgoBrowserIdentifier("/ego_browser")).toBe(true);
+    expect(isEgoBrowserIdentifier("browser")).toBe(false);
+
+    // Claude Code bundled skills emitted as slashCommands fold into 自带技能 with Chinese descriptions
+    const claudeBundledSkills = [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring",
+      "auto-mode-setup",
+      "team-onboarding",
+      "insights",
+    ];
+    for (const skillCmd of claudeBundledSkills) {
+      expect(classifyProviderSlashCommandAsSkill(skillCmd, "Original EN")).toBe("builtin");
+      const pres = resolveBundledSkillCommandPresentation(skillCmd, "Original EN", "builtin");
+      expect(pres.isLocalized).toBe(true);
+      expect(pres.description).toMatch(/[\u4e00-\u9fff]/u);
+    }
+
+    // Dynamic fallback catches future Claude/AGY skills with "Use this skill..." descriptions
+    expect(
+      classifyProviderSlashCommandAsSkill(
+        "future-new-skill",
+        "Use this skill whenever you need future behavior",
+      ),
+    ).toBe("builtin");
+    // Personal skills leaked into slashCommands stay untranslated under 个人技能
+    expect(
+      classifyProviderSlashCommandAsSkill("brainstorming", "My note (user)"),
+    ).toBe("personal");
+    expect(
+      classifyProviderSlashCommandAsSkill("brainstorming", "My note", new Set(["brainstorming"])),
+    ).toBe("personal");
+    const personalLeaked = resolveBundledSkillCommandPresentation(
+      "brainstorming",
+      "Custom prompt (user)",
+      "personal",
+    );
+    expect(personalLeaked.description).toBe("Custom prompt");
+    expect(personalLeaked.isLocalized).toBe(false);
+
+    // Claude native commands & Codex system skills are localized
+    for (const nativeCmd of [
+      "loop",
+      "debug",
+      "advisor",
+      "autocompact",
+      "output-style",
+      "reload-plugins",
+      "reload-skills",
+      "recap",
+      "list-agents",
+    ]) {
+      const pres = resolveSlashCommandPresentation(nativeCmd);
+      expect(pres.isLocalized).toBe(true);
+      expect(pres.zhTitle).toBeTruthy();
+      expect(pres.description).toMatch(/[\u4e00-\u9fff]/u);
+    }
+    expect(BUILTIN_SKILL_ZH_DESCRIPTIONS["create-statusline"]).toMatch(/[\u4e00-\u9fff]/u);
+    expect(BUILTIN_SKILL_ZH_DESCRIPTIONS["review-agent"]).toMatch(/[\u4e00-\u9fff]/u);
   });
 
   it("respects explicit descriptionOverride (e.g. sideChatDisabledReason) and falls back cleanly for unknown commands", () => {
@@ -354,9 +468,18 @@ describe("composerSlashCommandSearch — ordering, collapsible skills folder & b
     ),
   ];
 
-  it("orders bare `/` as native commands first and collapses personal + built-in skills into a single folder toggle", () => {
+  it("orders bare `/` as native commands first, hides usage-limits/noise, and collapses personal + built-in skills into a single folder toggle", () => {
     const collapsed = buildComposerSlashMenuItems({
-      items: sampleItems,
+      items: [
+        ...sampleItems,
+        makeProviderSlashItem("agy-customizations", "AGY customization guide"),
+        makeProviderSlashItem("antigravity-guide", "AGY usage guide"),
+        makeProviderSlashItem("run-workflow", "Run workflow script"),
+        {
+          ...makeProviderSlashItem("deep-research", "Deep research harness"),
+          skillCategory: "builtin" as const,
+        },
+      ],
       query: "",
       skillsExpanded: false,
     });
@@ -365,7 +488,6 @@ describe("composerSlashCommandSearch — ordering, collapsible skills folder & b
       "slash:model",
       "provider-slash-command:codex:swarm",
       "provider-slash-command:codex:goal",
-      "provider-slash-command:codex:usage-limits",
       "provider-slash-command:codex:feedback",
       "slash:skills-folder",
     ]);
@@ -376,16 +498,22 @@ describe("composerSlashCommandSearch — ordering, collapsible skills folder & b
       type: "skill-group-toggle",
       expanded: false,
       personalCount: 2,
-      builtinCount: 2,
-      totalCount: 4,
+      builtinCount: 3,
+      totalCount: 5,
       label: "技能",
-      description: "个人 2 · 自带 2",
+      description: "个人 2 · 自带 3",
     });
   });
 
-  it("expands bare `/` into toggle row -> personal skills -> built-in skills", () => {
+  it("expands bare `/` into toggle row -> personal skills -> built-in skills (including folded bundled slash commands)", () => {
     const expanded = buildComposerSlashMenuItems({
-      items: sampleItems,
+      items: [
+        ...sampleItems,
+        {
+          ...makeProviderSlashItem("deep-research", "Deep research harness"),
+          skillCategory: "builtin" as const,
+        },
+      ],
       query: "",
       skillsExpanded: true,
     });
@@ -394,13 +522,13 @@ describe("composerSlashCommandSearch — ordering, collapsible skills folder & b
       "slash:model",
       "provider-slash-command:codex:swarm",
       "provider-slash-command:codex:goal",
-      "provider-slash-command:codex:usage-limits",
       "provider-slash-command:codex:feedback",
       "slash:skills-folder",
       "skill:codex:ego-browser",
       "skill:codex:brainstorming",
       "skill:codex:agy-customizations",
       "skill:codex:pdf",
+      "provider-slash-command:codex:deep-research",
     ]);
     const folder = expanded.find(
       (item): item is Extract<ComposerCommandItem, { type: "skill-group-toggle" }> =>
@@ -410,7 +538,7 @@ describe("composerSlashCommandSearch — ordering, collapsible skills folder & b
     expect(folder?.label).toBe("收起技能");
   });
 
-  it("auto-expands and matches bilingual English & Chinese queries across commands and skills", () => {
+  it("auto-expands and matches bilingual English & Chinese queries across commands and skills while hiding usage-limits", () => {
     expect(
       buildComposerSlashMenuItems({ items: sampleItems, query: "蜂群", skillsExpanded: false })[0]
         ?.id,
@@ -427,10 +555,10 @@ describe("composerSlashCommandSearch — ordering, collapsible skills folder & b
       buildComposerSlashMenuItems({ items: sampleItems, query: "模型", skillsExpanded: false })[0]
         ?.id,
     ).toBe("slash:model");
+    // usage-limits is hidden across all agents
     expect(
-      buildComposerSlashMenuItems({ items: sampleItems, query: "限额", skillsExpanded: false })[0]
-        ?.id,
-    ).toBe("provider-slash-command:codex:usage-limits");
+      buildComposerSlashMenuItems({ items: sampleItems, query: "限额", skillsExpanded: false }),
+    ).toEqual([]);
     expect(
       buildComposerSlashMenuItems({ items: sampleItems, query: "反馈", skillsExpanded: false })[0]
         ?.id,
@@ -458,7 +586,6 @@ describe("composerSlashCommandSearch — ordering, collapsible skills folder & b
       "slash:model",
       "provider-slash-command:codex:swarm",
       "provider-slash-command:codex:goal",
-      "provider-slash-command:codex:usage-limits",
       "provider-slash-command:codex:feedback",
       "skill:codex:ego-browser",
       "skill:codex:brainstorming",
@@ -600,5 +727,265 @@ describe("@ mention enhancements — @对话 and @工作Agent", () => {
       includeReadyAgentsOnEmptyQuery: true,
     });
     expect(byZhAgent.map((item) => item.label)).toEqual(["Codex", "Claude Code", "Antigravity"]);
+  });
+});
+
+describe("useComposerMenuItems — universal /btw, /compact, cross-provider /browser & Claude layout", () => {
+  const defaultSlashLabels = {
+    switchModel: "Switch response model for this thread",
+    askSideQuestion: "Ask a side question in a new side chat",
+    compactConversation: "Summarize the conversation and reduce context usage",
+    invokeBrowser: "Invoke a browser agent for web tasks.",
+    freshSession: "Start a fresh session; earlier messages stay visible",
+    runProviderCommand: "Run provider command",
+    formatScopedSkill: (scope: string) => `${scope} skill`,
+  };
+  const defaultSkillLabels = {
+    runProviderSkill: "Run provider skill",
+    formatScopedSkill: (scope: string) => `${scope} skill`,
+  };
+
+  it("promotes /browser universally whenever ego-browser is equipped on ANY local provider and hides ego-browser from 技能 & $ lists", () => {
+    const claude = ProviderDriverKind.make("claudeAgent");
+    const codex = ProviderDriverKind.make("codex");
+    const agy = ProviderDriverKind.make("antigravity");
+
+    const egoSkill = makeSkill("ego-browser", {
+      scope: "user",
+      shortDescription: "Operate logged-in Chromium browser",
+    });
+    const personalSkill = makeSkill("brainstorming", {
+      scope: "user",
+      shortDescription: "【需求探索】头脑风暴",
+    });
+
+    // Only Antigravity has ego-browser equipped in instanceEntries; active provider is Claude Code with NO ego-browser or native /browser
+    const agyBase = makeProviderEntry("antigravity", "antigravity", "Antigravity");
+    const agyWithEgo = makeProviderEntry("antigravity", "antigravity", "Antigravity", {
+      snapshot: { ...agyBase.snapshot, skills: [egoSkill, personalSkill] },
+    });
+    const claudeEntry = makeProviderEntry("claude", "claudeAgent", "Claude Code");
+
+    const claudeItems = buildComposerSlashTriggerItems({
+      query: "",
+      isAtPromptStart: true,
+      sideChatAvailable: true,
+      sideChatOffered: true,
+      sideChatDisabledReason: null,
+      freshSessionAvailable: true,
+      compactSlashCommandAvailable: true,
+      selectedProvider: claude,
+      selectedProviderSkills: [],
+      selectedProviderSlashCommands: [
+        { name: "btw", description: "Native btw" },
+        { name: "compact", description: "Native compact" },
+        { name: "usage-limits", description: "Usage limits" },
+        { name: "usage", description: "Usage" },
+        { name: "limits", description: "Limits" },
+        { name: "rate-limits", description: "Rate limits" },
+        { name: "__remote-workflow", description: "Internal" },
+        { name: "workflow-launch-exec", description: "Internal" },
+        { name: "agents", description: "Agents" },
+        { name: "heapdump", description: "Heapdump" },
+        { name: "color", description: "Color" },
+        { name: "focus", description: "Focus" },
+        { name: "design-consent", description: "Consent" },
+        { name: "design-revoke", description: "Revoke" },
+        { name: "deep-research", description: "Deep research" },
+        { name: "design", description: "Claude Design" },
+        { name: "design-sync", description: "Sync design" },
+        { name: "dataviz", description: "Data viz" },
+        { name: "update-config", description: "Update config" },
+        { name: "verify", description: "Verify changes" },
+        { name: "simplify", description: "Simplify code" },
+        { name: "batch", description: "Batch refactor" },
+        { name: "fewer-permission-prompts", description: "Fewer prompts" },
+        { name: "claude-api", description: "Claude API" },
+        { name: "workflow-authoring", description: "Workflow authoring" },
+        { name: "run", description: "Run app" },
+        { name: "run-skill-generator", description: "Generate run skill" },
+        { name: "plugin-authoring", description: "Plugin authoring" },
+        { name: "auto-mode-setup", description: "Auto mode setup" },
+        { name: "team-onboarding", description: "Team onboarding" },
+        { name: "insights", description: "Insights" },
+        { name: "future-dynamic-skill", description: "Use this skill when doing future things" },
+        { name: "design", description: "My custom personal design note (user)" },
+      ],
+      showSkillsInSlashMenu: true,
+      slashSkillsExpanded: true,
+      instanceEntries: [claudeEntry, agyWithEgo],
+      labels: defaultSlashLabels,
+    });
+
+    const ids = claudeItems.map((item) => item.id);
+    // Universal commands present & deduplicated
+    expect(ids.filter((id) => id === "slash:btw")).toHaveLength(1);
+    expect(ids.filter((id) => id === "slash:compact")).toHaveLength(1);
+    expect(ids.filter((id) => id === "slash:browser")).toHaveLength(1);
+    expect(
+      ids.some(
+        (id) =>
+          id.startsWith("provider-slash-command:") &&
+          (id.endsWith(":btw") || id.endsWith(":compact")),
+      ),
+    ).toBe(false);
+
+    // Cross-provider ego-browser promotion
+    const browserItem = claudeItems.find((item) => item.id === "slash:browser");
+    expect(browserItem).toMatchObject({
+      type: "slash-command",
+      command: "browser",
+      browserDispatchMode: "ego-skill",
+      egoBrowserSkillName: "ego-browser",
+    });
+    expect(browserItem?.description).toContain("ego-browser");
+
+    // All hidden/junk commands excluded
+    for (const hidden of [
+      "usage-limits",
+      "usage",
+      "limits",
+      "rate-limits",
+      "__remote-workflow",
+      "workflow-launch-exec",
+      "agents",
+      "heapdump",
+      "color",
+      "focus",
+      "design-consent",
+      "design-revoke",
+    ]) {
+      expect(ids.some((id) => id.endsWith(`:${hidden}`))).toBe(false);
+    }
+
+    // Skills folder holds personal `(user)` skill (untranslated) + all 17 bundled skills + dynamic fallback
+    const folder = claudeItems.find((item) => item.type === "skill-group-toggle");
+    expect(folder).toMatchObject({
+      personalCount: 1,
+      builtinCount: 18,
+      totalCount: 19,
+    });
+    const personalItem = claudeItems.find(
+      (item) => item.type === "provider-slash-command" && item.skillCategory === "personal",
+    );
+    expect(personalItem).toMatchObject({
+      label: "/design",
+      description: "My custom personal design note",
+    });
+    const foldedBuiltins = claudeItems.filter(
+      (item) => item.type === "provider-slash-command" && item.skillCategory === "builtin",
+    );
+    expect(foldedBuiltins).toHaveLength(18);
+    expect(
+      foldedBuiltins.every((item) => item.type === "provider-slash-command" && item.label.startsWith("/")),
+    ).toBe(true);
+
+    // On Codex where ego-browser IS equipped directly, it is promoted to /browser and NEVER appears in 技能 or $
+    const codexItems = buildComposerSlashTriggerItems({
+      query: "",
+      isAtPromptStart: true,
+      sideChatAvailable: true,
+      sideChatOffered: true,
+      sideChatDisabledReason: null,
+      freshSessionAvailable: false,
+      compactSlashCommandAvailable: false,
+      selectedProvider: codex,
+      selectedProviderSkills: [egoSkill, personalSkill],
+      selectedProviderSlashCommands: [{ name: "ego-browser", description: "Browser skill" }],
+      showSkillsInSlashMenu: true,
+      slashSkillsExpanded: true,
+      instanceEntries: [],
+      labels: defaultSlashLabels,
+    });
+    expect(codexItems.find((item) => item.id === "slash:browser")).toMatchObject({
+      browserDispatchMode: "ego-skill",
+      egoBrowserSkillName: "ego-browser",
+    });
+    expect(codexItems.some((item) => item.id.includes("ego-browser"))).toBe(false);
+    expect(codexItems.find((item) => item.type === "skill-group-toggle")).toMatchObject({
+      personalCount: 1,
+      builtinCount: 0,
+      totalCount: 1,
+    });
+
+    // `$` skill trigger NEVER shows ego-browser
+    const dollarSkills = buildComposerSkillTriggerItems({
+      query: "",
+      selectedProvider: codex,
+      selectedProviderSkills: [egoSkill, personalSkill],
+      labels: defaultSkillLabels,
+    });
+    expect(dollarSkills.map((item) => item.id)).toEqual(["skill:codex:brainstorming"]);
+
+    // Native `/browser` works when no provider has ego-browser, and hides AGY doc/meta commands
+    const agyNativeBrowser = buildComposerSlashTriggerItems({
+      query: "",
+      isAtPromptStart: true,
+      sideChatAvailable: true,
+      sideChatOffered: true,
+      sideChatDisabledReason: null,
+      freshSessionAvailable: false,
+      compactSlashCommandAvailable: true,
+      selectedProvider: agy,
+      selectedProviderSkills: [],
+      selectedProviderSlashCommands: [
+        { name: "browser", description: "Native browser" },
+        { name: "agy-customizations", description: "Docs" },
+        { name: "antigravity-guide", description: "Docs" },
+        { name: "run-workflow", description: "Docs" },
+      ],
+      showSkillsInSlashMenu: true,
+      slashSkillsExpanded: false,
+      instanceEntries: [],
+      labels: defaultSlashLabels,
+    });
+    expect(agyNativeBrowser.find((item) => item.id === "slash:browser")).toMatchObject({
+      browserDispatchMode: "native-command",
+    });
+    expect(agyNativeBrowser.some((item) => item.id.includes("provider-slash-command"))).toBe(false);
+
+    // No ego-browser on any provider & no native /browser => no /browser command
+    const noBrowserItems = buildComposerSlashTriggerItems({
+      query: "",
+      isAtPromptStart: true,
+      sideChatAvailable: true,
+      sideChatOffered: true,
+      sideChatDisabledReason: null,
+      freshSessionAvailable: false,
+      compactSlashCommandAvailable: true,
+      selectedProvider: codex,
+      selectedProviderSkills: [],
+      selectedProviderSlashCommands: [],
+      showSkillsInSlashMenu: true,
+      slashSkillsExpanded: false,
+      instanceEntries: [claudeEntry],
+      labels: defaultSlashLabels,
+    });
+    expect(noBrowserItems.some((item) => item.id === "slash:browser")).toBe(false);
+    expect(noBrowserItems.some((item) => item.id === "slash:btw")).toBe(true);
+    expect(noBrowserItems.some((item) => item.id === "slash:compact")).toBe(true);
+  });
+
+  it("supports bilingual search on folded bundled skill commands and untranslated personal slash-command skills", () => {
+    const claude = ProviderDriverKind.make("claudeAgent");
+    const items: SlashSearchItem[] = [
+      {
+        ...makeProviderSlashItem("deep-research", "Run multi-agent web research", claude),
+        skillCategory: "builtin",
+      },
+      {
+        ...makeProviderSlashItem("custom-note", "Custom obsidian workflow (user)", claude),
+        skillCategory: "personal",
+      },
+    ];
+    expect(searchSlashCommandItems(items, "联网检索").map((item) => item.id)).toEqual([
+      "provider-slash-command:claudeAgent:deep-research",
+    ]);
+    expect(searchSlashCommandItems(items, "multi-agent").map((item) => item.id)).toEqual([
+      "provider-slash-command:claudeAgent:deep-research",
+    ]);
+    expect(searchSlashCommandItems(items, "obsidian").map((item) => item.id)).toEqual([
+      "provider-slash-command:claudeAgent:custom-note",
+    ]);
   });
 });

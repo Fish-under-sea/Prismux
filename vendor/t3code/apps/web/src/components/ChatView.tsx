@@ -4230,6 +4230,7 @@ export default function ChatView(props: ChatViewProps) {
                                 keepFullHistory={keepFullHistory}
                                 onToggleKeepFullHistory={toggleKeepFullHistoryStable}
                                 sideChatAvailable={sideChat.available}
+                                sideChatOffered={sideChatsOffered}
                                 sideChatDisabledReason={sideChatDisabledReason}
                                 onFreshSession={
                                   freshSessionCommandAvailable ? armFreshSessionStable : undefined

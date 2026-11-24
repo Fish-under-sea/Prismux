@@ -1609,6 +1609,66 @@ it.layer(
       assert.deepStrictEqual(mergedEmptyCatalog.skills, previousProvider.skills);
     });
 
+    it("retains cached Antigravity slash commands across cold startup probes until sign-out or session refresh", () => {
+      const antigravityDriver = ProviderDriverKind.make("antigravity");
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("antigravity"),
+        driver: antigravityDriver,
+        displayName: "Antigravity",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated", type: "local-cli" },
+        checkedAt: "2026-11-24T10:00:00.000Z",
+        models: [
+          {
+            slug: "gemini-4-neon",
+            name: "Gemini 4 Neon",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [
+          { name: "swarm", description: "Launch swarm" },
+          { name: "teamwork", description: "Teamwork mode" },
+        ],
+        skills: [],
+      } as const satisfies ServerProvider;
+
+      // Cold startup check refreshes models/auth with empty slashCommands before any ACP session runs
+      const coldProbe = {
+        ...previousProvider,
+        checkedAt: "2026-11-24T12:00:00.000Z",
+        slashCommands: [],
+      } satisfies ServerProvider;
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previousProvider, coldProbe).slashCommands,
+        previousProvider.slashCommands,
+      );
+
+      // Live ACP session refresh replaces cached slashCommands
+      const sessionRefresh = {
+        ...coldProbe,
+        slashCommands: [{ name: "goal", description: "Goal mode" }],
+      } satisfies ServerProvider;
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previousProvider, sessionRefresh).slashCommands,
+        sessionRefresh.slashCommands,
+      );
+
+      // Sign-out clears slashCommands
+      const signedOut = {
+        ...coldProbe,
+        status: "warning" as const,
+        auth: { status: "unauthenticated" as const, type: "local-cli" },
+      } satisfies ServerProvider;
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previousProvider, signedOut).slashCommands,
+        [],
+      );
+    });
+
     describe("Pi model inventories", () => {
       const defaultModel = {
         slug: "default",

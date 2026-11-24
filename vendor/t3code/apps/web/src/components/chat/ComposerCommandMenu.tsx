@@ -42,9 +42,11 @@ import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation"
 import {
   SKILL_SOURCE_ICON_BY_KIND,
   classifyComposerSkillCategory,
+  resolveBundledSkillCommandPresentation,
   resolveSkillPresentation,
   resolveSkillSourceBadgeLabel,
   resolveSlashCommandPresentation,
+  type ComposerSkillCategory,
   type SlashCommandIconSpec,
 } from "./composerSlashCatalog";
 
@@ -65,6 +67,8 @@ export type ComposerCommandItem =
       label: string;
       description: string;
       descriptionOverride?: string | undefined;
+      browserDispatchMode?: "ego-skill" | "ego-command" | "native-command" | undefined;
+      egoBrowserSkillName?: string | undefined;
     }
   | {
       id: string;
@@ -73,6 +77,7 @@ export type ComposerCommandItem =
       command: ServerProviderSlashCommand;
       label: string;
       description: string;
+      skillCategory?: ComposerSkillCategory | undefined;
     }
   | {
       id: "slash:skills-folder";
@@ -200,7 +205,11 @@ export function groupComposerCommandMenuItems(
           ? classifyComposerSkillCategory(resolveProviderSkillSourceKind(item.skill)) === "personal"
             ? "personal-skills"
             : "builtin-skills"
-          : "commands";
+          : item.type === "provider-slash-command" && item.skillCategory !== undefined
+            ? item.skillCategory === "personal"
+              ? "personal-skills"
+              : "builtin-skills"
+            : "commands";
       const label =
         bucket === "personal-skills"
           ? "个人技能"
@@ -324,7 +333,90 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   );
 });
 
+/** 1:1 native Antigravity `/swarm` pixel queen bee icon (crisp pixel SVG, used exclusively for `/swarm`). */
+function SwarmQueenBeeIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      data-slash-icon="swarm-bee"
+      viewBox="5 7 18 13"
+      shapeRendering="crispEdges"
+      className="size-4 shrink-0"
+    >
+      {/* Ruby-tipped queen crown */}
+      <rect x="9" y="7" width="1" height="1" fill="#FFE9A6" />
+      <rect x="7" y="8" width="1" height="1" fill="#FFE9A6" />
+      <rect x="9" y="8" width="1" height="1" fill="#FFE9A6" />
+      <rect x="11" y="8" width="1" height="1" fill="#FFE9A6" />
+      <rect x="7" y="9" width="1" height="1" fill="#C98A2B" />
+      <rect x="8" y="9" width="1" height="1" fill="#F7CE5B" />
+      <rect x="9" y="9" width="1" height="1" fill="#E4566A" />
+      <rect x="10" y="9" width="1" height="1" fill="#F7CE5B" />
+      <rect x="11" y="9" width="1" height="1" fill="#C98A2B" />
+      {/* Translucent wing */}
+      <rect x="16" y="9" width="4" height="1" fill="rgba(140,160,192,0.9)" />
+      <rect x="15" y="10" width="6" height="1" fill="rgba(140,160,192,0.9)" />
+      {/* Body outline & stinger */}
+      <rect x="12" y="9" width="2" height="1" fill="#451c1e" />
+      <rect x="14" y="9" width="1" height="1" fill="#b1502f" />
+      <rect x="15" y="9" width="1" height="1" fill="#451c1e" />
+      <rect x="7" y="10" width="2" height="1" fill="#b1502f" />
+      <rect x="6" y="11" width="1" height="1" fill="#b1502f" />
+      <rect x="19" y="11" width="1" height="1" fill="#451c1e" />
+      <rect x="5" y="12" width="1" height="2" fill="#b1502f" />
+      <rect x="5" y="14" width="1" height="3" fill="#451c1e" />
+      <rect x="20" y="12" width="1" height="5" fill="#451c1e" />
+      <rect x="21" y="14" width="2" height="1" fill="#451c1e" />
+      <rect x="6" y="17" width="1" height="1" fill="#451c1e" />
+      <rect x="19" y="17" width="1" height="1" fill="#451c1e" />
+      <rect x="7" y="18" width="2" height="1" fill="#451c1e" />
+      <rect x="17" y="18" width="2" height="1" fill="#451c1e" />
+      <rect x="9" y="19" width="8" height="1" fill="#451c1e" />
+      {/* Golden honey body & dark stripes */}
+      <rect x="9" y="10" width="3" height="1" fill="#f8e081" />
+      <rect x="12" y="10" width="2" height="1" fill="#5c4a3d" />
+      <rect x="14" y="10" width="1" height="1" fill="#e9c349" />
+      <rect x="7" y="11" width="2" height="1" fill="#f8e081" />
+      <rect x="9" y="11" width="3" height="1" fill="#fef5cd" />
+      <rect x="12" y="11" width="2" height="1" fill="#5c4a3d" />
+      <rect x="14" y="11" width="1" height="1" fill="#f8e081" />
+      <rect x="15" y="11" width="1" height="1" fill="#e9c349" />
+      <rect x="16" y="11" width="2" height="1" fill="#392423" />
+      <rect x="18" y="11" width="1" height="1" fill="#b1502f" />
+      <rect x="6" y="12" width="1" height="3" fill="#e9c349" />
+      <rect x="7" y="12" width="5" height="1" fill="#f8e081" />
+      <rect x="9" y="12" width="1" height="1" fill="#fef5cd" />
+      <rect x="12" y="12" width="2" height="1" fill="#5c4a3d" />
+      <rect x="14" y="12" width="2" height="4" fill="#e9c349" />
+      <rect x="16" y="12" width="2" height="2" fill="#392423" />
+      <rect x="18" y="12" width="1" height="1" fill="#e9c349" />
+      <rect x="19" y="12" width="1" height="5" fill="#b1502f" />
+      <rect x="7" y="13" width="6" height="1" fill="#f8e081" />
+      <rect x="8" y="13" width="1" height="1" fill="#FFFFFF" />
+      <rect x="9" y="13" width="1" height="1" fill="#221116" />
+      <rect x="13" y="13" width="1" height="4" fill="#392423" />
+      <rect x="18" y="13" width="1" height="5" fill="#b1502f" />
+      <rect x="7" y="14" width="6" height="3" fill="#e9c349" />
+      <rect x="8" y="14" width="2" height="1" fill="#221116" />
+      <rect x="16" y="14" width="1" height="1" fill="#392423" />
+      <rect x="17" y="14" width="1" height="4" fill="#221116" />
+      <rect x="6" y="15" width="1" height="1" fill="rgba(255,128,150,0.45)" />
+      <rect x="7" y="15" width="1" height="1" fill="rgba(255,128,150,0.65)" />
+      <rect x="16" y="15" width="1" height="4" fill="#221116" />
+      <rect x="6" y="16" width="1" height="1" fill="#b1502f" />
+      <rect x="12" y="16" width="1" height="1" fill="#392423" />
+      <rect x="14" y="16" width="2" height="3" fill="#b1502f" />
+      <rect x="7" y="17" width="5" height="1" fill="#b1502f" />
+      <rect x="12" y="17" width="2" height="2" fill="#221116" />
+      <rect x="9" y="18" width="3" height="1" fill="#b1502f" />
+    </svg>
+  );
+}
+
 function SlashCommandLeadingIcon(props: { icon: SlashCommandIconSpec }) {
+  if (props.icon.kind === "swarm-bee") {
+    return <SwarmQueenBeeIcon />;
+  }
   if (props.icon.kind === "emoji") {
     return (
       <span
@@ -356,6 +448,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   onSelect: (item: ComposerCommandItem) => void;
 }) {
   const m = useMessages();
+  const isBundledSkillCommand =
+    props.item.type === "provider-slash-command" && props.item.skillCategory !== undefined;
   const slashPresentation =
     props.item.type === "slash-command"
       ? resolveSlashCommandPresentation(
@@ -363,13 +457,19 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           props.item.description,
           props.item.descriptionOverride,
         )
-      : props.item.type === "provider-slash-command"
+      : props.item.type === "provider-slash-command" && !isBundledSkillCommand
         ? resolveSlashCommandPresentation(props.item.command.name, props.item.description)
         : null;
   const skillPresentation =
     props.item.type === "skill"
       ? resolveSkillPresentation(props.item.skill, props.item.description)
-      : null;
+      : props.item.type === "provider-slash-command" && props.item.skillCategory !== undefined
+        ? resolveBundledSkillCommandPresentation(
+            props.item.command.name,
+            props.item.description,
+            props.item.skillCategory,
+          )
+        : null;
   const pullRequestPresentation =
     props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest, m) : null;
   const displayedDescription =

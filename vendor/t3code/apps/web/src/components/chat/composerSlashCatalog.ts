@@ -34,13 +34,17 @@ import {
   MessageSquareWarningIcon,
   Minimize2Icon,
   PackageIcon,
+  PaletteIcon,
   PencilIcon,
   PlayCircleIcon,
   PlugIcon,
   PuzzleIcon,
+  RefreshCwIcon,
+  RepeatIcon,
   RotateCcwIcon,
   SettingsIcon,
   ShieldCheckIcon,
+  SlidersHorizontalIcon,
   // oxlint-disable-next-line t3code/no-sparkles-icon -- design spec explicitly maps /model to SparklesIcon
   SparklesIcon,
   StethoscopeIcon,
@@ -54,6 +58,7 @@ import {
 } from "lucide-react";
 
 export type SlashCommandIconSpec =
+  | { readonly kind: "swarm-bee" }
   | { readonly kind: "emoji"; readonly emoji: string }
   | { readonly kind: "lucide"; readonly icon: LucideIcon };
 
@@ -86,7 +91,112 @@ export interface SkillPresentation {
 }
 
 const lucide = (icon: LucideIcon): SlashCommandIconSpec => ({ kind: "lucide", icon });
-const emoji = (value: string): SlashCommandIconSpec => ({ kind: "emoji", emoji: value });
+const swarmBee = (): SlashCommandIconSpec => ({ kind: "swarm-bee" });
+
+/**
+ * Slash commands hidden from the `/` menu across ALL agents:
+ * - usage/rate-limit probes (replaced by Prismux's real-time bottom quota bar)
+ * - low-value AGY static documentation / meta-workflow commands
+ * - Claude Code internal/removed/CLI-only commands
+ */
+export const HIDDEN_SLASH_COMMAND_KEYS: ReadonlySet<string> = new Set([
+  "usage-limits",
+  "usage",
+  "limits",
+  "rate-limits",
+  "agy-customizations",
+  "antigravity-guide",
+  "run-workflow",
+  "__remote-workflow",
+  "workflow-launch-exec",
+  "agents",
+  "heapdump",
+  "color",
+  "focus",
+  "design-consent",
+  "design-revoke",
+]);
+
+/**
+ * Provider-bundled skills that some CLIs (notably Claude Code) emit inside `slashCommands`
+ * instead of `skills`. Prismux automatically folds them into the collapsible `自带技能` group
+ * with Chinese descriptions while preserving native `/<name>` invocation.
+ */
+export const PROVIDER_BUNDLED_SKILL_COMMANDS: ReadonlySet<string> = new Set([
+  "deep-research",
+  "design",
+  "design-sync",
+  "dataviz",
+  "update-config",
+  "verify",
+  "simplify",
+  "batch",
+  "fewer-permission-prompts",
+  "claude-api",
+  "workflow-authoring",
+  "run",
+  "run-skill-generator",
+  "plugin-authoring",
+  "auto-mode-setup",
+  "team-onboarding",
+  "insights",
+  "generative_ui",
+  "generative-ui",
+  "mcp-app-development",
+  "migrate-agent-settings",
+  "migrate-workflows",
+  "ui-plugin-navigation",
+  "swarm_monitor",
+  "swarm-monitor",
+  "swarm_pane",
+  "swarm-pane",
+  "swarm_narrator",
+  "swarm-narrator",
+  "permissioned-github",
+]);
+
+const BUNDLED_SKILL_DESCRIPTION_PATTERN =
+  /^(?:use this skill|reference for |author or improve |make a mod:)/i;
+
+export function isHiddenSlashCommand(rawName: string): boolean {
+  const key = normalizeSlashCommandKey(rawName);
+  if (!key) return false;
+  return (
+    HIDDEN_SLASH_COMMAND_KEYS.has(key) ||
+    HIDDEN_SLASH_COMMAND_KEYS.has(key.replaceAll("_", "-"))
+  );
+}
+
+export function isEgoBrowserIdentifier(rawName: string): boolean {
+  const key = normalizeSlashCommandKey(rawName).replaceAll("_", "-");
+  return key === "ego-browser";
+}
+
+export function classifyProviderSlashCommandAsSkill(
+  rawName: string,
+  description = "",
+  knownPersonalSkillNames?: ReadonlySet<string>,
+): ComposerSkillCategory | null {
+  const key = normalizeSlashCommandKey(rawName);
+  if (!key) return null;
+  const trimmedDesc = description.trim();
+  if (/\(user\)\s*$/i.test(trimmedDesc)) {
+    return "personal";
+  }
+  if (PROVIDER_BUNDLED_SKILL_COMMANDS.has(key)) {
+    return "builtin";
+  }
+  if (SLASH_COMMAND_CATALOG[key]) {
+    return null;
+  }
+  if (knownPersonalSkillNames?.has(key)) {
+    return "personal";
+  }
+  if (BUNDLED_SKILL_DESCRIPTION_PATTERN.test(trimmedDesc)) {
+    return "builtin";
+  }
+  return null;
+}
 
 const USAGE_LIMITS_ENTRY: SlashCommandCatalogEntry = {
   icon: lucide(GaugeIcon),
@@ -120,13 +230,13 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
     icon: lucide(MessageSquarePlusIcon),
     zhTitle: "旁路提问",
     description: "在不打断主线程的前提下发起旁路支线提问",
-    aliases: ["侧聊", "支线", "旁路"],
+    aliases: ["侧聊", "支线", "旁路", "btw"],
   },
   btw: {
     icon: lucide(MessageSquarePlusIcon),
-    zhTitle: "顺便一问",
-    description: "同 /side，快速发起不干扰主线的旁路提问",
-    aliases: ["side", "顺便", "侧聊"],
+    zhTitle: "旁路提问",
+    description: "在不打断主线程的前提下发起旁路支线提问",
+    aliases: ["side", "顺便", "顺便一问", "侧聊", "支线", "旁路"],
   },
   clear: {
     icon: lucide(RotateCcwIcon),
@@ -141,16 +251,16 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
     aliases: ["目标", "自动推进", "通宵"],
   },
   swarm: {
-    icon: emoji("🐝"),
+    icon: swarmBee(),
     zhTitle: "蜂群",
     description: "启动多智能体蜂群协作，并行分工推进复杂任务",
     aliases: ["蜂群", "多智能体", "并行", "协作", "蜜蜂"],
   },
   teamwork: {
-    icon: emoji("🐝"),
+    icon: lucide(UsersIcon),
     zhTitle: "团队协作",
     description: "组建多智能体自治协作团队共同完成复杂项目",
-    aliases: ["team", "团队", "蜂群", "协作"],
+    aliases: ["team", "团队", "多代理", "协作"],
   },
   schedule: {
     icon: lucide(ClockIcon),
@@ -158,11 +268,23 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
     description: "按周期计划或一次性倒计时自动触发指令",
     aliases: ["cron", "timer", "定时", "倒计时", "计划任务"],
   },
+  loop: {
+    icon: lucide(RepeatIcon),
+    zhTitle: "定时循环",
+    description: "按指定时间间隔循环执行提示词或斜杠命令",
+    aliases: ["repeat", "cron", "循环", "轮询", "定时"],
+  },
   compact: {
     icon: lucide(Minimize2Icon),
-    zhTitle: "压缩上下文",
+    zhTitle: "上下文压缩",
     description: "总结并压缩当前对话历史，释放上下文窗口",
     aliases: ["summarize", "压缩", "精简", "上下文"],
+  },
+  autocompact: {
+    icon: lucide(SlidersHorizontalIcon),
+    zhTitle: "自动压缩阈值",
+    description: "设置上下文占用达到多少比例时自动触发历史摘要压缩",
+    aliases: ["自动压缩", "阈值", "上下文"],
   },
   plan: {
     icon: lucide(ClipboardListIcon),
@@ -176,6 +298,48 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
     description: "审查当前代码改动，排查风险与潜在回归缺陷",
     aliases: ["cr", "审查", "评审", "检视"],
   },
+  debug: {
+    icon: lucide(BugIcon),
+    zhTitle: "调试诊断",
+    description: "开启当前会话调试日志并辅助定位排查问题",
+    aliases: ["调试", "排错", "日志", "诊断"],
+  },
+  advisor: {
+    icon: lucide(BrainIcon),
+    zhTitle: "顾问模型",
+    description: "允许在关键决策节点向更强模型征询建议",
+    aliases: ["顾问", "智囊", "咨询"],
+  },
+  recap: {
+    icon: lucide(FileTextIcon),
+    zhTitle: "会话摘要",
+    description: "立即生成一句当前会话的核心进展摘要",
+    aliases: ["摘要", "回顾", "总结"],
+  },
+  "list-agents": {
+    icon: lucide(UsersIcon),
+    zhTitle: "查看代理",
+    description: "列出当前可通信的子智能体、协作成员与其他会话",
+    aliases: ["代理列表", "成员", "子代理"],
+  },
+  "output-style": {
+    icon: lucide(PaletteIcon),
+    zhTitle: "输出风格",
+    description: "列出并切换当前对话回复的输出风格模板",
+    aliases: ["风格", "样式", "语气"],
+  },
+  "reload-plugins": {
+    icon: lucide(RefreshCwIcon),
+    zhTitle: "重载插件",
+    description: "立即在当前会话激活待生效的插件变更",
+    aliases: ["刷新插件", "重载"],
+  },
+  "reload-skills": {
+    icon: lucide(RefreshCwIcon),
+    zhTitle: "重载技能",
+    description: "重新加载磁盘上新增或修改的技能定义",
+    aliases: ["刷新技能", "重载"],
+  },
   feedback: {
     icon: lucide(MessageSquareWarningIcon),
     zhTitle: "发送反馈",
@@ -188,7 +352,7 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
     icon: lucide(GlobeIcon),
     zhTitle: "浏览器操控",
     description: "打开并交互操作网页，用于搜索、测试与排查",
-    aliases: ["web", "浏览器", "网页"],
+    aliases: ["web", "ego-browser", "ego_browser", "浏览器", "网页", "操控"],
   },
   "grill-me": {
     icon: lucide(FlameIcon),
@@ -470,8 +634,28 @@ export const BUILTIN_SKILL_ZH_DESCRIPTIONS: Readonly<Record<string, string>> = {
   screenshot: "捕获桌面窗口或指定区域屏幕截图用于视觉核验",
   yeet: "一键完成暂存、提交、推送并创建 GitHub Pull Request",
   simplify: "审查近期代码改动并精简冗余逻辑，提升复用性与执行效率",
-  batch: "跨目录或跨文件大规模并行批量重构代码变更",
-  "claude-api": "构建调用 Claude / Anthropic SDK 与 Agent API 的应用代码",
+  batch: "规划大规模代码改造，拉起多个隔离 Worktree 代理并行执行并提交 PR",
+  "claude-api": "构建调用 Claude / Anthropic SDK 与 Agent API 的应用代码与最佳实践参考",
+  // Claude Code bundled skills (reported in slashCommands, folded into 自带技能)
+  "deep-research": "多路并行联网检索、交叉核验信息来源并生成带引用的深度研究报告",
+  design: "授权或撤销 Claude 智能体访问你的 Claude Design 设计项目",
+  "design-sync": "打包 React 组件代码（Storybook 或独立包）并同步至 Claude Design 设计系统",
+  dataviz: "面向图表、仪表盘与交互式数据可视化的专业设计与绘制技能",
+  "update-config": "通过 settings.json 配置 Claude Code 运行参数与自动化规则",
+  verify: "通过真实运行、操作与观测端到端验证代码改动是否真正符合预期",
+  "fewer-permission-prompts": "扫描历史记录中高频只读 Bash 与 MCP 调用，为项目生成优先白名单减少审批弹窗",
+  "workflow-authoring": "编写与调试 Workflow 工作流脚本的 API 指南、恢复机制与实践范例",
+  run: "启动并驱动当前项目应用，实机运行或截屏验证改动效果",
+  "run-skill-generator": "为项目生成或优化专属的 run-<unit> 构建、启动与驱动技能",
+  "plugin-authoring": "开发界面主题、侧边栏面板等自定义扩展以定制交互行为",
+  "auto-mode-setup": "向自动模式说明当前环境特征并微调自动化执行规则",
+  "team-onboarding": "结合历史使用习惯为团队成员生成 Claude Code 快速上手指南",
+  insights: "分析历史 Claude Code 会话记录并生成效率与使用习惯洞察报告",
+  // Codex built-in system skills
+  "create-statusline": "为 Codex CLI 构建并启用自定义 MCP 状态栏展示",
+  "review-agent": "针对代码改动执行专项审查，定位可落地的真实缺陷与回归风险",
+  "permissioned-github": "按最小权限边界执行 GitHub 仓库与 PR 协作操作",
+  swarm_narrator: "蜂群叙事播报员：整理多代理协作进展并生成结构化阶段摘要",
 };
 
 export const SKILL_SOURCE_ICON_BY_KIND: Readonly<Record<ProviderSkillSourceKind, LucideIcon>> = {
@@ -590,6 +774,47 @@ export function resolveSkillPresentation(
     sourceBadgeLabel: resolveSkillSourceBadgeLabel(sourceKind),
     nativeName,
     description: localizedDescription ?? originalDescription,
+    isLocalized: localizedDescription !== undefined,
+  };
+}
+
+/**
+ * Formats a provider slash command that has been classified into the collapsible `技能` folder
+ * (e.g. Claude Code's bundled skills reported via `slashCommands`).
+ * Personal skills stay strictly untranslated; built-in skills use localized Chinese descriptions.
+ */
+export function resolveBundledSkillCommandPresentation(
+  rawName: string,
+  fallbackDescription = "",
+  category: ComposerSkillCategory = "builtin",
+): SkillPresentation {
+  const nativeName = rawName.trim().replace(/^\/+/, "");
+  const cleanedFallback = fallbackDescription
+    .trim()
+    .replace(/\s*\(user\)\s*$/i, "")
+    .trim();
+  const sourceKind: ProviderSkillSourceKind = category === "personal" ? "personal" : "app";
+
+  if (category === "personal") {
+    return {
+      icon: resolveSkillSourceIcon(sourceKind),
+      category,
+      sourceKind,
+      sourceBadgeLabel: resolveSkillSourceBadgeLabel(sourceKind),
+      nativeName,
+      description: cleanedFallback,
+      isLocalized: false,
+    };
+  }
+
+  const localizedDescription = lookupBuiltinSkillZhDescription(nativeName);
+  return {
+    icon: resolveSkillSourceIcon(sourceKind),
+    category,
+    sourceKind,
+    sourceBadgeLabel: resolveSkillSourceBadgeLabel(sourceKind),
+    nativeName,
+    description: localizedDescription ?? cleanedFallback,
     isLocalized: localizedDescription !== undefined,
   };
 }

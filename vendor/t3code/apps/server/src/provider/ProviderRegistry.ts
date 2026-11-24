@@ -259,6 +259,15 @@ const shouldRetainMissingOpenCodeMetadata = (provider: ServerProvider): boolean 
   provider.driver === ProviderDriverKind.make("opencode") &&
   shouldRetainMissingProviderModels(provider);
 
+// Antigravity learns slash commands from ACP available_commands_update during live sessions,
+// not from cold startup health probes; keep cached commands until a session refreshes them
+// or the user signs out / disables / uninstalls Antigravity.
+const shouldRetainMissingAntigravitySlashCommands = (provider: ServerProvider): boolean =>
+  provider.driver === ProviderDriverKind.make("antigravity") &&
+  provider.enabled &&
+  provider.installed &&
+  provider.auth.status !== "unauthenticated";
+
 const mergeProviderModels = (
   provider: ServerProvider,
   previousModels: ReadonlyArray<ServerProvider["models"][number]>,
@@ -395,7 +404,13 @@ export const mergeProviderSnapshot = (
               : nextProvider.slashCommands,
           skills: nextProvider.skills.length === 0 ? previousProvider.skills : nextProvider.skills,
         }
-      : {}),
+      : shouldRetainMissingAntigravitySlashCommands(nextProvider) &&
+          nextProvider.slashCommands.length === 0 &&
+          previousProvider.slashCommands.length > 0
+        ? {
+            slashCommands: previousProvider.slashCommands,
+          }
+        : {}),
   };
 };
 

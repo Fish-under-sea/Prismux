@@ -27,7 +27,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import {
   AgentBrandLogo,
   resolveProviderEntryDisplayName,
@@ -72,7 +72,7 @@ import {
 import { announce } from "~/lib/announce";
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
-import { TooltipProvider } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { InlineButton } from "../ui/button";
 import { Badge } from "../ui/badge";
 import {
@@ -456,7 +456,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       modelOptionsByInstance.get(props.activeInstanceId) ?? [],
     );
   const agentScoped = props.agentScoped === true;
-  const [agentSwitcherOpen, setAgentSwitcherOpen] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | "favorites">(
     () => {
       if (
@@ -1214,69 +1213,41 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               onTouchStart={(e) => e.stopPropagation()}
             />
 
-            {/* Minimal secondary Agent switcher (only shown when agentScoped and unlocked multi-agent) */}
-            {agentScoped && selectedEntry ? (
+            {/* Always-visible logo-only Agent switcher (no text label or dropdown toggle) */}
+            {agentScoped && !isLocked && switchableScopedEntries.length > 1 ? (
               <div
                 data-model-picker-agent-scope-bar="true"
-                className="flex shrink-0 flex-col border-b border-border/55 bg-muted/20 px-2.5 py-1.5"
+                className="flex shrink-0 items-center border-b border-border/55 bg-muted/20 px-2.5 py-1.5"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="inline-flex min-w-0 items-center gap-1.5 text-[11.5px] font-medium text-muted-foreground">
-                    <AgentBrandLogo
-                      provider={
-                        selectedEntry.driverKind === "acpRegistry"
-                          ? selectedEntry.displayName || selectedEntry.instanceId
-                          : selectedEntry.driverKind
-                      }
-                      size={13}
-                    />
-                    <span className="truncate">
-                      {resolveProviderEntryDisplayName(selectedEntry)}
-                    </span>
-                  </span>
-                  {!isLocked && switchableScopedEntries.length > 1 ? (
-                    <button
-                      type="button"
-                      data-model-picker-switch-agent-toggle="true"
-                      aria-expanded={agentSwitcherOpen}
-                      onClick={() => setAgentSwitcherOpen((open) => !open)}
-                      className="inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-                    >
-                      <span>切换代理</span>
-                      <ChevronDownIcon
-                        aria-hidden="true"
-                        className={cn(
-                          "size-3 transition-transform",
-                          agentSwitcherOpen && "rotate-180",
-                        )}
-                      />
-                    </button>
-                  ) : null}
-                </div>
-                {agentSwitcherOpen && !isLocked && switchableScopedEntries.length > 1 ? (
-                  <div
-                    data-model-picker-agent-switcher-list="true"
-                    className="mt-1.5 flex flex-wrap gap-1"
-                  >
-                    {switchableScopedEntries.map((entry) => {
-                      const active = entry.instanceId === effectiveSelectedInstanceId;
-                      const brandLabel = resolveProviderEntryDisplayName(entry);
-                      return (
-                        <button
-                          key={entry.instanceId}
-                          type="button"
-                          data-model-picker-agent-chip={entry.instanceId}
-                          aria-pressed={active}
-                          onClick={() => {
-                            handleSelectInstance(entry.instanceId);
-                            setAgentSwitcherOpen(false);
-                          }}
-                          className={cn(
-                            "inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring",
-                            active
-                              ? "border-primary/45 bg-primary/12 text-foreground"
-                              : "border-border/65 bg-background/55 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
-                          )}
+                <div
+                  data-model-picker-agent-switcher-list="true"
+                  role="group"
+                  aria-label={gt("Switch provider")}
+                  className="flex flex-wrap items-center gap-1"
+                >
+                  {switchableScopedEntries.map((entry) => {
+                    const active = entry.instanceId === effectiveSelectedInstanceId;
+                    const brandLabel = resolveProviderEntryDisplayName(entry);
+                    return (
+                      <Tooltip key={entry.instanceId}>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              data-model-picker-agent-chip={entry.instanceId}
+                              aria-label={brandLabel}
+                              aria-pressed={active}
+                              onClick={() => {
+                                handleSelectInstance(entry.instanceId);
+                              }}
+                              className={cn(
+                                "inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border outline-none transition-all focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+                                active
+                                  ? "border-primary/55 bg-primary/14 opacity-100 ring-1 ring-inset ring-primary/25"
+                                  : "border-transparent bg-transparent opacity-70 hover:border-border/65 hover:bg-foreground/[0.07] hover:opacity-100",
+                              )}
+                            />
+                          }
                         >
                           <AgentBrandLogo
                             provider={
@@ -1284,14 +1255,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                                 ? entry.displayName || entry.instanceId
                                 : entry.driverKind
                             }
-                            size={12}
+                            size={16}
                           />
-                          <span className="truncate">{brandLabel}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
+                        </TooltipTrigger>
+                        <TooltipPopup side="top">{brandLabel}</TooltipPopup>
+                      </Tooltip>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
 
