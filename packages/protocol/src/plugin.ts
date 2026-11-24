@@ -4,14 +4,14 @@ import type {
   LifecycleHookEvent
 } from "./hooks.js";
 
-export const OFFICIAL_PLUGIN_IDS = [
-  "qq",
-  "pet",
-  "fishdock-hook",
-  "ssh"
-] as const;
+export const OFFICIAL_PLUGIN_IDS = ["qq", "fishdock-hook"] as const;
 
 export type OfficialPluginId = (typeof OFFICIAL_PLUGIN_IDS)[number];
+
+export const RETIRED_OFFICIAL_PLUGIN_IDS = ["pet", "ssh"] as const;
+
+export type RetiredOfficialPluginId =
+  (typeof RETIRED_OFFICIAL_PLUGIN_IDS)[number];
 
 export const PLUGIN_REALMS = ["daemon", "ui"] as const;
 
@@ -70,12 +70,28 @@ export interface OfficialPluginCatalogEntry {
   sha256: string | null;
   bytes?: number | null;
   status: PluginCatalogStatus;
+  downloadUrl?: string;
+  downloadUrls?: string[];
+}
+
+export interface RetiredOfficialPluginEntry {
+  id: string;
+  packageName: string;
+  titleZh?: string;
+  titleEn?: string;
+  status: "deprecated";
+  replacedByBuiltin: true;
+  noticeZh: string;
+  noticeEn: string;
+  detailZh?: string;
+  detailEn?: string;
 }
 
 export interface OfficialPluginCatalog {
   schemaVersion: 1;
   generatedAt: string;
   plugins: OfficialPluginCatalogEntry[];
+  retiredPlugins?: RetiredOfficialPluginEntry[];
 }
 
 export interface InstalledPluginRecord {

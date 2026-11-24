@@ -14,12 +14,15 @@ export {
 
 export {
   CANONICAL_EFFORT_LABELS,
+  computeReasoningEffortStopPercent,
+  computeReasoningEffortStopProgress,
   formatEffortLabel,
   formatReasoningEffortLabel,
   formatReasoningEffortShortLabel,
   getEffortPresetForFamily,
   normalizeReasoningEffortOptions,
   resolveEffortStopIndex,
+  resolveReasoningEffortStopIndexFromPointer,
   type NormalizedReasoningEffortOption,
   type ReasoningEffortLocale,
   type ReasoningEffortOption,

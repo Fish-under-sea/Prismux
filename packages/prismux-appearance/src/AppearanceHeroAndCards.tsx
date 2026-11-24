@@ -229,8 +229,8 @@ export interface LiquidGlassCardProps {
 
 /**
  * Liquid Glass card: 5 global presets + accent & glass tint + fidelity & dim +
- * unified 5-zone fine-grained glass configurator (shellFrame / rightSidebar / mainCanvas /
- * composer / overlays) + optional collapsed global inherit baseline & thinking mode.
+ * unified 6-zone fine-grained glass configurator (shellFrame / rightSidebar / mainCanvas /
+ * workPanels / composer / overlays) + optional collapsed global inherit baseline & thinking mode.
  */
 export function LiquidGlassCard({
   config,
@@ -276,7 +276,7 @@ export function LiquidGlassCard({
       <div className="ilook-box-head">
         <span className="ilook-box-title">液态玻璃</span>
         <span className="ilook-box-note">
-          全局预设一键统调，5 大工作台分区精细控制（窗口外框连体统一，右侧功能边栏、主画布、输入框与弹窗独立可控）；禁 GPU 时自动回落实底。
+          全局预设一键统调，6 大工作台分区精细控制（窗口外框连体统一，右侧功能边栏、主画布、工作面板、输入框与弹窗独立可控）；禁 GPU 时自动回落实底。
         </span>
       </div>
 
@@ -1353,6 +1353,7 @@ export function ThemeSnapshotCard({
         shellFrame: { ...DEFAULT_GLASS_ZONES.shellFrame },
         rightSidebar: { ...DEFAULT_GLASS_ZONES.rightSidebar },
         mainCanvas: { ...DEFAULT_GLASS_ZONES.mainCanvas },
+        workPanels: { ...DEFAULT_GLASS_ZONES.workPanels },
         composer: { ...DEFAULT_GLASS_ZONES.composer },
         overlays: { ...DEFAULT_GLASS_ZONES.overlays },
       },

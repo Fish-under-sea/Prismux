@@ -831,4 +831,31 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.match(panelCss, /\.pmx-wp-stage__scrim\s*\{[^}]*background:\s*#000000;/s);
     assert.doesNotMatch(panelCss, /backdrop-filter:[^;]*saturate\(1\.[4-9]/);
   });
+
+  it("enforces high-contrast 3-state (Light / Dark / Glass) active pills on wallpaper tabs & toggle buttons (#505)", async () => {
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const panelCss = await readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8");
+    const noComments = panelCss.replace(/\/\*[\s\S]*?\*\//g, "");
+
+    assert.equal(noComments.includes("prefers-color-scheme"), false, "wallpaper-panel.css must never use prefers-color-scheme");
+    assert.equal(
+      (noComments.match(/\{/g) ?? []).length,
+      (noComments.match(/\}/g) ?? []).length,
+      "wallpaper-panel.css must keep balanced braces",
+    );
+
+    // Recessed track + accented sliding pill across Dark, Light, Dark Glass, Light Glass
+    assert.match(panelCss, /\.pmx-wp-tabs__pill\s*\{[\s\S]*?border:\s*1px solid color-mix\(/);
+    assert.match(panelCss, /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/);
+    assert.match(panelCss, /html\.dark\[data-pmx-glass='1'\] \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/);
+    assert.match(panelCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/);
+    assert.match(panelCss, /\.pmx-wp-tabs__tab--active\s*\{[\s\S]*?color:\s*#ffffff;[\s\S]*?font-weight:\s*600;/);
+    assert.match(panelCss, /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-tabs__tab--active[\s\S]*?color:\s*#0f172a;/);
+
+    // Active toggle buttons (.pmx-wp-btn.is-on) keep high-contrast fill & are excluded from generic glass button override
+    assert.match(panelCss, /\.pmx-wp-btn\.is-on\s*\{[\s\S]*?color:\s*#ffffff;[\s\S]*?font-weight:\s*600;/);
+    assert.match(panelCss, /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-btn\.is-on[\s\S]*?color:\s*#0f172a;/);
+    assert.match(panelCss, /\.pmx-wp-btn:not\(\.pmx-wp-btn--primary\):not\(\.pmx-wp-rate--active\):not\(\.is-on\)/);
+  });
 });

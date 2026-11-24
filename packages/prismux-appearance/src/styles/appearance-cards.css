@@ -124,20 +124,41 @@
   min-width: 0;
 }
 
-/* Segmented pills (5-preset liquid glass & toggles) */
+/* Segmented pills (5-preset liquid glass & zone mode toggles — high-contrast 3-state Light/Dark/Glass) */
 .pmx-appearance .seg {
   display: inline-flex;
   flex: none;
+  gap: 2px;
   padding: 2px;
   border-radius: 999px;
-  background: var(--g2);
-  border: 1px solid var(--g3);
+  background: rgba(10, 14, 24, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   font-size: 12px;
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance .seg,
+html:not(.dark):not([data-pmx-theme='dark']):not(.pmx-dark) .pmx-appearance .seg,
+.pmx-light .pmx-appearance .seg,
+.tb-light .pmx-appearance .seg {
+  background: rgba(15, 23, 42, 0.075);
+  border-color: rgba(15, 23, 42, 0.15);
+}
+
+html.dark[data-pmx-glass='1'] .pmx-appearance .seg,
+html[data-pmx-theme='dark'][data-pmx-glass='1'] .pmx-appearance .seg {
+  background: rgba(8, 12, 22, 0.56);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+html:not(.dark)[data-pmx-glass='1'] .pmx-appearance .seg,
+html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg {
+  background: rgba(15, 23, 42, 0.1);
+  border-color: rgba(15, 23, 42, 0.18);
 }
 
 .pmx-appearance .seg > button {
   padding: 4px 10px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
   color: var(--dock-muted, var(--g5));
@@ -147,12 +168,23 @@
   white-space: nowrap;
   transition:
     background-color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
     color 0.2s ease,
     transform 0.14s cubic-bezier(0.2, 0, 0, 1);
 }
 
-.pmx-appearance .seg > button:hover:not(:disabled) {
+.pmx-appearance .seg > button:hover:not(:disabled):not(.on) {
+  background: rgba(255, 255, 255, 0.07);
   color: var(--dock-fg, var(--fg));
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance .seg > button:hover:not(:disabled):not(.on),
+html:not(.dark):not([data-pmx-theme='dark']):not(.pmx-dark) .pmx-appearance .seg > button:hover:not(:disabled):not(.on),
+.pmx-light .pmx-appearance .seg > button:hover:not(:disabled):not(.on),
+.tb-light .pmx-appearance .seg > button:hover:not(:disabled):not(.on) {
+  background: rgba(15, 23, 42, 0.055);
+  color: #0f172a;
 }
 
 .pmx-appearance .seg > button:active:not(:disabled) {
@@ -164,10 +196,56 @@
   outline-offset: 2px;
 }
 
-.pmx-appearance .seg > button.on {
-  background: var(--g3);
-  color: var(--dock-heading, var(--dock-fg, var(--fg)));
+.pmx-appearance .seg > button.on,
+.pmx-appearance .seg > button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 30%, rgba(255, 255, 255, 0.14));
+  border-color: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 72%, rgba(255, 255, 255, 0.34));
+  color: #ffffff;
   font-weight: 600;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance .seg > button.on,
+:root[data-pmx-theme='light'] .pmx-appearance .seg > button[aria-pressed='true'],
+html:not(.dark):not([data-pmx-theme='dark']):not(.pmx-dark) .pmx-appearance .seg > button.on,
+html:not(.dark):not([data-pmx-theme='dark']):not(.pmx-dark) .pmx-appearance .seg > button[aria-pressed='true'],
+.pmx-light .pmx-appearance .seg > button.on,
+.pmx-light .pmx-appearance .seg > button[aria-pressed='true'],
+.tb-light .pmx-appearance .seg > button.on,
+.tb-light .pmx-appearance .seg > button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #005fb8)) 14%, #ffffff);
+  border-color: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #005fb8)) 58%, rgba(15, 23, 42, 0.16));
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+html.dark[data-pmx-glass='1'] .pmx-appearance .seg > button.on,
+html.dark[data-pmx-glass='1'] .pmx-appearance .seg > button[aria-pressed='true'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] .pmx-appearance .seg > button.on,
+html[data-pmx-theme='dark'][data-pmx-glass='1'] .pmx-appearance .seg > button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 38%, rgba(20, 30, 52, 0.88));
+  border-color: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 82%, rgba(255, 255, 255, 0.38));
+  color: #ffffff;
+  box-shadow:
+    0 1px 5px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+html:not(.dark)[data-pmx-glass='1'] .pmx-appearance .seg > button.on,
+html:not(.dark)[data-pmx-glass='1'] .pmx-appearance .seg > button[aria-pressed='true'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg > button.on,
+html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg > button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #005fb8)) 18%, rgba(255, 255, 255, 0.96));
+  border-color: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #005fb8)) 64%, rgba(15, 23, 42, 0.2));
+  color: #0f172a;
+  box-shadow:
+    0 1px 4px rgba(15, 23, 42, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.98);
 }
 
 .pmx-appearance .dock-glass-seg {
@@ -1319,7 +1397,7 @@ html[data-pmx-theme='dark'] .pmx-re-root {
   position: absolute;
   z-index: 4;
   top: 50%;
-  left: clamp(13px, var(--pmx-re-progress), calc(100% - 13px));
+  left: var(--pmx-re-progress);
   width: 24px;
   height: 24px;
   border: 1px solid rgba(255, 255, 255, 0.92);
@@ -1336,7 +1414,7 @@ html[data-pmx-theme='dark'] .pmx-re-root {
 
 /* Chibi running sprite knob */
 .pmx-re-root.is-runner .pmx-re-knob {
-  left: clamp(16px, var(--pmx-re-progress), calc(100% - 16px));
+  left: var(--pmx-re-progress);
   width: 36px;
   height: 49px;
   border: 0;
@@ -1354,7 +1432,7 @@ html[data-pmx-theme='dark'] .pmx-re-root {
   transform-origin: 50% 68%;
 }
 .pmx-re-root.is-runner.is-compact .pmx-re-knob {
-  left: clamp(14px, var(--pmx-re-progress), calc(100% - 14px));
+  left: var(--pmx-re-progress);
   width: 32px;
   height: 44px;
 }
@@ -1587,18 +1665,21 @@ html[data-pmx-glass='1'] .pmx-re-track {
   border: 1px solid var(--pmx-glass-border, rgba(255, 255, 255, 0.18));
 }
 
-/* Discrete Clickable Stop Pills (WCAG >= 4.5:1) */
+/* Discrete Clickable Stop Pills (WCAG >= 4.5:1)
+ * Equal-width N-column grid with gap: 0 and symmetric margin-inline guarantees that
+ * the i-th label pill center sits at EXACTLY ((i + 0.5) / N) * 100% (0.00px delta with
+ * the running chibi center and radiation flare focus). */
 .pmx-re-stops {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--pmx-re-count, 4), minmax(0, 1fr));
   align-items: center;
-  justify-content: space-between;
-  gap: 3px;
+  gap: 0;
   width: 100%;
   min-width: 0;
 }
 .pmx-re-stop {
-  flex: 1 1 auto;
   min-width: 0;
+  margin-inline: 2px;
   padding: 3px 3px;
   border-radius: 6px;
   border: 1px solid transparent;
@@ -1614,6 +1695,9 @@ html[data-pmx-glass='1'] .pmx-re-track {
   text-overflow: ellipsis;
   cursor: pointer;
   transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.pmx-re-root.is-compact .pmx-re-stop {
+  margin-inline: 1px;
 }
 .pmx-re-stop:hover:not(:disabled) {
   color: var(--foreground, #0f172a);
@@ -2055,11 +2139,31 @@ html[data-prismux-gpu='0'] .pmx-re-slider[data-top] .pmx-re-track {
   outline-offset: 2px;
 }
 
-.pmx-appearance .pmx-gz-pill.on {
-  border-color: var(--dock-accent, var(--pmx-accent, #5e9bff));
-  background: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 16%, var(--g2));
-  color: var(--dock-heading, var(--dock-fg, var(--fg)));
+.pmx-appearance .pmx-gz-pill.on,
+.pmx-appearance .pmx-gz-pill[aria-selected='true'] {
+  border-color: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 76%, rgba(255, 255, 255, 0.3));
+  background: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 30%, rgba(20, 30, 52, 0.62));
+  color: #ffffff;
   font-weight: 600;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+:root[data-pmx-theme='light'] .pmx-appearance .pmx-gz-pill.on,
+:root[data-pmx-theme='light'] .pmx-appearance .pmx-gz-pill[aria-selected='true'],
+html:not(.dark):not([data-pmx-theme='dark']):not(.pmx-dark) .pmx-appearance .pmx-gz-pill.on,
+html:not(.dark):not([data-pmx-theme='dark']):not(.pmx-dark) .pmx-appearance .pmx-gz-pill[aria-selected='true'],
+.pmx-light .pmx-appearance .pmx-gz-pill.on,
+.pmx-light .pmx-appearance .pmx-gz-pill[aria-selected='true'],
+.tb-light .pmx-appearance .pmx-gz-pill.on,
+.tb-light .pmx-appearance .pmx-gz-pill[aria-selected='true'] {
+  border-color: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #005fb8)) 62%, rgba(15, 23, 42, 0.16));
+  background: color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #005fb8)) 15%, #ffffff);
+  color: #0f172a;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
 }
 
 /* ── Inline Right-Sidebar Appearance Studio (.pmx-inline-studio) ─────────── */

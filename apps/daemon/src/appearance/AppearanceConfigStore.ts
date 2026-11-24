@@ -37,6 +37,25 @@ export interface GlassSurfaceOverride {
   fidelity?: number;
 }
 
+export type PersistedGlassZoneMode = "inherit" | "custom" | "solid";
+
+export interface PersistedGlassZoneConfig {
+  mode: PersistedGlassZoneMode;
+  opacity?: number;
+  blurPx?: number;
+  saturation?: number;
+  tint?: string;
+}
+
+export type PersistedGlassZonesConfig = {
+  shellFrame: PersistedGlassZoneConfig;
+  rightSidebar: PersistedGlassZoneConfig;
+  mainCanvas: PersistedGlassZoneConfig;
+  workPanels: PersistedGlassZoneConfig;
+  composer: PersistedGlassZoneConfig;
+  overlays: PersistedGlassZoneConfig;
+};
+
 export interface SidebarSquareCorners {
   tl: boolean;
   tr: boolean;
@@ -124,6 +143,7 @@ export interface PersistedAppearanceConfig {
   rightSidebarGlass: boolean;
   rightSidebarFullClear: boolean;
   perSurfaceOverrides: Record<string, GlassSurfaceOverride>;
+  glassZones: PersistedGlassZonesConfig;
   sidebarCornerRadius: SidebarCornerRadius;
   sidebarSquareCorners: SidebarSquareCorners;
   rightSidebarCornerRadius?: SidebarCornerRadius;
@@ -287,6 +307,14 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
     rightSidebarGlass: true,
     rightSidebarFullClear: false,
     perSurfaceOverrides: {},
+    glassZones: {
+      shellFrame: { mode: "inherit" },
+      rightSidebar: { mode: "inherit" },
+      mainCanvas: { mode: "inherit" },
+      workPanels: { mode: "inherit" },
+      composer: { mode: "inherit" },
+      overlays: { mode: "inherit" }
+    },
     sidebarCornerRadius: "native",
     sidebarSquareCorners: {
       tl: false,
@@ -425,6 +453,66 @@ function normalizePerSurfaceOverrides(
     };
   }
   return out;
+}
+
+function normalizeGlassZoneEntry(
+  raw: unknown,
+  fallback: PersistedGlassZoneConfig,
+  minOpacity = 0
+): PersistedGlassZoneConfig {
+  if (!isPlainRecord(raw)) {
+    return { ...fallback };
+  }
+  const mode: PersistedGlassZoneMode =
+    raw["mode"] === "custom" || raw["mode"] === "solid" || raw["mode"] === "inherit"
+      ? raw["mode"]
+      : fallback.mode;
+  const opacityRaw = raw["opacity"] !== undefined ? raw["opacity"] : fallback.opacity;
+  const blurRaw = raw["blurPx"] !== undefined ? raw["blurPx"] : fallback.blurPx;
+  const satRaw = raw["saturation"] !== undefined ? raw["saturation"] : fallback.saturation;
+  const tintRaw = raw["tint"] !== undefined ? raw["tint"] : fallback.tint;
+  return {
+    mode,
+    ...(typeof opacityRaw === "number" && Number.isFinite(opacityRaw)
+      ? { opacity: Math.round(clampNumber(opacityRaw, minOpacity, 100, fallback.opacity ?? 50)) }
+      : {}),
+    ...(typeof blurRaw === "number" && Number.isFinite(blurRaw)
+      ? { blurPx: Math.round(clampNumber(blurRaw, 0, 48, fallback.blurPx ?? 16)) }
+      : {}),
+    ...(typeof satRaw === "number" && Number.isFinite(satRaw)
+      ? { saturation: Math.round(clampNumber(satRaw, 80, 240, fallback.saturation ?? 110)) }
+      : {}),
+    ...(typeof tintRaw === "string" && tintRaw.trim().length > 0 ? { tint: tintRaw.trim() } : {})
+  };
+}
+
+function normalizeGlassZones(
+  raw: unknown,
+  fallback: PersistedGlassZonesConfig
+): PersistedGlassZonesConfig {
+  if (!isPlainRecord(raw)) {
+    return {
+      shellFrame: { ...fallback.shellFrame },
+      rightSidebar: { ...fallback.rightSidebar },
+      mainCanvas: { ...fallback.mainCanvas },
+      workPanels: { ...fallback.workPanels },
+      composer: { ...fallback.composer },
+      overlays: { ...fallback.overlays }
+    };
+  }
+  const legacyShell = isPlainRecord(raw["leftSidebar"])
+    ? raw["leftSidebar"]
+    : isPlainRecord(raw["chromeBars"])
+      ? raw["chromeBars"]
+      : undefined;
+  return {
+    shellFrame: normalizeGlassZoneEntry(raw["shellFrame"] ?? legacyShell, fallback.shellFrame, 0),
+    rightSidebar: normalizeGlassZoneEntry(raw["rightSidebar"], fallback.rightSidebar, 0),
+    mainCanvas: normalizeGlassZoneEntry(raw["mainCanvas"], fallback.mainCanvas, 0),
+    workPanels: normalizeGlassZoneEntry(raw["workPanels"], fallback.workPanels, 0),
+    composer: normalizeGlassZoneEntry(raw["composer"], fallback.composer, 0),
+    overlays: normalizeGlassZoneEntry(raw["overlays"], fallback.overlays, 68)
+  };
 }
 
 function normalizeUserPropOverrides(
@@ -595,6 +683,10 @@ export function mergeAppearanceConfig(
             base.perSurfaceOverrides
           )
         : base.perSurfaceOverrides,
+    glassZones:
+      "glassZones" in rawPatch
+        ? normalizeGlassZones(rawPatch["glassZones"], base.glassZones)
+        : base.glassZones,
     sidebarCornerRadius: normalizeCornerRadius(
       rawPatch["sidebarCornerRadius"],
       base.sidebarCornerRadius

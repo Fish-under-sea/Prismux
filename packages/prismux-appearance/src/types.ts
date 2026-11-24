@@ -25,10 +25,11 @@ export type GlassSurfaceId =
   | 'sidebarContent';
 
 /**
- * Five unified workbench liquid-glass zones exposed for real-time per-zone customization:
+ * Six unified workbench liquid-glass zones exposed for real-time per-zone customization:
  * - `shellFrame`: Monolithic closed picture-frame shell (Left Sidebar + Top Bar + Bottom Status Bar + Right Edge)
  * - `rightSidebar`: Expandable right feature sidebar (defaults to following `shellFrame`, independently tunable)
  * - `mainCanvas`: Central rounded inner workspace canvas (defaults crystal-clear with 0px blur & zero tint shift)
+ * - `workPanels`: Unified frosted-glass zone for Tasks, Workspace Board & Scheduled Tasks main panels
  * - `composer`: Message composer & cards
  * - `overlays`: Modals, popovers, dropdowns & settings panels
  */
@@ -36,13 +37,14 @@ export type GlassZoneId =
   | 'shellFrame'
   | 'rightSidebar'
   | 'mainCanvas'
+  | 'workPanels'
   | 'composer'
   | 'overlays';
 
 /** Legacy 6-zone ids automatically migrated into `shellFrame` for 100% backward compatibility. */
 export type LegacyGlassZoneId = 'leftSidebar' | 'chromeBars';
 
-/** Zone identifier input accepted by mutators/normalizers (canonical 5-zone or legacy aliases). */
+/** Zone identifier input accepted by mutators/normalizers (canonical 6-zone or legacy aliases). */
 export type GlassZoneIdInput = GlassZoneId | LegacyGlassZoneId;
 
 export type GlassZoneMode = 'inherit' | 'custom' | 'solid';
@@ -172,7 +174,7 @@ export interface AppearanceConfig {
   rightSidebarFullClear: boolean;
   /** Optional per-surface independent overrides. */
   perSurfaceOverrides: Partial<Record<GlassSurfaceId, GlassSurfaceOverride>>;
-  /** Five unified workbench glass zones (shellFrame, rightSidebar, mainCanvas, composer, overlays). */
+  /** Six unified workbench glass zones (shellFrame, rightSidebar, mainCanvas, workPanels, composer, overlays). */
   glassZones: GlassZonesConfig;
   /** Unified sidebar corner radius ('native' | 6 | 12 | 20). */
   sidebarCornerRadius: SidebarCornerRadius;
@@ -263,6 +265,7 @@ export const GLASS_ZONE_IDS: readonly GlassZoneId[] = [
   'shellFrame',
   'rightSidebar',
   'mainCanvas',
+  'workPanels',
   'composer',
   'overlays',
 ] as const;
@@ -271,6 +274,7 @@ export const GLASS_ZONE_CSS_NAMES: Readonly<Record<GlassZoneId, string>> = {
   shellFrame: 'shell-frame',
   rightSidebar: 'right-sidebar',
   mainCanvas: 'main-canvas',
+  workPanels: 'work-panels',
   composer: 'composer',
   overlays: 'overlays',
 };
@@ -313,6 +317,18 @@ export const GLASS_ZONE_META: readonly GlassZoneDescriptor[] = [
     minOpacity: GLASS_ZONE_LIMITS.opacityMin,
   },
   {
+    id: 'workPanels',
+    cssName: 'work-panels',
+    title: '工作面板',
+    compactTitle: '工作面板',
+    shortLabel: '工作面板',
+    note: '任务面板、工作区板与定时任务统一调节',
+    compactNote: '任务面板、工作区板与定时任务统一调节',
+    defaultRegion: 'surface',
+    defaultSaturation: 108,
+    minOpacity: GLASS_ZONE_LIMITS.opacityMin,
+  },
+  {
     id: 'composer',
     cssName: 'composer',
     title: '输入框与卡片',
@@ -338,6 +354,7 @@ export const DEFAULT_GLASS_ZONES: GlassZonesConfig = {
   shellFrame: { mode: 'inherit' },
   rightSidebar: { mode: 'inherit' },
   mainCanvas: { mode: 'inherit' },
+  workPanels: { mode: 'inherit' },
   composer: { mode: 'inherit' },
   overlays: { mode: 'inherit' },
 };
@@ -426,6 +443,7 @@ export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
     shellFrame: { mode: 'inherit' },
     rightSidebar: { mode: 'inherit' },
     mainCanvas: { mode: 'inherit' },
+    workPanels: { mode: 'inherit' },
     composer: { mode: 'inherit' },
     overlays: { mode: 'inherit' },
   },

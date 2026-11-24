@@ -25,8 +25,10 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
+  computeReasoningEffortStopProgress,
   normalizeReasoningEffortOptions,
   resolveEffortStopIndex,
+  resolveReasoningEffortStopIndexFromPointer,
   type NormalizedReasoningEffortOption,
   type ReasoningEffortLocale,
   type ReasoningEffortOption,
@@ -158,7 +160,7 @@ export function PrismuxReasoningEffortSlider({
   onPreviewChangeRef.current = onPreviewChange;
 
   const radiationRef = useRef<ReasoningRadiationState>({
-    progress: stops.length >= 2 ? committedIndex / (stops.length - 1) : 1,
+    progress: computeReasoningEffortStopProgress(committedIndex, stops.length),
     dragging: false,
   });
   const redrawRef = useRef<(() => void) | null>(null);
@@ -173,7 +175,7 @@ export function PrismuxReasoningEffortSlider({
   const effectiveIndex = dragging ? previewIndex : committedIndex;
   const activeStop = stops[effectiveIndex] ?? stops[0];
   const stopCount = stops.length;
-  const progressRatio = stopCount >= 2 ? effectiveIndex / (stopCount - 1) : 1;
+  const progressRatio = computeReasoningEffortStopProgress(effectiveIndex, stopCount);
   const progressPercent = progressRatio * 100;
   const isTop = stopCount >= 2 && effectiveIndex === stopCount - 1;
   const interactive = !disabled && stopCount >= 2;
@@ -199,8 +201,12 @@ export function PrismuxReasoningEffortSlider({
     let width = 1;
     let height = 1;
     let frameId = 0;
+    let isVisible = true;
+    let lastDrawTime = -Infinity;
 
     const shouldAnimate = (): boolean => {
+      if (!isVisible) return false;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
       if (mq?.matches) return false;
       if (isGpuDisabledOnDocument()) return false;
       return typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function';
@@ -220,6 +226,7 @@ export function PrismuxReasoningEffortSlider({
     };
 
     const draw = (time = 1200): void => {
+      lastDrawTime = time;
       drawReasoningRadiation(
         context,
         width,
@@ -239,7 +246,10 @@ export function PrismuxReasoningEffortSlider({
     };
 
     const tick = (time: number): void => {
-      draw(time);
+      const minInterval = radiationRef.current.dragging ? 0 : 32;
+      if (time - lastDrawTime >= minInterval) {
+        draw(time);
+      }
       if (shouldAnimate()) {
         frameId = window.requestAnimationFrame(tick);
       } else {
@@ -264,6 +274,23 @@ export function PrismuxReasoningEffortSlider({
       resizeObserver.observe(canvas);
     }
 
+    let intersectionObserver: IntersectionObserver | undefined;
+    if (typeof IntersectionObserver === 'function') {
+      intersectionObserver = new IntersectionObserver((entries) => {
+        const entry = entries[entries.length - 1];
+        if (!entry) return;
+        const nextVisible = entry.isIntersecting;
+        if (nextVisible === isVisible) return;
+        isVisible = nextVisible;
+        if (isVisible) {
+          syncLoop();
+        } else {
+          stopLoop();
+        }
+      });
+      intersectionObserver.observe(canvas);
+    }
+
     let docObserver: MutationObserver | undefined;
     if (typeof MutationObserver === 'function' && typeof document !== 'undefined') {
       docObserver = new MutationObserver(() => {
@@ -273,6 +300,11 @@ export function PrismuxReasoningEffortSlider({
         attributes: true,
         attributeFilter: ['class', 'data-pmx-theme', 'data-pmx-glass', 'data-pmx-gpu', 'data-prismux-gpu', 'data-pmx-reduced-motion'],
       });
+    }
+
+    const handleVisibilityChange = () => syncLoop();
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
     }
 
     const handleMqChange = () => syncLoop();
@@ -290,7 +322,11 @@ export function PrismuxReasoningEffortSlider({
     return () => {
       stopLoop();
       resizeObserver?.disconnect();
+      intersectionObserver?.disconnect();
       docObserver?.disconnect();
+      if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
       if (mq && typeof mq.removeEventListener === 'function') {
         mq.removeEventListener('change', handleMqChange);
       }
@@ -315,8 +351,7 @@ export function PrismuxReasoningEffortSlider({
     const list = stopsRef.current;
     const bounds = input.getBoundingClientRect();
     if (bounds.width <= 0 || list.length < 2) return previewIndexRef.current;
-    const ratio = (clientX - bounds.left) / bounds.width;
-    return Math.max(0, Math.min(list.length - 1, ratio * (list.length - 1)));
+    return resolveReasoningEffortStopIndexFromPointer(clientX, bounds, list.length);
   }, []);
 
   const updatePreview = useCallback((rawIndex: number) => {
@@ -446,6 +481,7 @@ export function PrismuxReasoningEffortSlider({
 
   const rootStyle = {
     '--pmx-re-progress': `${progressPercent}%`,
+    '--pmx-re-count': String(Math.max(1, stopCount)),
     '--pmx-re-sprite': `url("${theme.spriteUrl}")`,
     '--pmx-re-accent-light': theme.accentLight,
     '--pmx-re-accent-dark': theme.accentDark,

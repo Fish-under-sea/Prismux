@@ -394,7 +394,7 @@ function sanitizeGlassZoneEntry(
 
 /**
  * Maps legacy 6-zone ids (`leftSidebar`, `chromeBars`) into the unified `shellFrame` zone
- * while preserving canonical 5-zone ids (`shellFrame`, `rightSidebar`, `mainCanvas`, `composer`, `overlays`).
+ * while preserving canonical 6-zone ids (`shellFrame`, `rightSidebar`, `mainCanvas`, `workPanels`, `composer`, `overlays`).
  */
 export function canonicalizeGlassZoneId(id: GlassZoneIdInput): GlassZoneId {
   if (id === 'leftSidebar' || id === 'chromeBars') return 'shellFrame';
@@ -419,6 +419,11 @@ function sanitizeGlassZones(
     shellFrame: sanitizeGlassZoneEntry('shellFrame', rawShellFrame, base.shellFrame),
     rightSidebar: sanitizeGlassZoneEntry('rightSidebar', raw?.rightSidebar, base.rightSidebar),
     mainCanvas: sanitizeGlassZoneEntry('mainCanvas', raw?.mainCanvas, base.mainCanvas),
+    workPanels: sanitizeGlassZoneEntry(
+      'workPanels',
+      raw?.workPanels,
+      base.workPanels ?? DEFAULT_GLASS_ZONES.workPanels,
+    ),
     composer: sanitizeGlassZoneEntry('composer', raw?.composer, base.composer),
     overlays: sanitizeGlassZoneEntry('overlays', raw?.overlays, base.overlays),
   };
@@ -829,7 +834,7 @@ export function resetGlassZone(
   };
 }
 
-/** Resets all 5 glass zones (plus legacy surface gates) back to `'inherit'`. */
+/** Resets all 6 glass zones (plus legacy surface gates) back to `'inherit'`. */
 export function resetAllGlassZones(config: AppearanceConfig): AppearanceConfig {
   const normalized = normalizeAppearanceConfig(config);
   return {
@@ -843,13 +848,14 @@ export function resetAllGlassZones(config: AppearanceConfig): AppearanceConfig {
       shellFrame: { mode: 'inherit' },
       rightSidebar: { mode: 'inherit' },
       mainCanvas: { mode: 'inherit' },
+      workPanels: { mode: 'inherit' },
       composer: { mode: 'inherit' },
       overlays: { mode: 'inherit' },
     },
   };
 }
 
-/** Counts how many of the 5 workbench zones diverge from `'inherit'` (`'custom'` or `'solid'`). */
+/** Counts how many of the 6 workbench zones diverge from `'inherit'` (`'custom'` or `'solid'`). */
 export function countCustomizedGlassZones(config: AppearanceConfig): number {
   const normalized = normalizeAppearanceConfig(config);
   let count = 0;
@@ -1081,9 +1087,12 @@ function resolveZoneGlassValue(
     } else {
       // Arc / AGY 2.0 crystal-clear framed stage window: default mainCanvas reveals Z-0 wallpaper
       // sharply with 0px blur while the surrounding monolithic frame carries the frosted liquid glass.
-      // Users still retain full freedom to dial custom blur/opacity or solid in 5-zone controls.
+      // Users still retain full freedom to dial custom blur/opacity or solid in 6-zone controls.
       inheritedBlur = 0;
     }
+  } else if (id === 'workPanels') {
+    // Dedicated frosted-glass readability baseline for Tasks, Workspace Board & Scheduled Tasks.
+    inheritedBlur = inheritedBlur > 0 ? Math.max(12, inheritedBlur) : 0;
   }
 
   let inheritedAlpha: number;
@@ -1097,6 +1106,11 @@ function resolveZoneGlassValue(
       // Whisper-light strictly achromatic clear veil: clear ~4%, balanced ~6%, light ~8% (0px blur, zero tint shift).
       inheritedAlpha = clampNumber(0.02 + (inheritedRawOp / 100) * 0.1, 0.02, 0.12);
     }
+  } else if (id === 'workPanels') {
+    // High-legibility frosted glass default: dark balanced ~67%, light balanced ~72% (never washed-out or bare over vivid wallpapers).
+    const floor = (isDark ? 0.56 : 0.64) * fidelityScalar;
+    const minFloor = (isDark ? 0.52 : 0.6) * fidelityScalar;
+    inheritedAlpha = clampNumber(floor + (inheritedRawOp / 100) * (1 - floor) * 0.7, minFloor, 0.94);
   } else if (id === 'composer') {
     const floor = 0.34 * fidelityScalar;
     inheritedAlpha = floor + (inheritedRawOp / 100) * (1 - floor);
@@ -1278,6 +1292,14 @@ export function resolveAppearanceRuntime(
     mainCanvas: resolveZoneGlassValue(
       config,
       'mainCanvas',
+      isDark,
+      glassActive,
+      activeGlassTint,
+      surfaces,
+    ),
+    workPanels: resolveZoneGlassValue(
+      config,
+      'workPanels',
       isDark,
       glassActive,
       activeGlassTint,
@@ -1487,6 +1509,12 @@ const MANAGED_CSS_VARS: readonly string[] = [
   '--pmx-font-sans',
   '--pmx-font-mono',
   '--pmx-font-weight',
+  '--pmx-glass-work-panels-bg',
+  '--pmx-glass-work-panels-card-bg',
+  '--pmx-glass-work-panels-blur',
+  '--pmx-glass-work-panels-border',
+  '--pmx-glass-work-panels-backdrop',
+  '--pmx-glass-work-panels-sheen',
   ...ZONE_CSS_VARS,
 ] as const;
 
@@ -1715,7 +1743,7 @@ export function applyPrismuxAppearanceToDocument(
   );
   s.setProperty('--pmx-right-sidebar-tint', runtime.zones.rightSidebar.tint);
 
-  // Unified 5-zone liquid glass CSS custom properties (+ mirrored legacy left-sidebar/chrome-bars aliases).
+  // Unified 6-zone liquid glass CSS custom properties (+ mirrored legacy left-sidebar/chrome-bars aliases).
   const solidFallbackBorder = runtime.isDark
     ? 'rgba(255, 255, 255, 0.12)'
     : 'rgba(15, 23, 42, 0.14)';
@@ -1746,6 +1774,49 @@ export function applyPrismuxAppearanceToDocument(
   }
   for (const legacyCssName of LEGACY_SHELL_FRAME_CSS_NAMES) {
     writeZoneCssProps(legacyCssName, runtime.zones.shellFrame);
+  }
+
+  // Dedicated semantic aliases for the `workPanels` zone (Tasks / Workspace Board / Scheduled Tasks).
+  const workPanelsZone = runtime.zones.workPanels;
+  const workPanelsTintRgb = hexToRgb(workPanelsZone.tint);
+  if (forceSolidZones || workPanelsZone.effectiveMode === 'solid') {
+    const solidCardBg = runtime.isDark
+      ? `rgb(${Math.min(255, workPanelsTintRgb.r + 11)}, ${Math.min(255, workPanelsTintRgb.g + 12)}, ${Math.min(255, workPanelsTintRgb.b + 15)})`
+      : 'rgb(255, 255, 255)';
+    s.setProperty(
+      '--pmx-glass-work-panels-bg',
+      `rgb(${workPanelsTintRgb.r}, ${workPanelsTintRgb.g}, ${workPanelsTintRgb.b})`,
+    );
+    s.setProperty('--pmx-glass-work-panels-card-bg', solidCardBg);
+    s.setProperty('--pmx-glass-work-panels-blur', '0px');
+    s.setProperty('--pmx-glass-work-panels-border', solidFallbackBorder);
+    s.setProperty('--pmx-glass-work-panels-backdrop', 'none');
+    s.setProperty('--pmx-glass-work-panels-sheen', 'none');
+  } else {
+    const panelAlpha = clampNumber(workPanelsZone.opacity / 100, 0, 1);
+    const cardAlpha = runtime.isDark
+      ? clampNumber(0.26 + panelAlpha * 0.42, 0.26, 0.74)
+      : clampNumber(0.46 + panelAlpha * 0.42, 0.46, 0.9);
+    const cardRgb = runtime.isDark
+      ? {
+          r: Math.min(255, workPanelsTintRgb.r + 10),
+          g: Math.min(255, workPanelsTintRgb.g + 12),
+          b: Math.min(255, workPanelsTintRgb.b + 16),
+        }
+      : {
+          r: Math.min(255, Math.round(workPanelsTintRgb.r * 0.35 + 255 * 0.65)),
+          g: Math.min(255, Math.round(workPanelsTintRgb.g * 0.35 + 255 * 0.65)),
+          b: Math.min(255, Math.round(workPanelsTintRgb.b * 0.35 + 255 * 0.65)),
+        };
+    s.setProperty('--pmx-glass-work-panels-bg', workPanelsZone.bgCss);
+    s.setProperty(
+      '--pmx-glass-work-panels-card-bg',
+      `rgba(${cardRgb.r}, ${cardRgb.g}, ${cardRgb.b}, ${cardAlpha.toFixed(3)})`,
+    );
+    s.setProperty('--pmx-glass-work-panels-blur', `${workPanelsZone.blurPx}px`);
+    s.setProperty('--pmx-glass-work-panels-border', workPanelsZone.borderCss);
+    s.setProperty('--pmx-glass-work-panels-backdrop', workPanelsZone.backdropCss);
+    s.setProperty('--pmx-glass-work-panels-sheen', workPanelsZone.sheenCss);
   }
 
   // Default inner workspace stage corner radius token (fixed 14px; no corner slider UI).

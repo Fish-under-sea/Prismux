@@ -22,11 +22,11 @@ export interface GlassZoneConfiguratorProps {
   onChange: (next: AppearanceConfig) => void;
   /** Compact layout tailored for 320-420px right sidebar with zero horizontal overflow. */
   compact?: boolean;
-  /** Optional subset/ordering of zones to render (defaults to all 5 unified workbench zones). */
+  /** Optional subset/ordering of zones to render (defaults to all 6 unified workbench zones). */
   zones?: readonly GlassZoneId[];
   /** Whether to show optional saturation slider when a zone is in 'custom' mode (defaults to true). */
   showSaturation?: boolean;
-  /** In compact mode, whether the secondary 3 zones start expanded together (defaults to false). */
+  /** In compact mode, whether the secondary 4 zones start expanded together (defaults to false). */
   defaultExpandAllZones?: boolean;
   /** Disables interaction and shows inline disabledReason when provided. */
   disabled?: boolean;
@@ -213,8 +213,8 @@ function GlassZoneCard({
 }
 
 /**
- * Unified 5-zone liquid-glass configurator covering shellFrame (Left Sidebar + Top Bar +
- * Bottom Status Bar + Right Edge), rightSidebar, mainCanvas, composer, and overlays.
+ * Unified 6-zone liquid-glass configurator covering shellFrame (Left Sidebar + Top Bar +
+ * Bottom Status Bar + Right Edge), rightSidebar, mainCanvas, workPanels, composer, and overlays.
  * Pure host visual control with 0 LLM token overhead.
  */
 export function GlassZoneConfigurator({
@@ -327,11 +327,11 @@ export function GlassZoneConfigurator({
       <div className="pmx-gz-header">
         <div className="pmx-gz-header-text">
           <span className="glass-reg-t">
-            {compact ? '工作台分区独立玻璃' : '工作台 5 分区精细玻璃控制'}
+            {compact ? '工作台分区独立玻璃' : '工作台 6 分区精细玻璃控制'}
           </span>
           {!compact ? (
             <span className="glass-reg-d">
-              窗口外框（左侧边栏、顶栏、底栏与右细边）统一连体调节，右侧功能边栏、主画布、输入框与弹窗层独立可控；拖动任意滑块立即实时生效。
+              窗口外框（左侧边栏、顶栏、底栏与右细边）统一连体调节，右侧功能边栏、主画布、工作面板（任务面板/工作区板/定时任务）、输入框与弹窗层独立可控；拖动任意滑块立即实时生效。
             </span>
           ) : null}
         </div>
@@ -364,7 +364,7 @@ export function GlassZoneConfigurator({
           {/* Pinned Shell Frame & Right Feature Sidebar directly accessible with zero extra clicks */}
           {pinnedDescriptors.map(renderCard)}
 
-          {/* Secondary 3 workbench zones with crisp pill selector or full expansion */}
+          {/* Secondary 4 workbench zones with crisp pill selector or full expansion */}
           {secondaryDescriptors.length > 0 ? (
             <div className="pmx-gz-secondary-wrap">
               <div className="pmx-gz-secondary-head">
@@ -377,7 +377,7 @@ export function GlassZoneConfigurator({
                   disabled={disabled}
                   onClick={() => setExpandAllSecondary((prev) => !prev)}
                 >
-                  {expandAllSecondary ? '切回单区' : '展开全部 5 区'}
+                  {expandAllSecondary ? '切回单区' : '展开全部 6 区'}
                 </button>
               </div>
 

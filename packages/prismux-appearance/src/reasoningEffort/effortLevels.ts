@@ -167,3 +167,38 @@ export function resolveEffortStopIndex(
   if (mediumIdx >= 0) return mediumIdx;
   return Math.floor((stops.length - 1) / 2);
 }
+
+/**
+ * Compute the normalized [0, 1] horizontal center position for stop `index`
+ * inside an equal-width `count`-column grid: `(index + 0.5) / count`.
+ * Aligns the running chibi center, flare focus, and radiation beam origin
+ * mathematically (0.00px delta) with the centerline of the `index`-th label pill below.
+ */
+export function computeReasoningEffortStopProgress(index: number, count: number): number {
+  if (!Number.isFinite(count) || count <= 0) return 0;
+  const safeCount = Math.floor(count);
+  const clampedIndex = Math.max(0, Math.min(safeCount - 1, Math.round(index)));
+  return (clampedIndex + 0.5) / safeCount;
+}
+
+/** Compute the percentage [0, 100] centerline offset `((index + 0.5) / count) * 100`. */
+export function computeReasoningEffortStopPercent(index: number, count: number): number {
+  return computeReasoningEffortStopProgress(index, count) * 100;
+}
+
+/**
+ * Map a pointer `clientX` on the slider track to its corresponding equal-width
+ * grid stop index via `Math.floor(((clientX - rect.left) / rect.width) * count)`.
+ */
+export function resolveReasoningEffortStopIndexFromPointer(
+  clientX: number,
+  rect: { readonly left: number; readonly width: number },
+  count: number,
+): number {
+  if (!Number.isFinite(count) || count <= 1 || !Number.isFinite(rect.width) || rect.width <= 0) {
+    return 0;
+  }
+  const safeCount = Math.floor(count);
+  const raw = Math.floor(((clientX - rect.left) / rect.width) * safeCount);
+  return Math.max(0, Math.min(safeCount - 1, raw));
+}

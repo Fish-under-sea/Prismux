@@ -112,6 +112,8 @@ import {
   REASONING_MODEL_THEMES,
   REASONING_RUNNER_FRAME_COUNT,
   REASONING_RUNNER_SPRITES,
+  computeReasoningEffortStopPercent,
+  computeReasoningEffortStopProgress,
   detectReasoningModelFamily,
   drawReasoningRadiation,
   formatEffortLabel,
@@ -120,6 +122,7 @@ import {
   getEffortPresetForFamily,
   normalizeReasoningEffortOptions,
   resolveEffortStopIndex,
+  resolveReasoningEffortStopIndexFromPointer,
   resolveReasoningModelTheme,
   type ReasoningModelFamily,
 } from '../reasoningEffort/index.js';
@@ -1091,6 +1094,57 @@ describe('PrismuxReasoningEffortSlider (dsh-fish model-aware running slider)', (
         `styles.css must include track styling for ${family}`,
       );
     }
+    assert.match(css, /\.pmx-re-stops\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(var\(--pmx-re-count,\s*4\),\s*minmax\(0,\s*1fr\)\);[^}]*gap:\s*0;/s);
+    assert.match(css, /\.pmx-re-root\.is-runner \.pmx-re-knob\s*\{[^}]*left:\s*var\(--pmx-re-progress\);/s);
+  });
+
+  it('mathematically centers the runner knob at ((i + 0.5) / N) * 100% with 0.00px error and aligns pointer hit cells across N=2..7', () => {
+    const widths = [240, 320, 480, 720, 960];
+    const rectLeft = 40;
+    for (const count of [2, 3, 4, 5, 6, 7]) {
+      for (let i = 0; i < count; i += 1) {
+        const expectedRatio = (i + 0.5) / count;
+        const actualRatio = computeReasoningEffortStopProgress(i, count);
+        const actualPercent = computeReasoningEffortStopPercent(i, count);
+        assert.ok(Math.abs(actualRatio - expectedRatio) < 1e-12);
+        assert.ok(Math.abs(actualPercent - expectedRatio * 100) < 1e-12);
+
+        for (const width of widths) {
+          const cellWidth = width / count;
+          const labelCenterX = rectLeft + (i + 0.5) * cellWidth;
+          const runnerCenterX = rectLeft + actualRatio * width;
+          assert.ok(
+            Math.abs(runnerCenterX - labelCenterX) < 1e-9,
+            `Expected 0.00px delta for N=${count}, i=${i}, W=${width}`,
+          );
+          assert.equal(
+            resolveReasoningEffortStopIndexFromPointer(labelCenterX, { left: rectLeft, width }, count),
+            i,
+          );
+          // Near left and right interior edges of cell i still map cleanly to i
+          assert.equal(
+            resolveReasoningEffortStopIndexFromPointer(
+              rectLeft + i * cellWidth + 0.01,
+              { left: rectLeft, width },
+              count,
+            ),
+            i,
+          );
+          assert.equal(
+            resolveReasoningEffortStopIndexFromPointer(
+              rectLeft + (i + 1) * cellWidth - 0.01,
+              { left: rectLeft, width },
+              count,
+            ),
+            i,
+          );
+        }
+      }
+      // Out-of-bounds drags clamp cleanly to [0, count - 1]
+      assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft - 50, { left: rectLeft, width: 400 }, count), 0);
+      assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + 400, { left: rectLeft, width: 400 }, count), count - 1);
+      assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + 500, { left: rectLeft, width: 400 }, count), count - 1);
+    }
   });
 });
 
@@ -1147,11 +1201,21 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     const body = createMockElement();
     const doc: DocumentLike = { documentElement: html, body };
 
-    assert.deepEqual(GLASS_ZONE_IDS, ['shellFrame', 'rightSidebar', 'mainCanvas', 'composer', 'overlays']);
+    assert.deepEqual(GLASS_ZONE_IDS, [
+      'shellFrame',
+      'rightSidebar',
+      'mainCanvas',
+      'workPanels',
+      'composer',
+      'overlays',
+    ]);
     assert.equal(GLASS_ZONE_META[0]?.id, 'shellFrame');
     assert.match(GLASS_ZONE_META[0]?.title ?? '', /^窗口外框/);
     assert.equal(GLASS_ZONE_META[1]?.id, 'rightSidebar');
     assert.equal(GLASS_ZONE_META[1]?.title, '右侧功能边栏');
+    assert.equal(GLASS_ZONE_META[3]?.id, 'workPanels');
+    assert.equal(GLASS_ZONE_META[3]?.title, '工作面板');
+    assert.equal(GLASS_ZONE_META[3]?.note, '任务面板、工作区板与定时任务统一调节');
     assert.equal(canonicalizeGlassZoneId('leftSidebar'), 'shellFrame');
     assert.equal(canonicalizeGlassZoneId('chromeBars'), 'shellFrame');
 
@@ -2565,5 +2629,154 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
       (fallbackSection.match(/\[data-pmx-shell-backdrop='1'\]/g) ?? []).length >= 6,
       'every solid fallback path + forced-colors must cover [data-pmx-shell-backdrop="1"]',
     );
+  });
+});
+
+describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks) & anti-whiteout bridge (#490)', () => {
+  it('provides high-readability frosted defaults, emits --pmx-glass-work-panels-* tokens, supports custom/solid & migrates legacy 5-zone configs', () => {
+    const html = createMockElement();
+    const body = createMockElement();
+    const doc: DocumentLike = { documentElement: html, body };
+
+    // Legacy 5-zone config missing `workPanels` migrates cleanly to `{ mode: 'inherit' }`
+    const migrated = normalizeAppearanceConfig({
+      themeMode: 'glass',
+      glassBasePolarity: 'dark',
+      glassPreset: 'balanced',
+      glassZones: {
+        shellFrame: { mode: 'inherit' },
+        rightSidebar: { mode: 'inherit' },
+        mainCanvas: { mode: 'inherit' },
+        composer: { mode: 'inherit' },
+        overlays: { mode: 'inherit' },
+      },
+    });
+    assert.deepEqual(migrated.glassZones.workPanels, { mode: 'inherit' });
+
+    // Dark balanced default: readable frosted glass (>= 60% opacity, >= 16px blur), NOT bare mainCanvas
+    const darkRt = applyPrismuxAppearanceToDocument(migrated, { document: doc, wallpaperActive: true });
+    assert.equal(darkRt.zones.workPanels.effectiveMode, 'inherit');
+    assert.ok(
+      darkRt.zones.workPanels.opacity >= 60 && darkRt.zones.workPanels.opacity <= 90,
+      `dark balanced workPanels opacity should be high-readability frosted glass, got ${darkRt.zones.workPanels.opacity}`,
+    );
+    assert.ok(
+      darkRt.zones.workPanels.blurPx >= 16,
+      `dark balanced workPanels blur should be >= 16px, got ${darkRt.zones.workPanels.blurPx}`,
+    );
+    assert.equal(html.attrs.get('data-pmx-zone-work-panels-mode'), 'inherit');
+    assert.equal(
+      html.styles.get('--pmx-glass-work-panels-bg'),
+      html.styles.get('--pmx-glass-zone-work-panels-bg'),
+    );
+    assert.match(html.styles.get('--pmx-glass-work-panels-card-bg') ?? '', /^rgba\(/);
+    assert.equal(html.styles.get('--pmx-glass-work-panels-blur'), `${darkRt.zones.workPanels.blurPx}px`);
+    assert.match(html.styles.get('--pmx-glass-work-panels-border') ?? '', /^rgba\(/);
+    assert.match(html.styles.get('--pmx-glass-work-panels-backdrop') ?? '', /^blur\(\d+px\) saturate\(1\.08\)$/);
+
+    // Light balanced default: crisp light milk-glass (>= 68% opacity)
+    const lightCfg = normalizeAppearanceConfig({
+      themeMode: 'glass',
+      glassBasePolarity: 'light',
+      glassPreset: 'balanced',
+    });
+    const lightRt = applyPrismuxAppearanceToDocument(lightCfg, { document: doc, wallpaperActive: true });
+    assert.ok(lightRt.zones.workPanels.opacity >= 68);
+    assert.match(html.styles.get('--pmx-glass-work-panels-card-bg') ?? '', /^rgba\(255, 255, 255,/);
+
+    // Custom live adjustment of workPanels updates both zone & alias CSS variables
+    const customCfg = updateGlassZone(migrated, 'workPanels', {
+      mode: 'custom',
+      opacity: 52,
+      blurPx: 26,
+    });
+    const customRt = applyPrismuxAppearanceToDocument(customCfg, { document: doc, wallpaperActive: true });
+    assert.equal(customRt.zones.workPanels.effectiveMode, 'custom');
+    assert.equal(customRt.zones.workPanels.opacity, 52);
+    assert.equal(customRt.zones.workPanels.blurPx, 26);
+    assert.equal(html.attrs.get('data-pmx-zone-work-panels-mode'), 'custom');
+    assert.equal(html.styles.get('--pmx-glass-work-panels-blur'), '26px');
+    assert.match(html.styles.get('--pmx-glass-work-panels-bg') ?? '', /0\.520\)$/);
+
+    // Solid mode drops blur/sheen and emits opaque solid bg + elevated solid card bg
+    const solidCfg = updateGlassZone(migrated, 'workPanels', { mode: 'solid' });
+    applyPrismuxAppearanceToDocument(solidCfg, { document: doc, wallpaperActive: true });
+    assert.equal(html.attrs.get('data-pmx-zone-work-panels-mode'), 'solid');
+    assert.equal(html.styles.get('--pmx-glass-work-panels-blur'), '0px');
+    assert.equal(html.styles.get('--pmx-glass-work-panels-backdrop'), 'none');
+    assert.match(html.styles.get('--pmx-glass-work-panels-bg') ?? '', /^rgb\(/);
+    assert.match(html.styles.get('--pmx-glass-work-panels-card-bg') ?? '', /^rgb\(/);
+
+    // Clear removes all workPanels CSS variables and mode attribute cleanly
+    clearPrismuxAppearanceFromDocument(doc);
+    assert.equal(html.attrs.get('data-pmx-zone-work-panels-mode'), undefined);
+    assert.equal(html.styles.get('--pmx-glass-work-panels-bg'), undefined);
+    assert.equal(html.styles.get('--pmx-glass-work-panels-card-bg'), undefined);
+    assert.equal(html.styles.get('--pmx-glass-work-panels-blur'), undefined);
+    assert.equal(html.styles.get('--pmx-glass-work-panels-border'), undefined);
+  });
+
+  it('wires [data-pmx-work-panel="1"], [data-pmx-work-panel-card="1"], and global .text-background glass safety guard in t3-glass-bridge.css', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+
+    assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\]\s+\.text-background[\s\S]*?color:\s*#0b0f17;/);
+    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\]\s+\.text-background[\s\S]*?color:\s*#ffffff;/);
+    assert.match(bridgeCss, /\[data-pmx-work-panel='1'\][\s\S]*?--pmx-glass-work-panels-bg/);
+    assert.match(bridgeCss, /\[data-pmx-work-panel-card='1'\][\s\S]*?--pmx-glass-work-panels-card-bg/);
+    assert.match(
+      bridgeCss,
+      /main\[data-slot='sidebar-inset'\]:has\(\[data-pmx-glass-zone='workPanels'\]\)/,
+    );
+
+    const fallbackSection = bridgeCss.slice(
+      bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
+    );
+    assert.ok(
+      (fallbackSection.match(/--pmx-glass-work-panels-bg/g) ?? []).length >= 3,
+      'all 3 solid fallbacks must reset --pmx-glass-work-panels-bg',
+    );
+    assert.ok(
+      (fallbackSection.match(/\[data-pmx-work-panel='1'\]/g) ?? []).length >= 5,
+      'all solid fallbacks + forced-colors must cover [data-pmx-work-panel="1"]',
+    );
+  });
+
+  it('enforces high-contrast 3-state (Light / Dark / Glass) active highlighting on shared segmented controls, ToggleGroup & Tabs (#505)', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
+
+    // Balanced braces & zero prefers-color-scheme in both stylesheets
+    for (const [name, css] of [
+      ['t3-glass-bridge.css', bridgeCss],
+      ['appearance-cards.css', cardsCss],
+    ] as const) {
+      const noComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+      assert.equal(noComments.includes('prefers-color-scheme'), false, `${name} must never use prefers-color-scheme`);
+      assert.equal(
+        (noComments.match(/\{/g) ?? []).length,
+        (noComments.match(/\}/g) ?? []).length,
+        `${name} must have balanced braces`,
+      );
+    }
+
+    // 1. t3-glass-bridge.css covers ToggleGroup segmented, Toggle [data-pressed], TabsList & TabsTrigger across Light / Dark / Glass
+    assert.match(bridgeCss, /\[data-slot='toggle-group'\]\[data-variant='segmented'\],\s*\[data-slot='tabs-list'\]/);
+    assert.match(bridgeCss, /html\.dark \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
+    assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\] \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
+    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
+    assert.match(bridgeCss, /\[data-slot='toggle'\]\[data-variant='segmented'\]\[data-pressed\]/);
+    assert.match(bridgeCss, /html\.dark \[data-slot='toggle'\]\[data-variant='segmented'\]\[data-pressed\][\s\S]*?font-weight:\s*600;/);
+    assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\] \[data-slot='toggle'\]\[data-pressed\][\s\S]*?color:\s*#ffffff;/);
+    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \[data-slot='toggle'\]\[data-pressed\][\s\S]*?color:\s*#0f172a;/);
+    assert.match(bridgeCss, /\[data-slot='tabs-trigger'\]\[data-active\]/);
+    assert.match(bridgeCss, /\[data-slot='tabs-trigger'\]\[aria-selected='true'\]/);
+
+    // 2. appearance-cards.css reinforces .seg > button.on / [aria-pressed='true'] and .pmx-gz-pill.on across Dark / Light / Glass
+    assert.match(cardsCss, /\.pmx-appearance \.seg > button\.on,\s*\.pmx-appearance \.seg > button\[aria-pressed='true'\][\s\S]*?font-weight:\s*600;/);
+    assert.match(cardsCss, /html\.dark\[data-pmx-glass='1'\] \.pmx-appearance \.seg > button\.on[\s\S]*?color:\s*#ffffff;/);
+    assert.match(cardsCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \.pmx-appearance \.seg > button\.on[\s\S]*?color:\s*#0f172a;/);
+    assert.match(cardsCss, /\.pmx-appearance \.pmx-gz-pill\.on[\s\S]*?font-weight:\s*600;/);
   });
 });
