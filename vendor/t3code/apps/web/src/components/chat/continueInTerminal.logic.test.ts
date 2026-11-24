@@ -85,13 +85,28 @@ describe("continueInTerminal.logic", () => {
     // Verify the Continue in terminal handler does not invoke thread.stop / interruptTurn / deleteThread.
     const handlerStart = source.indexOf("const handleContinueInTerminalStable = useStableCallback");
     expect(handlerStart).toBeGreaterThan(-1);
-    const handlerSlice = source.slice(handlerStart, handlerStart + 1200);
-    expect(handlerSlice).toContain("runProjectScriptStable");
+    const handlerSlice = source.slice(handlerStart, handlerStart + 1400);
+    expect(handlerSlice).toContain("await runProjectScriptStable");
+    expect(handlerSlice).toContain("providerInstanceId");
     expect(handlerSlice).not.toContain("interruptTurn");
     expect(handlerSlice).not.toContain("deleteThread");
     expect(handlerSlice).not.toContain("archiveThread");
     expect(source).toContain("AgentSessionContinuationDialog");
     expect(source).toContain('data-action="hand-off-to-agent"');
+    expect(source).toContain("data-cli-launch-banner");
+    expect(source).toContain("data-cli-launch-primary");
+    expect(source).toContain("data-cli-launch-secondary");
+    expect(source).toContain("backdrop-blur-md");
+
+    // Regression guard: ThreadTerminalDrawer must initialize sendTerminalInput before replaying output or focusing.
+    const drawerPath = path.resolve(import.meta.dirname, "../ThreadTerminalDrawer.tsx");
+    const drawerSource = fs.readFileSync(drawerPath, "utf8");
+    const sendInputIdx = drawerSource.indexOf("const sendTerminalInput =");
+    const initialReplayIdx = drawerSource.indexOf("writeTerminalOutputUpdate(terminal, initialOutput)");
+    const initialFocusIdx = drawerSource.indexOf("terminal.focus();\n      }");
+    expect(sendInputIdx).toBeGreaterThan(-1);
+    expect(initialReplayIdx).toBeGreaterThan(sendInputIdx);
+    expect(initialFocusIdx).toBeGreaterThan(sendInputIdx);
   });
 
   it("uses dynamic markdown fences and prompt-injection trust boundaries for hand-off prompts", () => {

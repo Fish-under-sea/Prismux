@@ -10,6 +10,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { DraftId } from "../../composerDraftStore";
 import { resolveStorage } from "../../lib/storage";
+import { containsUuidNoise, formatAgentBrandName } from "../../prismux/agentBrand";
 import type { ThreadRouteTarget } from "../../threadRoutes";
 
 export const WORKSPACE_TABS_STORAGE_KEY = "prismux.workspaceTabs.v1";
@@ -346,7 +347,9 @@ export function createInitialWorkspaceTabsState(): WorkspaceTabsStateData {
   };
 }
 
-function sanitizeRehydratedState(raw: Partial<WorkspaceTabsStateData> | undefined): WorkspaceTabsStateData {
+export function sanitizeRehydratedState(
+  raw: Partial<WorkspaceTabsStateData> | undefined,
+): WorkspaceTabsStateData {
   const initial = createInitialWorkspaceTabsState();
   if (!raw || !raw.layout || !raw.panes || !raw.tabs) {
     return initial;
@@ -357,12 +360,36 @@ function sanitizeRehydratedState(raw: Partial<WorkspaceTabsStateData> | undefine
     return initial;
   }
 
+  const firstPaneId = leafIds[0]!;
+  const resolvedPrimaryPaneId =
+    raw.primaryPaneId && leafIds.includes(raw.primaryPaneId) ? raw.primaryPaneId : firstPaneId;
+  const primaryPaneRawTabIds = new Set(raw.panes[resolvedPrimaryPaneId]?.tabIds ?? []);
+
   const cleanTabs: Record<string, WorkspaceTab> = {};
   for (const [id, tab] of Object.entries(raw.tabs)) {
     if (!tab || typeof tab !== "object" || typeof tab.id !== "string" || typeof tab.kind !== "string") {
       continue;
     }
-    cleanTabs[id] = tab;
+    // Purge legacy unbacked "agent" tabs in the primary pane left over from retired blank-stage builds
+    // so main workspace tabs always converge cleanly onto full ChatView drafts/threads.
+    if (
+      tab.kind === "agent" &&
+      !tab.threadId &&
+      !tab.draftId &&
+      primaryPaneRawTabIds.has(id)
+    ) {
+      continue;
+    }
+    const needsUuidHeal =
+      (tab.kind === "agent" || tab.kind === "draft") &&
+      typeof tab.title === "string" &&
+      containsUuidNoise(tab.title);
+    cleanTabs[id] = needsUuidHeal
+      ? {
+          ...tab,
+          title: formatAgentBrandName(tab.providerId ?? tab.instanceId ?? tab.title, tab.title),
+        }
+      : tab;
   }
 
   const cleanPanes: Record<string, WorkspacePane> = {};
@@ -380,15 +407,13 @@ function sanitizeRehydratedState(raw: Partial<WorkspaceTabsStateData> | undefine
     };
   }
 
-  const firstPaneId = leafIds[0]!;
   const focusedPaneId =
     raw.focusedPaneId && Object.hasOwn(cleanPanes, raw.focusedPaneId)
       ? raw.focusedPaneId
       : firstPaneId;
-  const primaryPaneId =
-    raw.primaryPaneId && Object.hasOwn(cleanPanes, raw.primaryPaneId)
-      ? raw.primaryPaneId
-      : firstPaneId;
+  const primaryPaneId = Object.hasOwn(cleanPanes, resolvedPrimaryPaneId)
+    ? resolvedPrimaryPaneId
+    : firstPaneId;
 
   return {
     layout: raw.layout,

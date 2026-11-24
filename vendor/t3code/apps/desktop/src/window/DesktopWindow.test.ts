@@ -882,6 +882,129 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect("triggers force reload and DevTools directly on Ctrl+Shift+R / Ctrl+Shift+I (win32) and Cmd+Shift+R / Alt+Cmd+I (darwin)", () =>
+    Effect.gen(function* () {
+      assert.equal(
+        DesktopWindow.matchMainWindowContentsShortcut(
+          {
+            type: "keyDown",
+            key: "R",
+            code: "KeyR",
+            control: true,
+            shift: true,
+            alt: false,
+            meta: false,
+            isAutoRepeat: false,
+          },
+          "win32",
+        ),
+        "forceReload",
+      );
+      assert.equal(
+        DesktopWindow.matchMainWindowContentsShortcut(
+          {
+            type: "keyDown",
+            key: "I",
+            code: "KeyI",
+            control: true,
+            shift: true,
+            alt: false,
+            meta: false,
+            isAutoRepeat: false,
+          },
+          "win32",
+        ),
+        "toggleDevTools",
+      );
+      assert.equal(
+        DesktopWindow.matchMainWindowContentsShortcut(
+          {
+            type: "keyDown",
+            key: "r",
+            code: "KeyR",
+            control: false,
+            shift: true,
+            alt: false,
+            meta: true,
+            isAutoRepeat: false,
+          },
+          "darwin",
+        ),
+        "forceReload",
+      );
+      assert.equal(
+        DesktopWindow.matchMainWindowContentsShortcut(
+          {
+            type: "keyDown",
+            key: "i",
+            code: "KeyI",
+            control: false,
+            shift: false,
+            alt: true,
+            meta: true,
+            isAutoRepeat: false,
+          },
+          "darwin",
+        ),
+        "toggleDevTools",
+      );
+
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        platform: "win32",
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
+        if (!beforeInput) {
+          return yield* Effect.die("before-input-event listener was not registered");
+        }
+
+        let preventedReload = false;
+        beforeInput(
+          { preventDefault: () => (preventedReload = true) },
+          {
+            type: "keyDown",
+            isAutoRepeat: false,
+            key: "R",
+            code: "KeyR",
+            control: true,
+            shift: true,
+            alt: false,
+            meta: false,
+          },
+        );
+        assert.isTrue(preventedReload);
+        assert.equal(fakeWindow.reloadIgnoringCache.mock.calls.length, 1);
+
+        let preventedDevTools = false;
+        beforeInput(
+          { preventDefault: () => (preventedDevTools = true) },
+          {
+            type: "keyDown",
+            isAutoRepeat: false,
+            key: "I",
+            code: "KeyI",
+            control: true,
+            shift: true,
+            alt: false,
+            meta: false,
+          },
+        );
+        assert.isTrue(preventedDevTools);
+        assert.equal(fakeWindow.toggleDevTools.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("reloads only the browser page selected through its context menu", () =>
     Effect.gen(function* () {
       const main = makeFakeBrowserWindow();

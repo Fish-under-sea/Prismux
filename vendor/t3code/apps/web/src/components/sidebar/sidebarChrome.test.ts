@@ -1,4 +1,12 @@
-import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type EnvironmentId,
+  type ProjectId,
+  type ServerProvider,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { GTProvider, initializeGT, useGT } from "gt-react";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import fs from "node:fs";
@@ -6,14 +14,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import zhCatalog from "../../i18n/translations/zh.json";
 
+import { Menu } from "../ui/menu";
 import {
+  executeBrandMenuForceReload,
+  executeBrandMenuReload,
+  executeBrandMenuToggleDevTools,
+  resolveBrandMenuDeveloperShortcuts,
+  resolveDefaultAvailableModelSelection,
   resolveSidebarUtilityNavIds,
   SIDEBAR_APP_MENU_ITEM_IDS,
   SIDEBAR_HEADER_CONTROL_ORDER,
+  SidebarBrandMenuItems,
 } from "./SidebarChrome";
 import { resolveSidebarUtilityOverflow } from "./sidebarMicroIndicators";
 import {
@@ -88,6 +103,8 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       "keybindings",
       "check-updates",
       "reload-window",
+      "force-reload-window",
+      "toggle-devtools",
     ]);
 
     const sidebarDir = path.dirname(
@@ -103,7 +120,9 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(source).not.toContain("Wallpaper & appearance");
 
     // Confirm header renders brand menu trigger -> header toggle -> ml-auto history nav in order.
-    const brandMenuIdx = source.indexOf("<SidebarBrandMenu onBackdrop={onBackdrop} />");
+    const brandMenuIdx = source.indexOf(
+      "<SidebarBrandMenu onBackdrop={onBackdrop} isElectron={isElectron} />",
+    );
     const headerToggleIdx = source.indexOf(
       "<SidebarHeaderToggleButton railCompact={false} onBackdrop={onBackdrop} />",
     );
@@ -111,6 +130,16 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(brandMenuIdx).toBeGreaterThan(-1);
     expect(headerToggleIdx).toBeGreaterThan(brandMenuIdx);
     expect(historyNavIdx).toBeGreaterThan(headerToggleIdx);
+
+    // Confirm bottom brand menu items render in exact order (Reload -> Force Reload -> Toggle Developer Tools)
+    // and new-thread launches a full direct draft session instead of only opening the command palette.
+    const reloadIdx = source.indexOf('data-sidebar-app-menu-item="reload-window"');
+    const forceReloadIdx = source.indexOf('data-sidebar-app-menu-item="force-reload-window"');
+    const devToolsIdx = source.indexOf('data-sidebar-app-menu-item="toggle-devtools"');
+    expect(reloadIdx).toBeGreaterThan(-1);
+    expect(forceReloadIdx).toBeGreaterThan(reloadIdx);
+    expect(devToolsIdx).toBeGreaterThan(forceReloadIdx);
+    expect(source).toContain("void handleCreateDirectNewThread()");
 
     // Confirm app menu popup opts into the overlays liquid glass zone.
     expect(source).toContain('data-pmx-glass-zone="overlays"');
@@ -164,6 +193,166 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       createElement(GTProvider, { locale: "zh", translations: zhTranslations }, createElement(Probe)),
     );
     expect(html).toContain("项目|最近会话");
+  });
+
+  it("localizes and wires Prismux brand menu developer items (Reload / Force Reload / Toggle Developer Tools) with Electron IPC & clean shortcut labels", () => {
+    initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+    const zhTranslations = { zh: zhCatalog } as unknown as NonNullable<
+      Parameters<typeof GTProvider>[0]["translations"]
+    >;
+
+    function DevMenuProbe() {
+      const gt = useGT();
+      return createElement(
+        "div",
+        null,
+        `${gt("Reload")}|${gt("Force Reload")}|${gt("Toggle Developer Tools")}`,
+      );
+    }
+
+    const zhHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(DevMenuProbe),
+      ),
+    );
+    expect(zhHtml).toContain("重新加载|强制重新加载|切换开发者工具");
+
+    // Render the real SidebarBrandMenuItems markup in both Electron (3 items) and Web (hides DevTools) modes.
+    const winShortcuts = resolveBrandMenuDeveloperShortcuts("Win32");
+    const electronMenuHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(
+          Menu,
+          null,
+          createElement(SidebarBrandMenuItems, {
+            commandPaletteShortcut: "Ctrl+K",
+            developerShortcuts: winShortcuts,
+            showDevToolsItem: true,
+            onNewThread: vi.fn(),
+            onAddProject: vi.fn(),
+            onOpenCommandPalette: vi.fn(),
+            onOpenSettings: vi.fn(),
+            onOpenKeybindings: vi.fn(),
+            onCheckUpdates: vi.fn(),
+            onReload: vi.fn(),
+            onForceReload: vi.fn(),
+            onToggleDevTools: vi.fn(),
+          }),
+        ),
+      ),
+    );
+    expect(electronMenuHtml).toContain('data-sidebar-app-menu-item="reload-window"');
+    expect(electronMenuHtml).toContain("重新加载");
+    expect(electronMenuHtml).toContain('data-sidebar-app-menu-item="force-reload-window"');
+    expect(electronMenuHtml).toContain("强制重新加载");
+    expect(electronMenuHtml).toContain("Ctrl+Shift+R");
+    expect(electronMenuHtml).toContain('data-sidebar-app-menu-item="toggle-devtools"');
+    expect(electronMenuHtml).toContain("切换开发者工具");
+    expect(electronMenuHtml).toContain("Ctrl+Shift+I");
+    expect(electronMenuHtml).not.toContain("\t");
+
+    const webMenuHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(
+          Menu,
+          null,
+          createElement(SidebarBrandMenuItems, {
+            commandPaletteShortcut: "Ctrl+K",
+            developerShortcuts: winShortcuts,
+            showDevToolsItem: false,
+            onNewThread: vi.fn(),
+            onAddProject: vi.fn(),
+            onOpenCommandPalette: vi.fn(),
+            onOpenSettings: vi.fn(),
+            onOpenKeybindings: vi.fn(),
+            onCheckUpdates: vi.fn(),
+            onReload: vi.fn(),
+            onForceReload: vi.fn(),
+            onToggleDevTools: vi.fn(),
+          }),
+        ),
+      ),
+    );
+    expect(webMenuHtml).toContain('data-sidebar-app-menu-item="reload-window"');
+    expect(webMenuHtml).toContain('data-sidebar-app-menu-item="force-reload-window"');
+    expect(webMenuHtml).not.toContain('data-sidebar-app-menu-item="toggle-devtools"');
+
+    // Shortcut labels must be clean right-aligned labels without any raw tab characters.
+    expect(winShortcuts).toEqual({
+      forceReload: "Ctrl+Shift+R",
+      toggleDevTools: "Ctrl+Shift+I",
+    });
+    expect(winShortcuts.forceReload).not.toContain("\t");
+    expect(winShortcuts.toggleDevTools).not.toContain("\t");
+
+    const macShortcuts = resolveBrandMenuDeveloperShortcuts("MacIntel");
+    expect(macShortcuts).toEqual({
+      forceReload: "⌘⇧R",
+      toggleDevTools: "⌥⌘I",
+    });
+
+    // Electron IPC bridge takes precedence over window.location.reload.
+    const reloadWindow = vi.fn().mockResolvedValue(undefined);
+    const forceReloadWindow = vi.fn().mockResolvedValue(undefined);
+    const toggleDevTools = vi.fn().mockResolvedValue(undefined);
+    const locationReload = vi.fn();
+
+    executeBrandMenuReload({ reloadWindow }, { reload: locationReload });
+    executeBrandMenuForceReload({ forceReloadWindow }, { reload: locationReload });
+    const toggled = executeBrandMenuToggleDevTools({ toggleDevTools });
+
+    expect(reloadWindow).toHaveBeenCalledTimes(1);
+    expect(forceReloadWindow).toHaveBeenCalledTimes(1);
+    expect(toggleDevTools).toHaveBeenCalledTimes(1);
+    expect(toggled).toBe(true);
+    expect(locationReload).not.toHaveBeenCalled();
+
+    // Non-Electron fallback uses location.reload and reports false for DevTools IPC.
+    executeBrandMenuReload(null, { reload: locationReload });
+    executeBrandMenuForceReload(null, { reload: locationReload });
+    expect(executeBrandMenuToggleDevTools(null)).toBe(false);
+    expect(locationReload).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves a default available provider model selection for direct brand-menu new thread creation", () => {
+    const providers: ServerProvider[] = [
+      {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "0.171.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-24T00:00:00.000Z",
+        models: [
+          {
+            slug: "gpt-5.4",
+            name: "GPT-5.4",
+            isDefault: true,
+            isCustom: false,
+            capabilities: {},
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      },
+    ];
+    const selection = resolveDefaultAvailableModelSelection(
+      providers,
+      DEFAULT_SERVER_SETTINGS,
+      null,
+    );
+    expect(selection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    });
   });
 
   it("drives Claude Code Desktop hover-peek dwell/grace/menu-lock/escape transitions cleanly", () => {

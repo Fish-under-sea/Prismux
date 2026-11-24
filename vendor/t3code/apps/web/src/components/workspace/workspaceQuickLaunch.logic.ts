@@ -11,8 +11,16 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Schema from "effect/Schema";
 
-import { formatAgentBrandName, resolveAgentBrandId, type AgentBrandId } from "../../prismux/agentBrand";
-import type { ProviderInstanceEntry } from "../../providerInstances";
+import {
+  formatAgentBrandName,
+  resolveAgentBrandId,
+  resolveProviderEntryDisplayName,
+  type AgentBrandId,
+} from "../../prismux/agentBrand";
+import {
+  disambiguateProviderInstanceDisplayNames,
+  type ProviderInstanceEntry,
+} from "../../providerInstances";
 import type { WorkspaceTab } from "./workspaceTabsStore";
 
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -205,11 +213,18 @@ export function buildQuickLaunchAgentOptions(input: {
     });
   }
 
-  return enabledEntries.map((entry) => {
-    const brandId = resolveAgentBrandId(entry.driverKind === "acpRegistry" ? entry.displayName || entry.instanceId : entry.driverKind);
-    const canonicalName = entry.isDefault
-      ? formatAgentBrandName(entry.driverKind, entry.driverKind === "acpRegistry" ? entry.displayName : undefined)
-      : formatAgentBrandName(entry.driverKind, entry.displayName);
+  const normalizedEnabledEntries = disambiguateProviderInstanceDisplayNames(
+    enabledEntries.map((entry) => ({
+      ...entry,
+      displayName: resolveProviderEntryDisplayName(entry),
+    })),
+  );
+
+  return normalizedEnabledEntries.map((entry) => {
+    const brandId = resolveAgentBrandId(
+      entry.driverKind === "acpRegistry" ? entry.displayName || entry.instanceId : entry.driverKind,
+    );
+    const canonicalName = entry.displayName;
     const defaultModel = defaultModelForEntry(entry);
     const exactThreads = byBrandThreads.get(`instance:${entry.instanceId}`) ?? [];
     const brandThreads = byBrandThreads.get(`brand:${brandId}`) ?? [];

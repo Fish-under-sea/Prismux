@@ -28,7 +28,10 @@ import {
   type RefObject,
 } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { AgentBrandLogo, formatAgentBrandName } from "../../prismux/agentBrand";
+import {
+  AgentBrandLogo,
+  resolveProviderEntryDisplayName,
+} from "../../prismux/agentBrand";
 import {
   formatModelSourceSubtitle,
   partitionAgentScopedModels,
@@ -1228,10 +1231,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                       size={13}
                     />
                     <span className="truncate">
-                      {formatAgentBrandName(
-                        selectedEntry.driverKind,
-                        selectedEntry.isDefault ? undefined : selectedEntry.displayName,
-                      )}
+                      {resolveProviderEntryDisplayName(selectedEntry)}
                     </span>
                   </span>
                   {!isLocked && switchableScopedEntries.length > 1 ? (
@@ -1260,14 +1260,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   >
                     {switchableScopedEntries.map((entry) => {
                       const active = entry.instanceId === effectiveSelectedInstanceId;
-                      const brandLabel = formatAgentBrandName(
-                        entry.driverKind,
-                        entry.isDefault &&
-                          entry.driverKind !== "acpRegistry" &&
-                          entry.driverKind !== "openaiCompatible"
-                          ? undefined
-                          : entry.displayName,
-                      );
+                      const brandLabel = resolveProviderEntryDisplayName(entry);
                       return (
                         <button
                           key={entry.instanceId}

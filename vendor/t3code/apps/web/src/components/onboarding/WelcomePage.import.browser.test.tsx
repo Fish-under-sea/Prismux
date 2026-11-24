@@ -191,6 +191,7 @@ vi.mock(import("../../state/use-atom-command"), async (original) => ({
 }));
 
 import { welcomeImportSelectionKey } from "../../onboarding/welcomeState";
+import { PrismuxRuntimeProvider } from "../../prismux/PrismuxRuntimeProvider";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { toastManager } from "../ui/toast";
 import { WelcomePage } from "./WelcomePage";
@@ -827,4 +828,76 @@ it("renders Prismux branding with logo and hides cloud phone setup when offline"
   const logo = document.querySelector<HTMLImageElement>('img[src="/prismux-logo.png"]');
   expect(logo).not.toBeNull();
   expect(logo?.alt).toBe("Prismux");
+});
+
+it("integrates Celestial 3-state theme capsule, built-in wallpapers, genuine Antigravity icon, and UUID-free agent names", async () => {
+  using _now = setup();
+  localStorage.removeItem("prismux.appearance.v1");
+  localStorage.removeItem("prismux.wallpaper.settings.v1");
+  appAtomRegistry.set(state.providers as Atom.Writable<ReadonlyArray<ServerProvider>>, [
+    readyClaude,
+    {
+      ...readyClaude,
+      instanceId: ProviderInstanceId.make("codex_048c43c3-0798-480e-bc42-1234567890ab"),
+      driver: ProviderDriverKind.make("codex"),
+      displayName: undefined,
+    },
+    {
+      ...readyClaude,
+      instanceId: ProviderInstanceId.make("antigravity"),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Antigravity",
+      enabled: false,
+      status: "disabled",
+    },
+  ]);
+
+  await using _screen = await render(
+    <RegistryContext.Provider value={appAtomRegistry}>
+      <PrismuxRuntimeProvider>
+        <WelcomePage environmentId={primaryId} onDone={state.onDone} />
+      </PrismuxRuntimeProvider>
+    </RegistryContext.Provider>,
+  );
+
+  // Appearance band with 1:1 Celestial 3-state capsule & built-in wallpapers
+  expect(document.querySelector('[data-pmx-welcome-appearance="1"]')).not.toBeNull();
+  expect(document.querySelector(".pmx-theme-pill")).not.toBeNull();
+  expect(document.querySelector('[data-pmx-welcome-wallpaper="none"]')).not.toBeNull();
+  expect(document.querySelector('[data-pmx-welcome-wallpaper="builtin:aurora-prism"]')).not.toBeNull();
+
+  // Select Solid background first, then switch to Glass -> auto-enables a built-in wallpaper & glass sheet
+  const solidTile = document.querySelector<HTMLButtonElement>('[data-pmx-welcome-wallpaper="none"]');
+  expect(solidTile).not.toBeNull();
+  await act(async () => solidTile?.click());
+  expect(solidTile?.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector('[data-pmx-welcome-sheet="solid"]')).not.toBeNull();
+
+  const glassStop = document.querySelector<HTMLButtonElement>('.dtp-label-btn[data-dtp-stop="glass"]');
+  expect(glassStop).not.toBeNull();
+  await act(async () => glassStop?.click());
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-pmx-welcome-sheet="glass"]')).not.toBeNull(),
+  );
+  expect(
+    document
+      .querySelector('[data-pmx-welcome-wallpaper="builtin:aurora-prism"]')
+      ?.getAttribute("aria-checked"),
+  ).toBe("true");
+
+  // Switch built-in wallpaper preset live
+  const liquidSilk = document.querySelector<HTMLButtonElement>(
+    '[data-pmx-welcome-wallpaper="builtin:liquid-silk"]',
+  );
+  expect(liquidSilk).not.toBeNull();
+  await act(async () => liquidSilk?.click());
+  expect(liquidSilk?.getAttribute("aria-checked")).toBe("true");
+
+  // Featured Antigravity row renders visibly with genuine 4-color SVG & UUID noise is stripped from Codex
+  const antigravityRow = document.querySelector('[data-pmx-welcome-agent="antigravity"]');
+  expect(antigravityRow).not.toBeNull();
+  expect(antigravityRow?.querySelector("svg")).not.toBeNull();
+  expect(pageText()).toContain("Antigravity");
+  expect(pageText()).toContain("Codex");
+  expect(pageText()).not.toContain("048c43c3");
 });

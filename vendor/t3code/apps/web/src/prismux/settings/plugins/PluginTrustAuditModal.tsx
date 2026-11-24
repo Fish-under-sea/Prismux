@@ -148,7 +148,7 @@ export function PluginTrustAuditModal({
         {/* Scrollable body */}
         <div className="space-y-4 overflow-y-auto px-5 py-4 text-xs">
           {/* Identity & Source Summary */}
-          <div className="rounded-xl border border-border/80 bg-muted/35 p-3.5 space-y-2">
+          <div className="space-y-2 rounded-xl border border-border/60 bg-foreground/[0.025] p-3.5 dark:bg-white/[0.035]">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-semibold text-foreground">{audit.targetLabel}</span>
               <div className="flex flex-wrap items-center gap-1.5">
@@ -189,14 +189,14 @@ export function PluginTrustAuditModal({
             </dl>
 
             {audit.sha256 ? (
-              <div className="rounded-lg border border-border/60 bg-background/60 px-2.5 py-1.5">
+              <div className="rounded-lg border border-border/60 bg-foreground/[0.035] px-2.5 py-1.5 dark:bg-white/[0.04]">
                 <span className="text-muted-foreground">SHA-256 校验摘要：</span>
                 <code className="break-all font-mono text-[11px] text-foreground">
                   {audit.sha256}
                 </code>
               </div>
             ) : audit.packageNameOrTarball ? (
-              <div className="rounded-lg border border-border/60 bg-background/60 px-2.5 py-1.5">
+              <div className="rounded-lg border border-border/60 bg-foreground/[0.035] px-2.5 py-1.5 dark:bg-white/[0.04]">
                 <span className="text-muted-foreground">npm 包 / Tarball：</span>
                 <code className="break-all font-mono text-[11px] text-foreground">
                   {audit.packageNameOrTarball}
@@ -229,11 +229,11 @@ export function PluginTrustAuditModal({
               </span>
             </div>
             {audit.permissions.length === 0 ? (
-              <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-muted-foreground">
+              <div className="rounded-lg border border-border/60 bg-foreground/[0.025] px-3 py-2 text-muted-foreground dark:bg-white/[0.035]">
                 未在安装前返回静态权限列表（安装时内核仍将强制执行顶层 engines.prismux 校验与脚本禁用）。
               </div>
             ) : (
-              <ul className="divide-y divide-border/60 rounded-xl border border-border/70 bg-muted/20">
+              <ul className="divide-y divide-border/50 rounded-xl border border-border/60 bg-foreground/[0.025] dark:bg-white/[0.035]">
                 {audit.permissions.map((perm) => (
                   <li
                     key={perm.permission}
@@ -257,7 +257,7 @@ export function PluginTrustAuditModal({
           </div>
 
           {/* Security Baseline Notice */}
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-foreground/[0.025] px-3 py-2 text-[11px] text-muted-foreground dark:bg-white/[0.035]">
             <LockIcon className="size-3.5 shrink-0" />
             <span>
               安装过程强制禁用 preinstall / install / postinstall 生命周期脚本、不调用本机 git，凭据独立写入 0600 加密仓。
@@ -279,7 +279,7 @@ export function PluginTrustAuditModal({
           {/* Explicit Consent Checkbox */}
           <label
             htmlFor={checkboxId}
-            className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border bg-background/70 p-3 transition-colors hover:border-primary/60"
+            className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border/60 bg-foreground/[0.03] p-3 transition-colors hover:border-primary/60 dark:bg-white/[0.04]"
           >
             <input
               id={checkboxId}
@@ -296,7 +296,7 @@ export function PluginTrustAuditModal({
         </div>
 
         {/* Footer */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 bg-muted/30 px-5 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 bg-foreground/[0.02] px-5 py-3 dark:bg-white/[0.025]">
           {!acknowledged ? (
             <span id={disabledReasonId} className="text-[11px] text-muted-foreground">
               请先勾选上方风险确认框以启用放行按钮。

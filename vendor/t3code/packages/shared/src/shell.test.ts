@@ -30,6 +30,7 @@ import {
   listLoginShellCandidates,
   mergePathEntries,
   mergePathValues,
+  npmNodeShimCommand,
   npmShimExecutable,
   preferGitForWindowsBinary,
   readEnvironmentFromLoginShell,
@@ -969,6 +970,89 @@ describe("npmShimExecutable", () => {
         shimPath.replace(".cmd", ".bat"),
         () => NPM_OPENCODE_SHIM,
         () => true,
+      ),
+    ).toBeUndefined();
+  });
+});
+
+const NPM_CODEX_NODE_SHIM = [
+  "@ECHO off",
+  "GOTO start",
+  ":find_dp0",
+  "SET dp0=%~dp0",
+  "EXIT /b",
+  ":start",
+  "SETLOCAL",
+  "CALL :find_dp0",
+  "",
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ") ELSE (",
+  '  SET "_prog=node"',
+  "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+  ")",
+  "",
+  'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
+].join("\r\n");
+
+describe("npmNodeShimCommand", () => {
+  const shimPath = "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd";
+  const scriptPath =
+    "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js";
+  const nodeExe = "C:\\Program Files\\nodejs\\node.exe";
+
+  it("unwraps standard npm Node .cmd shims (e.g. codex.cmd) into direct node.exe invocation", () => {
+    const resolved = npmNodeShimCommand(
+      shimPath,
+      ["app-server"],
+      { PATH: "C:\\Program Files\\nodejs" },
+      (cmd) => (cmd === "node" ? nodeExe : undefined),
+      () => NPM_CODEX_NODE_SHIM,
+      (filePath) => filePath === scriptPath,
+    );
+    expect(resolved).toEqual({
+      command: nodeExe,
+      args: [scriptPath, "app-server"],
+      shell: false,
+    });
+  });
+
+  it("prefers bundled node.exe beside the shim and rejects non-exe node resolution or missing scripts", () => {
+    const bundledNode = "C:\\Users\\me\\AppData\\Roaming\\npm\\node.exe";
+    expect(
+      npmNodeShimCommand(
+        shimPath,
+        ["--version"],
+        {},
+        () => undefined,
+        () => NPM_CODEX_NODE_SHIM,
+        (filePath) => filePath === scriptPath || filePath === bundledNode,
+      ),
+    ).toEqual({
+      command: bundledNode,
+      args: [scriptPath, "--version"],
+      shell: false,
+    });
+
+    expect(
+      npmNodeShimCommand(
+        shimPath,
+        ["app-server"],
+        {},
+        () => "C:\\shims\\node.cmd",
+        () => NPM_CODEX_NODE_SHIM,
+        (filePath) => filePath === scriptPath,
+      ),
+    ).toBeUndefined();
+
+    expect(
+      npmNodeShimCommand(
+        shimPath,
+        ["app-server"],
+        {},
+        () => nodeExe,
+        () => NPM_CODEX_NODE_SHIM,
+        () => false,
       ),
     ).toBeUndefined();
   });

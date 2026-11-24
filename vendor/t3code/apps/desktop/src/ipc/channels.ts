@@ -168,3 +168,6 @@ export const PRISMUX_SET_KEEP_AWAKE_CHANNEL = "desktop:prismux:set-keep-awake";
 export const PRISMUX_GET_KEEP_AWAKE_STATE_CHANNEL = "desktop:prismux:get-keep-awake-state";
 export const PRISMUX_SET_TRAY_RUNNING_AGENTS_CHANNEL = "desktop:prismux:set-tray-running-agents";
 export const PRISMUX_TRAY_ACTION_CHANNEL = "desktop:prismux:tray-action";
+export const PRISMUX_RELOAD_WINDOW_CHANNEL = "desktop:prismux:reload-window";
+export const PRISMUX_FORCE_RELOAD_WINDOW_CHANNEL = "desktop:prismux:force-reload-window";
+export const PRISMUX_TOGGLE_DEVTOOLS_CHANNEL = "desktop:prismux:toggle-devtools";

@@ -179,7 +179,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const spawnCommand = yield* resolveSpawnCommand(
         input.binary,
         [...input.launchArgs, ...CODEX_NO_PLUGIN_ARGS, "mcp", "list", "--json"],
-        { env: input.env },
+        { env: input.env, bypassNpmShim: true },
       );
       const child = yield* commandSpawner.spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
@@ -343,7 +343,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
           "-",
         ],
-        { env: effectiveEnvironment },
+        { env: effectiveEnvironment, bypassNpmShim: true },
       );
       const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         env,

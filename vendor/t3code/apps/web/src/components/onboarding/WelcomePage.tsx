@@ -1,5 +1,7 @@
 import { useAuth } from "@clerk/react";
 import { useAtomValue } from "@effect/atom-react";
+import { CelestialThemeCapsule, type ThemeMode } from "@prismux/appearance";
+import type { WallpaperItem, WallpaperRuntimeSnapshot } from "@prismux/wallpaper";
 import type {
   AgentSessionProjectCandidate,
   EnvironmentId,
@@ -38,7 +40,15 @@ import {
   TerminalIcon,
 } from "lucide-react";
 import { msg, T, useGT, useLocale, useMessages, Var } from "gt-react";
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { MOBILE_APP_URL } from "../../branding";
@@ -72,6 +82,7 @@ import {
   codexNeedsSetup,
   groupWelcomeAgents,
   isBrokenVersion,
+  partitionFeaturedWelcomeAgents,
   turnedOnInstance,
   welcomeAgentState,
   welcomeOffersPhone,
@@ -114,6 +125,16 @@ import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  type ProviderInstanceEntry,
+} from "../../providerInstances";
+import {
+  useOptionalPrismuxRuntime,
+  type PrismuxRuntimeContextValue,
+} from "../../prismux/PrismuxRuntimeProvider";
 import { PrismuxDiagnosticsSection } from "../../prismux/settings/PrismuxDiagnosticsSection";
 import { cn } from "../../lib/utils";
 import { formatRelativeTime } from "../../timestampFormat";
@@ -258,6 +279,10 @@ export function WelcomePage({
   // Without import permission, starting simply skips the projects.
   const selected = projectImport.canWrite ? projectImport.selected : [];
   const newCount = selected.filter(projectImport.isNew).length;
+  const prismuxRuntime = useOptionalPrismuxRuntime();
+  const wallpaperSnapshot = useOptionalWallpaperSnapshot(prismuxRuntime);
+  const isGlassMode = prismuxRuntime?.appearance.themeMode === "glass";
+  const hasActiveWallpaper = Boolean(wallpaperSnapshot?.settings.selectedId);
   const start = () => {
     keepChoicesRef.current = scans.some((scan) => scan.data === null);
     if (selected.length === 0) {
@@ -273,17 +298,45 @@ export function WelcomePage({
     <SidebarInset
       {...workspaceAreaProps("home", 1, gt("Welcome"))}
       role="main"
+      data-pmx-welcome-page="1"
       className="h-dvh min-h-0 overflow-hidden overscroll-y-none"
     >
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col",
+          isGlassMode ? "bg-transparent" : "bg-background",
+        )}
+      >
         {/* The desktop window only moves where CSS opts in, so keep a titlebar strip. */}
-        {isElectron ? <WorkspacePageHeader electron /> : null}
-        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
-          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pt-12 pb-8 sm:pt-20">
+        {isElectron ? (
+          <WorkspacePageHeader
+            electron
+            {...(isGlassMode || hasActiveWallpaper
+              ? {
+                  "data-pmx-glass-zone": undefined,
+                  className: "border-0! bg-transparent! shadow-none! backdrop-blur-none!",
+                }
+              : {})}
+          />
+        ) : null}
+        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both px-4 sm:px-6">
+          <div
+            data-pmx-welcome-sheet={
+              isGlassMode ? "glass" : hasActiveWallpaper ? "wallpaper" : "solid"
+            }
+            className={cn(
+              "mx-auto flex w-full max-w-3xl flex-col",
+              isGlassMode
+                ? "my-5 rounded-2xl border border-black/12 bg-white/82 px-6 py-7 shadow-[0_20px_60px_rgba(15,23,42,0.16)] backdrop-blur-xl sm:my-8 sm:px-8 sm:py-9 dark:border-white/15 dark:bg-[#0d1524]/78 dark:shadow-[0_24px_70px_rgba(0,0,0,0.48)]"
+                : hasActiveWallpaper
+                  ? "my-5 rounded-2xl border border-border/75 bg-card/94 px-6 py-7 shadow-sm sm:my-8 sm:px-8 sm:py-9"
+                  : "min-h-full px-2 pt-10 pb-8 sm:px-0 sm:pt-16",
+            )}
+          >
             <div className="flex items-center gap-3.5">
               <img
                 alt={gt("Prismux")}
-                className="size-10 shrink-0 rounded-xl object-cover shadow-xs ring-1 ring-border/60"
+                className="size-11 shrink-0 rounded-xl object-cover shadow-sm ring-1 ring-border/70"
                 src="/prismux-logo.png"
               />
               <div className="min-w-0">
@@ -293,7 +346,7 @@ export function WelcomePage({
                 <p className="mt-1 text-sm text-muted-foreground">
                   <T>
                     Setting up{" "}
-                    <span className="text-foreground">
+                    <span className="font-medium text-foreground">
                       <Var>{label}</Var>
                     </span>
                     .
@@ -301,7 +354,13 @@ export function WelcomePage({
                 </p>
               </div>
             </div>
-            <div className="mt-10 border-t border-border/60">
+            <div className="mt-8 border-t border-border/60">
+              {prismuxRuntime !== null && wallpaperSnapshot !== null ? (
+                <AppearanceSection
+                  runtime={prismuxRuntime}
+                  wallpaperSnapshot={wallpaperSnapshot}
+                />
+              ) : null}
               <AgentsSection
                 environmentId={environmentId}
                 label={label}
@@ -351,6 +410,196 @@ export function WelcomePage({
         </div>
       </div>
     </SidebarInset>
+  );
+}
+
+function useOptionalWallpaperSnapshot(
+  runtime: PrismuxRuntimeContextValue | null,
+): WallpaperRuntimeSnapshot | null {
+  const store = runtime?.wallpaperStore ?? null;
+  const subscribe = useCallback(
+    (listener: () => void) => (store ? store.subscribe(listener) : () => undefined),
+    [store],
+  );
+  const getSnapshot = useCallback(() => (store ? store.getSnapshot() : null), [store]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function builtinWallpaperLabel(item: WallpaperItem, gt: ReturnType<typeof useGT>): string {
+  switch (item.builtinSceneId) {
+    case "aurora-prism":
+      return gt("Aurora Prism");
+    case "midnight-abyss":
+      return gt("Midnight Abyss");
+    case "liquid-silk":
+      return gt("Liquid Silk");
+    case "cyber-twilight":
+      return gt("Cyber Twilight");
+    default:
+      return item.title;
+  }
+}
+
+function AppearanceSection({
+  runtime,
+  wallpaperSnapshot,
+}: {
+  readonly runtime: PrismuxRuntimeContextValue;
+  readonly wallpaperSnapshot: WallpaperRuntimeSnapshot;
+}) {
+  const gt = useGT();
+  const mode = runtime.appearance.themeMode;
+  const builtins = wallpaperSnapshot.wallpapers
+    .filter((item) => item.source === "builtin")
+    .slice(0, 4);
+  const selectedId = wallpaperSnapshot.settings.selectedId;
+
+  const handleThemeModeChange = (nextMode: ThemeMode) => {
+    runtime.setThemeMode(nextMode);
+    if (nextMode === "glass" && selectedId === null && builtins[0]) {
+      runtime.wallpaperStore.selectWallpaper(builtins[0].id);
+    }
+  };
+
+  const activeModeLabel =
+    mode === "light" ? gt("Light") : mode === "dark" ? gt("Dark") : gt("Glass");
+
+  return (
+    <WelcomeSection title={gt("Appearance")}>
+      <div data-pmx-welcome-appearance="1" className="space-y-4 py-1">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="block text-sm font-medium text-foreground">
+                <T>Theme & Liquid Glass</T>
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                <T>
+                  Switch between Light, Dark, and translucent Liquid Glass with live preview.
+                </T>
+              </span>
+            </div>
+            <span className="rounded-full border border-border/70 bg-muted/60 px-2.5 py-0.5 text-2xs font-medium text-foreground">
+              {activeModeLabel}
+            </span>
+          </div>
+          <div className="max-w-sm pt-0.5">
+            <CelestialThemeCapsule
+              mode={mode}
+              onChange={handleThemeModeChange}
+              size="default"
+              ariaLabel={gt("Appearance mode")}
+              labels={{
+                light: gt("Light"),
+                dark: gt("Dark"),
+                glass: gt("Glass"),
+              }}
+              className="!mt-0 !border-t-0 !pt-0"
+            />
+          </div>
+        </div>
+
+        {builtins.length > 0 ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                <T>Curated built-in wallpapers</T>
+              </span>
+              <span className="text-2xs text-muted-foreground">
+                {selectedId === null
+                  ? gt("Solid background")
+                  : (builtins.find((item) => item.id === selectedId)
+                      ? builtinWallpaperLabel(
+                          builtins.find((item) => item.id === selectedId)!,
+                          gt,
+                        )
+                      : gt("Custom wallpaper"))}
+              </span>
+            </div>
+            <div
+              role="radiogroup"
+              aria-label={gt("Curated built-in wallpapers")}
+              className="grid grid-cols-2 gap-2 sm:grid-cols-5"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selectedId === null}
+                data-pmx-welcome-wallpaper="none"
+                onClick={() => runtime.wallpaperStore.selectWallpaper(null)}
+                className={cn(
+                  "group relative flex aspect-16/10 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border text-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  selectedId === null
+                    ? "border-primary ring-2 ring-primary/40"
+                    : "border-border/80 hover:border-foreground/40",
+                  "bg-muted/70 text-foreground",
+                )}
+              >
+                <span className="text-xs font-medium">{gt("Solid")}</span>
+                {selectedId === null ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-1.5 right-1.5 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs"
+                  >
+                    <CheckIcon className="size-2.5" />
+                  </span>
+                ) : null}
+              </button>
+              {builtins.map((item) => {
+                const active = selectedId === item.id;
+                const shortTitle = builtinWallpaperLabel(item, gt);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    data-pmx-welcome-wallpaper={item.id}
+                    onClick={() => runtime.wallpaperStore.selectWallpaper(item.id)}
+                    className={cn(
+                      "group relative aspect-16/10 cursor-pointer overflow-hidden rounded-lg border text-left transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      active
+                        ? "border-primary ring-2 ring-primary/45"
+                        : "border-border/80 hover:border-foreground/40",
+                    )}
+                  >
+                    {item.previewUrl ? (
+                      <img
+                        src={item.previewUrl}
+                        alt=""
+                        aria-hidden="true"
+                        className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="block size-full"
+                        style={{ backgroundColor: item.schemeColor ?? "#0f172a" }}
+                      />
+                    )}
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-black/82 via-black/45 to-transparent"
+                    />
+                    <span className="absolute inset-x-1.5 bottom-1 truncate text-[11px] font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
+                      {shortTitle}
+                    </span>
+                    {active ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute top-1.5 right-1.5 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs"
+                      >
+                        <CheckIcon className="size-2.5" />
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </WelcomeSection>
   );
 }
 
@@ -437,10 +686,22 @@ function useWelcomeAgents(environmentId: EnvironmentId) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const managedPolicy = serverConfig?.managedPolicy;
+  const derivedEntries = deriveProviderInstanceEntries(providers ?? []);
+  const brandedEntries = serverConfig?.settings
+    ? brandProviderInstanceEntries(derivedEntries, serverConfig.settings)
+    : derivedEntries;
+  const disambiguatedEntries = disambiguateProviderInstanceDisplayNames(brandedEntries);
+  const entryById = new Map<ProviderInstanceId, ProviderInstanceEntry>(
+    disambiguatedEntries.map((entry) => [entry.instanceId, entry] as const),
+  );
+  const nameOf = (provider: ServerProvider) =>
+    entryById.get(provider.instanceId)?.displayName ?? agentName(provider);
   return {
     providers,
     serverConfig,
-    ...groupWelcomeAgents(providers, serverConfig?.settings, agentName, (provider) =>
+    entryById,
+    nameOf,
+    ...groupWelcomeAgents(providers, serverConfig?.settings, nameOf, (provider) =>
       isManagedDriverAllowed(managedPolicy, provider.driver),
     ),
   };
@@ -465,7 +726,8 @@ function AgentsSection({
   // The project scan only reads agents that are on, so turning one on can find more history.
   readonly onImportSourceEnabled: () => void;
 }) {
-  const { providers, serverConfig, checking, found, available } = useWelcomeAgents(environmentId);
+  const { providers, serverConfig, entryById, nameOf, checking, found, available } =
+    useWelcomeAgents(environmentId);
   const gt = useGT();
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
@@ -569,7 +831,7 @@ function AgentsSection({
         const cause = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: gt("Could not turn on {agent}", { agent: agentName(provider) }),
+          title: gt("Could not turn on {agent}", { agent: nameOf(provider) }),
           ...(cause instanceof Error ? { description: cause.message } : {}),
         });
       }
@@ -582,7 +844,7 @@ function AgentsSection({
   // One action per agent, the same in the list and in the grid.
   const actionFor = (provider: ServerProvider) => {
     const state = stateOf(provider);
-    const name = agentName(provider);
+    const name = nameOf(provider);
     const settingsAction = (actionLabel: string) => (
       <Button
         size="xs"
@@ -665,17 +927,25 @@ function AgentsSection({
       : null,
   ].filter((note) => note !== null);
 
+  const { featured: featuredAvailable, secondary: secondaryAvailable } =
+    partitionFeaturedWelcomeAgents(
+      available,
+      (provider) => entryById.get(provider.instanceId)?.acpRegistryAgentId,
+    );
+  const primaryAgents = [...found, ...featuredAvailable];
+
   return (
     <WelcomeSection title={gt("Agents")}>
-      {found.map((provider) => (
+      {primaryAgents.map((provider) => (
         <AgentRow
           key={provider.instanceId}
           provider={provider}
+          entry={entryById.get(provider.instanceId)}
           state={stateOf(provider)}
           action={actionFor(provider)}
         />
       ))}
-      {checking && found.length === 0 ? (
+      {checking && primaryAgents.length === 0 ? (
         <p className="text-sm leading-10 text-muted-foreground">
           <T>
             Checking <Var>{label}</Var>…
@@ -687,54 +957,63 @@ function AgentsSection({
           {note}
         </p>
       ))}
-      <Collapsible open={showMore} onOpenChange={setMoreOpen}>
-        <CollapsibleTrigger className="group flex min-h-10 w-full items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
-          <RowIcon>
-            <PlusIcon className="size-4" />
-          </RowIcon>
-          <span
-            className={cn(
-              "text-sm group-hover:text-foreground",
-              found.length > 0 ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {found.length > 0 ? gt("Add more agents") : gt("Set up an agent")}
-          </span>
-          {showMore ? null : <AgentLogoStack providers={available} acp={acpAllowed} />}
-          <ChevronDownIcon className="ml-auto size-4 text-muted-foreground group-data-panel-open:rotate-180" />
-        </CollapsibleTrigger>
-        <CollapsiblePanel>
-          <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
-            {available.map((provider) => (
-              <AgentRow
-                key={provider.instanceId}
-                provider={provider}
-                state={stateOf(provider)}
-                compact
-                action={actionFor(provider)}
+      {secondaryAvailable.length > 0 || acpAllowed ? (
+        <Collapsible open={showMore} onOpenChange={setMoreOpen}>
+          <CollapsibleTrigger className="group flex min-h-10 w-full items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+            <RowIcon>
+              <PlusIcon className="size-4" />
+            </RowIcon>
+            <span
+              className={cn(
+                "text-sm group-hover:text-foreground",
+                primaryAgents.length > 0 ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {primaryAgents.length > 0 ? gt("Add more agents") : gt("Set up an agent")}
+            </span>
+            {showMore ? null : (
+              <AgentLogoStack
+                providers={secondaryAvailable}
+                entryById={entryById}
+                acp={acpAllowed}
               />
-            ))}
-          </div>
-          {acpAllowed ? (
-            <div className="flex min-h-9 items-center gap-3">
-              <RowIcon>
-                <ACPRegistryIcon className="size-4" />
-              </RowIcon>
-              <span className="min-w-0 flex-1 text-sm text-muted-foreground">
-                <T>More agents in the ACP Registry</T>
-              </span>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={!canManageProviders}
-                onClick={() => setAddingProvider(true)}
-              >
-                <T>Browse</T>
-              </Button>
+            )}
+            <ChevronDownIcon className="ml-auto size-4 text-muted-foreground group-data-panel-open:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsiblePanel>
+            <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
+              {secondaryAvailable.map((provider) => (
+                <AgentRow
+                  key={provider.instanceId}
+                  provider={provider}
+                  entry={entryById.get(provider.instanceId)}
+                  state={stateOf(provider)}
+                  compact
+                  action={actionFor(provider)}
+                />
+              ))}
             </div>
-          ) : null}
-        </CollapsiblePanel>
-      </Collapsible>
+            {acpAllowed ? (
+              <div className="flex min-h-9 items-center gap-3">
+                <RowIcon>
+                  <ACPRegistryIcon className="size-4" />
+                </RowIcon>
+                <span className="min-w-0 flex-1 text-sm text-muted-foreground">
+                  <T>More agents in the ACP Registry</T>
+                </span>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!canManageProviders}
+                  onClick={() => setAddingProvider(true)}
+                >
+                  <T>Browse</T>
+                </Button>
+              </div>
+            ) : null}
+          </CollapsiblePanel>
+        </Collapsible>
+      ) : null}
       {codexSetupProvider !== null && serverConfig !== null ? (
         <div key={codexSetupProvider.instanceId} ref={revealOnMount} className="mt-2">
           <OnboardingCodexSetup
@@ -785,22 +1064,30 @@ function AgentsSection({
 // A quiet preview of what the fold holds; the names are inside it.
 function AgentLogoStack({
   providers,
+  entryById,
   acp,
 }: {
   readonly providers: ReadonlyArray<ServerProvider>;
+  readonly entryById: ReadonlyMap<ProviderInstanceId, ProviderInstanceEntry>;
   readonly acp: boolean;
 }) {
   if (providers.length === 0 && !acp) return null;
   return (
-    <span className="flex items-center gap-2 opacity-60 grayscale" aria-hidden>
-      {providers.slice(0, 6).map((provider) => (
-        <ProviderInstanceIcon
-          key={provider.instanceId}
-          driverKind={provider.driver}
-          displayName={agentName(provider)}
-          iconClassName="size-3.5"
-        />
-      ))}
+    <span className="flex items-center gap-2 opacity-85" aria-hidden>
+      {providers.slice(0, 6).map((provider) => {
+        const entry = entryById.get(provider.instanceId);
+        return (
+          <ProviderInstanceIcon
+            key={provider.instanceId}
+            driverKind={provider.driver}
+            displayName={entry?.displayName ?? agentName(provider)}
+            accentColor={entry?.accentColor}
+            acpRegistryAgentId={entry?.acpRegistryAgentId}
+            acpRegistryIconUrl={entry?.acpRegistryIconUrl ?? provider.iconUrl}
+            iconClassName="size-3.5"
+          />
+        );
+      })}
       {acp ? <ACPRegistryIcon className="size-3.5" /> : null}
     </span>
   );
@@ -1230,17 +1517,19 @@ function TerminalAction({
 
 function AgentRow({
   provider,
+  entry,
   state,
   action,
   compact = false,
 }: {
   readonly provider: ServerProvider;
+  readonly entry?: ProviderInstanceEntry | undefined;
   readonly state: ReturnType<typeof welcomeAgentState>;
   readonly action?: ReactNode;
   // A row in the "Add more agents" grid: the button carries the state, so no detail line.
   readonly compact?: boolean;
 }) {
-  const name = agentName(provider);
+  const name = entry?.displayName ?? agentName(provider);
   const gt = useGT();
   const messages = useMessages();
   // Claude Code and Codex tiles show Install or Set up; other agents that are on say why not.
@@ -1254,18 +1543,26 @@ function AgentRow({
         : gt("Not installed")
       : compact || state === "ready" || state === "checking"
         ? null
-        : state === "attention"
-          ? (provider.unavailableReason ??
-            brokenMessage ??
-            provider.message ??
-            getProviderSummary(provider, messages).headline)
-          : (brokenMessage ?? getProviderSummary(provider, messages).headline);
+        : state === "disabled" && provider.driver === "antigravity"
+          ? gt("Turn on to connect local agy CLI or your Google account.")
+          : state === "attention"
+            ? (provider.unavailableReason ??
+              brokenMessage ??
+              provider.message ??
+              getProviderSummary(provider, messages).headline)
+            : (brokenMessage ?? getProviderSummary(provider, messages).headline);
   return (
-    <div className={cn("flex items-center gap-3", compact ? "min-h-9" : "min-h-10 py-1")}>
+    <div
+      data-pmx-welcome-agent={provider.driver}
+      className={cn("flex items-center gap-3", compact ? "min-h-9" : "min-h-10 py-1")}
+    >
       <RowIcon>
         <ProviderInstanceIcon
           driverKind={provider.driver}
           displayName={name}
+          accentColor={entry?.accentColor}
+          acpRegistryAgentId={entry?.acpRegistryAgentId}
+          acpRegistryIconUrl={entry?.acpRegistryIconUrl ?? provider.iconUrl}
           iconClassName={compact ? "size-4" : "size-[18px]"}
         />
       </RowIcon>
@@ -1538,7 +1835,7 @@ function useProjectImport({
       })),
     ),
   );
-  // Projects already in T3 Code stay in the list, but reopening the page does not import their
+  // Projects already in Prismux stay in the list, but reopening the page does not import their
   // history again unless the user picks them. The scan can be 30 s old, so the live list decides.
   const projects = useProjects();
   const isNewProject = isNewOnboardingProject(projects);
@@ -2009,7 +2306,7 @@ function ImportRowMeta({
   );
 }
 
-/** The desktop app links `t3` on a fresh install; this puts its folder on PATH when it is not. */
+/** The desktop app links `prismux` on a fresh install; this puts its folder on PATH when it is not. */
 function CliPathSetup() {
   const { state, busy, run } = useDesktopCliCommand();
   const setup = state?.pathSetup;
@@ -2023,11 +2320,11 @@ function CliPathSetup() {
         {setup.added ? (
           <T>
             Added to <Var>{setup.file}</Var>. Open a new terminal to use{" "}
-            <code className="font-mono">t3</code>.
+            <code className="font-mono">prismux</code>.
           </T>
         ) : (
           <T>
-            Use <code className="font-mono">t3</code> from any terminal. Adds one line to{" "}
+            Use <code className="font-mono">prismux</code> from any terminal. Adds one line to{" "}
             <Var>{setup.file}</Var>.
           </T>
         )}

@@ -650,4 +650,51 @@ describe("provider icon metadata", () => {
     expect(restoredEntry?.acpRegistryIconUrl).toBe(iconUrl);
     expect(restoredEntry?.enabled).toBe(true);
   });
+
+  it("syncs settings displayName immediately, scrubs UUID instance IDs, and disambiguates unnamed siblings", () => {
+    const codex = ProviderDriverKind.make("codex");
+    const uuidId = ProviderInstanceId.make("codex_048c43c3-0798-480e-bc42-1a2b3c4d5e6f");
+    const snapshots = [
+      provider({ provider: codex, instanceId: uuidId, displayName: "ChatGPT - Personal" }),
+    ];
+
+    // Rename in settings to "Codex" takes effect immediately without leaking UUID
+    const renamed = applyProviderInstanceSettings(
+      deriveProviderInstanceEntries(snapshots),
+      {
+        providerInstances: {
+          [uuidId]: { driver: codex, enabled: true, displayName: "Codex" },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    expect(renamed[0]?.displayName).toBe("Codex");
+
+    // Rename in settings to custom label syncs before server snapshot refreshes
+    const customRenamed = applyProviderInstanceSettings(
+      deriveProviderInstanceEntries(snapshots),
+      {
+        providerInstances: {
+          [uuidId]: { driver: codex, enabled: true, displayName: "主力 Codex" },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    expect(customRenamed[0]?.displayName).toBe("主力 Codex");
+
+    // Clearing displayName on UUID instance falls back cleanly to "Codex", never UUID text
+    const cleared = applyProviderInstanceSettings(
+      deriveProviderInstanceEntries(snapshots),
+      {
+        providerInstances: {
+          [uuidId]: { driver: codex, enabled: true },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    expect(cleared[0]?.displayName).toBe("Codex");
+  });
 });

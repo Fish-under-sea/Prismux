@@ -4,6 +4,7 @@ import {
   ArrowRightIcon,
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
+  Code2Icon,
   Columns3Icon,
   CrosshairIcon,
   FolderIcon,
@@ -16,6 +17,7 @@ import {
   PanelLeftIcon,
   PlusIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   RotateCwIcon,
   SearchIcon,
   SettingsIcon,
@@ -32,8 +34,19 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_SERVER_SETTINGS,
+  type ModelSelection,
+  type PrismuxDesktopBridge,
+  type ProjectId,
+  type ScopedProjectRef,
+  type ServerProvider,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import { openCommandPalette } from "../../commandPaletteBus";
-import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { isElectron as IS_ELECTRON_RUNTIME } from "../../env";
+import { useHandleNewThread, useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useThreadRouteTarget } from "../../hooks/useThreadRouteTarget";
@@ -43,15 +56,23 @@ import {
   useCanNavigateHistory,
   type HistoryDirection,
 } from "../../navigationHistory";
+import {
+  providerInstanceEntriesFor,
+  resolveProjectDefaultProviderModelSelection,
+} from "../../providerInstances";
 import { useProjects, useVisibleThreadShells } from "../../state/entities";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
-import { primaryServerKeybindingsAtom } from "../../state/server";
+import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../../state/server";
 import { cn, isMacPlatform } from "../../lib/utils";
 import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
 import { PrismuxAutoUpdateHost } from "../../prismux/updates/PrismuxAutoUpdateHost";
 import { PrismuxSidebarUpdateCapsule } from "../../prismux/updates/PrismuxSidebarUpdateCapsule";
 import { useUpdateNotifierState } from "../../prismux/updates/updateNotifierStore";
-import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
+import {
+  useIssuesSupported,
+  usePrimaryEnvironmentId,
+  usePullRequestsSupported,
+} from "../../state/environments";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { resolveDesktopUpdateButtonAction } from "../desktopUpdate.logic";
 import { openPrismuxRemoteConnectDialog } from "../cloud/prismuxRemoteConnect.logic";
@@ -111,7 +132,79 @@ export const SIDEBAR_APP_MENU_ITEM_IDS = [
   "keybindings",
   "check-updates",
   "reload-window",
+  "force-reload-window",
+  "toggle-devtools",
 ] as const;
+
+export interface BrandMenuDeveloperShortcuts {
+  readonly forceReload: string;
+  readonly toggleDevTools: string;
+}
+
+export function resolveBrandMenuDeveloperShortcuts(platform: string): BrandMenuDeveloperShortcuts {
+  return isMacPlatform(platform)
+    ? { forceReload: "⌘⇧R", toggleDevTools: "⌥⌘I" }
+    : { forceReload: "Ctrl+Shift+R", toggleDevTools: "Ctrl+Shift+I" };
+}
+
+export function resolveDefaultAvailableModelSelection(
+  providers: ReadonlyArray<ServerProvider>,
+  settings: ServerSettings,
+  projectId: ProjectId | null,
+): ModelSelection | null {
+  const resolved = resolveProjectDefaultProviderModelSelection(providers, settings, projectId);
+  if (resolved) return resolved;
+  const entries = providerInstanceEntriesFor(providers, settings, projectId);
+  const fallbackEntry = entries.find((entry) => entry.enabled) ?? entries[0];
+  if (!fallbackEntry) return null;
+  const fallbackModel =
+    fallbackEntry.models.find((model) => model.isDefault && !model.isCustom)?.slug ??
+    fallbackEntry.models.find((model) => !model.isCustom)?.slug ??
+    fallbackEntry.models[0]?.slug ??
+    DEFAULT_MODEL_BY_PROVIDER[fallbackEntry.driverKind];
+  return fallbackModel ? { instanceId: fallbackEntry.instanceId, model: fallbackModel } : null;
+}
+
+export function executeBrandMenuReload(
+  prismuxBridge?: Pick<PrismuxDesktopBridge, "reloadWindow"> | null,
+  locationLike?: Pick<Location, "reload"> | null,
+): void {
+  if (typeof prismuxBridge?.reloadWindow === "function") {
+    void prismuxBridge.reloadWindow();
+    return;
+  }
+  locationLike?.reload();
+}
+
+export function executeBrandMenuForceReload(
+  prismuxBridge?: Pick<PrismuxDesktopBridge, "forceReloadWindow"> | null,
+  locationLike?: Pick<Location, "reload"> | null,
+): void {
+  if (typeof prismuxBridge?.forceReloadWindow === "function") {
+    void prismuxBridge.forceReloadWindow();
+    return;
+  }
+  if (typeof caches !== "undefined" && typeof caches.keys === "function") {
+    void caches
+      .keys()
+      .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+      .finally(() => {
+        locationLike?.reload();
+      });
+    return;
+  }
+  locationLike?.reload();
+}
+
+export function executeBrandMenuToggleDevTools(
+  prismuxBridge?: Pick<PrismuxDesktopBridge, "toggleDevTools"> | null,
+): boolean {
+  if (typeof prismuxBridge?.toggleDevTools === "function") {
+    void prismuxBridge.toggleDevTools();
+    return true;
+  }
+  return false;
+}
 
 const HEADER_ICON_BUTTON_BASE_CLASS =
   "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent bg-transparent transition-colors [-webkit-app-region:no-drag] outline-none focus-visible:ring-1 focus-visible:ring-foreground/25 disabled:pointer-events-none disabled:opacity-35";
@@ -171,7 +264,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           )}
         >
           <div className="flex min-w-0 shrink-0 items-center gap-1">
-            <SidebarBrandMenu onBackdrop={onBackdrop} />
+            <SidebarBrandMenu onBackdrop={onBackdrop} isElectron={isElectron} />
             <SidebarHeaderToggleButton railCompact={false} onBackdrop={onBackdrop} />
           </div>
           {pillLabel ? (
@@ -319,20 +412,184 @@ function HistoryNavigationButton({
   );
 }
 
-function SidebarBrandMenu({
+function useDirectNewThreadCreator() {
+  const environmentServerConfigs = useAtomValue(environmentServerConfigsAtom);
+  const projects = useProjects();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { activeThread, activeDraftThread, defaultProjectRef, handleNewThread } =
+    useHandleNewThread();
+  const { scratchEnvironmentId, openScratchProject } = useScratchProject();
+
+  return useCallback(async () => {
+    const firstOpenProject = projects.find((project) => project.archivedAt == null);
+    let targetProjectRef: ScopedProjectRef | null = activeThread
+      ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
+      : activeDraftThread
+        ? scopeProjectRef(activeDraftThread.environmentId, activeDraftThread.projectId)
+        : (defaultProjectRef ??
+          (firstOpenProject
+            ? scopeProjectRef(firstOpenProject.environmentId, firstOpenProject.id)
+            : null));
+    let fromScratch = false;
+    if (!targetProjectRef) {
+      const scratchEnv = scratchEnvironmentId(primaryEnvironmentId);
+      if (scratchEnv) {
+        const scratchProject = await openScratchProject(scratchEnv);
+        if (scratchProject) {
+          targetProjectRef = scopeProjectRef(scratchProject.environmentId, scratchProject.id);
+          fromScratch = true;
+        }
+      }
+    }
+    if (!targetProjectRef) {
+      openCommandPalette({ open: "new-thread-in" });
+      return;
+    }
+    const serverConfig =
+      environmentServerConfigs.get(targetProjectRef.environmentId) ??
+      [...environmentServerConfigs.values()][0];
+    const defaultSelection = resolveDefaultAvailableModelSelection(
+      serverConfig?.providers ?? [],
+      serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
+      targetProjectRef.projectId,
+    );
+    const opened = await handleNewThread(targetProjectRef, {
+      forceNew: true,
+      ...(fromScratch ? { envMode: "local" as const } : {}),
+      ...(defaultSelection ? { modelSelection: defaultSelection } : {}),
+    }).catch(() => null);
+    if (!opened) {
+      openCommandPalette({ open: "new-thread-in" });
+    }
+  }, [
+    activeDraftThread,
+    activeThread,
+    defaultProjectRef,
+    environmentServerConfigs,
+    handleNewThread,
+    openScratchProject,
+    primaryEnvironmentId,
+    projects,
+    scratchEnvironmentId,
+  ]);
+}
+
+export interface SidebarBrandMenuItemsProps {
+  readonly commandPaletteShortcut: string | null;
+  readonly developerShortcuts: BrandMenuDeveloperShortcuts;
+  readonly showDevToolsItem: boolean;
+  readonly onNewThread: () => void;
+  readonly onAddProject: () => void;
+  readonly onOpenCommandPalette: () => void;
+  readonly onOpenSettings: () => void;
+  readonly onOpenKeybindings: () => void;
+  readonly onCheckUpdates: () => void;
+  readonly onReload: () => void;
+  readonly onForceReload: () => void;
+  readonly onToggleDevTools: () => void;
+}
+
+export function SidebarBrandMenuItems(props: SidebarBrandMenuItemsProps) {
+  const gt = useGT();
+  const {
+    commandPaletteShortcut,
+    developerShortcuts,
+    showDevToolsItem,
+    onNewThread,
+    onAddProject,
+    onOpenCommandPalette,
+    onOpenSettings,
+    onOpenKeybindings,
+    onCheckUpdates,
+    onReload,
+    onForceReload,
+    onToggleDevTools,
+  } = props;
+
+  return (
+    <>
+      <MenuItem data-sidebar-app-menu-item="new-thread" onClick={onNewThread}>
+        <SquarePenIcon className="size-3.5" aria-hidden="true" />
+        <span>{gt("New thread")}</span>
+      </MenuItem>
+      <MenuItem data-sidebar-app-menu-item="open-workspace" onClick={onAddProject}>
+        <FolderPlusIcon className="size-3.5" aria-hidden="true" />
+        <span>{gt("Add project")}</span>
+      </MenuItem>
+      <MenuItem data-sidebar-app-menu-item="command-palette" onClick={onOpenCommandPalette}>
+        <SearchIcon className="size-3.5" aria-hidden="true" />
+        <span className="flex-1">{gt("Command palette")}</span>
+        {commandPaletteShortcut ? (
+          <span className="ml-4 text-[11px] text-muted-foreground tabular-nums">
+            {commandPaletteShortcut}
+          </span>
+        ) : null}
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem data-sidebar-app-menu-item="settings" onClick={onOpenSettings}>
+        <SettingsIcon className="size-3.5" aria-hidden="true" />
+        <span>{gt("Settings")}</span>
+      </MenuItem>
+      <MenuItem data-sidebar-app-menu-item="keybindings" onClick={onOpenKeybindings}>
+        <KeyboardIcon className="size-3.5" aria-hidden="true" />
+        <span>
+          <T>Keyboard shortcuts</T>
+        </span>
+      </MenuItem>
+      <MenuItem data-sidebar-app-menu-item="check-updates" onClick={onCheckUpdates}>
+        <RefreshCwIcon className="size-3.5" aria-hidden="true" />
+        <span>{gt("Check for updates")}</span>
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem data-sidebar-app-menu-item="reload-window" onClick={onReload}>
+        <RotateCwIcon className="size-3.5" aria-hidden="true" />
+        <span className="flex-1">{gt("Reload")}</span>
+      </MenuItem>
+      <MenuItem data-sidebar-app-menu-item="force-reload-window" onClick={onForceReload}>
+        <RotateCcwIcon className="size-3.5" aria-hidden="true" />
+        <span className="flex-1">{gt("Force Reload")}</span>
+        <span className="ml-4 text-[11px] text-muted-foreground tabular-nums">
+          {developerShortcuts.forceReload}
+        </span>
+      </MenuItem>
+      {showDevToolsItem ? (
+        <MenuItem data-sidebar-app-menu-item="toggle-devtools" onClick={onToggleDevTools}>
+          <Code2Icon className="size-3.5" aria-hidden="true" />
+          <span className="flex-1">{gt("Toggle Developer Tools")}</span>
+          <span className="ml-4 text-[11px] text-muted-foreground tabular-nums">
+            {developerShortcuts.toggleDevTools}
+          </span>
+        </MenuItem>
+      ) : null}
+    </>
+  );
+}
+
+export function SidebarBrandMenu({
   onBackdrop,
   onOpenChange,
   onAction,
+  isElectron,
+  defaultOpen,
 }: {
   onBackdrop: boolean;
   onOpenChange?: ((open: boolean) => void) | undefined;
   onAction?: (() => void) | undefined;
+  isElectron?: boolean | undefined;
+  defaultOpen?: boolean | undefined;
 }) {
   const gt = useGT();
   const navigate = useNavigate();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { isMobile, setOpenMobile } = useSidebar();
+  const handleCreateDirectNewThread = useDirectNewThreadCreator();
   const commandPaletteShortcut = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
+  const platform = typeof navigator !== "undefined" ? navigator.platform : "";
+  const developerShortcuts = resolveBrandMenuDeveloperShortcuts(platform);
+  const prismuxBridge =
+    typeof window !== "undefined" ? (window.desktopBridge?.prismux ?? null) : null;
+  const showDevToolsItem =
+    isElectron ?? (IS_ELECTRON_RUNTIME || typeof prismuxBridge?.toggleDevTools === "function");
 
   const closeAfterAction = () => {
     if (isMobile) setOpenMobile(false);
@@ -340,7 +597,7 @@ function SidebarBrandMenu({
   };
 
   return (
-    <Menu onOpenChange={onOpenChange}>
+    <Menu defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
       <MenuTrigger
         render={
           <button
@@ -364,89 +621,55 @@ function SidebarBrandMenu({
         side="bottom"
         align="start"
         sideOffset={6}
-        className="min-w-52"
+        className="min-w-60"
       >
-        <MenuItem
-          data-sidebar-app-menu-item="new-thread"
-          onClick={() => {
+        <SidebarBrandMenuItems
+          commandPaletteShortcut={commandPaletteShortcut}
+          developerShortcuts={developerShortcuts}
+          showDevToolsItem={showDevToolsItem}
+          onNewThread={() => {
             closeAfterAction();
-            openCommandPalette({ open: "new-thread-in" });
+            void handleCreateDirectNewThread();
           }}
-        >
-          <SquarePenIcon className="size-3.5" aria-hidden="true" />
-          <span>{gt("New thread")}</span>
-        </MenuItem>
-        <MenuItem
-          data-sidebar-app-menu-item="open-workspace"
-          onClick={() => {
+          onAddProject={() => {
             closeAfterAction();
             openCommandPalette({ open: "add-project" });
           }}
-        >
-          <FolderPlusIcon className="size-3.5" aria-hidden="true" />
-          <span>{gt("Add project")}</span>
-        </MenuItem>
-        <MenuItem
-          data-sidebar-app-menu-item="command-palette"
-          onClick={() => {
+          onOpenCommandPalette={() => {
             closeAfterAction();
             openCommandPalette();
           }}
-        >
-          <SearchIcon className="size-3.5" aria-hidden="true" />
-          <span className="flex-1">{gt("Command palette")}</span>
-          {commandPaletteShortcut ? (
-            <span className="ml-3 text-[11px] text-muted-foreground tabular-nums">
-              {commandPaletteShortcut}
-            </span>
-          ) : null}
-        </MenuItem>
-        <MenuSeparator />
-        <MenuItem
-          data-sidebar-app-menu-item="settings"
-          onClick={() => {
+          onOpenSettings={() => {
             closeAfterAction();
             void navigate({ to: "/settings" });
           }}
-        >
-          <SettingsIcon className="size-3.5" aria-hidden="true" />
-          <span>{gt("Settings")}</span>
-        </MenuItem>
-        <MenuItem
-          data-sidebar-app-menu-item="keybindings"
-          onClick={() => {
+          onOpenKeybindings={() => {
             closeAfterAction();
             void navigate({ to: "/settings/keybindings" });
           }}
-        >
-          <KeyboardIcon className="size-3.5" aria-hidden="true" />
-          <span>
-            <T>Keyboard shortcuts</T>
-          </span>
-        </MenuItem>
-        <MenuItem
-          data-sidebar-app-menu-item="check-updates"
-          onClick={() => {
+          onCheckUpdates={() => {
             closeAfterAction();
             void navigate({ to: "/settings/about" });
           }}
-        >
-          <RefreshCwIcon className="size-3.5" aria-hidden="true" />
-          <span>{gt("Check for updates")}</span>
-        </MenuItem>
-        <MenuSeparator />
-        <MenuItem
-          data-sidebar-app-menu-item="reload-window"
-          onClick={() => {
+          onReload={() => {
             closeAfterAction();
-            if (typeof window !== "undefined") {
-              window.location.reload();
-            }
+            executeBrandMenuReload(
+              prismuxBridge,
+              typeof window !== "undefined" ? window.location : null,
+            );
           }}
-        >
-          <RotateCwIcon className="size-3.5" aria-hidden="true" />
-          <span>{gt("Reload")}</span>
-        </MenuItem>
+          onForceReload={() => {
+            closeAfterAction();
+            executeBrandMenuForceReload(
+              prismuxBridge,
+              typeof window !== "undefined" ? window.location : null,
+            );
+          }}
+          onToggleDevTools={() => {
+            closeAfterAction();
+            executeBrandMenuToggleDevTools(prismuxBridge);
+          }}
+        />
       </MenuPopup>
     </Menu>
   );
@@ -494,6 +717,7 @@ function SidebarCollapsedPeekBody({
   const projects = useProjects();
   const visibleThreads = useVisibleThreadShells();
   const handleNewThread = useNewThreadHandler();
+  const handleCreateDirectNewThread = useDirectNewThreadCreator();
   const { scratchWorkspaceRootFor } = useScratchProject();
   const routeTarget = useThreadRouteTarget();
 
@@ -554,6 +778,7 @@ function SidebarCollapsedPeekBody({
       >
         <SidebarBrandMenu
           onBackdrop={false}
+          isElectron={isElectron}
           onOpenChange={onMenuOpenChange}
           onAction={onClose}
         />
@@ -798,7 +1023,7 @@ function SidebarCollapsedPeekBody({
         ) : (
           <button
             type="button"
-            onClick={() => navigateAndClose(() => openCommandPalette({ open: "new-thread-in" }))}
+            onClick={() => navigateAndClose(() => void handleCreateDirectNewThread())}
             className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-xs text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
           >
             <SquarePenIcon className="size-3.5 shrink-0 opacity-75" aria-hidden="true" />

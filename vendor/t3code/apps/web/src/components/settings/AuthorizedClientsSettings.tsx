@@ -429,9 +429,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                       role="radio"
                       aria-checked={isSelected}
                       className={cn(
-                        "flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                        "flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                         isSelected
-                          ? "border-foreground/60 bg-muted/30"
+                          ? "border-primary/80 bg-primary/15 ring-1 ring-primary/35 dark:bg-primary/22"
                           : "border-border/50 hover:bg-muted/20",
                       )}
                       onClick={() => setQrEndpointId(option.id)}

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -9,6 +10,8 @@ import { userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
 import { PrismuxStatusBar } from "../PrismuxStatusBar";
+import { aggregateQuotaSummary, type QuotaPreferences } from "./quotaStatus.logic";
+import { QuotaStatusPopover } from "./QuotaStatusPopover";
 import { ResourcesStatusPopover } from "./ResourcesStatusPopover";
 import { STATUS_BAR_VISIBILITY_STORAGE_KEY } from "./statusBarVisibility";
 
@@ -36,8 +39,10 @@ describe("PrismuxStatusBar (browser)", () => {
     expect(Math.round(barEl.getBoundingClientRect().height)).toBe(20);
     expect(barEl.getAttribute("data-pmx-glass-zone")).toBe("shellFrame");
 
-    // Streamlined 4 capsules: Usage + Keep Awake + Ports + CPU/RAM (Ctx and Cache moved under ChatComposer).
+    // Streamlined 5 capsules: Usage + Standalone Quota + Keep Awake + Ports + CPU/RAM.
     expect(screen.getByTestId("status-bar-usage-trigger").element()).toBeTruthy();
+    expect(screen.getByTestId("status-bar-quota-trigger").element()).toBeTruthy();
+    expect(screen.getByTestId("status-bar-quota-refresh").element()).toBeTruthy();
     expect(screen.getByTestId("status-bar-keep-awake-trigger").element()).toBeTruthy();
     expect(screen.getByTestId("status-bar-ports-trigger").element()).toBeTruthy();
     expect(screen.getByTestId("status-bar-resources-trigger").element()).toBeTruthy();
@@ -155,5 +160,99 @@ describe("PrismuxStatusBar (browser)", () => {
     expect(nameBtn.className).toContain("bg-primary");
     expect(cpuBtn.getAttribute("aria-pressed")).toBe("false");
     expect(cpuBtn.className).toContain("bg-transparent");
+  });
+
+  it("switches QuotaStatusPopover interactively across Detailed (Fig 3), Compact (Fig 4), Single-Agent Detail (Fig 5), and Used/Remaining toggle", async () => {
+    const now = Date.parse("2026-11-24T06:00:00Z");
+    const summary = aggregateQuotaSummary(
+      {
+        ok: true,
+        cached: false,
+        cacheTtlMs: 180_000,
+        fetchedAt: now - 3_000,
+        fetchedAtIso: new Date(now - 3_000).toISOString(),
+        providers: [],
+        antigravity: {
+          id: "antigravity",
+          providerId: "antigravity",
+          displayName: "Antigravity",
+          source: "official-cli",
+          command: 'agy -p "/usage"',
+          status: "ok",
+          available: true,
+          executablePath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+          remainingCredits: 0,
+          fetchedAt: now - 3_000,
+          fetchedAtIso: new Date(now - 3_000).toISOString(),
+          error: null,
+          windows: [
+            {
+              id: "gemini:weekly",
+              group: "Gemini",
+              groupId: "gemini",
+              window: "weekly",
+              shortLabel: "Gemini 周",
+              detailLabel: "Gemini · 每周",
+              remainingPercent: 93,
+              usedPercent: 7,
+              resetAtIso: "2026-11-30T20:03:11.000Z",
+              resetAtMs: Date.parse("2026-11-30T20:03:11.000Z"),
+            },
+            {
+              id: "gemini:5h",
+              group: "Gemini",
+              groupId: "gemini",
+              window: "5h",
+              shortLabel: "Gemini 5h",
+              detailLabel: "Gemini · 5h",
+              remainingPercent: 95,
+              usedPercent: 5,
+              resetAtIso: "2026-11-24T09:34:15.000Z",
+              resetAtMs: Date.parse("2026-11-24T09:34:15.000Z"),
+            },
+          ],
+        },
+      },
+      [],
+      now,
+    );
+
+    function Harness() {
+      const [prefs, setPrefs] = useState<QuotaPreferences>({
+        viewMode: "detailed",
+        percentMode: "used",
+      });
+      return (
+        <QuotaStatusPopover
+          summary={summary}
+          prefs={prefs}
+          onPrefsChange={setPrefs}
+          now={now}
+          onRefresh={async () => {}}
+        />
+      );
+    }
+
+    await using screen = await render(<Harness />);
+    const popover = screen.getByTestId("prismux-quota-popover").element() as HTMLElement;
+    expect(popover.getAttribute("data-quota-view")).toBe("detailed");
+
+    // Switch to Compact view (Fig 4)
+    await userEvent.click(screen.getByTestId("quota-view-compact"));
+    expect(popover.getAttribute("data-quota-view")).toBe("compact");
+
+    // Drill down into Antigravity detail view (Fig 5)
+    await userEvent.click(screen.getByTestId("quota-agent-row-antigravity"));
+    expect(screen.getByTestId("prismux-quota-popover").element().getAttribute("data-quota-view")).toBe("detail");
+    expect(screen.getByTestId("quota-detail-updated-at").element().textContent).toContain("更新于 刚刚");
+
+    // Toggle Used -> Remaining
+    await userEvent.click(screen.getByTestId("quota-percent-mode-toggle"));
+    expect(screen.getByTestId("quota-percent-mode-toggle").element().textContent).toContain("剩余");
+    expect(screen.getByTestId("quota-detail-row-gemini:weekly").element().textContent).toContain("93%");
+
+    // Navigate back to list view
+    await userEvent.click(screen.getByTestId("quota-detail-back"));
+    expect(screen.getByTestId("prismux-quota-popover").element().getAttribute("data-quota-view")).toBe("compact");
   });
 });

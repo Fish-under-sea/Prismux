@@ -7,7 +7,7 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import type { MessageResolver } from "../../i18n/messages";
-import { formatAgentBrandName } from "../../prismux/agentBrand";
+import { resolveProviderEntryDisplayName } from "../../prismux/agentBrand";
 import {
   isProviderInstancePickerReady,
   shouldShowInstanceBadge,
@@ -15,14 +15,7 @@ import {
 } from "../../providerInstances";
 
 function resolveCanonicalEntryLabel(entry: ProviderInstanceEntry): string {
-  return entry.isDefault
-    ? formatAgentBrandName(
-        entry.driverKind,
-        entry.driverKind === "acpRegistry" || entry.driverKind === "openaiCompatible"
-          ? entry.displayName
-          : undefined,
-      )
-    : formatAgentBrandName(entry.driverKind, entry.displayName);
+  return resolveProviderEntryDisplayName(entry);
 }
 
 function describeUnavailableInstance(

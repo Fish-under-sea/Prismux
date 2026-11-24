@@ -46,23 +46,22 @@ export function formatModelSourceSubtitle(input: {
   readonly subProvider?: string | undefined;
   readonly isDefaultInstance?: boolean | undefined;
 }): string {
+  const resolvedName = formatAgentBrandName(input.driverKind, input.instanceDisplayName);
   const canonicalBrand = formatAgentBrandName(
     input.driverKind,
     input.driverKind === "acpRegistry" || input.driverKind === "openaiCompatible"
-      ? input.instanceDisplayName
+      ? resolvedName
       : undefined,
   );
   const sub = input.subProvider?.trim();
-  if (sub && sub.toLowerCase() !== canonicalBrand.toLowerCase()) {
-    return `${canonicalBrand} · via ${sub}`;
+  if (sub && sub.toLowerCase() !== resolvedName.toLowerCase()) {
+    return `${resolvedName} · via ${sub}`;
   }
-  const customLabel = input.instanceDisplayName.trim();
   if (
-    !input.isDefaultInstance &&
-    customLabel.length > 0 &&
-    customLabel.toLowerCase() !== canonicalBrand.toLowerCase()
+    resolvedName.length > 0 &&
+    resolvedName.toLowerCase() !== canonicalBrand.toLowerCase()
   ) {
-    return `${canonicalBrand} · via ${customLabel}`;
+    return input.isDefaultInstance ? resolvedName : `${canonicalBrand} · via ${resolvedName}`;
   }
   return canonicalBrand;
 }

@@ -1,6 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { DeclarativeGlassRenderer, type DeclarativeUiPanelSpec } from "@prismux/appearance";
+import {
+  PLUGIN_DEVELOPMENT_GUIDE_REPO_PATH,
+  PLUGIN_DEVELOPMENT_GUIDE_URL,
+  PLUGIN_HOOKS_AND_THEME_REPO_PATH,
+  PLUGIN_HOOKS_AND_THEME_URL,
+  PLUGIN_REQUIREMENT_PLACEHOLDER_BLOCK,
+  PluginCreatorGuideModal,
+  buildPluginCreatorAgentPrompt,
+} from "./PluginCreatorGuideModal";
 import { PluginDetailDrawer } from "./PluginDetailDrawer";
 import { PluginRollbackDialog } from "./PluginRollbackDialog";
 import { PluginTrustAuditModal } from "./PluginTrustAuditModal";
@@ -399,12 +408,13 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
     expect(rollbackHtml).toContain("模拟回滚网络超时");
   });
 
-  it("renders complete PrismuxPluginCenterView with zero-preinstall banner, 4 tabs, 6 category chips, featured section, and scriptless npm import", () => {
+  it("renders redesigned PrismuxPluginCenterView with unified settings glass, zero-preinstall banner, no featured/retired bloat, dynamic non-zero categories, and creator guide CTA", () => {
     const noopDaemon = {
       requestJson: async <T,>(): Promise<T> => ({ ok: true, plugins: [] }) as T,
     };
 
-    const html = renderToStaticMarkup(
+    // Case 1: Mixed official + community plugins (communication=2, theme=1, tools=1; pet=0, ops=0)
+    const mixedHtml = renderToStaticMarkup(
       <PrismuxPluginCenterView
         daemon={noopDaemon}
         daemonReady={true}
@@ -415,38 +425,123 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
       />,
     );
 
-    // Zero-preinstall mandatory banner (2 active official plugins)
-    expect(html).toContain("两大官方插件默认零预装声明");
-    expect(html).toContain("fishdock-hook");
+    // Zero-preinstall mandatory banner (2 active official plugins) + unified SettingsGroup glass
+    expect(mixedHtml).toContain("两大官方插件默认零预装声明");
+    expect(mixedHtml).toContain("fishdock-hook");
+    expect(mixedHtml).toContain('data-slot="settings-group"');
+    expect(mixedHtml).toContain("bg-card/40");
+    expect(mixedHtml).not.toContain("bg-card/80");
+    expect(mixedHtml).not.toContain("bg-card/85");
 
-    // Restrained read-only retired notice for pet / ssh with NO install buttons
-    expect(html).toContain('data-testid="plugin-retired-section"');
-    expect(html).toContain('data-testid="plugin-retired-pet"');
-    expect(html).toContain('data-testid="plugin-retired-ssh"');
-    expect(html).toContain("已停用：已被 Prismux 内置功能取代");
-    expect(html).not.toContain('data-testid="plugin-card-pet"');
-    expect(html).not.toContain('data-testid="plugin-card-ssh"');
+    // Redundant Featured Recommendations & bottom Retired Plugins cards are completely removed from UI
+    expect(mixedHtml).not.toContain('data-testid="plugin-featured-section"');
+    expect(mixedHtml).not.toContain("精选推荐");
+    expect(mixedHtml).not.toContain('data-testid="plugin-retired-section"');
+    expect(mixedHtml).not.toContain('data-testid="plugin-retired-pet"');
+    expect(mixedHtml).not.toContain('data-testid="plugin-retired-ssh"');
+    expect(mixedHtml).not.toContain("已停用插件说明");
+    expect(mixedHtml).not.toContain('data-testid="plugin-card-pet"');
+    expect(mixedHtml).not.toContain('data-testid="plugin-card-ssh"');
 
-    // Four-state tabs with live counts
-    expect(html).toContain('data-testid="plugin-tab-all"');
-    expect(html).toContain("已安装 (3)");
-    expect(html).toContain('data-testid="plugin-tab-available"');
-    expect(html).toContain("有更新 (1)");
+    // Four-state segmented tabs with live counts
+    expect(mixedHtml).toContain('data-slot="toggle-group"');
+    expect(mixedHtml).toContain('data-testid="plugin-tab-all"');
+    expect(mixedHtml).toContain("已安装 (3)");
+    expect(mixedHtml).toContain('data-testid="plugin-tab-available"');
+    expect(mixedHtml).toContain("有更新 (1)");
 
-    // Instant search & 6 category chips
-    expect(html).toContain('data-testid="plugin-search-input"');
-    for (const cat of ["all", "communication", "pet", "ops", "theme", "tools"]) {
-      expect(html).toContain(`data-testid="plugin-category-${cat}"`);
+    // Instant search & dynamic category chips (ONLY count > 0 categories shown; ZERO empty "0" chips!)
+    expect(mixedHtml).toContain('data-testid="plugin-search-input"');
+    for (const nonZeroCat of ["all", "communication", "theme", "tools"]) {
+      expect(mixedHtml).toContain(`data-testid="plugin-category-${nonZeroCat}"`);
     }
+    expect(mixedHtml).not.toContain('data-testid="plugin-category-pet"');
+    expect(mixedHtml).not.toContain('data-testid="plugin-category-ops"');
 
-    // Featured recommendations, scriptless npm import, and local .wb-plugin import
-    expect(html).toContain('data-testid="plugin-featured-section"');
-    expect(html).toContain("精选推荐");
-    expect(html).toContain("社区 npm 插件流式导入");
-    expect(html).toContain('data-testid="plugin-local-archive-btn"');
-    expect(html).toContain("导入本地 .wb-plugin");
-    expect(html).toContain("免 Git 依赖");
-    expect(html).toContain("禁用安装脚本");
+    // Scriptless npm import, local .wb-plugin import & Creator Guide button
+    expect(mixedHtml).toContain("社区 npm 插件流式导入");
+    expect(mixedHtml).toContain('data-testid="plugin-creator-guide-btn"');
+    expect(mixedHtml).toContain("创作指引");
+    expect(mixedHtml).toContain('data-testid="plugin-local-archive-btn"');
+    expect(mixedHtml).toContain("导入本地 .wb-plugin");
+    expect(mixedHtml).toContain("免 Git 依赖");
+    expect(mixedHtml).toContain("禁用安装脚本");
+
+    // Case 2: Official catalog only (all plugins in communication; <= 1 non-zero category)
+    // Secondary category strip is completely hidden — zero empty "桌宠 0 / 运维 0 / 主题 0 / 工具 0" labels!
+    const officialOnlyHtml = renderToStaticMarkup(
+      <PrismuxPluginCenterView
+        daemon={noopDaemon}
+        daemonReady={true}
+        initialCatalog={makeOfficialCatalogFixture()}
+        initialInstalled={[]}
+        skipInitialFetch={true}
+      />,
+    );
+    expect(officialOnlyHtml).not.toContain('data-testid="plugin-category-');
+    expect(officialOnlyHtml).toContain('data-testid="plugin-card-qq"');
+    expect(officialOnlyHtml).toContain('data-testid="plugin-card-fishdock-hook"');
+  });
+
+  it("renders PluginCreatorGuideModal with both official doc links and builds Agent prompt with placeholder or custom requirement", () => {
+    // Closed modal renders nothing
+    expect(
+      renderToStaticMarkup(<PluginCreatorGuideModal open={false} onClose={() => undefined} />),
+    ).toBe("");
+
+    // Default prompt (empty user requirement) embeds docs, contracts, exact 6 hooks, theme tokens & placeholder block
+    const defaultPrompt = buildPluginCreatorAgentPrompt("");
+    expect(defaultPrompt).toContain(PLUGIN_DEVELOPMENT_GUIDE_URL);
+    expect(defaultPrompt).toContain(PLUGIN_DEVELOPMENT_GUIDE_REPO_PATH);
+    expect(defaultPrompt).toContain(PLUGIN_HOOKS_AND_THEME_URL);
+    expect(defaultPrompt).toContain(PLUGIN_HOOKS_AND_THEME_REPO_PATH);
+    expect(defaultPrompt).toContain("engines");
+    expect(defaultPrompt).toContain("ctx.effect()");
+    for (const hookName of [
+      "SessionStart",
+      "PreToolUse",
+      "PostToolUse",
+      "Notification",
+      "SubagentStop",
+      "Stop",
+    ]) {
+      expect(defaultPrompt).toContain(hookName);
+    }
+    expect(defaultPrompt).toContain("html[data-pmx-theme");
+    expect(defaultPrompt).toContain("--pmx-");
+    expect(defaultPrompt).toContain('ui: "components"');
+    expect(defaultPrompt).toContain("pnpm plugin:pack");
+    expect(defaultPrompt).toContain(PLUGIN_REQUIREMENT_PLACEHOLDER_BLOCK);
+
+    // Custom user requirement replaces placeholder cleanly
+    const customPrompt = buildPluginCreatorAgentPrompt("  做一个飞书通知插件，推送 Stop 摘要  ");
+    expect(customPrompt).toContain("【我的插件创作需求】\n做一个飞书通知插件，推送 Stop 摘要");
+    expect(customPrompt).not.toContain("请在此替换为你想实现的功能");
+
+    // Open modal markup verification
+    const modalHtml = renderToStaticMarkup(
+      <PluginCreatorGuideModal
+        open={true}
+        initialRequirement="构建一个自定义 GitHub PR 提醒插件"
+        onClose={() => undefined}
+      />,
+    );
+    expect(modalHtml).toContain('role="dialog"');
+    expect(modalHtml).toContain('aria-modal="true"');
+    expect(modalHtml).toContain('data-pmx-glass-zone="overlays"');
+    expect(modalHtml).toContain("dialog-glass");
+    expect(modalHtml).toContain("Prismux 插件创作指引");
+    expect(modalHtml).toContain('data-testid="plugin-doc-link-dev-guide"');
+    expect(modalHtml).toContain('data-testid="plugin-doc-link-hooks-theme"');
+    expect(modalHtml).toContain(PLUGIN_DEVELOPMENT_GUIDE_URL);
+    expect(modalHtml).toContain(PLUGIN_HOOKS_AND_THEME_URL);
+    expect(modalHtml).toContain(PLUGIN_DEVELOPMENT_GUIDE_REPO_PATH);
+    expect(modalHtml).toContain(PLUGIN_HOOKS_AND_THEME_REPO_PATH);
+    expect(modalHtml).toContain('data-testid="plugin-creator-requirement-input"');
+    expect(modalHtml).toContain('data-testid="plugin-creator-prompt-preview"');
+    expect(modalHtml).toContain("构建一个自定义 GitHub PR 提醒插件");
+    expect(modalHtml).toContain('data-testid="plugin-creator-copy-btn"');
+    expect(modalHtml).toContain("复制 Agent 提示词");
   });
 
   it("renders DeclarativeGlassRenderer across all 8 primitives while escaping XSS and blocking raw HTML/CSS/prototype pollution", () => {

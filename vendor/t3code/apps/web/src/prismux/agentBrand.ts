@@ -1,4 +1,10 @@
+import {
+  containsUuidNoise,
+  stripUuidNoise,
+} from "@t3tools/client-runtime/state/provider-instance-display";
 import { createElement, memo, useEffect, useId, type CSSProperties, type ReactElement } from "react";
+
+export { containsUuidNoise, stripUuidNoise };
 
 export type AgentBrandId =
   | "codex"
@@ -259,14 +265,74 @@ export function toCanonicalChiefProviderId(providerIdOrName: string | null | und
 
 /**
  * Authoritative brand formatter for all Prismux UI surfaces (tabs, launcher, Chief pill, settings).
- * Eliminates raw lowercase IDs like `codex` / `claudeAgent` while preserving custom ACP display names.
+ * Priority:
+ * 1. User's custom displayName / label (trimmed, non-empty, UUID-scrubbed)
+ * 2. Clean canonical brand name (Codex / Claude Code / Antigravity / Gemini CLI / OpenCode / Cursor / oh-my-pi)
+ * Never formats UUID segments into human display names.
  */
 export function formatAgentBrandName(
   providerIdOrName: string | null | undefined,
   customDisplayName?: string | null,
 ): string {
+  const resolveRawFallback = (): string => {
+    const trimmedRaw = typeof providerIdOrName === "string" ? providerIdOrName.trim() : "";
+    if (!trimmedRaw) {
+      return "Agent";
+    }
+
+    const rawKey = normalizeLookupKey(trimmedRaw);
+    const directBrand = KNOWN_ALIASES[rawKey];
+    if (directBrand) {
+      return CANONICAL_BRAND_META[directBrand].displayName;
+    }
+
+    const extra = EXTRA_KNOWN_DISPLAY_NAMES[rawKey];
+    if (extra) {
+      return extra;
+    }
+
+    if (containsUuidNoise(trimmedRaw)) {
+      const resolvedBrand = resolveAgentBrandId(trimmedRaw);
+      if (resolvedBrand !== "custom") {
+        return CANONICAL_BRAND_META[resolvedBrand].displayName;
+      }
+      const cleanedRaw = stripUuidNoise(trimmedRaw);
+      if (!cleanedRaw) {
+        return "Agent";
+      }
+      const cleanedKey = normalizeLookupKey(cleanedRaw);
+      const cleanedBrand = KNOWN_ALIASES[cleanedKey];
+      if (cleanedBrand) {
+        return CANONICAL_BRAND_META[cleanedBrand].displayName;
+      }
+      const cleanedExtra = EXTRA_KNOWN_DISPLAY_NAMES[cleanedKey];
+      if (cleanedExtra) {
+        return cleanedExtra;
+      }
+      return smartTitleCase(cleanedRaw);
+    }
+
+    return smartTitleCase(trimmedRaw);
+  };
+
   const trimmedCustom = typeof customDisplayName === "string" ? customDisplayName.trim() : "";
   if (trimmedCustom.length > 0) {
+    if (containsUuidNoise(trimmedCustom)) {
+      const cleanedCustom = stripUuidNoise(trimmedCustom);
+      if (cleanedCustom.length === 0) {
+        return resolveRawFallback();
+      }
+      const cleanedKey = normalizeLookupKey(cleanedCustom);
+      const cleanedBrand = KNOWN_ALIASES[cleanedKey];
+      if (cleanedBrand) {
+        return CANONICAL_BRAND_META[cleanedBrand].displayName;
+      }
+      const cleanedExtra = EXTRA_KNOWN_DISPLAY_NAMES[cleanedKey];
+      if (cleanedExtra) {
+        return cleanedExtra;
+      }
+      return cleanedCustom;
+    }
     const customKey = normalizeLookupKey(trimmedCustom);
     const customBrand = KNOWN_ALIASES[customKey];
     if (customBrand) {
@@ -279,23 +345,22 @@ export function formatAgentBrandName(
     return trimmedCustom;
   }
 
-  const trimmedRaw = typeof providerIdOrName === "string" ? providerIdOrName.trim() : "";
-  if (!trimmedRaw) {
-    return "Agent";
-  }
+  return resolveRawFallback();
+}
 
-  const rawKey = normalizeLookupKey(trimmedRaw);
-  const directBrand = KNOWN_ALIASES[rawKey];
-  if (directBrand) {
-    return CANONICAL_BRAND_META[directBrand].displayName;
-  }
+export interface ProviderEntryDisplayInput {
+  readonly driverKind: string;
+  readonly displayName?: string | null | undefined;
+  readonly instanceId?: string | null | undefined;
+}
 
-  const extra = EXTRA_KNOWN_DISPLAY_NAMES[rawKey];
-  if (extra) {
-    return extra;
-  }
-
-  return smartTitleCase(trimmedRaw);
+/**
+ * Unified display-name resolver for any ProviderInstanceEntry across the entire workbench
+ * (`+` quick launcher, tabs, model picker, sidebar, welcome stage, and Chief selector).
+ * Always honors the user's custom display name (even on default instances) and never leaks UUIDs.
+ */
+export function resolveProviderEntryDisplayName(entry: ProviderEntryDisplayInput): string {
+  return formatAgentBrandName(entry.driverKind || entry.instanceId, entry.displayName);
 }
 
 /**

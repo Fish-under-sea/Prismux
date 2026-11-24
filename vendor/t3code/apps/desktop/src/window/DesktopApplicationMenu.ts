@@ -340,7 +340,7 @@ export const make = Effect.gen(function* () {
           },
           {
             label: m(msg("Force Reload")),
-            accelerator: "Shift+CmdOrCtrl+R",
+            accelerator: "CmdOrCtrl+Shift+R",
             click: mainContentsClick("forceReload"),
           },
           {

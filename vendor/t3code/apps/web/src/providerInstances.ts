@@ -13,12 +13,19 @@ import {
   type ServerProviderState,
 } from "@t3tools/contracts";
 import {
+  containsUuidNoise,
+  disambiguateProviderInstanceDisplayNames,
   normalizeProviderAccentColor,
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@t3tools/client-runtime/state/provider-instance-display";
 
-export { normalizeProviderAccentColor, shouldShowInstanceBadge };
+export {
+  containsUuidNoise,
+  disambiguateProviderInstanceDisplayNames,
+  normalizeProviderAccentColor,
+  shouldShowInstanceBadge,
+};
 
 /** Placeholder for untargetable drafts. Never persist or dispatch it; disable send until replaced. */
 export const NO_PROVIDER_MODEL_SELECTION: ModelSelection = {
@@ -30,6 +37,7 @@ export interface ProviderInstanceEntry {
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
   readonly displayName: string;
+  readonly hasCustomDisplayName?: boolean | undefined;
   readonly accentColor?: string | undefined;
   readonly acpRegistryAgentId?: string | undefined;
   readonly acpRegistryIconUrl?: string | undefined;
@@ -93,10 +101,13 @@ export function deriveProviderInstanceEntries(
     const driverKind = snapshot.driver;
     const defaultId = defaultInstanceIdForDriver(driverKind);
     const isDefault = instanceId === defaultId;
+    const rawSnapshotName = snapshot.displayName?.trim();
+    const hasCustomDisplayName = Boolean(rawSnapshotName && !containsUuidNoise(rawSnapshotName));
     return {
       instanceId,
       driverKind,
       displayName: resolveProviderInstanceDisplayName(snapshot),
+      hasCustomDisplayName,
       accentColor: normalizeProviderAccentColor(snapshot.accentColor),
       ...(driverKind === "acpRegistry" && snapshot.iconUrl
         ? { acpRegistryIconUrl: snapshot.iconUrl }
@@ -126,7 +137,8 @@ export function deriveProviderEntriesByEnvironment(
   const byEnvironment = new Map<string, ReadonlyMap<string, ProviderInstanceEntry>>();
   for (const [environmentId, providers, settings] of providersByEnvironment) {
     const derived = deriveProviderInstanceEntries(providers);
-    const entries = settings ? brandProviderInstanceEntries(derived, settings) : derived;
+    const branded = settings ? brandProviderInstanceEntries(derived, settings) : derived;
+    const entries = disambiguateProviderInstanceDisplayNames(branded);
     byEnvironment.set(
       environmentId,
       new Map(entries.map((entry) => [entry.instanceId as string, entry] as const)),
@@ -165,18 +177,41 @@ function applyProviderInstanceBranding(
   const explicitInstance = Object.hasOwn(settings.providerInstances, entry.instanceId)
     ? settings.providerInstances[entry.instanceId]
     : undefined;
-  if (entry.driverKind !== "acpRegistry" || explicitInstance === undefined) return entry;
+  if (explicitInstance === undefined) return entry;
+
+  const rawExplicitName = explicitInstance.displayName?.trim();
+  const hasCustomDisplayName = Boolean(rawExplicitName && !containsUuidNoise(rawExplicitName));
+  const nextDisplayName = resolveProviderInstanceDisplayName({
+    instanceId: entry.instanceId,
+    driver: entry.driverKind,
+    displayName: explicitInstance.displayName,
+  });
+  const nextAccentColor = normalizeProviderAccentColor(explicitInstance.accentColor);
+
+  const syncedEntry: ProviderInstanceEntry =
+    nextDisplayName === entry.displayName &&
+    hasCustomDisplayName === entry.hasCustomDisplayName &&
+    nextAccentColor === entry.accentColor
+      ? entry
+      : {
+          ...entry,
+          displayName: nextDisplayName,
+          hasCustomDisplayName,
+          accentColor: nextAccentColor,
+        };
+
+  if (syncedEntry.driverKind !== "acpRegistry") return syncedEntry;
   const config =
     explicitInstance.config !== null && typeof explicitInstance.config === "object"
       ? (explicitInstance.config as Readonly<Record<string, unknown>>)
       : null;
   if (config?.source === "local") {
-    return { ...entry, acpRegistryAgentId: undefined, acpRegistryIconUrl: undefined };
+    return { ...syncedEntry, acpRegistryAgentId: undefined, acpRegistryIconUrl: undefined };
   }
   const agentId = config?.agentId;
   const iconUrl = config?.registryIconUrl;
   return {
-    ...entry,
+    ...syncedEntry,
     ...(typeof agentId === "string" && agentId.trim()
       ? { acpRegistryAgentId: agentId.trim() }
       : {}),
@@ -196,6 +231,7 @@ export function providerInstanceEntriesFor(
     deriveProviderInstanceEntries(providers),
     (entries) => applyProviderInstanceSettings(entries, settings, projectId),
     sortProviderInstanceEntries,
+    disambiguateProviderInstanceDisplayNames,
   );
 }
 

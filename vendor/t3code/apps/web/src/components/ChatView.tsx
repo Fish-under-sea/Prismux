@@ -3506,16 +3506,32 @@ export default function ChatView(props: ChatViewProps) {
     continueInTerminalPlan !== null &&
     Boolean(activeThreadKey && !dismissedCliHintByThreadKey[activeThreadKey]) &&
     !isTerminalHosted;
-  const handleContinueInTerminalStable = useStableCallback(() => {
+  const handleContinueInTerminalStable = useStableCallback(async () => {
     if (!continueInTerminalPlan || !activeThreadKey) return;
     // Contract invariant: never interrupt, kill, or archive the existing Chat thread.
-    void runProjectScriptStable(continueInTerminalPlan.script, {
+    const resolvedProviderInstanceId =
+      activeProviderStatus && activeProviderInstanceId ? activeProviderInstanceId : null;
+    const launched = await runProjectScriptStable(continueInTerminalPlan.script, {
       cwd: continueInTerminalPlan.cwd,
       worktreePath: activeThread?.worktreePath ?? null,
+      ...(resolvedProviderInstanceId ? { providerInstanceId: resolvedProviderInstanceId } : {}),
       preferNewTerminal: true,
       rememberAsLastInvoked: false,
       shellHistory: "preserve",
     });
+    if (!launched) {
+      toastManager.add({
+        type: "error",
+        title: gt("Unable to launch {label} in terminal", {
+          label: continueInTerminalPlan.label,
+        }),
+        description: gt(
+          "Could not open a persistent PTY for {command}. Ensure a workspace folder is attached and terminal access is available.",
+          { command: continueInTerminalPlan.command },
+        ),
+      });
+      return;
+    }
     setTerminalHostedByThreadKey((prev) => ({ ...prev, [activeThreadKey]: true }));
     toastManager.add({
       type: "info",
@@ -3559,15 +3575,30 @@ export default function ChatView(props: ChatViewProps) {
         })
       : null;
   const handleLaunchContinuationInTerminalStable = useStableCallback(
-    (plan: ContinueInTerminalPlan) => {
+    async (plan: ContinueInTerminalPlan) => {
       if (!activeThreadKey) return;
-      void runProjectScriptStable(plan.script, {
+      const validProviderInstanceId =
+        plan.instanceId && providerStatuses.some((status) => status.instanceId === plan.instanceId)
+          ? plan.instanceId
+          : null;
+      const launched = await runProjectScriptStable(plan.script, {
         cwd: plan.cwd,
         worktreePath: activeThread?.worktreePath ?? null,
+        ...(validProviderInstanceId ? { providerInstanceId: validProviderInstanceId } : {}),
         preferNewTerminal: true,
         rememberAsLastInvoked: false,
         shellHistory: "preserve",
       });
+      if (!launched) {
+        toastManager.add({
+          type: "error",
+          title: gt("Unable to launch {label} in terminal", { label: plan.label }),
+          description: gt("Could not open a persistent PTY for {command}.", {
+            command: plan.command,
+          }),
+        });
+        return;
+      }
       setTerminalHostedByThreadKey((prev) => ({ ...prev, [activeThreadKey]: true }));
       toastManager.add({
         type: "info",
@@ -3838,42 +3869,48 @@ export default function ChatView(props: ChatViewProps) {
               setThreadErrorBannerDismissTick={setThreadErrorBannerDismissTick}
             />
             {showCliPreferenceBanner && continueInTerminalPlan ? (
-              <div
-                data-cli-launch-banner
-                className="mx-auto mt-2 flex w-full max-w-3xl flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-2 text-xs"
-              >
-                <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
-                  <TerminalIcon className="size-3.5 shrink-0 text-primary" />
-                  <span className="truncate">
-                    {gt("{provider} is set to CLI mode for new sessions.", {
-                      provider: continueInTerminalPlan.label,
-                    })}
-                  </span>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="default"
-                    onClick={handleContinueInTerminalStable}
-                  >
-                    <TerminalIcon className="size-3" />
-                    {gt("Launch in terminal")}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => {
-                      if (!activeThreadKey) return;
-                      setDismissedCliHintByThreadKey((prev) => ({
-                        ...prev,
-                        [activeThreadKey]: true,
-                      }));
-                    }}
-                  >
-                    {gt("Stay in Chat")}
-                  </Button>
+              <div className="w-full px-3 pt-2 sm:px-5">
+                <div
+                  data-cli-launch-banner
+                  className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-2.5 rounded-xl border border-black/12 bg-white/88 px-3.5 py-2.5 text-xs text-slate-900 shadow-[0_6px_20px_rgba(15,23,42,0.10)] backdrop-blur-md dark:border-white/18 dark:bg-zinc-900/86 dark:text-white dark:shadow-[0_8px_24px_rgba(0,0,0,0.42)] [[data-pmx-glass='1']_&]:border-white/22 [[data-pmx-glass='1']_&]:bg-slate-950/72 [[data-pmx-glass='1']_&]:text-white [[data-pmx-glass='1']_&]:shadow-[0_10px_28px_rgba(0,0,0,0.46),inset_0_1px_0_rgba(255,255,255,0.14)] [html:not(.dark)[data-pmx-glass='1']_&]:border-slate-900/14 [html:not(.dark)[data-pmx-glass='1']_&]:bg-white/84 [html:not(.dark)[data-pmx-glass='1']_&]:text-slate-950 [html:not(.dark)[data-pmx-glass='1']_&]:shadow-[0_8px_24px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.72)]"
+                >
+                  <div className="flex min-w-0 items-center gap-2 font-medium text-inherit">
+                    <TerminalIcon className="size-3.5 shrink-0 text-blue-600 dark:text-blue-400 [[data-pmx-glass='1']_&]:text-blue-300 [html:not(.dark)[data-pmx-glass='1']_&]:text-blue-600" />
+                    <span className="truncate">
+                      {gt("{provider} is set to CLI mode for new sessions.", {
+                        provider: continueInTerminalPlan.label,
+                      })}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="default"
+                      data-cli-launch-primary
+                      className="border border-blue-500/85 bg-blue-600 font-medium text-white shadow-xs hover:bg-blue-500 active:bg-blue-700 dark:border-blue-400/70 dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500"
+                      onClick={() => void handleContinueInTerminalStable()}
+                    >
+                      <TerminalIcon className="size-3" />
+                      {gt("Launch in terminal")}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      data-cli-launch-secondary
+                      className="border-black/18 bg-black/[0.04] font-medium text-slate-900 shadow-none hover:bg-black/[0.09] dark:border-white/24 dark:bg-white/10 dark:text-white dark:hover:bg-white/18 [[data-pmx-glass='1']_&]:border-white/28 [[data-pmx-glass='1']_&]:bg-white/10 [[data-pmx-glass='1']_&]:text-white [[data-pmx-glass='1']_&]:hover:bg-white/18 [html:not(.dark)[data-pmx-glass='1']_&]:border-slate-900/20 [html:not(.dark)[data-pmx-glass='1']_&]:bg-slate-900/[0.05] [html:not(.dark)[data-pmx-glass='1']_&]:text-slate-900 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-slate-900/[0.11]"
+                      onClick={() => {
+                        if (!activeThreadKey) return;
+                        setDismissedCliHintByThreadKey((prev) => ({
+                          ...prev,
+                          [activeThreadKey]: true,
+                        }));
+                      }}
+                    >
+                      {gt("Stay in Chat")}
+                    </Button>
+                  </div>
                 </div>
               </div>
             ) : null}

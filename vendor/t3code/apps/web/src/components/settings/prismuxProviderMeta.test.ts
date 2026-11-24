@@ -154,6 +154,16 @@ describe("buildContinueInTerminalCommand", () => {
     expect(built.command).toBe("codex");
     expect(built.supportsResume).toBe(false);
   });
+
+  it("uses PowerShell call syntax without backslash escaping for Windows binary paths containing spaces", () => {
+    const built = buildContinueInTerminalCommand({
+      driver: "codex",
+      binaryPath: "C:\\Program Files\\OpenAI Tools\\codex.cmd",
+      sessionId: "thread-987",
+    });
+    expect(built.command).toBe("& 'C:\\Program Files\\OpenAI Tools\\codex.cmd' resume thread-987");
+    expect(built.supportsResume).toBe(true);
+  });
 });
 
 describe("openSafeExternalHttpsFromAnchor & process-family resolution (Orca alignment)", () => {

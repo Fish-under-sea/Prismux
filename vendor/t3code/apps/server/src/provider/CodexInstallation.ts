@@ -416,11 +416,15 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     command: string,
     args: ReadonlyArray<string>,
   ) {
-    const resolved = yield* resolveSpawnCommand(command, args).pipe(
+    const resolved = yield* resolveSpawnCommand(command, args, { bypassNpmShim: true }).pipe(
       Effect.provideService(HostProcess.Platform, platform),
     );
     const child = yield* spawner.spawn(
-      ChildProcess.make(resolved.command, resolved.args, { shell: resolved.shell }),
+      ChildProcess.make(resolved.command, resolved.args, {
+        shell: resolved.shell,
+        extendEnv: true,
+        env: { ELECTRON_RUN_AS_NODE: undefined },
+      }),
     );
     const [output, , exitCode] = yield* Effect.all(
       [

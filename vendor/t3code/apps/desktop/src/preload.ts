@@ -627,5 +627,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       return () =>
         ipcRenderer.removeListener(IpcChannels.PRISMUX_TRAY_ACTION_CHANNEL, wrappedListener);
     },
+    reloadWindow: () => ipcRenderer.invoke(IpcChannels.PRISMUX_RELOAD_WINDOW_CHANNEL),
+    forceReloadWindow: () => ipcRenderer.invoke(IpcChannels.PRISMUX_FORCE_RELOAD_WINDOW_CHANNEL),
+    toggleDevTools: () => ipcRenderer.invoke(IpcChannels.PRISMUX_TOGGLE_DEVTOOLS_CHANNEL),
   },
 } satisfies DesktopBridge);

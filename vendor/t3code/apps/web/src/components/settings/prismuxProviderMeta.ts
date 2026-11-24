@@ -113,6 +113,22 @@ export function quoteShellToken(token: string): string {
   return `"${token.replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
+/**
+ * Quotes a CLI executable for interactive shell execution.
+ * Windows paths containing spaces (e.g. `C:\Program Files\Codex\codex.cmd`) require
+ * PowerShell's call operator (`& '...'`) without backslash double-escaping so the shell
+ * executes the binary instead of printing a string literal.
+ */
+export function quoteShellExecutable(executable: string): string {
+  if (/^[a-zA-Z0-9._:/\\-]+$/.test(executable)) {
+    return executable;
+  }
+  if (/^[a-zA-Z]:[\\/]/.test(executable) || executable.includes("\\")) {
+    return `& '${executable.replace(/'/g, "''")}'`;
+  }
+  return quoteShellToken(executable);
+}
+
 export function sanitizeResumeSessionId(raw: string | null | undefined): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
@@ -130,7 +146,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     loginHint: "agy acp --login",
     supportsCliMode: true,
     supportsResume: false,
-    buildResumeCommand: ({ command }) => quoteShellToken(command || "agy"),
+    buildResumeCommand: ({ command }) => quoteShellExecutable(command || "agy"),
   },
   agy: {
     id: "agy",
@@ -141,7 +157,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     loginHint: "agy acp --login",
     supportsCliMode: true,
     supportsResume: false,
-    buildResumeCommand: ({ command }) => quoteShellToken(command || "agy"),
+    buildResumeCommand: ({ command }) => quoteShellExecutable(command || "agy"),
   },
   claudeAgent: {
     id: "claudeAgent",
@@ -152,7 +168,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsCliMode: true,
     supportsResume: true,
     buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellToken(command || "claude");
+      const exe = quoteShellExecutable(command || "claude");
       const safeId = sanitizeResumeSessionId(sessionId);
       return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : `${exe} --continue`;
     },
@@ -166,7 +182,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsCliMode: true,
     supportsResume: true,
     buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellToken(command || "claude");
+      const exe = quoteShellExecutable(command || "claude");
       const safeId = sanitizeResumeSessionId(sessionId);
       return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : `${exe} --continue`;
     },
@@ -180,7 +196,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsCliMode: true,
     supportsResume: true,
     buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellToken(command || "codex");
+      const exe = quoteShellExecutable(command || "codex");
       const safeId = sanitizeResumeSessionId(sessionId);
       return safeId ? `${exe} resume ${quoteShellToken(safeId)}` : exe;
     },
@@ -194,7 +210,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsCliMode: true,
     supportsResume: true,
     buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellToken(command || "omp");
+      const exe = quoteShellExecutable(command || "omp");
       const safeId = sanitizeResumeSessionId(sessionId);
       return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : exe;
     },
@@ -208,7 +224,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsCliMode: true,
     supportsResume: true,
     buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellToken(command || "opencode");
+      const exe = quoteShellExecutable(command || "opencode");
       const safeId = sanitizeResumeSessionId(sessionId);
       return safeId ? `${exe} --session ${quoteShellToken(safeId)}` : exe;
     },
@@ -222,7 +238,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsCliMode: true,
     supportsResume: true,
     buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellToken(command || "gemini");
+      const exe = quoteShellExecutable(command || "gemini");
       const safeId = sanitizeResumeSessionId(sessionId);
       return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : exe;
     },
@@ -236,7 +252,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsCliMode: true,
     supportsResume: true,
     buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellToken(command || "pi");
+      const exe = quoteShellExecutable(command || "pi");
       const safeId = sanitizeResumeSessionId(sessionId);
       return safeId ? `${exe} --continue ${quoteShellToken(safeId)}` : exe;
     },
@@ -249,7 +265,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     updateCommandHint: "cursor-agent update",
     supportsCliMode: true,
     supportsResume: false,
-    buildResumeCommand: ({ command }) => quoteShellToken(command || "cursor-agent"),
+    buildResumeCommand: ({ command }) => quoteShellExecutable(command || "cursor-agent"),
   },
   kiro: {
     id: "kiro",
@@ -259,7 +275,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     updateCommandHint: "kiro-cli update",
     supportsCliMode: true,
     supportsResume: false,
-    buildResumeCommand: ({ command }) => quoteShellToken(command || "kiro-cli"),
+    buildResumeCommand: ({ command }) => quoteShellExecutable(command || "kiro-cli"),
   },
   grok: {
     id: "grok",
@@ -269,7 +285,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     updateCommandHint: "npm install -g @vibe-kit/grok-cli@latest",
     supportsCliMode: true,
     supportsResume: false,
-    buildResumeCommand: ({ command }) => quoteShellToken(command || "grok"),
+    buildResumeCommand: ({ command }) => quoteShellExecutable(command || "grok"),
   },
 };
 
@@ -321,7 +337,7 @@ export function resolveAgentCliMeta(input: {
         updateCommandHint: "",
         supportsCliMode: true,
         supportsResume: false,
-        buildResumeCommand: ({ command }) => quoteShellToken(command || commandPath),
+        buildResumeCommand: ({ command }) => quoteShellExecutable(command || commandPath),
       };
     }
     return null;
@@ -381,7 +397,7 @@ export function buildContinueInTerminalCommand(input: {
   if (!meta) {
     const fallbackExe = configuredBinary || input.driver || "sh";
     return {
-      command: quoteShellToken(fallbackExe),
+      command: quoteShellExecutable(fallbackExe),
       cliCommand: fallbackExe,
       label: input.displayName?.trim() || fallbackExe,
       supportsResume: false,

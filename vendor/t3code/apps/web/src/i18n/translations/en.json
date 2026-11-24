@@ -12780,5 +12780,52 @@
   "3b815be546c80a97": "chief secretary provider model reasoning effort dial agent oracle review agents.md",
   "fd82460d3178693f": "sync e2ee encrypted argon2id aead passphrase webdav s3 github sync matrix portable memory & sync",
   "59cf87e475f5462a": "Overnight Factory & Mail",
-  "8d33850bc9bc6f4e": "overnight factory mail gmail oauth2 imap smtp qq 163 outlook whitelist oracle morning report #factory"
+  "8d33850bc9bc6f4e": "overnight factory mail gmail oauth2 imap smtp qq 163 outlook whitelist oracle morning report #factory",
+  "826cb3059ebc7cc3": "Force Reload",
+  "8340487d05e832e8": "Toggle Developer Tools",
+  "64ba484de59fc117": "Glass",
+  "933c765866f01575": "Solid background",
+  "4db3b8d3b416deb8": "Aurora Prism",
+  "f4655a8b47c89d35": "Midnight Abyss",
+  "ad13c1a51bab1876": "Liquid Silk",
+  "50d2be46ef0b7644": "Cyber Twilight",
+  "8b292c933e46cf73": "Custom wallpaper",
+  "bf8e53c9f3c3ecee": "Curated built-in wallpapers",
+  "558dd10b0c40d272": "Curated built-in wallpapers",
+  "b161f6f939547c02": "Solid",
+  "d8429d21f345b7e9": "Turn on to connect local agy CLI or your Google account.",
+  "8402b1d7fb1e9275": "Theme & Liquid Glass",
+  "bcb6d790fd27765f": "Switch between Light, Dark, and translucent Liquid Glass with live preview.",
+  "063af1854fce5186": [
+    "Added to ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    ". Open a new terminal to use",
+    " ",
+    {
+      "t": "code",
+      "i": 2,
+      "c": "prismux"
+    },
+    "."
+  ],
+  "a0b83414c0c93eb4": [
+    "Use ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "prismux"
+    },
+    " from any terminal. Adds one line to",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "."
+  ]
 }

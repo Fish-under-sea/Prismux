@@ -762,51 +762,10 @@ function TerminalSessionViewport({
       if (currentFont.family !== setupFont.family || currentFont.size !== setupFont.size) {
         void terminal.setFont(terminalFontOptions(currentFont.family, currentFont.size));
       }
-      const latestSession = readTerminalSession();
-      terminal.setSharedGrid(latestSession.grid);
-      const initialOutput = readTerminalOutputUpdate(
-        latestSession.output,
-        INITIAL_TERMINAL_OUTPUT_CURSOR,
-      );
-      if (initialOutput.type === "reset" && initialOutput.data.length > 0) {
-        writeTerminalOutputUpdate(terminal, initialOutput);
-      }
-      outputCursorRef.current = initialOutput.cursor;
-      if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
-      synchronizedStatusRef.current = "closed";
-      synchronizeTerminalStatus(terminal, latestSession.status, latestSession.version);
-      // Read and subscribe in one synchronous step so no output lands between them.
-      let previousSession = latestSession;
-      let resizeGeneration = writableSessionGeneration(latestSession, hasTerminalWriteAccess());
-      setupCleanups.push(
-        subscribeTerminalSession((session) => {
-          const nextResizeGeneration = writableSessionGeneration(session, hasTerminalWriteAccess());
-          if (nextResizeGeneration !== resizeGeneration) {
-            resizeGeneration = nextResizeGeneration;
-            // The first fit can precede authorization/attach; replay the grid for each writable session, including
-            // reconnects.
-            if (nextResizeGeneration !== null) terminal.resendSize();
-          }
-          const previous = previousSession;
-          previousSession = session;
-          terminal.setSharedGrid(session.grid);
-          synchronizeTerminalStatus(terminal, session.status, session.version);
-          outputCursorRef.current = synchronizeTerminalSession(
-            terminal,
-            previous,
-            session,
-            outputCursorRef.current,
-          );
-        }),
-      );
-      if (
-        hasTerminalWriteAccess() &&
-        visibleRef.current &&
-        mount.contains(document.activeElement)
-      ) {
-        terminal.focus();
-      }
 
+      // Declare input & context-menu handlers BEFORE replaying initial output or focusing the
+      // terminal, because replayed ANSI modes (e.g. Codex CLI enabling \x1b[?1004h focus reporting
+      // or DA/OSC queries) can synchronously trigger onData/onReply during write or focus().
       const clearSelectionAction = () => {
         selectionActionRequestIdRef.current += 1;
       };
@@ -1019,6 +978,51 @@ function TerminalSessionViewport({
             report(m(msg("Terminal paste interrupted. Paste again when the terminal is ready."))),
         );
       };
+
+      const latestSession = readTerminalSession();
+      terminal.setSharedGrid(latestSession.grid);
+      const initialOutput = readTerminalOutputUpdate(
+        latestSession.output,
+        INITIAL_TERMINAL_OUTPUT_CURSOR,
+      );
+      if (initialOutput.type === "reset" && initialOutput.data.length > 0) {
+        writeTerminalOutputUpdate(terminal, initialOutput);
+      }
+      outputCursorRef.current = initialOutput.cursor;
+      if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
+      synchronizedStatusRef.current = "closed";
+      synchronizeTerminalStatus(terminal, latestSession.status, latestSession.version);
+      // Read and subscribe in one synchronous step so no output lands between them.
+      let previousSession = latestSession;
+      let resizeGeneration = writableSessionGeneration(latestSession, hasTerminalWriteAccess());
+      setupCleanups.push(
+        subscribeTerminalSession((session) => {
+          const nextResizeGeneration = writableSessionGeneration(session, hasTerminalWriteAccess());
+          if (nextResizeGeneration !== resizeGeneration) {
+            resizeGeneration = nextResizeGeneration;
+            // The first fit can precede authorization/attach; replay the grid for each writable session, including
+            // reconnects.
+            if (nextResizeGeneration !== null) terminal.resendSize();
+          }
+          const previous = previousSession;
+          previousSession = session;
+          terminal.setSharedGrid(session.grid);
+          synchronizeTerminalStatus(terminal, session.status, session.version);
+          outputCursorRef.current = synchronizeTerminalSession(
+            terminal,
+            previous,
+            session,
+            outputCursorRef.current,
+          );
+        }),
+      );
+      if (
+        hasTerminalWriteAccess() &&
+        visibleRef.current &&
+        mount.contains(document.activeElement)
+      ) {
+        terminal.focus();
+      }
 
       function handleBeforeKey(event: KeyboardEvent): boolean {
         const currentKeybindings = readKeybindings();

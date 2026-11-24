@@ -425,35 +425,39 @@ export function PrismuxDiagnosticsSection({
         <div className="min-w-0">
           <Collapsible open={compactOpen} onOpenChange={setCompactOpen}>
             <div className="flex flex-wrap items-center justify-between gap-2 py-1.5">
-              <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <ActivityIcon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="truncate text-sm font-medium text-foreground">
-                  <T>Prismux Service Diagnostics</T>
-                </span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge variant="success" className="font-mono text-[10px] tabular-nums">
-                    {report.summary.ok} {gt("Healthy")}
-                  </Badge>
-                  {report.summary.degraded > 0 ? (
-                    <Badge variant="warning" className="font-mono text-[10px] tabular-nums">
-                      {report.summary.degraded} {gt("Degraded")}
+              <CollapsibleTrigger className="group flex min-w-0 flex-1 items-start gap-2.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <ActivityIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <span className="text-sm font-medium text-foreground">
+                    <T>Prismux Service Diagnostics</T>
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant="success" className="font-mono text-[10px] tabular-nums">
+                      {report.summary.ok} {gt("Healthy")}
                     </Badge>
-                  ) : null}
-                  {report.summary.error > 0 ? (
-                    <Badge variant="error" className="font-mono text-[10px] tabular-nums">
-                      {report.summary.error} {gt("Error")}
+                    {report.summary.degraded > 0 ? (
+                      <Badge variant="warning" className="font-mono text-[10px] tabular-nums">
+                        {report.summary.degraded} {gt("Degraded")}
+                      </Badge>
+                    ) : null}
+                    {report.summary.error > 0 ? (
+                      <Badge variant="error" className="font-mono text-[10px] tabular-nums">
+                        {report.summary.error} {gt("Error")}
+                      </Badge>
+                    ) : null}
+                    <Badge
+                      variant={
+                        report.memoryRetrievalState === "fts5+sqlite-vec" ? "info" : "secondary"
+                      }
+                      className="text-[10px]"
+                    >
+                      {report.memoryRetrievalState === "fts5+sqlite-vec"
+                        ? gt("FTS5 + sqlite-vec hybrid")
+                        : gt("FTS5 degraded mode")}
                     </Badge>
-                  ) : null}
-                  <Badge
-                    variant={report.memoryRetrievalState === "fts5+sqlite-vec" ? "info" : "secondary"}
-                    className="text-[10px]"
-                  >
-                    {report.memoryRetrievalState === "fts5+sqlite-vec"
-                      ? gt("FTS5 + sqlite-vec hybrid")
-                      : gt("FTS5 degraded mode")}
-                  </Badge>
+                  </div>
                 </div>
-                <ChevronDownIcon className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-180" />
+                <ChevronDownIcon className="mt-0.5 ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-180" />
               </CollapsibleTrigger>
               <Button
                 type="button"

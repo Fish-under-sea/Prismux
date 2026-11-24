@@ -58,11 +58,13 @@ import { getAppModelOptionsForInstance } from "../../modelSelection";
 import {
   brandProviderInstanceEntries,
   deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
 } from "../../providerInstances";
 import { primaryServerProvidersAtom } from "../../state/server";
 import {
   AgentBrandLogo,
   formatAgentBrandName,
+  resolveProviderEntryDisplayName,
   toCanonicalChiefProviderId,
 } from "../agentBrand";
 import { DEFAULT_CHIEF_DISPLAY_NAME, normalizeChiefDisplayName } from "../chiefMention";
@@ -249,9 +251,9 @@ export function buildChiefProviderOptions(input: {
   readonly currentProvider?: string | null;
 }): ChiefProviderDropdownOption[] {
   const derivedEntries = deriveProviderInstanceEntries(input.serverProviders);
-  const brandedEntries = input.settings
-    ? brandProviderInstanceEntries(derivedEntries, input.settings)
-    : derivedEntries;
+  const brandedEntries = disambiguateProviderInstanceDisplayNames(
+    input.settings ? brandProviderInstanceEntries(derivedEntries, input.settings) : derivedEntries,
+  );
 
   interface ProviderBucket {
     value: string;
@@ -260,7 +262,8 @@ export function buildChiefProviderOptions(input: {
     available: boolean;
     models: ChiefModelDropdownOption[];
     seenModelSlugs: Set<string>;
-    customAcpNames: Set<string>;
+    customNames: Set<string>;
+    enabledInstanceCount: number;
   }
 
   const buckets = new Map<string, ProviderBucket>();
@@ -278,7 +281,8 @@ export function buildChiefProviderOptions(input: {
       available: false,
       models: [],
       seenModelSlugs: new Set<string>(),
-      customAcpNames: new Set<string>(),
+      customNames: new Set<string>(),
+      enabledInstanceCount: 0,
     };
     buckets.set(canonicalId, created);
     return created;
@@ -286,21 +290,28 @@ export function buildChiefProviderOptions(input: {
 
   for (const entry of brandedEntries) {
     const canonicalId = toCanonicalChiefProviderId(entry.driverKind);
-    const customLabel =
-      entry.driverKind === "acpRegistry" ? entry.displayName : undefined;
-    const bucket = ensureBucket(canonicalId, customLabel);
+    const resolvedEntryLabel = resolveProviderEntryDisplayName(entry);
+    const defaultBrandLabel = formatAgentBrandName(canonicalId);
+    const bucket = ensureBucket(canonicalId);
     if (entry.enabled) {
       bucket.configured = true;
+      bucket.enabledInstanceCount += 1;
+      if (
+        resolvedEntryLabel.length > 0 &&
+        resolvedEntryLabel.toLowerCase() !== defaultBrandLabel.toLowerCase()
+      ) {
+        bucket.customNames.add(resolvedEntryLabel);
+      }
     }
     if (entry.enabled && entry.isAvailable) {
       bucket.available = true;
     }
-    if (entry.driverKind === "acpRegistry" && entry.displayName.trim().length > 0) {
-      bucket.customAcpNames.add(entry.displayName.trim());
-      bucket.label =
-        bucket.customAcpNames.size === 1
-          ? formatAgentBrandName("acp", [...bucket.customAcpNames][0])
-          : formatAgentBrandName("acp");
+    if (bucket.enabledInstanceCount === 1 && bucket.customNames.size === 1) {
+      bucket.label = [...bucket.customNames][0]!;
+    } else if (entry.driverKind === "acpRegistry" && bucket.customNames.size === 1) {
+      bucket.label = [...bucket.customNames][0]!;
+    } else {
+      bucket.label = defaultBrandLabel;
     }
 
     const rawModelsBySlug = new Map<string, ServerProviderModel>();

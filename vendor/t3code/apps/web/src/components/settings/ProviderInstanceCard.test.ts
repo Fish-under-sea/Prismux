@@ -1,9 +1,11 @@
 import { RegistryContext } from "@effect/atom-react";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 import {
+  IsoDateTime,
   ProviderDriverKind,
   ProviderInstanceId,
   SecretProviderId,
+  type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { GTProvider, initializeGT } from "gt-react";
@@ -176,5 +178,76 @@ describe("ProviderInstanceCard dual-entry deletion controls", () => {
 
     const readOnlyHtml = renderCard({ mode: "editor", readOnly: true });
     expect(readOnlyHtml).not.toContain('data-provider-delete-detail="antigravity"');
+  });
+
+  it("renders high-contrast active highlight for Chat and CLI modes in both list and editor views", () => {
+    for (const mode of ["list", "editor"] as const) {
+      const chatHtml = renderCard({ mode, launchMode: "chat" });
+      const chatActiveButton = chatHtml.match(/<button[^>]*data-launch-mode="chat"[^>]*>/)?.[0] ?? "";
+      const cliInactiveButton = chatHtml.match(/<button[^>]*data-launch-mode="cli"[^>]*>/)?.[0] ?? "";
+      expect(chatActiveButton).toContain('data-active="true"');
+      expect(chatActiveButton).toContain('aria-checked="true"');
+      expect(chatActiveButton).toContain("bg-primary");
+      expect(chatActiveButton).toContain("text-primary-foreground");
+      expect(chatActiveButton).toContain("font-semibold");
+      expect(chatActiveButton).not.toContain("bg-background");
+      expect(cliInactiveButton).toContain('data-active="false"');
+      expect(cliInactiveButton).toContain("bg-transparent");
+      expect(cliInactiveButton).not.toContain("bg-primary");
+
+      const cliHtml = renderCard({ mode, launchMode: "cli" });
+      const chatInactiveButton = cliHtml.match(/<button[^>]*data-launch-mode="chat"[^>]*>/)?.[0] ?? "";
+      const cliActiveButton = cliHtml.match(/<button[^>]*data-launch-mode="cli"[^>]*>/)?.[0] ?? "";
+      expect(cliActiveButton).toContain('data-active="true"');
+      expect(cliActiveButton).toContain('aria-checked="true"');
+      expect(cliActiveButton).toContain("bg-primary");
+      expect(cliActiveButton).toContain("text-primary-foreground");
+      expect(cliActiveButton).toContain("font-semibold");
+      expect(cliActiveButton).not.toContain("bg-background");
+      expect(chatInactiveButton).toContain('data-active="false"');
+      expect(chatInactiveButton).toContain("bg-transparent");
+      expect(chatInactiveButton).not.toContain("bg-primary");
+    }
+  });
+
+  it("mounts ProviderCliVersionBadge in the editor header for live CLI versions", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const codexDriver = ProviderDriverKind.make("codex");
+    const liveProvider: ServerProvider = {
+      instanceId: codexId,
+      driver: codexDriver,
+      displayName: "Codex",
+      enabled: true,
+      installed: true,
+      version: "0.172.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: IsoDateTime.make("2026-11-24T00:00:00.000Z"),
+      models: [],
+      slashCommands: [],
+      skills: [],
+    };
+
+    const editorHtml = renderCard({
+      mode: "editor",
+      instanceId: codexId,
+      instance: { driver: codexDriver, displayName: "Codex", enabled: true },
+      liveProvider,
+      readOnly: false,
+    });
+    expect(editorHtml).toContain('data-cli-version-badge="codex"');
+    expect(editorHtml).toContain('data-cli-version-state="latest"');
+    expect(editorHtml).toContain("v0.172.0");
+
+    const readOnlyHtml = renderCard({
+      mode: "editor",
+      instanceId: codexId,
+      instance: { driver: codexDriver, displayName: "Codex", enabled: true },
+      liveProvider,
+      readOnly: true,
+    });
+    expect(readOnlyHtml).toContain('data-cli-version-badge="codex"');
+    expect(readOnlyHtml).toContain('data-cli-version-state="readonly"');
+    expect(readOnlyHtml).toContain("v0.172.0");
   });
 });

@@ -1,3 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import fs from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import path from "node:path";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   EnvironmentId,
@@ -34,6 +38,7 @@ import {
   countLeafPanes,
   DEFAULT_PRIMARY_PANE_ID,
   listLeafPaneIds,
+  sanitizeRehydratedState,
   useWorkspaceTabsStore,
   WORKSPACE_MAX_SPLIT_PANES,
 } from "./workspaceTabsStore";
@@ -391,6 +396,36 @@ describe("workspaceQuickLaunch.logic", () => {
     expect(filteredUrl.urlTarget?.normalizedUrl).toBe("http://localhost:3000/");
   });
 
+  it("syncs custom provider renames cleanly in quick launch options and never leaks UUID instance IDs", () => {
+    const codexDriver = ProviderDriverKind.make("codex");
+    const claudeDriver = ProviderDriverKind.make("claudeAgent");
+    const uuidId1 = ProviderInstanceId.make("codex_048c43c3-0798-480e-bc42-1a2b3c4d5e6f");
+    const uuidId2 = ProviderInstanceId.make("codex_88888888-1111-4222-8333-444444444444");
+
+    // 1. UUID instance explicitly renamed to "Codex" + default Claude renamed to "我的克劳德"
+    const renamedEntries = deriveProviderInstanceEntries([
+      makeProvider({ instanceId: uuidId1, driver: codexDriver, displayName: "Codex" }),
+      makeProvider({ instanceId: "claudeAgent", driver: claudeDriver, displayName: "我的克劳德" }),
+    ]);
+    const renamedAgents = buildQuickLaunchAgentOptions({
+      instanceEntries: renamedEntries,
+      historyThreads: [],
+    });
+    expect(renamedAgents.map((a) => a.displayName)).toEqual(["Codex", "我的克劳德"]);
+    expect(renamedAgents.every((a) => !/[0-9a-f]{8}/i.test(a.displayName))).toBe(true);
+
+    // 2. Multiple unnamed UUID Codex instances use clean minimal numbering "Codex", "Codex (2)"
+    const multiUnnamedEntries = deriveProviderInstanceEntries([
+      makeProvider({ instanceId: uuidId1, driver: codexDriver }),
+      makeProvider({ instanceId: uuidId2, driver: codexDriver }),
+    ]);
+    const multiUnnamedAgents = buildQuickLaunchAgentOptions({
+      instanceEntries: multiUnnamedEntries,
+      historyThreads: [],
+    });
+    expect(multiUnnamedAgents.map((a) => a.displayName)).toEqual(["Codex", "Codex (2)"]);
+  });
+
   it("resolves valid provider instance & default model for Codex, Claude Code, and Antigravity even before server hydration", () => {
     // 1. Hydrated server providers
     const entries = deriveProviderInstanceEntries([
@@ -716,37 +751,92 @@ describe("WorkspaceTabBar markup", () => {
     ).toBe(false);
   });
 
-  it("renders high-contrast glass readability classes and soft shadow on split agent blank stage subtitle", () => {
-    const html = renderToStaticMarkup(
+  it("never renders the retired simplistic '开始与 新会话 聊天' blank stage and purges legacy primary agent tabs on rehydration", () => {
+    const htmlWithGenericTitle = renderToStaticMarkup(
       <TooltipProvider>
         <WorkspacePaneContent
           paneId="pane-right"
           tab={{
-            id: "tab-agent-codex",
+            id: "tab-agent-legacy",
             kind: "agent",
-            title: "Codex",
-            providerId: "codex",
+            title: "新会话",
+            providerId: null,
             createdAt: 1,
             lastActiveAt: 1,
           }}
           activeHostThreadRef={null}
           environmentId={null}
-          instanceEntries={[]}
+          instanceEntries={deriveProviderInstanceEntries([
+            makeProvider({ instanceId: "codex", driver: "codex" }),
+          ])}
           modelOptionsByInstance={new Map()}
           historyThreads={[]}
           onUpdateTab={vi.fn()}
           onOpenHistoryThreadInPane={vi.fn()}
           onLaunchAgentPrompt={vi.fn()}
           onOpenQuickTool={vi.fn()}
+          onOpenConversationInMainChat={vi.fn()}
         />
       </TooltipProvider>,
     );
 
-    expect(html).toContain('data-workspace-agent-stage="true"');
-    expect(html).toContain("开始与 Codex 聊天");
-    expect(html).toContain('data-workspace-agent-subtitle="true"');
-    expect(html).toContain("让 Codex 检查代码、解释输出或进行修改");
-    expect(html).toContain("dark:[[data-pmx-glass=&#x27;1&#x27;]_&amp;]:text-white/92");
-    expect(html).toContain("text-shadow:0_1px_4px_rgba(0,0,0,0.58)");
+    expect(htmlWithGenericTitle).toContain('data-workspace-chat-handoff="true"');
+    expect(htmlWithGenericTitle).toContain("Codex");
+    expect(htmlWithGenericTitle).not.toContain('data-workspace-agent-stage="true"');
+    expect(htmlWithGenericTitle).not.toContain("开始与");
+    expect(htmlWithGenericTitle).not.toContain("新会话");
+    expect(htmlWithGenericTitle).not.toContain("检查代码、解释输出或进行修改");
+    expect(htmlWithGenericTitle).not.toContain("提问或描述要修改的任务");
+    expect(htmlWithGenericTitle).not.toContain("PowerShell 终端");
+    expect(htmlWithGenericTitle).not.toContain("查看差异");
+
+    // Rehydration strips legacy unbacked primary-pane "agent" tabs while keeping valid threads/tools.
+    const rehydrated = sanitizeRehydratedState({
+      layout: { type: "leaf", paneId: DEFAULT_PRIMARY_PANE_ID },
+      panes: {
+        [DEFAULT_PRIMARY_PANE_ID]: {
+          id: DEFAULT_PRIMARY_PANE_ID,
+          tabIds: ["tab-stale-agent", "tab-live-thread"],
+          activeTabId: "tab-stale-agent",
+        },
+      },
+      tabs: {
+        "tab-stale-agent": {
+          id: "tab-stale-agent",
+          kind: "agent",
+          title: "新会话",
+          providerId: null,
+          createdAt: 1,
+          lastActiveAt: 1,
+        },
+        "tab-live-thread": {
+          id: "tab-live-thread",
+          kind: "thread",
+          title: "主会话",
+          providerId: "codex",
+          environmentId: ENV_LOCAL,
+          threadId: THREAD_A,
+          createdAt: 2,
+          lastActiveAt: 2,
+        },
+      },
+      focusedPaneId: DEFAULT_PRIMARY_PANE_ID,
+      primaryPaneId: DEFAULT_PRIMARY_PANE_ID,
+      terminalCounter: 0,
+    });
+    expect(rehydrated.tabs["tab-stale-agent"]).toBeUndefined();
+    expect(rehydrated.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual(["tab-live-thread"]);
+    expect(rehydrated.panes[DEFAULT_PRIMARY_PANE_ID]?.activeTabId).toBe("tab-live-thread");
+
+    // Verify WorkspaceSplitContainer routes primary-pane conversation tabs to full ChatView and never downgrades pruned drafts to kind: "agent".
+    const workspaceDir = path.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const splitSource = fs.readFileSync(
+      path.join(workspaceDir, "WorkspaceSplitContainer.tsx"),
+      "utf8",
+    );
+    expect(splitSource).toContain('activeTab.kind === "agent"');
+    expect(splitSource).not.toContain('kind: "agent",\n          draftId: null');
   });
 });

@@ -96,6 +96,7 @@ import { AgentInstallPrompt } from "./AgentInstallPrompt";
 import type { ProviderLaunchMode } from "./prismuxProviderMode";
 import type { ProviderRemovalKind } from "./ProviderSettingsPanel.logic";
 import { formatAgentBrandName } from "../../prismux/agentBrand";
+import { ProviderCliVersionBadge } from "../../prismux/providers/ProviderCliVersionBadge";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
@@ -1058,9 +1059,16 @@ export function ProviderInstanceCard({
     <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">{headerAction}</span>
   ) : null;
 
-  const versionCodeNode = versionLabel ? (
-    <code className="text-xs text-muted-foreground">{versionLabel}</code>
-  ) : null;
+  const versionCodeNode = (
+    <ProviderCliVersionBadge
+      provider={cliMeta?.id ?? String(instance.driver)}
+      currentVersion={liveProvider?.version ?? null}
+      displayName={displayName}
+      environmentId={environmentId}
+      readOnly={readOnly}
+      disableAutoCheck={isMissingCli}
+    />
+  );
 
   const statusDotNode =
     statusKey === "warning" || statusKey === "error" ? (
@@ -1263,20 +1271,26 @@ export function ProviderInstanceCard({
 
   const cliMissingForLaunchMode = isMissingCli;
   const effectiveDisplayedLaunchMode = cliMissingForLaunchMode ? "chat" : launchMode;
+  const launchModeActiveOptionClass =
+    "border border-primary/85 bg-primary font-semibold text-primary-foreground shadow-[0_1px_2px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.24)] [@media(forced-colors:active)]:border-[Highlight] [@media(forced-colors:active)]:bg-[Highlight] [@media(forced-colors:active)]:text-[HighlightText]";
+  const launchModeInactiveOptionClass =
+    "border border-transparent bg-transparent font-medium text-foreground/60 hover:bg-black/[0.06] hover:text-foreground dark:text-white/55 dark:hover:bg-white/10 dark:hover:text-white [[data-pmx-glass='1']_&]:text-white/58 [[data-pmx-glass='1']_&]:hover:bg-white/12 [[data-pmx-glass='1']_&]:hover:text-white [html:not(.dark)[data-pmx-glass='1']_&]:text-slate-900/60 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-black/[0.07] [html:not(.dark)[data-pmx-glass='1']_&]:hover:text-slate-950";
   const cliModeButton = (
     <button
       type="button"
       role="radio"
+      data-launch-mode="cli"
+      data-active={effectiveDisplayedLaunchMode === "cli" ? "true" : "false"}
       tabIndex={effectiveDisplayedLaunchMode === "cli" && !cliMissingForLaunchMode ? 0 : -1}
       disabled={cliMissingForLaunchMode}
       aria-checked={effectiveDisplayedLaunchMode === "cli"}
       className={cn(
-        "inline-flex h-5 items-center justify-center rounded-sm px-1 font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "inline-flex h-5 cursor-pointer items-center justify-center rounded-sm px-1 transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring",
         cliMissingForLaunchMode
-          ? "cursor-not-allowed text-muted-foreground/40"
+          ? "cursor-not-allowed border border-transparent bg-transparent font-medium text-muted-foreground/40"
           : effectiveDisplayedLaunchMode === "cli"
-            ? "bg-background text-foreground shadow-2xs"
-            : "text-muted-foreground hover:text-foreground",
+            ? launchModeActiveOptionClass
+            : launchModeInactiveOptionClass,
       )}
       onClick={(event) => {
         event.stopPropagation();
@@ -1297,7 +1311,7 @@ export function ProviderInstanceCard({
           aria-label={gt("{provider} default launch mode", { provider: displayName })}
           data-provider-mode-toggle={instanceId}
           data-cli-missing={cliMissingForLaunchMode ? "true" : "false"}
-          className="inline-grid h-6 w-[5.25rem] shrink-0 grid-cols-2 items-center rounded-md border border-border/70 bg-muted/40 p-0.5 text-2xs"
+          className="inline-grid h-6 w-[5.25rem] shrink-0 grid-cols-2 items-center gap-0.5 rounded-md border border-black/14 bg-black/[0.06] p-0.5 text-2xs shadow-inner dark:border-white/16 dark:bg-black/45 [[data-pmx-glass='1']_&]:border-white/22 [[data-pmx-glass='1']_&]:bg-black/38 [html:not(.dark)[data-pmx-glass='1']_&]:border-black/14 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/[0.08]"
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => {
             if (event.key === "ArrowLeft" || event.key === "Home") {
@@ -1325,13 +1339,15 @@ export function ProviderInstanceCard({
           <button
             type="button"
             role="radio"
+            data-launch-mode="chat"
+            data-active={effectiveDisplayedLaunchMode === "chat" ? "true" : "false"}
             tabIndex={effectiveDisplayedLaunchMode === "chat" ? 0 : -1}
             aria-checked={effectiveDisplayedLaunchMode === "chat"}
             className={cn(
-              "inline-flex h-5 items-center justify-center rounded-sm px-1 font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "inline-flex h-5 cursor-pointer items-center justify-center rounded-sm px-1 transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring",
               effectiveDisplayedLaunchMode === "chat"
-                ? "bg-background text-foreground shadow-2xs"
-                : "text-muted-foreground hover:text-foreground",
+                ? launchModeActiveOptionClass
+                : launchModeInactiveOptionClass,
             )}
             onClick={(event) => {
               event.stopPropagation();

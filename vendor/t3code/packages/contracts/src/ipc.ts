@@ -1212,6 +1212,9 @@ export interface PrismuxDesktopBridge {
     extra?: { readonly mobileUrl?: string | null },
   ) => Promise<PrismuxSetTrayRunningAgentsResult>;
   onTrayAction?: (listener: (payload: PrismuxTrayActionPayload) => void) => () => void;
+  reloadWindow?: () => Promise<void>;
+  forceReloadWindow?: () => Promise<void>;
+  toggleDevTools?: () => Promise<void>;
 }
 
 export interface DesktopBridge {

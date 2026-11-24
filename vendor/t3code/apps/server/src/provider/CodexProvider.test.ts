@@ -13,6 +13,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
   applyPreferredCodexDefaultModel,
+  codexAppServerEnvironment,
   codexCustomEndpoint,
   codexRoutesSpendNativeQuota,
   makeCodexSkillsProbe,
@@ -387,4 +388,15 @@ it("normalizes fallback additionalSpeedTiers labels and full Codex reasoning eff
       ["default:Standard", "priority:Fast", "ultrafast:Ultrafast", "flex:Flex"],
     );
   }
+});
+
+it("strips ELECTRON_RUN_AS_NODE from codexAppServerEnvironment while preserving originator and caller env", () => {
+  const env = codexAppServerEnvironment({
+    ELECTRON_RUN_AS_NODE: "1",
+    CUSTOM_FLAG: "yes",
+  });
+  assert.strictEqual(env.ELECTRON_RUN_AS_NODE, undefined);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(env, "ELECTRON_RUN_AS_NODE"), true);
+  assert.strictEqual(env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, "T3 Code");
+  assert.strictEqual(env.CUSTOM_FLAG, "yes");
 });

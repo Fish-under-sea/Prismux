@@ -30,7 +30,7 @@ function ToggleGroup({
           ? "*:pointer-coarse:after:min-w-auto"
           : "*:pointer-coarse:after:min-h-auto",
         variant === "segmented"
-          ? "gap-0.5 rounded-lg border border-border/75 bg-muted/80 p-0.5 dark:border-white/12 dark:bg-black/30"
+          ? "gap-0.5 rounded-lg border border-border/75 bg-muted/80 p-0.5 dark:border-white/12 dark:bg-black/30 shadow-inner [[data-pmx-glass='1']_&]:border-white/22 [[data-pmx-glass='1']_&]:bg-black/38 [html:not(.dark)[data-pmx-glass='1']_&]:border-black/14 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/[0.08]"
           : variant === "default"
             ? "gap-0.5"
             : orientation === "horizontal"

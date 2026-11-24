@@ -125,6 +125,51 @@ export type DesktopWindowError =
 export type MainWindowZoomDirection = "in" | "out" | "reset";
 export type MainWindowContentsCommand = "reload" | "forceReload" | "toggleDevTools";
 
+export function toggleWebContentsDevTools(
+  webContents: Pick<Electron.WebContents, "toggleDevTools"> &
+    Partial<Pick<Electron.WebContents, "isDevToolsOpened" | "closeDevTools" | "openDevTools">>,
+): void {
+  if (
+    typeof webContents.isDevToolsOpened === "function" &&
+    typeof webContents.closeDevTools === "function" &&
+    typeof webContents.openDevTools === "function"
+  ) {
+    if (webContents.isDevToolsOpened()) {
+      webContents.closeDevTools();
+    } else {
+      webContents.openDevTools();
+    }
+    return;
+  }
+  webContents.toggleDevTools();
+}
+
+export function matchMainWindowContentsShortcut(
+  input: Pick<
+    Electron.Input,
+    "type" | "key" | "code" | "control" | "meta" | "shift" | "alt" | "isAutoRepeat"
+  >,
+  platform: NodeJS.Platform,
+): Exclude<MainWindowContentsCommand, "reload"> | null {
+  if (input.type !== "keyDown" || input.isAutoRepeat) return null;
+  const key = input.key.toLowerCase();
+  const code = typeof input.code === "string" ? input.code : "";
+  if (platform === "darwin") {
+    if (input.meta && input.shift && !input.alt && !input.control && (key === "r" || code === "KeyR")) {
+      return "forceReload";
+    }
+    if (input.meta && input.alt && !input.shift && !input.control && (key === "i" || code === "KeyI")) {
+      return "toggleDevTools";
+    }
+    return null;
+  }
+  if (input.control && input.shift && !input.alt && !input.meta) {
+    if (key === "r" || code === "KeyR") return "forceReload";
+    if (key === "i" || code === "KeyI") return "toggleDevTools";
+  }
+  return null;
+}
+
 export class DesktopWindow extends Context.Service<
   DesktopWindow,
   {
@@ -841,6 +886,18 @@ export const make = Effect.gen(function* () {
     window.webContents.on("before-input-event", (event, input) => {
       quitShortcutHandler(event, input);
       if (window.isDestroyed()) return;
+      // Guarantee Ctrl+Shift+R / Cmd+Shift+R (force reload) and Ctrl+Shift+I / Alt+Cmd+I (DevTools)
+      // work reliably in both dev and packaged builds even with hidden/auto-hidden native menu bars.
+      const shortcutCommand = matchMainWindowContentsShortcut(input, environment.platform);
+      if (shortcutCommand !== null) {
+        event.preventDefault();
+        if (shortcutCommand === "forceReload") {
+          window.webContents.reloadIgnoringCache();
+        } else {
+          toggleWebContentsDevTools(window.webContents);
+        }
+        return;
+      }
       // Cmd/Ctrl+W reaches the renderer; DevTools uses the native menu shortcut.
       window.webContents.setIgnoreMenuShortcuts(
         (environment.platform === "darwin" ? input.meta : input.control) &&
@@ -1292,7 +1349,7 @@ export const make = Effect.gen(function* () {
       const webContents = window.value.webContents;
       if (command === "reload") webContents.reload();
       else if (command === "forceReload") webContents.reloadIgnoringCache();
-      else webContents.toggleDevTools();
+      else toggleWebContentsDevTools(webContents);
     }),
     syncAppearance: Effect.gen(function* () {
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;

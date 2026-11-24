@@ -8,9 +8,12 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import {
   AGENT_BRAND_BREATHE_CSS,
   AgentBrandLogo,
+  containsUuidNoise,
   formatAgentBrandName,
   getAgentBrandMeta,
   resolveAgentBrandId,
+  resolveProviderEntryDisplayName,
+  stripUuidNoise,
   toCanonicalChiefProviderId,
 } from "./agentBrand";
 import { PrismuxChiefStatusPill } from "./PrismuxChiefStatusPill";
@@ -49,6 +52,29 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(formatAgentBrandName("my-custom-acp")).toBe("My Custom ACP");
     expect(formatAgentBrandName("acmeCodeAgent")).toBe("Acme Code Agent");
     expect(formatAgentBrandName("  ")).toBe("Agent");
+  });
+
+  it("scrubs UUID instance IDs and humanized UUID strings while preserving user custom renames", () => {
+    expect(formatAgentBrandName("codex_048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Codex");
+    expect(formatAgentBrandName("codex-048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Codex");
+    expect(
+      formatAgentBrandName("codex", "Codex 048c43c3 0798 480e Bc42 1..."),
+    ).toBe("Codex");
+    expect(
+      formatAgentBrandName("claudeAgent_048c43c3-0798-480e-bc42-1a2b3c4d5e6f"),
+    ).toBe("Claude Code");
+    expect(formatAgentBrandName("048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Agent");
+    expect(formatAgentBrandName("codex", "主力 Codex")).toBe("主力 Codex");
+    expect(formatAgentBrandName("codex", "Codex (2)")).toBe("Codex (2)");
+    expect(
+      resolveProviderEntryDisplayName({
+        driverKind: "codex",
+        instanceId: "codex_048c43c3-0798-480e-bc42-1a2b3c4d5e6f",
+        displayName: "工作 Codex",
+      }),
+    ).toBe("工作 Codex");
+    expect(containsUuidNoise("Codex 048c43c3 0798 480e Bc42 1...")).toBe(true);
+    expect(stripUuidNoise("Codex 048c43c3 0798 480e Bc42 1...")).toBe("Codex");
   });
 
   it("resolves brand IDs and canonical Chief provider IDs consistently", () => {

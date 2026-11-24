@@ -927,6 +927,16 @@ const NPM_EXECUTABLE_SHIM_PREFIX = [
   "CALL :find_dp0",
 ];
 const NPM_EXECUTABLE_SHIM_RUN = /^"%dp0%\\([^"%]+\.exe)" +%\*$/;
+const NPM_NODE_SHIM_BRANCH = [
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ") ELSE (",
+  '  SET "_prog=node"',
+  "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+  ")",
+];
+const NPM_NODE_SHIM_RUN =
+  /^(?:endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & )?"%_prog%" +((?:--[^"% ]+ +)*)"%dp0%\\([^"%]+)" +%\*$/;
 
 function readFileSyncOrUndefined(filePath: string): string | undefined {
   try {
@@ -956,6 +966,52 @@ export function npmShimExecutable(
   if (target === undefined) return undefined;
   const executable = path.join(path.dirname(shimPath), target);
   return isFile(executable) ? executable : undefined;
+}
+
+/**
+ * Resolve standard npm Node.js `.cmd` shims (such as `codex.cmd`) directly into
+ * `node.exe <script> ...args` with `shell: false`, avoiding cmd.exe batch parsing
+ * failures and keeping the child process inside libuv's kill-on-close job object.
+ */
+export function npmNodeShimCommand(
+  shimPath: string,
+  args: ReadonlyArray<string>,
+  env: NodeJS.ProcessEnv,
+  resolveExecutable: SpawnExecutableResolver = resolveSpawnExecutableWithNode,
+  readFile: (filePath: string) => string | undefined = readFileSyncOrUndefined,
+  isFile: (filePath: string) => boolean = isFileSync,
+): ResolvedSpawnCommand | undefined {
+  const path = NodePath.win32;
+  if (path.extname(shimPath).toLowerCase() !== ".cmd") return undefined;
+  const lines = readFile(shimPath)
+    ?.split(/\r?\n/)
+    .filter((line) => line.length > 0);
+  const expectedPrefix = [...NPM_EXECUTABLE_SHIM_PREFIX, ...NPM_NODE_SHIM_BRANCH];
+  if (lines?.length !== expectedPrefix.length + 1) return undefined;
+  if (expectedPrefix.some((expected, index) => lines[index] !== expected)) {
+    return undefined;
+  }
+  const match = NPM_NODE_SHIM_RUN.exec(lines.at(-1)!);
+  if (!match) return undefined;
+  const rawFlags = match[1]?.trim() ?? "";
+  const target = match[2];
+  if (!target) return undefined;
+  const shimDir = path.dirname(shimPath);
+  const scriptPath = path.join(shimDir, target);
+  if (!isFile(scriptPath)) return undefined;
+  const bundledNode = path.join(shimDir, "node.exe");
+  const nodeExecutable = isFile(bundledNode)
+    ? bundledNode
+    : resolveExecutable("node", "win32", env);
+  if (!nodeExecutable || path.extname(nodeExecutable).toLowerCase() !== ".exe") {
+    return undefined;
+  }
+  const nodeFlags = rawFlags.length > 0 ? rawFlags.split(/ +/) : [];
+  return {
+    command: nodeExecutable,
+    args: [...nodeFlags, scriptPath, ...args],
+    shell: false,
+  };
 }
 
 export type XcodeGitLocator = (env: NodeJS.ProcessEnv) => string | undefined;
@@ -1128,6 +1184,12 @@ export const resolveSpawnCommand = Effect.fnUntraced(function* (
   const shimExecutable = options.bypassNpmShim ? npmShimExecutable(resolvedCommand) : undefined;
   if (shimExecutable !== undefined) {
     return { command: shimExecutable, args: [...args], shell: false };
+  }
+  const nodeShimCommand = options.bypassNpmShim
+    ? npmNodeShimCommand(resolvedCommand, args, env, resolveExecutable)
+    : undefined;
+  if (nodeShimCommand !== undefined) {
+    return nodeShimCommand;
   }
 
   // Build the escaped command line without separate args to avoid Node DEP0190 with shell:true.

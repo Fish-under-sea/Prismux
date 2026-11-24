@@ -3672,6 +3672,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.npmRebuild = false;
     buildConfig.nsis = {
       oneClick: false,
+      perMachine: false,
+      selectPerMachineByDefault: false,
       allowToChangeInstallationDirectory: true,
       createDesktopShortcut: true,
       createStartMenuShortcut: true,

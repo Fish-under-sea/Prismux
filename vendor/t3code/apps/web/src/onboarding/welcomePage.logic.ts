@@ -87,9 +87,51 @@ export function turnedOnInstance(instance: ProviderInstanceConfig): ProviderInst
   };
 }
 
-/** A CLI the server knows is too old or otherwise broken for T3 Code; Settings updates it. */
+/** A CLI the server knows is too old or otherwise broken for Prismux; Settings updates it. */
 export function isBrokenVersion(provider: ServerProvider) {
   return provider.installed && provider.compatibilityAdvisory?.status === "broken";
+}
+
+/**
+ * Identifies Prismux's primary featured agents (such as Antigravity, whether native or official
+ * `antigravity-acp`) so new users immediately see them alongside Claude Code and Codex with
+ * one-click enablement instead of having to expand the secondary fold first.
+ */
+export function isFeaturedWelcomeAgent(
+  provider: ServerProvider,
+  acpRegistryAgentId?: string | undefined,
+): boolean {
+  if (provider.driver === "antigravity") return true;
+  if (
+    provider.driver === "acpRegistry" &&
+    acpRegistryAgentId?.trim().toLowerCase() === "antigravity-acp"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Splits `available` agents into featured primary agents (surfaced right below detected agents)
+ * and remaining agents kept inside the collapsible "Add more agents" fold.
+ */
+export function partitionFeaturedWelcomeAgents(
+  available: ReadonlyArray<ServerProvider>,
+  resolveAcpRegistryAgentId?: (provider: ServerProvider) => string | undefined,
+): {
+  readonly featured: ReadonlyArray<ServerProvider>;
+  readonly secondary: ReadonlyArray<ServerProvider>;
+} {
+  const featured: ServerProvider[] = [];
+  const secondary: ServerProvider[] = [];
+  for (const provider of available) {
+    if (isFeaturedWelcomeAgent(provider, resolveAcpRegistryAgentId?.(provider))) {
+      featured.push(provider);
+    } else {
+      secondary.push(provider);
+    }
+  }
+  return { featured, secondary };
 }
 
 /**

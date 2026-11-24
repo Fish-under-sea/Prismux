@@ -1,6 +1,7 @@
 import {
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
+  ProviderInstanceId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -89,6 +90,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
     readonly terminalId?: string;
     readonly location?: TerminalLaunchLocation | null;
     readonly extraEnv?: Record<string, string>;
+    readonly providerInstanceId?: string | null;
     readonly stopOnSettle?: boolean;
     readonly size?: { readonly cols: number; readonly rows: number };
   }) => {
@@ -97,6 +99,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
     if (!location) return null;
     const terminalId = input.terminalId ?? allocateTerminalId();
     input.place(terminalId);
+    const trimmedProviderInstanceId = input.providerInstanceId?.trim() || null;
     const result = openTerminalCommand({
       environmentId: threadRef.environmentId,
       input: {
@@ -104,6 +107,9 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
         terminalId,
         cwd: location.cwd,
         ...(location.worktreePath !== null ? { worktreePath: location.worktreePath } : {}),
+        ...(trimmedProviderInstanceId !== null
+          ? { providerInstanceId: ProviderInstanceId.make(trimmedProviderInstanceId) }
+          : {}),
         env: projectScriptRuntimeEnv({
           project: { cwd: project.workspaceRoot },
           worktreePath: location.worktreePath,

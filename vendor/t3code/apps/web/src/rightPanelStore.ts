@@ -32,6 +32,7 @@ import {
   type LinkedThreadSurface,
 } from "./linkedThreadSurface";
 import type { ThreadPanelPresentation } from "./rightPanelLayout";
+import { formatAgentBrandName } from "./prismux/agentBrand";
 import type { ChatFileAttachment } from "./types";
 
 const RIGHT_PANEL_KINDS = [
@@ -667,7 +668,7 @@ const singletonSurface = (
       return {
         id: `agent-session:${Date.now().toString(36)}`,
         kind: "agent-session",
-        title: "新会话",
+        title: "Codex",
         providerId: "codex",
       };
   }
@@ -1256,7 +1257,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const nextSurface: AgentSessionSurface = {
               id: surfaceId,
               kind: "agent-session",
-              title: input.title.trim() || "新会话",
+              title: input.title.trim() || formatAgentBrandName(input.providerId),
               providerId: input.providerId,
               ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),

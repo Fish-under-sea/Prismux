@@ -37,7 +37,12 @@ import { ComposerHandleContext } from "../../composerHandleContext";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
-import { AgentBrandLogo, formatAgentBrandName } from "../../prismux/agentBrand";
+import {
+  AgentBrandLogo,
+  formatAgentBrandName,
+  resolveAgentBrandId,
+  resolveProviderEntryDisplayName,
+} from "../../prismux/agentBrand";
 import {
   providerInstanceEntriesFor,
   type ProviderInstanceEntry,
@@ -111,7 +116,18 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
   const [sending, setSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const brandName = formatAgentBrandName(surface.providerId || surface.title);
+  const rawTitleTrimmed = surface.title?.trim() ?? "";
+  const sanitizedSurfaceTitle =
+    rawTitleTrimmed.length > 0 &&
+    !["新会话", "会话", "新标签页", "new thread", "new session", "new chat"].includes(
+      rawTitleTrimmed.toLowerCase(),
+    )
+      ? rawTitleTrimmed
+      : undefined;
+  const fallbackBrandName = formatAgentBrandName(
+    surface.providerId || sanitizedSurfaceTitle || "codex",
+    sanitizedSurfaceTitle,
+  );
 
   const resolvedEnvironmentId: EnvironmentId | null =
     surface.environmentId ??
@@ -147,18 +163,22 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
       const exact = instanceEntries.find((entry) => entry.instanceId === surface.instanceId);
       if (exact) return exact;
     }
-    const targetName = brandName.toLowerCase();
+    const targetName = fallbackBrandName.toLowerCase();
     return (
       instanceEntries.find(
         (entry) =>
           entry.enabled &&
-          formatAgentBrandName(entry.driverKind, entry.displayName).toLowerCase() === targetName,
+          resolveProviderEntryDisplayName(entry).toLowerCase() === targetName,
       ) ??
       instanceEntries.find((entry) => entry.enabled) ??
       instanceEntries[0] ??
       null
     );
-  }, [brandName, instanceEntries, surface.instanceId]);
+  }, [fallbackBrandName, instanceEntries, surface.instanceId]);
+
+  const brandName = matchedEntry
+    ? resolveProviderEntryDisplayName(matchedEntry)
+    : fallbackBrandName;
 
   const activeInstanceId = matchedEntry?.instanceId ?? null;
   const activeModel =
@@ -168,6 +188,9 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
     DEFAULT_MODEL;
 
   const relatedThreads = useMemo(() => {
+    const targetBrandId = resolveAgentBrandId(
+      matchedEntry?.driverKind ?? surface.providerId ?? brandName,
+    );
     const targetLower = brandName.toLowerCase();
     return [...visibleThreads]
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
@@ -181,12 +204,18 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
         }
         const instanceId = thread.modelSelection?.instanceId ?? null;
         if (!instanceId) return false;
+        if (matchedEntry && instanceId === matchedEntry.instanceId) return true;
         const entry = instanceEntries.find((candidate) => candidate.instanceId === instanceId);
-        const label = formatAgentBrandName(entry?.driverKind ?? instanceId, entry?.displayName);
+        if (targetBrandId !== "custom") {
+          return resolveAgentBrandId(entry?.driverKind ?? instanceId) === targetBrandId;
+        }
+        const label = entry
+          ? resolveProviderEntryDisplayName(entry)
+          : formatAgentBrandName(instanceId);
         return label.toLowerCase() === targetLower;
       })
       .slice(0, 3);
-  }, [brandName, hostThreadRef, instanceEntries, visibleThreads]);
+  }, [brandName, hostThreadRef, instanceEntries, matchedEntry, surface.providerId, visibleThreads]);
 
   const resolveProjectRefForCreation = async (): Promise<ScopedProjectRef | null> => {
     const firstOpen = projects.find((project) => project.archivedAt == null);
@@ -505,7 +534,7 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
                           (entry) => entry.instanceId === nextInstanceId,
                         );
                         const nextBrand = nextEntry
-                          ? formatAgentBrandName(nextEntry.driverKind, nextEntry.displayName)
+                          ? resolveProviderEntryDisplayName(nextEntry)
                           : brandName;
                         onUpdateSurface({
                           instanceId: nextInstanceId,

@@ -12,21 +12,11 @@ import {
   ExternalLinkIcon,
   GitCompareArrowsIcon,
   GlobeIcon,
-  MessageSquareIcon,
+  MessageSquarePlusIcon,
   RefreshCwIcon,
-  SendHorizontalIcon,
   TerminalIcon,
 } from "lucide-react";
-import {
-  lazy,
-  memo,
-  Suspense,
-  useCallback,
-  useMemo,
-  useState,
-  type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { lazy, memo, Suspense, useCallback, useMemo, useState, type FormEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { ComposerHandleContext } from "../../composerHandleContext";
@@ -34,13 +24,16 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
 import type { TerminalContextSelection } from "../../lib/terminalContext";
-import { AgentBrandLogo, formatAgentBrandName } from "../../prismux/agentBrand";
+import {
+  AgentBrandLogo,
+  formatAgentBrandName,
+  resolveProviderEntryDisplayName,
+} from "../../prismux/agentBrand";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { useRightPanelStore, type RightPanelSurface } from "../../rightPanelStore";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { BackgroundThreadContext } from "../chat/backgroundThread";
-import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { PersistentThreadTerminalPanel } from "../PersistentThreadTerminals";
 import { PhoneSimulatorBlankStage } from "../RightPanelTabs";
@@ -55,6 +48,42 @@ const DiffPanel = lazy(() => import("../DiffPanel"));
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
+
+const GENERIC_SESSION_LABELS = new Set([
+  "新会话",
+  "会话",
+  "新标签页",
+  "new thread",
+  "new session",
+  "new chat",
+  "untitled",
+]);
+
+function resolveConversationBrandName(
+  tab: WorkspaceTab,
+  instanceEntries: ReadonlyArray<ProviderInstanceEntry>,
+): string {
+  if (tab.instanceId) {
+    const exact = instanceEntries.find((entry) => entry.instanceId === tab.instanceId);
+    if (exact) return resolveProviderEntryDisplayName(exact);
+  }
+  const rawProvider = tab.providerId?.trim() ?? "";
+  if (rawProvider.length > 0 && !GENERIC_SESSION_LABELS.has(rawProvider.toLowerCase())) {
+    const formatted = formatAgentBrandName(rawProvider);
+    const matched = instanceEntries.find(
+      (entry) =>
+        entry.enabled &&
+        resolveProviderEntryDisplayName(entry).toLowerCase() === formatted.toLowerCase(),
+    );
+    return matched ? resolveProviderEntryDisplayName(matched) : formatted;
+  }
+  const rawTitle = tab.title?.trim() ?? "";
+  if (rawTitle.length > 0 && !GENERIC_SESSION_LABELS.has(rawTitle.toLowerCase())) {
+    return formatAgentBrandName(rawTitle, rawTitle);
+  }
+  const defaultEntry = instanceEntries.find((entry) => entry.enabled) ?? instanceEntries[0] ?? null;
+  return defaultEntry ? resolveProviderEntryDisplayName(defaultEntry) : "Agent";
+}
 
 export interface WorkspacePaneContentProps {
   readonly paneId: string;
@@ -78,6 +107,7 @@ export interface WorkspacePaneContentProps {
     readonly prompt: string;
   }) => void;
   readonly onOpenQuickTool: (tool: "terminal" | "diff" | "browser" | "simulator", paneId: string) => void;
+  readonly onOpenConversationInMainChat?: ((paneId: string, tab: WorkspaceTab) => void) | undefined;
 }
 
 const STAGE_TITLE_GLASS_CLASS =
@@ -385,228 +415,41 @@ function EmbeddedSimulatorTabView() {
   );
 }
 
-function AgentBlankStageView(props: {
+function ConversationMainChatHandoffView(props: {
   readonly paneId: string;
   readonly tab: WorkspaceTab;
-  readonly environmentId: EnvironmentId | null;
   readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
-  readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
-  readonly historyThreads: ReadonlyArray<QuickLaunchHistoryThread>;
-  readonly onUpdateTab: WorkspacePaneContentProps["onUpdateTab"];
-  readonly onOpenHistoryThreadInPane: WorkspacePaneContentProps["onOpenHistoryThreadInPane"];
-  readonly onLaunchAgentPrompt: WorkspacePaneContentProps["onLaunchAgentPrompt"];
-  readonly onOpenQuickTool: WorkspacePaneContentProps["onOpenQuickTool"];
+  readonly onOpenConversationInMainChat?: ((paneId: string, tab: WorkspaceTab) => void) | undefined;
 }) {
-  const {
-    paneId,
-    tab,
-    environmentId,
-    instanceEntries,
-    modelOptionsByInstance,
-    historyThreads,
-    onUpdateTab,
-    onOpenHistoryThreadInPane,
-    onLaunchAgentPrompt,
-    onOpenQuickTool,
-  } = props;
-
-  const [prompt, setPrompt] = useState("");
-  const brandName = formatAgentBrandName(tab.providerId ?? tab.title);
-
-  const matchedEntry = useMemo(() => {
-    if (tab.instanceId) {
-      const exact = instanceEntries.find((entry) => entry.instanceId === tab.instanceId);
-      if (exact) return exact;
-    }
-    const targetName = brandName.toLowerCase();
-    return (
-      instanceEntries.find(
-        (entry) =>
-          entry.enabled &&
-          formatAgentBrandName(entry.driverKind, entry.displayName).toLowerCase() === targetName,
-      ) ??
-      instanceEntries.find((entry) => entry.enabled) ??
-      instanceEntries[0] ??
-      null
-    );
-  }, [brandName, instanceEntries, tab.instanceId]);
-
-  const activeInstanceId = matchedEntry?.instanceId ?? null;
-  const activeModel =
-    tab.model ??
-    matchedEntry?.models.find((m) => m.isDefault && !m.isCustom)?.slug ??
-    matchedEntry?.models[0]?.slug ??
-    "";
-
-  const relatedThreads = useMemo(() => {
-    const targetLower = brandName.toLowerCase();
-    return historyThreads
-      .filter((thread) => {
-        if (!thread.providerId) return false;
-        return formatAgentBrandName(thread.providerId).toLowerCase() === targetLower;
-      })
-      .slice(0, 4);
-  }, [brandName, historyThreads]);
-
-  const handleSubmit = () => {
-    const trimmed = prompt.trim();
-    if (!trimmed) return;
-    onLaunchAgentPrompt({
-      paneId,
-      tabId: tab.id,
-      providerId: tab.providerId ?? matchedEntry?.driverKind ?? "codex",
-      instanceId: activeInstanceId,
-      model: activeModel || null,
-      prompt: trimmed,
-    });
-    setPrompt("");
-  };
-
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      handleSubmit();
-    }
-  };
+  const { paneId, tab, instanceEntries, onOpenConversationInMainChat } = props;
+  const brandName = resolveConversationBrandName(tab, instanceEntries);
 
   return (
     <PrismuxStageFrame
-      innerDataAttributes={{ "data-workspace-agent-stage": "true" }}
-      innerClassName="items-center justify-center overflow-y-auto px-5 py-8"
+      innerDataAttributes={{ "data-workspace-chat-handoff": "true" }}
+      innerClassName="items-center justify-center gap-3 p-6 text-center"
     >
-      <div className="flex w-full max-w-xl flex-col items-center gap-5">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex size-12 items-center justify-center rounded-2xl border border-border/75 bg-muted/40 shadow-xs [[data-pmx-glass='1']_&]:border-white/25 [[data-pmx-glass='1']_&]:bg-background/55">
-            <AgentBrandLogo provider={tab.providerId ?? brandName} size={26} />
-          </div>
-          <div className="space-y-1.5">
-            <h2
-              data-workspace-agent-title="true"
-              className={cn("text-base font-semibold tracking-tight", STAGE_TITLE_GLASS_CLASS)}
-            >
-              开始与 {brandName} 聊天
-            </h2>
-            <p
-              data-workspace-agent-subtitle="true"
-              className={cn("text-xs font-medium", STAGE_SUBTITLE_GLASS_CLASS)}
-            >
-              让 {brandName} 检查代码、解释输出或进行修改
-            </p>
-          </div>
-        </div>
-
-        {/* Real interactive composer card */}
-        <div
-          data-pmx-glass-zone="composer"
-          className="flex w-full flex-col gap-2 rounded-2xl border border-border/75 bg-card/85 p-3 shadow-sm"
-        >
-          <textarea
-            rows={3}
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={`向 ${brandName} 提问或描述要修改的任务...`}
-            className="w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/75 dark:[[data-pmx-glass='1']_&]:placeholder:text-white/75"
-          />
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <div className="min-w-0">
-              {activeInstanceId && instanceEntries.length > 0 ? (
-                <ProviderModelPicker
-                  environmentId={environmentId}
-                  activeInstanceId={activeInstanceId}
-                  model={activeModel}
-                  lockedProvider={null}
-                  instanceEntries={instanceEntries}
-                  modelOptionsByInstance={modelOptionsByInstance}
-                  scopeToActiveAgent
-                  isComposerOwned
-                  size="sm"
-                  onInstanceModelChange={(nextInstanceId, nextModel) => {
-                    const nextEntry = instanceEntries.find((e) => e.instanceId === nextInstanceId);
-                    const nextBrand = nextEntry
-                      ? formatAgentBrandName(nextEntry.driverKind, nextEntry.displayName)
-                      : brandName;
-                    onUpdateTab(tab.id, {
-                      instanceId: nextInstanceId,
-                      providerId: nextEntry?.driverKind ?? tab.providerId,
-                      model: nextModel,
-                      title: nextBrand,
-                    });
-                  }}
-                />
-              ) : (
-                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <AgentBrandLogo provider={tab.providerId ?? brandName} size={13} />
-                  {brandName}
-                </span>
-              )}
-            </div>
-            <Button
-              type="button"
-              size="xs"
-              disabled={prompt.trim().length === 0}
-              onClick={handleSubmit}
-              className="gap-1 rounded-full px-3"
-            >
-              <SendHorizontalIcon className="size-3.5" aria-hidden />
-              <span>发送</span>
-            </Button>
-          </div>
-        </div>
-
-        {/* Recent threads for this Agent or quick tool switches */}
-        {relatedThreads.length > 0 ? (
-          <div className="flex w-full flex-col gap-1.5">
-            <div className={cn("text-[11px] font-medium", STAGE_SUBTITLE_GLASS_CLASS)}>
-              或继续 {brandName} 的历史会话
-            </div>
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {relatedThreads.map((thread) => (
-                <button
-                  key={`${thread.environmentId}:${thread.threadId}`}
-                  type="button"
-                  onClick={() => onOpenHistoryThreadInPane(thread, paneId)}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/65 bg-muted/25 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors hover:bg-muted/55 focus-visible:ring-2 focus-visible:ring-ring [[data-pmx-glass='1']_&]:border-white/18 [[data-pmx-glass='1']_&]:bg-background/45 [[data-pmx-glass='1']_&]:hover:bg-background/65"
-                >
-                  <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground dark:[[data-pmx-glass='1']_&]:text-white/85" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center justify-center gap-1.5 text-xs">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => onOpenQuickTool("terminal", paneId)}
-            >
-              <TerminalIcon className="size-3.5" />
-              <span>PowerShell 终端</span>
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => onOpenQuickTool("diff", paneId)}
-            >
-              <GitCompareArrowsIcon className="size-3.5" />
-              <span>查看差异</span>
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => onOpenQuickTool("browser", paneId)}
-            >
-              <GlobeIcon className="size-3.5" />
-              <span>内置浏览器</span>
-            </Button>
-          </div>
-        )}
+      <div className="flex size-11 items-center justify-center rounded-xl border border-border/70 bg-muted/40 [[data-pmx-glass='1']_&]:border-white/20 [[data-pmx-glass='1']_&]:bg-background/50">
+        <AgentBrandLogo provider={tab.providerId ?? brandName} size={22} />
       </div>
+      <div className="space-y-1">
+        <p className={cn("text-sm font-medium", STAGE_TITLE_GLASS_CLASS)}>{brandName}</p>
+        <p className={cn("max-w-xs text-xs", STAGE_SUBTITLE_GLASS_CLASS)}>
+          对话会话已统一收敛至完整主工作台视图。
+        </p>
+      </div>
+      {onOpenConversationInMainChat ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="gap-1.5"
+          onClick={() => onOpenConversationInMainChat(paneId, tab)}
+        >
+          <MessageSquarePlusIcon className="size-3.5" aria-hidden />
+          <span>在主工作台打开 {brandName}</span>
+        </Button>
+      ) : null}
     </PrismuxStageFrame>
   );
 }
@@ -618,14 +461,9 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
     paneId,
     tab,
     activeHostThreadRef,
-    environmentId,
     instanceEntries,
-    modelOptionsByInstance,
-    historyThreads,
     onUpdateTab,
-    onOpenHistoryThreadInPane,
-    onLaunchAgentPrompt,
-    onOpenQuickTool,
+    onOpenConversationInMainChat,
   } = props;
 
   const resolvedHostRef = tab.hostThreadRef ?? activeHostThreadRef;
@@ -643,17 +481,11 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
         );
       }
       return (
-        <AgentBlankStageView
+        <ConversationMainChatHandoffView
           paneId={paneId}
           tab={tab}
-          environmentId={environmentId}
           instanceEntries={instanceEntries}
-          modelOptionsByInstance={modelOptionsByInstance}
-          historyThreads={historyThreads}
-          onUpdateTab={onUpdateTab}
-          onOpenHistoryThreadInPane={onOpenHistoryThreadInPane}
-          onLaunchAgentPrompt={onLaunchAgentPrompt}
-          onOpenQuickTool={onOpenQuickTool}
+          onOpenConversationInMainChat={onOpenConversationInMainChat}
         />
       );
     case "terminal":
@@ -674,17 +506,11 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
     case "agent":
     default:
       return (
-        <AgentBlankStageView
+        <ConversationMainChatHandoffView
           paneId={paneId}
           tab={tab}
-          environmentId={environmentId}
           instanceEntries={instanceEntries}
-          modelOptionsByInstance={modelOptionsByInstance}
-          historyThreads={historyThreads}
-          onUpdateTab={onUpdateTab}
-          onOpenHistoryThreadInPane={onOpenHistoryThreadInPane}
-          onLaunchAgentPrompt={onLaunchAgentPrompt}
-          onOpenQuickTool={onOpenQuickTool}
+          onOpenConversationInMainChat={onOpenConversationInMainChat}
         />
       );
   }

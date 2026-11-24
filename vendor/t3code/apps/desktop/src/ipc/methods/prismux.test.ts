@@ -6,7 +6,11 @@ import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import type * as Electron from "electron";
+import { vi } from "vite-plus/test";
 
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import {
   buildPrismuxDaemonChildEnv,
   normalizeT3HttpUrl,
@@ -15,8 +19,11 @@ import {
 import {
   computeFileSha256Hex,
   executePrismuxInstallDownloadedUpdate,
+  forceReloadPrismuxWindow,
   isPathStrictlyWithinDirectory,
+  reloadPrismuxWindow,
   resolvePrismuxUpdateCachePolicy,
+  togglePrismuxDevTools,
   verifySha256ConstantTime,
   type PrismuxInstallDownloadedUpdateDeps,
 } from "./prismux.ts";
@@ -323,5 +330,58 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
     assert.equal(env.PRISMUX_T3_SERVER_URL, "http://127.0.0.1:3773");
     assert.equal(env.T3CODE_SERVER_URL, "http://127.0.0.1:3773");
     assert.equal(env.PRISMUX_T3_WS_URL, "ws://127.0.0.1:3773/ws");
+  });
+
+  it("handles reload, forceReload (reloadIgnoringCache), and toggleDevTools IPC on main BrowserWindow", async () => {
+    let devToolsOpened = false;
+    const reload = vi.fn();
+    const reloadIgnoringCache = vi.fn();
+    const openDevTools = vi.fn(() => {
+      devToolsOpened = true;
+    });
+    const closeDevTools = vi.fn(() => {
+      devToolsOpened = false;
+    });
+    const toggleDevTools = vi.fn();
+    const fakeWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        reload,
+        reloadIgnoringCache,
+        isDevToolsOpened: () => devToolsOpened,
+        openDevTools,
+        closeDevTools,
+        toggleDevTools,
+      },
+    } as unknown as Electron.BrowserWindow;
+
+    const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
+      create: () => Effect.die("unexpected create"),
+      main: Effect.succeedSome(fakeWindow),
+      focusedMainOrFirst: Effect.succeedSome(fakeWindow),
+      currentMainOrFirst: Effect.succeedSome(fakeWindow),
+      setMain: () => Effect.void,
+      clearMain: () => Effect.void,
+      prepareReveal: () => Effect.succeed(false),
+      reveal: () => Effect.void,
+      sendAll: () => Effect.void,
+      syncAllAppearance: () => Effect.void,
+      destroyAll: Effect.void,
+    } satisfies ElectronWindow.ElectronWindow["Service"]);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* reloadPrismuxWindow.handler(undefined);
+        yield* forceReloadPrismuxWindow.handler(undefined);
+        yield* togglePrismuxDevTools.handler(undefined);
+        yield* togglePrismuxDevTools.handler(undefined);
+      }).pipe(Effect.provide(electronWindowLayer)),
+    );
+
+    assert.equal(reload.mock.calls.length, 1);
+    assert.equal(reloadIgnoringCache.mock.calls.length, 1);
+    assert.equal(openDevTools.mock.calls.length, 1);
+    assert.equal(closeDevTools.mock.calls.length, 1);
+    assert.equal(toggleDevTools.mock.calls.length, 0);
   });
 });

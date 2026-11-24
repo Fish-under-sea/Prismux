@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
   type ProviderInstanceId,
@@ -24,7 +25,10 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useClientSettings } from "../../hooks/useSettings";
-import { formatAgentBrandName } from "../../prismux/agentBrand";
+import {
+  formatAgentBrandName,
+  resolveProviderEntryDisplayName,
+} from "../../prismux/agentBrand";
 import {
   PrismuxTopbarControls,
   PrismuxWallpaperQuickPanel,
@@ -411,15 +415,41 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     if (routeThreadShell?.title?.trim()) return routeThreadShell.title.trim();
     if (shownTarget?.kind === "draft") {
       if (routeActiveEntry) {
-        return formatAgentBrandName(
-          routeActiveEntry.driverKind,
-          routeActiveEntry.driverKind === "acpRegistry" ? routeActiveEntry.displayName : undefined,
-        );
+        return resolveProviderEntryDisplayName(routeActiveEntry);
       }
-      return routeActiveProviderId ? formatAgentBrandName(routeActiveProviderId) : "新会话";
+      if (routeActiveProviderId) {
+        return formatAgentBrandName(routeActiveProviderId);
+      }
+      const fallbackEntry = instanceEntries.find((entry) => entry.enabled) ?? instanceEntries[0];
+      if (fallbackEntry) {
+        return resolveProviderEntryDisplayName(fallbackEntry);
+      }
+      return "新会话";
     }
     return "会话";
-  }, [routeActiveEntry, routeActiveProviderId, routeThreadShell?.title, shownTarget?.kind]);
+  }, [
+    instanceEntries,
+    routeActiveEntry,
+    routeActiveProviderId,
+    routeThreadShell?.title,
+    shownTarget?.kind,
+  ]);
+
+  // Keep open draft & blank agent tab titles synchronized immediately when a provider is renamed in Settings.
+  useEffect(() => {
+    if (instanceEntries.length === 0) return;
+    const entryById = new Map(instanceEntries.map((entry) => [entry.instanceId, entry] as const));
+    const store = useWorkspaceTabsStore.getState();
+    for (const tab of Object.values(store.tabs)) {
+      if ((tab.kind !== "agent" && tab.kind !== "draft") || !tab.instanceId) continue;
+      const entry = entryById.get(tab.instanceId);
+      if (!entry) continue;
+      const nextTitle = resolveProviderEntryDisplayName(entry);
+      if (nextTitle && tab.title !== nextTitle) {
+        store.updateTab(tab.id, { title: nextTitle });
+      }
+    }
+  }, [instanceEntries]);
 
   useEffect(() => {
     if (!shownTarget || !routeKey) return;
@@ -473,6 +503,133 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     return list;
   }, [panes, tabs]);
 
+  const resolveProjectRefForMainLaunch = useCallback(async (): Promise<{
+    readonly projectRef: ReturnType<typeof scopeProjectRef>;
+    readonly fromScratch: boolean;
+  } | null> => {
+    const firstOpenProject = projects.find((project) => project.archivedAt == null);
+    const direct =
+      activeEnvironmentId && activeProjectId
+        ? scopeProjectRef(activeEnvironmentId, activeProjectId)
+        : (defaultProjectRef ??
+          (firstOpenProject
+            ? scopeProjectRef(firstOpenProject.environmentId, firstOpenProject.id)
+            : null));
+    if (direct) {
+      return { projectRef: direct, fromScratch: false };
+    }
+    const scratchEnv = scratchEnvironmentId(activeEnvironmentId ?? primaryEnvironmentId);
+    if (!scratchEnv) {
+      return null;
+    }
+    const scratchProject = await openScratchProject(scratchEnv);
+    if (!scratchProject) {
+      return null;
+    }
+    return {
+      projectRef: scopeProjectRef(scratchProject.environmentId, scratchProject.id),
+      fromScratch: true,
+    };
+  }, [
+    activeEnvironmentId,
+    activeProjectId,
+    defaultProjectRef,
+    openScratchProject,
+    primaryEnvironmentId,
+    projects,
+    scratchEnvironmentId,
+  ]);
+
+  const materializingTabIdsRef = useRef<Set<string>>(new Set());
+
+  const materializePrimaryConversationTab = useCallback(
+    async (tab: WorkspaceTab) => {
+      if (materializingTabIdsRef.current.has(tab.id)) return;
+      materializingTabIdsRef.current.add(tab.id);
+      try {
+        const resolvedProject = await resolveProjectRefForMainLaunch();
+        if (!resolvedProject) {
+          const store = useWorkspaceTabsStore.getState();
+          store.closeTab(tab.id, store.primaryPaneId);
+          void navigate({ to: "/" });
+          return;
+        }
+        const { projectRef, fromScratch } = resolvedProject;
+        const matchedEntry =
+          (tab.instanceId
+            ? instanceEntries.find((entry) => entry.instanceId === tab.instanceId)
+            : undefined) ??
+          (tab.providerId
+            ? instanceEntries.find(
+                (entry) =>
+                  entry.enabled &&
+                  (entry.driverKind === tab.providerId ||
+                    formatAgentBrandName(entry.driverKind).toLowerCase() ===
+                      formatAgentBrandName(tab.providerId).toLowerCase()),
+              )
+            : undefined) ??
+          instanceEntries.find((entry) => entry.enabled) ??
+          instanceEntries[0] ??
+          null;
+        const resolvedModel =
+          tab.model ??
+          matchedEntry?.models.find((model) => model.isDefault && !model.isCustom)?.slug ??
+          matchedEntry?.models.find((model) => !model.isCustom)?.slug ??
+          matchedEntry?.models[0]?.slug ??
+          (matchedEntry ? DEFAULT_MODEL_BY_PROVIDER[matchedEntry.driverKind] : null) ??
+          null;
+        const modelSelection =
+          matchedEntry && resolvedModel
+            ? createModelSelection(matchedEntry.instanceId, resolvedModel)
+            : null;
+        const opened = await handleNewThread(projectRef, {
+          forceNew: true,
+          ...(fromScratch ? { envMode: "local" as const } : {}),
+          ...(modelSelection ? { modelSelection } : {}),
+        }).catch(() => null);
+        if (!opened) {
+          const store = useWorkspaceTabsStore.getState();
+          store.closeTab(tab.id, store.primaryPaneId);
+          void navigate({ to: "/" });
+          return;
+        }
+        if (modelSelection) {
+          useComposerDraftStore.getState().setModelSelection(opened.draftId, modelSelection, {
+            explicit: true,
+            replaceOptions: true,
+          });
+        }
+        useWorkspaceTabsStore.getState().updateTab(tab.id, {
+          kind: "draft",
+          draftId: opened.draftId,
+          environmentId: projectRef.environmentId,
+          threadId: opened.threadId,
+          providerId: matchedEntry?.driverKind ?? tab.providerId ?? null,
+          instanceId: matchedEntry?.instanceId ?? tab.instanceId ?? null,
+          model: resolvedModel,
+          title: matchedEntry
+            ? resolveProviderEntryDisplayName(matchedEntry)
+            : tab.providerId
+              ? formatAgentBrandName(tab.providerId)
+              : "新会话",
+        });
+      } finally {
+        materializingTabIdsRef.current.delete(tab.id);
+      }
+    },
+    [handleNewThread, instanceEntries, navigate, resolveProjectRefForMainLaunch],
+  );
+
+  // Auto-upgrade any legacy/orphaned "agent" tab active in the primary pane into a full ChatView draft.
+  const primaryActiveTab = panes[primaryPaneId]?.activeTabId
+    ? (tabs[panes[primaryPaneId]!.activeTabId!] ?? null)
+    : null;
+  useEffect(() => {
+    if (primaryActiveTab?.kind === "agent") {
+      void materializePrimaryConversationTab(primaryActiveTab);
+    }
+  }, [materializePrimaryConversationTab, primaryActiveTab]);
+
   const navigateToTabIfPrimaryRoute = useCallback(
     (paneId: string, tab: WorkspaceTab | undefined) => {
       if (!tab || paneId !== useWorkspaceTabsStore.getState().primaryPaneId) return;
@@ -499,14 +656,13 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           });
           return;
         }
-        // Draft was pruned across reload; keep tab interactive instead of dead-ending on index.
-        useWorkspaceTabsStore.getState().updateTab(tab.id, {
-          kind: "agent",
-          draftId: null,
-        });
+        // Draft was pruned across reload; re-materialize as a real full-ChatView draft instead of a blank shell.
+        void materializePrimaryConversationTab(tab);
+      } else if (tab.kind === "agent" || (tab.kind === "draft" && !tab.draftId)) {
+        void materializePrimaryConversationTab(tab);
       }
     },
-    [navigate],
+    [materializePrimaryConversationTab, navigate],
   );
 
   const handleActivateTab = useCallback(
@@ -561,43 +717,6 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     [activeHostThreadRef, instanceEntries],
   );
 
-  const resolveProjectRefForMainLaunch = useCallback(async (): Promise<{
-    readonly projectRef: ReturnType<typeof scopeProjectRef>;
-    readonly fromScratch: boolean;
-  } | null> => {
-    const firstOpenProject = projects.find((project) => project.archivedAt == null);
-    const direct =
-      activeEnvironmentId && activeProjectId
-        ? scopeProjectRef(activeEnvironmentId, activeProjectId)
-        : (defaultProjectRef ??
-          (firstOpenProject
-            ? scopeProjectRef(firstOpenProject.environmentId, firstOpenProject.id)
-            : null));
-    if (direct) {
-      return { projectRef: direct, fromScratch: false };
-    }
-    const scratchEnv = scratchEnvironmentId(activeEnvironmentId ?? primaryEnvironmentId);
-    if (!scratchEnv) {
-      return null;
-    }
-    const scratchProject = await openScratchProject(scratchEnv);
-    if (!scratchProject) {
-      return null;
-    }
-    return {
-      projectRef: scopeProjectRef(scratchProject.environmentId, scratchProject.id),
-      fromScratch: true,
-    };
-  }, [
-    activeEnvironmentId,
-    activeProjectId,
-    defaultProjectRef,
-    openScratchProject,
-    primaryEnvironmentId,
-    projects,
-    scratchEnvironmentId,
-  ]);
-
   const launchAgentInPane = useCallback(
     async (agent: QuickLaunchAgentOption, targetPaneId: string) => {
       const store = useWorkspaceTabsStore.getState();
@@ -605,19 +724,9 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         targetPaneId && store.panes[targetPaneId] ? targetPaneId : store.primaryPaneId;
       const resolved = resolveQuickLaunchAgentTarget(agent, instanceEntries);
 
-      // Secondary split panes open a dedicated interactive agent tab inside that pane.
+      // Secondary panes route parallel agent sessions to the right sidebar instead of a blank shell.
       if (resolvedPaneId !== store.primaryPaneId) {
-        store.openTab(
-          {
-            kind: "agent",
-            title: agent.displayName,
-            providerId: resolved.providerId,
-            instanceId: resolved.instanceId,
-            model: resolved.model,
-            reuseExisting: false,
-          },
-          resolvedPaneId,
-        );
+        openAgentInRightSidebar(agent);
         return;
       }
 
@@ -658,21 +767,17 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         }
       }
 
-      // Guaranteed zero-silent-failure fallback when offline or no server scratch root is available:
-      // immediately open an interactive agent stage tab in the active main pane.
-      useWorkspaceTabsStore.getState().openTab(
-        {
-          kind: "agent",
-          title: agent.displayName,
-          providerId: resolved.providerId,
-          instanceId: resolved.instanceId,
-          model: resolved.model,
-          reuseExisting: false,
-        },
-        resolvedPaneId,
-      );
+      // Never fall back to a stripped pseudo-chat stage in the primary workspace;
+      // route to "/" so the full AGY 2.0 welcome stage / NoProjectsHero handles onboarding cleanly.
+      void navigate({ to: "/" });
     },
-    [handleNewThread, instanceEntries, resolveProjectRefForMainLaunch],
+    [
+      handleNewThread,
+      instanceEntries,
+      navigate,
+      openAgentInRightSidebar,
+      resolveProjectRefForMainLaunch,
+    ],
   );
 
   const handleOpenHistoryThread = useCallback(
@@ -874,16 +979,21 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             replaceOptions: true,
           });
         }
+        const matchedEntry = input.instanceId
+          ? instanceEntries.find((candidate) => candidate.instanceId === input.instanceId)
+          : undefined;
         useWorkspaceTabsStore.getState().updateTab(input.tabId, {
           kind: "draft",
           draftId: opened.draftId,
           environmentId: projectRef.environmentId,
           threadId: opened.threadId,
-          title: formatAgentBrandName(input.providerId),
+          title: matchedEntry
+            ? resolveProviderEntryDisplayName(matchedEntry)
+            : formatAgentBrandName(input.providerId),
         });
       }
     },
-    [handleNewThread, resolveProjectRefForMainLaunch],
+    [handleNewThread, instanceEntries, resolveProjectRefForMainLaunch],
   );
 
   const paneCount = countLeafPanes(layout);
@@ -977,10 +1087,14 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     const isFocused = pane.id === focusedPaneId;
     const otherPaneIds = allLeafIds.filter((id) => id !== pane.id);
 
-    // Primary pane shows the real T3 route content when active tab is a route thread/draft (or empty)
+    // Primary pane ALWAYS hosts the real full ChatView / route stage for any conversation tab
+    // (thread, draft, or legacy agent) — never a stripped blank agent shell.
     const primaryShowsRoute =
       isPrimaryPane &&
-      (activeTab === null || activeTab.kind === "thread" || activeTab.kind === "draft");
+      (activeTab === null ||
+        activeTab.kind === "thread" ||
+        activeTab.kind === "draft" ||
+        activeTab.kind === "agent");
 
     return (
       <section
@@ -1050,6 +1164,13 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
                 onOpenHistoryThreadInPane={handleOpenHistoryThread}
                 onLaunchAgentPrompt={(payload) => void handleLaunchAgentPrompt(payload)}
                 onOpenQuickTool={(tool, targetPaneId) => handleRunQuickTool(tool, targetPaneId)}
+                onOpenConversationInMainChat={(fromPaneId, sourceTab) => {
+                  const store = useWorkspaceTabsStore.getState();
+                  if (fromPaneId !== store.primaryPaneId) {
+                    store.closeTab(sourceTab.id, fromPaneId);
+                  }
+                  void materializePrimaryConversationTab(sourceTab);
+                }}
               />
             ) : !isPrimaryPane ? (
               <PrismuxStageFrame innerClassName="items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground [[data-pmx-glass='1']_&]:text-foreground/92 dark:[[data-pmx-glass='1']_&]:text-white/92 dark:[[data-pmx-glass='1']_&]:[text-shadow:0_1px_4px_rgba(0,0,0,0.58)]">

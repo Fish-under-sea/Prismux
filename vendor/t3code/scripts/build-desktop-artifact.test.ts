@@ -2190,3 +2190,69 @@ it.effect(
       Effect.provideService(HostProcess.Platform, "linux"),
     ),
 );
+
+it.effect(
+  "configures assisted Windows NSIS installer with bilingual desktop shortcut option and silent-update compatibility",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const winConfig = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.1.2-preview.4",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const nsis = winConfig.nsis as Record<string, unknown>;
+      assert.equal(nsis.oneClick, false);
+      assert.equal(nsis.perMachine, false);
+      assert.equal(nsis.selectPerMachineByDefault, false);
+      assert.equal(nsis.allowToChangeInstallationDirectory, true);
+      assert.equal(nsis.createDesktopShortcut, true);
+      assert.equal(nsis.createStartMenuShortcut, true);
+      assert.equal(nsis.include, "apps/desktop/resources/installer.nsh");
+
+      const installerNshPath = path.join(
+        import.meta.dirname,
+        "..",
+        "apps",
+        "desktop",
+        "resources",
+        "installer.nsh",
+      );
+      const script = yield* fs.readFileString(installerNshPath);
+
+      // Installer-only UI and variables stay guarded from BUILD_UNINSTALLER pass (-WX safe).
+      assert.include(script, "!ifndef BUILD_UNINSTALLER");
+      assert.include(script, "!macro customInit");
+      assert.include(script, "!macro customPageAfterChangeDir");
+      assert.include(script, "Page custom PrismuxOptionsPageCreate PrismuxOptionsPageLeave");
+
+      // Bilingual / Chinese-English checkbox copy (checked by default, user can uncheck).
+      assert.include(script, "创建桌面快捷方式");
+      assert.include(script, "建立桌面捷徑");
+      assert.include(script, "Create desktop shortcut");
+      assert.include(script, 'StrCpy $PrismuxCreateDesktopShortcut "1"');
+      assert.include(script, "${NSD_CreateCheckbox}");
+
+      // Silent auto-updates (/S) & --updated skip the interactive page and respect existing desktop shortcut presence.
+      assert.include(script, "${If} ${Silent}");
+      assert.include(script, "${OrIf} ${isUpdated}");
+      assert.include(script, "$PrismuxHadExistingInstall");
+      assert.include(script, "$PrismuxHadExistingDesktopShortcut");
+
+      // Default per-user install path resolves dynamically to $LOCALAPPDATA\Programs\Prismux (never hardcoded user or Program Files).
+      assert.include(script, 'StrCpy $INSTDIR "$LOCALAPPDATA\\Programs\\${APP_FILENAME}"');
+      assert.notInclude(script, "C:\\Users\\");
+
+      // Unchecking strictly blocks addDesktopLink and cleans up only Prismux's own desktop .lnk.
+      assert.include(script, "!undef isNoDesktopShortcut");
+      assert.include(script, 'StrCmp "$PrismuxCreateDesktopShortcut" "0"');
+      assert.include(script, 'WinShell::UninstShortcut "$newDesktopLink"');
+      assert.include(script, 'Delete "$newDesktopLink"');
+      assert.include(script, 'WinShell::SetLnkAUMI "$newDesktopLink" "${APP_ID}"');
+    }).pipe(Effect.provide(NodeServices.layer)),
+);

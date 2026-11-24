@@ -41,6 +41,7 @@ import {
   updateSharedPrismuxTrayRunningAgentsCount,
 } from "../../prismux/PrismuxTrayController.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
+import { toggleWebContentsDevTools } from "../../window/DesktopWindow.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
@@ -577,5 +578,57 @@ export const setPrismuxTrayRunningAgentsCount = DesktopIpc.makeIpcMethod({
       }
     }
     return result;
+  }),
+});
+
+const resolveMainWindowForContentsCommand = Effect.gen(function* () {
+  const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const main = yield* electronWindow.main;
+  if (Option.isSome(main) && !main.value.isDestroyed()) {
+    return main;
+  }
+  const fallback = yield* electronWindow.currentMainOrFirst;
+  if (Option.isSome(fallback) && !fallback.value.isDestroyed()) {
+    return fallback;
+  }
+  return Option.none<Electron.BrowserWindow>();
+});
+
+export const reloadPrismuxWindow = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PRISMUX_RELOAD_WINDOW_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.prismux.reloadWindow")(function* () {
+    const windowOption = yield* resolveMainWindowForContentsCommand;
+    if (Option.isNone(windowOption)) return;
+    yield* Effect.sync(() => {
+      windowOption.value.webContents.reload();
+    });
+  }),
+});
+
+export const forceReloadPrismuxWindow = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PRISMUX_FORCE_RELOAD_WINDOW_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.prismux.forceReloadWindow")(function* () {
+    const windowOption = yield* resolveMainWindowForContentsCommand;
+    if (Option.isNone(windowOption)) return;
+    yield* Effect.sync(() => {
+      windowOption.value.webContents.reloadIgnoringCache();
+    });
+  }),
+});
+
+export const togglePrismuxDevTools = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PRISMUX_TOGGLE_DEVTOOLS_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.prismux.toggleDevTools")(function* () {
+    const windowOption = yield* resolveMainWindowForContentsCommand;
+    if (Option.isNone(windowOption)) return;
+    yield* Effect.sync(() => {
+      toggleWebContentsDevTools(windowOption.value.webContents);
+    });
   }),
 });

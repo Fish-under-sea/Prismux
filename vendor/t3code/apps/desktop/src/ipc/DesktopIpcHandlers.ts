@@ -93,15 +93,18 @@ import {
   addCliCommandToPath,
 } from "./methods/cliCommand.ts";
 import {
+  forceReloadPrismuxWindow,
   getPrismuxDaemonInfo,
   getPrismuxKeepAwakeState,
   getPrismuxWindowOcclusion,
   installPrismuxDownloadedUpdate,
   pickPrismuxWallpaperDirectory,
   pickPrismuxWallpaperFiles,
+  reloadPrismuxWindow,
   setPrismuxKeepAwake,
   setPrismuxTrayRunningAgentsCount,
   setPrismuxUpdateFeedUrl,
+  togglePrismuxDevTools,
 } from "./methods/prismux.ts";
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
@@ -211,4 +214,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setPrismuxKeepAwake);
   yield* ipc.handle(getPrismuxKeepAwakeState);
   yield* ipc.handle(setPrismuxTrayRunningAgentsCount);
+  yield* ipc.handle(reloadPrismuxWindow);
+  yield* ipc.handle(forceReloadPrismuxWindow);
+  yield* ipc.handle(togglePrismuxDevTools);
 });

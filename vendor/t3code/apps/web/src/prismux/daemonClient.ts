@@ -845,6 +845,99 @@ export interface DaemonKillStalePtyResponse {
   [key: string]: unknown;
 }
 
+export type DaemonCliInstallMethod = "npm-global" | "native-self-update" | "unsupported";
+
+export interface DaemonCliUpdateItemDto {
+  provider: string;
+  canonicalProvider: string | null;
+  command: string | null;
+  packageName: string | null;
+  installed: boolean;
+  installedPath: string | null;
+  currentVersion: string | null;
+  rawVersion: string | null;
+  latestVersion: string | null;
+  hasUpdate: boolean;
+  updateSupported: boolean;
+  installMethod: DaemonCliInstallMethod;
+  registryUsed: string | null;
+  checkedAt: number;
+  cached: boolean;
+  error?: string;
+}
+
+export interface DaemonCliUpdatesCheckResponse {
+  ok: true;
+  checkedAt: number;
+  cached: boolean;
+  items: DaemonCliUpdateItemDto[];
+  item?: DaemonCliUpdateItemDto;
+}
+
+export interface DaemonCliUpdateInstallResponse {
+  ok: true;
+  provider: string;
+  packageName: string | null;
+  method: Exclude<DaemonCliInstallMethod, "unsupported">;
+  previousVersion: string | null;
+  newVersion: string | null;
+  latestVersion: string | null;
+  registryUsed: string | null;
+  durationMs: number;
+  item: DaemonCliUpdateItemDto;
+  message: string;
+}
+
+export type DaemonOfficialQuotaWindowKind = "weekly" | "5h" | "other";
+
+export interface DaemonOfficialQuotaWindowDto {
+  id: string;
+  group: string;
+  groupId: string;
+  window: DaemonOfficialQuotaWindowKind;
+  shortLabel: string;
+  detailLabel: string;
+  remainingPercent: number;
+  usedPercent: number;
+  resetAtIso: string | null;
+  resetAtMs: number | null;
+  rawGroup?: string;
+  rawWindow?: string;
+}
+
+export type DaemonOfficialQuotaProviderStatus =
+  | "ok"
+  | "not_installed"
+  | "unauthenticated"
+  | "timeout"
+  | "error";
+
+export interface DaemonOfficialQuotaProviderDto {
+  id: "antigravity" | string;
+  providerId: string;
+  displayName: string;
+  source: "official-cli" | string;
+  command: string;
+  status: DaemonOfficialQuotaProviderStatus;
+  available: boolean;
+  executablePath: string | null;
+  windows: DaemonOfficialQuotaWindowDto[];
+  remainingCredits: number | null;
+  fetchedAt: number;
+  fetchedAtIso: string;
+  error: string | null;
+}
+
+export interface DaemonOfficialQuotaSummaryResponse {
+  ok: true;
+  cached: boolean;
+  cacheTtlMs: number;
+  fetchedAt: number;
+  fetchedAtIso: string;
+  providers: DaemonOfficialQuotaProviderDto[];
+  antigravity: DaemonOfficialQuotaProviderDto;
+}
+
 const EMPTY_CONNECTION_INFO: DaemonConnectionInfo = {
   baseUrl: "",
   token: "",
@@ -1410,6 +1503,33 @@ export class PrismuxDaemonClient {
     });
   }
 
+  checkCliUpdates(options: { force?: boolean; provider?: string } = {}): Promise<DaemonCliUpdatesCheckResponse> {
+    const params = new URLSearchParams();
+    if (options.force) {
+      params.set("force", "1");
+    }
+    const provider = options.provider?.trim();
+    if (provider) {
+      params.set("provider", provider);
+    }
+    const query = params.toString();
+    return this.requestJson<DaemonCliUpdatesCheckResponse>(
+      query.length > 0 ? `/v1/cli-updates/check?${query}` : "/v1/cli-updates/check",
+    );
+  }
+
+  installCliUpdate(provider: string): Promise<DaemonCliUpdateInstallResponse> {
+    return this.requestJson<DaemonCliUpdateInstallResponse>("/v1/cli-updates/install", {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    });
+  }
+
+  fetchQuotaSummary(force = false): Promise<DaemonOfficialQuotaSummaryResponse> {
+    const suffix = force ? "?force=1" : "";
+    return this.requestJson<DaemonOfficialQuotaSummaryResponse>(`/v1/quota/summary${suffix}`);
+  }
+
   subscribeUpdaterEvents(
     onEvent: (event: DaemonUpdaterEvent) => void,
     options: DaemonUpdaterEventsOptions = {},
@@ -1638,3 +1758,15 @@ export const fetchSystemResources = (
 
 export const killStalePty = (sessionId: string): Promise<DaemonKillStalePtyResponse> =>
   prismuxDaemonClient.killStalePty(sessionId);
+
+export const checkCliUpdates = (options?: {
+  force?: boolean;
+  provider?: string;
+}): Promise<DaemonCliUpdatesCheckResponse> => prismuxDaemonClient.checkCliUpdates(options);
+
+export const installCliUpdate = (provider: string): Promise<DaemonCliUpdateInstallResponse> =>
+  prismuxDaemonClient.installCliUpdate(provider);
+
+export const fetchQuotaSummary = (
+  force = false,
+): Promise<DaemonOfficialQuotaSummaryResponse> => prismuxDaemonClient.fetchQuotaSummary(force);

@@ -14,6 +14,8 @@ import {
   codexCardProvider,
   codexNeedsSetup,
   groupWelcomeAgents,
+  isFeaturedWelcomeAgent,
+  partitionFeaturedWelcomeAgents,
   turnedOnInstance,
   welcomeOffersPhone,
 } from "./welcomePage.logic";
@@ -261,5 +263,49 @@ describe("welcomeOffersPhone", () => {
     expect(offers({ policy: policy({ connect: false }) })).toBe(false);
     expect(offers({ policy: policy({ clients: ["desktop"] }) })).toBe(false);
     expect(offers({ isPrimary: false })).toBe(false);
+  });
+});
+
+describe("partitionFeaturedWelcomeAgents", () => {
+  it("surfaces native Antigravity and official antigravity-acp ahead of secondary agents", () => {
+    const antigravity = provider("Antigravity", {
+      instanceId: ProviderInstanceId.make("antigravity"),
+      driver: ProviderDriverKind.make("antigravity"),
+      enabled: false,
+      status: "disabled",
+    });
+    const antigravityAcp = provider("AntigravityAcp", {
+      instanceId: ProviderInstanceId.make("acp-agy"),
+      driver: ProviderDriverKind.make("acpRegistry"),
+      displayName: "Antigravity ACP",
+      enabled: false,
+      status: "disabled",
+    });
+    const cursor = provider("Cursor", {
+      instanceId: ProviderInstanceId.make("cursor"),
+      driver: ProviderDriverKind.make("cursor"),
+      enabled: false,
+      status: "disabled",
+    });
+    const pi = provider("Pi", {
+      instanceId: ProviderInstanceId.make("pi"),
+      driver: ProviderDriverKind.make("pi"),
+      enabled: false,
+      status: "disabled",
+    });
+
+    const resolveAcpId = (entry: ServerProvider) =>
+      entry.instanceId === antigravityAcp.instanceId ? "antigravity-acp" : undefined;
+
+    expect(isFeaturedWelcomeAgent(antigravity)).toBe(true);
+    expect(isFeaturedWelcomeAgent(antigravityAcp, "antigravity-acp")).toBe(true);
+    expect(isFeaturedWelcomeAgent(cursor)).toBe(false);
+
+    const partitioned = partitionFeaturedWelcomeAgents(
+      [antigravity, antigravityAcp, cursor, pi],
+      resolveAcpId,
+    );
+    expect(names(partitioned.featured)).toEqual(["Antigravity", "Antigravity ACP"]);
+    expect(names(partitioned.secondary)).toEqual(["Cursor", "Pi"]);
   });
 });

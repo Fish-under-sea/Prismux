@@ -1,5 +1,6 @@
 export const STATUS_BAR_SEGMENT_IDS = [
   "usage",
+  "quota",
   "keepAwake",
   "ports",
   "resources",
@@ -22,6 +23,7 @@ export const STATUS_BAR_USAGE_PREFS_STORAGE_KEY = "prismux.statusBar.usagePrefs.
 
 export const DEFAULT_STATUS_BAR_VISIBILITY: StatusBarVisibility = Object.freeze({
   usage: true,
+  quota: true,
   keepAwake: true,
   ports: true,
   resources: true,
@@ -53,6 +55,7 @@ export function normalizeStatusBarVisibility(raw: unknown): StatusBarVisibility 
   const record = raw as Record<string, unknown>;
   return {
     usage: typeof record.usage === "boolean" ? record.usage : DEFAULT_STATUS_BAR_VISIBILITY.usage,
+    quota: typeof record.quota === "boolean" ? record.quota : DEFAULT_STATUS_BAR_VISIBILITY.quota,
     keepAwake:
       typeof record.keepAwake === "boolean"
         ? record.keepAwake

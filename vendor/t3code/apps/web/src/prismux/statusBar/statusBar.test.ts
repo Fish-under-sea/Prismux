@@ -25,6 +25,16 @@ vi.mock("@tanstack/react-router", () => ({
 import { PrismuxDaemonClient, PrismuxDaemonError } from "../daemonClient";
 import { KeepAwakeStatusPopover } from "./KeepAwakeStatusPopover";
 import { PortsStatusPopover } from "./PortsStatusPopover";
+import { QuotaStatusPopover } from "./QuotaStatusPopover";
+import {
+  aggregateQuotaSummary,
+  buildQuotaStatusBarPill,
+  formatQuotaResetDuration,
+  formatQuotaResetLabel,
+  formatQuotaUpdatedAgo,
+  loadQuotaPreferences,
+  saveQuotaPreferences,
+} from "./quotaStatus.logic";
 import { ResourcesStatusPopover } from "./ResourcesStatusPopover";
 import { UsageStatusPopover } from "./UsageStatusPopover";
 import {
@@ -95,11 +105,12 @@ afterEach(() => {
 });
 
 describe("statusBarVisibility persistence", () => {
-  it("persists and reloads 4-segment visibility from storage and upgrades legacy keys", () => {
+  it("persists and reloads 5-segment visibility from storage and upgrades legacy keys", () => {
     const storage = createMemoryStorage();
     expect(loadStatusBarVisibility(storage)).toEqual(DEFAULT_STATUS_BAR_VISIBILITY);
     expect(DEFAULT_STATUS_BAR_VISIBILITY).toEqual({
       usage: true,
+      quota: true,
       keepAwake: true,
       ports: true,
       resources: true,
@@ -113,18 +124,20 @@ describe("statusBarVisibility persistence", () => {
 
     expect(loadStatusBarVisibility(storage)).toEqual({
       usage: true,
+      quota: true,
       keepAwake: true,
       ports: false,
       resources: false,
     });
 
-    // Legacy payloads containing removed `context` / `cache` fields and missing `keepAwake` upgrade cleanly.
+    // Legacy payloads containing removed `context` / `cache` fields and missing `quota` / `keepAwake` upgrade cleanly.
     storage.setItem(
       "prismux.statusBar.visibility.v1",
       JSON.stringify({ usage: false, context: false, cache: false, ports: true, resources: true }),
     );
     expect(loadStatusBarVisibility(storage)).toEqual({
       usage: false,
+      quota: true,
       keepAwake: true,
       ports: true,
       resources: true,
@@ -480,36 +493,47 @@ describe("statusBarUsage compliance and urgency sorting", () => {
     expect(summary.telemetry.providers[0]?.isCustomEndpoint).toBe(true);
     expect(formatCompactUsageTokens(64_000)).toBe("64.0K tok");
 
-    // Verify UsageStatusPopover renders real local usage cards, custom-endpoint badge, refresh button, and overlays glass attributes
+    // Verify UsageStatusPopover renders pure "用量总览" (Fig 6) with Fig 2 compliance card completely removed
+    const summaryWithAgyEntry = {
+      ...summary,
+      antigravityEntries: [
+        {
+          providerInstanceId: "antigravity-local",
+          providerName: "Antigravity",
+          authenticated: true,
+          tierLabel: "Google AI Ultra",
+          cliCommands: ["/usage", "/credits"] as const,
+          complianceNotice: ANTIGRAVITY_COMPLIANCE_NOTICE,
+        },
+      ],
+    };
     const standaloneHtml = renderToStaticMarkup(
       createElement(UsageStatusPopover, {
-        summary,
-        activeThreadIsAntigravity: false,
-        prefs: { density: "detailed", percentMode: "used" },
-        onPrefsChange: () => {},
-        now: Date.parse("2026-11-23T12:00:00Z"),
+        summary: summaryWithAgyEntry,
         onRefresh: async () => {},
         onClose: () => {},
       }),
     );
-    expect(standaloneHtml).toContain("额度与用量总览");
+    expect(standaloneHtml).toContain("用量总览");
+    expect(standaloneHtml).not.toContain("额度与用量总览");
+    expect(standaloneHtml).not.toContain("Antigravity（纯官方 ACP 合规）");
+    expect(standaloneHtml).not.toContain("prismux-antigravity-acp-card");
+    expect(standaloneHtml).not.toContain("agy → /usage");
+    expect(standaloneHtml).not.toContain("agy → /credits");
     expect(standaloneHtml).toContain("64.0K tok");
     expect(standaloneHtml).toContain("212K tok");
     expect(standaloneHtml).toContain("90%");
     expect(standaloneHtml).toContain("Claude Custom Relay");
     expect(standaloneHtml).toContain("自定义端点");
     expect(standaloneHtml).toContain("刷新");
+    expect(standaloneHtml).toContain("本地近 7 日实时统计");
     expect(standaloneHtml).toContain('data-pmx-glass-zone="overlays"');
     expect(standaloneHtml).toContain('data-pmx-status-popover="1"');
 
     // Embedded inside PopoverPopup: transparent body avoids double background / corner protrusion
     const embeddedHtml = renderToStaticMarkup(
       createElement(UsageStatusPopover, {
-        summary,
-        activeThreadIsAntigravity: false,
-        prefs: { density: "detailed", percentMode: "used" },
-        onPrefsChange: () => {},
-        now: Date.parse("2026-11-23T12:00:00Z"),
+        summary: summaryWithAgyEntry,
         onRefresh: async () => {},
         onClose: () => {},
         embeddedInPopover: true,
@@ -517,6 +541,257 @@ describe("statusBarUsage compliance and urgency sorting", () => {
     );
     expect(embeddedHtml).toContain("bg-transparent");
     expect(embeddedHtml).not.toContain("bg-popover");
+    expect(embeddedHtml).not.toContain("Antigravity（纯官方 ACP 合规）");
+  });
+});
+
+describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", () => {
+  it("formats Chinese reset countdowns, updatedAgo timestamps, and localStorage quota preferences", () => {
+    const now = Date.parse("2026-11-24T06:00:00Z");
+
+    // 6d 14h (matches Fig 4 & Fig 5)
+    const sixDaysFourteenHours = now + (6 * 24 + 14) * 3_600_000 + 180_000;
+    expect(formatQuotaResetDuration(sixDaysFourteenHours, now)).toBe("6天 14小时");
+    expect(formatQuotaResetLabel(sixDaysFourteenHours, now)).toBe("6天 14小时后重置");
+
+    // 3h 34m (matches Fig 3)
+    const threeHoursThirtyFourMins = now + (3 * 60 + 34) * 60_000 + 20_000;
+    expect(formatQuotaResetDuration(threeHoursThirtyFourMins, now)).toBe("3小时 34分钟");
+    expect(formatQuotaResetLabel(threeHoursThirtyFourMins, now)).toBe("3小时 34分钟后重置");
+
+    // 4h 59m & 6d 23h (matches Fig 5)
+    const fourHoursFiftyNineMins = now + (4 * 60 + 59) * 60_000 + 15_000;
+    expect(formatQuotaResetLabel(fourHoursFiftyNineMins, now)).toBe("4小时 59分钟后重置");
+    const sixDaysTwentyThreeHours = now + (6 * 24 + 23) * 3_600_000 + 30 * 60_000;
+    expect(formatQuotaResetLabel(sixDaysTwentyThreeHours, now)).toBe("6天 23小时后重置");
+
+    // Edge cases
+    expect(formatQuotaResetLabel(now - 5_000, now)).toBe("即将重置");
+    expect(formatQuotaResetDuration(now - 5_000, now)).toBeNull();
+    expect(formatQuotaResetLabel(now + 20_000, now)).toBe("1分钟后重置");
+
+    // Relative updated time (Fig 5)
+    expect(formatQuotaUpdatedAgo(now - 10_000, now)).toBe("更新于 刚刚");
+    expect(formatQuotaUpdatedAgo(now - 2 * 60_000 - 5_000, now)).toBe("更新于 2 分钟前");
+    expect(formatQuotaUpdatedAgo(now - 3 * 3_600_000, now)).toBe("更新于 3 小时前");
+
+    // Persistence
+    const storage = createMemoryStorage();
+    expect(loadQuotaPreferences(storage)).toEqual({ viewMode: "detailed", percentMode: "used" });
+    saveQuotaPreferences({ viewMode: "compact", percentMode: "remaining" }, storage);
+    expect(loadQuotaPreferences(storage)).toEqual({
+      viewMode: "compact",
+      percentMode: "remaining",
+    });
+  });
+
+  it("aggregates official Daemon Antigravity quota with upstream compliant providers and renders Detailed / Compact / Detail / Fallback views", () => {
+    const now = Date.parse("2026-11-24T06:00:00Z");
+    const daemonQuota = {
+      ok: true as const,
+      cached: false,
+      cacheTtlMs: 180_000,
+      fetchedAt: now - 5_000,
+      fetchedAtIso: new Date(now - 5_000).toISOString(),
+      providers: [],
+      antigravity: {
+        id: "antigravity" as const,
+        providerId: "antigravity",
+        displayName: "Antigravity",
+        source: "official-cli" as const,
+        command: 'agy -p "/usage"',
+        status: "ok" as const,
+        available: true,
+        executablePath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+        remainingCredits: 0,
+        fetchedAt: now - 5_000,
+        fetchedAtIso: new Date(now - 5_000).toISOString(),
+        error: null,
+        windows: [
+          {
+            id: "gemini:weekly",
+            group: "Gemini",
+            groupId: "gemini",
+            window: "weekly" as const,
+            shortLabel: "Gemini 周",
+            detailLabel: "Gemini · 每周",
+            remainingPercent: 93,
+            usedPercent: 7,
+            resetAtIso: "2026-11-30T20:03:11.000Z",
+            resetAtMs: Date.parse("2026-11-30T20:03:11.000Z"),
+          },
+          {
+            id: "gemini:5h",
+            group: "Gemini",
+            groupId: "gemini",
+            window: "5h" as const,
+            shortLabel: "Gemini 5h",
+            detailLabel: "Gemini · 5h",
+            remainingPercent: 95,
+            usedPercent: 5,
+            resetAtIso: "2026-11-24T09:34:15.000Z",
+            resetAtMs: Date.parse("2026-11-24T09:34:15.000Z"),
+          },
+          {
+            id: "claude-gpt:weekly",
+            group: "Claude/GPT",
+            groupId: "claude-gpt",
+            window: "weekly" as const,
+            shortLabel: "Claude/GPT 周",
+            detailLabel: "Claude/GPT · 每周",
+            remainingPercent: 100,
+            usedPercent: 0,
+            resetAtIso: "2026-12-01T05:30:00.000Z",
+            resetAtMs: Date.parse("2026-12-01T05:30:00.000Z"),
+          },
+          {
+            id: "claude-gpt:5h",
+            group: "Claude/GPT",
+            groupId: "claude-gpt",
+            window: "5h" as const,
+            shortLabel: "Claude/GPT 5h",
+            detailLabel: "Claude/GPT · 5h",
+            remainingPercent: 100,
+            usedPercent: 0,
+            resetAtIso: "2026-11-24T10:59:30.000Z",
+            resetAtMs: Date.parse("2026-11-24T10:59:30.000Z"),
+          },
+        ],
+      },
+    };
+
+    const upstreamProviders = [
+      {
+        instanceId: "codex-main",
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        usageLimits: {
+          checkedAt: new Date(now - 60_000).toISOString(),
+          windows: [
+            { id: "weekly", kind: "weekly", label: "7d", usedPercent: 18, resetsAt: "2026-11-29T06:00:00Z" },
+          ],
+        },
+      },
+    ] as unknown as ServerProvider[];
+
+    const summary = aggregateQuotaSummary(daemonQuota, upstreamProviders, now);
+    expect(summary.availableAgents.map((a) => a.displayName)).toEqual(["Antigravity", "Codex"]);
+
+    // Bottom status bar pill text (Fig 1): used vs remaining
+    const usedPill = buildQuotaStatusBarPill(summary, "used");
+    expect(usedPill?.text).toBe("已用 Gemini 周 7%");
+    const remainingPill = buildQuotaStatusBarPill(summary, "remaining");
+    expect(remainingPill?.text).toBe("剩余 Gemini 周 93%");
+
+    // Detailed View (Fig 3)
+    const detailedHtml = renderToStaticMarkup(
+      createElement(QuotaStatusPopover, {
+        summary,
+        prefs: { viewMode: "detailed", percentMode: "used" },
+        onPrefsChange: () => {},
+        now,
+        onRefresh: async () => {},
+      }),
+    );
+    expect(detailedHtml).toContain("使用量");
+    expect(detailedHtml).toContain("· 所有代理");
+    expect(detailedHtml).toContain("已用");
+    expect(detailedHtml).toContain("Antigravity");
+    expect(detailedHtml).toContain("Codex");
+    expect(detailedHtml).toContain("3小时 34分钟后重置");
+    expect(detailedHtml).toContain("Gemini 周");
+    expect(detailedHtml).toContain("Gemini 5h");
+    expect(detailedHtml).toContain("Claude/GPT 周");
+    expect(detailedHtml).toContain("Claude/GPT 5h");
+    expect(detailedHtml).toContain("7%");
+    expect(detailedHtml).toContain("5%");
+    expect(detailedHtml).toMatch(
+      /data-testid="quota-view-detailed"[^>]*aria-pressed="true"[^>]*data-active="true"[^>]*bg-primary/,
+    );
+
+    // Compact View (Fig 4)
+    const compactHtml = renderToStaticMarkup(
+      createElement(QuotaStatusPopover, {
+        summary,
+        prefs: { viewMode: "compact", percentMode: "used" },
+        onPrefsChange: () => {},
+        now,
+        onRefresh: async () => {},
+      }),
+    );
+    expect(compactHtml).toContain('data-quota-view="compact"');
+    expect(compactHtml).toContain("6天 14小时");
+    expect(compactHtml).toContain("7%");
+    expect(compactHtml).toMatch(
+      /data-testid="quota-view-compact"[^>]*aria-pressed="true"[^>]*data-active="true"[^>]*bg-primary/,
+    );
+
+    // Single-Agent Detail View (Fig 5)
+    const detailHtml = renderToStaticMarkup(
+      createElement(QuotaStatusPopover, {
+        summary,
+        prefs: { viewMode: "detailed", percentMode: "used" },
+        onPrefsChange: () => {},
+        now,
+        onRefresh: async () => {},
+        initialSelectedAgentId: "antigravity",
+      }),
+    );
+    expect(detailHtml).toContain('data-quota-view="detail"');
+    expect(detailHtml).toContain("更新于 刚刚");
+    expect(detailHtml).toContain("Gemini · 每周");
+    expect(detailHtml).toContain("6天 14小时后重置");
+    expect(detailHtml).toContain("Gemini · 5h");
+    expect(detailHtml).toContain("3小时 34分钟后重置");
+    expect(detailHtml).toContain("Claude/GPT · 每周");
+    expect(detailHtml).toContain("6天 23小时后重置");
+    expect(detailHtml).toContain("Claude/GPT · 5h");
+    expect(detailHtml).toContain("4小时 59分钟后重置");
+    expect(detailHtml).toContain("bg-[#22c55e]");
+
+    // Remaining mode on Detail View
+    const detailRemainingHtml = renderToStaticMarkup(
+      createElement(QuotaStatusPopover, {
+        summary,
+        prefs: { viewMode: "detailed", percentMode: "remaining" },
+        onPrefsChange: () => {},
+        now,
+        initialSelectedAgentId: "antigravity",
+      }),
+    );
+    expect(detailRemainingHtml).toContain("剩余");
+    expect(detailRemainingHtml).toContain("93%");
+    expect(detailRemainingHtml).toContain("95%");
+    expect(detailRemainingHtml).toContain("100%");
+
+    // Graceful Fallback when agy CLI is unavailable/unauthenticated
+    const unauthSummary = aggregateQuotaSummary(
+      {
+        ...daemonQuota,
+        antigravity: {
+          ...daemonQuota.antigravity,
+          status: "unauthenticated",
+          available: false,
+          windows: [],
+          error: "未检测到官方 agy CLI 登录态",
+        },
+      },
+      [],
+      now,
+    );
+    const fallbackHtml = renderToStaticMarkup(
+      createElement(QuotaStatusPopover, {
+        summary: unauthSummary,
+        prefs: { viewMode: "detailed", percentMode: "used" },
+        onPrefsChange: () => {},
+        now,
+        onRefresh: async () => {},
+      }),
+    );
+    expect(fallbackHtml).toContain("未检测到官方 agy CLI 登录态");
+    expect(fallbackHtml).toContain("重试");
   });
 });
 

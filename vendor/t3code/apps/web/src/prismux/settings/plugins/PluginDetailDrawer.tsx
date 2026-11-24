@@ -258,7 +258,7 @@ export function PluginDetailDrawer({
         {/* Scrollable Content */}
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4 text-xs">
           {/* Overview & Distribution Metadata */}
-          <section className="space-y-2.5 rounded-xl border border-border/70 bg-muted/20 p-3.5">
+          <section className="space-y-2.5 rounded-xl border border-border/60 bg-foreground/[0.025] p-3.5 dark:bg-white/[0.035]">
             <p className="leading-relaxed text-foreground">
               {plugin.description || "暂无插件简介。"}
             </p>
@@ -297,7 +297,7 @@ export function PluginDetailDrawer({
               </div>
             </dl>
             {plugin.sha256 ? (
-              <div className="rounded-lg border border-border/60 bg-background/60 px-2.5 py-1.5">
+              <div className="rounded-lg border border-border/60 bg-foreground/[0.035] px-2.5 py-1.5 dark:bg-white/[0.04]">
                 <span className="text-muted-foreground">SHA-256：</span>
                 <code className="break-all font-mono text-[11px] text-foreground">
                   {plugin.sha256}
@@ -321,7 +321,7 @@ export function PluginDetailDrawer({
               {contributionBuckets.map((bucket) => (
                 <div
                   key={bucket.key}
-                  className="rounded-xl border border-border/70 bg-muted/15 p-3 space-y-1.5"
+                  className="space-y-1.5 rounded-xl border border-border/60 bg-foreground/[0.025] p-3 dark:bg-white/[0.035]"
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-foreground">{bucket.label}</span>
@@ -336,7 +336,7 @@ export function PluginDetailDrawer({
                       {bucket.items.map((entry) => (
                         <li
                           key={entry}
-                          className="truncate rounded bg-background/60 px-2 py-1 font-mono text-[11px] text-foreground"
+                          className="truncate rounded bg-foreground/[0.04] px-2 py-1 font-mono text-[11px] text-foreground dark:bg-white/[0.05]"
                           title={entry}
                         >
                           {entry}
@@ -366,12 +366,12 @@ export function PluginDetailDrawer({
               )}
             </div>
             {evaluatedPermissions.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-muted/15 px-3 py-2.5 text-muted-foreground">
+              <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-foreground/[0.025] px-3 py-2.5 text-muted-foreground dark:bg-white/[0.035]">
                 <ShieldCheckIcon className="size-4 shrink-0 text-success-foreground" />
                 <span>仅访问插件自身隔离目录（无外部系统权限，对大模型 0 Token 纯净）。</span>
               </div>
             ) : (
-              <ul className="divide-y divide-border/60 rounded-xl border border-border/70 bg-muted/15">
+              <ul className="divide-y divide-border/50 rounded-xl border border-border/60 bg-foreground/[0.025] dark:bg-white/[0.035]">
                 {evaluatedPermissions.map((perm) => (
                   <li
                     key={perm.permission}
@@ -492,7 +492,7 @@ export function PluginDetailDrawer({
             <div
               tabIndex={0}
               aria-label="插件运行日志输出"
-              className="max-h-52 overflow-y-auto rounded-xl border border-border/70 bg-background/70 font-mono text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="max-h-52 overflow-y-auto rounded-xl border border-border/60 bg-foreground/[0.03] font-mono text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring dark:bg-white/[0.035]"
             >
               {filteredLogs.length === 0 ? (
                 <div className="px-3.5 py-5 text-center font-sans text-xs text-muted-foreground">
@@ -529,7 +529,7 @@ export function PluginDetailDrawer({
         </div>
 
         {/* Footer Actions: Toggle, Upgrade/Install, Rollback, Safe Uninstall */}
-        <footer className="space-y-2 border-t border-border/70 bg-muted/25 px-5 py-3.5">
+        <footer className="space-y-2 border-t border-border/60 bg-foreground/[0.02] px-5 py-3.5 dark:bg-white/[0.025]">
           {confirmingUninstall ? (
             <div
               role="alert"

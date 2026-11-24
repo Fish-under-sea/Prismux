@@ -610,13 +610,21 @@ const requestCodexChatGptModels = Effect.fn("requestCodexChatGptModels")(functio
   );
 });
 
-/** Set originator at spawn; the pre-initialize refresh otherwise overwrites shared cache with plain-CLI models. */
+/**
+ * Set originator at spawn; the pre-initialize refresh otherwise overwrites shared cache with plain-CLI models.
+ * Also explicitly clear ELECTRON_RUN_AS_NODE so Codex (and any tool/browser it launches) never inherits
+ * Electron's Node-only runtime flag from the embedded desktop server process.
+ */
 export const codexAppServerEnvironment = (
   environment: NodeJS.ProcessEnv | undefined,
-): NodeJS.ProcessEnv => ({
-  CODEX_INTERNAL_ORIGINATOR_OVERRIDE: CODEX_CLIENT_NAME,
-  ...environment,
-});
+): NodeJS.ProcessEnv => {
+  const next: NodeJS.ProcessEnv = {
+    CODEX_INTERNAL_ORIGINATOR_OVERRIDE: CODEX_CLIENT_NAME,
+    ...environment,
+  };
+  next.ELECTRON_RUN_AS_NODE = undefined;
+  return next;
+};
 
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
@@ -657,7 +665,7 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   const spawnCommand = yield* resolveSpawnCommand(
     input.binaryPath,
     codexAppServerArgs(input.launchArgs),
-    { env: environment, extendEnv: true },
+    { env: environment, extendEnv: true, bypassNpmShim: true },
   );
   const child = yield* spawner
     .spawn(
@@ -693,6 +701,7 @@ const CODEX_STARTUP_WORK_GRACE = Duration.minutes(1);
 
 const codexProcessGroupIsBusy = Effect.fn("codexProcessGroupIsBusy")(
   function* (pid: number) {
+    if ((yield* HostProcess.Platform) === "win32") return false;
     const { stdout } = yield* spawnAndCollect(
       "pgrep",
       ChildProcess.make("pgrep", ["-g", `${pid}`]),
@@ -845,6 +854,7 @@ const probeCodexCliVersion = Effect.fn("probeCodexCliVersion")(
     const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, ["--version"], {
       env: environment,
       extendEnv: true,
+      bypassNpmShim: true,
     });
     const result = yield* spawnAndCollect(
       input.binaryPath,

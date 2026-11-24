@@ -1,9 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import {
-  deriveLatestContextWindowSnapshot,
-  latestProviderTurnTokenUsage,
-} from "@t3tools/client-runtime/state/context-window";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import type { PrismuxKeepAwakeState, ServerProvider } from "@t3tools/contracts";
 import { makeWindow } from "@t3tools/shared/usageFormat";
@@ -14,7 +10,7 @@ import {
   CpuIcon,
   GaugeIcon,
   NetworkIcon,
-  ShieldCheckIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -30,23 +26,30 @@ import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { getClientSettings, subscribeClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { ensureLocalApi } from "~/localApi";
-import {
-  useProject,
-  useQuietThreadProjection,
-  useQuietThreadVisibleTurnItems,
-} from "~/state/entities";
+import { useProject, useQuietThreadProjection } from "~/state/entities";
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
 import { runningThreadKeepAliveAtom } from "~/state/threads";
 import { useUsage } from "~/state/usage";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { resolveThreadRouteRef } from "~/threadRoutes";
-import type { DaemonSystemResourcesResponse } from "./daemonClient";
+import { AgentBrandLogo } from "./agentBrand";
+import type {
+  DaemonOfficialQuotaSummaryResponse,
+  DaemonSystemResourcesResponse,
+} from "./daemonClient";
 import { useOptionalPrismuxRuntime } from "./PrismuxRuntimeProvider";
 import { KeepAwakeStatusPopover } from "./statusBar/KeepAwakeStatusPopover";
 import { PortsStatusPopover } from "./statusBar/PortsStatusPopover";
+import {
+  aggregateQuotaSummary,
+  buildQuotaStatusBarPill,
+  loadQuotaPreferences,
+  saveQuotaPreferences,
+  type QuotaPreferences,
+} from "./statusBar/quotaStatus.logic";
+import { QuotaStatusPopover } from "./statusBar/QuotaStatusPopover";
 import { ResourcesStatusPopover } from "./statusBar/ResourcesStatusPopover";
-import { deriveContextGaugeFromSnapshot } from "./statusBar/statusBarContext";
 import {
   shouldOpenStatusBarContextMenu,
   STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS,
@@ -67,18 +70,14 @@ import {
 import {
   collectStatusBarUsageSummary,
   formatCompactUsageTokens,
-  formatCompactUsageWindowValue,
 } from "./statusBar/statusBarUsage";
 import {
   DEFAULT_STATUS_BAR_VISIBILITY,
-  loadStatusBarUsagePreferences,
   loadStatusBarVisibility,
-  saveStatusBarUsagePreferences,
   saveStatusBarVisibility,
   STATUS_BAR_SEGMENT_IDS,
   toggleStatusBarSegment,
   type StatusBarSegmentId,
-  type StatusBarUsagePreferences,
   type StatusBarVisibility,
 } from "./statusBar/statusBarVisibility";
 import { UsageStatusPopover } from "./statusBar/UsageStatusPopover";
@@ -88,7 +87,8 @@ import { usePrismuxTraySync } from "./usePrismuxTraySync";
 export const PRISMUX_STATUS_BAR_HEIGHT_PX = 20 as const;
 
 const SEGMENT_LABELS: Readonly<Record<StatusBarSegmentId, string>> = {
-  usage: "额度与用量统计",
+  usage: "用量总览",
+  quota: "实时额度",
   keepAwake: "防止电脑休眠",
   ports: "监听端口胶囊",
   resources: "CPU / RAM 归因",
@@ -110,6 +110,7 @@ interface NavigatorWithWakeLock {
 const RESOURCES_OPEN_POLL_MS = 2_000;
 const RESOURCES_IDLE_POLL_MS = 5_000;
 const RESOURCES_EARLY_WARMUP_MS = 1_200;
+const QUOTA_POLL_INTERVAL_MS = 3 * 60 * 1_000;
 
 const STATUS_POPOVER_POPUP_CLASS =
   "overflow-hidden rounded-xl border border-border bg-popover bg-clip-padding p-0 shadow-xl before:hidden";
@@ -123,10 +124,10 @@ export function PrismuxStatusBar() {
   const [visibility, setVisibility] = useState<StatusBarVisibility>(() =>
     loadStatusBarVisibility(),
   );
-  const [usagePrefs, setUsagePrefs] = useState<StatusBarUsagePreferences>(() =>
-    loadStatusBarUsagePreferences(),
-  );
+  const [quotaPrefs, setQuotaPrefs] = useState<QuotaPreferences>(() => loadQuotaPreferences());
   const [usageOpen, setUsageOpen] = useState(false);
+  const [quotaOpen, setQuotaOpen] = useState(false);
+  const [quotaPopoverSession, setQuotaPopoverSession] = useState(0);
   const [keepAwakeOpen, setKeepAwakeOpen] = useState(false);
   const [portsOpen, setPortsOpen] = useState(false);
   const [resourcesOpen, setResourcesOpen] = useState(false);
@@ -146,6 +147,10 @@ export function PrismuxStatusBar() {
   const [manualResourcesLoading, setManualResourcesLoading] = useState(false);
   const [liveResourcesError, setLiveResourcesError] = useState<string | null>(null);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
+  const [daemonQuota, setDaemonQuota] = useState<DaemonOfficialQuotaSummaryResponse | null>(null);
+  const [quotaRefreshing, setQuotaRefreshing] = useState(false);
+  const [quotaMinuteTick, setQuotaMinuteTick] = useState<number>(() => Date.now());
+  const quotaInflightRef = useRef<Promise<void> | null>(null);
 
   // Resolve current route thread & workspace root without touching ChatView.
   const routeParams = useRouterState({
@@ -165,7 +170,6 @@ export function PrismuxStatusBar() {
   );
   const serverThreadProjection = useQuietThreadProjection(activeThreadRef);
   const serverProjection = serverThreadProjection?.projection ?? null;
-  const serverVisibleTurnItems = useQuietThreadVisibleTurnItems(activeThreadRef);
   const activeProjectRef =
     serverProjection && activeThreadRef
       ? scopeProjectRef(activeThreadRef.environmentId, serverProjection.thread.projectId)
@@ -176,28 +180,6 @@ export function PrismuxStatusBar() {
     serverProjection?.thread.worktreePath ??
     activeProject?.workspaceRoot ??
     null;
-
-  const activeProviderThread = serverProjection?.providerThreads.find(
-    (thread) => thread.id === serverProjection.thread.activeProviderThreadId,
-  );
-  const activeThreadLiveTokenUsage = useMemo(
-    () =>
-      latestProviderTurnTokenUsage(
-        serverProjection?.providerTurns ?? [],
-        serverProjection,
-        activeProviderThread,
-      ),
-    [serverProjection, activeProviderThread],
-  );
-  const activeContextWindow = useMemo(
-    () =>
-      deriveLatestContextWindowSnapshot(
-        serverVisibleTurnItems ?? [],
-        activeThreadLiveTokenUsage,
-        activeProviderThread,
-      ),
-    [serverVisibleTurnItems, activeThreadLiveTokenUsage, activeProviderThread],
-  );
 
   // Collect providers across connected environments (read-only from existing client atoms).
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
@@ -220,17 +202,21 @@ export function PrismuxStatusBar() {
     reportFailure: false,
   });
 
-  const activeThreadProvider = useMemo(() => {
-    const instanceId =
-      activeProviderThread?.providerInstanceId ??
-      serverProjection?.thread.modelSelection?.instanceId ??
-      null;
-    if (!instanceId) return null;
-    return allProviders.find((p) => p.instanceId === instanceId) ?? null;
-  }, [activeProviderThread, allProviders, serverProjection]);
-
-  const usageResetTimes = useMemo(() => {
+  const quotaResetTimes = useMemo(() => {
     const times: number[] = [];
+    const agyWindows = daemonQuota?.antigravity?.windows;
+    if (Array.isArray(agyWindows)) {
+      for (const win of agyWindows) {
+        if (typeof win.resetAtMs === "number" && Number.isFinite(win.resetAtMs)) {
+          times.push(win.resetAtMs);
+        } else if (typeof win.resetAtIso === "string" && win.resetAtIso.trim()) {
+          const parsed = Date.parse(win.resetAtIso);
+          if (Number.isFinite(parsed)) {
+            times.push(parsed);
+          }
+        }
+      }
+    }
     for (const provider of allProviders) {
       if (!provider.enabled || provider.driver === "antigravity") continue;
       const rawWindows = provider.usageLimits?.windows;
@@ -245,18 +231,34 @@ export function PrismuxStatusBar() {
       }
     }
     return times;
-  }, [allProviders]);
+  }, [allProviders, daemonQuota]);
 
   // Boundary-scheduled countdown clock (Orca `useResetCountdownClock`): ticks only at exact reset boundaries while popover is open.
-  const now = useResetCountdownClock(usageOpen, usageResetTimes);
+  const resetClockNow = useResetCountdownClock(quotaOpen, quotaResetTimes);
+  const quotaNow = Math.max(resetClockNow, quotaMinuteTick);
+
+  useEffect(() => {
+    if (!quotaOpen) return;
+    setQuotaMinuteTick(Date.now());
+    const timer = setInterval(() => {
+      setQuotaMinuteTick(Date.now());
+    }, 60_000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [quotaOpen]);
 
   const usageSummary = useMemo(
-    () => collectStatusBarUsageSummary(allProviders, now, mergedUsage, usageWindow.untilDay),
-    [allProviders, mergedUsage, now, usageWindow.untilDay],
+    () => collectStatusBarUsageSummary(allProviders, quotaNow, mergedUsage, usageWindow.untilDay),
+    [allProviders, mergedUsage, quotaNow, usageWindow.untilDay],
   );
-  const contextGauge = useMemo(
-    () => deriveContextGaugeFromSnapshot(activeContextWindow),
-    [activeContextWindow],
+  const quotaSummary = useMemo(
+    () => aggregateQuotaSummary(daemonQuota, allProviders, quotaNow),
+    [allProviders, daemonQuota, quotaNow],
+  );
+  const quotaPill = useMemo(
+    () => buildQuotaStatusBarPill(quotaSummary, quotaPrefs.percentMode),
+    [quotaPrefs.percentMode, quotaSummary],
   );
 
   // Prefer whichever resources snapshot is newer between runtime context and live status-bar sampling.
@@ -436,6 +438,8 @@ export function PrismuxStatusBar() {
   const handleKeepAwakeOpenChange = useCallback((open: boolean) => {
     setKeepAwakeOpen(open);
     if (!open) return;
+    setUsageOpen(false);
+    setQuotaOpen(false);
     const bridge = typeof window !== "undefined" ? window.desktopBridge?.prismux : undefined;
     if (bridge && typeof bridge.getKeepAwakeState === "function") {
       void bridge
@@ -548,33 +552,95 @@ export function PrismuxStatusBar() {
     setContextMenu(null);
   }, []);
 
-  const handleUsagePrefsChange = useCallback((next: StatusBarUsagePreferences) => {
-    setUsagePrefs(next);
-    saveStatusBarUsagePreferences(next);
+  const handleQuotaPrefsChange = useCallback((next: QuotaPreferences) => {
+    setQuotaPrefs(next);
+    saveQuotaPreferences(next);
   }, []);
+
+  const handleRefreshQuota = useCallback(
+    async (force = false) => {
+      if (!runtime?.daemonInfo.ready) return;
+      if (quotaInflightRef.current && !force) {
+        await quotaInflightRef.current;
+        return;
+      }
+      setQuotaRefreshing(true);
+      const run = (async () => {
+        try {
+          const tasks: Array<Promise<unknown>> = [];
+          if (typeof runtime.daemon?.fetchQuotaSummary === "function") {
+            tasks.push(
+              runtime.daemon.fetchQuotaSummary(force).then((snapshot) => {
+                setDaemonQuota(snapshot);
+                setQuotaMinuteTick(Date.now());
+              }),
+            );
+          }
+          if (force) {
+            for (const [environmentId, presentation] of presentations) {
+              if (
+                presentation.connection.phase !== "connected" ||
+                presentation.serverConfig === null
+              ) {
+                continue;
+              }
+              tasks.push(
+                refreshUsageLimits(
+                  environmentId,
+                  () => refreshProviders({ environmentId, input: {} }),
+                  false,
+                ),
+              );
+            }
+          }
+          await Promise.allSettled(tasks);
+        } finally {
+          setQuotaRefreshing(false);
+        }
+      })();
+      quotaInflightRef.current = run;
+      try {
+        await run;
+      } finally {
+        if (quotaInflightRef.current === run) {
+          quotaInflightRef.current = null;
+        }
+      }
+    },
+    [presentations, refreshProviders, runtime],
+  );
+
+  // Fetch official CLI quota on daemon ready and refresh every 3 minutes while visible.
+  useEffect(() => {
+    if (!runtime?.daemonInfo.ready || runtime.occluded) return;
+    let cancelled = false;
+    const poll = () => {
+      if (
+        cancelled ||
+        (typeof document !== "undefined" && document.visibilityState === "hidden")
+      ) {
+        return;
+      }
+      void handleRefreshQuota(false);
+    };
+    poll();
+    const timer = setInterval(poll, QUOTA_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [handleRefreshQuota, runtime?.daemonInfo.ready, runtime?.occluded]);
 
   const handleRefreshUsage = useCallback(async () => {
     setUsageRefreshing(true);
     try {
       const nextWindow = makeWindow(7, undefined, "day");
       setUsageWindow(nextWindow);
-      await Promise.allSettled([
-        usageView.refresh(nextWindow),
-        ...Array.from(presentations, ([environmentId, presentation]) => {
-          if (presentation.connection.phase !== "connected" || presentation.serverConfig === null) {
-            return Promise.resolve();
-          }
-          return refreshUsageLimits(
-            environmentId,
-            () => refreshProviders({ environmentId, input: {} }),
-            false,
-          );
-        }),
-      ]);
+      await Promise.allSettled([usageView.refresh(nextWindow)]);
     } finally {
       setUsageRefreshing(false);
     }
-  }, [presentations, refreshProviders, usageView]);
+  }, [usageView]);
 
   // Native non-passive wheel listener (modeled after Orca StatusBarSurface.tsx):
   // Chromium treats React `onWheel` as passive, so `preventDefault()` requires `{ passive: false }`.
@@ -614,21 +680,42 @@ export function PrismuxStatusBar() {
     setContextMenu({ x, y });
   }, []);
 
-  const handleUsageOpenChange = useCallback(
+  const handleUsageOpenChange = useCallback((open: boolean) => {
+    setUsageOpen(open);
+    if (open) {
+      setQuotaOpen(false);
+      setKeepAwakeOpen(false);
+      setPortsOpen(false);
+      setResourcesOpen(false);
+      const nextWindow = makeWindow(7, undefined, "day");
+      setUsageWindow(nextWindow);
+    }
+  }, []);
+
+  const handleQuotaOpenChange = useCallback(
     (open: boolean) => {
-      setUsageOpen(open);
+      setQuotaOpen(open);
       if (open) {
-        const nextWindow = makeWindow(7, undefined, "day");
-        setUsageWindow(nextWindow);
+        setQuotaPopoverSession((seq) => seq + 1);
+        setUsageOpen(false);
+        setKeepAwakeOpen(false);
+        setPortsOpen(false);
+        setResourcesOpen(false);
+        setQuotaMinuteTick(Date.now());
+        if (runtime?.daemonInfo.ready) {
+          void handleRefreshQuota(false);
+        }
       }
     },
-    [],
+    [handleRefreshQuota, runtime?.daemonInfo.ready],
   );
 
   const handlePortsOpenChange = useCallback(
     (open: boolean) => {
       setPortsOpen(open);
       if (open) {
+        setUsageOpen(false);
+        setQuotaOpen(false);
         void runtime?.refreshSystemPorts(activeWorkspaceRoot ?? undefined);
       } else {
         setOverridePortsWorkspace(null);
@@ -641,6 +728,8 @@ export function PrismuxStatusBar() {
     (open: boolean) => {
       setResourcesOpen(open);
       if (open) {
+        setUsageOpen(false);
+        setQuotaOpen(false);
         void fetchLiveResources({ forceRefresh: true, showSpinner: false });
       }
     },
@@ -659,8 +748,6 @@ export function PrismuxStatusBar() {
   }, []);
 
   const portsCount = runtime?.portsState.ports.length ?? 0;
-  const primaryUsage = usageSummary.primaryWindow;
-  const antigravityPrimary = usageSummary.antigravityEntries[0] ?? null;
   const { telemetry: usageTelemetry } = usageSummary;
 
   const effectiveResourcesLoading = manualResourcesLoading || Boolean(runtime?.resourcesLoading);
@@ -687,7 +774,7 @@ export function PrismuxStatusBar() {
         data-testid="prismux-status-bar-strip"
         className="flex h-full min-w-0 flex-1 items-center justify-between gap-1.5 overflow-x-auto overflow-y-hidden px-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {/* Left Zone: Compliant Quota & Local Usage Telemetry */}
+        {/* Left Zone: Local Token Usage Overview + Standalone Official Quota Pill */}
         <div className="flex h-full shrink-0 items-center gap-1">
           {visibility.usage ? (
             <Popover open={usageOpen} onOpenChange={handleUsageOpenChange}>
@@ -696,45 +783,23 @@ export function PrismuxStatusBar() {
                   <button
                     type="button"
                     data-testid="status-bar-usage-trigger"
-                    aria-label="打开额度与用量统计详情"
-                    className={cn(
-                      "inline-flex h-4 cursor-pointer items-center gap-1 rounded-sm px-1.5 font-medium tabular-nums transition-colors hover:bg-accent/70 active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                      primaryUsage?.urgency === "critical"
-                        ? "text-red-700 dark:text-red-300"
-                        : primaryUsage?.urgency === "warning"
-                          ? "text-amber-700 dark:text-amber-300"
-                          : "text-foreground",
-                    )}
+                    aria-label="打开用量总览详情"
+                    className="inline-flex h-4 cursor-pointer items-center gap-1 rounded-sm px-1.5 font-medium text-foreground tabular-nums transition-colors hover:bg-accent/70 active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
                   />
                 }
               >
-                {primaryUsage ? (
+                {usageTelemetry.todayTokens > 0 ? (
                   <>
-                    <GaugeIcon aria-hidden className="size-[11px] shrink-0" />
-                    <span className="max-w-28 truncate">{primaryUsage.providerName}</span>
-                    <span>{formatCompactUsageWindowValue(primaryUsage, usagePrefs.percentMode)}</span>
-                  </>
-                ) : usageTelemetry.todayTokens > 0 ? (
-                  <>
-                    <GaugeIcon aria-hidden className="size-[11px] shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    <GaugeIcon
+                      aria-hidden
+                      className="size-[11px] shrink-0 text-emerald-600 dark:text-emerald-400"
+                    />
                     <span>今日 {formatCompactUsageTokens(usageTelemetry.todayTokens)}</span>
                   </>
                 ) : usageTelemetry.weekTokens > 0 ? (
                   <>
                     <GaugeIcon aria-hidden className="size-[11px] shrink-0 text-foreground/80" />
                     <span>7日 {formatCompactUsageTokens(usageTelemetry.weekTokens)}</span>
-                  </>
-                ) : antigravityPrimary ? (
-                  <>
-                    <ShieldCheckIcon
-                      aria-hidden
-                      className="size-[11px] shrink-0 text-emerald-600 dark:text-emerald-400"
-                    />
-                    <span className="max-w-36 truncate">
-                      {antigravityPrimary.tierLabel
-                        ? `AGY · ${antigravityPrimary.tierLabel}`
-                        : "AGY · ACP"}
-                    </span>
                   </>
                 ) : usageSummary.enabledProviderCount > 0 ? (
                   <>
@@ -744,7 +809,7 @@ export function PrismuxStatusBar() {
                 ) : (
                   <>
                     <GaugeIcon aria-hidden className="size-[11px] shrink-0 text-muted-foreground" />
-                    <span className="text-muted-foreground">额度 —</span>
+                    <span className="text-muted-foreground">用量总览</span>
                   </>
                 )}
               </PopoverTrigger>
@@ -760,11 +825,6 @@ export function PrismuxStatusBar() {
               >
                 <UsageStatusPopover
                   summary={usageSummary}
-                  activeThreadIsAntigravity={activeThreadProvider?.driver === "antigravity"}
-                  contextGauge={contextGauge}
-                  prefs={usagePrefs}
-                  onPrefsChange={handleUsagePrefsChange}
-                  now={now}
                   loading={usageRefreshing || usageView.isPending}
                   onRefresh={handleRefreshUsage}
                   onClose={() => setUsageOpen(false)}
@@ -772,6 +832,94 @@ export function PrismuxStatusBar() {
                 />
               </PopoverPopup>
             </Popover>
+          ) : null}
+
+          {visibility.quota ? (
+            <div
+              data-testid="status-bar-quota-capsule"
+              className="inline-flex h-4 items-center rounded-sm transition-colors hover:bg-accent/70"
+            >
+              <Popover open={quotaOpen} onOpenChange={handleQuotaOpenChange}>
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      data-testid="status-bar-quota-trigger"
+                      aria-label={
+                        quotaPill ? `打开实时额度详情：${quotaPill.text}` : "打开实时额度详情"
+                      }
+                      className={cn(
+                        "inline-flex h-4 cursor-pointer items-center gap-1 rounded-l-sm pl-1.5 pr-1 font-medium tabular-nums active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                        quotaPill?.tone === "critical"
+                          ? "text-red-700 dark:text-red-300"
+                          : quotaPill?.tone === "warning"
+                            ? "text-amber-700 dark:text-amber-300"
+                            : "text-foreground",
+                      )}
+                    />
+                  }
+                >
+                  {quotaPill ? (
+                    <>
+                      <span className="text-muted-foreground">{quotaPill.modePrefix}</span>
+                      <AgentBrandLogo provider={quotaPill.brandProvider} size={11} />
+                      <span className="max-w-32 truncate">
+                        {quotaPill.shortLabel} {quotaPill.displayPercent}%
+                      </span>
+                    </>
+                  ) : quotaRefreshing ? (
+                    <>
+                      <AgentBrandLogo provider="antigravity" size={11} />
+                      <span className="text-muted-foreground">额度查询中…</span>
+                    </>
+                  ) : (
+                    <>
+                      <AgentBrandLogo provider="antigravity" size={11} online={false} />
+                      <span className="text-muted-foreground">额度 —</span>
+                    </>
+                  )}
+                </PopoverTrigger>
+                <PopoverPopup
+                  {...STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS}
+                  side="top"
+                  align="start"
+                  sideOffset={8}
+                  padding="none"
+                  data-pmx-glass-zone="overlays"
+                  data-pmx-status-popover="1"
+                  className={STATUS_POPOVER_POPUP_CLASS}
+                >
+                  <QuotaStatusPopover
+                    key={quotaPopoverSession}
+                    summary={quotaSummary}
+                    prefs={quotaPrefs}
+                    onPrefsChange={handleQuotaPrefsChange}
+                    now={quotaNow}
+                    loading={quotaRefreshing}
+                    onRefresh={handleRefreshQuota}
+                    embeddedInPopover
+                  />
+                </PopoverPopup>
+              </Popover>
+
+              <button
+                type="button"
+                data-testid="status-bar-quota-refresh"
+                aria-label="立即刷新实时额度"
+                title="立即刷新实时额度"
+                disabled={quotaRefreshing}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleRefreshQuota(true);
+                }}
+                className="inline-flex h-4 w-4 cursor-pointer items-center justify-center rounded-r-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+              >
+                <RefreshCwIcon
+                  aria-hidden
+                  className={cn("size-[11px] shrink-0", quotaRefreshing && "animate-spin")}
+                />
+              </button>
+            </div>
           ) : null}
         </div>
 
