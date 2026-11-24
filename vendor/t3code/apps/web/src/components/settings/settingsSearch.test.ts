@@ -113,9 +113,12 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
     expect(searchSettings("panel animations").map((item) => item.id)).toEqual(["panel-animations"]);
-    expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");
+    expect(searchSettings("thè\u{1ab0}mes")[0]).toMatchObject({
+      id: "theme",
+      to: "/settings/appearance",
+      targetId: "prismux-appearance",
+    });
     const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase").mockReturnValue("gıt");
     try {
       expect(searchSettings("GIT")[0]?.id).toBe("git-fetch-interval");
@@ -124,6 +127,20 @@ describe("searchSettings", () => {
       localeLowerCase.mockRestore();
     }
     expect(searchSettings("xyzzy")).toEqual([]);
+  });
+
+  it("omits deduplicated glass-opacity and environment-identification settings and redirects theme anchors to prismux-appearance", () => {
+    const allIds = new Set<string>(SETTINGS_SEARCH_ITEMS.map((item) => item.id));
+    expect(allIds.has("setting-glass-opacity")).toBe(false);
+    expect(allIds.has("environment-identification")).toBe(false);
+    expect(searchSettings("glass opacity")).toEqual([]);
+    expect(searchSettings("environment identification")).toEqual([]);
+    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "color-scheme")?.targetId).toBe(
+      "prismux-appearance",
+    );
+    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "theme")?.targetId).toBe(
+      "prismux-appearance",
+    );
   });
 
   it("matches query words across fields and ranks the strongest result first", () => {

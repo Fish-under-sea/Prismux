@@ -40,6 +40,7 @@ import {
   deriveLockedProvider,
   makeModelDisabledReason,
 } from "../ChatView.logic";
+import { isBtwSideThread } from "./btwMode";
 interface ComposerSelectionInput {
   readonly environmentId: EnvironmentId;
   readonly composerDraftTarget: ComposerThreadTarget;
@@ -156,6 +157,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   const applyThreadModelPick = useApplyThreadModelPick();
 
   const handleRuntimeModeChange = (mode: RuntimeMode) => {
+    if (isBtwSideThread(activeThread)) return;
     if (mode === runtimeMode) return;
     cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
     setComposerDraftRuntimeMode(composerDraftTarget, mode);
@@ -306,7 +308,11 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       explicit: true,
       replaceOptions: true,
     });
-    setStickyComposerModelSelection(nextModelSelection);
+    // Switching models inside a BTW side-question tab must NEVER mutate the parent thread
+    // or global sticky model selection.
+    if (!isBtwSideThread(activeThread)) {
+      setStickyComposerModelSelection(nextModelSelection);
+    }
     if (!isLocalDraftThread) applyThreadModelPick(threadRef);
     if (options?.focusComposer !== false) scheduleComposerFocus();
   };

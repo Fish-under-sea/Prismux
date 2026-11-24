@@ -59,6 +59,7 @@ export function ComposerControlsBar(props: {
   compatibleRuntimeMode: RuntimeMode;
   defaultRuntimeMode: RuntimeMode | undefined;
   compatibleRuntimeModeOptions: ReadonlyArray<RuntimeModeOption>;
+  readOnlyBtwLock?: boolean | undefined;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   composerControlsCollapsed: boolean;
   composerControlsHidden: boolean;
@@ -177,6 +178,7 @@ export function ComposerControlsBar(props: {
               hidden={composerControlsHidden || restingHiddenBlockCount > 0}
               accessDisplay={accessDisplay}
               emphasized={!accessMatchesDefault}
+              readOnlyBtwLock={props.readOnlyBtwLock === true}
               onRuntimeModeChange={handleRuntimeModeChange}
             />
           ),
@@ -297,7 +299,7 @@ export function ComposerControlsBar(props: {
             size={controlSize}
             hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
             // Permissions join the overflow only when their normal home is in it.
-            showPermissions={overflowShowsPermissions}
+            showPermissions={overflowShowsPermissions && props.readOnlyBtwLock !== true}
             onRuntimeModeChange={handleRuntimeModeChange}
           />
         </div>

@@ -195,26 +195,36 @@ export function decodeThreadSurface(surface: object): ThreadSurface | null {
 }
 
 export const DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER = [
-  "pull-request",
+  "pull-requests",
   "diff",
   "files",
   "terminal",
-  "side-chat",
   "preview",
   "mobile-simulator",
-  "pull-requests",
-  "wallpaper",
+  "side-chat",
 ] as const;
 
 export type RightPanelActivityItemId = (typeof DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER)[number];
 
-export const RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v3";
+export const RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v4";
 const LEGACY_RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEYS = [
+  "prismux.rightPanel.activityOrder.v3",
   "prismux.rightPanel.activityOrder.v2",
   "prismux.rightPanel.activityOrder.v1",
 ] as const;
 
 const LEGACY_DEFAULT_ACTIVITY_ORDERS: ReadonlyArray<readonly string[]> = [
+  [
+    "pull-request",
+    "diff",
+    "files",
+    "terminal",
+    "side-chat",
+    "preview",
+    "mobile-simulator",
+    "pull-requests",
+    "wallpaper",
+  ],
   ["diff", "files", "terminal", "preview", "mobile-simulator", "wallpaper"],
   ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "device", "files"],
   ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "devices", "files"],
@@ -255,6 +265,8 @@ export function normalizeRightPanelActivityOrder(raw: unknown): RightPanelActivi
     for (const item of raw) {
       if (
         typeof item === "string" &&
+        item !== "pull-request" &&
+        item !== "wallpaper" &&
         item !== "device" &&
         item !== "devices" &&
         validSet.has(item) &&

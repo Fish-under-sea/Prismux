@@ -1,6 +1,7 @@
 import {
   createCipheriv,
   createDecipheriv,
+  getCiphers,
   hkdfSync,
   randomBytes,
   randomUUID
@@ -18,12 +19,24 @@ import { basename, dirname, resolve } from "node:path";
 import type { PluginCredentialsHandle } from "@prismux/protocol";
 
 const SAFE_PLUGIN_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
-const CREDENTIAL_MAGIC = Buffer.from("PRXC01", "ascii");
+/** Legacy OpenSSL ChaCha20-Poly1305 envelope magic. */
+const CREDENTIAL_MAGIC_V1 = Buffer.from("PRXC01", "ascii");
+/** Cross-runtime AES-256-GCM envelope magic (supported by both OpenSSL Node and Electron BoringSSL). */
+const CREDENTIAL_MAGIC_V2 = Buffer.from("PRXC02", "ascii");
 const CREDENTIAL_HKDF_INFO = "prismux-plugin-cred-v1";
 const CREDENTIAL_KEY_BYTES = 32;
 const CREDENTIAL_IV_BYTES = 12;
 const CREDENTIAL_AUTH_TAG_BYTES = 16;
-const CREDENTIAL_CIPHER_ALGORITHM = "chacha20-poly1305" as const;
+const CREDENTIAL_CIPHER_V1 = "chacha20-poly1305" as const;
+const CREDENTIAL_CIPHER_V2 = "aes-256-gcm" as const;
+
+let chacha20SupportedCache: boolean | null = null;
+function isChaCha20Supported(): boolean {
+  if (chacha20SupportedCache === null) {
+    chacha20SupportedCache = getCiphers().includes(CREDENTIAL_CIPHER_V1);
+  }
+  return chacha20SupportedCache;
+}
 
 export interface PluginCredentialStore {
   /** Resolves an isolated `0600` encrypted credential handle for a single plugin ID. */
@@ -187,7 +200,7 @@ export class EncryptedPluginCredentialStore implements PluginCredentialStore {
     const buf = Buffer.isBuffer(rawBytes) ? rawBytes : Buffer.from(rawBytes);
 
     const minBytes =
-      CREDENTIAL_MAGIC.byteLength +
+      CREDENTIAL_MAGIC_V2.byteLength +
       CREDENTIAL_IV_BYTES +
       CREDENTIAL_AUTH_TAG_BYTES;
     if (buf.byteLength < minBytes) {
@@ -196,14 +209,24 @@ export class EncryptedPluginCredentialStore implements PluginCredentialStore {
       );
     }
 
-    const magic = buf.subarray(0, CREDENTIAL_MAGIC.byteLength);
-    if (!magic.equals(CREDENTIAL_MAGIC)) {
+    const magic = buf.subarray(0, CREDENTIAL_MAGIC_V2.byteLength);
+    let cipherAlgorithm: typeof CREDENTIAL_CIPHER_V1 | typeof CREDENTIAL_CIPHER_V2;
+    if (magic.equals(CREDENTIAL_MAGIC_V2)) {
+      cipherAlgorithm = CREDENTIAL_CIPHER_V2;
+    } else if (magic.equals(CREDENTIAL_MAGIC_V1)) {
+      if (!isChaCha20Supported()) {
+        throw new PluginCredentialError(
+          `Legacy ChaCha20 credential blob for "${safeId}" cannot be decrypted in this Electron/BoringSSL runtime without re-saving credentials.`
+        );
+      }
+      cipherAlgorithm = CREDENTIAL_CIPHER_V1;
+    } else {
       throw new PluginCredentialError(
         `Corrupted credential blob for "${safeId}": invalid magic header.`
       );
     }
 
-    const ivStart = CREDENTIAL_MAGIC.byteLength;
+    const ivStart = CREDENTIAL_MAGIC_V2.byteLength;
     const tagStart = ivStart + CREDENTIAL_IV_BYTES;
     const ciphertextStart = tagStart + CREDENTIAL_AUTH_TAG_BYTES;
 
@@ -213,21 +236,29 @@ export class EncryptedPluginCredentialStore implements PluginCredentialStore {
 
     const pluginKey = this.derivePluginKey(safeId);
     try {
-      const decipher = createDecipheriv(
-        CREDENTIAL_CIPHER_ALGORITHM,
-        pluginKey,
-        iv,
-        { authTagLength: CREDENTIAL_AUTH_TAG_BYTES }
-      );
-      decipher.setAAD(Buffer.from(`${CREDENTIAL_HKDF_INFO}:${safeId}`, "utf8"), {
-        plaintextLength: ciphertext.byteLength
-      });
-      decipher.setAuthTag(authTag);
-
-      const plaintext = Buffer.concat([
-        decipher.update(ciphertext),
-        decipher.final()
-      ]).toString("utf8");
+      const aad = Buffer.from(`${CREDENTIAL_HKDF_INFO}:${safeId}`, "utf8");
+      let plaintext: string;
+      if (cipherAlgorithm === CREDENTIAL_CIPHER_V1) {
+        const decipher = createDecipheriv(CREDENTIAL_CIPHER_V1, pluginKey, iv, {
+          authTagLength: CREDENTIAL_AUTH_TAG_BYTES
+        });
+        decipher.setAAD(aad, { plaintextLength: ciphertext.byteLength });
+        decipher.setAuthTag(authTag);
+        plaintext = Buffer.concat([
+          decipher.update(ciphertext),
+          decipher.final()
+        ]).toString("utf8");
+      } else {
+        const decipher = createDecipheriv(CREDENTIAL_CIPHER_V2, pluginKey, iv, {
+          authTagLength: CREDENTIAL_AUTH_TAG_BYTES
+        });
+        decipher.setAAD(aad);
+        decipher.setAuthTag(authTag);
+        plaintext = Buffer.concat([
+          decipher.update(ciphertext),
+          decipher.final()
+        ]).toString("utf8");
+      }
 
       const parsed: unknown = JSON.parse(plaintext);
       if (!isPlainStringRecord(parsed)) {
@@ -268,15 +299,11 @@ export class EncryptedPluginCredentialStore implements PluginCredentialStore {
     try {
       const iv = randomBytes(CREDENTIAL_IV_BYTES);
       const plaintext = Buffer.from(JSON.stringify(map), "utf8");
-      const cipher = createCipheriv(
-        CREDENTIAL_CIPHER_ALGORITHM,
-        pluginKey,
-        iv,
-        { authTagLength: CREDENTIAL_AUTH_TAG_BYTES }
-      );
-      cipher.setAAD(Buffer.from(`${CREDENTIAL_HKDF_INFO}:${pluginId}`, "utf8"), {
-        plaintextLength: plaintext.byteLength
+      const aad = Buffer.from(`${CREDENTIAL_HKDF_INFO}:${pluginId}`, "utf8");
+      const cipher = createCipheriv(CREDENTIAL_CIPHER_V2, pluginKey, iv, {
+        authTagLength: CREDENTIAL_AUTH_TAG_BYTES
       });
+      cipher.setAAD(aad);
 
       const ciphertext = Buffer.concat([
         cipher.update(plaintext),
@@ -284,7 +311,7 @@ export class EncryptedPluginCredentialStore implements PluginCredentialStore {
       ]);
       const authTag = cipher.getAuthTag();
 
-      return Buffer.concat([CREDENTIAL_MAGIC, iv, authTag, ciphertext]);
+      return Buffer.concat([CREDENTIAL_MAGIC_V2, iv, authTag, ciphertext]);
     } finally {
       pluginKey.fill(0);
     }

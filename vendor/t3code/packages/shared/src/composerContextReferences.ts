@@ -226,6 +226,37 @@ export function replaceComposerContextReferences(
 const CONTEXT_ENVELOPE_TAG = "t3_context";
 const CONTEXT_ENTRY_TAG = "context";
 
+/**
+ * Invisible context record kind carrying read-only BTW (Side Question) system instructions.
+ * Projected automatically by `projectComposerContextForProvider` even without an inline
+ * markdown token in `message.text`, keeping the user's chat bubble 100% clean.
+ */
+export const BTW_GUARDRAIL_CONTEXT_KIND = "btw-guardrail" as const;
+
+interface BtwGuardrailPayload {
+  readonly mode?: string;
+  readonly instruction: string;
+  readonly contextSummary?: string;
+}
+
+function isBtwGuardrailPayload(payload: unknown): payload is BtwGuardrailPayload {
+  if (!payload || typeof payload !== "object") return false;
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.instruction === "string" && candidate.instruction.trim().length > 0;
+}
+
+function formatBtwGuardrailPayload(payload: BtwGuardrailPayload): string {
+  const lines = [payload.instruction.trim()];
+  if (typeof payload.contextSummary === "string" && payload.contextSummary.trim().length > 0) {
+    lines.push("", "Main conversation context summary:", payload.contextSummary.trim());
+  }
+  return lines.join("\n");
+}
+
+function isUnreferencedBtwGuardrailRecord(record: ComposerContextRecord): boolean {
+  return record.kind === BTW_GUARDRAIL_CONTEXT_KIND && "payload" in record;
+}
+
 function kindDisplayName(kind: ComposerContextKind): string {
   const spaced = kind.replace(/-/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
@@ -386,7 +417,9 @@ function formatEnvelopeEntry(
   if (!record) return `${open} unavailable="true"/>`;
   const body =
     "payload" in record
-      ? JSON.stringify(record.payload)
+      ? kind === BTW_GUARDRAIL_CONTEXT_KIND && isBtwGuardrailPayload(record.payload)
+        ? formatBtwGuardrailPayload(record.payload)
+        : JSON.stringify(record.payload)
       : formatComposerContextProviderPayload(record);
   return `${open}>\n${escapeComposerContextPayloadText(body)}\n</${CONTEXT_ENTRY_TAG}>`;
 }
@@ -396,19 +429,24 @@ export function projectComposerContextForProvider(input: {
   records: ReadonlyArray<ComposerContextRecord>;
 }): string {
   const occurrences = collectComposerContextReferences(input.text);
-  if (occurrences.length === 0) return expandAssistantCitationsForProvider(input.text);
+  const trailingGuardrails = input.records.filter(isUnreferencedBtwGuardrailRecord);
+  if (occurrences.length === 0 && trailingGuardrails.length === 0) {
+    return expandAssistantCitationsForProvider(input.text);
+  }
   const recordsById = new Map<ComposerContextId, ComposerContextRecord | undefined>();
   for (const record of input.records) {
     recordsById.set(record.contextId, recordsById.has(record.contextId) ? undefined : record);
   }
   const body = expandAssistantCitationsForProvider(
-    replaceComposerContextReferences(input.text, (occurrence) =>
-      formatComposerContextProviderMarker(
-        recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
-        occurrence.label,
-        occurrence.contextId,
-      ),
-    ),
+    occurrences.length === 0
+      ? input.text
+      : replaceComposerContextReferences(input.text, (occurrence) =>
+          formatComposerContextProviderMarker(
+            recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
+            occurrence.label,
+            occurrence.contextId,
+          ),
+        ),
   );
   const seen = new Set<ComposerContextId>();
   const entries: string[] = [];
@@ -422,6 +460,12 @@ export function projectComposerContextForProvider(input: {
       record,
     );
     entries.push(entry);
+  }
+  for (const guardrail of trailingGuardrails) {
+    if (seen.has(guardrail.contextId)) continue;
+    seen.add(guardrail.contextId);
+    const record = recordsById.get(guardrail.contextId);
+    entries.push(formatEnvelopeEntry(guardrail.kind, guardrail.contextId, record));
   }
   if (entries.length === 0) return body;
   return `${body}\n\n<${CONTEXT_ENVELOPE_TAG} version="1">\n${entries.join("\n")}\n</${CONTEXT_ENVELOPE_TAG}>`;

@@ -665,6 +665,29 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     expect(html).toContain("已回复");
     expect(html).toContain("离线时问题会不会丢失？");
     expect(html).toContain("离线暂存");
+
+    // Legacy "Side chat" native side-thread titles normalize cleanly to "旁路提问"
+    const normalizedNative = extractOverviewSideQuestions({
+      currentThreadId: ThreadId.make("thread-1"),
+      persisted: [],
+      activeOnly: false,
+      relationshipShells: [
+        {
+          id: ThreadId.make("btw-legacy-1"),
+          title: "Side chat",
+          status: "idle",
+          activityRunStatus: null,
+          updatedAt: "2026-11-24T12:00:00.000Z",
+          lineage: {
+            parentThreadId: ThreadId.make("thread-1"),
+            sideChat: true,
+          },
+        } as never,
+      ],
+    });
+    expect(normalizedNative).toHaveLength(1);
+    expect(normalizedNative[0]?.title).toBe("旁路提问");
+    expect(normalizedNative[0]?.linkedSideThreadId).toBe(ThreadId.make("btw-legacy-1"));
   });
 
   it("supports diffStats override, threadAttachments, continueInTerminalDisabled, and empty/offline thread state cleanly", () => {

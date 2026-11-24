@@ -18,6 +18,7 @@ import {
   LinkedItemsEmptySurface,
   PullRequestEmptySurface,
   SideChatEmptySurface,
+  type ExistingBtwSideThreadItem,
 } from "./RightPanelEmptySurfaces";
 import SideThreadPane from "./SideThreadPane";
 import type { ComposerImageAttachment, DraftId } from "../../composerDraftStore";
@@ -68,6 +69,10 @@ interface RightPanelSideChatProps {
   readonly canStart: boolean;
   readonly disabledReason: string | null;
   readonly onStart?: (() => void) | undefined;
+  readonly onQuickAsk?: ((question: string) => Promise<boolean> | boolean | void) | undefined;
+  readonly isServerThread?: boolean | undefined;
+  readonly existingSideThreads?: ReadonlyArray<ExistingBtwSideThreadItem> | undefined;
+  readonly onOpenExistingSideThread?: ((threadId: ThreadId) => void) | undefined;
 }
 
 interface RightPanelFileProps {
@@ -288,6 +293,11 @@ export function RightPanelSurfaceContent(props: {
           canStart={props.sideChat?.canStart === true}
           disabledReason={props.sideChat?.disabledReason ?? null}
           onStart={props.sideChat?.onStart}
+          onQuickAsk={props.sideChat?.onQuickAsk}
+          threadRef={threadRef}
+          isServerThread={props.sideChat?.isServerThread}
+          existingSideThreads={props.sideChat?.existingSideThreads}
+          onOpenExistingSideThread={props.sideChat?.onOpenExistingSideThread}
         />
       );
     case "linked-thread":

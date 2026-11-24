@@ -1,6 +1,8 @@
 import type {
   ChatAttachment,
   EnvironmentId,
+  ModelSelection,
+  OrchestrationMessageContext,
   OrchestrationV2ThreadProjection,
   ThreadId,
 } from "@t3tools/contracts";
@@ -29,10 +31,17 @@ import { m } from "~/i18n/messages";
 import { cn, newMessageId, newThreadId } from "~/lib/utils";
 import { prismuxDaemonClient } from "~/prismux/daemonClient";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { useThreadProjection, waitForThreadShell } from "~/state/entities";
+import { readThreadShell, useThreadProjection, waitForThreadShell } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
+import {
+  attachBtwReadOnlyGuardrailContext,
+  deriveBtwThreadTitle,
+  notifySideQuestionsUpdated,
+  resolveBtwRuntimeMode,
+  subscribeSideQuestionsUpdated,
+} from "../chat/btwMode";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -87,8 +96,10 @@ export interface UseSideQuestionControllerInput {
         readonly text: string;
         readonly titleSeed: string;
         readonly attachments: ReadonlyArray<ChatAttachment>;
+        readonly context?: OrchestrationMessageContext;
       }) => Promise<boolean> | boolean | void)
     | undefined;
+  readonly readModelSelection?: (() => ModelSelection | undefined) | undefined;
   readonly onAskSideQuestion?: SideQuestionAskExecutor | undefined;
 }
 
@@ -103,6 +114,17 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
     records: loadPersistedSideQuestions(environmentId, threadId),
   }));
 
+  useEffect(
+    () =>
+      subscribeSideQuestionsUpdated(environmentId, threadId, () => {
+        setState({
+          key: threadStorageKey,
+          records: loadPersistedSideQuestions(environmentId, threadId),
+        });
+      }),
+    [environmentId, threadId, threadStorageKey],
+  );
+
   const records =
     state.key === threadStorageKey
       ? state.records
@@ -112,6 +134,9 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
 
   const forkSideChat = useAtomCommand(threadEnvironment.forkSideChat, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
+  const setThreadRuntimeMode = useOrchestrationCommand(threadEnvironment.setRuntimeMode, {
+    reportFailure: false,
+  });
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
     reportFailure: false,
   });
@@ -127,6 +152,7 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
         savePersistedSideQuestions(environmentId, threadId, next);
         return { key: threadStorageKey, records: next };
       });
+      notifySideQuestionsUpdated(environmentId, threadId);
     },
     [environmentId, threadId, threadStorageKey],
   );
@@ -153,7 +179,12 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
   const dispatchQuestion = useCallback(
     async (record: SideQuestionRecord): Promise<SideQuestionRecord> => {
       const prompt = buildSideQuestionPrompt(record.question, record.contextSummary);
-      const titleSeed = deriveSideQuestionTitle(record.question);
+      const titleSeed = deriveBtwThreadTitle(record.question, deriveSideQuestionTitle(record.question));
+      const btwRuntimeMode = resolveBtwRuntimeMode();
+      const guardedContext = attachBtwReadOnlyGuardrailContext(undefined, {
+        contextSummary: record.contextSummary,
+      });
+      const modelSelection = input.readModelSelection?.();
 
       // 1. Custom test / host bridge override
       if (input.onAskSideQuestion) {
@@ -187,7 +218,8 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
         }
       }
 
-      // 2. Real isolated T3 side-chat fork + read-only turn (never pollutes main thread)
+      // 2. Real isolated T3 BTW side-question fork + strictly read-only turn
+      // (keeps `message.text` clean for the chat bubble and carries read-only instructions invisibly in `context`)
       if (input.isServerThread && input.sideChatAvailable) {
         const targetThreadId = newThreadId();
         const fork = await forkSideChat({
@@ -202,6 +234,17 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
           const targetRef = scopeThreadRef(environmentId, targetThreadId);
           const ready = await waitForThreadShell(targetRef);
           if (ready) {
+            const sideShell = readThreadShell(targetRef);
+            if (sideShell && sideShell.runtimeMode !== btwRuntimeMode) {
+              await setThreadRuntimeMode({
+                environmentId,
+                input: {
+                  threadId: targetThreadId,
+                  runtimeMode: btwRuntimeMode,
+                  createdAt: new Date().toISOString(),
+                },
+              });
+            }
             const turn = await startThreadTurn({
               environmentId,
               input: {
@@ -209,11 +252,13 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
                 message: {
                   messageId: newMessageId(),
                   role: "user",
-                  text: prompt,
+                  text: record.question,
                   attachments: [],
+                  context: guardedContext,
                 },
+                ...(modelSelection === undefined ? {} : { modelSelection }),
                 titleSeed,
-                runtimeMode: "approval-required",
+                runtimeMode: btwRuntimeMode,
                 interactionMode: "default",
                 createdAt: new Date().toISOString(),
               },
@@ -255,9 +300,10 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
         if (input.onOpenSideChat) {
           try {
             const started = await input.onOpenSideChat({
-              text: prompt,
+              text: record.question,
               titleSeed,
               attachments: [],
+              context: guardedContext,
             });
             if (started !== false) {
               const dispatched: SideQuestionRecord = {
@@ -300,6 +346,7 @@ export function useSideQuestionController(input: UseSideQuestionControllerInput)
       fetchLocalMemoryHints,
       forkSideChat,
       input,
+      setThreadRuntimeMode,
       startThreadTurn,
       threadId,
     ],

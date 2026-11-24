@@ -1,5 +1,5 @@
-import { msg, T, useGT, useMessages } from "gt-react";
-import { m, type MessageResolver } from "../i18n/messages";
+import { msg, T, useGT, useLocale, useMessages } from "gt-react";
+import { getActiveLocale, m, type MessageResolver } from "../i18n/messages";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
@@ -44,8 +44,17 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dnd-kit/modifiers";
-import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
+import {
+  restrictToFirstScrollableAncestor,
+  restrictToHorizontalAxis,
+  restrictToVerticalAxis,
+} from "@dnd-kit/modifiers";
+import {
+  horizontalListSortingStrategy,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   Bot,
@@ -58,7 +67,9 @@ import {
   FileDiff,
   Files,
   Globe2,
+  GripVertical,
   Image as ImageIcon,
+  MessageSquarePlus,
   MessagesSquare,
   MoreHorizontal,
   Network,
@@ -187,23 +198,25 @@ export interface RightPanelTabsProps {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
-  onAddPullRequest: () => void;
+  /** Kept optional for backwards compatibility; PR tabs open via Linked items (`已关联项`). */
+  onAddPullRequest?: (() => void) | undefined;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
-  /** Prismux wallpaper & liquid glass quick sidebar. */
+  /** Kept optional for backwards compatibility; Wallpaper sidebar opens from the topbar toggle. */
   onAddWallpaper?: (() => void) | undefined;
-  /** Absent where side chats are not offered. */
+  /** Absent where side questions are not offered. */
   onAddSideChat?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
-  pullRequestAvailable: boolean;
+  /** Kept optional for backwards compatibility. */
+  pullRequestAvailable?: boolean | undefined;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
   wallpaperAvailable?: boolean;
   sideChatAvailable?: boolean;
-  /** Overrides the default reason while side chats are available but cannot start. */
+  /** Overrides the default reason while side questions are available but cannot start. */
   sideChatDisabledReason?: string | null;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
@@ -223,15 +236,35 @@ function shouldOpenDefaultBrowserProfileFromMenuClick(pointerType: string | unde
   return pointerType !== "touch";
 }
 
+const SIDE_QUESTION_MSG = msg("Side question");
+
+function isChineseLocale(locale?: string | null): boolean {
+  const effective = (locale ?? getActiveLocale() ?? "en").toLowerCase();
+  return effective.startsWith("zh");
+}
+
+/**
+ * Resolves the unified BTW side-question label across locales:
+ * renders `"旁路提问"` in Chinese UI even before a dedicated GT hash entry lands,
+ * and `"Side question"` in English UI (or translated string in any other locale).
+ */
+export function resolveSideQuestionLabel(
+  resolve: MessageResolver = m,
+  locale?: string | null,
+): string {
+  const translated = resolve(SIDE_QUESTION_MSG);
+  if (translated !== "Side question") {
+    return translated;
+  }
+  return isChineseLocale(locale) ? "旁路提问" : translated;
+}
+
 const SURFACE_DISABLED_REASONS = {
   browser: msg("Browser previews are only available in the T3 Code desktop app."),
   terminal: msg("Terminal surfaces are only available from a project thread."),
   files: msg("Files are only available when a project is open."),
   diff: msg("Diff is only available for server threads in Git repositories."),
-  pullRequest: msg("This thread's branch has no pull request yet."),
   pullRequests: msg("This thread has no linked items."),
-  device: msg("Devices are only available from a thread."),
-  wallpaper: msg("Wallpaper panel is available from an active thread."),
   sideChat: msg("Side chats start after the first message."),
 } as const;
 
@@ -254,10 +287,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   terminal: msg("Available when a project is open."),
   files: msg("Available when a project is open."),
   diff: msg("Available for Git repositories."),
-  pullRequest: msg("No pull request on this branch yet."),
   pullRequests: msg("No linked items available."),
-  device: msg("Available from a thread."),
-  wallpaper: msg("Available from an active thread."),
   sideChat: msg("Available after the first message."),
 } as const;
 
@@ -350,6 +380,7 @@ function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement })
 }
 
 function SurfaceMenuItem(props: {
+  itemId?: RightPanelActivityItemId;
   available: boolean;
   disabledReason?: string;
   shortcut: string;
@@ -358,6 +389,7 @@ function SurfaceMenuItem(props: {
 }) {
   const item = (
     <MenuItem
+      data-surface-menu-item={props.itemId}
       className={!props.available ? "data-disabled:pointer-events-auto" : undefined}
       onClick={props.onClick}
       disabled={!props.available}
@@ -371,123 +403,299 @@ function SurfaceMenuItem(props: {
   return <DisabledReasonTooltip reason={props.disabledReason} trigger={item} />;
 }
 
-function RightPanelEmptyState(props: {
-  onAddBrowser: () => void;
-  onAddMobileSimulator: () => void;
-  onAddBrowserInProfile: (profileId: string) => void;
-  browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
-  onAddTerminal: () => void;
-  onAddDiff: () => void;
-  onAddFiles: () => void;
-  onAddPullRequest: () => void;
-  onAddPullRequests: () => void;
-  onAddDevice: () => void;
-  onAddWallpaper?: (() => void) | undefined;
-  /** Absent where side chats are not offered. */
-  onAddSideChat?: (() => void) | undefined;
-  browserAvailable: boolean;
-  terminalAvailable: boolean;
-  diffAvailable: boolean;
-  filesAvailable: boolean;
-  pullRequestAvailable: boolean;
-  pullRequestsAvailable: boolean;
-  deviceAvailable: boolean;
-  wallpaperAvailable: boolean;
-  sideChatAvailable: boolean;
-  sideChatDisabledReason: string | null;
-}) {
-  const gt = useGT();
-  const messages = useMessages();
-  const [highlight, setHighlight] = useState(-1);
+export interface RightPanelLauncherAction {
+  readonly id: RightPanelActivityItemId;
+  readonly label: string;
+  readonly icon: typeof Globe2;
+  readonly shortcut: "L" | "D" | "F" | "T" | "B" | "I" | "S";
+  readonly available: boolean;
+  readonly disabledReason: string;
+  readonly onClick: () => void;
+}
 
-  const actions = [
-    {
-      label: msg("PR"),
-      icon: PullRequestGlyph.pullRequest,
-      shortcut: "P",
-      available: props.pullRequestAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.pullRequest),
-      onClick: props.onAddPullRequest,
-    },
-    {
-      label: msg("Diff"),
-      icon: FileDiff,
-      shortcut: "D",
-      available: props.diffAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.diff),
-      onClick: props.onAddDiff,
-    },
-    {
-      label: msg("Files"),
-      icon: Files,
-      shortcut: "F",
-      available: props.filesAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.files),
-      onClick: props.onAddFiles,
-    },
-    {
-      label: msg("Terminal"),
-      icon: TerminalSquare,
-      shortcut: "T",
-      available: props.terminalAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.terminal),
-      onClick: props.onAddTerminal,
-    },
-    ...(props.onAddSideChat
-      ? [
-          {
-            label: msg("Side chat"),
-            description: msg("Ask a side question while this thread keeps working."),
-            icon: MessagesSquare,
-            shortcut: "S",
-            available: props.sideChatAvailable,
-            disabledReason:
-              props.sideChatDisabledReason ?? messages(SURFACE_UNAVAILABLE_HINTS.sideChat),
-            onClick: props.onAddSideChat,
-          },
-        ]
-      : []),
-    {
-      label: msg("Browser"),
-      icon: Globe2,
-      shortcut: "B",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
-      onClick: props.onAddBrowser,
-    },
-    {
-      label: "手机模拟",
-      description: msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"),
-      icon: TabletSmartphone,
-      shortcut: "I",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
-      onClick: props.onAddMobileSimulator,
-    },
-    {
-      label: msg("Linked items"),
+export interface BuildRightPanelLauncherActionsInput {
+  readonly order: readonly RightPanelActivityItemId[];
+  readonly resolveMessage: MessageResolver;
+  readonly locale?: string | null;
+  readonly disabledReasonStyle: "hint" | "reason";
+  readonly includeSideChat: boolean;
+  readonly availability: {
+    readonly pullRequests: boolean;
+    readonly diff: boolean;
+    readonly files: boolean;
+    readonly terminal: boolean;
+    readonly preview: boolean;
+    readonly mobileSimulator: boolean;
+    readonly sideChat: boolean;
+  };
+  readonly sideChatDisabledReason?: string | null;
+  readonly handlers: {
+    readonly onPullRequests: () => void;
+    readonly onDiff: () => void;
+    readonly onFiles: () => void;
+    readonly onTerminal: () => void;
+    readonly onPreview: () => void;
+    readonly onMobileSimulator: () => void;
+    readonly onSideChat?: (() => void) | undefined;
+  };
+}
+
+/**
+ * Pure builder shared by the empty-state launcher ("打开面板") and the top `+` dropdown menu.
+ * Follows the exact live `activityBarOrder` so top bar, bottom launcher, and `+` menu always stay in sync.
+ */
+export function buildRightPanelLauncherActions(
+  input: BuildRightPanelLauncherActionsInput,
+): RightPanelLauncherAction[] {
+  const {
+    order,
+    resolveMessage,
+    locale,
+    disabledReasonStyle,
+    includeSideChat,
+    availability,
+    sideChatDisabledReason,
+    handlers,
+  } = input;
+  const reasons =
+    disabledReasonStyle === "hint" ? SURFACE_UNAVAILABLE_HINTS : SURFACE_DISABLED_REASONS;
+
+  const actionMap: Record<RightPanelActivityItemId, RightPanelLauncherAction> = {
+    "pull-requests": {
+      id: "pull-requests",
+      label: resolveMessage(msg("Linked items")),
       icon: PullRequestGlyph.link,
       shortcut: "L",
-      available: props.pullRequestsAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.pullRequests),
-      onClick: props.onAddPullRequests,
+      available: availability.pullRequests,
+      disabledReason: resolveMessage(reasons.pullRequests),
+      onClick: handlers.onPullRequests,
     },
-    ...(props.onAddWallpaper
-      ? [
-          {
-            label: "壁纸",
-            description: msg("切换动态壁纸、液态玻璃与外观主题。"),
-            icon: ImageIcon,
-            shortcut: "W",
-            available: props.wallpaperAvailable,
-            disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.wallpaper),
-            onClick: props.onAddWallpaper,
-          },
-        ]
-      : []),
-  ] as const;
+    diff: {
+      id: "diff",
+      label: resolveMessage(msg("Diff")),
+      icon: FileDiff,
+      shortcut: "D",
+      available: availability.diff,
+      disabledReason: resolveMessage(reasons.diff),
+      onClick: handlers.onDiff,
+    },
+    files: {
+      id: "files",
+      label: resolveMessage(msg("Files")),
+      icon: Files,
+      shortcut: "F",
+      available: availability.files,
+      disabledReason: resolveMessage(reasons.files),
+      onClick: handlers.onFiles,
+    },
+    terminal: {
+      id: "terminal",
+      label: resolveMessage(msg("Terminal")),
+      icon: TerminalSquare,
+      shortcut: "T",
+      available: availability.terminal,
+      disabledReason: resolveMessage(reasons.terminal),
+      onClick: handlers.onTerminal,
+    },
+    preview: {
+      id: "preview",
+      label: resolveMessage(msg("Browser")),
+      icon: Globe2,
+      shortcut: "B",
+      available: availability.preview,
+      disabledReason: resolveMessage(reasons.browser),
+      onClick: handlers.onPreview,
+    },
+    "mobile-simulator": {
+      id: "mobile-simulator",
+      label: "手机模拟",
+      icon: TabletSmartphone,
+      shortcut: "I",
+      available: availability.mobileSimulator,
+      disabledReason: resolveMessage(reasons.browser),
+      onClick: handlers.onMobileSimulator,
+    },
+    "side-chat": {
+      id: "side-chat",
+      label: resolveSideQuestionLabel(resolveMessage, locale),
+      icon: MessageSquarePlus,
+      shortcut: "S",
+      available: availability.sideChat,
+      disabledReason: sideChatDisabledReason ?? resolveMessage(reasons.sideChat),
+      onClick: () => handlers.onSideChat?.(),
+    },
+  };
 
-  type SurfaceAction = (typeof actions)[number];
+  const result: RightPanelLauncherAction[] = [];
+  for (const id of order) {
+    if (id === "side-chat" && !includeSideChat) continue;
+    const action = actionMap[id];
+    if (action) result.push(action);
+  }
+  return result;
+}
+
+const EMPTY_STATE_DRAG_MODIFIERS = [restrictToVerticalAxis];
+
+export function applyRightPanelActivityDragEnd(
+  event: Pick<DragEndEvent, "active" | "over">,
+  onReorder: (fromId: RightPanelActivityItemId, toId: RightPanelActivityItemId) => void,
+): boolean {
+  const { active, over } = event;
+  if (!over || active.id === over.id) return false;
+  onReorder(active.id as RightPanelActivityItemId, over.id as RightPanelActivityItemId);
+  return true;
+}
+
+function SortableEmptyStateActionRow(props: {
+  readonly action: RightPanelLauncherAction;
+  readonly highlighted: boolean;
+  readonly browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  readonly onAddBrowserInProfile: (profileId: string) => void;
+  readonly onHighlight: () => void;
+  readonly onClearHighlight: () => void;
+}) {
+  const gt = useGT();
+  const { action, highlighted, browserProfiles, onAddBrowserInProfile } = props;
+  const Icon = action.icon;
+  const {
+    attributes: {
+      "aria-pressed": _dndAriaPressed,
+      role: _dndRole,
+      tabIndex: _dndTabIndex,
+      ...sortableAttributes
+    },
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: action.id });
+
+  const iconNode = (
+    <span className="relative inline-flex shrink-0">
+      <Icon className="size-4" />
+    </span>
+  );
+
+  return (
+    <div
+      ref={setNodeRef}
+      data-launcher-item={action.id}
+      data-launcher-sortable="true"
+      data-dragging={isDragging ? "true" : "false"}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+      }}
+      {...listeners}
+      className={cn(
+        "group relative flex h-8 w-full items-center rounded-(--control-radius) transition-colors",
+        action.available
+          ? "hover:bg-accent/60"
+          : "cursor-grab hover:bg-accent/30 active:cursor-grabbing",
+        action.available && highlighted && "bg-accent/60",
+        isDragging && "z-20 bg-accent/80 opacity-80 shadow-sm ring-1 ring-primary/50",
+      )}
+      onMouseEnter={action.available ? props.onHighlight : undefined}
+      onMouseLeave={action.available ? props.onClearHighlight : undefined}
+    >
+      <span
+        {...sortableAttributes}
+        data-launcher-drag-handle={action.id}
+        aria-label={`拖拽调整「${action.label}」顺序`}
+        className={cn(
+          "inline-flex h-8 w-5 shrink-0 cursor-grab items-center justify-center pl-1 text-muted-foreground transition-opacity active:cursor-grabbing",
+          "opacity-35 group-hover:opacity-85 group-focus-within:opacity-85",
+          isDragging && "opacity-100 text-foreground",
+        )}
+      >
+        <GripVertical aria-hidden className="size-3.5" />
+      </span>
+      {action.available ? (
+        <>
+          <button
+            type="button"
+            onClick={action.onClick}
+            className="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2.5 pr-2.5 pl-1 text-left text-sm outline-none"
+          >
+            {iconNode}
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate",
+                action.id === "preview" && browserProfiles.length > 1 && "pr-7",
+              )}
+            >
+              {action.label}
+            </span>
+            <Kbd>{action.shortcut}</Kbd>
+          </button>
+          {action.id === "preview" && browserProfiles.length > 1 ? (
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    aria-label={gt("Open browser in a profile")}
+                    className="absolute top-1/2 right-8 -translate-y-1/2"
+                    size="icon-xs"
+                    variant="ghost-muted"
+                    onPointerDown={(event) => event.stopPropagation()}
+                  />
+                }
+              >
+                <ChevronDown className="size-3.5" />
+              </MenuTrigger>
+              <MenuPopup align="end" side="bottom" sideOffset={6} className="max-w-56">
+                {browserProfiles.map((profile) => (
+                  <MenuItem key={profile.id} onClick={() => onAddBrowserInProfile(profile.id)}>
+                    <span className="min-w-0 truncate">{profile.name}</span>
+                  </MenuItem>
+                ))}
+              </MenuPopup>
+            </Menu>
+          ) : null}
+        </>
+      ) : (
+        <DisabledReasonTooltip
+          reason={action.disabledReason}
+          trigger={
+            <div
+              tabIndex={0}
+              aria-disabled="true"
+              className="flex h-8 min-w-0 flex-1 cursor-grab items-center gap-2.5 pr-2.5 pl-1 text-left text-sm opacity-50 active:cursor-grabbing"
+            >
+              {iconNode}
+              <span className="min-w-0 flex-1 truncate">{action.label}</span>
+              <Kbd>{action.shortcut}</Kbd>
+            </div>
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+export function RightPanelEmptyState(props: {
+  readonly actions: readonly RightPanelLauncherAction[];
+  readonly browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  readonly onAddBrowserInProfile: (profileId: string) => void;
+  readonly isCustomOrder: boolean;
+  readonly onReorder: (
+    fromId: RightPanelActivityItemId,
+    toId: RightPanelActivityItemId,
+  ) => void;
+  readonly onResetOrder: () => void;
+}) {
+  const gt = useGT();
+  const [highlight, setHighlight] = useState(-1);
+  const { actions } = props;
+
+  // PointerSensor distance=5px matches RightPanelActivityBar so clicks stay crisp and never misfire as drags.
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+  );
 
   const availableActions = actions.filter((action) => action.available);
   const highlightIndex =
@@ -536,17 +744,15 @@ function RightPanelEmptyState(props: {
     }
   };
 
-  const isHighlighted = (action: SurfaceAction) =>
+  const handleDragEnd = (event: DragEndEvent) => {
+    setHighlight(-1);
+    applyRightPanelActivityDragEnd(event, props.onReorder);
+  };
+
+  const isHighlighted = (action: RightPanelLauncherAction) =>
     highlightIndex !== -1 && availableActions[highlightIndex] === action;
 
-  const actionIcon = (action: SurfaceAction, iconClassName = "size-4") => {
-    const Icon = action.icon;
-    return (
-      <span className="relative inline-flex shrink-0">
-        <Icon className={iconClassName} />
-      </span>
-    );
-  };
+  const announcements = buildActivityBarDragAnnouncements(actions);
 
   return (
     <div
@@ -554,6 +760,7 @@ function RightPanelEmptyState(props: {
       tabIndex={0}
       onKeyDown={handleKeyDown}
       aria-label={gt("Open a surface")}
+      data-testid="right-panel-empty-launcher"
       data-surface-launcher-keys={availableActions.map((action) => action.shortcut).join("")}
       className={cn(
         "scrollbar-gutter-both flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 outline-none",
@@ -561,87 +768,53 @@ function RightPanelEmptyState(props: {
       )}
     >
       <div className="w-full max-w-xs py-6">
-        <h3 className="mb-3 text-center font-medium text-foreground text-sm">
-          <T>Open a surface</T>
-        </h3>
-        <div className="flex flex-col gap-0.5">
-          {actions.map((action) =>
-            action.available ? (
-              <div
-                key={action.label}
-                className="group relative"
-                onMouseEnter={() => setHighlight(availableActions.indexOf(action))}
-                onMouseLeave={() =>
-                  setHighlight((current) =>
-                    current === availableActions.indexOf(action) ? -1 : current,
-                  )
-                }
-              >
-                <button
-                  type="button"
-                  onClick={action.onClick}
-                  className={cn(
-                    "flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-(--control-radius) px-2.5 text-left text-sm transition-colors group-hover:bg-accent/60",
-                    isHighlighted(action) && "bg-accent/60",
-                  )}
-                >
-                  {actionIcon(action, "size-4")}
-                  <span
-                    className={cn(
-                      "min-w-0 flex-1 truncate",
-                      action.label === "Browser" && props.browserProfiles.length > 1 && "pr-7",
-                    )}
-                  >
-                    {messages(action.label)}
-                  </span>
-                  <Kbd>{action.shortcut}</Kbd>
-                </button>
-                {action.label === "Browser" && props.browserProfiles.length > 1 ? (
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <Button
-                          aria-label={gt("Open browser in a profile")}
-                          className="absolute top-1/2 right-8 -translate-y-1/2"
-                          size="icon-xs"
-                          variant="ghost-muted"
-                        />
-                      }
-                    >
-                      <ChevronDown className="size-3.5" />
-                    </MenuTrigger>
-                    <MenuPopup align="end" side="bottom" sideOffset={6} className="max-w-56">
-                      {props.browserProfiles.map((profile) => (
-                        <MenuItem
-                          key={profile.id}
-                          onClick={() => props.onAddBrowserInProfile(profile.id)}
-                        >
-                          <span className="min-w-0 truncate">{profile.name}</span>
-                        </MenuItem>
-                      ))}
-                    </MenuPopup>
-                  </Menu>
-                ) : null}
-              </div>
-            ) : (
-              <DisabledReasonTooltip
-                key={action.label}
-                reason={action.disabledReason}
-                trigger={
-                  <div
-                    tabIndex={0}
-                    aria-disabled="true"
-                    className="flex h-8 w-full cursor-default items-center gap-2.5 rounded-(--control-radius) px-2.5 text-left text-sm opacity-50"
-                  >
-                    {actionIcon(action, "size-4")}
-                    <span className="min-w-0 flex-1 truncate">{messages(action.label)}</span>
-                    <Kbd>{action.shortcut}</Kbd>
-                  </div>
-                }
-              />
-            ),
-          )}
+        <div className="mb-3 flex items-center justify-center gap-2">
+          <h3 className="font-medium text-foreground text-sm">
+            <T>Open a surface</T>
+          </h3>
+          {props.isCustomOrder ? (
+            <button
+              type="button"
+              data-testid="right-panel-empty-reset-order"
+              onClick={props.onResetOrder}
+              className="inline-flex h-5 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-muted/40 px-1.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-border hover:bg-accent/70 hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              <RotateCcw aria-hidden className="size-3 shrink-0" />
+              <span>重置默认排序</span>
+            </button>
+          ) : null}
         </div>
+        <DndContext
+          id="right-panel-empty-state-dnd"
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={EMPTY_STATE_DRAG_MODIFIERS}
+          accessibility={{ announcements }}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={actions.map((action) => action.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="flex flex-col gap-0.5" data-testid="right-panel-empty-launcher-list">
+              {actions.map((action) => (
+                <SortableEmptyStateActionRow
+                  key={action.id}
+                  action={action}
+                  highlighted={isHighlighted(action)}
+                  browserProfiles={props.browserProfiles}
+                  onAddBrowserInProfile={props.onAddBrowserInProfile}
+                  onHighlight={() => setHighlight(availableActions.indexOf(action))}
+                  onClearHighlight={() =>
+                    setHighlight((current) =>
+                      current === availableActions.indexOf(action) ? -1 : current,
+                    )
+                  }
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       </div>
     </div>
   );
@@ -652,6 +825,7 @@ function surfaceTitle(
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
   terminalLabelsById: ReadonlyMap<string, string>,
   resolve: MessageResolver = m,
+  locale?: string | null,
 ): string {
   switch (surface.kind) {
     case "diff":
@@ -688,7 +862,7 @@ function surfaceTitle(
       // Until the thread's own title loads.
       return resolve(msg("Thread"));
     case "side-chat-empty":
-      return resolve(msg("Side chat"));
+      return resolveSideQuestionLabel(resolve, locale);
     case "linked-thread":
       return linkedThreadTitle(
         surface,
@@ -789,7 +963,7 @@ function SurfaceIcon({
     case "thread":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
     case "side-chat-empty":
-      return <MessagesSquare className="size-3 shrink-0" />;
+      return <MessageSquarePlus className="size-3 shrink-0" />;
     case "linked-thread":
       return <MessagesSquare className="size-3 shrink-0" />;
     case "device":
@@ -846,7 +1020,7 @@ function SideChatTabIcon(props: { environmentId: EnvironmentId | null; threadId:
     props.environmentId === null ? null : scopeThreadRef(props.environmentId, props.threadId),
   );
   const state = sideChatTabState(shell);
-  const Icon = shell !== null && shell.lineage.sideChat !== true ? Bot : MessagesSquare;
+  const Icon = shell !== null && shell.lineage.sideChat !== true ? Bot : MessageSquarePlus;
   return (
     <>
       <Icon className="size-3 shrink-0" />
@@ -1255,34 +1429,32 @@ export interface BuildRightPanelActivityActionsInput {
   readonly focusedSurfaceKind: RightPanelSurface["kind"] | null;
   readonly mobileSimulatorIdleActive: boolean;
   readonly resolveMessage: MessageResolver;
+  readonly locale?: string | null;
   readonly availability: {
-    readonly pullRequest: boolean;
+    readonly pullRequests: boolean;
     readonly diff: boolean;
     readonly files: boolean;
     readonly terminal: boolean;
-    readonly sideChat: boolean;
     readonly preview: boolean;
     readonly mobileSimulator: boolean;
-    readonly pullRequests: boolean;
-    readonly wallpaper: boolean;
+    readonly sideChat: boolean;
   };
   readonly handlers: {
-    readonly onPullRequest: () => void;
+    readonly onPullRequests: () => void;
     readonly onDiff: () => void;
     readonly onFiles: () => void;
     readonly onTerminal: () => void;
-    readonly onSideChat: () => void;
     readonly onPreview: () => void;
     readonly onMobileSimulator: () => void;
-    readonly onPullRequests: () => void;
-    readonly onWallpaper: () => void;
+    readonly onSideChat: () => void;
   };
 }
 
 /**
- * Pure builder for the 9 canonical right-panel Activity Bar shortcuts:
- * PR -> 差异 -> 文件 -> 终端 -> 侧聊 -> 浏览器 -> 手机模拟 -> 已关联项 -> 壁纸.
- * Strictly excludes legacy `device` items and enforces `手机模拟` (without `器`).
+ * Pure builder for the 7 canonical right-panel Activity Bar shortcuts:
+ * 已关联项 -> 差异 -> 文件 -> 终端 -> 浏览器 -> 手机模拟 -> 旁路提问.
+ * Strictly excludes PR (`pull-request`), Wallpaper (`wallpaper`), and legacy `device` items,
+ * and enforces `手机模拟` (without `器`) + `MessageSquarePlus` for `旁路提问`.
  */
 export function buildRightPanelActivityActions(
   input: BuildRightPanelActivityActionsInput,
@@ -1292,19 +1464,19 @@ export function buildRightPanelActivityActions(
     focusedSurfaceKind,
     mobileSimulatorIdleActive,
     resolveMessage,
+    locale,
     availability,
     handlers,
   } = input;
 
   const actionMap: Record<RightPanelActivityItemId, RightPanelActivityAction> = {
-    "pull-request": {
-      id: "pull-request",
-      label: resolveMessage(msg("PR")),
-      icon: PullRequestGlyph.pullRequest,
-      available: availability.pullRequest,
-      active:
-        focusedSurfaceKind === "pull-request" || focusedSurfaceKind === "pull-request-empty",
-      onClick: handlers.onPullRequest,
+    "pull-requests": {
+      id: "pull-requests",
+      label: resolveMessage(msg("Linked items")),
+      icon: PullRequestGlyph.link,
+      available: availability.pullRequests,
+      active: focusedSurfaceKind === "pull-requests",
+      onClick: handlers.onPullRequests,
     },
     diff: {
       id: "diff",
@@ -1330,14 +1502,6 @@ export function buildRightPanelActivityActions(
       active: focusedSurfaceKind === "terminal",
       onClick: handlers.onTerminal,
     },
-    "side-chat": {
-      id: "side-chat",
-      label: resolveMessage(msg("Side chat")),
-      icon: MessagesSquare,
-      available: availability.sideChat,
-      active: focusedSurfaceKind === "thread" || focusedSurfaceKind === "side-chat-empty",
-      onClick: handlers.onSideChat,
-    },
     preview: {
       id: "preview",
       label: resolveMessage(msg("Browser")),
@@ -1354,21 +1518,13 @@ export function buildRightPanelActivityActions(
       active: focusedSurfaceKind === "preview" && mobileSimulatorIdleActive,
       onClick: handlers.onMobileSimulator,
     },
-    "pull-requests": {
-      id: "pull-requests",
-      label: resolveMessage(msg("Linked items")),
-      icon: PullRequestGlyph.link,
-      available: availability.pullRequests,
-      active: focusedSurfaceKind === "pull-requests",
-      onClick: handlers.onPullRequests,
-    },
-    wallpaper: {
-      id: "wallpaper",
-      label: "壁纸",
-      icon: ImageIcon,
-      available: availability.wallpaper,
-      active: focusedSurfaceKind === "wallpaper",
-      onClick: handlers.onWallpaper,
+    "side-chat": {
+      id: "side-chat",
+      label: resolveSideQuestionLabel(resolveMessage, locale),
+      icon: MessageSquarePlus,
+      available: availability.sideChat,
+      active: focusedSurfaceKind === "thread" || focusedSurfaceKind === "side-chat-empty",
+      onClick: handlers.onSideChat,
     },
   };
 
@@ -1382,7 +1538,7 @@ const ACTIVITY_BAR_DRAG_MODIFIERS = [restrictToHorizontalAxis];
  * Announces human-readable tab labels instead of internal IDs for screen readers.
  */
 function buildActivityBarDragAnnouncements(
-  actions: readonly RightPanelActivityAction[],
+  actions: readonly { readonly id: RightPanelActivityItemId; readonly label: string }[],
 ): Announcements {
   const title = (id: string | number): string =>
     actions.find((item) => item.id === id)?.label ?? String(id);
@@ -1457,7 +1613,7 @@ function SortableActivityBarButton(props: {
   );
 }
 
-function RightPanelActivityBar(props: {
+export function RightPanelActivityBar(props: {
   readonly actions: readonly RightPanelActivityAction[];
   readonly isCustomOrder: boolean;
   readonly onReorder: (
@@ -1495,12 +1651,7 @@ function RightPanelActivityBar(props: {
   );
 
   const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    props.onReorder(
-      active.id as RightPanelActivityItemId,
-      over.id as RightPanelActivityItemId,
-    );
+    applyRightPanelActivityDragEnd(event, props.onReorder);
   };
 
   if (props.actions.length === 0) return null;
@@ -1509,6 +1660,7 @@ function RightPanelActivityBar(props: {
 
   return (
     <DndContext
+      id="right-panel-activity-bar-dnd"
       sensors={sensors}
       collisionDetection={closestCenter}
       modifiers={ACTIVITY_BAR_DRAG_MODIFIERS}
@@ -1896,6 +2048,7 @@ export function PhoneSimulatorBlankStage() {
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
   const gt = useGT();
+  const locale = useLocale();
   const messages = useMessages();
   const topbarPortal = useWorkspaceTopbarPortal();
   const focusedSurface = props.surfaces.find((surface) => surface.id === props.activeSurfaceId);
@@ -1979,9 +2132,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const activityBarOrder = useRightPanelStore((state) => state.activityBarOrder);
   const reorderActivityBar = useRightPanelStore((state) => state.reorderActivityBar);
   const resetActivityBarOrder = useRightPanelStore((state) => state.resetActivityBarOrder);
-  const isCustomActivityBarOrder = activityBarOrder.some(
-    (id, index) => id !== DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER[index],
-  );
+  const isCustomActivityBarOrder =
+    activityBarOrder.length !== DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER.length ||
+    activityBarOrder.some((id, index) => id !== DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER[index]);
   const requestMobileSimulatorLaunch = useRightPanelStore(
     (state) => state.requestMobileSimulatorLaunch,
   );
@@ -1996,6 +2149,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     focusedSurface?.kind === "preview" &&
     (focusedPreviewSession === null || focusedPreviewSession.navStatus._tag === "Idle");
 
+  const handleOpenBrowser = useStableCallback(() => {
+    useRightPanelStore.getState().setMobileSimulatorIdleActive(false);
+    props.onAddBrowser();
+  });
+
   const handleOpenMobileSimulator = useStableCallback(() => {
     if (!props.browserAvailable) return;
     requestMobileSimulatorLaunch();
@@ -2007,121 +2165,68 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     props.onAddBrowser();
   });
 
+  const effectiveSideChatAvailable =
+    Boolean(props.onAddSideChat) && props.sideChatAvailable !== false;
+
+  const sharedAvailability = {
+    pullRequests: props.pullRequestsAvailable,
+    diff: props.diffAvailable,
+    files: props.filesAvailable,
+    terminal: props.terminalAvailable,
+    preview: props.browserAvailable,
+    mobileSimulator: props.browserAvailable,
+    sideChat: effectiveSideChatAvailable,
+  };
+
   const orderedActivityActions = buildRightPanelActivityActions({
     order: activityBarOrder,
     focusedSurfaceKind: focusedSurface?.kind ?? null,
     mobileSimulatorIdleActive,
     resolveMessage: messages,
-    availability: {
-      pullRequest: props.pullRequestAvailable,
-      diff: props.diffAvailable,
-      files: props.filesAvailable,
-      terminal: props.terminalAvailable,
-      sideChat: Boolean(props.onAddSideChat) && props.sideChatAvailable !== false,
-      preview: props.browserAvailable,
-      mobileSimulator: props.browserAvailable,
-      pullRequests: props.pullRequestsAvailable,
-      wallpaper: Boolean(props.onAddWallpaper) && props.wallpaperAvailable !== false,
-    },
+    locale,
+    availability: sharedAvailability,
     handlers: {
-      onPullRequest: props.onAddPullRequest,
+      onPullRequests: props.onAddPullRequests,
       onDiff: props.onAddDiff,
       onFiles: props.onAddFiles,
       onTerminal: props.onAddTerminal,
-      onSideChat: () => props.onAddSideChat?.(),
-      onPreview: () => {
-        useRightPanelStore.getState().setMobileSimulatorIdleActive(false);
-        props.onAddBrowser();
-      },
+      onPreview: handleOpenBrowser,
       onMobileSimulator: handleOpenMobileSimulator,
-      onPullRequests: props.onAddPullRequests,
-      onWallpaper: () => props.onAddWallpaper?.(),
+      onSideChat: () => props.onAddSideChat?.(),
     },
   });
 
-  const addSurfaceActions = [
-    {
-      label: msg("PR"),
-      icon: PullRequestGlyph.pullRequest,
-      shortcut: "P",
-      available: props.pullRequestAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.pullRequest),
-      onClick: props.onAddPullRequest,
-    },
-    {
-      label: msg("Diff"),
-      icon: FileDiff,
-      shortcut: "D",
-      available: props.diffAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.diff),
-      onClick: props.onAddDiff,
-    },
-    {
-      label: msg("Files"),
-      icon: Files,
-      shortcut: "F",
-      available: props.filesAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.files),
-      onClick: props.onAddFiles,
-    },
-    {
-      label: msg("Terminal"),
-      icon: TerminalSquare,
-      shortcut: "T",
-      available: props.terminalAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.terminal),
-      onClick: props.onAddTerminal,
-    },
-    ...(props.onAddSideChat
-      ? [
-          {
-            label: msg("Side chat"),
-            icon: MessagesSquare,
-            shortcut: "S",
-            available: props.sideChatAvailable !== false,
-            disabledReason:
-              props.sideChatDisabledReason ?? messages(SURFACE_DISABLED_REASONS.sideChat),
-            onClick: props.onAddSideChat,
-          },
-        ]
-      : []),
-    {
-      label: msg("Browser"),
-      icon: Globe2,
-      shortcut: "B",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
-      onClick: props.onAddBrowser,
-    },
-    {
-      label: "手机模拟",
-      icon: TabletSmartphone,
-      shortcut: "I",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
-      onClick: handleOpenMobileSimulator,
-    },
-    {
-      label: msg("Linked items"),
-      icon: PullRequestGlyph.link,
-      shortcut: "L",
-      available: props.pullRequestsAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.pullRequests),
-      onClick: props.onAddPullRequests,
-    },
-    ...(props.onAddWallpaper
-      ? [
-          {
-            label: "壁纸",
-            icon: ImageIcon,
-            shortcut: "W",
-            available: props.wallpaperAvailable !== false,
-            disabledReason: messages(SURFACE_DISABLED_REASONS.wallpaper),
-            onClick: props.onAddWallpaper,
-          },
-        ]
-      : []),
-  ] as const;
+  const sharedLauncherHandlers = {
+    onPullRequests: props.onAddPullRequests,
+    onDiff: props.onAddDiff,
+    onFiles: props.onAddFiles,
+    onTerminal: props.onAddTerminal,
+    onPreview: handleOpenBrowser,
+    onMobileSimulator: handleOpenMobileSimulator,
+    onSideChat: props.onAddSideChat,
+  };
+
+  const emptyLauncherActions = buildRightPanelLauncherActions({
+    order: activityBarOrder,
+    resolveMessage: messages,
+    locale,
+    disabledReasonStyle: "hint",
+    includeSideChat: Boolean(props.onAddSideChat),
+    availability: sharedAvailability,
+    sideChatDisabledReason: props.sideChatDisabledReason ?? null,
+    handlers: sharedLauncherHandlers,
+  });
+
+  const addSurfaceActions = buildRightPanelLauncherActions({
+    order: activityBarOrder,
+    resolveMessage: messages,
+    locale,
+    disabledReasonStyle: "reason",
+    includeSideChat: Boolean(props.onAddSideChat),
+    availability: sharedAvailability,
+    sideChatDisabledReason: props.sideChatDisabledReason ?? null,
+    handlers: sharedLauncherHandlers,
+  });
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const action = surfaceShortcutActionForKey(addSurfaceActions, event.nativeEvent);
@@ -2309,6 +2414,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 props.previewSessions,
                 props.terminalLabelsById,
                 messages,
+                locale,
               ),
             })
           : gt("Workspace panel")
@@ -2376,6 +2482,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       props.previewSessions,
                       props.terminalLabelsById,
                       messages,
+                      locale,
                     )}
                     audio={tabAudioState(
                       previewTabId ? (props.desktopByTabId[previewTabId] ?? null) : null,
@@ -2424,10 +2531,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 >
                   {addSurfaceActions.map((action) => {
                     const Icon = action.icon;
-                    if (action.label === "Browser" && action.available) {
+                    if (action.id === "preview" && action.available) {
                       return (
-                        <MenuSub key={action.label}>
+                        <MenuSub key={action.id}>
                           <MenuSubTrigger
+                            data-surface-menu-item={action.id}
                             className="[&>svg:last-child]:ms-0"
                             aria-keyshortcuts={action.shortcut}
                             onClick={(event) => {
@@ -2443,7 +2551,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                             }}
                           >
                             <Icon />
-                            {messages(action.label)}
+                            {action.label}
                             <MenuShortcut>{action.shortcut}</MenuShortcut>
                           </MenuSubTrigger>
                           <MenuSubPopup className="max-w-56">
@@ -2461,14 +2569,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     }
                     return (
                       <SurfaceMenuItem
-                        key={action.label}
+                        key={action.id}
+                        itemId={action.id}
                         available={action.available}
                         disabledReason={action.disabledReason}
                         shortcut={action.shortcut}
                         onClick={action.onClick}
                       >
                         <Icon />
-                        {messages(action.label)}
+                        {action.label}
                       </SurfaceMenuItem>
                     );
                   })}
@@ -2548,6 +2657,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         props.previewSessions,
                         props.terminalLabelsById,
                         messages,
+                        locale,
                       )}
                     </span>
                   </MenuItem>
@@ -2581,28 +2691,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       >
         {props.activeSurfaceId === null ? (
           <RightPanelEmptyState
-            onAddBrowser={props.onAddBrowser}
-            onAddMobileSimulator={handleOpenMobileSimulator}
-            onAddBrowserInProfile={props.onAddBrowserInProfile}
+            actions={emptyLauncherActions}
             browserProfiles={browserProfiles}
-            onAddTerminal={props.onAddTerminal}
-            onAddDiff={props.onAddDiff}
-            onAddFiles={props.onAddFiles}
-            onAddPullRequest={props.onAddPullRequest}
-            onAddPullRequests={props.onAddPullRequests}
-            onAddDevice={props.onAddDevice}
-            onAddWallpaper={props.onAddWallpaper}
-            onAddSideChat={props.onAddSideChat}
-            browserAvailable={props.browserAvailable}
-            terminalAvailable={props.terminalAvailable}
-            diffAvailable={props.diffAvailable}
-            filesAvailable={props.filesAvailable}
-            pullRequestAvailable={props.pullRequestAvailable}
-            pullRequestsAvailable={props.pullRequestsAvailable}
-            deviceAvailable={props.deviceAvailable}
-            wallpaperAvailable={props.wallpaperAvailable !== false}
-            sideChatAvailable={props.sideChatAvailable === true}
-            sideChatDisabledReason={props.sideChatDisabledReason ?? null}
+            onAddBrowserInProfile={props.onAddBrowserInProfile}
+            isCustomOrder={isCustomActivityBarOrder}
+            onReorder={reorderActivityBar}
+            onResetOrder={resetActivityBarOrder}
           />
         ) : (
           <>

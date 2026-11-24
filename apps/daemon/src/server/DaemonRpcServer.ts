@@ -1416,7 +1416,10 @@ export class DaemonRpcServer {
       return true;
     }
 
-    if (method === "PUT" && pathname === "/v1/sync/config") {
+    if (
+      (method === "PUT" || method === "POST") &&
+      pathname === "/v1/sync/config"
+    ) {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
       if (!this.businessService) {

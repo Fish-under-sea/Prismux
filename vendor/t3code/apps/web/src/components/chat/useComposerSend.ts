@@ -110,6 +110,13 @@ import {
 } from "./composerSend.logic";
 import { useMultipleModelSend } from "./useMultipleModelSend";
 import type { SideChatMessage } from "./useSideChat";
+import {
+  attachBtwReadOnlyGuardrailContext,
+  deriveBtwThreadTitle,
+  hasUserVisibleMessageContext,
+  isBtwSideThread,
+  resolveBtwRuntimeMode,
+} from "./btwMode";
 import { type ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import {
   getUploadedAttachments,
@@ -496,7 +503,7 @@ export function useComposerSend(input: ComposerSendInput) {
       notifyDirectAnnotationAttached();
       return;
     }
-    if ((isSendBusy && !sendQueuesBehindSetup) || sendInFlightRef.current) {
+    if ((!startsSideChat && isSendBusy && !sendQueuesBehindSetup) || sendInFlightRef.current) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
       } else {
@@ -698,13 +705,16 @@ export function useComposerSend(input: ComposerSendInput) {
               })),
             }),
           }),
-          titleSeed: deriveThreadTitleSeed(
-            {
-              text: snapshot.messageText,
-              attachments: snapshot.attachments,
-              fallbackLabels: sendTitleFallbackLabels(snapshot),
-            },
-            m,
+          titleSeed: deriveBtwThreadTitle(
+            snapshot.messageText,
+            deriveThreadTitleSeed(
+              {
+                text: snapshot.messageText,
+                attachments: snapshot.attachments,
+                fallbackLabels: sendTitleFallbackLabels(snapshot),
+              },
+              m,
+            ),
           ),
         });
       }).finally(() => {
@@ -983,6 +993,10 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
+    // Follow-up turns inside a BTW side-question tab remain strictly read-only (`approval-required`)
+    // and carry the invisible read-only BTW system guardrail while keeping `message.text` clean.
+    const isBtwThread = isBtwSideThread(activeThread);
+    const effectiveRuntimeMode = isBtwThread ? resolveBtwRuntimeMode(runtimeMode) : runtimeMode;
     const threadIdForSend = activeThread.id;
     const sendSnapshot = snapshotComposerSend({
       prompt: promptForSend,
@@ -1254,7 +1268,10 @@ export function useComposerSend(input: ComposerSendInput) {
         respondingRequestIdsRef.current.includes(approval.requestId),
       );
       if (approvalFeedbackTarget !== undefined) {
-        if (composerAttachmentsSnapshot.length > 0 || outgoingMessageContext !== undefined) {
+        if (
+          composerAttachmentsSnapshot.length > 0 ||
+          hasUserVisibleMessageContext(outgoingMessageContext)
+        ) {
           setThreadError(
             threadIdForSend,
             m(msg("Send approval feedback without attachments or added context.")),
@@ -1452,7 +1469,7 @@ export function useComposerSend(input: ComposerSendInput) {
         ...(localCheckoutBranchMismatch
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
-        runtimeMode,
+        runtimeMode: effectiveRuntimeMode,
         interactionMode: DEFAULT_INTERACTION_MODE,
       });
       if (settingsResult._tag === "Failure") {
@@ -1485,7 +1502,7 @@ export function useComposerSend(input: ComposerSendInput) {
             idleCompaction: "onReturn",
           },
           modelSelection: ctxSelectedModelSelection,
-          runtimeMode,
+          runtimeMode: effectiveRuntimeMode,
           interactionMode: DEFAULT_INTERACTION_MODE,
         },
       });
@@ -1506,7 +1523,7 @@ export function useComposerSend(input: ComposerSendInput) {
                       projectId: activeProject.id,
                       title,
                       modelSelection: threadCreateModelSelection,
-                      runtimeMode,
+                      runtimeMode: effectiveRuntimeMode,
                       interactionMode: DEFAULT_INTERACTION_MODE,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
@@ -1539,6 +1556,12 @@ export function useComposerSend(input: ComposerSendInput) {
           )
         : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
+      const wireContext = buildOutgoingMessageContext(
+        boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+      );
+      const finalWireContext = isBtwThread
+        ? attachBtwReadOnlyGuardrailContext(wireContext)
+        : wireContext;
       const startPromise = startThreadTurn({
         environmentId,
         input: {
@@ -1549,14 +1572,12 @@ export function useComposerSend(input: ComposerSendInput) {
             attachments: turnAttachmentsResult.value,
             ...withMessageContext({
               text: outgoingMessageText,
-              context: buildOutgoingMessageContext(
-                boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
-              ),
+              context: finalWireContext,
             }),
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
-          runtimeMode,
+          runtimeMode: effectiveRuntimeMode,
           interactionMode: DEFAULT_INTERACTION_MODE,
           dispatchMode: turnDispatchMode,
           ...(freshArm === undefined ? {} : { freshContext: true }),

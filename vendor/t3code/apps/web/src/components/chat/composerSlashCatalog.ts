@@ -229,14 +229,14 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
   side: {
     icon: lucide(MessageSquarePlusIcon),
     zhTitle: "旁路提问",
-    description: "在不打断主线程的前提下发起旁路支线提问",
-    aliases: ["侧聊", "支线", "旁路", "btw"],
+    description: "在不打断主线程的前提下发起只读旁路提问（不修改文件、不污染主上下文）",
+    aliases: ["侧聊", "支线", "旁路", "btw", "只读"],
   },
   btw: {
     icon: lucide(MessageSquarePlusIcon),
     zhTitle: "旁路提问",
-    description: "在不打断主线程的前提下发起旁路支线提问",
-    aliases: ["side", "顺便", "顺便一问", "侧聊", "支线", "旁路"],
+    description: "在不打断主线程的前提下发起只读旁路提问（不修改文件、不污染主上下文）",
+    aliases: ["side", "顺便", "顺便一问", "侧聊", "支线", "旁路", "只读"],
   },
   clear: {
     icon: lucide(RotateCcwIcon),

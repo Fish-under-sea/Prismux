@@ -320,6 +320,7 @@ import {
   useThreadError,
   useThreadStatus,
   useThreadHistory,
+  readThreadShell,
   useQuietThreadShell,
   useThreadCheckpointSummaries,
   useThreadShells,
@@ -346,6 +347,12 @@ import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveScrollToEndClearance } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
 import { useSideChat } from "./chat/useSideChat";
+import {
+  deriveBtwThreadTitle,
+  isBtwSideThread,
+  normalizeBtwDisplayTitle,
+  resolveBtwRuntimeMode,
+} from "./chat/btwMode";
 import { sideThreadComposer, sideThreadKindOf } from "@t3tools/client-runtime/side-thread";
 import { useOpenSurfaceInMainView } from "../hooks/useOpenSurfaceInMainView";
 import { useRemoteOpenState } from "~/remoteOpen";
@@ -1058,12 +1065,14 @@ export default function ChatView(props: ChatViewProps) {
   const [, setThreadErrorBannerDismissTick] = useState(0);
   const threadErrorIsServerRuntimeError =
     localServerError === null && visibleThreadError === serverRuntime?.lastError;
+  const isBtwThread = isBtwSideThread(activeThread);
   const defaultRuntimeMode = resolveProjectSettings(settings, activeThread?.projectId ?? null)
     .settings.defaultRuntimeMode;
-  const runtimeMode =
-    composerRuntimeMode ??
-    (isServerThread ? activeThread?.runtimeMode : undefined) ??
-    defaultRuntimeMode;
+  const runtimeMode = isBtwThread
+    ? resolveBtwRuntimeMode()
+    : (composerRuntimeMode ??
+      (isServerThread ? activeThread?.runtimeMode : undefined) ??
+      defaultRuntimeMode);
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = canWriteSourceControl && isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -3067,19 +3076,37 @@ export default function ChatView(props: ChatViewProps) {
                   )
                 ? gt("Available once the thread's worktree is set up.")
                 : null;
+  const canStartSideChat = sideChatsOffered && sideChat.available && !sideChatDisabledReason;
   const openSideChatStable = useStableCallback(() => void sideChat.open());
+  const quickAskSideChatStable = useStableCallback(async (question: string) => {
+    const trimmed = question.trim();
+    if (!trimmed) return false;
+    return sideChat.open({
+      text: trimmed,
+      attachments: [],
+      titleSeed: deriveBtwThreadTitle(trimmed),
+    });
+  });
+  const readCurrentModelSelectionStable = useStableCallback(
+    () => composerRef.current?.getSendContext().selectedModelSelection,
+  );
   const openSideChatSurfaceStable = useStableCallback(() => {
     if (!activeThreadRef) return;
     const store = useRightPanelStore.getState();
     const existingSideChat = selectThreadRightPanelState(
       store.byThreadKey,
       activeThreadRef,
-    ).surfaces.find((surface) => surface.kind === "thread");
+    ).surfaces.find(
+      (surface) =>
+        surface.kind === "thread" &&
+        readThreadShell(scopeThreadRef(activeThreadRef.environmentId, surface.threadId))?.lineage
+          .sideChat === true,
+    );
     if (existingSideChat) {
       store.activateSurface(activeThreadRef, existingSideChat.id);
       return;
     }
-    if (sideChatsOffered && sideChat.available && !sideChatDisabledReason) {
+    if (canStartSideChat) {
       void sideChat.open();
       return;
     }
@@ -3637,7 +3664,15 @@ export default function ChatView(props: ChatViewProps) {
     hostRef: scopeThreadRef(environmentId, threadId),
     openToolDiff: onOpenToolDiffStable,
     runShellCommand: runSideChatShellCommandStable,
+    ...(canStartSideChat ? { onNewSideChat: openSideChatStable } : {}),
   };
+  const existingBtwSideThreads = (agentAuxRelationshipShells ?? [])
+    .filter((shell) => shell.lineage.sideChat === true && shell.deletedAt == null)
+    .map((shell) => ({
+      threadId: shell.id,
+      title: normalizeBtwDisplayTitle(shell.title, gt("Side chat")),
+      running: shell.runtime?.status === "running" || shell.latestRun?.status === "running",
+    }));
 
   const topbarPortal = useWorkspaceTopbarPortal();
   const topbarManaged = topbarPortal.managed && !embedded;
@@ -3714,12 +3749,15 @@ export default function ChatView(props: ChatViewProps) {
           onOpenLinkedItems: addPullRequestsSurfaceStable,
         }}
         sideChat={{
-          canStart: sideChatsOffered && sideChat.available && !sideChatDisabledReason,
+          canStart: canStartSideChat,
           disabledReason: sideChatDisabledReason,
-          onStart:
-            sideChatsOffered && sideChat.available && !sideChatDisabledReason
-              ? openSideChatStable
-              : undefined,
+          onStart: canStartSideChat ? openSideChatStable : undefined,
+          onQuickAsk: canStartSideChat ? quickAskSideChatStable : undefined,
+          isServerThread,
+          existingSideThreads: existingBtwSideThreads,
+          onOpenExistingSideThread: (sideThreadId) => {
+            useRightPanelStore.getState().openThread(activeThreadRef, sideThreadId);
+          },
         }}
         issuesSupported={serverConfig?.environment.capabilities.issues === true}
         files={{
@@ -4251,6 +4289,7 @@ export default function ChatView(props: ChatViewProps) {
                                 respondingRequestIds={respondingRequestIds}
                                 runtimeMode={runtimeMode}
                                 defaultRuntimeMode={defaultRuntimeMode}
+                                readOnlyBtwLock={isBtwThread}
                                 lockedProvider={modelPickerLockedProvider}
                                 providerStatuses={providerStatuses as ServerProvider[]}
                                 providerCatalogKnown={serverConfig !== null}
@@ -4529,6 +4568,7 @@ export default function ChatView(props: ChatViewProps) {
                   agentAuxEntry={agentAux.overviewEntry}
                   onOpenAgentAux={agentAux.openAuxPanel}
                   {...(sideChat.available ? { onOpenSideChat: sendSideChatStable } : {})}
+                  readModelSelection={readCurrentModelSelectionStable}
                   sideChatAvailable={sideChat.available}
                   sideChatDisabledReason={sideChatDisabledReason}
                   onRunProjectScript={runProjectScriptStable}

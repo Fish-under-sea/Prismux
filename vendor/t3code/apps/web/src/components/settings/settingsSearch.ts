@@ -401,14 +401,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Color scheme"),
     to: "/settings/appearance",
     searchTerms: [msg("appearance light dark system mode")],
-    targetId: "appearance",
+    targetId: "prismux-appearance",
   },
   {
     id: "theme",
     title: msg("Themes"),
     to: "/settings/appearance",
     searchTerms: [msg("appearance colors palette custom import")],
-    targetId: "appearance",
+    targetId: "prismux-appearance",
   },
   {
     // Prefixed because the slider control already owns the `appearance-contrast` id.
@@ -416,13 +416,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Contrast"),
     to: "/settings/appearance",
     searchTerms: [msg("colors borders interface")],
-  },
-  {
-    // Prefixed because the slider control already owns the `glass-opacity` id.
-    id: "setting-glass-opacity",
-    title: msg("Glass opacity"),
-    to: "/settings/appearance",
-    searchTerms: [msg("transparent transparency solid menus dialogs composer")],
   },
   {
     id: "diff-color-scheme",
@@ -464,13 +457,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "panel-animations",
     title: msg("Panel animations"),
     to: "/settings/appearance",
-  },
-  {
-    id: "environment-identification",
-    title: msg("Environment identification"),
-    to: "/settings/appearance",
-    searchTerms: [msg("dev nightly latest channel artwork pill label hide none")],
-    targetId: "appearance-interface",
   },
   {
     id: "interface-font",

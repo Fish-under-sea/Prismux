@@ -1198,13 +1198,13 @@ export function apply(ctx) {
     currentVersion: string;
     policy: { routePreference: string; includePrerelease: boolean };
   };
-  assert.equal(updaterStatus.currentVersion, "0.1.3-preview.2");
+  assert.equal(updaterStatus.currentVersion, "0.1.3-preview.3");
   assert.equal(updaterStatus.policy.routePreference, "domestic");
   assert.equal(updaterStatus.policy.includePrerelease, false);
 
   const healthCheckRes = await fetch(`${ready.httpUrl}/health`);
   assert.equal(healthCheckRes.status, 200);
-  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.3-preview.2");
+  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.3-preview.3");
 });
 
 test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electron protocol CORS + PRISMUX_CATALOG_PATH resolution", async () => {
@@ -1398,4 +1398,223 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
 
   assert.equal(sawNormalizedWsPath, true);
   assert.equal(reconnected, true, "Daemon should auto-connect once T3 Server starts");
+});
+
+test("Sync config accepts PUT and POST, rejects incomplete enabled channels with 400, and probes GitHub repo access accurately", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-sync-github-probe-"));
+  tempDirs.push(dataDir);
+
+  let ghMode: "ok-missing-file" | "repo-404" | "token-401" = "repo-404";
+  const expectedPat = "ghp_SyncProbeSecretToken987654321";
+
+  const mockGhServer = createServer((req, res) => {
+    const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (req.method === "GET" && reqUrl.pathname === "/repos/Fish-under-sea/prismux-vault") {
+      if (ghMode === "token-401" || req.headers.authorization !== `Bearer ${expectedPat}`) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ message: "Bad credentials" }));
+        return;
+      }
+      if (ghMode === "repo-404") {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ message: "Not Found" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          full_name: "Fish-under-sea/prismux-vault",
+          private: true,
+          default_branch: "main",
+          size: 16,
+          permissions: { push: true, pull: true }
+        })
+      );
+      return;
+    }
+
+    if (
+      req.method === "GET" &&
+      reqUrl.pathname === "/repos/Fish-under-sea/prismux-vault/contents/prismux-vault.prismux-backup"
+    ) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ message: "Not Found" }));
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise<void>((resolveListen) => {
+    mockGhServer.listen(0, "127.0.0.1", () => resolveListen());
+  });
+  cleanups.push(
+    () =>
+      new Promise<void>((resolveClose) => {
+        mockGhServer.close(() => resolveClose());
+      })
+  );
+  const ghPort = (mockGhServer.address() as AddressInfo).port;
+  const ghApiBaseUrl = `http://127.0.0.1:${ghPort}`;
+
+  const ownerToken = "sync-fix-owner-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    host: "127.0.0.1",
+    port: 0,
+    dataDir,
+    authToken: ownerToken
+  });
+  const ready = await daemon.start();
+  cleanups.push(async () => {
+    await daemon.stop();
+  });
+
+  const authHeaders = {
+    "content-type": "application/json",
+    Authorization: `Bearer ${ownerToken}`
+  };
+
+  // 1. Enabled channel missing required fields returns 400 INVALID_SYNC_CHANNEL instead of silently dropping
+  const badGithubRes = await fetch(`${ready.httpUrl}/v1/sync/config`, {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({
+      channels: {
+        github: { enabled: true, owner: "Fish-under-sea", repo: "" }
+      }
+    })
+  });
+  assert.equal(badGithubRes.status, 400);
+  const badGithubErr = (await badGithubRes.json()) as {
+    error?: { code?: string; message?: string };
+  };
+  assert.equal(badGithubErr.error?.code, "INVALID_SYNC_CHANNEL");
+  assert.match(badGithubErr.error?.message ?? "", /私有仓库名/);
+
+  const badWebdavRes = await fetch(`${ready.httpUrl}/v1/sync/config`, {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({
+      channels: {
+        webdav: { enabled: true, endpointUrl: "" }
+      }
+    })
+  });
+  assert.equal(badWebdavRes.status, 400);
+
+  const badS3Res = await fetch(`${ready.httpUrl}/v1/sync/config`, {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({
+      channels: {
+        s3: { enabled: true, endpointUrl: "https://s3.example.com", bucket: "" }
+      }
+    })
+  });
+  assert.equal(badS3Res.status, 400);
+
+  // 2. Backwards-compatible POST /v1/sync/config succeeds (saving a disabled unreachable WebDAV + enabled GitHub)
+  const postSaveRes = await fetch(`${ready.httpUrl}/v1/sync/config`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      channels: {
+        webdav: {
+          enabled: false,
+          endpointUrl: "http://127.0.0.1:1/unreachable-disabled-webdav",
+          username: "unused"
+        },
+        github: {
+          enabled: true,
+          owner: "Fish-under-sea",
+          repo: "prismux-vault",
+          branch: "main",
+          filePath: "prismux-vault.prismux-backup",
+          apiBaseUrl: ghApiBaseUrl,
+          token: expectedPat
+        }
+      }
+    })
+  });
+  assert.equal(postSaveRes.status, 200);
+  const postSaved = (await postSaveRes.json()) as {
+    channels: { github: { enabled: boolean; owner: string; repo: string; hasSecret: boolean } };
+  };
+  assert.equal(postSaved.channels.github.enabled, true);
+  assert.equal(postSaved.channels.github.owner, "Fish-under-sea");
+  assert.equal(postSaved.channels.github.repo, "prismux-vault");
+  assert.equal(postSaved.channels.github.hasSecret, true);
+
+  // 3. GitHub repo 404 MUST fail connectivity probe (never falsely report success when snapshot 404s)
+  ghMode = "repo-404";
+  const repo404ProbeRes = await fetch(`${ready.httpUrl}/v1/sync/test`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({})
+  });
+  assert.equal(repo404ProbeRes.status, 200);
+  const repo404Text = await repo404ProbeRes.text();
+  assert.ok(!repo404Text.includes(expectedPat), "PAT must never leak in probe response");
+  const repo404Json = JSON.parse(repo404Text) as {
+    ok: boolean;
+    results: Array<{ channel: string; ok: boolean; reachable?: boolean; error?: string }>;
+  };
+  assert.equal(repo404Json.ok, false);
+  assert.equal(repo404Json.results.length, 1);
+  assert.equal(repo404Json.results[0]?.channel, "github");
+  assert.equal(repo404Json.results[0]?.ok, false);
+  assert.match(repo404Json.results[0]?.error ?? "", /404/);
+
+  // 4. GitHub token 401 fails with clear auth error and scrubs PAT
+  ghMode = "token-401";
+  const auth401ProbeRes = await fetch(`${ready.httpUrl}/v1/sync/test`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({ channels: ["github"] })
+  });
+  assert.equal(auth401ProbeRes.status, 200);
+  const auth401Json = (await auth401ProbeRes.json()) as {
+    ok: boolean;
+    results: Array<{ channel: string; ok: boolean; error?: string }>;
+  };
+  assert.equal(auth401Json.ok, false);
+  assert.match(auth401Json.results[0]?.error ?? "", /401/);
+
+  // 5. Valid GitHub repo with missing snapshot file succeeds AND disabled unreachable WebDAV does NOT break overallOk
+  ghMode = "ok-missing-file";
+  const okProbeRes = await fetch(`${ready.httpUrl}/v1/sync/test`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({})
+  });
+  assert.equal(okProbeRes.status, 200);
+  const okProbeJson = (await okProbeRes.json()) as {
+    ok: boolean;
+    results: Array<{ channel: string; ok: boolean; reachable?: boolean; exists?: boolean; message?: string }>;
+  };
+  assert.equal(okProbeJson.ok, true);
+  assert.equal(okProbeJson.results.length, 1);
+  assert.equal(okProbeJson.results[0]?.channel, "github");
+  assert.equal(okProbeJson.results[0]?.ok, true);
+  assert.equal(okProbeJson.results[0]?.reachable, true);
+  assert.equal(okProbeJson.results[0]?.exists, false);
+  assert.match(okProbeJson.results[0]?.message ?? "", /Fish-under-sea\/prismux-vault/);
+
+  // 6. PUT /v1/sync/config also works cleanly for passphrase-only updates without touching channels
+  const putPassRes = await fetch(`${ready.httpUrl}/v1/sync/config`, {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({ passphrase: "DistinctSyncVaultPassphrase#2026" })
+  });
+  assert.equal(putPassRes.status, 200);
+  const putPassJson = (await putPassRes.json()) as {
+    hasPassphrase: boolean;
+    channels: { github: { enabled: boolean; owner: string; hasSecret: boolean } };
+  };
+  assert.equal(putPassJson.hasPassphrase, true);
+  assert.equal(putPassJson.channels.github.enabled, true);
+  assert.equal(putPassJson.channels.github.owner, "Fish-under-sea");
+  assert.equal(putPassJson.channels.github.hasSecret, true);
 });

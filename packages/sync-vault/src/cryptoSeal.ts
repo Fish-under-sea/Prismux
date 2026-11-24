@@ -2,18 +2,29 @@ import {
   argon2Sync,
   createCipheriv,
   createDecipheriv,
-  randomBytes
+  getCiphers,
+  randomBytes,
+  scryptSync
 } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { assertDistinctBackupPassphrase } from "./types.js";
 
 export const BACKUP_HEADER_MAGIC = "PRMXBK01" as const;
 export const BACKUP_CIPHER_NAME = "chacha20-poly1305" as const;
+export const BACKUP_FALLBACK_CIPHER_NAME = "aes-256-gcm" as const;
 export const BACKUP_KDF_NAME = "argon2id" as const;
+export const BACKUP_FALLBACK_KDF_NAME = "scrypt" as const;
 export const BACKUP_IV_LENGTH = 12;
 export const BACKUP_SALT_LENGTH = 16;
 export const BACKUP_AUTH_TAG_LENGTH = 16;
 export const BACKUP_KEY_LENGTH = 32;
+
+export type BackupCipherName =
+  | typeof BACKUP_CIPHER_NAME
+  | typeof BACKUP_FALLBACK_CIPHER_NAME;
+export type BackupKdfName =
+  | typeof BACKUP_KDF_NAME
+  | typeof BACKUP_FALLBACK_KDF_NAME;
 
 const MAX_METADATA_BYTES = 1024 * 1024;
 const SENSITIVE_SNAPSHOT_KEYS = new Set([
@@ -29,6 +40,15 @@ export interface Argon2KdfParams {
   tagLength: number;
 }
 
+export interface ScryptKdfParams {
+  N: number;
+  r: number;
+  p: number;
+  tagLength: number;
+}
+
+export type BackupKdfParams = Argon2KdfParams | ScryptKdfParams;
+
 export const DEFAULT_ARGON2_PARAMS: Argon2KdfParams = {
   memory: 65_536,
   passes: 3,
@@ -36,11 +56,50 @@ export const DEFAULT_ARGON2_PARAMS: Argon2KdfParams = {
   tagLength: BACKUP_KEY_LENGTH
 };
 
+export const DEFAULT_SCRYPT_PARAMS: ScryptKdfParams = {
+  N: 32_768,
+  r: 8,
+  p: 1,
+  tagLength: BACKUP_KEY_LENGTH
+};
+
+let chacha20SupportedCache: boolean | null = null;
+export function isChaCha20Poly1305Supported(): boolean {
+  if (chacha20SupportedCache === null) {
+    chacha20SupportedCache = getCiphers().includes(BACKUP_CIPHER_NAME);
+  }
+  return chacha20SupportedCache;
+}
+
+let argon2idSupportedCache: boolean | null = null;
+export function isArgon2idSupported(): boolean {
+  if (argon2idSupportedCache === null) {
+    if (typeof argon2Sync !== "function") {
+      argon2idSupportedCache = false;
+    } else {
+      try {
+        argon2Sync("argon2id", {
+          message: Buffer.from("probe", "utf8"),
+          nonce: Buffer.alloc(16),
+          parallelism: 1,
+          tagLength: 32,
+          memory: 64,
+          passes: 1
+        });
+        argon2idSupportedCache = true;
+      } catch {
+        argon2idSupportedCache = false;
+      }
+    }
+  }
+  return argon2idSupportedCache;
+}
+
 export interface SealedBackupMetadata {
   format: typeof BACKUP_HEADER_MAGIC;
-  cipher: typeof BACKUP_CIPHER_NAME;
-  kdf: typeof BACKUP_KDF_NAME;
-  kdfParams: Argon2KdfParams;
+  cipher: BackupCipherName;
+  kdf: BackupKdfName;
+  kdfParams: BackupKdfParams;
   saltB64: string;
   ivB64: string;
   authTagLength: typeof BACKUP_AUTH_TAG_LENGTH;
@@ -50,7 +109,10 @@ export interface SealedBackupMetadata {
 }
 
 export interface SealBackupOptions {
+  kdf?: BackupKdfName;
+  cipher?: BackupCipherName;
   kdfParams?: Partial<Argon2KdfParams>;
+  scryptParams?: Partial<ScryptKdfParams>;
   compression?: "gzip" | "none";
   containsSecrets?: boolean;
   createdAt?: number;
@@ -148,6 +210,36 @@ function resolveAndValidateKdfParams(
   return params;
 }
 
+function resolveAndValidateScryptParams(
+  partial?: Partial<ScryptKdfParams>
+): ScryptKdfParams {
+  const params: ScryptKdfParams = {
+    N: partial?.N ?? DEFAULT_SCRYPT_PARAMS.N,
+    r: partial?.r ?? DEFAULT_SCRYPT_PARAMS.r,
+    p: partial?.p ?? DEFAULT_SCRYPT_PARAMS.p,
+    tagLength: partial?.tagLength ?? DEFAULT_SCRYPT_PARAMS.tagLength
+  };
+  if (params.tagLength !== BACKUP_KEY_LENGTH) {
+    throw new Error(
+      `Invalid scrypt tagLength: expected ${BACKUP_KEY_LENGTH}, got ${params.tagLength}.`
+    );
+  }
+  const isPowerOfTwo = (n: number): boolean =>
+    Number.isInteger(n) && n >= 1024 && n <= 1_048_576 && (n & (n - 1)) === 0;
+  if (!isPowerOfTwo(params.N)) {
+    throw new Error(
+      `Invalid scrypt N: ${params.N} (must be power of two in 1024..1048576).`
+    );
+  }
+  if (!Number.isInteger(params.r) || params.r < 1 || params.r > 32) {
+    throw new Error(`Invalid scrypt r: ${params.r} (must be integer 1..32).`);
+  }
+  if (!Number.isInteger(params.p) || params.p < 1 || params.p > 16) {
+    throw new Error(`Invalid scrypt p: ${params.p} (must be integer 1..16).`);
+  }
+  return params;
+}
+
 function deriveKeyArgon2id(
   passphrase: string,
   salt: Buffer,
@@ -165,9 +257,38 @@ function deriveKeyArgon2id(
   );
 }
 
+function deriveKeyScrypt(
+  passphrase: string,
+  salt: Buffer,
+  params: ScryptKdfParams
+): Buffer {
+  const maxmem = Math.max(64 * 1024 * 1024, 256 * params.N * params.r);
+  return Buffer.from(
+    scryptSync(Buffer.from(passphrase, "utf8"), salt, params.tagLength, {
+      N: params.N,
+      r: params.r,
+      p: params.p,
+      maxmem
+    })
+  );
+}
+
+function deriveBackupKey(
+  kdf: BackupKdfName,
+  passphrase: string,
+  salt: Buffer,
+  params: BackupKdfParams
+): Buffer {
+  if (kdf === BACKUP_KDF_NAME) {
+    return deriveKeyArgon2id(passphrase, salt, params as Argon2KdfParams);
+  }
+  return deriveKeyScrypt(passphrase, salt, params as ScryptKdfParams);
+}
+
 /**
  * Seals any JSON-serializable payload into a self-describing `.prismux-backup`
- * binary block using Argon2id + ChaCha20-Poly1305 (with header+metadata bound as AAD).
+ * binary block using Argon2id + ChaCha20-Poly1305 (with automatic scrypt + AES-256-GCM
+ * fallback on BoringSSL / Electron runtimes lacking Argon2/ChaCha20).
  */
 export function sealBackupPayload<T>(
   payload: T,
@@ -177,7 +298,18 @@ export function sealBackupPayload<T>(
 ): Buffer {
   assertDistinctBackupPassphrase(passphrase, remoteSecrets);
 
-  const kdfParams = resolveAndValidateKdfParams(options?.kdfParams);
+  const selectedKdf: BackupKdfName =
+    options?.kdf ??
+    (isArgon2idSupported() ? BACKUP_KDF_NAME : BACKUP_FALLBACK_KDF_NAME);
+  const selectedCipher: BackupCipherName =
+    options?.cipher ??
+    (isChaCha20Poly1305Supported()
+      ? BACKUP_CIPHER_NAME
+      : BACKUP_FALLBACK_CIPHER_NAME);
+  const kdfParams: BackupKdfParams =
+    selectedKdf === BACKUP_KDF_NAME
+      ? resolveAndValidateKdfParams(options?.kdfParams)
+      : resolveAndValidateScryptParams(options?.scryptParams);
   const salt = randomBytes(BACKUP_SALT_LENGTH);
   const iv = randomBytes(BACKUP_IV_LENGTH);
 
@@ -202,8 +334,8 @@ export function sealBackupPayload<T>(
 
   const metadata: SealedBackupMetadata = {
     format: BACKUP_HEADER_MAGIC,
-    cipher: BACKUP_CIPHER_NAME,
-    kdf: BACKUP_KDF_NAME,
+    cipher: selectedCipher,
+    kdf: selectedKdf,
     kdfParams,
     saltB64: salt.toString("base64"),
     ivB64: iv.toString("base64"),
@@ -219,14 +351,25 @@ export function sealBackupPayload<T>(
   prefix.writeUInt32BE(metaBytes.length, 8);
   const headerBytes = Buffer.concat([prefix, metaBytes]);
 
-  const key = deriveKeyArgon2id(passphrase, salt, kdfParams);
+  const key = deriveBackupKey(selectedKdf, passphrase, salt, kdfParams);
   try {
-    const cipher = createCipheriv(BACKUP_CIPHER_NAME, key, iv, {
-      authTagLength: BACKUP_AUTH_TAG_LENGTH
-    });
-    cipher.setAAD(headerBytes, { plaintextLength: plaintext.length });
-    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const authTag = cipher.getAuthTag();
+    let ciphertext: Buffer;
+    let authTag: Buffer;
+    if (selectedCipher === BACKUP_CIPHER_NAME) {
+      const cipher = createCipheriv(BACKUP_CIPHER_NAME, key, iv, {
+        authTagLength: BACKUP_AUTH_TAG_LENGTH
+      });
+      cipher.setAAD(headerBytes, { plaintextLength: plaintext.length });
+      ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      authTag = cipher.getAuthTag();
+    } else {
+      const cipher = createCipheriv(BACKUP_FALLBACK_CIPHER_NAME, key, iv, {
+        authTagLength: BACKUP_AUTH_TAG_LENGTH
+      });
+      cipher.setAAD(headerBytes);
+      ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      authTag = cipher.getAuthTag();
+    }
     return Buffer.concat([headerBytes, ciphertext, authTag]);
   } finally {
     key.fill(0);
@@ -297,10 +440,19 @@ export function inspectSealedBackupHeader(
   }
 
   const meta = parsed as Partial<SealedBackupMetadata>;
+  const cipherName: BackupCipherName | null =
+    meta.cipher === BACKUP_CIPHER_NAME ||
+    meta.cipher === BACKUP_FALLBACK_CIPHER_NAME
+      ? meta.cipher
+      : null;
+  const kdfName: BackupKdfName | null =
+    meta.kdf === BACKUP_KDF_NAME || meta.kdf === BACKUP_FALLBACK_KDF_NAME
+      ? meta.kdf
+      : null;
   if (
     meta.format !== BACKUP_HEADER_MAGIC ||
-    meta.cipher !== BACKUP_CIPHER_NAME ||
-    meta.kdf !== BACKUP_KDF_NAME ||
+    cipherName === null ||
+    kdfName === null ||
     meta.authTagLength !== BACKUP_AUTH_TAG_LENGTH ||
     (meta.compressed !== "gzip" && meta.compressed !== "none") ||
     typeof meta.saltB64 !== "string" ||
@@ -315,9 +467,12 @@ export function inspectSealedBackupHeader(
     );
   }
 
-  let kdfParams: Argon2KdfParams;
+  let kdfParams: BackupKdfParams;
   try {
-    kdfParams = resolveAndValidateKdfParams(meta.kdfParams);
+    kdfParams =
+      kdfName === BACKUP_KDF_NAME
+        ? resolveAndValidateKdfParams(meta.kdfParams as Partial<Argon2KdfParams>)
+        : resolveAndValidateScryptParams(meta.kdfParams as Partial<ScryptKdfParams>);
   } catch (err) {
     throw new BackupDecryptionError(
       err instanceof Error ? err.message : "Invalid KDF parameters."
@@ -340,8 +495,8 @@ export function inspectSealedBackupHeader(
   return {
     metadata: {
       format: meta.format,
-      cipher: meta.cipher,
-      kdf: meta.kdf,
+      cipher: cipherName,
+      kdf: kdfName,
       kdfParams,
       saltB64: meta.saltB64,
       ivB64: meta.ivB64,
@@ -371,7 +526,8 @@ export function unsealBackupPayload<T = unknown>(
   }
 
   const inspected = inspectSealedBackupHeader(sealedBytes);
-  const key = deriveKeyArgon2id(
+  const key = deriveBackupKey(
+    inspected.metadata.kdf,
     passphrase,
     inspected.salt,
     inspected.metadata.kdfParams
@@ -379,17 +535,34 @@ export function unsealBackupPayload<T = unknown>(
 
   let plaintext: Buffer;
   try {
-    const decipher = createDecipheriv(BACKUP_CIPHER_NAME, key, inspected.iv, {
-      authTagLength: BACKUP_AUTH_TAG_LENGTH
-    });
-    decipher.setAAD(inspected.headerBytes, {
-      plaintextLength: inspected.ciphertext.length
-    });
-    decipher.setAuthTag(inspected.authTag);
-    plaintext = Buffer.concat([
-      decipher.update(inspected.ciphertext),
-      decipher.final()
-    ]);
+    if (inspected.metadata.cipher === BACKUP_CIPHER_NAME) {
+      const decipher = createDecipheriv(BACKUP_CIPHER_NAME, key, inspected.iv, {
+        authTagLength: BACKUP_AUTH_TAG_LENGTH
+      });
+      decipher.setAAD(inspected.headerBytes, {
+        plaintextLength: inspected.ciphertext.length
+      });
+      decipher.setAuthTag(inspected.authTag);
+      plaintext = Buffer.concat([
+        decipher.update(inspected.ciphertext),
+        decipher.final()
+      ]);
+    } else {
+      const decipher = createDecipheriv(
+        BACKUP_FALLBACK_CIPHER_NAME,
+        key,
+        inspected.iv,
+        {
+          authTagLength: BACKUP_AUTH_TAG_LENGTH
+        }
+      );
+      decipher.setAAD(inspected.headerBytes);
+      decipher.setAuthTag(inspected.authTag);
+      plaintext = Buffer.concat([
+        decipher.update(inspected.ciphertext),
+        decipher.final()
+      ]);
+    }
   } catch (err) {
     throw new BackupDecryptionError(
       `Backup authentication or decryption failed (wrong passphrase or corrupted/tampered payload): ${

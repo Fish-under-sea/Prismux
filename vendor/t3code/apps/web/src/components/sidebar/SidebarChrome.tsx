@@ -37,7 +37,6 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { isElectron as IS_ELECTRON_RUNTIME } from "../../env";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
   navigateHistory,
@@ -63,12 +62,9 @@ import {
 } from "../../state/environments";
 import { resolveDesktopUpdateButtonAction } from "../desktopUpdate.logic";
 import {
-  resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
   SidebarStageBackdrop,
-  useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
-import { Badge } from "../ui/badge";
 import {
   SidebarFooter,
   SidebarMenu,
@@ -189,18 +185,9 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }: {
   isElectron: boolean;
 }) {
-  const stageLabel = useEnvironmentStageLabel();
-  const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const { isMobile, isIconRail, isTextHidden } = useSidebar();
   const gt = useGT();
-  const backdropVariant = resolveSidebarStageBackdropVariant(
-    stageLabel,
-    environmentIdentificationMode,
-  );
-  const pillLabel =
-    environmentIdentificationMode === "pill"
-      ? resolveEnvironmentIdentificationPillLabel(stageLabel)
-      : null;
+  const backdropVariant = resolveSidebarStageBackdropVariant();
   const railCompact = !isMobile && isIconRail;
   const onBackdrop = backdropVariant !== null;
 
@@ -216,10 +203,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         isElectron && "drag-region",
       )}
     >
-      {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
+      <SidebarStageBackdrop variant={backdropVariant} />
       <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 flex shrink-0 items-center md:hidden">
         <SidebarTrigger
-          variant={backdropVariant ? "media-navigation" : "ghost"}
+          variant="media-navigation"
           className="relative top-auto translate-y-0"
           aria-label={gt("Toggle main sidebar")}
         />
@@ -239,13 +226,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
             <SidebarBrandMenu onBackdrop={onBackdrop} isElectron={isElectron} />
             <SidebarHeaderToggleButton railCompact={false} onBackdrop={onBackdrop} />
           </div>
-          {pillLabel ? (
-            <div className="ml-0.5 flex h-6 shrink-0 items-center">
-              <Badge data-environment-identification="pill" size="sm" variant="secondary">
-                {pillLabel}
-              </Badge>
-            </div>
-          ) : null}
           {isElectron ? (
             <div
               data-sidebar-header-history="true"
@@ -333,7 +313,7 @@ export function SidebarHeaderToggleButton({
               HEADER_ICON_BUTTON_BASE_CLASS,
               railCompact ? "size-7" : "hidden size-6 md:inline-flex",
               onBackdrop
-                ? "text-white/85 hover:bg-white/15 hover:text-white"
+                ? "text-white drop-shadow-[0_1px_2.5px_rgb(4_12_28/82%)] hover:bg-white/18 hover:text-white focus-visible:ring-white/45"
                 : "text-muted-foreground/85 hover:bg-foreground/8 hover:text-foreground dark:hover:bg-white/10",
             )}
           />
@@ -382,7 +362,7 @@ function HistoryNavigationButton({
               HEADER_ICON_BUTTON_BASE_CLASS,
               "size-6",
               onBackdrop
-                ? "text-white/85 hover:bg-white/15 hover:text-white"
+                ? "text-white drop-shadow-[0_1px_2.5px_rgb(4_12_28/82%)] hover:bg-white/18 hover:text-white focus-visible:ring-white/45 disabled:opacity-55"
                 : "text-muted-foreground/80 hover:bg-foreground/8 hover:text-foreground dark:hover:bg-white/10",
             )}
           />
@@ -672,7 +652,9 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
       <span
         className={cn(
           "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
-          onBackdrop ? "text-white" : "text-foreground",
+          onBackdrop
+            ? "text-white drop-shadow-[0_1px_2.5px_rgb(4_12_28/82%)]"
+            : "text-foreground",
         )}
       >
         {/* oxlint-disable-next-line t3code/no-untranslated-copy -- product wordmark */}

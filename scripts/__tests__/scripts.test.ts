@@ -1017,12 +1017,12 @@ describe('release-and-npm-packages', () => {
         },
       ],
     });
-    assert.equal(formatReleaseTitle('0.1.1-preview.1'), 'Prismux v0.1.1 Preview 1');
-    assert.equal(formatReleaseTitle('0.1.1-alpha.1'), 'Prismux v0.1.1 Preview 1');
-    assert.equal(formatReleaseTitle('0.1.1-beta.2'), 'Prismux v0.1.1 Beta 2');
-    assert.equal(formatReleaseTitle('0.1.1-rc.3'), 'Prismux v0.1.1 RC 3');
+    assert.equal(formatReleaseTitle('0.1.1-preview.1'), 'Prismux v0.1.1-Preview.1');
+    assert.equal(formatReleaseTitle('0.1.1-alpha.1'), 'Prismux v0.1.1-Preview.1');
+    assert.equal(formatReleaseTitle('0.1.1-beta.2'), 'Prismux v0.1.1-Beta.2');
+    assert.equal(formatReleaseTitle('0.1.1-rc.3'), 'Prismux v0.1.1-RC.3');
     assert.equal(formatReleaseTitle('0.1.1'), 'Prismux v0.1.1');
-    assert.ok(ghNotes.includes('# Prismux v0.1.1 Preview 1'));
+    assert.ok(ghNotes.includes('# Prismux v0.1.1-Preview.1'));
     assert.equal(ghNotes.includes('公测版'), false);
     assert.equal(ghNotes.includes('内测版'), false);
     assert.ok(ghNotes.includes('下载指南：我应该下载哪个文件？'));

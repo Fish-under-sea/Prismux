@@ -1,31 +1,17 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
 import { msg, useGT, useMessages } from "gt-react";
 import {
-  DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
   type ChatWidth,
   type EffortDisplay,
-  type EnvironmentIdentificationMode,
   MAX_APPEARANCE_CONTRAST,
-  MAX_GLASS_OPACITY,
   MAX_PANEL_ANIMATION_DURATION_MS,
   MIN_APPEARANCE_CONTRAST,
-  MIN_GLASS_OPACITY,
   MIN_PANEL_ANIMATION_DURATION_MS,
 } from "@t3tools/contracts/settings";
-import {
-  resolveSidebarStageBackdropVariant,
-  type SidebarStageBackdropVariant,
-  useEnvironmentStageLabel,
-} from "../SidebarStageBackdrop";
-import { useCustomThemes } from "../../hooks/useCustomThemes";
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
-import { useTheme } from "../../hooks/useTheme";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { ThemeLibrary } from "./ThemeSettings";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -38,42 +24,6 @@ import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
 import { ThreadDetailsItemsRow } from "./ThreadDetailsItemsRow";
 import { PrismuxAppearanceIntegration } from "../../prismux/settings/PrismuxAppearanceIntegration";
-
-const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
-  artwork: msg("Artwork"),
-  "nightly-artwork": msg("Nightly artwork"),
-  "dev-artwork": msg("Dev artwork"),
-  pill: msg("Version pill"),
-  none: msg("None"),
-};
-
-// The default "artwork" follows the running channel, so it is labeled as that channel's art,
-// or as "None" on Latest. The other channel's art is offered as a fixed choice.
-function environmentIdentificationOptions(
-  stageVariant: SidebarStageBackdropVariant | null,
-): ReadonlyArray<readonly [EnvironmentIdentificationMode, string]> {
-  if (stageVariant === "dev") {
-    return [
-      ["artwork", msg("Dev artwork")],
-      ["nightly-artwork", msg("Nightly artwork")],
-      ["pill", msg("Version pill")],
-      ["none", msg("None")],
-    ];
-  }
-  if (stageVariant === "nightly") {
-    return [
-      ["artwork", msg("Nightly artwork")],
-      ["dev-artwork", msg("Dev artwork")],
-      ["pill", msg("Version pill")],
-      ["none", msg("None")],
-    ];
-  }
-  return [
-    ["artwork", msg("None")],
-    ["nightly-artwork", msg("Nightly artwork")],
-    ["dev-artwork", msg("Dev artwork")],
-  ];
-}
 
 const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
   comfortable: msg("Comfortable"),
@@ -88,51 +38,10 @@ const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
 
 export function AppearanceSettingsPanel() {
   const searchableSetting = useSearchableSetting();
-  const {
-    appearanceMode,
-    refreshTheme,
-    resolvedTheme,
-    setAppearanceMode,
-    setTheme,
-    setThemeHalf,
-    theme,
-    themeHalves,
-  } = useTheme();
   const gt = useGT();
   const m = useMessages();
-  const customThemes = useCustomThemes();
-  const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const environmentStageLabel = useEnvironmentStageLabel();
-  const environmentStageVariant = resolveSidebarStageBackdropVariant(environmentStageLabel);
-  const environmentIdentificationOptionList =
-    environmentIdentificationOptions(environmentStageVariant);
-  const environmentIdentificationLabel = m(
-    environmentIdentificationOptionList.find(
-      ([value]) => value === settings.environmentIdentificationMode,
-    )?.[1] ?? ENVIRONMENT_IDENTIFICATION_LABELS[settings.environmentIdentificationMode],
-  );
-  const effectiveEnvironmentIdentificationMode = useEnvironmentIdentificationMode();
-  const themeHidesEnvironmentArtwork =
-    effectiveEnvironmentIdentificationMode === "pill" &&
-    resolveSidebarStageBackdropVariant(
-      environmentStageLabel,
-      settings.environmentIdentificationMode,
-    ) !== null;
-  const environmentIdentificationDescription = themeHidesEnvironmentArtwork
-    ? environmentStageVariant
-      ? gt("Only built-in themes show artwork, so this theme shows the version pill.")
-      : gt("Only built-in themes show artwork.")
-    : environmentStageVariant
-      ? gt("Choose how Dev and Nightly environments are identified.")
-      : gt("Show Dev or Nightly artwork in the sidebar header.");
-  const glassOpacityRatio =
-    (settings.glassOpacity - MIN_GLASS_OPACITY) / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY);
-  const glassOpacitySliderStyle = {
-    "--settings-slider-progress": `${glassOpacityRatio * 100}%`,
-    "--settings-slider-fill-offset": `${0.5 - glassOpacityRatio}rem`,
-  } as CSSProperties;
   const appearanceContrastRatio =
     (settings.appearanceContrast - MIN_APPEARANCE_CONTRAST) /
     (MAX_APPEARANCE_CONTRAST - MIN_APPEARANCE_CONTRAST);
@@ -304,59 +213,10 @@ export function AppearanceSettingsPanel() {
         />
         <AdvancedSettings
           targetIds={[
-            searchableSetting("setting-glass-opacity").id,
             searchableSetting("panel-animations").id,
-            searchableSetting("environment-identification").id,
-            // Environment identification's search result lands on this section.
-            "appearance-interface",
             searchableSetting("composer-context").id,
           ]}
         >
-          <SettingsRow
-            {...searchableSetting("setting-glass-opacity")}
-            description={gt("Higher values make menus, dialogs, and the composer more solid.")}
-            resetAction={
-              settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset glass opacity to default")}
-                  onClick={() =>
-                    updateSettings({ glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <div className="flex w-full items-center gap-3 sm:w-52">
-                <output
-                  className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
-                  htmlFor="glass-opacity"
-                >
-                  {settings.glassOpacity}%
-                </output>
-                <input
-                  aria-label={gt("Glass opacity")}
-                  className="settings-slider min-w-0 flex-1"
-                  id="glass-opacity"
-                  max={MAX_GLASS_OPACITY}
-                  min={MIN_GLASS_OPACITY}
-                  onChange={(event) => {
-                    const glassOpacity = Number(event.currentTarget.value);
-                    if (
-                      Number.isInteger(glassOpacity) &&
-                      glassOpacity >= MIN_GLASS_OPACITY &&
-                      glassOpacity <= MAX_GLASS_OPACITY
-                    ) {
-                      updateSettings({ glassOpacity });
-                    }
-                  }}
-                  step={5}
-                  style={glassOpacitySliderStyle}
-                  type="range"
-                  value={settings.glassOpacity}
-                />
-              </div>
-            }
-          />
           <SettingsRow
             {...searchableSetting("panel-animations")}
             description={gt("Set how fast panels open and close.")}
@@ -409,48 +269,6 @@ export function AppearanceSettingsPanel() {
             }
           />
           <SettingsRow
-            {...searchableSetting("environment-identification")}
-            description={environmentIdentificationDescription}
-            resetAction={
-              settings.environmentIdentificationMode !== DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset environment identification to default")}
-                  onClick={() =>
-                    updateSettings({
-                      environmentIdentificationMode: DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Select
-                value={settings.environmentIdentificationMode}
-                onValueChange={(value) => {
-                  const option = environmentIdentificationOptionList.find(
-                    ([optionValue]) => optionValue === value,
-                  );
-                  if (option) updateSettings({ environmentIdentificationMode: option[0] });
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  className="w-full sm:w-40"
-                  aria-label={gt("Environment identification")}
-                >
-                  <SelectValue>{environmentIdentificationLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {environmentIdentificationOptionList.map(([value, label]) => (
-                    <SelectItem hideIndicator key={value} value={value}>
-                      {m(label)}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            }
-          />
-          <SettingsRow
             {...searchableSetting("composer-context")}
             description={gt(
               "Keep branch and worktree controls below the composer after a thread starts.",
@@ -479,27 +297,6 @@ export function AppearanceSettingsPanel() {
               />
             }
           />
-        </AdvancedSettings>
-      </SettingsSection>
-
-      {/* Native T3 Code palette library folded under Advanced to avoid duplicating Prismux's Celestial theme switcher */}
-      <SettingsSection id="appearance" title={gt("Colors & themes")}>
-        <AdvancedSettings targetIds={[searchableSetting("theme").id]}>
-          <div id={searchableSetting("theme").id} className="p-3 sm:p-4">
-            <ThemeLibrary
-              appearanceMode={appearanceMode}
-              customThemes={customThemes}
-              initialAppearance={resolvedTheme}
-              refreshTheme={refreshTheme}
-              isImportOpen={isImportThemeOpen}
-              setAppearanceMode={setAppearanceMode}
-              setTheme={setTheme}
-              setThemeHalf={setThemeHalf}
-              theme={theme}
-              themeHalves={themeHalves}
-              onImportOpenChange={setIsImportThemeOpen}
-            />
-          </div>
         </AdvancedSettings>
       </SettingsSection>
     </SettingsPageContainer>

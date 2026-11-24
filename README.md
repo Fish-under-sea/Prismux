@@ -12,7 +12,7 @@
 </picture>
 
 <p>
-  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.2"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-version-zh-dark.png"><img src="assets/readme/stat-version-zh-light.png" alt="VERSION：v0.1.3-Preview.2（纯本地零遥测 · Win x64）" width="23%"></picture></a>
+  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.3"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-version-zh-dark.png"><img src="assets/readme/stat-version-zh-light.png" alt="VERSION：v0.1.3-Preview.3（纯本地零遥测 · Win x64）" width="23%"></picture></a>
   <a href="#preview"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-visual-zh-dark.png"><img src="assets/readme/stat-visual-zh-light.png" alt="VISUAL：0 TOKEN（360° 液态玻璃）" width="23%"></picture></a>
   <a href="#features"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-memory-zh-dark.png"><img src="assets/readme/stat-memory-zh-light.png" alt="MEMORY：SQLITE VEC（单文件物理隔离）" width="23%"></picture></a>
   <a href="#plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-plugins-zh-dark.png"><img src="assets/readme/stat-plugins-zh-light.png" alt="PLUGINS：2 PLUGINS（默认不预装）" width="23%"></picture></a>
@@ -24,7 +24,7 @@
   <img src="https://img.shields.io/badge/TypeScript-5.8-8fd6a0?style=flat-square&amp;logo=typescript&amp;logoColor=white&amp;labelColor=5a544a" alt="TypeScript 5.8">
   <img src="https://img.shields.io/badge/Electron-44-8fd6a0?style=flat-square&amp;logo=electron&amp;logoColor=white&amp;labelColor=5a544a" alt="Electron 44">
   <img src="https://img.shields.io/badge/License-MIT-8fd6a0?style=flat-square&amp;labelColor=5a544a" alt="License MIT">
-  <img src="https://img.shields.io/badge/Release-v0.1.3--Preview.2-f08a5d?style=flat-square&amp;labelColor=5a544a" alt="Release Prismux v0.1.3-Preview.2">
+  <img src="https://img.shields.io/badge/Release-v0.1.3--Preview.3-f08a5d?style=flat-square&amp;labelColor=5a544a" alt="Release Prismux v0.1.3-Preview.3">
 </p>
 
 <p><strong>Prismux · 纯本地零遥测的液态玻璃 AI 超级工作台与 24 小时常驻秘书</strong><br>
@@ -33,7 +33,7 @@
 
 <p>
   <a href="#install"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-download-zh-dark.png"><img src="assets/readme/key-download-zh-light.png" alt="下载 / Releases" height="40"></picture></a>
-  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.2"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-release-zh-dark.png"><img src="assets/readme/key-release-zh-light.png" alt="更新记录" height="40"></picture></a>
+  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.3"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-release-zh-dark.png"><img src="assets/readme/key-release-zh-light.png" alt="更新记录" height="40"></picture></a>
   <a href="https://github.com/Fish-under-sea/Prismux/issues"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-issues-zh-dark.png"><img src="assets/readme/key-issues-zh-light.png" alt="反馈 / Issues" height="40"></picture></a>
 </p>
 
@@ -50,13 +50,13 @@
 - **零预装插件生态与双源更新体验**：官方仅维护 `qq` 与 `fishdock-hook` 两款按需独立插件（默认零预装，卸载零残留；原 `pet` / `ssh` 已被内置能力取代而停用），并配套 Argon2id + AEAD 端到端加密同步与 GitHub / Gitee 双源测速自动更新。
 
 > [!TIP]
-> **`Prismux v0.1.3-Preview.2` 最新亮点**
-> - **隐私硬切断**：清零全部静默上报与冷启动外联，默认拒绝附带反馈日志，全链路落地凭据与内网地址脱敏。
-> - **精雕 `/` 斜杠菜单与常驻 Logo 切代理**：统一图标前置的中英双语命令排版，跨全 Agent 通用 `/btw`（旁路提问）、`/compact`（上下文压缩）与 `/browser`（自动提升 `ego-browser`）；`swarm` 独占 1:1 像素蜂王图标，自带技能优雅折叠且完整保留个人技能原名；模型弹层常驻纯 Logo 一键切代理。
-> - **利落的桌面交互与多语言体验**：收起态改为干净的 `54 px` 图标导轨（点击直展侧栏 + `100 ms` 统一右侧文字提示，零遮挡误触）；新增单例空白草稿标签、不挤压居中输入框的独立右侧概览、AGY 胶囊用户气泡与四边液态玻璃活跃流光卡片；按主机时区自动匹配 10 种界面语言，中文时区首启即见完整中文欢迎页且绝不覆盖手动设置。
-> - **透明掌控与高保真更新**：`20 px` 状态栏同步呈现 Orca 详细 / 紧凑多窗口额度条、实时进程资源归因、端口监控、防休眠开关与四级液态玻璃服务体检；国内 Gitee `80 MB` 分卷下载支持实时加权进度条，并在更新弹窗与关于页完整还原多节富文本升级公告。
+> **`Prismux v0.1.3-Preview.3` 最新亮点**
+> - **右侧辅助边栏 7 项精简与双向拖拽同步**：移除重复 `PR` 与 `壁纸` 入口，确立 `已关联项 → 差异 → 文件 → 终端 → 浏览器 → 手机模拟 → 旁路提问` 默认序；上方快捷栏、下方「打开面板」垂直列表与 `+` 菜单三处实时联动，支持上下双向拖拽排序与一键重置默认排序（`v4` 平滑迁移）。
+> - **1:1 复刻 Antigravity 原生 `/btw` 旁路提问模式**：统一主框 `/btw`、右侧栏与概览入口；强制 `approval-required` 只读安全护栏与隐藏式 `btw-guardrail` 上下文注入（用户气泡 100% 干净）、并行不打断主会话且零污染主上下文、独立模型切换不影响主线程，配套专属 `BTW · 只读` 标题栏（`+ 新建` / `引用回主会话` / 删除 / 关闭）与空白草稿即用体验。
+> - **外观设置去重与默认常驻 24 小时实时动态天穹背景**：彻底清理设置页重复的外观项，并将侧栏顶栏与发送键重做为默认常驻的纯声明式 SVG 24 小时动态天穹（每 5 分钟推进、全天 288 帧连续演化日出 / 蔚蓝白云 / 晚霞日落 / 星月夜空，后台自动挂起、0 Token 零负担且全时段对比度 ≥ 4.5:1）。
+> - **端到端加密同步 404 / BoringSSL 修复与卡片视觉重构**：根治 `/v1/sync/config` `POST/PUT` 404 及 Electron 44 BoringSSL 下 `Unknown cipher` HTTP 500 崩溃（`CredentialStore` 升级跨运行时 `PRXC02` `aes-256-gcm` 并兼容 `PRXC01`，`cryptoSeal` 自动回退 `scrypt + aes-256-gcm`）；各展开通道卡片底部就地集成「保存此通道配置」与「测试此通道」，补齐清晰字段标签、主口令就地保存与 GitHub 仓库权限精准探测。
 
-当前最新发行版本为 **`Prismux v0.1.3-Preview.2`**（发布标签 `v0.1.3-preview.2`），率先提供 Windows x64 安装包 `Prismux-Setup-0.1.3-preview.2-win-x64.exe`（GitHub Releases 与 Gitee Releases 双源同步发布），macOS 与 Linux 安装包通道已预留。
+当前最新发行版本为 **`Prismux v0.1.3-Preview.3`**（发布标签 `v0.1.3-preview.3`），率先提供 Windows x64 安装包 `Prismux-Setup-0.1.3-preview.3-win-x64.exe`（GitHub Releases 与 Gitee Releases 双源同步发布），macOS 与 Linux 安装包通道已预留。
 
 <h2 id="preview"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-preview-zh-dark.png"><img src="assets/readme/section-preview-zh-light.png" alt="PREVIEW · 界面实景" width="100%"></picture></h2>
 
@@ -151,14 +151,14 @@
 <h2 id="plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-plugins-zh-dark.png"><img src="assets/readme/section-plugins-zh-light.png" alt="PLUGINS · 官方独立插件" width="100%"></picture></h2>
 
 > [!NOTE]
-> **官方插件严格默认零预装**：`Prismux-Setup-0.1.3-preview.2-win-x64.exe` 安装包及解压态目录**绝不包含**任何 `plugins-official/` 插件（发布前通过全目录 0 命中扫描校验）。以下 2 款活跃官方插件（`qq`、`fishdock-hook`）均以独立 `.wb-plugin` 归档（配套 `prismux-plugins-official.json` 与 `prismux-plugins-0.1.3-preview.2-SHA256SUMS.txt`）及无脚本 npm 单包分发，按需安装并支持 `ctx.effect()` 零残留卸载。
+> **官方插件严格默认零预装**：`Prismux-Setup-0.1.3-preview.3-win-x64.exe` 安装包及解压态目录**绝不包含**任何 `plugins-official/` 插件（发布前通过全目录 0 命中扫描校验）。以下 2 款活跃官方插件（`qq`、`fishdock-hook`）均以独立 `.wb-plugin` 归档（配套 `prismux-plugins-official.json` 与 `prismux-plugins-0.1.3-preview.3-SHA256SUMS.txt`）及无脚本 npm 单包分发，按需安装并支持 `ctx.effect()` 零残留卸载。
 >
 > **已停用插件说明**：原 `pet`（`@prismux/plugin-pet`，桌宠联动）与 `ssh`（`@prismux/plugin-ssh`，SSH 远程主机终端）已彻底移出官方目录与发布链路——**已停用：已被 Prismux 内置功能取代**。
 
 | 插件 ID | 独立归档包（`.wb-plugin`） | npm 包名（无作用域 / GitHub Packages） | 运行域（`realms`） | 核心能力与隔离边界 |
 | :--- | :--- | :--- | :--- | :--- |
-| `qq` | `prismux-plugin-qq-0.1.3-preview.2.wb-plugin` | `prismux-plugin-qq`<br><code>@fish-under-sea/prismux-plugin-qq</code> | `daemon`、`ui` | OneBot v11 正 / 反向 WebSocket 自动探测（NapCatQQ / Lagrange.Core）；私聊主人直连主秘书，群聊启用防刷屏节奏器并硬隔离至 <code>social/qq-group-&lt;gid&gt;</code> |
-| `fishdock-hook` | `prismux-plugin-fishdock-hook-0.1.3-preview.2.wb-plugin` | `prismux-plugin-fishdock-hook`<br><code>@fish-under-sea/prismux-plugin-fishdock-hook</code> | `daemon` | FISH-Dock 灵动岛桥接插件；将 `PreToolUse` 中文风险审批、重要邮件提醒与夜间工场完工回执推送至灵动岛卡片并支持快捷放行或驳回 |
+| `qq` | `prismux-plugin-qq-0.1.3-preview.3.wb-plugin` | `prismux-plugin-qq`<br><code>@fish-under-sea/prismux-plugin-qq</code> | `daemon`、`ui` | OneBot v11 正 / 反向 WebSocket 自动探测（NapCatQQ / Lagrange.Core）；私聊主人直连主秘书，群聊启用防刷屏节奏器并硬隔离至 <code>social/qq-group-&lt;gid&gt;</code> |
+| `fishdock-hook` | `prismux-plugin-fishdock-hook-0.1.3-preview.3.wb-plugin` | `prismux-plugin-fishdock-hook`<br><code>@fish-under-sea/prismux-plugin-fishdock-hook</code> | `daemon` | FISH-Dock 灵动岛桥接插件；将 `PreToolUse` 中文风险审批、重要邮件提醒与夜间工场完工回执推送至灵动岛卡片并支持快捷放行或驳回 |
 
 ### 插件创作与官方文档
 
@@ -173,31 +173,31 @@
 
 | 分发渠道 | 适用场景 | 入口与下载说明 |
 | :--- | :--- | :--- |
-| **GitHub Releases**（国际直连） | 海外网络 / GitHub CLI 环境 | [Prismux v0.1.3-Preview.2 发布页](https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.2) · [直下 `Prismux-Setup-0.1.3-preview.2-win-x64.exe`](https://github.com/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.2/Prismux-Setup-0.1.3-preview.2-win-x64.exe) |
-| **Gitee Releases**（国内镜像） | 中国大陆直连加速下载 | [Prismux v0.1.3-Preview.2 发布页](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.2)（含 `80 MB` 7z 无损分卷 `.7z.001..003`、分卷汇总校验与全部活跃官方插件归档） |
+| **GitHub Releases**（国际直连） | 海外网络 / GitHub CLI 环境 | [Prismux v0.1.3-Preview.3 发布页](https://github.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.3) · [直下 `Prismux-Setup-0.1.3-preview.3-win-x64.exe`](https://github.com/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.3/Prismux-Setup-0.1.3-preview.3-win-x64.exe) |
+| **Gitee Releases**（国内镜像） | 中国大陆直连加速下载 | [Prismux v0.1.3-Preview.3 发布页](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.3)（含 `80 MB` 7z 无损分卷 `.7z.001..003`、分卷汇总校验与全部活跃官方插件归档） |
 | **软件内更新中心**（推荐） | 自动测速 GitHub / Gitee、分卷实时加权下载与 SHA-256 强制校验 | 在工作台打开 **设置 → 关于与更新**（`/settings/about#prismux-updates`），在 `智能测速 / 国内优先 / 国际优先` 间秒切，查看完整富文本更新日志并一键安装重启 |
 
 ### 平台下载矩阵与完整性校验
 
 | 平台 / 发行资产 | 文件名 / 状态 | 说明与隔离策略 |
 | :--- | :--- | :--- |
-| **Windows x64 安装包（Electron 44 NSIS）** | `Prismux-Setup-0.1.3-preview.2-win-x64.exe`（Gitee 同步提供 `.7z.001..003`） | 内含完整 Electron 44 桌面端、内置 `resources/prismux-daemon/`、非 `.asar` `resources/native/sqlite-vec/vec0.dll`、`resources/tools/7za.exe` 与 `t3-resource-monitor.exe`；默认安装至用户目录 `%LOCALAPPDATA%\Programs\Prismux`（支持界面改路径、可选桌面快捷方式与 `/D=<目录>`）；运行状态隔离于 `~/.prismux/`（支持便携 `data/` 模式）；**官方独立插件零预装** |
+| **Windows x64 安装包（Electron 44 NSIS）** | `Prismux-Setup-0.1.3-preview.3-win-x64.exe`（Gitee 同步提供 `.7z.001..003`） | 内含完整 Electron 44 桌面端、内置 `resources/prismux-daemon/`、非 `.asar` `resources/native/sqlite-vec/vec0.dll`、`resources/tools/7za.exe` 与 `t3-resource-monitor.exe`；默认安装至用户目录 `%LOCALAPPDATA%\Programs\Prismux`（支持界面改路径、可选桌面快捷方式与 `/D=<目录>`）；运行状态隔离于 `~/.prismux/`（支持便携 `data/` 模式）；**官方独立插件零预装** |
 | **macOS（Apple Silicon / Intel）** | `暂未发布（已预留通道）` | 后续预览版将提供 `.dmg` 安装镜像，遵循同一套 `0-Token` 视觉与 `~/.prismux/` 隔离规范 |
 | **Linux（x86_64 / arm64）** | `暂未发布（已预留通道）` | 后续预览版将提供 `.AppImage` / `.deb` 发行包，同样支持双源更新与独立插件验签导入 |
-| **2 款官方独立插件包** | `prismux-plugin-{qq,fishdock-hook}-0.1.3-preview.2.wb-plugin` 与 `prismux-plugins-official.json` | 确定性 ustar + gzip 归档，下载后在 **设置 → 插件中心**（`/settings/plugins`）按需验签导入（`pet` / `ssh` 已停用：已被内置功能取代） |
-| **分离式合并校验清单** | `Prismux-0.1.3-preview.2-SHA256SUMS.txt` 与 `prismux-plugins-0.1.3-preview.2-SHA256SUMS.txt` | 手动下载后可通过 `Get-FileHash Prismux-Setup-0.1.3-preview.2-win-x64.exe -Algorithm SHA256` 或 `7z t` 核对完整性 |
+| **2 款官方独立插件包** | `prismux-plugin-{qq,fishdock-hook}-0.1.3-preview.3.wb-plugin` 与 `prismux-plugins-official.json` | 确定性 ustar + gzip 归档，下载后在 **设置 → 插件中心**（`/settings/plugins`）按需验签导入（`pet` / `ssh` 已停用：已被内置功能取代） |
+| **分离式合并校验清单** | `Prismux-0.1.3-preview.3-SHA256SUMS.txt` 与 `prismux-plugins-0.1.3-preview.3-SHA256SUMS.txt` | 手动下载后可通过 `Get-FileHash Prismux-Setup-0.1.3-preview.3-win-x64.exe -Algorithm SHA256` 或 `7z t` 核对完整性 |
 
 <h2 id="packages"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-packages-zh-dark.png"><img src="assets/readme/section-packages-zh-light.png" alt="PACKAGES · npm 与国内镜像" width="100%"></picture></h2>
 
-每款活跃官方插件均额外发布为**零 `preinstall / install / postinstall` 脚本**的独立 npm 单包，内置通过 SHA-256 核验的 `prismux-plugin-<id>-0.1.3-preview.2.wb-plugin` 归档与防覆盖导出命令（`prismux-plugin-<id>`）；软件内插件市场支持在 **`registry.npmjs.org` ↔ `registry.npmmirror.com`** 间免本机 Git 纯流式拉取与自动故障回退。
+每款活跃官方插件均额外发布为**零 `preinstall / install / postinstall` 脚本**的独立 npm 单包，内置通过 SHA-256 核验的 `prismux-plugin-<id>-0.1.3-preview.3.wb-plugin` 归档与防覆盖导出命令（`prismux-plugin-<id>`）；软件内插件市场支持在 **`registry.npmjs.org` ↔ `registry.npmmirror.com`** 间免本机 Git 纯流式拉取与自动故障回退。
 
 ```powershell
 # 1. 从 npm 官方源安装并提取 .wb-plugin 归档（内置 SHA-256 核对，目标文件已存在时不覆盖）
-npm install prismux-plugin-qq@0.1.3-preview.2
+npm install prismux-plugin-qq@0.1.3-preview.3
 npx prismux-plugin-qq --out ./plugins-stage
 
 # 2. 中国大陆网络使用 npmmirror 国内镜像加速安装
-npm install prismux-plugin-qq@0.1.3-preview.2 --registry=https://registry.npmmirror.com
+npm install prismux-plugin-qq@0.1.3-preview.3 --registry=https://registry.npmmirror.com
 npx prismux-plugin-qq --out ./plugins-stage
 ```
 
@@ -244,7 +244,7 @@ prismux/
 ├── README.md / README.en.md             # 中英双语项目主页
 ├── UPSTREAM_LOCK.json                   # pingdotgg/t3code 基线 SHA、managed-fork 模式与台账指针
 ├── pnpm-workspace.yaml                  # 10 个 TS 工作区包白名单（排除 vendor/t3code 与 desktop-tauri）
-├── package.json                         # 根任务编排脚本（0.1.3-preview.2）
+├── package.json                         # 根任务编排脚本（0.1.3-preview.3）
 ├── tsconfig.base.json                   # TypeScript 5.8+ 严格共享基线（ES2024 + NodeNext）
 ├── assets/
 │   ├── logo.png                         # 透明 1024×1024 吉祥物主图标
@@ -298,7 +298,7 @@ prismux/
 </details>
 
 <details>
-<summary><strong>展开查看：M1–M5 与 v0.1.0 ~ v0.1.3-Preview.2 演进里程碑</strong></summary>
+<summary><strong>展开查看：M1–M5 与 v0.1.0 ~ v0.1.3-Preview.3 演进里程碑</strong></summary>
 
 | 里程碑 | 核心交付内容 | 验收状态 |
 | :--- | :--- | :--- |
@@ -307,7 +307,7 @@ prismux/
 | **M3** | `cordis-kernel`（预发布兼容 SemVer 校验、`ctx.effect()` 零残留、多源验签与免 Git 流式安装、声明式液态玻璃 UI）与 `sync-vault`（Argon2id + AEAD、`If-Match` 乐观锁、`60 s` 看门狗、便携 `data/` 模式） | 已完成并通过门禁 |
 | **M4 / v0.1.0–v0.1.2** | `@prismux/appearance` 与 `@prismux/wallpaper` 外置沉淀、T3 Code 真实 Electron 44 底座融合（6 分区实时液态玻璃、全宽天体胶囊、`dsh-fish` 思考条、Windows Codex 零壳直启、官方 `agy acp` 额度联动、NSIS 用户目录安装包、插件中心重设计与两份源码级插件开发指南） | 已完成并通过实机签收 |
 | **M5** | `OvernightFactory` 夜间全自动工场前后端闭环、两大活跃官方独立插件（`qq`、`fishdock-hook`）确定性打包验签与双源分卷自动更新体系（`pet` / `ssh` 已停用并移除） | 已完成并通过门禁 |
-| **v0.1.3 ~ v0.1.3-Preview.2** | 全栈零静默遥测隐私硬切断与端到端脱敏、1:1 AGY 蜂群与 Claude Code / Codex 原生只读协作侧边栏、常驻纯 Logo 代理切换与双语图标 `/` 斜杠菜单（通用 `/btw` / `/compact` / `/browser` + 像素蜂王 `/swarm` + 折叠自带技能）、干净的 `54 px` 图标导轨与 `100 ms` 右侧气泡提示、不挤压输入框的独立右侧概览、单例空白草稿标签、壁纸 SHA-256 永久去重、主机时区 10 语言自动识别、`20 px` Orca 多窗口额度条与四级液态玻璃服务体检，以及 Gitee 分卷加权进度与多节富文本更新公告 | 已完成并通过实机签收 |
+| **v0.1.3 ~ v0.1.3-Preview.3** | 全栈零静默遥测隐私硬切断与端到端脱敏、1:1 AGY 蜂群与 Claude Code / Codex 原生只读协作侧边栏、右侧辅助边栏 7 项精简与上下双向拖拽同步、1:1 AGY 原生 `/btw` 只读旁路提问与零污染独立模型切换、默认常驻 24 小时 288 帧动态天穹背景、常驻纯 Logo 代理切换与双语图标 `/` 斜杠菜单、`54 px` 图标导轨、`20 px` Orca 多窗口额度条与四级液态玻璃服务体检，以及 Electron 44 BoringSSL 端到端加密同步加固与 Gitee 分卷富文本更新 | 已完成并通过实机签收 |
 
 </details>
 
@@ -341,4 +341,4 @@ prismux/
 
 Prismux 本仓核心代码与排版工具链遵循 **MIT License**（见仓库根 [`LICENSE`](LICENSE)）；随视觉资产分发的像素字体 `Jersey20-Regular.ttf` 遵循 [SIL Open Font License 1.1](assets/readme/OFL-Jersey20.txt)；基于 `pingdotgg/t3code`（MIT）托管的 `vendor/t3code` 及上述参考移植源码均严格保留各自原始 MIT 许可证与归属声明。
 
-<p align="center"><sub>Prismux v0.1.3-Preview.2 · 纯本地零遥测 · 多 Agent 超级工作台 · 0-Token 视觉层 · 2 款按需官方插件</sub></p>
+<p align="center"><sub>Prismux v0.1.3-Preview.3 · 纯本地零遥测 · 多 Agent 超级工作台 · 0-Token 视觉层 · 2 款按需官方插件</sub></p>

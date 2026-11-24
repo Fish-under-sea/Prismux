@@ -445,6 +445,30 @@ describe("provider projection", () => {
     expect(projected).not.toContain("another payload");
     expect(projected).not.toContain("boom");
   });
+
+  it("projects unreferenced btw-guardrail records invisibly into the provider envelope while keeping text clean", () => {
+    const guardrailRecord = {
+      version: 1 as const,
+      kind: "btw-guardrail",
+      contextId: ctx("btw-guardrail_readonly"),
+      label: "BTW Read-Only Guardrail",
+      payload: {
+        mode: "read-only",
+        instruction: "Answer concisely. Do NOT modify workspace files.",
+        contextSummary: "Current thread: Refactoring sync vault",
+      },
+    };
+    const projected = projectComposerContextForProvider({
+      text: "How does If-Match retry work?",
+      records: [guardrailRecord],
+    });
+    expect(projected.startsWith("How does If-Match retry work?\n\n<t3_context version=\"1\">")).toBe(
+      true,
+    );
+    expect(projected).toContain('<context kind="btw-guardrail" id="btw-guardrail_readonly">');
+    expect(projected).toContain("Answer concisely. Do NOT modify workspace files.");
+    expect(projected).toContain("Main conversation context summary:\nCurrent thread: Refactoring sync vault");
+  });
 });
 
 describe("threadContextsOutsideEnvironment", () => {

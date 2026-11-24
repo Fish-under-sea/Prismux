@@ -433,13 +433,13 @@ export function formatReleaseTitle(rawVersion: string): string {
   const channel = match[2]?.toLowerCase();
   const num = match[3];
   if ((channel === 'preview' || channel === 'alpha') && num) {
-    return `Prismux v${base} Preview ${num}`;
+    return `Prismux v${base}-Preview.${num}`;
   }
   if (channel === 'beta' && num) {
-    return `Prismux v${base} Beta ${num}`;
+    return `Prismux v${base}-Beta.${num}`;
   }
   if (channel === 'rc' && num) {
-    return `Prismux v${base} RC ${num}`;
+    return `Prismux v${base}-RC.${num}`;
   }
   return `Prismux v${version}`;
 }
@@ -745,7 +745,7 @@ async function main(): Promise<void> {
 
   if (values.help || !values.dir) {
     console.log(
-      'Usage: node scripts/publish-gitee-release.ts --dir <release-dir> [--tag v0.1.3-preview.2] [--notes <md-path>] [--force] [--latest]',
+      'Usage: node scripts/publish-gitee-release.ts --dir <release-dir> [--tag v0.1.3-preview.3] [--notes <md-path>] [--force] [--latest]',
     );
     if (!values.help) {
       process.exitCode = 1;

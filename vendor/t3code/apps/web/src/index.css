@@ -536,27 +536,42 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     var(--app-scrollbar-width) 100%;
 }
 
-/* Stage-channel art needs a mask and pseudo-element gradient, so keep the
-   behavior composable without tying it to the global components layer. */
+/* 24-hour dynamic sky backdrop softly feathers into Light, Dark, and Liquid Glass
+   sidebars with an ease-out alpha mask and no hard rectangular bottom edge. */
 @utility sidebar-stage-backdrop {
   --stage-fade: var(--sidebar-stage-fade, var(--app-chrome-background));
-  mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 92%);
-  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 92%);
+  mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black 44%,
+    rgb(0 0 0 / 82%) 60%,
+    rgb(0 0 0 / 46%) 76%,
+    rgb(0 0 0 / 16%) 89%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black 44%,
+    rgb(0 0 0 / 82%) 60%,
+    rgb(0 0 0 / 46%) 76%,
+    rgb(0 0 0 / 16%) 89%,
+    transparent 100%
+  );
 
   &::after {
     content: "";
     position: absolute;
     inset: 0;
+    pointer-events: none;
     background: linear-gradient(
       to bottom,
       transparent 0%,
-      transparent 28%,
-      color-mix(in srgb, var(--stage-fade) 10%, transparent) 40%,
-      color-mix(in srgb, var(--stage-fade) 30%, transparent) 52%,
-      color-mix(in srgb, var(--stage-fade) 58%, transparent) 64%,
-      color-mix(in srgb, var(--stage-fade) 82%, transparent) 75%,
-      color-mix(in srgb, var(--stage-fade) 96%, transparent) 85%,
-      var(--stage-fade) 93%
+      transparent 48%,
+      color-mix(in srgb, var(--stage-fade) 18%, transparent) 64%,
+      color-mix(in srgb, var(--stage-fade) 54%, transparent) 78%,
+      color-mix(in srgb, var(--stage-fade) 88%, transparent) 90%,
+      var(--stage-fade) 100%
     );
   }
 }

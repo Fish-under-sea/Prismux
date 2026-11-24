@@ -29,6 +29,7 @@ import {
   S3SyncChannel,
   sealBackupPayload,
   StallTimeoutError,
+  SyncHttpError,
   SyncVaultEngine,
   unsealBackupPayload,
   WebDavSyncChannel,
@@ -1564,4 +1565,199 @@ test("DoD 3e: three-way merge handles ULID tombstones, usage ledger deduplicatio
   assert.deepEqual(inboundForLaptop.commandsAndMcp, {
     sharedMcp: { url: "https://mcp.shared.example" }
   });
+});
+
+test("GitHubSyncChannel.verifyAccess distinguishes 401/403/404 repo/auth/branch errors from valid empty repo or missing initial snapshot", async () => {
+  type Scenario =
+    | "snapshot-exists"
+    | "snapshot-missing"
+    | "empty-repo"
+    | "branch-missing"
+    | "repo-404"
+    | "token-401"
+    | "contents-403";
+
+  let scenario: Scenario = "snapshot-exists";
+  const server = http.createServer((req, res) => {
+    const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    const path = reqUrl.pathname;
+
+    if (req.method === "GET" && path === "/repos/Fish-under-sea/prismux-vault") {
+      if (scenario === "token-401") {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Bad credentials" }));
+        return;
+      }
+      if (scenario === "repo-404") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Not Found" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          full_name: "Fish-under-sea/prismux-vault",
+          private: true,
+          default_branch: "main",
+          size: scenario === "empty-repo" ? 0 : 24,
+          permissions: { push: true, pull: true }
+        })
+      );
+      return;
+    }
+
+    if (
+      req.method === "GET" &&
+      path === "/repos/Fish-under-sea/prismux-vault/contents/prismux-vault.prismux-backup"
+    ) {
+      if (scenario === "snapshot-exists") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ sha: "blob-existing-1", size: 512 }));
+        return;
+      }
+      if (scenario === "snapshot-missing") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Not Found" }));
+        return;
+      }
+      if (scenario === "empty-repo") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "This repository is empty." }));
+        return;
+      }
+      if (scenario === "branch-missing") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ message: "No commit found for the ref wrong-branch" })
+        );
+        return;
+      }
+      if (scenario === "contents-403") {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            message: "Resource not accessible by personal access token"
+          })
+        );
+        return;
+      }
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  const { baseUrl } = await listenServer(server);
+  try {
+    const makeChannel = (branch = "main") =>
+      new GitHubSyncChannel({
+        enabled: true,
+        owner: "Fish-under-sea",
+        repo: "prismux-vault",
+        branch,
+        filePath: "prismux-vault.prismux-backup",
+        token: "ghp_mock_secret_token_value",
+        apiBaseUrl: baseUrl
+      });
+
+    // 1. Snapshot exists -> exists: true
+    scenario = "snapshot-exists";
+    const okExisting = await makeChannel().verifyAccess();
+    assert.equal(okExisting.exists, true);
+    assert.equal(okExisting.etag, "blob-existing-1");
+    assert.equal(okExisting.repoFullName, "Fish-under-sea/prismux-vault");
+    assert.equal(okExisting.emptyRepo, false);
+    assert.equal(okExisting.hasToken, true);
+    assert.equal(okExisting.canPush, true);
+
+    // 2. Valid repo, file not uploaded yet -> exists: false, emptyRepo: false
+    scenario = "snapshot-missing";
+    const okFirstTime = await makeChannel().verifyAccess();
+    assert.equal(okFirstTime.exists, false);
+    assert.equal(okFirstTime.etag, null);
+    assert.equal(okFirstTime.emptyRepo, false);
+
+    // 3. Valid empty repo -> exists: false, emptyRepo: true
+    scenario = "empty-repo";
+    const okEmpty = await makeChannel().verifyAccess();
+    assert.equal(okEmpty.exists, false);
+    assert.equal(okEmpty.emptyRepo, true);
+
+    // 4. Invalid PAT (401) -> rejects with SyncHttpError(401)
+    scenario = "token-401";
+    await assert.rejects(
+      () => makeChannel().verifyAccess(),
+      (err: unknown) => {
+        assert.ok(err instanceof SyncHttpError);
+        assert.equal(err.statusCode, 401);
+        assert.match(err.message, /401/);
+        assert.ok(!err.message.includes("ghp_mock_secret_token_value"));
+        return true;
+      }
+    );
+
+    // 5. Missing / unauthorized private repo (404 on /repos/{owner}/{repo}) -> rejects with 404
+    scenario = "repo-404";
+    await assert.rejects(
+      () => makeChannel().verifyAccess(),
+      (err: unknown) => {
+        assert.ok(err instanceof SyncHttpError);
+        assert.equal(err.statusCode, 404);
+        assert.match(err.message, /Fish-under-sea\/prismux-vault/);
+        return true;
+      }
+    );
+
+    // 6. Token lacks Contents permission (403 on /contents/...) -> rejects with 403
+    scenario = "contents-403";
+    await assert.rejects(
+      () => makeChannel().verifyAccess(),
+      (err: unknown) => {
+        assert.ok(err instanceof SyncHttpError);
+        assert.equal(err.statusCode, 403);
+        assert.match(err.message, /Contents/);
+        return true;
+      }
+    );
+
+    // 7. Non-existent branch on non-empty repo -> rejects with 404 naming the branch
+    scenario = "branch-missing";
+    await assert.rejects(
+      () => makeChannel("wrong-branch").verifyAccess(),
+      (err: unknown) => {
+        assert.ok(err instanceof SyncHttpError);
+        assert.equal(err.statusCode, 404);
+        assert.match(err.message, /wrong-branch/);
+        return true;
+      }
+    );
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("BoringSSL / Electron fallback: scrypt + aes-256-gcm seal/unseal roundtrip rejects wrong passphrase and 1-byte tampering", () => {
+  const payload = { hello: "prismux-electron", items: [1, 2, 3] };
+  const passphrase = "electron-boringssl-passphrase-2026";
+  const sealed = sealBackupPayload(payload, passphrase, ["remote-secret"], {
+    kdf: "scrypt",
+    cipher: "aes-256-gcm",
+    scryptParams: { N: 1024, r: 8, p: 1, tagLength: 32 }
+  });
+  const unsealed = unsealBackupPayload<typeof payload>(sealed, passphrase);
+  assert.deepEqual(unsealed.payload, payload);
+  assert.equal(unsealed.metadata.kdf, "scrypt");
+  assert.equal(unsealed.metadata.cipher, "aes-256-gcm");
+
+  assert.throws(
+    () => unsealBackupPayload(sealed, "wrong-passphrase"),
+    BackupDecryptionError
+  );
+
+  const tampered = Buffer.from(sealed);
+  tampered[tampered.length - 1] = (tampered[tampered.length - 1]! ^ 0x01) & 0xff;
+  assert.throws(
+    () => unsealBackupPayload(tampered, passphrase),
+    BackupDecryptionError
+  );
 });

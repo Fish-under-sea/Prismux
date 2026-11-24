@@ -12,6 +12,7 @@ import type {
 } from "@t3tools/contracts";
 import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
+import { normalizeBtwDisplayTitle } from "../chat/btwMode";
 
 export const DEFAULT_OVERVIEW_SECTION_LIMIT = 4;
 export const OVERVIEW_DISPLAY_PREFS_STORAGE_KEY = "prismux.overview.displayPrefs.v1";
@@ -733,10 +734,11 @@ export function extractOverviewSideQuestions(input: {
     if (linkedThreadIds.has(shell.id)) continue;
     linkedThreadIds.add(shell.id);
     const active = shell.activityRunStatus === "running" || shell.status === "running";
+    const normalizedTitle = normalizeBtwDisplayTitle(shell.title, "旁路提问");
     result.push({
       id: `native:${shell.id}`,
-      title: shell.title?.trim() || "旁路提问",
-      question: shell.title?.trim() || "旁路支线对话",
+      title: normalizedTitle,
+      question: normalizedTitle,
       status: active ? "pending" : "native",
       answer: null,
       errorMessage: null,

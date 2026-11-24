@@ -15,7 +15,6 @@ import {
   CornerUpRightIcon,
   ListPlusIcon,
 } from "lucide-react";
-import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import type { MessageResolver } from "~/i18n/messages";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn, isMacPlatform } from "~/lib/utils";
@@ -269,7 +268,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
-  const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const shortcutModifiers = useShortcutModifierState();
   const isQueuing =
     !isEditingQueuedMessage &&
@@ -281,7 +279,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     }) === "queue";
   const alternateAction = alternateComposerDispatchAction(followUpBehavior);
   const isSendDisabled = !canOperateThread || sendDisabledReason !== null;
-  const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
+  const stageBackdropVariant = useSidebarStageBackdropVariant();
 
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
     <StopGenerationButton

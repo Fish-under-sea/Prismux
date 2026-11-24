@@ -6,10 +6,13 @@ import { useClosedViewStore } from "./closedViewStore";
 import { linkedThreadTitle } from "./linkedThreadSurface";
 import { reopenClosedView } from "./reopenClosedView";
 import {
+  DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER,
   hostRightPanel,
+  loadRightPanelActivityOrder,
   migratePersistedRightPanelState,
   pullRequestSurface,
   pullRequestSurfaceId,
+  RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadPanelVisibility,
@@ -1392,5 +1395,72 @@ describe("rightPanelStore", () => {
     store.reconcileBrowserSurfaces(refA, ["tab-a", "tab-b"]);
     expect(surfaceIds()).toEqual(["browser:tab-a", "terminal:term-1", "diff", "browser:tab-b"]);
     expect(store.getUserActionRevision(refA)).toBe(revision);
+  });
+
+  it("migrates v3 activityBarOrder to v4 7-item default while keeping PR and wallpaper surfaces openable", () => {
+    expect(RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY).toBe("prismux.rightPanel.activityOrder.v4");
+    expect([...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER]).toEqual([
+      "pull-requests",
+      "diff",
+      "files",
+      "terminal",
+      "preview",
+      "mobile-simulator",
+      "side-chat",
+    ]);
+
+    const backing = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => backing.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        backing.set(key, value);
+      },
+    };
+    storage.setItem(
+      "prismux.rightPanel.activityOrder.v3",
+      JSON.stringify([
+        "pull-request",
+        "diff",
+        "files",
+        "terminal",
+        "side-chat",
+        "preview",
+        "mobile-simulator",
+        "pull-requests",
+        "wallpaper",
+      ]),
+    );
+    expect(loadRightPanelActivityOrder(storage)).toEqual([...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER]);
+
+    // Custom v3 order filters out pull-request & wallpaper while preserving user ordering.
+    backing.clear();
+    storage.setItem(
+      "prismux.rightPanel.activityOrder.v3",
+      JSON.stringify(["side-chat", "wallpaper", "pull-request", "terminal", "pull-requests"]),
+    );
+    expect(loadRightPanelActivityOrder(storage)).toEqual([
+      "side-chat",
+      "terminal",
+      "pull-requests",
+      "diff",
+      "files",
+      "preview",
+      "mobile-simulator",
+    ]);
+
+    // PR detail tabs and Wallpaper sidebar remain first-class surfaces in the store.
+    const store = useRightPanelStore.getState();
+    store.open(refA, "wallpaper");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe(
+      "wallpaper",
+    );
+    store.openPullRequest(refA, {
+      projectId: "project-a",
+      repository: "pingdotgg/t3code",
+      number: 77,
+    });
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe(
+      "pull-request",
+    );
   });
 });

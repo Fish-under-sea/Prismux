@@ -51,3 +51,26 @@ it("opens a side thread beside the thread the click was in, or in its place", ()
   expect(navigated).toEqual([sideChatRef, mainRef, elsewhere, sideChatRef]);
   expect(surfaces()).toHaveLength(1);
 });
+
+it("supports multiple parallel BTW side-question tabs beside the same main thread", () => {
+  useRightPanelStore.setState(useRightPanelStore.getInitialState());
+  const btwOne = scopeThreadRef(environmentId, ThreadId.make("btw-1"));
+  const btwTwo = scopeThreadRef(environmentId, ThreadId.make("btw-2"));
+
+  expect(
+    resolveThreadOpenRoute(btwOne, {
+      lineage: { sideChat: true, parentThreadId: mainRef.threadId } as never,
+    }),
+  ).toEqual(mainRef);
+  expect(
+    resolveThreadOpenRoute(btwTwo, {
+      lineage: { sideChat: true, parentThreadId: mainRef.threadId } as never,
+    }),
+  ).toEqual(mainRef);
+
+  const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, mainRef);
+  expect(state.surfaces.map((surface) => surface.id)).toEqual(["thread:btw-1", "thread:btw-2"]);
+  expect(
+    selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, mainRef)?.id,
+  ).toBe("thread:btw-2");
+});

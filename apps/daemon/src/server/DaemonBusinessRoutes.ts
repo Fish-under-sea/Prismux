@@ -1241,6 +1241,125 @@ export class DaemonBusinessService {
     const credHandle =
       this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
 
+    const channelsRaw = isPlainRecord(rawBody["channels"])
+      ? rawBody["channels"]
+      : null;
+
+    // Validate all enabled channel payloads upfront so invalid configs return 400
+    // cleanly without partially mutating stored credentials or channel configs.
+    const webdavRaw =
+      channelsRaw && isPlainRecord(channelsRaw["webdav"])
+        ? channelsRaw["webdav"]
+        : null;
+    const s3Raw =
+      channelsRaw && isPlainRecord(channelsRaw["s3"]) ? channelsRaw["s3"] : null;
+    const githubRaw =
+      channelsRaw && isPlainRecord(channelsRaw["github"])
+        ? channelsRaw["github"]
+        : null;
+
+    const assertValidHttpUrl = (rawUrl: string, label: string): void => {
+      try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          throw new Error("invalid protocol");
+        }
+      } catch {
+        throw new BusinessRouteError(
+          400,
+          "INVALID_SYNC_CHANNEL",
+          `${label} 的 Endpoint URL 格式无效，请以 http:// 或 https:// 开头。`
+        );
+      }
+    };
+
+    const existingWebdav = webdavRaw
+      ? this.ctx.syncVault.getChannelConfig("webdav")
+      : undefined;
+    const webdavEnabled = webdavRaw
+      ? typeof webdavRaw["enabled"] === "boolean"
+        ? webdavRaw["enabled"]
+        : (existingWebdav?.enabled ?? false)
+      : false;
+    const webdavEndpointUrl = webdavRaw
+      ? typeof webdavRaw["endpointUrl"] === "string"
+        ? webdavRaw["endpointUrl"].trim()
+        : (existingWebdav?.endpointUrl ?? "")
+      : "";
+    if (webdavRaw && webdavEnabled) {
+      if (webdavEndpointUrl.length === 0) {
+        throw new BusinessRouteError(
+          400,
+          "INVALID_SYNC_CHANNEL",
+          "启用 WebDAV 通道时必须填写 Endpoint URL。"
+        );
+      }
+      assertValidHttpUrl(webdavEndpointUrl, "WebDAV 通道");
+    }
+
+    const existingS3 = s3Raw
+      ? this.ctx.syncVault.getChannelConfig("s3")
+      : undefined;
+    const s3Enabled = s3Raw
+      ? typeof s3Raw["enabled"] === "boolean"
+        ? s3Raw["enabled"]
+        : (existingS3?.enabled ?? false)
+      : false;
+    const s3EndpointUrl = s3Raw
+      ? typeof s3Raw["endpointUrl"] === "string"
+        ? s3Raw["endpointUrl"].trim()
+        : (existingS3?.endpointUrl ?? "")
+      : "";
+    const s3Bucket = s3Raw
+      ? typeof s3Raw["bucket"] === "string"
+        ? s3Raw["bucket"].trim()
+        : (existingS3?.bucket ?? "")
+      : "";
+    if (s3Raw && s3Enabled) {
+      const missing: string[] = [];
+      if (s3EndpointUrl.length === 0) missing.push("Endpoint URL");
+      if (s3Bucket.length === 0) missing.push("Bucket 名称");
+      if (missing.length > 0) {
+        throw new BusinessRouteError(
+          400,
+          "INVALID_SYNC_CHANNEL",
+          `启用 S3 对象存储通道时必须填写：${missing.join("、")}。`
+        );
+      }
+      assertValidHttpUrl(s3EndpointUrl, "S3 对象存储通道");
+    }
+
+    const existingGithub = githubRaw
+      ? this.ctx.syncVault.getChannelConfig("github")
+      : undefined;
+    const githubEnabled = githubRaw
+      ? typeof githubRaw["enabled"] === "boolean"
+        ? githubRaw["enabled"]
+        : (existingGithub?.enabled ?? false)
+      : false;
+    const githubOwner = githubRaw
+      ? typeof githubRaw["owner"] === "string"
+        ? githubRaw["owner"].trim()
+        : (existingGithub?.owner ?? "")
+      : "";
+    const githubRepo = githubRaw
+      ? typeof githubRaw["repo"] === "string"
+        ? githubRaw["repo"].trim()
+        : (existingGithub?.repo ?? "")
+      : "";
+    if (githubRaw && githubEnabled) {
+      const missing: string[] = [];
+      if (githubOwner.length === 0) missing.push("Owner（GitHub 用户名或组织）");
+      if (githubRepo.length === 0) missing.push("私有仓库名（Repo）");
+      if (missing.length > 0) {
+        throw new BusinessRouteError(
+          400,
+          "INVALID_SYNC_CHANNEL",
+          `启用 GitHub 私有仓库通道时必须填写：${missing.join("、")}。`
+        );
+      }
+    }
+
     if (
       typeof rawBody["passphrase"] === "string" &&
       rawBody["passphrase"].length > 0 &&
@@ -1268,10 +1387,8 @@ export class DaemonBusinessService {
       this.ctx.syncVault.setSyncMatrix(partial);
     }
 
-    if (isPlainRecord(rawBody["channels"])) {
-      const webdavRaw = rawBody["channels"]["webdav"];
-      if (isPlainRecord(webdavRaw)) {
-        const existing = this.ctx.syncVault.getChannelConfig("webdav");
+    if (channelsRaw) {
+      if (webdavRaw) {
         if (
           typeof webdavRaw["password"] === "string" &&
           webdavRaw["password"].length > 0 &&
@@ -1279,49 +1396,49 @@ export class DaemonBusinessService {
         ) {
           await credHandle.set("webdav.password", webdavRaw["password"]);
         }
-        const endpointUrl =
-          typeof webdavRaw["endpointUrl"] === "string"
-            ? webdavRaw["endpointUrl"].trim()
-            : (existing?.endpointUrl ?? "");
-        if (endpointUrl.length > 0) {
+        if (webdavEndpointUrl.length > 0) {
+          const hasStoredWebdavSecret =
+            (typeof webdavRaw["password"] === "string" &&
+              webdavRaw["password"].length > 0) ||
+            (credHandle
+              ? (await credHandle.get("webdav.password")) !== undefined
+              : false);
           const passwordRef =
             typeof webdavRaw["passwordRef"] === "string"
               ? webdavRaw["passwordRef"]
-              : (existing?.passwordRef ??
-                (typeof webdavRaw["password"] === "string" &&
-                webdavRaw["password"].length > 0
+              : (existingWebdav?.passwordRef ??
+                (hasStoredWebdavSecret
                   ? `${SYNC_CREDENTIAL_BUCKET}:webdav.password`
                   : undefined));
+          const remotePath =
+            typeof webdavRaw["remotePath"] === "string"
+              ? webdavRaw["remotePath"].trim()
+              : undefined;
           this.ctx.syncVault.setChannelConfig("webdav", {
-            enabled:
-              typeof webdavRaw["enabled"] === "boolean"
-                ? webdavRaw["enabled"]
-                : (existing?.enabled ?? false),
-            endpointUrl,
+            enabled: webdavEnabled,
+            endpointUrl: webdavEndpointUrl,
             username:
               typeof webdavRaw["username"] === "string"
-                ? webdavRaw["username"]
-                : (existing?.username ?? ""),
-            ...(typeof webdavRaw["remotePath"] === "string"
-              ? { remotePath: webdavRaw["remotePath"] }
-              : existing?.remotePath !== undefined
-                ? { remotePath: existing.remotePath }
+                ? webdavRaw["username"].trim()
+                : (existingWebdav?.username ?? ""),
+            ...(remotePath && remotePath.length > 0
+              ? { remotePath }
+              : existingWebdav?.remotePath !== undefined
+                ? { remotePath: existingWebdav.remotePath }
                 : {}),
             ...(typeof webdavRaw["allowSelfSignedTls"] === "boolean"
               ? { allowSelfSignedTls: webdavRaw["allowSelfSignedTls"] }
-              : existing?.allowSelfSignedTls !== undefined
-                ? { allowSelfSignedTls: existing.allowSelfSignedTls }
+              : existingWebdav?.allowSelfSignedTls !== undefined
+                ? { allowSelfSignedTls: existingWebdav.allowSelfSignedTls }
                 : {}),
             ...(passwordRef !== undefined ? { passwordRef } : {})
           });
-        } else if (typeof webdavRaw["enabled"] === "boolean" && existing) {
+        } else if (typeof webdavRaw["enabled"] === "boolean" && existingWebdav) {
           this.ctx.syncVault.setChannelEnabled("webdav", webdavRaw["enabled"]);
         }
       }
 
-      const s3Raw = rawBody["channels"]["s3"];
-      if (isPlainRecord(s3Raw)) {
-        const existing = this.ctx.syncVault.getChannelConfig("s3");
+      if (s3Raw) {
         if (
           typeof s3Raw["secretAccessKey"] === "string" &&
           s3Raw["secretAccessKey"].length > 0 &&
@@ -1329,66 +1446,58 @@ export class DaemonBusinessService {
         ) {
           await credHandle.set("s3.secretAccessKey", s3Raw["secretAccessKey"]);
         }
-        const endpointUrl =
-          typeof s3Raw["endpointUrl"] === "string"
-            ? s3Raw["endpointUrl"].trim()
-            : (existing?.endpointUrl ?? "");
-        const bucket =
-          typeof s3Raw["bucket"] === "string"
-            ? s3Raw["bucket"].trim()
-            : (existing?.bucket ?? "");
-        if (endpointUrl.length > 0 && bucket.length > 0) {
+        if (s3EndpointUrl.length > 0 && s3Bucket.length > 0) {
+          const hasStoredS3Secret =
+            (typeof s3Raw["secretAccessKey"] === "string" &&
+              s3Raw["secretAccessKey"].length > 0) ||
+            (credHandle
+              ? (await credHandle.get("s3.secretAccessKey")) !== undefined
+              : false);
           const secretKeyRef =
             typeof s3Raw["secretKeyRef"] === "string"
               ? s3Raw["secretKeyRef"]
-              : (existing?.secretKeyRef ??
-                (typeof s3Raw["secretAccessKey"] === "string" &&
-                s3Raw["secretAccessKey"].length > 0
+              : (existingS3?.secretKeyRef ??
+                (hasStoredS3Secret
                   ? `${SYNC_CREDENTIAL_BUCKET}:s3.secretAccessKey`
                   : undefined));
+          const regionRaw =
+            typeof s3Raw["region"] === "string" ? s3Raw["region"].trim() : "";
           this.ctx.syncVault.setChannelConfig("s3", {
-            enabled:
-              typeof s3Raw["enabled"] === "boolean"
-                ? s3Raw["enabled"]
-                : (existing?.enabled ?? false),
-            endpointUrl,
+            enabled: s3Enabled,
+            endpointUrl: s3EndpointUrl,
             region:
-              typeof s3Raw["region"] === "string"
-                ? s3Raw["region"]
-                : (existing?.region ?? "us-east-1"),
-            bucket,
+              regionRaw.length > 0 ? regionRaw : (existingS3?.region ?? "us-east-1"),
+            bucket: s3Bucket,
             forcePathStyle:
               typeof s3Raw["forcePathStyle"] === "boolean"
                 ? s3Raw["forcePathStyle"]
-                : (existing?.forcePathStyle ?? true),
+                : (existingS3?.forcePathStyle ?? true),
             allowSelfSignedTls:
               typeof s3Raw["allowSelfSignedTls"] === "boolean"
                 ? s3Raw["allowSelfSignedTls"]
-                : (existing?.allowSelfSignedTls ?? false),
+                : (existingS3?.allowSelfSignedTls ?? false),
             accessKeyId:
               typeof s3Raw["accessKeyId"] === "string"
-                ? s3Raw["accessKeyId"]
-                : (existing?.accessKeyId ?? ""),
+                ? s3Raw["accessKeyId"].trim()
+                : (existingS3?.accessKeyId ?? ""),
             ...(typeof s3Raw["keyPrefix"] === "string"
               ? { keyPrefix: s3Raw["keyPrefix"] }
-              : existing?.keyPrefix !== undefined
-                ? { keyPrefix: existing.keyPrefix }
+              : existingS3?.keyPrefix !== undefined
+                ? { keyPrefix: existingS3.keyPrefix }
                 : {}),
             ...(typeof s3Raw["remoteKey"] === "string"
               ? { remoteKey: s3Raw["remoteKey"] }
-              : existing?.remoteKey !== undefined
-                ? { remoteKey: existing.remoteKey }
+              : existingS3?.remoteKey !== undefined
+                ? { remoteKey: existingS3.remoteKey }
                 : {}),
             ...(secretKeyRef !== undefined ? { secretKeyRef } : {})
           });
-        } else if (typeof s3Raw["enabled"] === "boolean" && existing) {
+        } else if (typeof s3Raw["enabled"] === "boolean" && existingS3) {
           this.ctx.syncVault.setChannelEnabled("s3", s3Raw["enabled"]);
         }
       }
 
-      const githubRaw = rawBody["channels"]["github"];
-      if (isPlainRecord(githubRaw)) {
-        const existing = this.ctx.syncVault.getChannelConfig("github");
+      if (githubRaw) {
         if (
           typeof githubRaw["token"] === "string" &&
           githubRaw["token"].length > 0 &&
@@ -1396,47 +1505,49 @@ export class DaemonBusinessService {
         ) {
           await credHandle.set("github.token", githubRaw["token"]);
         }
-        const owner =
-          typeof githubRaw["owner"] === "string"
-            ? githubRaw["owner"].trim()
-            : (existing?.owner ?? "");
-        const repo =
-          typeof githubRaw["repo"] === "string"
-            ? githubRaw["repo"].trim()
-            : (existing?.repo ?? "");
-        if (owner.length > 0 && repo.length > 0) {
+        if (githubOwner.length > 0 && githubRepo.length > 0) {
+          const hasStoredGithubSecret =
+            (typeof githubRaw["token"] === "string" &&
+              githubRaw["token"].length > 0) ||
+            (credHandle
+              ? (await credHandle.get("github.token")) !== undefined
+              : false);
           const tokenRef =
             typeof githubRaw["tokenRef"] === "string"
               ? githubRaw["tokenRef"]
-              : (existing?.tokenRef ??
-                (typeof githubRaw["token"] === "string" &&
-                githubRaw["token"].length > 0
+              : (existingGithub?.tokenRef ??
+                (hasStoredGithubSecret
                   ? `${SYNC_CREDENTIAL_BUCKET}:github.token`
                   : undefined));
+          const branchRaw =
+            typeof githubRaw["branch"] === "string"
+              ? githubRaw["branch"].trim()
+              : "";
+          const filePathRaw =
+            typeof githubRaw["filePath"] === "string"
+              ? githubRaw["filePath"].trim()
+              : "";
           this.ctx.syncVault.setChannelConfig("github", {
-            enabled:
-              typeof githubRaw["enabled"] === "boolean"
-                ? githubRaw["enabled"]
-                : (existing?.enabled ?? false),
-            owner,
-            repo,
+            enabled: githubEnabled,
+            owner: githubOwner,
+            repo: githubRepo,
             branch:
-              typeof githubRaw["branch"] === "string"
-                ? githubRaw["branch"]
-                : (existing?.branch ?? "main"),
+              branchRaw.length > 0
+                ? branchRaw
+                : (existingGithub?.branch ?? "main"),
             ...(typeof githubRaw["apiBaseUrl"] === "string"
               ? { apiBaseUrl: githubRaw["apiBaseUrl"] }
-              : existing?.apiBaseUrl !== undefined
-                ? { apiBaseUrl: existing.apiBaseUrl }
+              : existingGithub?.apiBaseUrl !== undefined
+                ? { apiBaseUrl: existingGithub.apiBaseUrl }
                 : {}),
-            ...(typeof githubRaw["filePath"] === "string"
-              ? { filePath: githubRaw["filePath"] }
-              : existing?.filePath !== undefined
-                ? { filePath: existing.filePath }
+            ...(filePathRaw.length > 0
+              ? { filePath: filePathRaw }
+              : existingGithub?.filePath !== undefined
+                ? { filePath: existingGithub.filePath }
                 : {}),
             ...(tokenRef !== undefined ? { tokenRef } : {})
           });
-        } else if (typeof githubRaw["enabled"] === "boolean" && existing) {
+        } else if (typeof githubRaw["enabled"] === "boolean" && existingGithub) {
           this.ctx.syncVault.setChannelEnabled("github", githubRaw["enabled"]);
         }
       }
@@ -1513,6 +1624,14 @@ export class DaemonBusinessService {
     message = message.replace(
       /(authorization\s*[:=]\s*(?:basic|bearer|token)\s+)[^\s,;"']+/gi,
       "$1[REDACTED]"
+    );
+    message = message.replace(
+      /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]+\b/g,
+      "[REDACTED]"
+    );
+    message = message.replace(
+      /\bgithub_pat_[A-Za-z0-9_]+\b/g,
+      "[REDACTED]"
     );
     return message;
   }
@@ -1622,9 +1741,18 @@ export class DaemonBusinessService {
     const configuredKinds = allKinds.filter(
       (kind) => getSyncChannelCfg(kind) !== undefined
     );
+    const enabledKinds = configuredKinds.filter(
+      (kind) => getSyncChannelCfg(kind)?.enabled === true
+    );
+    const defaultTargetKinds =
+      enabledKinds.length > 0
+        ? enabledKinds
+        : configuredKinds.length > 0
+          ? configuredKinds
+          : allKinds;
     const targetChannels = this.parseRequestedSyncChannels(
       rawBody,
-      configuredKinds.length > 0 ? configuredKinds : allKinds
+      defaultTargetKinds
     );
 
     const results: SyncChannelOperationResult[] = [];
@@ -1645,27 +1773,56 @@ export class DaemonBusinessService {
 
       const started = performance.now();
       try {
-        const client =
-          kind === "webdav"
-            ? this.ctx.syncVault.getChannelClient("webdav")
-            : kind === "s3"
-              ? this.ctx.syncVault.getChannelClient("s3")
-              : this.ctx.syncVault.getChannelClient("github");
-        const headResult = await client.head();
-        const latencyMs = Math.max(0, Math.round(performance.now() - started));
-        results.push({
-          channel: kind,
-          ok: true,
-          enabled: cfg.enabled,
-          configured: true,
-          reachable: true,
-          exists: headResult.exists,
-          etag: headResult.etag,
-          latencyMs,
-          message: headResult.exists
-            ? "连接成功（远端已存在加密快照）"
-            : "连接成功（远端尚未上传首次快照）"
-        });
+        if (kind === "github") {
+          const ghCfg = this.ctx.syncVault.getChannelConfig("github");
+          const client = this.ctx.syncVault.getChannelClient("github");
+          const probe = await client.verifyAccess();
+          const latencyMs = Math.max(0, Math.round(performance.now() - started));
+          const repoLabel =
+            probe.repoFullName ??
+            (ghCfg ? `${ghCfg.owner}/${ghCfg.repo}` : "github");
+          const readOnlyHint =
+            probe.canPush === false
+              ? "（注意：当前 Token 仅有只读权限，无法上传）"
+              : !probe.hasToken
+                ? "（注意：未配置 PAT，仅可读取公开仓库）"
+                : "";
+          results.push({
+            channel: kind,
+            ok: true,
+            enabled: cfg.enabled,
+            configured: true,
+            reachable: true,
+            exists: probe.exists,
+            etag: probe.etag,
+            latencyMs,
+            message: probe.exists
+              ? `连接成功（仓库 ${repoLabel} 已存在加密快照）${readOnlyHint}`
+              : probe.emptyRepo
+                ? `连接成功（仓库 ${repoLabel} 当前为空仓库，首次同步将自动创建快照）${readOnlyHint}`
+                : `连接成功（仓库 ${repoLabel} 可访问，远端尚未上传首次快照）${readOnlyHint}`
+          });
+        } else {
+          const client =
+            kind === "webdav"
+              ? this.ctx.syncVault.getChannelClient("webdav")
+              : this.ctx.syncVault.getChannelClient("s3");
+          const headResult = await client.head();
+          const latencyMs = Math.max(0, Math.round(performance.now() - started));
+          results.push({
+            channel: kind,
+            ok: true,
+            enabled: cfg.enabled,
+            configured: true,
+            reachable: true,
+            exists: headResult.exists,
+            etag: headResult.etag,
+            latencyMs,
+            message: headResult.exists
+              ? "连接成功（远端已存在加密快照）"
+              : "连接成功（远端尚未上传首次快照）"
+          });
+        }
       } catch (err) {
         const latencyMs = Math.max(0, Math.round(performance.now() - started));
         const safeErr = await this.scrubSyncErrorMessage(
@@ -1687,6 +1844,7 @@ export class DaemonBusinessService {
     const configuredResults = results.filter((r) => r.configured);
     const overallOk =
       configuredResults.length > 0 && configuredResults.every((r) => r.ok);
+    const firstError = configuredResults.find((r) => !r.ok)?.error;
 
     return {
       ok: overallOk,
@@ -1699,11 +1857,20 @@ export class DaemonBusinessService {
             error: "尚未配置任何同步通道（WebDAV / S3 / GitHub）。",
             message: "尚未配置任何同步通道。"
           }
-        : {
-            message: overallOk
-              ? `全部 ${configuredResults.length} 个已配置同步通道连通性测试通过。`
-              : "部分同步通道连通性测试失败，请检查端点地址与认证凭据。"
-          })
+        : overallOk
+          ? {
+              message:
+                enabledKinds.length > 0
+                  ? `全部 ${configuredResults.length} 个已启用同步通道连通性测试通过。`
+                  : `已检测 ${configuredResults.length} 个已配置同步通道（当前未启用），连通性测试通过。`
+            }
+          : {
+              ...(firstError !== undefined ? { error: firstError } : {}),
+              message:
+                configuredResults.length === 1 && firstError
+                  ? firstError
+                  : "部分同步通道连通性测试失败，请检查端点地址与认证凭据。"
+            })
     };
   }
 

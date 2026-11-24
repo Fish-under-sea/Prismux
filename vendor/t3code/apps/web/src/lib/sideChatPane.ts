@@ -32,6 +32,8 @@ export interface SideChatParentPanel {
   readonly hostRef: ScopedThreadRef;
   readonly openToolDiff: (target: ToolCallDiffTarget) => void;
   readonly runShellCommand: (command: string) => void;
+  /** Starts a fresh parallel BTW side-question tab beside the current one. */
+  readonly onNewSideChat?: (() => void) | undefined;
 }
 
 /**

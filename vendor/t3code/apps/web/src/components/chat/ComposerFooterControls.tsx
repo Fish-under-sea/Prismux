@@ -1,7 +1,7 @@
 import type { ModelSelection, ProviderInstanceId, RuntimeMode } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { T, useGT, useMessages } from "gt-react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, LockIcon } from "lucide-react";
 import { type ComponentProps, memo, useId, useRef } from "react";
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
@@ -33,6 +33,8 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   accessDisplay?: "label" | "icon" | "hidden";
   /** Draw the icon in the label color, not muted (the mode differs from the user's default). */
   emphasized?: boolean;
+  /** Locks permissions to read-only inside BTW side-question tabs (hides `full-access` toggle). */
+  readOnlyBtwLock?: boolean;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const gt = useGT();
@@ -42,6 +44,35 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   const composerFloatingLayerProps = useComposerMenuProps();
   const [open, setOpen] = useComposerMenuState(props.hidden);
   const permissionsChipRef = useRef<HTMLButtonElement>(null);
+
+  if (props.readOnlyBtwLock) {
+    if (accessDisplay === "hidden") return null;
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              role="status"
+              data-btw-readonly-lock="true"
+              data-permission-mode="approval-required"
+              aria-label="旁路只读模式已锁定"
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1 rounded-full border border-sky-500/25 bg-sky-500/10 text-sky-700 select-none dark:border-sky-400/25 dark:bg-sky-400/12 dark:text-sky-300",
+                size === "xs" ? "h-5.5 px-1.5 text-[10px]" : "h-6 px-2 text-[11px]",
+                "font-medium leading-none",
+              )}
+            >
+              <LockIcon aria-hidden="true" className="size-3 shrink-0" />
+              <span>只读</span>
+            </span>
+          }
+        />
+        <TooltipPopup side="top">
+          旁路提问（BTW）已锁定为只读安全模式（approval-required），仅允许查代码与只读命令，禁止修改工作区文件。
+        </TooltipPopup>
+      </Tooltip>
+    );
+  }
   const runtimeModeOption =
     props.runtimeModeOptions.find((option) => option.mode === props.runtimeMode) ??
     resolveRuntimeModeOption("approval-required", messages);

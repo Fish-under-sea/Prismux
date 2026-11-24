@@ -29,6 +29,15 @@ export interface RemoteHeadResult {
   contentLength?: number;
 }
 
+export interface GitHubAccessProbeResult extends RemoteHeadResult {
+  repoFullName?: string;
+  isPrivate?: boolean;
+  defaultBranch?: string;
+  emptyRepo?: boolean;
+  hasToken: boolean;
+  canPush?: boolean;
+}
+
 export interface RemoteDownloadResult {
   data: Buffer;
   etag: string | null;
@@ -882,6 +891,13 @@ export class GitHubSyncChannel {
     return headers;
   }
 
+  private repoUrl(): string {
+    const base = this.getApiBaseUrl();
+    const encodedOwner = encodeURIComponent(this.config.owner);
+    const encodedRepo = encodeURIComponent(this.config.repo);
+    return `${base}/repos/${encodedOwner}/${encodedRepo}`;
+  }
+
   private contentsUrl(filePath: string, ref?: string): string {
     const base = this.getApiBaseUrl();
     const encodedOwner = encodeURIComponent(this.config.owner);
@@ -889,6 +905,171 @@ export class GitHubSyncChannel {
     const encodedPath = this.encodeRepoPath(filePath);
     const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : "";
     return `${base}/repos/${encodedOwner}/${encodedRepo}/contents/${encodedPath}${refQuery}`;
+  }
+
+  /**
+   * Accurately verifies GitHub repository access & token authorization before probing
+   * the encrypted snapshot file, distinguishing 401/403/404 repo/auth failures and
+   * non-existent branches from a valid empty repo or not-yet-uploaded snapshot file.
+   */
+  async verifyAccess(
+    filePath?: string,
+    ref?: string
+  ): Promise<GitHubAccessProbeResult> {
+    const headers = await this.buildHeaders();
+    const hasToken =
+      typeof headers["Authorization"] === "string" &&
+      headers["Authorization"].length > 0;
+    const repoLabel = `${this.config.owner}/${this.config.repo}`;
+
+    const repoRes = await requestWithStallWatchdog({
+      url: this.repoUrl(),
+      method: "GET",
+      isMetadataRequest: true,
+      metadataTimeoutMs: this.getMetadataTimeoutMs(),
+      headers
+    });
+
+    const repoBodyText = repoRes.body.toString("utf8");
+    if (repoRes.statusCode === 401) {
+      throw new SyncHttpError(
+        401,
+        "GitHub 认证失败（HTTP 401）：Personal Access Token 无效或已过期，请检查并重新保存 Token。",
+        repoBodyText
+      );
+    }
+    if (repoRes.statusCode === 403) {
+      let ghMsg = "";
+      try {
+        ghMsg = String(
+          (JSON.parse(repoBodyText) as { message?: unknown }).message ?? ""
+        );
+      } catch {
+        // ignore non-JSON body
+      }
+      const isRateLimit = /rate limit/i.test(ghMsg);
+      throw new SyncHttpError(
+        403,
+        isRateLimit
+          ? "GitHub API 请求频率受限（HTTP 403）：请稍后重试或配置已认证的 Personal Access Token。"
+          : `GitHub 权限不足（HTTP 403）：Token 无权访问仓库「${repoLabel}」，请授予目标仓库 Contents 读写权限。`,
+        repoBodyText
+      );
+    }
+    if (repoRes.statusCode === 404) {
+      throw new SyncHttpError(
+        404,
+        hasToken
+          ? `未找到 GitHub 仓库「${repoLabel}」或当前 Token 无访问权限（HTTP 404）：请核对 Owner / 私有仓库名，并确认 PAT 已勾选目标仓库的 Contents 读写权限。`
+          : `未找到 GitHub 仓库「${repoLabel}」或私有仓库未提供访问凭据（HTTP 404）：请填写具备目标仓库 Contents 读写权限的 Personal Access Token。`,
+        repoBodyText
+      );
+    }
+    if (repoRes.statusCode < 200 || repoRes.statusCode >= 300) {
+      throw new SyncHttpError(
+        repoRes.statusCode,
+        `GitHub 仓库探测失败（HTTP ${repoRes.statusCode}）。`,
+        repoBodyText
+      );
+    }
+
+    let repoMeta: {
+      full_name?: string;
+      private?: boolean;
+      default_branch?: string;
+      size?: number;
+      permissions?: { push?: boolean; pull?: boolean };
+    } = {};
+    try {
+      repoMeta = JSON.parse(repoBodyText) as typeof repoMeta;
+    } catch {
+      // keep defaults if response wasn't JSON
+    }
+
+    const targetPath = this.getDefaultFilePath(filePath);
+    const targetBranch = ref ?? this.config.branch;
+    const contentsRes = await requestWithStallWatchdog({
+      url: this.contentsUrl(targetPath, targetBranch),
+      method: "GET",
+      isMetadataRequest: true,
+      metadataTimeoutMs: this.getMetadataTimeoutMs(),
+      headers
+    });
+    const contentsBodyText = contentsRes.body.toString("utf8");
+
+    if (contentsRes.statusCode === 401) {
+      throw new SyncHttpError(
+        401,
+        "GitHub 内容读取认证失败（HTTP 401）：Personal Access Token 无效或已过期。",
+        contentsBodyText
+      );
+    }
+    if (contentsRes.statusCode === 403) {
+      throw new SyncHttpError(
+        403,
+        `GitHub 仓库内容访问被拒绝（HTTP 403）：请确认 Token 具备「${repoLabel}」的 Contents 读写权限。`,
+        contentsBodyText
+      );
+    }
+    if (contentsRes.statusCode === 404) {
+      let ghMsg = "";
+      try {
+        ghMsg = String(
+          (JSON.parse(contentsBodyText) as { message?: unknown }).message ?? ""
+        );
+      } catch {
+        // ignore non-JSON body
+      }
+      const isEmptyRepo =
+        /repository is empty/i.test(ghMsg) || repoMeta.size === 0;
+      if (!isEmptyRepo && /no commit found for the ref/i.test(ghMsg)) {
+        const defaultHint = repoMeta.default_branch
+          ? `（仓库默认分支为「${repoMeta.default_branch}」）`
+          : "";
+        throw new SyncHttpError(
+          404,
+          `GitHub 分支「${targetBranch}」在仓库「${repoLabel}」中不存在${defaultHint}，请修正分支名称。`,
+          contentsBodyText
+        );
+      }
+      return {
+        exists: false,
+        etag: null,
+        repoFullName: repoMeta.full_name ?? repoLabel,
+        isPrivate: repoMeta.private,
+        defaultBranch: repoMeta.default_branch,
+        emptyRepo: isEmptyRepo,
+        hasToken,
+        ...(typeof repoMeta.permissions?.push === "boolean"
+          ? { canPush: repoMeta.permissions.push }
+          : {})
+      };
+    }
+    if (contentsRes.statusCode < 200 || contentsRes.statusCode >= 300) {
+      throw new SyncHttpError(
+        contentsRes.statusCode,
+        `GitHub Contents 探测失败（HTTP ${contentsRes.statusCode}）。`,
+        contentsBodyText
+      );
+    }
+
+    const parsed = JSON.parse(contentsBodyText) as {
+      sha?: string;
+      size?: number;
+    };
+    return {
+      exists: true,
+      etag: parsed.sha ?? null,
+      contentLength: parsed.size,
+      repoFullName: repoMeta.full_name ?? repoLabel,
+      isPrivate: repoMeta.private,
+      defaultBranch: repoMeta.default_branch,
+      emptyRepo: false,
+      hasToken,
+      ...(typeof repoMeta.permissions?.push === "boolean"
+        ? { canPush: repoMeta.permissions.push }
+        : {})
+    };
   }
 
   async head(filePath?: string, ref?: string): Promise<RemoteHeadResult> {

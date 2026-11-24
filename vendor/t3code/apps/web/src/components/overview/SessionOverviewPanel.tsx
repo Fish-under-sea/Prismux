@@ -1,17 +1,19 @@
-import type {
-  AssetResource,
-  ChatAttachment,
-  ChatFileAttachment,
-  EditorId,
-  EnvironmentId,
-  OrchestrationV2ThreadProjection,
-  OrchestrationV2ThreadShell,
-  ProjectId,
-  ProjectScript,
-  ResolvedKeybindingsConfig,
-  ScheduledTask,
-  TaskFolder,
+import {
   ThreadId,
+  type AssetResource,
+  type ChatAttachment,
+  type ChatFileAttachment,
+  type EditorId,
+  type EnvironmentId,
+  type ModelSelection,
+  type OrchestrationMessageContext,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
+  type ProjectId,
+  type ProjectScript,
+  type ResolvedKeybindingsConfig,
+  type ScheduledTask,
+  type TaskFolder,
 } from "@t3tools/contracts";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
@@ -182,7 +184,9 @@ export interface SessionOverviewPanelProps {
     readonly text: string;
     readonly titleSeed: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
+    readonly context?: OrchestrationMessageContext;
   }) => Promise<boolean> | boolean | void;
+  readonly readModelSelection?: (() => ModelSelection | undefined) | undefined;
   readonly sideChatAvailable?: boolean;
   readonly sideChatDisabledReason?: string | null;
   readonly diffStats?: OverviewDiffStats | null;
@@ -565,6 +569,7 @@ function SessionOverviewPanelContent(
     projection,
     modifiedFiles,
     onOpenSideChat: props.onOpenSideChat,
+    readModelSelection: props.readModelSelection,
     onAskSideQuestion: props.onAskSideQuestion,
   });
 
@@ -1204,7 +1209,16 @@ function SessionOverviewPanelContent(
               maxVisibleItems={dynamicSectionLimit}
               composerOpen={sideComposerOpen}
               onToggleComposer={() => setSideComposerOpen((prev) => !prev)}
-              onSelectItem={(item) => setActiveSideQuestionId(item.id)}
+              onSelectItem={(item) => {
+                // Native / live BTW items open directly in the right-panel multi-turn SideThreadPane tab.
+                if (item.linkedSideThreadId) {
+                  useRightPanelStore
+                    .getState()
+                    .openThread(activeThreadRef, item.linkedSideThreadId);
+                  return;
+                }
+                setActiveSideQuestionId(item.id);
+              }}
               composerSlot={
                 <SideQuestionComposer
                   open={sideComposerOpen}
@@ -1215,7 +1229,11 @@ function SessionOverviewPanelContent(
                   onSubmit={async (question) => {
                     const created = await sideQuestionController.ask(question);
                     setSideComposerOpen(false);
-                    if (created) {
+                    if (created?.linkedSideThreadId) {
+                      useRightPanelStore
+                        .getState()
+                        .openThread(activeThreadRef, ThreadId.make(created.linkedSideThreadId));
+                    } else if (created) {
                       setActiveSideQuestionId(created.id);
                     }
                   }}

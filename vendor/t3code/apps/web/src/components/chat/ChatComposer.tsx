@@ -430,6 +430,8 @@ export interface ChatComposerProps {
 
   runtimeMode: RuntimeMode;
   defaultRuntimeMode?: RuntimeMode;
+  /** Locks permission switcher to a read-only BTW lock badge inside side-question tabs. */
+  readOnlyBtwLock?: boolean | undefined;
 
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
@@ -2701,6 +2703,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       compatibleRuntimeMode={compatibleRuntimeMode}
       defaultRuntimeMode={props.defaultRuntimeMode}
       compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
+      readOnlyBtwLock={props.readOnlyBtwLock}
       handleRuntimeModeChange={handleRuntimeModeChange}
       composerControlsCollapsed={composerControlsCollapsed}
       effortDisplay={settings.effortDisplay}
@@ -4100,6 +4103,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         hidden={dictationTakesFooter || composerControlsCollapsed}
                         accessDisplay="icon"
                         emphasized={compatibleRuntimeMode !== props.defaultRuntimeMode}
+                        readOnlyBtwLock={props.readOnlyBtwLock === true}
                         onRuntimeModeChange={handleRuntimeModeChange}
                       />
                     ) : null}

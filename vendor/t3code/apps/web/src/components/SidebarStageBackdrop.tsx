@@ -1,37 +1,55 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentIdentificationMode } from "@t3tools/contracts";
-import { useId } from "react";
+import { useId, useSyncExternalStore } from "react";
 
 import { APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import { primaryServerConfigAtom } from "../state/server";
+import {
+  SKY_COMPACT_STARS,
+  SKY_MASK_EXCLUDE,
+  SKY_MASK_INCLUDE,
+  SKY_SPARKLE_COLOR,
+  SKY_SPARKLES,
+  SKY_STARS,
+  SKY_SUN_SPECULAR,
+  SKY_TIME_CHANGE_EVENT,
+  SKY_VIEWBOX_HEIGHT,
+  SKY_VIEWBOX_WIDTH,
+  computeMsUntilNextSkyTick,
+  computeSkyScene,
+  computeStarStepOpacity,
+  normalizeMinutesOfDay,
+  resolveEffectiveSkyMinutes,
+  type SkyScene,
+} from "./sidebarSkyBackdrop.logic";
 
-export type SidebarStageBackdropVariant = "nightly" | "dev";
+export type SidebarStageBackdropVariant = "sky" | "nightly" | "dev";
 export type EnvironmentIdentificationPillLabel = "Dev" | "Nightly";
 
-const STAGE_BACKDROP_VIEW_BOX = "0 0 8192 96";
-
-export function resolveSidebarStageBackdropVariant(
-  stageLabel: string,
-  mode: EnvironmentIdentificationMode = "artwork",
-): SidebarStageBackdropVariant | null {
-  if (mode === "nightly-artwork") return "nightly";
-  if (mode === "dev-artwork") return "dev";
-  if (mode !== "artwork") return null;
-  const normalized = stageLabel.trim().toLowerCase();
-  if (normalized === "nightly") return "nightly";
-  if (normalized === "dev") return "dev";
-  return null;
+declare global {
+  interface Window {
+    __PRISMUX_SKY_MINUTES__?: number;
+  }
 }
 
+/**
+ * Default always-on 24-hour dynamic sky backdrop.
+ * Never hidden by "none", "pill", or release channel; preserves exported signature for callers.
+ */
+export function resolveSidebarStageBackdropVariant(
+  _stageLabel?: string,
+  _mode?: EnvironmentIdentificationMode,
+): SidebarStageBackdropVariant {
+  return "sky";
+}
+
+/**
+ * Legacy Dev / Nightly pill badges are retired in favor of the default-on 24h sky artwork.
+ */
 export function resolveEnvironmentIdentificationPillLabel(
-  stageLabel: string,
+  _stageLabel?: string,
 ): EnvironmentIdentificationPillLabel | null {
-  const normalized = stageLabel.trim().toLowerCase();
-  // oxlint-disable-next-line t3code/no-untranslated-copy -- release channel names
-  if (normalized === "dev") return "Dev";
-  // oxlint-disable-next-line t3code/no-untranslated-copy -- release channel names
-  if (normalized === "nightly") return "Nightly";
   return null;
 }
 
@@ -46,350 +64,549 @@ export function useEnvironmentStageLabel(): string {
 }
 
 export function useSidebarStageBackdropVariant(
-  mode: EnvironmentIdentificationMode,
-): SidebarStageBackdropVariant | null {
+  mode?: EnvironmentIdentificationMode,
+): SidebarStageBackdropVariant {
   return resolveSidebarStageBackdropVariant(useEnvironmentStageLabel(), mode);
 }
 
-export function SidebarStageBackdrop({ variant }: { variant: SidebarStageBackdropVariant }) {
+const skyClockSubscribers = new Set<() => void>();
+let currentSkyMinutes = resolveEffectiveSkyMinutes();
+let skyTickTimer: ReturnType<typeof setTimeout> | null = null;
+let skyClockListenersAttached = false;
+
+function clearSkyTickTimer(): void {
+  if (skyTickTimer !== null) {
+    clearTimeout(skyTickTimer);
+    skyTickTimer = null;
+  }
+}
+
+function syncSkyClockMinutes(): void {
+  const next = resolveEffectiveSkyMinutes();
+  if (next !== currentSkyMinutes) {
+    currentSkyMinutes = next;
+    for (const listener of skyClockSubscribers) {
+      listener();
+    }
+  }
+}
+
+function isDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function scheduleNextSkyTick(): void {
+  clearSkyTickTimer();
+  if (skyClockSubscribers.size === 0 || isDocumentHidden()) return;
+  const delayMs = computeMsUntilNextSkyTick(new Date());
+  skyTickTimer = setTimeout(() => {
+    skyTickTimer = null;
+    syncSkyClockMinutes();
+    scheduleNextSkyTick();
+  }, delayMs);
+}
+
+function handleVisibilityChange(): void {
+  if (isDocumentHidden()) {
+    clearSkyTickTimer();
+    return;
+  }
+  syncSkyClockMinutes();
+  scheduleNextSkyTick();
+}
+
+function handleSkyTimeOverrideEvent(): void {
+  syncSkyClockMinutes();
+}
+
+function attachSkyClockListeners(): void {
+  if (skyClockListenersAttached) return;
+  skyClockListenersAttached = true;
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener(SKY_TIME_CHANGE_EVENT, handleSkyTimeOverrideEvent);
+  }
+}
+
+function detachSkyClockListeners(): void {
+  if (!skyClockListenersAttached) return;
+  skyClockListenersAttached = false;
+  clearSkyTickTimer();
+  if (typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }
+  if (typeof window !== "undefined") {
+    window.removeEventListener(SKY_TIME_CHANGE_EVENT, handleSkyTimeOverrideEvent);
+  }
+}
+
+function subscribeToSkyClock(listener: () => void): () => void {
+  skyClockSubscribers.add(listener);
+  if (skyClockSubscribers.size === 1) {
+    currentSkyMinutes = resolveEffectiveSkyMinutes();
+    attachSkyClockListeners();
+    scheduleNextSkyTick();
+  }
+  return () => {
+    skyClockSubscribers.delete(listener);
+    if (skyClockSubscribers.size === 0) {
+      detachSkyClockListeners();
+    }
+  };
+}
+
+function getSkyClockSnapshot(): number {
+  return currentSkyMinutes;
+}
+
+function getSkyClockServerSnapshot(): number {
+  return resolveEffectiveSkyMinutes();
+}
+
+export function useDynamicSkyMinutes(minutesOverride?: number): number {
+  const clockMinutes = useSyncExternalStore(
+    subscribeToSkyClock,
+    getSkyClockSnapshot,
+    getSkyClockServerSnapshot,
+  );
+  if (typeof minutesOverride === "number" && Number.isFinite(minutesOverride)) {
+    return normalizeMinutesOfDay(minutesOverride);
+  }
+  return clockMinutes;
+}
+
+export function SidebarStageBackdrop({
+  variant = "sky",
+  minutesOverride,
+}: {
+  readonly variant?: SidebarStageBackdropVariant;
+  readonly minutesOverride?: number;
+}) {
+  const minutes = useDynamicSkyMinutes(minutesOverride);
+  const scene = computeSkyScene(minutes);
+
   return (
     <div
-      aria-hidden
+      aria-hidden="true"
+      data-stage-backdrop={variant}
+      data-sky-phase={scene.phase}
+      data-sky-minutes={String(Math.round(scene.minutes))}
       className="sidebar-stage-backdrop pointer-events-none absolute inset-x-0 top-0 z-0 h-20 select-none overflow-hidden"
     >
-      <StageBackdropArt variant={variant} />
+      <DynamicSkyArt scene={scene} />
     </div>
   );
 }
 
-function StageBackdropArt({ variant }: { variant: SidebarStageBackdropVariant }) {
-  return variant === "nightly" ? <NightlySkyArt /> : <DevBlueprintArt />;
+export function StageBackdropButtonArt({
+  variant = "sky",
+  minutesOverride,
+}: {
+  readonly variant?: SidebarStageBackdropVariant;
+  readonly minutesOverride?: number;
+}) {
+  const minutes = useDynamicSkyMinutes(minutesOverride);
+  const scene = computeSkyScene(minutes);
+
+  return <CompactSkyButtonArt scene={scene} variant={variant} />;
 }
 
-export function StageBackdropButtonArt({ variant }: { variant: SidebarStageBackdropVariant }) {
-  return variant === "nightly" ? <NightlySkyArt compact /> : <DevBlueprintArt compact />;
+function sparkleDiamondPath(x: number, y: number, size: number): string {
+  const s = size;
+  return `M${x} ${y - s} Q${x} ${y} ${x + s} ${y} Q${x} ${y} ${x} ${y + s} Q${x} ${y} ${x - s} ${y} Q${x} ${y} ${x} ${y - s} Z`;
 }
 
-const NIGHTLY_STARS: ReadonlyArray<{
-  cx: number;
-  cy: number;
-  r: number;
-  opacity: number;
-}> = [
-  { cx: 14, cy: 10, r: 0.6, opacity: 0.85 },
-  { cx: 38, cy: 22, r: 0.4, opacity: 0.55 },
-  { cx: 58, cy: 8, r: 0.5, opacity: 0.7 },
-  { cx: 84, cy: 16, r: 0.4, opacity: 0.5 },
-  { cx: 104, cy: 7, r: 0.6, opacity: 0.8 },
-  { cx: 126, cy: 20, r: 0.4, opacity: 0.55 },
-  { cx: 148, cy: 11, r: 0.5, opacity: 0.7 },
-  { cx: 170, cy: 24, r: 0.4, opacity: 0.5 },
-  { cx: 192, cy: 9, r: 0.6, opacity: 0.8 },
-  { cx: 214, cy: 18, r: 0.4, opacity: 0.55 },
-  { cx: 236, cy: 8, r: 0.5, opacity: 0.7 },
-  { cx: 258, cy: 20, r: 0.45, opacity: 0.6 },
-  { cx: 278, cy: 11, r: 0.55, opacity: 0.75 },
-  { cx: 26, cy: 34, r: 0.4, opacity: 0.45 },
-  { cx: 118, cy: 34, r: 0.4, opacity: 0.45 },
-  { cx: 202, cy: 32, r: 0.4, opacity: 0.5 },
-  { cx: 268, cy: 34, r: 0.4, opacity: 0.45 },
-];
+// Layered sculpted cumulus cloud silhouettes crafted for the 288x80 panoramic header.
+const MID_CLOUD_LEFT_PATH =
+  "M-28 84 L-28 60 C-18 59 -10 53 -2 54 C4 44 16 39 28 42 C36 37 48 39 54 47 C62 45 71 49 75 56 C83 56 90 61 93 68 L102 84 Z";
+const MID_CLOUD_CENTER_PATH =
+  "M112 84 L118 68 C124 60 134 57 143 60 C149 51 161 48 171 53 C178 49 188 51 193 58 C201 58 208 64 211 72 L218 84 Z";
+const MID_CLOUD_RIGHT_PATH =
+  "M214 84 L220 64 C227 56 238 52 248 55 C255 44 268 39 280 43 C289 40 299 44 304 52 C311 53 317 59 318 67 L318 84 Z";
 
-const NIGHTLY_SPARKLES: ReadonlyArray<{ x: number; y: number }> = [
-  { x: 70, y: 28 },
-  { x: 160, y: 36 },
-  { x: 246, y: 26 },
-];
+const NEAR_CLOUD_LEFT_BODY =
+  "M-22 86 L-22 65 C-14 64 -7 59 1 60 C7 49 20 43 33 46 C42 40 56 42 63 51 C72 48 82 52 87 60 C96 59 105 64 109 72 C116 73 121 78 123 86 Z";
+const NEAR_CLOUD_RIGHT_BODY =
+  "M166 86 C169 76 177 70 186 70 C191 59 203 53 215 55 C223 45 238 41 251 47 C260 43 272 46 278 55 C287 54 297 59 301 68 C307 69 312 76 312 86 Z";
+const NEAR_CLOUD_CENTER_PUFF =
+  "M100 86 C104 77 112 72 121 73 C127 65 138 62 148 66 C155 62 165 64 170 71 C177 72 183 77 185 86 Z";
 
-function NightlySkyArt({ compact = false }: { compact?: boolean }) {
+function DynamicSkyArt({ scene }: { readonly scene: SkyScene }) {
   const idPrefix = useId().replaceAll(":", "");
-  const skyId = `${idPrefix}-stage-night-sky`;
-  const glowId = `${idPrefix}-stage-night-glow`;
-  const cloudId = `${idPrefix}-stage-night-cloud`;
-  const softId = `${idPrefix}-stage-night-soft`;
-  const starsId = `${idPrefix}-stage-night-stars`;
-  const glowsId = `${idPrefix}-stage-night-glows`;
+  const skyGradId = `${idPrefix}-sky-grad`;
+  const atmoGlowId = `${idPrefix}-atmo-glow`;
+  const horizonMistId = `${idPrefix}-horizon-mist`;
+  const sunOuterId = `${idPrefix}-sun-outer`;
+  const sunInnerId = `${idPrefix}-sun-inner`;
+  const sunCoreId = `${idPrefix}-sun-core`;
+  const moonHaloId = `${idPrefix}-moon-halo`;
+  const moonMaskId = `${idPrefix}-moon-mask`;
+  const cloudMidGradId = `${idPrefix}-cloud-mid`;
+  const cloudNearGradId = `${idPrefix}-cloud-near`;
+  const cloudNearRimGradId = `${idPrefix}-cloud-rim`;
+  const topScrimId = `${idPrefix}-top-scrim`;
+  const softGlowFilterId = `${idPrefix}-soft-glow`;
+
+  const { palette, sun, moon, clouds, stepIndex } = scene;
+  const glowOriginX = sun.visible ? sun.x : moon.visible ? moon.x : 144;
+  const glowOriginY = sun.visible ? sun.y : moon.visible ? moon.y : 68;
+  const showStars = palette.starVisibility > 0.005;
 
   return (
     <svg
-      data-stage-art="nightly"
+      data-stage-art="sky"
+      data-sky-phase={scene.phase}
       className="h-full w-full"
       fill="none"
-      preserveAspectRatio="xMinYMin slice"
-      viewBox={compact ? "96 0 8192 96" : STAGE_BACKDROP_VIEW_BOX}
+      preserveAspectRatio="xMidYMin slice"
+      viewBox={`0 0 ${SKY_VIEWBOX_WIDTH} ${SKY_VIEWBOX_HEIGHT}`}
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        <linearGradient
-          id={skyId}
-          x1="24"
-          y1="0"
-          x2="264"
-          y2="96"
-          gradientUnits="userSpaceOnUse"
-          spreadMethod="reflect"
-        >
-          <stop style={{ stopColor: "var(--stage-night-bottom)" }} />
-          <stop offset="0.5" style={{ stopColor: "var(--stage-night-mid)" }} />
-          <stop offset="1" style={{ stopColor: "var(--stage-night-top)" }} />
+        {/* 4-stop vertical atmospheric sky gradient */}
+        <linearGradient id={skyGradId} x1="0" y1="0" x2="0" y2={SKY_VIEWBOX_HEIGHT} gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor={palette.skyTop} />
+          <stop offset="38%" stopColor={palette.skyUpper} />
+          <stop offset="72%" stopColor={palette.skyMid} />
+          <stop offset="100%" stopColor={palette.skyHorizon} />
         </linearGradient>
+
+        {/* Celestial atmospheric scatter glow */}
         <radialGradient
-          id={glowId}
-          cx="0"
-          cy="0"
-          r="1"
-          gradientTransform="translate(216 18) rotate(137) scale(120 84)"
+          id={atmoGlowId}
+          cx={glowOriginX}
+          cy={glowOriginY}
+          r="116"
           gradientUnits="userSpaceOnUse"
         >
-          <stop style={{ stopColor: "var(--stage-night-glow-highlight)" }} stopOpacity="0.4" />
+          <stop offset="0%" stopColor={palette.atmosphereGlowColor} stopOpacity={palette.atmosphereGlowOpacity} />
           <stop
-            offset="0.5"
-            style={{ stopColor: "var(--stage-night-glow-secondary)" }}
-            stopOpacity="0.16"
+            offset="48%"
+            stopColor={palette.atmosphereGlowColor}
+            stopOpacity={Math.round(palette.atmosphereGlowOpacity * 0.34 * 100) / 100}
           />
-          <stop offset="1" style={{ stopColor: "var(--stage-night-bottom)" }} stopOpacity="0" />
+          <stop offset="100%" stopColor={palette.atmosphereGlowColor} stopOpacity="0" />
         </radialGradient>
-        <linearGradient id={cloudId} x1="0" y1="60" x2="288" y2="96" gradientUnits="userSpaceOnUse">
-          <stop style={{ stopColor: "var(--stage-night-highlight)" }} stopOpacity="0.5" />
+
+        {/* Soft atmospheric horizon mist band */}
+        <linearGradient
+          id={horizonMistId}
+          x1="0"
+          y1="44"
+          x2="0"
+          y2={SKY_VIEWBOX_HEIGHT}
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0%" stopColor={palette.horizonMistColor} stopOpacity="0" />
           <stop
-            offset="0.52"
-            style={{ stopColor: "var(--stage-night-secondary)" }}
-            stopOpacity="0.62"
+            offset="58%"
+            stopColor={palette.horizonMistColor}
+            stopOpacity={Math.round(palette.horizonMistOpacity * 0.65 * 100) / 100}
           />
-          <stop offset="1" style={{ stopColor: "var(--stage-night-tertiary)" }} stopOpacity="0.5" />
+          <stop offset="100%" stopColor={palette.horizonMistColor} stopOpacity={palette.horizonMistOpacity} />
         </linearGradient>
-        <filter id={softId} x="-24" y="-24" width="336" height="144" filterUnits="userSpaceOnUse">
-          <feGaussianBlur stdDeviation="4" />
-        </filter>
-        <pattern id={starsId} width="288" height="96" patternUnits="userSpaceOnUse">
-          <g style={{ fill: "var(--stage-night-line)" }}>
-            {NIGHTLY_STARS.map((star) => (
+
+        {/* Sun concentric radiance gradients */}
+        {sun.visible ? (
+          <>
+            <radialGradient id={sunOuterId} cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={sun.outerGlowColor} stopOpacity="0.56" />
+              <stop offset="46%" stopColor={sun.outerGlowColor} stopOpacity="0.2" />
+              <stop offset="100%" stopColor={sun.outerGlowColor} stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id={sunInnerId} cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={sun.coreColor} stopOpacity="0.92" />
+              <stop offset="52%" stopColor={sun.innerGlowColor} stopOpacity="0.46" />
+              <stop offset="100%" stopColor={sun.innerGlowColor} stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id={sunCoreId} cx="42%" cy="38%" r="62%">
+              <stop offset="0%" stopColor={SKY_SUN_SPECULAR} />
+              <stop offset="65%" stopColor={sun.coreColor} />
+              <stop offset="100%" stopColor={sun.innerGlowColor} />
+            </radialGradient>
+          </>
+        ) : null}
+
+        {/* Crescent moon halo & crisp cutout mask */}
+        {moon.visible ? (
+          <>
+            <radialGradient id={moonHaloId} cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={moon.haloColor} stopOpacity="0.48" />
+              <stop offset="45%" stopColor={moon.haloColor} stopOpacity="0.16" />
+              <stop offset="100%" stopColor={moon.haloColor} stopOpacity="0" />
+            </radialGradient>
+            <mask id={moonMaskId} maskUnits="userSpaceOnUse" x={moon.x - 16} y={moon.y - 16} width="32" height="32">
+              <circle cx={moon.x} cy={moon.y} r={moon.radius} fill={SKY_MASK_INCLUDE} />
               <circle
-                key={`${star.cx}-${star.cy}`}
-                cx={star.cx}
-                cy={star.cy}
-                r={star.r}
-                fillOpacity={star.opacity}
+                cx={moon.x + moon.radius * 0.45}
+                cy={moon.y - moon.radius * 0.24}
+                r={moon.radius * 0.87}
+                fill={SKY_MASK_EXCLUDE}
               />
-            ))}
-          </g>
-          <g
-            style={{ stroke: "var(--stage-night-sparkle)" }}
-            strokeLinecap="round"
-            strokeOpacity="0.7"
-            strokeWidth="0.6"
-          >
-            {NIGHTLY_SPARKLES.map((sparkle) => (
-              <g key={`${sparkle.x}-${sparkle.y}`}>
-                <path d={`M${sparkle.x - 1.5} ${sparkle.y}H${sparkle.x + 1.5}`} />
-                <path d={`M${sparkle.x} ${sparkle.y - 1.5}V${sparkle.y + 1.5}`} />
-              </g>
-            ))}
-          </g>
-        </pattern>
-        <pattern id={glowsId} width="640" height="96" patternUnits="userSpaceOnUse">
-          <rect width="640" height="96" fill={`url(#${glowId})`} />
-        </pattern>
+            </mask>
+          </>
+        ) : null}
+
+        {/* Sculpted cloud depth gradients (sunlit top -> cool underside) */}
+        <linearGradient id={cloudMidGradId} x1="0" y1="38" x2="0" y2="82" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor={palette.cloudHighlight} stopOpacity="0.92" />
+          <stop offset="48%" stopColor={palette.cloudBody} stopOpacity="0.86" />
+          <stop offset="100%" stopColor={palette.cloudShadow} stopOpacity="0.72" />
+        </linearGradient>
+
+        <linearGradient id={cloudNearGradId} x1="0" y1="42" x2="0" y2="84" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor={palette.cloudHighlight} stopOpacity="0.98" />
+          <stop offset="36%" stopColor={palette.cloudBody} stopOpacity="0.96" />
+          <stop offset="100%" stopColor={palette.cloudShadow} stopOpacity="0.9" />
+        </linearGradient>
+
+        <linearGradient id={cloudNearRimGradId} x1="0" y1="40" x2="0" y2="66" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor={palette.cloudHighlight} stopOpacity="0.95" />
+          <stop offset="65%" stopColor={palette.cloudHighlight} stopOpacity="0.32" />
+          <stop offset="100%" stopColor={palette.cloudHighlight} stopOpacity="0" />
+        </linearGradient>
+
+        {/* Subtle zenith depth scrim guaranteeing >= 4.5:1 white text contrast across 24h */}
+        <linearGradient id={topScrimId} x1="0" y1="0" x2="0" y2="42" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor={palette.topScrimColor} stopOpacity={palette.topScrimOpacity} />
+          <stop
+            offset="55%"
+            stopColor={palette.topScrimColor}
+            stopOpacity={Math.round(palette.topScrimOpacity * 0.62 * 100) / 100}
+          />
+          <stop offset="100%" stopColor={palette.topScrimColor} stopOpacity="0" />
+        </linearGradient>
+
+        {/* Lightweight blur for distant atmospheric wisps */}
+        <filter id={softGlowFilterId} x="-12%" y="-18%" width="124%" height="136%">
+          <feGaussianBlur stdDeviation="1.4" />
+        </filter>
       </defs>
 
-      <rect width="100%" height="96" fill={`url(#${skyId})`} />
-      <rect width="100%" height="96" fill={`url(#${glowsId})`} />
-      <rect width="100%" height="96" fill={`url(#${starsId})`} />
+      {/* 1. Primary 24h atmospheric sky */}
+      <rect width={SKY_VIEWBOX_WIDTH} height={SKY_VIEWBOX_HEIGHT} fill={`url(#${skyGradId})`} />
 
-      <g filter={`url(#${softId})`}>
+      {/* 2. Celestial atmospheric scatter glow */}
+      <rect width={SKY_VIEWBOX_WIDTH} height={SKY_VIEWBOX_HEIGHT} fill={`url(#${atmoGlowId})`} />
+
+      {/* 3. Horizon mist */}
+      <rect
+        y="44"
+        width={SKY_VIEWBOX_WIDTH}
+        height={SKY_VIEWBOX_HEIGHT - 44}
+        fill={`url(#${horizonMistId})`}
+      />
+
+      {/* 4. Starfield & 4-point diamond sparkles (dusk / night / dawn) */}
+      {showStars ? (
+        <g data-sky-layer="stars" opacity={palette.starVisibility}>
+          {SKY_STARS.map((star) => (
+            <circle
+              key={`star-${star.x}-${star.y}`}
+              cx={star.x}
+              cy={star.y}
+              r={star.r}
+              fill={star.color}
+              fillOpacity={computeStarStepOpacity(star.baseOpacity, star.phase, stepIndex, 1)}
+            />
+          ))}
+          {SKY_SPARKLES.map((sparkle) => (
+            <path
+              key={`sparkle-${sparkle.x}-${sparkle.y}`}
+              d={sparkleDiamondPath(sparkle.x, sparkle.y, sparkle.size)}
+              fill={SKY_SPARKLE_COLOR}
+              fillOpacity={computeStarStepOpacity(sparkle.baseOpacity, sparkle.phase, stepIndex, 1)}
+            />
+          ))}
+        </g>
+      ) : null}
+
+      {/* 5. High-altitude wispy cirrus clouds */}
+      <g
+        data-sky-layer="clouds-cirrus"
+        opacity={palette.cirrusOpacity}
+        transform={`translate(${clouds.highDriftX} 0)`}
+        filter={`url(#${softGlowFilterId})`}
+      >
         <path
-          d="M-12 88C-12 74 0 63 14 63C18 50 30 41 44 41C58 41 70 49 74 62C79 57 86 54 94 54C110 54 123 66 124 82C132 83 138 88 141 96H-12V88Z"
-          fill={`url(#${cloudId})`}
+          d="M12 22 C30 18 52 19 72 23 C54 24 32 24 12 22 Z"
+          fill={palette.cloudHighlight}
+          fillOpacity="0.72"
+        />
+        <path
+          d="M148 16 C172 12 204 13 228 18 C202 19 172 19 148 16 Z"
+          fill={palette.cloudHighlight}
+          fillOpacity="0.65"
+        />
+        <path
+          d="M84 32 C104 28 128 29 144 33 C124 34 102 34 84 32 Z"
+          fill={palette.cloudHighlight}
+          fillOpacity="0.52"
         />
       </g>
-      <g filter={`url(#${softId})`}>
-        <path
-          d="M150 96C151 84 161 75 173 75C176 64 186 57 198 57C210 57 220 64 223 75C231 75 238 80 241 87C250 87 257 91 260 96H150Z"
-          fill={`url(#${cloudId})`}
-          fillOpacity="0.8"
-        />
+
+      {/* 6a. Solar orb & concentric glow */}
+      {sun.visible ? (
+        <g
+          data-sky-body="sun"
+          data-celestial-x={String(sun.x)}
+          data-celestial-y={String(sun.y)}
+          opacity={sun.opacity}
+        >
+          <circle cx={sun.x} cy={sun.y} r={sun.radius * 5.2} fill={`url(#${sunOuterId})`} />
+          <circle cx={sun.x} cy={sun.y} r={sun.radius * 2.25} fill={`url(#${sunInnerId})`} />
+          <circle cx={sun.x} cy={sun.y} r={sun.radius} fill={`url(#${sunCoreId})`} />
+        </g>
+      ) : null}
+
+      {/* 6b. Crescent moon & cool lunar halo */}
+      {moon.visible ? (
+        <g
+          data-sky-body="moon"
+          data-celestial-x={String(moon.x)}
+          data-celestial-y={String(moon.y)}
+          opacity={moon.opacity}
+        >
+          <circle cx={moon.x} cy={moon.y} r={moon.radius * 4.2} fill={`url(#${moonHaloId})`} />
+          <g transform={`rotate(${moon.tiltDeg} ${moon.x} ${moon.y})`}>
+            <circle
+              cx={moon.x}
+              cy={moon.y}
+              r={moon.radius}
+              fill={moon.fillColor}
+              mask={`url(#${moonMaskId})`}
+            />
+          </g>
+        </g>
+      ) : null}
+
+      {/* 7a. Mid-distance layered cumulus cloud bank */}
+      <g
+        data-sky-layer="clouds-mid"
+        opacity={Math.round(palette.cloudOpacity * 0.64 * 100) / 100}
+        transform={`translate(${clouds.midDriftX} 0)`}
+      >
+        <path d={MID_CLOUD_LEFT_PATH} fill={`url(#${cloudMidGradId})`} />
+        <path d={MID_CLOUD_CENTER_PATH} fill={`url(#${cloudMidGradId})`} fillOpacity="0.82" />
+        <path d={MID_CLOUD_RIGHT_PATH} fill={`url(#${cloudMidGradId})`} />
       </g>
+
+      {/* 7b. Foreground sculpted cumulus clusters with directional sunlit rims */}
+      <g
+        data-sky-layer="clouds-near"
+        opacity={palette.cloudOpacity}
+        transform={`translate(${clouds.nearDriftX} 0)`}
+      >
+        {/* Directional bright crown highlight */}
+        <g transform={`translate(${clouds.rimOffsetX} ${clouds.rimOffsetY})`}>
+          <path d={NEAR_CLOUD_LEFT_BODY} fill={`url(#${cloudNearRimGradId})`} />
+          <path d={NEAR_CLOUD_RIGHT_BODY} fill={`url(#${cloudNearRimGradId})`} />
+          <path d={NEAR_CLOUD_CENTER_PUFF} fill={`url(#${cloudNearRimGradId})`} fillOpacity="0.72" />
+        </g>
+        {/* Sculpted cloud bodies with sky-tinted underside shading */}
+        <path d={NEAR_CLOUD_LEFT_BODY} fill={`url(#${cloudNearGradId})`} />
+        <path d={NEAR_CLOUD_CENTER_PUFF} fill={`url(#${cloudNearGradId})`} fillOpacity="0.88" />
+        <path d={NEAR_CLOUD_RIGHT_BODY} fill={`url(#${cloudNearGradId})`} />
+      </g>
+
+      {/* 8. Subtle luminance-calibrated zenith depth veil for crisp header readability */}
+      <rect width={SKY_VIEWBOX_WIDTH} height="42" fill={`url(#${topScrimId})`} />
     </svg>
   );
 }
 
-function DevBlueprintArt({ compact = false }: { compact?: boolean }) {
+function CompactSkyButtonArt({
+  scene,
+  variant,
+}: {
+  readonly scene: SkyScene;
+  readonly variant: SidebarStageBackdropVariant;
+}) {
   const idPrefix = useId().replaceAll(":", "");
-  const paperId = `${idPrefix}-stage-bp-paper`;
-  const glowId = `${idPrefix}-stage-bp-glow`;
-  const celesteGlowId = `${idPrefix}-stage-bp-glow-celeste`;
-  const violetGlowId = `${idPrefix}-stage-bp-glow-violet`;
-  const minorGridId = `${idPrefix}-stage-bp-grid-minor`;
-  const majorGridId = `${idPrefix}-stage-bp-grid-major`;
-  const rulerId = `${idPrefix}-stage-bp-ruler`;
-  const glowsId = `${idPrefix}-stage-bp-glows`;
-  const annotationsId = `${idPrefix}-stage-bp-annotations`;
+  const gradId = `${idPrefix}-btn-sky`;
+  const glowId = `${idPrefix}-btn-glow`;
+  const moonMaskId = `${idPrefix}-btn-moon-mask`;
+  const { palette, sun, moon } = scene;
+  const showStars = palette.starVisibility > 0.12;
 
   return (
     <svg
-      data-stage-art="blueprint"
+      data-stage-art={variant === "sky" ? "sky-compact" : variant}
+      data-sky-phase={scene.phase}
       className="h-full w-full"
       fill="none"
-      preserveAspectRatio="xMinYMin slice"
-      viewBox={compact ? "64 0 8192 96" : STAGE_BACKDROP_VIEW_BOX}
+      preserveAspectRatio="xMidYMid slice"
+      viewBox="0 0 36 36"
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        <linearGradient
-          id={paperId}
-          x1="60"
-          y1="0"
-          x2="220"
-          y2="96"
-          gradientUnits="userSpaceOnUse"
-          spreadMethod="reflect"
-        >
-          <stop style={{ stopColor: "var(--stage-art-bottom)" }} />
-          <stop offset="0.5" style={{ stopColor: "var(--stage-art-mid)" }} />
-          <stop offset="1" style={{ stopColor: "var(--stage-art-top)" }} />
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="36" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor={palette.skyTop} />
+          <stop offset="56%" stopColor={palette.skyUpper} />
+          <stop offset="100%" stopColor={palette.skyMid} />
         </linearGradient>
-        <radialGradient
-          id={glowId}
-          cx="0"
-          cy="0"
-          r="1"
-          gradientTransform="translate(216 14) rotate(137) scale(120 84)"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop style={{ stopColor: "var(--stage-art-highlight)" }} stopOpacity="0.4" />
+        <radialGradient id={glowId} cx="72%" cy="24%" r="58%">
           <stop
-            offset="0.52"
-            style={{ stopColor: "var(--stage-art-secondary)" }}
-            stopOpacity="0.16"
+            offset="0%"
+            stopColor={palette.atmosphereGlowColor}
+            stopOpacity={Math.round(palette.atmosphereGlowOpacity * 0.72 * 100) / 100}
           />
-          <stop offset="1" style={{ stopColor: "var(--stage-art-bottom)" }} stopOpacity="0" />
+          <stop offset="100%" stopColor={palette.atmosphereGlowColor} stopOpacity="0" />
         </radialGradient>
-        <radialGradient
-          id={celesteGlowId}
-          cx="0"
-          cy="0"
-          r="1"
-          gradientTransform="translate(474 44) rotate(166) scale(156 92)"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop style={{ stopColor: "var(--stage-art-celeste-highlight)" }} stopOpacity="0.34" />
-          <stop
-            offset="0.5"
-            style={{ stopColor: "var(--stage-art-celeste-secondary)" }}
-            stopOpacity="0.18"
-          />
-          <stop offset="1" style={{ stopColor: "var(--stage-art-bottom)" }} stopOpacity="0" />
-        </radialGradient>
-        <radialGradient
-          id={violetGlowId}
-          cx="0"
-          cy="0"
-          r="1"
-          gradientTransform="translate(704 18) rotate(145) scale(132 88)"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop style={{ stopColor: "var(--stage-art-violet-highlight)" }} stopOpacity="0.3" />
-          <stop
-            offset="0.52"
-            style={{ stopColor: "var(--stage-art-tertiary)" }}
-            stopOpacity="0.14"
-          />
-          <stop offset="1" style={{ stopColor: "var(--stage-art-bottom)" }} stopOpacity="0" />
-        </radialGradient>
-        <pattern id={minorGridId} width="8" height="8" patternUnits="userSpaceOnUse">
-          <path
-            d="M8 0H0V8"
-            style={{ stroke: "var(--stage-art-grid-line)" }}
-            strokeOpacity="0.14"
-            strokeWidth="0.5"
-          />
-        </pattern>
-        <pattern id={majorGridId} width="32" height="32" patternUnits="userSpaceOnUse">
-          <path
-            d="M32 0H0V32"
-            style={{ stroke: "var(--stage-art-grid-line)" }}
-            strokeOpacity="0.26"
-            strokeWidth="0.6"
-          />
-        </pattern>
-        <pattern id={rulerId} width="32" height="6" patternUnits="userSpaceOnUse">
-          <path
-            d="M4 0V2.5M12 0V2.5M20 0V4M28 0V2.5"
-            style={{ stroke: "var(--stage-art-line)" }}
-            strokeOpacity="0.5"
-            strokeWidth="0.5"
-          />
-        </pattern>
-        <pattern id={glowsId} width="768" height="96" patternUnits="userSpaceOnUse">
-          <rect width="768" height="96" fill={`url(#${glowId})`} />
-          <rect width="768" height="96" fill={`url(#${celesteGlowId})`} />
-          <rect width="768" height="96" fill={`url(#${violetGlowId})`} />
-        </pattern>
-        <pattern id={annotationsId} width="768" height="96" patternUnits="userSpaceOnUse">
-          <g
-            style={{ stroke: "var(--stage-art-line)" }}
-            strokeLinecap="round"
-            strokeOpacity="0.6"
-            strokeWidth="0.7"
-          >
-            <path d="M180 64H264" strokeDasharray="5 4" />
-            <path d="M180 61V67M264 61V67" />
-            <path d="M276 10V44" strokeDasharray="4 4" strokeOpacity="0.5" />
-            <path d="M273 10H279M273 44H279" strokeOpacity="0.5" />
-            <path d="M348 30H428" strokeDasharray="3.5 5" strokeOpacity="0.5" />
-            <path d="M348 27V33M428 27V33" strokeOpacity="0.5" />
-            <path d="M512 48V80" strokeDasharray="5 3" strokeOpacity="0.45" />
-            <path d="M509 48H515M509 80H515" strokeOpacity="0.45" />
-            <path d="M590 70H724" strokeDasharray="7 4" strokeOpacity="0.55" />
-            <path d="M590 67V73M724 67V73" strokeOpacity="0.55" />
-          </g>
-
-          <g
-            style={{ stroke: "var(--stage-art-line)" }}
-            strokeLinecap="round"
-            strokeOpacity="0.55"
-            strokeWidth="0.6"
-          >
-            <g>
-              <path d="M34 60L38 64M38 60L34 64" />
-            </g>
-            <g>
-              <path d="M228 26H234M231 23V29" />
-            </g>
-            <g>
-              <path d="M143 51H149M146 48V54" />
-            </g>
-            <g>
-              <path d="M316 16L322 22M322 16L316 22" />
-            </g>
-            <g>
-              <path d="M468 70H476M472 66V74" />
-            </g>
-            <g>
-              <path d="M558 28L564 34M564 28L558 34" />
-            </g>
-            <g>
-              <path d="M742 44H750M746 40V48" />
-            </g>
-          </g>
-
-          <g style={{ stroke: "var(--stage-art-line)" }} strokeOpacity="0.35" strokeWidth="0.6">
-            <circle cx="196" cy="38" r="13" strokeDasharray="3.5 4" />
-            <path d="M196 33V43M191 38H201" strokeOpacity="0.6" strokeWidth="0.4" />
-            <circle cx="414" cy="64" r="10" strokeDasharray="2.5 3.5" />
-            <path d="M414 60V68M410 64H418" strokeOpacity="0.6" strokeWidth="0.4" />
-            <circle cx="648" cy="32" r="15" strokeDasharray="4 5" />
-            <path d="M648 26V38M642 32H654" strokeOpacity="0.6" strokeWidth="0.4" />
-          </g>
-        </pattern>
+        {moon.visible ? (
+          <mask id={moonMaskId} maskUnits="userSpaceOnUse" x="18" y="2" width="14" height="14">
+            <circle cx="25.5" cy="9.5" r="3.1" fill={SKY_MASK_INCLUDE} />
+            <circle cx="26.9" cy="8.7" r="2.7" fill={SKY_MASK_EXCLUDE} />
+          </mask>
+        ) : null}
       </defs>
 
-      <rect width="100%" height="96" fill={`url(#${paperId})`} />
-      <rect width="100%" height="96" fill={`url(#${glowsId})`} />
-      <rect width="100%" height="96" fill={`url(#${minorGridId})`} />
-      <rect width="100%" height="96" fill={`url(#${majorGridId})`} />
-      <rect width="100%" height="6" fill={`url(#${rulerId})`} />
-      <rect width="100%" height="96" fill={`url(#${annotationsId})`} />
+      <rect width="36" height="36" fill={`url(#${gradId})`} />
+      <rect width="36" height="36" fill={`url(#${glowId})`} />
+
+      {showStars ? (
+        <g opacity={palette.starVisibility * 0.85}>
+          {SKY_COMPACT_STARS.map((star) => (
+            <circle
+              key={`btn-star-${star.cx}-${star.cy}`}
+              cx={star.cx}
+              cy={star.cy}
+              r={star.r}
+              fill={star.color}
+            />
+          ))}
+        </g>
+      ) : null}
+
+      {sun.visible ? (
+        <circle cx="26" cy="9.5" r="3.2" fill={sun.coreColor} fillOpacity={sun.opacity * 0.82} />
+      ) : moon.visible ? (
+        <circle
+          cx="25.5"
+          cy="9.5"
+          r="3.1"
+          fill={moon.fillColor}
+          fillOpacity={moon.opacity * 0.88}
+          mask={`url(#${moonMaskId})`}
+        />
+      ) : null}
+
+      {/* Soft miniature bottom cloud wisp */}
+      <path
+        d="M-2 37 C2 31 8 29 13 31 C17 27 24 27 28 31 C32 30 36 32 38 37 Z"
+        fill={palette.cloudHighlight}
+        fillOpacity={Math.round(palette.cloudOpacity * 0.36 * 100) / 100}
+      />
+
+      {/* Gentle readability veil so white send icon stays >= 4.5:1 crisp */}
+      <rect
+        width="36"
+        height="36"
+        fill={palette.topScrimColor}
+        fillOpacity={Math.round(palette.topScrimOpacity * 0.9 * 100) / 100}
+      />
     </svg>
   );
 }

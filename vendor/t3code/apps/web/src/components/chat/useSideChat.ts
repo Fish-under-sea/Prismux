@@ -19,6 +19,11 @@ import { readThreadShell, waitForThreadShell } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+import {
+  attachBtwReadOnlyGuardrailContext,
+  deriveBtwThreadTitle,
+  resolveBtwRuntimeMode,
+} from "./btwMode";
 
 export type SideChatMessage = Pick<
   StartThreadTurnInput["message"],
@@ -57,12 +62,18 @@ export function useSideChat(input: {
     input.onError(thrownErrorMessage(error, m) ?? fallback);
   };
   const start = async (threadRef: ScopedThreadRef, message: SideChatMessage | undefined) => {
-    const { runtimeMode, modelSelection } = input.readSettings();
+    const { runtimeMode: parentRuntimeMode, modelSelection } = input.readSettings();
+    // 1:1 AGY Native BTW: side questions are ALWAYS strictly read-only (`approval-required`),
+    // never inheriting writable `full-access` from the main thread.
+    const btwRuntimeMode = resolveBtwRuntimeMode(parentRuntimeMode);
+    const initialTitle = deriveBtwThreadTitle(
+      message?.text || message?.titleSeed,
+      m(msg("Side chat")),
+    );
     const targetThreadId = newThreadId();
     const fork = await forkSideChat({
       environmentId: threadRef.environmentId,
-      // oxlint-disable-next-line t3code/no-untranslated-copy -- stored on the server as the thread title, shared by every viewer
-      input: { sourceThreadId: threadRef.threadId, targetThreadId, title: "Side chat" },
+      input: { sourceThreadId: threadRef.threadId, targetThreadId, title: initialTitle },
     });
     if (fork._tag === "Failure") {
       reportFailure(fork, m(msg("Could not start a side chat.")));
@@ -86,10 +97,14 @@ export function useSideChat(input: {
       discard();
       return false;
     }
-    if (runtimeMode !== sideChat.runtimeMode) {
+    if (btwRuntimeMode !== sideChat.runtimeMode) {
       const mode = await setThreadRuntimeMode({
         environmentId: threadRef.environmentId,
-        input: { threadId: targetThreadId, runtimeMode, createdAt: new Date().toISOString() },
+        input: {
+          threadId: targetThreadId,
+          runtimeMode: btwRuntimeMode,
+          createdAt: new Date().toISOString(),
+        },
       });
       if (mode._tag === "Failure") {
         reportFailure(mode, m(msg("Could not set the side chat's permission mode.")));
@@ -99,15 +114,21 @@ export function useSideChat(input: {
     }
     // Send before showing the tab: closing a tab whose side chat has no run deletes it.
     if (message) {
-      const { titleSeed, ...content } = message;
+      const { titleSeed, context, ...content } = message;
+      const guardedContext = attachBtwReadOnlyGuardrailContext(context);
       const turn = await startThreadTurn({
         environmentId: threadRef.environmentId,
         input: {
           threadId: targetThreadId,
-          message: { messageId: newMessageId(), role: "user", ...content },
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            ...content,
+            context: guardedContext,
+          },
           ...(modelSelection === undefined ? {} : { modelSelection }),
-          titleSeed,
-          runtimeMode,
+          titleSeed: deriveBtwThreadTitle(titleSeed || content.text, initialTitle),
+          runtimeMode: btwRuntimeMode,
           interactionMode: "default",
           createdAt: new Date().toISOString(),
         },
@@ -117,8 +138,12 @@ export function useSideChat(input: {
         discard();
         return false;
       }
-    } else if (modelSelection !== undefined) {
-      useComposerDraftStore.getState().setModelSelection(targetRef, modelSelection);
+    } else {
+      const draftStore = useComposerDraftStore.getState();
+      draftStore.setRuntimeMode(targetRef, btwRuntimeMode);
+      if (modelSelection !== undefined) {
+        draftStore.setModelSelection(targetRef, modelSelection);
+      }
     }
     useRightPanelStore.getState().openThread(threadRef, targetThreadId);
     return true;
