@@ -168,3 +168,26 @@ prismux/
 - **挂载点同步登记**：任何修改 `vendor/t3code/` 的提交，必须在同一批改动中同步更新 [`docs/t3code-patch-manifest.md`](./docs/t3code-patch-manifest.md) 对应挂载点坐标与改动摘要。
 - **一次性产物管理与清理**：所有临时调试脚本、中间打包输出（如 `.work/plugin-dist`）与临时缓存统一放进本仓 `.work/`；任务收尾时仅按精确路径逐项删除自己产生的产物（`Remove-Item <精确路径>`），禁止误删他人产物。
 - **规则与档案分流提交**：跨机器工程规则随对应功能提交一起入库；纯个人本机环境档案更新按 [`docs/agents/README.md`](./docs/agents/README.md) 规范单独提交。
+
+## 七、标准发布流程与四端交付门禁
+
+每次 Prismux 发版（预发布或正式版）必须严格按以下顺序完成**四端同步与清理**，全部验真通过后方可宣告交付完成：
+
+1. **版本同步与 README 资产重绘**：
+   - 全仓统一升级版本号（根 `package.json`、`packages/*/package.json`、`packages/protocol/src/brand.ts`、`apps/daemon/package.json`、`vendor/t3code/apps/{desktop,server,web}/package.json`、活跃官方插件 `plugins-official/plugin-{qq,fishdock-hook}/{package.json,plugin.manifest.json,src/index.ts}`、`plugins-official/catalog/official.json`、`docs/t3code-patch-manifest.md`、`README.md` 与 `README.en.md`）。
+   - 执行 `node scripts/render-readme.mjs` 全量重绘 `assets/readme/*.png` 与 `header-metadata.json`，并肉眼核验版本仪表卡图片。
+2. **全量质量门禁与实机截屏自审**：
+   - 清空代理环境变量后跑绿：`pnpm -r typecheck && pnpm -r build && pnpm -r --if-present test && pnpm test:scripts && pnpm upstream:check`。
+   - 跑绿 `vendor/t3code` 8 个核心运行时包 `typecheck`、相关单测及 `pnpm --dir vendor/t3code run build:desktop`。
+   - 核查仓库洁净：`docs/t3code-patch-manifest.md` 未登记项 `UNACCOUNTED=0`、`vendor/t3code/pnpm-lock.yaml` diff 为 `0`、`docs/specs/*` diff 为 `0`、`core.hooksPath` 未被污染。
+   - 启动真实 Electron 44 桌面端截屏自审关键界面改动，核验后清理 `.work/` 临时目录并确保零残留 `electron.exe`。
+3. **打包产物与安装包红线核验（`node scripts/release-all.ts`）**：
+   - Windows NSIS 必须为 `perMachine: false`、默认安装至 `$LOCALAPPDATA\Programs\Prismux`、提供双语可选桌面快捷方式页、非 asar 解包 `vec0.dll` 与随包 `7za.exe`，且严格零预装任何官方插件。
+   - 仅打包活跃官方插件 `qq` 与 `fishdock-hook`（严禁打包已停用的 `pet` 与 `ssh`）。
+4. **原子提交、打 Annotated Tag 并双远端推送**：
+   - 按职责拆分中文 Conventional Commits，打 Annotated Tag `v<version>`，推送 `main` 与 `v<version>` 至 `origin`（GitHub）与 `gitee`。
+5. **四端发布与自动清理核验**：
+   - **GitHub Release**：发布为 `--latest`（非 prerelease 标记按发版策略对齐），上传全部完整安装包与活跃插件归档并校验服务器 SHA-256 摘要；**严禁删除 GitHub 历史 Release 或历史附件**。
+   - **Gitee Release**：创建新版本 Release 并上传 80 MB 分卷压缩包与活跃插件附件，校验匿名 `HEAD 200` 字节数与匿名下载 SHA-256；**自动清理旧版本 Gitee Release 附件（保留历史 Release 说明页），仅保留最新版本的 Gitee 附件以节约配额**。
+   - **GitHub Packages（`@fish-under-sea/prismux-plugin-*`）**：确认 `.github/workflows/publish-github-packages.yml` 自动发布活跃插件 `prismux-plugin-qq` 与 `prismux-plugin-fishdock-hook` 成功，并**确保已停用的废弃包（如 `prismux-plugin-ssh`、`prismux-plugin-pet`）已从 GitHub Packages 彻底清理（仅保留活跃官方插件包）**；如 `GITHUB_TOKEN` 权限受限于个人包删除作用域，须使用含 `delete:packages` 权限的 `gh` / 网页端完成清理并复核仓库右侧 `Packages` 计数严格等于活跃插件数。
+   - **npm（`npmjs.org`）**：切换至本机档案记录的 Node 22 LTS（避开 Node 24 zlib 大包异常），发布 `prismux-plugin-qq` 与 `prismux-plugin-fishdock-hook`（预发布带 `--tag preview`），并确保已停用的 `prismux-plugin-ssh` / `prismux-plugin-pet` 已标注废弃（`npm deprecate`），最后通过 `npm view` 核验线上最新版本号。
