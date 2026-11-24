@@ -13,6 +13,32 @@ import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
 const COMPOSER_THREAD_RESULT_LIMIT = 5;
+const COMPOSER_RECENT_THREAD_LIMIT = 4;
+
+const CHINESE_THREAD_MENTION_KEYWORDS = new Set(["对话", "会话", "聊天", "对", "会", "聊"]);
+const ENGLISH_THREAD_MENTION_KEYWORDS = new Set(["thread", "threads", "chat", "chats"]);
+
+function threadRecencyMs(shell: ComposerThreadCandidate): number {
+  const updatedMs = Date.parse(shell.updatedAt);
+  const latestMessageMs = shell.latestUserMessageAt
+    ? Date.parse(shell.latestUserMessageAt)
+    : Number.NaN;
+  const createdMs = Date.parse(shell.createdAt);
+  return Math.max(
+    Number.isFinite(updatedMs) ? updatedMs : 0,
+    Number.isFinite(latestMessageMs) ? latestMessageMs : 0,
+    Number.isFinite(createdMs) ? createdMs : 0,
+  );
+}
+
+function compareThreadsByRecency(
+  left: ComposerThreadCandidate,
+  right: ComposerThreadCandidate,
+): number {
+  const delta = threadRecencyMs(right) - threadRecencyMs(left);
+  if (delta !== 0) return delta;
+  return left.id.localeCompare(right.id);
+}
 
 export type ComposerThreadCandidate = ThreadSearchShell &
   Pick<EnvironmentThreadShell, "archivedAt" | "lineage">;
@@ -41,11 +67,14 @@ export function matchComposerThreadItems(
     query: string;
     /** Recency is measured against this time. */
     now: number;
+    /** When true, bare `@` surfaces up to 4 most recent threads for quick `@对话` picking. */
+    readonly includeRecentOnEmptyQuery?: boolean;
   },
   resolve: MFunctionType = mFallback,
 ): ComposerThreadItem[] {
   const query = foldSearchQuery(input.query);
-  if (query.length === 0) return [];
+  const includeRecentOnEmptyQuery = input.includeRecentOnEmptyQuery === true;
+  if (query.length === 0 && !includeRecentOnEmptyQuery) return [];
   // Closing an unused side chat deletes it, so only one with a message is offered.
   const isOwnSideChat = (shell: ComposerThreadCandidate) =>
     shell.lineage.sideChat === true &&
@@ -60,30 +89,66 @@ export function matchComposerThreadItems(
       shell.archivedAt === null &&
       (isListedThreadLineage(shell.lineage) || isOwnSideChat(shell)),
   );
-  return rankSearchItems(candidates, (shell, options) =>
+  const toThreadItem = (
+    shell: ComposerThreadCandidate,
+    useChineseRecentLabels: boolean,
+  ): ComposerThreadItem => {
+    const machine =
+      shell.environmentId === input.environmentId
+        ? undefined
+        : input.linkedEnvironments.get(shell.environmentId);
+    const description = useChineseRecentLabels
+      ? isOwnSideChat(shell)
+        ? "旁路对话"
+        : machine === undefined
+          ? "当前工作区对话"
+          : `${machine} 上的对话`
+      : isOwnSideChat(shell)
+        ? resolve(msg("Side chat"))
+        : machine === undefined
+          ? resolve(msg("Thread", { $context: "noun, search result type" }))
+          : resolve(msg("Thread on {machine}", { machine }));
+    return {
+      id: `thread:${shell.environmentId}:${shell.id}`,
+      type: "thread",
+      thread: { environmentId: shell.environmentId, threadId: shell.id },
+      label: shell.title,
+      description,
+    };
+  };
+
+  if (query.length === 0) {
+    return [...candidates]
+      .sort(compareThreadsByRecency)
+      .slice(0, COMPOSER_RECENT_THREAD_LIMIT)
+      .map((shell) => toThreadItem(shell, true));
+  }
+
+  const isChineseKeyword = CHINESE_THREAD_MENTION_KEYWORDS.has(query);
+  const isEnglishKeyword = ENGLISH_THREAD_MENTION_KEYWORDS.has(query);
+  const rankedMatches = rankSearchItems(candidates, (shell, options) =>
     scoreThreadSearch(query, threadSearchSubject(shell, null), input.now, {
       ...options,
       picks: false,
     }),
-  )
+  ).map(({ item }) => item);
+
+  if (isChineseKeyword || isEnglishKeyword) {
+    const seen = new Set<string>();
+    const combined: ComposerThreadCandidate[] = [];
+    for (const shell of [...rankedMatches, ...[...candidates].sort(compareThreadsByRecency)]) {
+      const key = `${shell.environmentId}:${shell.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      combined.push(shell);
+      if (combined.length >= COMPOSER_THREAD_RESULT_LIMIT) break;
+    }
+    return combined.map((shell) => toThreadItem(shell, isChineseKeyword || includeRecentOnEmptyQuery));
+  }
+
+  return rankedMatches
     .slice(0, COMPOSER_THREAD_RESULT_LIMIT)
-    .map(({ item: shell }) => {
-      const machine =
-        shell.environmentId === input.environmentId
-          ? undefined
-          : input.linkedEnvironments.get(shell.environmentId);
-      return {
-        id: `thread:${shell.environmentId}:${shell.id}`,
-        type: "thread",
-        thread: { environmentId: shell.environmentId, threadId: shell.id },
-        label: shell.title,
-        description: isOwnSideChat(shell)
-          ? resolve(msg("Side chat"))
-          : machine === undefined
-            ? resolve(msg("Thread", { $context: "noun, search result type" }))
-            : resolve(msg("Thread on {machine}", { machine })),
-      };
-    });
+    .map((shell) => toThreadItem(shell, false));
 }
 
 export interface ComposerEnvironmentCandidate {

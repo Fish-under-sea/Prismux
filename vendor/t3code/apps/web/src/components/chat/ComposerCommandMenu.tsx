@@ -1,4 +1,3 @@
-import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import type { ComposerPathSearchTarget } from "@t3tools/client-runtime/state/threads";
 import {
   resolveProviderSkillSourceKind,
@@ -17,12 +16,9 @@ import {
 } from "@t3tools/contracts";
 import {
   BlocksIcon,
-  FolderIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   MessagesSquareIcon,
-  PackageIcon,
-  SettingsIcon,
-  UserRoundIcon,
-  type LucideIcon,
 } from "lucide-react";
 import { msg, useGT, useMessages } from "gt-react";
 import { memo, useLayoutEffect, useRef, useState } from "react";
@@ -30,13 +26,27 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
-import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
+import {
+  Command,
+  CommandGroup,
+  CommandGroupLabel,
+  CommandItem,
+  CommandList,
+} from "../ui/command";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { ComposerBanner } from "./ComposerBanner";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
+import {
+  SKILL_SOURCE_ICON_BY_KIND,
+  classifyComposerSkillCategory,
+  resolveSkillPresentation,
+  resolveSkillSourceBadgeLabel,
+  resolveSlashCommandPresentation,
+  type SlashCommandIconSpec,
+} from "./composerSlashCatalog";
 
 export type ComposerCommandItem =
   | {
@@ -54,12 +64,23 @@ export type ComposerCommandItem =
       command: ComposerSlashCommand;
       label: string;
       description: string;
+      descriptionOverride?: string | undefined;
     }
   | {
       id: string;
       type: "provider-slash-command";
       provider: ProviderDriverKind;
       command: ServerProviderSlashCommand;
+      label: string;
+      description: string;
+    }
+  | {
+      id: "slash:skills-folder";
+      type: "skill-group-toggle";
+      expanded: boolean;
+      personalCount: number;
+      builtinCount: number;
+      totalCount: number;
       label: string;
       description: string;
     }
@@ -106,6 +127,109 @@ export type ComposerCommandItem =
       description: string;
     };
 
+export interface ComposerCommandMenuGroup {
+  readonly key: string;
+  readonly label: string | null;
+  readonly items: ReadonlyArray<ComposerCommandItem>;
+}
+
+const PATH_SECTION_LABEL_BY_TYPE: Partial<Record<ComposerCommandItem["type"], string>> = {
+  thread: "对话",
+  model: "工作 Agent",
+  environment: "已连接主机",
+  path: "工作区文件",
+};
+
+export function groupComposerCommandMenuItems(
+  items: ReadonlyArray<ComposerCommandItem>,
+  triggerKind: ComposerTriggerKind | null,
+): ComposerCommandMenuGroup[] {
+  if (items.length === 0) return [];
+
+  if (triggerKind === "path") {
+    const sections: Array<{
+      key: string;
+      type: ComposerCommandItem["type"];
+      label: string | null;
+      items: ComposerCommandItem[];
+    }> = [];
+
+    for (const item of items) {
+      const current = sections.at(-1);
+      if (current && current.type === item.type) {
+        current.items.push(item);
+      } else {
+        sections.push({
+          key: `path-section:${item.type}:${sections.length}`,
+          type: item.type,
+          label: PATH_SECTION_LABEL_BY_TYPE[item.type] ?? null,
+          items: [item],
+        });
+      }
+    }
+
+    if (sections.length <= 1) {
+      return [{ key: "default", label: null, items }];
+    }
+
+    return sections.map(({ key, label, items: groupItems }) => ({
+      key,
+      label,
+      items: groupItems,
+    }));
+  }
+
+  if (triggerKind === "slash-command") {
+    const hasExpandedSkillsFolder = items.some(
+      (item) => item.type === "skill-group-toggle" && item.expanded,
+    );
+    if (!hasExpandedSkillsFolder) {
+      return [{ key: "default", label: null, items }];
+    }
+
+    const sections: Array<{
+      key: string;
+      bucket: "commands" | "personal-skills" | "builtin-skills";
+      label: string | null;
+      items: ComposerCommandItem[];
+    }> = [];
+
+    for (const item of items) {
+      const bucket: "commands" | "personal-skills" | "builtin-skills" =
+        item.type === "skill"
+          ? classifyComposerSkillCategory(resolveProviderSkillSourceKind(item.skill)) === "personal"
+            ? "personal-skills"
+            : "builtin-skills"
+          : "commands";
+      const label =
+        bucket === "personal-skills"
+          ? "个人技能"
+          : bucket === "builtin-skills"
+            ? "自带技能"
+            : null;
+      const current = sections.at(-1);
+      if (current && current.bucket === bucket) {
+        current.items.push(item);
+      } else {
+        sections.push({
+          key: `slash-section:${bucket}:${sections.length}`,
+          bucket,
+          label,
+          items: [item],
+        });
+      }
+    }
+
+    return sections.map(({ key, label, items: groupItems }) => ({
+      key,
+      label,
+      items: groupItems,
+    }));
+  }
+
+  return [{ key: "default", label: null, items }];
+}
+
 export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   listId: string;
   items: ComposerCommandItem[];
@@ -130,6 +254,8 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
     el?.scrollIntoView({ block: "nearest" });
   }, [props.activeItemId]);
 
+  const groups = groupComposerCommandMenuItems(props.items, props.triggerKind);
+
   return (
     <Command
       autoHighlight={false}
@@ -153,20 +279,27 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
             }
             className="max-h-72 min-h-0 scroll-pb-6"
           >
-            <CommandGroup>
-              {props.items.map((item) => (
-                <ComposerCommandMenuItem
-                  key={item.id}
-                  optionId={composerSuggestionOptionId(props.listId, item.id)}
-                  item={item}
-                  triggerKind={props.triggerKind}
-                  resolvedTheme={props.resolvedTheme}
-                  isActive={props.activeItemId === item.id}
-                  onHighlight={props.onHighlightedItemChange}
-                  onSelect={props.onSelect}
-                />
-              ))}
-            </CommandGroup>
+            {groups.map((group) => (
+              <CommandGroup key={group.key}>
+                {group.label ? (
+                  <CommandGroupLabel data-composer-section-label={group.label}>
+                    {group.label}
+                  </CommandGroupLabel>
+                ) : null}
+                {group.items.map((item) => (
+                  <ComposerCommandMenuItem
+                    key={item.id}
+                    optionId={composerSuggestionOptionId(props.listId, item.id)}
+                    item={item}
+                    triggerKind={props.triggerKind}
+                    resolvedTheme={props.resolvedTheme}
+                    isActive={props.activeItemId === item.id}
+                    onHighlight={props.onHighlightedItemChange}
+                    onSelect={props.onSelect}
+                  />
+                ))}
+              </CommandGroup>
+            ))}
           </CommandList>
         ) : (
           <div className="px-5 pt-3.5 pb-7">
@@ -191,6 +324,28 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   );
 });
 
+function SlashCommandLeadingIcon(props: { icon: SlashCommandIconSpec }) {
+  if (props.icon.kind === "emoji") {
+    return (
+      <span
+        aria-hidden="true"
+        data-slash-icon="emoji"
+        className="inline-flex size-4 shrink-0 items-center justify-center text-sm leading-none"
+      >
+        {props.icon.emoji}
+      </span>
+    );
+  }
+  const Icon = props.icon.icon;
+  return (
+    <Icon
+      aria-hidden="true"
+      data-slash-icon="lucide"
+      className="size-4 shrink-0 text-secondary-label"
+    />
+  );
+}
+
 const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   optionId: string;
   item: ComposerCommandItem;
@@ -201,12 +356,24 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   onSelect: (item: ComposerCommandItem) => void;
 }) {
   const m = useMessages();
-  const skillSourceKind =
-    props.item.type === "skill" ? resolveProviderSkillSourceKind(props.item.skill) : null;
-  const isSlashSkill =
-    props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
+  const slashPresentation =
+    props.item.type === "slash-command"
+      ? resolveSlashCommandPresentation(
+          props.item.command,
+          props.item.description,
+          props.item.descriptionOverride,
+        )
+      : props.item.type === "provider-slash-command"
+        ? resolveSlashCommandPresentation(props.item.command.name, props.item.description)
+        : null;
+  const skillPresentation =
+    props.item.type === "skill"
+      ? resolveSkillPresentation(props.item.skill, props.item.description)
+      : null;
   const pullRequestPresentation =
     props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest, m) : null;
+  const displayedDescription =
+    slashPresentation?.description ?? skillPresentation?.description ?? props.item.description;
   const descriptionRef = useRef<HTMLSpanElement>(null);
   const [descriptionTruncated, setDescriptionTruncated] = useState(false);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the rendered description so only cut-off text gets a tooltip
@@ -217,12 +384,16 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     );
   }, [props.isActive]);
 
+  const skillsToggleItem = props.item.type === "skill-group-toggle" ? props.item : null;
+
   return (
     <CommandItem
       render={<div id={props.optionId} />}
       aria-selected={props.isActive}
+      aria-expanded={skillsToggleItem ? skillsToggleItem.expanded : undefined}
       value={props.item.id}
       data-composer-item-id={props.item.id}
+      data-composer-skills-toggle={skillsToggleItem ? "1" : undefined}
       active={props.isActive}
       onMouseMove={() => {
         if (!props.isActive) props.onHighlight(props.item.id);
@@ -234,6 +405,17 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         props.onSelect(props.item);
       }}
     >
+      {slashPresentation ? <SlashCommandLeadingIcon icon={slashPresentation.icon} /> : null}
+      {skillsToggleItem ? (
+        <BlocksIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
+      ) : null}
+      {skillPresentation ? (
+        <skillPresentation.icon
+          aria-hidden="true"
+          data-skill-icon="lucide"
+          className="size-4 shrink-0 text-secondary-label"
+        />
+      ) : null}
       {props.item.type === "path" ? (
         <PierreEntryIcon
           pathValue={props.item.path}
@@ -268,38 +450,135 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           className={cn("size-4 shrink-0", pullRequestPresentation.toneClassName)}
         />
       ) : null}
-      <span className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium">
-          {isSlashSkill ? (
-            <>
-              <span className="text-secondary-label">/skill:</span>
-              {formatProviderSkillDisplayName(isSlashSkill)}
-            </>
+
+      {slashPresentation ? (
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {slashPresentation.zhTitle ? (
+            <span className="inline-flex max-w-[52%] shrink-0 items-baseline gap-1.5 truncate">
+              <span className="shrink-0 font-sans text-xs font-medium text-foreground">
+                {slashPresentation.zhTitle}
+              </span>
+              <span className="truncate font-mono text-2xs text-secondary-label/85">
+                {slashPresentation.nativeName}
+              </span>
+              {slashPresentation.description ? (
+                <span aria-hidden="true" className="-ms-1 shrink-0 text-secondary-label text-xs">
+                  ：
+                </span>
+              ) : null}
+            </span>
           ) : (
-            props.item.label
+            <span className="inline-flex max-w-[45%] shrink-0 items-baseline truncate">
+              <span className="truncate font-mono text-xs font-medium text-foreground">
+                {slashPresentation.nativeName}
+              </span>
+              {slashPresentation.description ? (
+                <span aria-hidden="true" className="shrink-0 text-secondary-label text-xs">
+                  ：
+                </span>
+              ) : null}
+            </span>
+          )}
+          <Tooltip open={descriptionTruncated}>
+            <TooltipTrigger
+              tabIndex={-1}
+              render={
+                <span
+                  ref={descriptionRef}
+                  className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs"
+                />
+              }
+            >
+              {slashPresentation.description}
+            </TooltipTrigger>
+            <TooltipPopup>{slashPresentation.description}</TooltipPopup>
+          </Tooltip>
+        </span>
+      ) : skillsToggleItem ? (
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="shrink-0 font-sans text-xs font-medium text-foreground">
+            {skillsToggleItem.label}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs">
+            {skillsToggleItem.description}
+          </span>
+          {skillsToggleItem.expanded ? (
+            <ChevronDownIcon
+              aria-hidden="true"
+              className="ms-auto size-4 shrink-0 text-secondary-label"
+            />
+          ) : (
+            <ChevronRightIcon
+              aria-hidden="true"
+              className="ms-auto size-4 shrink-0 text-secondary-label"
+            />
           )}
         </span>
-        <Tooltip open={descriptionTruncated}>
-          <TooltipTrigger
-            tabIndex={-1}
-            render={
-              <span
-                ref={descriptionRef}
-                className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs"
-              />
-            }
-          >
-            {props.item.description}
-          </TooltipTrigger>
-          <TooltipPopup>{props.item.description}</TooltipPopup>
-        </Tooltip>
-        {skillSourceKind ? (
-          <SkillSourceBadge
-            kind={skillSourceKind}
-            showSkillSuffix={props.triggerKind === "skill"}
-          />
-        ) : null}
-      </span>
+      ) : skillPresentation ? (
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span className="inline-flex max-w-[48%] shrink-0 items-baseline gap-1.5 truncate">
+            <span className="shrink-0 font-sans text-xs font-medium text-foreground">技能</span>
+            <span className="truncate font-mono text-2xs text-secondary-label/85">
+              {skillPresentation.nativeName}
+            </span>
+            {skillPresentation.description ? (
+              <span aria-hidden="true" className="-ms-1 shrink-0 text-secondary-label text-xs">
+                ：
+              </span>
+            ) : null}
+          </span>
+          <Tooltip open={descriptionTruncated}>
+            <TooltipTrigger
+              tabIndex={-1}
+              render={
+                <span
+                  ref={descriptionRef}
+                  className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs"
+                />
+              }
+            >
+              {skillPresentation.description}
+            </TooltipTrigger>
+            <TooltipPopup>{skillPresentation.description}</TooltipPopup>
+          </Tooltip>
+          <SkillSourceBadge kind={skillPresentation.sourceKind} />
+        </span>
+      ) : (
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium">
+            {props.item.label}
+          </span>
+          <Tooltip open={descriptionTruncated}>
+            <TooltipTrigger
+              tabIndex={-1}
+              render={
+                <span
+                  ref={descriptionRef}
+                  className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs"
+                />
+              }
+            >
+              {displayedDescription}
+            </TooltipTrigger>
+            <TooltipPopup>{displayedDescription}</TooltipPopup>
+          </Tooltip>
+          {props.item.type === "thread" ? (
+            <Badge className="ms-auto" variant="secondary">
+              对话
+            </Badge>
+          ) : null}
+          {props.item.type === "model" ? (
+            <Badge className="ms-auto" variant="secondary">
+              工作 Agent
+            </Badge>
+          ) : null}
+          {props.item.type === "environment" ? (
+            <Badge className="ms-auto" variant="secondary">
+              主机
+            </Badge>
+          ) : null}
+        </span>
+      )}
     </CommandItem>
   );
 });
@@ -316,53 +595,13 @@ const LISTBOX_LABEL_BY_TRIGGER: Record<ComposerTriggerKind, string> = {
   skill: msg("Skills"),
 };
 
-const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, LucideIcon> = {
-  app: BlocksIcon,
-  repo: FolderIcon,
-  project: FolderIcon,
-  personal: UserRoundIcon,
-  system: SettingsIcon,
-  other: PackageIcon,
-};
-
-const SKILL_SOURCE_LABEL_BY_KIND: Record<
-  ProviderSkillSourceKind,
-  { readonly label: string; readonly skillLabel: string }
-> = {
-  app: {
-    label: msg("App", { $context: "skill source badge" }),
-    skillLabel: msg("App Skill"),
-  },
-  repo: {
-    label: msg("Repo", { $context: "skill source badge" }),
-    skillLabel: msg("Repo Skill"),
-  },
-  project: {
-    label: msg("Project", { $context: "skill source badge" }),
-    skillLabel: msg("Project Skill"),
-  },
-  personal: {
-    label: msg("Personal", { $context: "skill source badge" }),
-    skillLabel: msg("Personal Skill"),
-  },
-  system: {
-    label: msg("System", { $context: "skill source badge" }),
-    skillLabel: msg("System Skill"),
-  },
-  other: {
-    label: msg("Provider", { $context: "skill source badge" }),
-    skillLabel: msg("Provider Skill"),
-  },
-};
-
-function SkillSourceBadge(props: { kind: ProviderSkillSourceKind; showSkillSuffix: boolean }) {
-  const m = useMessages();
+function SkillSourceBadge(props: { kind: ProviderSkillSourceKind }) {
   const Icon = SKILL_SOURCE_ICON_BY_KIND[props.kind];
-  const labels = SKILL_SOURCE_LABEL_BY_KIND[props.kind];
+  const label = resolveSkillSourceBadgeLabel(props.kind);
   return (
     <Badge className="ms-auto" variant="secondary">
       <Icon aria-hidden="true" className="text-current" />
-      {m(props.showSkillSuffix ? labels.skillLabel : labels.label)}
+      {label}
     </Badge>
   );
 }

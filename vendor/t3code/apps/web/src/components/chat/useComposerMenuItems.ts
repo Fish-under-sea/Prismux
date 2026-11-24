@@ -6,6 +6,8 @@ import {
 import {
   matchComposerEnvironmentItems,
   matchComposerThreadItems,
+  type ComposerEnvironmentCandidate,
+  type ComposerEnvironmentItem,
 } from "@t3tools/client-runtime/composerThreadItems";
 import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
@@ -32,6 +34,7 @@ import { basenameOfPath } from "../../pierre-icons";
 import {
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
+  resolveProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useVisibleThreadShells } from "~/state/entities";
@@ -53,14 +56,56 @@ import { matchComposerModelItems } from "./composerModelMentions";
 import type { ModelEsque } from "./providerIconUtils";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import {
-  searchSlashCommandItems,
+  classifyComposerSkillCategory,
+  resolveSkillPresentation,
+  resolveSlashCommandPresentation,
+} from "./composerSlashCatalog";
+import {
+  buildComposerSlashMenuItems,
   slashCommandItemsForPromptPosition,
 } from "./composerSlashCommandSearch";
 
 const COMPOSER_PULL_REQUEST_LIST_LIMIT = 99;
 const COMPOSER_PULL_REQUEST_RESULT_LIMIT = 12;
+const COMPOSER_EMPTY_MACHINE_LIMIT = 3;
+const MACHINE_MENTION_KEYWORDS = new Set([
+  "主机",
+  "机器",
+  "服务器",
+  "主",
+  "机",
+  "host",
+  "machine",
+  "server",
+]);
 const EMPTY_PULL_REQUEST_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> =
   [];
+
+function collectLinkedEnvironmentItems(input: {
+  readonly environments: ReadonlyArray<ComposerEnvironmentCandidate>;
+  readonly linkedEnvironments: ReadonlyMap<EnvironmentId, string>;
+  readonly environmentId: EnvironmentId;
+  readonly limit: number;
+}): ComposerEnvironmentItem[] {
+  const paired = new Set(input.environments.map((environment) => environment.environmentId));
+  const linkedOnly = Array.from(input.linkedEnvironments, ([envId, label]) => ({
+    environmentId: envId,
+    label,
+    machine: "server" as const,
+  })).filter((environment) => !paired.has(environment.environmentId));
+
+  return [...input.environments, ...linkedOnly]
+    .filter((environment) => environment.environmentId !== input.environmentId)
+    .slice(0, input.limit)
+    .map((environment) => ({
+      id: `environment:${environment.environmentId}`,
+      type: "environment",
+      environmentId: environment.environmentId,
+      machine: environment.machine,
+      label: environment.label,
+      description: "已连接主机",
+    }));
+}
 
 /** Builds the @, /, $ and # suggestion lists, running the searches each trigger needs. */
 export function useComposerMenuItems({
@@ -80,6 +125,7 @@ export function useComposerMenuItems({
   selectedProviderSkills,
   selectedProviderSlashCommands,
   showSkillsInSlashMenu,
+  slashSkillsExpanded = false,
   workspaceSkillsScanning,
   questionAttachmentTarget,
   modelMentions,
@@ -100,6 +146,7 @@ export function useComposerMenuItems({
   readonly selectedProviderSkills: ServerProvider["skills"];
   readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
   readonly showSkillsInSlashMenu: boolean;
+  readonly slashSkillsExpanded?: boolean;
   readonly workspaceSkillsScanning: boolean;
   readonly questionAttachmentTarget: DraftId | null;
   readonly modelMentions: {
@@ -211,6 +258,27 @@ export function useComposerMenuItems({
   const items = ((): ComposerCommandItem[] => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
+      const trimmedPathQuery = composerTrigger.query.trim();
+      const normalizedPathQuery = trimmedPathQuery.toLowerCase();
+      const environmentItems =
+        questionAttachmentTarget === null && offersMachines
+          ? trimmedPathQuery.length === 0 || MACHINE_MENTION_KEYWORDS.has(normalizedPathQuery)
+            ? collectLinkedEnvironmentItems({
+                environments: mentionableEnvironments,
+                linkedEnvironments,
+                environmentId,
+                limit: COMPOSER_EMPTY_MACHINE_LIMIT,
+              })
+            : matchComposerEnvironmentItems(
+                {
+                  environments: mentionableEnvironments,
+                  linkedEnvironments,
+                  environmentId,
+                  query: composerTrigger.query,
+                },
+                messages,
+              )
+          : [];
       return [
         ...matchComposerThreadItems(
           {
@@ -220,26 +288,18 @@ export function useComposerMenuItems({
             excludeThreadId: activeThreadId,
             query: composerTrigger.query,
             now,
+            includeRecentOnEmptyQuery: true,
           },
           messages,
         ),
-        // An answer to an agent's question carries thread links, not machines.
-        ...(questionAttachmentTarget === null && offersMachines
-          ? matchComposerEnvironmentItems(
-              {
-                environments: mentionableEnvironments,
-                linkedEnvironments,
-                environmentId,
-                query: composerTrigger.query,
-              },
-              messages,
-            )
-          : []),
         ...matchComposerModelItems({
           instanceEntries: modelMentions.instanceEntries,
           modelOptionsByInstance: modelMentions.modelOptionsByInstance,
           query: composerTrigger.query,
+          includeReadyAgentsOnEmptyQuery: true,
         }),
+        // An answer to an agent's question carries thread links, not machines.
+        ...environmentItems,
         ...workspaceEntries.entries.map((entry) => ({
           id: `path:${entry.kind}:${entry.path}`,
           type: "path" as const,
@@ -260,7 +320,10 @@ export function useComposerMenuItems({
           type: "slash-command",
           command: "model",
           label: "/model",
-          description: gt("Switch response model for this thread"),
+          description: resolveSlashCommandPresentation(
+            "model",
+            gt("Switch response model for this thread"),
+          ).description,
         },
         ...(sideChatAvailable
           ? ([
@@ -269,14 +332,24 @@ export function useComposerMenuItems({
                 type: "slash-command",
                 command: "side",
                 label: "/side",
-                description: sideChatDisabledReason ?? gt("Ask a side question in a new side chat"),
+                description: resolveSlashCommandPresentation(
+                  "side",
+                  gt("Ask a side question in a new side chat"),
+                  sideChatDisabledReason,
+                ).description,
+                ...(sideChatDisabledReason ? { descriptionOverride: sideChatDisabledReason } : {}),
               },
               {
                 id: "slash:btw",
                 type: "slash-command",
                 command: "btw",
                 label: "/btw",
-                description: sideChatDisabledReason ?? gt("Same as /side"),
+                description: resolveSlashCommandPresentation(
+                  "btw",
+                  gt("Same as /side"),
+                  sideChatDisabledReason,
+                ).description,
+                ...(sideChatDisabledReason ? { descriptionOverride: sideChatDisabledReason } : {}),
               },
             ] as const)
           : []),
@@ -287,7 +360,10 @@ export function useComposerMenuItems({
                 type: "slash-command",
                 command: "clear",
                 label: "/clear",
-                description: gt("Start a fresh session; earlier messages stay visible"),
+                description: resolveSlashCommandPresentation(
+                  "clear",
+                  gt("Start a fresh session; earlier messages stay visible"),
+                ).description,
               },
             ] as const)
           : []),
@@ -299,26 +375,34 @@ export function useComposerMenuItems({
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
         selectedProviderSlashCommands,
         slashMenuSkills,
-      ).map((command) => ({
-        id: `provider-slash-command:${selectedProvider}:${command.name}`,
-        type: "provider-slash-command" as const,
-        provider: selectedProvider,
-        command,
-        label: `/${command.name}`,
-        description: command.description ?? command.input?.hint ?? gt("Run provider command"),
-      }));
+      ).map((command) => {
+        const fallbackDescription =
+          command.description ?? command.input?.hint ?? gt("Run provider command");
+        return {
+          id: `provider-slash-command:${selectedProvider}:${command.name}`,
+          type: "provider-slash-command" as const,
+          provider: selectedProvider,
+          command,
+          label: `/${command.name}`,
+          description: resolveSlashCommandPresentation(command.name, fallbackDescription)
+            .description,
+        };
+      });
       const query = composerTrigger.query.trim().toLowerCase();
-      const skillItems = slashMenuSkills.map((skill) => ({
-        id: `skill:${selectedProvider}:${skill.name}`,
-        type: "skill" as const,
-        provider: selectedProvider,
-        skill,
-        label: `/skill:${skill.name}`,
-        description:
+      const skillItems = slashMenuSkills.map((skill) => {
+        const fallbackDescription =
           skill.shortDescription ??
           skill.description ??
-          (skill.scope ? gt("{scope} skill", { scope: skill.scope }) : ""),
-      }));
+          (skill.scope ? gt("{scope} skill", { scope: skill.scope }) : "");
+        return {
+          id: `skill:${selectedProvider}:${skill.name}`,
+          type: "skill" as const,
+          provider: selectedProvider,
+          skill,
+          label: `/skill:${skill.name}`,
+          description: resolveSkillPresentation(skill, fallbackDescription).description,
+        };
+      });
       // T3's `/clear` replaces the provider's, which would clear a session T3 still treats as live.
       const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
         (item) =>
@@ -329,20 +413,43 @@ export function useComposerMenuItems({
         [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
         composerTrigger.rangeStart === 0,
       );
-      return searchSlashCommandItems(slashCommandItems, query);
+      return buildComposerSlashMenuItems({
+        items: slashCommandItems,
+        query,
+        skillsExpanded: slashSkillsExpanded,
+      });
     }
     if (composerTrigger.kind === "skill") {
-      return searchProviderSkills(selectedProviderSkills, composerTrigger.query).map((skill) => ({
-        id: `skill:${selectedProvider}:${skill.name}`,
-        type: "skill" as const,
-        provider: selectedProvider,
-        skill,
-        label: formatProviderSkillDisplayName(skill),
-        description:
+      const searchedSkills = searchProviderSkills(selectedProviderSkills, composerTrigger.query);
+      const orderedSkills =
+        composerTrigger.query.trim().length === 0
+          ? [
+              ...searchedSkills.filter(
+                (skill) =>
+                  classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) ===
+                  "personal",
+              ),
+              ...searchedSkills.filter(
+                (skill) =>
+                  classifyComposerSkillCategory(resolveProviderSkillSourceKind(skill)) ===
+                  "builtin",
+              ),
+            ]
+          : searchedSkills;
+      return orderedSkills.map((skill) => {
+        const fallbackDescription =
           skill.shortDescription ??
           skill.description ??
-          (skill.scope ? gt("{scope} skill", { scope: skill.scope }) : gt("Run provider skill")),
-      }));
+          (skill.scope ? gt("{scope} skill", { scope: skill.scope }) : gt("Run provider skill"));
+        return {
+          id: `skill:${selectedProvider}:${skill.name}`,
+          type: "skill" as const,
+          provider: selectedProvider,
+          skill,
+          label: formatProviderSkillDisplayName(skill),
+          description: resolveSkillPresentation(skill, fallbackDescription).description,
+        };
+      });
     }
     if (
       composerTrigger.kind === "pull-request" &&
