@@ -270,9 +270,20 @@ import {
   type OrcaWorkspaceAgentOption,
 } from "./sidebar/orcaProjects/orcaProjects.logic";
 import { useOrcaProjectsCopy } from "./sidebar/orcaProjects/orcaProjectsCopy";
-import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import {
+  SidebarChromeFooter,
+  SidebarChromeHeader,
+  SidebarRailMonogramButton,
+} from "./sidebar/SidebarChrome";
+import {
+  resolveSidebarRailThreadTooltip,
+  SIDEBAR_EXPANDED_TOOLTIP_DELAY_MS,
+  SIDEBAR_RAIL_TOOLTIP_CLOSE_DELAY_MS,
+  SIDEBAR_RAIL_TOOLTIP_DELAY_MS,
+  SIDEBAR_RAIL_TOOLTIP_TIMEOUT_MS,
+} from "./sidebar/sidebarIconRailMotion";
 import { resolveAgentRuntimeLamp } from "./sidebar/sidebarMicroIndicators";
-import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -924,7 +935,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const { openScratchProject } = useScratchProject();
   const delegatedUnderParent = useDelegatedUnderParent();
   const router = useRouter();
-  const { isMobile, setOpenMobile, isIconRail, isTextHidden } = useSidebar();
+  const { isMobile, setOpen, setOpenMobile, isIconRail, isTextHidden } = useSidebar();
   const railCompact = !isMobile && isIconRail;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
@@ -3491,8 +3502,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     orcaEnvironments.find((env) => env.environmentId === browseFolderDialogEnvId) ?? null;
 
   return (
-    <SidebarFolderDrop>
-      <SidebarChromeHeader isElectron={isElectron} />
+    <TooltipProvider
+      delay={railCompact ? SIDEBAR_RAIL_TOOLTIP_DELAY_MS : SIDEBAR_EXPANDED_TOOLTIP_DELAY_MS}
+      closeDelay={SIDEBAR_RAIL_TOOLTIP_CLOSE_DELAY_MS}
+      timeout={SIDEBAR_RAIL_TOOLTIP_TIMEOUT_MS}
+    >
+      <SidebarFolderDrop>
+        <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         ref={sidebarContentRef}
         className="min-h-full"
@@ -3539,111 +3555,104 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           role="presentation"
         >
           {railCompact ? (
-            <TooltipProvider
-              key="sidebar-rail-thread-tooltips"
-              delay={120}
-              closeDelay={0}
-              timeout={400}
+            <ul
+              ref={attachTreeRef}
+              role="presentation"
+              data-testid="prismux-sidebar-rail-threads"
+              className="flex w-full flex-col items-center gap-1"
             >
-              <ul
-                ref={attachTreeRef}
-                role="presentation"
-                data-testid="prismux-sidebar-rail-threads"
-                className="flex w-full flex-col items-center gap-1"
-              >
-                {(() => {
-                  const railCandidates = [...pinnedThreads, ...activeThreads, ...workingThreads];
-                  const activeAttentionKeys = new Set(
-                    orcaActivityItems
-                      .filter(
-                        (item) =>
-                          item.bucket === "attention" || item.bucket === "working" || item.isUnread,
-                      )
-                      .map((item) => item.key),
+              {(() => {
+                const railCandidates = [...pinnedThreads, ...activeThreads, ...workingThreads];
+                const activeAttentionKeys = new Set(
+                  orcaActivityItems
+                    .filter(
+                      (item) =>
+                        item.bucket === "attention" || item.bucket === "working" || item.isUnread,
+                    )
+                    .map((item) => item.key),
+                );
+                const railThreads = activityViewActive
+                  ? railCandidates.filter((thread) =>
+                      activeAttentionKeys.has(threadShellKey(thread)),
+                    )
+                  : railCandidates;
+                if (railThreads.length === 0 && !activityViewActive) {
+                  const railProjects = projectGroups.filter(
+                    (group) => !group.archived && !group.isScratch,
                   );
-                  const railThreads = activityViewActive
-                    ? railCandidates.filter((thread) =>
-                        activeAttentionKeys.has(threadShellKey(thread)),
-                      )
-                    : railCandidates;
-                  return railThreads.map((thread) => {
-                    const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-                    const threadKey = scopedThreadKey(threadRef);
-                    const isRouteActive = routeRowThreadKey === threadKey;
-                    const project =
-                      projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null;
-                    const projectDisplayName =
-                      projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                      null;
-                    const effectiveThread = {
-                      ...thread,
-                      lastVisitedAt: resolveThreadLastVisitedAt(
-                        thread.lastVisitedAt,
-                        localLastVisitedAtById[threadKey],
-                      ),
-                    };
-                    const rowStatus = resolveSidebarRowStatus(effectiveThread);
-                    const agentLamp = resolveAgentRuntimeLamp(rowStatus);
-                    const isUnread =
-                      rowStatus === "ready" && hasUnseenCompletion(effectiveThread);
-                    const statusText = messages(agentLamp.labelMessage);
-                    const tooltipTitle = projectDisplayName
-                      ? `${thread.title} · ${projectDisplayName}`
-                      : thread.title;
-                    return (
-                      <li key={threadKey} className="list-none">
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                data-sidebar-row={threadKey}
-                                aria-label={`${tooltipTitle} (${statusText})`}
-                                aria-current={isRouteActive ? "page" : undefined}
-                                onClick={() => navigateToThread(threadRef)}
-                                className={cn(
-                                  "relative flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-transparent text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                                  isRouteActive &&
-                                    "border-sidebar-border/65 bg-sidebar-row-active text-sidebar-foreground shadow-[0_1px_2px_rgb(0_0_0/6%)]",
-                                )}
-                              />
-                            }
-                          >
-                            {project ? (
-                              <ProjectFavicon project={project} className="size-4 shrink-0" />
-                            ) : (
-                              <MessageSquareIcon aria-hidden className="size-3.5 shrink-0" />
-                            )}
-                            {agentLamp.state !== "idle" || isUnread ? (
-                              <span
-                                aria-hidden
-                                data-rail-dot="true"
-                                className={cn(
-                                  "pointer-events-none absolute right-1 bottom-1 size-1.5 rounded-full ring-2 ring-sidebar",
-                                  agentLamp.state !== "idle"
-                                    ? agentLamp.dotClassName
-                                    : "bg-primary",
-                                )}
-                              />
-                            ) : null}
-                          </TooltipTrigger>
-                          <TooltipPopup side="right" sideOffset={8} className="max-w-64">
-                            <div className="flex flex-col gap-0.5 text-left">
-                              <span className="truncate font-medium">{thread.title}</span>
-                              <span className="truncate text-[11px] text-muted-foreground">
-                                {projectDisplayName
-                                  ? `${projectDisplayName} · ${statusText}`
-                                  : statusText}
-                              </span>
-                            </div>
-                          </TooltipPopup>
-                        </Tooltip>
-                      </li>
-                    );
+                  return railProjects.map((group) => (
+                    <li key={`rail-project:${group.projectKey}`} className="list-none">
+                      <SidebarRailMonogramButton
+                        icon={<ProjectFavicon project={group} className="size-4 shrink-0" />}
+                        primaryLabel={group.displayName}
+                        ariaLabel={group.displayName}
+                        dataProjectKey={group.projectKey}
+                        onClick={() => {
+                          setOpen(true);
+                          setProjectExpanded(sidebarFolderExpansionKeys(group), true);
+                        }}
+                      />
+                    </li>
+                  ));
+                }
+                return railThreads.map((thread) => {
+                  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+                  const threadKey = scopedThreadKey(threadRef);
+                  const isRouteActive = routeRowThreadKey === threadKey;
+                  const project =
+                    projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null;
+                  const projectDisplayName =
+                    projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+                    project?.title ??
+                    null;
+                  const effectiveThread = {
+                    ...thread,
+                    lastVisitedAt: resolveThreadLastVisitedAt(
+                      thread.lastVisitedAt,
+                      localLastVisitedAtById[threadKey],
+                    ),
+                  };
+                  const rowStatus = resolveSidebarRowStatus(effectiveThread);
+                  const agentLamp = resolveAgentRuntimeLamp(rowStatus);
+                  const isUnread =
+                    rowStatus === "ready" && hasUnseenCompletion(effectiveThread);
+                  const statusText = messages(agentLamp.labelMessage);
+                  const tooltipContent = resolveSidebarRailThreadTooltip({
+                    threadTitle: thread.title,
+                    projectDisplayName,
+                    lampState: agentLamp.state,
+                    statusText,
+                    fallbackTitle: gt("New thread"),
                   });
-                })()}
-              </ul>
-            </TooltipProvider>
+                  const dotClassName =
+                    agentLamp.state !== "idle"
+                      ? agentLamp.dotClassName
+                      : isUnread
+                        ? "bg-primary"
+                        : null;
+                  return (
+                    <li key={threadKey} className="list-none">
+                      <SidebarRailMonogramButton
+                        icon={
+                          project ? (
+                            <ProjectFavicon project={project} className="size-4 shrink-0" />
+                          ) : (
+                            <MessageSquareIcon aria-hidden className="size-3.5 shrink-0" />
+                          )
+                        }
+                        primaryLabel={tooltipContent.primary}
+                        secondaryLabel={tooltipContent.secondary}
+                        ariaLabel={tooltipContent.ariaLabel}
+                        active={isRouteActive}
+                        dotClassName={dotClassName}
+                        dataRow={threadKey}
+                        onClick={() => navigateToThread(threadRef)}
+                      />
+                    </li>
+                  );
+                });
+              })()}
+            </ul>
           ) : activityViewActive ? (
             projectsSectionOpen ? (
               <OrcaActivityView
@@ -4115,6 +4124,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         environment={browseFolderDialogEnv}
         onSubmitFolderPath={addLocalFolderPathAsProject}
       />
-    </SidebarFolderDrop>
+      </SidebarFolderDrop>
+    </TooltipProvider>
   );
 }

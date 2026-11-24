@@ -85,6 +85,9 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
   const CollapseAllIcon = allProjectsCollapsed ? ChevronsUpDownIcon : ChevronsDownUpIcon;
 
   const bellTooltip = activityViewActive ? copy.closeActivityView : copy.openActivityView;
+  const railBellTooltip = activityViewActive
+    ? copy.railCloseNotificationsTooltip
+    : copy.railNotificationsTooltip;
   const newWorkspaceShortcutText = isMac ? "⌘N" : "Ctrl+N";
 
   const labelFadeClass = cn(
@@ -112,7 +115,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
                 type="button"
                 data-testid="prismux-sidebar-inbox-bell"
                 data-orca-activity-bell="true"
-                aria-label={bellTooltip}
+                aria-label={railBellTooltip}
                 aria-pressed={activityViewActive}
                 onClick={onToggleActivityView}
                 className={cn(
@@ -135,7 +138,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
             />
           </TooltipTrigger>
           <TooltipPopup side="right" sideOffset={8}>
-            {bellTooltip}
+            {railBellTooltip}
           </TooltipPopup>
         </Tooltip>
 
@@ -155,10 +158,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
             <PlusIcon aria-hidden className="size-4 text-(--sidebar-icon-color)" strokeWidth={2.25} />
           </TooltipTrigger>
           <TooltipPopup side="right" sideOffset={8}>
-            <span className="inline-flex items-center gap-1.5">
-              <span>{copy.newWorkspaceTooltip}</span>
-              <span className="opacity-70">{newWorkspaceShortcutText}</span>
-            </span>
+            {copy.newWorkspaceTooltip}
           </TooltipPopup>
         </Tooltip>
       </div>

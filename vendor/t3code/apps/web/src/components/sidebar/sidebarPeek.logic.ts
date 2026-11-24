@@ -15,6 +15,8 @@ export interface SidebarPeekStateInput {
   readonly pointerInDrawer: boolean;
   readonly openMenuCount: number;
   readonly dismissedByEscape: boolean;
+  /** Pointer over the collapsed expand trigger must never open a floating hover preview. */
+  readonly pointerInExpandTrigger?: boolean;
 }
 
 export type SidebarPeekDecision =
@@ -25,15 +27,16 @@ export type SidebarPeekDecision =
   | "close-now";
 
 /**
- * Pure state machine deciding whether the Claude Code Desktop-style collapsed sidebar
- * floating peek drawer should open immediately, schedule a delayed open/close, stay open,
- * or close immediately.
+ * Pure state machine deciding whether the collapsed sidebar floating peek drawer should
+ * open immediately, schedule a delayed open/close, stay open, or close immediately.
+ * Hovering the collapsed expand button always resolves to `close-now` so floating previews
+ * can never cover the expand trigger or steal clicks.
  */
 export function resolveSidebarPeekDecision(
   currentlyOpen: boolean,
   input: SidebarPeekStateInput,
 ): SidebarPeekDecision {
-  if (!input.railCompact || input.dismissedByEscape) {
+  if (!input.railCompact || input.dismissedByEscape || input.pointerInExpandTrigger) {
     return "close-now";
   }
   if (input.openMenuCount > 0) {

@@ -136,6 +136,7 @@ function readStoredSidebarOpen(storageKey: string | undefined): boolean | null {
 
 // An offcanvas sidebar turns inert once collapsed, which drops focus to the body.
 function moveFocusOutOfCollapsingSidebar() {
+  if (typeof document === "undefined") return;
   const sidebar = document.activeElement?.closest<HTMLElement>(
     '[data-slot="sidebar"][data-collapsible-mode="offcanvas"]',
   );
@@ -153,7 +154,7 @@ interface SidebarOpenState {
 }
 
 /** Per-provider open state, kept outside React so shortcuts can toggle it at event time. */
-function createSidebarOpenStore(defaultOpen: boolean, storageKey: string | undefined) {
+export function createSidebarOpenStore(defaultOpen: boolean, storageKey: string | undefined) {
   let state: SidebarOpenState = {
     open: readStoredSidebarOpen(storageKey) ?? defaultOpen,
     openMobile: false,
@@ -170,7 +171,7 @@ function createSidebarOpenStore(defaultOpen: boolean, storageKey: string | undef
       moveFocusOutOfCollapsingSidebar();
     }
     if (open !== state.open) {
-      if (!isMobileViewport()) announceSidebarVisibility(open);
+      if (typeof document !== "undefined" && !isMobileViewport()) announceSidebarVisibility(open);
       publish({ ...state, open });
     }
     if (storageKey) writeLocalStorageValue(storageKey, open, defaultOpen, Schema.Boolean);

@@ -152,17 +152,15 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           ? gt("Service diagnostics: all healthy")
           : null;
 
-  const searchRailTooltip = searchShortcutLabel
-    ? `${gt("Search", { $context: "sidebar global search trigger" })} (${searchShortcutLabel})`
-    : gt("Search", { $context: "sidebar global search trigger" });
+  const searchRailTooltip = gt("Search", { $context: "sidebar global search trigger" });
   const diagnosticsRailTooltip =
-    diagnosticsDotLabel ?? gt("Service diagnostics", { $context: "sidebar quick navigation" });
+    diagnosticsTone === "error" || diagnosticsTone === "degraded"
+      ? (diagnosticsDotLabel ?? gt("Service diagnostics", { $context: "sidebar quick navigation" }))
+      : gt("Service diagnostics", { $context: "sidebar quick navigation" });
   const tasksRailTooltip = quickNavCopy.tasks;
   const workspaceBoardRailTooltip = quickNavCopy.workspaceBoard;
   const automationsRailTooltip = quickNavCopy.scheduledTasks;
-  const mobileRailTooltip = showMobileNewBadge
-    ? `${gt("Prismux Mobile", { $context: "sidebar quick navigation" })} · ${gt("New", { $context: "new feature badge" })}`
-    : gt("Prismux Mobile", { $context: "sidebar quick navigation" });
+  const mobileRailTooltip = gt("Prismux Mobile", { $context: "sidebar quick navigation" });
 
   if (!isMobile && isIconRail) {
     return (

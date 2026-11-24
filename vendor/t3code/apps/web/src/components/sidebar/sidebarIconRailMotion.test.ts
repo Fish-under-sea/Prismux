@@ -6,9 +6,14 @@ import {
   resolveInboxRailDotTone,
   resolvePluginsRailDotTone,
   resolveSidebarMotionVisualState,
+  resolveSidebarRailThreadTooltip,
   SIDEBAR_COLLAPSE_TEXT_FADE_MS,
+  SIDEBAR_EXPANDED_TOOLTIP_DELAY_MS,
   SIDEBAR_EXPAND_WIDTH_MS,
   SIDEBAR_ICON_RAIL_WIDTH_PX,
+  SIDEBAR_RAIL_TOOLTIP_CLOSE_DELAY_MS,
+  SIDEBAR_RAIL_TOOLTIP_DELAY_MS,
+  SIDEBAR_RAIL_TOOLTIP_TIMEOUT_MS,
 } from "./sidebarIconRailMotion";
 
 describe("sidebar icon-rail two-stage collapse choreography (Spec 2)", () => {
@@ -111,5 +116,69 @@ describe("sidebar icon-rail two-stage collapse choreography (Spec 2)", () => {
 
     expect(formatSidebarRailTooltip("Plugins", "0")).toBe("Plugins · 0");
     expect(formatSidebarRailTooltip("Automations", null)).toBe("Automations");
+  });
+
+  it("configures snappy collapsed rail tooltip timing and concise project/thread tooltip labels", () => {
+    expect(SIDEBAR_RAIL_TOOLTIP_DELAY_MS).toBeGreaterThan(0);
+    expect(SIDEBAR_RAIL_TOOLTIP_DELAY_MS).toBeLessThanOrEqual(150);
+    expect(SIDEBAR_RAIL_TOOLTIP_CLOSE_DELAY_MS).toBe(0);
+    expect(SIDEBAR_RAIL_TOOLTIP_TIMEOUT_MS).toBeGreaterThanOrEqual(300);
+    expect(SIDEBAR_EXPANDED_TOOLTIP_DELAY_MS).toBeGreaterThan(SIDEBAR_RAIL_TOOLTIP_DELAY_MS);
+
+    expect(
+      resolveSidebarRailThreadTooltip({
+        threadTitle: "优化侧边栏",
+        projectDisplayName: "Prismux",
+        lampState: "idle",
+        statusText: "空闲",
+        fallbackTitle: "新建会话",
+      }),
+    ).toEqual({
+      primary: "优化侧边栏",
+      secondary: "Prismux",
+      ariaLabel: "优化侧边栏 (Prismux)",
+    });
+
+    expect(
+      resolveSidebarRailThreadTooltip({
+        threadTitle: "修复单测",
+        projectDisplayName: "Prismux",
+        lampState: "running",
+        statusText: "运行中",
+        fallbackTitle: "新建会话",
+      }),
+    ).toEqual({
+      primary: "修复单测",
+      secondary: "Prismux · 运行中",
+      ariaLabel: "修复单测 (Prismux · 运行中)",
+    });
+
+    expect(
+      resolveSidebarRailThreadTooltip({
+        threadTitle: "   ",
+        projectDisplayName: "Prismux",
+        lampState: "idle",
+        statusText: "空闲",
+        fallbackTitle: "新建会话",
+      }),
+    ).toEqual({
+      primary: "Prismux",
+      secondary: null,
+      ariaLabel: "Prismux",
+    });
+
+    expect(
+      resolveSidebarRailThreadTooltip({
+        threadTitle: "Prismux",
+        projectDisplayName: "Prismux",
+        lampState: "approval",
+        statusText: "待审批",
+        fallbackTitle: "新建会话",
+      }),
+    ).toEqual({
+      primary: "Prismux",
+      secondary: "待审批",
+      ariaLabel: "Prismux (待审批)",
+    });
   });
 });

@@ -12,6 +12,15 @@ export const SIDEBAR_ICON_RAIL_WIDTH_PX = 54 as const;
 export const SIDEBAR_COLLAPSE_TEXT_FADE_MS = 90 as const;
 export const SIDEBAR_EXPAND_WIDTH_MS = 150 as const;
 
+/** Snappy initial hover delay (ms) for collapsed 54px icon-rail tooltips. */
+export const SIDEBAR_RAIL_TOOLTIP_DELAY_MS = 100 as const;
+/** Immediate close delay (ms) when leaving a rail icon. */
+export const SIDEBAR_RAIL_TOOLTIP_CLOSE_DELAY_MS = 0 as const;
+/** Warmup window (ms) for 0ms instant tooltip switching while gliding along the 54px rail. */
+export const SIDEBAR_RAIL_TOOLTIP_TIMEOUT_MS = 400 as const;
+/** Standard hover delay (ms) for expanded sidebar chrome tooltips. */
+export const SIDEBAR_EXPANDED_TOOLTIP_DELAY_MS = 350 as const;
+
 export type SidebarCollapseMotionPhase =
   | "expanded"
   | "collapsing-text"
@@ -144,4 +153,37 @@ export function resolveInboxRailDotTone(input: {
 export function resolvePluginsRailDotTone(installedCount: number | null): SidebarRailDotTone {
   if (installedCount !== null && installedCount > 0) return "primary";
   return null;
+}
+
+export interface SidebarRailThreadTooltipContent {
+  readonly primary: string;
+  readonly secondary: string | null;
+  readonly ariaLabel: string;
+}
+
+/**
+ * Resolves concise right-side tooltip content for a collapsed 54px rail project/thread monogram button.
+ * Falls back cleanly to the project title when a thread has no title, and appends runtime status
+ * only while the agent is actively running or waiting for approval.
+ */
+export function resolveSidebarRailThreadTooltip(input: {
+  readonly threadTitle: string | null | undefined;
+  readonly projectDisplayName: string | null | undefined;
+  readonly lampState: "running" | "approval" | "idle";
+  readonly statusText: string;
+  readonly fallbackTitle: string;
+}): SidebarRailThreadTooltipContent {
+  const trimmedThread = input.threadTitle?.trim() ?? "";
+  const trimmedProject = input.projectDisplayName?.trim() ?? "";
+  const primary = trimmedThread || trimmedProject || input.fallbackTitle;
+  const trimmedStatus = input.statusText.trim();
+  const includeStatus = input.lampState !== "idle" && trimmedStatus.length > 0;
+  let secondary: string | null = null;
+  if (trimmedProject && trimmedProject !== primary) {
+    secondary = includeStatus ? `${trimmedProject} · ${trimmedStatus}` : trimmedProject;
+  } else if (includeStatus) {
+    secondary = trimmedStatus;
+  }
+  const ariaLabel = secondary ? `${primary} (${secondary})` : primary;
+  return { primary, secondary, ariaLabel };
 }

@@ -1,39 +1,28 @@
 import {
-  ActivityIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
-  CalendarClockIcon,
   ChartNoAxesColumnIcon,
   Code2Icon,
-  Columns3Icon,
   CrosshairIcon,
-  FolderIcon,
   FolderPlusIcon,
   KeyboardIcon,
-  ListTodoIcon,
-  MessageSquareIcon,
   MoreHorizontalIcon,
   PanelLeftCloseIcon,
   PanelLeftIcon,
-  PlusIcon,
   RefreshCwIcon,
   RotateCcwIcon,
   RotateCwIcon,
   SearchIcon,
   SettingsIcon,
-  SmartphoneIcon,
   SquarePenIcon,
 } from "lucide-react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
-import { createPortal } from "react-dom";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
@@ -46,10 +35,9 @@ import {
 } from "@t3tools/contracts";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { isElectron as IS_ELECTRON_RUNTIME } from "../../env";
-import { useHandleNewThread, useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
-import { useThreadRouteTarget } from "../../hooks/useThreadRouteTarget";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
   navigateHistory,
@@ -60,7 +48,7 @@ import {
   providerInstanceEntriesFor,
   resolveProjectDefaultProviderModelSelection,
 } from "../../providerInstances";
-import { useProjects, useVisibleThreadShells } from "../../state/entities";
+import { useProjects } from "../../state/entities";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../../state/server";
 import { cn, isMacPlatform } from "../../lib/utils";
@@ -73,9 +61,7 @@ import {
   usePrimaryEnvironmentId,
   usePullRequestsSupported,
 } from "../../state/environments";
-import { buildThreadRouteParams } from "../../threadRoutes";
 import { resolveDesktopUpdateButtonAction } from "../desktopUpdate.logic";
-import { openPrismuxRemoteConnectDialog } from "../cloud/prismuxRemoteConnect.logic";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -83,7 +69,6 @@ import {
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
-import { Kbd } from "../ui/kbd";
 import {
   SidebarFooter,
   SidebarMenu,
@@ -98,23 +83,13 @@ import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPr
 import { readIssueListPreferences } from "../issue/issueListPreferences";
 import { IssueGlyph } from "../issue/issuePresentation";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
-import { usePrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
-import {
-  PRISMUX_SIDEBAR_QUICK_NAV_ROUTES,
-  requestLocateActiveSidebarThread,
-} from "./prismuxSidebarQuickNav.logic";
+import { requestLocateActiveSidebarThread } from "./prismuxSidebarQuickNav.logic";
 import {
   nextToolbarFocusIndex,
   resolveSidebarUtilityOverflow,
   resolveToolbarItemOwningFocus,
   SIDEBAR_UTILITY_ITEM_ATTR,
 } from "./sidebarMicroIndicators";
-import {
-  buildSidebarPeekGroups,
-  resolveSidebarPeekDecision,
-  SIDEBAR_PEEK_CLOSE_DELAY_MS,
-  SIDEBAR_PEEK_OPEN_DELAY_MS,
-} from "./sidebarPeek.logic";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
@@ -218,7 +193,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const { isMobile, isIconRail, isTextHidden } = useSidebar();
   const gt = useGT();
-  const headerRef = useRef<HTMLDivElement | null>(null);
   const backdropVariant = resolveSidebarStageBackdropVariant(
     stageLabel,
     environmentIdentificationMode,
@@ -232,7 +206,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
   return (
     <div
-      ref={headerRef}
       data-sidebar-chrome-header="true"
       data-sidebar-rail-compact={railCompact ? "true" : "false"}
       className={cn(
@@ -254,7 +227,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       {railCompact ? (
         <div className="relative z-10 hidden items-center justify-center md:flex">
           <SidebarHeaderToggleButton railCompact onBackdrop={onBackdrop} />
-          <SidebarCollapsedPeekDrawer anchorRef={headerRef} isElectron={isElectron} />
         </div>
       ) : (
         <div
@@ -317,7 +289,21 @@ export function SidebarBrandWidthProbe({
   );
 }
 
-function SidebarHeaderToggleButton({
+export function handleSidebarHeaderToggleClick(
+  railCompact: boolean,
+  actions: {
+    readonly setOpen: (open: boolean) => void;
+    readonly toggleSidebar: () => void;
+  },
+): void {
+  if (railCompact) {
+    actions.setOpen(true);
+    return;
+  }
+  actions.toggleSidebar();
+}
+
+export function SidebarHeaderToggleButton({
   railCompact,
   onBackdrop,
 }: {
@@ -326,10 +312,10 @@ function SidebarHeaderToggleButton({
 }) {
   const gt = useGT();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar } = useSidebar();
+  const { setOpen, toggleSidebar } = useSidebar();
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle");
   const label = railCompact ? gt("Expand sidebar") : gt("Collapse sidebar");
-  const tooltip = shortcutLabel ? `${label} (${shortcutLabel})` : label;
+  const tooltip = !railCompact && shortcutLabel ? `${label} (${shortcutLabel})` : label;
 
   return (
     <Tooltip>
@@ -342,7 +328,7 @@ function SidebarHeaderToggleButton({
             data-sidebar-header-toggle="true"
             aria-label={label}
             aria-pressed={!railCompact}
-            onClick={toggleSidebar}
+            onClick={() => handleSidebarHeaderToggleClick(railCompact, { setOpen, toggleSidebar })}
             className={cn(
               HEADER_ICON_BUTTON_BASE_CLASS,
               railCompact ? "size-7" : "hidden size-6 md:inline-flex",
@@ -696,644 +682,76 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function SidebarCollapsedPeekBody({
-  isElectron,
-  onClose,
-  onPinExpand,
-  onMenuOpenChange,
+export function SidebarRailMonogramButton({
+  icon,
+  primaryLabel,
+  secondaryLabel = null,
+  ariaLabel,
+  active = false,
+  dotClassName = null,
+  onClick,
+  dataRow,
+  dataProjectKey,
 }: {
-  isElectron: boolean;
-  onClose: () => void;
-  onPinExpand: () => void;
-  onMenuOpenChange: (open: boolean) => void;
+  readonly icon: ReactNode;
+  readonly primaryLabel: string;
+  readonly secondaryLabel?: string | null;
+  readonly ariaLabel: string;
+  readonly active?: boolean;
+  readonly dotClassName?: string | null;
+  readonly onClick: () => void;
+  readonly dataRow?: string;
+  readonly dataProjectKey?: string;
 }) {
-  const gt = useGT();
-  const quickNavCopy = usePrismuxSidebarQuickNavCopy();
-  const navigate = useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
-  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const pullRequestsSupported = usePullRequestsSupported();
-  const issuesSupported = useIssuesSupported();
-  const projects = useProjects();
-  const visibleThreads = useVisibleThreadShells();
-  const handleNewThread = useNewThreadHandler();
-  const handleCreateDirectNewThread = useDirectNewThreadCreator();
-  const { scratchWorkspaceRootFor } = useScratchProject();
-  const routeTarget = useThreadRouteTarget();
-
-  const activeServerRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
-  const searchShortcutLabel =
-    shortcutLabelForCommand(keybindings, "commandPalette.toggle") ??
-    (typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
-  const toggleShortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle");
-
-  const { groups, recentThreads } = buildSidebarPeekGroups({
-    projects: projects.map((project) => ({
-      environmentId: project.environmentId,
-      id: project.id,
-      title: project.title,
-      archivedAt: project.archivedAt,
-      isScratch: isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
-    })),
-    threads: visibleThreads.map((thread) => ({
-      environmentId: thread.environmentId,
-      id: thread.id,
-      projectId: thread.projectId,
-      title: thread.title,
-      branch: thread.branch,
-      updatedAt: thread.updatedAt,
-      archivedAt: thread.archivedAt,
-      pinnedAt: thread.pinnedAt,
-      isSubagent: thread.lineage.parentThreadId !== null,
-      isRunning: threadRuntimeIsActive(thread.runtime),
-      needsAttention: thread.hasPendingApprovals || thread.hasPendingUserInput,
-    })),
-  });
-
-  const navRowClass = (active: boolean) =>
-    cn(
-      "group flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] font-medium tracking-tight transition-colors outline-none focus-visible:ring-1 focus-visible:ring-foreground/25",
-      active
-        ? "bg-sidebar-row-active text-sidebar-foreground"
-        : "text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-    );
-
-  const peekUtilityIds = resolveSidebarUtilityNavIds({
-    pullRequestsSupported,
-    issuesSupported,
-    railCompact: false,
-  });
-
-  const navigateAndClose = (action: () => void) => {
-    onClose();
-    action();
-  };
-
   return (
-    <>
-      {/* Peek Header: [Logo+Prismux App Menu] [Pin/Expand] ... [Back][Forward] */}
-      <div
-        data-sidebar-peek-header="true"
-        className="flex h-[var(--workspace-topbar-height,36px)] shrink-0 items-center gap-1 border-b border-sidebar-border/45 px-2.5"
-      >
-        <SidebarBrandMenu
-          onBackdrop={false}
-          isElectron={isElectron}
-          onOpenChange={onMenuOpenChange}
-          onAction={onClose}
-        />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                data-sidebar-peek-pin="true"
-                aria-label={gt("Expand sidebar")}
-                onClick={onPinExpand}
-                className={cn(
-                  HEADER_ICON_BUTTON_BASE_CLASS,
-                  "size-6 text-muted-foreground/85 hover:bg-foreground/8 hover:text-foreground dark:hover:bg-white/10",
-                )}
-              />
-            }
-          >
-            <PanelLeftIcon className="size-3.5" aria-hidden="true" />
-          </TooltipTrigger>
-          <TooltipPopup data-pmx-glass-zone="overlays" side="bottom" sideOffset={4}>
-            {toggleShortcutLabel
-              ? `${gt("Expand sidebar")} (${toggleShortcutLabel})`
-              : gt("Expand sidebar")}
-          </TooltipPopup>
-        </Tooltip>
-        {isElectron ? (
-          <div className="ml-auto flex shrink-0 items-center gap-0.5">
-            <HistoryNavigationButton direction="back" onBackdrop={false} />
-            <HistoryNavigationButton direction="forward" onBackdrop={false} />
-          </div>
-        ) : null}
-      </div>
-
-      {/* Quick Navigation + Search */}
-      <nav
-        aria-label={gt("Workspace quick navigation")}
-        data-sidebar-peek-quick-nav="true"
-        className="flex shrink-0 flex-col gap-0.5 px-2 pt-2 pb-1.5"
-      >
-        <button
-          type="button"
-          data-sidebar-peek-search="true"
-          onClick={() => navigateAndClose(() => openCommandPalette({ query: "" }))}
-          className="group mb-1 flex h-7 w-full cursor-pointer items-center gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar-foreground/[0.045] px-2 text-left text-[12px] font-medium text-sidebar-muted-foreground transition-colors outline-none hover:bg-sidebar-foreground/[0.09] hover:text-sidebar-foreground focus-visible:ring-1 focus-visible:ring-foreground/25"
-        >
-          <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-75" />
-          <span className="min-w-0 flex-1 truncate">
-            {gt("Search", { $context: "sidebar global search trigger" })}
-          </span>
-          {searchShortcutLabel ? <Kbd className="text-[10px]">{searchShortcutLabel}</Kbd> : null}
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            navigateAndClose(() => void navigate({ to: "/settings/diagnostics" }))
-          }
-          className={navRowClass(pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.diagnostics)}
-        >
-          <ActivityIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-80" />
-          <span className="truncate">
-            {gt("Service diagnostics", { $context: "sidebar quick navigation" })}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => navigateAndClose(() => void navigate({ to: "/tasks" }))}
-          className={navRowClass(pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.tasks)}
-        >
-          <ListTodoIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-80" />
-          <span className="truncate">{quickNavCopy.tasks}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => navigateAndClose(() => void navigate({ to: "/workspace-board" }))}
-          className={navRowClass(pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.workspaceBoard)}
-        >
-          <Columns3Icon aria-hidden="true" className="size-3.5 shrink-0 opacity-80" />
-          <span className="truncate">{quickNavCopy.workspaceBoard}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => navigateAndClose(() => void navigate({ to: "/scheduled-tasks" }))}
-          className={navRowClass(pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.automations)}
-        >
-          <CalendarClockIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-80" />
-          <span className="truncate">{quickNavCopy.scheduledTasks}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => navigateAndClose(() => openPrismuxRemoteConnectDialog())}
-          className={navRowClass(pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.mobileAccess)}
-        >
-          <SmartphoneIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-80" />
-          <span className="truncate">
-            {gt("Prismux Mobile", { $context: "sidebar quick navigation" })}
-          </span>
-        </button>
-      </nav>
-
-      {/* Projects & Recent Threads */}
-      <div
-        data-sidebar-peek-threads="true"
-        className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto border-t border-sidebar-border/45 px-2 py-2"
-      >
-        <div className="flex items-center justify-between px-1.5 pb-0.5">
-          <span
-            data-sidebar-peek-section-heading="true"
-            className="text-[11px] font-medium tracking-wide text-sidebar-muted-foreground/85"
-          >
-            {groups.length > 0 ? gt("Projects") : gt("Recent Threads")}
-          </span>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={gt("Add project")}
-                  onClick={() => navigateAndClose(() => openCommandPalette({ open: "add-project" }))}
-                  className={cn(
-                    HEADER_ICON_BUTTON_BASE_CLASS,
-                    "size-5 text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-                  )}
-                />
-              }
-            >
-              <PlusIcon className="size-3.5" aria-hidden="true" />
-            </TooltipTrigger>
-            <TooltipPopup data-pmx-glass-zone="overlays" side="right" sideOffset={6}>
-              {gt("Add project")}
-            </TooltipPopup>
-          </Tooltip>
-        </div>
-
-        {groups.length > 0 ? (
-          <div className="flex flex-col gap-1.5">
-            {groups.map(({ project, threads }) => (
-              <div
-                key={`${project.environmentId}:${project.id}`}
-                data-sidebar-peek-project={project.id}
-                className="flex flex-col gap-0.5"
-              >
-                <div className="group flex h-6 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-sidebar-foreground/90 hover:bg-sidebar-row-hover">
-                  <FolderIcon className="size-3.5 shrink-0 opacity-70" aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate">{project.title}</span>
-                  <button
-                    type="button"
-                    aria-label={gt("New thread")}
-                    onClick={() =>
-                      navigateAndClose(() => {
-                        void handleNewThread(scopeProjectRef(project.environmentId, project.id));
-                      })
-                    }
-                    className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-sidebar-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-foreground/10 hover:text-sidebar-foreground focus-visible:opacity-100"
-                  >
-                    <SquarePenIcon className="size-3" aria-hidden="true" />
-                  </button>
-                </div>
-                {threads.map((thread) => {
-                  const isActive =
-                    activeServerRef?.environmentId === thread.environmentId &&
-                    activeServerRef?.threadId === thread.id;
-                  return (
-                    <button
-                      key={`${thread.environmentId}:${thread.id}`}
-                      type="button"
-                      data-sidebar-peek-thread={thread.id}
-                      onClick={() =>
-                        navigateAndClose(() => {
-                          void navigate({
-                            to: "/$environmentId/$threadId",
-                            params: buildThreadRouteParams(
-                              scopeThreadRef(thread.environmentId, thread.id),
-                            ),
-                          });
-                        })
-                      }
-                      className={cn(
-                        "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pl-5 pr-2 text-left text-xs transition-colors outline-none focus-visible:ring-1 focus-visible:ring-foreground/25",
-                        isActive
-                          ? "bg-sidebar-row-active font-medium text-sidebar-foreground"
-                          : "text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-                      )}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          "size-1.5 shrink-0 rounded-full",
-                          thread.needsAttention
-                            ? "bg-amber-500"
-                            : thread.isRunning
-                              ? "bg-emerald-500"
-                              : "bg-sidebar-muted-foreground/35",
-                        )}
-                      />
-                      <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        ) : recentThreads.length > 0 ? (
-          <div className="flex flex-col gap-0.5">
-            {recentThreads.map((thread) => {
-              const isActive =
-                activeServerRef?.environmentId === thread.environmentId &&
-                activeServerRef?.threadId === thread.id;
-              return (
-                <button
-                  key={`${thread.environmentId}:${thread.id}`}
-                  type="button"
-                  data-sidebar-peek-thread={thread.id}
-                  onClick={() =>
-                    navigateAndClose(() => {
-                      void navigate({
-                        to: "/$environmentId/$threadId",
-                        params: buildThreadRouteParams(
-                          scopeThreadRef(thread.environmentId, thread.id),
-                        ),
-                      });
-                    })
-                  }
-                  className={cn(
-                    "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-xs transition-colors outline-none focus-visible:ring-1 focus-visible:ring-foreground/25",
-                    isActive
-                      ? "bg-sidebar-row-active font-medium text-sidebar-foreground"
-                      : "text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-                  )}
-                >
-                  <MessageSquareIcon className="size-3.5 shrink-0 opacity-70" aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
+    <Tooltip>
+      <TooltipTrigger
+        render={
           <button
             type="button"
-            onClick={() => navigateAndClose(() => void handleCreateDirectNewThread())}
-            className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-xs text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-          >
-            <SquarePenIcon className="size-3.5 shrink-0 opacity-75" aria-hidden="true" />
-            <span className="truncate">{gt("New thread")}</span>
-          </button>
-        )}
-      </div>
-
-      {/* Bottom Utility Row — mirrors canonical Orca left/right footer (zero Help / Wallpaper / Collapse) */}
-      <div
-        data-sidebar-peek-footer="true"
-        className="flex shrink-0 items-center gap-1 border-t border-sidebar-border/45 px-2 py-1.5"
-      >
-        {peekUtilityIds.map((itemId) => {
-          const isFirstRight = itemId === "locate";
-          let icon: ReactNode;
-          let label: string;
-          let onClick: () => void;
-          switch (itemId) {
-            case "settings":
-              icon = <SettingsIcon aria-hidden="true" />;
-              label = gt("Settings");
-              onClick = () => navigateAndClose(() => void navigate({ to: "/settings" }));
-              break;
-            case "locate":
-              icon = <CrosshairIcon aria-hidden="true" />;
-              label = gt("Locate current thread");
-              onClick = () => navigateAndClose(() => requestLocateActiveSidebarThread());
-              break;
-            case "pull-requests":
-              icon = <PullRequestGlyph.pullRequest />;
-              label = gt("Pull requests");
-              onClick = () =>
-                navigateAndClose(
-                  () =>
-                    void navigate({
-                      to: "/pull-requests",
-                      search: readPullRequestListPreferences(),
-                    }),
-                );
-              break;
-            case "issues":
-              icon = <IssueGlyph.issue />;
-              label = gt("Issues", { $context: "sidebar link to the list of issues" });
-              onClick = () =>
-                navigateAndClose(
-                  () => void navigate({ to: "/issues", search: readIssueListPreferences() }),
-                );
-              break;
-            case "usage":
-              icon = <ChartNoAxesColumnIcon aria-hidden="true" />;
-              label = gt("Usage");
-              onClick = () => navigateAndClose(() => void navigate({ to: "/usage" }));
-              break;
-          }
-          return (
-            <Tooltip key={itemId}>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    data-sidebar-peek-utility={itemId}
-                    aria-label={label}
-                    onClick={onClick}
-                    className={cn(
-                      HEADER_ICON_BUTTON_BASE_CLASS,
-                      "size-[26px] text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground [&>svg]:size-[15px] [&_svg]:size-[15px]",
-                      isFirstRight && "ml-auto",
-                    )}
-                  />
-                }
-              >
-                {icon}
-              </TooltipTrigger>
-              <TooltipPopup data-pmx-glass-zone="overlays" side="top" sideOffset={4}>
-                {label}
-              </TooltipPopup>
-            </Tooltip>
-          );
-        })}
-      </div>
-    </>
-  );
-}
-
-function SidebarCollapsedPeekDrawer({
-  anchorRef,
-  isElectron,
-}: {
-  anchorRef: RefObject<HTMLDivElement | null>;
-  isElectron: boolean;
-}) {
-  const gt = useGT();
-  const { isMobile, isIconRail, toggleSidebar } = useSidebar();
-  const railCompact = !isMobile && isIconRail;
-  const [peekOpen, setPeekOpen] = useState(false);
-  const [peekEntered, setPeekEntered] = useState(false);
-
-  const peekOpenRef = useRef(false);
-  const pointerInRailRef = useRef(false);
-  const pointerInDrawerRef = useRef(false);
-  const openMenuCountRef = useRef(0);
-  const dismissedByEscapeRef = useRef(false);
-  const openTimerRef = useRef<number | null>(null);
-  const closeTimerRef = useRef<number | null>(null);
-
-  const clearTimers = useCallback(() => {
-    if (openTimerRef.current !== null) {
-      window.clearTimeout(openTimerRef.current);
-      openTimerRef.current = null;
-    }
-    if (closeTimerRef.current !== null) {
-      window.clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
-  }, []);
-
-  const setOpenImmediate = useCallback((nextOpen: boolean) => {
-    peekOpenRef.current = nextOpen;
-    setPeekOpen(nextOpen);
-    if (!nextOpen) {
-      setPeekEntered(false);
-    }
-  }, []);
-
-  const reconcilePeek = useCallback(() => {
-    const decision = resolveSidebarPeekDecision(peekOpenRef.current, {
-      railCompact,
-      pointerInRail: pointerInRailRef.current,
-      pointerInDrawer: pointerInDrawerRef.current,
-      openMenuCount: openMenuCountRef.current,
-      dismissedByEscape: dismissedByEscapeRef.current,
-    });
-    if (decision === "close-now") {
-      clearTimers();
-      setOpenImmediate(false);
-      return;
-    }
-    if (decision === "open") {
-      clearTimers();
-      setOpenImmediate(true);
-      return;
-    }
-    if (decision === "keep-open") {
-      clearTimers();
-      return;
-    }
-    if (decision === "schedule-open") {
-      if (closeTimerRef.current !== null) {
-        window.clearTimeout(closeTimerRef.current);
-        closeTimerRef.current = null;
-      }
-      if (openTimerRef.current === null) {
-        openTimerRef.current = window.setTimeout(() => {
-          openTimerRef.current = null;
-          if (pointerInRailRef.current && !dismissedByEscapeRef.current) {
-            setOpenImmediate(true);
-          }
-        }, SIDEBAR_PEEK_OPEN_DELAY_MS);
-      }
-      return;
-    }
-    // schedule-close
-    if (openTimerRef.current !== null) {
-      window.clearTimeout(openTimerRef.current);
-      openTimerRef.current = null;
-    }
-    if (closeTimerRef.current === null) {
-      closeTimerRef.current = window.setTimeout(() => {
-        closeTimerRef.current = null;
-        if (
-          !pointerInRailRef.current &&
-          !pointerInDrawerRef.current &&
-          openMenuCountRef.current === 0
-        ) {
-          setOpenImmediate(false);
-        }
-      }, SIDEBAR_PEEK_CLOSE_DELAY_MS);
-    }
-  }, [clearTimers, railCompact, setOpenImmediate]);
-
-  const closePeekNow = useCallback(() => {
-    pointerInRailRef.current = false;
-    pointerInDrawerRef.current = false;
-    openMenuCountRef.current = 0;
-    clearTimers();
-    setOpenImmediate(false);
-  }, [clearTimers, setOpenImmediate]);
-
-  const handlePinExpand = useCallback(() => {
-    closePeekNow();
-    toggleSidebar();
-  }, [closePeekNow, toggleSidebar]);
-
-  const handleMenuOpenChange = useCallback(
-    (open: boolean) => {
-      openMenuCountRef.current = Math.max(0, openMenuCountRef.current + (open ? 1 : -1));
-      reconcilePeek();
-    },
-    [reconcilePeek],
-  );
-
-  // Trigger smooth CSS entrance on the next animation frame after mounting the floating portal.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drives entrance transition frame for portal drawer
-  useEffect(() => {
-    if (!peekOpen) return;
-    const frame = window.requestAnimationFrame(() => setPeekEntered(true));
-    return () => window.cancelAnimationFrame(frame);
-  }, [peekOpen]);
-
-  // Attach hover listeners to the enclosing 54px collapsed sidebar rail container.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes DOM pointer hover events on the 54px icon rail container
-  useEffect(() => {
-    if (!railCompact) {
-      closePeekNow();
-      return;
-    }
-    const anchor = anchorRef.current;
-    const railContainer =
-      anchor?.closest<HTMLElement>('[data-slot="sidebar-container"]') ?? anchor?.parentElement;
-    if (!railContainer) return;
-
-    const handleRailEnter = () => {
-      dismissedByEscapeRef.current = false;
-      pointerInRailRef.current = true;
-      reconcilePeek();
-    };
-    const handleRailLeave = () => {
-      pointerInRailRef.current = false;
-      reconcilePeek();
-    };
-    railContainer.addEventListener("pointerenter", handleRailEnter, { passive: true });
-    railContainer.addEventListener("pointerleave", handleRailLeave, { passive: true });
-    return () => {
-      railContainer.removeEventListener("pointerenter", handleRailEnter);
-      railContainer.removeEventListener("pointerleave", handleRailLeave);
-      clearTimers();
-    };
-  }, [anchorRef, clearTimers, closePeekNow, railCompact, reconcilePeek]);
-
-  // Allow instant Escape dismiss while floating peek drawer is open.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listens for Escape key while floating peek drawer is visible
-  useEffect(() => {
-    if (!peekOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      dismissedByEscapeRef.current = true;
-      closePeekNow();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [closePeekNow, peekOpen]);
-
-  if (!railCompact || typeof document === "undefined") {
-    return null;
-  }
-
-  return createPortal(
-    <>
-      {!peekOpen ? (
-        <div
-          aria-hidden="true"
-          data-sidebar-peek-hotzone="true"
-          className="fixed bottom-[calc(var(--pmx-status-bar-height,20px)+4px)] left-0 top-[var(--workspace-topbar-height,36px)] z-30 w-1.5"
-          onPointerEnter={() => {
-            dismissedByEscapeRef.current = false;
-            pointerInRailRef.current = true;
-            reconcilePeek();
-          }}
-          onPointerLeave={() => {
-            pointerInRailRef.current = false;
-            reconcilePeek();
-          }}
-        />
-      ) : null}
-      {peekOpen ? (
-        <aside
-          data-pmx-sidebar-peek="1"
-          data-state={peekEntered ? "open" : "closed"}
-          aria-label={gt("Workspace quick navigation")}
-          onPointerEnter={() => {
-            pointerInDrawerRef.current = true;
-            reconcilePeek();
-          }}
-          onPointerLeave={() => {
-            pointerInDrawerRef.current = false;
-            reconcilePeek();
-          }}
-          className={cn(
-            "fixed bottom-[calc(var(--pmx-status-bar-height,20px)+8px)] left-2 top-2 z-40 flex w-[268px] flex-col text-sidebar-foreground will-change-transform",
-            peekEntered ? "translate-x-0 opacity-100" : "-translate-x-2 opacity-0",
-          )}
-        >
-          <SidebarCollapsedPeekBody
-            isElectron={isElectron}
-            onClose={closePeekNow}
-            onPinExpand={handlePinExpand}
-            onMenuOpenChange={handleMenuOpenChange}
+            data-sidebar-row={dataRow}
+            data-sidebar-rail-project={dataProjectKey}
+            aria-label={ariaLabel}
+            aria-current={active ? "page" : undefined}
+            onClick={onClick}
+            className={cn(
+              "relative flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-transparent text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              active &&
+                "border-sidebar-border/65 bg-sidebar-row-active text-sidebar-foreground shadow-[0_1px_2px_rgb(0_0_0/6%)]",
+            )}
           />
-        </aside>
-      ) : null}
-    </>,
-    document.body,
+        }
+      >
+        {icon}
+        {dotClassName ? (
+          <span
+            aria-hidden
+            data-rail-dot="true"
+            className={cn(
+              "pointer-events-none absolute right-1 bottom-1 size-1.5 rounded-full ring-2 ring-sidebar",
+              dotClassName,
+            )}
+          />
+        ) : null}
+      </TooltipTrigger>
+      <TooltipPopup side="right" sideOffset={8} className="max-w-64">
+        {secondaryLabel ? (
+          <div className="flex flex-col gap-0.5 text-left">
+            <span className="truncate font-medium">{primaryLabel}</span>
+            <span className="truncate text-[11px] text-muted-foreground">{secondaryLabel}</span>
+          </div>
+        ) : (
+          primaryLabel
+        )}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
 const SIDEBAR_UTILITY_BUTTON_CLASS =
   "size-[26px] rounded-md p-0 [&>svg]:size-[15px] [&_svg]:size-[15px]";
 
-function SidebarUtilityItem({
+export function SidebarUtilityItem({
   itemId,
   icon,
   label,
@@ -1678,7 +1096,9 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               <TooltipTrigger
                 render={
                   <SidebarMenuButton
+                    {...{ [SIDEBAR_UTILITY_ITEM_ATTR]: "back" }}
                     size="icon"
+                    className={SIDEBAR_UTILITY_BUTTON_CLASS}
                     aria-label={gt("Back")}
                     onClick={handleBackClick}
                   >

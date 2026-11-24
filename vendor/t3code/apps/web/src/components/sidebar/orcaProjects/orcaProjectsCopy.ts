@@ -11,6 +11,8 @@ export interface OrcaProjectsCopy {
   readonly collapseAllProjects: string;
   readonly openActivityView: string;
   readonly closeActivityView: string;
+  readonly railNotificationsTooltip: string;
+  readonly railCloseNotificationsTooltip: string;
   readonly activityFilterPlaceholder: string;
   readonly activitySearchAriaLabel: string;
   readonly clearSearch: string;
@@ -106,6 +108,8 @@ const ZH_COPY: OrcaProjectsCopy = {
   collapseAllProjects: "折叠所有项目",
   openActivityView: "查看代理活动",
   closeActivityView: "关闭代理活动视图",
+  railNotificationsTooltip: "通知",
+  railCloseNotificationsTooltip: "关闭通知",
   activityFilterPlaceholder: "筛选...",
   activitySearchAriaLabel: "筛选代理活动",
   clearSearch: "清空筛选",
@@ -211,6 +215,8 @@ const EN_COPY: OrcaProjectsCopy = {
   collapseAllProjects: "Collapse all projects",
   openActivityView: "View activity",
   closeActivityView: "Turn off activity view",
+  railNotificationsTooltip: "Notifications",
+  railCloseNotificationsTooltip: "Close notifications",
   activityFilterPlaceholder: "Filter...",
   activitySearchAriaLabel: "Filter agent activity",
   clearSearch: "Clear filter",

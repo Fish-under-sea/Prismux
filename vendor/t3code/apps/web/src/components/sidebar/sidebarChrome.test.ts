@@ -7,6 +7,12 @@ import {
   type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 import { GTProvider, initializeGT, useGT } from "gt-react";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import fs from "node:fs";
@@ -19,17 +25,28 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import zhCatalog from "../../i18n/translations/zh.json";
 
 import { Menu } from "../ui/menu";
+import { createSidebarOpenStore, Sidebar, SidebarProvider } from "../ui/sidebar";
+import { resolveSidebarState } from "../ui/sidebarState";
+import { TooltipProvider } from "../ui/tooltip";
+import { PrismuxSidebarQuickNav } from "./PrismuxSidebarQuickNav";
 import {
   executeBrandMenuForceReload,
   executeBrandMenuReload,
   executeBrandMenuToggleDevTools,
+  handleSidebarHeaderToggleClick,
   resolveBrandMenuDeveloperShortcuts,
   resolveDefaultAvailableModelSelection,
   resolveSidebarUtilityNavIds,
   SIDEBAR_APP_MENU_ITEM_IDS,
   SIDEBAR_HEADER_CONTROL_ORDER,
   SidebarBrandMenuItems,
+  SidebarChromeFooter,
+  SidebarChromeHeader,
+  SidebarRailMonogramButton,
 } from "./SidebarChrome";
+import { OrcaProjectsHeader } from "./orcaProjects/OrcaProjectsHeader";
+import { DEFAULT_ORCA_PROJECTS_PREFS } from "./orcaProjects/orcaProjects.logic";
+import { ProjectMonogram } from "../ProjectMonogram";
 import { resolveSidebarUtilityOverflow } from "./sidebarMicroIndicators";
 import {
   buildSidebarPeekGroups,
@@ -145,10 +162,14 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(source).toContain('data-pmx-glass-zone="overlays"');
     expect(source).toContain('data-sidebar-brand-menu-popup="true"');
 
-    // Confirm collapsed hover-peek floating drawer mounts via portal with @glass-engine hook & zero CJK copy.
-    expect(source).toContain('data-pmx-sidebar-peek="1"');
-    expect(source).toContain('data-sidebar-peek-pin="true"');
-    expect(source).toContain("createPortal");
+    // Confirm collapsed sidebar hover-preview drawer is disabled so hovering the top-left expand button
+    // (or approaching it across the icon rail) never pops up a floating overlay that covers it or steals clicks.
+    expect(source).not.toContain("SidebarCollapsedPeekDrawer");
+    expect(source).not.toContain('data-pmx-sidebar-peek="1"');
+    expect(source).not.toContain('data-sidebar-peek-hotzone="true"');
+    expect(source).not.toContain('data-sidebar-peek-pin="true"');
+    expect(source).not.toContain("pointerenter");
+    expect(source).toContain("<SidebarHeaderToggleButton railCompact onBackdrop={onBackdrop} />");
 
     // Confirm compact Orca footer sizing (26x26 buttons, 15px icons) and left/right partition.
     expect(source).toContain("size-[26px]");
@@ -172,10 +193,6 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(capsuleIdx).toBeGreaterThan(-1);
     expect(utilityIdx).toBeGreaterThan(capsuleIdx);
     expect(footerBody).toContain("<PrismuxAutoUpdateHost />");
-
-    // Confirm peek section heading uses gt("Recent Threads") (not <T>Recent Threads</T>) so zh catalog resolves.
-    expect(source).toContain('gt("Recent Threads")');
-    expect(source).not.toContain("<T>Recent Threads</T>");
   });
 
   it("localizes collapsed hover-peek section headings cleanly in Simplified Chinese", () => {
@@ -423,6 +440,161 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
         dismissedByEscape: false,
       }),
     ).toBe("close-now");
+    // Hovering the collapsed expand trigger must ALWAYS return close-now (never schedule or keep open).
+    expect(
+      resolveSidebarPeekDecision(false, {
+        railCompact: true,
+        pointerInRail: true,
+        pointerInDrawer: false,
+        openMenuCount: 0,
+        dismissedByEscape: false,
+        pointerInExpandTrigger: true,
+      }),
+    ).toBe("close-now");
+    expect(
+      resolveSidebarPeekDecision(true, {
+        railCompact: true,
+        pointerInRail: true,
+        pointerInDrawer: true,
+        openMenuCount: 1,
+        dismissedByEscape: false,
+        pointerInExpandTrigger: true,
+      }),
+    ).toBe("close-now");
+  });
+
+  it("renders the collapsed sidebar expand button without any hover-preview overlay and expands directly on click", () => {
+    initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+    const zhTranslations = { zh: zhCatalog } as unknown as NonNullable<
+      Parameters<typeof GTProvider>[0]["translations"]
+    >;
+
+    const collapsedHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(
+          TooltipProvider,
+          null,
+          createElement(
+            SidebarProvider,
+            { defaultOpen: false },
+            createElement(
+              Sidebar,
+              { side: "left", collapsible: "icon" },
+              createElement(SidebarChromeHeader, { isElectron: true }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Collapsed 54px icon rail renders the top-left expand button cleanly with zero hover-preview overlay.
+    expect(collapsedHtml).toContain('data-sidebar-state="collapsed"');
+    expect(collapsedHtml).toContain('data-collapsible="icon"');
+    expect(collapsedHtml).toContain('data-sidebar-rail-compact="true"');
+    expect(collapsedHtml).toContain('data-sidebar-header-toggle="true"');
+    expect(collapsedHtml).toContain('data-sidebar="trigger"');
+    expect(collapsedHtml).toContain('aria-label="展开侧边栏"');
+    expect(collapsedHtml).toContain('aria-pressed="false"');
+    expect(collapsedHtml).not.toContain("data-pmx-sidebar-peek");
+    expect(collapsedHtml).not.toContain("data-sidebar-peek-hotzone");
+    expect(collapsedHtml).not.toContain("data-sidebar-peek-pin");
+
+    // Clicking the collapsed expand button immediately expands the real docked sidebar store.
+    const store = createSidebarOpenStore(false, undefined);
+    expect(store.getSnapshot().open).toBe(false);
+    expect(
+      resolveSidebarState({
+        isMobile: false,
+        open: store.getSnapshot().open,
+        openMobile: store.getSnapshot().openMobile,
+      }),
+    ).toBe("collapsed");
+
+    handleSidebarHeaderToggleClick(true, {
+      setOpen: store.setOpen,
+      toggleSidebar: store.toggle,
+    });
+    expect(store.getSnapshot().open).toBe(true);
+    expect(
+      resolveSidebarState({
+        isMobile: false,
+        open: store.getSnapshot().open,
+        openMobile: store.getSnapshot().openMobile,
+      }),
+    ).toBe("expanded");
+
+    // Defensive check: clicking collapsed expand action is idempotent and stays expanded.
+    handleSidebarHeaderToggleClick(true, {
+      setOpen: store.setOpen,
+      toggleSidebar: store.toggle,
+    });
+    expect(store.getSnapshot().open).toBe(true);
+
+    // Clicking the header toggle when expanded collapses cleanly back to icon rail.
+    handleSidebarHeaderToggleClick(false, {
+      setOpen: store.setOpen,
+      toggleSidebar: store.toggle,
+    });
+    expect(store.getSnapshot().open).toBe(false);
+    expect(
+      resolveSidebarState({
+        isMobile: false,
+        open: store.getSnapshot().open,
+        openMobile: store.getSnapshot().openMobile,
+      }),
+    ).toBe("collapsed");
+  });
+
+  it("keeps all collapsed icon rail quick-nav buttons intact when sidebar is collapsed", () => {
+    initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+    const zhTranslations = { zh: zhCatalog } as unknown as NonNullable<
+      Parameters<typeof GTProvider>[0]["translations"]
+    >;
+    const rootRoute = createRootRoute();
+    const router = createRouter({
+      routeTree: rootRoute,
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+
+    const RouterContextWrapper = RouterContextProvider as React.ComponentType<{
+      readonly router: unknown;
+      readonly children?: React.ReactNode;
+    }>;
+
+    const railHtml = renderToStaticMarkup(
+      createElement(
+        RouterContextWrapper,
+        { router },
+        createElement(
+          GTProvider,
+          { locale: "zh", translations: zhTranslations },
+          createElement(
+            TooltipProvider,
+            null,
+            createElement(
+              SidebarProvider,
+              { defaultOpen: false },
+              createElement(PrismuxSidebarQuickNav, {
+                routeThreadRef: null,
+                showSearch: true,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(railHtml).toContain('data-testid="prismux-sidebar-quick-nav"');
+    expect(railHtml).toContain('data-rail-mode="true"');
+    expect(railHtml).toContain('data-testid="prismux-sidebar-search-button"');
+    expect(railHtml).toContain('data-testid="prismux-nav-diagnostics"');
+    expect(railHtml).toContain('data-testid="prismux-nav-tasks"');
+    expect(railHtml).toContain('data-testid="prismux-nav-workspace-board"');
+    expect(railHtml).toContain('data-testid="prismux-nav-automations"');
+    expect(railHtml).toContain('data-testid="prismux-nav-mobile"');
+    expect(railHtml).not.toContain("data-pmx-sidebar-peek");
   });
 
   it("groups active projects & recent non-subagent threads for the collapsed peek drawer", () => {
@@ -478,5 +650,348 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(result.groups.map((g) => g.project.title)).toEqual(["Prismux", "Alpha"]);
     expect(result.groups[0]?.threads.map((t) => t.id)).toEqual(["t-pinned", "t-latest"]);
     expect(result.recentThreads.some((t) => t.id === "t-sub")).toBe(false);
+  });
+
+  it("wires one shared snappy TooltipProvider across the full collapsed sidebar rail with zero native title attributes or floating peek drawer", () => {
+    initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+    const zhTranslations = { zh: zhCatalog } as unknown as NonNullable<
+      Parameters<typeof GTProvider>[0]["translations"]
+    >;
+
+    const sidebarDir = path.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const sidebarSource = fs.readFileSync(path.join(sidebarDir, "..", "Sidebar.tsx"), "utf8");
+
+    // Sidebar.tsx must wrap Header + Content + Footer in one shared TooltipProvider using rail timing constants.
+    const providerIdx = sidebarSource.indexOf("<TooltipProvider");
+    const headerIdx = sidebarSource.indexOf("<SidebarChromeHeader isElectron={isElectron} />");
+    const footerIdx = sidebarSource.indexOf("<SidebarChromeFooter />");
+    expect(providerIdx).toBeGreaterThan(-1);
+    expect(headerIdx).toBeGreaterThan(providerIdx);
+    expect(footerIdx).toBeGreaterThan(headerIdx);
+    expect(sidebarSource).toContain("SIDEBAR_RAIL_TOOLTIP_DELAY_MS");
+    expect(sidebarSource).toContain("SIDEBAR_RAIL_TOOLTIP_CLOSE_DELAY_MS");
+    expect(sidebarSource).toContain("SIDEBAR_RAIL_TOOLTIP_TIMEOUT_MS");
+    expect(sidebarSource).not.toContain("data-pmx-sidebar-peek");
+    expect(sidebarSource).not.toContain('key="sidebar-rail-thread-tooltips"');
+
+    const rootRoute = createRootRoute();
+    const router = createRouter({
+      routeTree: rootRoute,
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    const RouterContextWrapper = RouterContextProvider as React.ComponentType<{
+      readonly router: unknown;
+      readonly children?: React.ReactNode;
+    }>;
+
+    const fullRailHtml = renderToStaticMarkup(
+      createElement(
+        RouterContextWrapper,
+        { router },
+        createElement(
+          GTProvider,
+          { locale: "zh", translations: zhTranslations },
+          createElement(
+            TooltipProvider,
+            { delay: 100, closeDelay: 0, timeout: 400 },
+            createElement(
+              SidebarProvider,
+              { defaultOpen: false },
+              createElement(
+                Sidebar,
+                { side: "left", collapsible: "icon" },
+                createElement(SidebarChromeHeader, { isElectron: true }),
+                createElement(PrismuxSidebarQuickNav, { routeThreadRef: null, showSearch: true }),
+                createElement(OrcaProjectsHeader, {
+                  projectsOpen: true,
+                  onToggleProjectsOpen: vi.fn(),
+                  canToggleAllProjects: true,
+                  allProjectsCollapsed: false,
+                  onToggleCollapseAllProjects: vi.fn(),
+                  activityViewActive: false,
+                  onToggleActivityView: vi.fn(),
+                  activityBadge: {
+                    attentionCount: 0,
+                    workingCount: 0,
+                    unreadCount: 0,
+                    completedCount: 0,
+                    displayCount: 0,
+                    tone: "idle",
+                  },
+                  prefs: DEFAULT_ORCA_PROJECTS_PREFS,
+                  onUpdatePrefs: vi.fn(),
+                  onMarkAllRead: vi.fn(),
+                  onClearCompleted: vi.fn(),
+                  environments: [],
+                  selectedAddProjectEnvId: null,
+                  onSelectAddProjectEnvId: vi.fn(),
+                  onBrowseFolder: vi.fn(),
+                  onOpenCloneDialog: vi.fn(),
+                  onOpenCreateProjectDialog: vi.fn(),
+                  onOpenCreateWorkspace: vi.fn(),
+                }),
+                createElement(SidebarRailMonogramButton, {
+                  icon: createElement(ProjectMonogram, { text: "PX", color: "blue" }),
+                  primaryLabel: "Prismux",
+                  ariaLabel: "Prismux",
+                  dataProjectKey: "proj-prismux",
+                  onClick: vi.fn(),
+                }),
+                createElement(SidebarChromeFooter),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Zero floating peek drawer or duplicate native browser title tooltips anywhere on the collapsed rail.
+    expect(fullRailHtml).not.toContain("data-pmx-sidebar-peek");
+    expect(fullRailHtml).not.toContain("data-sidebar-peek-hotzone");
+    expect(fullRailHtml).not.toMatch(/\stitle="/);
+
+    // Every collapsed-rail button is wired as a Base UI TooltipTrigger with concise Chinese aria-labels.
+    expect(fullRailHtml).toContain("data-base-ui-tooltip-trigger");
+    expect(fullRailHtml).toContain('aria-label="展开侧边栏"');
+    expect(fullRailHtml).toContain('aria-label="搜索"');
+    expect(fullRailHtml).toContain('aria-label="服务体检"');
+    expect(fullRailHtml).toContain('aria-label="任务面板"');
+    expect(fullRailHtml).toContain('aria-label="工作区板"');
+    expect(fullRailHtml).toContain('aria-label="定时任务"');
+    expect(fullRailHtml).toContain('aria-label="Prismux 手机端"');
+    expect(fullRailHtml).toContain('aria-label="通知"');
+    expect(fullRailHtml).toContain('aria-label="新工作区"');
+    expect(fullRailHtml).toContain('aria-label="Prismux"');
+    expect(fullRailHtml).toContain('data-sidebar-utility-item="locate"');
+    expect(fullRailHtml).toContain('aria-label="定位当前会话"');
+    expect(fullRailHtml).toContain('data-sidebar-utility-item="settings"');
+    expect(fullRailHtml).toContain('aria-label="设置"');
+    expect(fullRailHtml).toContain('data-sidebar-utility-item="usage"');
+    expect(fullRailHtml).toContain('aria-label="用量"');
+  });
+
+  it("renders right-side TooltipPopup labels for every collapsed 54px rail icon from top to bottom in zh and en", async () => {
+    vi.resetModules();
+    const createTooltipMock = () => ({
+      TooltipProvider: ({ children }: { readonly children?: React.ReactNode }) =>
+        createElement("div", { "data-test-tooltip-provider": "true" }, children),
+      Tooltip: ({ children }: { readonly children?: React.ReactNode }) =>
+        createElement("span", { "data-test-tooltip-root": "true" }, children),
+      TooltipTrigger: ({
+        render,
+        children,
+      }: {
+        readonly render?: React.ReactElement<{ readonly children?: React.ReactNode }>;
+        readonly children?: React.ReactNode;
+      }) =>
+        render
+          ? createElement(
+              "span",
+              { "data-test-tooltip-trigger": "true" },
+              render,
+              children ?? null,
+            )
+          : createElement("button", { type: "button", "data-test-tooltip-trigger": "true" }, children),
+      TooltipPopup: ({
+        side = "top",
+        sideOffset,
+        children,
+      }: {
+        readonly side?: string;
+        readonly sideOffset?: number;
+        readonly children?: React.ReactNode;
+      }) =>
+        createElement(
+          "output",
+          {
+            "data-test-tooltip-popup": "true",
+            "data-tooltip-side": side,
+            "data-tooltip-offset": sideOffset ?? 4,
+          },
+          children,
+        ),
+    });
+    vi.doMock("../ui/tooltip", createTooltipMock);
+    vi.doMock("~/components/ui/tooltip", createTooltipMock);
+    vi.doMock("../../state/environments", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../../state/environments")>();
+      return {
+        ...actual,
+        useIssuesSupported: () => true,
+        usePullRequestsSupported: () => true,
+      };
+    });
+
+    try {
+      // Ensure mocked tooltip module settles before loading consumer components.
+      await import("../ui/tooltip");
+      const uiSidebarMod = await import("../ui/sidebar");
+      const chromeMod = await import("./SidebarChrome");
+      const quickNavMod = await import("./PrismuxSidebarQuickNav");
+      const orcaHeaderMod = await import("./orcaProjects/OrcaProjectsHeader");
+
+      initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+      const zhTranslations = { zh: zhCatalog } as unknown as NonNullable<
+        Parameters<typeof GTProvider>[0]["translations"]
+      >;
+
+      const renderCollapsedRail = (locale: "zh" | "en", initialPath: string, activityViewActive = false) => {
+        const rootRoute = createRootRoute();
+        const router = createRouter({
+          routeTree: rootRoute,
+          history: createMemoryHistory({ initialEntries: [initialPath] }),
+        });
+        const RouterContextWrapper = RouterContextProvider as React.ComponentType<{
+          readonly router: unknown;
+          readonly children?: React.ReactNode;
+        }>;
+        return renderToStaticMarkup(
+          createElement(
+            RouterContextWrapper,
+            { router },
+            createElement(
+              GTProvider,
+              { locale, translations: zhTranslations },
+              createElement(
+                uiSidebarMod.SidebarProvider,
+                { defaultOpen: false },
+                createElement(
+                  uiSidebarMod.Sidebar,
+                  { side: "left", collapsible: "icon" },
+                  createElement(chromeMod.SidebarChromeHeader, { isElectron: true }),
+                  createElement(quickNavMod.PrismuxSidebarQuickNav, {
+                    routeThreadRef: null,
+                    showSearch: true,
+                  }),
+                  createElement(orcaHeaderMod.OrcaProjectsHeader, {
+                    projectsOpen: true,
+                    onToggleProjectsOpen: vi.fn(),
+                    canToggleAllProjects: true,
+                    allProjectsCollapsed: false,
+                    onToggleCollapseAllProjects: vi.fn(),
+                    activityViewActive,
+                    onToggleActivityView: vi.fn(),
+                    activityBadge: {
+                      attentionCount: 1,
+                      workingCount: 0,
+                      unreadCount: 1,
+                      completedCount: 0,
+                      displayCount: 1,
+                      tone: "attention",
+                    },
+                    prefs: DEFAULT_ORCA_PROJECTS_PREFS,
+                    onUpdatePrefs: vi.fn(),
+                    onMarkAllRead: vi.fn(),
+                    onClearCompleted: vi.fn(),
+                    environments: [],
+                    selectedAddProjectEnvId: null,
+                    onSelectAddProjectEnvId: vi.fn(),
+                    onBrowseFolder: vi.fn(),
+                    onOpenCloneDialog: vi.fn(),
+                    onOpenCreateProjectDialog: vi.fn(),
+                    onOpenCreateWorkspace: vi.fn(),
+                  }),
+                  createElement(chromeMod.SidebarRailMonogramButton, {
+                    icon: createElement(ProjectMonogram, { text: "PX", color: "blue" }),
+                    primaryLabel: "Prismux",
+                    ariaLabel: "Prismux",
+                    dataProjectKey: "proj-prismux",
+                    onClick: vi.fn(),
+                  }),
+                  createElement(chromeMod.SidebarRailMonogramButton, {
+                    icon: createElement(ProjectMonogram, { text: "PX", color: "blue" }),
+                    primaryLabel: "修复侧边栏",
+                    secondaryLabel: "Prismux",
+                    ariaLabel: "修复侧边栏 (Prismux)",
+                    dataRow: "env:thread-1",
+                    onClick: vi.fn(),
+                  }),
+                  createElement(chromeMod.SidebarChromeFooter),
+                ),
+              ),
+            ),
+          ),
+        );
+      };
+
+      const extractPopups = (html: string) =>
+        Array.from(
+          html.matchAll(
+            /<output data-test-tooltip-popup="true" data-tooltip-side="([^"]+)" data-tooltip-offset="([^"]+)">([\s\S]*?)<\/output>/g,
+          ),
+          (match) => ({
+            side: match[1]!,
+            offset: Number(match[2]!),
+            text: match[3]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+          }),
+        );
+
+      const zhHtml = renderCollapsedRail("zh", "/");
+      expect(zhHtml).not.toContain("data-pmx-sidebar-peek");
+      expect(zhHtml).not.toMatch(/\stitle="/);
+
+      const zhPopups = extractPopups(zhHtml);
+      expect(zhPopups.length).toBeGreaterThanOrEqual(16);
+      // Every single collapsed-rail tooltip popup MUST open on the right side!
+      for (const popup of zhPopups) {
+        expect(popup.side, `Tooltip "${popup.text}" must appear on side="right"`).toBe("right");
+      }
+
+      const zhTexts = zhPopups.map((popup) => popup.text);
+      expect(zhTexts).toContain("展开侧边栏");
+      expect(zhTexts).toContain("搜索");
+      expect(zhTexts).toContain("服务体检");
+      expect(zhTexts).toContain("任务面板");
+      expect(zhTexts).toContain("工作区板");
+      expect(zhTexts).toContain("定时任务");
+      expect(zhTexts).toContain("Prismux 手机端");
+      expect(zhTexts).toContain("通知");
+      expect(zhTexts).toContain("新工作区");
+      expect(zhTexts).toContain("Prismux");
+      expect(zhTexts).toContain("修复侧边栏 Prismux");
+      expect(zhTexts).toContain("定位当前会话");
+      expect(zhTexts).toContain("issue");
+      expect(zhTexts).toContain("PR");
+      expect(zhTexts).toContain("设置");
+      expect(zhTexts).toContain("用量");
+      expect(zhTexts).toContain("更多导航项");
+
+      // Active bell state + utility-page Back button tooltip on the right
+      const zhUtilityHtml = renderCollapsedRail("zh", "/tasks", true);
+      const zhUtilityTexts = extractPopups(zhUtilityHtml).map((popup) => popup.text);
+      expect(zhUtilityTexts).toContain("关闭通知");
+      expect(zhUtilityTexts).toContain("返回");
+
+      // English locale parity
+      const enHtml = renderCollapsedRail("en", "/");
+      const enPopups = extractPopups(enHtml);
+      for (const popup of enPopups) {
+        expect(popup.side, `EN Tooltip "${popup.text}" must appear on side="right"`).toBe("right");
+      }
+      const enTexts = enPopups.map((popup) => popup.text);
+      expect(enTexts).toContain("Expand sidebar");
+      expect(enTexts).toContain("Search");
+      expect(enTexts).toContain("Service diagnostics");
+      expect(enTexts).toContain("Tasks");
+      expect(enTexts).toContain("Workspace board");
+      expect(enTexts).toContain("Scheduled Tasks");
+      expect(enTexts).toContain("Prismux Mobile");
+      expect(enTexts).toContain("Notifications");
+      expect(enTexts).toContain("New workspace");
+      expect(enTexts).toContain("Prismux");
+      expect(enTexts).toContain("Locate current thread");
+      expect(enTexts).toContain("Issues");
+      expect(enTexts).toContain("Pull requests");
+      expect(enTexts).toContain("Settings");
+      expect(enTexts).toContain("Usage");
+      expect(enTexts).toContain("More navigation items");
+    } finally {
+      vi.doUnmock("../ui/tooltip");
+      vi.doUnmock("~/components/ui/tooltip");
+      vi.doUnmock("../../state/environments");
+      vi.resetModules();
+    }
   });
 });
