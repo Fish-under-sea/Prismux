@@ -23,8 +23,11 @@ import {
   extractReleaseNotesPreview,
   parseReleaseNotesBlocks,
   prismuxUpdateNotifierStore,
+  shouldPollUpdaterStatusFallback,
+  startUpdaterStatusFallbackPoller,
   type StorageLike,
 } from "./updateNotifierStore";
+import { parseUpdaterStatusPayload } from "../settings/prismuxUpdates.logic";
 
 function createMemoryStorage(): StorageLike & { readonly map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -443,6 +446,292 @@ describe("Sidebar update capsule & release modal rendering", () => {
     );
     expect(updatesSettingsSource).toContain("<PrismuxReleaseNotesMarkdown");
     expect(updatesSettingsSource).not.toContain("whitespace-pre-wrap");
+  });
+
+  it("renders exact weighted determinate progress width, MB/s speed, split volume badge, and 4-stage indicator without fake 14%/15% widths", () => {
+    const splitCheck = makeUpdateCheck({
+      sourceUsed: "gitee",
+      recommendedAsset: {
+        name: "Prismux-Setup-0.2.0.exe",
+        kind: "split-7z-exe",
+        effectiveUrl: "https://gitee.com/Fish-under-sea/Prismux/releases/download/v0.2.0/Prismux-Setup-0.2.0.exe.7z.001",
+        sizeBytes: 218_000_000,
+        sha256: "a".repeat(64),
+        expectedExeName: "Prismux-Setup-0.2.0.exe",
+        parts: [
+          { name: "Prismux-Setup-0.2.0.exe.7z.001", url: "https://gitee.com/a/1", size: 95_000_000 },
+          { name: "Prismux-Setup-0.2.0.exe.7z.002", url: "https://gitee.com/a/2", size: 95_000_000 },
+          { name: "Prismux-Setup-0.2.0.exe.7z.003", url: "https://gitee.com/a/3", size: 28_000_000 },
+        ],
+        source: "gitee",
+      },
+    });
+    prismuxUpdateNotifierStore.hydrateFromDaemonStatus({
+      currentVersion: "0.1.2-preview.4",
+      portableMode: false,
+      policy: {
+        routePreference: "domestic",
+        channel: "prerelease",
+        includePrerelease: true,
+        customGhProxyPrefix: "",
+        pluginRegistryOverride: "auto",
+        timeoutMs: 15_000,
+        autoCheckEnabled: true,
+      },
+      checking: false,
+      downloading: true,
+      installState: "downloading",
+      progress: {
+        stage: "downloading",
+        percent: 32,
+        bytesDownloaded: 100_000_000,
+        totalBytes: 218_000_000,
+        currentPart: 2,
+        totalParts: 3,
+        partName: "Prismux-Setup-0.2.0.exe.7z.002",
+        message: "正在下载分卷 2/3",
+        updatedAt: 1000,
+      },
+      downloadedFilePath: null,
+      downloadedSha256: null,
+      lastCheck: splitCheck,
+      lastProbe: null,
+      lastError: null,
+    });
+    // Second SSE progress tick establishes live MB/s speed and advances bar to exact 42.6%.
+    prismuxUpdateNotifierStore.applySseEvent({
+      event: "progress",
+      data: {
+        installState: "downloading",
+        progress: {
+          stage: "downloading",
+          percent: 42.6,
+          bytesDownloaded: 112_000_000,
+          totalBytes: 218_000_000,
+          currentPart: 2,
+          totalParts: 3,
+          partName: "Prismux-Setup-0.2.0.exe.7z.002",
+          message: "正在下载分卷 2/3",
+          updatedAt: 2000,
+        },
+      },
+      rawData: "",
+      receivedAt: 2000,
+    });
+    prismuxUpdateNotifierStore.openReleaseModal();
+
+    const modalHtml = renderToStaticMarkup(createElement(PrismuxUpdateReleaseModal));
+    expect(modalHtml).toContain('data-progress-mode="determinate"');
+    expect(modalHtml).toContain('data-testid="prismux-update-modal-progressbar-fill"');
+    expect(modalHtml).toContain("width:42.6%");
+    expect(modalHtml).not.toContain("width:14%");
+    expect(modalHtml).not.toContain("width:15%");
+    expect(modalHtml).toContain("43%");
+    expect(modalHtml).toContain('data-testid="prismux-update-modal-speed"');
+    expect(modalHtml).toContain("MB/s");
+    expect(modalHtml).toContain('data-testid="prismux-update-modal-part"');
+    expect(modalHtml).toContain("分卷 2/3");
+    expect(modalHtml).toContain('data-stage-step="downloading" data-stage-state="active"');
+    expect(modalHtml).toContain('data-stage-step="extracting" data-stage-state="pending"');
+    expect(modalHtml).toContain("0–90%");
+    expect(modalHtml).toContain("90–95%");
+    expect(modalHtml).toContain("95–100%");
+
+    // Collapsed sidebar capsule shows live percentage & hairline progress bar.
+    prismuxUpdateNotifierStore.collapseToCapsule(null, true);
+    const capsuleHtml = renderToStaticMarkup(
+      createElement(PrismuxSidebarUpdateCapsule, { railCompact: false }),
+    );
+    expect(capsuleHtml).toContain("下载更新 43%");
+    expect(capsuleHtml).toContain('data-testid="prismux-sidebar-update-capsule-progress"');
+    expect(capsuleHtml).toContain("width:42.6%");
+  });
+
+  it("renders reduced-motion-safe indeterminate shimmer bar during null-percent connection handshake instead of static 14%/15%", () => {
+    prismuxUpdateNotifierStore.hydrateFromDaemonStatus({
+      currentVersion: "0.1.2-preview.4",
+      portableMode: false,
+      policy: {
+        routePreference: "auto",
+        channel: "prerelease",
+        includePrerelease: true,
+        customGhProxyPrefix: "",
+        pluginRegistryOverride: "auto",
+        timeoutMs: 15_000,
+        autoCheckEnabled: true,
+      },
+      checking: false,
+      downloading: true,
+      installState: "downloading",
+      progress: {
+        stage: "downloading",
+        percent: null,
+        bytesDownloaded: 0,
+        totalBytes: null,
+        currentPart: null,
+        totalParts: null,
+        partName: null,
+        message: null,
+        updatedAt: 1000,
+      },
+      downloadedFilePath: null,
+      downloadedSha256: null,
+      lastCheck: makeUpdateCheck(),
+      lastProbe: null,
+      lastError: null,
+    });
+    prismuxUpdateNotifierStore.openReleaseModal();
+
+    const modalHtml = renderToStaticMarkup(createElement(PrismuxUpdateReleaseModal));
+    expect(modalHtml).toContain('data-progress-mode="indeterminate"');
+    expect(modalHtml).toContain('data-testid="prismux-update-modal-progressbar-indeterminate"');
+    expect(modalHtml).toContain("motion-reduce:animate-none");
+    expect(modalHtml).toContain("正在连接下载源…");
+    expect(modalHtml).toContain("连接中…");
+    expect(modalHtml).not.toContain("width:14%");
+    expect(modalHtml).not.toContain("width:15%");
+    expect(modalHtml).not.toContain("aria-valuenow=");
+  });
+
+  it("activates 500ms status polling fallback whenever SSE goes silent > 700ms during active transfer and guards against stale out-of-order polls", async () => {
+    const store = createUpdateNotifierStore({ storage: createMemoryStorage() });
+    let clock = 10_000;
+
+    store.hydrateFromDaemonStatus({
+      currentVersion: "0.1.2-preview.4",
+      portableMode: false,
+      policy: {
+        routePreference: "domestic",
+        channel: "prerelease",
+        includePrerelease: true,
+        customGhProxyPrefix: "",
+        pluginRegistryOverride: "auto",
+        timeoutMs: 15_000,
+        autoCheckEnabled: true,
+      },
+      checking: false,
+      downloading: true,
+      installState: "downloading",
+      progress: {
+        stage: "downloading",
+        percent: 20,
+        bytesDownloaded: 40_000_000,
+        totalBytes: 200_000_000,
+        currentPart: 1,
+        totalParts: 3,
+        partName: "Prismux-Setup.exe.7z.001",
+        message: null,
+        updatedAt: 10_000,
+      },
+      downloadedFilePath: null,
+      downloadedSha256: null,
+      lastCheck: makeUpdateCheck(),
+      lastProbe: null,
+      lastError: null,
+    });
+
+    // Fresh SSE event received at t=10_000 -> at t=10_500 (500ms <= 700ms), fallback poll stays idle.
+    store.applySseEvent({
+      event: "progress",
+      data: {
+        installState: "downloading",
+        progress: {
+          stage: "downloading",
+          percent: 24,
+          bytesDownloaded: 48_000_000,
+          totalBytes: 200_000_000,
+          currentPart: 1,
+          totalParts: 3,
+          partName: "Prismux-Setup.exe.7z.001",
+          updatedAt: 10_000,
+        },
+      },
+      rawData: "",
+      receivedAt: 10_000,
+    });
+    expect(shouldPollUpdaterStatusFallback(store.getState(), 10_500)).toBe(false);
+    expect(shouldPollUpdaterStatusFallback(store.getState(), 10_701)).toBe(true);
+
+    const registeredTicks: Array<() => void> = [];
+    let cleared = false;
+    let pollCalls = 0;
+
+    const stop = startUpdaterStatusFallbackPoller({
+      store,
+      intervalMs: 500,
+      staleThresholdMs: 700,
+      now: () => clock,
+      setIntervalFn: ((fn: () => void) => {
+        registeredTicks.push(fn);
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      }) as typeof setInterval,
+      clearIntervalFn: (() => {
+        cleared = true;
+      }) as typeof clearInterval,
+      fetchStatus: async () => {
+        pollCalls += 1;
+        return {
+          currentVersion: "0.1.2-preview.4",
+          portableMode: false,
+          policy: { routePreference: "domestic", channel: "prerelease" },
+          checking: false,
+          downloading: true,
+          installState: "downloading",
+          progress: {
+            stage: "downloading",
+            percent: 58.4,
+            bytesDownloaded: 120_000_000,
+            totalBytes: 200_000_000,
+            currentPart: 2,
+            totalParts: 3,
+            partName: "Prismux-Setup.exe.7z.002",
+            updatedAt: 11_000,
+          },
+        };
+      },
+      parseStatus: (raw) => parseUpdaterStatusPayload(raw, "0.1.2-preview.4"),
+    });
+
+    expect(registeredTicks).toHaveLength(1);
+    const runTick = registeredTicks[0]!;
+
+    // Tick while SSE is still fresh -> 0 HTTP polls
+    clock = 10_400;
+    runTick();
+    await Promise.resolve();
+    expect(pollCalls).toBe(0);
+
+    // Clock crosses 700ms SSE silence -> fallback poll executes & updates store + live speed
+    clock = 11_000;
+    runTick();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pollCalls).toBe(1);
+    expect(store.getState().updaterStatus?.progress?.percent).toBe(58.4);
+    expect(store.getState().updaterStatus?.progress?.currentPart).toBe(2);
+    expect(store.getState().speedBytesPerSec).toBeGreaterThan(0);
+
+    // Out-of-order older poll snapshot (updatedAt < 11_000) must never rewind progress backwards!
+    store.hydrateFromDaemonStatus(
+      {
+        ...store.getState().updaterStatus!,
+        progress: {
+          stage: "downloading",
+          percent: 30,
+          bytesDownloaded: 60_000_000,
+          totalBytes: 200_000_000,
+          currentPart: 1,
+          totalParts: 3,
+          partName: "Prismux-Setup.exe.7z.001",
+          message: null,
+          updatedAt: 10_500,
+        },
+      },
+      { syncAutoCheck: false, fromPoll: true },
+    );
+    expect(store.getState().updaterStatus?.progress?.percent).toBe(58.4);
+
+    stop();
+    expect(cleared).toBe(true);
   });
 });
 

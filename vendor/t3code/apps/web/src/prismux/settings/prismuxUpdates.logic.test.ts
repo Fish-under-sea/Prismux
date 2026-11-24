@@ -7,9 +7,13 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ALLOWED_UPDATE_CHANNELS,
   applyUpdaterSseEvent,
+  buildUpdaterStageSteps,
   describeUpdaterProgressStage,
+  formatProgressPercentDisplay,
+  formatUpdaterStageWeightHint,
   normalizeUpdateChannel,
   parseUpdaterStatusPayload,
+  resolveProgressBarPercent,
   resolveRuntimeVersion,
   selectRecommendedUpdateAsset,
 } from "./prismuxUpdates.logic";
@@ -153,5 +157,139 @@ describe("prismuxUpdates.logic", () => {
     expect(source).toContain("prismux-auto-check-updates-switch");
     expect(source).toContain("自动检查更新");
     expect(source).toContain("installDownloadedUpdate");
+  });
+
+  it("computes weighted progress display, stage steps, and weight hints across 0->30->60->90->95->99.9->100%", () => {
+    // Handshake with null percent -> strictly null (indeterminate shimmer), never hardcoded 14%/15%.
+    expect(
+      resolveProgressBarPercent({
+        stage: "downloading",
+        percent: null,
+        bytesDownloaded: 0,
+        totalBytes: null,
+        currentPart: 1,
+        totalParts: 3,
+        partName: "Prismux-Setup.exe.7z.001",
+        message: null,
+        updatedAt: 1000,
+      }),
+    ).toBeNull();
+    expect(formatProgressPercentDisplay(null)).toBeNull();
+
+    // Split part 2/3 mid-download at 42.6%
+    const part2Progress = {
+      stage: "downloading" as const,
+      percent: 42.6,
+      bytesDownloaded: 90_000_000,
+      totalBytes: 218_000_000,
+      currentPart: 2,
+      totalParts: 3,
+      partName: "Prismux-Setup.exe.7z.002",
+      message: null,
+      updatedAt: 2000,
+    };
+    expect(resolveProgressBarPercent(part2Progress)).toBe(42.6);
+    expect(formatProgressPercentDisplay(42.6)).toBe("43%");
+    const splitHint = formatUpdaterStageWeightHint(part2Progress, true);
+    expect(splitHint).toContain("0–90%");
+    expect(splitHint).toContain("30%");
+    expect(splitHint).toContain("90–95%");
+    expect(splitHint).toContain("95–100%");
+
+    const downloadingSteps = buildUpdaterStageSteps(part2Progress, false, true);
+    expect(downloadingSteps.map((s) => `${s.id}:${s.state}`)).toEqual([
+      "downloading:active",
+      "extracting:pending",
+      "verifying:pending",
+      "ready:pending",
+    ]);
+
+    // Extracting 90->95%
+    const extractingSteps = buildUpdaterStageSteps(
+      { ...part2Progress, stage: "extracting", percent: 92 },
+      false,
+      true,
+    );
+    expect(extractingSteps.map((s) => `${s.id}:${s.state}`)).toEqual([
+      "downloading:completed",
+      "extracting:active",
+      "verifying:pending",
+      "ready:pending",
+    ]);
+
+    // Verifying 99.9% displays "99%" (never prematurely 100% before ready)
+    expect(formatProgressPercentDisplay(99.9)).toBe("99%");
+    const verifyingSteps = buildUpdaterStageSteps(
+      { ...part2Progress, stage: "verifying", percent: 99.9 },
+      false,
+      true,
+    );
+    expect(verifyingSteps.map((s) => `${s.id}:${s.state}`)).toEqual([
+      "downloading:completed",
+      "extracting:completed",
+      "verifying:active",
+      "ready:pending",
+    ]);
+
+    // Ready hits 100% with all stages completed
+    expect(formatProgressPercentDisplay(100)).toBe("100%");
+    const readySteps = buildUpdaterStageSteps(
+      { ...part2Progress, stage: "ready", percent: 100 },
+      true,
+      true,
+    );
+    expect(readySteps.map((s) => `${s.id}:${s.state}`)).toEqual([
+      "downloading:completed",
+      "extracting:completed",
+      "verifying:completed",
+      "ready:completed",
+    ]);
+  });
+
+  it("enforces zero hardcoded 14%/15% fake widths, infinite SSE reconnect, polling fallback, and glass contrast across updater UI files", () => {
+    const prismuxDir = path.resolve(import.meta.dirname, "..");
+    const settingsSrc = fs.readFileSync(
+      path.join(prismuxDir, "settings/PrismuxUpdatesSettingsPage.tsx"),
+      "utf8",
+    );
+    const modalSrc = fs.readFileSync(
+      path.join(prismuxDir, "updates/PrismuxUpdateReleaseModal.tsx"),
+      "utf8",
+    );
+    const hostSrc = fs.readFileSync(
+      path.join(prismuxDir, "updates/PrismuxAutoUpdateHost.tsx"),
+      "utf8",
+    );
+    const capsuleSrc = fs.readFileSync(
+      path.join(prismuxDir, "updates/PrismuxSidebarUpdateCapsule.tsx"),
+      "utf8",
+    );
+
+    // Zero hardcoded 14% / 15% fake widths anywhere
+    expect(modalSrc).not.toMatch(/\?\?\s*14\b/);
+    expect(settingsSrc).not.toMatch(/\?\?\s*15\b/);
+    expect(modalSrc).not.toContain("width: 14%");
+    expect(settingsSrc).not.toContain("width: 15%");
+
+    // Infinite reconnect (no maxReconnectAttempts option cap) + 500ms fallback poller
+    expect(hostSrc).not.toMatch(/maxReconnectAttempts\s*:/);
+    expect(settingsSrc).not.toMatch(/maxReconnectAttempts\s*:/);
+    expect(hostSrc).toContain("startUpdaterStatusFallbackPoller");
+    expect(settingsSrc).toContain("startUpdaterStatusFallbackPoller");
+
+    // Settings page shares speed & store state
+    expect(settingsSrc).toContain("formatTransferSpeed");
+    expect(settingsSrc).toContain("prismuxUpdateNotifierStore");
+
+    // Glass contrast guardrail: zero bg-background/45..85 across updated UI files
+    for (const [label, src] of [
+      ["PrismuxUpdatesSettingsPage", settingsSrc],
+      ["PrismuxUpdateReleaseModal", modalSrc],
+      ["PrismuxSidebarUpdateCapsule", capsuleSrc],
+    ] as const) {
+      expect(src, `${label} must not use washed-out bg-background/45..85`).not.toMatch(
+        /\bbg-background\/(?:45|50|55|60|70|75|80|85)\b/,
+      );
+    }
   });
 });

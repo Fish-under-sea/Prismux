@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
+import { cn } from "../../lib/utils";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -42,16 +43,25 @@ import {
 } from "../daemonClient";
 import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
 import {
+  formatTransferSpeed,
+  formatUpdateByteSize,
+  isUpdateTransferActive,
   prismuxUpdateNotifierStore,
+  startUpdaterStatusFallbackPoller,
+  UPDATER_SSE_STALE_FALLBACK_MS,
+  UPDATER_STATUS_POLL_INTERVAL_MS,
   useUpdateNotifierState,
 } from "../updates/updateNotifierStore";
 import { PrismuxReleaseNotesMarkdown } from "../updates/PrismuxReleaseNotesMarkdown";
 import {
-  applyUpdaterSseEvent,
+  buildUpdaterStageSteps,
   describeUpdaterProgressStage,
+  formatProgressPercentDisplay,
+  formatUpdaterStageWeightHint,
   parseCheckResult,
   parseProbeReport,
   parseUpdaterStatusPayload,
+  resolveProgressBarPercent,
   resolveRuntimeVersion,
   selectRecommendedUpdateAsset,
   type PluginRegistryOverride,
@@ -115,9 +125,15 @@ export function PrismuxUpdatesSettingsPage({
   const { daemon, daemonInfo } = usePrismuxRuntime();
   const notifierState = useUpdateNotifierState();
 
-  const [status, setStatus] = useState<UpdaterStatusView | null>(null);
-  const [probe, setProbe] = useState<ProbeReportView | null>(null);
-  const [checkResult, setCheckResult] = useState<UpdateCheckView | null>(null);
+  const [status, setStatus] = useState<UpdaterStatusView | null>(
+    () => notifierState.updaterStatus,
+  );
+  const [probe, setProbe] = useState<ProbeReportView | null>(
+    () => notifierState.updaterStatus?.lastProbe ?? null,
+  );
+  const [checkResult, setCheckResult] = useState<UpdateCheckView | null>(
+    () => notifierState.updaterStatus?.lastCheck ?? notifierState.availableUpdate ?? null,
+  );
 
   const [routePreference, setRoutePreference] = useState<RoutePreference>("auto");
   const [registryOverride, setRegistryOverride] = useState<PluginRegistryOverride>("auto");
@@ -131,7 +147,9 @@ export function PrismuxUpdatesSettingsPage({
   const [loading, setLoading] = useState(true);
   const [probing, setProbing] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState(
+    () => notifierState.downloading || isUpdateTransferActive(notifierState.updaterStatus),
+  );
   const [installing, setInstalling] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -140,6 +158,23 @@ export function PrismuxUpdatesSettingsPage({
   useEffect(() => {
     setAutoCheckEnabled(notifierState.autoCheckEnabled);
   }, [notifierState.autoCheckEnabled]);
+
+  // Keep settings page bidirectionally synced with global prismuxUpdateNotifierStore
+  // (shared download progress, real-time speed, verified package & check results).
+  useEffect(() => {
+    const sharedStatus = notifierState.updaterStatus;
+    if (sharedStatus) {
+      setStatus(sharedStatus);
+      setDownloading(notifierState.downloading || isUpdateTransferActive(sharedStatus));
+      if (sharedStatus.lastCheck) setCheckResult(sharedStatus.lastCheck);
+      if (sharedStatus.lastProbe) setProbe(sharedStatus.lastProbe);
+      if (sharedStatus.progress?.stage === "error" && sharedStatus.lastError) {
+        setErrorMsg(sharedStatus.lastError);
+      }
+    } else if (notifierState.availableUpdate) {
+      setCheckResult((prev) => prev ?? notifierState.availableUpdate);
+    }
+  }, [notifierState.availableUpdate, notifierState.downloading, notifierState.updaterStatus]);
 
   const applyElectronFeedUrl = useCallback(
     async (pref: RoutePreference, recommendedSource?: UpdateSourceId) => {
@@ -187,26 +222,44 @@ export function PrismuxUpdatesSettingsPage({
     void loadStatus();
   }, [loadStatus]);
 
-  // Subscribe to real-time SSE download / extract / SHA-256 verification / ready events.
+  // Subscribe to real-time SSE download / extract / SHA-256 verification / ready events
+  // with infinite exponential-backoff reconnect while mounted (cleaned up on unmount).
   useEffect(() => {
+    let cancelled = false;
     const unsubscribe = daemon.subscribeUpdaterEvents(
       (event) => {
-        setStatus((prev) => {
-          const next = applyUpdaterSseEvent(prev, event, APP_VERSION);
-          if (next) {
-            setDownloading(next.downloading);
-            if (next.lastCheck) setCheckResult(next.lastCheck);
-            if (next.lastProbe) setProbe(next.lastProbe);
-            if (next.progress?.stage === "error" && next.lastError) {
-              setErrorMsg(next.lastError);
-            }
-          }
-          return next;
-        });
+        if (cancelled) return;
+        prismuxUpdateNotifierStore.applySseEvent(event, APP_VERSION);
       },
-      { maxReconnectAttempts: 5 },
+      {
+        reconnectDelayMs: 1_000,
+        maxReconnectDelayMs: 15_000,
+        onOpen: () => {
+          if (cancelled) return;
+          const snap = prismuxUpdateNotifierStore.getState();
+          if (snap.downloading || isUpdateTransferActive(snap.updaterStatus)) {
+            void daemon
+              .fetchUpdaterStatus()
+              .then((raw) => {
+                if (cancelled) return;
+                const parsed = parseUpdaterStatusPayload(raw, APP_VERSION);
+                if (parsed) {
+                  prismuxUpdateNotifierStore.hydrateFromDaemonStatus(parsed, {
+                    syncAutoCheck: false,
+                  });
+                }
+              })
+              .catch(() => {
+                // ignore reconnect sync error
+              });
+          }
+        },
+      },
     );
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [daemon]);
 
   const handleProbeOnly = useCallback(async () => {
@@ -270,6 +323,8 @@ export function PrismuxUpdatesSettingsPage({
   const handleStartDownload = useCallback(
     async (asset?: UpdateAssetView | null) => {
       setDownloading(true);
+      prismuxUpdateNotifierStore.setDownloading(true);
+      prismuxUpdateNotifierStore.setMessages({ error: null, status: null });
       setErrorMsg(null);
       setStatusMsg(null);
       try {
@@ -285,44 +340,72 @@ export function PrismuxUpdatesSettingsPage({
             ? { sourceOverride: target.source }
             : {}),
         });
-        setStatus((prev) =>
-          prev
-            ? {
-                ...prev,
-                downloading: false,
-                installState: "ready",
-                downloadedFilePath: result.filePath,
-                downloadedSha256: result.sha256,
-                progress: {
-                  stage: "ready",
-                  percent: 100,
-                  bytesDownloaded: result.bytesDownloaded ?? result.totalBytes ?? 0,
-                  totalBytes: result.totalBytes ?? result.bytesDownloaded ?? null,
-                  currentPart: null,
-                  totalParts: null,
-                  partName: null,
-                  message: "SHA-256 校验通过，安装包已就绪",
-                  updatedAt: Date.now(),
-                },
-                lastError: null,
-              }
-            : prev,
-        );
-        setStatusMsg(
-          `安装包已下载并通过 SHA-256 强校验（${result.sha256.slice(0, 16)}…），现在可以执行安装。`,
-        );
+        const prevStatus = prismuxUpdateNotifierStore.getState().updaterStatus ?? status;
+        const nextReadyStatus: UpdaterStatusView = {
+          currentVersion: resolveRuntimeVersion(prevStatus?.currentVersion, APP_VERSION),
+          portableMode: prevStatus?.portableMode ?? false,
+          policy: prevStatus?.policy ?? {
+            routePreference,
+            channel: updateChannel,
+            includePrerelease: updateChannel === "prerelease",
+            customGhProxyPrefix: customGhProxyPrefix.trim(),
+            pluginRegistryOverride: registryOverride,
+            timeoutMs: 15_000,
+            autoCheckEnabled,
+          },
+          checking: false,
+          downloading: false,
+          installState: "ready",
+          downloadedFilePath: result.filePath,
+          downloadedSha256: result.sha256,
+          lastCheck: checkResult ?? prevStatus?.lastCheck ?? null,
+          lastProbe: probe ?? prevStatus?.lastProbe ?? null,
+          progress: {
+            stage: "ready",
+            percent: 100,
+            bytesDownloaded: result.bytesDownloaded ?? result.totalBytes ?? 0,
+            totalBytes: result.totalBytes ?? result.bytesDownloaded ?? null,
+            currentPart: null,
+            totalParts: null,
+            partName: null,
+            message: "SHA-256 校验通过，安装包已就绪",
+            updatedAt: Date.now(),
+          },
+          lastError: null,
+        };
+        setStatus(nextReadyStatus);
+        prismuxUpdateNotifierStore.hydrateFromDaemonStatus(nextReadyStatus, {
+          syncAutoCheck: false,
+        });
+        const readyMsg = `安装包已下载并通过 SHA-256 强校验（${result.sha256.slice(0, 16)}…），现在可以执行安装。`;
+        setStatusMsg(readyMsg);
+        prismuxUpdateNotifierStore.setMessages({ error: null, status: readyMsg });
       } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : String(err));
+        const errMessage = err instanceof Error ? err.message : String(err);
+        setErrorMsg(errMessage);
+        prismuxUpdateNotifierStore.setMessages({ error: errMessage });
       } finally {
         setDownloading(false);
+        prismuxUpdateNotifierStore.setDownloading(false);
       }
     },
-    [checkResult?.assets, checkResult?.recommendedAsset, daemon, status?.portableMode],
+    [
+      autoCheckEnabled,
+      checkResult,
+      customGhProxyPrefix,
+      daemon,
+      probe,
+      registryOverride,
+      routePreference,
+      status,
+      updateChannel,
+    ],
   );
 
   const handleInstallDownloaded = useCallback(async () => {
-    const filePath = status?.downloadedFilePath;
-    const expectedSha256 = status?.downloadedSha256;
+    const latestStatus = prismuxUpdateNotifierStore.getState().updaterStatus ?? status;
+    const filePath = latestStatus?.downloadedFilePath;
+    const expectedSha256 = latestStatus?.downloadedSha256;
     if (!filePath || !expectedSha256) {
       setErrorMsg("尚未检测到已通过 SHA-256 校验的安装包，请先完成软件内下载。");
       return;
@@ -333,6 +416,7 @@ export function PrismuxUpdatesSettingsPage({
       return;
     }
     setInstalling(true);
+    prismuxUpdateNotifierStore.setInstalling(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
@@ -352,8 +436,9 @@ export function PrismuxUpdatesSettingsPage({
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setInstalling(false);
+      prismuxUpdateNotifierStore.setInstalling(false);
     }
-  }, [status?.downloadedFilePath, status?.downloadedSha256]);
+  }, [status]);
 
   const handleToggleAutoCheck = useCallback(
     async (checked: boolean) => {
@@ -419,25 +504,48 @@ export function PrismuxUpdatesSettingsPage({
     }
   }, []);
 
-  const runtimeVersion = resolveRuntimeVersion(status?.currentVersion, APP_VERSION);
-  const progress = status?.progress ?? null;
+  const effectiveStatus = notifierState.updaterStatus ?? status;
+  const runtimeVersion = resolveRuntimeVersion(effectiveStatus?.currentVersion, APP_VERSION);
+  const progress = effectiveStatus?.progress ?? null;
   const isTransferActive =
     downloading ||
-    progress?.stage === "downloading" ||
-    progress?.stage === "extracting" ||
-    progress?.stage === "verifying";
-  const hasVerifiedPackage = Boolean(status?.downloadedFilePath && status?.downloadedSha256);
-  const portableMode = status?.portableMode === true;
+    notifierState.downloading ||
+    isUpdateTransferActive(effectiveStatus);
+  const hasVerifiedPackage = Boolean(
+    effectiveStatus?.downloadedFilePath && effectiveStatus?.downloadedSha256,
+  );
+  const portableMode = effectiveStatus?.portableMode === true;
   const recommendedAsset =
     checkResult?.recommendedAsset ??
     selectRecommendedUpdateAsset(checkResult?.assets ?? [], portableMode);
   const safeReleaseHtmlUrl = validateSafeHttpsUrl(checkResult?.htmlUrl);
-  const progressPercent =
-    progress?.percent !== null && progress?.percent !== undefined
-      ? Math.max(0, Math.min(100, Math.round(progress.percent)))
-      : progress?.stage === "ready"
-        ? 100
-        : null;
+  const barPercent = resolveProgressBarPercent(progress, hasVerifiedPackage && !isTransferActive);
+  const progressPercentText = formatProgressPercentDisplay(barPercent);
+  const speedText = formatTransferSpeed(notifierState.speedBytesPerSec);
+  const isSplitArchive =
+    recommendedAsset?.kind === "split-7z-exe" ||
+    (progress?.totalParts !== null &&
+      progress?.totalParts !== undefined &&
+      progress.totalParts > 1) ||
+    progress?.stage === "extracting";
+  const stageSteps = buildUpdaterStageSteps(
+    progress,
+    hasVerifiedPackage && !isTransferActive,
+    isSplitArchive,
+  );
+  const stageWeightHint = formatUpdaterStageWeightHint(progress, isSplitArchive);
+
+  // Fallback status poller while transfer is active (500ms interval when SSE is silent > 700ms).
+  useEffect(() => {
+    if (!isTransferActive) return;
+    return startUpdaterStatusFallbackPoller({
+      store: prismuxUpdateNotifierStore,
+      fetchStatus: () => daemon.fetchUpdaterStatus(),
+      parseStatus: (raw) => parseUpdaterStatusPayload(raw, APP_VERSION),
+      intervalMs: UPDATER_STATUS_POLL_INTERVAL_MS,
+      staleThresholdMs: UPDATER_SSE_STALE_FALLBACK_MS,
+    });
+  }, [daemon, isTransferActive]);
 
   const content = (
     <>
@@ -541,71 +649,145 @@ export function PrismuxUpdatesSettingsPage({
         {isTransferActive || hasVerifiedPackage ? (
           <div
             data-updater-transfer-card
-            className="mx-4 my-3 space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-3.5 text-xs"
+            className="mx-4 my-3 space-y-3 rounded-xl border border-primary/30 bg-primary/[0.06] p-3.5 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-primary/[0.09] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 font-medium text-foreground">
+              <div className="flex min-w-0 items-center gap-2 font-medium text-foreground">
                 {hasVerifiedPackage && !isTransferActive ? (
-                  <ShieldCheckIcon className="size-4 text-emerald-500" />
+                  <ShieldCheckIcon className="size-4 shrink-0 text-emerald-500" />
                 ) : (
-                  <RefreshCwIcon className="size-4 animate-spin text-primary" />
+                  <RefreshCwIcon className="size-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
                 )}
-                <span>
+                <span className="truncate">
                   {isTransferActive
                     ? describeUpdaterProgressStage(progress)
                     : "安装包 SHA-256 校验通过，已就绪"}
                 </span>
               </div>
-              {progressPercent !== null ? (
-                <span className="font-mono font-semibold tabular-nums text-foreground">
-                  {progressPercent}%
-                </span>
-              ) : null}
+              <span
+                data-testid="prismux-updates-settings-percent"
+                className={cn(
+                  "shrink-0 font-mono tabular-nums",
+                  progressPercentText !== null
+                    ? "text-[13px] font-semibold text-foreground"
+                    : "text-[11px] font-medium text-muted-foreground",
+                )}
+              >
+                {progressPercentText ?? "连接中…"}
+              </span>
+            </div>
+
+            {/* 4-Stage Visual Progression Indicator */}
+            <div
+              data-testid="prismux-updates-settings-stages"
+              className="grid grid-cols-2 gap-1.5 sm:grid-cols-4"
+            >
+              {stageSteps.map((step) => (
+                <div
+                  key={step.id}
+                  data-stage-step={step.id}
+                  data-stage-state={step.state}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10.5px] transition-colors motion-reduce:transition-none",
+                    step.state === "completed"
+                      ? "border-emerald-500/35 bg-emerald-500/[0.09] text-emerald-800 dark:text-emerald-200"
+                      : step.state === "active"
+                        ? "border-primary/45 bg-primary/[0.14] font-semibold text-foreground"
+                        : "border-border/50 bg-foreground/[0.025] text-muted-foreground dark:bg-white/[0.03]",
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "size-1.5 shrink-0 rounded-full",
+                      step.state === "completed"
+                        ? "bg-emerald-500"
+                        : step.state === "active"
+                          ? "bg-primary animate-pulse motion-reduce:animate-none"
+                          : "bg-muted-foreground/40",
+                    )}
+                  />
+                  <span className="truncate">{step.label}</span>
+                </div>
+              ))}
             </div>
 
             {isTransferActive ? (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <div
                   role="progressbar"
                   aria-label="Prismux 更新下载与校验进度"
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-valuenow={progressPercent ?? 0}
-                  className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                  {...(barPercent !== null ? { "aria-valuenow": Math.round(barPercent) } : {})}
+                  data-progress-mode={barPercent !== null ? "determinate" : "indeterminate"}
+                  data-testid="prismux-updates-settings-progressbar"
+                  className="relative h-2 w-full overflow-hidden rounded-full bg-foreground/12 dark:bg-white/14"
                 >
-                  <div
-                    className="h-full bg-primary transition-[width] duration-200"
-                    style={{ width: `${progressPercent ?? 15}%` }}
-                  />
+                  {barPercent !== null ? (
+                    <div
+                      data-testid="prismux-updates-settings-progressbar-fill"
+                      className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out motion-reduce:transition-none"
+                      style={{ width: `${barPercent}%` }}
+                    />
+                  ) : (
+                    <div
+                      data-testid="prismux-updates-settings-progressbar-indeterminate"
+                      className="h-full w-full rounded-full bg-gradient-to-r from-primary/15 via-primary/85 to-primary/15 animate-pulse motion-reduce:animate-none"
+                    />
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground tabular-nums">
                   <span>
                     {progress?.stage === "downloading"
-                      ? `已下载 ${formatSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatSize(progress.totalBytes)}` : ""}`
+                      ? barPercent === null && progress.bytesDownloaded <= 0
+                        ? "正在连接下载源…"
+                        : progress.bytesDownloaded > 0 || progress.totalBytes
+                          ? `已下载 ${formatUpdateByteSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatUpdateByteSize(progress.totalBytes)}` : ""}`
+                          : "已连接下载源，准备接收数据…"
                       : progress?.stage === "extracting"
-                        ? "正在通过内置 7za.exe 无损合并分卷…"
+                        ? `正在通过内置 7za.exe 无损合并分卷…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
                         : progress?.stage === "verifying"
-                          ? "正在逐字节比对 SHA-256 摘要…"
-                          : progress?.message ?? "处理中…"}
+                          ? `正在逐字节比对 SHA-256 摘要…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
+                          : progress?.message ?? "正在连接下载源…"}
                   </span>
-                  {progress?.totalParts && progress.totalParts > 1 ? (
-                    <span className="inline-flex items-center gap-1 font-mono">
-                      <LayersIcon className="size-3" />
-                      分卷 {progress.currentPart ?? 1}/{progress.totalParts}
-                    </span>
-                  ) : null}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {speedText && progress?.stage === "downloading" ? (
+                      <span
+                        data-testid="prismux-updates-settings-speed"
+                        className="rounded-md bg-foreground/[0.06] px-1.5 py-0.5 font-mono text-[10.5px] font-medium text-foreground tabular-nums dark:bg-white/[0.08]"
+                      >
+                        {speedText}
+                      </span>
+                    ) : null}
+                    {progress?.totalParts && progress.totalParts > 1 ? (
+                      <span
+                        data-testid="prismux-updates-settings-part"
+                        className="inline-flex items-center gap-1 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 font-mono text-[10.5px] font-medium text-foreground tabular-nums dark:bg-white/[0.08]"
+                      >
+                        <LayersIcon className="size-3" />
+                        分卷 {progress.currentPart ?? 1}/{progress.totalParts}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="text-[10.5px] text-muted-foreground/85 tabular-nums">
+                  {stageWeightHint}
                 </div>
               </div>
             ) : null}
 
             {hasVerifiedPackage && !isTransferActive ? (
               <div className="space-y-2.5">
-                <div className="rounded-lg border border-border/60 bg-background/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-                  <div className="truncate text-foreground" title={status?.downloadedFilePath ?? ""}>
-                    文件：{status?.downloadedFilePath}
+                <div className="rounded-lg border border-border/60 bg-foreground/[0.035] px-3 py-2 font-mono text-[11px] text-muted-foreground dark:bg-white/[0.045]">
+                  <div
+                    className="truncate text-foreground"
+                    title={effectiveStatus?.downloadedFilePath ?? ""}
+                  >
+                    文件：{effectiveStatus?.downloadedFilePath}
                   </div>
                   <div className="mt-0.5 truncate">
-                    SHA-256：{status?.downloadedSha256}
+                    SHA-256：{effectiveStatus?.downloadedSha256}
                   </div>
                 </div>
 
@@ -672,7 +854,7 @@ export function PrismuxUpdatesSettingsPage({
               {probe.sources.map((src) => (
                 <div
                   key={src.source}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-background/60 px-3 py-2.5 text-xs"
+                  className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-foreground/[0.035] px-3 py-2.5 text-xs dark:bg-white/[0.045]"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 font-medium text-foreground">
@@ -750,7 +932,7 @@ export function PrismuxUpdatesSettingsPage({
             {checkResult.releaseNotes ? (
               <div
                 data-testid="prismux-updates-settings-release-notes"
-                className="max-h-72 overflow-y-auto overscroll-contain rounded-xl border border-border/70 bg-background/50 px-4 py-3 dark:bg-white/[0.03]"
+                className="max-h-72 overflow-y-auto overscroll-contain rounded-xl border border-border/70 bg-foreground/[0.03] px-4 py-3 dark:bg-white/[0.035]"
               >
                 <PrismuxReleaseNotesMarkdown markdown={checkResult.releaseNotes} />
               </div>
@@ -764,7 +946,7 @@ export function PrismuxUpdatesSettingsPage({
                 {checkResult.assets.map((asset) => (
                   <div
                     key={asset.name}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-xs"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-foreground/[0.03] px-3 py-2 text-xs dark:bg-white/[0.035]"
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">

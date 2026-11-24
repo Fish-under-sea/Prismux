@@ -17,8 +17,12 @@ import { PrismuxUpdateReleaseModal } from "./PrismuxUpdateReleaseModal";
 import {
   extractReleaseNotesPreview,
   formatVersionBadge,
+  isUpdateTransferActive,
   PRISMUX_UPDATE_AVAILABLE_EVENT,
   prismuxUpdateNotifierStore,
+  startUpdaterStatusFallbackPoller,
+  UPDATER_SSE_STALE_FALLBACK_MS,
+  UPDATER_STATUS_POLL_INTERVAL_MS,
   useUpdateNotifierState,
   type RectSnapshot,
   type UpdateFlyTransition,
@@ -393,39 +397,54 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
     if (!isPrimaryHost || !daemonReady) return;
     let cancelled = false;
 
-    void daemon
-      .fetchUpdaterStatus()
-      .then(async (raw) => {
-        if (cancelled) return;
-        const parsed = parseUpdaterStatusPayload(raw, APP_VERSION);
-        if (!parsed) return;
-        if (prismuxUpdateNotifierStore.isLocalAutoCheckDirty()) {
-          const desired = prismuxUpdateNotifierStore.getState().autoCheckEnabled;
-          prismuxUpdateNotifierStore.hydrateFromDaemonStatus(parsed, { syncAutoCheck: false });
-          if (parsed.policy.autoCheckEnabled !== desired) {
-            try {
-              await daemon.updateUpdaterPolicy({ autoCheckEnabled: desired });
+    const syncStatusOnce = () => {
+      void daemon
+        .fetchUpdaterStatus()
+        .then(async (raw) => {
+          if (cancelled) return;
+          const parsed = parseUpdaterStatusPayload(raw, APP_VERSION);
+          if (!parsed) return;
+          if (prismuxUpdateNotifierStore.isLocalAutoCheckDirty()) {
+            const desired = prismuxUpdateNotifierStore.getState().autoCheckEnabled;
+            prismuxUpdateNotifierStore.hydrateFromDaemonStatus(parsed, { syncAutoCheck: false });
+            if (parsed.policy.autoCheckEnabled !== desired) {
+              try {
+                await daemon.updateUpdaterPolicy({ autoCheckEnabled: desired });
+                prismuxUpdateNotifierStore.clearLocalAutoCheckDirty();
+              } catch {
+                // Keep local preference until daemon accepts update.
+              }
+            } else {
               prismuxUpdateNotifierStore.clearLocalAutoCheckDirty();
-            } catch {
-              // Keep local preference until daemon accepts update.
             }
           } else {
-            prismuxUpdateNotifierStore.clearLocalAutoCheckDirty();
+            prismuxUpdateNotifierStore.hydrateFromDaemonStatus(parsed, { syncAutoCheck: true });
           }
-        } else {
-          prismuxUpdateNotifierStore.hydrateFromDaemonStatus(parsed, { syncAutoCheck: true });
-        }
-      })
-      .catch(() => {
-        // Offline or daemon restarting; local preference remains active.
-      });
+        })
+        .catch(() => {
+          // Offline or daemon restarting; local preference remains active.
+        });
+    };
 
+    syncStatusOnce();
+
+    // Infinite exponential-backoff reconnect while mounted (unbounded reconnect attempts).
     const unsubscribe = daemon.subscribeUpdaterEvents(
       (event) => {
         if (cancelled) return;
         prismuxUpdateNotifierStore.applySseEvent(event, APP_VERSION);
       },
-      { maxReconnectAttempts: 6 },
+      {
+        reconnectDelayMs: 1_000,
+        maxReconnectDelayMs: 15_000,
+        onOpen: () => {
+          if (cancelled) return;
+          const current = prismuxUpdateNotifierStore.getState();
+          if (current.downloading || isUpdateTransferActive(current.updaterStatus)) {
+            syncStatusOnce();
+          }
+        },
+      },
     );
 
     return () => {
@@ -433,6 +452,21 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
       unsubscribe();
     };
   }, [daemon, daemonReady, isPrimaryHost]);
+
+  const isTransferActive = state.downloading || isUpdateTransferActive(state.updaterStatus);
+
+  // Fallback status poller while download / extraction / verification is active:
+  // If SSE goes silent > 700ms, poll GET /v1/updater/status every 500ms so progress never freezes.
+  useEffect(() => {
+    if (!isPrimaryHost || !daemonReady || !isTransferActive) return;
+    return startUpdaterStatusFallbackPoller({
+      store: prismuxUpdateNotifierStore,
+      fetchStatus: () => daemon.fetchUpdaterStatus(),
+      parseStatus: (raw) => parseUpdaterStatusPayload(raw, APP_VERSION),
+      intervalMs: UPDATER_STATUS_POLL_INTERVAL_MS,
+      staleThresholdMs: UPDATER_SSE_STALE_FALLBACK_MS,
+    });
+  }, [daemon, daemonReady, isPrimaryHost, isTransferActive]);
 
   // Schedule startup delayed check & 4-hour periodic silent check while autoCheckEnabled is on.
   useEffect(() => {

@@ -4,6 +4,10 @@ import { ArrowUpIcon, RefreshCwIcon, ShieldCheckIcon } from "lucide-react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../../components/ui/tooltip";
 import { cn } from "../../lib/utils";
 import {
+  formatProgressPercentDisplay,
+  resolveProgressBarPercent,
+} from "../settings/prismuxUpdates.logic";
+import {
   formatVersionBadge,
   hasVerifiedUpdatePackage,
   isUpdateTransferActive,
@@ -41,10 +45,8 @@ export const PrismuxSidebarUpdateCapsule = memo(function PrismuxSidebarUpdateCap
 
   const isFlyingIn = state.flyTransition !== null;
   const versionBadge = formatVersionBadge(update?.latestVersion);
-  const progressPercent =
-    status?.progress?.percent !== null && status?.progress?.percent !== undefined
-      ? Math.max(0, Math.min(100, Math.round(status.progress.percent)))
-      : null;
+  const barPercent = resolveProgressBarPercent(status?.progress ?? null, isReady && !isTransferring);
+  const progressPercentText = formatProgressPercentDisplay(barPercent);
 
   const tone: "ready" | "transfer" | "available" = isReady
     ? "ready"
@@ -59,12 +61,16 @@ export const PrismuxSidebarUpdateCapsule = memo(function PrismuxSidebarUpdateCap
         : "更新已就绪"
       : tone === "transfer"
         ? status?.progress?.stage === "verifying"
-          ? "正在校验更新…"
+          ? progressPercentText
+            ? `校验更新 ${progressPercentText}`
+            : "正在校验更新…"
           : status?.progress?.stage === "extracting"
-            ? "分卷重组中…"
-            : progressPercent !== null
-              ? `下载更新 ${progressPercent}%`
-              : "正在下载更新…"
+            ? progressPercentText
+              ? `合并分卷 ${progressPercentText}`
+              : "分卷重组中…"
+            : progressPercentText !== null
+              ? `下载更新 ${progressPercentText}`
+              : "正在连接下载源…"
         : versionBadge
           ? `发现新版本 ${versionBadge}`
           : "发现新版本";
@@ -108,11 +114,11 @@ export const PrismuxSidebarUpdateCapsule = memo(function PrismuxSidebarUpdateCap
                 aria-label={tooltipText}
                 onClick={handleOpenModal}
                 className={cn(
-                  "relative inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-full border bg-background/70 shadow-xs outline-none transition-[opacity,transform,border-color,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                  "relative inline-flex size-[26px] shrink-0 cursor-pointer items-center justify-center rounded-full border bg-foreground/[0.05] shadow-xs outline-none transition-[opacity,transform,border-color,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none dark:bg-white/[0.08]",
                   capsuleToneClass,
                   isFlyingIn
                     ? "pointer-events-none scale-90 opacity-0"
-                    : "scale-100 opacity-100 hover:bg-foreground/[0.06] dark:hover:bg-white/[0.08]",
+                    : "scale-100 opacity-100 hover:bg-foreground/[0.09] dark:hover:bg-white/[0.12]",
                 )}
               />
             }
@@ -154,15 +160,23 @@ export const PrismuxSidebarUpdateCapsule = memo(function PrismuxSidebarUpdateCap
               aria-label={tooltipText}
               onClick={handleOpenModal}
               className={cn(
-                "group relative flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-full border bg-background/70 px-2.5 text-left text-[11.5px] font-medium tabular-nums shadow-xs outline-none transition-[opacity,transform,border-color,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                "group relative flex h-7 w-full cursor-pointer items-center gap-1.5 overflow-hidden rounded-full border bg-foreground/[0.05] px-2.5 text-left text-[11.5px] font-medium tabular-nums shadow-xs outline-none transition-[opacity,transform,border-color,background-color] duration-200 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none dark:bg-white/[0.08]",
                 capsuleToneClass,
                 isFlyingIn
                   ? "pointer-events-none scale-95 opacity-0"
-                  : "scale-100 opacity-100 hover:bg-foreground/[0.05] dark:hover:bg-white/[0.08]",
+                  : "scale-100 opacity-100 hover:bg-foreground/[0.08] dark:hover:bg-white/[0.12]",
               )}
             />
           }
         >
+          {tone === "transfer" && barPercent !== null ? (
+            <span
+              aria-hidden="true"
+              data-testid="prismux-sidebar-update-capsule-progress"
+              className="pointer-events-none absolute inset-y-0 left-0 bg-sky-500/14 transition-[width] duration-200 ease-out motion-reduce:transition-none dark:bg-sky-400/18"
+              style={{ width: `${barPercent}%` }}
+            />
+          ) : null}
           <span className="relative flex size-2 shrink-0 items-center justify-center" aria-hidden="true">
             <span
               className={cn(

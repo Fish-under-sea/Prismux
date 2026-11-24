@@ -89,6 +89,12 @@ const DEFAULT_MAX_REDIRECTS = 6;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_DELAYS_MS = [250, 750, 1500];
 const DEFAULT_EXTRACT_TIMEOUT_MS = 180_000;
+const DOWNLOAD_PROGRESS_MAX_PERCENT = 90;
+const SPLIT_EXTRACT_END_PERCENT = 95;
+const VERIFY_MAX_PERCENT = 99.9;
+const HEAD_SIZE_PROBE_TIMEOUT_MS = 5_000;
+const PROGRESS_SSE_THROTTLE_MS = 100;
+const PROGRESS_SSE_MIN_PERCENT_DELTA = 1;
 
 export const DEFAULT_AUTO_CHECK_INITIAL_DELAY_MS = 15_000;
 export const DEFAULT_AUTO_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -261,15 +267,56 @@ function sanitizeAssetFileName(name: string): string {
   return trimmed;
 }
 
-function computePercent(
+function roundPercent1(value: number, min = 0, max = 100): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, Math.round(value * 10) / 10));
+}
+
+function computeWeightedDownloadPercent(
   bytesDownloaded: number,
-  totalBytes: number | null
+  totalBytes: number | null,
+  maxWeight = DOWNLOAD_PROGRESS_MAX_PERCENT
 ): number | null {
   if (totalBytes === null || totalBytes <= 0) {
     return null;
   }
-  const pct = (bytesDownloaded / totalBytes) * 100;
-  return Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
+  const pct = (bytesDownloaded / totalBytes) * maxWeight;
+  return roundPercent1(pct, 0, maxWeight);
+}
+
+function computeSplitPartWeightedPercent(
+  partIndex: number,
+  totalParts: number,
+  partBytes: number,
+  partTotal: number | null
+): number {
+  const safeTotalParts = Math.max(1, totalParts);
+  const safeIndex = Math.max(0, Math.min(safeTotalParts - 1, partIndex));
+  const partFrac =
+    partTotal !== null && partTotal > 0
+      ? Math.max(0, Math.min(1, partBytes / partTotal))
+      : partBytes > 0
+        ? Math.min(0.95, 1 - 1 / (1 + partBytes / (32 * 1024 * 1024)))
+        : 0;
+  const raw = ((safeIndex + partFrac) / safeTotalParts) * DOWNLOAD_PROGRESS_MAX_PERCENT;
+  return roundPercent1(raw, 0, DOWNLOAD_PROGRESS_MAX_PERCENT);
+}
+
+function parsePositiveIntegerHeader(
+  rawHeader: string | string[] | undefined
+): number | null {
+  const value = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 export function applyGhProxyPrefix(rawUrl: string, prefix: string): string {
@@ -805,8 +852,11 @@ async function fetchText(
 }
 
 async function computeFileSha256(
-  filePath: string
+  filePath: string,
+  onProgress?: (hashedBytes: number, totalBytes: number) => void
 ): Promise<{ sha256: string; bytes: number }> {
+  const totalBytes = existsSync(filePath) ? statSync(filePath).size : 0;
+  onProgress?.(0, totalBytes);
   const hash = createHash("sha256");
   let bytes = 0;
   const stream = createReadStream(filePath);
@@ -814,6 +864,10 @@ async function computeFileSha256(
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
     bytes += buf.length;
     hash.update(buf);
+    onProgress?.(bytes, totalBytes > 0 ? totalBytes : bytes);
+  }
+  if (bytes === 0) {
+    onProgress?.(0, totalBytes);
   }
   return {
     sha256: hash.digest("hex"),
@@ -1459,26 +1513,128 @@ export class AppUpdater {
       let activeAsset = primaryAsset;
       let activeSha = expectedSha;
 
+      let lastSseEmitAt = 0;
+      let lastSseStage: UpdateDownloadProgress["stage"] | null = null;
+      let lastSsePart: number | undefined = undefined;
+      let lastSsePercent: number | null = null;
+      let lastSseBytes = -1;
+
+      const resetProgressThrottle = () => {
+        lastSseEmitAt = 0;
+        lastSseStage = null;
+        lastSsePart = undefined;
+        lastSsePercent = null;
+        lastSseBytes = -1;
+      };
+
       const emitProgress = (prog: UpdateDownloadProgress) => {
         this.progress = prog;
+        let sseType: UpdaterSseEventType;
+        let sseError: string | null | undefined;
         if (prog.stage === "extracting") {
           this.installState = "extracting";
-          this.emitEvent("extracting");
+          sseType = "extracting";
         } else if (prog.stage === "verifying") {
           this.installState = "verifying";
-          this.emitEvent("verifying");
+          sseType = "verifying";
         } else if (prog.stage === "ready") {
           this.installState = "ready";
-          this.emitEvent("ready");
+          sseType = "ready";
         } else if (prog.stage === "error") {
           this.installState = "error";
-          this.emitEvent("error", prog.message ?? null);
+          sseType = "error";
+          sseError = prog.message ?? null;
         } else {
           this.installState = "downloading";
-          this.emitEvent("progress");
+          sseType = "progress";
         }
+
+        const now = prog.updatedAt > 0 ? prog.updatedAt : Date.now();
+        const isTerminalOrDiscrete =
+          prog.stage === "ready" ||
+          prog.stage === "error" ||
+          (prog.stage === "extracting" &&
+            (lastSseStage !== "extracting" || lastSsePercent !== prog.percent));
+        const stageChanged = prog.stage !== lastSseStage;
+        const partChanged = prog.currentPart !== lastSsePart;
+        const hitPercentMilestone =
+          prog.percent !== null &&
+          prog.percent !== lastSsePercent &&
+          (prog.percent >= 100 ||
+            (prog.stage === "downloading" &&
+              prog.percent >= DOWNLOAD_PROGRESS_MAX_PERCENT) ||
+            (prog.stage === "downloading" &&
+              typeof prog.currentPart === "number" &&
+              typeof prog.totalParts === "number" &&
+              prog.totalParts > 1 &&
+              prog.percent >=
+                roundPercent1(
+                  (prog.currentPart / prog.totalParts) *
+                    DOWNLOAD_PROGRESS_MAX_PERCENT,
+                  0,
+                  DOWNLOAD_PROGRESS_MAX_PERCENT
+                )) ||
+            (prog.stage === "verifying" && prog.percent >= VERIFY_MAX_PERCENT));
+        const hitEndOfBytes =
+          prog.totalBytes !== null &&
+          prog.totalBytes > 0 &&
+          prog.bytesDownloaded >= prog.totalBytes &&
+          prog.bytesDownloaded !== lastSseBytes;
+        const hitPercentDelta =
+          prog.percent !== null &&
+          (lastSsePercent === null ||
+            Math.abs(prog.percent - lastSsePercent) >=
+              PROGRESS_SSE_MIN_PERCENT_DELTA);
+        const hitTimeInterval =
+          now - lastSseEmitAt >= PROGRESS_SSE_THROTTLE_MS &&
+          (prog.bytesDownloaded !== lastSseBytes ||
+            prog.percent !== lastSsePercent);
+
+        const shouldEmitSse =
+          isTerminalOrDiscrete ||
+          stageChanged ||
+          partChanged ||
+          hitPercentMilestone ||
+          hitEndOfBytes ||
+          hitPercentDelta ||
+          hitTimeInterval;
+
+        if (shouldEmitSse) {
+          lastSseEmitAt = now;
+          lastSseStage = prog.stage;
+          lastSsePart = prog.currentPart;
+          lastSsePercent = prog.percent;
+          lastSseBytes = prog.bytesDownloaded;
+          this.emitEvent(sseType, sseError);
+        }
+
         options?.onProgress?.(prog);
       };
+
+      const emitInitialHandshakeProgress = (asset: UpdateAssetInfo) => {
+        const splitParts =
+          asset.kind === "split-7z-exe" ? (asset.parts ?? []) : [];
+        const initialTotalBytes = asset.totalBytes ?? asset.sizeBytes ?? null;
+        emitProgress({
+          stage: "downloading",
+          phase: "downloading",
+          bytesDownloaded: 0,
+          totalBytes: initialTotalBytes,
+          percent: 0,
+          source: asset.source,
+          ...(splitParts.length > 0
+            ? {
+                currentPart: 1,
+                totalParts: splitParts.length,
+                partName: splitParts[0]?.name
+              }
+            : { partName: asset.name }),
+          message: `正在连接 ${asset.source === "gitee" ? "Gitee" : "GitHub"} 下载源...`,
+          updatedAt: Date.now()
+        });
+      };
+
+      emitInitialHandshakeProgress(activeAsset);
 
       try {
         const result = await this.executeAssetDownload({
@@ -1493,10 +1649,11 @@ export class AppUpdater {
           retryDelaysMs,
           onProgress: emitProgress
         });
+        this.downloading = false;
         this.lastDownload = result;
         this.lastError = null;
         this.installState = "ready";
-        this.progress = {
+        const readyProgress: UpdateDownloadProgress = {
           stage: "ready",
           phase: "ready",
           bytesDownloaded: result.bytesDownloaded,
@@ -1506,7 +1663,9 @@ export class AppUpdater {
           message: `校验完成，已就绪：${result.assetName}`,
           updatedAt: Date.now()
         };
+        this.progress = readyProgress;
         this.emitEvent("ready");
+        options?.onProgress?.(readyProgress);
         return result;
       } catch (primaryError) {
         if (primaryError instanceof UpdateIntegrityError) {
@@ -1600,6 +1759,9 @@ export class AppUpdater {
         const fallbackTargetPath = join(destDir, fallbackSafeName);
         const fallbackPartPath = `${fallbackTargetPath}.part`;
 
+        resetProgressThrottle();
+        emitInitialHandshakeProgress(activeAsset);
+
         const fallbackResult = await this.executeAssetDownload({
           asset: activeAsset,
           expectedSha256: activeSha,
@@ -1615,10 +1777,11 @@ export class AppUpdater {
           retryDelaysMs,
           onProgress: emitProgress
         });
+        this.downloading = false;
         this.lastDownload = fallbackResult;
         this.lastError = null;
         this.installState = "ready";
-        this.progress = {
+        const readyProgress: UpdateDownloadProgress = {
           stage: "ready",
           phase: "ready",
           bytesDownloaded: fallbackResult.bytesDownloaded,
@@ -1628,10 +1791,13 @@ export class AppUpdater {
           message: `校验完成，已就绪：${fallbackResult.assetName}`,
           updatedAt: Date.now()
         };
+        this.progress = readyProgress;
         this.emitEvent("ready");
+        options?.onProgress?.(readyProgress);
         return fallbackResult;
       }
     } catch (err) {
+      this.downloading = false;
       this.installState = "error";
       this.lastError = err instanceof Error ? err.message : String(err);
       this.emitEvent("error", this.lastError);
@@ -2267,6 +2433,7 @@ export class AppUpdater {
             if (params.checkCompleteDigest !== undefined) {
               const checkExisting = await computeFileSha256(params.partPath);
               if (checkExisting.sha256 === params.checkCompleteDigest) {
+                params.onChunkProgress(checkExisting.bytes, checkExisting.bytes);
                 return {
                   bytes: checkExisting.bytes,
                   resumedFromBytes: checkExisting.bytes
@@ -2276,6 +2443,7 @@ export class AppUpdater {
               params.expectedSizeHint !== null &&
               existingSize === params.expectedSizeHint
             ) {
+              params.onChunkProgress(existingSize, existingSize);
               return {
                 bytes: existingSize,
                 resumedFromBytes: existingSize
@@ -2293,12 +2461,12 @@ export class AppUpdater {
           throw new UpdateHttpError(response.statusCode, params.url);
         }
 
+        const contentRange = parseContentRangeHeader(
+          response.headers["content-range"]
+        );
         let appendMode = false;
         let currentOffset = 0;
         if (response.statusCode === 206 && existingSize > 0) {
-          const contentRange = parseContentRangeHeader(
-            response.headers["content-range"]
-          );
           if (contentRange !== null && contentRange.start !== existingSize) {
             response.stream.resume();
             rmSync(params.partPath, { force: true });
@@ -2313,16 +2481,25 @@ export class AppUpdater {
           }
         }
 
-        const headerContentLength = response.headers["content-length"];
-        const parsedContentLength =
-          typeof headerContentLength === "string" &&
-          /^\d+$/.test(headerContentLength)
-            ? Number.parseInt(headerContentLength, 10)
+        const parsedContentLength = parsePositiveIntegerHeader(
+          response.headers["content-length"]
+        );
+        const parsedContentRangeTotal =
+          contentRange !== null &&
+          contentRange.total !== null &&
+          Number.isSafeInteger(contentRange.total) &&
+          contentRange.total > 0
+            ? contentRange.total
             : null;
         const totalBytesForProgress =
           parsedContentLength !== null
             ? currentOffset + parsedContentLength
-            : params.expectedSizeHint;
+            : parsedContentRangeTotal !== null
+              ? parsedContentRangeTotal
+              : params.expectedSizeHint;
+
+        // Emit immediate header-received progress so UI gets real total size right away.
+        params.onChunkProgress(currentOffset, totalBytesForProgress);
 
         const writeStream = createWriteStream(params.partPath, {
           flags: appendMode ? "a" : "w"
@@ -2375,6 +2552,7 @@ export class AppUpdater {
         const finalSize = existsSync(params.partPath)
           ? statSync(params.partPath).size
           : currentOffset + bytesWrittenThisAttempt;
+        params.onChunkProgress(finalSize, totalBytesForProgress ?? finalSize);
         return { bytes: finalSize, resumedFromBytes };
       } catch (error) {
         if (attempt < params.maxRetries && isRetryableDownloadError(error)) {
@@ -2390,6 +2568,44 @@ export class AppUpdater {
     }
 
     throw new Error(`Exhausted retries while downloading ${params.url}`);
+  }
+
+  private async probeRemoteAssetSize(url: string): Promise<number | null> {
+    const headTimeoutMs = Math.min(this.policy.timeoutMs, HEAD_SIZE_PROBE_TIMEOUT_MS);
+    try {
+      const response = await openHttpWithRedirects(
+        url,
+        {},
+        headTimeoutMs,
+        this.maxRedirects,
+        "HEAD",
+        true
+      );
+      response.stream.resume();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      const fromLength = parsePositiveIntegerHeader(
+        response.headers["content-length"]
+      );
+      if (fromLength !== null) {
+        return fromLength;
+      }
+      const contentRange = parseContentRangeHeader(
+        response.headers["content-range"]
+      );
+      if (
+        contentRange !== null &&
+        contentRange.total !== null &&
+        Number.isSafeInteger(contentRange.total) &&
+        contentRange.total > 0
+      ) {
+        return contentRange.total;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   private async downloadAndVerifySingleAsset(params: {
@@ -2408,6 +2624,7 @@ export class AppUpdater {
       params.asset.source
     );
 
+    let lastDownloadPercent = 0;
     const transfer = await this.streamDownloadFileWithResume({
       url: effectiveDownloadUrl,
       partPath: params.partPath,
@@ -2416,12 +2633,24 @@ export class AppUpdater {
       retryDelaysMs: params.retryDelaysMs,
       checkCompleteDigest: params.expectedSha256,
       onChunkProgress: (bytesDownloaded, totalBytes) => {
+        const rawPercent = computeWeightedDownloadPercent(
+          bytesDownloaded,
+          totalBytes,
+          DOWNLOAD_PROGRESS_MAX_PERCENT
+        );
+        const percent =
+          rawPercent !== null
+            ? Math.max(lastDownloadPercent, rawPercent)
+            : null;
+        if (percent !== null) {
+          lastDownloadPercent = percent;
+        }
         params.onProgress({
           stage: "downloading",
           phase: "downloading",
           bytesDownloaded,
           totalBytes,
-          percent: computePercent(bytesDownloaded, totalBytes),
+          percent,
           source: params.asset.source,
           partName: params.asset.name,
           message: `正在下载 ${params.asset.name}...`,
@@ -2436,19 +2665,36 @@ export class AppUpdater {
       );
     }
 
-    params.onProgress({
-      stage: "verifying",
-      phase: "verifying",
-      bytesDownloaded: transfer.bytes,
-      totalBytes: params.asset.sizeBytes ?? transfer.bytes,
-      percent: 100,
-      source: params.asset.source,
-      partName: params.asset.name,
-      message: "正在执行 SHA-256 完整性校验...",
-      updatedAt: Date.now()
-    });
-
-    const computed = await computeFileSha256(params.partPath);
+    const verifyTotalBytes = params.asset.sizeBytes ?? transfer.bytes;
+    let lastVerifyPercent = DOWNLOAD_PROGRESS_MAX_PERCENT;
+    const computed = await computeFileSha256(
+      params.partPath,
+      (hashedBytes, totalHashBytes) => {
+        const frac =
+          totalHashBytes > 0
+            ? Math.max(0, Math.min(1, hashedBytes / totalHashBytes))
+            : 1;
+        const candidate = roundPercent1(
+          DOWNLOAD_PROGRESS_MAX_PERCENT +
+            frac * (VERIFY_MAX_PERCENT - DOWNLOAD_PROGRESS_MAX_PERCENT),
+          DOWNLOAD_PROGRESS_MAX_PERCENT,
+          VERIFY_MAX_PERCENT
+        );
+        const percent = Math.max(lastVerifyPercent, candidate);
+        lastVerifyPercent = percent;
+        params.onProgress({
+          stage: "verifying",
+          phase: "verifying",
+          bytesDownloaded: transfer.bytes,
+          totalBytes: verifyTotalBytes,
+          percent,
+          source: params.asset.source,
+          partName: params.asset.name,
+          message: "正在执行 SHA-256 完整性校验...",
+          updatedAt: Date.now()
+        });
+      }
+    );
     if (computed.sha256 !== params.expectedSha256) {
       rmSync(params.partPath, { force: true });
       throw new UpdateIntegrityError(
@@ -2514,14 +2760,56 @@ export class AppUpdater {
     const extractDir = join(workDir, "extracted");
     mkdirSync(workDir, { recursive: true });
 
-    const totalArchiveBytes =
-      params.asset.totalBytes ??
-      (parts.every((p) => typeof p.size === "number")
-        ? parts.reduce((sum, p) => sum + (p.size ?? 0), 0)
-        : null);
+    const knownPartSizes: Array<number | null> = parts.map((p) =>
+      typeof p.size === "number" && Number.isFinite(p.size) && p.size > 0
+        ? p.size
+        : null
+    );
 
+    const computeTotalArchiveBytes = (): number | null => {
+      if (
+        knownPartSizes.every((size): size is number => size !== null && size > 0)
+      ) {
+        return knownPartSizes.reduce((sum, size) => sum + size, 0);
+      }
+      if (
+        typeof params.asset.totalBytes === "number" &&
+        Number.isFinite(params.asset.totalBytes) &&
+        params.asset.totalBytes > 0
+      ) {
+        return params.asset.totalBytes;
+      }
+      return null;
+    };
+
+    // Fast parallel HEAD probe for any parts missing size metadata (common on Gitee API/HTML).
+    if (computeTotalArchiveBytes() === null) {
+      const missingIndices: number[] = [];
+      for (let i = 0; i < parts.length; i += 1) {
+        if (knownPartSizes[i] === null) {
+          missingIndices.push(i);
+        }
+      }
+      if (missingIndices.length > 0) {
+        await Promise.all(
+          missingIndices.map(async (idx) => {
+            const part = parts[idx]!;
+            const probeUrl =
+              part.effectiveUrl ??
+              this.resolveSourceUrl(part.url, params.asset.source);
+            const probedSize = await this.probeRemoteAssetSize(probeUrl);
+            if (probedSize !== null) {
+              knownPartSizes[idx] = probedSize;
+            }
+          })
+        );
+      }
+    }
+
+    let totalArchiveBytes = computeTotalArchiveBytes();
     let completedPartsBytes = 0;
     let totalResumedBytes = 0;
+    let lastDownloadPercent = 0;
     const downloadedPartPaths: string[] = [];
 
     for (let i = 0; i < parts.length; i += 1) {
@@ -2532,22 +2820,32 @@ export class AppUpdater {
       const effectivePartUrl =
         part.effectiveUrl ??
         this.resolveSourceUrl(part.url, params.asset.source);
+      const expectedPartSize = knownPartSizes[i] ?? null;
 
       // Reuse already-completed split volume if exact size matches (supports cross-attempt resume).
       if (
         existsSync(finalPartPath) &&
-        typeof part.size === "number" &&
-        statSync(finalPartPath).size === part.size
+        expectedPartSize !== null &&
+        statSync(finalPartPath).size === expectedPartSize
       ) {
-        completedPartsBytes += part.size;
-        totalResumedBytes += part.size;
+        completedPartsBytes += expectedPartSize;
+        totalResumedBytes += expectedPartSize;
         downloadedPartPaths.push(finalPartPath);
+        const reusedPercent = Math.max(
+          lastDownloadPercent,
+          roundPercent1(
+            ((i + 1) / parts.length) * DOWNLOAD_PROGRESS_MAX_PERCENT,
+            0,
+            DOWNLOAD_PROGRESS_MAX_PERCENT
+          )
+        );
+        lastDownloadPercent = reusedPercent;
         params.onProgress({
           stage: "downloading",
           phase: "downloading",
           bytesDownloaded: completedPartsBytes,
           totalBytes: totalArchiveBytes,
-          percent: computePercent(completedPartsBytes, totalArchiveBytes),
+          percent: reusedPercent,
           source: params.asset.source,
           currentPart: i + 1,
           totalParts: parts.length,
@@ -2562,17 +2860,33 @@ export class AppUpdater {
       const transfer = await this.streamDownloadFileWithResume({
         url: effectivePartUrl,
         partPath: tempPartPath,
-        expectedSizeHint: part.size ?? null,
+        expectedSizeHint: expectedPartSize,
         maxRetries: params.maxRetries,
         retryDelaysMs: params.retryDelaysMs,
-        onChunkProgress: (partBytes, _partTotal) => {
+        onChunkProgress: (partBytes, partTotal) => {
+          if (partTotal !== null && Number.isFinite(partTotal) && partTotal > 0) {
+            knownPartSizes[i] = partTotal;
+            totalArchiveBytes = computeTotalArchiveBytes();
+          }
+          const effectivePartTotal =
+            partTotal !== null && Number.isFinite(partTotal) && partTotal > 0
+              ? partTotal
+              : knownPartSizes[i] ?? null;
           const aggregateBytes = partBaseOffset + partBytes;
+          const weightedPercent = computeSplitPartWeightedPercent(
+            i,
+            parts.length,
+            partBytes,
+            effectivePartTotal
+          );
+          const percent = Math.max(lastDownloadPercent, weightedPercent);
+          lastDownloadPercent = percent;
           params.onProgress({
             stage: "downloading",
             phase: "downloading",
             bytesDownloaded: aggregateBytes,
             totalBytes: totalArchiveBytes,
-            percent: computePercent(aggregateBytes, totalArchiveBytes),
+            percent,
             source: params.asset.source,
             currentPart: i + 1,
             totalParts: parts.length,
@@ -2585,28 +2899,75 @@ export class AppUpdater {
 
       rmSync(finalPartPath, { force: true });
       renameSync(tempPartPath, finalPartPath);
+      knownPartSizes[i] = transfer.bytes;
+      totalArchiveBytes = computeTotalArchiveBytes();
       completedPartsBytes += transfer.bytes;
       totalResumedBytes += transfer.resumedFromBytes;
       downloadedPartPaths.push(finalPartPath);
+
+      const partEndPercent = roundPercent1(
+        ((i + 1) / parts.length) * DOWNLOAD_PROGRESS_MAX_PERCENT,
+        0,
+        DOWNLOAD_PROGRESS_MAX_PERCENT
+      );
+      if (lastDownloadPercent < partEndPercent) {
+        lastDownloadPercent = partEndPercent;
+        params.onProgress({
+          stage: "downloading",
+          phase: "downloading",
+          bytesDownloaded: completedPartsBytes,
+          totalBytes: totalArchiveBytes,
+          percent: partEndPercent,
+          source: params.asset.source,
+          currentPart: i + 1,
+          totalParts: parts.length,
+          partName: safePartName,
+          message: `已完成分卷 ${i + 1}/${parts.length} (${safePartName})`,
+          updatedAt: Date.now()
+        });
+      }
     }
 
     const firstVolumePath = downloadedPartPaths[0]!;
-    params.onProgress({
-      stage: "extracting",
-      phase: "extracting",
-      bytesDownloaded: completedPartsBytes,
-      totalBytes: totalArchiveBytes ?? completedPartsBytes,
-      percent: 100,
-      source: params.asset.source,
-      currentPart: parts.length,
-      totalParts: parts.length,
-      partName: expectedExeName,
-      message: `正在使用 7-Zip 无损合并解压 ${expectedExeName}...`,
-      updatedAt: Date.now()
-    });
+    const resolvedTotalBytes = totalArchiveBytes ?? completedPartsBytes;
+    const reportExtractProgress = (percent: number, message: string) => {
+      params.onProgress({
+        stage: "extracting",
+        phase: "extracting",
+        bytesDownloaded: completedPartsBytes,
+        totalBytes: resolvedTotalBytes,
+        percent,
+        source: params.asset.source,
+        currentPart: parts.length,
+        totalParts: parts.length,
+        partName: expectedExeName,
+        message,
+        updatedAt: Date.now()
+      });
+    };
+
+    reportExtractProgress(
+      DOWNLOAD_PROGRESS_MAX_PERCENT,
+      `正在使用 7-Zip 无损合并解压 ${expectedExeName}...`
+    );
 
     rmSync(extractDir, { recursive: true, force: true });
     mkdirSync(extractDir, { recursive: true });
+
+    let extractPercent = DOWNLOAD_PROGRESS_MAX_PERCENT;
+    const extractHeartbeat = this.timers.setInterval(() => {
+      if (extractPercent < SPLIT_EXTRACT_END_PERCENT - 1) {
+        extractPercent =
+          extractPercent < DOWNLOAD_PROGRESS_MAX_PERCENT + 2
+            ? DOWNLOAD_PROGRESS_MAX_PERCENT + 2
+            : Math.min(SPLIT_EXTRACT_END_PERCENT - 1, extractPercent + 1);
+        reportExtractProgress(
+          extractPercent,
+          `正在使用 7-Zip 无损合并解压 ${expectedExeName}...`
+        );
+      }
+    }, 350);
+    unrefTimerHandle(extractHeartbeat);
 
     try {
       await execFileAsync(
@@ -2625,6 +2986,8 @@ export class AppUpdater {
       throw new Error(
         `分卷 7z 解压失败（已自动清理残片）：${detail}`
       );
+    } finally {
+      this.timers.clearInterval(extractHeartbeat);
     }
 
     const extractedExePath = findExtractedExeFile(extractDir, expectedExeName);
@@ -2635,21 +2998,42 @@ export class AppUpdater {
       );
     }
 
-    params.onProgress({
-      stage: "verifying",
-      phase: "verifying",
-      bytesDownloaded: completedPartsBytes,
-      totalBytes: totalArchiveBytes ?? completedPartsBytes,
-      percent: 100,
-      source: params.asset.source,
-      currentPart: parts.length,
-      totalParts: parts.length,
-      partName: expectedExeName,
-      message: `正在校验整包 SHA-256 (${expectedExeName})...`,
-      updatedAt: Date.now()
-    });
+    reportExtractProgress(
+      SPLIT_EXTRACT_END_PERCENT,
+      `分卷合并完成，准备执行 SHA-256 校验 (${expectedExeName})...`
+    );
 
-    const computed = await computeFileSha256(extractedExePath);
+    let lastVerifyPercent = SPLIT_EXTRACT_END_PERCENT;
+    const computed = await computeFileSha256(
+      extractedExePath,
+      (hashedBytes, totalHashBytes) => {
+        const frac =
+          totalHashBytes > 0
+            ? Math.max(0, Math.min(1, hashedBytes / totalHashBytes))
+            : 1;
+        const candidate = roundPercent1(
+          SPLIT_EXTRACT_END_PERCENT +
+            frac * (VERIFY_MAX_PERCENT - SPLIT_EXTRACT_END_PERCENT),
+          SPLIT_EXTRACT_END_PERCENT,
+          VERIFY_MAX_PERCENT
+        );
+        const percent = Math.max(lastVerifyPercent, candidate);
+        lastVerifyPercent = percent;
+        params.onProgress({
+          stage: "verifying",
+          phase: "verifying",
+          bytesDownloaded: completedPartsBytes,
+          totalBytes: resolvedTotalBytes,
+          percent,
+          source: params.asset.source,
+          currentPart: parts.length,
+          totalParts: parts.length,
+          partName: expectedExeName,
+          message: `正在校验整包 SHA-256 (${expectedExeName})...`,
+          updatedAt: Date.now()
+        });
+      }
+    );
     if (computed.sha256 !== params.expectedSha256) {
       // Immediately wipe all fragments and extracted tampered artifacts!
       rmSync(workDir, { recursive: true, force: true });
@@ -2671,7 +3055,7 @@ export class AppUpdater {
       assetName: expectedExeName,
       filePath: params.targetPath,
       bytesDownloaded: completedPartsBytes,
-      totalBytes: totalArchiveBytes ?? completedPartsBytes,
+      totalBytes: resolvedTotalBytes,
       resumedFromBytes: totalResumedBytes,
       sha256: computed.sha256,
       verified: true,

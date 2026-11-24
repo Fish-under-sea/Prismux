@@ -32,7 +32,11 @@ import {
 } from "../daemonClient";
 import { useOptionalPrismuxRuntime } from "../PrismuxRuntimeProvider";
 import {
+  buildUpdaterStageSteps,
   describeUpdaterProgressStage,
+  formatProgressPercentDisplay,
+  formatUpdaterStageWeightHint,
+  resolveProgressBarPercent,
   resolveRuntimeVersion,
   selectRecommendedUpdateAsset,
   type UpdateAssetView,
@@ -121,12 +125,8 @@ export function PrismuxUpdateReleaseModal() {
   );
   const latestVersion = update?.latestVersion ?? null;
   const progress = status?.progress ?? null;
-  const progressPercent =
-    progress?.percent !== null && progress?.percent !== undefined
-      ? Math.max(0, Math.min(100, Math.round(progress.percent)))
-      : progress?.stage === "ready"
-        ? 100
-        : null;
+  const barPercent = resolveProgressBarPercent(progress, hasVerifiedPackage && !isTransferActive);
+  const progressPercentText = formatProgressPercentDisplay(barPercent);
   const speedText = formatTransferSpeed(state.speedBytesPerSec);
 
   const recommendedAsset = useMemo<UpdateAssetView | null>(() => {
@@ -136,6 +136,19 @@ export function PrismuxUpdateReleaseModal() {
       selectRecommendedUpdateAsset(update.assets, portableMode)
     );
   }, [portableMode, update]);
+
+  const isSplitArchive =
+    recommendedAsset?.kind === "split-7z-exe" ||
+    (progress?.totalParts !== null &&
+      progress?.totalParts !== undefined &&
+      progress.totalParts > 1) ||
+    progress?.stage === "extracting";
+  const stageSteps = buildUpdaterStageSteps(
+    progress,
+    hasVerifiedPackage && !isTransferActive,
+    isSplitArchive,
+  );
+  const stageWeightHint = formatUpdaterStageWeightHint(progress, isSplitArchive);
 
   const safeReleaseHtmlUrl =
     validateSafeHttpsUrl(update?.htmlUrl) ??
@@ -419,65 +432,138 @@ export function PrismuxUpdateReleaseModal() {
           {isTransferActive || hasVerifiedPackage ? (
             <section
               data-testid="prismux-update-modal-progress"
-              className="space-y-2.5 rounded-xl border border-primary/30 bg-primary/[0.06] p-3.5 text-xs"
+              className="space-y-3 rounded-xl border border-primary/30 bg-primary/[0.06] p-3.5 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-primary/[0.09] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 font-medium text-foreground">
+                <div className="flex min-w-0 items-center gap-2 font-medium text-foreground">
                   {hasVerifiedPackage && !isTransferActive ? (
-                    <ShieldCheckIcon className="size-4 text-emerald-500" />
+                    <ShieldCheckIcon className="size-4 shrink-0 text-emerald-500" />
                   ) : (
-                    <RefreshCwIcon className="size-4 animate-spin text-primary" />
+                    <RefreshCwIcon className="size-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
                   )}
-                  <span>
+                  <span className="truncate">
                     {isTransferActive
                       ? describeUpdaterProgressStage(progress)
                       : "SHA-256 整包校验通过，安装包已就绪"}
                   </span>
                 </div>
-                {progressPercent !== null ? (
-                  <span className="font-mono font-semibold tabular-nums text-foreground">
-                    {progressPercent}%
-                  </span>
-                ) : null}
+                <span
+                  data-testid="prismux-update-modal-percent"
+                  className={cn(
+                    "shrink-0 font-mono tabular-nums",
+                    progressPercentText !== null
+                      ? "text-[13px] font-semibold text-foreground"
+                      : "text-[11px] font-medium text-muted-foreground",
+                  )}
+                >
+                  {progressPercentText ?? "连接中…"}
+                </span>
+              </div>
+
+              {/* 4-Stage Visual Progression Indicator */}
+              <div
+                data-testid="prismux-update-modal-stages"
+                className="grid grid-cols-4 gap-1.5"
+              >
+                {stageSteps.map((step) => (
+                  <div
+                    key={step.id}
+                    data-stage-step={step.id}
+                    data-stage-state={step.state}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10.5px] transition-colors motion-reduce:transition-none",
+                      step.state === "completed"
+                        ? "border-emerald-500/35 bg-emerald-500/[0.09] text-emerald-800 dark:text-emerald-200"
+                        : step.state === "active"
+                          ? "border-primary/45 bg-primary/[0.14] font-semibold text-foreground"
+                          : "border-border/50 bg-foreground/[0.025] text-muted-foreground dark:bg-white/[0.03]",
+                    )}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        step.state === "completed"
+                          ? "bg-emerald-500"
+                          : step.state === "active"
+                            ? "bg-primary animate-pulse motion-reduce:animate-none"
+                            : "bg-muted-foreground/40",
+                      )}
+                    />
+                    <span className="truncate">{step.label}</span>
+                  </div>
+                ))}
               </div>
 
               {isTransferActive ? (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <div
                     role="progressbar"
                     aria-label="软件内更新下载进度"
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-valuenow={progressPercent ?? 0}
-                    className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/10 dark:bg-white/12"
+                    {...(barPercent !== null ? { "aria-valuenow": Math.round(barPercent) } : {})}
+                    data-progress-mode={barPercent !== null ? "determinate" : "indeterminate"}
+                    data-testid="prismux-update-modal-progressbar"
+                    className="relative h-2 w-full overflow-hidden rounded-full bg-foreground/12 dark:bg-white/14"
                   >
-                    <div
-                      className="h-full rounded-full bg-primary transition-[width] duration-200"
-                      style={{ width: `${progressPercent ?? 14}%` }}
-                    />
+                    {barPercent !== null ? (
+                      <div
+                        data-testid="prismux-update-modal-progressbar-fill"
+                        className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out motion-reduce:transition-none"
+                        style={{ width: `${barPercent}%` }}
+                      />
+                    ) : (
+                      <div
+                        data-testid="prismux-update-modal-progressbar-indeterminate"
+                        className="h-full w-full rounded-full bg-gradient-to-r from-primary/15 via-primary/85 to-primary/15 animate-pulse motion-reduce:animate-none"
+                      />
+                    )}
                   </div>
+
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums text-muted-foreground">
                     <span>
                       {progress?.stage === "downloading"
-                        ? `已下载 ${formatUpdateByteSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatUpdateByteSize(progress.totalBytes)}` : ""}${speedText ? ` · ${speedText}` : ""}`
+                        ? barPercent === null && progress.bytesDownloaded <= 0
+                          ? "正在连接下载源…"
+                          : progress.bytesDownloaded > 0 || progress.totalBytes
+                            ? `已下载 ${formatUpdateByteSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatUpdateByteSize(progress.totalBytes)}` : ""}`
+                            : "已连接下载源，准备接收数据…"
                         : progress?.stage === "extracting"
-                          ? "正在通过内置 7za.exe 无损合并分卷…"
+                          ? `正在通过内置 7za.exe 无损合并分卷…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
                           : progress?.stage === "verifying"
-                            ? "正在逐字节核验 SHA-256 摘要…"
-                            : progress?.message ?? "正在处理更新包…"}
+                            ? `正在逐字节核验 SHA-256 摘要…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
+                            : progress?.message ?? "正在连接下载源…"}
                     </span>
-                    {progress?.totalParts && progress.totalParts > 1 ? (
-                      <span className="inline-flex items-center gap-1 font-mono">
-                        <LayersIcon className="size-3" />
-                        分卷 {progress.currentPart ?? 1}/{progress.totalParts}
-                      </span>
-                    ) : null}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {speedText && progress?.stage === "downloading" ? (
+                        <span
+                          data-testid="prismux-update-modal-speed"
+                          className="rounded-md bg-foreground/[0.06] px-1.5 py-0.5 font-mono text-[10.5px] font-medium text-foreground tabular-nums dark:bg-white/[0.08]"
+                        >
+                          {speedText}
+                        </span>
+                      ) : null}
+                      {progress?.totalParts && progress.totalParts > 1 ? (
+                        <span
+                          data-testid="prismux-update-modal-part"
+                          className="inline-flex items-center gap-1 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 font-mono text-[10.5px] font-medium text-foreground tabular-nums dark:bg-white/[0.08]"
+                        >
+                          <LayersIcon className="size-3" />
+                          分卷 {progress.currentPart ?? 1}/{progress.totalParts}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="text-[10.5px] text-muted-foreground/85 tabular-nums">
+                    {stageWeightHint}
                   </div>
                 </div>
               ) : null}
 
               {hasVerifiedPackage && !isTransferActive ? (
-                <div className="space-y-1.5 rounded-lg border border-border/60 bg-background/55 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+                <div className="space-y-1.5 rounded-lg border border-border/60 bg-foreground/[0.04] px-3 py-2 font-mono text-[11px] text-muted-foreground dark:bg-white/[0.05]">
                   <div className="truncate text-foreground" title={status?.downloadedFilePath ?? ""}>
                     文件：{status?.downloadedFilePath}
                   </div>
@@ -570,18 +656,22 @@ export function PrismuxUpdateReleaseModal() {
                 }}
               >
                 {isTransferActive ? (
-                  <RefreshCwIcon className="size-3.5 animate-spin" />
+                  <RefreshCwIcon className="size-3.5 animate-spin motion-reduce:animate-none" />
                 ) : (
                   <DownloadIcon className="size-3.5" />
                 )}
                 {isTransferActive
                   ? progress?.stage === "extracting"
-                    ? "分卷重组中…"
+                    ? progressPercentText
+                      ? `合并分卷 ${progressPercentText}`
+                      : "分卷重组中…"
                     : progress?.stage === "verifying"
-                      ? "SHA-256 校验中…"
-                      : progressPercent !== null
-                        ? `下载中 ${progressPercent}%`
-                        : "正在下载…"
+                      ? progressPercentText
+                        ? `SHA-256 校验 ${progressPercentText}`
+                        : "SHA-256 校验中…"
+                      : progressPercentText !== null
+                        ? `下载中 ${progressPercentText}`
+                        : "正在连接下载源…"
                   : "软件内一键更新"}
               </Button>
             )}

@@ -290,6 +290,115 @@ export function normalizeDiagnosticsResponse(
   };
 }
 
+export const DORMANT_ENGINES_GROUP_ID = "dormant_engines" as const;
+
+export type DiagnosticStatusFilter = "all" | DaemonDiagnosticsStatus;
+
+export interface FilteredDiagnosticsView {
+  readonly activeGroups: readonly NormalizedDiagnosticGroup[];
+  readonly dormantGroup: NormalizedDiagnosticGroup | null;
+  readonly visibleActiveItemCount: number;
+  readonly visibleDormantItemCount: number;
+  readonly totalVisibleCount: number;
+  readonly isFiltered: boolean;
+}
+
+/**
+ * Toggles a KPI status filter tile: clicking `"all"` or clicking the currently active
+ * status resets the filter back to `"all"`.
+ */
+export function toggleDiagnosticStatusFilter(
+  current: DiagnosticStatusFilter,
+  next: DiagnosticStatusFilter,
+): DiagnosticStatusFilter {
+  if (next === "all" || current === next) {
+    return "all";
+  }
+  return next;
+}
+
+function buildFilteredGroup(
+  id: string,
+  fallbackLabel: string,
+  items: readonly NormalizedDiagnosticItem[],
+): NormalizedDiagnosticGroup {
+  const okCount = items.filter((item) => item.status === "ok").length;
+  const degradedCount = items.filter((item) => item.status === "degraded").length;
+  const errorCount = items.filter((item) => item.status === "error").length;
+  return {
+    id,
+    fallbackLabel,
+    status: computeGroupStatus(items),
+    okCount,
+    degradedCount,
+    errorCount,
+    items,
+  };
+}
+
+/**
+ * Splits a normalized diagnostics report into operational groups + a single deduplicated
+ * `dormant_engines` read-only summary group, then applies the active status filter and
+ * automatically hides groups that have zero matching checks.
+ */
+export function filterDiagnosticsReport(
+  report: NormalizedDiagnosticsReport,
+  statusFilter: DiagnosticStatusFilter,
+): FilteredDiagnosticsView {
+  const matchesStatus = (item: NormalizedDiagnosticItem) =>
+    statusFilter === "all" || item.status === statusFilter;
+
+  const rawDormantGroup = report.groups.find((group) => group.id === DORMANT_ENGINES_GROUP_ID);
+  const seenDormantIds = new Set<string>();
+  const allDormantItems: NormalizedDiagnosticItem[] = [];
+  for (const item of [...(rawDormantGroup?.items ?? []), ...report.dormantEngines]) {
+    if (!seenDormantIds.has(item.id)) {
+      seenDormantIds.add(item.id);
+      allDormantItems.push(item);
+    }
+  }
+
+  const activeGroups: NormalizedDiagnosticGroup[] = [];
+  let visibleActiveItemCount = 0;
+
+  for (const group of report.groups) {
+    if (group.id === DORMANT_ENGINES_GROUP_ID) {
+      continue;
+    }
+    const filteredItems = group.items.filter(
+      (item) => !seenDormantIds.has(item.id) && matchesStatus(item),
+    );
+    if (filteredItems.length === 0) {
+      continue;
+    }
+    visibleActiveItemCount += filteredItems.length;
+    activeGroups.push(buildFilteredGroup(group.id, group.fallbackLabel, filteredItems));
+  }
+
+  const filteredDormantItems = allDormantItems.filter(matchesStatus);
+  const dormantGroup =
+    filteredDormantItems.length > 0
+      ? buildFilteredGroup(
+          DORMANT_ENGINES_GROUP_ID,
+          rawDormantGroup?.fallbackLabel ??
+            DEFAULT_CATEGORY_LABELS[DORMANT_ENGINES_GROUP_ID] ??
+            "Dormant Engines Summary",
+          filteredDormantItems,
+        )
+      : null;
+
+  const visibleDormantItemCount = dormantGroup?.items.length ?? 0;
+
+  return {
+    activeGroups,
+    dormantGroup,
+    visibleActiveItemCount,
+    visibleDormantItemCount,
+    totalVisibleCount: visibleActiveItemCount + visibleDormantItemCount,
+    isFiltered: statusFilter !== "all",
+  };
+}
+
 export function formatDiagnosticsTimestamp(timestampMs: number | null | undefined): string {
   if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs) || timestampMs <= 0) {
     return "—";

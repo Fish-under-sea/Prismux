@@ -431,12 +431,117 @@ export function selectRecommendedUpdateAsset(
   );
 }
 
+export interface UpdaterStageStepDescriptor {
+  readonly id: "downloading" | "extracting" | "verifying" | "ready";
+  readonly label: string;
+  readonly weightLabel: string;
+  readonly state: "completed" | "active" | "pending";
+}
+
+export function resolveProgressBarPercent(
+  progress: UpdateProgressView | null,
+  hasVerifiedPackage = false,
+): number | null {
+  if (
+    progress?.percent !== null &&
+    progress?.percent !== undefined &&
+    Number.isFinite(progress.percent)
+  ) {
+    return Math.max(0, Math.min(100, Math.round(progress.percent * 10) / 10));
+  }
+  if (progress?.stage === "ready" || hasVerifiedPackage) {
+    return 100;
+  }
+  return null;
+}
+
+export function formatProgressPercentDisplay(percent: number | null): string | null {
+  if (percent === null || !Number.isFinite(percent)) {
+    return null;
+  }
+  if (percent >= 100) {
+    return "100%";
+  }
+  const rounded = Math.max(0, Math.min(99, Math.round(percent)));
+  return `${rounded}%`;
+}
+
+export function formatUpdaterStageWeightHint(
+  progress: UpdateProgressView | null,
+  isSplitArchive = false,
+): string {
+  const split =
+    isSplitArchive ||
+    (progress?.totalParts !== null &&
+      progress?.totalParts !== undefined &&
+      progress.totalParts > 1) ||
+    progress?.stage === "extracting";
+  if (split) {
+    const partsCount =
+      progress?.totalParts !== null &&
+      progress?.totalParts !== undefined &&
+      progress.totalParts > 1
+        ? progress.totalParts
+        : 3;
+    const perPart = Math.round((90 / partsCount) * 10) / 10;
+    return `分卷下载 0–90%（每卷 ${perPart}%） · 合并解压 90–95% · SHA-256 校验 95–100%`;
+  }
+  return "安装包下载 0–90% · SHA-256 校验 90–100%";
+}
+
+export function buildUpdaterStageSteps(
+  progress: UpdateProgressView | null,
+  hasVerifiedPackage = false,
+  isSplitArchive = false,
+): readonly UpdaterStageStepDescriptor[] {
+  const split =
+    isSplitArchive ||
+    (progress?.totalParts !== null &&
+      progress?.totalParts !== undefined &&
+      progress.totalParts > 1) ||
+    progress?.stage === "extracting";
+  const stage = progress?.stage ?? "idle";
+  const isReady = hasVerifiedPackage || stage === "ready";
+  const isVerifying = !isReady && stage === "verifying";
+  const isExtracting = !isReady && stage === "extracting";
+
+  return [
+    {
+      id: "downloading",
+      label: "下载中",
+      weightLabel: "0–90%",
+      state: isReady || isVerifying || isExtracting ? "completed" : "active",
+    },
+    {
+      id: "extracting",
+      label: "合并分卷",
+      weightLabel: split ? "90–95%" : "直装免合并",
+      state: isReady || isVerifying ? "completed" : isExtracting ? "active" : "pending",
+    },
+    {
+      id: "verifying",
+      label: "SHA-256 校验",
+      weightLabel: split ? "95–100%" : "90–100%",
+      state: isReady ? "completed" : isVerifying ? "active" : "pending",
+    },
+    {
+      id: "ready",
+      label: "校验就绪",
+      weightLabel: "100%",
+      state: isReady ? "completed" : "pending",
+    },
+  ];
+}
+
 export function describeUpdaterProgressStage(progress: UpdateProgressView | null): string {
-  if (!progress) return "";
+  if (!progress) return "正在连接下载源…";
   if (progress.stage === "downloading") {
     if (progress.currentPart !== null && progress.totalParts !== null && progress.totalParts > 1) {
       const partLabel = progress.partName ? ` (${progress.partName})` : "";
       return `正在下载分卷 ${progress.currentPart}/${progress.totalParts}${partLabel}`;
+    }
+    if (progress.percent === null && progress.bytesDownloaded <= 0) {
+      return "正在连接下载源…";
     }
     return "正在下载安装包";
   }

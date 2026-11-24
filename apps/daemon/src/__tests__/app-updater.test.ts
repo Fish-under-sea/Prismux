@@ -1,25 +1,36 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync
+  rmSync,
+  writeFileSync
 } from "node:fs";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { promisify } from "node:util";
 import { compareSemver } from "@prismux/cordis-kernel";
-import { DEFAULT_UPDATE_POLICY, type UpdaterStatusSnapshot } from "@prismux/protocol";
+import {
+  DEFAULT_UPDATE_POLICY,
+  type UpdateDownloadProgress,
+  type UpdaterSseEventPayload,
+  type UpdaterStatusSnapshot
+} from "@prismux/protocol";
 import { PrismuxDaemon } from "../index.js";
 import {
   AppUpdater,
   UpdateIntegrityError,
-  applyGhProxyPrefix
+  applyGhProxyPrefix,
+  resolve7zaBinary
 } from "../updater/AppUpdater.js";
+
+const execFileAsync = promisify(execFile);
 
 async function startMockServer(
   handler: http.RequestListener
@@ -669,7 +680,7 @@ test("AppUpdater supports Range resume, 302 redirects (max 6 hops), and customGh
   }
 });
 
-test("PrismuxDaemon integrates AppUpdater with 0.1.2-preview.4 default and exposes HTTP & RPC updater endpoints", async () => {
+test("PrismuxDaemon integrates AppUpdater with 0.1.3-preview.1 default and exposes HTTP & RPC updater endpoints", async () => {
   const dataDir = makeTempDir("prismux-daemon-updater-");
   const daemon = new PrismuxDaemon({
     headless: true,
@@ -686,7 +697,7 @@ test("PrismuxDaemon integrates AppUpdater with 0.1.2-preview.4 default and expos
     });
     assert.equal(statusRes.status, 200);
     const statusJson = (await statusRes.json()) as UpdaterStatusSnapshot;
-    assert.equal(statusJson.currentVersion, "0.1.2-preview.4");
+    assert.equal(statusJson.currentVersion, "0.1.3-preview.1");
     assert.equal(statusJson.policy.routePreference, "auto");
     assert.equal(statusJson.policy.includePrerelease, true);
     assert.equal(statusJson.policy.customGhProxyPrefix, "");
@@ -849,5 +860,475 @@ test("AppUpdater downloadUpdate switches to fallback source when primary asset C
   } finally {
     await closeMockServer(giteeRef.server);
     await closeMockServer(githubRef.server);
+  }
+});
+
+async function createSplit7zThreePartFixture(
+  sevenZipExe: string,
+  exeName: string,
+  payload: Buffer,
+  volumeSizeArg = "28k"
+): Promise<{
+  fixtureDir: string;
+  parts: Array<{ name: string; bytes: Buffer }>;
+}> {
+  const fixtureDir = makeTempDir("prismux-7z-3part-");
+  const sourceExe = join(fixtureDir, exeName);
+  writeFileSync(sourceExe, payload);
+  const archiveBase = join(fixtureDir, `${exeName}.7z`);
+
+  await execFileAsync(
+    sevenZipExe,
+    ["a", "-t7z", "-mx=0", `-v${volumeSizeArg}`, archiveBase, sourceExe],
+    { windowsHide: true, timeout: 15_000 }
+  );
+
+  const partNames = readdirSync(fixtureDir)
+    .filter((name) => name.startsWith(`${exeName}.7z.`))
+    .sort((a, b) => a.localeCompare(b));
+  assert.equal(
+    partNames.length,
+    3,
+    `Expected exactly 3 split 7z volumes, got ${partNames.join(", ")}`
+  );
+
+  return {
+    fixtureDir,
+    parts: partNames.map((name) => ({
+      name,
+      bytes: readFileSync(join(fixtureDir, name))
+    }))
+  };
+}
+
+function writeChunkedBuffer(
+  res: http.ServerResponse,
+  buf: Buffer,
+  chunkSize: number,
+  delayMs = 2
+): void {
+  let offset = 0;
+  const pushNext = () => {
+    if (res.writableEnded || res.destroyed) return;
+    if (offset >= buf.length) {
+      res.end();
+      return;
+    }
+    const end = Math.min(buf.length, offset + chunkSize);
+    res.write(buf.subarray(offset, end));
+    offset = end;
+    if (delayMs > 0) {
+      setTimeout(pushNext, delayMs);
+    } else {
+      setImmediate(pushNext);
+    }
+  };
+  pushNext();
+}
+
+test("AppUpdater probes Gitee 3-part split-7z sizes via HEAD when JSON omits size and emits monotonic 0->30->60->90->95->99.9->100% progress", async () => {
+  const sevenZip = resolve7zaBinary();
+  assert.ok(sevenZip !== null, "Expected 7za/7z binary on Windows test host");
+
+  const exeName = "Prismux-Setup-0.1.2-preview.5.exe";
+  const exePayload = randomBytes(72 * 1024);
+  const expectedSha = sha256Hex(exePayload);
+  const fixture = await createSplit7zThreePartFixture(sevenZip, exeName, exePayload, "28k");
+  const totalArchiveBytes = fixture.parts.reduce((sum, part) => sum + part.bytes.length, 0);
+
+  let headCount = 0;
+  let mockRef!: { server: http.Server; baseUrl: string };
+  mockRef = await startMockServer((req, res) => {
+    const urlPath = req.url ?? "/";
+    if (urlPath.startsWith("/gitee/repos/")) {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      // Intentionally omit `size` on every asset to reproduce Gitee OpenAPI v5 / Web HTML payload.
+      res.end(
+        JSON.stringify([
+          {
+            tag_name: "v0.1.2-preview.5",
+            name: "Prismux v0.1.2-preview.5",
+            prerelease: true,
+            draft: false,
+            assets: [
+              ...fixture.parts.map((part) => ({
+                name: part.name,
+                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(part.name)}`
+              })),
+              {
+                name: `${exeName}.sha256`,
+                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(exeName)}.sha256`
+              }
+            ]
+          }
+        ])
+      );
+      return;
+    }
+
+    if (urlPath === `/dl/${encodeURIComponent(exeName)}.sha256`) {
+      res.statusCode = 200;
+      res.end(`${expectedSha}  ${exeName}\n`);
+      return;
+    }
+
+    const matchedPart = fixture.parts.find(
+      (part) => urlPath === `/dl/${encodeURIComponent(part.name)}`
+    );
+    if (matchedPart) {
+      if (req.method === "HEAD") {
+        headCount += 1;
+        res.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-length": String(matchedPart.bytes.length)
+        });
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(matchedPart.bytes.length)
+      });
+      writeChunkedBuffer(res, matchedPart.bytes, 4 * 1024, 1);
+      return;
+    }
+
+    res.statusCode = 404;
+    res.end();
+  });
+
+  try {
+    const dataDir = makeTempDir("prismux-updater-head-3part-");
+    const updater = new AppUpdater({
+      currentVersion: "0.1.2-preview.4",
+      dataDir,
+      sevenZipPath: sevenZip,
+      giteeApiBase: `${mockRef.baseUrl}/gitee`,
+      githubApiBase: `${mockRef.baseUrl}/github-offline`,
+      initialPolicy: { routePreference: "domestic", includePrerelease: true },
+      retryDelaysMs: [10]
+    });
+
+    const check = await updater.checkForUpdates({ sourceOverride: "gitee" });
+    assert.equal(check.recommendedAsset?.kind, "split-7z-exe");
+    assert.equal(check.recommendedAsset?.totalBytes, null);
+
+    const progressLog: UpdateDownloadProgress[] = [];
+    const sseLog: UpdaterSseEventPayload[] = [];
+    const unsub = updater.subscribeEvents((evt) => {
+      sseLog.push(evt);
+    });
+
+    const result = await updater.downloadUpdate({
+      checkResult: check,
+      onProgress: (p) => {
+        progressLog.push({ ...p });
+      }
+    });
+    unsub();
+
+    assert.equal(result.verified, true);
+    assert.equal(result.sha256, expectedSha);
+    assert.equal(result.totalBytes, totalArchiveBytes);
+    assert.equal(headCount, 3, "Expected parallel HEAD probes for all 3 parts lacking size");
+
+    // Verify zero null percents and strict monotonicity across the entire 0 -> 100% pipeline.
+    assert.ok(progressLog.length >= 10, `Expected granular progress updates, got ${progressLog.length}`);
+    for (let i = 0; i < progressLog.length; i += 1) {
+      const p = progressLog[i]!;
+      assert.notEqual(p.percent, null, `Progress entry #${i} (${p.stage}) must never have null percent`);
+      if (i > 0) {
+        const prev = progressLog[i - 1]!;
+        assert.ok(
+          (p.percent ?? 0) >= (prev.percent ?? 0),
+          `Progress percent must be monotonic: #${i - 1}=${prev.percent} -> #${i}=${p.percent}`
+        );
+      }
+    }
+
+    const part1Progress = progressLog.filter((p) => p.stage === "downloading" && p.currentPart === 1 && p.bytesDownloaded > 0);
+    const part2Progress = progressLog.filter((p) => p.stage === "downloading" && p.currentPart === 2 && p.bytesDownloaded > 0);
+    const part3Progress = progressLog.filter((p) => p.stage === "downloading" && p.currentPart === 3 && p.bytesDownloaded > 0);
+    const extractingProgress = progressLog.filter((p) => p.stage === "extracting");
+    const verifyingProgress = progressLog.filter((p) => p.stage === "verifying");
+    const readyProgress = progressLog.filter((p) => p.stage === "ready");
+
+    // HEAD probe resolved exact totalArchiveBytes before part 1 chunks even started.
+    assert.ok(part1Progress.length > 0 && part1Progress.every((p) => p.totalBytes === totalArchiveBytes));
+    assert.ok(part1Progress.some((p) => (p.percent ?? 0) > 0 && (p.percent ?? 0) < 30));
+    assert.equal(Math.max(...part1Progress.map((p) => p.percent ?? 0)), 30);
+
+    assert.ok(part2Progress.some((p) => (p.percent ?? 0) > 30 && (p.percent ?? 0) < 60));
+    assert.equal(Math.max(...part2Progress.map((p) => p.percent ?? 0)), 60);
+
+    assert.ok(part3Progress.some((p) => (p.percent ?? 0) > 60 && (p.percent ?? 0) < 90));
+    assert.equal(Math.max(...part3Progress.map((p) => p.percent ?? 0)), 90);
+
+    assert.ok(extractingProgress.some((p) => p.percent === 90));
+    assert.ok(extractingProgress.some((p) => p.percent === 95));
+
+    assert.ok(verifyingProgress.length > 0);
+    assert.ok(verifyingProgress[0]!.percent === 95);
+    assert.ok(verifyingProgress.every((p) => (p.percent ?? 0) >= 95 && (p.percent ?? 0) <= 99.9));
+    assert.equal(verifyingProgress[verifyingProgress.length - 1]!.percent, 99.9);
+
+    assert.equal(readyProgress.length, 1);
+    assert.equal(readyProgress[0]!.percent, 100);
+
+    const readySse = sseLog.find((evt) => evt.type === "ready");
+    assert.ok(readySse !== undefined);
+    assert.equal(readySse.progress?.percent, 100);
+    assert.equal(readySse.status.downloading, false);
+  } finally {
+    await closeMockServer(mockRef.server);
+  }
+});
+
+test("AppUpdater keeps smooth monotonic 0->30->60->90->95->99.9->100% progress even when HEAD returns 405 and part 3 uses Content-Range", async () => {
+  const sevenZip = resolve7zaBinary();
+  assert.ok(sevenZip !== null, "Expected 7za/7z binary on Windows test host");
+
+  const exeName = "Prismux-Setup-0.1.2-preview.5.exe";
+  const exePayload = randomBytes(72 * 1024);
+  const expectedSha = sha256Hex(exePayload);
+  const fixture = await createSplit7zThreePartFixture(sevenZip, exeName, exePayload, "28k");
+  const totalArchiveBytes = fixture.parts.reduce((sum, part) => sum + part.bytes.length, 0);
+
+  let head405Count = 0;
+  let mockRef!: { server: http.Server; baseUrl: string };
+  mockRef = await startMockServer((req, res) => {
+    const urlPath = req.url ?? "/";
+    if (urlPath.startsWith("/gitee/repos/")) {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify([
+          {
+            tag_name: "v0.1.2-preview.5",
+            prerelease: true,
+            draft: false,
+            assets: [
+              ...fixture.parts.map((part) => ({
+                name: part.name,
+                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(part.name)}`
+              })),
+              {
+                name: `${exeName}.sha256`,
+                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(exeName)}.sha256`
+              }
+            ]
+          }
+        ])
+      );
+      return;
+    }
+
+    if (urlPath === `/dl/${encodeURIComponent(exeName)}.sha256`) {
+      res.statusCode = 200;
+      res.end(`${expectedSha}  ${exeName}\n`);
+      return;
+    }
+
+    const partIdx = fixture.parts.findIndex(
+      (part) => urlPath === `/dl/${encodeURIComponent(part.name)}`
+    );
+    if (partIdx >= 0) {
+      const matchedPart = fixture.parts[partIdx]!;
+      if (req.method === "HEAD") {
+        head405Count += 1;
+        res.statusCode = 405;
+        res.end("Method Not Allowed");
+        return;
+      }
+      if (partIdx === 2) {
+        // Part 3 omits Content-Length and provides Content-Range total fallback.
+        res.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-range": `bytes 0-${matchedPart.bytes.length - 1}/${matchedPart.bytes.length}`
+        });
+      } else {
+        res.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-length": String(matchedPart.bytes.length)
+        });
+      }
+      writeChunkedBuffer(res, matchedPart.bytes, 4 * 1024, 1);
+      return;
+    }
+
+    res.statusCode = 404;
+    res.end();
+  });
+
+  try {
+    const dataDir = makeTempDir("prismux-updater-head405-3part-");
+    const updater = new AppUpdater({
+      currentVersion: "0.1.2-preview.4",
+      dataDir,
+      sevenZipPath: sevenZip,
+      giteeApiBase: `${mockRef.baseUrl}/gitee`,
+      githubApiBase: `${mockRef.baseUrl}/github-offline`,
+      initialPolicy: { routePreference: "domestic", includePrerelease: true },
+      retryDelaysMs: [10]
+    });
+
+    const check = await updater.checkForUpdates({ sourceOverride: "gitee" });
+    const progressLog: UpdateDownloadProgress[] = [];
+
+    const result = await updater.downloadUpdate({
+      checkResult: check,
+      onProgress: (p) => {
+        progressLog.push({ ...p });
+      }
+    });
+
+    assert.equal(result.verified, true);
+    assert.equal(result.sha256, expectedSha);
+    assert.equal(head405Count, 3, "HEAD 405 must be gracefully ignored without failing download");
+
+    for (let i = 0; i < progressLog.length; i += 1) {
+      const p = progressLog[i]!;
+      assert.notEqual(p.percent, null, `Progress #${i} must never fall back to null when HEAD returns 405`);
+      if (i > 0) {
+        assert.ok((p.percent ?? 0) >= (progressLog[i - 1]!.percent ?? 0));
+      }
+    }
+
+    const p1 = progressLog.filter((p) => p.stage === "downloading" && p.currentPart === 1);
+    const p2 = progressLog.filter((p) => p.stage === "downloading" && p.currentPart === 2);
+    const p3 = progressLog.filter((p) => p.stage === "downloading" && p.currentPart === 3);
+
+    assert.ok(p1.some((p) => (p.percent ?? 0) > 0 && (p.percent ?? 0) < 30));
+    assert.equal(Math.max(...p1.map((p) => p.percent ?? 0)), 30);
+    assert.ok(p2.some((p) => (p.percent ?? 0) > 30 && (p.percent ?? 0) < 60));
+    assert.equal(Math.max(...p2.map((p) => p.percent ?? 0)), 60);
+    assert.ok(p3.some((p) => (p.percent ?? 0) > 60 && (p.percent ?? 0) < 90));
+    assert.equal(Math.max(...p3.map((p) => p.percent ?? 0)), 90);
+    // By part 3, all 3 part sizes are known (via GET Content-Length + Content-Range) -> exact totalBytes!
+    assert.ok(p3.some((p) => p.totalBytes === totalArchiveBytes));
+
+    assert.equal(progressLog[progressLog.length - 1]?.stage, "ready");
+    assert.equal(progressLog[progressLog.length - 1]?.percent, 100);
+  } finally {
+    await closeMockServer(mockRef.server);
+  }
+});
+
+test("AppUpdater throttles high-frequency chunk SSE broadcasts while preserving real-time status and 0->90->99.9->100% single-file progression", async () => {
+  // 512 KB delivered in 512 rapid 1 KB chunks -> ~512 raw chunk callbacks, throttled SSE.
+  const fullPayload = randomBytes(512 * 1024);
+  const expectedSha = sha256Hex(fullPayload);
+
+  let mockRef!: { server: http.Server; baseUrl: string };
+  mockRef = await startMockServer((req, res) => {
+    const urlPath = req.url ?? "/";
+    if (urlPath.startsWith("/repos/")) {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify([
+          {
+            tag_name: "v0.1.2-preview.5",
+            prerelease: true,
+            draft: false,
+            assets: [
+              {
+                name: "Prismux-Setup-0.1.2-preview.5.exe",
+                browser_download_url: `${mockRef.baseUrl}/dl/setup.exe`
+              },
+              {
+                name: "Prismux-Setup-0.1.2-preview.5.exe.sha256",
+                browser_download_url: `${mockRef.baseUrl}/dl/setup.exe.sha256`
+              }
+            ]
+          }
+        ])
+      );
+      return;
+    }
+    if (urlPath === "/dl/setup.exe.sha256") {
+      res.statusCode = 200;
+      res.end(`${expectedSha}  Prismux-Setup-0.1.2-preview.5.exe\n`);
+      return;
+    }
+    if (urlPath === "/dl/setup.exe") {
+      // Omit Content-Length to also verify Content-Range total parsing on single-file download.
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-range": `bytes 0-${fullPayload.length - 1}/${fullPayload.length}`
+      });
+      writeChunkedBuffer(res, fullPayload, 1024, 0);
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+
+  try {
+    const dataDir = makeTempDir("prismux-updater-throttle-");
+    const updater = new AppUpdater({
+      currentVersion: "0.1.2-preview.4",
+      dataDir,
+      initialPolicy: { routePreference: "global", includePrerelease: true },
+      githubApiBase: mockRef.baseUrl,
+      giteeApiBase: mockRef.baseUrl,
+      retryDelaysMs: [10]
+    });
+
+    const check = await updater.checkForUpdates();
+    let rawChunkProgressCount = 0;
+    const sseEvents: UpdaterSseEventPayload[] = [];
+    const unsub = updater.subscribeEvents((evt) => {
+      sseEvents.push(evt);
+    });
+
+    const result = await updater.downloadUpdate({
+      checkResult: check,
+      onProgress: (p) => {
+        if (p.stage === "downloading") {
+          rawChunkProgressCount += 1;
+          // Ensure updater.getStatus().progress is updated synchronously on every chunk.
+          assert.equal(updater.getStatus().progress?.bytesDownloaded, p.bytesDownloaded);
+        }
+      }
+    });
+    unsub();
+
+    assert.equal(result.verified, true);
+    assert.equal(result.sha256, expectedSha);
+
+    const sseDownloadEvents = sseEvents.filter((evt) => evt.type === "progress");
+    const sseVerifyEvents = sseEvents.filter((evt) => evt.type === "verifying");
+    const sseReadyEvents = sseEvents.filter((evt) => evt.type === "ready");
+
+    assert.ok(
+      rawChunkProgressCount >= 200,
+      `Expected >=200 raw chunk progress callbacks, got ${rawChunkProgressCount}`
+    );
+    assert.ok(
+      sseDownloadEvents.length > 10 && sseDownloadEvents.length <= 120,
+      `Expected throttled SSE progress events (11..120), got ${sseDownloadEvents.length} for ${rawChunkProgressCount} raw chunks`
+    );
+    assert.ok(
+      sseDownloadEvents.length < rawChunkProgressCount / 2,
+      `Expected SSE throttling to cut event volume by >50% (${sseDownloadEvents.length} vs ${rawChunkProgressCount})`
+    );
+    assert.equal(sseDownloadEvents[0]!.progress?.percent, 0);
+    assert.equal(sseDownloadEvents[sseDownloadEvents.length - 1]!.progress?.percent, 90);
+    assert.equal(
+      sseDownloadEvents[sseDownloadEvents.length - 1]!.progress?.totalBytes,
+      fullPayload.length
+    );
+
+    assert.ok(sseVerifyEvents.length >= 1);
+    assert.ok(sseVerifyEvents[0]!.progress?.percent !== null && sseVerifyEvents[0]!.progress!.percent! >= 90);
+    assert.equal(sseVerifyEvents[sseVerifyEvents.length - 1]!.progress?.percent, 99.9);
+
+    assert.equal(sseReadyEvents.length, 1);
+    assert.equal(sseReadyEvents[0]!.progress?.percent, 100);
+    assert.equal(sseReadyEvents[0]!.status.downloading, false);
+  } finally {
+    await closeMockServer(mockRef.server);
   }
 });

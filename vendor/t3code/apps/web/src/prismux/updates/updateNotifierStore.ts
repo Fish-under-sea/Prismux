@@ -10,6 +10,8 @@ import {
 export const AUTO_CHECK_UPDATES_STORAGE_KEY = "prismux.updater.autoCheck.v1";
 export const COLLAPSED_UPDATE_VERSIONS_STORAGE_KEY = "prismux.updater.collapsedVersions.v1";
 export const PRISMUX_UPDATE_AVAILABLE_EVENT = "prismux:update-available";
+export const UPDATER_SSE_STALE_FALLBACK_MS = 700;
+export const UPDATER_STATUS_POLL_INTERVAL_MS = 500;
 
 export type UpdatePresentationMode = "hidden" | "toast" | "modal" | "capsule";
 
@@ -43,6 +45,8 @@ export interface UpdateNotifierState {
   readonly downloading: boolean;
   readonly installing: boolean;
   readonly speedBytesPerSec: number | null;
+  readonly lastSseEventAt: number;
+  readonly lastPollSyncAt: number;
   readonly errorMessage: string | null;
   readonly statusMessage: string | null;
 }
@@ -359,7 +363,7 @@ export interface UpdateNotifierStore {
   ): void;
   hydrateFromDaemonStatus(
     status: UpdaterStatusView,
-    options?: { readonly syncAutoCheck?: boolean },
+    options?: { readonly syncAutoCheck?: boolean; readonly fromPoll?: boolean },
   ): void;
   applySseEvent(event: DaemonUpdaterEvent, appVersionFallback?: string): void;
   openReleaseModal(): void;
@@ -388,6 +392,8 @@ export function createUpdateNotifierStore(
     downloading: false,
     installing: false,
     speedBytesPerSec: null,
+    lastSseEventAt: 0,
+    lastPollSyncAt: 0,
     errorMessage: null,
     statusMessage: null,
   };
@@ -411,9 +417,13 @@ export function createUpdateNotifierStore(
     }
     const now = progress.updatedAt > 0 ? progress.updatedAt : Date.now();
     const bytes = Math.max(0, progress.bytesDownloaded);
-    if (!lastBytesSample || bytes < lastBytesSample.bytes) {
+    if (!lastBytesSample) {
       lastBytesSample = { bytes, at: now };
       return state.speedBytesPerSec;
+    }
+    if (bytes < lastBytesSample.bytes) {
+      lastBytesSample = { bytes, at: now };
+      return null;
     }
     const dtMs = now - lastBytesSample.at;
     const dBytes = bytes - lastBytesSample.bytes;
@@ -545,20 +555,42 @@ export function createUpdateNotifierStore(
         writeAutoCheckPreference(nextAutoCheck, storage);
       }
 
-      const nextSpeed = computeNextSpeed(status);
-      const nextDownloading = isUpdateTransferActive(status);
+      // Guard against stale in-flight poll snapshots rewinding fresher SSE progress.
+      const prevProgress = state.updaterStatus?.progress ?? null;
+      const incomingProgress = status.progress;
+      const effectiveStatus =
+        opts?.fromPoll &&
+        prevProgress &&
+        incomingProgress &&
+        isUpdateTransferActive(state.updaterStatus) &&
+        isUpdateTransferActive(status) &&
+        prevProgress.updatedAt > 0 &&
+        incomingProgress.updatedAt > 0 &&
+        incomingProgress.updatedAt < prevProgress.updatedAt
+          ? {
+              ...status,
+              installState: state.updaterStatus?.installState ?? status.installState,
+              progress: prevProgress,
+            }
+          : status;
+
+      const nextSpeed = computeNextSpeed(effectiveStatus);
+      const nextDownloading = isUpdateTransferActive(effectiveStatus);
 
       let nextAvailable = state.availableUpdate;
       let nextPresentation = state.presentation;
 
-      if (status.lastCheck?.hasUpdate && normalizeVersionString(status.lastCheck.latestVersion)) {
-        nextAvailable = status.lastCheck;
-        const verKey = normalizeVersionString(status.lastCheck.latestVersion);
+      if (
+        effectiveStatus.lastCheck?.hasUpdate &&
+        normalizeVersionString(effectiveStatus.lastCheck.latestVersion)
+      ) {
+        nextAvailable = effectiveStatus.lastCheck;
+        const verKey = normalizeVersionString(effectiveStatus.lastCheck.latestVersion);
         if (nextPresentation === "hidden") {
           nextPresentation = state.collapsedVersions.includes(verKey) ? "capsule" : "toast";
         }
       } else if (
-        (nextDownloading || hasVerifiedUpdatePackage(status)) &&
+        (nextDownloading || hasVerifiedUpdatePackage(effectiveStatus)) &&
         nextPresentation === "hidden"
       ) {
         nextPresentation = "capsule";
@@ -567,22 +599,30 @@ export function createUpdateNotifierStore(
       setState({
         ...state,
         autoCheckEnabled: nextAutoCheck,
-        updaterStatus: status,
+        updaterStatus: effectiveStatus,
         availableUpdate: nextAvailable,
         presentation: nextPresentation,
-        checking: status.checking,
+        checking: effectiveStatus.checking,
         downloading: nextDownloading,
         speedBytesPerSec: nextSpeed,
+        ...(opts?.fromPoll ? { lastPollSyncAt: Date.now() } : {}),
         errorMessage:
-          status.progress?.stage === "error" && status.lastError
-            ? status.lastError
+          effectiveStatus.progress?.stage === "error" && effectiveStatus.lastError
+            ? effectiveStatus.lastError
             : state.errorMessage,
       });
     },
 
     applySseEvent: (event, appVersionFallback = "") => {
       const nextStatus = applyUpdaterSseEvent(state.updaterStatus, event, appVersionFallback);
-      if (!nextStatus) return;
+      const sseReceivedAt = event.receivedAt > 0 ? event.receivedAt : Date.now();
+      if (!nextStatus) {
+        setState({
+          ...state,
+          lastSseEventAt: sseReceivedAt,
+        });
+        return;
+      }
 
       const nextSpeed = computeNextSpeed(nextStatus);
       const nextDownloading = isUpdateTransferActive(nextStatus);
@@ -614,6 +654,7 @@ export function createUpdateNotifierStore(
         checking: nextStatus.checking,
         downloading: nextDownloading,
         speedBytesPerSec: nextSpeed,
+        lastSseEventAt: sseReceivedAt,
         errorMessage:
           nextStatus.progress?.stage === "error" && nextStatus.lastError
             ? nextStatus.lastError
@@ -689,10 +730,109 @@ export function createUpdateNotifierStore(
         downloading: false,
         installing: false,
         speedBytesPerSec: null,
+        lastSseEventAt: 0,
+        lastPollSyncAt: 0,
         errorMessage: null,
         statusMessage: null,
       });
     },
+  };
+}
+
+export function shouldPollUpdaterStatusFallback(
+  state: Pick<
+    UpdateNotifierState,
+    "downloading" | "updaterStatus" | "lastSseEventAt" | "lastPollSyncAt"
+  >,
+  now = Date.now(),
+  options: {
+    readonly staleThresholdMs?: number;
+    readonly minPollGapMs?: number;
+  } = {},
+): boolean {
+  const isActive = state.downloading || isUpdateTransferActive(state.updaterStatus);
+  if (!isActive) {
+    return false;
+  }
+  const staleThresholdMs = options.staleThresholdMs ?? UPDATER_SSE_STALE_FALLBACK_MS;
+  const minPollGapMs = options.minPollGapMs ?? 450;
+  if (now - state.lastSseEventAt <= staleThresholdMs) {
+    return false;
+  }
+  if (state.lastPollSyncAt > 0 && now - state.lastPollSyncAt < minPollGapMs) {
+    return false;
+  }
+  return true;
+}
+
+export interface UpdaterStatusFallbackPollerOptions {
+  readonly store: UpdateNotifierStore;
+  readonly fetchStatus: () => Promise<unknown>;
+  readonly parseStatus: (raw: unknown) => UpdaterStatusView | null;
+  readonly onHydrated?: (status: UpdaterStatusView) => void;
+  readonly intervalMs?: number;
+  readonly staleThresholdMs?: number;
+  readonly minPollGapMs?: number;
+  readonly now?: () => number;
+  readonly setIntervalFn?: typeof setInterval;
+  readonly clearIntervalFn?: typeof clearInterval;
+}
+
+/**
+ * Fallback status poller during active transfers:
+ * Whenever SSE has been silent for > 700ms while a download/extract/verify is in flight,
+ * polls `GET /v1/updater/status` every 500ms and hydrates the shared store so UI progress
+ * never freezes even if an SSE stream stalls or drops mid-transfer.
+ */
+export function startUpdaterStatusFallbackPoller(
+  options: UpdaterStatusFallbackPollerOptions,
+): () => void {
+  const intervalMs = options.intervalMs ?? UPDATER_STATUS_POLL_INTERVAL_MS;
+  const staleThresholdMs = options.staleThresholdMs ?? UPDATER_SSE_STALE_FALLBACK_MS;
+  const minPollGapMs = options.minPollGapMs ?? Math.max(200, intervalMs - 50);
+  const nowFn = options.now ?? Date.now;
+  const setInt = options.setIntervalFn ?? setInterval;
+  const clearInt = options.clearIntervalFn ?? clearInterval;
+
+  let disposed = false;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (disposed || inFlight) return;
+    const snap = options.store.getState();
+    if (
+      !shouldPollUpdaterStatusFallback(snap, nowFn(), {
+        staleThresholdMs,
+        minPollGapMs,
+      })
+    ) {
+      return;
+    }
+    inFlight = true;
+    try {
+      const raw = await options.fetchStatus();
+      if (disposed) return;
+      const parsed = options.parseStatus(raw);
+      if (!parsed) return;
+      options.store.hydrateFromDaemonStatus(parsed, {
+        syncAutoCheck: false,
+        fromPoll: true,
+      });
+      options.onHydrated?.(parsed);
+    } catch {
+      // Transient polling errors stay silent; SSE & next tick will recover.
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const timer = setInt(() => {
+    void tick();
+  }, intervalMs);
+
+  return () => {
+    disposed = true;
+    clearInt(timer);
   };
 }
 
