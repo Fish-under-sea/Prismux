@@ -75,6 +75,27 @@ function advanceCodexUsage(previous: CodexTokenUsage | null, last: CodexTokenUsa
 
 const CodexSpeed = Schema.Literals(["standard", "fast", "ultrafast"]);
 
+const MAX_CODEX_CALL_DURATION_MS = 10 * 60 * 1000;
+
+function readCodexTimingMs(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+  allowZero: boolean,
+): number | undefined {
+  for (const key of keys) {
+    const value = source[key];
+    if (
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      (allowZero ? value >= 0 : value > 0) &&
+      value <= 60 * 60 * 1000
+    ) {
+      return Math.round(value * 100) / 100;
+    }
+  }
+  return undefined;
+}
+
 // What a request is billed as is fixed when it is read, not when a later snapshot reconciles it.
 const CodexUnreportedRequest = Schema.Struct({
   timestampMs: Schema.Finite,
@@ -82,6 +103,8 @@ const CodexUnreportedRequest = Schema.Struct({
   turnId: Schema.String,
   speed: CodexSpeed,
   sawThreadSettings: Schema.Boolean,
+  ttftMs: Schema.optionalKey(Schema.Finite),
+  durationMs: Schema.optionalKey(Schema.Finite),
   usage: CodexTokenUsage,
 });
 type CodexUnreportedRequest = typeof CodexUnreportedRequest.Type;
@@ -154,6 +177,7 @@ export const CodexScanState = Schema.Struct({
   sawThreadSettings: Schema.mutableKey(Schema.Boolean),
   suppressingForkCopies: Schema.mutableKey(Schema.Boolean),
   forkCopyAnchorMs: Schema.mutableKey(Schema.Finite),
+  lastTurnContextAtMs: Schema.mutableKey(Schema.optionalKey(Schema.Finite)),
 });
 export type CodexScanState = typeof CodexScanState.Type;
 
@@ -250,6 +274,9 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): readonly Usag
       payloadRecord["model"].length > 0
         ? payloadRecord["turn_id"]
         : "";
+    const turnContextAtMs = parseTimestampMs(record["timestamp"]);
+    if (turnContextAtMs !== null) state.lastTurnContextAtMs = turnContextAtMs;
+    else delete state.lastTurnContextAtMs;
     return [];
   }
 
@@ -260,6 +287,13 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): readonly Usag
     if (timestampMs === null || usage === null || state.model.length === 0) return [];
     // Copied history is already billed in the parent.
     if (isForkCopy(state, timestampMs)) return [];
+    const ttftMs = readCodexTimingMs(payloadRecord, ["ttftMs", "ttft_ms", "time_to_first_token_ms"], true);
+    const explicitDurationMs = readCodexTimingMs(
+      payloadRecord,
+      ["durationMs", "duration_ms", "elapsed_ms", "latency_ms"],
+      false,
+    );
+    const attribution = codexAttribution(state, timestampMs, ttftMs, explicitDurationMs);
     const responseId = payloadRecord["response_id"];
     if (typeof responseId === "string" && responseId.length > 0) {
       const pending = state.unreportedRequests ?? [];
@@ -273,13 +307,13 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): readonly Usag
       return [
         ...pending.map((request) => codexRequestRecord(state, request.usage, request)),
         {
-          ...codexRequestRecord(state, usage, codexAttribution(state, timestampMs)),
+          ...codexRequestRecord(state, usage, attribution),
           dedupeKey: JSON.stringify(["codex", state.sessionId, responseId]),
         },
       ];
     }
     state.requestLedgerActive = false;
-    (state.unreportedRequests ??= []).push({ ...codexAttribution(state, timestampMs), usage });
+    (state.unreportedRequests ??= []).push({ ...attribution, usage });
     return [];
   }
 
@@ -418,26 +452,52 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): readonly Usag
   }
   state.lastUsageSignature = signature;
 
+  const ttftMs =
+    readCodexTimingMs(infoRecord, ["ttftMs", "ttft_ms", "time_to_first_token_ms"], true) ??
+    readCodexTimingMs(payloadRecord, ["ttftMs", "ttft_ms", "time_to_first_token_ms"], true);
+  const explicitDurationMs =
+    readCodexTimingMs(infoRecord, ["durationMs", "duration_ms", "elapsed_ms", "latency_ms"], false) ??
+    readCodexTimingMs(payloadRecord, ["durationMs", "duration_ms", "elapsed_ms", "latency_ms"], false);
+
   return [
     ...unreported.map((request) => codexRequestRecord(state, request.usage, request)),
-    codexRequestRecord(state, last, codexAttribution(state, timestampMs)),
+    codexRequestRecord(
+      state,
+      last,
+      codexAttribution(state, timestampMs, ttftMs, explicitDurationMs),
+    ),
   ];
 }
 
-function codexAttribution(state: CodexScanState, timestampMs: number): CodexRequestAttribution {
+function codexAttribution(
+  state: CodexScanState,
+  timestampMs: number,
+  ttftMs?: number,
+  explicitDurationMs?: number,
+): CodexRequestAttribution {
+  let durationMs = explicitDurationMs;
+  if (durationMs === undefined && state.lastTurnContextAtMs !== undefined) {
+    const elapsed = timestampMs - state.lastTurnContextAtMs;
+    if (elapsed > 0 && elapsed <= MAX_CODEX_CALL_DURATION_MS) {
+      durationMs = elapsed;
+    }
+  }
+  delete state.lastTurnContextAtMs;
   return {
     timestampMs,
     model: state.model,
     turnId: state.turnId,
     speed: state.speed,
     sawThreadSettings: state.sawThreadSettings,
+    ...(ttftMs !== undefined ? { ttftMs } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
   };
 }
 
 function codexRequestRecord(
   state: CodexScanState,
   usage: CodexTokenUsage,
-  { timestampMs, model, turnId, speed, sawThreadSettings }: CodexRequestAttribution,
+  { timestampMs, model, turnId, speed, sawThreadSettings, ttftMs, durationMs }: CodexRequestAttribution,
 ): UsageRecord {
   const inputTokens = usage.input_tokens;
   const cachedInputTokens = usage.cached_input_tokens;
@@ -469,6 +529,8 @@ function codexRequestRecord(
       ? { unresolvedServiceTierTurnId: turnId }
       : {}),
     dedupeKey: null,
+    ...(ttftMs !== undefined ? { ttftMs } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
   };
 }
 
@@ -494,7 +556,24 @@ export const codexUsageFormat: TranscriptUsageFormat<CodexScanState> = {
       thread_settings: { service_tier: true },
       forked_from_id: true,
       source: { subagent: { thread_spawn: { parent_thread_id: true } } },
-      info: { last_token_usage: true, total_token_usage: true },
+      info: {
+        last_token_usage: true,
+        total_token_usage: true,
+        ttftMs: true,
+        ttft_ms: true,
+        time_to_first_token_ms: true,
+        durationMs: true,
+        duration_ms: true,
+        elapsed_ms: true,
+        latency_ms: true,
+      },
+      ttftMs: true,
+      ttft_ms: true,
+      time_to_first_token_ms: true,
+      durationMs: true,
+      duration_ms: true,
+      elapsed_ms: true,
+      latency_ms: true,
       usage: true,
     },
   },

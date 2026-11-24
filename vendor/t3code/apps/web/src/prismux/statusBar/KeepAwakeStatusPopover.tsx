@@ -98,13 +98,16 @@ export function KeepAwakeStatusPopover({
               type="button"
               role="radio"
               aria-checked={selected}
+              data-selected={selected ? "true" : "false"}
               data-testid={`keep-awake-option-${option.mode}`}
               onClick={() => onSelectMode(option.mode)}
               className={cn(
-                "group flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                selected
-                  ? "bg-accent/70 text-foreground"
-                  : "text-foreground/90 hover:bg-accent/45",
+                "group flex w-full cursor-pointer items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                optionIsActivelyLocking
+                  ? "border-amber-500/45 bg-amber-500/14 text-foreground shadow-xs dark:border-amber-400/50 dark:bg-amber-400/18 [[data-pmx-glass='1']_&]:border-amber-400/55 [[data-pmx-glass='1']_&]:bg-amber-400/20"
+                  : selected
+                    ? "border-primary/45 bg-primary/14 text-foreground shadow-xs dark:border-primary/55 dark:bg-primary/20 [[data-pmx-glass='1']_&]:border-primary/60 [[data-pmx-glass='1']_&]:bg-primary/24"
+                    : "border-transparent bg-transparent text-foreground/85 hover:bg-black/[0.05] hover:text-foreground dark:hover:bg-white/[0.08] [[data-pmx-glass='1']_&]:hover:bg-white/10 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-black/[0.06]",
               )}
             >
               {/* Left glowing dot indicator */}

@@ -13,6 +13,7 @@ import {
   shouldDismissOnBackdropClick,
 } from "../../components/ui/dialog-styles";
 import type { UpdateCheckView } from "../settings/prismuxUpdates.logic";
+import { PrismuxReleaseNotesMarkdown } from "./PrismuxReleaseNotesMarkdown";
 import { PrismuxSidebarUpdateCapsule } from "./PrismuxSidebarUpdateCapsule";
 import { PrismuxUpdateReleaseModal } from "./PrismuxUpdateReleaseModal";
 import {
@@ -258,6 +259,52 @@ describe("updateNotifierStore state machine & persistence", () => {
     }
     expect(blocks[2]).toEqual({ type: "paragraph", text: "感谢大家反馈！" });
   });
+
+  it("strips Markdown blockquote prefixes (>) and GitHub Alert tags ([!NOTE]/[!IMPORTANT]/etc.) from toast preview", () => {
+    const quotedReleaseNotes = [
+      "# Prismux v0.1.2-preview.2",
+      "",
+      "> 纯宿主视觉层 0 Token 开销，内置 `sqlite-vec` 混合检索开箱即用。",
+      "",
+      "## 更新亮点",
+      "- 其他内容",
+    ].join("\n");
+    const quotedPreview = extractReleaseNotesPreview(quotedReleaseNotes);
+    expect(quotedPreview).toBe("纯宿主视觉层 0 Token 开销，内置 sqlite-vec 混合检索开箱即用。");
+    expect(quotedPreview.startsWith(">")).toBe(false);
+    expect(quotedPreview).not.toContain("`");
+
+    const alertMultiLineNotes = [
+      "# Release v0.2.0",
+      "> [!IMPORTANT]",
+      "> **官方插件默认零预装**，请按需在插件中心安装。",
+    ].join("\n");
+    const alertMultiLinePreview = extractReleaseNotesPreview(alertMultiLineNotes);
+    expect(alertMultiLinePreview).toBe("官方插件默认零预装，请按需在插件中心安装。");
+    expect(alertMultiLinePreview).not.toContain("[!IMPORTANT]");
+    expect(alertMultiLinePreview).not.toContain(">");
+    expect(alertMultiLinePreview).not.toContain("**");
+
+    const alertInlineNotes = "> [!NOTE] 仅本机运行，零外部服务依赖。";
+    expect(extractReleaseNotesPreview(alertInlineNotes)).toBe("仅本机运行，零外部服务依赖。");
+
+    const nestedAndFenceNotes = [
+      "```bash",
+      "pnpm build",
+      "```",
+      "> [!WARNING]",
+      "> > - [x] **嵌套引用与任务列表**均可干净提取",
+    ].join("\n");
+    expect(extractReleaseNotesPreview(nestedAndFenceNotes)).toBe(
+      "嵌套引用与任务列表均可干净提取",
+    );
+
+    const parsedBlocks = parseReleaseNotesBlocks(alertMultiLineNotes);
+    expect(parsedBlocks).toEqual([
+      { type: "heading", level: 1, text: "Release v0.2.0" },
+      { type: "paragraph", text: "**官方插件默认零预装**，请按需在插件中心安装。" },
+    ]);
+  });
 });
 
 describe("Sidebar update capsule & release modal rendering", () => {
@@ -309,6 +356,93 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(modalHtml).toContain("更新亮点");
     expect(modalHtml).toContain("软件内一键更新");
     expect(modalHtml).toContain("稍后提醒");
+  });
+
+  it("renders rich sanitized Markdown (headings, blockquotes, bold, inline/block code, GFM tables, hr, safe https links) across settings and update modal without raw syntax leakage", () => {
+    const richNotes = [
+      "# Prismux v0.1.2 Preview 1",
+      "",
+      "> 标准 SemVer / Tag: `v0.1.2-preview.1` (`0.1.2-preview.1`)。**官方四大插件（`qq` / `pet` / `fishdock-hook` / `ssh`）严格保持默认零预装**：按需独立安装。",
+      "",
+      "## 📦 下载指南：我应该下载哪个文件？",
+      "",
+      "### 1. 桌面主程序 (Desktop App)",
+      "",
+      "| 文件名 | 适用场景 | 校验 |",
+      "| :--- | :--- | :--- |",
+      "| `Prismux-Setup.exe` | 标准安装版 | **SHA-256** |",
+      "| `Prismux-Portable.zip` | 便携目录版 | **SHA-256** |",
+      "",
+      "1. 下载对应安装包",
+      "2. 核对 [GitHub Releases](https://github.com/Fish-under-sea/Prismux/releases)",
+      "",
+      "- 禁止危险链接：[恶意链接](javascript:alert(1))",
+      "- 原始 HTML 必须安全转义：<script>window.__xss=1</script>",
+      "",
+      "```bash",
+      "pnpm release:build",
+      "```",
+      "",
+      "---",
+    ].join("\n");
+
+    const renderedHtml = renderToStaticMarkup(
+      createElement(PrismuxReleaseNotesMarkdown, { markdown: richNotes }),
+    );
+
+    expect(renderedHtml).toContain('data-pmx-release-notes-markdown="1"');
+    expect(renderedHtml).toContain("<h1");
+    expect(renderedHtml).toContain("Prismux v0.1.2 Preview 1</h1>");
+    expect(renderedHtml).toContain("<h2");
+    expect(renderedHtml).toContain("下载指南：我应该下载哪个文件？</h2>");
+    expect(renderedHtml).toContain("<h3");
+    expect(renderedHtml).toContain("1. 桌面主程序 (Desktop App)</h3>");
+    expect(renderedHtml).toContain("<blockquote");
+    expect(renderedHtml).toContain("<strong");
+    expect(renderedHtml).toContain("官方四大插件");
+    expect(renderedHtml).toContain("<code");
+    expect(renderedHtml).toContain("v0.1.2-preview.1");
+    expect(renderedHtml).toContain('data-pmx-release-notes-table-wrap="1"');
+    expect(renderedHtml).toContain("overflow-x-auto");
+    expect(renderedHtml).toContain("<table");
+    expect(renderedHtml).toContain("<thead");
+    expect(renderedHtml).toContain("<tbody");
+    expect(renderedHtml).toContain("<ol");
+    expect(renderedHtml).toContain("<ul");
+    expect(renderedHtml).toContain("<pre");
+    expect(renderedHtml).toContain("pnpm release:build");
+    expect(renderedHtml).toContain("<hr");
+    expect(renderedHtml).toContain('href="https://github.com/Fish-under-sea/Prismux/releases"');
+    expect(renderedHtml).toContain('rel="noopener noreferrer"');
+
+    // No raw markdown syntax symbols leaking into rendered output
+    expect(renderedHtml).not.toContain("# Prismux v0.1.2 Preview 1");
+    expect(renderedHtml).not.toContain("## 📦");
+    expect(renderedHtml).not.toContain("### 1.");
+    expect(renderedHtml).not.toContain("&gt; 标准 SemVer");
+    expect(renderedHtml).not.toContain("**官方四大插件");
+    expect(renderedHtml).not.toContain("| :--- |");
+
+    // Strict XSS & protocol hardening (no script tag or javascript: href)
+    expect(renderedHtml).not.toContain("<script>");
+    expect(renderedHtml).not.toContain('href="javascript:');
+
+    // Update release modal also renders full rich Markdown via PrismuxReleaseNotesMarkdown
+    prismuxUpdateNotifierStore.reportUpdateAvailable(makeUpdateCheck({ releaseNotes: richNotes }));
+    prismuxUpdateNotifierStore.openReleaseModal();
+    const modalHtml = renderToStaticMarkup(createElement(PrismuxUpdateReleaseModal));
+    expect(modalHtml).toContain('data-pmx-release-notes-markdown="1"');
+    expect(modalHtml).toContain("<blockquote");
+    expect(modalHtml).toContain("<table");
+    expect(modalHtml).not.toContain("**官方四大插件");
+
+    // Verify PrismuxUpdatesSettingsPage no longer renders raw <pre> releaseNotes
+    const updatesSettingsSource = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../settings/PrismuxUpdatesSettingsPage.tsx"),
+      "utf8",
+    );
+    expect(updatesSettingsSource).toContain("<PrismuxReleaseNotesMarkdown");
+    expect(updatesSettingsSource).not.toContain("whitespace-pre-wrap");
   });
 });
 

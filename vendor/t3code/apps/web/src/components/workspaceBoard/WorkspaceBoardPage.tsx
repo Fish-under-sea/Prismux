@@ -268,18 +268,21 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
 
   return (
     <SidebarInset className="h-dvh min-w-0 flex-1 overflow-hidden">
-      <PrismuxStageFrame rightPanelOpen={topbarPortal.standaloneRightPanelOpen}>
+      <PrismuxStageFrame
+        glassZone="workPanels"
+        rightPanelOpen={topbarPortal.standaloneRightPanelOpen}
+      >
         <div
           data-testid="prismux-workspace-board-page"
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           {/* Top Header Bar: Title + Search input ... Filter + View Settings + Close × */}
-          <header className="flex flex-none items-center justify-between gap-3 border-b border-border/55 px-4 py-2.5">
+          <header className="flex flex-none items-center justify-between gap-3 border-b border-border/65 px-4 py-2.5">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <h1 className="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
                 <span>{copy.title}</span>
                 {projection.totalCount > 0 ? (
-                  <span className="rounded-full bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-muted-foreground tabular-nums">
+                  <span className="rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-foreground/80 tabular-nums">
                     {projection.isFiltering
                       ? `${projection.matchCount} / ${projection.totalCount}`
                       : projection.totalCount}
@@ -291,12 +294,13 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   data-testid="workspace-board-search-input"
+                  data-pmx-work-panel-control="1"
                   value={filters.query}
                   onChange={(event) =>
                     setFilters((current) => ({ ...current, query: event.target.value }))
                   }
                   placeholder={copy.searchPlaceholder}
-                  className="h-8 rounded-md border-border/55 bg-background/70 pr-7 pl-8 text-xs text-foreground shadow-xs"
+                  className="h-8 rounded-md border-border/75 bg-card pr-7 pl-8 text-xs text-foreground shadow-xs"
                 />
                 {filters.query.length > 0 ? (
                   <button
@@ -395,8 +399,8 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                           className={cn(
                             "flex w-full cursor-pointer items-center justify-between rounded px-2 py-1 text-left transition-colors",
                             filters.projectKey === null
-                              ? "bg-accent font-medium text-foreground"
-                              : "text-muted-foreground hover:bg-accent/55 hover:text-foreground",
+                              ? "bg-primary text-primary-foreground font-medium"
+                              : "text-foreground/85 hover:bg-accent hover:text-foreground",
                           )}
                         >
                           <span className="truncate">{copy.filterAllProjects}</span>
@@ -411,8 +415,8 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                             className={cn(
                               "flex w-full cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-left transition-colors",
                               filters.projectKey === project.key
-                                ? "bg-accent font-medium text-foreground"
-                                : "text-muted-foreground hover:bg-accent/55 hover:text-foreground",
+                                ? "bg-primary text-primary-foreground font-medium"
+                                : "text-foreground/85 hover:bg-accent hover:text-foreground",
                             )}
                           >
                             <FolderGit2Icon className="size-3 shrink-0 opacity-75" />
@@ -523,17 +527,18 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
             <div
               data-testid="workspace-board-pin-drop-target"
               data-workspace-pin-drop-target=""
+              data-pmx-work-panel-card="1"
               data-drag-over={isDragOverPinTarget ? "true" : "false"}
               onDragOver={handlePinZoneDragOver}
               onDragLeave={() => setIsDragOverPinTarget(false)}
               onDrop={handlePinZoneDrop}
               className={cn(
-                "mb-3 flex min-h-9 shrink-0 flex-wrap items-center gap-2 rounded-md border border-dashed border-border/75 bg-background/45 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur-sm transition-colors",
+                "mb-3 flex min-h-9 shrink-0 flex-wrap items-center gap-2 rounded-md border border-dashed border-border/80 bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors",
                 isDragOverPinTarget &&
-                  "border-primary bg-primary/10 text-foreground ring-1 ring-primary/30",
+                  "border-primary bg-primary/15 text-foreground ring-1 ring-primary/35",
               )}
             >
-              <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-foreground/90">
+              <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-foreground">
                 <PinIcon className="size-3.5" />
                 <span>{copy.pinnedTitle}</span>
               </span>
@@ -547,7 +552,8 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                   {projection.pinnedCards.map((card) => (
                     <div
                       key={card.key}
-                      className="group/pinchip inline-flex max-w-[220px] items-center gap-1 rounded-md border border-border/60 bg-background/75 px-2 py-0.5 text-[11px] text-foreground shadow-xs"
+                      data-pmx-work-panel-control="1"
+                      className="group/pinchip inline-flex max-w-[220px] items-center gap-1 rounded-md border border-border/75 bg-muted/70 px-2 py-0.5 text-[11px] text-foreground shadow-xs"
                     >
                       <button
                         type="button"
@@ -592,6 +598,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                     aria-label={lane.label}
                     data-testid={`workspace-board-lane-${lane.id}`}
                     data-lane-id={lane.id}
+                    data-pmx-work-panel-card="1"
                     data-drag-target={isDragTarget ? "true" : "false"}
                     onDragOver={(event) => handleLaneDragOver(event, lane.id)}
                     onDragLeave={(event) => {
@@ -601,15 +608,15 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                     }}
                     onDrop={(event) => handleLaneDrop(event, lane.id)}
                     className={cn(
-                      "group/lane relative flex min-h-0 min-w-[230px] flex-col overflow-hidden rounded-md border border-t-2 border-border/60 backdrop-blur-md transition-colors",
+                      "group/lane relative flex min-h-0 min-w-[230px] flex-col overflow-hidden rounded-md border border-t-2 border-border/75 bg-card transition-colors",
                       lane.borderTopClass,
                       lane.laneTintClass,
                       isDragTarget &&
-                        "border-primary/70 bg-accent/55 ring-1 ring-primary/35",
+                        "border-primary/75 ring-1 ring-primary/40",
                     )}
                   >
                     {/* Lane Header */}
-                    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border/55 py-0 pr-2 pl-3">
+                    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border/65 py-0 pr-2 pl-3">
                       <div className="flex min-w-0 flex-1 items-center gap-1.5">
                         <LaneStatusIcon
                           laneId={lane.id}
@@ -618,7 +625,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                         <span className="min-w-0 truncate text-xs font-semibold text-foreground">
                           {lane.label}
                         </span>
-                        <span className="shrink-0 rounded-full bg-muted/85 px-1.5 py-0.5 text-[10px] leading-none font-medium text-muted-foreground tabular-nums">
+                        <span className="shrink-0 rounded-full border border-border/60 bg-muted/85 px-1.5 py-0.5 text-[10px] leading-none font-medium text-foreground/80 tabular-nums">
                           {projection.isFiltering
                             ? `${cards.length} / ${totalInLane}`
                             : cards.length}
@@ -635,7 +642,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                               data-testid={`workspace-board-add-${lane.id}`}
                               aria-label={createTooltip}
                               onClick={() => requestOpenCreateWorkspace()}
-                              className="size-6 rounded text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                              className="size-6 rounded text-muted-foreground hover:bg-accent hover:text-foreground"
                             />
                           }
                         >
@@ -660,6 +667,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                                 key={card.key}
                                 draggable
                                 data-testid={`workspace-board-card-${card.threadId}`}
+                                data-pmx-work-panel-control="1"
                                 onDragStart={(event) => handleCardDragStart(event, card.key)}
                                 onDragEnd={handleCardDragEnd}
                                 onClick={() => handleOpenCard(card)}
@@ -672,7 +680,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                                   }
                                 }}
                                 className={cn(
-                                  "group/card relative flex cursor-pointer flex-col gap-1.5 rounded-md border border-border/55 bg-background/75 text-left shadow-xs transition-all hover:border-border hover:bg-background/95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                                  "group/card relative flex cursor-pointer flex-col gap-1.5 rounded-md border border-border/75 bg-card text-left shadow-xs transition-all hover:border-primary/45 hover:bg-accent/55 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                                   boardState.compactMode ? "px-2.5 py-1.5" : "px-2.5 py-2",
                                   isDragging && "opacity-45",
                                 )}

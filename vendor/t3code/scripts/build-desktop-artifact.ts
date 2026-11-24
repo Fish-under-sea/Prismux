@@ -614,6 +614,39 @@ if (!result.ok) throw new Error(result.error);
 result.value.destroy();
 `;
 
+const WINDOWS_SQLITE_VEC_PROBE_SOURCE = `
+const { existsSync } = await import("node:fs");
+const { join } = await import("node:path");
+const { pathToFileURL } = await import("node:url");
+const { DatabaseSync } = await import("node:sqlite");
+const vecDllPath = process.argv[1];
+const daemonMemoryCoreEntry = process.argv[2];
+const db = new DatabaseSync(":memory:", { allowExtension: true });
+db.loadExtension(vecDllPath);
+const row = db.prepare("SELECT vec_version() AS version").get();
+db.close();
+if (!row || typeof row.version !== "string" || row.version.trim().length === 0) {
+  throw new Error("SELECT vec_version() returned empty output");
+}
+if (daemonMemoryCoreEntry && existsSync(daemonMemoryCoreEntry)) {
+  const { SqliteMemoryStore } = await import(pathToFileURL(daemonMemoryCoreEntry).href);
+  const store = new SqliteMemoryStore({
+    dbPath: ":memory:",
+    machineId: "packaged-probe",
+    embeddingDimensions: 4,
+    enableWal: false,
+  });
+  await store.initialize();
+  const enabled = store.isVectorSearchEnabled();
+  const mode = store.getRetrievalMode();
+  const ver = store.getVectorExtensionVersion();
+  await store.close();
+  if (!enabled || mode !== "fts5+sqlite-vec" || !ver) {
+    throw new Error("Packaged SqliteMemoryStore failed zero-config sqlite-vec auto-load: mode=" + mode);
+  }
+}
+`;
+
 export class ExternalizedBundleError extends Schema.TaggedError<ExternalizedBundleError>()(
   "ExternalizedBundleError",
   { sentinel: Schema.String, inlinedPackageCount: Schema.Number },
@@ -746,6 +779,20 @@ export class WindowsPrimaryNativeProbeError extends Schema.TaggedError<WindowsPr
   }
 }
 
+export class WindowsSqliteVecNativeProbeError extends Schema.TaggedError<WindowsSqliteVecNativeProbeError>()(
+  "WindowsSqliteVecNativeProbeError",
+  {
+    executablePath: Schema.String,
+    extensionPath: Schema.String,
+    exitCode: Schema.Number,
+    output: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The packaged Windows primary could not load sqlite-vec from ${this.extensionPath} (exit ${this.exitCode}). Output:\n${this.output}`;
+  }
+}
+
 const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "packaged-app-missing",
   "sidecar-missing",
@@ -753,6 +800,7 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "unpacked-native-missing",
   "resource-monitor-missing",
   "seven-zip-missing",
+  "sqlite-vec-missing",
   "official-plugins-preinstalled",
   "wsl-runtime-missing",
   "wsl-runtime-invalid",
@@ -782,6 +830,9 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
     }
     if (this.reason === "seven-zip-missing") {
       return "Windows packaged payload is missing resources/tools/7za.exe or its size is invalid.";
+    }
+    if (this.reason === "sqlite-vec-missing") {
+      return "Windows packaged payload is missing resources/native/sqlite-vec/vec0.dll or its size is invalid.";
     }
     if (this.reason === "official-plugins-preinstalled") {
       return `Windows packaged payload violates the zero-preinstalled official plugins policy: ${(this.missingFiles ?? []).join(", ")}.`;
@@ -815,6 +866,22 @@ export class WindowsSevenZipToolError extends Schema.TaggedError<WindowsSevenZip
       return `Staged 7za.exe has unexpected size (${String(this.sizeBytes ?? 0)} bytes); expected between ${String(WINDOWS_SEVEN_ZIP_MIN_BYTES)} and ${String(WINDOWS_SEVEN_ZIP_MAX_BYTES)} bytes.`;
     }
     return `Could not locate 7za.exe / 7z.exe in any candidate path: ${this.searchedPaths.join(", ")}.`;
+  }
+}
+
+export class SqliteVecNativeToolError extends Schema.TaggedError<SqliteVecNativeToolError>()(
+  "SqliteVecNativeToolError",
+  {
+    reason: Schema.Literals(["missing", "invalid-size"]),
+    searchedPaths: Schema.Array(Schema.String),
+    sizeBytes: Schema.optionalKey(Schema.Number),
+  },
+) {
+  override get message(): string {
+    if (this.reason === "invalid-size") {
+      return `Staged sqlite-vec native binary has unexpected size (${String(this.sizeBytes ?? 0)} bytes); expected between ${String(WINDOWS_SQLITE_VEC_MIN_BYTES)} and ${String(WINDOWS_SQLITE_VEC_MAX_BYTES)} bytes.`;
+    }
+    return `Could not locate sqlite-vec native binary (vec0) in any candidate path: ${this.searchedPaths.join(", ")}.`;
   }
 }
 
@@ -1027,6 +1094,14 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/apple-speech/**/*",
   "!apps/desktop/prod-resources/windows-server",
   "!apps/desktop/prod-resources/windows-server/**/*",
+  "!apps/desktop/prod-resources/native",
+  "!apps/desktop/prod-resources/native/**/*",
+  "!apps/desktop/prod-resources/prismux-daemon",
+  "!apps/desktop/prod-resources/prismux-daemon/**/*",
+  "!apps/desktop/prod-resources/prismux-daemon-deps",
+  "!apps/desktop/prod-resources/prismux-daemon-deps/**/*",
+  "!apps/desktop/prod-resources/tools",
+  "!apps/desktop/prod-resources/tools/**/*",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
   "!apps/desktop/gnome-extension",
@@ -1093,6 +1168,8 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
 export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 300;
 export const WINDOWS_SEVEN_ZIP_MIN_BYTES = 100_000;
 export const WINDOWS_SEVEN_ZIP_MAX_BYTES = 20 * 1024 * 1024;
+export const WINDOWS_SQLITE_VEC_MIN_BYTES = 50_000;
+export const WINDOWS_SQLITE_VEC_MAX_BYTES = 20 * 1024 * 1024;
 export const PRISMUX_OFFICIAL_PLUGIN_DIRS = [
   "plugin-qq",
   "plugin-pet",
@@ -1103,6 +1180,12 @@ export const WINDOWS_TOOLS_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/tools",
     to: "tools",
+  },
+] as const;
+export const PRISMUX_SQLITE_VEC_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/native/sqlite-vec",
+    to: "native/sqlite-vec",
   },
 ] as const;
 export const PRISMUX_DAEMON_EXTRA_RESOURCES = [
@@ -2981,7 +3064,9 @@ export function resolveWindowsSevenZipCandidates(input: {
     NodePath.join(input.repoRoot, "node_modules", "7zip-bin", "win", archFolder, "7za.exe"),
   );
   if (archFolder !== "x64") {
-    candidates.push(NodePath.join(input.repoRoot, "node_modules", "7zip-bin", "win", "x64", "7za.exe"));
+    candidates.push(
+      NodePath.join(input.repoRoot, "node_modules", "7zip-bin", "win", "x64", "7za.exe"),
+    );
   }
   candidates.push(
     "C:\\Program Files\\7-Zip\\7za.exe",
@@ -3056,10 +3141,7 @@ export const stageWindowsSevenZipTool = Effect.fn("desktopArtifact.stageWindowsS
 
     const copiedStat = yield* fs.stat(targetExePath);
     const copiedBytes = Number(copiedStat.size);
-    if (
-      copiedBytes < WINDOWS_SEVEN_ZIP_MIN_BYTES ||
-      copiedBytes > WINDOWS_SEVEN_ZIP_MAX_BYTES
-    ) {
+    if (copiedBytes < WINDOWS_SEVEN_ZIP_MIN_BYTES || copiedBytes > WINDOWS_SEVEN_ZIP_MAX_BYTES) {
       return yield* new WindowsSevenZipToolError({
         reason: "invalid-size",
         searchedPaths: [targetExePath],
@@ -3161,7 +3243,9 @@ const stagePrismuxDaemon = Effect.fn("desktopArtifact.stagePrismuxDaemon")(funct
     path.join(prismuxRoot, "node_modules/ws"),
   ];
   for (const wsSource of wsCandidates) {
-    if (yield* fs.exists(path.join(wsSource, "package.json")).pipe(Effect.orElseSucceed(() => false))) {
+    if (
+      yield* fs.exists(path.join(wsSource, "package.json")).pipe(Effect.orElseSucceed(() => false))
+    ) {
       const wsTarget = path.join(input.depsTargetDir, "ws");
       yield* fs.makeDirectory(wsTarget, { recursive: true });
       yield* fs.copyFile(path.join(wsSource, "package.json"), path.join(wsTarget, "package.json"));
@@ -3172,7 +3256,12 @@ const stagePrismuxDaemon = Effect.fn("desktopArtifact.stagePrismuxDaemon")(funct
 
   // Copy ONLY the official plugin catalog metadata JSON (~3 KB) so packaged /settings/plugins
   // renders the 4 official entries on demand; strictly NEVER copy plugin-* source or .wb-plugin archives.
-  const officialCatalogSource = path.join(prismuxRoot, "plugins-official", "catalog", "official.json");
+  const officialCatalogSource = path.join(
+    prismuxRoot,
+    "plugins-official",
+    "catalog",
+    "official.json",
+  );
   if (yield* fs.exists(officialCatalogSource).pipe(Effect.orElseSucceed(() => false))) {
     const catalogTargetDir = path.join(input.targetDir, "catalog");
     yield* fs.makeDirectory(catalogTargetDir, { recursive: true });
@@ -3184,6 +3273,189 @@ const stagePrismuxDaemon = Effect.fn("desktopArtifact.stagePrismuxDaemon")(funct
   );
   return true;
 });
+
+export function sqliteVecNativeLibraryName(platform: typeof BuildPlatform.Type): string {
+  if (platform === "win") return "vec0.dll";
+  if (platform === "mac") return "vec0.dylib";
+  return "vec0.so";
+}
+
+export function sqliteVecNativePackageName(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): string {
+  const osToken = platform === "win" ? "windows" : platform === "mac" ? "darwin" : "linux";
+  const archToken = arch === "arm64" ? "arm64" : "x64";
+  return `sqlite-vec-${osToken}-${archToken}`;
+}
+
+export function resolveSqliteVecNativeCandidates(input: {
+  readonly repoRoot: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+}): ReadonlyArray<string> {
+  const libName = sqliteVecNativeLibraryName(input.platform);
+  const pkgName = sqliteVecNativePackageName(input.platform, input.arch);
+  const prismuxRoot = NodePath.resolve(input.repoRoot, "../..");
+  const candidates: string[] = [];
+
+  const envOverride = input.env?.PRISMUX_SQLITE_VEC_PATH?.trim();
+  if (envOverride) {
+    candidates.push(envOverride);
+    if (!envOverride.toLowerCase().endsWith(libName.toLowerCase())) {
+      candidates.push(NodePath.join(envOverride, libName));
+    }
+  }
+
+  candidates.push(
+    NodePath.join(input.repoRoot, "apps/desktop/prod-resources/native/sqlite-vec", libName),
+    NodePath.join(prismuxRoot, "packages/memory-core/node_modules", pkgName, libName),
+    NodePath.join(prismuxRoot, "apps/daemon/node_modules", pkgName, libName),
+    NodePath.join(prismuxRoot, "node_modules", pkgName, libName),
+    NodePath.join(prismuxRoot, "node_modules/.pnpm/node_modules", pkgName, libName),
+  );
+  return candidates;
+}
+
+export const stageSqliteVecNative = Effect.fn("desktopArtifact.stageSqliteVecNative")(
+  function* (input: {
+    readonly repoRoot: string;
+    readonly platform: typeof BuildPlatform.Type;
+    readonly arch: typeof BuildArch.Type;
+    readonly targetDir: string;
+    readonly daemonDepsTargetDir?: string;
+    readonly candidates?: ReadonlyArray<string>;
+    readonly env?: Readonly<Record<string, string | undefined>>;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const libName = sqliteVecNativeLibraryName(input.platform);
+    const pkgName = sqliteVecNativePackageName(input.platform, input.arch);
+    const prismuxRoot = path.resolve(input.repoRoot, "../..");
+
+    const searchedCandidates: string[] = [
+      ...(input.candidates ??
+        resolveSqliteVecNativeCandidates({
+          repoRoot: input.repoRoot,
+          platform: input.platform,
+          arch: input.arch,
+          env: input.env ?? process.env,
+        })),
+    ];
+
+    // Follow pnpm symlink at packages/memory-core/node_modules/sqlite-vec -> sibling platform package,
+    // and scan root node_modules/.pnpm/sqlite-vec-<os>-<arch>@*/node_modules/<pkgName>/<libName>.
+    if (input.candidates === undefined) {
+      const sqliteVecLink = path.join(prismuxRoot, "packages/memory-core/node_modules/sqlite-vec");
+      const realSqliteVec = yield* Effect.tryPromise(() => NodeFSP.realpath(sqliteVecLink)).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (realSqliteVec !== null) {
+        searchedCandidates.push(path.join(path.dirname(realSqliteVec), pkgName, libName));
+      }
+
+      const pnpmStoreDir = path.join(prismuxRoot, "node_modules/.pnpm");
+      const pnpmEntries = yield* fs
+        .readDirectory(pnpmStoreDir)
+        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
+      const prefix = `${pkgName}@`;
+      for (const entry of [...pnpmEntries].sort()) {
+        if (entry.startsWith(prefix)) {
+          searchedCandidates.push(path.join(pnpmStoreDir, entry, "node_modules", pkgName, libName));
+        }
+      }
+    }
+
+    let matchedPath: string | undefined;
+    let matchedSizeBytes = 0;
+    for (const candidate of searchedCandidates) {
+      const stat = yield* fs.stat(candidate).pipe(Effect.orElseSucceed(() => null));
+      if (stat?.type === "File") {
+        matchedPath = candidate;
+        matchedSizeBytes = Number(stat.size);
+        break;
+      }
+    }
+
+    if (!matchedPath) {
+      return yield* new SqliteVecNativeToolError({
+        reason: "missing",
+        searchedPaths: searchedCandidates,
+      });
+    }
+
+    if (
+      matchedSizeBytes < WINDOWS_SQLITE_VEC_MIN_BYTES ||
+      matchedSizeBytes > WINDOWS_SQLITE_VEC_MAX_BYTES
+    ) {
+      return yield* new SqliteVecNativeToolError({
+        reason: "invalid-size",
+        searchedPaths: [matchedPath],
+        sizeBytes: matchedSizeBytes,
+      });
+    }
+
+    yield* fs.makeDirectory(input.targetDir, { recursive: true });
+    const targetLibraryPath = path.join(input.targetDir, libName);
+    yield* fs.copyFile(matchedPath, targetLibraryPath);
+
+    const copiedStat = yield* fs.stat(targetLibraryPath);
+    const copiedBytes = Number(copiedStat.size);
+    if (copiedBytes < WINDOWS_SQLITE_VEC_MIN_BYTES || copiedBytes > WINDOWS_SQLITE_VEC_MAX_BYTES) {
+      return yield* new SqliteVecNativeToolError({
+        reason: "invalid-size",
+        searchedPaths: [targetLibraryPath],
+        sizeBytes: copiedBytes,
+      });
+    }
+
+    // Also stage `sqlite-vec` JS wrapper + platform package under prismux-daemon/node_modules
+    // so both `resources/native/sqlite-vec/vec0.dll` and `import("sqlite-vec")` succeed out-of-the-box.
+    if (input.daemonDepsTargetDir !== undefined) {
+      const platformPkgTargetDir = path.join(input.daemonDepsTargetDir, pkgName);
+      yield* fs.makeDirectory(platformPkgTargetDir, { recursive: true });
+      yield* fs.copyFile(matchedPath, path.join(platformPkgTargetDir, libName));
+      const sourcePkgJson = path.join(path.dirname(matchedPath), "package.json");
+      if (yield* fs.exists(sourcePkgJson).pipe(Effect.orElseSucceed(() => false))) {
+        yield* fs.copyFile(sourcePkgJson, path.join(platformPkgTargetDir, "package.json"));
+      }
+
+      const sqliteVecWrapperCandidates = [
+        path.join(prismuxRoot, "packages/memory-core/node_modules/sqlite-vec"),
+        path.join(prismuxRoot, "node_modules/sqlite-vec"),
+        path.join(prismuxRoot, "node_modules/.pnpm/node_modules/sqlite-vec"),
+      ];
+      for (const wrapperCandidate of sqliteVecWrapperCandidates) {
+        const realWrapper = yield* Effect.tryPromise(() => NodeFSP.realpath(wrapperCandidate)).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        if (realWrapper === null) continue;
+        const wrapperPkgJson = path.join(realWrapper, "package.json");
+        if (!(yield* fs.exists(wrapperPkgJson).pipe(Effect.orElseSucceed(() => false)))) continue;
+
+        const wrapperTargetDir = path.join(input.daemonDepsTargetDir, "sqlite-vec");
+        yield* fs.makeDirectory(wrapperTargetDir, { recursive: true });
+        for (const fileName of ["package.json", "index.mjs", "index.cjs"]) {
+          const srcFile = path.join(realWrapper, fileName);
+          if (yield* fs.exists(srcFile).pipe(Effect.orElseSucceed(() => false))) {
+            yield* fs.copyFile(srcFile, path.join(wrapperTargetDir, fileName));
+          }
+        }
+        break;
+      }
+    }
+
+    yield* Effect.log(
+      `[desktop-artifact] Staged ${libName} from ${matchedPath} (${String(copiedBytes)} bytes) -> ${targetLibraryPath}.`,
+    );
+    return {
+      sourcePath: matchedPath,
+      targetLibraryPath,
+      sizeBytes: copiedBytes,
+    } as const;
+  },
+);
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
@@ -3208,6 +3480,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
   prismuxDaemonBundled = false,
   windowsToolsBundled = false,
+  sqliteVecBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
@@ -3236,6 +3509,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(prismuxDaemonBundled ? PRISMUX_DAEMON_EXTRA_RESOURCES : []),
+      ...(sqliteVecBundled ? PRISMUX_SQLITE_VEC_EXTRA_RESOURCES : []),
       ...(platform === "win" && windowsToolsBundled ? WINDOWS_TOOLS_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
@@ -3745,6 +4019,106 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   );
 });
 
+export const verifyWindowsSqliteVecNativeLoad = Effect.fn(
+  "desktopArtifact.verifyWindowsSqliteVecNativeLoad",
+)(function* (input: {
+  readonly packagedAppDir: string;
+  readonly appExecutableName: string;
+  readonly targetArch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const hostPlatform = yield* HostProcess.Platform;
+  const hostArchitecture = yield* HostProcess.Architecture;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const executablePath = path.join(input.packagedAppDir, input.appExecutableName);
+  const extensionPath = path.join(
+    input.packagedAppDir,
+    "resources",
+    "native",
+    "sqlite-vec",
+    sqliteVecNativeLibraryName("win"),
+  );
+  const executableStat = yield* fs.stat(executablePath).pipe(Effect.orElseSucceed(() => null));
+  if (executableStat?.type !== "File") {
+    return yield* new WindowsSqliteVecNativeProbeError({
+      executablePath,
+      extensionPath,
+      exitCode: -1,
+      output: "The unpacked application does not contain its expected primary executable.",
+    });
+  }
+  if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) return;
+
+  const daemonDir = path.join(input.packagedAppDir, "resources", "prismux-daemon");
+  const daemonMemoryCoreEntry = path.join(
+    daemonDir,
+    "node_modules",
+    "@prismux",
+    "memory-core",
+    "dist",
+    "index.js",
+  );
+  const probeCwd = (yield* fs.exists(daemonDir).pipe(Effect.orElseSucceed(() => false)))
+    ? daemonDir
+    : input.packagedAppDir;
+
+  const probeEnv = { ...process.env };
+  delete probeEnv.ELECTRON_NO_ASAR;
+  delete probeEnv.NODE_OPTIONS;
+  delete probeEnv.PRISMUX_SQLITE_VEC_PATH;
+
+  yield* runCommand(
+    ChildProcess.make(
+      executablePath,
+      [
+        "--no-global-search-paths",
+        "--input-type=module",
+        "--eval",
+        WINDOWS_SQLITE_VEC_PROBE_SOURCE,
+        extensionPath,
+        daemonMemoryCoreEntry,
+      ],
+      {
+        cwd: probeCwd,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...probeEnv,
+          ELECTRON_RUN_AS_NODE: "1",
+          NODE_PATH: "",
+        },
+      },
+    ),
+    {
+      label: "Windows primary sqlite-vec native-load probe",
+      verbose: input.verbose,
+    },
+  ).pipe(
+    Effect.timeout(WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT),
+    Effect.catchTags({
+      TimeoutError: () =>
+        Effect.fail(
+          new WindowsSqliteVecNativeProbeError({
+            executablePath,
+            extensionPath,
+            exitCode: -1,
+            output: `The sqlite-vec native-load probe did not finish within ${Duration.toSeconds(WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT)}s.`,
+          }),
+        ),
+      BuildCommandFailedError: (error) =>
+        Effect.fail(
+          new WindowsSqliteVecNativeProbeError({
+            executablePath,
+            extensionPath,
+            exitCode: error.exitCode,
+            output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
+          }),
+        ),
+    }),
+  );
+});
+
 /**
  * The fff probe needs a host of the target's platform and architecture; the
  * bundle self-check needs a Windows host. A cross build defers both to
@@ -3756,11 +4130,20 @@ export const verifyWindowsPackagedRuntime = Effect.fn(
   readonly packagedAppDir: string;
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
+  readonly expectSqliteVec?: boolean;
   readonly verbose: boolean;
 }) {
   const path = yield* Path.Path;
   const asarPath = path.join(input.packagedAppDir, "resources", WINDOWS_SERVER_ASAR_RESOURCE);
   yield* verifyWindowsPrimaryFffNativeLoad({ ...input, asarPath });
+  if (input.expectSqliteVec === true) {
+    yield* verifyWindowsSqliteVecNativeLoad({
+      packagedAppDir: input.packagedAppDir,
+      appExecutableName: input.appExecutableName,
+      targetArch: input.targetArch,
+      verbose: input.verbose,
+    });
+  }
   const hostPlatform = yield* HostProcess.Platform;
   if (hostPlatform !== "win32") {
     yield* Effect.log(
@@ -3780,6 +4163,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly appVersion: string;
   readonly expectWslRuntime?: boolean;
   readonly expectSevenZipTool?: boolean;
+  readonly expectSqliteVec?: boolean;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
 }) {
@@ -3878,14 +4262,29 @@ export const validateWindowsPackagedPayload = Effect.fn(
     const sevenZipPath = path.join(resourcesDir, "tools", "7za.exe");
     const sevenZipStat = yield* fs.stat(sevenZipPath).pipe(Effect.orElseSucceed(() => null));
     const sevenZipSize = sevenZipStat?.type === "File" ? Number(sevenZipStat.size) : 0;
-    if (
-      sevenZipSize < WINDOWS_SEVEN_ZIP_MIN_BYTES ||
-      sevenZipSize > WINDOWS_SEVEN_ZIP_MAX_BYTES
-    ) {
+    if (sevenZipSize < WINDOWS_SEVEN_ZIP_MIN_BYTES || sevenZipSize > WINDOWS_SEVEN_ZIP_MAX_BYTES) {
       return yield* new WindowsPackagedPayloadValidationError({
         reason: "seven-zip-missing",
         packagedAppDir,
         missingFiles: ["tools/7za.exe"],
+      });
+    }
+  }
+
+  if (input.expectSqliteVec === true) {
+    const vecDllPath = path.join(
+      resourcesDir,
+      "native",
+      "sqlite-vec",
+      sqliteVecNativeLibraryName("win"),
+    );
+    const vecDllStat = yield* fs.stat(vecDllPath).pipe(Effect.orElseSucceed(() => null));
+    const vecDllSize = vecDllStat?.type === "File" ? Number(vecDllStat.size) : 0;
+    if (vecDllSize < WINDOWS_SQLITE_VEC_MIN_BYTES || vecDllSize > WINDOWS_SQLITE_VEC_MAX_BYTES) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "sqlite-vec-missing",
+        packagedAppDir,
+        missingFiles: [`native/sqlite-vec/${sqliteVecNativeLibraryName("win")}`],
       });
     }
   }
@@ -4011,6 +4410,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     packagedAppDir,
     appExecutableName: input.appExecutableName,
     targetArch: input.targetArch,
+    ...(input.expectSqliteVec !== undefined ? { expectSqliteVec: input.expectSqliteVec } : {}),
     verbose: input.verbose ?? false,
   });
 
@@ -4330,12 +4730,33 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+  const prismuxDaemonDepsTargetDir = path.join(stageProdResourcesDir, "prismux-daemon-deps");
   const prismuxDaemonBundled = yield* stagePrismuxDaemon({
     repoRoot,
     targetDir: path.join(stageProdResourcesDir, "prismux-daemon"),
-    depsTargetDir: path.join(stageProdResourcesDir, "prismux-daemon-deps"),
+    depsTargetDir: prismuxDaemonDepsTargetDir,
     appVersion,
   });
+  let sqliteVecBundled = false;
+  if (options.platform === "win" && options.arch === "x64") {
+    yield* stageSqliteVecNative({
+      repoRoot,
+      platform: options.platform,
+      arch: options.arch,
+      targetDir: path.join(stageProdResourcesDir, "native", "sqlite-vec"),
+      ...(prismuxDaemonBundled ? { daemonDepsTargetDir: prismuxDaemonDepsTargetDir } : {}),
+    });
+    sqliteVecBundled = true;
+  } else if (prismuxDaemonBundled) {
+    const stagedOptional = yield* stageSqliteVecNative({
+      repoRoot,
+      platform: options.platform,
+      arch: options.arch,
+      targetDir: path.join(stageProdResourcesDir, "native", "sqlite-vec"),
+      daemonDepsTargetDir: prismuxDaemonDepsTargetDir,
+    }).pipe(Effect.option);
+    sqliteVecBundled = Option.isSome(stagedOptional);
+  }
   let windowsToolsBundled = false;
   if (options.platform === "win") {
     yield* stageWindowsSevenZipTool({
@@ -4412,8 +4833,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     ...(macWebAuthn ? { t3codeWebAuthn: macWebAuthn } : {}),
     private: true,
     packageManager: rootPackageJson.packageManager,
-    description:
-      "Prismux — 极简液态玻璃 AI 超级工作台与 24h 秘书系统（四大官方插件默认零预装）",
+    description: "Prismux — 极简液态玻璃 AI 超级工作台与 24h 秘书系统（四大官方插件默认零预装）",
     license: "MIT",
     homepage: "https://github.com/Fish-under-sea/Prismux",
     author: "Prismux",
@@ -4435,6 +4855,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       options.arch,
       prismuxDaemonBundled,
       windowsToolsBundled,
+      sqliteVecBundled,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -4606,6 +5027,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         runtimeArchivePath: options.wslRuntime,
       }),
       expectSevenZipTool: windowsToolsBundled,
+      expectSqliteVec: sqliteVecBundled,
       verbose: options.verbose,
     });
   }

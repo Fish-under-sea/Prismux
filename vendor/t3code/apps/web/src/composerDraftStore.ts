@@ -597,6 +597,8 @@ interface ComposerDraftStoreState {
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
+      /** Keep an existing empty draft for the same logical project alive when opening multiple tabs. */
+      preservePreviousDraft?: boolean;
     },
   ) => void;
   setProjectDraftThreadId: (
@@ -614,6 +616,8 @@ interface ComposerDraftStoreState {
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
+      /** Keep an existing empty draft for the same logical project alive when opening multiple tabs. */
+      preservePreviousDraft?: boolean;
     },
   ) => void;
   setDraftThreadContext: (
@@ -2999,7 +3003,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ? undefined
                 : nextDraftThreadsByThreadKey[previousThreadKeyForLogicalProject];
             // Keep populated drafts unmapped: sidebar rows still expose them when a new draft is opened.
+            // Also keep previous empty drafts intact when explicitly requested by multi-tab workspace launchers.
             if (
+              !options?.preservePreviousDraft &&
               previousThreadKeyForLogicalProject &&
               previousThreadKeyForLogicalProject !== draftId &&
               !isComposerThreadKeyInUse(

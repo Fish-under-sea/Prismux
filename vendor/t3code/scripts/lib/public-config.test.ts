@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { loadRepoEnv } from "./public-config.ts";
+import { DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG, loadRepoEnv } from "./public-config.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -50,6 +50,31 @@ describe("loadRepoEnv", () => {
       T3CODE_RELAY_URL: "https://ci.example.test",
       VITE_T3CODE_RELAY_URL: "https://ci.example.test",
     });
+  });
+
+  it("falls back to official public T3 Connect identifiers when .env is absent and respects T3CODE_DISABLE_CLOUD=1", () => {
+    const repoRoot = makeTemporaryDirectory();
+    const resolved = loadRepoEnv({ baseEnv: {}, repoRoot });
+    expect(resolved).toMatchObject({
+      T3CODE_CLERK_PUBLISHABLE_KEY:
+        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_PUBLISHABLE_KEY,
+      VITE_CLERK_PUBLISHABLE_KEY:
+        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_PUBLISHABLE_KEY,
+      T3CODE_CLERK_JWT_TEMPLATE:
+        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_JWT_TEMPLATE,
+      VITE_CLERK_JWT_TEMPLATE:
+        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_JWT_TEMPLATE,
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID:
+        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID,
+      VITE_CLERK_CLI_OAUTH_CLIENT_ID:
+        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID,
+      T3CODE_RELAY_URL: DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_RELAY_URL,
+      VITE_T3CODE_RELAY_URL: DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_RELAY_URL,
+    });
+
+    const disabled = loadRepoEnv({ baseEnv: { T3CODE_DISABLE_CLOUD: "1" }, repoRoot });
+    expect(disabled.T3CODE_RELAY_URL).toBeUndefined();
+    expect(disabled.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
   });
 });
 

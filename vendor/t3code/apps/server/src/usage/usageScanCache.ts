@@ -66,6 +66,8 @@ type SerializedRecord = readonly [
   rateModelIndex?: number | null,
   unresolvedServiceTierTurnId?: string | null,
   cacheCreation1hTokens?: number,
+  ttftMs?: number | null,
+  durationMs?: number | null,
 ];
 
 interface SerializedFile {
@@ -109,27 +111,37 @@ function intern(table: string[], index: Map<string, number>, value: string): num
 }
 
 function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile {
-  const serializeRecord = (record: UsageRecord): SerializedRecord => [
-    record.timestampMs,
-    intern(tables.models, tables.modelIndex, record.model),
-    intern(tables.sessions, tables.sessionIndex, record.sessionId),
-    record.totals.uncachedInputTokens,
-    record.totals.cachedInputTokens,
-    record.totals.cacheCreationTokens,
-    record.totals.outputTokens,
-    record.totals.reasoningTokens,
-    record.dedupeKey,
-    record.reportedCostUsd,
-    SPEEDS.indexOf(record.speed),
-    record.rateModel === undefined
-      ? null
-      : intern(tables.models, tables.modelIndex, record.rateModel),
-    ...(record.cacheCreation1hTokens !== undefined
-      ? ([record.unresolvedServiceTierTurnId ?? null, record.cacheCreation1hTokens] as const)
-      : record.unresolvedServiceTierTurnId !== undefined
-        ? ([record.unresolvedServiceTierTurnId] as const)
-        : ([] as const)),
-  ];
+  const serializeRecord = (record: UsageRecord): SerializedRecord => {
+    const hasTiming = record.ttftMs !== undefined || record.durationMs !== undefined;
+    return [
+      record.timestampMs,
+      intern(tables.models, tables.modelIndex, record.model),
+      intern(tables.sessions, tables.sessionIndex, record.sessionId),
+      record.totals.uncachedInputTokens,
+      record.totals.cachedInputTokens,
+      record.totals.cacheCreationTokens,
+      record.totals.outputTokens,
+      record.totals.reasoningTokens,
+      record.dedupeKey,
+      record.reportedCostUsd,
+      SPEEDS.indexOf(record.speed),
+      record.rateModel === undefined
+        ? null
+        : intern(tables.models, tables.modelIndex, record.rateModel),
+      ...(hasTiming
+        ? ([
+            record.unresolvedServiceTierTurnId ?? null,
+            record.cacheCreation1hTokens ?? 0,
+            record.ttftMs ?? null,
+            record.durationMs ?? null,
+          ] as const)
+        : record.cacheCreation1hTokens !== undefined
+          ? ([record.unresolvedServiceTierTurnId ?? null, record.cacheCreation1hTokens] as const)
+          : record.unresolvedServiceTierTurnId !== undefined
+            ? ([record.unresolvedServiceTierTurnId] as const)
+            : ([] as const)),
+    ];
+  };
   return {
     s: entry.size,
     m: entry.mtimeMs,
@@ -220,6 +232,8 @@ export function decodeScanCache(
         rateModelIndex,
         unresolvedServiceTierTurnId,
         cacheCreation1h = 0,
+        rawTtftMs,
+        rawDurationMs,
       ] = row as SerializedRecord;
       const speed = typeof speedIndex === "number" ? SPEEDS[speedIndex] : undefined;
 
@@ -231,6 +245,9 @@ export function decodeScanCache(
         model === undefined ||
         (unresolvedServiceTierTurnId != null && typeof unresolvedServiceTierTurnId !== "string") ||
         !Number.isFinite(cacheCreation1h) ||
+        (rawTtftMs != null && (typeof rawTtftMs !== "number" || !Number.isFinite(rawTtftMs) || rawTtftMs < 0)) ||
+        (rawDurationMs != null &&
+          (typeof rawDurationMs !== "number" || !Number.isFinite(rawDurationMs) || rawDurationMs <= 0)) ||
         (rateModelIndex != null && rateModel === undefined) ||
         !Number.isFinite(uncached) ||
         !Number.isFinite(cached) ||
@@ -265,6 +282,8 @@ export function decodeScanCache(
         ...(version >= 7 && unresolvedServiceTierTurnId != null
           ? { unresolvedServiceTierTurnId }
           : {}),
+        ...(typeof rawTtftMs === "number" ? { ttftMs: rawTtftMs } : {}),
+        ...(typeof rawDurationMs === "number" ? { durationMs: rawDurationMs } : {}),
         dedupeKey:
           typeof dedupeKey !== "string"
             ? null

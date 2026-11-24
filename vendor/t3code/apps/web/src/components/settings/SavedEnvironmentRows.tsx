@@ -70,6 +70,7 @@ import {
   ServerUpdateProgress,
 } from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
+import { T3ConnectAccountCard } from "../cloud/T3ConnectAccountCard";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 
 type SavedBackendListRowProps = {
@@ -566,10 +567,12 @@ function ConfiguredCloudLinkRow({
   environmentId,
   canManageRelay,
   connectDeviceApproval,
+  omitPrimaryTunnelRow = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly canManageRelay: boolean;
   readonly connectDeviceApproval: ConnectDeviceApprovalControl | null;
+  readonly omitPrimaryTunnelRow?: boolean;
 }) {
   const setting = useSearchableSetting();
   const gt = useGT();
@@ -722,7 +725,7 @@ function ConfiguredCloudLinkRow({
 
   return (
     <>
-      {showSwitch ? (
+      {omitPrimaryTunnelRow ? null : showSwitch ? (
         <SettingsRow
           title={gt("T3 Connect")}
           description={
@@ -782,7 +785,7 @@ function ConfiguredCloudLinkRow({
           description={gt("Run `t3 connect link` on the host, then restart Prismux there.")}
         />
       )}
-      {signedOut && showSwitch ? null : (
+      {signedOut && (showSwitch || omitPrimaryTunnelRow) ? null : (
         <SettingsRow
           title={gt("Publish agent activity")}
           description={
@@ -870,23 +873,49 @@ export function CloudLinkRow({
   readonly connectDeviceApproval: ConnectDeviceApprovalControl | null;
 }) {
   const gt = useGT();
-  if (!hasCloudPublicConfig()) return null;
-  if (!canReadRelay) {
+  if (!hasCloudPublicConfig()) {
     return (
-      <SettingsRow
-        title={gt("T3 Connect")}
-        description={gt(
-          "To edit these settings, pair this connection with both View relay and Manage relay permissions.",
-        )}
+      <T3ConnectAccountCard
+        environmentId={environmentId}
+        canReadRelay={canReadRelay}
+        canManageRelay={canManageRelay}
+        variant="settings"
       />
     );
   }
+  if (!canReadRelay) {
+    return (
+      <>
+        <T3ConnectAccountCard
+          environmentId={environmentId}
+          canReadRelay={false}
+          canManageRelay={false}
+          variant="settings"
+        />
+        <SettingsRow
+          title={gt("T3 Connect")}
+          description={gt(
+            "To edit these settings, pair this connection with both View relay and Manage relay permissions.",
+          )}
+        />
+      </>
+    );
+  }
   return (
-    <ConfiguredCloudLinkRow
-      environmentId={environmentId}
-      canManageRelay={canManageRelay}
-      connectDeviceApproval={connectDeviceApproval}
-    />
+    <>
+      <T3ConnectAccountCard
+        environmentId={environmentId}
+        canReadRelay={canReadRelay}
+        canManageRelay={canManageRelay}
+        variant="settings"
+      />
+      <ConfiguredCloudLinkRow
+        environmentId={environmentId}
+        canManageRelay={canManageRelay}
+        connectDeviceApproval={connectDeviceApproval}
+        omitPrimaryTunnelRow
+      />
+    </>
   );
 }
 

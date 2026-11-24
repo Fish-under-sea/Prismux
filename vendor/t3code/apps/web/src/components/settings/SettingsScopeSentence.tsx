@@ -60,6 +60,9 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/about",
   "/settings/wallpaper",
   "/settings/plugins",
+  "/settings/memory",
+  "/settings/sync",
+  "/settings/overnight-factory",
   "/settings/memory-sync",
   "/settings/updates",
 ]);

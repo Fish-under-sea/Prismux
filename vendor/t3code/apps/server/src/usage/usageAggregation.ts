@@ -41,9 +41,15 @@ export function computeUsageCacheHitRate(
   return Math.round(ratio * 10_000) / 10_000;
 }
 
+const MIN_USAGE_DURATION_MS = 10;
+const MIN_POST_TTFT_DECODE_MS = 50;
+const MAX_POST_TTFT_TPS = 2_000;
+
 /**
  * Computes real output throughput (`tok/s`) using post-TTFT generation duration when
- * `durationMs > ttftMs`, or `null` whenever real timing or output tokens are unavailable.
+ * `durationMs > ttftMs`, falling back to full `durationMs` when the post-TTFT window is a
+ * micro-burst (e.g. buffered thinking/tool-call packet), or `null` whenever real timing or
+ * output tokens are unavailable.
  */
 export function computeUsageOutputTps(
   outputTokens: number,
@@ -51,15 +57,27 @@ export function computeUsageOutputTps(
   ttftMs?: number | null | undefined,
 ): number | null {
   if (!Number.isFinite(outputTokens) || outputTokens <= 0) return null;
-  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) {
+  if (
+    typeof durationMs !== "number" ||
+    !Number.isFinite(durationMs) ||
+    durationMs < MIN_USAGE_DURATION_MS
+  ) {
     return null;
   }
   const normalizedTtft =
     typeof ttftMs === "number" && Number.isFinite(ttftMs) && ttftMs >= 0 ? ttftMs : null;
-  const generationMs =
-    normalizedTtft !== null && durationMs > normalizedTtft ? durationMs - normalizedTtft : durationMs;
-  if (generationMs <= 0) return null;
-  return Math.round((outputTokens / (generationMs / 1000)) * 100) / 100;
+  if (normalizedTtft !== null && durationMs > normalizedTtft) {
+    const postTtftMs = durationMs - normalizedTtft;
+    if (postTtftMs >= MIN_POST_TTFT_DECODE_MS) {
+      const postTtftTps = outputTokens / (postTtftMs / 1000);
+      if (Number.isFinite(postTtftTps) && postTtftTps <= MAX_POST_TTFT_TPS) {
+        return Math.round(postTtftTps * 100) / 100;
+      }
+    }
+  }
+  const totalTps = outputTokens / (durationMs / 1000);
+  if (!Number.isFinite(totalTps) || totalTps <= 0) return null;
+  return Math.round(totalTps * 100) / 100;
 }
 
 function readOptionalTiming(
@@ -262,6 +280,18 @@ export function mergeUsageCopies(held: UsageRecord, copy: UsageRecord): UsageRec
     held.reportedCostUsd === null || copy.reportedCostUsd === null
       ? (held.reportedCostUsd ?? copy.reportedCostUsd)
       : Math.max(held.reportedCostUsd, copy.reportedCostUsd);
+  const ttftMs =
+    held.ttftMs === undefined
+      ? copy.ttftMs
+      : copy.ttftMs === undefined
+        ? held.ttftMs
+        : Math.min(held.ttftMs, copy.ttftMs);
+  const durationMs =
+    held.durationMs === undefined
+      ? copy.durationMs
+      : copy.durationMs === undefined
+        ? held.durationMs
+        : Math.max(held.durationMs, copy.durationMs);
   if (
     b.uncachedInputTokens <= a.uncachedInputTokens &&
     b.cachedInputTokens <= a.cachedInputTokens &&
@@ -269,7 +299,9 @@ export function mergeUsageCopies(held: UsageRecord, copy: UsageRecord): UsageRec
     b.outputTokens <= a.outputTokens &&
     b.reasoningTokens <= a.reasoningTokens &&
     (copy.cacheCreation1hTokens ?? 0) <= (held.cacheCreation1hTokens ?? 0) &&
-    reportedCostUsd === held.reportedCostUsd
+    reportedCostUsd === held.reportedCostUsd &&
+    ttftMs === held.ttftMs &&
+    durationMs === held.durationMs
   ) {
     return held;
   }
@@ -280,6 +312,8 @@ export function mergeUsageCopies(held: UsageRecord, copy: UsageRecord): UsageRec
   return {
     ...held,
     ...(cacheCreation1hTokens > 0 ? { cacheCreation1hTokens } : {}),
+    ...(ttftMs !== undefined ? { ttftMs } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
     totals: {
       uncachedInputTokens: Math.max(a.uncachedInputTokens, b.uncachedInputTokens),
       cachedInputTokens: Math.max(a.cachedInputTokens, b.cachedInputTokens),
@@ -302,8 +336,12 @@ function smallestGrokCopy(held: UsageRecord, copy: UsageRecord): UsageRecord {
     held.reportedCostUsd === null || copy.reportedCostUsd === null
       ? (held.reportedCostUsd ?? copy.reportedCostUsd)
       : Math.min(held.reportedCostUsd, copy.reportedCostUsd);
+  const ttftMs = held.ttftMs ?? copy.ttftMs;
+  const durationMs = held.durationMs ?? copy.durationMs;
   return {
     ...held,
+    ...(ttftMs !== undefined ? { ttftMs } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
     totals: {
       uncachedInputTokens: Math.min(a.uncachedInputTokens, b.uncachedInputTokens),
       cachedInputTokens: Math.min(a.cachedInputTokens, b.cachedInputTokens),

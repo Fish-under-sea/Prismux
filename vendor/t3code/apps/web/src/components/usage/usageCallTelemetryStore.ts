@@ -25,8 +25,10 @@ export interface UsageCallLogRecord {
   readonly cachedInputTokens: number;
   /** Prompt cache creation / write tokens. */
   readonly cacheCreationTokens: number;
-  /** Generated output tokens. */
+  /** Generated output tokens (including reasoning subset when reported). */
   readonly outputTokens: number;
+  /** Optional reasoning / thinking output tokens subset of `outputTokens`. */
+  readonly reasoningTokens?: number | undefined;
   /** Total processed tokens for this call. */
   readonly totalTokens: number;
   /** Actual cache hit rate in [0, 1], or null when no input tokens were processed. */
@@ -46,14 +48,19 @@ export interface BackendUsageCallLogLike {
   readonly threadId?: string | null | undefined;
   readonly turnId?: string | null | undefined;
   readonly ttftMs?: number | null | undefined;
+  readonly ttft_ms?: number | null | undefined;
   readonly durationMs?: number | null | undefined;
+  readonly duration_ms?: number | null | undefined;
   readonly tps?: number | null | undefined;
+  readonly tokensPerSecond?: number | null | undefined;
+  readonly tokens_per_second?: number | null | undefined;
   readonly inputTokens?: number | null | undefined;
   readonly uncachedInputTokens?: number | null | undefined;
   readonly cachedInputTokens?: number | null | undefined;
   readonly cacheCreationTokens?: number | null | undefined;
   readonly cacheWriteTokens?: number | null | undefined;
   readonly outputTokens?: number | null | undefined;
+  readonly reasoningTokens?: number | null | undefined;
   readonly totalTokens?: number | null | undefined;
   readonly cacheHitRate?: number | null | undefined;
   readonly status?: UsageCallStatus | string | undefined;
@@ -78,6 +85,7 @@ export interface RecordModelCallTelemetryInput {
   /** Alias accepted for convenience alongside `cacheCreationTokens`. */
   readonly cacheWriteTokens?: number | undefined;
   readonly outputTokens?: number | undefined;
+  readonly reasoningTokens?: number | undefined;
   readonly totalTokens?: number | undefined;
   readonly cacheHitRate?: number | null | undefined;
   readonly contextPercent?: number | null | undefined;
@@ -97,6 +105,7 @@ export interface SessionLiveTelemetrySnapshot {
   readonly cachedInputTokens: number;
   readonly cacheCreationTokens: number;
   readonly outputTokens: number;
+  readonly reasoningTokens?: number | undefined;
   readonly totalTokens: number;
   /** Real cumulative tokens in this thread across recorded turns plus active in-flight turn. */
   readonly sessionTotalTokens: number;
@@ -120,6 +129,7 @@ export interface SessionLiveTelemetryPatch {
   readonly cacheCreationTokens?: number | undefined;
   readonly cacheWriteTokens?: number | undefined;
   readonly outputTokens?: number | undefined;
+  readonly reasoningTokens?: number | undefined;
   readonly totalTokens?: number | undefined;
   readonly sessionTotalTokens?: number | undefined;
   readonly cacheHitRate?: number | null | undefined;
@@ -178,9 +188,14 @@ export function computeCacheHitRate(
   return Math.min(1, Math.max(0, cached / totalInput));
 }
 
+const MIN_USAGE_DURATION_MS = 10;
+const MIN_POST_TTFT_DECODE_MS = 50;
+const MAX_POST_TTFT_TPS = 2_000;
+
 /**
  * Compute real output generation throughput (`tok/s`), or `null` when real timing or output
- * token count is missing. Uses post-TTFT generation window when `durationMs > ttftMs`.
+ * token count is missing. Uses post-TTFT generation window when `durationMs > ttftMs`, falling
+ * back to full `durationMs` when the post-TTFT window is a buffered micro-burst.
  */
 export function computeOutputTps(
   outputTokens: number,
@@ -189,11 +204,19 @@ export function computeOutputTps(
 ): number | null {
   const out = nonNegativeFinite(outputTokens);
   const dur = positiveNullable(durationMs);
-  if (out <= 0 || dur === null) return null;
+  if (out <= 0 || dur === null || dur < MIN_USAGE_DURATION_MS) return null;
   const ttft = positiveOrZeroNullable(ttftMs);
-  const genMs = ttft !== null && dur > ttft ? dur - ttft : dur;
-  if (genMs <= 0) return null;
-  return out / (genMs / 1000);
+  if (ttft !== null && dur > ttft) {
+    const postTtftMs = dur - ttft;
+    if (postTtftMs >= MIN_POST_TTFT_DECODE_MS) {
+      const postTtftTps = out / (postTtftMs / 1000);
+      if (Number.isFinite(postTtftTps) && postTtftTps <= MAX_POST_TTFT_TPS) {
+        return postTtftTps;
+      }
+    }
+  }
+  const totalTps = out / (dur / 1000);
+  return Number.isFinite(totalTps) && totalTps > 0 ? totalTps : null;
 }
 
 export function formatTtft(ms: number | null | undefined): string {
@@ -318,6 +341,9 @@ function loadFromStorage(): readonly UsageCallLogRecord[] {
         cachedInputTokens: nonNegativeFinite(item.cachedInputTokens),
         cacheCreationTokens: nonNegativeFinite(item.cacheCreationTokens),
         outputTokens: nonNegativeFinite(item.outputTokens),
+        ...(typeof item.reasoningTokens === "number" && Number.isFinite(item.reasoningTokens) && item.reasoningTokens > 0
+          ? { reasoningTokens: nonNegativeFinite(item.reasoningTokens) }
+          : {}),
         totalTokens: nonNegativeFinite(item.totalTokens),
         cacheHitRate: normalizeCacheHitRateValue(item.cacheHitRate),
         contextPercent:
@@ -418,6 +444,7 @@ export function recordModelCallTelemetry(
     input.cacheCreationTokens ?? input.cacheWriteTokens,
   );
   const outputTokens = nonNegativeFinite(input.outputTokens);
+  const reasoningTokens = nonNegativeFinite(input.reasoningTokens);
   const computedTotal = inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
   const totalTokens = Math.max(nonNegativeFinite(input.totalTokens), computedTotal);
 
@@ -449,6 +476,7 @@ export function recordModelCallTelemetry(
     cachedInputTokens,
     cacheCreationTokens,
     outputTokens,
+    ...(reasoningTokens > 0 ? { reasoningTokens } : {}),
     totalTokens,
     cacheHitRate: derivedCacheHitRate,
     contextPercent:
@@ -483,6 +511,7 @@ export function recordModelCallTelemetry(
         cachedInputTokens: record.cachedInputTokens,
         cacheCreationTokens: record.cacheCreationTokens,
         outputTokens: record.outputTokens,
+        ...(record.reasoningTokens ? { reasoningTokens: record.reasoningTokens } : {}),
         totalTokens: record.totalTokens,
         sessionTotalTokens: Math.max(threadTotal, record.totalTokens),
         cacheHitRate: record.cacheHitRate ?? prev?.cacheHitRate ?? null,
@@ -535,6 +564,10 @@ export function updateSessionLiveTelemetry(
     patch.outputTokens !== undefined
       ? nonNegativeFinite(patch.outputTokens)
       : (prev?.outputTokens ?? 0);
+  const reasoningTokens =
+    patch.reasoningTokens !== undefined
+      ? nonNegativeFinite(patch.reasoningTokens)
+      : (prev?.reasoningTokens ?? 0);
 
   const computedTurnTotal = inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
   const totalTokens =
@@ -578,6 +611,7 @@ export function updateSessionLiveTelemetry(
     cachedInputTokens,
     cacheCreationTokens,
     outputTokens,
+    ...(reasoningTokens > 0 ? { reasoningTokens } : {}),
     totalTokens,
     sessionTotalTokens,
     cacheHitRate,
@@ -645,13 +679,15 @@ export function normalizeBackendUsageCallLog(
   const cachedInputTokens = nonNegativeFinite(raw.cachedInputTokens);
   const cacheCreationTokens = nonNegativeFinite(raw.cacheCreationTokens ?? raw.cacheWriteTokens);
   const outputTokens = nonNegativeFinite(raw.outputTokens);
+  const reasoningTokens = nonNegativeFinite(raw.reasoningTokens);
   const computedTotal = inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
   const totalTokens = Math.max(nonNegativeFinite(raw.totalTokens), computedTotal);
-  const ttftMs = positiveOrZeroNullable(raw.ttftMs);
-  const durationMs = positiveOrZeroNullable(raw.durationMs);
+  const ttftMs = positiveOrZeroNullable(raw.ttftMs ?? raw.ttft_ms);
+  const durationMs = positiveNullable(raw.durationMs ?? raw.duration_ms);
+  const rawTps = raw.tps ?? raw.tokensPerSecond ?? raw.tokens_per_second;
   const tps =
-    raw.tps !== undefined && raw.tps !== null
-      ? positiveNullable(raw.tps)
+    rawTps !== undefined && rawTps !== null
+      ? positiveNullable(rawTps)
       : computeOutputTps(outputTokens, durationMs, ttftMs);
   const cacheHitRate =
     raw.cacheHitRate !== undefined && raw.cacheHitRate !== null
@@ -672,6 +708,7 @@ export function normalizeBackendUsageCallLog(
     cachedInputTokens,
     cacheCreationTokens,
     outputTokens,
+    ...(reasoningTokens > 0 ? { reasoningTokens } : {}),
     totalTokens,
     cacheHitRate,
     status: normalizeStatus(raw.status),
@@ -698,18 +735,26 @@ export function mergeUsageCallLogs(
       const normalized = normalizeBackendUsageCallLog(raw);
       const existing = byId.get(normalized.id);
       if (existing) {
+        const mergedTtftMs = existing.ttftMs ?? normalized.ttftMs;
+        const mergedDurationMs = existing.durationMs ?? normalized.durationMs;
+        const mergedOutputTokens = Math.max(existing.outputTokens, normalized.outputTokens);
+        const mergedTps =
+          existing.tps ??
+          normalized.tps ??
+          computeOutputTps(mergedOutputTokens, mergedDurationMs, mergedTtftMs);
         byId.set(normalized.id, {
           ...normalized,
-          ttftMs: existing.ttftMs ?? normalized.ttftMs,
-          durationMs: existing.durationMs ?? normalized.durationMs,
-          tps: existing.tps ?? normalized.tps,
+          ttftMs: mergedTtftMs,
+          durationMs: mergedDurationMs,
+          tps: mergedTps,
+          outputTokens: mergedOutputTokens,
           cacheHitRate: existing.cacheHitRate ?? normalized.cacheHitRate,
           contextPercent: existing.contextPercent ?? normalized.contextPercent,
           source: existing.source,
         });
         continue;
       }
-      // Deduplicate live vs backend records that represent the same turn within 10s
+      // Deduplicate live vs backend records that represent the same turn within 15s
       let matchedKey: string | null = null;
       for (const [key, candidate] of byId.entries()) {
         if (
@@ -717,7 +762,7 @@ export function mergeUsageCallLogs(
           candidate.provider === normalized.provider &&
           candidate.model === normalized.model &&
           candidate.outputTokens === normalized.outputTokens &&
-          Math.abs(candidate.timestamp - normalized.timestamp) <= 10_000
+          Math.abs(candidate.timestamp - normalized.timestamp) <= 15_000
         ) {
           matchedKey = key;
           break;
@@ -725,14 +770,22 @@ export function mergeUsageCallLogs(
       }
       if (matchedKey !== null) {
         const live = byId.get(matchedKey)!;
+        const mergedTtftMs = live.ttftMs ?? normalized.ttftMs;
+        const mergedDurationMs = live.durationMs ?? normalized.durationMs;
+        const mergedOutputTokens = Math.max(live.outputTokens, normalized.outputTokens);
+        const mergedTps =
+          live.tps ??
+          normalized.tps ??
+          computeOutputTps(mergedOutputTokens, mergedDurationMs, mergedTtftMs);
         byId.set(matchedKey, {
           ...live,
-          ttftMs: live.ttftMs ?? normalized.ttftMs,
-          durationMs: live.durationMs ?? normalized.durationMs,
-          tps: live.tps ?? normalized.tps,
+          ttftMs: mergedTtftMs,
+          durationMs: mergedDurationMs,
+          tps: mergedTps,
           inputTokens: Math.max(live.inputTokens, normalized.inputTokens),
           cachedInputTokens: Math.max(live.cachedInputTokens, normalized.cachedInputTokens),
           cacheCreationTokens: Math.max(live.cacheCreationTokens, normalized.cacheCreationTokens),
+          outputTokens: mergedOutputTokens,
           totalTokens: Math.max(live.totalTokens, normalized.totalTokens),
           cacheHitRate: live.cacheHitRate ?? normalized.cacheHitRate,
         });

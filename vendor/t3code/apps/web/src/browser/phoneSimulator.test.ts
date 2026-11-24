@@ -166,7 +166,8 @@ describe("Phone Simulator presets and CDP device emulation mapping", () => {
     );
     expect(html).toContain("prismux-phone-simulator-blank-stage");
     expect(html).toContain("prismux-phone-bezel-frame");
-    expect(html).toContain("Prismux 手机模拟器已就绪");
+    expect(html).toContain("Prismux 手机模拟已就绪");
+    expect(html).not.toContain("手机模拟器");
     expect(html).toContain("iPhone 16 Pro");
     expect(html).toContain("393 × 852");
     expect(html).toContain("phone-simulator-quick-url-input");

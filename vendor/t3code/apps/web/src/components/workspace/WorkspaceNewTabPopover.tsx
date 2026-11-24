@@ -16,6 +16,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
@@ -88,6 +89,60 @@ function tabKindIcon(tab: WorkspaceTab): ReactNode {
   }
 }
 
+export interface SubmenuContainerLike {
+  contains(node: Node | null): boolean;
+}
+
+function containsTarget(container: SubmenuContainerLike, candidate: unknown): boolean {
+  if (candidate == null) return false;
+  if (typeof Node !== "undefined" && !(candidate instanceof Node)) {
+    return false;
+  }
+  return container.contains(candidate as Node);
+}
+
+function isEventInsideElement(
+  event: Event | { readonly target?: unknown; readonly relatedTarget?: unknown; readonly composedPath?: () => unknown[] } | undefined,
+  container: SubmenuContainerLike | null,
+): boolean {
+  if (!container || !event) return false;
+  if (typeof event.composedPath === "function") {
+    for (const entry of event.composedPath()) {
+      if (containsTarget(container, entry)) {
+        return true;
+      }
+    }
+  }
+  if (containsTarget(container, event.target)) {
+    return true;
+  }
+  if ("relatedTarget" in event && containsTarget(container, event.relatedTarget)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Pure guard for Base UI Popover's `onOpenChange`: keeps the parent popover open when
+ * `outside-press` or `focus-out` targets the body-portaled hover submenu, while never
+ * blocking `escape-key`, `trigger-press`, `close-press`, or true outside clicks.
+ */
+export function shouldPreservePopoverOnSubmenuDismiss(input: {
+  readonly nextOpen: boolean;
+  readonly reason: string | undefined;
+  readonly event: Event | { readonly target?: unknown; readonly relatedTarget?: unknown; readonly composedPath?: () => unknown[] } | undefined;
+  readonly submenuEl: SubmenuContainerLike | null;
+  readonly activeElement?: unknown;
+}): boolean {
+  if (input.nextOpen || !input.submenuEl) return false;
+  if (input.reason !== "outside-press" && input.reason !== "focus-out") return false;
+  if (isEventInsideElement(input.event, input.submenuEl)) return true;
+  if (input.reason === "focus-out" && containsTarget(input.submenuEl, input.activeElement)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Orca-aligned `+` quick launcher popover:
  * 1. Top omnibox search (open tabs, history threads, agents, tools, and direct URLs)
@@ -103,7 +158,6 @@ export const WorkspaceNewTabPopover = memo(function WorkspaceNewTabPopover(
     openTabs,
     historyThreads,
     agents,
-    canSplit = true,
     onActivateOpenTab,
     onOpenHistoryThread,
     onLaunchAgent,
@@ -166,6 +220,28 @@ export const WorkspaceNewTabPopover = memo(function WorkspaceNewTabPopover(
     setOpen(false);
     setActiveSubmenuAgentId(null);
     aimCone.controller.reset();
+  };
+
+  // The hover submenu is portaled to `document.body` so `overflow-hidden` glass shells never clip it.
+  // Prevent Base UI's `outside-press` and `focus-out` dismiss handlers from unmounting the submenu
+  // before a submenu button's `onClick` fires.
+  const handlePopoverOpenChange: NonNullable<ComponentProps<typeof Popover>["onOpenChange"]> = (
+    nextOpen,
+    eventDetails,
+  ) => {
+    if (
+      shouldPreservePopoverOnSubmenuDismiss({
+        nextOpen,
+        reason: eventDetails?.reason,
+        event: eventDetails?.event,
+        submenuEl: submenuPopupRef.current,
+        activeElement: typeof document !== "undefined" ? document.activeElement : null,
+      })
+    ) {
+      eventDetails?.cancel();
+      return;
+    }
+    setOpen(nextOpen);
   };
 
   const openAgentSubmenu = (agentId: string, rowEl: HTMLElement | null) => {
@@ -265,7 +341,7 @@ export const WorkspaceNewTabPopover = memo(function WorkspaceNewTabPopover(
     searchResult.historyThreads.length > 0;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handlePopoverOpenChange}>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -417,6 +493,7 @@ export const WorkspaceNewTabPopover = memo(function WorkspaceNewTabPopover(
                     >
                       <button
                         type="button"
+                        data-workspace-agent-launch={agent.brandId}
                         onClick={() => {
                           onLaunchAgent(agent, paneId);
                           closePopover();
@@ -621,12 +698,18 @@ export const WorkspaceNewTabPopover = memo(function WorkspaceNewTabPopover(
                   data-pmx-glass-zone="overlays"
                   style={{ top: submenuCoords.top, left: submenuCoords.left }}
                   onPointerEnter={() => aimCone.controller.cancelPendingSwitch()}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onMouseDown={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      closePopover();
+                    }
+                  }}
                   className="dropdown-glass fixed z-[150] flex w-60 flex-col overflow-hidden rounded-xl border border-border/80 bg-popover bg-clip-padding p-1.5 shadow-[0_18px_42px_-16px_rgba(0,0,0,0.45)] [-webkit-app-region:no-drag]"
                 >
                   <button
                     type="button"
+                    data-workspace-agent-submenu-new={activeSubmenuAgent.brandId}
                     onClick={() => {
                       onLaunchAgent(activeSubmenuAgent, paneId);
                       closePopover();
@@ -637,9 +720,10 @@ export const WorkspaceNewTabPopover = memo(function WorkspaceNewTabPopover(
                     <span className="truncate">新建 {activeSubmenuAgent.displayName} 对话</span>
                   </button>
 
-                  {canSplit && onLaunchAgentInSplit ? (
+                  {onLaunchAgentInSplit ? (
                     <button
                       type="button"
+                      data-workspace-agent-submenu-sidebar={activeSubmenuAgent.brandId}
                       onClick={() => {
                         onLaunchAgentInSplit(activeSubmenuAgent, paneId);
                         closePopover();
@@ -664,6 +748,7 @@ export const WorkspaceNewTabPopover = memo(function WorkspaceNewTabPopover(
                     <button
                       key={`${thread.environmentId}:${thread.threadId}`}
                       type="button"
+                      data-workspace-agent-submenu-thread={thread.threadId}
                       onClick={() => {
                         onOpenHistoryThread(thread, paneId);
                         closePopover();

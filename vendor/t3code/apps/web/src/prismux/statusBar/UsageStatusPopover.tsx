@@ -18,6 +18,11 @@ import { cn } from "~/lib/utils";
 import type { ContextGaugeSummary } from "./statusBarContext";
 import { STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS } from "./statusBarContextMenuPolicy";
 import {
+  STATUS_BAR_ACTION_BUTTON_CLASS,
+  STATUS_BAR_SEGMENTED_GROUP_CLASS,
+  statusBarSegmentedOptionClass,
+} from "./statusBarControlStyles";
+import {
   formatCompactUsageTokens,
   formatCompactUsageWindowValue,
   formatCompactUsd,
@@ -169,31 +174,23 @@ export function UsageStatusPopover({
               <div
                 role="group"
                 aria-label="显示密度"
-                className="inline-flex rounded-md border border-border bg-muted/60 p-0.5 text-[10px]"
+                className={STATUS_BAR_SEGMENTED_GROUP_CLASS}
               >
                 <button
                   type="button"
                   aria-pressed={prefs.density === "detailed"}
+                  data-active={prefs.density === "detailed" ? "true" : "false"}
                   onClick={() => setDensity("detailed")}
-                  className={cn(
-                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                    prefs.density === "detailed"
-                      ? "bg-background text-foreground shadow-xs"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
+                  className={statusBarSegmentedOptionClass(prefs.density === "detailed")}
                 >
                   详细
                 </button>
                 <button
                   type="button"
                   aria-pressed={prefs.density === "compact"}
+                  data-active={prefs.density === "compact" ? "true" : "false"}
                   onClick={() => setDensity("compact")}
-                  className={cn(
-                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                    prefs.density === "compact"
-                      ? "bg-background text-foreground shadow-xs"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
+                  className={statusBarSegmentedOptionClass(prefs.density === "compact")}
                 >
                   紧凑
                 </button>
@@ -201,39 +198,31 @@ export function UsageStatusPopover({
               <div
                 role="group"
                 aria-label="百分比模式"
-                className="inline-flex rounded-md border border-border bg-muted/60 p-0.5 text-[10px]"
+                className={STATUS_BAR_SEGMENTED_GROUP_CLASS}
               >
                 <button
                   type="button"
                   aria-pressed={prefs.percentMode === "used"}
+                  data-active={prefs.percentMode === "used" ? "true" : "false"}
                   aria-description="按已用额度百分比显示，点击切换"
                   onClick={(event) => {
                     setPercentMode("used");
                     if (event.detail > 0) event.currentTarget.blur();
                   }}
-                  className={cn(
-                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                    prefs.percentMode === "used"
-                      ? "bg-background text-foreground shadow-xs"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
+                  className={statusBarSegmentedOptionClass(prefs.percentMode === "used")}
                 >
                   % 已用
                 </button>
                 <button
                   type="button"
                   aria-pressed={prefs.percentMode === "remaining"}
+                  data-active={prefs.percentMode === "remaining" ? "true" : "false"}
                   aria-description="按剩余额度百分比显示，点击切换"
                   onClick={(event) => {
                     setPercentMode("remaining");
                     if (event.detail > 0) event.currentTarget.blur();
                   }}
-                  className={cn(
-                    "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                    prefs.percentMode === "remaining"
-                      ? "bg-background text-foreground shadow-xs"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
+                  className={statusBarSegmentedOptionClass(prefs.percentMode === "remaining")}
                 >
                   % 剩余
                 </button>
@@ -248,7 +237,7 @@ export function UsageStatusPopover({
               aria-busy={isBusy || undefined}
               data-testid="usage-refresh-button"
               onClick={() => void handleRefresh()}
-              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-background/85 px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+              className={STATUS_BAR_ACTION_BUTTON_CLASS}
             >
               {justRefreshed && !isBusy ? (
                 <CheckIcon aria-hidden className="size-3 text-emerald-600 dark:text-emerald-400" />

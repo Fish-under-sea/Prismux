@@ -8,7 +8,7 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState, type RefObject } from "react";
 
 import { SettingsRow } from "../../components/settings/settingsLayout";
 import { Badge } from "../../components/ui/badge";
@@ -23,6 +23,7 @@ import type {
   DaemonObsidianImportPlanResponse,
   PrismuxDaemonClient,
 } from "../daemonClient";
+import type { ActiveChiefSlotSnapshot } from "./ChiefIdentityAndAgentsMdSection";
 
 export interface ObsidianAgentImportCardProps {
   readonly daemon: Pick<PrismuxDaemonClient, "requestJson">;
@@ -30,9 +31,11 @@ export interface ObsidianAgentImportCardProps {
   readonly activeProvider: string;
   readonly activeProviderLabel: string;
   readonly activeModel: string;
-  readonly onCommitted?: () => void | Promise<void>;
-  readonly onError?: (message: string) => void;
-  readonly onStatus?: (message: string) => void;
+  readonly activeSlotRef?: RefObject<ActiveChiefSlotSnapshot> | undefined;
+  readonly onRender?: (() => void) | undefined;
+  readonly onCommitted?: (() => void | Promise<void>) | undefined;
+  readonly onError?: ((message: string) => void) | undefined;
+  readonly onStatus?: ((message: string) => void) | undefined;
 }
 
 const CURATED_KIND_META: Readonly<
@@ -48,16 +51,19 @@ const CURATED_KIND_META: Readonly<
   knowledge: { label: "知识事实", variant: "outline" },
 };
 
-export function ObsidianAgentImportCard({
+export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
   daemon,
   secretaryName,
   activeProvider,
   activeProviderLabel,
   activeModel,
+  activeSlotRef,
+  onRender,
   onCommitted,
   onError,
   onStatus,
 }: ObsidianAgentImportCardProps) {
+  onRender?.();
   const effectiveSecretaryName = normalizeChiefDisplayName(secretaryName);
   const [vaultPath, setVaultPath] = useState("");
   const [namespace, setNamespace] = useState("private/chief");
@@ -94,6 +100,10 @@ export function ObsidianAgentImportCard({
     setCommitReport(null);
     try {
       const trimmedNs = namespace.trim() || "private/chief";
+      const liveSlot = activeSlotRef?.current;
+      const effectiveProvider = liveSlot?.provider ?? activeProvider;
+      const effectiveModel = (liveSlot?.model ?? activeModel).trim();
+      const effectiveProviderLabel = liveSlot?.providerLabel ?? activeProviderLabel;
       const res = await daemon.requestJson<DaemonObsidianImportPlanResponse>(
         "/v1/memory/import-obsidian/plan",
         {
@@ -102,8 +112,8 @@ export function ObsidianAgentImportCard({
             vaultPath: trimmedVault,
             namespace: trimmedNs,
             useAgentCuration,
-            provider: activeProvider,
-            ...(activeModel.trim().length > 0 ? { model: activeModel.trim() } : {}),
+            provider: effectiveProvider,
+            ...(effectiveModel.length > 0 ? { model: effectiveModel } : {}),
           }),
         },
       );
@@ -111,7 +121,7 @@ export function ObsidianAgentImportCard({
       setItems(Array.isArray(res?.items) ? res.items : []);
       const modeText =
         res.curationSource === "agent"
-          ? `主秘书 Agent（${res.curatorLabel ?? `${effectiveSecretaryName} · ${activeProviderLabel}`}）智能提炼`
+          ? `主秘书 Agent（${res.curatorLabel ?? `${effectiveSecretaryName} · ${effectiveProviderLabel}`}）智能提炼`
           : "本地结构化整理（安全回退）";
       onStatus?.(
         `已完成 ${modeText}：扫描 ${res.stats.scannedFiles} 篇笔记，提炼 ${res.items.length} 条候选记忆，请审核勾选后写入记忆库。`,
@@ -125,6 +135,7 @@ export function ObsidianAgentImportCard({
     activeModel,
     activeProvider,
     activeProviderLabel,
+    activeSlotRef,
     daemon,
     effectiveSecretaryName,
     namespace,
@@ -434,4 +445,4 @@ export function ObsidianAgentImportCard({
       </div>
     </SettingsRow>
   );
-}
+});

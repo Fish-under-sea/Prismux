@@ -7,6 +7,7 @@ import {
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTION_LABELS,
   searchSettings,
+  settingsNavGroups,
 } from "../components/settings/settingsSearch";
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
 import { m, setActiveLocale } from "./messages";
@@ -48,14 +49,54 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(SETTINGS_SECTION_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_SECTION_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_SECTION_LABELS["/settings/plugins"])).toBe("插件中心");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/memory"])).toBe("记忆");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/sync"])).toBe("同步");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/overnight-factory"])).toBe("夜间工场与邮箱");
     expect(m(SETTINGS_SECTION_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
     expect(m(SETTINGS_SECTION_LABELS["/settings/updates"])).toBe("软件更新");
 
     expect(m(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_NAV_LABELS["/settings/plugins"])).toBe("插件中心");
+    expect(m(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("记忆");
+    expect(m(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("同步");
+    expect(m(SETTINGS_NAV_LABELS["/settings/overnight-factory"])).toBe("夜间工场与邮箱");
     expect(m(SETTINGS_NAV_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
     expect(m(SETTINGS_NAV_LABELS["/settings/updates"])).toBe("软件更新");
+
+    // Verify exact 4-group Simplified Chinese sidebar hierarchy and item order
+    const zhGroups = settingsNavGroups(false, false).map((group) => ({
+      heading: m(group.heading),
+      labels: group.paths.map((path) => m(SETTINGS_NAV_LABELS[path])),
+    }));
+    expect(zhGroups).toEqual([
+      {
+        heading: "常用与外观",
+        labels: ["通用", "聊天", "语音", "外观", "壁纸", "快捷键"],
+      },
+      {
+        heading: "智能体与工作区",
+        labels: [
+          "智能体提供方",
+          "设备",
+          "会话",
+          "项目",
+          "归档",
+          "浏览器",
+          "工作树",
+          "差异与 PR",
+          "版本控制与 issue",
+        ],
+      },
+      {
+        heading: "扩展、记忆与连接",
+        labels: ["环境", "记忆", "同步", "插件中心", "共享与访问", "夜间工场与邮箱"],
+      },
+      {
+        heading: "系统与关于",
+        labels: ["服务体检", "维护", "关于与更新"],
+      },
+    ]);
 
     expect(m(msg("Prismux"))).toBe("Prismux");
     expect(m(msg("Wallpaper Engine"))).toBe("壁纸引擎");
@@ -69,13 +110,20 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["动态壁纸", "prismux-wallpaper"],
       ["插件中心", "prismux-plugins"],
       ["官方插件", "prismux-plugins"],
-      ["记忆与同步", "prismux-memory-sync"],
-      ["主秘书", "prismux-memory-sync"],
+      ["记忆", "prismux-memory"],
+      ["主秘书", "prismux-chief-slot"],
+      ["同步", "prismux-sync"],
+      ["WebDAV", "prismux-sync"],
+      ["夜间工场", "prismux-overnight-factory"],
+      ["夜间工厂", "prismux-overnight-factory"],
+      ["邮箱绑定", "prismux-overnight-factory"],
+      ["Overnight Factory", "prismux-overnight-factory"],
       ["软件更新", "prismux-updates"],
       ["双源", "prismux-updates"],
       ["Wallpaper Engine", "prismux-wallpaper"],
       ["Plugin Center", "prismux-plugins"],
-      ["Memory & Sync", "prismux-memory-sync"],
+      ["Memory", "prismux-memory"],
+      ["Sync", "prismux-sync"],
       ["Prismux Updates", "prismux-updates"],
       ["入门引导", "welcome-page"],
       ["欢迎页", "welcome-page"],

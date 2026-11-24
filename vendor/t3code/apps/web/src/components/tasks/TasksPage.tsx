@@ -101,12 +101,13 @@ function PresetChip({
     <button
       type="button"
       aria-pressed={active}
+      data-pmx-work-panel-control={active ? undefined : "1"}
       onClick={onClick}
       className={cn(
         "cursor-pointer rounded-md border px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active
-          ? "border-border/50 bg-foreground/90 text-background shadow-xs"
-          : "border-border/60 bg-background/70 text-foreground shadow-xs hover:bg-muted/65",
+          ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
+          : "border-border/75 bg-card text-foreground shadow-xs hover:bg-accent",
       )}
     >
       {label}
@@ -497,7 +498,10 @@ export const TasksPage = memo(function TasksPage() {
 
   return (
     <SidebarInset className="h-dvh min-w-0 flex-1 overflow-hidden">
-      <PrismuxStageFrame rightPanelOpen={topbarPortal.standaloneRightPanelOpen}>
+      <PrismuxStageFrame
+        glassZone="workPanels"
+        rightPanelOpen={topbarPortal.standaloneRightPanelOpen}
+      >
         <div
           data-testid="prismux-tasks-page"
           className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3.5"
@@ -536,9 +540,10 @@ export const TasksPage = memo(function TasksPage() {
                       <button
                         type="button"
                         data-task-source="github"
+                        data-pmx-work-panel-control="1"
                         aria-label={copy.githubSourceLabel}
                         aria-pressed="true"
-                        className="flex size-8 cursor-pointer items-center justify-center rounded-md border border-foreground/35 bg-muted/65 text-foreground shadow-xs transition-colors hover:bg-muted/85 focus-visible:ring-2 focus-visible:ring-ring"
+                        className="flex size-8 cursor-pointer items-center justify-center rounded-md border border-primary/55 bg-card text-foreground shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                       />
                     }
                   >
@@ -553,7 +558,8 @@ export const TasksPage = memo(function TasksPage() {
                   type="button"
                   onClick={() => setProjectPickerOpen(true)}
                   data-testid="tasks-source-summary"
-                  className="inline-flex h-8 max-w-[min(420px,45vw)] cursor-pointer items-center gap-1.5 rounded-md border border-border/55 bg-muted/35 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted/55 hover:text-foreground"
+                  data-pmx-work-panel-control="1"
+                  className="inline-flex h-8 max-w-[min(420px,45vw)] cursor-pointer items-center gap-1.5 rounded-md border border-border/75 bg-card px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
                   <span className="font-medium text-foreground">{copy.sourcePrefixGitHub}</span>
                   <span aria-hidden="true" className="opacity-50">
@@ -563,7 +569,7 @@ export const TasksPage = memo(function TasksPage() {
                 </button>
               </div>
 
-              <span className="hidden text-[11px] font-medium text-muted-foreground/80 sm:inline">
+              <span className="hidden text-[11px] font-medium text-muted-foreground sm:inline">
                 {copy.pageTitle}
               </span>
             </div>
@@ -590,12 +596,13 @@ export const TasksPage = memo(function TasksPage() {
                       role="tab"
                       aria-selected={active}
                       data-testid={`tasks-tab-${tab.id}`}
+                      data-pmx-work-panel-control={active ? undefined : "1"}
                       onClick={() => setTabMode(tab.id)}
                       className={cn(
                         "cursor-pointer rounded-md border px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
                         active
-                          ? "border-border/50 bg-foreground/90 text-background shadow-xs"
-                          : "border-border/60 bg-muted/45 text-foreground shadow-xs hover:bg-muted/70",
+                          ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
+                          : "border-border/75 bg-card text-foreground shadow-xs hover:bg-accent",
                       )}
                     >
                       {tab.label}
@@ -611,7 +618,8 @@ export const TasksPage = memo(function TasksPage() {
                     <button
                       type="button"
                       data-testid="tasks-project-picker-trigger"
-                      className="inline-flex h-8 max-w-[230px] cursor-pointer items-center gap-1.5 rounded-md border border-border/55 bg-muted/45 px-2.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring"
+                      data-pmx-work-panel-control="1"
+                      className="inline-flex h-8 max-w-[230px] cursor-pointer items-center gap-1.5 rounded-md border border-border/75 bg-card px-2.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                     />
                   }
                 >
@@ -714,6 +722,7 @@ export const TasksPage = memo(function TasksPage() {
                       type="button"
                       variant="outline"
                       size="icon-sm"
+                      data-pmx-work-panel-control="1"
                       disabled={!externalGitHubUrl}
                       onClick={() => {
                         if (externalGitHubUrl) {
@@ -721,7 +730,7 @@ export const TasksPage = memo(function TasksPage() {
                         }
                       }}
                       aria-label={copy.openInGitHubTooltip}
-                      className="size-8 rounded-md border-border/55 bg-muted/45 text-foreground shadow-xs hover:bg-muted/70"
+                      className="size-8 rounded-md border-border/75 bg-card text-foreground shadow-xs hover:bg-accent"
                     />
                   }
                 >
@@ -736,7 +745,10 @@ export const TasksPage = memo(function TasksPage() {
 
           {/* Main Content: Projects Grid OR Joined Filter Chrome + Table Shell */}
           {tabMode === "projects" ? (
-            <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border/55 bg-background/55 shadow-xs backdrop-blur-md">
+            <div
+              data-pmx-work-panel-card="1"
+              className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border/75 bg-card shadow-xs"
+            >
               {activeProjects.length === 0 ? (
                 <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
                   <p className="text-base font-medium text-foreground">
@@ -749,6 +761,7 @@ export const TasksPage = memo(function TasksPage() {
                     type="button"
                     variant="outline"
                     size="sm"
+                    data-pmx-work-panel-control="1"
                     onClick={() => openCommandPalette({ open: "add-project" })}
                     className="mt-4 gap-1.5"
                   >
@@ -765,7 +778,8 @@ export const TasksPage = memo(function TasksPage() {
                     return (
                       <div
                         key={key}
-                        className="flex flex-col justify-between gap-3 rounded-lg border border-border/60 bg-background/70 p-3.5 shadow-xs transition-colors hover:border-border"
+                        data-pmx-work-panel-control="1"
+                        className="flex flex-col justify-between gap-3 rounded-lg border border-border/75 bg-card p-3.5 shadow-xs transition-colors hover:border-primary/45"
                       >
                         <div className="min-w-0">
                           <div className="flex items-center justify-between gap-2">
@@ -829,10 +843,11 @@ export const TasksPage = memo(function TasksPage() {
             </div>
           ) : (
             <div className="mt-2.5 flex min-h-0 flex-1 flex-col overflow-hidden">
-              {/* Filter Chrome (joined smoothly to table shell below, exact Orca surface) */}
+              {/* Filter Chrome (joined smoothly to table shell below, unified workPanels surface) */}
               <div
                 data-testid="tasks-filter-chrome"
-                className="flex flex-none flex-col gap-2.5 rounded-t-md border border-border/55 bg-muted/30 px-3 py-2.5 backdrop-blur-md"
+                data-pmx-work-panel-card="1"
+                className="flex flex-none flex-col gap-2.5 rounded-t-md border border-border/75 bg-card px-3 py-2.5"
               >
                 {/* Preset Chips Row */}
                 {tabMode === "prs" ? (
@@ -909,7 +924,8 @@ export const TasksPage = memo(function TasksPage() {
                         <button
                           type="button"
                           data-testid="tasks-filters-dropdown"
-                          className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border/60 bg-background/80 px-2.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring"
+                          data-pmx-work-panel-control="1"
+                          className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border/75 bg-card px-2.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                         />
                       }
                     >
@@ -941,8 +957,8 @@ export const TasksPage = memo(function TasksPage() {
                                 className={cn(
                                   "cursor-pointer rounded px-2 py-1 text-[11px] font-medium transition-colors",
                                   parsedQuery.state === opt.id
-                                    ? "bg-foreground/90 text-background"
-                                    : "bg-muted/60 text-foreground hover:bg-muted",
+                                    ? "bg-primary text-primary-foreground shadow-xs"
+                                    : "bg-muted/70 text-foreground hover:bg-accent",
                                 )}
                               >
                                 {opt.label}
@@ -977,8 +993,8 @@ export const TasksPage = memo(function TasksPage() {
                                 className={cn(
                                   "cursor-pointer rounded px-2 py-1 text-[11px] font-medium transition-colors",
                                   parsedQuery.involvement === opt.id
-                                    ? "bg-foreground/90 text-background"
-                                    : "bg-muted/60 text-foreground hover:bg-muted",
+                                    ? "bg-primary text-primary-foreground shadow-xs"
+                                    : "bg-muted/70 text-foreground hover:bg-accent",
                                 )}
                               >
                                 {opt.label}
@@ -1004,8 +1020,8 @@ export const TasksPage = memo(function TasksPage() {
                                 className={cn(
                                   "cursor-pointer rounded px-2 py-1 text-[11px] font-medium transition-colors",
                                   sortOrder === opt.id
-                                    ? "bg-foreground/90 text-background"
-                                    : "bg-muted/60 text-foreground hover:bg-muted",
+                                    ? "bg-primary text-primary-foreground shadow-xs"
+                                    : "bg-muted/70 text-foreground hover:bg-accent",
                                 )}
                               >
                                 {opt.label}
@@ -1022,6 +1038,7 @@ export const TasksPage = memo(function TasksPage() {
                     <Input
                       ref={searchInputRef}
                       data-testid="tasks-query-input"
+                      data-pmx-work-panel-control="1"
                       value={activeRawQuery}
                       onChange={(event) => setActiveRawQuery(event.target.value)}
                       placeholder={
@@ -1029,7 +1046,7 @@ export const TasksPage = memo(function TasksPage() {
                           ? copy.searchPrsPlaceholder
                           : copy.searchIssuesPlaceholder
                       }
-                      className="h-8 rounded-md border-border/60 bg-background/85 pr-8 pl-8 font-mono text-xs text-foreground shadow-xs"
+                      className="h-8 rounded-md border-border/75 bg-card pr-8 pl-8 font-mono text-xs text-foreground shadow-xs"
                     />
                     {activeRawQuery.length > 0 ? (
                       <button
@@ -1052,9 +1069,10 @@ export const TasksPage = memo(function TasksPage() {
                             variant="outline"
                             size="icon"
                             data-testid="tasks-create-button"
+                            data-pmx-work-panel-control="1"
                             onClick={() => requestOpenCreateWorkspace()}
                             aria-label={copy.createTaskTooltip}
-                            className="size-8 border-border/60 bg-background/85 text-foreground shadow-xs hover:bg-muted/60"
+                            className="size-8 border-border/75 bg-card text-foreground shadow-xs hover:bg-accent"
                           />
                         }
                       >
@@ -1073,13 +1091,14 @@ export const TasksPage = memo(function TasksPage() {
                             variant="outline"
                             size="icon"
                             data-testid="tasks-refresh-button"
+                            data-pmx-work-panel-control="1"
                             onClick={handleRefresh}
                             disabled={isBusy}
                             aria-busy={isBusy}
                             aria-label={
                               isBusy ? copy.refreshingTasksTooltip : copy.refreshTasksTooltip
                             }
-                            className="size-8 border-border/60 bg-background/85 text-foreground shadow-xs hover:bg-muted/60"
+                            className="size-8 border-border/75 bg-card text-foreground shadow-xs hover:bg-accent"
                           />
                         }
                       >
@@ -1098,13 +1117,17 @@ export const TasksPage = memo(function TasksPage() {
               </div>
 
               {/* Joined Table Shell (rounded-t-none border-t-0, zero doubled seam) */}
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-md border border-t-0 border-border/55 bg-background/55 shadow-xs backdrop-blur-md">
+              <div
+                data-pmx-work-panel-card="1"
+                className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-md border border-t-0 border-border/75 bg-card shadow-xs"
+              >
                 <div className="min-h-0 flex-1 overflow-auto">
                   {/* Sticky Table Header */}
                   <div
                     data-testid="tasks-table-header"
+                    data-pmx-work-panel-control="1"
                     className={cn(
-                      "sticky top-0 z-10 grid h-8 min-w-[660px] items-center gap-3 border-b border-border/55 bg-muted/45 px-3 text-[11px] font-semibold tracking-wider text-muted-foreground backdrop-blur-md",
+                      "sticky top-0 z-10 grid h-8 min-w-[660px] items-center gap-3 border-b border-border/70 bg-muted/85 px-3 text-[11px] font-semibold tracking-wider text-foreground/80",
                       tableGridClass,
                     )}
                   >
@@ -1160,6 +1183,7 @@ export const TasksPage = memo(function TasksPage() {
                               type="button"
                               variant="outline"
                               size="sm"
+                              data-pmx-work-panel-control="1"
                               onClick={() => updateProjectSelection(availableProjectKeys)}
                             >
                               {copy.selectAllProjects}
@@ -1169,6 +1193,7 @@ export const TasksPage = memo(function TasksPage() {
                               type="button"
                               variant="outline"
                               size="sm"
+                              data-pmx-work-panel-control="1"
                               onClick={() => openCommandPalette({ open: "add-project" })}
                               className="gap-1.5"
                             >

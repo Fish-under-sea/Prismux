@@ -18,6 +18,7 @@ import {
   getAppModalReturnThreadTarget,
   isAppModalPage,
 } from "~/components/sidebar/mainAppLocation";
+import { openPrismuxRemoteConnectDialog } from "~/components/cloud/prismuxRemoteConnect.logic";
 import { toastManager } from "~/components/ui/toast";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import {
@@ -294,7 +295,7 @@ export function usePrismuxTraySync(): void {
   const handleTrayAction = useCallback(
     (payload: PrismuxTrayActionPayload) => {
       if (payload.action === "open-mobile-connect") {
-        void navigate({ to: "/settings/access" });
+        openPrismuxRemoteConnectDialog();
         return;
       }
 

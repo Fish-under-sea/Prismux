@@ -21,6 +21,7 @@ import { useDiffPanelStore } from "../../diffPanelStore";
 import { type ThreadPanelPresentation } from "../../rightPanelLayout";
 import {
   selectThreadPanelOpen,
+  selectThreadRightPanelState,
   type RightPanelSurface,
   useRightPanelStore,
 } from "../../rightPanelStore";
@@ -94,7 +95,6 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     canMaximizeRightPanel,
     rightPanelMaximized,
     supportsPullRequests,
-    pullRequestsSurfaceAvailable,
     gitCwd,
     activeProjectCwd,
     onDiffPanelOpen,
@@ -158,7 +158,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const addFilesSurfaceStable = useStableCallback(addFilesSurface);
   const addPullRequestsSurface = () => {
-    if (!activeThreadRef || !pullRequestsSurfaceAvailable) return;
+    if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
   };
   const addPullRequestsSurfaceStable = useStableCallback(addPullRequestsSurface);
@@ -178,6 +178,9 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const addWallpaperSurfaceStable = useStableCallback(addWallpaperSurface);
   const toggleWallpaperSurface = () => {
     if (!activeThreadRef) return;
+    if (rightPanelOpen && activeRightPanelSurface?.kind === "wallpaper") {
+      useRightPanelStore.getState().setMaximized(activeThreadRef, false);
+    }
     useRightPanelStore.getState().toggle(activeThreadRef, "wallpaper");
   };
   const toggleWallpaperSurfaceStable = useStableCallback(toggleWallpaperSurface);
@@ -312,9 +315,21 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const copyRightPanelFilePathStable = useStableCallback(copyRightPanelFilePath);
   const addPullRequestSurface = () => {
-    if (!supportsPullRequests || activeThreadRef === null || pullRequestPanelTarget === null)
+    if (activeThreadRef === null) return;
+    const store = useRightPanelStore.getState();
+    if (supportsPullRequests && pullRequestPanelTarget !== null) {
+      store.openPullRequest(activeThreadRef, pullRequestPanelTarget);
       return;
-    useRightPanelStore.getState().openPullRequest(activeThreadRef, pullRequestPanelTarget);
+    }
+    const existingPullRequest = selectThreadRightPanelState(
+      store.byThreadKey,
+      activeThreadRef,
+    ).surfaces.find((surface) => surface.kind === "pull-request");
+    if (existingPullRequest) {
+      store.activateSurface(activeThreadRef, existingPullRequest.id);
+      return;
+    }
+    store.open(activeThreadRef, "pull-request-empty");
   };
   const addPullRequestSurfaceStable = useStableCallback(addPullRequestSurface);
   const onOpenTurnDiff = (runId: RunId, filePath?: string) => {

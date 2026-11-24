@@ -689,4 +689,108 @@ describe("readAntigravityUsage", () => {
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect(
+    "extracts exact TTFT, decode/total duration, and linked planner step timestamps from Antigravity gen_metadata",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const dir = yield* tempDir;
+        const tsProto = (sec: number, nanos: number) => [
+          ...protoNumber(1, sec),
+          ...protoNumber(2, nanos),
+        ];
+        const durProto = (sec: number, nanos: number) => [
+          ...(sec > 0 ? protoNumber(1, sec) : []),
+          ...(nanos > 0 ? protoNumber(2, nanos) : []),
+        ];
+        yield* seedDatabase(path.join(dir, "timing-session.db"), (db) =>
+          Effect.gen(function* () {
+            yield* db.exec("CREATE TABLE gen_metadata (idx INTEGER, data BLOB)");
+            yield* db.exec(
+              "CREATE TABLE steps (idx INTEGER, step_type INTEGER, metadata BLOB)",
+            );
+            // Generation idx=0 with no f9.f4 timestamp, real f11 (TTFT=4.857s) and f12 (decode=9.342s)
+            const gen0 = protoBytes(1, [
+              ...protoNumber(3, 1535),
+              ...protoBytes(4, [
+                ...protoNumber(1, 1535),
+                ...protoNumber(2, 3162),
+                ...protoNumber(3, 1356),
+                ...protoNumber(5, 167712),
+                ...protoText(11, "resp-timing-0"),
+              ]),
+              ...protoBytes(11, durProto(4, 857_123_400)),
+              ...protoBytes(12, durProto(9, 342_000_000)),
+              ...protoText(19, "gemini-4-neon"),
+            ]);
+            // Generation idx=1 without f11/f12, falling back to linked planner step timestamps
+            const gen1 = protoBytes(1, [
+              ...protoNumber(3, 1535),
+              ...protoBytes(4, [
+                ...protoNumber(1, 1535),
+                ...protoNumber(2, 500),
+                ...protoNumber(3, 200),
+                ...protoText(11, "resp-timing-1"),
+              ]),
+              ...protoText(19, "gemini-4-neon"),
+            ]);
+            yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [0, new Uint8Array(gen0)]);
+            yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [1, new Uint8Array(gen1)]);
+
+            // Tool step (step_type=132) referencing genIdx=0 should lose to planner step (step_type=15)
+            const toolStep = [
+              ...protoBytes(1, tsProto(1795472420, 438_000_000)),
+              ...protoBytes(8, tsProto(1795472425, 0)),
+              ...protoBytes(20, protoNumber(3, 0)),
+            ];
+            const plannerStep0 = [
+              ...protoBytes(1, tsProto(1795472406, 238_000_000)),
+              ...protoBytes(6, tsProto(1795472411, 95_000_000)),
+              ...protoBytes(7, tsProto(1795472420, 437_000_000)),
+              ...protoBytes(8, tsProto(1795472420, 437_000_000)),
+              ...protoBytes(20, protoNumber(3, 0)),
+            ];
+            const plannerStep1 = [
+              ...protoBytes(1, tsProto(1795472500, 0)),
+              ...protoBytes(6, tsProto(1795472503, 500_000_000)),
+              ...protoBytes(7, tsProto(1795472505, 500_000_000)),
+              ...protoBytes(8, tsProto(1795472505, 500_000_000)),
+              ...protoBytes(20, protoNumber(3, 1)),
+            ];
+            yield* db.run("INSERT INTO steps VALUES (?, ?, ?)", [
+              10,
+              132,
+              new Uint8Array(toolStep),
+            ]);
+            yield* db.run("INSERT INTO steps VALUES (?, ?, ?)", [
+              11,
+              15,
+              new Uint8Array(plannerStep0),
+            ]);
+            yield* db.run("INSERT INTO steps VALUES (?, ?, ?)", [
+              12,
+              15,
+              new Uint8Array(plannerStep1),
+            ]);
+          }),
+        );
+        const result = yield* readAntigravityUsage(dir, 0);
+        assert.deepStrictEqual(result.errors, []);
+        const list = records(result);
+        assert.strictEqual(list.length, 2);
+
+        const rec0 = list.find((item) => item.dedupeKey === "antigravity:11:resp-timing-0");
+        assert.isDefined(rec0);
+        assert.strictEqual(rec0?.timestampMs, 1795472420437);
+        assert.strictEqual(rec0?.ttftMs, 4857);
+        assert.strictEqual(rec0?.durationMs, 4857 + 9342);
+
+        const rec1 = list.find((item) => item.dedupeKey === "antigravity:11:resp-timing-1");
+        assert.isDefined(rec1);
+        assert.strictEqual(rec1?.timestampMs, 1795472505500);
+        assert.strictEqual(rec1?.ttftMs, 3500);
+        assert.strictEqual(rec1?.durationMs, 5500);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

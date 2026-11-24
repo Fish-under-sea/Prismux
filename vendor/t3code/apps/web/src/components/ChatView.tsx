@@ -1601,6 +1601,7 @@ export default function ChatView(props: ChatViewProps) {
     model: reportedModelSelection?.model ?? activeThread?.modelSelection?.model ?? null,
     serverProjection,
     activeContextWindow,
+    providerStatuses,
     isWorking,
     activeWorkStartedAt,
   });
@@ -2590,7 +2591,6 @@ export default function ChatView(props: ChatViewProps) {
     onDiffPanelOpen,
     closeRightPanelSurface,
   });
-  const pullRequestSurfaceAvailable = supportsPullRequests && pullRequestPanelTarget !== null;
   const {
     acknowledgeActiveThreadWoke,
     activeBranchMismatchKey,
@@ -3066,6 +3066,23 @@ export default function ChatView(props: ChatViewProps) {
                 ? gt("Available once the thread's worktree is set up.")
                 : null;
   const openSideChatStable = useStableCallback(() => void sideChat.open());
+  const openSideChatSurfaceStable = useStableCallback(() => {
+    if (!activeThreadRef) return;
+    const store = useRightPanelStore.getState();
+    const existingSideChat = selectThreadRightPanelState(
+      store.byThreadKey,
+      activeThreadRef,
+    ).surfaces.find((surface) => surface.kind === "thread");
+    if (existingSideChat) {
+      store.activateSurface(activeThreadRef, existingSideChat.id);
+      return;
+    }
+    if (sideChatsOffered && sideChat.available && !sideChatDisabledReason) {
+      void sideChat.open();
+      return;
+    }
+    store.open(activeThreadRef, "side-chat-empty");
+  });
   const openSurfaceInMainView = useOpenSurfaceInMainView(activeThreadRef);
   const sendSideChatStable = useStableCallback(sideChat.open);
   const { onConfirmRevertStable, onForkFromRunStable, onRevertTimelineTurnStable } =
@@ -3444,7 +3461,7 @@ export default function ChatView(props: ChatViewProps) {
       composerRef.current?.addDroppedFolders(folders),
   );
   const openChiefSettingsStable = useStableCallback(() => {
-    void navigate({ to: "/settings/memory-sync" as never });
+    void navigate({ to: "/settings/memory" as never });
   });
   const { state: launchModePreferences } = useProviderLaunchModePreferences();
   const [terminalHostedByThreadKey, setTerminalHostedByThreadKey] = useState<
@@ -3632,6 +3649,7 @@ export default function ChatView(props: ChatViewProps) {
         pullRequest={{
           capabilityKnown: pullRequestsCapabilityKnown,
           supported: supportsPullRequests,
+          isServerThread,
           projectId: activeThread.projectId,
           pullRequests: visiblePullRequests,
           linkedPullRequest: linkedThreadPullRequest,
@@ -3639,6 +3657,15 @@ export default function ChatView(props: ChatViewProps) {
           onBack:
             pullRequestsSurfaceAvailable && visiblePullRequestCount > 1
               ? addPullRequestsSurfaceStable
+              : undefined,
+          onOpenLinkedItems: addPullRequestsSurfaceStable,
+        }}
+        sideChat={{
+          canStart: sideChatsOffered && sideChat.available && !sideChatDisabledReason,
+          disabledReason: sideChatDisabledReason,
+          onStart:
+            sideChatsOffered && sideChat.available && !sideChatDisabledReason
+              ? openSideChatStable
               : undefined,
         }}
         issuesSupported={serverConfig?.environment.capabilities.issues === true}
@@ -4281,6 +4308,13 @@ export default function ChatView(props: ChatViewProps) {
                                       <ComposerLiveTelemetryStrip
                                         threadId={activeThreadId ?? threadId}
                                         contextWindow={activeContextWindow}
+                                        providerStatuses={providerStatuses}
+                                        selectedModelId={
+                                          reportedModelSelection?.model ??
+                                          activeThread?.modelSelection?.model ??
+                                          null
+                                        }
+                                        selectedProvider={selectedProvider ?? null}
                                       />
                                     }
                                   />
@@ -4292,6 +4326,13 @@ export default function ChatView(props: ChatViewProps) {
                                     <ComposerLiveTelemetryStrip
                                       threadId={activeThreadId ?? threadId}
                                       contextWindow={activeContextWindow}
+                                      providerStatuses={providerStatuses}
+                                      selectedModelId={
+                                        reportedModelSelection?.model ??
+                                        activeThread?.modelSelection?.model ??
+                                        null
+                                      }
+                                      selectedProvider={selectedProvider ?? null}
                                     />
                                   </ComposerSurface.ContextStrip>
                                 </div>
@@ -4646,16 +4687,16 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequests={addPullRequestsSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}
           onAddWallpaper={addWallpaperSurfaceStable}
-          onAddSideChat={sideChatsOffered ? openSideChatStable : undefined}
+          onAddSideChat={openSideChatSurfaceStable}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && diffAvailable}
           filesAvailable={activeProject !== null}
-          pullRequestAvailable={pullRequestSurfaceAvailable}
-          pullRequestsAvailable={linkedItemsSurfaceAvailable}
+          pullRequestAvailable={activeThreadRef !== null}
+          pullRequestsAvailable={activeThreadRef !== null}
           deviceAvailable={activeThreadRef !== null}
           wallpaperAvailable={activeThreadRef !== null}
-          sideChatAvailable={sideChat.available}
+          sideChatAvailable={activeThreadRef !== null}
           sideChatDisabledReason={sideChatDisabledReason}
         >
           {rightPanelContent}

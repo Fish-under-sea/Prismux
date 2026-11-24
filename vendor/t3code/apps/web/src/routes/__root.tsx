@@ -25,6 +25,7 @@ import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { DevReplayHost } from "../components/DevReplayHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
+import { PrismuxRemoteConnectDialogHost } from "../components/cloud/PrismuxRemoteConnectDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
@@ -198,6 +199,7 @@ function RootRouteBranch() {
       {isElectron ? <RunningThreadKeepAlive /> : null}
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
+      <PrismuxRemoteConnectDialogHost />
       <SshPasswordPromptDialog />
       <SnapShotCoordinator />
       <ReopenClosedViewShortcut />

@@ -6,7 +6,7 @@ import {
   SparklesIcon,
   UserCheckIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState, type RefObject } from "react";
 
 import { SettingsRow } from "../../components/settings/settingsLayout";
 import { Badge } from "../../components/ui/badge";
@@ -24,6 +24,14 @@ import type {
 } from "../daemonClient";
 import { emitChiefSlotUpdated } from "../PrismuxChiefStatusPill";
 
+export interface ActiveChiefSlotSnapshot {
+  readonly provider: string;
+  readonly providerLabel: string;
+  readonly model: string;
+  readonly reasoningEffort: string;
+  readonly dialMode: "agent" | "oracle" | "review";
+}
+
 export interface ChiefIdentityAndAgentsMdSectionProps {
   readonly daemon: Pick<PrismuxDaemonClient, "requestJson">;
   readonly secretaryName: string;
@@ -33,15 +41,19 @@ export interface ChiefIdentityAndAgentsMdSectionProps {
   readonly activeModel: string;
   readonly activeEffort: string;
   readonly activeDialMode: "agent" | "oracle" | "review";
-  readonly onIdentityUpdated?: (next: {
+  /** Optional ref tracking uncommitted Chief slot drafts so switching Provider/Model never re-renders AGENTS.md. */
+  readonly activeSlotRef?: RefObject<ActiveChiefSlotSnapshot> | undefined;
+  /** Optional render observer used by unit tests to verify strict memo isolation. */
+  readonly onRender?: (() => void) | undefined;
+  readonly onIdentityUpdated?: ((next: {
     readonly secretaryName: string;
     readonly agentsMdPath: string;
-  }) => void;
-  readonly onError?: (message: string) => void;
-  readonly onStatus?: (message: string) => void;
+  }) => void) | undefined;
+  readonly onError?: ((message: string) => void) | undefined;
+  readonly onStatus?: ((message: string) => void) | undefined;
 }
 
-export function ChiefIdentityAndAgentsMdSection({
+export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAgentsMdSection({
   daemon,
   secretaryName,
   agentsMdPath,
@@ -50,10 +62,13 @@ export function ChiefIdentityAndAgentsMdSection({
   activeModel,
   activeEffort,
   activeDialMode,
+  activeSlotRef,
+  onRender,
   onIdentityUpdated,
   onError,
   onStatus,
 }: ChiefIdentityAndAgentsMdSectionProps) {
+  onRender?.();
   const effectiveName = normalizeChiefDisplayName(secretaryName);
   const [nameInput, setNameInput] = useState(effectiveName);
   const [savingName, setSavingName] = useState(false);
@@ -123,11 +138,12 @@ export function ChiefIdentityAndAgentsMdSection({
           "~/.prismux/chief/AGENTS.md";
         setNameInput(finalName);
         setResolvedPath(finalPath);
+        const liveSlot = activeSlotRef?.current;
         emitChiefSlotUpdated({
-          provider: activeProvider,
-          model: activeModel || null,
-          reasoningEffort: activeEffort || null,
-          dialMode: activeDialMode,
+          provider: liveSlot?.provider ?? activeProvider,
+          model: (liveSlot?.model ?? activeModel) || null,
+          reasoningEffort: (liveSlot?.reasoningEffort ?? activeEffort) || null,
+          dialMode: liveSlot?.dialMode ?? activeDialMode,
           secretaryName: finalName,
           agentsMdPath: finalPath,
         });
@@ -150,6 +166,7 @@ export function ChiefIdentityAndAgentsMdSection({
       activeEffort,
       activeModel,
       activeProvider,
+      activeSlotRef,
       daemon,
       loadAgentsMd,
       nameInput,
@@ -375,4 +392,4 @@ export function ChiefIdentityAndAgentsMdSection({
       </SettingsRow>
     </>
   );
-}
+});

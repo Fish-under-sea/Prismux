@@ -423,4 +423,21 @@ describe("scan cache round trip", () => {
     const restored = decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP);
     expect(restored.has("/a.jsonl")).toBe(false);
   });
+
+  it("round-trips optional ttftMs and durationMs timing fields cleanly", () => {
+    const timed = cacheWith([
+      [
+        "/timed.jsonl",
+        500,
+        [
+          record({ dedupeKey: "msg_timed_1", ttftMs: 420, durationMs: 2420 }),
+          record({ dedupeKey: "msg_timed_2", durationMs: 5100 }),
+          record({ dedupeKey: "msg_untimed" }),
+        ],
+      ],
+    ]);
+    const encoded = parse(makeScanCacheWriter()(timed, {}));
+    const restored = decodeScanCache(encoded, TEST_FORMAT_MAP);
+    expect(restored).toEqual(timed);
+  });
 });

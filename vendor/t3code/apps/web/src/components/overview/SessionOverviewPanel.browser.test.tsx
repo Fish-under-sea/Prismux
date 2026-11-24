@@ -272,10 +272,9 @@ describe("SessionOverviewPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "在终端继续" }));
     expect(onContinueInTerminal).toHaveBeenCalledTimes(1);
 
-    // Verify all 8 structured sections exist
+    // Verify non-zero structured sections render while zero-count side-questions stays hidden
     for (const sectionId of [
       "subagents",
-      "side-questions",
       "background-tasks",
       "goals",
       "artifacts",
@@ -287,10 +286,35 @@ describe("SessionOverviewPanel", () => {
         screen.container.querySelector(`[data-overview-section="${sectionId}"]`),
       ).not.toBeNull();
     }
+    expect(screen.container.querySelector('[data-overview-section="side-questions"]')).toBeNull();
 
     // Verify read-only used skills extraction
     await expect.element(screen.getByText("/handoff")).toBeVisible();
     await expect.element(screen.getByText("tdd")).toBeVisible();
+  });
+
+  it("hides +0 -0 and all 8 zero-count sections on an empty thread while keeping top 3 quick actions", async () => {
+    mockState.projection = null;
+
+    await using screen = await render(
+      <SessionOverviewPanel
+        {...makeBaseProps({
+          isServerThread: false,
+          gitCwd: null,
+          isGitRepo: false,
+          diffStats: { insertions: 0, deletions: 0, files: [] },
+          threadAttachments: [],
+          daemonPtysOverride: [],
+        })}
+      />,
+    );
+
+    await expect.element(screen.getByRole("button", { name: "审查" })).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "文件列表" })).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "在终端继续" })).toBeVisible();
+    expect(screen.container.querySelector('[data-overview-diff-stats="1"]')).toBeNull();
+    expect(screen.container.querySelector("[data-thread-relationships-panel]")).toBeNull();
+    expect(screen.container.querySelectorAll("[data-overview-section]").length).toBe(0);
   });
 
   it("shows first 4 modified files by default, toggles 查看全部/收起, and opens file diff on click", async () => {
@@ -321,7 +345,7 @@ describe("SessionOverviewPanel", () => {
     );
   });
 
-  it("creates, persists, and opens Side Questions without polluting the main conversation", async () => {
+  it("initiates Side Questions from the ⋮ more menu when hidden, then dynamically reveals and persists the section", async () => {
     const onAskSideQuestion = vi.fn(async () => ({
       status: "answered" as const,
       answer: "使用单层 rightSidebar 液态玻璃即可保持高对比度。",
@@ -331,12 +355,21 @@ describe("SessionOverviewPanel", () => {
       <SessionOverviewPanel {...makeBaseProps({ onAskSideQuestion })} />,
     );
 
-    expect(
-      screen.container.querySelector('[data-overview-count="side-questions"]')?.textContent,
-    ).toBe("0");
+    // Side Questions section is hidden by default when count is 0
+    expect(screen.container.querySelector('[data-overview-section="side-questions"]')).toBeNull();
 
-    // Click + to open inline side-question composer
-    await userEvent.click(screen.getByRole("button", { name: "发起旁路提问" }));
+    // Open ⋮ more menu and click 「发起旁路提问」
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    const askMenuAction = document.querySelector<HTMLButtonElement>(
+      '[data-overview-more-action="add-side-question"]',
+    );
+    expect(askMenuAction).not.toBeNull();
+    await userEvent.click(askMenuAction!);
+
+    // Side Questions section dynamically appears with the inline composer open
+    expect(
+      screen.container.querySelector('[data-overview-section="side-questions"]'),
+    ).not.toBeNull();
     const textarea = screen.getByRole("textbox", { name: "旁路提问内容" });
     await expect.element(textarea).toBeVisible();
 

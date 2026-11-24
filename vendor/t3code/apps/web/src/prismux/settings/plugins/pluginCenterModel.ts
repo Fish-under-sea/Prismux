@@ -145,14 +145,56 @@ export interface EvaluatedPermissionItem {
   readonly elevated: boolean;
 }
 
+export interface RetiredPluginItem {
+  readonly id: string;
+  readonly packageName: string;
+  readonly titleZh: string;
+  readonly titleEn: string;
+  readonly status: "deprecated";
+  readonly replacedByBuiltin: true;
+  readonly noticeZh: string;
+  readonly noticeEn: string;
+  readonly detailZh?: string;
+  readonly detailEn?: string;
+}
+
+export const DEFAULT_RETIRED_OFFICIAL_PLUGINS: readonly RetiredPluginItem[] = [
+  {
+    id: "pet",
+    packageName: "@prismux/plugin-pet",
+    titleZh: "桌宠联动（pet）",
+    titleEn: "Desktop Pet Bridge (pet)",
+    status: "deprecated",
+    replacedByBuiltin: true,
+    noticeZh: "已停用：已被 Prismux 内置功能取代",
+    noticeEn: "Deprecated: Replaced by Prismux built-in capabilities",
+    detailZh: "原桌宠联动插件已从官方目录与构建链路移除，相关交互与状态反馈由 Prismux 内置工作台体验承接。",
+    detailEn: "Retired from the official catalog; superseded by built-in Prismux capabilities.",
+  },
+  {
+    id: "ssh",
+    packageName: "@prismux/plugin-ssh",
+    titleZh: "SSH 远程主机终端（ssh）",
+    titleEn: "SSH Remote Terminal (ssh)",
+    status: "deprecated",
+    replacedByBuiltin: true,
+    noticeZh: "已停用：已被 Prismux 内置功能取代",
+    noticeEn: "Deprecated: Replaced by Prismux built-in capabilities",
+    detailZh: "原 SSH 插件已从官方目录与构建链路移除，远程终端与主机连接由 Prismux 内置终端与工作区能力取代。",
+    detailEn: "Retired from the official catalog; superseded by built-in Prismux terminal capabilities.",
+  },
+] as const;
+
 export interface TrustAuditAssessment {
   readonly required: boolean;
   readonly severity: "critical" | "warning" | "info";
   readonly operation: "install" | "upgrade";
-  readonly source: "official" | "npm";
+  readonly source: "official" | "npm" | "local";
   readonly targetLabel: string;
   readonly pluginId?: string;
   readonly packageNameOrTarball?: string;
+  readonly localArchiveFileName?: string;
+  readonly localArchiveBase64?: string;
   readonly networkPreference?: "auto" | "domestic" | "global";
   readonly fromVersion?: string;
   readonly toVersion?: string;
@@ -183,16 +225,12 @@ export interface GroupVisibilityResult<T> {
 
 export const OFFICIAL_TITLE_MAP: Readonly<Record<string, string>> = {
   qq: "QQ 主秘书与群聊隔离插件",
-  pet: "桌宠租约联动插件",
   "fishdock-hook": "FISH-Dock 灵动岛审批回执插件",
-  ssh: "SSH 主机池 · Web PTY · SFTP 插件",
 };
 
 const OFFICIAL_CATEGORY_MAP: Readonly<Record<string, PluginAssignedCategory>> = {
   qq: "communication",
   "fishdock-hook": "communication",
-  pet: "pet",
-  ssh: "ops",
 };
 
 const OFFICIAL_CONTRIBUTIONS_MAP: Readonly<Record<string, PluginCapabilityContributions>> = {
@@ -202,23 +240,11 @@ const OFFICIAL_CONTRIBUTIONS_MAP: Readonly<Record<string, PluginCapabilityContri
     hooks: ["Notification", "Stop"],
     routes: ["POST /plugins/qq/onebot/webhook", "GET /plugins/qq/status"],
   },
-  pet: {
-    panels: ["pet-stage-panel（桌宠实例绑定与租约面板）"],
-    commands: ["pet.acquire-lease", "pet.handover-stage"],
-    hooks: ["PreToolUse", "PostToolUse", "Notification"],
-    routes: ["GET /plugins/pet/lease", "POST /plugins/pet/handover"],
-  },
   "fishdock-hook": {
     panels: [],
     commands: ["fishdock.ping-island", "fishdock.sync-approvals"],
     hooks: ["PreToolUse", "Notification", "Stop"],
     routes: ["POST /plugins/fishdock/callback"],
-  },
-  ssh: {
-    panels: ["ssh-host-pool（SSH 主机池 / Web PTY / SFTP 面板）"],
-    commands: ["ssh.connect-host", "ssh.open-sftp"],
-    hooks: [],
-    routes: ["GET /plugins/ssh/hosts", "POST /plugins/ssh/pty/open"],
   },
 };
 
@@ -317,106 +343,6 @@ const OFFICIAL_DECLARATIVE_UI_MAP: Readonly<Record<string, DeclarativeUiPanelSpe
             { scope: "owner_private", memory: "private/chief + workspace/*", chief: true },
             { scope: "qq_group:<gid>", memory: "social/qq-group-<gid>", chief: false },
           ],
-        },
-      ],
-    },
-  },
-  pet: {
-    ui: "components",
-    schemaVersion: 1,
-    title: "桌宠实例绑定与租约控制",
-    description: "受控声明式界面（ui: components），支持租约锁配置与分阶段交还。",
-    atoms: [
-      { key: "petInstanceId", type: "string", defaultValue: "desktop-primary", persist: true },
-      { key: "followWorkProgress", type: "boolean", defaultValue: true, persist: true },
-      { key: "stagedHandover", type: "boolean", defaultValue: true, persist: true },
-    ],
-    actions: [
-      { id: "pet:probe-lease", label: "检查租约状态" },
-    ],
-    root: {
-      type: "Card",
-      title: "租约与演出联动",
-      children: [
-        {
-          type: "Input",
-          label: "目标桌宠实例标识",
-          atomKey: "petInstanceId",
-          placeholder: "desktop-primary",
-        },
-        {
-          type: "Switch",
-          label: "订阅任务进度演出",
-          description: "随工场与构建进度更新桌宠状态，不占用任何模型 Token。",
-          atomKey: "followWorkProgress",
-        },
-        {
-          type: "Switch",
-          label: "启用分阶段交还（Staged Handover）",
-          atomKey: "stagedHandover",
-        },
-        {
-          type: "Button",
-          label: "检查租约状态",
-          actionId: "pet:probe-lease",
-          variant: "primary",
-          size: "sm",
-        },
-      ],
-    },
-  },
-  ssh: {
-    ui: "components",
-    schemaVersion: 1,
-    title: "SSH 主机池声明式控制台",
-    description: "声明式只读预览与基础连接策略配置，私钥独立加密存储于 0600 凭据仓。",
-    atoms: [
-      { key: "keepaliveSeconds", type: "number", defaultValue: 30, persist: true },
-      { key: "strictHostKeyCheck", type: "boolean", defaultValue: true, persist: true },
-    ],
-    actions: [
-      { id: "ssh:refresh-pool", label: "刷新主机池状态" },
-    ],
-    root: {
-      type: "Stack",
-      direction: "column",
-      gap: "sm",
-      children: [
-        {
-          type: "Card",
-          title: "安全连接基线",
-          children: [
-            {
-              type: "Switch",
-              label: "严格校验 SSH 主机指纹（StrictHostKeyChecking）",
-              atomKey: "strictHostKeyCheck",
-            },
-            {
-              type: "Input",
-              label: "心跳保活间隔（秒）",
-              atomKey: "keepaliveSeconds",
-              inputType: "number",
-            },
-            {
-              type: "Button",
-              label: "刷新主机池状态",
-              actionId: "ssh:refresh-pool",
-              variant: "primary",
-              size: "sm",
-            },
-          ],
-        },
-        {
-          type: "Table",
-          caption: "已注册主机概览",
-          compact: true,
-          columns: [
-            { key: "alias", label: "主机别名" },
-            { key: "endpoint", label: "目标地址", mono: true },
-            { key: "pty", label: "Web PTY", align: "center" },
-          ],
-          rows: [],
-          emptyText: "尚未配置远程主机（按需安装并启用后可添加）",
         },
       ],
     },
@@ -766,10 +692,12 @@ export function classifyPermission(permission: string): EvaluatedPermissionItem 
 
 export function evaluatePluginTrustAudit(
   input: {
-    source: "official" | "npm";
+    source: "official" | "npm" | "local";
     targetLabel: string;
     pluginId?: string | undefined;
     packageNameOrTarball?: string | undefined;
+    localArchiveFileName?: string | undefined;
+    localArchiveBase64?: string | undefined;
     networkPreference?: "auto" | "domestic" | "global" | undefined;
     fromVersion?: string | undefined;
     toVersion?: string | undefined;
@@ -855,6 +783,12 @@ export function evaluatePluginTrustAudit(
     ...(input.packageNameOrTarball !== undefined
       ? { packageNameOrTarball: input.packageNameOrTarball }
       : {}),
+    ...(input.localArchiveFileName !== undefined
+      ? { localArchiveFileName: input.localArchiveFileName }
+      : {}),
+    ...(input.localArchiveBase64 !== undefined
+      ? { localArchiveBase64: input.localArchiveBase64 }
+      : {}),
     ...(input.networkPreference !== undefined
       ? { networkPreference: input.networkPreference }
       : {}),
@@ -879,6 +813,8 @@ export function parseCatalogPluginsPayload(payload: unknown): OfficialCatalogPlu
     if (!rec) continue;
     const id = asString(rec.id);
     if (!id) continue;
+    const status = asString(rec.status, "pending");
+    if (status === "deprecated") continue;
     const enginesRec = asRecord(rec.engines);
     const permissions = asStringArray(rec.permissions);
     const parsedContributions = parseContributions(rec.contributions ?? rec.contributes);
@@ -897,7 +833,7 @@ export function parseCatalogPluginsPayload(payload: unknown): OfficialCatalogPlu
         permissions.some((p) => p === "hooks:intercept" || p.toLowerCase().includes("prompt")),
       sha256: asString(rec.sha256),
       bytes: asNumber(rec.bytes, 0),
-      status: asString(rec.status, "pending"),
+      status,
       installed: asBoolean(rec.installed, false),
       enabled: asBoolean(rec.enabled, false),
       mounted: asBoolean(rec.mounted, false),
@@ -911,6 +847,31 @@ export function parseCatalogPluginsPayload(payload: unknown): OfficialCatalogPlu
     });
   }
   return result;
+}
+
+export function parseRetiredPluginsPayload(payload: unknown): RetiredPluginItem[] {
+  const root = asRecord(payload);
+  const rawList = Array.isArray(root?.retiredPlugins) ? root.retiredPlugins : [];
+  const parsed: RetiredPluginItem[] = [];
+  for (const item of rawList) {
+    const rec = asRecord(item);
+    if (!rec) continue;
+    const id = asString(rec.id);
+    if (!id) continue;
+    parsed.push({
+      id,
+      packageName: asString(rec.packageName, `@prismux/plugin-${id}`),
+      titleZh: asString(rec.titleZh, id),
+      titleEn: asString(rec.titleEn, id),
+      status: "deprecated",
+      replacedByBuiltin: true,
+      noticeZh: asString(rec.noticeZh, "已停用：已被 Prismux 内置功能取代"),
+      noticeEn: asString(rec.noticeEn, "Deprecated: Replaced by Prismux built-in capabilities"),
+      ...(typeof rec.detailZh === "string" ? { detailZh: rec.detailZh } : {}),
+      ...(typeof rec.detailEn === "string" ? { detailEn: rec.detailEn } : {}),
+    });
+  }
+  return parsed.length > 0 ? parsed : [...DEFAULT_RETIRED_OFFICIAL_PLUGINS];
 }
 
 export function parseInstalledPluginsPayload(payload: unknown): InstalledPluginRaw[] {
@@ -1221,7 +1182,19 @@ export function isAuditRequiredError(err: unknown): {
   const details = asRecord(rec?.details);
   const nestedError = asRecord(details?.error);
   const auditPayload = asRecord(nestedError?.details) ?? details;
-  const permissions = asStringArray(auditPayload?.permissions);
+  const rawPermissions = Array.isArray(auditPayload?.permissions) ? auditPayload.permissions : [];
+  const permissions: string[] = [];
+  for (const item of rawPermissions) {
+    if (typeof item === "string" && item.trim().length > 0) {
+      permissions.push(item.trim());
+    } else {
+      const obj = asRecord(item);
+      const perm = asString(obj?.permission).trim();
+      if (perm.length > 0) {
+        permissions.push(perm);
+      }
+    }
+  }
   const reasons = asStringArray(auditPayload?.warnings ?? auditPayload?.reasons);
   const required =
     code === "AUDIT_CONFIRMATION_REQUIRED" ||

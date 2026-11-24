@@ -5,16 +5,19 @@ import { getActiveLocale } from "../../i18n/messages";
 export interface PrismuxSidebarQuickNavCopy {
   readonly tasks: string;
   readonly workspaceBoard: string;
+  readonly scheduledTasks: string;
 }
 
 const ZH_COPY: PrismuxSidebarQuickNavCopy = {
   tasks: "任务面板",
   workspaceBoard: "工作区板",
+  scheduledTasks: "定时任务",
 };
 
 const EN_COPY: PrismuxSidebarQuickNavCopy = {
   tasks: "Tasks",
   workspaceBoard: "Workspace board",
+  scheduledTasks: "Scheduled Tasks",
 };
 
 export function getPrismuxSidebarQuickNavCopy(

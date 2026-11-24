@@ -42,9 +42,11 @@ const RIGHT_PANEL_KINDS = [
   "device",
   "terminal",
   "pull-request",
+  "pull-request-empty",
   "pull-requests",
   "issue",
   "thread",
+  "side-chat-empty",
   "linked-thread",
   "wallpaper",
   "agent-session",
@@ -103,6 +105,7 @@ export type RightPanelSurface =
       revealUrl?: string;
       detailTab?: PullRequestDetailTab;
     }
+  | { id: "pull-request:empty"; kind: "pull-request-empty" }
   | { id: "pull-requests"; kind: "pull-requests" }
   /**
    * An issue opened in the issues list's shared panel, or beside a thread. Like `pull-request`,
@@ -124,6 +127,7 @@ export type RightPanelSurface =
    * the thread's own lineage, so the surface only names it.
    */
   | ThreadSurface
+  | { id: "side-chat:empty"; kind: "side-chat-empty" }
   /** A linked environment's thread, read through `viaEnvironmentId`; it has no thread here. */
   | LinkedThreadSurface
   /** Prismux liquid-glass & wallpaper engine right-sidebar quick panel. */
@@ -171,20 +175,27 @@ export function decodeThreadSurface(surface: object): ThreadSurface | null {
 }
 
 export const DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER = [
+  "pull-request",
   "diff",
   "files",
   "terminal",
+  "side-chat",
   "preview",
   "mobile-simulator",
+  "pull-requests",
   "wallpaper",
 ] as const;
 
 export type RightPanelActivityItemId = (typeof DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER)[number];
 
-export const RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v2";
-const LEGACY_RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v1";
+export const RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY = "prismux.rightPanel.activityOrder.v3";
+const LEGACY_RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEYS = [
+  "prismux.rightPanel.activityOrder.v2",
+  "prismux.rightPanel.activityOrder.v1",
+] as const;
 
 const LEGACY_DEFAULT_ACTIVITY_ORDERS: ReadonlyArray<readonly string[]> = [
+  ["diff", "files", "terminal", "preview", "mobile-simulator", "wallpaper"],
   ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "device", "files"],
   ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "devices", "files"],
   ["mobile-simulator", "preview", "wallpaper", "diff", "terminal", "files"],
@@ -253,11 +264,13 @@ export function loadRightPanelActivityOrder(
     if (raw) {
       return normalizeRightPanelActivityOrder(JSON.parse(raw));
     }
-    const legacyRaw = storage.getItem(LEGACY_RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEY);
-    if (legacyRaw) {
-      const migrated = normalizeRightPanelActivityOrder(JSON.parse(legacyRaw));
-      saveRightPanelActivityOrder(migrated, storage);
-      return migrated;
+    for (const legacyKey of LEGACY_RIGHT_PANEL_ACTIVITY_ORDER_STORAGE_KEYS) {
+      const legacyRaw = storage.getItem(legacyKey);
+      if (legacyRaw) {
+        const migrated = normalizeRightPanelActivityOrder(JSON.parse(legacyRaw));
+        saveRightPanelActivityOrder(migrated, storage);
+        return migrated;
+      }
     }
     return [...DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER];
   } catch {
@@ -333,11 +346,22 @@ export interface RightPanelActivityBarLayout<T extends ActivityBarLayoutItem> {
   readonly compactIds: ReadonlySet<RightPanelActivityItemId>;
 }
 
-const ACTIVITY_BAR_LABELED_CHROME_PX = 28;
-const ACTIVITY_BAR_CHAR_PX = 9;
+const ACTIVITY_BAR_LABELED_CHROME_PX = 26;
+const ACTIVITY_BAR_ASCII_CHAR_PX = 7;
+const ACTIVITY_BAR_WIDE_CHAR_PX = 11.5;
 const ACTIVITY_BAR_COMPACT_WIDTH_PX = 26;
-const ACTIVITY_BAR_MORE_WIDTH_PX = 28;
-const ACTIVITY_BAR_GAP_PX = 4;
+const ACTIVITY_BAR_MORE_WIDTH_PX = 26;
+const ACTIVITY_BAR_GAP_PX = 2;
+
+function estimateActivityLabelWidth(label: string): number {
+  let width = 0;
+  for (const ch of label) {
+    width += /[^\u0000-\u00ff]/.test(ch)
+      ? ACTIVITY_BAR_WIDE_CHAR_PX
+      : ACTIVITY_BAR_ASCII_CHAR_PX;
+  }
+  return Math.min(88, ACTIVITY_BAR_LABELED_CHROME_PX + Math.ceil(width));
+}
 
 /**
  * Two-stage compact-before-overflow Activity Bar layout modeled after Orca
@@ -350,7 +374,7 @@ const ACTIVITY_BAR_GAP_PX = 4;
 export function resolveRightPanelActivityBarLayout<T extends ActivityBarLayoutItem>(
   items: readonly T[],
   availableWidth: number,
-  stripPadding = 16,
+  stripPadding = 12,
 ): RightPanelActivityBarLayout<T> {
   const compactIds = new Set<RightPanelActivityItemId>();
   if (items.length === 0) {
@@ -360,8 +384,7 @@ export function resolveRightPanelActivityBarLayout<T extends ActivityBarLayoutIt
     return { visible: [...items], overflow: [], compactIds };
   }
 
-  const labeledWidth = (item: T): number =>
-    Math.min(84, ACTIVITY_BAR_LABELED_CHROME_PX + item.label.length * ACTIVITY_BAR_CHAR_PX);
+  const labeledWidth = (item: T): number => estimateActivityLabelWidth(item.label);
   const itemWidth = (item: T, compact: boolean): number =>
     (compact ? ACTIVITY_BAR_COMPACT_WIDTH_PX : labeledWidth(item)) + ACTIVITY_BAR_GAP_PX;
 
@@ -630,8 +653,12 @@ const singletonSurface = (
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
+    case "pull-request-empty":
+      return { id: "pull-request:empty", kind };
     case "pull-requests":
       return { id: "pull-requests", kind };
+    case "side-chat-empty":
+      return { id: "side-chat:empty", kind };
     case "device":
       return { id: "device", kind };
     case "wallpaper":
@@ -1300,9 +1327,15 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) =>
           rightPanelHostRef(ref).threadId === threadId
             ? state
-            : userAction(state, scopedThreadKey(ref), (current) =>
-                upsertSurface(current, threadSurface(threadId)),
-              ),
+            : userAction(state, scopedThreadKey(ref), (current) => {
+                const withoutEmptySideChat = current.surfaces.filter(
+                  (surface) => surface.kind !== "side-chat-empty",
+                );
+                return upsertSurface(
+                  { ...current, surfaces: withoutEmptySideChat },
+                  threadSurface(threadId),
+                );
+              }),
         ),
       openLinkedThread: (ref, target) =>
         set((state) =>
@@ -1367,7 +1400,13 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
             const surface = pullRequestSurface(target);
-            const next = upsertSurface(current, surface);
+            const withoutEmptyPullRequest = current.surfaces.filter(
+              (entry) => entry.kind !== "pull-request-empty",
+            );
+            const next = upsertSurface(
+              { ...current, surfaces: withoutEmptyPullRequest },
+              surface,
+            );
             const { url, revealUrl } = target;
             if (!url && !revealUrl) return next;
             return {
@@ -1928,6 +1967,8 @@ useRightPanelStore.subscribe((next, previous) => {
       if (
         surface.kind === "terminal" ||
         surface.kind === "agent-session" ||
+        surface.kind === "pull-request-empty" ||
+        surface.kind === "side-chat-empty" ||
         (surface.kind === "preview" && surface.resourceId !== null)
       )
         continue;

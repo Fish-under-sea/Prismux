@@ -26,6 +26,7 @@ import {
   type SidebarStorageLike,
 } from "./prismuxSidebarQuickNav.logic";
 import { getPrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
+import { isSidebarUtilityPage } from "./mainAppLocation";
 
 function createMemoryStorage(): SidebarStorageLike & { readonly data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -53,7 +54,7 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
       diagnostics: "/settings/diagnostics",
       tasks: "/tasks",
       workspaceBoard: "/workspace-board",
-      automations: "/settings/scheduled-tasks",
+      automations: "/scheduled-tasks",
       mobileAccess: "/settings/access",
       plugins: "/settings/plugins",
     });
@@ -61,11 +62,17 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
     expect(getPrismuxSidebarQuickNavCopy("zh")).toEqual({
       tasks: "任务面板",
       workspaceBoard: "工作区板",
+      scheduledTasks: "定时任务",
     });
     expect(getPrismuxSidebarQuickNavCopy("en")).toEqual({
       tasks: "Tasks",
       workspaceBoard: "Workspace board",
+      scheduledTasks: "Scheduled Tasks",
     });
+
+    expect(isSidebarUtilityPage("/tasks")).toBe(true);
+    expect(isSidebarUtilityPage("/workspace-board")).toBe(true);
+    expect(isSidebarUtilityPage("/scheduled-tasks")).toBe(true);
   });
 
   it("persists Prismux Mobile [New] onboarding badge dismissal in localStorage", () => {

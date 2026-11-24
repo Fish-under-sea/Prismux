@@ -13,6 +13,11 @@ import type {
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { lazy, Suspense } from "react";
 import { LinkedThreadPane } from "./LinkedThreadPane";
+import {
+  LinkedItemsEmptySurface,
+  PullRequestEmptySurface,
+  SideChatEmptySurface,
+} from "./RightPanelEmptySurfaces";
 import SideThreadPane from "./SideThreadPane";
 import type { ComposerImageAttachment, DraftId } from "../../composerDraftStore";
 import type { ShortcutMatchContext } from "../../keybindings";
@@ -47,11 +52,19 @@ type RightPanelTerminalProps = Omit<
 interface RightPanelPullRequestProps {
   readonly capabilityKnown: boolean;
   readonly supported: boolean;
+  readonly isServerThread?: boolean;
   readonly projectId: ProjectId | null;
   readonly pullRequests: ReadonlyArray<ThreadPullRequestLink>;
   readonly linkedPullRequest: ThreadLinkedPullRequest | null;
   readonly branchPullRequest: ThreadLinkedPullRequest | null | undefined;
   readonly onBack: (() => void) | undefined;
+  readonly onOpenLinkedItems?: (() => void) | undefined;
+}
+
+interface RightPanelSideChatProps {
+  readonly canStart: boolean;
+  readonly disabledReason: string | null;
+  readonly onStart?: (() => void) | undefined;
 }
 
 interface RightPanelFileProps {
@@ -84,6 +97,7 @@ export function RightPanelSurfaceContent(props: {
   readonly onCloseSurface: (surface: RightPanelSurface) => void;
   readonly terminal: RightPanelTerminalProps;
   readonly pullRequest: RightPanelPullRequestProps;
+  readonly sideChat?: RightPanelSideChatProps | undefined;
   readonly issuesSupported: boolean;
   readonly files: RightPanelFileProps;
   readonly sideChatParentPanel: SideChatParentPanel;
@@ -185,6 +199,16 @@ export function RightPanelSurfaceContent(props: {
         />
       );
     }
+    case "pull-request-empty":
+      return (
+        <PullRequestEmptySurface
+          threadRef={threadRef}
+          capabilityKnown={props.pullRequest.capabilityKnown}
+          supported={props.pullRequest.supported}
+          isServerThread={props.pullRequest.isServerThread !== false}
+          onOpenLinkedItems={props.pullRequest.onOpenLinkedItems}
+        />
+      );
     case "issue":
       if (!props.pullRequest.capabilityKnown) return <PullRequestDetailGhost />;
       if (!props.issuesSupported) {
@@ -232,6 +256,9 @@ export function RightPanelSurfaceContent(props: {
         />
       );
     case "pull-requests":
+      if (props.pullRequest.isServerThread === false) {
+        return <LinkedItemsEmptySurface />;
+      }
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
     case "thread":
       // Not lazy: revealing a suspended tiptap editor tears down its view and crashes the composer.
@@ -242,6 +269,14 @@ export function RightPanelSurfaceContent(props: {
           surface={surface}
           parentPanel={props.sideChatParentPanel}
           onClose={() => onCloseSurface(surface)}
+        />
+      );
+    case "side-chat-empty":
+      return (
+        <SideChatEmptySurface
+          canStart={props.sideChat?.canStart === true}
+          disabledReason={props.sideChat?.disabledReason ?? null}
+          onStart={props.sideChat?.onStart}
         />
       );
     case "linked-thread":

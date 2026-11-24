@@ -107,9 +107,9 @@ interface NavigatorWithWakeLock {
   };
 }
 
-const RESOURCES_OPEN_POLL_MS = 3_000;
-const RESOURCES_IDLE_POLL_MS = 8_000;
-const RESOURCES_EARLY_WARMUP_MS = 1_800;
+const RESOURCES_OPEN_POLL_MS = 2_000;
+const RESOURCES_IDLE_POLL_MS = 5_000;
+const RESOURCES_EARLY_WARMUP_MS = 1_200;
 
 const STATUS_POPOVER_POPUP_CLASS =
   "overflow-hidden rounded-xl border border-border bg-popover bg-clip-padding p-0 shadow-xl before:hidden";

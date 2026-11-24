@@ -6,6 +6,7 @@ import {
   type ProviderInstanceId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
 import {
   memo,
@@ -24,7 +25,10 @@ import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useClientSettings } from "../../hooks/useSettings";
 import { formatAgentBrandName } from "../../prismux/agentBrand";
-import { PrismuxChiefStatusPill } from "../../prismux/PrismuxChiefStatusPill";
+import {
+  PrismuxTopbarControls,
+  PrismuxWallpaperQuickPanel,
+} from "../../prismux/PrismuxWallpaperBridge";
 import {
   providerInstanceEntriesFor,
   type ProviderInstanceEntry,
@@ -43,6 +47,7 @@ import { RightPanelAgentSessionPane } from "./RightPanelAgentSessionPane";
 import { WorkspacePaneContent } from "./WorkspacePaneContent";
 import {
   buildQuickLaunchAgentOptions,
+  resolveQuickLaunchAgentTarget,
   type QuickLaunchAgentOption,
   type QuickLaunchHistoryThread,
   type QuickLaunchOpenTabMatch,
@@ -238,7 +243,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const visibleThreads = useVisibleThreadShells();
   const environmentServerConfigs = useAtomValue(environmentServerConfigsAtom);
   const { defaultProjectRef, handleNewThread } = useHandleNewThread();
-  const { scratchEnvironmentId, startScratchThread } = useScratchProject();
+  const { scratchEnvironmentId, openScratchProject } = useScratchProject();
   const _clientSettings = useClientSettings((s) => s.confirmThreadDelete);
   void _clientSettings;
 
@@ -246,8 +251,11 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const tabBarRef = useRef<HTMLDivElement | null>(null);
   const [topbarSlotElement, setTopbarSlotElement] = useState<HTMLDivElement | null>(null);
   const [hasActiveChatControls, setHasActiveChatControls] = useState(false);
-  const [standaloneRightSession, setStandaloneRightSession] =
-    useState<AgentSessionSurface | null>(null);
+  const [standaloneRightPanel, setStandaloneRightPanel] = useState<
+    | { readonly kind: "agent-session"; readonly session: AgentSessionSurface }
+    | { readonly kind: "wallpaper" }
+    | null
+  >(null);
 
   // Resolve current route thread metadata for seamless Tab Bar sync
   const routeServerRef = shownTarget?.kind === "server" ? shownTarget.threadRef : null;
@@ -285,10 +293,16 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
 
   // Close standalone fallback drawer once a real thread mounts its native RightPanel.
   useEffect(() => {
-    if (activeHostThreadRef && standaloneRightSession) {
-      setStandaloneRightSession(null);
+    if (activeHostThreadRef && standaloneRightPanel) {
+      setStandaloneRightPanel(null);
     }
-  }, [activeHostThreadRef, standaloneRightSession]);
+  }, [activeHostThreadRef, standaloneRightPanel]);
+
+  const toggleStandaloneWallpaper = useCallback(() => {
+    setStandaloneRightPanel((current) =>
+      current?.kind === "wallpaper" ? null : { kind: "wallpaper" },
+    );
+  }, []);
 
   const topbarPortalValue = useMemo<WorkspaceTopbarPortalContextValue>(
     () => ({
@@ -296,13 +310,13 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       slotElement: topbarSlotElement,
       tabBarRef,
       setHasActiveChatControls,
-      standaloneRightPanelOpen: Boolean(standaloneRightSession && !activeHostThreadRef),
+      standaloneRightPanelOpen: Boolean(standaloneRightPanel && !activeHostThreadRef),
     }),
-    [activeHostThreadRef, standaloneRightSession, topbarSlotElement],
+    [activeHostThreadRef, standaloneRightPanel, topbarSlotElement],
   );
 
   const openChiefSettings = useCallback(() => {
-    void navigate({ to: "/settings/memory-sync" as never });
+    void navigate({ to: "/settings/memory" as never });
   }, [navigate]);
 
   // Dynamic Provider instance entries + model options for Quick Launcher & Agent Blank Stage
@@ -388,13 +402,24 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     return draftSelection?.instanceId ?? routeThreadShell?.modelSelection?.instanceId ?? null;
   }, [routeComposerDraft, routeThreadShell]);
 
+  const routeActiveEntry = useMemo(() => {
+    if (!routeActiveInstanceId) return null;
+    return instanceEntries.find((candidate) => candidate.instanceId === routeActiveInstanceId) ?? null;
+  }, [instanceEntries, routeActiveInstanceId]);
+
   const routeDisplayTitle = useMemo(() => {
     if (routeThreadShell?.title?.trim()) return routeThreadShell.title.trim();
     if (shownTarget?.kind === "draft") {
+      if (routeActiveEntry) {
+        return formatAgentBrandName(
+          routeActiveEntry.driverKind,
+          routeActiveEntry.driverKind === "acpRegistry" ? routeActiveEntry.displayName : undefined,
+        );
+      }
       return routeActiveProviderId ? formatAgentBrandName(routeActiveProviderId) : "新会话";
     }
     return "会话";
-  }, [routeActiveProviderId, routeThreadShell?.title, shownTarget?.kind]);
+  }, [routeActiveEntry, routeActiveProviderId, routeThreadShell?.title, shownTarget?.kind]);
 
   useEffect(() => {
     if (!shownTarget || !routeKey) return;
@@ -457,9 +482,27 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           params: buildThreadRouteParams(scopeThreadRef(tab.environmentId, tab.threadId)),
         });
       } else if (tab.kind === "draft" && tab.draftId) {
-        void navigate({
-          to: "/draft/$draftId",
-          params: buildDraftThreadRouteParams(tab.draftId),
+        const draftStore = useComposerDraftStore.getState();
+        const promotedRedirect = draftStore.getPromotedDraftRedirect(tab.draftId);
+        if (promotedRedirect) {
+          useWorkspaceTabsStore.getState().promoteDraftTab(tab.draftId, promotedRedirect);
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(promotedRedirect),
+          });
+          return;
+        }
+        if (draftStore.getDraftSession(tab.draftId)) {
+          void navigate({
+            to: "/draft/$draftId",
+            params: buildDraftThreadRouteParams(tab.draftId),
+          });
+          return;
+        }
+        // Draft was pruned across reload; keep tab interactive instead of dead-ending on index.
+        useWorkspaceTabsStore.getState().updateTab(tab.id, {
+          kind: "agent",
+          draftId: null,
         });
       }
     },
@@ -490,36 +533,146 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
 
   const openAgentInRightSidebar = useCallback(
     (agent: QuickLaunchAgentOption) => {
-      const providerId = agent.brandId === "custom" ? String(agent.driverKind) : agent.brandId;
+      const resolved = resolveQuickLaunchAgentTarget(agent, instanceEntries);
       if (activeHostThreadRef) {
         useRightPanelStore.getState().openAgentSession(activeHostThreadRef, {
           title: agent.displayName,
-          providerId,
-          instanceId: agent.instanceId,
-          model: agent.defaultModel,
+          providerId: resolved.providerId,
+          instanceId: resolved.instanceId,
+          model: resolved.model,
         });
         return;
       }
 
       // Empty workspace (no active thread yet): open a matching right-sidebar drawer smoothly
       // without splitting or replacing the main stage with a blank pseudo-pane.
-      setStandaloneRightSession({
-        id: `agent-session:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      setStandaloneRightPanel({
         kind: "agent-session",
-        title: agent.displayName,
-        providerId,
-        instanceId: agent.instanceId,
-        model: agent.defaultModel,
+        session: {
+          id: `agent-session:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          kind: "agent-session",
+          title: agent.displayName,
+          providerId: resolved.providerId,
+          instanceId: resolved.instanceId,
+          model: resolved.model,
+        },
       });
     },
-    [activeHostThreadRef],
+    [activeHostThreadRef, instanceEntries],
   );
 
+  const resolveProjectRefForMainLaunch = useCallback(async (): Promise<{
+    readonly projectRef: ReturnType<typeof scopeProjectRef>;
+    readonly fromScratch: boolean;
+  } | null> => {
+    const firstOpenProject = projects.find((project) => project.archivedAt == null);
+    const direct =
+      activeEnvironmentId && activeProjectId
+        ? scopeProjectRef(activeEnvironmentId, activeProjectId)
+        : (defaultProjectRef ??
+          (firstOpenProject
+            ? scopeProjectRef(firstOpenProject.environmentId, firstOpenProject.id)
+            : null));
+    if (direct) {
+      return { projectRef: direct, fromScratch: false };
+    }
+    const scratchEnv = scratchEnvironmentId(activeEnvironmentId ?? primaryEnvironmentId);
+    if (!scratchEnv) {
+      return null;
+    }
+    const scratchProject = await openScratchProject(scratchEnv);
+    if (!scratchProject) {
+      return null;
+    }
+    return {
+      projectRef: scopeProjectRef(scratchProject.environmentId, scratchProject.id),
+      fromScratch: true,
+    };
+  }, [
+    activeEnvironmentId,
+    activeProjectId,
+    defaultProjectRef,
+    openScratchProject,
+    primaryEnvironmentId,
+    projects,
+    scratchEnvironmentId,
+  ]);
+
   const launchAgentInPane = useCallback(
-    async (agent: QuickLaunchAgentOption, _targetPaneId: string) => {
-      openAgentInRightSidebar(agent);
+    async (agent: QuickLaunchAgentOption, targetPaneId: string) => {
+      const store = useWorkspaceTabsStore.getState();
+      const resolvedPaneId =
+        targetPaneId && store.panes[targetPaneId] ? targetPaneId : store.primaryPaneId;
+      const resolved = resolveQuickLaunchAgentTarget(agent, instanceEntries);
+
+      // Secondary split panes open a dedicated interactive agent tab inside that pane.
+      if (resolvedPaneId !== store.primaryPaneId) {
+        store.openTab(
+          {
+            kind: "agent",
+            title: agent.displayName,
+            providerId: resolved.providerId,
+            instanceId: resolved.instanceId,
+            model: resolved.model,
+            reuseExisting: false,
+          },
+          resolvedPaneId,
+        );
+        return;
+      }
+
+      // Main workspace: create a fresh independent draft conversation tab bound to the chosen Agent & default model.
+      const resolvedProject = await resolveProjectRefForMainLaunch();
+      if (resolvedProject) {
+        const { projectRef, fromScratch } = resolvedProject;
+        const opened = await handleNewThread(projectRef, {
+          forceNew: true,
+          ...(fromScratch ? { envMode: "local" as const } : {}),
+          ...(resolved.modelSelection ? { modelSelection: resolved.modelSelection } : {}),
+        }).catch(() => null);
+
+        if (opened) {
+          if (resolved.modelSelection) {
+            useComposerDraftStore
+              .getState()
+              .setModelSelection(opened.draftId, resolved.modelSelection, {
+                explicit: true,
+                replaceOptions: true,
+              });
+          }
+          useWorkspaceTabsStore.getState().openTab(
+            {
+              kind: "draft",
+              title: agent.displayName,
+              providerId: resolved.providerId,
+              instanceId: resolved.instanceId,
+              model: resolved.model,
+              environmentId: projectRef.environmentId,
+              threadId: opened.threadId,
+              draftId: opened.draftId,
+              reuseExisting: true,
+            },
+            resolvedPaneId,
+          );
+          return;
+        }
+      }
+
+      // Guaranteed zero-silent-failure fallback when offline or no server scratch root is available:
+      // immediately open an interactive agent stage tab in the active main pane.
+      useWorkspaceTabsStore.getState().openTab(
+        {
+          kind: "agent",
+          title: agent.displayName,
+          providerId: resolved.providerId,
+          instanceId: resolved.instanceId,
+          model: resolved.model,
+          reuseExisting: false,
+        },
+        resolvedPaneId,
+      );
     },
-    [openAgentInRightSidebar],
+    [handleNewThread, instanceEntries, resolveProjectRefForMainLaunch],
   );
 
   const handleOpenHistoryThread = useCallback(
@@ -701,42 +854,36 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       readonly model: string | null;
       readonly prompt: string;
     }) => {
-      const projectRef =
-        defaultProjectRef ??
-        (projects.find((p) => p.archivedAt == null)
-          ? {
-              environmentId: projects.find((p) => p.archivedAt == null)!.environmentId,
-              projectId: projects.find((p) => p.archivedAt == null)!.id,
-            }
-          : null);
-      if (projectRef) {
-        const opened = await handleNewThread(projectRef, { prompt: input.prompt });
-        if (opened) {
-          if (input.instanceId && input.model) {
-            useComposerDraftStore
-              .getState()
-              .setModelSelection(
-                opened.draftId,
-                { instanceId: input.instanceId, model: input.model },
-                { replaceOptions: true },
-              );
-          }
-          useWorkspaceTabsStore.getState().updateTab(input.tabId, {
-            kind: "draft",
-            draftId: opened.draftId,
-            environmentId: projectRef.environmentId,
-            threadId: opened.threadId,
-            title: formatAgentBrandName(input.providerId),
+      const resolvedProject = await resolveProjectRefForMainLaunch();
+      if (!resolvedProject) return;
+      const { projectRef, fromScratch } = resolvedProject;
+      const modelSelection =
+        input.instanceId && input.model
+          ? createModelSelection(input.instanceId, input.model)
+          : null;
+      const opened = await handleNewThread(projectRef, {
+        forceNew: true,
+        prompt: input.prompt,
+        ...(fromScratch ? { envMode: "local" as const } : {}),
+        ...(modelSelection ? { modelSelection } : {}),
+      });
+      if (opened) {
+        if (modelSelection) {
+          useComposerDraftStore.getState().setModelSelection(opened.draftId, modelSelection, {
+            explicit: true,
+            replaceOptions: true,
           });
-          return;
         }
-      }
-      const scratchEnv = scratchEnvironmentId(primaryEnvironmentId);
-      if (scratchEnv) {
-        await startScratchThread(scratchEnv);
+        useWorkspaceTabsStore.getState().updateTab(input.tabId, {
+          kind: "draft",
+          draftId: opened.draftId,
+          environmentId: projectRef.environmentId,
+          threadId: opened.threadId,
+          title: formatAgentBrandName(input.providerId),
+        });
       }
     },
-    [defaultProjectRef, handleNewThread, primaryEnvironmentId, projects, scratchEnvironmentId, startScratchThread],
+    [handleNewThread, resolveProjectRefForMainLaunch],
   );
 
   const paneCount = countLeafPanes(layout);
@@ -862,9 +1009,11 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           topbarRightSlotRef={edges.top && edges.right ? setTopbarSlotElement : undefined}
           fallbackRightControls={
             edges.top && edges.right && !hasActiveChatControls ? (
-              <PrismuxChiefStatusPill
-                onClick={openChiefSettings}
-                className="h-6.5 px-2 text-[11px]"
+              <PrismuxTopbarControls
+                wallpaperOpen={standaloneRightPanel?.kind === "wallpaper"}
+                wallpaperAvailable
+                onToggleWallpaper={toggleStandaloneWallpaper}
+                onOpenChiefSettings={openChiefSettings}
               />
             ) : null
           }
@@ -909,29 +1058,40 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             ) : null}
           </div>
 
-          {isPrimaryPane && standaloneRightSession && !activeHostThreadRef ? (
+          {isPrimaryPane && standaloneRightPanel && !activeHostThreadRef ? (
             <aside
               data-pmx-glass-zone="rightSidebar"
               data-preview-panel-mode="inline"
-              data-standalone-agent-sidebar="1"
+              data-standalone-agent-sidebar={
+                standaloneRightPanel.kind === "agent-session" ? "1" : undefined
+              }
+              data-standalone-wallpaper-sidebar={
+                standaloneRightPanel.kind === "wallpaper" ? "1" : undefined
+              }
               className="flex h-full min-h-0 w-[min(420px,46vw)] shrink-0 flex-col overflow-hidden bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent"
             >
-              <RightPanelAgentSessionPane
-                hostThreadRef={null}
-                surface={standaloneRightSession}
-                activeProjectRef={
-                  activeEnvironmentId && activeProjectId
-                    ? scopeProjectRef(activeEnvironmentId, activeProjectId)
-                    : defaultProjectRef
-                }
-                sideChatParentPanel={null}
-                onUpdateSurface={(patch) =>
-                  setStandaloneRightSession((current) =>
-                    current ? { ...current, ...patch } : null,
-                  )
-                }
-                onClose={() => setStandaloneRightSession(null)}
-              />
+              {standaloneRightPanel.kind === "agent-session" ? (
+                <RightPanelAgentSessionPane
+                  hostThreadRef={null}
+                  surface={standaloneRightPanel.session}
+                  activeProjectRef={
+                    activeEnvironmentId && activeProjectId
+                      ? scopeProjectRef(activeEnvironmentId, activeProjectId)
+                      : defaultProjectRef
+                  }
+                  sideChatParentPanel={null}
+                  onUpdateSurface={(patch) =>
+                    setStandaloneRightPanel((current) =>
+                      current?.kind === "agent-session"
+                        ? { kind: "agent-session", session: { ...current.session, ...patch } }
+                        : current,
+                    )
+                  }
+                  onClose={() => setStandaloneRightPanel(null)}
+                />
+              ) : (
+                <PrismuxWallpaperQuickPanel />
+              )}
             </aside>
           ) : null}
         </div>

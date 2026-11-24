@@ -1,5 +1,7 @@
 import {
+  ANTIGRAVITY_DEFAULT_MODEL,
   EnvironmentId,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -8,7 +10,7 @@ import {
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { DraftId } from "../../composerDraftStore";
+import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   selectActiveRightPanelSurface,
@@ -16,6 +18,7 @@ import {
   useRightPanelStore,
 } from "../../rightPanelStore";
 import { TooltipProvider } from "../ui/tooltip";
+import { shouldPreservePopoverOnSubmenuDismiss } from "./WorkspaceNewTabPopover";
 import { WorkspacePaneContent } from "./WorkspacePaneContent";
 import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { PrismuxStageFrame } from "./WorkspaceTopbarPortalContext";
@@ -23,6 +26,7 @@ import {
   buildQuickLaunchAgentOptions,
   classifyQuickLaunchUrl,
   filterQuickLaunchResults,
+  resolveQuickLaunchAgentTarget,
   type QuickLaunchHistoryThread,
 } from "./workspaceQuickLaunch.logic";
 import {
@@ -386,6 +390,81 @@ describe("workspaceQuickLaunch.logic", () => {
     });
     expect(filteredUrl.urlTarget?.normalizedUrl).toBe("http://localhost:3000/");
   });
+
+  it("resolves valid provider instance & default model for Codex, Claude Code, and Antigravity even before server hydration", () => {
+    // 1. Hydrated server providers
+    const entries = deriveProviderInstanceEntries([
+      makeProvider({ instanceId: "codex", driver: "codex" }),
+      makeProvider({ instanceId: "claudeAgent", driver: "claudeAgent" }),
+      makeProvider({ instanceId: "antigravity", driver: "antigravity" }),
+    ]);
+    const agents = buildQuickLaunchAgentOptions({ instanceEntries: entries, historyThreads: [] });
+    const resolvedHydrated = agents.map((agent) => resolveQuickLaunchAgentTarget(agent, entries));
+    expect(resolvedHydrated.map((r) => r.modelSelection)).toEqual([
+      { instanceId: "codex", model: "codex-default" },
+      { instanceId: "claudeAgent", model: "claudeAgent-default" },
+      { instanceId: "antigravity", model: "antigravity-default" },
+    ]);
+
+    // 2. Fallback agents when instanceEntries is empty (blank workspace / offline before config load)
+    const fallbackAgents = buildQuickLaunchAgentOptions({ instanceEntries: [], historyThreads: [] });
+    const claudeFallback = resolveQuickLaunchAgentTarget(
+      fallbackAgents.find((a) => a.brandId === "claude-code")!,
+      [],
+    );
+    const codexFallback = resolveQuickLaunchAgentTarget(
+      fallbackAgents.find((a) => a.brandId === "codex")!,
+      [],
+    );
+    const agyFallback = resolveQuickLaunchAgentTarget(
+      fallbackAgents.find((a) => a.brandId === "antigravity")!,
+      [],
+    );
+    expect(claudeFallback.modelSelection?.instanceId).toBe("claudeAgent");
+    expect(claudeFallback.model).toBeTruthy();
+    expect(codexFallback.modelSelection?.instanceId).toBe("codex");
+    expect(codexFallback.model).toBeTruthy();
+    expect(agyFallback.modelSelection).toEqual({
+      instanceId: "antigravity",
+      model: ANTIGRAVITY_DEFAULT_MODEL,
+    });
+  });
+
+  it("preserves previous empty draft sessions when preservePreviousDraft is set for multi-agent main tabs", () => {
+    const draftStore = useComposerDraftStore.getState();
+    const projectRef = { environmentId: ENV_LOCAL, projectId: ProjectId.make("proj-multi-tab") };
+    const logicalKey = "logical:proj-multi-tab";
+    const draftCodex = "draft-codex-tab" as DraftId;
+    const draftClaude = "draft-claude-tab" as DraftId;
+
+    draftStore.setLogicalProjectDraftThreadId(logicalKey, projectRef, draftCodex, {
+      threadId: THREAD_A,
+    });
+    draftStore.setModelSelection(
+      draftCodex,
+      { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+      { explicit: true, replaceOptions: true },
+    );
+
+    draftStore.setLogicalProjectDraftThreadId(logicalKey, projectRef, draftClaude, {
+      threadId: THREAD_B,
+      preservePreviousDraft: true,
+    });
+    draftStore.setModelSelection(
+      draftClaude,
+      { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-sonnet-4-6" },
+      { explicit: true, replaceOptions: true },
+    );
+
+    const latest = useComposerDraftStore.getState();
+    expect(latest.getDraftSession(draftCodex)).not.toBeNull();
+    expect(latest.getDraftSession(draftClaude)).not.toBeNull();
+    expect(latest.getComposerDraft(draftCodex)?.activeProvider).toBe("codex");
+    expect(latest.getComposerDraft(draftClaude)?.activeProvider).toBe("claudeAgent");
+
+    latest.clearDraftThread(draftCodex);
+    latest.clearDraftThread(draftClaude);
+  });
 });
 
 describe("WorkspaceTabBar markup", () => {
@@ -537,6 +616,104 @@ describe("WorkspaceTabBar markup", () => {
     });
 
     useRightPanelStore.getState().removeThread(hostRef);
+  });
+
+  it("toggles the right wallpaper sidebar open, switches to wallpaper from another tab, and collapses when already on wallpaper", () => {
+    const hostRef = { environmentId: ENV_LOCAL, threadId: THREAD_A };
+    useRightPanelStore.getState().removeThread(hostRef);
+
+    // 1. Closed -> opens right panel directly on wallpaper tab
+    useRightPanelStore.getState().toggle(hostRef, "wallpaper");
+    let state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, hostRef);
+    expect(state.isOpen).toBe(true);
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind).toBe(
+      "wallpaper",
+    );
+
+    // 2. Switch to another tab (diff) -> clicking wallpaper toggle switches back to wallpaper without collapsing
+    useRightPanelStore.getState().open(hostRef, "diff");
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind).toBe(
+      "diff",
+    );
+    useRightPanelStore.getState().toggle(hostRef, "wallpaper");
+    state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, hostRef);
+    expect(state.isOpen).toBe(true);
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind).toBe(
+      "wallpaper",
+    );
+
+    // 3. Already open and active on wallpaper -> clicking wallpaper toggle collapses right panel
+    useRightPanelStore.getState().toggle(hostRef, "wallpaper");
+    state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, hostRef);
+    expect(state.isOpen).toBe(false);
+
+    useRightPanelStore.getState().removeThread(hostRef);
+  });
+
+  it("preserves parent WorkspaceNewTabPopover during outside-press/focus-out targeting the body-portaled submenu without blocking Escape or real outside clicks", () => {
+    const insideButton = { id: "submenu-new-codex-btn" } as unknown as Node;
+    const outsideNode = { id: "outside-canvas" } as unknown as Node;
+    const submenuEl = {
+      contains(node: Node | null) {
+        return node === insideButton;
+      },
+    };
+
+    // Clicking a button inside the portaled submenu triggers outside-press & focus-out -> must preserve popover
+    expect(
+      shouldPreservePopoverOnSubmenuDismiss({
+        nextOpen: false,
+        reason: "outside-press",
+        event: { target: insideButton },
+        submenuEl,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreservePopoverOnSubmenuDismiss({
+        nextOpen: false,
+        reason: "outside-press",
+        event: { target: outsideNode, composedPath: () => [insideButton, outsideNode] },
+        submenuEl,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreservePopoverOnSubmenuDismiss({
+        nextOpen: false,
+        reason: "focus-out",
+        event: { relatedTarget: insideButton },
+        submenuEl,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreservePopoverOnSubmenuDismiss({
+        nextOpen: false,
+        reason: "focus-out",
+        event: { target: outsideNode },
+        submenuEl,
+        activeElement: insideButton,
+      }),
+    ).toBe(true);
+
+    // True outside click closes cleanly
+    expect(
+      shouldPreservePopoverOnSubmenuDismiss({
+        nextOpen: false,
+        reason: "outside-press",
+        event: { target: outsideNode },
+        submenuEl,
+      }),
+    ).toBe(false);
+
+    // Escape key ALWAYS closes even when focus/target is inside the submenu
+    expect(
+      shouldPreservePopoverOnSubmenuDismiss({
+        nextOpen: false,
+        reason: "escape-key",
+        event: { target: insideButton },
+        submenuEl,
+        activeElement: insideButton,
+      }),
+    ).toBe(false);
   });
 
   it("renders high-contrast glass readability classes and soft shadow on split agent blank stage subtitle", () => {

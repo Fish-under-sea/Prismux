@@ -37,7 +37,7 @@ export const PRISMUX_SIDEBAR_QUICK_NAV_ROUTES = {
   diagnostics: "/settings/diagnostics",
   tasks: "/tasks",
   workspaceBoard: "/workspace-board",
-  automations: "/settings/scheduled-tasks",
+  automations: "/scheduled-tasks",
   mobileAccess: "/settings/access",
   plugins: "/settings/plugins",
 } as const;

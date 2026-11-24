@@ -25,6 +25,11 @@ import type {
 } from "../daemonClient";
 import { STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS } from "./statusBarContextMenuPolicy";
 import {
+  STATUS_BAR_ACTION_BUTTON_CLASS,
+  STATUS_BAR_SEGMENTED_GROUP_CLASS,
+  statusBarSegmentedOptionClass,
+} from "./statusBarControlStyles";
+import {
   formatBytesCompact,
   formatCpuPercent,
   formatSampleTimestamp,
@@ -320,7 +325,8 @@ export function ResourcesStatusPopover({
           <div
             role="group"
             aria-label="资源排序方式"
-            className="inline-flex rounded-md border border-border bg-muted/60 p-0.5 text-[10px]"
+            data-testid="resources-sort-group"
+            className={STATUS_BAR_SEGMENTED_GROUP_CLASS}
           >
             {(
               [
@@ -328,25 +334,25 @@ export function ResourcesStatusPopover({
                 { id: "cpu", label: "CPU" },
                 { id: "name", label: "名称" },
               ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                aria-pressed={sortOption === opt.id}
-                onClick={(event) => {
-                  setSortOption(opt.id);
-                  if (event.detail > 0) event.currentTarget.blur();
-                }}
-                className={cn(
-                  "cursor-pointer rounded-sm px-1.5 py-0.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                  sortOption === opt.id
-                    ? "bg-background text-foreground shadow-xs"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
+            ).map((opt) => {
+              const selected = sortOption === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-testid={`resources-sort-${opt.id}`}
+                  aria-pressed={selected}
+                  data-active={selected ? "true" : "false"}
+                  onClick={(event) => {
+                    setSortOption(opt.id);
+                    if (event.detail > 0) event.currentTarget.blur();
+                  }}
+                  className={statusBarSegmentedOptionClass(selected)}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
           </div>
           <button
             type="button"
@@ -354,7 +360,7 @@ export function ResourcesStatusPopover({
             aria-busy={loading || undefined}
             data-testid="resources-refresh-button"
             onClick={() => void handleManualRefresh()}
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+            className={STATUS_BAR_ACTION_BUTTON_CLASS}
           >
             {justRefreshed && !loading ? (
               <CheckIcon aria-hidden className="size-3 text-emerald-600 dark:text-emerald-400" />

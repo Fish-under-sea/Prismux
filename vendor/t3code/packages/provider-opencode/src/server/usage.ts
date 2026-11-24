@@ -55,8 +55,17 @@ function parseOpenCodeMessage(
   const modelReference = object(message.model);
   const model = text(modelReference.id) || text(modelReference.modelID) || text(message.modelID);
   const providerId = text(modelReference.providerID) || text(message.providerID);
-  const timestampMs = object(message.time).created ?? fallback.timestampMs;
+  const timeRecord = object(message.time);
+  const timestampMs = timeRecord.created ?? fallback.timestampMs;
   if (!model || typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) return null;
+  const completedMs = timeRecord.completed;
+  const durationMs =
+    typeof completedMs === "number" &&
+    Number.isFinite(completedMs) &&
+    completedMs > timestampMs &&
+    completedMs - timestampMs <= 60 * 60 * 1000
+      ? Math.round(completedMs - timestampMs)
+      : undefined;
   const reasoningTokens = tokens(usage.reasoning);
   const totals = {
     uncachedInputTokens: tokens(usage.input),
@@ -85,6 +94,7 @@ function parseOpenCodeMessage(
         : null,
     speed: "standard",
     dedupeKey: id ? `opencode:${id}` : null,
+    ...(durationMs !== undefined ? { durationMs } : {}),
   };
 }
 

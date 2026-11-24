@@ -22,6 +22,7 @@ import {
   type PortsScanState,
 } from "./portsPolling";
 import { STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS } from "./statusBarContextMenuPolicy";
+import { STATUS_BAR_ACTION_BUTTON_CLASS } from "./statusBarControlStyles";
 
 export interface PortsStatusPopoverProps {
   readonly state: PortsScanState;
@@ -285,7 +286,7 @@ export function PortsStatusPopover({
           disabled={!daemonReady || state.loading}
           onClick={() => void onRefresh()}
           aria-busy={state.loading || undefined}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+          className={STATUS_BAR_ACTION_BUTTON_CLASS}
         >
           <RefreshCwIcon aria-hidden className={cn("size-3", state.loading && "animate-spin")} />
           <span>{state.loading ? "扫描中…" : "立即扫描"}</span>

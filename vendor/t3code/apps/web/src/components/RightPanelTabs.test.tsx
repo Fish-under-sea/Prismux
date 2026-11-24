@@ -1,8 +1,23 @@
-import { EnvironmentId, type ThreadPullRequestLink } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { EnvironmentId, ThreadId, type ThreadPullRequestLink } from "@t3tools/contracts";
+import { getTranslationsSnapshot, GTProvider, initializeGT } from "gt-react";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "../i18n/locales";
+import { m, setActiveLocale } from "../i18n/messages";
+import zhCatalog from "../i18n/translations/zh.json";
+import { DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER, useRightPanelStore } from "../rightPanelStore";
 import {
+  LinkedItemsEmptySurface,
+  PullRequestEmptySurface,
+  SideChatEmptySurface,
+} from "./chat/RightPanelEmptySurfaces";
+import {
+  buildRightPanelActivityActions,
   resolvePullRequestTabLink,
+  rightPanelActivityButtonClass,
+  RightPanelTabs,
   surfaceShortcutActionForKey,
   surfaceShortcutTargetsTypingContext,
 } from "./RightPanelTabs";
@@ -157,7 +172,7 @@ describe("pull request tab snapshots", () => {
       syncedAt: "2026-02-01T00:00:00Z",
     };
     const newer = { ...link, snapshot };
-    expect(
+      expect(
       resolvePullRequestTabLink(
         [{ environmentId, pullRequests: [link, newer] }],
         environmentId,
@@ -165,5 +180,308 @@ describe("pull request tab snapshots", () => {
         link,
       ),
     ).toBe(newer);
+  });
+});
+
+describe("RightPanel Activity Bar 9-item strict order, labels & 3-mode highlight", () => {
+  beforeAll(async () => {
+    await initializeGT({
+      defaultLocale: DEFAULT_LOCALE,
+      locales: [...SUPPORTED_LOCALES],
+      loadTranslations: async (locale) => (locale === "zh" ? zhCatalog : {}),
+      cacheExpiryTime: null,
+    });
+    await getTranslationsSnapshot("zh");
+    setActiveLocale("zh");
+  });
+
+  afterAll(() => {
+    setActiveLocale(DEFAULT_LOCALE);
+  });
+
+  const makeHandlers = () => ({
+    onPullRequest: vi.fn(),
+    onDiff: vi.fn(),
+    onFiles: vi.fn(),
+    onTerminal: vi.fn(),
+    onSideChat: vi.fn(),
+    onPreview: vi.fn(),
+    onMobileSimulator: vi.fn(),
+    onPullRequests: vi.fn(),
+    onWallpaper: vi.fn(),
+  });
+
+  const allAvailable = {
+    pullRequest: true,
+    diff: true,
+    files: true,
+    terminal: true,
+    sideChat: true,
+    preview: true,
+    mobileSimulator: true,
+    pullRequests: true,
+    wallpaper: true,
+  };
+
+  it("builds the exact 9-item Chinese order with zero '设备' and strictly '手机模拟' (no '器')", () => {
+    const handlers = makeHandlers();
+    const actions = buildRightPanelActivityActions({
+      order: DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER,
+      focusedSurfaceKind: "pull-request-empty",
+      mobileSimulatorIdleActive: false,
+      resolveMessage: m,
+      availability: allAvailable,
+      handlers,
+    });
+
+    expect(actions.map((item) => item.id)).toEqual([
+      "pull-request",
+      "diff",
+      "files",
+      "terminal",
+      "side-chat",
+      "preview",
+      "mobile-simulator",
+      "pull-requests",
+      "wallpaper",
+    ]);
+    expect(actions.map((item) => item.label)).toEqual([
+      "PR",
+      "差异",
+      "文件",
+      "终端",
+      "侧聊",
+      "浏览器",
+      "手机模拟",
+      "已关联项",
+      "壁纸",
+    ]);
+
+    const labels = actions.map((item) => item.label);
+    expect(labels).not.toContain("设备");
+    expect(labels).not.toContain("Device");
+    expect(labels).not.toContain("手机模拟器");
+    expect(actions[0]?.active).toBe(true);
+
+    // Clicking every single one of the 9 items fires its dedicated handler.
+    for (const action of actions) {
+      action.onClick();
+    }
+    expect(handlers.onPullRequest).toHaveBeenCalledTimes(1);
+    expect(handlers.onDiff).toHaveBeenCalledTimes(1);
+    expect(handlers.onFiles).toHaveBeenCalledTimes(1);
+    expect(handlers.onTerminal).toHaveBeenCalledTimes(1);
+    expect(handlers.onSideChat).toHaveBeenCalledTimes(1);
+    expect(handlers.onPreview).toHaveBeenCalledTimes(1);
+    expect(handlers.onMobileSimulator).toHaveBeenCalledTimes(1);
+    expect(handlers.onPullRequests).toHaveBeenCalledTimes(1);
+    expect(handlers.onWallpaper).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks active highlight accurately for restored PR, side-chat, and linked-items surfaces", () => {
+    const checkActive = (kind: Parameters<typeof buildRightPanelActivityActions>[0]["focusedSurfaceKind"]) =>
+      buildRightPanelActivityActions({
+        order: DEFAULT_RIGHT_PANEL_ACTIVITY_ORDER,
+        focusedSurfaceKind: kind,
+        mobileSimulatorIdleActive: false,
+        resolveMessage: m,
+        availability: allAvailable,
+        handlers: makeHandlers(),
+      })
+        .filter((item) => item.active)
+        .map((item) => item.id);
+
+    expect(checkActive("pull-request")).toEqual(["pull-request"]);
+    expect(checkActive("pull-request-empty")).toEqual(["pull-request"]);
+    expect(checkActive("thread")).toEqual(["side-chat"]);
+    expect(checkActive("side-chat-empty")).toEqual(["side-chat"]);
+    expect(checkActive("pull-requests")).toEqual(["pull-requests"]);
+    expect(checkActive("wallpaper")).toEqual(["wallpaper"]);
+  });
+
+  it("provides unmistakable high-contrast active styling across Light, Dark, and Liquid Glass themes", () => {
+    const activeClass = rightPanelActivityButtonClass({
+      active: true,
+      compact: false,
+      available: true,
+    });
+    const inactiveClass = rightPanelActivityButtonClass({
+      active: false,
+      compact: false,
+      available: true,
+    });
+
+    expect(activeClass).toContain("bg-primary");
+    expect(activeClass).toContain("text-primary-foreground");
+    expect(activeClass).toContain("font-semibold");
+    expect(activeClass).toContain("[[data-pmx-glass='1']_&]:bg-primary");
+    expect(activeClass).toContain("[html:not(.dark)[data-pmx-glass='1']_&]:bg-primary");
+
+    expect(inactiveClass).toContain("bg-transparent");
+    expect(inactiveClass).not.toContain("bg-primary");
+  });
+
+  it("renders RightPanelTabs with the exact 9-item Activity Bar DOM order and zero '设备'/'手机模拟器' labels", () => {
+    useRightPanelStore.getState().resetActivityBarOrder();
+    const noop = () => {};
+    const html = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: {} },
+        createElement(
+          RightPanelTabs,
+          {
+            mode: "embedded",
+            open: true,
+            keybindings: [],
+            getShortcutContext: () => ({
+              terminalFocus: false,
+              terminalOpen: false,
+              previewFocus: false,
+              previewOpen: false,
+              isWeb: true,
+              isDesktop: false,
+            }),
+            surfaces: [{ id: "side-chat:empty", kind: "side-chat-empty" }],
+            environmentId: EnvironmentId.make("local"),
+            activeSurfaceId: "side-chat:empty",
+            pendingSurfaceIds: new Set<string>(),
+            previewSessions: {},
+            desktopByTabId: {},
+            terminalLabelsById: new Map<string, string>(),
+            onActivate: noop,
+            onCloseSurface: noop,
+            onCloseOtherSurfaces: noop,
+            onCloseSurfacesToRight: noop,
+            onCloseAllSurfaces: noop,
+            onCopyFilePath: noop,
+            onAddBrowser: noop,
+            onAddBrowserInProfile: noop,
+            onAddTerminal: noop,
+            onAddDiff: noop,
+            onAddFiles: noop,
+            onAddPullRequest: noop,
+            onAddPullRequests: noop,
+            onAddDevice: noop,
+            onAddWallpaper: noop,
+            onAddSideChat: noop,
+            browserAvailable: true,
+            terminalAvailable: true,
+            diffAvailable: true,
+            filesAvailable: true,
+            pullRequestAvailable: true,
+            pullRequestsAvailable: true,
+            deviceAvailable: false,
+            wallpaperAvailable: true,
+            sideChatAvailable: true,
+            children: createElement("div", { "data-testid": "surface-body" }, "empty-side-chat"),
+          },
+        ),
+      ),
+    );
+
+    const renderedIds = [...html.matchAll(/data-activity-item="([^"]+)"/g)].map((match) => match[1]);
+    expect(renderedIds).toEqual([
+      "pull-request",
+      "diff",
+      "files",
+      "terminal",
+      "side-chat",
+      "preview",
+      "mobile-simulator",
+      "pull-requests",
+      "wallpaper",
+    ]);
+    const renderedLabels = [...html.matchAll(/data-activity-item="[^"]+"[^>]*aria-label="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(renderedLabels).toEqual([
+      "PR",
+      "差异",
+      "文件",
+      "终端",
+      "侧聊",
+      "浏览器",
+      "手机模拟",
+      "已关联项",
+      "壁纸",
+    ]);
+    expect(html).toContain("手机模拟");
+    expect(html).not.toContain("手机模拟器");
+    expect(html).not.toContain('aria-label="设备"');
+    expect(html).toContain('data-activity-item="side-chat"');
+    expect(html).toContain('data-active="true"');
+    expect(html).toContain("bg-primary");
+  });
+
+  it("replaces PR and side-chat empty placeholder surfaces cleanly once real surfaces open", () => {
+    const ref = {
+      environmentId: EnvironmentId.make("local"),
+      threadId: ThreadId.make("thread-placeholder-test"),
+    };
+    const store = useRightPanelStore.getState();
+    store.removeThread(ref);
+
+    store.open(ref, "pull-request-empty");
+    expect(useRightPanelStore.getState().byThreadKey[`${ref.environmentId}:${ref.threadId}`]?.activeSurfaceId).toBe(
+      "pull-request:empty",
+    );
+
+    store.openPullRequest(ref, {
+      projectId: "proj-1",
+      repository: "acme/prismux",
+      number: 42,
+    });
+    const afterPr = useRightPanelStore.getState().byThreadKey[`${ref.environmentId}:${ref.threadId}`]!;
+    expect(afterPr.surfaces.some((s) => s.kind === "pull-request-empty")).toBe(false);
+    expect(afterPr.surfaces.some((s) => s.kind === "pull-request")).toBe(true);
+
+    store.open(ref, "side-chat-empty");
+    expect(useRightPanelStore.getState().byThreadKey[`${ref.environmentId}:${ref.threadId}`]?.activeSurfaceId).toBe(
+      "side-chat:empty",
+    );
+
+    store.openThread(ref, ThreadId.make("side-child-1"));
+    const afterSide = useRightPanelStore.getState().byThreadKey[`${ref.environmentId}:${ref.threadId}`]!;
+    expect(afterSide.surfaces.some((s) => s.kind === "side-chat-empty")).toBe(false);
+    expect(afterSide.surfaces.some((s) => s.kind === "thread")).toBe(true);
+
+    store.removeThread(ref);
+  });
+
+  it("renders graceful empty states for PR, side-chat, and draft linked-items surfaces without crashing", () => {
+    const ref = {
+      environmentId: EnvironmentId.make("local"),
+      threadId: ThreadId.make("thread-empty-surface-test"),
+    };
+    const noop = () => {};
+
+    const prEmptyHtml = renderToStaticMarkup(
+      createElement(PullRequestEmptySurface, {
+        threadRef: ref,
+        capabilityKnown: true,
+        supported: true,
+        isServerThread: true,
+        onOpenLinkedItems: noop,
+      }),
+    );
+    expect(prEmptyHtml).toContain("right-panel-pr-empty-state");
+    expect(prEmptyHtml).toContain("当前分支暂无 Pull Request");
+    expect(prEmptyHtml).toContain("手动关联 PR");
+    expect(prEmptyHtml).toContain("查看已关联项");
+
+    const sideChatEmptyHtml = renderToStaticMarkup(
+      createElement(SideChatEmptySurface, {
+        canStart: false,
+        disabledReason: "发送第一条消息后即可开启侧聊。",
+        onStart: undefined,
+      }),
+    );
+    expect(sideChatEmptyHtml).toContain("right-panel-side-chat-empty-state");
+    expect(sideChatEmptyHtml).toContain("发送第一条消息后即可开启侧聊。");
+
+    const linkedEmptyHtml = renderToStaticMarkup(createElement(LinkedItemsEmptySurface));
+    expect(linkedEmptyHtml).toContain("right-panel-linked-items-empty-state");
+    expect(linkedEmptyHtml).toContain("暂无已关联项");
   });
 });

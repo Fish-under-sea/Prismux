@@ -1,6 +1,9 @@
+import { ProviderDriverKind } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import { ProviderInstanceIcon, providerLogoColor } from "../components/chat/ProviderInstanceIcon";
+import { AntigravityIcon } from "../components/Icons";
 import { TooltipProvider } from "../components/ui/tooltip";
 import {
   AGENT_BRAND_BREATHE_CSS,
@@ -150,5 +153,60 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(html).toContain("猫猫（主秘书槽位）· 引擎：Codex");
     expect(html).toContain("独立 AGENTS.md 已加载");
     expect(html).toContain("喊「猫猫」即可唤起");
+  });
+
+  it("renders authentic Google 4-color Antigravity SVG with unique useId gradient IDs across all icon surfaces", () => {
+    const meta = getAgentBrandMeta("antigravity");
+    expect(meta.accentColor).toBe("#4285F4");
+    expect(meta.accentColor.toLowerCase()).not.toBe("#6366f1");
+    expect(providerLogoColor(ProviderDriverKind.make("antigravity"))).toBe("#4285F4");
+
+    // Multi-instance render across AgentBrandLogo, AntigravityIcon, and ProviderInstanceIcon (native + ACP registry)
+    const multiHtml = renderToStaticMarkup(
+      <div>
+        <AgentBrandLogo provider="antigravity" size={20} />
+        <AgentBrandLogo provider="agy" size={68} />
+        <AntigravityIcon className="size-4" />
+        <AntigravityIcon className="size-6" />
+        <ProviderInstanceIcon
+          driverKind={ProviderDriverKind.make("antigravity")}
+          displayName="Antigravity"
+        />
+        <ProviderInstanceIcon
+          driverKind={ProviderDriverKind.make("acpRegistry")}
+          displayName="Antigravity"
+          acpRegistryAgentId="antigravity-acp"
+        />
+      </div>,
+    );
+
+    // Must contain authentic Google 4-color gradient stops and vector mesh primitives
+    expect(multiHtml).toContain("#4285F4");
+    expect(multiHtml).toContain("#EA4335");
+    expect(multiHtml).toContain("#FBBC04");
+    expect(multiHtml).toContain("#34A853");
+    expect(multiHtml).toContain("linearGradient");
+    expect(multiHtml).toContain("radialGradient");
+    expect(multiHtml).toContain("clipPath");
+
+    // Must NOT contain legacy wrong purple/indigo gradients or raster PNG fallback
+    expect(multiHtml.toLowerCase()).not.toContain("#6366f1");
+    expect(multiHtml.toLowerCase()).not.toContain("#818cf8");
+    expect(multiHtml.toLowerCase()).not.toContain("#c084fc");
+    expect(multiHtml).not.toContain("data:image/png");
+
+    // Every rendered instance must produce distinct gradient/clipPath IDs via React useId()
+    const idMatches = [...multiHtml.matchAll(/id="([^"]*agy-(?:clip|base|green|yellow|red|belly))"/g)].map(
+      (m) => m[1],
+    );
+    expect(idMatches.length).toBe(6 * 6);
+    expect(new Set(idMatches).size).toBe(idMatches.length);
+
+    // Monochrome variant renders a single currentColor silhouette without gradient defs
+    const monoHtml = renderToStaticMarkup(
+      <AgentBrandLogo provider="antigravity" monochrome size={16} />,
+    );
+    expect(monoHtml).toContain('fill="currentColor"');
+    expect(monoHtml).not.toContain("linearGradient");
   });
 });

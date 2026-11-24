@@ -15,7 +15,8 @@ export function isSidebarUtilityPage(pathname: string) {
     pathname === "/pull-requests" ||
     pathname === "/issues" ||
     pathname === "/tasks" ||
-    pathname === "/workspace-board"
+    pathname === "/workspace-board" ||
+    pathname === "/scheduled-tasks"
   );
 }
 

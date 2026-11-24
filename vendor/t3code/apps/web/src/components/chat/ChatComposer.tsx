@@ -4028,6 +4028,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         placement="inline"
                         threadId={activeThreadId ?? routeThreadRef.threadId}
                         contextWindow={props.contextWindow ?? null}
+                        providerStatuses={providerStatuses}
+                        selectedModelId={reportedModelSelection?.model ?? selectedModel ?? null}
+                        selectedProvider={selectedProvider ?? null}
                         className="ms-0"
                       />
                     ) : null}
@@ -4146,6 +4149,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       placement="inline"
                       threadId={activeThreadId ?? routeThreadRef.threadId}
                       contextWindow={props.contextWindow ?? null}
+                      providerStatuses={providerStatuses}
+                      selectedModelId={reportedModelSelection?.model ?? selectedModel ?? null}
+                      selectedProvider={selectedProvider ?? null}
                       className="ms-0"
                     />
                   </div>

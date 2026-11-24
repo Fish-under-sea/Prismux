@@ -12,10 +12,21 @@ vi.mock("@tanstack/react-router", () => ({
 
 import {
   CANONICAL_DIAGNOSTIC_CATEGORIES,
+  createDiagnosticsRefreshController,
   detectMemoryRetrievalState,
+  DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
+  getLatestNormalizedDiagnosticsReport,
+  isDiagnosticsAutoRefreshSettingsPath,
   normalizeDiagnosticsResponse,
+  publishDiagnosticsReport,
+  requestDiagnosticsRefresh,
+  resetDiagnosticsLiveStoreForTests,
+  resolveDiagnosticsSettingsRoute,
   sanitizeDiagnosticsSettingsRoute,
+  subscribeDiagnosticsRefreshRequest,
+  subscribeDiagnosticsReport,
 } from "./prismuxDiagnostics.logic";
+import { resolveDiagnosticsBadgeTone } from "../../components/sidebar/prismuxSidebarQuickNav.logic";
 import {
   DiagnosticItemCard,
   PrismuxDiagnosticsSection,
@@ -132,12 +143,29 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(hybrid.state).toBe("fts5+sqlite-vec");
   });
 
-  it("sanitizes settings routes to internal /settings/* paths only", () => {
+  it("sanitizes settings routes to internal /settings/* paths only and maps legacy /settings/memory-sync precisely", () => {
     expect(sanitizeDiagnosticsSettingsRoute("/settings/updates")).toBe("/settings/updates");
+    expect(sanitizeDiagnosticsSettingsRoute("/settings/memory")).toBe("/settings/memory");
+    expect(sanitizeDiagnosticsSettingsRoute("/settings/sync")).toBe("/settings/sync");
     expect(sanitizeDiagnosticsSettingsRoute("/settings/memory-sync")).toBe("/settings/memory-sync");
     expect(sanitizeDiagnosticsSettingsRoute("https://evil.example/settings/updates")).toBeNull();
     expect(sanitizeDiagnosticsSettingsRoute("javascript:alert(1)")).toBeNull();
     expect(sanitizeDiagnosticsSettingsRoute("/settings/../etc/passwd")).toBeNull();
+
+    // Legacy /settings/memory-sync routes automatically target the exact split page by item id
+    expect(resolveDiagnosticsSettingsRoute("/settings/memory-sync", "memory.sqlite_wal")).toBe(
+      "/settings/memory",
+    );
+    expect(resolveDiagnosticsSettingsRoute("/settings/memory-sync", "memory.sqlite_vec")).toBe(
+      "/settings/memory",
+    );
+    expect(resolveDiagnosticsSettingsRoute("/settings/memory-sync", "sync.vault")).toBe(
+      "/settings/sync",
+    );
+    expect(resolveDiagnosticsSettingsRoute("/settings/sync", "sync.vault")).toBe("/settings/sync");
+    expect(resolveDiagnosticsSettingsRoute("/settings/memory", "memory.sqlite_vec")).toBe(
+      "/settings/memory",
+    );
   });
 
   it("renders PrismuxDiagnosticsSection cleanly without requiring PrismuxRuntimeProvider", () => {
@@ -210,5 +238,113 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     );
     expect(copiedCardHtml).toContain("Copied ✓");
     expect(copiedCardHtml).not.toContain("<code");
+
+    // Memory retrieval banner links directly to the split /settings/memory page
+    expect(fullHtml).toContain('href="/settings/memory"');
+    expect(fullHtml).not.toContain('href="/settings/memory-sync"');
+  });
+
+  it("debounces window focus/visibility auto hot-reload with a 3s cooldown while allowing explicit bypass", () => {
+    let fakeNow = 10_000;
+    const triggered: string[] = [];
+    const controller = createDiagnosticsRefreshController(
+      (reason) => {
+        triggered.push(reason);
+      },
+      {
+        cooldownMs: DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
+        now: () => fakeNow,
+      },
+    );
+
+    // First focus trigger fires immediately
+    expect(controller.trigger("focus")).toBe(true);
+    expect(triggered).toEqual(["focus"]);
+
+    // Repeated focus / visibility events within 3s are suppressed to prevent probe storms
+    fakeNow += 1_200;
+    expect(controller.trigger("visibility")).toBe(false);
+    fakeNow += 1_799;
+    expect(controller.trigger("focus")).toBe(false);
+    expect(triggered).toEqual(["focus"]);
+
+    // Explicit plugin mutation bypasses cooldown immediately
+    expect(controller.trigger("plugin-mutated", { bypassCooldown: true })).toBe(true);
+    expect(triggered).toEqual(["focus", "plugin-mutated"]);
+
+    // Focus right after explicit refresh respects new cooldown window
+    fakeNow += 2_000;
+    expect(controller.trigger("focus")).toBe(false);
+
+    // After >= 3000ms elapses, focus hot-reload fires again
+    fakeNow += 1_000;
+    expect(controller.trigger("focus")).toBe(true);
+    expect(triggered).toEqual(["focus", "plugin-mutated", "focus"]);
+
+    // markRefreshed resets the cooldown window
+    controller.markRefreshed(fakeNow);
+    fakeNow += 500;
+    expect(controller.trigger("visibility")).toBe(false);
+  });
+
+  it("broadcasts published diagnostics reports and refresh requests to keep Diagnostics page and sidebar dot in sync", () => {
+    resetDiagnosticsLiveStoreForTests();
+    const tones: Array<ReturnType<typeof resolveDiagnosticsBadgeTone>> = [];
+    const unsubReport = subscribeDiagnosticsReport(({ response }) => {
+      tones.push(resolveDiagnosticsBadgeTone(response));
+    });
+
+    const reasons: string[] = [];
+    const unsubRequest = subscribeDiagnosticsRefreshRequest((reason) => {
+      reasons.push(reason);
+    });
+
+    try {
+      publishDiagnosticsReport({
+        ok: true,
+        checkedAt: 1_763_000_001_000,
+        durationMs: 180,
+        cached: false,
+        summary: { total: 2, ok: 1, degraded: 1, error: 0 },
+        items: [
+          { id: "provider.codex", category: "ai_providers", name: "Codex CLI", status: "degraded", summary: "missing" },
+          { id: "tool.android_sdk", category: "simulators_media", name: "Android SDK", status: "ok", summary: "ok" },
+        ],
+      });
+
+      publishDiagnosticsReport({
+        ok: true,
+        checkedAt: 1_763_000_005_000,
+        durationMs: 140,
+        cached: false,
+        summary: { total: 2, ok: 2, degraded: 0, error: 0 },
+        items: [
+          { id: "provider.codex", category: "ai_providers", name: "Codex CLI", status: "ok", summary: "codex-cli 0.171.0" },
+          { id: "tool.android_sdk", category: "simulators_media", name: "Android SDK", status: "ok", summary: "adb ok" },
+        ],
+      });
+
+      expect(tones).toEqual(["degraded", "ok"]);
+      expect(getLatestNormalizedDiagnosticsReport()?.summary).toEqual({
+        total: 2,
+        ok: 2,
+        degraded: 0,
+        error: 0,
+      });
+
+      requestDiagnosticsRefresh("plugin-mutated");
+      expect(reasons).toEqual(["plugin-mutated"]);
+
+      expect(isDiagnosticsAutoRefreshSettingsPath("/settings/providers")).toBe(true);
+      expect(isDiagnosticsAutoRefreshSettingsPath("/settings/plugins")).toBe(true);
+      expect(isDiagnosticsAutoRefreshSettingsPath("/settings/memory")).toBe(true);
+      expect(isDiagnosticsAutoRefreshSettingsPath("/settings/sync")).toBe(true);
+      expect(isDiagnosticsAutoRefreshSettingsPath("/settings/diagnostics")).toBe(false);
+      expect(isDiagnosticsAutoRefreshSettingsPath("/tasks")).toBe(false);
+    } finally {
+      unsubReport();
+      unsubRequest();
+      resetDiagnosticsLiveStoreForTests();
+    }
   });
 });

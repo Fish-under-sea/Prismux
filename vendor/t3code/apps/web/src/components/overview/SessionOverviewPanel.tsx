@@ -21,6 +21,7 @@ import {
   ChevronRightIcon,
   FolderOpenIcon,
   GitCompareArrowsIcon,
+  MessageSquarePlusIcon,
   MoreVerticalIcon,
   SlidersHorizontalIcon,
   TerminalIcon,
@@ -702,6 +703,25 @@ function SessionOverviewPanelContent(
     (msg) => msg.role === "user" || msg.role === "assistant",
   ).length;
 
+  const hasDiffChanges = diffTotals.insertions > 0 || diffTotals.deletions > 0;
+  const showSubagents = subagents.length > 0;
+  const showSideQuestions = sideQuestions.length > 0 || sideComposerOpen;
+  const showBackgroundTasks = backgroundTasks.length > 0;
+  const showGoals = goalsSummary.totalCount > 0;
+  const showArtifacts = artifacts.length > 0;
+  const showModifiedFiles = modifiedFiles.length > 0;
+  const showUploads = uploads.length > 0;
+  const showUsedSkills = usedSkills.length > 0;
+  const hasAnyOverviewSection =
+    showSubagents ||
+    showSideQuestions ||
+    showBackgroundTasks ||
+    showGoals ||
+    showArtifacts ||
+    showModifiedFiles ||
+    showUploads ||
+    showUsedSkills;
+
   return (
     <div
       data-pmx-glass-zone="rightSidebar"
@@ -741,6 +761,22 @@ function SessionOverviewPanelContent(
             className="w-[292px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl bg-clip-padding"
           >
             <div className="max-h-[min(72dvh,540px)] overflow-y-auto p-1.5">
+              {/* Always-available Side Question trigger even while zero-count sections stay hidden */}
+              <div className="mb-1 border-b border-border/50 pb-1">
+                <button
+                  type="button"
+                  data-overview-more-action="add-side-question"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    setSideComposerOpen(true);
+                  }}
+                  className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 text-left text-xs font-medium text-foreground/90 transition-colors hover:bg-black/[0.045] hover:text-foreground dark:hover:bg-white/[0.075]"
+                >
+                  <MessageSquarePlusIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="flex-1 truncate">发起旁路提问</span>
+                </button>
+              </div>
+
               {/* Lossless original workspace controls: Environment/Host, Open In Explorer/Editor, Project Scripts */}
               <section
                 aria-label={gt("Workspace")}
@@ -881,23 +917,25 @@ function SessionOverviewPanelContent(
         >
           <GitCompareArrowsIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="min-w-0 flex-1 truncate">审查</span>
-          <span
-            data-overview-diff-stats="1"
-            className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] font-medium tabular-nums"
-          >
+          {hasDiffChanges ? (
             <span
-              data-overview-diff-insertions="1"
-              className="text-emerald-600 dark:text-emerald-400"
+              data-overview-diff-stats="1"
+              className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] font-medium tabular-nums"
             >
-              +{diffTotals.insertions}
+              <span
+                data-overview-diff-insertions="1"
+                className="text-emerald-600 dark:text-emerald-400"
+              >
+                +{diffTotals.insertions}
+              </span>
+              <span
+                data-overview-diff-deletions="1"
+                className="text-rose-600 dark:text-rose-400"
+              >
+                -{diffTotals.deletions}
+              </span>
             </span>
-            <span
-              data-overview-diff-deletions="1"
-              className="text-rose-600 dark:text-rose-400"
-            >
-              -{diffTotals.deletions}
-            </span>
-          </span>
+          ) : null}
         </button>
 
         <button
@@ -952,55 +990,69 @@ function SessionOverviewPanelContent(
         </div>
       ) : null}
 
-      {/* 8 Structured AGY-style Overview Sections (marked so ThreadDetailsCard height measurement stays smooth) */}
-      <div data-thread-relationships-panel className="flex flex-col pb-1.5">
-        <SubagentsOverviewSection items={subagents} onOpenSubagent={handleOpenSubagent} />
+      {/* 8 Structured AGY-style Overview Sections: hidden when count === 0, dynamically appear on real data */}
+      {hasAnyOverviewSection ? (
+        <div data-thread-relationships-panel className="flex flex-col pb-1.5">
+          {showSubagents ? (
+            <SubagentsOverviewSection items={subagents} onOpenSubagent={handleOpenSubagent} />
+          ) : null}
 
-        <SideQuestionsOverviewSection
-          items={sideQuestions}
-          composerOpen={sideComposerOpen}
-          onToggleComposer={() => setSideComposerOpen((prev) => !prev)}
-          onSelectItem={(item) => setActiveSideQuestionId(item.id)}
-          composerSlot={
-            <SideQuestionComposer
-              open={sideComposerOpen}
-              submitting={sideQuestionController.submitting}
-              online={effectiveSideChatAvailable || Boolean(props.onAskSideQuestion)}
-              contextMessageCount={contextMessageCount}
-              onClose={() => setSideComposerOpen(false)}
-              onSubmit={async (question) => {
-                const created = await sideQuestionController.ask(question);
-                setSideComposerOpen(false);
-                if (created) {
-                  setActiveSideQuestionId(created.id);
-                }
-              }}
+          {showSideQuestions ? (
+            <SideQuestionsOverviewSection
+              items={sideQuestions}
+              composerOpen={sideComposerOpen}
+              onToggleComposer={() => setSideComposerOpen((prev) => !prev)}
+              onSelectItem={(item) => setActiveSideQuestionId(item.id)}
+              composerSlot={
+                <SideQuestionComposer
+                  open={sideComposerOpen}
+                  submitting={sideQuestionController.submitting}
+                  online={effectiveSideChatAvailable || Boolean(props.onAskSideQuestion)}
+                  contextMessageCount={contextMessageCount}
+                  onClose={() => setSideComposerOpen(false)}
+                  onSubmit={async (question) => {
+                    const created = await sideQuestionController.ask(question);
+                    setSideComposerOpen(false);
+                    if (created) {
+                      setActiveSideQuestionId(created.id);
+                    }
+                  }}
+                />
+              }
             />
-          }
-        />
+          ) : null}
 
-        <BackgroundTasksOverviewSection
-          items={backgroundTasks}
-          onOpenTask={handleOpenBackgroundTask}
-        />
+          {showBackgroundTasks ? (
+            <BackgroundTasksOverviewSection
+              items={backgroundTasks}
+              onOpenTask={handleOpenBackgroundTask}
+            />
+          ) : null}
 
-        <GoalsOverviewSection summary={goalsSummary} />
+          {showGoals ? <GoalsOverviewSection summary={goalsSummary} /> : null}
 
-        <ArtifactsOverviewSection items={artifacts} onOpenArtifact={handleOpenArtifact} />
+          {showArtifacts ? (
+            <ArtifactsOverviewSection items={artifacts} onOpenArtifact={handleOpenArtifact} />
+          ) : null}
 
-        <ModifiedFilesOverviewSection
-          items={modifiedFiles}
-          onOpenFileDiff={handleOpenFileDiff}
-        />
+          {showModifiedFiles ? (
+            <ModifiedFilesOverviewSection
+              items={modifiedFiles}
+              onOpenFileDiff={handleOpenFileDiff}
+            />
+          ) : null}
 
-        <UploadsOverviewSection
-          items={uploads}
-          imageUrlById={imageUrlById}
-          onOpenUpload={handleOpenUpload}
-        />
+          {showUploads ? (
+            <UploadsOverviewSection
+              items={uploads}
+              imageUrlById={imageUrlById}
+              onOpenUpload={handleOpenUpload}
+            />
+          ) : null}
 
-        <UsedSkillsOverviewSection items={usedSkills} />
-      </div>
+          {showUsedSkills ? <UsedSkillsOverviewSection items={usedSkills} /> : null}
+        </div>
+      ) : null}
 
       {/* Inner Overlay Dialogs (all strictly tagged with data-pmx-glass-zone="overlays") */}
       <SideQuestionDetailDialog

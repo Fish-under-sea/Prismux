@@ -54,6 +54,7 @@ import { useUpdateNotifierState } from "../../prismux/updates/updateNotifierStor
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { resolveDesktopUpdateButtonAction } from "../desktopUpdate.logic";
+import { openPrismuxRemoteConnectDialog } from "../cloud/prismuxRemoteConnect.logic";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -639,20 +640,16 @@ function SidebarCollapsedPeekBody({
 
         <button
           type="button"
-          onClick={() =>
-            navigateAndClose(() => void navigate({ to: "/settings/scheduled-tasks" }))
-          }
+          onClick={() => navigateAndClose(() => void navigate({ to: "/scheduled-tasks" }))}
           className={navRowClass(pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.automations)}
         >
           <CalendarClockIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-80" />
-          <span className="truncate">
-            {gt("Automations", { $context: "sidebar quick navigation" })}
-          </span>
+          <span className="truncate">{quickNavCopy.scheduledTasks}</span>
         </button>
 
         <button
           type="button"
-          onClick={() => navigateAndClose(() => void navigate({ to: "/settings/access" }))}
+          onClick={() => navigateAndClose(() => openPrismuxRemoteConnectDialog())}
           className={navRowClass(pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.mobileAccess)}
         >
           <SmartphoneIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-80" />

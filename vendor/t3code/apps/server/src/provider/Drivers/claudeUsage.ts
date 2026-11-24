@@ -1,6 +1,7 @@
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
@@ -15,19 +16,55 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 // Claude Code uses this model for local placeholders that never reached the API.
 export const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 
+const MAX_CLAUDE_CALL_DURATION_MS = 10 * 60 * 1000;
+
+export const ClaudeScanState = Schema.Struct({
+  pendingRequestStartedAtMs: Schema.mutableKey(Schema.NullOr(Schema.Finite)),
+  activeDedupeKey: Schema.mutableKey(Schema.NullOr(Schema.String)),
+  activeStartedAtMs: Schema.mutableKey(Schema.NullOr(Schema.Finite)),
+});
+export type ClaudeScanState = typeof ClaudeScanState.Type;
+
+export function initialClaudeScanState(): ClaudeScanState {
+  return {
+    pendingRequestStartedAtMs: null,
+    activeDedupeKey: null,
+    activeStartedAtMs: null,
+  };
+}
+
+function readOptionalMs(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+  allowZero: boolean,
+): number | null {
+  for (const key of keys) {
+    const value = source[key];
+    if (
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      (allowZero ? value >= 0 : value > 0) &&
+      value <= 60 * 60 * 1000
+    ) {
+      return Math.round(value * 100) / 100;
+    }
+  }
+  return null;
+}
+
 /**
  * Claude Code repeats a message's `dedupeKey` for each assistant content block.
  * Subagent blocks can progress from stream-start to final usage, so callers
  * must count each key once using the maximum of each token channel.
  */
-export function parseClaudeLine(line: string): readonly UsageRecord[] {
+export function parseClaudeLine(line: string, state?: ClaudeScanState): readonly UsageRecord[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
     return [];
   }
-  return parseClaudeRecord(parsed);
+  return parseClaudeRecord(parsed, state);
 }
 
 function cacheCreation1h(usage: Record<string, unknown>): { cacheCreation1hTokens?: number } {
@@ -37,11 +74,21 @@ function cacheCreation1h(usage: Record<string, unknown>): { cacheCreation1hToken
   return tokens > 0 ? { cacheCreation1hTokens: tokens } : {};
 }
 
-function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
+function parseClaudeRecord(parsed: unknown, state?: ClaudeScanState): readonly UsageRecord[] {
   if (typeof parsed !== "object" || parsed === null) return [];
 
   const record = parsed as Record<string, unknown>;
-  if (record["type"] !== "assistant") return [];
+  const recordType = record["type"];
+  if (recordType === "api-request-shape" || recordType === "user") {
+    if (state !== undefined) {
+      const requestTimestampMs = parseTimestampMs(record["timestamp"]);
+      if (requestTimestampMs !== null) {
+        state.pendingRequestStartedAtMs = requestTimestampMs;
+      }
+    }
+    return [];
+  }
+  if (recordType !== "assistant") return [];
 
   const message = record["message"];
   if (typeof message !== "object" || message === null) return [];
@@ -62,6 +109,47 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
   const dedupeKey =
     messageId === null && requestId === null ? null : `${messageId ?? ""}:${requestId ?? ""}`;
 
+  const explicitTtftMs =
+    readOptionalMs(record, ["ttftMs", "ttft_ms", "time_to_first_token_ms"], true) ??
+    readOptionalMs(messageRecord, ["ttftMs", "ttft_ms", "time_to_first_token_ms"], true);
+  const explicitDurationMs =
+    readOptionalMs(
+      record,
+      ["durationMs", "duration_ms", "apiDurationMs", "api_duration_ms"],
+      false,
+    ) ??
+    readOptionalMs(
+      messageRecord,
+      ["durationMs", "duration_ms", "apiDurationMs", "api_duration_ms"],
+      false,
+    );
+
+  let inferredDurationMs: number | null = null;
+  if (state !== undefined) {
+    let startedAtMs: number | null;
+    if (
+      dedupeKey !== null &&
+      dedupeKey === state.activeDedupeKey &&
+      state.activeStartedAtMs !== null
+    ) {
+      startedAtMs = state.activeStartedAtMs;
+    } else {
+      startedAtMs = state.pendingRequestStartedAtMs;
+      state.pendingRequestStartedAtMs = null;
+      state.activeDedupeKey = dedupeKey;
+      state.activeStartedAtMs = startedAtMs;
+    }
+    if (
+      startedAtMs !== null &&
+      timestampMs > startedAtMs &&
+      timestampMs - startedAtMs <= MAX_CLAUDE_CALL_DURATION_MS
+    ) {
+      inferredDurationMs = timestampMs - startedAtMs;
+    }
+  }
+
+  const resolvedDurationMs = explicitDurationMs ?? inferredDurationMs;
+
   const cost = record["costUSD"];
 
   const executor: UsageRecord = {
@@ -81,6 +169,8 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     speed: usageRecord["speed"] === "fast" ? "fast" : "standard",
     dedupeKey,
+    ...(explicitTtftMs !== null ? { ttftMs: explicitTtftMs } : {}),
+    ...(resolvedDurationMs !== null ? { durationMs: resolvedDurationMs } : {}),
   };
 
   // Top-level `usage` is the executor's alone. Advisor calls run on another model at its own rates
@@ -118,18 +208,37 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
   return records;
 }
 
-export const claudeUsageFormat: TranscriptUsageFormat<void> = {
+export const claudeUsageFormat: TranscriptUsageFormat<ClaudeScanState> = {
   selectFields: {
     type: true,
     timestamp: true,
     requestId: true,
     sessionId: true,
     costUSD: true,
-    message: { id: true, model: true, usage: true },
+    durationMs: true,
+    duration_ms: true,
+    apiDurationMs: true,
+    api_duration_ms: true,
+    ttftMs: true,
+    ttft_ms: true,
+    time_to_first_token_ms: true,
+    message: {
+      id: true,
+      model: true,
+      usage: true,
+      durationMs: true,
+      duration_ms: true,
+      apiDurationMs: true,
+      api_duration_ms: true,
+      ttftMs: true,
+      ttft_ms: true,
+      time_to_first_token_ms: true,
+    },
   },
-  usageMarkers: ['"usage"'],
-  parseLine: (line) => parseClaudeLine(line),
-  parseProjected: (projected) => parseClaudeRecord(projected),
+  usageMarkers: ['"usage"', '"api-request-shape"', '"type":"user"', '"type": "user"'],
+  parseLine: (line, state) => parseClaudeLine(line, state),
+  parseProjected: (projected, state) => parseClaudeRecord(projected, state),
+  state: { initial: initialClaudeScanState, schema: ClaudeScanState },
 };
 
 export const claudeUsageReader: ProviderUsageReader<ClaudeSettings, Path.Path> = {

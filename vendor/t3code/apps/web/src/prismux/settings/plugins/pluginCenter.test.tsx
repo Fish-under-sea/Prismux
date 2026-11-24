@@ -7,11 +7,15 @@ import { PluginTrustAuditModal } from "./PluginTrustAuditModal";
 import { PrismuxPluginCenterView } from "./PrismuxPluginCenterView";
 import {
   DEFAULT_GROUP_DISPLAY_LIMIT,
+  DEFAULT_RETIRED_OFFICIAL_PLUGINS,
   comparePluginSemver,
   computePluginCounts,
   evaluatePluginTrustAudit,
   filterPluginCenterItems,
+  isAuditRequiredError,
   mergePluginCenterItems,
+  parseCatalogPluginsPayload,
+  parseRetiredPluginsPayload,
   selectVisiblePluginsForGroup,
   type InstalledPluginRaw,
   type OfficialCatalogPluginRaw,
@@ -41,23 +45,6 @@ function makeOfficialCatalogFixture(): OfficialCatalogPluginRaw[] {
       distribution: "managed",
     },
     {
-      id: "pet",
-      packageName: "@prismux/plugin-pet",
-      version: "0.1.0-alpha.3",
-      description: "Desktop mascot / pet plugin with lease tokens and staged handover.",
-      enginesPrismux: ">=0.1.0-0 <2.0.0",
-      realms: ["ui", "daemon"],
-      permissions: ["pet:lease", "ui:panel", "hooks:subscribe"],
-      modelVisible: false,
-      modifiesSystemPrompt: false,
-      sha256: "b249044eee5666cf279cb99af1fafec8310b328f5183864bcc1d714ba00d43e5",
-      bytes: 26865,
-      status: "verified",
-      installed: false,
-      enabled: false,
-      mounted: false,
-    },
-    {
       id: "fishdock-hook",
       packageName: "@prismux/plugin-fishdock-hook",
       version: "0.1.0-alpha.3",
@@ -69,23 +56,6 @@ function makeOfficialCatalogFixture(): OfficialCatalogPluginRaw[] {
       modifiesSystemPrompt: false,
       sha256: "b3fec9a26034ccacc19acd6e36a11179a7ef76c6c749d90756512704a6da06f9",
       bytes: 36977,
-      status: "verified",
-      installed: false,
-      enabled: false,
-      mounted: false,
-    },
-    {
-      id: "ssh",
-      packageName: "@prismux/plugin-ssh",
-      version: "0.1.0-alpha.3",
-      description: "Optional SSH host pool, Web PTY, and SFTP operations plugin.",
-      enginesPrismux: ">=0.1.0-0 <2.0.0",
-      realms: ["daemon", "ui"],
-      permissions: ["network:outbound", "pty:spawn", "fs:read", "fs:write", "ui:panel"],
-      modelVisible: false,
-      modifiesSystemPrompt: false,
-      sha256: "54c90bdb7d09d4472145c70aaa8b463028e9dce6ed953aa8c31e1f4aca782265",
-      bytes: 31639,
       status: "verified",
       installed: false,
       enabled: false,
@@ -145,15 +115,15 @@ describe("Plugin Center model: 4-state tabs, category chips, search, and update 
     );
 
     const counts = computePluginCounts(items);
-    expect(counts.all).toBe(6);
+    expect(counts.all).toBe(4);
     expect(counts.installed).toBe(3); // qq + glass-nord-theme + ai-prompt-helper
-    expect(counts.available).toBe(3); // pet + fishdock-hook + ssh
+    expect(counts.available).toBe(1); // fishdock-hook
     expect(counts.updates).toBe(1); // qq: 0.1.0-alpha.3 -> 0.2.0
 
     // Category distribution
     expect(counts.byCategory.communication).toBe(2); // qq, fishdock-hook
-    expect(counts.byCategory.pet).toBe(1); // pet
-    expect(counts.byCategory.ops).toBe(1); // ssh
+    expect(counts.byCategory.pet).toBe(0);
+    expect(counts.byCategory.ops).toBe(0);
     expect(counts.byCategory.theme).toBe(1); // glass-nord-theme
     expect(counts.byCategory.tools).toBe(1); // ai-prompt-helper
 
@@ -167,7 +137,7 @@ describe("Plugin Center model: 4-state tabs, category chips, search, and update 
       filterPluginCenterItems(items, { tab: "available", category: "all", query: "" }).map(
         (i) => i.id,
       ),
-    ).toEqual(["pet", "fishdock-hook", "ssh"]);
+    ).toEqual(["fishdock-hook"]);
     expect(
       filterPluginCenterItems(items, { tab: "updates", category: "all", query: "" }).map(
         (i) => i.id,
@@ -176,18 +146,32 @@ describe("Plugin Center model: 4-state tabs, category chips, search, and update 
 
     // Category Chips + Instant Search
     expect(
-      filterPluginCenterItems(items, { tab: "all", category: "ops", query: "" }).map((i) => i.id),
-    ).toEqual(["ssh"]);
+      filterPluginCenterItems(items, { tab: "all", category: "theme", query: "" }).map((i) => i.id),
+    ).toEqual(["glass-nord-theme"]);
     expect(
-      filterPluginCenterItems(items, { tab: "all", category: "all", query: "pty:spawn" }).map(
+      filterPluginCenterItems(items, { tab: "all", category: "all", query: "hooks:intercept" }).map(
         (i) => i.id,
       ),
-    ).toEqual(["ssh"]);
+    ).toEqual(["ai-prompt-helper"]);
     expect(
       filterPluginCenterItems(items, { tab: "all", category: "communication", query: "onebot" }).map(
         (i) => i.id,
       ),
     ).toEqual(["qq"]);
+
+    // Deprecated entries are filtered out of active catalog and parsed via retiredPlugins
+    const parsedActive = parseCatalogPluginsPayload({
+      plugins: [
+        { id: "qq", version: "0.1.2-preview.1", status: "verified" },
+        { id: "pet", version: "0.1.2-preview.1", status: "deprecated" },
+      ],
+    });
+    expect(parsedActive.map((item) => item.id)).toEqual(["qq"]);
+    const retired = parseRetiredPluginsPayload({});
+    expect(retired.map((item) => item.id)).toEqual(["pet", "ssh"]);
+    expect(retired.every((item) => item.status === "deprecated" && item.replacedByBuiltin)).toBe(
+      true,
+    );
   });
 });
 
@@ -272,12 +256,12 @@ describe("Trust Audit Confirmation Gate (modelVisible / prompt / sensitive permi
     expect(modelAudit.severity).toBe("critical");
     expect(modelAudit.riskReasons.some((r) => r.includes("modelVisible: true"))).toBe(true);
 
-    // Sensitive shell/fs/network on upgrade
-    const sshUpgradeAudit = evaluatePluginTrustAudit(
+    // Sensitive shell/fs/network on upgrade (community ops plugin)
+    const opsUpgradeAudit = evaluatePluginTrustAudit(
       {
-        source: "official",
-        targetLabel: "SSH 插件 (@prismux/plugin-ssh)",
-        pluginId: "ssh",
+        source: "npm",
+        targetLabel: "远程运维扩展 (prismux-plugin-ops-demo)",
+        packageNameOrTarball: "prismux-plugin-ops-demo",
         fromVersion: "0.1.0-alpha.3",
         toVersion: "0.2.0",
         sha256: "54c90bdb7d09d4472145c70aaa8b463028e9dce6ed953aa8c31e1f4aca782265",
@@ -286,29 +270,50 @@ describe("Trust Audit Confirmation Gate (modelVisible / prompt / sensitive permi
       },
       "upgrade",
     );
-    expect(sshUpgradeAudit.required).toBe(true);
-    expect(sshUpgradeAudit.severity).toBe("critical");
-    expect(sshUpgradeAudit.operation).toBe("upgrade");
-    expect(sshUpgradeAudit.sensitivePermissions.length).toBe(4);
+    expect(opsUpgradeAudit.required).toBe(true);
+    expect(opsUpgradeAudit.severity).toBe("critical");
+    expect(opsUpgradeAudit.operation).toBe("upgrade");
+    expect(opsUpgradeAudit.sensitivePermissions.length).toBe(4);
 
-    // Safe 0-Token non-sensitive plugin (pet)
-    const petAudit = evaluatePluginTrustAudit(
+    // Safe 0-Token non-sensitive UI theme plugin
+    const safeUiAudit = evaluatePluginTrustAudit(
       {
-        source: "official",
-        targetLabel: "桌宠租约联动插件 (@prismux/plugin-pet)",
-        pluginId: "pet",
+        source: "npm",
+        targetLabel: "极光主题 (prismux-plugin-theme-nord)",
+        packageNameOrTarball: "prismux-plugin-theme-nord",
         modelVisible: false,
-        permissions: ["pet:lease", "ui:panel", "hooks:subscribe"],
+        permissions: ["ui:panel", "hooks:subscribe"],
       },
       "install",
     );
-    expect(petAudit.required).toBe(false);
-    expect(petAudit.severity).toBe("info");
+    expect(safeUiAudit.required).toBe(false);
+    expect(safeUiAudit.severity).toBe("info");
 
-    // Modal markup check: role="alertdialog", SHA-256 / npm package, consent checkbox, confirm disabled initially
+    // Daemon 409 audit object permissions extraction
+    const parsedAuditErr = isAuditRequiredError({
+      status: 409,
+      code: "AUDIT_CONFIRMATION_REQUIRED",
+      details: {
+        error: {
+          details: {
+            permissions: [
+              { permission: "hooks:intercept", labelZh: "拦截钩子", elevated: true },
+              "network:outbound",
+            ],
+            warnings: ["需要二次确认"],
+          },
+        },
+      },
+    });
+    expect(parsedAuditErr.required).toBe(true);
+    expect(parsedAuditErr.permissions).toEqual(["hooks:intercept", "network:outbound"]);
+    expect(parsedAuditErr.reasons).toEqual(["需要二次确认"]);
+
+    // Modal markup check: role="alertdialog", SHA-256 / npm package, inline error visible inside modal, consent checkbox
     const modalHtml = renderToStaticMarkup(
       <PluginTrustAuditModal
-        audit={sshUpgradeAudit}
+        audit={opsUpgradeAudit}
+        error="模拟下载超时：GitHub 与 Gitee 均不可达"
         onConfirm={() => undefined}
         onCancel={() => undefined}
       />,
@@ -320,6 +325,8 @@ describe("Trust Audit Confirmation Gate (modelVisible / prompt / sensitive permi
     expect(modalHtml).toContain("升级前信任审计确认");
     expect(modalHtml).toContain("v0.1.0-alpha.3 → v0.2.0");
     expect(modalHtml).toContain("54c90bdb7d09d4472145c70aaa8b463028e9dce6ed953aa8c31e1f4aca782265");
+    expect(modalHtml).toContain('data-testid="plugin-trust-audit-error"');
+    expect(modalHtml).toContain("模拟下载超时：GitHub 与 Gitee 均不可达");
     expect(modalHtml).toContain('type="checkbox"');
     expect(modalHtml).toContain("请先勾选上方风险确认框以启用放行按钮");
     expect(modalHtml).toContain("确认信任并升级");
@@ -403,13 +410,22 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
         daemonReady={true}
         initialCatalog={makeOfficialCatalogFixture()}
         initialInstalled={makeCommunityInstalledFixture()}
+        initialRetired={DEFAULT_RETIRED_OFFICIAL_PLUGINS}
         skipInitialFetch={true}
       />,
     );
 
-    // Zero-preinstall mandatory banner
-    expect(html).toContain("四大官方插件默认零预装声明");
+    // Zero-preinstall mandatory banner (2 active official plugins)
+    expect(html).toContain("两大官方插件默认零预装声明");
     expect(html).toContain("fishdock-hook");
+
+    // Restrained read-only retired notice for pet / ssh with NO install buttons
+    expect(html).toContain('data-testid="plugin-retired-section"');
+    expect(html).toContain('data-testid="plugin-retired-pet"');
+    expect(html).toContain('data-testid="plugin-retired-ssh"');
+    expect(html).toContain("已停用：已被 Prismux 内置功能取代");
+    expect(html).not.toContain('data-testid="plugin-card-pet"');
+    expect(html).not.toContain('data-testid="plugin-card-ssh"');
 
     // Four-state tabs with live counts
     expect(html).toContain('data-testid="plugin-tab-all"');
@@ -423,10 +439,12 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
       expect(html).toContain(`data-testid="plugin-category-${cat}"`);
     }
 
-    // Featured recommendations & scriptless npm import preserved
+    // Featured recommendations, scriptless npm import, and local .wb-plugin import
     expect(html).toContain('data-testid="plugin-featured-section"');
     expect(html).toContain("精选推荐");
     expect(html).toContain("社区 npm 插件流式导入");
+    expect(html).toContain('data-testid="plugin-local-archive-btn"');
+    expect(html).toContain("导入本地 .wb-plugin");
     expect(html).toContain("免 Git 依赖");
     expect(html).toContain("禁用安装脚本");
   });

@@ -101,7 +101,7 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
     }
   });
 
-  it("mounts PrismuxWallpaperQuickPanel and unified single-topbar PrismuxTopbarControls (Chief Pill + Overview toggle)", () => {
+  it("mounts PrismuxWallpaperQuickPanel and unified single-topbar PrismuxTopbarControls (Chief Pill + Overview list-box SVG + independent Sparkles Wallpaper toggle)", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <PrismuxRuntimeProvider>
@@ -109,6 +109,9 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
             overviewOpen={true}
             overviewShortcutLabel="Ctrl+Shift+B"
             onToggleOverview={() => {}}
+            wallpaperOpen={false}
+            wallpaperAvailable={true}
+            onToggleWallpaper={() => {}}
             onOpenChiefSettings={() => {}}
           />
           <PrismuxWallpaperQuickPanel />
@@ -123,11 +126,25 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
     expect(html).not.toContain(">AGENT<");
     expect(html).not.toContain(">Agent<");
 
-    // Overview toggle button lives cleanly beside Chief Pill without brittle mr-28 spacer
+    // Overview toggle uses crisp 20x20 rounded square + 3 left-aligned bars (3rd shorter) SVG
     expect(html).toContain('data-pmx-overview-toggle="1"');
     expect(html).toContain("data-thread-panel-toggle");
-    expect(html).toContain('aria-label="切换概览"');
+    expect(html).toContain('aria-label="概览"');
+    expect(html).toContain('data-pmx-overview-icon="1"');
+    expect(html).toContain('viewBox="0 0 20 20"');
+    expect(html).toContain("M6.1 6.9H13.9M6.1 10H13.9M6.1 13.1H10.5");
+
+    // Independent Wallpaper quick-toggle button sits right beside Overview with the Sparkles icon
+    expect(html).toContain('data-pmx-wallpaper-toggle="1"');
+    expect(html).toContain('aria-label="壁纸快速开启"');
+    expect(html).toContain('data-pmx-wallpaper-icon="1"');
+    expect(html).toContain("lucide-sparkles");
     expect(html).not.toContain("mr-28");
+
+    // Overview toggle must appear before Wallpaper quick-toggle in DOM order
+    expect(html.indexOf('data-pmx-overview-toggle="1"')).toBeLessThan(
+      html.indexOf('data-pmx-wallpaper-toggle="1"'),
+    );
 
     // Right sidebar mounts WallpaperQuickPanel cleanly
     expect(html).toContain("data-pmx-right-sidebar");

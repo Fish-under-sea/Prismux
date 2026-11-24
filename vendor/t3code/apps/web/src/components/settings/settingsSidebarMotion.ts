@@ -10,6 +10,7 @@ export const SETTINGS_NAV_PARENT_ALIASES: Readonly<Record<string, SettingsPath>>
   "/settings/open-source-licenses": "/settings/about",
   "/settings/labs": "/settings/general",
   "/settings/beta": "/settings/general",
+  "/settings/memory-sync": "/settings/memory",
 };
 
 export interface SettingsNavItemGeometry {

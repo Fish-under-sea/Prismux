@@ -1,6 +1,7 @@
 ; Prismux Windows NSIS Installer Customization (Mount Point 6)
 ; Note: Prismux ships with ZERO preinstalled official plugins.
-; Official plugins (qq / pet / fishdock-hook / ssh) are installed on demand via the Prismux Plugin Center.
+; Active official plugins (qq / fishdock-hook) are installed on demand via the Prismux Plugin Center.
+; Retired plugins (pet / ssh) have been replaced by Prismux built-in capabilities.
 
 !include "StrFunc.nsh"
 !ifdef BUILD_UNINSTALLER
@@ -35,7 +36,7 @@
 !macroend
 
 !macro customInstall
-  DetailPrint "Prismux core installed (4 official plugins: qq / pet / fishdock-hook / ssh are NOT preinstalled by default)."
+  DetailPrint "Prismux core installed (2 active official plugins: qq / fishdock-hook are NOT preinstalled by default)."
   !ifndef DO_NOT_CREATE_START_MENU_SHORTCUT
     ${IfNot} ${FileExists} "$newStartMenuLink"
       !insertmacro createMenuDirectory

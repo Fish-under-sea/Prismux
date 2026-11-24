@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { T, useGT } from "gt-react";
 import {
@@ -28,8 +28,13 @@ import { SettingsSection } from "../../components/settings/settingsLayout";
 import { cn } from "../../lib/utils";
 import { prismuxDaemonClient, type DaemonDiagnosticsStatus } from "../daemonClient";
 import {
+  createDiagnosticsRefreshController,
+  DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
   formatDiagnosticsTimestamp,
-  normalizeDiagnosticsResponse,
+  getLatestNormalizedDiagnosticsReport,
+  publishDiagnosticsReport,
+  subscribeDiagnosticsRefreshRequest,
+  subscribeDiagnosticsReport,
   type NormalizedDiagnosticGroup,
   type NormalizedDiagnosticItem,
   type NormalizedDiagnosticsReport,
@@ -148,7 +153,7 @@ export function DiagnosticItemCard({
       data-diagnostic-id={item.id}
       data-diagnostic-status={item.status}
       className={cn(
-        "flex h-full min-h-[156px] flex-col rounded-lg border bg-background/55 px-3.5 py-3 transition-colors",
+        "flex h-full min-h-[156px] flex-col rounded-lg border bg-card/85 px-3.5 py-3 transition-colors",
         tone.border,
       )}
     >
@@ -278,30 +283,131 @@ export function PrismuxDiagnosticsSection({
 }) {
   const gt = useGT();
   const { copiedId, copyCommand } = useCopyFixCommand();
-  const [report, setReport] = useState<NormalizedDiagnosticsReport | null>(
-    () => initialReportOverride ?? null,
+  const [report, setReport] = useState<NormalizedDiagnosticsReport | null>(() =>
+    initialReportOverride !== undefined
+      ? initialReportOverride
+      : getLatestNormalizedDiagnosticsReport(),
   );
   const [loading, setLoading] = useState(() => initialReportOverride === undefined);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [compactOpen, setCompactOpen] = useState(false);
 
-  const loadDiagnostics = useCallback(async (force: boolean) => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const response = await prismuxDaemonClient.fetchDiagnosticsServices(force);
-      setReport(normalizeDiagnosticsResponse(response));
-    } catch (error) {
-      setErrorMsg(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const requestSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+  const refreshControllerRef = useRef<ReturnType<typeof createDiagnosticsRefreshController> | null>(
+    null,
+  );
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadDiagnostics = useCallback(
+    async (force: boolean, options?: { silent?: boolean }) => {
+      const seq = ++requestSeqRef.current;
+      setLoading(true);
+      if (!options?.silent) {
+        setErrorMsg(null);
+      }
+      try {
+        const response = force
+          ? await prismuxDaemonClient.refreshDiagnosticsServices()
+          : await prismuxDaemonClient.fetchDiagnosticsServices(false);
+        if (!mountedRef.current || seq !== requestSeqRef.current) {
+          return;
+        }
+        const normalized = publishDiagnosticsReport(response);
+        setReport(normalized);
+        setErrorMsg(null);
+        refreshControllerRef.current?.markRefreshed();
+      } catch (error) {
+        if (!mountedRef.current || seq !== requestSeqRef.current) {
+          return;
+        }
+        if (!options?.silent) {
+          setErrorMsg(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        if (mountedRef.current && seq === requestSeqRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  // Keep refresh controller wired to latest loadDiagnostics while preserving cooldown timestamp.
+  useEffect(() => {
+    const prevTimestamp = refreshControllerRef.current?.getLastTriggeredAt();
+    const controller = createDiagnosticsRefreshController(
+      () => {
+        void loadDiagnostics(true, { silent: true });
+      },
+      { cooldownMs: DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS },
+    );
+    if (prevTimestamp !== undefined && Number.isFinite(prevTimestamp)) {
+      controller.markRefreshed(prevTimestamp);
+    }
+    refreshControllerRef.current = controller;
+  }, [loadDiagnostics]);
+
+  // Initial mount: opening `/settings/diagnostics` always runs a fresh `force=1` hot-probe
+  // (refreshing Windows registry env & bypassing TTL cache), while keeping any prior report visible.
+  useEffect(() => {
     if (initialReportOverride !== undefined) return;
-    void loadDiagnostics(false);
-  }, [initialReportOverride, loadDiagnostics]);
+    if (variant === "full") {
+      refreshControllerRef.current?.markRefreshed();
+      void loadDiagnostics(true);
+    } else {
+      void loadDiagnostics(false);
+    }
+  }, [initialReportOverride, loadDiagnostics, variant]);
+
+  // Sync with externally published reports (e.g. sidebar background refresh) and explicit reload broadcasts.
+  useEffect(() => {
+    if (initialReportOverride !== undefined) return;
+    const unsubReport = subscribeDiagnosticsReport(({ report: nextReport }) => {
+      setReport((current) => {
+        if (!current || nextReport.checkedAt >= current.checkedAt) {
+          return nextReport;
+        }
+        return current;
+      });
+    });
+    const unsubRequest = subscribeDiagnosticsRefreshRequest((reason) => {
+      if (variant !== "full") return;
+      refreshControllerRef.current?.trigger(reason, { bypassCooldown: true });
+    });
+    return () => {
+      unsubReport();
+      unsubRequest();
+    };
+  }, [initialReportOverride, variant]);
+
+  // Auto hot-reload on window focus / tab visibility return (debounced 3s to prevent probe storms).
+  useEffect(() => {
+    if (initialReportOverride !== undefined || variant !== "full") return;
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+
+    const handleFocus = () => {
+      refreshControllerRef.current?.trigger("focus");
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshControllerRef.current?.trigger("visibility");
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [initialReportOverride, variant]);
 
   if (variant === "compact") {
     if (!report) {
@@ -419,7 +525,7 @@ export function PrismuxDiagnosticsSection({
         <div className="space-y-4 px-4 py-3.5 sm:px-5">
           {/* Summary counts bar */}
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            <div className="rounded-lg border border-border/70 bg-background/50 px-3 py-2.5">
+            <div className="rounded-lg border border-border/70 bg-card/85 px-3 py-2.5">
               <div className="text-[11px] text-muted-foreground">
                 <T>Total checks</T>
               </div>
@@ -521,9 +627,9 @@ export function PrismuxDiagnosticsSection({
               <Button
                 size="xs"
                 variant="outline"
-                render={<Link to="/settings/memory-sync" />}
+                render={<Link to="/settings/memory" />}
               >
-                <span>{gt("Memory & Sync")}</span>
+                <span>{gt("Memory Engine")}</span>
                 <ArrowRightIcon className="size-3" />
               </Button>
             </div>
@@ -549,7 +655,7 @@ export function PrismuxDiagnosticsSection({
                   return (
                     <div
                       key={engine.id}
-                      className="flex h-full flex-col rounded-md border border-border/60 bg-background/60 px-2.5 py-2"
+                      className="flex h-full flex-col rounded-md border border-border/65 bg-card/85 px-2.5 py-2"
                     >
                       <div className="flex items-center justify-between gap-1.5">
                         <span className="truncate text-[11px] font-medium text-foreground">

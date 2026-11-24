@@ -1,8 +1,21 @@
-import type { EnvironmentId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  type EnvironmentId,
+  type ModelSelection,
+  type ProviderInstanceId,
+  type ThreadId,
+} from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
+import * as Schema from "effect/Schema";
 
 import { formatAgentBrandName, resolveAgentBrandId, type AgentBrandId } from "../../prismux/agentBrand";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import type { WorkspaceTab } from "./workspaceTabsStore";
+
+const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
 export type QuickLaunchToolId = "terminal" | "diff" | "browser" | "simulator" | "settings";
 
@@ -222,6 +235,63 @@ export function buildQuickLaunchAgentOptions(input: {
       recentThreads,
     };
   });
+}
+
+export interface ResolvedQuickLaunchAgentTarget {
+  readonly providerId: string;
+  readonly instanceId: ProviderInstanceId | null;
+  readonly model: string;
+  readonly modelSelection: ModelSelection | null;
+}
+
+/**
+ * Resolves a quick-launched agent option into concrete provider/instance/model coordinates,
+ * guaranteed to yield a valid ModelSelection for built-in agents (Codex / Claude Code / Antigravity)
+ * even before server provider configs finish hydrating.
+ */
+export function resolveQuickLaunchAgentTarget(
+  agent: Pick<QuickLaunchAgentOption, "brandId" | "driverKind" | "instanceId" | "defaultModel">,
+  instanceEntries: ReadonlyArray<ProviderInstanceEntry>,
+): ResolvedQuickLaunchAgentTarget {
+  const providerId = agent.brandId === "custom" ? String(agent.driverKind) : agent.brandId;
+  const matchedEntry =
+    (agent.instanceId
+      ? instanceEntries.find((entry) => entry.instanceId === agent.instanceId)
+      : undefined) ??
+    instanceEntries.find(
+      (entry) =>
+        entry.enabled &&
+        resolveAgentBrandId(
+          entry.driverKind === "acpRegistry" ? entry.displayName || entry.instanceId : entry.driverKind,
+        ) === agent.brandId,
+    ) ??
+    instanceEntries.find((entry) => entry.driverKind === agent.driverKind) ??
+    null;
+
+  const resolvedInstanceId: ProviderInstanceId | null =
+    matchedEntry?.instanceId ??
+    agent.instanceId ??
+    (isProviderDriverKind(agent.driverKind) ? defaultInstanceIdForDriver(agent.driverKind) : null);
+
+  const driverKindForDefault =
+    matchedEntry?.driverKind ?? (isProviderDriverKind(agent.driverKind) ? agent.driverKind : null);
+
+  const resolvedModel =
+    agent.defaultModel ??
+    (matchedEntry ? defaultModelForEntry(matchedEntry) : null) ??
+    (driverKindForDefault ? DEFAULT_MODEL_BY_PROVIDER[driverKindForDefault] : undefined) ??
+    DEFAULT_MODEL;
+
+  const modelSelection = resolvedInstanceId
+    ? createModelSelection(resolvedInstanceId, resolvedModel)
+    : null;
+
+  return {
+    providerId,
+    instanceId: resolvedInstanceId,
+    model: resolvedModel,
+    modelSelection,
+  };
 }
 
 function matchesAllTokens(haystack: string, tokens: ReadonlyArray<string>): boolean {

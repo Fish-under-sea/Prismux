@@ -24,6 +24,10 @@ export interface UsageRecord {
   readonly speed: UsageSpeed;
   readonly unresolvedServiceTierTurnId?: string;
   readonly dedupeKey: string | null;
+  /** Real time-to-first-token in milliseconds, when recorded by provider history. */
+  readonly ttftMs?: number;
+  /** Real total call duration in milliseconds, when recorded by provider history. */
+  readonly durationMs?: number;
 }
 
 export const EMPTY_TOTALS: UsageTokenTotals = {

@@ -100,11 +100,15 @@ describe("searchSettings", () => {
     }
   });
 
-  it("finds the Scheduled tasks page", () => {
-    expect(searchSettings("scheduled tasks")[0]).toMatchObject({
-      id: "scheduled-tasks",
-      to: "/settings/scheduled-tasks",
-    });
+  it("omits Scheduled tasks from Settings sidebar and search after promotion to standalone /scheduled-tasks panel", () => {
+    const navPaths = settingsNavGroups(true, true).flatMap((group) => group.paths);
+    expect(navPaths).not.toContain("/settings/scheduled-tasks");
+    expect(
+      SETTINGS_SEARCH_ITEMS.some((item) => item.to === "/settings/scheduled-tasks"),
+    ).toBe(false);
+    expect(
+      searchSettings("scheduled tasks").some((item) => item.to === "/settings/scheduled-tasks"),
+    ).toBe(false);
   });
 
   it("matches normalized title substrings", () => {
@@ -261,10 +265,12 @@ describe("searchSettings", () => {
       "Wallpaper Engine": "壁纸引擎",
       Plugins: "插件中心",
       "Plugin Center": "插件中心",
-      "Memory & Sync": "记忆与同步",
+      Memory: "记忆",
+      Sync: "同步",
+      "Chief Thread Slot": "主秘书槽位",
       "Prismux Updates": "软件更新",
     };
-    const translate = (message: string) => zhLabels[message] ?? message;
+    const translate = (message: string) => zhLabels[message] ?? zhLabels[decodeMsg(message)] ?? message;
     expect(searchSettings("壁纸", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
       "prismux-wallpaper",
     );
@@ -274,9 +280,14 @@ describe("searchSettings", () => {
     expect(searchSettings("插件中心", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
       "prismux-plugins",
     );
-    expect(searchSettings("记忆与同步", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
-      "prismux-memory-sync",
-    );
+    expect(searchSettings("记忆", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "prismux-memory",
+      to: "/settings/memory",
+    });
+    expect(searchSettings("同步", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "prismux-sync",
+      to: "/settings/sync",
+    });
     expect(searchSettings("软件更新", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
       "prismux-updates",
     );
@@ -414,6 +425,17 @@ describe("source control host search items", () => {
       sourceControlHostSettingsSearchId("github"),
     );
   });
+  it("finds Overnight Factory & Mail via English & email protocol keywords", () => {
+    for (const query of ["Overnight Factory", "gmail", "imap", "smtp", "#factory"]) {
+      expect(searchSettings(query).map((item) => item.id), query).toContain(
+        "prismux-overnight-factory",
+      );
+    }
+    const overnightItem = SETTINGS_SEARCH_ITEMS.find(
+      (item) => item.id === "prismux-overnight-factory",
+    );
+    expect(overnightItem?.to).toBe("/settings/overnight-factory");
+  });
 });
 
 describe("movedSettingsPath", () => {
@@ -435,6 +457,9 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/beta", "")).toBe("/settings/general");
     expect(movedSettingsPath("/settings/labs", "")).toBe("/settings/general");
     expect(movedSettingsPath("/settings/updates", "")).toBe("/settings/about");
+    expect(movedSettingsPath("/settings/memory-sync", "")).toBe("/settings/memory");
+    expect(movedSettingsPath("/settings/memory-sync", "sync")).toBe("/settings/sync");
+    expect(movedSettingsPath("/settings/memory-sync", "prismux-e2ee-sync")).toBe("/settings/sync");
   });
 
   it("leaves current pages alone", () => {

@@ -402,37 +402,12 @@ function RightPanelEmptyState(props: {
 
   const actions = [
     {
-      label: msg("Browser"),
-      icon: Globe2,
-      shortcut: "B",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
-      onClick: props.onAddBrowser,
-    },
-    {
-      label: msg("手机模拟器"),
-      description: msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"),
-      icon: TabletSmartphone,
-      shortcut: "I",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
-      onClick: props.onAddMobileSimulator,
-    },
-    {
-      label: msg("Terminal"),
-      icon: TerminalSquare,
-      shortcut: "T",
-      available: props.terminalAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.terminal),
-      onClick: props.onAddTerminal,
-    },
-    {
-      label: msg("Files"),
-      icon: Files,
-      shortcut: "F",
-      available: props.filesAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.files),
-      onClick: props.onAddFiles,
+      label: msg("PR"),
+      icon: PullRequestGlyph.pullRequest,
+      shortcut: "P",
+      available: props.pullRequestAvailable,
+      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.pullRequest),
+      onClick: props.onAddPullRequest,
     },
     {
       label: msg("Diff"),
@@ -443,12 +418,51 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddDiff,
     },
     {
-      label: msg("Pull request"),
-      icon: PullRequestGlyph.pullRequest,
-      shortcut: "P",
-      available: props.pullRequestAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.pullRequest),
-      onClick: props.onAddPullRequest,
+      label: msg("Files"),
+      icon: Files,
+      shortcut: "F",
+      available: props.filesAvailable,
+      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.files),
+      onClick: props.onAddFiles,
+    },
+    {
+      label: msg("Terminal"),
+      icon: TerminalSquare,
+      shortcut: "T",
+      available: props.terminalAvailable,
+      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.terminal),
+      onClick: props.onAddTerminal,
+    },
+    ...(props.onAddSideChat
+      ? [
+          {
+            label: msg("Side chat"),
+            description: msg("Ask a side question while this thread keeps working."),
+            icon: MessagesSquare,
+            shortcut: "S",
+            available: props.sideChatAvailable,
+            disabledReason:
+              props.sideChatDisabledReason ?? messages(SURFACE_UNAVAILABLE_HINTS.sideChat),
+            onClick: props.onAddSideChat,
+          },
+        ]
+      : []),
+    {
+      label: msg("Browser"),
+      icon: Globe2,
+      shortcut: "B",
+      available: props.browserAvailable,
+      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
+      onClick: props.onAddBrowser,
+    },
+    {
+      label: "手机模拟",
+      description: msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"),
+      icon: TabletSmartphone,
+      shortcut: "I",
+      available: props.browserAvailable,
+      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.browser),
+      onClick: props.onAddMobileSimulator,
     },
     {
       label: msg("Linked items"),
@@ -458,39 +472,16 @@ function RightPanelEmptyState(props: {
       disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.pullRequests),
       onClick: props.onAddPullRequests,
     },
-    {
-      label: msg("Device"),
-      description: msg("Watch an iOS Simulator or Android Emulator."),
-      icon: Smartphone,
-      shortcut: "M",
-      available: props.deviceAvailable,
-      disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.device),
-      onClick: props.onAddDevice,
-    },
     ...(props.onAddWallpaper
       ? [
           {
-            label: msg("壁纸"),
+            label: "壁纸",
             description: msg("切换动态壁纸、液态玻璃与外观主题。"),
             icon: ImageIcon,
             shortcut: "W",
             available: props.wallpaperAvailable,
             disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.wallpaper),
             onClick: props.onAddWallpaper,
-          },
-        ]
-      : []),
-    ...(props.onAddSideChat
-      ? [
-          {
-            label: msg("Side chat"),
-            description: msg("Ask a side question while this thread keeps working."),
-            icon: MessagesSquare,
-            shortcut: "S",
-            available: props.sideChatAvailable && !props.sideChatDisabledReason,
-            disabledReason:
-              props.sideChatDisabledReason ?? messages(SURFACE_UNAVAILABLE_HINTS.sideChat),
-            onClick: props.onAddSideChat,
           },
         ]
       : []),
@@ -678,6 +669,8 @@ function surfaceTitle(
       );
     case "pull-request":
       return `#${surface.number}`;
+    case "pull-request-empty":
+      return resolve(msg("PR"));
     case "pull-requests":
       return resolve(msg("Linked items"));
     case "issue":
@@ -692,6 +685,8 @@ function surfaceTitle(
     case "thread":
       // Until the thread's own title loads.
       return resolve(msg("Thread"));
+    case "side-chat-empty":
+      return resolve(msg("Side chat"));
     case "linked-thread":
       return linkedThreadTitle(
         surface,
@@ -783,12 +778,16 @@ function SurfaceIcon({
           seed={pullRequestStatusSeed}
         />
       );
+    case "pull-request-empty":
+      return <PullRequestGlyph.pullRequest className="size-3 shrink-0" />;
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "issue":
       return <IssueSurfaceIcon surface={surface} environmentId={environmentId} />;
     case "thread":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
+    case "side-chat-empty":
+      return <MessagesSquare className="size-3 shrink-0" />;
     case "linked-thread":
       return <MessagesSquare className="size-3 shrink-0" />;
     case "device":
@@ -1179,11 +1178,11 @@ function RightPanelTab(
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
-        "cursor-pointer group/tab flex h-6 max-w-36 shrink-0 items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
+        "cursor-pointer group/tab flex h-6 max-w-36 shrink-0 items-center gap-0.5 rounded-md border pr-2 pl-1.5 text-xs transition-colors",
         props.ownsDesktopTitleBar && "[-webkit-app-region:no-drag]",
         props.active
-          ? "bg-accent text-foreground"
-          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+          ? "border-primary/35 bg-primary/12 font-medium text-foreground shadow-2xs dark:border-primary/45 dark:bg-primary/22 dark:text-white [[data-pmx-glass='1']_&]:border-white/25 [[data-pmx-glass='1']_&]:bg-white/18 [[data-pmx-glass='1']_&]:text-white [html:not(.dark)[data-pmx-glass='1']_&]:border-black/15 [html:not(.dark)[data-pmx-glass='1']_&]:bg-white/75 [html:not(.dark)[data-pmx-glass='1']_&]:text-slate-950"
+          : "border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground dark:hover:bg-white/8 [[data-pmx-glass='1']_&]:text-white/72 [[data-pmx-glass='1']_&]:hover:bg-white/10 [[data-pmx-glass='1']_&]:hover:text-white [html:not(.dark)[data-pmx-glass='1']_&]:text-slate-900/70 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-black/[0.06] [html:not(.dark)[data-pmx-glass='1']_&]:hover:text-slate-950",
         isDragging && "relative z-10",
       )}
     >
@@ -1192,13 +1191,161 @@ function RightPanelTab(
   );
 }
 
-interface RightPanelActivityAction {
+export interface RightPanelActivityAction {
   readonly id: RightPanelActivityItemId;
   readonly label: string;
   readonly icon: typeof Globe2;
   readonly available: boolean;
   readonly active: boolean;
   readonly onClick: () => void;
+}
+
+/**
+ * High-contrast Activity Bar pill styles across Light, Dark, Dark Glass, and Light Glass.
+ * Active state uses solid primary fill + crisp border + elevated shadow so the focused surface
+ * stands out unmistakably over solid panels and dynamic liquid-glass wallpapers alike.
+ */
+export function rightPanelActivityButtonClass(options: {
+  readonly active: boolean;
+  readonly compact: boolean;
+  readonly available: boolean;
+  readonly isDragging?: boolean;
+}): string {
+  const { active, compact, available, isDragging = false } = options;
+  return cn(
+    "inline-flex h-6 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md border text-[11px] leading-none transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    compact ? "w-6.5 px-0" : "max-w-23 px-1.5",
+    active
+      ? "border-primary/85 bg-primary font-semibold text-primary-foreground shadow-[0_1px_2px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.22)] dark:border-primary/90 dark:bg-primary dark:text-primary-foreground [[data-pmx-glass='1']_&]:border-primary/90 [[data-pmx-glass='1']_&]:bg-primary [[data-pmx-glass='1']_&]:text-primary-foreground [[data-pmx-glass='1']_&]:shadow-[0_1px_4px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.26)] [html:not(.dark)[data-pmx-glass='1']_&]:border-primary/85 [html:not(.dark)[data-pmx-glass='1']_&]:bg-primary [html:not(.dark)[data-pmx-glass='1']_&]:text-primary-foreground [@media(forced-colors:active)]:border-[Highlight] [@media(forced-colors:active)]:bg-[Highlight] [@media(forced-colors:active)]:text-[HighlightText]"
+      : "border-transparent bg-transparent font-medium text-foreground/68 hover:bg-black/[0.06] hover:text-foreground dark:text-white/68 dark:hover:bg-white/10 dark:hover:text-white [[data-pmx-glass='1']_&]:text-white/76 [[data-pmx-glass='1']_&]:hover:bg-white/12 [[data-pmx-glass='1']_&]:hover:text-white [html:not(.dark)[data-pmx-glass='1']_&]:text-slate-900/72 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-black/[0.07] [html:not(.dark)[data-pmx-glass='1']_&]:hover:text-slate-950",
+    !available && "cursor-not-allowed opacity-45",
+    isDragging && "relative z-20 opacity-60 shadow-sm ring-1 ring-primary/60",
+  );
+}
+
+export interface BuildRightPanelActivityActionsInput {
+  readonly order: readonly RightPanelActivityItemId[];
+  readonly focusedSurfaceKind: RightPanelSurface["kind"] | null;
+  readonly mobileSimulatorIdleActive: boolean;
+  readonly resolveMessage: MessageResolver;
+  readonly availability: {
+    readonly pullRequest: boolean;
+    readonly diff: boolean;
+    readonly files: boolean;
+    readonly terminal: boolean;
+    readonly sideChat: boolean;
+    readonly preview: boolean;
+    readonly mobileSimulator: boolean;
+    readonly pullRequests: boolean;
+    readonly wallpaper: boolean;
+  };
+  readonly handlers: {
+    readonly onPullRequest: () => void;
+    readonly onDiff: () => void;
+    readonly onFiles: () => void;
+    readonly onTerminal: () => void;
+    readonly onSideChat: () => void;
+    readonly onPreview: () => void;
+    readonly onMobileSimulator: () => void;
+    readonly onPullRequests: () => void;
+    readonly onWallpaper: () => void;
+  };
+}
+
+/**
+ * Pure builder for the 9 canonical right-panel Activity Bar shortcuts:
+ * PR -> 差异 -> 文件 -> 终端 -> 侧聊 -> 浏览器 -> 手机模拟 -> 已关联项 -> 壁纸.
+ * Strictly excludes legacy `device` items and enforces `手机模拟` (without `器`).
+ */
+export function buildRightPanelActivityActions(
+  input: BuildRightPanelActivityActionsInput,
+): RightPanelActivityAction[] {
+  const {
+    order,
+    focusedSurfaceKind,
+    mobileSimulatorIdleActive,
+    resolveMessage,
+    availability,
+    handlers,
+  } = input;
+
+  const actionMap: Record<RightPanelActivityItemId, RightPanelActivityAction> = {
+    "pull-request": {
+      id: "pull-request",
+      label: resolveMessage(msg("PR")),
+      icon: PullRequestGlyph.pullRequest,
+      available: availability.pullRequest,
+      active:
+        focusedSurfaceKind === "pull-request" || focusedSurfaceKind === "pull-request-empty",
+      onClick: handlers.onPullRequest,
+    },
+    diff: {
+      id: "diff",
+      label: resolveMessage(msg("Diff")),
+      icon: FileDiff,
+      available: availability.diff,
+      active: focusedSurfaceKind === "diff",
+      onClick: handlers.onDiff,
+    },
+    files: {
+      id: "files",
+      label: resolveMessage(msg("Files")),
+      icon: Files,
+      available: availability.files,
+      active: focusedSurfaceKind === "files" || focusedSurfaceKind === "file",
+      onClick: handlers.onFiles,
+    },
+    terminal: {
+      id: "terminal",
+      label: resolveMessage(msg("Terminal")),
+      icon: TerminalSquare,
+      available: availability.terminal,
+      active: focusedSurfaceKind === "terminal",
+      onClick: handlers.onTerminal,
+    },
+    "side-chat": {
+      id: "side-chat",
+      label: resolveMessage(msg("Side chat")),
+      icon: MessagesSquare,
+      available: availability.sideChat,
+      active: focusedSurfaceKind === "thread" || focusedSurfaceKind === "side-chat-empty",
+      onClick: handlers.onSideChat,
+    },
+    preview: {
+      id: "preview",
+      label: resolveMessage(msg("Browser")),
+      icon: Globe2,
+      available: availability.preview,
+      active: focusedSurfaceKind === "preview" && !mobileSimulatorIdleActive,
+      onClick: handlers.onPreview,
+    },
+    "mobile-simulator": {
+      id: "mobile-simulator",
+      label: "手机模拟",
+      icon: TabletSmartphone,
+      available: availability.mobileSimulator,
+      active: focusedSurfaceKind === "preview" && mobileSimulatorIdleActive,
+      onClick: handlers.onMobileSimulator,
+    },
+    "pull-requests": {
+      id: "pull-requests",
+      label: resolveMessage(msg("Linked items")),
+      icon: PullRequestGlyph.link,
+      available: availability.pullRequests,
+      active: focusedSurfaceKind === "pull-requests",
+      onClick: handlers.onPullRequests,
+    },
+    wallpaper: {
+      id: "wallpaper",
+      label: "壁纸",
+      icon: ImageIcon,
+      available: availability.wallpaper,
+      active: focusedSurfaceKind === "wallpaper",
+      onClick: handlers.onWallpaper,
+    },
+  };
+
+  return order.map((id) => actionMap[id]);
 }
 
 const ACTIVITY_BAR_DRAG_MODIFIERS = [restrictToHorizontalAxis];
@@ -1250,6 +1397,7 @@ function SortableActivityBarButton(props: {
             type="button"
             data-activity-item={item.id}
             data-activity-compact={compact ? "true" : "false"}
+            data-active={item.active ? "true" : "false"}
             aria-label={item.label}
             aria-pressed={item.active}
             disabled={!item.available}
@@ -1263,15 +1411,12 @@ function SortableActivityBarButton(props: {
             }}
             {...sortableAttributes}
             {...listeners}
-            className={cn(
-              "inline-flex h-5.5 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md text-[11px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              compact ? "w-6.5 px-0" : "max-w-21 px-1.5",
-              item.active
-                ? "bg-accent text-foreground"
-                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-              !item.available && "cursor-not-allowed opacity-45",
-              isDragging && "relative z-20 opacity-60 shadow-sm ring-1 ring-primary/60",
-            )}
+            className={rightPanelActivityButtonClass({
+              active: item.active,
+              compact,
+              available: item.available,
+              isDragging,
+            })}
           />
         }
       >
@@ -1348,9 +1493,19 @@ function RightPanelActivityBar(props: {
         role="toolbar"
         aria-label="右侧表面快捷栏（支持拖拽排序）"
         data-testid="right-panel-activity-bar"
-        className="flex h-7 shrink-0 items-center gap-1 overflow-hidden border-b border-border/60 px-2 [-webkit-app-region:no-drag]"
+        className="flex h-7.5 shrink-0 items-center gap-1 overflow-hidden border-b border-border/60 bg-black/[0.02] px-1.5 [-webkit-app-region:no-drag] dark:bg-white/[0.02] [[data-pmx-glass='1']_&]:border-white/12 [[data-pmx-glass='1']_&]:bg-black/15 [html:not(.dark)[data-pmx-glass='1']_&]:border-black/10 [html:not(.dark)[data-pmx-glass='1']_&]:bg-white/25"
       >
-        <div ref={stripRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+        <div
+          ref={stripRef}
+          onWheel={(event) => {
+            const node = stripRef.current;
+            if (!node || node.scrollWidth <= node.clientWidth) return;
+            const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+            if (delta === 0) return;
+            node.scrollLeft += delta;
+          }}
+          className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
           <SortableContext
             items={visible.map((item) => item.id)}
             strategy={horizontalListSortingStrategy}
@@ -1560,7 +1715,7 @@ export function PhoneSimulatorBlankStage() {
         <div className="flex flex-col gap-1">
           <div className="inline-flex w-fit items-center gap-1 rounded-full border border-emerald-500/35 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
             <TabletSmartphone aria-hidden className="size-3" />
-            <span>Prismux 手机模拟器已就绪</span>
+            <span>Prismux 手机模拟已就绪</span>
           </div>
           <div className="text-sm font-semibold">
             {activePreset?.label ?? "自定义移动视口"}
@@ -1585,7 +1740,7 @@ export function PhoneSimulatorBlankStage() {
             value={draftUrl}
             onChange={(event) => setDraftUrl(event.target.value)}
             placeholder="输入网址或 :5173 回车预览…"
-            aria-label="手机模拟器快速预览网址"
+            aria-label="手机模拟快速预览网址"
             data-testid="phone-simulator-quick-url-input"
             className={cn(
               "h-7 w-full rounded-md border px-2 text-xs outline-none focus:ring-2 focus:ring-sky-500/50",
@@ -1600,7 +1755,7 @@ export function PhoneSimulatorBlankStage() {
             className="inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-md bg-sky-600 px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ExternalLink aria-hidden className="size-3" />
-            <span>{openingUrl ? "加载中…" : "在手机模拟器中打开"}</span>
+            <span>{openingUrl ? "加载中…" : "在手机模拟中打开"}</span>
           </button>
           {navError ? (
             <div role="alert" className="text-[11px] text-rose-400">
@@ -1629,7 +1784,7 @@ export function PhoneSimulatorBlankStage() {
                         ? "border-slate-300 bg-white text-slate-800 hover:bg-slate-100"
                         : "border-white/15 bg-white/8 text-slate-100 hover:bg-white/15",
                     )}
-                    title={`在手机模拟器中预览 ${url}`}
+                    title={`在手机模拟中预览 ${url}`}
                   >
                     <span className="font-semibold text-emerald-500">:{entry.port}</span>
                     <span className="max-w-20 truncate opacity-75">{entry.processName}</span>
@@ -1825,98 +1980,46 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     props.onAddBrowser();
   });
 
-  const activityActionMap: Record<RightPanelActivityItemId, RightPanelActivityAction | null> = {
-    diff: {
-      id: "diff",
-      label: messages(msg("Diff")),
-      icon: FileDiff,
-      available: props.diffAvailable,
-      active: focusedSurface?.kind === "diff",
-      onClick: props.onAddDiff,
+  const orderedActivityActions = buildRightPanelActivityActions({
+    order: activityBarOrder,
+    focusedSurfaceKind: focusedSurface?.kind ?? null,
+    mobileSimulatorIdleActive,
+    resolveMessage: messages,
+    availability: {
+      pullRequest: props.pullRequestAvailable,
+      diff: props.diffAvailable,
+      files: props.filesAvailable,
+      terminal: props.terminalAvailable,
+      sideChat: Boolean(props.onAddSideChat) && props.sideChatAvailable !== false,
+      preview: props.browserAvailable,
+      mobileSimulator: props.browserAvailable,
+      pullRequests: props.pullRequestsAvailable,
+      wallpaper: Boolean(props.onAddWallpaper) && props.wallpaperAvailable !== false,
     },
-    files: {
-      id: "files",
-      label: messages(msg("Files")),
-      icon: Files,
-      available: props.filesAvailable,
-      active: focusedSurface?.kind === "files" || focusedSurface?.kind === "file",
-      onClick: props.onAddFiles,
-    },
-    terminal: {
-      id: "terminal",
-      label: messages(msg("Terminal")),
-      icon: TerminalSquare,
-      available: props.terminalAvailable,
-      active: focusedSurface?.kind === "terminal",
-      onClick: props.onAddTerminal,
-    },
-    preview: {
-      id: "preview",
-      label: messages(msg("Browser")),
-      icon: Globe2,
-      available: props.browserAvailable,
-      active: focusedSurface?.kind === "preview" && !mobileSimulatorIdleActive,
-      onClick: () => {
+    handlers: {
+      onPullRequest: props.onAddPullRequest,
+      onDiff: props.onAddDiff,
+      onFiles: props.onAddFiles,
+      onTerminal: props.onAddTerminal,
+      onSideChat: () => props.onAddSideChat?.(),
+      onPreview: () => {
         useRightPanelStore.getState().setMobileSimulatorIdleActive(false);
         props.onAddBrowser();
       },
+      onMobileSimulator: handleOpenMobileSimulator,
+      onPullRequests: props.onAddPullRequests,
+      onWallpaper: () => props.onAddWallpaper?.(),
     },
-    "mobile-simulator": {
-      id: "mobile-simulator",
-      label: "手机模拟",
-      icon: TabletSmartphone,
-      available: props.browserAvailable,
-      active: focusedSurface?.kind === "preview" && mobileSimulatorIdleActive,
-      onClick: handleOpenMobileSimulator,
-    },
-    wallpaper: props.onAddWallpaper
-      ? {
-          id: "wallpaper",
-          label: "壁纸",
-          icon: ImageIcon,
-          available: props.wallpaperAvailable !== false,
-          active: focusedSurface?.kind === "wallpaper",
-          onClick: props.onAddWallpaper,
-        }
-      : null,
-  };
-
-  const orderedActivityActions = activityBarOrder
-    .map((id) => activityActionMap[id])
-    .filter((item): item is RightPanelActivityAction => item !== null);
+  });
 
   const addSurfaceActions = [
     {
-      label: msg("Browser"),
-      icon: Globe2,
-      shortcut: "B",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
-      onClick: props.onAddBrowser,
-    },
-    {
-      label: msg("手机模拟器"),
-      icon: TabletSmartphone,
-      shortcut: "I",
-      available: props.browserAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
-      onClick: handleOpenMobileSimulator,
-    },
-    {
-      label: msg("Terminal"),
-      icon: TerminalSquare,
-      shortcut: "T",
-      available: props.terminalAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.terminal),
-      onClick: props.onAddTerminal,
-    },
-    {
-      label: msg("Files"),
-      icon: Files,
-      shortcut: "F",
-      available: props.filesAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.files),
-      onClick: props.onAddFiles,
+      label: msg("PR"),
+      icon: PullRequestGlyph.pullRequest,
+      shortcut: "P",
+      available: props.pullRequestAvailable,
+      disabledReason: messages(SURFACE_DISABLED_REASONS.pullRequest),
+      onClick: props.onAddPullRequest,
     },
     {
       label: msg("Diff"),
@@ -1927,12 +2030,49 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddDiff,
     },
     {
-      label: msg("Pull request"),
-      icon: PullRequestGlyph.pullRequest,
-      shortcut: "P",
-      available: props.pullRequestAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.pullRequest),
-      onClick: props.onAddPullRequest,
+      label: msg("Files"),
+      icon: Files,
+      shortcut: "F",
+      available: props.filesAvailable,
+      disabledReason: messages(SURFACE_DISABLED_REASONS.files),
+      onClick: props.onAddFiles,
+    },
+    {
+      label: msg("Terminal"),
+      icon: TerminalSquare,
+      shortcut: "T",
+      available: props.terminalAvailable,
+      disabledReason: messages(SURFACE_DISABLED_REASONS.terminal),
+      onClick: props.onAddTerminal,
+    },
+    ...(props.onAddSideChat
+      ? [
+          {
+            label: msg("Side chat"),
+            icon: MessagesSquare,
+            shortcut: "S",
+            available: props.sideChatAvailable !== false,
+            disabledReason:
+              props.sideChatDisabledReason ?? messages(SURFACE_DISABLED_REASONS.sideChat),
+            onClick: props.onAddSideChat,
+          },
+        ]
+      : []),
+    {
+      label: msg("Browser"),
+      icon: Globe2,
+      shortcut: "B",
+      available: props.browserAvailable,
+      disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
+      onClick: props.onAddBrowser,
+    },
+    {
+      label: "手机模拟",
+      icon: TabletSmartphone,
+      shortcut: "I",
+      available: props.browserAvailable,
+      disabledReason: messages(SURFACE_DISABLED_REASONS.browser),
+      onClick: handleOpenMobileSimulator,
     },
     {
       label: msg("Linked items"),
@@ -1942,36 +2082,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: messages(SURFACE_DISABLED_REASONS.pullRequests),
       onClick: props.onAddPullRequests,
     },
-    {
-      label: msg("Device"),
-      icon: Smartphone,
-      shortcut: "M",
-      available: props.deviceAvailable,
-      disabledReason: messages(SURFACE_DISABLED_REASONS.device),
-      onClick: props.onAddDevice,
-    },
     ...(props.onAddWallpaper
       ? [
           {
-            label: msg("壁纸"),
+            label: "壁纸",
             icon: ImageIcon,
             shortcut: "W",
             available: props.wallpaperAvailable !== false,
             disabledReason: messages(SURFACE_DISABLED_REASONS.wallpaper),
             onClick: props.onAddWallpaper,
-          },
-        ]
-      : []),
-    ...(props.onAddSideChat
-      ? [
-          {
-            label: msg("Side chat"),
-            icon: MessagesSquare,
-            shortcut: "S",
-            available: props.sideChatAvailable === true && !props.sideChatDisabledReason,
-            disabledReason:
-              props.sideChatDisabledReason ?? messages(SURFACE_DISABLED_REASONS.sideChat),
-            onClick: props.onAddSideChat,
           },
         ]
       : []),

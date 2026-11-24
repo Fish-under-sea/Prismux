@@ -26,6 +26,7 @@ import {
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
   movedSettingsPath,
+  resolveLegacyMemorySyncRedirectTarget,
 } from "../components/settings/settingsSearch";
 
 function RestoreDeviceDefaultsButton({ onRestored }: { onRestored: () => void }) {
@@ -198,11 +199,44 @@ export const Route = createFileRoute("/_chat/settings")({
     if (location.pathname === "/settings") {
       throw redirect({ to: "/settings/general", replace: true });
     }
+    if (
+      location.pathname === "/settings/automations" ||
+      location.pathname === "/settings/automations/" ||
+      location.pathname === "/settings/scheduled-tasks" ||
+      location.pathname === "/settings/scheduled-tasks/"
+    ) {
+      const params = new URLSearchParams(location.searchStr);
+      const taskId = params.get("taskId")?.trim();
+      const environmentId = params.get("environmentId")?.trim();
+      throw redirect({
+        to: "/scheduled-tasks",
+        search: {
+          ...(taskId ? { taskId: taskId as never } : {}),
+          ...(environmentId ? { environmentId: environmentId as never } : {}),
+        },
+        replace: true,
+      });
+    }
     if (location.pathname === "/settings/updates") {
       throw redirect({
         to: "/settings/about",
         search: true,
         hash: location.hash ? location.hash.replace(/^#/, "") : "prismux-updates",
+        replace: true,
+      });
+    }
+    if (
+      location.pathname === "/settings/memory-sync" ||
+      location.pathname === "/settings/memory-sync/"
+    ) {
+      const target = resolveLegacyMemorySyncRedirectTarget({
+        hash: location.hash,
+        searchStr: location.searchStr,
+      });
+      throw redirect({
+        to: target.to,
+        search: true,
+        ...(target.hash ? { hash: target.hash } : {}),
         replace: true,
       });
     }

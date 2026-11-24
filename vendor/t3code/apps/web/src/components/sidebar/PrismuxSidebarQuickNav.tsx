@@ -1,38 +1,32 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { T, useGT } from "gt-react";
 import {
   ActivityIcon,
   CalendarClockIcon,
-  ChevronRightIcon,
   Columns3Icon,
   ListTodoIcon,
-  QrCodeIcon,
   SearchIcon,
   SmartphoneIcon,
-  TabletSmartphoneIcon,
 } from "lucide-react";
-import { memo, useEffect, useState } from "react";
+import { memo, useState } from "react";
 
 import { useAtomValue } from "@effect/atom-react";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
-import { rightPanelHostRef, useRightPanelStore } from "../../rightPanelStore";
+import { useLiveDiagnosticsBadgeTone } from "../../prismux/settings/useLiveDiagnosticsBadgeTone";
 import { primaryServerKeybindingsAtom } from "../../state/server";
+import { openPrismuxRemoteConnectDialog } from "../cloud/prismuxRemoteConnect.logic";
 import { Kbd } from "../ui/kbd";
-import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { useSidebar } from "../ui/sidebar";
-import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { usePrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
 import {
   dismissMobileSidebarOnboardingBadge,
   PRISMUX_SIDEBAR_QUICK_NAV_ROUTES,
   readMobileSidebarOnboardingDismissed,
-  resolveDiagnosticsBadgeTone,
   shouldShowMobileSidebarOnboardingBadge,
   type DiagnosticsBadgeTone,
 } from "./prismuxSidebarQuickNav.logic";
@@ -54,7 +48,6 @@ const DIAGNOSTICS_DOT_CLASS: Record<Exclude<DiagnosticsBadgeTone, null>, string>
  * with Spec 2 persistent 54px icon-rail collapse & two-stage text fade choreography.
  */
 export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
-  routeThreadRef,
   showSearch = true,
 }: PrismuxSidebarQuickNavProps) {
   const gt = useGT();
@@ -67,29 +60,10 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
   const daemon = prismuxRuntime?.daemon ?? null;
   const daemonReady = prismuxRuntime?.daemonInfo.ready ?? false;
 
-  const [mobilePopoverOpen, setMobilePopoverOpen] = useState(false);
   const [mobileBadgeDismissed, setMobileBadgeDismissed] = useState<boolean>(() =>
     readMobileSidebarOnboardingDismissed(),
   );
-  const [diagnosticsTone, setDiagnosticsTone] = useState<DiagnosticsBadgeTone>(null);
-
-  // Non-blocking lightweight poll on Daemon availability for live diagnostics dot.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads read-only daemon badge summary when daemon becomes ready
-  useEffect(() => {
-    if (!daemon || !daemonReady) return;
-    let cancelled = false;
-    void daemon
-      .fetchDiagnosticsServices(false)
-      .then((report) => {
-        if (!cancelled) setDiagnosticsTone(resolveDiagnosticsBadgeTone(report));
-      })
-      .catch(() => {
-        // Leave badge unset if Daemon diagnostics is unavailable.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [daemon, daemonReady]);
+  const diagnosticsTone = useLiveDiagnosticsBadgeTone(daemon, daemonReady, pathname);
 
   const closeMobileSidebar = () => {
     if (isMobile) setOpenMobile(false);
@@ -128,40 +102,16 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
 
   const handleOpenAutomations = () => {
     closeMobileSidebar();
-    void navigate({ to: "/settings/scheduled-tasks" });
+    void navigate({ to: "/scheduled-tasks" });
   };
 
-  const handleOpenMobileWebAccess = () => {
-    setMobilePopoverOpen(false);
-    closeMobileSidebar();
-    void navigate({ to: "/settings/access" });
-  };
-
-  const handleOpenPhoneSimulator = () => {
-    setMobilePopoverOpen(false);
-    closeMobileSidebar();
-    const rightPanel = useRightPanelStore.getState();
-    rightPanel.requestMobileSimulatorLaunch();
-    if (!routeThreadRef) {
-      toastManager.add({
-        type: "info",
-        title: gt("Open a thread to launch Phone Simulator"),
-        description: gt(
-          "Select or start any workspace thread, and the right panel will open directly in Phone Simulator mode.",
-        ),
-      });
-      return;
+  const handleOpenRemoteConnect = () => {
+    if (!mobileBadgeDismissed) {
+      dismissMobileSidebarOnboardingBadge();
+      setMobileBadgeDismissed(true);
     }
-    const hostRef = rightPanelHostRef(routeThreadRef);
-    const existingPreview = rightPanel.byThreadKey[scopedThreadKey(hostRef)]?.surfaces.find(
-      (surface) => surface.kind === "preview",
-    );
-    if (existingPreview) {
-      rightPanel.activateSurface(hostRef, existingPreview.id);
-      rightPanel.show(hostRef);
-      return;
-    }
-    rightPanel.openBrowser(hostRef, null);
+    closeMobileSidebar();
+    openPrismuxRemoteConnectDialog();
   };
 
   const labelFadeClass = cn(
@@ -209,65 +159,10 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     diagnosticsDotLabel ?? gt("Service diagnostics", { $context: "sidebar quick navigation" });
   const tasksRailTooltip = quickNavCopy.tasks;
   const workspaceBoardRailTooltip = quickNavCopy.workspaceBoard;
-  const automationsRailTooltip = gt("Automations", { $context: "sidebar quick navigation" });
+  const automationsRailTooltip = quickNavCopy.scheduledTasks;
   const mobileRailTooltip = showMobileNewBadge
     ? `${gt("Prismux Mobile", { $context: "sidebar quick navigation" })} · ${gt("New", { $context: "new feature badge" })}`
     : gt("Prismux Mobile", { $context: "sidebar quick navigation" });
-
-  const mobilePopoverBody = (
-    <PopoverPopup side="right" align="start" sideOffset={8} width="sm" padding="compact">
-      <div className="flex flex-col gap-2 py-1">
-        <div className="px-1">
-          <PopoverTitle className="text-[13px] font-semibold">
-            <T>Prismux Mobile</T>
-          </PopoverTitle>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            <T>Preview responsive apps locally or connect your phone over LAN / Tailscale.</T>
-          </p>
-        </div>
-        <div className="flex flex-col gap-1">
-          <button
-            type="button"
-            data-testid="prismux-mobile-open-simulator"
-            onClick={handleOpenPhoneSimulator}
-            className="flex w-full cursor-pointer items-center gap-2.5 rounded-md border border-border/60 bg-background/50 px-2.5 py-2 text-left transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/12 text-primary">
-              <TabletSmartphoneIcon aria-hidden className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs font-medium text-foreground">
-                <T>Built-in Phone Simulator</T>
-              </span>
-              <span className="block truncate text-[11px] text-muted-foreground">
-                <T>Open mobile frame in right panel</T>
-              </span>
-            </span>
-            <ChevronRightIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-          </button>
-          <button
-            type="button"
-            data-testid="prismux-mobile-open-lan-qr"
-            onClick={handleOpenMobileWebAccess}
-            className="flex w-full cursor-pointer items-center gap-2.5 rounded-md border border-border/60 bg-background/50 px-2.5 py-2 text-left transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
-              <QrCodeIcon aria-hidden className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs font-medium text-foreground">
-                <T>Mobile Web QR access</T>
-              </span>
-              <span className="block truncate text-[11px] text-muted-foreground">
-                <T>Configure LAN / Tailscale pairing</T>
-              </span>
-            </span>
-            <ChevronRightIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-          </button>
-        </div>
-      </div>
-    </PopoverPopup>
-  );
 
   if (!isMobile && isIconRail) {
     return (
@@ -394,52 +289,34 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </TooltipPopup>
         </Tooltip>
 
-        {/* 5. Prismux Mobile */}
-        <Popover
-          open={mobilePopoverOpen}
-          onOpenChange={(open) => {
-            setMobilePopoverOpen(open);
-            if (open && !mobileBadgeDismissed) {
-              dismissMobileSidebarOnboardingBadge();
-              setMobileBadgeDismissed(true);
-            }
-          }}
-        >
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <PopoverTrigger
-                  render={
-                    <button
-                      type="button"
-                      data-testid="prismux-nav-mobile"
-                      aria-label={mobileRailTooltip}
-                      aria-current={mobileAccessActive ? "page" : undefined}
-                      className={railButtonClassName(mobilePopoverOpen || mobileAccessActive)}
-                    />
-                  }
-                />
-              }
-            >
-              <SmartphoneIcon
-                aria-hidden
-                className={navIconClassName(mobilePopoverOpen || mobileAccessActive)}
+        {/* 5. Prismux Mobile (opens centered Remote Access & T3 Connect modal) */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-testid="prismux-nav-mobile"
+                aria-label={mobileRailTooltip}
+                aria-current={mobileAccessActive ? "page" : undefined}
+                onClick={handleOpenRemoteConnect}
+                className={railButtonClassName(mobileAccessActive)}
               />
-              {showMobileNewBadge ? (
-                <span
-                  aria-hidden
-                  data-testid="prismux-nav-mobile-new-dot"
-                  data-rail-dot="true"
-                  className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary ring-2 ring-sidebar"
-                />
-              ) : null}
-            </TooltipTrigger>
-            <TooltipPopup side="right" sideOffset={8}>
-              {mobileRailTooltip}
-            </TooltipPopup>
-          </Tooltip>
-          {mobilePopoverBody}
-        </Popover>
+            }
+          >
+            <SmartphoneIcon aria-hidden className={navIconClassName(mobileAccessActive)} />
+            {showMobileNewBadge ? (
+              <span
+                aria-hidden
+                data-testid="prismux-nav-mobile-new-dot"
+                data-rail-dot="true"
+                className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary ring-2 ring-sidebar"
+              />
+            ) : null}
+          </TooltipTrigger>
+          <TooltipPopup side="right" sideOffset={8}>
+            {mobileRailTooltip}
+          </TooltipPopup>
+        </Tooltip>
       </nav>
     );
   }
@@ -537,7 +414,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         </span>
       </button>
 
-      {/* 4. Automations (T3 Code scheduled tasks) */}
+      {/* 4. Scheduled Tasks (standalone main panel) */}
       <button
         type="button"
         data-testid="prismux-nav-automations"
@@ -547,52 +424,34 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
       >
         <CalendarClockIcon aria-hidden className={navIconClassName(automationsActive)} />
         <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
-          <T context="sidebar quick navigation">Automations</T>
+          {quickNavCopy.scheduledTasks}
         </span>
       </button>
 
-      {/* 5. Prismux Mobile + persistent dismissible [New] badge */}
-      <Popover
-        open={mobilePopoverOpen}
-        onOpenChange={(open) => {
-          setMobilePopoverOpen(open);
-          if (open && !mobileBadgeDismissed) {
-            dismissMobileSidebarOnboardingBadge();
-            setMobileBadgeDismissed(true);
-          }
-        }}
+      {/* 5. Prismux Mobile + persistent dismissible [New] badge (opens centered Remote Access & T3 Connect modal) */}
+      <button
+        type="button"
+        data-testid="prismux-nav-mobile"
+        aria-current={mobileAccessActive ? "page" : undefined}
+        onClick={handleOpenRemoteConnect}
+        className={navRowClassName(mobileAccessActive)}
       >
-        <PopoverTrigger
-          render={
-            <button
-              type="button"
-              data-testid="prismux-nav-mobile"
-              aria-current={mobileAccessActive ? "page" : undefined}
-              className={navRowClassName(mobilePopoverOpen || mobileAccessActive)}
-            />
-          }
-        >
-          <SmartphoneIcon
-            aria-hidden
-            className={navIconClassName(mobilePopoverOpen || mobileAccessActive)}
-          />
-          <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
-            <T context="sidebar quick navigation">Prismux Mobile</T>
+        <SmartphoneIcon aria-hidden className={navIconClassName(mobileAccessActive)} />
+        <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
+          <T context="sidebar quick navigation">Prismux Mobile</T>
+        </span>
+        {showMobileNewBadge ? (
+          <span
+            data-testid="prismux-nav-mobile-new-badge"
+            className={cn(
+              "shrink-0 rounded-full bg-primary px-1.5 py-px text-[10px] leading-tight font-semibold text-primary-foreground",
+              labelFadeClass,
+            )}
+          >
+            <T context="new feature badge">New</T>
           </span>
-          {showMobileNewBadge ? (
-            <span
-              data-testid="prismux-nav-mobile-new-badge"
-              className={cn(
-                "shrink-0 rounded-full bg-primary px-1.5 py-px text-[10px] leading-tight font-semibold text-primary-foreground",
-                labelFadeClass,
-              )}
-            >
-              <T context="new feature badge">New</T>
-            </span>
-          ) : null}
-        </PopoverTrigger>
-        {mobilePopoverBody}
-      </Popover>
+        ) : null}
+      </button>
     </nav>
   );
 });

@@ -752,6 +752,18 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
     expect(resourcesHtml).toContain("僵死");
     expect(resourcesHtml).toContain('data-pmx-glass-zone="overlays"');
     expect(resourcesHtml).toContain('data-pmx-status-popover="1"');
+    // Sort segmented control must render unmistakably highlighted active option & transparent muted unselected options across Light/Dark/Glass.
+    expect(resourcesHtml).toContain('data-testid="resources-sort-group"');
+    expect(resourcesHtml).toMatch(
+      /data-testid="resources-sort-memory"[^>]*aria-pressed="true"[^>]*data-active="true"[^>]*bg-primary[^>]*text-primary-foreground/,
+    );
+    expect(resourcesHtml).toMatch(
+      /data-testid="resources-sort-cpu"[^>]*aria-pressed="false"[^>]*data-active="false"[^>]*bg-transparent/,
+    );
+    expect(resourcesHtml).toMatch(
+      /data-testid="resources-sort-name"[^>]*aria-pressed="false"[^>]*data-active="false"[^>]*bg-transparent/,
+    );
+    expect(resourcesHtml).not.toMatch(/data-testid="resources-sort-memory"[^>]*bg-background\b/);
 
     // Verify sortProcessResources orders descending by memory / cpu / name keeping nulls last
     const normalizedRes = normalizeResourcesSummary({
@@ -1068,6 +1080,29 @@ describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
     expect(standaloneHtml).toContain("允许系统正常进入睡眠状态");
     expect(standaloneHtml).toContain("#42");
     expect(standaloneHtml).toContain('data-testid="keep-awake-option-agent"');
+    expect(standaloneHtml).toMatch(
+      /data-selected="true"[^>]*data-testid="keep-awake-option-agent"[^>]*border-amber-500\/45/,
+    );
+    expect(standaloneHtml).toMatch(
+      /data-selected="false"[^>]*data-testid="keep-awake-option-off"[^>]*border-transparent bg-transparent/,
+    );
+
+    const standbyState = deriveKeepAwakeState({
+      mode: "agent",
+      activeThreadCount: 0,
+      activeAgentProcessCount: 0,
+      desktopBridgeAvailable: true,
+      nativeActive: false,
+    });
+    const standbyHtml = renderToStaticMarkup(
+      createElement(KeepAwakeStatusPopover, {
+        state: standbyState,
+        onSelectMode: () => {},
+      }),
+    );
+    expect(standbyHtml).toMatch(
+      /data-selected="true"[^>]*data-testid="keep-awake-option-agent"[^>]*border-primary\/45/,
+    );
 
     const embeddedHtml = renderToStaticMarkup(
       createElement(KeepAwakeStatusPopover, {

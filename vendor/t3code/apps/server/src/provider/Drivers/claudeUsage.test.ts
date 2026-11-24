@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import { parseRateTable, priceUsage } from "../../usage/usagePricing.ts";
-import { claudeUsageFormat, parseClaudeLine } from "./claudeUsage.ts";
+import { claudeUsageFormat, initialClaudeScanState, parseClaudeLine } from "./claudeUsage.ts";
 
 function claudeLine(overrides: {
   messageId: string;
@@ -79,12 +79,12 @@ describe("parseClaudeLine", () => {
         },
       }),
     ];
-    expect(claudeUsageFormat.parseLine(JSON.stringify(projected), undefined)).toEqual(expected);
-    expect(claudeUsageFormat.parseProjected(projected, undefined)).toEqual(expected);
+    expect(claudeUsageFormat.parseLine(JSON.stringify(projected), initialClaudeScanState())).toEqual(expected);
+    expect(claudeUsageFormat.parseProjected(projected, initialClaudeScanState())).toEqual(expected);
 
     const synthetic = { ...projected, message: { ...projected.message, model: "<synthetic>" } };
-    expect(claudeUsageFormat.parseLine(JSON.stringify(synthetic), undefined)).toEqual([]);
-    expect(claudeUsageFormat.parseProjected(synthetic, undefined)).toEqual([]);
+    expect(claudeUsageFormat.parseLine(JSON.stringify(synthetic), initialClaudeScanState())).toEqual([]);
+    expect(claudeUsageFormat.parseProjected(synthetic, initialClaudeScanState())).toEqual([]);
   });
 });
 
@@ -135,7 +135,8 @@ describe("Claude advisor iterations", () => {
     ...advisorTurn,
     message: { ...advisorTurn.message, usage: { ...advisorTurn.message.usage, iterations } },
   });
-  const parse = (turn: unknown) => claudeUsageFormat.parseLine(JSON.stringify(turn), undefined);
+  const parse = (turn: unknown) =>
+    claudeUsageFormat.parseLine(JSON.stringify(turn), initialClaudeScanState());
 
   it("reports the advisor model's tokens as their own record beside the unchanged executor record", () => {
     const executor = {
@@ -172,7 +173,7 @@ describe("Claude advisor iterations", () => {
     ];
 
     expect(parse(advisorTurn)).toEqual(expected);
-    expect(claudeUsageFormat.parseProjected(advisorTurn, undefined)).toEqual(expected);
+    expect(claudeUsageFormat.parseProjected(advisorTurn, initialClaudeScanState())).toEqual(expected);
   });
 
   it("keys the advisor record apart from the executor and the same across a message's content blocks", () => {
@@ -198,11 +199,11 @@ describe("Claude advisor iterations", () => {
     );
 
     expect(parse(withIterations(executorIterations))).toHaveLength(1);
-    expect(claudeUsageFormat.parseProjected(withIterations([]), undefined)).toHaveLength(1);
+    expect(claudeUsageFormat.parseProjected(withIterations([]), initialClaudeScanState())).toHaveLength(1);
     expect(
       claudeUsageFormat.parseLine(
         claudeLine({ messageId: "msg_3", contentType: "text" }),
-        undefined,
+        initialClaudeScanState(),
       ),
     ).toHaveLength(1);
   });
@@ -258,5 +259,66 @@ describe("Claude cache write pricing", () => {
     if (record === undefined) throw new Error("expected a usage record");
     // 0.4M x $6.25/M + 0.6M x $10/M
     expect(priceUsage(rates, record).costUsd).toBeCloseTo(8.5, 9);
+  });
+
+  it("extracts real call duration from paired request timestamps and explicit timing fields without fabricating TTFT", () => {
+    const state = initialClaudeScanState();
+    expect(
+      parseClaudeLine(
+        JSON.stringify({
+          type: "api-request-shape",
+          timestamp: "2026-11-11T13:25:38.164Z",
+        }),
+        state,
+      ),
+    ).toEqual([]);
+    const [block1] = parseClaudeLine(
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-11-11T13:25:47.782Z",
+        sessionId: "sess-1",
+        message: {
+          id: "msg_pair",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 100, output_tokens: 163 },
+        },
+      }),
+      state,
+    );
+    const [block2] = parseClaudeLine(
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-11-11T13:25:47.796Z",
+        sessionId: "sess-1",
+        message: {
+          id: "msg_pair",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 100, output_tokens: 163 },
+        },
+      }),
+      state,
+    );
+    expect(block1?.durationMs).toBe(9618);
+    expect(block1?.ttftMs).toBeUndefined();
+    expect(block2?.durationMs).toBe(9632);
+
+    // Explicit timing fields override paired timestamp inference
+    const [explicit] = parseClaudeLine(
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-11-11T13:26:00.000Z",
+        ttft_ms: 420,
+        apiDurationMs: 2420,
+        sessionId: "sess-1",
+        message: {
+          id: "msg_explicit",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 100, output_tokens: 200 },
+        },
+      }),
+      state,
+    );
+    expect(explicit?.ttftMs).toBe(420);
+    expect(explicit?.durationMs).toBe(2420);
   });
 });

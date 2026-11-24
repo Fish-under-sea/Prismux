@@ -532,29 +532,29 @@ function PrismuxPrismWatermarkSvg({ size }: { readonly size: number }) {
     >
       <defs>
         <linearGradient id={gradId} x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="currentColor" stopOpacity="0.95" />
-          <stop offset="55%" stopColor="currentColor" stopOpacity="0.65" />
-          <stop offset="100%" stopColor="currentColor" stopOpacity="0.35" />
+          <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
+          <stop offset="55%" stopColor="currentColor" stopOpacity="0.88" />
+          <stop offset="100%" stopColor="currentColor" stopOpacity="0.72" />
         </linearGradient>
       </defs>
       <path
         d="M32 6L54 19V45L32 58L10 45V19L32 6Z"
         stroke={`url(#${gradId})`}
-        strokeWidth="2.4"
+        strokeWidth="2.5"
         strokeLinejoin="round"
       />
       <path
         d="M32 6V32M32 32L54 19M32 32L10 19M32 32V58"
         stroke={`url(#${gradId})`}
-        strokeWidth="1.8"
+        strokeWidth="1.9"
         strokeLinecap="round"
         strokeLinejoin="round"
-        opacity="0.72"
+        opacity="0.86"
       />
       <polygon
         points="32,16 44,23 32,30 20,23"
         fill="currentColor"
-        opacity="0.22"
+        opacity="0.26"
       />
     </svg>
   );
@@ -585,8 +585,8 @@ export function useWelcomeLanguage(localeOverride?: string | null | undefined): 
 
 /**
  * Open, wallpaper-friendly center-stage AGY 2.0 welcome hero:
- * - Dynamic translucent Agent watermark logo (`68px`, `opacity ~0.28`, subtle frosted aura; falls back to Prismux prism)
- * - Secret 5-tap watermark summoner (within 1.8s) forces the hidden easter egg with gentle spring motion
+ * - Dynamic full-saturation Agent brand logo (`68px`, `opacity-100`, crisp adaptive shadow; falls back to Prismux prism)
+ * - Secret 5-tap logo summoner (within 1.8s) forces the hidden easter egg with gentle spring motion
  * - 6 time-of-day bilingual greeting pools locked once per mount (zero flicker while typing)
  */
 export const AgyWelcomeGreeting = memo(function AgyWelcomeGreeting({
@@ -654,7 +654,7 @@ export const AgyWelcomeGreeting = memo(function AgyWelcomeGreeting({
         className,
       )}
     >
-      {/* Dynamic translucent Agent / Prismux watermark logo (stealth 5-tap easter egg summoner) */}
+      {/* Dynamic full-saturation Agent / Prismux brand logo (stealth 5-tap easter egg summoner) */}
       <button
         type="button"
         data-pmx-welcome-watermark="1"
@@ -663,10 +663,11 @@ export const AgyWelcomeGreeting = memo(function AgyWelcomeGreeting({
         aria-label={watermarkLabel}
         onClick={handleWatermarkClick}
         className={cn(
-          "pointer-events-auto relative mb-4 inline-flex size-[72px] cursor-default appearance-none items-center justify-center rounded-full border-0 bg-transparent p-0 text-foreground/90 opacity-[0.28] transition-[opacity,transform,filter] duration-200",
-          "hover:opacity-[0.38] active:scale-95 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40",
-          "drop-shadow-[0_4px_20px_rgba(255,255,255,0.14)] dark:drop-shadow-[0_6px_24px_rgba(0,0,0,0.45)]",
-          "[[data-pmx-glass='1']_&]:drop-shadow-[0_4px_22px_rgba(255,255,255,0.2)]",
+          "pointer-events-auto relative mb-4 inline-flex size-[72px] cursor-default appearance-none items-center justify-center rounded-full border-0 bg-transparent p-0 text-foreground opacity-100 transition-[transform,filter] duration-200",
+          "hover:scale-[1.03] active:scale-95 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40",
+          "drop-shadow-[0_4px_14px_rgba(15,23,42,0.16)] dark:drop-shadow-[0_6px_20px_rgba(0,0,0,0.52)]",
+          "[[data-pmx-glass='1']_&]:drop-shadow-[0_4px_18px_rgba(0,0,0,0.34)] [[data-pmx-wallpaper='1']_&]:drop-shadow-[0_4px_18px_rgba(0,0,0,0.36)]",
+          "[[data-pmx-theme='light'][data-pmx-glass='1']_&]:drop-shadow-[0_3px_14px_rgba(15,23,42,0.24)]",
         )}
       >
         <span

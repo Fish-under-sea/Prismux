@@ -261,7 +261,7 @@ export function BrowserDeviceToolbar({
               size="xs"
               type="button"
               data-testid="browser-phone-simulator-shortcut"
-              aria-label="手机模拟器快捷模式（iPhone 16 Pro）"
+              aria-label="手机模拟快捷模式（iPhone 16 Pro）"
               aria-pressed={isPhoneSimulatorActive}
               disabled={pending}
               onClick={activatePhoneSimulator}
@@ -270,7 +270,7 @@ export function BrowserDeviceToolbar({
           }
         >
           <SmartphoneIcon aria-hidden className="size-3 shrink-0" />
-          {width >= 420 ? <span>手机模拟器</span> : null}
+          {width >= 420 ? <span>手机模拟</span> : null}
         </TooltipTrigger>
         <TooltipPopup side="top">
           一键切换至 iPhone 16 Pro 真机模拟（含机身外壳与移动端触摸/UA 仿真）
@@ -299,7 +299,7 @@ export function BrowserDeviceToolbar({
         <SelectPopup align="start" alignItemWithTrigger={false}>
           <SelectItem value={RESPONSIVE_VALUE}>{m(SELECT_ITEMS[0]!.label)}</SelectItem>
           <SelectGroup>
-            <SelectGroupLabel>精选手机模拟器</SelectGroupLabel>
+            <SelectGroupLabel>精选手机模拟</SelectGroupLabel>
             {CURATED_MOBILE_VIEWPORT_PRESETS.map((preset) => (
               <SelectItem key={preset.id} value={preset.id}>
                 <span className="flex w-full items-center justify-between gap-4">

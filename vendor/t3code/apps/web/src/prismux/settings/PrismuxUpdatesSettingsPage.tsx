@@ -45,6 +45,7 @@ import {
   prismuxUpdateNotifierStore,
   useUpdateNotifierState,
 } from "../updates/updateNotifierStore";
+import { PrismuxReleaseNotesMarkdown } from "../updates/PrismuxReleaseNotesMarkdown";
 import {
   applyUpdaterSseEvent,
   describeUpdaterProgressStage,
@@ -747,9 +748,12 @@ export function PrismuxUpdatesSettingsPage({
             </div>
 
             {checkResult.releaseNotes ? (
-              <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border/70 bg-background/50 p-3 font-sans text-xs leading-relaxed text-muted-foreground">
-                {checkResult.releaseNotes}
-              </pre>
+              <div
+                data-testid="prismux-updates-settings-release-notes"
+                className="max-h-72 overflow-y-auto overscroll-contain rounded-xl border border-border/70 bg-background/50 px-4 py-3 dark:bg-white/[0.03]"
+              >
+                <PrismuxReleaseNotesMarkdown markdown={checkResult.releaseNotes} />
+              </div>
             ) : null}
 
             {checkResult.assets.length > 0 ? (

@@ -17,7 +17,7 @@ describe("PrismuxHostMetricsReporter", () => {
         pid: 1000,
         type: "Browser",
         creationTime: 1_700_000_000_000,
-        cpu: { percentCPUUsage: 6.4, idleWakeupsPerSecond: 0 },
+        cpu: { percentCPUUsage: 0.8, cumulativeCPUUsage: 4.5, idleWakeupsPerSecond: 0 },
         memory: { workingSetSize: 150_000, peakWorkingSetSize: 180_000, privateBytes: 110_000 },
       },
       {
@@ -25,14 +25,14 @@ describe("PrismuxHostMetricsReporter", () => {
         type: "Tab",
         name: "Workbench",
         creationTime: 1_700_000_001_000,
-        cpu: { percentCPUUsage: 18.2, idleWakeupsPerSecond: 0 },
+        cpu: { percentCPUUsage: 4.2, cumulativeCPUUsage: 12.8, idleWakeupsPerSecond: 0 },
         memory: { workingSetSize: 240_000, peakWorkingSetSize: 280_000, privateBytes: 190_000 },
       },
       {
         pid: 1002,
         type: "GPU",
         creationTime: 1_700_000_001_500,
-        cpu: { percentCPUUsage: 9.6, idleWakeupsPerSecond: 0 },
+        cpu: { percentCPUUsage: 3.1, cumulativeCPUUsage: 9.2, idleWakeupsPerSecond: 0 },
         memory: { workingSetSize: 120_000, peakWorkingSetSize: 140_000, privateBytes: 95_000 },
       },
     ] as unknown as ReadonlyArray<Electron.ProcessMetric>;
@@ -40,7 +40,7 @@ describe("PrismuxHostMetricsReporter", () => {
     const payload = buildHostMetricsPayload({
       metrics,
       mainPid: 1000,
-      cpuCores: 16,
+      cpuCores: 32,
       collectedAt: 1_700_000_010_000,
       t3BackendSnapshot: {
         desiredRunning: true,
@@ -53,12 +53,15 @@ describe("PrismuxHostMetricsReporter", () => {
     });
 
     assert.equal(payload.mainPid, 1000);
-    assert.equal(payload.cpuCores, 16);
-    assert.equal(payload.cpuScale, "single-core");
+    assert.equal(payload.cpuCores, 32);
+    // Electron app.getAppMetrics().cpu.percentCPUUsage is already divided by NumberOfProcessors (system-total 0-100%).
+    assert.equal(payload.cpuScale, "system-total");
     assert.equal(payload.electronProcesses.length, 3);
     assert.equal(payload.electronProcesses[0]?.workingSetBytes, 150_000 * 1024);
     assert.equal(payload.electronProcesses[0]?.privateMemoryBytes, 110_000 * 1024);
-    assert.equal(payload.electronProcesses[1]?.cpuPercent, 18.2);
+    assert.equal(payload.electronProcesses[0]?.cumulativeCpuSeconds, 4.5);
+    assert.equal(payload.electronProcesses[1]?.cpuPercent, 4.2);
+    assert.equal(payload.electronProcesses[1]?.cumulativeCpuSeconds, 12.8);
     assert.deepEqual(payload.t3Server, {
       pid: 2000,
       ready: true,

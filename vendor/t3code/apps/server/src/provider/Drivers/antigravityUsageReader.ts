@@ -78,6 +78,50 @@ const timestamp = (value: Fields) => {
   return seconds > 0 ? seconds * 1000 + Math.floor(numberAt(value, 2) / 1_000_000) : null;
 };
 
+const MAX_CALL_DURATION_MS = 60 * 60 * 1000;
+/** Antigravity `steps.step_type` for the planner LLM response step directly paired with `gen_metadata`. */
+const PLANNER_RESPONSE_STEP_TYPE = 15;
+
+const safeNested = (value: Fields, key: number): Fields | null => {
+  const bytes = bytesAt(value, key);
+  if (bytes === undefined || bytes.length === 0) return null;
+  try {
+    return fields(bytes);
+  } catch {
+    return null;
+  }
+};
+
+/** Decode a `google.protobuf.Duration` (`{ 1: seconds, 2: nanos }`) into milliseconds. */
+const protobufDurationMs = (value: Fields | null): number | null => {
+  if (value === null || value.size === 0) return null;
+  for (const key of value.keys()) {
+    if (key !== 1 && key !== 2) return null;
+  }
+  const rawSeconds = value.get(1)?.[0];
+  const rawNanos = value.get(2)?.[0];
+  if (
+    (rawSeconds !== undefined && typeof rawSeconds !== "number") ||
+    (rawNanos !== undefined && typeof rawNanos !== "number")
+  ) {
+    return null;
+  }
+  const seconds = typeof rawSeconds === "number" ? rawSeconds : 0;
+  const nanos = typeof rawNanos === "number" ? rawNanos : 0;
+  if (
+    !Number.isFinite(seconds) ||
+    !Number.isFinite(nanos) ||
+    seconds < 0 ||
+    seconds >= 86_400 ||
+    nanos < 0 ||
+    nanos >= 1_000_000_000
+  ) {
+    return null;
+  }
+  const totalMs = Math.round(seconds * 1000 + nanos / 1_000_000);
+  return totalMs >= 0 && totalMs <= MAX_CALL_DURATION_MS ? totalMs : null;
+};
+
 // Offline fallback for records without names. New names are learned from the scanned metadata.
 // Cross-checked against ccusage's Antigravity parser and mrexodia/agent-cost-dashboard.
 const MODEL_IDS: Record<number, string> = {
@@ -185,10 +229,17 @@ interface Metadata {
   model: string;
   modelId: number;
   timestampMs: number | null;
+  ttftMs: number | null;
+  durationMs: number | null;
+  hasPrimaryUsage: boolean;
+  /** For `steps` rows, the linked `gen_metadata.idx` encoded in `metadata.f20.f3`. */
+  genIdx: number | null;
+  /** For `steps` rows, `steps.step_type` when the column exists. */
+  stepType: number | null;
   usages: Fields[];
 }
 
-function metadata(bytes: Uint8Array, step: boolean): Metadata {
+function metadata(bytes: Uint8Array, step: boolean, stepType: number | null = null): Metadata {
   const root = fields(bytes);
   if (!step && bytesAt(root, 1) === undefined) {
     throw new Error("Missing Antigravity generation metadata");
@@ -205,14 +256,69 @@ function metadata(bytes: Uint8Array, step: boolean): Metadata {
     if (retryUsage !== undefined) usages.push(fields(retryUsage.slice()));
   }
   const names = [textAt(model, step ? 12 : 19), textAt(model, step ? 8 : 21)].map(modelName);
+  let timestampMs: number | null;
+  let ttftMs: number | null = null;
+  let durationMs: number | null = null;
+  let genIdx: number | null = null;
+
+  if (step) {
+    const startedAtMs = timestamp(nested(data, 1));
+    const firstTokenAtMs = timestamp(nested(data, 6));
+    const streamEndAtMs = timestamp(nested(data, 7));
+    const completedAtMs = timestamp(nested(data, 8));
+    timestampMs = completedAtMs ?? streamEndAtMs ?? firstTokenAtMs ?? startedAtMs;
+    if (
+      startedAtMs !== null &&
+      firstTokenAtMs !== null &&
+      firstTokenAtMs >= startedAtMs &&
+      firstTokenAtMs - startedAtMs <= MAX_CALL_DURATION_MS
+    ) {
+      ttftMs = firstTokenAtMs - startedAtMs;
+    }
+    const endForDuration = streamEndAtMs ?? completedAtMs;
+    if (
+      startedAtMs !== null &&
+      endForDuration !== null &&
+      endForDuration > startedAtMs &&
+      endForDuration - startedAtMs <= MAX_CALL_DURATION_MS
+    ) {
+      durationMs = endForDuration - startedAtMs;
+    }
+    const stepRef = safeNested(data, 20);
+    if (stepRef !== null && stepRef.has(3)) {
+      const linkedIdx = stepRef.get(3)?.[0];
+      if (typeof linkedIdx === "number" && Number.isSafeInteger(linkedIdx) && linkedIdx >= 0) {
+        genIdx = linkedIdx;
+      }
+    }
+  } else {
+    timestampMs = timestamp(nested(nested(data, 9), 4));
+    // Antigravity `gen_metadata.data -> f1` stores `google.protobuf.Duration` TTFT at field 11
+    // and post-TTFT streaming/decode duration at field 12.
+    const rawTtftMs = protobufDurationMs(safeNested(data, 11));
+    const rawDecodeMs = protobufDurationMs(safeNested(data, 12));
+    ttftMs = rawTtftMs;
+    if (rawTtftMs !== null && rawDecodeMs !== null) {
+      const total = rawTtftMs + rawDecodeMs;
+      durationMs = total > 0 && total <= MAX_CALL_DURATION_MS ? total : null;
+    } else if (rawDecodeMs !== null && rawDecodeMs > 0) {
+      durationMs = rawDecodeMs;
+    } else if (rawTtftMs !== null && rawTtftMs > 0) {
+      durationMs = rawTtftMs;
+    }
+  }
+
   return {
     model:
       names.find(isConcreteModel) ?? names.find((name) => name && !/^model[_-]/.test(name)) ?? "",
     modelId:
       numberAt(model, step ? 1 : 3) || (primaryUsage === undefined ? 0 : numberAt(primaryUsage, 1)),
-    timestampMs: step
-      ? (timestamp(nested(data, 8)) ?? timestamp(nested(data, 1)))
-      : timestamp(nested(nested(data, 9), 4)),
+    timestampMs,
+    ttftMs,
+    durationMs,
+    hasPrimaryUsage: primaryUsage !== undefined,
+    genIdx,
+    stepType,
     usages,
   };
 }
@@ -228,6 +334,8 @@ interface UsageCandidate {
   modelQuality: number;
   keys: readonly string[];
   timestampQuality: number;
+  /** 2 = direct gen_metadata duration fields (f11/f12), 1 = step timestamps, 0 = none. */
+  timingQuality: number;
 }
 
 class AntigravityDatabaseDecodeError extends Schema.TaggedError<AntigravityDatabaseDecodeError>()(
@@ -276,6 +384,7 @@ const readDatabase = Effect.fn("readDatabase")(function* (
           .unsafe<{
             readonly row_id: number;
             readonly idx: unknown;
+            readonly step_type?: unknown;
             readonly data: unknown;
           }>(query, [after, pageRows])
           .pipe(Effect.withTracerEnabled(false));
@@ -286,7 +395,11 @@ const readDatabase = Effect.fn("readDatabase")(function* (
           if (typeof idx !== "number") {
             return yield* new AntigravityDatabaseDecodeError({ path });
           }
-          entries.push({ idx, entry: yield* decode(() => metadata(blob(row.data), step)) });
+          const stepType = typeof row.step_type === "number" ? row.step_type : null;
+          entries.push({
+            idx,
+            entry: yield* decode(() => metadata(blob(row.data), step, stepType)),
+          });
         }
         if (rows.length < pageRows) break;
         after = rows[rows.length - 1]!.row_id;
@@ -311,9 +424,18 @@ const readDatabase = Effect.fn("readDatabase")(function* (
         );
       }
     }
+    let stepHasTypeColumn = false;
+    if (tables.has("steps")) {
+      const stepColumns = yield* sql.unsafe<{ readonly name: unknown }>(
+        "PRAGMA table_info(steps)",
+      );
+      stepHasTypeColumn = stepColumns.some((column) => column.name === "step_type");
+    }
     const steps = tables.has("steps")
       ? yield* readMetadata(
-          "SELECT rowid AS row_id, idx, metadata AS data FROM steps WHERE rowid > ? ORDER BY rowid LIMIT ?",
+          stepHasTypeColumn
+            ? "SELECT rowid AS row_id, idx, step_type, metadata AS data FROM steps WHERE rowid > ? ORDER BY rowid LIMIT ?"
+            : "SELECT rowid AS row_id, idx, NULL AS step_type, metadata AS data FROM steps WHERE rowid > ? ORDER BY rowid LIMIT ?",
           STEP_PAGE_ROWS,
           true,
         )
@@ -347,11 +469,31 @@ function usageCandidates(
 ): UsageCandidate[] {
   const records: UsageCandidate[] = [];
   const generationModels = new Map(generations.map(({ idx, entry }) => [idx, entry]));
+  // Link each `gen_metadata.idx` to its corresponding planner response step (`step_type = 15`),
+  // falling back to the earliest step referencing `genIdx`, so generations without `f9.f4`
+  // receive their exact per-call timestamp (and step timing fallback if `f11`/`f12` are absent).
+  const linkedStepByGenIdx = new Map<number, Metadata>();
+  for (const { entry } of steps) {
+    if (entry.genIdx === null) continue;
+    const existing = linkedStepByGenIdx.get(entry.genIdx);
+    const isPlanner = entry.stepType === PLANNER_RESPONSE_STEP_TYPE;
+    const existingIsPlanner = existing?.stepType === PLANNER_RESPONSE_STEP_TYPE;
+    if (
+      existing === undefined ||
+      (!existingIsPlanner && isPlanner) ||
+      (existingIsPlanner === isPlanner &&
+        entry.timestampMs !== null &&
+        (existing.timestampMs === null || entry.timestampMs < existing.timestampMs))
+    ) {
+      linkedStepByGenIdx.set(entry.genIdx, entry);
+    }
+  }
   for (const [source, entries] of [
     ["step", steps],
     ["generation", generations],
   ] as const) {
     for (const [index, { idx, entry }] of entries.entries()) {
+      const linkedStep = source === "generation" ? linkedStepByGenIdx.get(idx) : undefined;
       for (const [usageIndex, usage] of entry.usages.entries()) {
         const modelId = numberAt(usage, 1) || entry.modelId;
         const generation = source === "step" ? generationModels.get(idx) : undefined;
@@ -383,22 +525,56 @@ function usageCandidates(
           const id = textAt(usage, key);
           return id ? [`antigravity:${key}:${id}`] : [];
         });
+        const isPrimary = usageIndex === 0 && entry.hasPrimaryUsage;
+        const resolvedTimestampMs =
+          entry.timestampMs ?? linkedStep?.timestampMs ?? trajectoryTimestamp ?? fallbackTimestamp;
+        const timestampQuality =
+          entry.timestampMs !== null || typeof linkedStep?.timestampMs === "number"
+            ? 2
+            : trajectoryTimestamp !== null
+              ? 1
+              : 0;
+        let resolvedTtftMs: number | null = null;
+        let resolvedDurationMs: number | null = null;
+        let timingQuality = 0;
+        if (isPrimary) {
+          if (source === "generation") {
+            const hasDirectGenTiming = entry.ttftMs !== null || entry.durationMs !== null;
+            resolvedTtftMs = entry.ttftMs ?? linkedStep?.ttftMs ?? null;
+            resolvedDurationMs = entry.durationMs ?? linkedStep?.durationMs ?? null;
+            if (hasDirectGenTiming) timingQuality = 2;
+            else if (resolvedTtftMs !== null || resolvedDurationMs !== null) timingQuality = 1;
+          } else {
+            const hasDirectGenTiming =
+              generation !== undefined &&
+              (generation.ttftMs !== null || generation.durationMs !== null);
+            resolvedTtftMs = generation?.ttftMs ?? entry.ttftMs ?? null;
+            resolvedDurationMs = generation?.durationMs ?? entry.durationMs ?? null;
+            if (hasDirectGenTiming) timingQuality = 2;
+            else if (resolvedTtftMs !== null || resolvedDurationMs !== null) timingQuality = 1;
+          }
+        }
         const record: UsageRecord = {
           provider: "antigravity",
           sessionId,
-          timestampMs: entry.timestampMs ?? trajectoryTimestamp ?? fallbackTimestamp,
+          timestampMs: resolvedTimestampMs,
           model,
           totals,
           reportedCostUsd: null,
           speed: "standard",
           dedupeKey: keys[0] ?? `antigravity:${sessionId}:${source}:${index}:${usageIndex}`,
+          ...(resolvedTtftMs !== null ? { ttftMs: resolvedTtftMs } : {}),
+          ...(resolvedDurationMs !== null && resolvedDurationMs > 0
+            ? { durationMs: resolvedDurationMs }
+            : {}),
         };
         records.push({
           record,
           modelId,
           modelQuality: isConcreteModel(model) ? 4 : model ? 1 : 0,
           keys,
-          timestampQuality: entry.timestampMs !== null ? 2 : trajectoryTimestamp !== null ? 1 : 0,
+          timestampQuality,
+          timingQuality,
         });
       }
     }
@@ -463,12 +639,23 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
         source.record.timestampMs < target.record.timestampMs)
         ? source
         : target;
+    const bestTiming =
+      source.timingQuality === target.timingQuality
+        ? first
+        : source.timingQuality > target.timingQuality
+          ? source
+          : target;
+    const fallbackTiming = bestTiming === source ? target : source;
+    const mergedTtftMs = bestTiming.record.ttftMs ?? fallbackTiming.record.ttftMs;
+    const mergedDurationMs = bestTiming.record.durationMs ?? fallbackTiming.record.durationMs;
     const x = target.record.totals;
     const y = source.record.totals;
     target.record = {
       ...first.record,
       model: bestModel.record.model,
       timestampMs: bestTime.record.timestampMs,
+      ...(mergedTtftMs !== undefined ? { ttftMs: mergedTtftMs } : {}),
+      ...(mergedDurationMs !== undefined ? { durationMs: mergedDurationMs } : {}),
       totals: {
         uncachedInputTokens: Math.max(x.uncachedInputTokens, y.uncachedInputTokens),
         cachedInputTokens: Math.max(x.cachedInputTokens, y.cachedInputTokens),
@@ -478,6 +665,7 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
       },
     };
     target.timestampQuality = bestTime.timestampQuality;
+    target.timingQuality = Math.max(target.timingQuality, source.timingQuality);
     target.modelQuality = bestModel.modelQuality;
     target.owner = first.owner;
     target.fileIndex = first.fileIndex;

@@ -365,4 +365,41 @@ describe("AgyWelcomeHero — 6 time bands, bilingual pools, easter egg, dynamic 
       expect(enSuggestionsHtml).toContain(item.label);
     }
   });
+
+  it("renders the welcome hero center Agent logo at full brand saturation without faded watermark opacity", () => {
+    const claudeHtml = renderToStaticMarkup(
+      <AgyWelcomeGreeting
+        userName="Fish"
+        provider="claudeAgent"
+        locale="zh"
+        initialDate={new Date(2026, 5, 1, 10, 0)}
+        rng={() => 0.5}
+      />,
+    );
+    const buttonMatch = claudeHtml.match(/<button[^>]*data-pmx-welcome-watermark="1"[^>]*>/);
+    expect(buttonMatch).not.toBeNull();
+    const buttonTag = buttonMatch![0];
+    expect(buttonTag).toContain("opacity-100");
+    expect(buttonTag).toContain("text-foreground");
+    expect(buttonTag).not.toMatch(/opacity-\[?0?\.?(?:2\d|3\d)/);
+    expect(buttonTag).toContain('data-pmx-welcome-watermark-trigger="1"');
+    expect(claudeHtml).toContain('fill="#d97757"');
+
+    const antigravityHtml = renderToStaticMarkup(
+      <AgyWelcomeGreeting
+        userName="Fish"
+        provider="antigravity"
+        locale="zh"
+        initialDate={new Date(2026, 5, 1, 10, 0)}
+        rng={() => 0.5}
+      />,
+    );
+    expect(antigravityHtml).toContain('data-pmx-welcome-watermark-brand="antigravity"');
+    expect(antigravityHtml).toContain("#4285F4");
+    expect(antigravityHtml).toContain("#EA4335");
+    expect(antigravityHtml).toContain("#FBBC04");
+    expect(antigravityHtml).toContain("#34A853");
+    expect(antigravityHtml).not.toContain("#6366f1");
+    expect(antigravityHtml).not.toContain("opacity-[0.28]");
+  });
 });

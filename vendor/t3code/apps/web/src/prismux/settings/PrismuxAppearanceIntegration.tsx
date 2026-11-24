@@ -50,7 +50,7 @@ export function PrismuxAppearanceIntegration() {
   };
 
   const wallpaperSlot = (
-    <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-background/60 px-3 py-2 text-xs">
+    <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/45 px-3 py-2 text-xs">
       <div className="flex min-w-0 items-center gap-2">
         <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate text-foreground">
@@ -82,10 +82,11 @@ export function PrismuxAppearanceIntegration() {
         }
       >
         <p className="px-4 pt-3 text-xs leading-relaxed text-muted-foreground">
-          统一管理光学天体三态胶囊、360° Fresnel 液态玻璃与 5 大工作台分区独立调节（窗口外框
-          ［含左侧边栏、顶栏、底栏与右细边］/ 右侧功能边栏 / 主内容画布 / 输入框与卡片 /
-          弹窗与设置）、全局 UI 配色、本机系统字体与主题快照，与右侧壁纸边栏实时双向同步。纯宿主视觉层，对模型
-          0 Token 开销。
+          统一管理光学天体三态胶囊、360° Fresnel 液态玻璃与 6 大工作台分区独立调节（窗口外框
+          ［含左侧边栏、顶栏、底栏与右细边］/ 右侧功能边栏 / 主内容画布 / 工作面板
+          ［任务面板、工作区板与定时任务］/ 输入框与卡片 / 弹窗与设置）、全局 UI
+          配色、本机系统字体与主题快照，与右侧壁纸边栏实时双向同步。纯宿主视觉层，对模型 0 Token
+          开销。
         </p>
         <div className="p-3 sm:p-4">
           <AppearanceHeroAndCards

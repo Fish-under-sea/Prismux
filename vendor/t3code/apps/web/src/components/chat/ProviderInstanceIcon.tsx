@@ -40,7 +40,7 @@ const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
 const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
   [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
-  [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
+  [ProviderDriverKind.make("antigravity")]: "text-[#4285F4]",
   [ProviderDriverKind.make("openai")]: "text-black dark:text-white",
   [ProviderDriverKind.make("anthropic")]: "text-black dark:text-white",
   [ProviderDriverKind.make("openrouter")]: "text-black dark:text-white",
@@ -49,7 +49,7 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
 
 const BUNDLED_LOGO_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("claudeAgent")]: "#d97757",
-  [ProviderDriverKind.make("antigravity")]: "#5b87bf",
+  [ProviderDriverKind.make("antigravity")]: "#4285F4",
 };
 
 /** The logo's own color, or null for logos that swap between black and white per theme. */
@@ -113,6 +113,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   const badgeContent = props.badgeContent ?? "initials";
   const iconClassName = cn(props.size === "compact" && "size-3.5", props.iconClassName);
   const isAcpRegistry = props.driverKind === "acpRegistry";
+  const isAntigravityAcpRegistry =
+    isAcpRegistry && props.acpRegistryAgentId?.trim().toLowerCase() === "antigravity-acp";
   // A custom OpenAI-compatible endpoint has no brand: show its name, marked with the protocol.
   const isCustomEndpoint = props.driverKind === "openaiCompatible";
   const acpRegistryIconUrl = resolveProviderInstanceAcpRegistryIconUrl({
@@ -130,7 +132,9 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       style={accentStyle}
       data-provider-accent-color={accentColor}
     >
-      {isAcpRegistry ? (
+      {isAntigravityAcpRegistry ? (
+        <AntigravityIcon className={cn("size-5 shrink-0", iconClassName)} aria-hidden />
+      ) : isAcpRegistry ? (
         <AcpRegistryAgentIcon
           className={cn("size-5 rounded-none bg-transparent", iconClassName)}
           fallbackClassName="size-full"

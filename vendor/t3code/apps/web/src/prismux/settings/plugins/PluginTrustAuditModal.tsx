@@ -20,6 +20,7 @@ import type { TrustAuditAssessment } from "./pluginCenterModel";
 export interface PluginTrustAuditModalProps {
   readonly audit: TrustAuditAssessment | null;
   readonly busy?: boolean;
+  readonly error?: string | null;
   readonly onConfirm: () => void | Promise<void>;
   readonly onCancel: () => void;
 }
@@ -43,6 +44,7 @@ const PERMISSION_CATEGORY_LABELS: Readonly<Record<string, string>> = {
 export function PluginTrustAuditModal({
   audit,
   busy = false,
+  error = null,
   onConfirm,
   onCancel,
 }: PluginTrustAuditModalProps) {
@@ -151,7 +153,11 @@ export function PluginTrustAuditModal({
               <span className="text-sm font-semibold text-foreground">{audit.targetLabel}</span>
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge variant={audit.source === "official" ? "success" : "info"}>
-                  {audit.source === "official" ? "官方认证目录" : "社区 npm 源"}
+                  {audit.source === "official"
+                    ? "官方认证目录"
+                    : audit.source === "local"
+                      ? "本地 .wb-plugin 归档"
+                      : "社区 npm 源"}
                 </Badge>
                 <Badge variant="outline">distribution: {audit.distribution}</Badge>
               </div>
@@ -257,6 +263,18 @@ export function PluginTrustAuditModal({
               安装过程强制禁用 preinstall / install / postinstall 生命周期脚本、不调用本机 git，凭据独立写入 0600 加密仓。
             </span>
           </div>
+
+          {/* Inline Error Feedback (never hidden behind backdrop) */}
+          {error ? (
+            <div
+              role="alert"
+              data-testid="plugin-trust-audit-error"
+              className="flex items-start gap-2 rounded-xl border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-xs text-destructive"
+            >
+              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+              <span className="min-w-0 flex-1 break-all leading-relaxed">{error}</span>
+            </div>
+          ) : null}
 
           {/* Explicit Consent Checkbox */}
           <label

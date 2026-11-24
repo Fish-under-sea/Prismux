@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { filterAndSortCallLogs } from "./UsageCallLogsSection";
+import { filterAndSortCallLogs, formatCallTimestamp } from "./UsageCallLogsSection";
+import { deriveSessionTelemetryFromProjection } from "../chat/useSessionCallTelemetry";
 import {
   MAX_USAGE_CALL_LOGS,
   clearSessionLiveTelemetry,
@@ -15,6 +16,7 @@ import {
   getRecordedUsageCallLogs,
   getSessionLiveTelemetry,
   mergeUsageCallLogs,
+  normalizeBackendUsageCallLog,
   recordModelCallTelemetry,
   updateSessionLiveTelemetry,
 } from "./usageCallTelemetryStore";
@@ -175,5 +177,52 @@ describe("usageCallTelemetryStore", () => {
       sortDirection: "desc",
     });
     expect(sortedByTpsDesc.map((entry) => entry.id)).toEqual(["backend-hist-2", "no-timing"]);
+  });
+
+  it("formats call timestamps with exact HH:mm:ss instead of truncating to :00 hourly buckets", () => {
+    const instant = Date.parse("2026-11-23T22:21:27.747Z"); // 2026-11-24 06:21:27 Asia/Shanghai
+    const zh = formatCallTimestamp(instant, "Asia/Shanghai", false, "zh-CN");
+    expect(zh).toContain("06:21:27");
+    expect(zh).not.toContain("06:00");
+
+    const en = formatCallTimestamp(instant, "UTC", false, "en-US");
+    expect(en).toContain("22:21:27");
+  });
+
+  it("normalizes snake_case backend timing aliases, guards micro-burst TPS spikes, and counts reasoning deltas for TTFT", () => {
+    const normalized = normalizeBackendUsageCallLog({
+      id: "ag-1",
+      timestamp: "2026-11-23T22:21:27.747Z",
+      provider: "antigravity",
+      model: "gemini-4-neon",
+      ttft_ms: 4857,
+      duration_ms: 14199,
+      inputTokens: 3162,
+      cachedInputTokens: 167712,
+      outputTokens: 1356,
+    });
+    expect(normalized.ttftMs).toBe(4857);
+    expect(normalized.durationMs).toBe(14199);
+    expect(normalized.tps).toBeCloseTo(1356 / (9342 / 1000), 2);
+
+    // Buffered micro-burst falls back to total wall time instead of spiking to 73,000 tok/s
+    expect(computeOutputTps(73, 26_125, 26_124)).toBeCloseTo(73 / 26.125, 2);
+    expect(computeOutputTps(50, 5, null)).toBeNull();
+
+    // Streaming reasoning item increments assistantCharCount so thinking-first models stamp TTFT
+    const derived = deriveSessionTelemetryFromProjection({
+      serverProjection: {
+        providerTurns: [],
+        messages: [],
+        turnItems: [
+          {
+            type: "reasoning",
+            text: "analyzing call log pipeline...",
+          } as unknown as never,
+        ],
+      },
+      activeContextWindow: null,
+    });
+    expect(derived.assistantCharCount).toBe("analyzing call log pipeline...".length);
   });
 });

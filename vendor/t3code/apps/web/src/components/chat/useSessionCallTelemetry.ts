@@ -1,16 +1,23 @@
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/models";
-import type { OrchestrationV2ProviderTurn } from "@t3tools/contracts";
+import type { OrchestrationV2ProviderTurn, ServerProvider } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { useEffect, useRef } from "react";
 
 import {
   computeCacheHitRate,
   computeOutputTps,
+  getRecordedUsageCallLogs,
   recordModelCallTelemetry,
   updateSessionLiveTelemetry,
   type UsageCallStatus,
 } from "../usage/usageCallTelemetryStore";
+import {
+  deriveSessionTelemetryDetail,
+  extractTurnUsageDetail,
+  publishSessionTelemetryDetail,
+  type SessionProjectionLike,
+} from "./sessionTelemetry.logic";
 
 const MIN_STREAMING_TPS_ELAPSED_MS = 200;
 
@@ -156,12 +163,56 @@ export function deriveContextOccupancyPercent(
   return (used / max) * 100;
 }
 
+function countStreamingOutputChars(
+  serverProjection: Pick<ThreadStructure, "messages"> &
+    Partial<Pick<ThreadStructure, "turnItems" | "visibleTurnItems">> | null,
+): number {
+  if (!serverProjection) return 0;
+  let total = 0;
+  for (const message of serverProjection.messages ?? []) {
+    if (message.role === "assistant" && typeof message.text === "string") {
+      total += message.text.length;
+    }
+  }
+  // Also count streaming assistant_message & reasoning turn items so thinking-first models
+  // (Antigravity / Claude / Codex) stamp `firstTokenAt` on the very first reasoning or text delta.
+  const items =
+    serverProjection.turnItems && serverProjection.turnItems.length > 0
+      ? serverProjection.turnItems
+      : (serverProjection.visibleTurnItems ?? []);
+  for (const item of items) {
+    const raw = item as unknown as Record<string, unknown>;
+    if (raw.type !== "assistant_message" && raw.type !== "reasoning") continue;
+    if (typeof raw.text === "string") total += raw.text.length;
+    if (typeof raw.summary === "string") total += raw.summary.length;
+    if (typeof raw.content === "string") total += raw.content.length;
+    if (Array.isArray(raw.content)) {
+      for (const part of raw.content) {
+        if (typeof part === "string") total += part.length;
+        else if (part && typeof part === "object") {
+          const text = (part as Record<string, unknown>).text;
+          if (typeof text === "string") total += text.length;
+        }
+      }
+    }
+  }
+  return total;
+}
+
+function readExplicitTurnDurationMs(turn: OrchestrationV2ProviderTurn): number | null {
+  const raw = (turn as unknown as { readonly durationMs?: unknown }).durationMs;
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
 /**
  * Pure derivation of real session telemetry from `serverProjection` and `activeContextWindow`.
  * Never fabricates TTFT or TPS when underlying timestamps or output token counts are absent.
  */
 export function deriveSessionTelemetryFromProjection(input: {
-  readonly serverProjection: Pick<ThreadStructure, "providerTurns" | "messages"> | null;
+  readonly serverProjection:
+    | (Pick<ThreadStructure, "providerTurns" | "messages"> &
+        Partial<Pick<ThreadStructure, "turnItems" | "visibleTurnItems">>)
+    | null;
   readonly activeContextWindow: ContextWindowSnapshot | null;
 }): DerivedProjectionTelemetry {
   const { serverProjection, activeContextWindow } = input;
@@ -195,9 +246,9 @@ export function deriveSessionTelemetryFromProjection(input: {
       const startedMs = parseTelemetryTimestampMs(turn.startedAt);
       const completedMs = parseTelemetryTimestampMs(turn.completedAt);
       const durationMs =
-        startedMs !== null && completedMs !== null && completedMs >= startedMs
+        startedMs !== null && completedMs !== null && completedMs > startedMs
           ? completedMs - startedMs
-          : null;
+          : readExplicitTurnDurationMs(turn);
       const computed = computeOutputTps(counts.outputTokens, durationMs, null);
       if (computed !== null) {
         latestTps = computed;
@@ -245,12 +296,7 @@ export function deriveSessionTelemetryFromProjection(input: {
       latestTokens.cacheCreationTokens,
     ) ?? computeCacheHitRate(totalUncached, totalCached, totalCacheCreate);
 
-  let assistantCharCount = 0;
-  for (const message of serverProjection?.messages ?? []) {
-    if (message.role === "assistant" && typeof message.text === "string") {
-      assistantCharCount += message.text.length;
-    }
-  }
+  const assistantCharCount = countStreamingOutputChars(serverProjection);
 
   return {
     activeTurnId,
@@ -276,8 +322,9 @@ export interface UseSessionCallTelemetryInput {
   readonly threadId: string | null;
   readonly provider: string | null;
   readonly model: string | null;
-  readonly serverProjection: Pick<ThreadStructure, "providerTurns" | "messages"> | null;
+  readonly serverProjection: SessionProjectionLike | null;
   readonly activeContextWindow: ContextWindowSnapshot | null;
+  readonly providerStatuses?: readonly ServerProvider[] | undefined;
   readonly isWorking: boolean;
   readonly activeWorkStartedAt: unknown;
 }
@@ -294,6 +341,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
     model,
     serverProjection,
     activeContextWindow,
+    providerStatuses,
     isWorking,
     activeWorkStartedAt,
   } = input;
@@ -304,24 +352,54 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
   >(new Map());
   const recordedTurnFingerprintsRef = useRef<Map<string, string>>(new Map());
   const lastLivePatchFingerprintRef = useRef<string | null>(null);
+  const lastDetailFingerprintRef = useRef<string | null>(null);
 
   // Reset per-thread transient timing tracker when switching threads.
   useEffect(() => {
     activeTrackerRef.current = null;
     lastLivePatchFingerprintRef.current = null;
+    lastDetailFingerprintRef.current = null;
   }, [threadId]);
 
   useEffect(() => {
     if (!threadId) return;
 
     const derived = deriveSessionTelemetryFromProjection({
-      serverProjection,
+      serverProjection: serverProjection
+        ? {
+            providerTurns: serverProjection.providerTurns ?? [],
+            messages: serverProjection.messages ?? [],
+            ...(serverProjection.turnItems !== undefined
+              ? { turnItems: serverProjection.turnItems }
+              : {}),
+            ...(serverProjection.visibleTurnItems !== undefined
+              ? { visibleTurnItems: serverProjection.visibleTurnItems }
+              : {}),
+          }
+        : null,
       activeContextWindow,
     });
     const now = Date.now();
     const resolvedProvider = provider?.trim() || "unknown";
     const resolvedModel =
       derived.latestTurn?.model?.trim() || model?.trim() || "unknown";
+
+    // Hydrate persisted per-turn timings from localStorage so switching threads or reloading
+    // preserves measured TTFT & duration for turns in this session.
+    const persistedByTurnId = new Map<
+      string,
+      { readonly timestamp: number; readonly ttftMs: number | null; readonly durationMs: number | null }
+    >();
+    for (const log of getRecordedUsageCallLogs()) {
+      if (log.threadId !== threadId || !log.turnId) continue;
+      if (!persistedByTurnId.has(log.turnId)) {
+        persistedByTurnId.set(log.turnId, {
+          timestamp: log.timestamp,
+          ttftMs: log.ttftMs,
+          durationMs: log.durationMs,
+        });
+      }
+    }
 
     // 1. Track real turn start & exact first-token arrival while streaming.
     const activeTurnKey =
@@ -369,22 +447,46 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
     // 2. Record finalized provider turns into persistent Call Logs (upsert on late token arrival).
     for (const turn of serverProjection?.providerTurns ?? []) {
       if (turn.status === "running" || turn.status === "pending") continue;
-      const counts = extractProviderTurnTokenCounts(turn);
+      const counts = extractTurnUsageDetail(turn);
+      const observedTiming = turnTimingsByIdRef.current.get(turn.id);
+      const persistedTiming = persistedByTurnId.get(turn.id);
       const startedMs =
         parseTelemetryTimestampMs(turn.startedAt) ??
-        turnTimingsByIdRef.current.get(turn.id)?.turnStartedAt ??
+        observedTiming?.turnStartedAt ??
+        persistedTiming?.timestamp ??
         null;
-      const completedMs = parseTelemetryTimestampMs(turn.completedAt);
-      const observedTiming = turnTimingsByIdRef.current.get(turn.id);
-      const firstTokenAt = observedTiming?.firstTokenAt ?? null;
+      const completedMs =
+        parseTelemetryTimestampMs(turn.completedAt) ??
+        (activeTrackerRef.current?.key === turn.id ? now : null);
+      const firstTokenAt =
+        observedTiming?.firstTokenAt ??
+        (startedMs !== null && persistedTiming?.ttftMs !== null && persistedTiming?.ttftMs !== undefined
+          ? startedMs + persistedTiming.ttftMs
+          : null);
       const ttftMs =
         startedMs !== null && firstTokenAt !== null && firstTokenAt >= startedMs
           ? firstTokenAt - startedMs
-          : null;
+          : (persistedTiming?.ttftMs ?? null);
+      const isLatestTurn = derived.latestTurn?.id === turn.id;
       const durationMs =
-        startedMs !== null && completedMs !== null && completedMs >= startedMs
+        startedMs !== null && completedMs !== null && completedMs > startedMs
           ? completedMs - startedMs
-          : null;
+          : readExplicitTurnDurationMs(turn) ??
+            (isLatestTurn &&
+            typeof activeContextWindow?.durationMs === "number" &&
+            Number.isFinite(activeContextWindow.durationMs) &&
+            activeContextWindow.durationMs > 0
+              ? activeContextWindow.durationMs
+              : null) ??
+            persistedTiming?.durationMs ??
+            null;
+
+      if (startedMs !== null && firstTokenAt !== null && !observedTiming?.firstTokenAt) {
+        turnTimingsByIdRef.current.set(turn.id, {
+          turnStartedAt: startedMs,
+          firstTokenAt,
+        });
+      }
 
       // Only record turns that carry real tokens or real observed timing (zero fabricated records).
       if (!counts.hasMeasuredTokens && durationMs === null && ttftMs === null) {
@@ -397,6 +499,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         counts.cachedInputTokens,
         counts.cacheCreationTokens,
         counts.outputTokens,
+        counts.reasoningTokens,
         ttftMs ?? "",
         durationMs ?? "",
       ].join("|");
@@ -405,7 +508,6 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       }
       recordedTurnFingerprintsRef.current.set(turn.id, fingerprint);
 
-      const isLatestTurn = derived.latestTurn?.id === turn.id;
       recordModelCallTelemetry({
         id: `turn:${turn.id}`,
         turnId: turn.id,
@@ -422,6 +524,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         cachedInputTokens: counts.cachedInputTokens,
         cacheCreationTokens: counts.cacheCreationTokens,
         outputTokens: counts.outputTokens,
+        reasoningTokens: counts.reasoningTokens,
         totalTokens: counts.totalTokens,
         contextPercent: isLatestTurn ? derived.contextPercent : undefined,
         status: mapTurnStatusToCallStatus(turn.status),
@@ -480,6 +583,47 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
     }
     const effectiveTps = streamingTps ?? latestCompletedTps;
 
+    // 3. Publish full active-session telemetry detail for the 3 independent composer popovers.
+    const detailSnapshot = deriveSessionTelemetryDetail({
+      threadId,
+      serverProjection,
+      activeContextWindow,
+      providerStatuses,
+      activeProvider: resolvedProvider,
+      activeModel: resolvedModel,
+      turnTimingsById: turnTimingsByIdRef.current,
+      activeLiveTps: streamingTps,
+      activeLiveTtftMs: liveTtftMs,
+      now,
+    });
+    const detailFingerprint = [
+      detailSnapshot.threadId,
+      detailSnapshot.rounds,
+      detailSnapshot.steps,
+      detailSnapshot.samples,
+      detailSnapshot.modelCallDurationMs ?? "",
+      detailSnapshot.toolCallDurationMs ?? "",
+      detailSnapshot.avgTtftMs !== null ? detailSnapshot.avgTtftMs.toFixed(1) : "",
+      detailSnapshot.sessionTps !== null ? detailSnapshot.sessionTps.toFixed(2) : "",
+      detailSnapshot.latestRequestTps !== null ? detailSnapshot.latestRequestTps.toFixed(2) : "",
+      detailSnapshot.textOutputTokens,
+      detailSnapshot.reasoningOutputTokens,
+      detailSnapshot.uncachedInputTokens,
+      detailSnapshot.cachedInputTokens,
+      detailSnapshot.outputTokens,
+      detailSnapshot.sessionTotalTokens,
+      detailSnapshot.subagentCount,
+      detailSnapshot.subagentTotalTokens,
+      detailSnapshot.modelDistribution.map((m) => `${m.modelId}:${m.totalTokens}`).join(","),
+      detailSnapshot.latestSampledModelId ?? "",
+      detailSnapshot.latestSampledModelDisplayName ?? "",
+    ].join("|");
+    if (lastDetailFingerprintRef.current !== detailFingerprint) {
+      lastDetailFingerprintRef.current = detailFingerprint;
+      publishSessionTelemetryDetail(threadId, detailSnapshot);
+    }
+
+    // 4. Publish live thread telemetry snapshot for the below-composer telemetry bar.
     const liveFingerprint = [
       threadId,
       resolvedProvider,
@@ -493,6 +637,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       derived.latestTokens.cachedInputTokens,
       derived.latestTokens.cacheCreationTokens,
       derived.latestTokens.outputTokens,
+      detailSnapshot.reasoningOutputTokens,
       derived.sessionTotalTokens,
       derived.latestCacheHitRate !== null ? derived.latestCacheHitRate.toFixed(4) : "",
       derived.contextPercent !== null ? derived.contextPercent.toFixed(2) : "",
@@ -523,6 +668,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         cachedInputTokens: derived.latestTokens.cachedInputTokens,
         cacheCreationTokens: derived.latestTokens.cacheCreationTokens,
         outputTokens: derived.latestTokens.outputTokens,
+        reasoningTokens: detailSnapshot.reasoningOutputTokens,
         totalTokens: derived.latestTokens.totalTokens,
         sessionTotalTokens: derived.sessionTotalTokens,
         cacheHitRate: derived.latestCacheHitRate,
@@ -535,6 +681,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
     isWorking,
     model,
     provider,
+    providerStatuses,
     serverProjection,
     threadId,
   ]);

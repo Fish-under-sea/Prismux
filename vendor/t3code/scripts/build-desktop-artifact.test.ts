@@ -63,12 +63,15 @@ import {
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
   WINDOWS_SERVER_ASAR_RESOURCE,
   WINDOWS_SEVEN_ZIP_MIN_BYTES,
+  WINDOWS_SQLITE_VEC_MIN_BYTES,
+  PRISMUX_SQLITE_VEC_EXTRA_RESOURCES,
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_NAME,
   WSL_RUNTIME_ARCHIVE_NAME,
   findForbiddenPreinstalledOfficialPlugins,
   removeDirectoryWithRetry,
+  stageSqliteVecNative,
   stageWindowsSevenZipTool,
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
@@ -2052,4 +2055,138 @@ it.effect("retries EBUSY/EPERM cleanup 3 times then degrades gracefully without 
     assert.isFalse(result.removed);
     assert.isTrue(result.deferred);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "stages vec0.dll into non-asar native/sqlite-vec and daemon node_modules, rejecting missing or undersized binaries",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-vec-stage-" });
+      const sourcePkgDir = path.join(root, "sqlite-vec-windows-x64");
+      const targetDir = path.join(root, "prod-resources", "native", "sqlite-vec");
+      const daemonDepsDir = path.join(root, "prod-resources", "prismux-daemon-deps");
+      yield* fs.makeDirectory(sourcePkgDir, { recursive: true });
+      const fakeDll = path.join(sourcePkgDir, "vec0.dll");
+      yield* fs.writeFile(fakeDll, new Uint8Array(WINDOWS_SQLITE_VEC_MIN_BYTES + 1024));
+      yield* fs.writeFileString(
+        path.join(sourcePkgDir, "package.json"),
+        '{"name":"sqlite-vec-windows-x64","version":"0.1.9"}\n',
+      );
+
+      const staged = yield* stageSqliteVecNative({
+        repoRoot: root,
+        platform: "win",
+        arch: "x64",
+        targetDir,
+        daemonDepsTargetDir: daemonDepsDir,
+        candidates: [path.join(root, "missing-vec0.dll"), fakeDll],
+      });
+      assert.equal(staged.sourcePath, fakeDll);
+      assert.equal(staged.targetLibraryPath, path.join(targetDir, "vec0.dll"));
+      assert.isTrue(yield* fs.exists(path.join(targetDir, "vec0.dll")));
+      assert.isTrue(
+        yield* fs.exists(path.join(daemonDepsDir, "sqlite-vec-windows-x64", "vec0.dll")),
+      );
+
+      // Undersized binary is rejected
+      const tinyDll = path.join(sourcePkgDir, "tiny-vec0.dll");
+      yield* fs.writeFile(tinyDll, new Uint8Array(64));
+      const tinyError = yield* stageSqliteVecNative({
+        repoRoot: root,
+        platform: "win",
+        arch: "x64",
+        targetDir: path.join(root, "target-tiny"),
+        candidates: [tinyDll],
+      }).pipe(Effect.flip);
+      assert.equal(tinyError._tag, "SqliteVecNativeToolError");
+      assert.equal(tinyError.reason, "invalid-size");
+
+      // Missing binary is rejected
+      const missingError = yield* stageSqliteVecNative({
+        repoRoot: root,
+        platform: "win",
+        arch: "x64",
+        targetDir: path.join(root, "target-missing"),
+        candidates: [path.join(root, "does-not-exist-vec0.dll")],
+      }).pipe(Effect.flip);
+      assert.equal(missingError._tag, "SqliteVecNativeToolError");
+      assert.equal(missingError.reason, "missing");
+
+      // createBuildConfig wires extraResources for native/sqlite-vec and excludes prod-resources/native from app.asar
+      const winConfig = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.1.2-preview.2",
+        false,
+        false,
+        undefined,
+        undefined,
+        false,
+        "x64",
+        true,
+        true,
+        true,
+      );
+      const extraResources = winConfig.extraResources as ReadonlyArray<{
+        from: string;
+        to: string;
+      }>;
+      assert.isTrue(
+        extraResources.some(
+          (entry) =>
+            entry.from === PRISMUX_SQLITE_VEC_EXTRA_RESOURCES[0].from &&
+            entry.to === PRISMUX_SQLITE_VEC_EXTRA_RESOURCES[0].to,
+        ),
+      );
+      assert.isTrue(
+        DESKTOP_FILE_EXCLUSIONS.some((glob) =>
+          NodePath.matchesGlob(
+            "apps/desktop/prod-resources/native/sqlite-vec/vec0.dll",
+            glob.slice(1),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect(
+  "validateWindowsPackagedPayload rejects missing resources/native/sqlite-vec/vec0.dll when expectSqliteVec is true",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+
+        const missingError = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+          expectSqliteVec: true,
+        }).pipe(Effect.flip);
+        assert.instanceOf(missingError, WindowsPackagedPayloadValidationError);
+        assert.equal(missingError.reason, "sqlite-vec-missing");
+
+        const vecDir = path.join(fixture.packagedAppDir, "resources", "native", "sqlite-vec");
+        yield* fs.makeDirectory(vecDir, { recursive: true });
+        yield* fs.writeFile(
+          path.join(vecDir, "vec0.dll"),
+          new Uint8Array(WINDOWS_SQLITE_VEC_MIN_BYTES + 2048),
+        );
+        const validResult = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+          expectSqliteVec: true,
+        });
+        assert.equal(validResult.packagedAppDir, fixture.packagedAppDir);
+      }),
+    ).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.provideService(HostProcess.Platform, "linux"),
+    ),
 );

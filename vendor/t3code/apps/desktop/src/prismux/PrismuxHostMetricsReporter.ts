@@ -8,8 +8,8 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import type * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 
-export const HOST_METRICS_WARMUP_DELAY = Duration.millis(800);
-export const HOST_METRICS_POLL_INTERVAL = Duration.millis(2_500);
+export const HOST_METRICS_WARMUP_DELAY = Duration.millis(300);
+export const HOST_METRICS_POLL_INTERVAL = Duration.millis(2_000);
 export const HOST_METRICS_POST_TIMEOUT = Duration.millis(1_500);
 
 export interface PrismuxElectronProcessMetricPayload {
@@ -38,7 +38,12 @@ export interface PrismuxHostMetricsPayload {
   readonly collectedAt: number;
   readonly mainPid: number;
   readonly cpuCores: number;
-  readonly cpuScale: "single-core";
+  /**
+   * Electron's `app.getAppMetrics().cpu.percentCPUUsage` divides Chromium's
+   * `GetPlatformIndependentCPUUsage()` by `base::SysInfo::NumberOfProcessors()`,
+   * so its native scale is total-system CPU% (0–100%), matching Windows Task Manager.
+   */
+  readonly cpuScale: "system-total";
   readonly t3Server?: PrismuxHostT3ServerPayload | null;
   readonly electronProcesses: readonly PrismuxElectronProcessMetricPayload[];
 }
@@ -133,7 +138,7 @@ export function buildHostMetricsPayload(input: {
     collectedAt,
     mainPid: input.mainPid,
     cpuCores,
-    cpuScale: "single-core",
+    cpuScale: "system-total",
     ...(t3Server !== undefined ? { t3Server } : {}),
     electronProcesses,
   };

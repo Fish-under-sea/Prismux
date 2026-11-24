@@ -43,6 +43,9 @@ export type SettingsPath =
   | "/settings/archived"
   | "/settings/wallpaper"
   | "/settings/plugins"
+  | "/settings/memory"
+  | "/settings/sync"
+  | "/settings/overnight-factory"
   | "/settings/memory-sync"
   | "/settings/updates";
 
@@ -124,6 +127,9 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/archived": msg("Archive"),
   "/settings/wallpaper": msg("Wallpaper"),
   "/settings/plugins": msg("Plugins"),
+  "/settings/memory": msg("Memory", { $context: "settings navigation item" }),
+  "/settings/sync": msg("Sync", { $context: "settings navigation item" }),
+  "/settings/overnight-factory": msg("Overnight Factory & Mail"),
   "/settings/memory-sync": msg("Memory & Sync"),
   "/settings/updates": msg("Prismux Updates"),
 };
@@ -153,9 +159,12 @@ export type SettingsNavGroup = {
 
 /**
  * Deduplicated 4-group divider-free sidebar hierarchy:
- * - `/settings/appearance` and `/settings/wallpaper` are independent sibling items in Group 1.
+ * - Group 1 (`General & appearance`): General -> Chat -> Voice -> Appearance -> Wallpaper -> Keybindings (+ macOS SnapShots).
+ * - Group 2 (`Agents & workspace`): Providers -> Devices -> Threads -> Projects -> Archive -> Browser -> Worktrees -> Diffs -> Source control.
+ * - Group 3 (`Extensions, memory & connections`): Environments -> Memory -> Sync -> Plugins -> Sharing & access (+ Secrets).
+ * - Group 4 (`System & about`): Service Diagnostics -> Maintenance -> About & Updates.
+ * - `/settings/memory-sync` redirects to `/settings/memory` (or `/settings/sync` for `#sync` / `?tab=sync`).
  * - `/settings/updates` is merged into `/settings/about` (legacy deep link redirects to `#prismux-updates`).
- * - `/settings/labs` redirects into official pages; `/settings/archived` stays in Group 2.
  */
 const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
@@ -164,11 +173,11 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     headingHidden: true,
     paths: [
       "/settings/general",
+      "/settings/chat",
+      "/settings/voice",
       "/settings/appearance",
       "/settings/wallpaper",
-      "/settings/chat",
       "/settings/keybindings",
-      "/settings/voice",
       "/settings/snap-shot",
     ],
   },
@@ -177,12 +186,11 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     heading: msg("Agents & workspace"),
     paths: [
       "/settings/providers",
+      "/settings/devices",
       "/settings/threads",
+      "/settings/projects",
       "/settings/archived",
       "/settings/browser",
-      "/settings/devices",
-      "/settings/scheduled-tasks",
-      "/settings/projects",
       "/settings/worktrees",
       "/settings/diffs",
       "/settings/source-control",
@@ -192,10 +200,12 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     id: "extensions-data",
     heading: msg("Extensions, memory & connections"),
     paths: [
-      "/settings/plugins",
-      "/settings/memory-sync",
       "/settings/connections",
+      "/settings/memory",
+      "/settings/sync",
+      "/settings/plugins",
       "/settings/access",
+      "/settings/overnight-factory",
       "/settings/secrets",
     ],
   },
@@ -1118,11 +1128,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     providerSettingsOnly: true,
   },
   {
-    id: "scheduled-tasks",
-    title: msg("Scheduled tasks"),
-    to: "/settings/scheduled-tasks",
-  },
-  {
     id: "agent-browser-access",
     title: msg("Agent browser access"),
     to: "/settings/browser",
@@ -1492,12 +1497,44 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
-    id: "prismux-memory-sync",
-    title: msg("Memory & Sync"),
-    to: "/settings/memory-sync",
+    id: "prismux-memory",
+    title: msg("Memory", { $context: "settings navigation item" }),
+    to: "/settings/memory",
+    targetId: "prismux-memory",
     searchTerms: [
       msg(
-        "memory sync chief thread slot secretary sqlite obsidian webdav s3 github prismux e2ee encrypted",
+        "memory chief thread slot secretary agents.md sqlite wal fts5 sqlite-vec obsidian import memory & sync",
+      ),
+    ],
+  },
+  {
+    id: "prismux-chief-slot",
+    title: msg("Chief Thread Slot"),
+    to: "/settings/memory",
+    targetId: "prismux-chief-slot",
+    searchTerms: [
+      msg("chief secretary provider model reasoning effort dial agent oracle review agents.md"),
+    ],
+  },
+  {
+    id: "prismux-sync",
+    title: msg("Sync", { $context: "settings navigation item" }),
+    to: "/settings/sync",
+    targetId: "prismux-e2ee-sync",
+    searchTerms: [
+      msg(
+        "sync e2ee encrypted argon2id aead passphrase webdav s3 github sync matrix portable memory & sync",
+      ),
+    ],
+  },
+  {
+    id: "prismux-overnight-factory",
+    title: msg("Overnight Factory & Mail"),
+    to: "/settings/overnight-factory",
+    targetId: "prismux-overnight-factory",
+    searchTerms: [
+      msg(
+        "overnight factory mail gmail oauth2 imap smtp qq 163 outlook whitelist oracle morning report #factory",
       ),
     ],
   },
@@ -1551,6 +1588,9 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/archived": "project-defaults",
   "/settings/wallpaper": null,
   "/settings/plugins": null,
+  "/settings/memory": null,
+  "/settings/sync": null,
+  "/settings/overnight-factory": null,
   "/settings/memory-sync": null,
   "/settings/updates": null,
 };
@@ -1561,6 +1601,7 @@ const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
   "/settings/beta": "/settings/general",
   "/settings/labs": "/settings/general",
   "/settings/updates": "/settings/about",
+  "/settings/memory-sync": "/settings/memory",
 };
 const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/settings/general",
@@ -1574,7 +1615,49 @@ const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
   "authorized-clients": "/settings/access",
   "text-generation": "/settings/threads",
   about: "/settings/about",
+  sync: "/settings/sync",
+  "prismux-sync": "/settings/sync",
+  "prismux-e2ee-sync": "/settings/sync",
+  "prismux-memory": "/settings/memory",
+  "prismux-memory-engine": "/settings/memory",
+  "prismux-chief-slot": "/settings/memory",
 };
+
+/**
+ * Resolves legacy `/settings/memory-sync` URLs to `/settings/memory` (default)
+ * or `/settings/sync` when `#sync` / `#prismux-e2ee-sync` / `#prismux-sync` or `?tab=sync` is present.
+ */
+export function resolveLegacyMemorySyncRedirectTarget(input: {
+  readonly hash?: string | undefined;
+  readonly searchStr?: string | undefined;
+}): {
+  readonly to: "/settings/memory" | "/settings/sync";
+  readonly hash: string;
+} {
+  const rawHash = (input.hash ?? "").replace(/^#/, "").trim();
+  const normalizedHash = rawHash.toLowerCase();
+  const params = new URLSearchParams(input.searchStr ?? "");
+  const tabParam = params.get("tab")?.trim().toLowerCase() ?? "";
+
+  const targetsSync =
+    tabParam === "sync" ||
+    normalizedHash === "sync" ||
+    normalizedHash === "prismux-sync" ||
+    normalizedHash === "prismux-e2ee-sync" ||
+    normalizedHash.startsWith("sync-");
+
+  if (targetsSync) {
+    return {
+      to: "/settings/sync",
+      hash: normalizedHash === "sync" ? "prismux-e2ee-sync" : rawHash,
+    };
+  }
+
+  return {
+    to: "/settings/memory",
+    hash: rawHash,
+  };
+}
 
 /** Where an old settings link now lives. Its anchor finds the page its row moved to. */
 export function movedSettingsPath(pathname: string, hash: string): SettingsPath | null {
@@ -1724,11 +1807,11 @@ export function searchSettings(
       const localizedTitle = normalizeSearchText(translate(item.title));
       const fields = [
         title,
-        normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
+        normalizeSearchText(decodeMsg(SETTINGS_SECTION_LABELS[item.to])),
         // The labels as displayed, so search also works in the active language.
         localizedTitle,
         normalizeSearchText(translate(SETTINGS_SECTION_LABELS[item.to])),
-        ...(item.searchTerms ?? []).map(normalizeSearchText),
+        ...(item.searchTerms ?? []).map((term) => normalizeSearchText(decodeMsg(term))),
         ...(item.searchTerms ?? []).map((term) => normalizeSearchText(translate(term))),
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];

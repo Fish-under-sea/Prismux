@@ -146,7 +146,6 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { useSearchableSetting } from "./settingsSearch";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -408,7 +407,6 @@ export function ScheduledTasksSettings(target: {
   readonly environmentId?: EnvironmentId;
   readonly taskId?: ScheduledTaskId | undefined;
 }) {
-  const setting = useSearchableSetting();
   const gt = useGT();
   const { scope, environments, connectedEnvironments, environment } = useSettingsScope();
   const [editor, setEditor] = useState<{
@@ -448,13 +446,17 @@ export function ScheduledTasksSettings(target: {
     setOpenedLinkTaskId(target.taskId);
     if (editor === null) setEditor({ environmentId: linkedEnvironmentId, task: linkedTask });
   }
-  const navigate = useNavigate({ from: "/settings/scheduled-tasks" });
+  const navigate = useNavigate();
   const closeEditor = () => {
     setEditor(null);
     if (target.taskId === undefined) return;
     void navigate({
-      to: "/settings/scheduled-tasks",
-      search: ({ taskId: _closed, ...rest }) => rest,
+      to: "/scheduled-tasks",
+      search: (prev) => {
+        const next = { ...(prev as Record<string, unknown>) };
+        delete next.taskId;
+        return next;
+      },
       replace: true,
     });
   };
@@ -473,7 +475,8 @@ export function ScheduledTasksSettings(target: {
   return (
     <SettingsPageContainer>
       <SettingsSection
-        {...setting("scheduled-tasks")}
+        id="scheduled-tasks"
+        title={gt("Scheduled tasks")}
         variant="plain"
         headerAction={
           <Button
@@ -539,13 +542,14 @@ export function ScheduledTasksSettings(target: {
   );
 }
 
-const scheduledTaskCreatePermissionsAtom = environmentAtomList(
+export const scheduledTaskCreatePermissionsAtom = environmentAtomList(
   "web-scheduled-task-create-permissions",
   serverEnvironment.upsertScheduledTask.permissionAtom,
 );
 
-const scheduledTasksListAtom = environmentAtomList("web-scheduled-tasks-list", (environmentId) =>
-  serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
+export const scheduledTasksListAtom = environmentAtomList(
+  "web-scheduled-tasks-list",
+  (environmentId) => serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
 );
 
 function ScheduledTaskEnvironmentList({
@@ -679,7 +683,7 @@ function ScheduledTaskEnvironmentList({
   );
 }
 
-function ScheduledTaskEnvironmentSubtitle({
+export function ScheduledTaskEnvironmentSubtitle({
   environment,
   secondary,
 }: {
@@ -778,16 +782,20 @@ function ScheduledTaskEnvironmentSection({
   );
 }
 
-function ScheduledTaskRow({
+export function ScheduledTaskRow({
   environmentId,
   task,
   timeZone,
   onEdit,
+  variant = "settings",
+  projectTitle,
 }: {
   readonly environmentId: EnvironmentId;
   readonly task: ScheduledTask;
   readonly timeZone: string | undefined;
   readonly onEdit: () => void;
+  readonly variant?: "settings" | "panel";
+  readonly projectTitle?: string | undefined;
 }) {
   const messages = useMessages();
   const locale = useLocale();
@@ -835,6 +843,189 @@ function ScheduledTaskRow({
       );
     }
   };
+  const scheduleText = scheduleLabel(
+    task.schedule,
+    timestampFormat,
+    timeZone,
+    task.nextRunAt,
+    messages,
+    locale,
+  );
+  const stateLabel =
+    task.blockedByPolicy !== undefined ? (
+      task.blockedByPolicy
+    ) : !task.enabled ? (
+      gt("Paused")
+    ) : isWebhook ? (
+      gt("Listening")
+    ) : task.nextRunAt ? (
+      <T>
+        Next run <ScheduledRelativeLabel value={task.nextRunAt} />
+      </T>
+    ) : (
+      gt("Not scheduled")
+    );
+
+  if (variant === "panel") {
+    return (
+      <article
+        data-testid={`scheduled-task-card-${task.id}`}
+        data-pmx-work-panel-card="1"
+        className="group flex flex-col gap-3 rounded-lg border border-border/75 bg-card px-4 py-3.5 shadow-xs transition-colors hover:border-border"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={
+                  task.blockedByPolicy !== undefined
+                    ? "size-2 shrink-0 rounded-full bg-amber-500"
+                    : task.enabled
+                      ? "size-2 shrink-0 rounded-full bg-emerald-500"
+                      : "size-2 shrink-0 rounded-full bg-muted-foreground/50"
+                }
+                aria-hidden="true"
+              />
+              <h3 className="min-w-0 truncate text-sm font-semibold text-foreground">
+                {task.title}
+              </h3>
+              <Badge variant={task.enabled ? "success" : "secondary"}>
+                {task.enabled ? (isWebhook ? gt("Listening") : gt("Enabled")) : gt("Paused")}
+              </Badge>
+              {task.lastRunStatus !== "never" ? (
+                <Badge variant={statusVariant(task.lastRunStatus)}>
+                  {messages(RUN_STATUS_LABELS[task.lastRunStatus])}
+                </Badge>
+              ) : null}
+              {projectTitle ? (
+                <Badge variant="outline" className="max-w-44 truncate">
+                  {projectTitle}
+                </Badge>
+              ) : null}
+            </div>
+            <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+              {task.prompt}
+            </p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Switch
+              checked={task.enabled}
+              disabled={busy || !canOperate}
+              aria-label={gt("Enable {title}", { title: task.title })}
+              onCheckedChange={() => void act("toggle")}
+            />
+            {isWebhook ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={busy || !canOperate}
+                onClick={() => setDeliveriesOpen(true)}
+                data-pmx-work-panel-control="1"
+                className="h-7 gap-1 px-2 text-xs"
+              >
+                <InboxIcon className="size-3.5" />
+                <T>Deliveries</T>
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={busy || !canOperate}
+                onClick={() => void act("run")}
+                data-pmx-work-panel-control="1"
+                className="h-7 gap-1 px-2 text-xs"
+              >
+                <PlayIcon className="size-3.5" />
+                <T>Run now</T>
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={busy || !canOperate}
+              onClick={onEdit}
+              data-pmx-work-panel-control="1"
+              className="h-7 gap-1 px-2 text-xs"
+            >
+              <PencilIcon className="size-3.5" />
+              <T>Edit</T>
+            </Button>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    disabled={busy || !canOperate}
+                    aria-label={gt("Actions for {title}", { title: task.title })}
+                    className="size-7 text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                  />
+                }
+              >
+                <MoreHorizontalIcon className="size-4" />
+              </MenuTrigger>
+              <MenuPopup align="end">
+                <MenuItem onClick={onEdit}>
+                  <PencilIcon />
+                  <T>Edit</T>
+                </MenuItem>
+                {isWebhook ? (
+                  <MenuItem onClick={() => setDeliveriesOpen(true)}>
+                    <InboxIcon />
+                    <T>Deliveries</T>
+                  </MenuItem>
+                ) : (
+                  <MenuItem onClick={() => void act("run")}>
+                    <PlayIcon />
+                    <T>Run now</T>
+                  </MenuItem>
+                )}
+                <MenuSeparator />
+                <MenuItem onClick={() => void act("delete")}>
+                  <Trash2Icon />
+                  <T>Delete</T>
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+            {deliveriesOpen ? (
+              <WebhookDeliveriesDialog
+                environmentId={environmentId}
+                task={task}
+                onClose={() => setDeliveriesOpen(false)}
+              />
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/55 pt-2.5 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5 font-medium text-foreground/85">
+            <Clock3Icon className="size-3.5 shrink-0 text-primary" />
+            <span>{scheduleText}</span>
+          </span>
+          <span aria-hidden="true" className="opacity-45">
+            ·
+          </span>
+          <span>{stateLabel}</span>
+          {task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread" ? (
+            <>
+              <span aria-hidden="true" className="opacity-45">
+                ·
+              </span>
+              <ScheduledTaskThreadLink environmentId={environmentId} threadId={task.threadId} />
+            </>
+          ) : null}
+          {task.lastRunError ? (
+            <span className="text-destructive">{task.lastRunError}</span>
+          ) : null}
+        </div>
+      </article>
+    );
+  }
+
   return (
     <SettingsRow
       title={task.title}
@@ -842,28 +1033,7 @@ function ScheduledTaskRow({
       status={
         <div className="flex flex-wrap items-center gap-2">
           <span>
-            {scheduleLabel(
-              task.schedule,
-              timestampFormat,
-              timeZone,
-              task.nextRunAt,
-              messages,
-              locale,
-            )}{" "}
-            ·{" "}
-            {task.blockedByPolicy !== undefined ? (
-              task.blockedByPolicy
-            ) : !task.enabled ? (
-              gt("Paused")
-            ) : isWebhook ? (
-              gt("Listening")
-            ) : task.nextRunAt ? (
-              <T>
-                Next run <ScheduledRelativeLabel value={task.nextRunAt} />
-              </T>
-            ) : (
-              gt("Not scheduled")
-            )}
+            {scheduleText} · {stateLabel}
           </span>
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>
@@ -1257,7 +1427,7 @@ function WebhookDeliveryMode({ environmentId }: { readonly environmentId: Enviro
   );
 }
 
-function ScheduledTaskEditorDialog({
+export function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
   onClose,

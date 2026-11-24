@@ -146,6 +146,17 @@ function stripInlineMarkdown(line: string): string {
     .trim();
 }
 
+const GITHUB_ALERT_TAG_RE = /^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i;
+const TABLE_SEPARATOR_RE = /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?$/;
+
+function stripBlockquoteAndAlertPrefix(line: string): string {
+  return line
+    .replace(/^(?:>\s*)+/, "")
+    .trim()
+    .replace(GITHUB_ALERT_TAG_RE, "")
+    .trim();
+}
+
 /**
  * Extracts a concise, clean first-line highlight from Markdown release notes
  * for the bottom-right liquid glass update toast.
@@ -160,14 +171,23 @@ export function extractReleaseNotesPreview(
 
   const lines = notes.split(/\r?\n/);
   let fallbackHeading = "";
+  let inCodeFence = false;
 
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
     if (!trimmed) continue;
+    if (/^```/.test(trimmed) || /^~~~/.test(trimmed)) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) continue;
     if (/^[-*_]{3,}$/.test(trimmed)) continue;
-    if (/^```/.test(trimmed)) continue;
 
-    const headingMatch = /^#{1,6}\s+(.+)$/.exec(trimmed);
+    const cleanLine = stripBlockquoteAndAlertPrefix(trimmed);
+    if (!cleanLine) continue;
+    if (/^[-*_]{3,}$/.test(cleanLine) || TABLE_SEPARATOR_RE.test(cleanLine)) continue;
+
+    const headingMatch = /^#{1,6}\s+(.+)$/.exec(cleanLine);
     if (headingMatch) {
       const cleanedHeading = stripInlineMarkdown(headingMatch[1] ?? "");
       if (!fallbackHeading && cleanedHeading.length > 0) {
@@ -176,8 +196,8 @@ export function extractReleaseNotesPreview(
       continue;
     }
 
-    const bulletMatch = /^(?:[-*+•]|\d+[.)])\s+(.+)$/.exec(trimmed);
-    const candidate = stripInlineMarkdown(bulletMatch ? (bulletMatch[1] ?? "") : trimmed);
+    const bulletMatch = /^(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$/.exec(cleanLine);
+    const candidate = stripInlineMarkdown(bulletMatch ? (bulletMatch[1] ?? "") : cleanLine);
     if (!candidate) continue;
     return candidate.length > maxLength ? `${candidate.slice(0, maxLength - 1).trimEnd()}…` : candidate;
   }
@@ -206,6 +226,7 @@ export function parseReleaseNotesBlocks(
   const blocks: ReleaseNotesBlock[] = [];
   let pendingList: string[] = [];
   let pendingParagraph: string[] = [];
+  let inCodeFence = false;
 
   const flushList = () => {
     if (pendingList.length > 0) {
@@ -228,13 +249,30 @@ export function parseReleaseNotesBlocks(
       flushParagraph();
       continue;
     }
-    if (/^[-*_]{3,}$/.test(trimmed) || /^```/.test(trimmed)) {
+    if (/^```/.test(trimmed) || /^~~~/.test(trimmed)) {
+      inCodeFence = !inCodeFence;
+      flushList();
+      flushParagraph();
+      continue;
+    }
+    if (inCodeFence) continue;
+    if (/^[-*_]{3,}$/.test(trimmed)) {
       flushList();
       flushParagraph();
       continue;
     }
 
-    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+    const cleanLine = stripBlockquoteAndAlertPrefix(trimmed);
+    if (!cleanLine) {
+      continue;
+    }
+    if (/^[-*_]{3,}$/.test(cleanLine) || TABLE_SEPARATOR_RE.test(cleanLine)) {
+      flushList();
+      flushParagraph();
+      continue;
+    }
+
+    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(cleanLine);
     if (headingMatch) {
       flushList();
       flushParagraph();
@@ -246,7 +284,7 @@ export function parseReleaseNotesBlocks(
       continue;
     }
 
-    const listMatch = /^(?:[-*+•]|\d+[.)])\s+(.+)$/.exec(trimmed);
+    const listMatch = /^(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$/.exec(cleanLine);
     if (listMatch) {
       flushParagraph();
       const itemText = listMatch[1]?.trim() ?? "";
@@ -257,7 +295,7 @@ export function parseReleaseNotesBlocks(
     }
 
     flushList();
-    pendingParagraph.push(trimmed);
+    pendingParagraph.push(cleanLine);
   }
 
   flushList();

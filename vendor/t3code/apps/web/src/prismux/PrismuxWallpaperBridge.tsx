@@ -6,7 +6,7 @@ import {
   type InlineAppearanceRenderContext,
   type WallpaperItem,
 } from "@prismux/wallpaper";
-import { Image as ImageIcon, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { memo, useCallback } from "react";
 
 import { PopoverCreateHandle, PopoverTrigger } from "../components/ui/popover";
@@ -103,6 +103,39 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
   );
 });
 
+/**
+ * 1:1 Overview panel icon (rounded square frame + 3 left-aligned rounded horizontal bars,
+ * with the 3rd bar shorter). Hand-crafted `viewBox="0 0 20 20"` for pixel-crisp rendering.
+ */
+export function OverviewPanelIcon({ className }: { readonly className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+      data-pmx-overview-icon="1"
+      className={className}
+    >
+      <rect
+        x="2.75"
+        y="2.75"
+        width="14.5"
+        height="14.5"
+        rx="2.6"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d="M6.1 6.9H13.9M6.1 10H13.9M6.1 13.1H10.5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export interface PrismuxTopbarControlsProps {
   /** Overview (`ThreadDetailsPanel`) toggle state when rendered in the unified single topbar. */
   readonly overviewOpen?: boolean;
@@ -110,7 +143,7 @@ export interface PrismuxTopbarControlsProps {
   readonly overviewPopoverHandle?: ReturnType<typeof PopoverCreateHandle>;
   readonly overviewShortcutLabel?: string | null;
   readonly onToggleOverview?: () => void;
-  /** Legacy wallpaper toggle props retained for backward compatibility when `onToggleOverview` is omitted. */
+  /** Independent right-sidebar wallpaper quick-toggle button (Sparkles icon) beside Overview. */
   readonly wallpaperOpen?: boolean;
   readonly wallpaperAvailable?: boolean;
   readonly inlineRightPanelOwnsTitleBar?: boolean;
@@ -122,7 +155,8 @@ export interface PrismuxTopbarControlsProps {
 /**
  * Unified single-topbar Prismux controls:
  * - Minimalist Chief Thread Slot breathing brand pill (`<PrismuxChiefStatusPill />`)
- * - AGY + Codex Overview panel (`ThreadDetailsPanel`) toggle button (`✨`, compatible with `Ctrl+Shift+B`)
+ * - AGY + Codex Overview panel (`ThreadDetailsPanel`) toggle button (rounded list-box SVG, `Ctrl+Shift+B`)
+ * - Independent Wallpaper Quick Sidebar toggle button (`Sparkles` 4-point star icon)
  * Strictly marks interactive controls `[-webkit-app-region:no-drag]` and uses clean flow layout
  * (zero brittle `mr-28` hacks) so it sits flush alongside right-panel toggles & Electron WCO buttons.
  */
@@ -144,18 +178,15 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
 
   const overviewToggleButton = (
     <Toggle
-      className={cn(
-        "size-6.5 shrink-0 [-webkit-app-region:no-drag]",
-        isGlassActive && !overviewOpen && "text-primary",
-      )}
+      className="size-6.5 shrink-0 [-webkit-app-region:no-drag]"
       pressed={overviewOpen}
       onPressedChange={overviewPresentation === "popover" ? undefined : onToggleOverview}
-      aria-label="切换概览"
+      aria-label="概览"
       data-pmx-overview-toggle="1"
       variant="ghost"
       size="sm"
     >
-      <Sparkles className="size-3.5" />
+      <OverviewPanelIcon className="size-4" />
     </Toggle>
   );
 
@@ -180,10 +211,12 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
             )}
           </TooltipTrigger>
           <TooltipPopup side="bottom">
-            {overviewShortcutLabel ? `切换概览 (${overviewShortcutLabel})` : "切换概览"}
+            {overviewShortcutLabel ? `概览 (${overviewShortcutLabel})` : "概览"}
           </TooltipPopup>
         </Tooltip>
-      ) : onToggleWallpaper ? (
+      ) : null}
+
+      {onToggleWallpaper ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>
             <Toggle
@@ -193,21 +226,17 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
               )}
               pressed={wallpaperOpen}
               onPressedChange={onToggleWallpaper}
-              aria-label="切换壁纸与液态玻璃边栏"
-              data-pmx-wallpaper-toggle=""
+              aria-label="壁纸快速开启"
+              data-pmx-wallpaper-toggle="1"
               variant="ghost"
               size="sm"
               disabled={!wallpaperAvailable}
             >
-              {isGlassActive ? (
-                <Sparkles className="size-3.5" />
-              ) : (
-                <ImageIcon className="size-3.5" />
-              )}
+              <Sparkles className="size-3.5" data-pmx-wallpaper-icon="1" aria-hidden />
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
-            {wallpaperAvailable ? "壁纸与液态玻璃边栏" : "打开会话后可使用壁纸边栏"}
+            {wallpaperAvailable ? "壁纸快速开启" : "打开会话后可使用壁纸边栏"}
           </TooltipPopup>
         </Tooltip>
       ) : null}

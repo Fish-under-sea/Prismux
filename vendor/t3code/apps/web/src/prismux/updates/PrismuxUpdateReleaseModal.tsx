@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangleIcon,
@@ -43,11 +43,11 @@ import {
   formatVersionBadge,
   hasVerifiedUpdatePackage,
   isUpdateTransferActive,
-  parseReleaseNotesBlocks,
   prismuxUpdateNotifierStore,
   useUpdateNotifierState,
   type RectSnapshot,
 } from "./updateNotifierStore";
+import { PrismuxReleaseNotesMarkdown } from "./PrismuxReleaseNotesMarkdown";
 
 function asPackageKind(raw: string): DaemonUpdatePackageKind | undefined {
   if (raw === "setup-exe" || raw === "portable-zip" || raw === "split-7z-exe") {
@@ -69,45 +69,6 @@ function formatPublishedDate(raw: string | null | undefined): string | null {
   } catch {
     return raw.slice(0, 10);
   }
-}
-
-function renderInlineMarkdown(text: string): ReactNode[] {
-  const tokens: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      tokens.push(text.slice(lastIndex, match.index));
-    }
-    const token = match[0] ?? "";
-    if (token.startsWith("`") && token.endsWith("`") && token.length > 2) {
-      tokens.push(
-        <code
-          key={`c-${key++}`}
-          className="rounded bg-foreground/[0.08] px-1 py-0.5 font-mono text-[11px] text-foreground dark:bg-white/10"
-        >
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
-      tokens.push(
-        <strong key={`b-${key++}`} className="font-semibold text-foreground">
-          {token.slice(2, -2)}
-        </strong>,
-      );
-    } else {
-      tokens.push(token);
-    }
-    lastIndex = match.index + token.length;
-  }
-
-  if (lastIndex < text.length) {
-    tokens.push(text.slice(lastIndex));
-  }
-  return tokens;
 }
 
 function captureRectSnapshot(el: HTMLElement | null): RectSnapshot | null {
@@ -181,10 +142,6 @@ export function PrismuxUpdateReleaseModal() {
     validateSafeHttpsUrl(recommendedAsset?.effectiveUrl) ??
     "https://github.com/Fish-under-sea/Prismux/releases";
 
-  const releaseBlocks = useMemo(
-    () => parseReleaseNotesBlocks(update?.releaseNotes),
-    [update?.releaseNotes],
-  );
   const publishedDate = formatPublishedDate(update?.publishedAt);
 
   const handleDismissToCapsule = useCallback(() => {
@@ -445,52 +402,16 @@ export function PrismuxUpdateReleaseModal() {
               ) : null}
             </div>
 
-            <div
-              data-testid="prismux-update-release-notes"
-              className="space-y-2.5 rounded-xl border border-border/65 bg-foreground/[0.03] px-4 py-3 text-xs leading-relaxed text-foreground/90 dark:bg-white/[0.035]"
-            >
-              {releaseBlocks.length > 0 ? (
-                releaseBlocks.map((block, index) => {
-                  if (block.type === "heading") {
-                    return (
-                      <h4
-                        key={`h-${index}`}
-                        className={cn(
-                          "font-semibold text-foreground",
-                          block.level === 1
-                            ? "text-[13.5px]"
-                            : block.level === 2
-                              ? "text-[12.5px]"
-                              : "text-xs",
-                          index > 0 && "pt-1",
-                        )}
-                      >
-                        {block.text}
-                      </h4>
-                    );
-                  }
-                  if (block.type === "list") {
-                    return (
-                      <ul key={`l-${index}`} className="list-disc space-y-1 pl-4 text-foreground/88">
-                        {block.items.map((item, itemIdx) => (
-                          <li key={`li-${itemIdx}`} className="leading-relaxed">
-                            {renderInlineMarkdown(item)}
-                          </li>
-                        ))}
-                      </ul>
-                    );
-                  }
-                  return (
-                    <p key={`p-${index}`} className="text-foreground/85">
-                      {renderInlineMarkdown(block.text)}
-                    </p>
-                  );
-                })
-              ) : (
-                <p className="text-muted-foreground">
-                  此版本包含性能与液态玻璃体验优化及若干稳定性修复，支持在软件内直接下载并完成 SHA-256 强校验升级。
-                </p>
-              )}
+            <div className="rounded-xl border border-border/65 bg-foreground/[0.03] px-4 py-3 dark:bg-white/[0.035]">
+              <PrismuxReleaseNotesMarkdown
+                markdown={update?.releaseNotes}
+                data-testid="prismux-update-release-notes"
+                fallback={
+                  <p className="text-muted-foreground">
+                    此版本包含性能与液态玻璃体验优化及若干稳定性修复，支持在软件内直接下载并完成 SHA-256 强校验升级。
+                  </p>
+                }
+              />
             </div>
           </section>
 

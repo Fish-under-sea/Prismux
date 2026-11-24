@@ -302,10 +302,9 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     expect(html).not.toContain("插件");
     expect(html).not.toContain("Plugins");
 
-    // All 8 structured sections rendered with real data & counts
+    // Only non-zero structured sections render (side-questions has count 0 here so it stays hidden by default)
     for (const sectionId of [
       "subagents",
-      "side-questions",
       "background-tasks",
       "goals",
       "artifacts",
@@ -315,10 +314,10 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     ]) {
       expect(html).toContain(`data-overview-section="${sectionId}"`);
     }
+    expect(html).not.toContain('data-overview-section="side-questions"');
 
-    // Real data assertions across sections
+    // Real data assertions across visible sections
     expect(html).toContain("UI Verifier"); // subagents
-    expect(html).toContain('data-action="add-side-question"'); // side-questions + trigger
     expect(html).toContain("vp dev"); // background tasks (Daemon PTY)
     expect(html).toContain("1/2"); // goals completion count
     expect(html).toContain("概览面板实施方案"); // artifacts (proposed_plan)
@@ -329,6 +328,83 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     expect(html).toContain("design-spec.pdf"); // uploads (file)
     expect(html).toContain("/handoff"); // used skills (read-only slash command)
     expect(html).toContain(">tdd<"); // used skills (read-only skill ref)
+  });
+
+  it("hides +0 -0 diff badge and all 8 zero-count sections (plus orphan divider) when no data exists", () => {
+    mockState.projection = null;
+
+    const html = renderToStaticMarkup(
+      <SessionOverviewPanel
+        {...makeBaseProps({
+          isServerThread: false,
+          gitCwd: null,
+          isGitRepo: false,
+          diffStats: { insertions: 0, deletions: 0, files: [] },
+          threadAttachments: [],
+          daemonPtysOverride: [],
+        })}
+      />,
+    );
+
+    // Top 3 quick action rows remain visible
+    expect(html).toContain('data-overview-action="review"');
+    expect(html).toContain('data-overview-action="files"');
+    expect(html).toContain('data-overview-action="continue-in-terminal"');
+
+    // +0 -0 diff stats badge is NOT rendered
+    expect(html).not.toContain('data-overview-diff-stats="1"');
+    expect(html).not.toContain('data-overview-diff-insertions="1"');
+    expect(html).not.toContain('data-overview-diff-deletions="1"');
+    expect(html).not.toContain(">+0<");
+    expect(html).not.toContain(">-0<");
+
+    // All 8 zero-count sections and their wrapper container stay unrendered
+    expect(html).not.toContain("data-thread-relationships-panel");
+    for (const sectionId of [
+      "subagents",
+      "side-questions",
+      "background-tasks",
+      "goals",
+      "artifacts",
+      "modified-files",
+      "uploads",
+      "used-skills",
+    ]) {
+      expect(html).not.toContain(`data-overview-section="${sectionId}"`);
+    }
+  });
+
+  it("renders diff badge when either insertions or deletions is non-zero and only reveals populated sections", () => {
+    mockState.projection = null;
+
+    const html = renderToStaticMarkup(
+      <SessionOverviewPanel
+        {...makeBaseProps({
+          isServerThread: false,
+          gitCwd: null,
+          isGitRepo: false,
+          diffStats: {
+            insertions: 5,
+            deletions: 0,
+            files: [{ path: "src/app.ts", insertions: 5, deletions: 0 }],
+          },
+          threadAttachments: [],
+          daemonPtysOverride: [],
+        })}
+      />,
+    );
+
+    expect(html).toContain('data-overview-diff-stats="1"');
+    expect(html).toContain("+5");
+    expect(html).toContain("-0");
+    expect(html).toContain('data-overview-section="modified-files"');
+    expect(html).not.toContain('data-overview-section="subagents"');
+    expect(html).not.toContain('data-overview-section="side-questions"');
+    expect(html).not.toContain('data-overview-section="background-tasks"');
+    expect(html).not.toContain('data-overview-section="goals"');
+    expect(html).not.toContain('data-overview-section="artifacts"');
+    expect(html).not.toContain('data-overview-section="uploads"');
+    expect(html).not.toContain('data-overview-section="used-skills"');
   });
 
   it("renders default 4 modified files with 查看全部 toggle and collapses/expands cleanly via OverviewSectionBlock", () => {

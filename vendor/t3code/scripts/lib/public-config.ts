@@ -21,16 +21,41 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 const REPO_ROOT = NodePath.resolve(NodeURL.fileURLToPath(import.meta.url), "../../..");
 
+/**
+ * Upstream T3 Connect public identifiers (identical to `vendor/t3code/.env.example`,
+ * NOT secrets). Baked into official T3 Code & Prismux builds so users can sign in
+ * with their T3 Code account and remotely control their workbench via T3 Connect
+ * out of the box. Override via `.env`, `.env.local`, or process env, or disable
+ * explicitly with `T3CODE_DISABLE_CLOUD=1`.
+ */
+export const DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG: Readonly<Record<string, string>> = {
+  T3CODE_CLERK_PUBLISHABLE_KEY: "pk_live_Y2xlcmsudDMuY29kZXMk",
+  T3CODE_CLERK_JWT_TEMPLATE: "t3-relay",
+  T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "hzxSgY2cH10sDU2r",
+  T3CODE_RELAY_URL: "https://relay.t3.codes",
+};
+
 export function loadRepoEnv({
   baseEnv = process.env,
   repoRoot = REPO_ROOT,
+  useOfficialDefaults,
 }: {
   readonly baseEnv?: Environment;
   readonly repoRoot?: string;
+  readonly useOfficialDefaults?: boolean;
 } = {}): Record<string, string | undefined> {
   const rootEnv = readEnvFile(NodePath.join(repoRoot, ".env"));
   const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
-  const config = resolvePublicConfig(baseEnv, localEnv, rootEnv);
+  const cloudExplicitlyDisabled =
+    firstNonEmpty([baseEnv, localEnv, rootEnv], "T3CODE_DISABLE_CLOUD") === "1";
+  const applyOfficialDefaults =
+    useOfficialDefaults !== undefined
+      ? useOfficialDefaults && !cloudExplicitlyDisabled
+      : !cloudExplicitlyDisabled;
+  const fallbackDefaults: Environment = applyOfficialDefaults
+    ? DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG
+    : {};
+  const config = resolvePublicConfig(baseEnv, localEnv, rootEnv, fallbackDefaults);
 
   return {
     ...rootEnv,

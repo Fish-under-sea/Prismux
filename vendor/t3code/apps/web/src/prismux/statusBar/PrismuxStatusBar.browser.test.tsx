@@ -9,6 +9,7 @@ import { userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
 import { PrismuxStatusBar } from "../PrismuxStatusBar";
+import { ResourcesStatusPopover } from "./ResourcesStatusPopover";
 import { STATUS_BAR_VISIBILITY_STORAGE_KEY } from "./statusBarVisibility";
 
 function renderStatusBarInRouter() {
@@ -77,5 +78,82 @@ describe("PrismuxStatusBar (browser)", () => {
 
     // Never performs any unsolicited Antigravity / remote quota fetch.
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("highlights the active option in ResourcesStatusPopover [内存 | CPU | 名称] segmented switcher across clicks", async () => {
+    await using screen = await render(
+      <ResourcesStatusPopover
+        raw={{
+          collectedAt: Date.now(),
+          totalCpuPercent: 8.7,
+          totalMemoryBytes: 620 * 1024 * 1024,
+          desktop: { pid: 1000, cpuPercent: 7.4, memoryBytes: 420 * 1024 * 1024, processCount: 2 },
+          daemon: { pid: 1050, cpuPercent: 0.3, memoryBytes: 60 * 1024 * 1024 },
+          t3Server: {
+            pid: 2000,
+            cpuPercent: 1.0,
+            memoryBytes: 140 * 1024 * 1024,
+            hostedBy: "electron",
+            state: "running",
+          },
+          processes: [
+            {
+              pid: 1001,
+              name: "工作台渲染进程",
+              processName: "Prismux.exe",
+              role: "electron-renderer",
+              category: "desktop",
+              cpuPercent: 5.2,
+              memoryBytes: 260 * 1024 * 1024,
+            },
+            {
+              pid: 1002,
+              name: "GPU 合成 / 壁纸渲染",
+              processName: "Prismux.exe",
+              role: "electron-gpu",
+              category: "desktop",
+              cpuPercent: 2.2,
+              memoryBytes: 160 * 1024 * 1024,
+            },
+          ],
+        }}
+        loading={false}
+        error={null}
+        daemonReady
+        onRefresh={async () => {}}
+        onKillPty={async (sessionId) => ({ ok: true, sessionId })}
+      />,
+    );
+
+    const memBtn = screen.getByTestId("resources-sort-memory").element() as HTMLButtonElement;
+    const cpuBtn = screen.getByTestId("resources-sort-cpu").element() as HTMLButtonElement;
+    const nameBtn = screen.getByTestId("resources-sort-name").element() as HTMLButtonElement;
+
+    // Default active: 内存
+    expect(memBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(memBtn.getAttribute("data-active")).toBe("true");
+    expect(memBtn.className).toContain("bg-primary");
+    expect(memBtn.className).toContain("text-primary-foreground");
+    expect(cpuBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(cpuBtn.getAttribute("data-active")).toBe("false");
+    expect(cpuBtn.className).toContain("bg-transparent");
+
+    // Switch to CPU
+    await userEvent.click(cpuBtn);
+    expect(cpuBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(cpuBtn.getAttribute("data-active")).toBe("true");
+    expect(cpuBtn.className).toContain("bg-primary");
+    expect(cpuBtn.className).toContain("text-primary-foreground");
+    expect(memBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(memBtn.getAttribute("data-active")).toBe("false");
+    expect(memBtn.className).toContain("bg-transparent");
+
+    // Switch to 名称
+    await userEvent.click(nameBtn);
+    expect(nameBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(nameBtn.getAttribute("data-active")).toBe("true");
+    expect(nameBtn.className).toContain("bg-primary");
+    expect(cpuBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(cpuBtn.className).toContain("bg-transparent");
   });
 });

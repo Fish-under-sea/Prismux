@@ -1,3 +1,4 @@
+import { decodeMsg } from "gt-react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -79,7 +80,7 @@ it("moves Tab through every settings section", async () => {
 
   const sections = settingsNavGroups(false)
     .flatMap((group) => group.paths)
-    .map((to) => SETTINGS_NAV_LABELS[to]);
+    .map((to) => decodeMsg(SETTINGS_NAV_LABELS[to]));
   const tabbed: string[] = [];
   for (let step = 0; step < sections.length; step += 1) {
     await userEvent.tab();

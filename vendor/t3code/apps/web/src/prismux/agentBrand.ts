@@ -1,4 +1,4 @@
-import { createElement, useEffect, useId, type CSSProperties, type ReactElement } from "react";
+import { createElement, memo, useEffect, useId, type CSSProperties, type ReactElement } from "react";
 
 export type AgentBrandId =
   | "codex"
@@ -38,8 +38,8 @@ const CANONICAL_BRAND_META: Readonly<Record<Exclude<AgentBrandId, "custom">, Age
     id: "antigravity",
     displayName: "Antigravity",
     canonicalProviderId: "antigravity",
-    accentColor: "#6366f1",
-    glowColor: "rgba(99, 102, 241, 0.62)",
+    accentColor: "#4285F4",
+    glowColor: "rgba(66, 133, 244, 0.58)",
   },
   omp: {
     id: "omp",
@@ -396,6 +396,130 @@ const CLAUDE_STARBURST_PATH =
 const CURSOR_PRISM_PATH =
   "M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z";
 
+/**
+ * Official Google Antigravity A-arch silhouette (24x24 viewBox), fitted 1:1 to
+ * the native Antigravity application icon (smooth parabolic crown, flared concave
+ * flanks, rounded legs, and open inner arch).
+ */
+export const ANTIGRAVITY_LOGO_PATH =
+  "M 12 2.81 C 14.78 2.81 16.10 5.30 17.78 11.94 C 18.92 16.45 20.22 18.58 21.64 20.02 C 22.18 20.56 21.88 21.22 21.02 21.19 C 20.48 21.17 20.08 20.84 19.62 20.46 C 17.92 19.10 16.96 17.42 15.72 15.20 C 14.75 13.68 13.86 12.75 12.00 12.75 C 10.14 12.75 9.25 13.68 8.28 15.20 C 7.04 17.42 6.08 19.10 4.38 20.46 C 3.92 20.84 3.52 21.17 2.98 21.19 C 2.12 21.22 1.82 20.56 2.36 20.02 C 3.78 18.58 5.08 16.45 6.22 11.94 C 7.90 5.30 9.22 2.81 12 2.81 Z";
+
+/**
+ * Renders the interior SVG elements (`<defs>` + clipped Google 4-color fluid mesh
+ * `#34A853` green -> `#FBBC04` yellow -> `#EA4335` red -> `#4285F4` blue) for the
+ * official Google Antigravity icon using caller-supplied `useId()` prefix to prevent
+ * multi-instance gradient/clipPath ID collisions.
+ */
+export function renderAntigravitySvgContent(
+  idPrefix: string,
+  monochrome = false,
+): readonly ReactElement[] {
+  if (monochrome) {
+    return [
+      createElement("path", {
+        key: "mono",
+        d: ANTIGRAVITY_LOGO_PATH,
+        fill: "currentColor",
+      }),
+    ];
+  }
+
+  const clipId = `${idPrefix}-agy-clip`;
+  const baseGradId = `${idPrefix}-agy-base`;
+  const greenGradId = `${idPrefix}-agy-green`;
+  const yellowGradId = `${idPrefix}-agy-yellow`;
+  const redGradId = `${idPrefix}-agy-red`;
+  const bellyGradId = `${idPrefix}-agy-belly`;
+
+  return [
+    createElement(
+      "defs",
+      { key: "defs" },
+      createElement(
+        "clipPath",
+        { id: clipId },
+        createElement("path", { d: ANTIGRAVITY_LOGO_PATH }),
+      ),
+      createElement(
+        "linearGradient",
+        {
+          id: baseGradId,
+          x1: "2.5",
+          y1: "21",
+          x2: "18.5",
+          y2: "5",
+          gradientUnits: "userSpaceOnUse",
+        },
+        createElement("stop", { offset: "0%", stopColor: "#60A8FC" }),
+        createElement("stop", { offset: "30%", stopColor: "#4285F4" }),
+        createElement("stop", { offset: "68%", stopColor: "#3186FF" }),
+        createElement("stop", { offset: "100%", stopColor: "#4285F4" }),
+      ),
+      createElement(
+        "radialGradient",
+        {
+          id: greenGradId,
+          cx: "7.4",
+          cy: "6.6",
+          r: "6.8",
+          gradientUnits: "userSpaceOnUse",
+        },
+        createElement("stop", { offset: "0%", stopColor: "#34A853", stopOpacity: 0.98 }),
+        createElement("stop", { offset: "42%", stopColor: "#4CC25E", stopOpacity: 0.72 }),
+        createElement("stop", { offset: "100%", stopColor: "#34A853", stopOpacity: 0 }),
+      ),
+      createElement(
+        "radialGradient",
+        {
+          id: yellowGradId,
+          cx: "10.4",
+          cy: "3.0",
+          r: "5.5",
+          gradientUnits: "userSpaceOnUse",
+        },
+        createElement("stop", { offset: "0%", stopColor: "#FBBC04", stopOpacity: 1 }),
+        createElement("stop", { offset: "50%", stopColor: "#FBBC04", stopOpacity: 0.78 }),
+        createElement("stop", { offset: "100%", stopColor: "#FBBC04", stopOpacity: 0 }),
+      ),
+      createElement(
+        "radialGradient",
+        {
+          id: redGradId,
+          cx: "14.9",
+          cy: "4.4",
+          r: "6.8",
+          gradientUnits: "userSpaceOnUse",
+        },
+        createElement("stop", { offset: "0%", stopColor: "#EA4335", stopOpacity: 0.98 }),
+        createElement("stop", { offset: "44%", stopColor: "#F25C43", stopOpacity: 0.72 }),
+        createElement("stop", { offset: "100%", stopColor: "#EA4335", stopOpacity: 0 }),
+      ),
+      createElement(
+        "radialGradient",
+        {
+          id: bellyGradId,
+          cx: "12.0",
+          cy: "12.4",
+          r: "5.4",
+          gradientUnits: "userSpaceOnUse",
+        },
+        createElement("stop", { offset: "0%", stopColor: "#3589FF", stopOpacity: 0.88 }),
+        createElement("stop", { offset: "55%", stopColor: "#4285F4", stopOpacity: 0.42 }),
+        createElement("stop", { offset: "100%", stopColor: "#4285F4", stopOpacity: 0 }),
+      ),
+    ),
+    createElement(
+      "g",
+      { key: "mesh", clipPath: `url(#${clipId})` },
+      createElement("rect", { x: 0, y: 0, width: 24, height: 24, fill: `url(#${baseGradId})` }),
+      createElement("rect", { x: 0, y: 0, width: 24, height: 24, fill: `url(#${greenGradId})` }),
+      createElement("rect", { x: 0, y: 0, width: 24, height: 24, fill: `url(#${yellowGradId})` }),
+      createElement("rect", { x: 0, y: 0, width: 24, height: 24, fill: `url(#${redGradId})` }),
+      createElement("rect", { x: 0, y: 0, width: 24, height: 24, fill: `url(#${bellyGradId})` }),
+    ),
+  ];
+}
+
 export interface AgentBrandLogoProps {
   /** Provider ID, driver kind, or display name (e.g. "codex", "claudeAgent", "antigravity", "omp"). */
   readonly provider: string | null | undefined;
@@ -455,41 +579,10 @@ function renderBrandSvg(
       );
 
     case "antigravity": {
-      const outerGradId = `${gradientPrefix}-agy-outer`;
-      const innerGradId = `${gradientPrefix}-agy-inner`;
       return createElement(
         "svg",
         { ...baseProps, viewBox: "0 0 24 24", fill: "none" },
-        monochrome
-          ? null
-          : createElement(
-              "defs",
-              null,
-              createElement(
-                "linearGradient",
-                { id: outerGradId, x1: "3", y1: "21", x2: "21", y2: "3", gradientUnits: "userSpaceOnUse" },
-                createElement("stop", { offset: "0%", stopColor: "#3b82f6" }),
-                createElement("stop", { offset: "50%", stopColor: "#6366f1" }),
-                createElement("stop", { offset: "100%", stopColor: "#22d3ee" }),
-              ),
-              createElement(
-                "linearGradient",
-                { id: innerGradId, x1: "7", y1: "19", x2: "17", y2: "9", gradientUnits: "userSpaceOnUse" },
-                createElement("stop", { offset: "0%", stopColor: "#818cf8" }),
-                createElement("stop", { offset: "100%", stopColor: "#c084fc" }),
-              ),
-            ),
-        // Outer dual-arch prism silhouette
-        createElement("path", {
-          d: "M4.1 19.6C6.4 12.1 8.8 4.2 12 4.2C15.2 4.2 17.6 12.1 19.9 19.6C20.2 20.5 19.3 21.2 18.5 20.7C16.2 19.2 14.3 15.8 12 15.8C9.7 15.8 7.8 19.2 5.5 20.7C4.7 21.2 3.8 20.5 4.1 19.6Z",
-          fill: monochrome ? "currentColor" : `url(#${outerGradId})`,
-        }),
-        // Inner floating levitation arch cut/core
-        createElement("path", {
-          d: "M9.3 14.3C10.2 11.4 11.1 9.2 12 9.2C12.9 9.2 13.8 11.4 14.7 14.3C13.8 13.8 12.9 13.5 12 13.5C11.1 13.5 10.2 13.8 9.3 14.3Z",
-          fill: monochrome ? "var(--background, #0b101b)" : `url(#${innerGradId})`,
-          opacity: monochrome ? 0.85 : 0.92,
-        }),
+        ...renderAntigravitySvgContent(gradientPrefix, monochrome),
       );
     }
 
@@ -595,7 +688,7 @@ function renderBrandSvg(
  * Official vendor SVG logo with gentle luminance breathing animation when online.
  * Respects `prefers-reduced-motion: reduce` and `[data-pmx-gpu="0"]` static degradation.
  */
-export function AgentBrandLogo({
+export const AgentBrandLogo = memo(function AgentBrandLogo({
   provider,
   online = true,
   breathing = false,
@@ -633,4 +726,4 @@ export function AgentBrandLogo({
     },
     renderBrandSvg(meta.id, size, monochrome, gradientPrefix, iconClassName),
   );
-}
+});

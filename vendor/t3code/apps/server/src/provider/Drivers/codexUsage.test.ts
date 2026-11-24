@@ -992,5 +992,34 @@ describe("parseCodexLine", () => {
         skipped: codexUsageFormat.readMalformedRecords?.(state),
       }).toEqual({ processed: [160, 230], skipped: 0 });
     });
+
+    it("extracts call duration from turn_context and explicit timing metadata", () => {
+      const state = initialCodexScanState();
+      parseCodexLine(sessionMeta, state);
+      parseCodexLine(turnContext, state);
+      const paired = parseCodexLine(tokenCount(1000, 600, 200, 50), state);
+      expect(paired?.durationMs).toBe(
+        Date.parse("2026-08-01T05:17:49.919Z") - Date.parse("2026-08-01T05:17:42.694Z"),
+      );
+      expect(paired?.ttftMs).toBeUndefined();
+
+      const explicit = parseCodexLine(
+        JSON.stringify({
+          type: "event_msg",
+          timestamp: "2026-08-01T05:17:55.000Z",
+          payload: {
+            type: "token_count",
+            info: {
+              ttft_ms: 520,
+              duration_ms: 3520,
+              last_token_usage: counters(300, 150),
+            },
+          },
+        }),
+        state,
+      );
+      expect(explicit?.ttftMs).toBe(520);
+      expect(explicit?.durationMs).toBe(3520);
+    });
   });
 });

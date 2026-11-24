@@ -85,6 +85,26 @@ export function sanitizeDiagnosticsSettingsRoute(raw: string | null | undefined)
   return trimmed;
 }
 
+/**
+ * Maps legacy `/settings/memory-sync` diagnostic routes to the exact split destination:
+ * `sync.*` items route to `/settings/sync`, while `memory.*` items route to `/settings/memory`.
+ */
+export function resolveDiagnosticsSettingsRoute(
+  raw: string | null | undefined,
+  itemId?: string,
+): string | null {
+  const sanitized = sanitizeDiagnosticsSettingsRoute(raw);
+  if (!sanitized) return null;
+  if (sanitized === "/settings/memory-sync" || sanitized === "/settings/memory-sync/") {
+    const normalizedId = (itemId ?? "").trim().toLowerCase();
+    if (normalizedId.startsWith("sync.") || normalizedId.includes("sync")) {
+      return "/settings/sync";
+    }
+    return "/settings/memory";
+  }
+  return sanitized;
+}
+
 function normalizeStatus(raw: unknown): DaemonDiagnosticsStatus {
   if (raw === "ok" || raw === "degraded" || raw === "error") {
     return raw;
@@ -114,7 +134,7 @@ function normalizeItem(raw: DaemonDiagnosticsItemDto): NormalizedDiagnosticItem 
       typeof raw.fixCommand === "string" && raw.fixCommand.trim().length > 0
         ? raw.fixCommand.trim()
         : null,
-    settingsRoute: sanitizeDiagnosticsSettingsRoute(raw.settingsRoute),
+    settingsRoute: resolveDiagnosticsSettingsRoute(raw.settingsRoute, raw.id),
     version:
       typeof raw.version === "string" && raw.version.trim().length > 0 ? raw.version.trim() : null,
     latencyMs:
@@ -283,4 +303,155 @@ export function formatDiagnosticsTimestamp(timestampMs: number | null | undefine
   } catch {
     return "—";
   }
+}
+
+export const DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS = 3_000;
+
+export type DiagnosticsRefreshReason =
+  | "mount"
+  | "manual"
+  | "focus"
+  | "visibility"
+  | "plugin-mutated"
+  | "settings-left"
+  | "external";
+
+export interface DiagnosticsReportEvent {
+  readonly response: DaemonDiagnosticsServicesResponse;
+  readonly report: NormalizedDiagnosticsReport;
+}
+
+type DiagnosticsReportListener = (event: DiagnosticsReportEvent) => void;
+type DiagnosticsRefreshRequestListener = (reason: DiagnosticsRefreshReason) => void;
+
+const DIAGNOSTICS_MUTATION_SETTINGS_PATHS: ReadonlySet<string> = new Set([
+  "/settings/providers",
+  "/settings/plugins",
+  "/settings/memory",
+  "/settings/sync",
+  "/settings/overnight-factory",
+  "/settings/memory-sync",
+  "/settings/updates",
+  "/settings/wallpaper",
+]);
+
+let latestDiagnosticsResponse: DaemonDiagnosticsServicesResponse | null = null;
+let latestNormalizedDiagnosticsReport: NormalizedDiagnosticsReport | null = null;
+const diagnosticsReportListeners = new Set<DiagnosticsReportListener>();
+const diagnosticsRefreshRequestListeners = new Set<DiagnosticsRefreshRequestListener>();
+
+/**
+ * Publishes a freshly fetched diagnostics response so both the Diagnostics page
+ * and the left sidebar status indicator stay strictly in sync.
+ */
+export function publishDiagnosticsReport(
+  response: DaemonDiagnosticsServicesResponse,
+): NormalizedDiagnosticsReport {
+  const report = normalizeDiagnosticsResponse(response);
+  latestDiagnosticsResponse = response;
+  latestNormalizedDiagnosticsReport = report;
+  const event: DiagnosticsReportEvent = { response, report };
+  for (const listener of diagnosticsReportListeners) {
+    try {
+      listener(event);
+    } catch {
+      // Isolate listener errors
+    }
+  }
+  return report;
+}
+
+export function getLatestDiagnosticsResponse(): DaemonDiagnosticsServicesResponse | null {
+  return latestDiagnosticsResponse;
+}
+
+export function getLatestNormalizedDiagnosticsReport(): NormalizedDiagnosticsReport | null {
+  return latestNormalizedDiagnosticsReport;
+}
+
+export function subscribeDiagnosticsReport(listener: DiagnosticsReportListener): () => void {
+  diagnosticsReportListeners.add(listener);
+  return () => {
+    diagnosticsReportListeners.delete(listener);
+  };
+}
+
+/**
+ * Broadcasts an explicit hot-reload request (e.g. after installing/uninstalling
+ * a plugin or changing provider settings) so active views and the sidebar badge
+ * immediately re-probe Daemon with `force=1`.
+ */
+export function requestDiagnosticsRefresh(
+  reason: DiagnosticsRefreshReason = "external",
+): void {
+  for (const listener of diagnosticsRefreshRequestListeners) {
+    try {
+      listener(reason);
+    } catch {
+      // Isolate listener errors
+    }
+  }
+}
+
+export function subscribeDiagnosticsRefreshRequest(
+  listener: DiagnosticsRefreshRequestListener,
+): () => void {
+  diagnosticsRefreshRequestListeners.add(listener);
+  return () => {
+    diagnosticsRefreshRequestListeners.delete(listener);
+  };
+}
+
+export function resetDiagnosticsLiveStoreForTests(): void {
+  latestDiagnosticsResponse = null;
+  latestNormalizedDiagnosticsReport = null;
+  diagnosticsReportListeners.clear();
+  diagnosticsRefreshRequestListeners.clear();
+}
+
+export function isDiagnosticsAutoRefreshSettingsPath(pathname: string): boolean {
+  const normalized = pathname.trim().replace(/\/+$/, "");
+  return DIAGNOSTICS_MUTATION_SETTINGS_PATHS.has(normalized);
+}
+
+export interface DiagnosticsRefreshController {
+  trigger(reason: DiagnosticsRefreshReason, options?: { bypassCooldown?: boolean }): boolean;
+  markRefreshed(timestampMs?: number): void;
+  getLastTriggeredAt(): number;
+}
+
+/**
+ * Coalesces / throttles automatic hot-reload triggers (such as window `focus`
+ * and `visibilitychange`) with a default 3-second cooldown to prevent probe
+ * storms while still allowing immediate explicit refreshes.
+ */
+export function createDiagnosticsRefreshController(
+  onRefresh: (reason: DiagnosticsRefreshReason) => void,
+  options?: {
+    cooldownMs?: number;
+    now?: () => number;
+  },
+): DiagnosticsRefreshController {
+  const cooldownMs = Math.max(0, options?.cooldownMs ?? DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS);
+  const now = options?.now ?? (() => Date.now());
+  let lastTriggeredAt = -Infinity;
+
+  return {
+    trigger(reason, triggerOptions) {
+      const current = now();
+      const bypass = triggerOptions?.bypassCooldown === true;
+      if (!bypass && current - lastTriggeredAt < cooldownMs) {
+        return false;
+      }
+      lastTriggeredAt = current;
+      onRefresh(reason);
+      return true;
+    },
+    markRefreshed(timestampMs) {
+      lastTriggeredAt = timestampMs ?? now();
+    },
+    getLastTriggeredAt() {
+      return lastTriggeredAt;
+    },
+  };
 }

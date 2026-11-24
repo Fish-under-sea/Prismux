@@ -1,4 +1,9 @@
 import {
+  PrismuxReasoningEffortSlider,
+  computeReasoningEffortStopPercent,
+  resolveReasoningEffortStopIndexFromPointer,
+} from "@prismux/appearance";
+import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -20,12 +25,14 @@ vi.mock("@tanstack/react-router", () => ({
 
 import {
   BUILTIN_CHIEF_FALLBACK_PROVIDERS,
+  PrismuxMemorySettingsPage,
   PrismuxMemorySyncSettingsPage,
   buildChiefModelDropdownItems,
   buildChiefProviderOptions,
   reconcileChiefSelectionOnProviderChange,
   resolveChiefEffortSpec,
 } from "./PrismuxMemorySyncSettingsPage";
+import { PrismuxSyncSettingsPage } from "./PrismuxSyncSettingsPage";
 
 function makeMockProvider(input: {
   instanceId: string;
@@ -388,5 +395,78 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     expect(html).toContain("Prismux 端到端加密同步");
     expect(html).toContain("Prismux 端到端加密同步（Argon2id + AEAD）");
     expect(html).not.toMatch(/magpie/i);
+  });
+
+  it("cleanly splits /settings/memory (Chief + AGENTS.md + SQLite + Obsidian) and /settings/sync (E2EE Sync + collapsible channels)", () => {
+    const memoryHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxMemorySettingsPage
+          serverProvidersOverride={mockProviders}
+          settingsOverride={null}
+          daemonReadyOverride
+        />
+      </GTProvider>,
+    );
+
+    expect(memoryHtml).toContain('id="prismux-memory"');
+    expect(memoryHtml).toContain("data-pmx-memory-settings-page");
+    expect(memoryHtml).toContain("data-pmx-chief-provider-select");
+    expect(memoryHtml).toContain("data-pmx-chief-agents-md-editor");
+    expect(memoryHtml).toContain('id="prismux-memory-engine"');
+    expect(memoryHtml).toContain("data-pmx-obsidian-agent-import");
+    // Sync section must NOT be rendered on /settings/memory
+    expect(memoryHtml).not.toContain('id="prismux-e2ee-sync"');
+    expect(memoryHtml).not.toContain('data-pmx-sync-channel="webdav"');
+
+    const syncHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxSyncSettingsPage daemonReadyOverride />
+      </GTProvider>,
+    );
+
+    expect(syncHtml).toContain('id="prismux-sync"');
+    expect(syncHtml).toContain("data-pmx-sync-settings-page");
+    expect(syncHtml).toContain('id="prismux-e2ee-sync"');
+    expect(syncHtml).toContain("Prismux 端到端加密同步（Argon2id + AEAD）");
+    expect(syncHtml).toContain('data-pmx-sync-channel="webdav"');
+    expect(syncHtml).toContain('data-pmx-sync-channel="s3"');
+    expect(syncHtml).toContain('data-pmx-sync-channel="github"');
+    expect(syncHtml).toContain('data-pmx-sync-channel-expanded="false"');
+    expect(syncHtml).toContain("同步域矩阵（Upload / Download 独立控制）");
+    // Chief / Memory sections must NOT be rendered on /settings/sync
+    expect(syncHtml).not.toContain('id="prismux-chief-slot"');
+    expect(syncHtml).not.toContain('id="prismux-memory-engine"');
+    expect(syncHtml).not.toContain("data-pmx-chief-agents-md-editor");
+    expect(syncHtml).not.toMatch(/magpie/i);
+  });
+
+  it("centers dsh-fish reasoning runner at ((i + 0.5) / N) * 100% and aligns pointer hit cells for N=2..7", () => {
+    const allLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    for (const count of [2, 3, 4, 5, 6, 7]) {
+      const options = allLevels.slice(0, count);
+      for (let i = 0; i < count; i += 1) {
+        const expectedPercent = ((i + 0.5) / count) * 100;
+        expect(computeReasoningEffortStopPercent(i, count)).toBeCloseTo(expectedPercent, 9);
+
+        const html = renderToStaticMarkup(
+          <PrismuxReasoningEffortSlider
+            modelId="gemini-2.5-pro"
+            provider="antigravity"
+            options={options}
+            value={options[i]}
+            showStops
+            showRunner
+            compact
+          />,
+        );
+        expect(html).toContain(`--pmx-re-progress:${expectedPercent}%`);
+        expect(html).toContain(`--pmx-re-count:${count}`);
+
+        const cellCenterX = 100 + ((i + 0.5) / count) * 600;
+        expect(
+          resolveReasoningEffortStopIndexFromPointer(cellCenterX, { left: 100, width: 600 }, count),
+        ).toBe(i);
+      }
+    }
   });
 });

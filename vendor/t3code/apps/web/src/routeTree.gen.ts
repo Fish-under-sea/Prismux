@@ -22,6 +22,7 @@ import { Route as ChatWorkspaceBoardRouteImport } from './routes/_chat.workspace
 import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
 import { Route as ChatTasksRouteImport } from './routes/_chat.tasks'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
+import { Route as ChatScheduledTasksRouteImport } from './routes/_chat.scheduled-tasks'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatIssuesRouteImport } from './routes/_chat.issues'
@@ -31,6 +32,7 @@ import { Route as ChatSettingsWallpaperRouteImport } from './routes/_chat.settin
 import { Route as ChatSettingsVoiceRouteImport } from './routes/_chat.settings.voice'
 import { Route as ChatSettingsUpdatesRouteImport } from './routes/_chat.settings.updates'
 import { Route as ChatSettingsThreadsRouteImport } from './routes/_chat.settings.threads'
+import { Route as ChatSettingsSyncRouteImport } from './routes/_chat.settings.sync'
 import { Route as ChatSettingsStorageRouteImport } from './routes/_chat.settings.storage'
 import { Route as ChatSettingsSourceControlRouteImport } from './routes/_chat.settings.source-control'
 import { Route as ChatSettingsSnapShotRouteImport } from './routes/_chat.settings.snap-shot'
@@ -39,8 +41,10 @@ import { Route as ChatSettingsScheduledTasksRouteImport } from './routes/_chat.s
 import { Route as ChatSettingsProvidersRouteImport } from './routes/_chat.settings.providers'
 import { Route as ChatSettingsProjectsRouteImport } from './routes/_chat.settings.projects'
 import { Route as ChatSettingsPluginsRouteImport } from './routes/_chat.settings.plugins'
+import { Route as ChatSettingsOvernightFactoryRouteImport } from './routes/_chat.settings.overnight-factory'
 import { Route as ChatSettingsOpenSourceLicensesRouteImport } from './routes/_chat.settings.open-source-licenses'
 import { Route as ChatSettingsMemorySyncRouteImport } from './routes/_chat.settings.memory-sync'
+import { Route as ChatSettingsMemoryRouteImport } from './routes/_chat.settings.memory'
 import { Route as ChatSettingsMaintenanceRouteImport } from './routes/_chat.settings.maintenance'
 import { Route as ChatSettingsLabsRouteImport } from './routes/_chat.settings.labs'
 import { Route as ChatSettingsKeybindingsRouteImport } from './routes/_chat.settings.keybindings'
@@ -53,6 +57,7 @@ import { Route as ChatSettingsConnectionsRouteImport } from './routes/_chat.sett
 import { Route as ChatSettingsChatRouteImport } from './routes/_chat.settings.chat'
 import { Route as ChatSettingsBrowserRouteImport } from './routes/_chat.settings.browser'
 import { Route as ChatSettingsBetaRouteImport } from './routes/_chat.settings.beta'
+import { Route as ChatSettingsAutomationsRouteImport } from './routes/_chat.settings.automations'
 import { Route as ChatSettingsArchivedRouteImport } from './routes/_chat.settings.archived'
 import { Route as ChatSettingsAppearanceRouteImport } from './routes/_chat.settings.appearance'
 import { Route as ChatSettingsAccessRouteImport } from './routes/_chat.settings.access'
@@ -125,6 +130,11 @@ const ChatSettingsRoute = ChatSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatScheduledTasksRoute = ChatScheduledTasksRouteImport.update({
+  id: '/scheduled-tasks',
+  path: '/scheduled-tasks',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -171,6 +181,11 @@ const ChatSettingsThreadsRoute = ChatSettingsThreadsRouteImport.update({
   path: '/threads',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsSyncRoute = ChatSettingsSyncRouteImport.update({
+  id: '/sync',
+  path: '/sync',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
 const ChatSettingsStorageRoute = ChatSettingsStorageRouteImport.update({
   id: '/storage',
   path: '/storage',
@@ -213,6 +228,12 @@ const ChatSettingsPluginsRoute = ChatSettingsPluginsRouteImport.update({
   path: '/plugins',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsOvernightFactoryRoute =
+  ChatSettingsOvernightFactoryRouteImport.update({
+    id: '/overnight-factory',
+    path: '/overnight-factory',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsOpenSourceLicensesRoute =
   ChatSettingsOpenSourceLicensesRouteImport.update({
     id: '/open-source-licenses',
@@ -222,6 +243,11 @@ const ChatSettingsOpenSourceLicensesRoute =
 const ChatSettingsMemorySyncRoute = ChatSettingsMemorySyncRouteImport.update({
   id: '/memory-sync',
   path: '/memory-sync',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
+const ChatSettingsMemoryRoute = ChatSettingsMemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
 const ChatSettingsMaintenanceRoute = ChatSettingsMaintenanceRouteImport.update({
@@ -285,6 +311,11 @@ const ChatSettingsBetaRoute = ChatSettingsBetaRouteImport.update({
   path: '/beta',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsAutomationsRoute = ChatSettingsAutomationsRouteImport.update({
+  id: '/automations',
+  path: '/automations',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
 const ChatSettingsArchivedRoute = ChatSettingsArchivedRouteImport.update({
   id: '/archived',
   path: '/archived',
@@ -336,6 +367,7 @@ export interface FileRoutesByFullPath {
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/scheduled-tasks': typeof ChatScheduledTasksRoute
   '/settings': typeof ChatSettingsRouteWithChildren
   '/tasks': typeof ChatTasksRoute
   '/usage': typeof ChatUsageRoute
@@ -347,6 +379,7 @@ export interface FileRoutesByFullPath {
   '/settings/access': typeof ChatSettingsAccessRoute
   '/settings/appearance': typeof ChatSettingsAppearanceRoute
   '/settings/archived': typeof ChatSettingsArchivedRoute
+  '/settings/automations': typeof ChatSettingsAutomationsRoute
   '/settings/beta': typeof ChatSettingsBetaRoute
   '/settings/browser': typeof ChatSettingsBrowserRoute
   '/settings/chat': typeof ChatSettingsChatRoute
@@ -359,8 +392,10 @@ export interface FileRoutesByFullPath {
   '/settings/keybindings': typeof ChatSettingsKeybindingsRoute
   '/settings/labs': typeof ChatSettingsLabsRoute
   '/settings/maintenance': typeof ChatSettingsMaintenanceRoute
+  '/settings/memory': typeof ChatSettingsMemoryRoute
   '/settings/memory-sync': typeof ChatSettingsMemorySyncRoute
   '/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
+  '/settings/overnight-factory': typeof ChatSettingsOvernightFactoryRoute
   '/settings/plugins': typeof ChatSettingsPluginsRoute
   '/settings/projects': typeof ChatSettingsProjectsRoute
   '/settings/providers': typeof ChatSettingsProvidersRoute
@@ -369,6 +404,7 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof ChatSettingsSnapShotRoute
   '/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/settings/storage': typeof ChatSettingsStorageRoute
+  '/settings/sync': typeof ChatSettingsSyncRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
   '/settings/updates': typeof ChatSettingsUpdatesRoute
   '/settings/voice': typeof ChatSettingsVoiceRoute
@@ -387,6 +423,7 @@ export interface FileRoutesByTo {
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/scheduled-tasks': typeof ChatScheduledTasksRoute
   '/settings': typeof ChatSettingsRouteWithChildren
   '/tasks': typeof ChatTasksRoute
   '/usage': typeof ChatUsageRoute
@@ -399,6 +436,7 @@ export interface FileRoutesByTo {
   '/settings/access': typeof ChatSettingsAccessRoute
   '/settings/appearance': typeof ChatSettingsAppearanceRoute
   '/settings/archived': typeof ChatSettingsArchivedRoute
+  '/settings/automations': typeof ChatSettingsAutomationsRoute
   '/settings/beta': typeof ChatSettingsBetaRoute
   '/settings/browser': typeof ChatSettingsBrowserRoute
   '/settings/chat': typeof ChatSettingsChatRoute
@@ -411,8 +449,10 @@ export interface FileRoutesByTo {
   '/settings/keybindings': typeof ChatSettingsKeybindingsRoute
   '/settings/labs': typeof ChatSettingsLabsRoute
   '/settings/maintenance': typeof ChatSettingsMaintenanceRoute
+  '/settings/memory': typeof ChatSettingsMemoryRoute
   '/settings/memory-sync': typeof ChatSettingsMemorySyncRoute
   '/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
+  '/settings/overnight-factory': typeof ChatSettingsOvernightFactoryRoute
   '/settings/plugins': typeof ChatSettingsPluginsRoute
   '/settings/projects': typeof ChatSettingsProjectsRoute
   '/settings/providers': typeof ChatSettingsProvidersRoute
@@ -421,6 +461,7 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof ChatSettingsSnapShotRoute
   '/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/settings/storage': typeof ChatSettingsStorageRoute
+  '/settings/sync': typeof ChatSettingsSyncRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
   '/settings/updates': typeof ChatSettingsUpdatesRoute
   '/settings/voice': typeof ChatSettingsVoiceRoute
@@ -441,6 +482,7 @@ export interface FileRoutesById {
   '/_chat/issues': typeof ChatIssuesRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
+  '/_chat/scheduled-tasks': typeof ChatScheduledTasksRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
   '/_chat/tasks': typeof ChatTasksRoute
   '/_chat/usage': typeof ChatUsageRoute
@@ -453,6 +495,7 @@ export interface FileRoutesById {
   '/_chat/settings/access': typeof ChatSettingsAccessRoute
   '/_chat/settings/appearance': typeof ChatSettingsAppearanceRoute
   '/_chat/settings/archived': typeof ChatSettingsArchivedRoute
+  '/_chat/settings/automations': typeof ChatSettingsAutomationsRoute
   '/_chat/settings/beta': typeof ChatSettingsBetaRoute
   '/_chat/settings/browser': typeof ChatSettingsBrowserRoute
   '/_chat/settings/chat': typeof ChatSettingsChatRoute
@@ -465,8 +508,10 @@ export interface FileRoutesById {
   '/_chat/settings/keybindings': typeof ChatSettingsKeybindingsRoute
   '/_chat/settings/labs': typeof ChatSettingsLabsRoute
   '/_chat/settings/maintenance': typeof ChatSettingsMaintenanceRoute
+  '/_chat/settings/memory': typeof ChatSettingsMemoryRoute
   '/_chat/settings/memory-sync': typeof ChatSettingsMemorySyncRoute
   '/_chat/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
+  '/_chat/settings/overnight-factory': typeof ChatSettingsOvernightFactoryRoute
   '/_chat/settings/plugins': typeof ChatSettingsPluginsRoute
   '/_chat/settings/projects': typeof ChatSettingsProjectsRoute
   '/_chat/settings/providers': typeof ChatSettingsProvidersRoute
@@ -475,6 +520,7 @@ export interface FileRoutesById {
   '/_chat/settings/snap-shot': typeof ChatSettingsSnapShotRoute
   '/_chat/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/_chat/settings/storage': typeof ChatSettingsStorageRoute
+  '/_chat/settings/sync': typeof ChatSettingsSyncRoute
   '/_chat/settings/threads': typeof ChatSettingsThreadsRoute
   '/_chat/settings/updates': typeof ChatSettingsUpdatesRoute
   '/_chat/settings/voice': typeof ChatSettingsVoiceRoute
@@ -496,6 +542,7 @@ export interface FileRouteTypes {
     | '/issues'
     | '/new'
     | '/pull-requests'
+    | '/scheduled-tasks'
     | '/settings'
     | '/tasks'
     | '/usage'
@@ -507,6 +554,7 @@ export interface FileRouteTypes {
     | '/settings/access'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/automations'
     | '/settings/beta'
     | '/settings/browser'
     | '/settings/chat'
@@ -519,8 +567,10 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/labs'
     | '/settings/maintenance'
+    | '/settings/memory'
     | '/settings/memory-sync'
     | '/settings/open-source-licenses'
+    | '/settings/overnight-factory'
     | '/settings/plugins'
     | '/settings/projects'
     | '/settings/providers'
@@ -529,6 +579,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/sync'
     | '/settings/threads'
     | '/settings/updates'
     | '/settings/voice'
@@ -547,6 +598,7 @@ export interface FileRouteTypes {
     | '/issues'
     | '/new'
     | '/pull-requests'
+    | '/scheduled-tasks'
     | '/settings'
     | '/tasks'
     | '/usage'
@@ -559,6 +611,7 @@ export interface FileRouteTypes {
     | '/settings/access'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/automations'
     | '/settings/beta'
     | '/settings/browser'
     | '/settings/chat'
@@ -571,8 +624,10 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/labs'
     | '/settings/maintenance'
+    | '/settings/memory'
     | '/settings/memory-sync'
     | '/settings/open-source-licenses'
+    | '/settings/overnight-factory'
     | '/settings/plugins'
     | '/settings/projects'
     | '/settings/providers'
@@ -581,6 +636,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/sync'
     | '/settings/threads'
     | '/settings/updates'
     | '/settings/voice'
@@ -600,6 +656,7 @@ export interface FileRouteTypes {
     | '/_chat/issues'
     | '/_chat/new'
     | '/_chat/pull-requests'
+    | '/_chat/scheduled-tasks'
     | '/_chat/settings'
     | '/_chat/tasks'
     | '/_chat/usage'
@@ -612,6 +669,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/access'
     | '/_chat/settings/appearance'
     | '/_chat/settings/archived'
+    | '/_chat/settings/automations'
     | '/_chat/settings/beta'
     | '/_chat/settings/browser'
     | '/_chat/settings/chat'
@@ -624,8 +682,10 @@ export interface FileRouteTypes {
     | '/_chat/settings/keybindings'
     | '/_chat/settings/labs'
     | '/_chat/settings/maintenance'
+    | '/_chat/settings/memory'
     | '/_chat/settings/memory-sync'
     | '/_chat/settings/open-source-licenses'
+    | '/_chat/settings/overnight-factory'
     | '/_chat/settings/plugins'
     | '/_chat/settings/projects'
     | '/_chat/settings/providers'
@@ -634,6 +694,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/snap-shot'
     | '/_chat/settings/source-control'
     | '/_chat/settings/storage'
+    | '/_chat/settings/sync'
     | '/_chat/settings/threads'
     | '/_chat/settings/updates'
     | '/_chat/settings/voice'
@@ -748,6 +809,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/scheduled-tasks': {
+      id: '/_chat/scheduled-tasks'
+      path: '/scheduled-tasks'
+      fullPath: '/scheduled-tasks'
+      preLoaderRoute: typeof ChatScheduledTasksRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -811,6 +879,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsThreadsRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/sync': {
+      id: '/_chat/settings/sync'
+      path: '/sync'
+      fullPath: '/settings/sync'
+      preLoaderRoute: typeof ChatSettingsSyncRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/storage': {
       id: '/_chat/settings/storage'
       path: '/storage'
@@ -867,6 +942,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsPluginsRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/overnight-factory': {
+      id: '/_chat/settings/overnight-factory'
+      path: '/overnight-factory'
+      fullPath: '/settings/overnight-factory'
+      preLoaderRoute: typeof ChatSettingsOvernightFactoryRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/open-source-licenses': {
       id: '/_chat/settings/open-source-licenses'
       path: '/open-source-licenses'
@@ -879,6 +961,13 @@ declare module '@tanstack/react-router' {
       path: '/memory-sync'
       fullPath: '/settings/memory-sync'
       preLoaderRoute: typeof ChatSettingsMemorySyncRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/memory': {
+      id: '/_chat/settings/memory'
+      path: '/memory'
+      fullPath: '/settings/memory'
+      preLoaderRoute: typeof ChatSettingsMemoryRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
     '/_chat/settings/maintenance': {
@@ -965,6 +1054,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsBetaRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/automations': {
+      id: '/_chat/settings/automations'
+      path: '/automations'
+      fullPath: '/settings/automations'
+      preLoaderRoute: typeof ChatSettingsAutomationsRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/archived': {
       id: '/_chat/settings/archived'
       path: '/archived'
@@ -1022,6 +1118,7 @@ interface ChatSettingsRouteChildren {
   ChatSettingsAccessRoute: typeof ChatSettingsAccessRoute
   ChatSettingsAppearanceRoute: typeof ChatSettingsAppearanceRoute
   ChatSettingsArchivedRoute: typeof ChatSettingsArchivedRoute
+  ChatSettingsAutomationsRoute: typeof ChatSettingsAutomationsRoute
   ChatSettingsBetaRoute: typeof ChatSettingsBetaRoute
   ChatSettingsBrowserRoute: typeof ChatSettingsBrowserRoute
   ChatSettingsChatRoute: typeof ChatSettingsChatRoute
@@ -1034,8 +1131,10 @@ interface ChatSettingsRouteChildren {
   ChatSettingsKeybindingsRoute: typeof ChatSettingsKeybindingsRoute
   ChatSettingsLabsRoute: typeof ChatSettingsLabsRoute
   ChatSettingsMaintenanceRoute: typeof ChatSettingsMaintenanceRoute
+  ChatSettingsMemoryRoute: typeof ChatSettingsMemoryRoute
   ChatSettingsMemorySyncRoute: typeof ChatSettingsMemorySyncRoute
   ChatSettingsOpenSourceLicensesRoute: typeof ChatSettingsOpenSourceLicensesRoute
+  ChatSettingsOvernightFactoryRoute: typeof ChatSettingsOvernightFactoryRoute
   ChatSettingsPluginsRoute: typeof ChatSettingsPluginsRoute
   ChatSettingsProjectsRoute: typeof ChatSettingsProjectsRoute
   ChatSettingsProvidersRoute: typeof ChatSettingsProvidersRoute
@@ -1044,6 +1143,7 @@ interface ChatSettingsRouteChildren {
   ChatSettingsSnapShotRoute: typeof ChatSettingsSnapShotRoute
   ChatSettingsSourceControlRoute: typeof ChatSettingsSourceControlRoute
   ChatSettingsStorageRoute: typeof ChatSettingsStorageRoute
+  ChatSettingsSyncRoute: typeof ChatSettingsSyncRoute
   ChatSettingsThreadsRoute: typeof ChatSettingsThreadsRoute
   ChatSettingsUpdatesRoute: typeof ChatSettingsUpdatesRoute
   ChatSettingsVoiceRoute: typeof ChatSettingsVoiceRoute
@@ -1056,6 +1156,7 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsAccessRoute: ChatSettingsAccessRoute,
   ChatSettingsAppearanceRoute: ChatSettingsAppearanceRoute,
   ChatSettingsArchivedRoute: ChatSettingsArchivedRoute,
+  ChatSettingsAutomationsRoute: ChatSettingsAutomationsRoute,
   ChatSettingsBetaRoute: ChatSettingsBetaRoute,
   ChatSettingsBrowserRoute: ChatSettingsBrowserRoute,
   ChatSettingsChatRoute: ChatSettingsChatRoute,
@@ -1068,8 +1169,10 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsKeybindingsRoute: ChatSettingsKeybindingsRoute,
   ChatSettingsLabsRoute: ChatSettingsLabsRoute,
   ChatSettingsMaintenanceRoute: ChatSettingsMaintenanceRoute,
+  ChatSettingsMemoryRoute: ChatSettingsMemoryRoute,
   ChatSettingsMemorySyncRoute: ChatSettingsMemorySyncRoute,
   ChatSettingsOpenSourceLicensesRoute: ChatSettingsOpenSourceLicensesRoute,
+  ChatSettingsOvernightFactoryRoute: ChatSettingsOvernightFactoryRoute,
   ChatSettingsPluginsRoute: ChatSettingsPluginsRoute,
   ChatSettingsProjectsRoute: ChatSettingsProjectsRoute,
   ChatSettingsProvidersRoute: ChatSettingsProvidersRoute,
@@ -1078,6 +1181,7 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsSnapShotRoute: ChatSettingsSnapShotRoute,
   ChatSettingsSourceControlRoute: ChatSettingsSourceControlRoute,
   ChatSettingsStorageRoute: ChatSettingsStorageRoute,
+  ChatSettingsSyncRoute: ChatSettingsSyncRoute,
   ChatSettingsThreadsRoute: ChatSettingsThreadsRoute,
   ChatSettingsUpdatesRoute: ChatSettingsUpdatesRoute,
   ChatSettingsVoiceRoute: ChatSettingsVoiceRoute,
@@ -1093,6 +1197,7 @@ interface ChatRouteChildren {
   ChatIssuesRoute: typeof ChatIssuesRoute
   ChatNewRoute: typeof ChatNewRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
+  ChatScheduledTasksRoute: typeof ChatScheduledTasksRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
   ChatTasksRoute: typeof ChatTasksRoute
   ChatUsageRoute: typeof ChatUsageRoute
@@ -1107,6 +1212,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatIssuesRoute: ChatIssuesRoute,
   ChatNewRoute: ChatNewRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
+  ChatScheduledTasksRoute: ChatScheduledTasksRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,
   ChatTasksRoute: ChatTasksRoute,
   ChatUsageRoute: ChatUsageRoute,

@@ -3,7 +3,12 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { DEFAULT_SERVER_SETTINGS, type ScopedProjectRef, type ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type ModelSelection,
+  type ScopedProjectRef,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import {
   composerDraftHasUserContent,
@@ -104,6 +109,10 @@ export function createNewThreadHandler(router: AnyRouter) {
       replace?: boolean;
       /** Composer text for the draft, set before it shows. A draft with user text keeps it. */
       prompt?: string;
+      /** Always allocate a fresh independent draft session instead of reusing an existing empty draft. */
+      forceNew?: boolean;
+      /** Explicit model selection to bind immediately on the created draft. */
+      modelSelection?: ModelSelection | null;
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
@@ -164,7 +173,8 @@ export function createNewThreadHandler(router: AnyRouter) {
         candidate.environmentId === projectRef.environmentId,
     );
     const abandonedSinceRequest = () =>
-      routeChangedSinceRequest() || (project !== undefined && readProject(projectRef) === null);
+      (!options?.forceNew && routeChangedSinceRequest()) ||
+      (project !== undefined && readProject(projectRef) === null);
     const projectSettings = resolveProjectSettings(
       targetServerSettings,
       project?.id ?? null,
@@ -278,7 +288,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         ? getDraftThread(currentRouteTarget.threadRef)
         : getDraftSession(currentRouteTarget.draftId)
       : null;
-    if (emptyStoredDraftThread) {
+    if (!options?.forceNew && emptyStoredDraftThread) {
       return (async () => {
         const isDraftAlreadyOpen =
           currentRouteTarget?.kind === "draft" &&
@@ -373,6 +383,7 @@ export function createNewThreadHandler(router: AnyRouter) {
     }
 
     if (
+      !options?.forceNew &&
       latestActiveDraftThread &&
       currentRouteTarget?.kind === "draft" &&
       latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
@@ -410,7 +421,9 @@ export function createNewThreadHandler(router: AnyRouter) {
         return resultIfAbandoned();
       }
       // Reuse drafts registered while awaiting so their pending navigation cannot lose them.
-      const racedDraft = getDraftSessionByLogicalProjectKey(logicalProjectKey);
+      const racedDraft = options?.forceNew
+        ? null
+        : getDraftSessionByLogicalProjectKey(logicalProjectKey);
       if (
         racedDraft &&
         racedDraft.draftId !== storedDraftThread?.draftId &&
@@ -445,11 +458,19 @@ export function createNewThreadHandler(router: AnyRouter) {
           }),
         runtimeMode: defaultRuntimeMode,
         ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+        ...(options?.forceNew ? { preservePreviousDraft: true } : {}),
       });
-      applyStickyState(draftId);
-      const modelSelectionOverride = resolveModelSelectionOverride(draftId);
-      if (modelSelectionOverride) {
-        setModelSelection(draftId, modelSelectionOverride, { replaceOptions: true });
+      if (options?.modelSelection) {
+        setModelSelection(draftId, options.modelSelection, {
+          explicit: true,
+          replaceOptions: true,
+        });
+      } else {
+        applyStickyState(draftId);
+        const modelSelectionOverride = resolveModelSelectionOverride(draftId);
+        if (modelSelectionOverride) {
+          setModelSelection(draftId, modelSelectionOverride, { replaceOptions: true });
+        }
       }
       seedPrompt(draftId);
       await router.navigate({

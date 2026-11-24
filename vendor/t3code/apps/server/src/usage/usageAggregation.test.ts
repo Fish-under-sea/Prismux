@@ -334,6 +334,49 @@ describe("UsageCallLog aggregation and telemetry math", () => {
     expect(computeUsageOutputTps(100, null, null)).toBeNull();
     expect(computeUsageOutputTps(100, 0, null)).toBeNull();
     expect(computeUsageOutputTps(0, 2000, 200)).toBeNull();
+    // Sub-10ms noise rejected; buffered single-packet micro-bursts fall back to total duration
+    expect(computeUsageOutputTps(50, 5, null)).toBeNull();
+    expect(computeUsageOutputTps(73, 26_125, 26_124)).toBeCloseTo(2.79, 2);
+    expect(computeUsageOutputTps(2081, 26_182, 25_425)).toBeCloseTo(79.48, 2);
+    // Normal streaming post-TTFT throughput stays exact
+    expect(computeUsageOutputTps(1356, 17_070, 7_728)).toBeCloseTo(145.15, 2);
+  });
+
+  it("preserves ttftMs and max durationMs across merged UsageRecord copies", () => {
+    const t = Date.parse("2026-08-07T04:05:10.000Z");
+    const result = aggregate([
+      record({
+        timestampMs: t,
+        dedupeKey: "msg_timed",
+        durationMs: 2_400,
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 900,
+          cacheCreationTokens: 0,
+          outputTokens: 20,
+          reasoningTokens: 0,
+        },
+      }),
+      record({
+        timestampMs: t,
+        dedupeKey: "msg_timed",
+        ttftMs: 400,
+        durationMs: 2_600,
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 900,
+          cacheCreationTokens: 0,
+          outputTokens: 220,
+          reasoningTokens: 0,
+        },
+      }),
+    ]);
+    expect(result.callLogs).toHaveLength(1);
+    expect(result.callLogs[0]).toMatchObject({
+      ttftMs: 400,
+      durationMs: 2_600,
+      tps: 100,
+    });
   });
 
   it("emits deduplicated, newest-first bounded callLogs with null timings when transcripts lack them", () => {

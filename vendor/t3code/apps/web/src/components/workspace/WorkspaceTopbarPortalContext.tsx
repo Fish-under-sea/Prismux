@@ -43,6 +43,8 @@ export function useWorkspaceTopbarPortal(): WorkspaceTopbarPortalContextValue {
 export interface PrismuxStageFrameProps {
   /** Whether the inline right sidebar is currently expanded alongside the main inner stage. */
   readonly rightPanelOpen?: boolean;
+  /** Which liquid-glass zone owns the inner stage (`mainCanvas` for chat, `workPanels` for Tasks/Workspace Board/Scheduled Tasks). */
+  readonly glassZone?: "mainCanvas" | "workPanels";
   readonly innerRef?: Ref<HTMLDivElement>;
   readonly innerStyle?: CSSProperties | undefined;
   readonly innerClassName?: string;
@@ -54,13 +56,14 @@ export interface PrismuxStageFrameProps {
 /**
  * Seamless AGY 2.0 / Arc-style closed monolithic outer shell frame aligned 1:1 with
  * `@prismux/appearance`'s `t3-glass-bridge.css` contract (`data-pmx-stage-frame="1"`, 4 inverted
- * corners, zero margin/gap, `data-pmx-right-open="0|1"`, `[data-pmx-glass-zone="mainCanvas"][data-pmx-inner-stage="1"]`,
+ * corners, zero margin/gap, `data-pmx-right-open="0|1"`, `[data-pmx-glass-zone="mainCanvas"|"workPanels"][data-pmx-inner-stage="1"]`,
  * and a sleek 7px right outer frame edge `[data-pmx-right-frame-edge="1"][data-pmx-glass-zone="shellFrame"]`
  * closing the 4-sided bezel whenever the inline right sidebar is collapsed).
  */
 export function PrismuxStageFrame(props: PrismuxStageFrameProps) {
   const {
     rightPanelOpen = false,
+    glassZone = "mainCanvas",
     innerRef,
     innerStyle,
     innerClassName,
@@ -86,7 +89,8 @@ export function PrismuxStageFrame(props: PrismuxStageFrameProps) {
         <span aria-hidden="true" data-pmx-stage-corner="br" />
         <div
           ref={innerRef}
-          data-pmx-glass-zone="mainCanvas"
+          data-pmx-glass-zone={glassZone}
+          data-pmx-work-panel={glassZone === "workPanels" ? "1" : undefined}
           data-pmx-inner-stage="1"
           style={innerStyle}
           className={cn(

@@ -27,7 +27,9 @@ import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
 import { formatAppDisplayName, resolveWebAppStageLabel } from "./src/branding.logic";
 
-const repoEnv = loadRepoEnv();
+// Keep Vitest unit suites decoupled from live Clerk defaults unless explicitly provided via env/.env.
+const isVitestRun = process.env.VITEST === "true" || process.env.VITEST === "1";
+const repoEnv = loadRepoEnv({ useOfficialDefaults: !isVitestRun });
 Object.assign(process.env, repoEnv);
 
 // Signal single-origin dev explicitly; loadRepoEnv can restore deleted URL keys from .env.

@@ -6,6 +6,7 @@ import { decodeMsg, GTProvider, initializeGT } from "gt-react";
 import { settingsBreadcrumbLabel } from "./SettingsBreadcrumb";
 import {
   movedSettingsPath,
+  resolveLegacyMemorySyncRedirectTarget,
   SETTINGS_NAV_LABELS,
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTION_LABELS,
@@ -48,25 +49,31 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(groupsWindows.map((group) => group.paths)).toEqual([
       [
         "/settings/general",
+        "/settings/chat",
+        "/settings/voice",
         "/settings/appearance",
         "/settings/wallpaper",
-        "/settings/chat",
         "/settings/keybindings",
-        "/settings/voice",
       ],
       [
         "/settings/providers",
+        "/settings/devices",
         "/settings/threads",
+        "/settings/projects",
         "/settings/archived",
         "/settings/browser",
-        "/settings/devices",
-        "/settings/scheduled-tasks",
-        "/settings/projects",
         "/settings/worktrees",
         "/settings/diffs",
         "/settings/source-control",
       ],
-      ["/settings/plugins", "/settings/memory-sync", "/settings/connections", "/settings/access"],
+      [
+        "/settings/connections",
+        "/settings/memory",
+        "/settings/sync",
+        "/settings/plugins",
+        "/settings/access",
+        "/settings/overnight-factory",
+      ],
       ["/settings/diagnostics", "/settings/maintenance", "/settings/about"],
     ]);
 
@@ -78,7 +85,18 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(flatWindows.indexOf("/settings/wallpaper")).toBe(
       flatWindows.indexOf("/settings/appearance") + 1,
     );
-    // Merged / removed top-level entries
+    // Memory & Sync are independent sibling entries in Group 3 (legacy /settings/memory-sync removed from nav)
+    expect(flatWindows).toContain("/settings/memory");
+    expect(flatWindows).toContain("/settings/sync");
+    expect(flatWindows.indexOf("/settings/sync")).toBe(flatWindows.indexOf("/settings/memory") + 1);
+    expect(flatWindows).not.toContain("/settings/memory-sync");
+    // Overnight Factory & Mail sits directly below Sharing & access in Group 3
+    expect(flatWindows).toContain("/settings/overnight-factory");
+    expect(flatWindows.indexOf("/settings/overnight-factory")).toBe(
+      flatWindows.indexOf("/settings/access") + 1,
+    );
+    // Merged / removed / promoted top-level entries
+    expect(flatWindows).not.toContain("/settings/scheduled-tasks");
     expect(flatWindows).not.toContain("/settings/updates");
     expect(flatWindows).not.toContain("/settings/labs");
     expect(flatWindows).not.toContain("/settings/snap-shot");
@@ -105,10 +123,17 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     }
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("Appearance");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("Wallpaper");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("Memory");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("Sync");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/overnight-factory"])).toBe(
+      "Overnight Factory & Mail",
+    );
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/diagnostics"])).toBe("Service Diagnostics");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/about"])).toBe("About & Updates");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/appearance") ?? "")).toBe("Appearance");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/wallpaper") ?? "")).toBe("Wallpaper");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/memory") ?? "")).toBe("Memory");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/sync") ?? "")).toBe("Sync");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/about") ?? "")).toBe("About & Updates");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/diagnostics") ?? "")).toBe(
       "Service Diagnostics",
@@ -173,6 +198,40 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
       "/settings/wallpaper",
     );
     expect(movedSettingsPath("/settings/wallpaper", "")).toBeNull();
+
+    // Split /settings/memory and /settings/sync targets + legacy /settings/memory-sync redirect resolution
+    expect(findSettingsNavTarget(groups, "/settings/memory")).toEqual({
+      groupId: "extensions-data",
+      path: "/settings/memory",
+    });
+    expect(findSettingsNavTarget(groups, "/settings/sync")).toEqual({
+      groupId: "extensions-data",
+      path: "/settings/sync",
+    });
+    expect(resolveSettingsNavActivePath("/settings/memory-sync")).toBe("/settings/memory");
+    expect(movedSettingsPath("/settings/memory-sync", "")).toBe("/settings/memory");
+    expect(movedSettingsPath("/settings/memory-sync", "sync")).toBe("/settings/sync");
+    expect(movedSettingsPath("/settings/memory-sync", "prismux-e2ee-sync")).toBe("/settings/sync");
+    expect(resolveLegacyMemorySyncRedirectTarget({})).toEqual({
+      to: "/settings/memory",
+      hash: "",
+    });
+    expect(resolveLegacyMemorySyncRedirectTarget({ hash: "#sync" })).toEqual({
+      to: "/settings/sync",
+      hash: "prismux-e2ee-sync",
+    });
+    expect(resolveLegacyMemorySyncRedirectTarget({ hash: "#prismux-e2ee-sync" })).toEqual({
+      to: "/settings/sync",
+      hash: "prismux-e2ee-sync",
+    });
+    expect(resolveLegacyMemorySyncRedirectTarget({ searchStr: "?tab=sync" })).toEqual({
+      to: "/settings/sync",
+      hash: "",
+    });
+    expect(resolveLegacyMemorySyncRedirectTarget({ hash: "#prismux-chief-slot" })).toEqual({
+      to: "/settings/memory",
+      hash: "prismux-chief-slot",
+    });
   });
 });
 
@@ -303,20 +362,27 @@ describe("settings sidebar indicator motion state machine", () => {
 
     const slid = transitionIndicatorState(
       entered,
-      { groupId: "extensions-data", path: "/settings/memory-sync" },
+      { groupId: "extensions-data", path: "/settings/memory" },
       { groups, reducedMotion: false, initialMode: "enter" },
     );
     expect(slid.mode).toBe("slide");
 
-    const crossed = transitionIndicatorState(
+    const slidToSync = transitionIndicatorState(
       slid,
+      { groupId: "extensions-data", path: "/settings/sync" },
+      { groups, reducedMotion: false, initialMode: "enter" },
+    );
+    expect(slidToSync.mode).toBe("slide");
+
+    const crossed = transitionIndicatorState(
+      slidToSync,
       { groupId: "system-about", path: "/settings/about" },
       { groups, reducedMotion: false, initialMode: "enter" },
     );
     expect(crossed.mode).toBe("crossfade");
     expect(crossed.groupStates["extensions-data"]).toEqual({
       visible: false,
-      path: "/settings/memory-sync",
+      path: "/settings/sync",
       mode: "crossfade",
     });
     expect(crossed.groupStates["system-about"]).toEqual({
@@ -462,6 +528,28 @@ describe("settings sidebar indicator motion state machine", () => {
     );
     expect(wallpaperActiveHtml).not.toMatch(
       /data-settings-section="\/settings\/appearance"[^>]*aria-current="page"|aria-current="page"[^>]*data-settings-section="\/settings\/appearance"/,
+    );
+
+    // /settings/memory and /settings/sync each highlight independently in Group 3
+    expect(html).toContain('data-settings-section="/settings/memory"');
+    expect(html).toContain('data-settings-section="/settings/sync"');
+    expect(html).not.toContain('data-settings-section="/settings/memory-sync"');
+    const syncActiveHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        null,
+        createElement(
+          SidebarProvider,
+          { defaultOpen: true },
+          createElement(SettingsSidebarNav, { pathname: "/settings/sync" }),
+        ),
+      ),
+    );
+    expect(syncActiveHtml).toMatch(
+      /data-settings-section="\/settings\/sync"[^>]*aria-current="page"|aria-current="page"[^>]*data-settings-section="\/settings\/sync"/,
+    );
+    expect(syncActiveHtml).not.toMatch(
+      /data-settings-section="\/settings\/memory"[^>]*aria-current="page"|aria-current="page"[^>]*data-settings-section="\/settings\/memory"/,
     );
   });
 });

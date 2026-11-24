@@ -1,5 +1,5 @@
 import { type UsageProviderKind } from "@t3tools/contracts";
-import { formatDateTimeShort, formatTokens } from "@t3tools/shared/usageFormat";
+import { formatTokens } from "@t3tools/shared/usageFormat";
 import { msg, useLocale, useMessages } from "gt-react";
 import {
   ArrowDownIcon,
@@ -117,16 +117,52 @@ function resolveProviderDisplay(provider: string): {
   return { label: provider, driverKind: null };
 }
 
-function formatCallTime(
+const callTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function getCallTimeFormatter(
+  locale: string,
+  timeZone: string | undefined,
+  hour12: boolean,
+): Intl.DateTimeFormat {
+  const intlLocale = !locale || locale === "en" ? "en-US" : locale;
+  const key = `${intlLocale}|${timeZone ?? ""}|${hour12 ? "12" : "24"}`;
+  let formatter = callTimeFormatters.get(key);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat(intlLocale, {
+      ...(timeZone ? { timeZone } : {}),
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      ...(hour12 ? { hour12: true } : { hourCycle: "h23" }),
+    });
+    if (callTimeFormatters.size >= 24) callTimeFormatters.clear();
+    callTimeFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
+/**
+ * Format an individual model call timestamp with real month/day and exact `HH:mm:ss` time
+ * (never truncating to `:00` hourly buckets).
+ */
+export function formatCallTimestamp(
   timestamp: number,
   timeZone: string,
   hour12: boolean,
   locale: string,
 ): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "—";
   try {
-    return formatDateTimeShort(new Date(timestamp).toISOString(), timeZone, hour12, locale);
+    return getCallTimeFormatter(locale, timeZone || undefined, hour12).format(date);
   } catch {
-    return new Date(timestamp).toLocaleString(locale);
+    try {
+      return getCallTimeFormatter(locale, undefined, hour12).format(date);
+    } catch {
+      return date.toLocaleString(locale);
+    }
   }
 }
 
@@ -346,7 +382,7 @@ export function UsageCallLogsSection({
                           ) : (
                             <ChevronRightIcon className="size-3.5 shrink-0" aria-hidden />
                           )}
-                          <span>{formatCallTime(log.timestamp, timeZone, hour12, locale)}</span>
+                          <span>{formatCallTimestamp(log.timestamp, timeZone, hour12, locale)}</span>
                         </button>
                       </td>
                       <td className="py-2 px-3 text-left">

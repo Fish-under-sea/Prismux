@@ -399,6 +399,51 @@ describe("useNewThreadHandler", () => {
     expect(opened).toEqual({ draftId: "draft-delayed", threadId: "thread-delayed" });
     expect(testState.router.navigate).toHaveBeenCalledOnce();
   });
+
+  it("allocates an independent draft and preserves the previous empty draft when forceNew and modelSelection are passed", async () => {
+    testState.reset({
+      draftId: "draft-existing-codex",
+      environmentId: "environment-ssh",
+      promotedTo: null,
+      threadId: "thread-existing-codex",
+    });
+
+    const opened = await useNewThreadHandler()(
+      {
+        environmentId: "environment-ssh",
+        projectId: "project-remote",
+      } as never,
+      {
+        forceNew: true,
+        modelSelection: {
+          instanceId: "claudeAgent" as never,
+          model: "claude-sonnet-4-6",
+        },
+      },
+    );
+
+    expect(opened).toEqual({ draftId: "draft-delayed", threadId: "thread-delayed" });
+    expect(testState.draftStore.setLogicalProjectDraftThreadId).toHaveBeenCalledWith(
+      "remote-project",
+      { environmentId: "environment-ssh", projectId: "project-remote" },
+      "draft-delayed",
+      expect.objectContaining({
+        threadId: "thread-delayed",
+        preservePreviousDraft: true,
+      }),
+    );
+    expect(testState.draftStore.setModelSelection).toHaveBeenCalledWith(
+      "draft-delayed",
+      { instanceId: "claudeAgent", model: "claude-sonnet-4-6" },
+      { explicit: true, replaceOptions: true },
+    );
+    expect(testState.draftStore.applyStickyState).not.toHaveBeenCalled();
+    expect(testState.router.navigate).toHaveBeenCalledWith({
+      to: "/draft/$draftId",
+      params: { draftId: "draft-delayed" },
+      replace: false,
+    });
+  });
 });
 
 describe("default project selection", () => {

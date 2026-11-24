@@ -265,12 +265,26 @@ export interface DaemonPluginCatalogEntryDto {
   [key: string]: unknown;
 }
 
+export interface DaemonRetiredPluginEntryDto {
+  id: string;
+  packageName: string;
+  titleZh?: string;
+  titleEn?: string;
+  status: "deprecated";
+  replacedByBuiltin: true;
+  noticeZh: string;
+  noticeEn: string;
+  detailZh?: string;
+  detailEn?: string;
+}
+
 export interface DaemonPluginCatalogResponse {
   ok: boolean;
   schemaVersion?: number;
   generatedAt?: string;
   officialCatalogPath?: string;
   plugins: DaemonPluginCatalogEntryDto[];
+  retiredPlugins?: DaemonRetiredPluginEntryDto[];
   installedCount?: number;
 }
 
@@ -530,6 +544,182 @@ export interface DaemonKillSystemPortResponse {
   message?: string;
   error?: string;
   [key: string]: unknown;
+}
+
+export type DaemonOvernightInboundMode = "gmail-oauth2" | "imap";
+export type DaemonOvernightMailPreset = "qq" | "163" | "outlook" | "custom";
+export type DaemonOvernightWindowMode = "scheduled" | "always";
+export type DaemonOvernightRunStatus =
+  | "completed"
+  | "failed"
+  | "blocked_whitelist"
+  | "skipped";
+
+export interface DaemonOvernightGmailConfigDto {
+  clientId: string;
+  redirectUri: string;
+  boundEmail: string;
+  connected: boolean;
+  connectedAt: number | null;
+  lastHistoryId?: string;
+}
+
+export interface DaemonOvernightImapSmtpConfigDto {
+  preset: DaemonOvernightMailPreset;
+  email: string;
+  imapHost: string;
+  imapPort: number;
+  imapSecure: boolean;
+  imapUsername: string;
+  mailbox: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUsername: string;
+  fromName: string;
+}
+
+export interface DaemonOvernightStrategyConfigDto {
+  triggerTag: string;
+  allowedSenders: string[];
+  windowMode: DaemonOvernightWindowMode;
+  windowStart: string;
+  windowEnd: string;
+  pollIntervalMinutes: number;
+  targetWorkspaceDir: string;
+  agentProvider: string;
+  agentModel: string;
+  oracleReviewEnabled: boolean;
+  localWorktreeOnlyNoPush: boolean;
+}
+
+export interface DaemonOvernightConfigDto {
+  schemaVersion: 1;
+  updatedAt: number;
+  enabled: boolean;
+  mode: DaemonOvernightInboundMode;
+  gmail: DaemonOvernightGmailConfigDto;
+  imapSmtp: DaemonOvernightImapSmtpConfigDto;
+  strategy: DaemonOvernightStrategyConfigDto;
+}
+
+export interface DaemonOvernightSecretPresenceDto {
+  hasGmailClientSecret: boolean;
+  hasGmailRefreshToken: boolean;
+  hasImapPassword: boolean;
+  hasSmtpPassword: boolean;
+}
+
+export interface DaemonOvernightMailProbeChannelDto {
+  ok: boolean;
+  latencyMs: number;
+  message: string;
+  detail?: string;
+}
+
+export interface DaemonOvernightMailTestResponse {
+  ok: boolean;
+  mode: DaemonOvernightInboundMode;
+  checkedAt: number;
+  durationMs: number;
+  inbound: DaemonOvernightMailProbeChannelDto;
+  outbound: DaemonOvernightMailProbeChannelDto;
+  message: string;
+}
+
+export interface DaemonOvernightConfigSnapshot {
+  ok: true;
+  config: DaemonOvernightConfigDto;
+  secrets: DaemonOvernightSecretPresenceDto;
+  credentialsFile: string;
+  runtime: {
+    pollerActive: boolean;
+    inAllowedWindow: boolean;
+    oauthPending: boolean;
+    lastPollAt: number | null;
+    lastPollError: string | null;
+    lastTestResult: DaemonOvernightMailTestResponse | null;
+    runsCount: number;
+  };
+}
+
+export interface DaemonOvernightConfigPatch {
+  enabled?: boolean;
+  mode?: DaemonOvernightInboundMode;
+  gmail?: Partial<Pick<DaemonOvernightGmailConfigDto, "clientId" | "redirectUri" | "boundEmail">>;
+  imapSmtp?: Partial<DaemonOvernightImapSmtpConfigDto>;
+  strategy?: Partial<DaemonOvernightStrategyConfigDto>;
+  secrets?: {
+    gmailClientSecret?: string;
+    gmailRefreshToken?: string;
+    imapPassword?: string;
+    smtpPassword?: string;
+  };
+  clearSecrets?: {
+    gmailClientSecret?: boolean;
+    gmailRefreshToken?: boolean;
+    imapPassword?: boolean;
+    smtpPassword?: boolean;
+  };
+}
+
+export interface DaemonOvernightTestReportResponse {
+  ok: true;
+  messageId: string;
+  recipient: string;
+  provider: string;
+  sentAt: number;
+  subject: string;
+  htmlPreviewLength: number;
+  message: string;
+}
+
+export interface DaemonOvernightRunRecordDto {
+  id: string;
+  jobId: string;
+  messageId: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  status: DaemonOvernightRunStatus;
+  branchName: string | null;
+  changedFilesCount: number;
+  testPassed: boolean | null;
+  oracleSummary: string;
+  reviewComments: string[];
+  deepLink: string | null;
+  reportSent: boolean;
+  createdAt: number;
+  completedAt: number;
+  errorMessage: string | null;
+}
+
+export interface DaemonOvernightRunsResponse {
+  ok: true;
+  runs: DaemonOvernightRunRecordDto[];
+  total: number;
+  lastPollAt: number | null;
+  lastPollError: string | null;
+}
+
+export interface DaemonOvernightPollNowResponse {
+  ok: true;
+  polledAt: number;
+  fetchedCount: number;
+  matchedCount: number;
+  executedCount: number;
+  blockedByWhitelistCount: number;
+  skippedDuplicateCount: number;
+  runs: DaemonOvernightRunRecordDto[];
+  message: string;
+}
+
+export interface DaemonOvernightGmailOAuthStartResponse {
+  ok: true;
+  authUrl: string;
+  state: string;
+  redirectUri: string;
+  expiresAt: number;
 }
 
 export interface DaemonPtyResourceDto {
@@ -1039,6 +1229,20 @@ export class PrismuxDaemonClient {
     );
   }
 
+  async refreshDiagnosticsServices(): Promise<DaemonDiagnosticsServicesResponse> {
+    try {
+      return await this.requestJson<DaemonDiagnosticsServicesResponse>(
+        "/v1/diagnostics/refresh",
+        { method: "POST" },
+      );
+    } catch (error) {
+      if (error instanceof PrismuxDaemonError && (error.status === 404 || error.status === 405)) {
+        return this.fetchDiagnosticsServices(true);
+      }
+      throw error;
+    }
+  }
+
   fetchSystemPorts(workspace?: string): Promise<DaemonSystemPortsResponse> {
     const trimmed = workspace?.trim();
     const suffix = trimmed ? `?workspace=${encodeURIComponent(trimmed)}` : "";
@@ -1062,6 +1266,79 @@ export class PrismuxDaemonClient {
       method: "POST",
       body: JSON.stringify({ sessionId }),
     });
+  }
+
+  fetchOvernightConfig(): Promise<DaemonOvernightConfigSnapshot> {
+    return this.requestJson<DaemonOvernightConfigSnapshot>("/v1/overnight/config");
+  }
+
+  updateOvernightConfig(
+    payload: DaemonOvernightConfigPatch,
+  ): Promise<DaemonOvernightConfigSnapshot> {
+    return this.requestJson<DaemonOvernightConfigSnapshot>("/v1/overnight/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  testOvernightMail(
+    payload?: DaemonOvernightConfigPatch,
+  ): Promise<DaemonOvernightMailTestResponse> {
+    return this.requestJson<DaemonOvernightMailTestResponse>("/v1/overnight/test-mail", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    });
+  }
+
+  sendOvernightTestReport(
+    payload?: DaemonOvernightConfigPatch & { recipient?: string },
+  ): Promise<DaemonOvernightTestReportResponse> {
+    return this.requestJson<DaemonOvernightTestReportResponse>(
+      "/v1/overnight/send-test-report",
+      {
+        method: "POST",
+        body: JSON.stringify(payload ?? {}),
+      },
+    );
+  }
+
+  pollOvernightNow(
+    payload?: DaemonOvernightConfigPatch,
+  ): Promise<DaemonOvernightPollNowResponse> {
+    return this.requestJson<DaemonOvernightPollNowResponse>("/v1/overnight/poll-now", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    });
+  }
+
+  fetchOvernightRuns(limit = 30): Promise<DaemonOvernightRunsResponse> {
+    return this.requestJson<DaemonOvernightRunsResponse>(
+      `/v1/overnight/runs?limit=${encodeURIComponent(String(limit))}`,
+    );
+  }
+
+  startOvernightGmailOAuth(payload?: {
+    clientId?: string;
+    clientSecret?: string;
+    redirectUri?: string;
+  }): Promise<DaemonOvernightGmailOAuthStartResponse> {
+    return this.requestJson<DaemonOvernightGmailOAuthStartResponse>(
+      "/v1/overnight/oauth/gmail/start",
+      {
+        method: "POST",
+        body: JSON.stringify(payload ?? {}),
+      },
+    );
+  }
+
+  disconnectOvernightGmail(): Promise<DaemonOvernightConfigSnapshot> {
+    return this.requestJson<DaemonOvernightConfigSnapshot>(
+      "/v1/overnight/oauth/gmail/disconnect",
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+    );
   }
 
   getPluginCatalog(): Promise<DaemonPluginCatalogResponse> {
