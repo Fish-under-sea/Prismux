@@ -42,7 +42,7 @@ jobs:
 
       - name: Pack deterministic .wb-plugin archives
         run: |
-          for id in qq pet fishdock-hook ssh; do
+          for id in qq fishdock-hook; do
             node scripts/pack-plugin.ts --plugin "plugins-official/plugin-${id}" --out ".work/release-out"
           done
 
@@ -68,7 +68,7 @@ jobs:
             }
           ")
           echo "Resolved npm dist-tag: ${DIST_TAG}"
-          for id in qq pet fishdock-hook ssh; do
+          for id in qq fishdock-hook; do
             PKG_DIR=".work/npm-packages/${id}"
             PKG_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('${PKG_DIR}/package.json', 'utf8')).name)")
             PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('${PKG_DIR}/package.json', 'utf8')).version)")
