@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIcon,
   AlertTriangleIcon,
@@ -56,6 +56,7 @@ import { PrismuxReleaseNotesMarkdown } from "../updates/PrismuxReleaseNotesMarkd
 import {
   buildUpdaterStageSteps,
   describeUpdaterProgressStage,
+  extractReleaseNotesHighlights,
   formatProgressPercentDisplay,
   formatUpdaterStageWeightHint,
   parseCheckResult,
@@ -519,6 +520,10 @@ export function PrismuxUpdatesSettingsPage({
     checkResult?.recommendedAsset ??
     selectRecommendedUpdateAsset(checkResult?.assets ?? [], portableMode);
   const safeReleaseHtmlUrl = validateSafeHttpsUrl(checkResult?.htmlUrl);
+  const displayReleaseNotes = useMemo(
+    () => extractReleaseNotesHighlights(checkResult?.releaseNotes),
+    [checkResult?.releaseNotes],
+  );
   const barPercent = resolveProgressBarPercent(progress, hasVerifiedPackage && !isTransferActive);
   const progressPercentText = formatProgressPercentDisplay(barPercent);
   const speedText = formatTransferSpeed(notifierState.speedBytesPerSec);
@@ -929,12 +934,23 @@ export function PrismuxUpdatesSettingsPage({
               </div>
             </div>
 
-            {checkResult.releaseNotes ? (
-              <div
-                data-testid="prismux-updates-settings-release-notes"
-                className="max-h-72 overflow-y-auto overscroll-contain rounded-xl border border-border/70 bg-foreground/[0.03] px-4 py-3 dark:bg-white/[0.035]"
-              >
-                <PrismuxReleaseNotesMarkdown markdown={checkResult.releaseNotes} />
+            {displayReleaseNotes ? (
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-semibold tracking-wide text-muted-foreground">
+                  更新公告
+                  {checkResult.releaseName &&
+                  checkResult.releaseName.trim() !== checkResult.tagName &&
+                  checkResult.releaseName.trim() !==
+                    (checkResult.latestVersion ? `v${checkResult.latestVersion}` : "")
+                    ? ` · ${checkResult.releaseName.trim()}`
+                    : ""}
+                </div>
+                <div
+                  data-testid="prismux-updates-settings-release-notes"
+                  className="max-h-[min(56dvh,480px)] overflow-y-auto overscroll-contain rounded-xl border border-border/70 bg-foreground/[0.03] px-4 py-3.5 dark:bg-white/[0.035]"
+                >
+                  <PrismuxReleaseNotesMarkdown markdown={displayReleaseNotes} />
+                </div>
               </div>
             ) : null}
 

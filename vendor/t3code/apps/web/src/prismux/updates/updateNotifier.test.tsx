@@ -27,7 +27,10 @@ import {
   startUpdaterStatusFallbackPoller,
   type StorageLike,
 } from "./updateNotifierStore";
-import { parseUpdaterStatusPayload } from "../settings/prismuxUpdates.logic";
+import {
+  extractReleaseNotesHighlights,
+  parseUpdaterStatusPayload,
+} from "../settings/prismuxUpdates.logic";
 
 function createMemoryStorage(): StorageLike & { readonly map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -445,7 +448,138 @@ describe("Sidebar update capsule & release modal rendering", () => {
       "utf8",
     );
     expect(updatesSettingsSource).toContain("<PrismuxReleaseNotesMarkdown");
+    expect(updatesSettingsSource).toContain("extractReleaseNotesHighlights");
     expect(updatesSettingsSource).not.toContain("whitespace-pre-wrap");
+  });
+
+  it("extracts and richly renders all 5 numbered sections of real v0.1.3-preview.1 (and v0.1.2-preview.4) without raw ** or backticks or download boilerplate", () => {
+    const realV013ReleaseNotes = [
+      "# Prismux v0.1.3 Preview 1",
+      "",
+      "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方两大活跃插件（`qq` / `fishdock-hook`）严格保持默认零预装**。",
+      "",
+      "## ✨ 本次核心升级亮点（v0.1.3 Preview 1）",
+      "",
+      "### 1. 1:1 还原 AGY 蜂群侧边栏 & 多 Agent 原生只读协作视图",
+      "- **AGY 蜂群 1:1 复刻**：原生只读还原 22×18 像素蜜蜂与蜂王皇冠、概览目标/进度/工作流、公告板（`@提及` / `#序号` 跳转胶囊与未读分隔线）、成员实时活动与离场筛选，以及关系图 / 消息回放。",
+      "- **多 Agent 原生适配**：同步提供 Claude Code（`~/.claude/teams`、`inboxes`、`tasks`）与 Codex（子代理协作、`goals` / `state`）原生只读协作侧边栏，不自建任何重型编排 DAG。",
+      "- **按需无扰唤醒**：仅在协作状态首次从休眠切入活跃时自动弹出（历史/空闲会话绝不误弹），并在概览面板「在终端继续」正下方提供一键打开入口。",
+      "",
+      "### 2. `/` 斜杠命令前缀图标双语汉化 & `@对话 / @工作 Agent` 提及",
+      "- **清晰双语格式**：统一按「图标 中文 小号原生英文：汉化介绍」排布（如 `🐝 蜂群 swarm：...`、`🕒 定时 schedule：...`）；技能项统一按「图标 技能 原生名：描述」展示，**个人技能严守原名不做汉化**，原生/系统自带技能完整汉化。",
+      "- **折叠分层排序**：只输入 `/` 时原生 Agent 指令排在顶部，个人技能与自带技能归入同一可展开折叠项（展开后先列「个人技能」，再列「自带技能」）。",
+      "- **增强 `@` 提及**：空 `@` 与中文关键词均可直接召出 `@对话`、`@工作 Agent`、`@主机` 与 `@文件`。",
+      "",
+      "### 3. 侧栏液态玻璃卡片、RGB 呼吸态、AGY 胶囊气泡 & Orca 详细配额",
+      "- **高对比四边液态玻璃卡片**：全面补全侧栏会话卡片四边玻璃质感与对比度（`刚刚`、Agent Logo、项目名与主机名在复杂壁纸下均清晰可读），移除前置状态圆点；活跃执行中的会话呈现旋转 RGB 跑马灯边环与呼吸 Agent Logo，空闲态静默优雅。",
+      "- **AGY 扁平大圆角胶囊气泡**：用户消息采用扁平大圆角胶囊设计，在浅色液态玻璃与深色液态玻璃下呈现清晰视觉区隔。",
+      "- **底部 20px 状态栏详细配额联动**：底部配额胶囊与浮窗 `详细 / 精简` 模式完全同步，一屏尽览多窗口百分比与迷你进度条。",
+      "",
+      "### 4. 空白新会话硬单例、概览面板解耦防遮挡 & 壁纸侧栏精简",
+      "- **空白新会话硬单例**：同一工作区最多仅保留 1 个未发送消息的空白草稿标签，支持原位切换 Agent，点击新建或切换标签绝不再连弹多个重复空白会话。",
+      "- **概览面板独立悬浮与动态限高**：右侧「概览」与底部居中对话框彻底解耦（对话框不再左偏），强制保障底部 ≥ 28px 留白，默认隐藏已完成/已结束项，并随窗口/全屏高度自动调整每区显示条数上限（支持右上角 `⋮` 手动定制）。",
+      "- **壁纸侧边栏精简与永久去重**：删除「壁纸属性」按钮、底部重复「外观与玻璃」按钮、壁纸页重复声音控制以及 4 张合成场景壁纸；导入本地图片按文件大小 + SHA-256 永久去重，仅保留唯一副本。",
+      "",
+      "### 5. 宿主机时区自动语言识别、全宽无白框天体胶囊 & 升级/体检重设计",
+      "- **时区自动语言切换**：首次启动默认读取宿主机 IANA 时区，在已支持的 10 种语言中自动切换（中国时区即刻直达全中文 `/welcome` 欢迎页）；一旦用户手动切换语言后，后续永不覆盖用户选择。",
+      "- **全宽无白框天体三态胶囊**：`/welcome` 天体三态胶囊拉满全宽对齐右侧边缘，并彻底移除点击玻璃态时右侧 1/3 出现刺眼白框的焦点描边。",
+      "- **分卷加权下载进度条 & 四级液态玻璃服务体检**：Gitee 3 段分卷下载按 `3×30% + 5% 解压 + 5% 校验 = 100%` 实时流式推送进度与 MB/s 速率，彻底根治进度条卡死前半段；服务体检中心升级为四级液态玻璃卡片与翡翠绿混合记忆引擎横幅。",
+      "",
+      "## 📦 下载指南（Windows x64 · 零预装插件）",
+      "",
+      "| 资产文件 | 用途说明 | SHA-256 |",
+      "| :--- | :--- | :--- |",
+      "| **`Prismux-Setup-0.1.3-preview.1-win-x64.exe`**（208.39 MB） | Electron 44 Windows x64 安装包 | `9498ae63f670e28acef5143ea3533b53d07c2bfdbfe584f5910a75475c71f8c0` |",
+      "",
+      "> 中国大陆用户亦可前往 **[Gitee Releases (`v0.1.3-preview.1`)](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.1)** 获取高速 80 MB 无损分卷（`.7z.001..003`）。",
+      "",
+      "### Gitee 80 MB 无损分卷还原说明",
+      "",
+      "```powershell",
+      "7z x Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.001",
+      "(Get-FileHash .\\Prismux-Setup-0.1.3-preview.1-win-x64.exe -Algorithm SHA256).Hash.ToLower()",
+      "```",
+    ].join("\n");
+
+    // Toast preview surfaces the real first highlight bullet, not SemVer boilerplate
+    const toastPreview = extractReleaseNotesPreview(realV013ReleaseNotes);
+    expect(toastPreview).toContain("AGY 蜂群 1:1 复刻");
+    expect(toastPreview).not.toContain("标准 SemVer");
+    expect(toastPreview).not.toContain("**");
+    expect(toastPreview).not.toContain("`");
+
+    // Modal renders full structured highlights cleanly
+    prismuxUpdateNotifierStore.reportUpdateAvailable(
+      makeUpdateCheck({
+        currentVersion: "0.1.2-preview.4",
+        latestVersion: "0.1.3-preview.1",
+        tagName: "v0.1.3-preview.1",
+        releaseName: "Prismux v0.1.3 Preview 1",
+        releaseNotes: realV013ReleaseNotes,
+        sourceUsed: "gitee",
+      }),
+    );
+    prismuxUpdateNotifierStore.openReleaseModal();
+
+    const modalHtml = renderToStaticMarkup(createElement(PrismuxUpdateReleaseModal));
+    expect(modalHtml).toContain("✨ 本次核心升级亮点（v0.1.3 Preview 1）</h2>");
+    expect(modalHtml).toContain("1. 1:1 还原 AGY 蜂群侧边栏 &amp; 多 Agent 原生只读协作视图</h3>");
+    expect(modalHtml).toContain("2. <code");
+    expect(modalHtml).toContain("斜杠命令前缀图标双语汉化");
+    expect(modalHtml).toContain("3. 侧栏液态玻璃卡片、RGB 呼吸态、AGY 胶囊气泡 &amp; Orca 详细配额</h3>");
+    expect(modalHtml).toContain("4. 空白新会话硬单例、概览面板解耦防遮挡 &amp; 壁纸侧栏精简</h3>");
+    expect(modalHtml).toContain("5. 宿主机时区自动语言识别、全宽无白框天体胶囊 &amp; 升级/体检重设计</h3>");
+
+    // Bold lead-ins and inline code pills rendered cleanly with zero raw markdown leakage
+    expect(modalHtml).toContain("<strong");
+    expect(modalHtml).toContain("AGY 蜂群 1:1 复刻</strong>");
+    expect(modalHtml).toContain("分卷加权下载进度条 &amp; 四级液态玻璃服务体检</strong>");
+    expect(modalHtml).toContain("~/.claude/teams</code>");
+    expect(modalHtml).toContain("3×30% + 5% 解压 + 5% 校验 = 100%</code>");
+    expect(modalHtml).not.toContain("**");
+    expect(modalHtml).not.toContain("`");
+
+    // Boilerplate tables, SHA-256 commands, and fallback one-liner must NOT appear
+    expect(modalHtml).not.toContain("标准 SemVer / Tag");
+    expect(modalHtml).not.toContain("下载指南");
+    expect(modalHtml).not.toContain("Gitee 80 MB 无损分卷");
+    expect(modalHtml).not.toContain("Get-FileHash");
+    expect(modalHtml).not.toContain("9498ae63f670e28a");
+    expect(modalHtml).not.toContain("此版本包含性能与液态玻璃体验优化");
+
+    // v0.1.2-preview.4 format (highlights AFTER download guide) renders cleanly in settings/modal pipeline too
+    const realV0124Notes = [
+      "# Prismux v0.1.2 Preview 4",
+      "",
+      "> 标准 SemVer / Tag：`v0.1.2-preview.4`（`0.1.2-preview.4`）。",
+      "",
+      "## 📦 下载指南：我应该下载哪个文件？",
+      "",
+      "| 平台 | 下载 |",
+      "| :--- | :--- |",
+      "| Windows | `Prismux-Setup-0.1.2-preview.4-win-x64.exe` |",
+      "",
+      "## ✨ Prismux v0.1.2 Preview 4 六大核心升级",
+      "",
+      "- **Codex Windows 双模启动修复**：`npmNodeShimCommand` 零壳直启。",
+      "- **权威插件文档**：新增 [`plugin-development-guide.md`](https://github.com/Fish-under-sea/Prismux/blob/v0.1.2-preview.4/docs/plugins/plugin-development-guide.md)。",
+    ].join("\n");
+
+    const settingsRenderedHtml = renderToStaticMarkup(
+      createElement(PrismuxReleaseNotesMarkdown, {
+        markdown: extractReleaseNotesHighlights(realV0124Notes),
+      }),
+    );
+    expect(settingsRenderedHtml).toContain("✨ Prismux v0.1.2 Preview 4 六大核心升级</h2>");
+    expect(settingsRenderedHtml).toContain("Codex Windows 双模启动修复</strong>");
+    expect(settingsRenderedHtml).toContain("npmNodeShimCommand</code>");
+    expect(settingsRenderedHtml).toContain(
+      'href="https://github.com/Fish-under-sea/Prismux/blob/v0.1.2-preview.4/docs/plugins/plugin-development-guide.md"',
+    );
+    expect(settingsRenderedHtml).not.toContain("下载指南");
+    expect(settingsRenderedHtml).not.toContain("标准 SemVer / Tag");
+    expect(settingsRenderedHtml).not.toContain("**");
+    expect(settingsRenderedHtml).not.toContain("`");
   });
 
   it("renders exact weighted determinate progress width, MB/s speed, split volume badge, and 4-stage indicator without fake 14%/15% widths", () => {

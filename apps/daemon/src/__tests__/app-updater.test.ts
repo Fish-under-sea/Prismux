@@ -25,8 +25,12 @@ import {
 import { PrismuxDaemon } from "../index.js";
 import {
   AppUpdater,
+  MAX_RELEASE_NOTES_CHARS,
   UpdateIntegrityError,
   applyGhProxyPrefix,
+  extractGiteeReleaseBodyFromHtml,
+  normalizeReleaseNotesBody,
+  parseGiteeWebReleasesHtml,
   resolve7zaBinary
 } from "../updater/AppUpdater.js";
 
@@ -680,7 +684,7 @@ test("AppUpdater supports Range resume, 302 redirects (max 6 hops), and customGh
   }
 });
 
-test("PrismuxDaemon integrates AppUpdater with 0.1.3-preview.1 default and exposes HTTP & RPC updater endpoints", async () => {
+test("PrismuxDaemon integrates AppUpdater with 0.1.3-preview.2 default and exposes HTTP & RPC updater endpoints", async () => {
   const dataDir = makeTempDir("prismux-daemon-updater-");
   const daemon = new PrismuxDaemon({
     headless: true,
@@ -697,7 +701,7 @@ test("PrismuxDaemon integrates AppUpdater with 0.1.3-preview.1 default and expos
     });
     assert.equal(statusRes.status, 200);
     const statusJson = (await statusRes.json()) as UpdaterStatusSnapshot;
-    assert.equal(statusJson.currentVersion, "0.1.3-preview.1");
+    assert.equal(statusJson.currentVersion, "0.1.3-preview.2");
     assert.equal(statusJson.policy.routePreference, "auto");
     assert.equal(statusJson.policy.includePrerelease, true);
     assert.equal(statusJson.policy.customGhProxyPrefix, "");
@@ -1328,6 +1332,301 @@ test("AppUpdater throttles high-frequency chunk SSE broadcasts while preserving 
     assert.equal(sseReadyEvents.length, 1);
     assert.equal(sseReadyEvents[0]!.progress?.percent, 100);
     assert.equal(sseReadyEvents[0]!.status.downloading, false);
+  } finally {
+    await closeMockServer(mockRef.server);
+  }
+});
+
+const REAL_V013_PREVIEW_1_GITHUB_BODY = [
+  "# Prismux v0.1.3 Preview 1",
+  "",
+  "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方两大活跃插件（`qq` / `fishdock-hook`）严格保持默认零预装**（原 `pet` / `ssh` 已停用：已被 Prismux 内置功能取代），桌面安装包内不包含任何官方插件，需要时可在 **设置 → 插件中心** 或通过下方独立 `.wb-plugin` / npm 单包按需安装。",
+  "",
+  "## ✨ 本次核心升级亮点（v0.1.3 Preview 1）",
+  "",
+  "### 1. 1:1 还原 AGY 蜂群侧边栏 & 多 Agent 原生只读协作视图",
+  "- **AGY 蜂群 1:1 复刻**：原生只读还原 22×18 像素蜜蜂与蜂王皇冠、概览目标/进度/工作流、公告板（`@提及` / `#序号` 跳转胶囊与未读分隔线）、成员实时活动与离场筛选，以及关系图 / 消息回放。",
+  "- **多 Agent 原生适配**：同步提供 Claude Code（`~/.claude/teams`、`inboxes`、`tasks`）与 Codex（子代理协作、`goals` / `state`）原生只读协作侧边栏，不自建任何重型编排 DAG。",
+  "- **按需无扰唤醒**：仅在协作状态首次从休眠切入活跃时自动弹出（历史/空闲会话绝不误弹），并在概览面板「在终端继续」正下方提供一键打开入口。",
+  "",
+  "### 2. `/` 斜杠命令前缀图标双语汉化 & `@对话 / @工作 Agent` 提及",
+  "- **清晰双语格式**：统一按「图标 中文 小号原生英文：汉化介绍」排布（如 `🐝 蜂群 swarm：...`、`🕒 定时 schedule：...`）；技能项统一按「图标 技能 原生名：描述」展示，**个人技能严守原名不做汉化**，原生/系统自带技能完整汉化。",
+  "- **折叠分层排序**：只输入 `/` 时原生 Agent 指令排在顶部，个人技能与自带技能归入同一可展开折叠项（展开后先列「个人技能」，再列「自带技能」）。",
+  "- **增强 `@` 提及**：空 `@` 与中文关键词均可直接召出 `@对话`、`@工作 Agent`、`@主机` 与 `@文件`。",
+  "",
+  "### 3. 侧栏液态玻璃卡片、RGB 呼吸态、AGY 胶囊气泡 & Orca 详细配额",
+  "- **高对比四边液态玻璃卡片**：全面补全侧栏会话卡片四边玻璃质感与对比度（`刚刚`、Agent Logo、项目名与主机名在复杂壁纸下均清晰可读），移除前置状态圆点；活跃执行中的会话呈现旋转 RGB 跑马灯边环与呼吸 Agent Logo，空闲态静默优雅。",
+  "- **AGY 扁平大圆角胶囊气泡**：用户消息采用扁平大圆角胶囊设计，在浅色液态玻璃与深色液态玻璃下呈现清晰视觉区隔。",
+  "- **底部 20px 状态栏详细配额联动**：底部配额胶囊与浮窗 `详细 / 精简` 模式完全同步，一屏尽览多窗口百分比与迷你进度条。",
+  "",
+  "### 4. 空白新会话硬单例、概览面板解耦防遮挡 & 壁纸侧栏精简",
+  "- **空白新会话硬单例**：同一工作区最多仅保留 1 个未发送消息的空白草稿标签，支持原位切换 Agent，点击新建或切换标签绝不再连弹多个重复空白会话。",
+  "- **概览面板独立悬浮与动态限高**：右侧「概览」与底部居中对话框彻底解耦（对话框不再左偏），强制保障底部 ≥ 28px 留白，默认隐藏已完成/已结束项，并随窗口/全屏高度自动调整每区显示条数上限（支持右上角 `⋮` 手动定制）。",
+  "- **壁纸侧边栏精简与永久去重**：删除「壁纸属性」按钮、底部重复「外观与玻璃」按钮、壁纸页重复声音控制以及 4 张合成场景壁纸；导入本地图片按文件大小 + SHA-256 永久去重，仅保留唯一副本。",
+  "",
+  "### 5. 宿主机时区自动语言识别、全宽无白框天体胶囊 & 升级/体检重设计",
+  "- **时区自动语言切换**：首次启动默认读取宿主机 IANA 时区，在已支持的 10 种语言中自动切换（中国时区即刻直达全中文 `/welcome` 欢迎页）；一旦用户手动切换语言后，后续永不覆盖用户选择。",
+  "- **全宽无白框天体三态胶囊**：`/welcome` 天体三态胶囊拉满全宽对齐右侧边缘，并彻底移除点击玻璃态时右侧 1/3 出现刺眼白框的焦点描边。",
+  "- **分卷加权下载进度条 & 四级液态玻璃服务体检**：Gitee 3 段分卷下载按 `3×30% + 5% 解压 + 5% 校验 = 100%` 实时流式推送进度与 MB/s 速率，彻底根治进度条卡死前半段；服务体检中心升级为四级液态玻璃卡片与翡翠绿混合记忆引擎横幅。",
+  "",
+  "## 📦 下载指南（Windows x64 · 零预装插件）",
+  "",
+  "| 资产文件 | 用途说明 | SHA-256 |",
+  "| :--- | :--- | :--- |",
+  "| **`Prismux-Setup-0.1.3-preview.1-win-x64.exe`**（208.39 MB） | Electron 44 Windows x64 安装包（**官方插件零预装**） | `9498ae63f670e28acef5143ea3533b53d07c2bfdbfe584f5910a75475c71f8c0` |",
+  "",
+  "> 中国大陆用户亦可前往 **[Gitee Releases (`v0.1.3-preview.1`)](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.1)** 获取高速 80 MB 无损分卷（`.7z.001..003`）及软件内置直连自动更新。"
+].join("\r\n");
+
+const REAL_V013_PREVIEW_1_GITEE_BODY = [
+  REAL_V013_PREVIEW_1_GITHUB_BODY.replace(/\r\n/g, "\n"),
+  "",
+  "### Gitee 80 MB 无损分卷还原说明",
+  "",
+  "| 分卷文件名 | 用途 | SHA-256 |",
+  "| :--- | :--- | :--- |",
+  "| `Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.001`（80.00 MB） | Gitee 80 MB 无损分卷 | `e7015543916680df151af36cf83e0a9c0d82d752509ba2cb6ae2d7e2023b1f6b` |",
+  "| `Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.002`（80.00 MB） | Gitee 80 MB 无损分卷 | `7442efafa4b0701158a1cedd372b9258c61efedd3f8adcdad783f1d5d525133f` |",
+  "| `Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.003`（48.39 MB） | Gitee 80 MB 无损分卷 | `1c3e760a844dc57e163ecbf3cc7b2e88fa220b4efa3895638efdb4969d216a93` |",
+  "",
+  "```powershell",
+  "# 下载全部 .7z.001..003 至同一目录后执行无损合并（只需指定 .001）：",
+  "7z x Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.001",
+  "(Get-FileHash .\\Prismux-Setup-0.1.3-preview.1-win-x64.exe -Algorithm SHA256).Hash.ToLower()",
+  "# 期望值: 9498ae63f670e28acef5143ea3533b53d07c2bfdbfe584f5910a75475c71f8c0",
+  "```"
+].join("\n");
+
+function escapeForGiteeTextarea(markdown: string): string {
+  return markdown
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("\n", "&#x000A;");
+}
+
+test("AppUpdater preserves full v0.1.3-preview.1 releaseNotes across GitHub API, Gitee API, and Gitee 403 Web HTML fallback", async () => {
+  // 1. normalizeReleaseNotesBody strips BOM/CRLF and preserves up to 24 KB without short truncation
+  const largeNotes = `${"✨ 更新条目\n".repeat(2500)}结尾验证`;
+  assert.ok(largeNotes.length > 16_000 && largeNotes.length < MAX_RELEASE_NOTES_CHARS);
+  assert.equal(normalizeReleaseNotesBody(`\uFEFF${largeNotes.replaceAll("\n", "\r\n")}`), largeNotes);
+
+  const oversized = "a".repeat(MAX_RELEASE_NOTES_CHARS + 500);
+  assert.equal(normalizeReleaseNotesBody(oversized)?.length, MAX_RELEASE_NOTES_CHARS);
+  assert.equal(normalizeReleaseNotesBody("   \r\n  "), null);
+
+  // 2. parseGiteeWebReleasesHtml extracts full Markdown body, title, timestamp, and split assets from real Gitee HTML
+  const giteeReleasesHtml = `
+    <html><body>
+      <div class='release-tag-item' data-tag='v0.1.3-preview.1' id='release-v0.1.3-preview.1'>
+        <div class='release-body'>
+          <div class='release-header'>
+            <div class='release-header-main'>
+              <a target="_blank" class="title" href="/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.1">Prismux v0.1.3 Preview 1</a>
+            </div>
+          </div>
+          <div class='release-meta-row'>
+            <span class='release-time' data-commit-date='2026-11-24 18:05:24 +0800'>2026-11-24 18:11</span>
+            <span class='tag-name' data-tag-name='v0.1.3-preview.1'>
+              <a href="/Fish-under-sea/Prismux/tree/v0.1.3-preview.1"><span>v0.1.3-preview.1</span></a>
+            </span>
+          </div>
+          <div class='content'>
+            <div class='markdown-body'>
+              <rich-markdown-renderer data-enterprise-id='' data-project-id='51687511'>&#x000A;<textarea class='content' style='display:none;'>${escapeForGiteeTextarea(REAL_V013_PREVIEW_1_GITEE_BODY)}</textarea></rich-markdown-renderer>
+            </div>
+          </div>
+          <div class='release-attachments'>
+            <a href="/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.1/Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.001">part1</a>
+            <a href="/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.1/Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.002">part2</a>
+            <a href="/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.1/Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.003">part3</a>
+            <a href="/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.1/Prismux-0.1.3-preview.1-SHA256SUMS.txt">sums</a>
+          </div>
+        </div>
+      </div>
+    </body></html>
+  `;
+
+  const parsedWeb = parseGiteeWebReleasesHtml(
+    giteeReleasesHtml,
+    "https://gitee.com",
+    "Fish-under-sea",
+    "Prismux"
+  );
+  assert.equal(parsedWeb.length, 1);
+  assert.equal(parsedWeb[0]!.tag_name, "v0.1.3-preview.1");
+  assert.equal(parsedWeb[0]!.name, "Prismux v0.1.3 Preview 1");
+  assert.equal(parsedWeb[0]!.published_at, "2026-11-24T10:05:24.000Z");
+  assert.equal(parsedWeb[0]!.body, REAL_V013_PREVIEW_1_GITEE_BODY);
+  assert.equal(
+    extractGiteeReleaseBodyFromHtml(
+      "<rich-markdown-renderer><textarea class='content'>&amp;lt;safe&amp;gt;</textarea></rich-markdown-renderer>"
+    ),
+    "&lt;safe&gt;"
+  );
+
+  // 3. End-to-end checkForUpdates across GitHub API, Gitee API 200, Gitee 403 -> Web index HTML,
+  //    and Gitee 403 -> index HTML omitting textarea -> tag detail page fallback.
+  const exeSha = "9498ae63f670e28acef5143ea3533b53d07c2bfdbfe584f5910a75475c71f8c0";
+  let giteeMode: "api-200" | "web-index" | "web-tag-fallback" = "api-200";
+  let tagDetailHits = 0;
+
+  let mockRef!: { server: http.Server; baseUrl: string };
+  mockRef = await startMockServer((req, res) => {
+    const urlPath = req.url ?? "/";
+    if (urlPath.startsWith("/gh-api/repos/")) {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify([
+          {
+            tag_name: "v0.1.3-preview.1",
+            name: "Prismux v0.1.3 Preview 1",
+            body: `\uFEFF${REAL_V013_PREVIEW_1_GITHUB_BODY}`,
+            prerelease: true,
+            draft: false,
+            published_at: "2026-11-24T10:11:00Z",
+            assets: [
+              {
+                name: "Prismux-Setup-0.1.3-preview.1-win-x64.exe",
+                browser_download_url: `${mockRef.baseUrl}/dl/setup.exe`,
+                size: 218_510_000
+              },
+              {
+                name: "Prismux-0.1.3-preview.1-SHA256SUMS.txt",
+                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
+              }
+            ]
+          }
+        ])
+      );
+      return;
+    }
+
+    if (urlPath.startsWith("/gitee-api/repos/")) {
+      if (giteeMode === "api-200") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify([
+            {
+              tag_name: "v0.1.3-preview.1",
+              name: "Prismux v0.1.3 Preview 1",
+              body: REAL_V013_PREVIEW_1_GITEE_BODY,
+              prerelease: true,
+              created_at: "2026-11-24T18:11:00+08:00",
+              assets: [
+                {
+                  name: "Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.001",
+                  browser_download_url: `${mockRef.baseUrl}/dl/part1`
+                },
+                {
+                  name: "Prismux-0.1.3-preview.1-SHA256SUMS.txt",
+                  browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
+                }
+              ]
+            }
+          ])
+        );
+        return;
+      }
+      res.statusCode = 403;
+      res.setHeader("content-type", "text/plain");
+      res.end("403 Forbidden (Rate Limit Exceeded)");
+      return;
+    }
+
+    if (urlPath === "/gitee-web/Fish-under-sea/Prismux/releases") {
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      if (giteeMode === "web-index") {
+        res.end(giteeReleasesHtml);
+      } else {
+        // Index page without embedded textarea -> triggers tag page fallback
+        res.end(`
+          <html><body>
+            <a href="/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.1">Prismux v0.1.3 Preview 1</a>
+            <a href="/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.1/Prismux-Setup-0.1.3-preview.1-win-x64.exe.7z.001">part1</a>
+            <a href="/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.1/Prismux-0.1.3-preview.1-SHA256SUMS.txt">sums</a>
+          </body></html>
+        `);
+      }
+      return;
+    }
+
+    if (urlPath === "/gitee-web/Fish-under-sea/Prismux/releases/tag/v0.1.3-preview.1") {
+      tagDetailHits += 1;
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.end(`
+        <html><body>
+          <rich-markdown-renderer><textarea class='content' style='display:none;'>${escapeForGiteeTextarea(REAL_V013_PREVIEW_1_GITEE_BODY)}</textarea></rich-markdown-renderer>
+        </body></html>
+      `);
+      return;
+    }
+
+    if (
+      urlPath === "/dl/SHA256SUMS.txt" ||
+      urlPath === "/gitee-web/Fish-under-sea/Prismux/releases/download/v0.1.3-preview.1/Prismux-0.1.3-preview.1-SHA256SUMS.txt"
+    ) {
+      res.statusCode = 200;
+      res.end(`${exeSha}  Prismux-Setup-0.1.3-preview.1-win-x64.exe\n`);
+      return;
+    }
+
+    res.statusCode = 404;
+    res.end();
+  });
+
+  try {
+    const updater = new AppUpdater({
+      currentVersion: "0.1.2-preview.4",
+      dataDir: makeTempDir("prismux-updater-notes-"),
+      githubApiBase: `${mockRef.baseUrl}/gh-api`,
+      giteeApiBase: `${mockRef.baseUrl}/gitee-api`,
+      giteeWebBase: `${mockRef.baseUrl}/gitee-web`,
+      initialPolicy: { routePreference: "global", includePrerelease: true }
+    });
+
+    const assertAllFiveHighlightsPresent = (notes: string | null, label: string) => {
+      assert.ok(notes !== null && notes.length > 2_400, `${label}: expected full unchopped notes`);
+      assert.ok(!notes.includes("\r"), `${label}: CRLF must be normalized to LF`);
+      assert.ok(!notes.startsWith("\uFEFF"), `${label}: BOM must be stripped`);
+      assert.ok(notes.includes("## ✨ 本次核心升级亮点（v0.1.3 Preview 1）"), label);
+      assert.ok(notes.includes("### 1. 1:1 还原 AGY 蜂群侧边栏 & 多 Agent 原生只读协作视图"), label);
+      assert.ok(notes.includes("### 2. `/` 斜杠命令前缀图标双语汉化 & `@对话 / @工作 Agent` 提及"), label);
+      assert.ok(notes.includes("### 3. 侧栏液态玻璃卡片、RGB 呼吸态、AGY 胶囊气泡 & Orca 详细配额"), label);
+      assert.ok(notes.includes("### 4. 空白新会话硬单例、概览面板解耦防遮挡 & 壁纸侧栏精简"), label);
+      assert.ok(notes.includes("### 5. 宿主机时区自动语言识别、全宽无白框天体胶囊 & 升级/体检重设计"), label);
+    };
+
+    // GitHub API
+    const ghCheck = await updater.checkForUpdates({ sourceOverride: "github" });
+    assert.equal(ghCheck.releaseName, "Prismux v0.1.3 Preview 1");
+    assertAllFiveHighlightsPresent(ghCheck.releaseNotes, "GitHub API");
+
+    // Gitee API 200
+    giteeMode = "api-200";
+    const giteeApiCheck = await updater.checkForUpdates({ sourceOverride: "gitee" });
+    assertAllFiveHighlightsPresent(giteeApiCheck.releaseNotes, "Gitee API 200");
+
+    // Gitee 403 -> Web releases index HTML (exact live condition that previously yielded releaseNotes: null!)
+    giteeMode = "web-index";
+    tagDetailHits = 0;
+    const giteeWebCheck = await updater.checkForUpdates({ sourceOverride: "gitee" });
+    assert.equal(giteeWebCheck.releaseName, "Prismux v0.1.3 Preview 1");
+    assert.equal(giteeWebCheck.publishedAt, "2026-11-24T10:05:24.000Z");
+    assert.equal(tagDetailHits, 0, "Inline textarea on /releases avoids extra tag-page fetch");
+    assertAllFiveHighlightsPresent(giteeWebCheck.releaseNotes, "Gitee 403 Web HTML");
+
+    // Gitee 403 -> Web index omits textarea -> tag detail page fallback recovers full releaseNotes
+    giteeMode = "web-tag-fallback";
+    tagDetailHits = 0;
+    const giteeTagFallbackCheck = await updater.checkForUpdates({ sourceOverride: "gitee" });
+    assert.equal(tagDetailHits, 1, "Expected tag detail page fallback fetch when index omits body");
+    assertAllFiveHighlightsPresent(giteeTagFallbackCheck.releaseNotes, "Gitee tag detail fallback");
   } finally {
     await closeMockServer(mockRef.server);
   }

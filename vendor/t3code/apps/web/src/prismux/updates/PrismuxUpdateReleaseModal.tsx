@@ -34,6 +34,7 @@ import { useOptionalPrismuxRuntime } from "../PrismuxRuntimeProvider";
 import {
   buildUpdaterStageSteps,
   describeUpdaterProgressStage,
+  extractReleaseNotesHighlights,
   formatProgressPercentDisplay,
   formatUpdaterStageWeightHint,
   resolveProgressBarPercent,
@@ -156,6 +157,10 @@ export function PrismuxUpdateReleaseModal() {
     "https://github.com/Fish-under-sea/Prismux/releases";
 
   const publishedDate = formatPublishedDate(update?.publishedAt);
+  const displayReleaseNotes = useMemo(
+    () => extractReleaseNotesHighlights(update?.releaseNotes),
+    [update?.releaseNotes],
+  );
 
   const handleDismissToCapsule = useCallback(() => {
     if (isInstalling) return;
@@ -327,7 +332,7 @@ export function PrismuxUpdateReleaseModal() {
         data-pmx-glass-zone="overlays"
         data-testid="prismux-update-release-modal"
         className={cn(
-          "dialog-glass relative flex max-h-[min(82dvh,640px)] w-full max-w-[540px] flex-col overflow-hidden rounded-2xl border text-popover-foreground shadow-2xl/50 outline-none transition-[opacity,transform] duration-200 ease-out [-webkit-app-region:no-drag] motion-reduce:transition-none",
+          "dialog-glass relative flex max-h-[min(86dvh,760px)] w-full max-w-[620px] flex-col overflow-hidden rounded-2xl border text-popover-foreground shadow-2xl/50 outline-none transition-[opacity,transform] duration-200 ease-out [-webkit-app-region:no-drag] motion-reduce:transition-none",
           entered ? "scale-100 opacity-100" : "scale-[0.975] opacity-0",
         )}
       >
@@ -415,9 +420,9 @@ export function PrismuxUpdateReleaseModal() {
               ) : null}
             </div>
 
-            <div className="rounded-xl border border-border/65 bg-foreground/[0.03] px-4 py-3 dark:bg-white/[0.035]">
+            <div className="rounded-xl border border-border/65 bg-foreground/[0.03] px-4 py-3.5 dark:bg-white/[0.035]">
               <PrismuxReleaseNotesMarkdown
-                markdown={update?.releaseNotes}
+                markdown={displayReleaseNotes}
                 data-testid="prismux-update-release-notes"
                 fallback={
                   <p className="text-muted-foreground">

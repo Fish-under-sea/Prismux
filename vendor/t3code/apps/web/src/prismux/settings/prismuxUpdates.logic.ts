@@ -559,3 +559,246 @@ export function describeUpdaterProgressStage(progress: UpdateProgressView | null
   }
   return progress.message ?? "";
 }
+
+const RELEASE_BANNER_H1_RE = /^#\s+(?:Prismux\b|Release\b|v?\d+\.\d+\.\d+)/i;
+const RELEASE_BOILERPLATE_QUOTE_RE =
+  /(?:标准\s*SemVer|Standard\s*SemVer|SemVer\s*\/\s*Tag|中国大陆用户亦可前往.*Gitee\s*Releases|统一插件校验清单)/i;
+const BOILERPLATE_H2_RE =
+  /(?:下载指南|安装包(?:与|和)校验|发布资产|资产(?:与|和).*校验|校验摘要|完整性校验|sha-?256|checksums?|download\s*guide|\bdownloads?\b|assets?\s*[&＆/]\s*checksums?|gitee.*分卷|无损分卷|分卷(?:下载|还原|合并)|(?:官方(?:独立|认证|按需)?|两大|四大).*插件.*(?:安装|不预装|零预装)|optional\s+official\s+plugins?)/i;
+const BOILERPLATE_H3_RE =
+  /(?:gitee.*分卷|无损分卷|分卷(?:下载|还原|合并)|完整性校验|校验命令|sha-?256|checksums?|桌面主程序\s*[（(]?Desktop\s*App|官方认证按需插件|插件安装方式)/i;
+const BOILERPLATE_VERIFY_CODE_RE =
+  /(?:Get-FileHash|sha256sum|certutil\s+-hashfile|7z\s+x\s+.*\.7z\.001|SHA256SUMS\.txt)/i;
+const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})/;
+
+function trimBlankAndRuleEdges(lines: readonly string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end) {
+    const t = lines[start]!.trim();
+    if (t.length === 0 || /^[-*_]{3,}$/.test(t)) {
+      start += 1;
+    } else {
+      break;
+    }
+  }
+  while (end > start) {
+    const t = lines[end - 1]!.trim();
+    if (t.length === 0 || /^[-*_]{3,}$/.test(t)) {
+      end -= 1;
+    } else {
+      break;
+    }
+  }
+  return lines.slice(start, end);
+}
+
+function cleanReleaseNotesLinesBlock(
+  lines: readonly string[],
+  options: { readonly stripLeadingBannerH1: boolean },
+): string[] {
+  const out: string[] = [];
+  let skippingBoilerplateH3 = false;
+  let seenContent = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+
+    // Fenced code blocks: keep atomic so `# comments` inside shell/powershell never mimic headings.
+    const fenceOpen = FENCE_OPEN_RE.exec(line);
+    if (fenceOpen) {
+      const fenceMarker = fenceOpen[1]!;
+      const fenceChar = fenceMarker[0]!;
+      const fenceLen = fenceMarker.length;
+      const closeRe = new RegExp(`^\\s*${fenceChar === "`" ? "`" : "~"}{${fenceLen},}\\s*$`);
+      const blockLines: string[] = [line];
+      let j = i + 1;
+      while (j < lines.length) {
+        blockLines.push(lines[j]!);
+        if (closeRe.test(lines[j]!)) {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      if (!skippingBoilerplateH3) {
+        const joined = blockLines.join("\n");
+        if (!BOILERPLATE_VERIFY_CODE_RE.test(joined)) {
+          seenContent = true;
+          out.push(...blockLines);
+        }
+      }
+      i = j - 1;
+      continue;
+    }
+
+    const h3Match = /^###\s+(.+)$/.exec(trimmed);
+    if (h3Match) {
+      if (BOILERPLATE_H3_RE.test(h3Match[1]!)) {
+        skippingBoilerplateH3 = true;
+        continue;
+      }
+      skippingBoilerplateH3 = false;
+      seenContent = true;
+      out.push(line);
+      continue;
+    }
+
+    if (skippingBoilerplateH3) {
+      continue;
+    }
+
+    if (options.stripLeadingBannerH1 && !seenContent && RELEASE_BANNER_H1_RE.test(trimmed)) {
+      continue;
+    }
+
+    if (trimmed.startsWith(">")) {
+      const quoteLines: string[] = [line];
+      let j = i + 1;
+      while (j < lines.length && lines[j]!.trim().startsWith(">")) {
+        quoteLines.push(lines[j]!);
+        j += 1;
+      }
+      if (!RELEASE_BOILERPLATE_QUOTE_RE.test(quoteLines.join("\n"))) {
+        seenContent = true;
+        out.push(...quoteLines);
+      }
+      i = j - 1;
+      continue;
+    }
+
+    if (trimmed.length === 0) {
+      out.push("");
+      continue;
+    }
+
+    if (!/^[-*_]{3,}$/.test(trimmed)) {
+      seenContent = true;
+    }
+    out.push(line);
+  }
+
+  return trimBlankAndRuleEdges(out);
+}
+
+/**
+ * Extracts the human-readable highlights/changelog sections from GitHub or Gitee
+ * release notes Markdown, regardless of whether highlights appear before or after
+ * `## 📦 下载指南`.
+ *
+ * Strips ONLY boilerplate release framing:
+ * - Top `# Prismux v...` title banner
+ * - `> 标准 SemVer / Tag...` metadata quote
+ * - `## 📦 下载指南...` download tables & plugin-install boilerplate
+ * - `### Gitee 80 MB 无损分卷...` split tables & SHA-256 verification commands
+ *
+ * Gracefully falls back to the normalized non-empty Markdown body if no distinct
+ * highlights section remains, so the UI never displays blank or truncated notes.
+ */
+export function extractReleaseNotesHighlights(rawMarkdown: string | null | undefined): string {
+  if (typeof rawMarkdown !== "string") {
+    return "";
+  }
+  const normalized = rawMarkdown
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+  if (normalized.length === 0) {
+    return "";
+  }
+
+  const lines = normalized.split("\n");
+  const preambleLines: string[] = [];
+  const h2Sections: Array<{
+    readonly headingLine: string;
+    readonly headingText: string;
+    readonly bodyLines: string[];
+  }> = [];
+
+  let currentSection: {
+    readonly headingLine: string;
+    readonly headingText: string;
+    readonly bodyLines: string[];
+  } | null = null;
+  let activeFence: { readonly char: string; readonly len: number } | null = null;
+
+  for (const line of lines) {
+    if (activeFence !== null) {
+      if (currentSection) {
+        currentSection.bodyLines.push(line);
+      } else {
+        preambleLines.push(line);
+      }
+      const closeRe = new RegExp(
+        `^\\s*${activeFence.char === "`" ? "`" : "~"}{${activeFence.len},}\\s*$`,
+      );
+      if (closeRe.test(line)) {
+        activeFence = null;
+      }
+      continue;
+    }
+
+    const fenceOpen = FENCE_OPEN_RE.exec(line);
+    if (fenceOpen) {
+      const marker = fenceOpen[1]!;
+      activeFence = { char: marker[0]!, len: marker.length };
+      if (currentSection) {
+        currentSection.bodyLines.push(line);
+      } else {
+        preambleLines.push(line);
+      }
+      continue;
+    }
+
+    const h2Match = /^##\s+(.+)$/.exec(line.trim());
+    if (h2Match) {
+      currentSection = {
+        headingLine: line.trimEnd(),
+        headingText: h2Match[1]!.trim(),
+        bodyLines: [],
+      };
+      h2Sections.push(currentSection);
+      continue;
+    }
+
+    if (currentSection) {
+      currentSection.bodyLines.push(line);
+    } else {
+      preambleLines.push(line);
+    }
+  }
+
+  const parts: string[] = [];
+  const cleanedPreamble = cleanReleaseNotesLinesBlock(preambleLines, {
+    stripLeadingBannerH1: true,
+  });
+  if (cleanedPreamble.length > 0) {
+    parts.push(cleanedPreamble.join("\n"));
+  }
+
+  for (const section of h2Sections) {
+    if (BOILERPLATE_H2_RE.test(section.headingText)) {
+      continue;
+    }
+    const hadRawBody = section.bodyLines.some((l) => l.trim().length > 0);
+    const cleanedBody = cleanReleaseNotesLinesBlock(section.bodyLines, {
+      stripLeadingBannerH1: false,
+    });
+    if (hadRawBody && cleanedBody.length === 0) {
+      continue;
+    }
+    const sectionMarkdown =
+      cleanedBody.length > 0
+        ? `${section.headingLine}\n\n${cleanedBody.join("\n")}`
+        : section.headingLine;
+    parts.push(sectionMarkdown);
+  }
+
+  const extracted = parts
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return extracted.length > 0 ? extracted : normalized;
+}

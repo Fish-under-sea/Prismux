@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import type { DaemonUpdaterEvent } from "../daemonClient";
 import {
   applyUpdaterSseEvent,
+  extractReleaseNotesHighlights,
   type UpdateCheckView,
   type UpdaterStatusView,
 } from "../settings/prismuxUpdates.logic";
@@ -169,11 +170,12 @@ export function extractReleaseNotesPreview(
   notes: string | null | undefined,
   maxLength = 104,
 ): string {
-  if (!notes || !notes.trim()) {
+  const effectiveNotes = extractReleaseNotesHighlights(notes);
+  if (!effectiveNotes) {
     return "包含体验优化、稳定性提升与问题修复，点击查看完整更新公告并一键升级。";
   }
 
-  const lines = notes.split(/\r?\n/);
+  const lines = effectiveNotes.split(/\r?\n/);
   let fallbackHeading = "";
   let inCodeFence = false;
 

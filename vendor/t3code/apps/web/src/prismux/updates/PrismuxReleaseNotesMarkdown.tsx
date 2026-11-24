@@ -33,7 +33,7 @@ function ReleaseHeading2({ node: _node, className, children, ...props }: HastCom
     <h2
       {...props}
       className={cn(
-        "text-[13px] font-semibold tracking-tight text-foreground first:mt-0 mt-3.5",
+        "border-b border-border/50 pb-1.5 text-[14px] font-semibold tracking-tight text-foreground first:mt-0 mt-3.5",
         className,
       )}
     >
@@ -47,7 +47,7 @@ function ReleaseHeading3({ node: _node, className, children, ...props }: HastCom
     <h3
       {...props}
       className={cn(
-        "text-[12.5px] font-semibold text-foreground/95 first:mt-0 mt-2.5",
+        "text-[13px] font-semibold leading-snug text-foreground first:mt-0 mt-3.5",
         className,
       )}
     >
@@ -107,7 +107,7 @@ function ReleaseUnorderedList({
     <ul
       {...props}
       className={cn(
-        "my-1.5 list-disc space-y-1 pl-4.5 text-xs leading-[1.6] text-foreground/88 [&_ul]:mt-1 [&_ul]:list-[circle]",
+        "my-1.5 list-disc space-y-1.5 pl-4.5 text-[12.5px] leading-[1.65] text-foreground/88 [&_ul]:mt-1 [&_ul]:list-[circle]",
         className,
       )}
     >
@@ -126,7 +126,7 @@ function ReleaseOrderedList({
     <ol
       {...props}
       className={cn(
-        "my-1.5 list-decimal space-y-1 pl-4.5 text-xs leading-[1.6] text-foreground/88 [&_ol]:mt-1",
+        "my-1.5 list-decimal space-y-1.5 pl-4.5 text-[12.5px] leading-[1.65] text-foreground/88 [&_ol]:mt-1",
         className,
       )}
     >
@@ -137,7 +137,7 @@ function ReleaseOrderedList({
 
 function ReleaseListItem({ node: _node, className, children, ...props }: HastComponentProps<"li">) {
   return (
-    <li {...props} className={cn("leading-[1.6] marker:text-muted-foreground/80", className)}>
+    <li {...props} className={cn("leading-[1.65] marker:text-primary/70", className)}>
       {children}
     </li>
   );
@@ -209,7 +209,7 @@ function ReleaseCode({
     <code
       {...rest}
       className={cn(
-        "rounded-md border border-border/50 bg-foreground/[0.065] px-1.5 py-0.5 font-mono text-[11px] text-foreground dark:bg-white/[0.09] in-[pre]:border-0 in-[pre]:bg-transparent in-[pre]:p-0 in-[pre]:rounded-none",
+        "rounded-md border border-border/55 bg-foreground/[0.07] px-1.5 py-[1px] font-mono text-[11px] font-medium text-foreground/95 dark:border-white/12 dark:bg-white/[0.1] in-[pre]:border-0 in-[pre]:bg-transparent in-[pre]:p-0 in-[pre]:rounded-none in-[pre]:font-normal",
         className,
       )}
     >

@@ -98,6 +98,7 @@ const PROGRESS_SSE_MIN_PERCENT_DELTA = 1;
 
 export const DEFAULT_AUTO_CHECK_INITIAL_DELAY_MS = 15_000;
 export const DEFAULT_AUTO_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+export const MAX_RELEASE_NOTES_CHARS = 24 * 1024;
 
 export type { UpdateDownloadProgress };
 
@@ -604,9 +605,127 @@ function safeDecodeUriComponent(raw: string): string {
   }
 }
 
+const NAMED_HTML_ENTITIES: Readonly<Record<string, string>> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " "
+};
+
+function decodeHtmlEntities(raw: string): string {
+  if (!raw.includes("&")) {
+    return raw;
+  }
+  return raw.replace(
+    /&(?:#x([0-9a-fA-F]+)|#(\d+)|(amp|lt|gt|quot|apos|nbsp));/gi,
+    (match, hex: string | undefined, dec: string | undefined, named: string | undefined) => {
+      if (hex !== undefined) {
+        const cp = Number.parseInt(hex, 16);
+        if (Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff) {
+          return String.fromCodePoint(cp);
+        }
+        return match;
+      }
+      if (dec !== undefined) {
+        const cp = Number.parseInt(dec, 10);
+        if (Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff) {
+          return String.fromCodePoint(cp);
+        }
+        return match;
+      }
+      if (named !== undefined) {
+        return NAMED_HTML_ENTITIES[named.toLowerCase()] ?? match;
+      }
+      return match;
+    }
+  );
+}
+
+/**
+ * Normalizes a release notes Markdown body from GitHub/Gitee APIs or Gitee Web HTML:
+ * strips UTF-8 BOM, normalizes CRLF/CR to LF, trims outer whitespace, and preserves
+ * full content up to `MAX_RELEASE_NOTES_CHARS` (24 KB) without arbitrary short truncation.
+ */
+export function normalizeReleaseNotesBody(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const normalized = raw
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+  if (normalized.length <= MAX_RELEASE_NOTES_CHARS) {
+    return normalized;
+  }
+  let end = MAX_RELEASE_NOTES_CHARS;
+  const lastCode = normalized.charCodeAt(end - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+    end -= 1;
+  }
+  return normalized.slice(0, end).trimEnd();
+}
+
+export function extractGiteeReleaseBodyFromHtml(blockHtml: string): string | null {
+  const richRendererMatch =
+    /<rich-markdown-renderer\b[^>]*>[\s\S]*?<textarea\b[^>]*>([\s\S]*?)<\/textarea>/i.exec(
+      blockHtml
+    );
+  const textareaMatch =
+    richRendererMatch ??
+    /<textarea\b[^>]*class=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/textarea>/i.exec(
+      blockHtml
+    );
+  if (textareaMatch === null) {
+    return null;
+  }
+  return normalizeReleaseNotesBody(decodeHtmlEntities(textareaMatch[1] ?? ""));
+}
+
+function parseGiteeReleaseTimestamp(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  // Example: "2026-11-24 18:05:24 +0800"
+  const withOffset =
+    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)\s*([+-]\d{2}):?(\d{2})$/.exec(
+      trimmed
+    );
+  if (withOffset !== null) {
+    const timePart = withOffset[2]!.length === 5 ? `${withOffset[2]!}:00` : withOffset[2]!;
+    const isoCandidate = `${withOffset[1]!}T${timePart}${withOffset[3]!}:${withOffset[4]!}`;
+    const parsed = new Date(isoCandidate);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  // Example: "2026-11-24 18:11" (Gitee CN web UI local display time)
+  const dateTimeLocal = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)$/.exec(trimmed);
+  if (dateTimeLocal !== null) {
+    const timePart =
+      dateTimeLocal[2]!.length === 5 ? `${dateTimeLocal[2]!}:00` : dateTimeLocal[2]!;
+    const parsed = new Date(`${dateTimeLocal[1]!}T${timePart}+08:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  const fallback = new Date(trimmed);
+  return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
+}
+
 export interface GiteeWebParsedRelease {
   tag_name: string;
   name: string;
+  body: string | null;
+  published_at: string | null;
   prerelease: boolean;
   draft: false;
   html_url: string;
@@ -641,6 +760,14 @@ export function parseGiteeWebReleasesHtml(
     string,
     Map<string, { name: string; browser_download_url: string }>
   >();
+  const metaByTag = new Map<
+    string,
+    {
+      name: string | null;
+      body: string | null;
+      publishedAt: string | null;
+    }
+  >();
 
   const registerTag = (rawTag: string): string | null => {
     const decoded = safeDecodeUriComponent(rawTag).trim();
@@ -657,6 +784,68 @@ export function parseGiteeWebReleasesHtml(
     }
     return tags.get(key)!;
   };
+
+  // Extract structured release cards (`<div class='release-tag-item' data-tag='...'>`)
+  // including full Markdown release body, title, and commit/release timestamp.
+  const cardStarts = [
+    ...html.matchAll(
+      /<div\b[^>]*class=["'][^"']*\brelease-tag-item\b[^"']*["'][^>]*>/gi
+    )
+  ];
+  for (let i = 0; i < cardStarts.length; i += 1) {
+    const startMatch = cardStarts[i]!;
+    const startIdx = startMatch.index ?? 0;
+    const endIdx =
+      i + 1 < cardStarts.length
+        ? (cardStarts[i + 1]!.index ?? html.length)
+        : html.length;
+    const cardHtml = html.slice(startIdx, endIdx);
+    const openingTag = startMatch[0];
+
+    const rawCardTag =
+      /\bdata-tag=["']([^"']+)["']/i.exec(openingTag)?.[1] ??
+      /\bdata-tag-name=["']([^"']+)["']/i.exec(cardHtml)?.[1] ??
+      new RegExp(
+        `href=["'](?:https?:\\/\\/[^"']+)?\\/${ownerEsc}\\/${repoEsc}\\/releases\\/tag\\/([^"'/?#]+)["']`,
+        "i"
+      ).exec(cardHtml)?.[1];
+    if (!rawCardTag) {
+      continue;
+    }
+    const canonicalTag = registerTag(rawCardTag);
+    if (canonicalTag === null) {
+      continue;
+    }
+    const tagKey = canonicalTag.toLowerCase();
+
+    const titleMatch =
+      /<a\b[^>]*class=["'][^"']*\btitle\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i.exec(
+        cardHtml
+      );
+    const cleanedTitle = titleMatch
+      ? decodeHtmlEntities(titleMatch[1]!.replace(/<[^>]+>/g, "")).trim()
+      : "";
+
+    const body = extractGiteeReleaseBodyFromHtml(cardHtml);
+
+    const commitDateAttr = /\bdata-commit-date=["']([^"']+)["']/i.exec(cardHtml)?.[1];
+    const releaseTimeText =
+      /<span\b[^>]*class=["'][^"']*\brelease-time\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i.exec(
+        cardHtml
+      )?.[1];
+    const publishedAt =
+      parseGiteeReleaseTimestamp(commitDateAttr) ??
+      parseGiteeReleaseTimestamp(
+        releaseTimeText ? decodeHtmlEntities(releaseTimeText.replace(/<[^>]+>/g, "")) : null
+      );
+
+    const existing = metaByTag.get(tagKey);
+    metaByTag.set(tagKey, {
+      name: existing?.name ?? (cleanedTitle.length > 0 ? cleanedTitle : null),
+      body: existing?.body ?? body,
+      publishedAt: existing?.publishedAt ?? publishedAt
+    });
+  }
 
   for (const match of html.matchAll(tagRe)) {
     registerTag(match[1]!);
@@ -698,9 +887,12 @@ export function parseGiteeWebReleasesHtml(
       continue;
     }
     const assetMap = assetsByTag.get(tagKey);
+    const meta = metaByTag.get(tagKey);
     records.push({
       tag_name: tagName,
-      name: tagName,
+      name: meta?.name ?? tagName,
+      body: meta?.body ?? null,
+      published_at: meta?.publishedAt ?? null,
       prerelease: parsed.prerelease.length > 0,
       draft: false,
       html_url: `${normalizedBase}/${owner}/${repo}/releases/tag/${encodeURIComponent(tagName)}`,
@@ -1963,6 +2155,7 @@ export class AppUpdater {
         : { accept: "application/json" };
 
     let parsedJson: unknown;
+    let usedGiteeWebFallback = false;
     try {
       const rawText = await fetchText(
         releasesUrl,
@@ -1977,6 +2170,7 @@ export class AppUpdater {
         error instanceof UpdateHttpError &&
         (error.statusCode === 403 || error.statusCode === 429)
       ) {
+        usedGiteeWebFallback = true;
         const giteeWebUrl = `${this.endpoints.giteeWebBase}/${this.endpoints.giteeOwner}/${this.endpoints.giteeRepo}/releases`;
         const html = await fetchText(
           giteeWebUrl,
@@ -2056,13 +2250,16 @@ export class AppUpdater {
         version,
         tagName,
         prerelease,
-        releaseName: typeof raw.name === "string" ? raw.name : tagName,
-        releaseNotes: typeof raw.body === "string" ? raw.body : null,
+        releaseName:
+          typeof raw.name === "string" && raw.name.trim().length > 0
+            ? raw.name.trim()
+            : tagName,
+        releaseNotes: normalizeReleaseNotesBody(raw.body),
         publishedAt:
-          typeof raw.published_at === "string"
-            ? raw.published_at
-            : typeof raw.created_at === "string"
-              ? raw.created_at
+          typeof raw.published_at === "string" && raw.published_at.trim().length > 0
+            ? raw.published_at.trim()
+            : typeof raw.created_at === "string" && raw.created_at.trim().length > 0
+              ? raw.created_at.trim()
               : null,
         htmlUrl:
           typeof raw.html_url === "string" && raw.html_url.trim().length > 0
@@ -2096,6 +2293,23 @@ export class AppUpdater {
       };
     }
 
+    // If Gitee index HTML omitted inline release body for the selected tag,
+    // attempt a single best-effort fetch of its dedicated tag page.
+    let resolvedReleaseNotes = best.releaseNotes;
+    if (usedGiteeWebFallback && resolvedReleaseNotes === null && best.htmlUrl !== null) {
+      try {
+        const tagHtml = await fetchText(
+          best.htmlUrl,
+          { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
+          Math.min(this.policy.timeoutMs, 8_000),
+          this.maxRedirects
+        );
+        resolvedReleaseNotes = extractGiteeReleaseBodyFromHtml(tagHtml);
+      } catch {
+        // Best-effort only: never fail update check if tag detail page is unreachable.
+      }
+    }
+
     const hasUpdate = compareSemver(best.version, this.currentVersion) > 0;
     const assets = hasUpdate
       ? await this.resolveReleaseAssetsWithSha256(best, source)
@@ -2111,7 +2325,7 @@ export class AppUpdater {
       channel: best.prerelease ? "prerelease" : "stable",
       prerelease: best.prerelease,
       releaseName: best.releaseName,
-      releaseNotes: best.releaseNotes,
+      releaseNotes: resolvedReleaseNotes,
       publishedAt: best.publishedAt,
       htmlUrl: best.htmlUrl,
       sourceUsed: source,
