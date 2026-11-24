@@ -46,7 +46,7 @@ h1{margin:0;font-size:124px;line-height:1.12;height:140px;white-space:nowrap}
 .metric .lamp{width:18px;height:18px}
 .metric-value{height:104px;border:3px solid var(--line);background:var(--paper);box-shadow:inset 3px 3px var(--low);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;padding:4px 13px}
 .number{font-size:54px;line-height:1.1;white-space:nowrap}
-#stat-version .number{font-size:38px}
+#stat-version .number{font-size:35px}
 .metric-label{font-size:17px;line-height:22px;white-space:nowrap;font-weight:700;color:var(--muted)}
 .keys{display:flex;align-items:flex-start;gap:18px;margin:35px 0 10px;padding:5px 4px 10px}
 .key{font-size:28px;line-height:1.3;min-height:65px;padding:10px 20px;color:var(--ink);white-space:nowrap;font-weight:700;flex:none}
@@ -61,16 +61,16 @@ h1{margin:0;font-size:124px;line-height:1.12;height:140px;white-space:nowrap}
 <div class="pane copy"><p class="kicker"><i></i><span id="kicker" data-zh="AI 超级工作台 · 24H 常驻秘书" data-en="AI SUPER WORKBENCH · 24/7 SECRETARY">AI 超级工作台 · 24H 常驻秘书</span></p>
 <h1 class="pixel">PRISMUX</h1><span class="product pixel">24H AI SUPER WORKBENCH</span>
 <div class="rule"><i></i><i></i><i></i></div>
-<p id="tagline" class="tagline" data-zh="极简液态玻璃 · 单文件记忆 · 夜间工场" data-en="Liquid Glass · Hybrid Memory · Night Factory">极简液态玻璃 · 单文件记忆 · 夜间工场</p>
-<p id="translation" class="translation pixel" data-zh="T3 Code base. 0-Token visual layer. 2 plugins." data-en="Agent-agnostic chief. Single-file SQLite. Dual-source updater.">T3 Code base. 0-Token visual layer. 2 plugins.</p>
-<div class="chips pixel"><span>WINDOWS X64</span><span>0-TOKEN UI</span><span>2 PLUGINS</span></div>
+<p id="tagline" class="tagline" data-zh="纯本地零遥测 · 多 Agent 协作 · 液态玻璃" data-en="Local-First · Multi-Agent · Liquid Glass">纯本地零遥测 · 多 Agent 协作 · 液态玻璃</p>
+<p id="translation" class="translation pixel" data-zh="Zero telemetry. 0-Token UI. Single-file SQLite memory." data-en="Zero telemetry. 0-Token UI. 24/7 secretary &amp; night factory.">Zero telemetry. 0-Token UI. Single-file SQLite memory.</p>
+<div class="chips pixel"><span>ZERO TELEMETRY</span><span>0-TOKEN UI</span><span>WINDOWS X64</span></div>
 </div>
 <div class="pane portrait"><img id="portrait" src="logo.png" width="360" height="360" alt="Prismux 吉祥物"></div>
 </div>
 </div>
 </section>
 <section class="metrics">
-<div id="stat-version" class="metric frame"><div class="metric-head pixel">VERSION<i class="lamp"></i></div><div class="metric-value"><span class="number pixel">0.1.3-preview.2</span><span class="metric-label" data-zh="PREVIEW 2 · T3 底座 · WIN X64" data-en="PREVIEW 2 · T3 BASE · WIN X64"></span></div></div>
+<div id="stat-version" class="metric frame"><div class="metric-head pixel">VERSION<i class="lamp"></i></div><div class="metric-value"><span class="number pixel">v0.1.3-Preview.2</span><span class="metric-label" data-zh="纯本地零遥测 · WIN X64" data-en="ZERO TELEMETRY · WIN X64"></span></div></div>
 <div id="stat-visual" class="metric frame"><div class="metric-head pixel">VISUAL<i class="lamp"></i></div><div class="metric-value"><span class="number pixel">0 TOKEN</span><span class="metric-label" data-zh="360° 液态玻璃 · 零模型开销" data-en="360° FRESNEL GLASS · 0 TOKEN"></span></div></div>
 <div id="stat-memory" class="metric frame"><div class="metric-head pixel">MEMORY<i class="lamp"></i></div><div class="metric-value"><span class="number pixel">SQLITE VEC</span><span class="metric-label" data-zh="单文件 WAL + FTS5 + 物理隔离" data-en="SINGLE-FILE WAL + ISOLATION"></span></div></div>
 <div id="stat-plugins" class="metric frame"><div class="metric-head pixel">PLUGINS<i class="lamp"></i></div><div class="metric-value"><span class="number pixel">2 PLUGINS</span><span class="metric-label" data-zh="两大官方插件 · 默认不预装" data-en="2 OPTIONAL · ZERO PREINSTALL"></span></div></div>
@@ -92,9 +92,10 @@ if(isEn){
 {
   const v=params.get('version');
   if(v){
+    const displayVersion=(v.startsWith('v')?v:`v${v}`).replace(/-preview\./i,'-Preview.');
     const card=document.querySelector('#stat-version');
     if(card){
-      const number=card.querySelector('.number');if(number)number.textContent=v;
+      const number=card.querySelector('.number');if(number)number.textContent=displayVersion;
       const label=card.querySelector('.metric-label');
       if(label){
         const lzh=params.get('lzh'), len=params.get('len');
