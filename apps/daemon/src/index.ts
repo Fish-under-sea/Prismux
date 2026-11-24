@@ -31,6 +31,8 @@ import { DaemonRpcServer } from "./server/DaemonRpcServer.js";
 import type { OfficialPluginSourceConfig } from "./server/OfficialPluginDownloader.js";
 import { OvernightRouteService } from "./server/OvernightRoutes.js";
 import { PairingManager } from "./server/PairingManager.js";
+import { CliUpdateService } from "./system/CliUpdateService.js";
+import { OfficialQuotaService } from "./system/OfficialQuotaService.js";
 import { PortScannerService } from "./system/PortScannerService.js";
 import { ResourceMonitorService } from "./system/ResourceMonitorService.js";
 import { ServiceDiagnosticsService } from "./system/ServiceDiagnosticsService.js";
@@ -55,10 +57,14 @@ export * from "./t3/T3RpcClient.js";
 export * from "./chief/ChiefObsidianCurator.js";
 export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
+export * from "./server/CliUpdateRoutes.js";
 export * from "./server/DaemonBusinessRoutes.js";
 export * from "./server/OvernightRoutes.js";
+export * from "./server/QuotaRoutes.js";
 export * from "./server/OfficialPluginDownloader.js";
 export * from "./server/DaemonRpcServer.js";
+export * from "./system/CliUpdateService.js";
+export * from "./system/OfficialQuotaService.js";
 export * from "./system/PortScannerService.js";
 export * from "./system/ResourceMonitorService.js";
 export * from "./system/ServiceDiagnosticsService.js";
@@ -200,6 +206,8 @@ export class PrismuxDaemon {
   readonly portScannerService: PortScannerService;
   readonly resourceMonitorService: ResourceMonitorService;
   readonly diagnosticsService: ServiceDiagnosticsService;
+  readonly cliUpdateService: CliUpdateService;
+  readonly quotaService: OfficialQuotaService;
   readonly t3Supervisor: T3ServerSupervisor | undefined;
   readonly t3RpcClient: T3RpcClient | undefined;
   readonly chiefManager: ChiefThreadManager;
@@ -369,6 +377,11 @@ export class PrismuxDaemon {
       hookBus: this.hookBus,
       sandbox: this.sandbox
     });
+    this.cliUpdateService = new CliUpdateService({
+      appUpdater: this.appUpdater,
+      onAfterUpdate: () => this.diagnosticsService.clearCache()
+    });
+    this.quotaService = new OfficialQuotaService();
     this.businessService = new DaemonBusinessService({
       dataDir: options.dataDir,
       hostVersion: resolvedHostVersion,
@@ -425,6 +438,8 @@ export class PrismuxDaemon {
       businessService: this.businessService,
       overnightService: this.overnightRouteService,
       diagnosticsService: this.diagnosticsService,
+      cliUpdateService: this.cliUpdateService,
+      quotaService: this.quotaService,
       portScannerService: this.portScannerService,
       resourceMonitorService: this.resourceMonitorService,
       startedAt: daemonStartedAt,

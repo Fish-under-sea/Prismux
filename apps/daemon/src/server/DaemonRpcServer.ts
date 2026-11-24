@@ -50,6 +50,8 @@ import type {
 } from "../handoff/HandoffEngine.js";
 import type { LifecycleHookBus } from "../hooks/LifecycleHookBus.js";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
+import type { CliUpdateService } from "../system/CliUpdateService.js";
+import type { OfficialQuotaService } from "../system/OfficialQuotaService.js";
 import {
   PortKillError,
   type PortScannerService
@@ -69,12 +71,14 @@ import {
   type WallpaperMediaService,
   type WallpaperRescanRequest
 } from "../wallpapers/WallpaperMediaService.js";
+import { CliUpdateRouteService } from "./CliUpdateRoutes.js";
 import {
   BusinessRouteError,
   type DaemonBusinessService
 } from "./DaemonBusinessRoutes.js";
 import type { OvernightRouteService } from "./OvernightRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
+import { handleQuotaRoute } from "./QuotaRoutes.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_IMPORT_JSON_BODY_BYTES = 34 * 1024 * 1024;
@@ -106,6 +110,8 @@ export interface DaemonRpcServerOptions {
   businessService?: DaemonBusinessService;
   overnightService?: OvernightRouteService;
   diagnosticsService?: ServiceDiagnosticsService;
+  cliUpdateService?: CliUpdateService;
+  quotaService?: OfficialQuotaService;
   portScannerService?: PortScannerService;
   resourceMonitorService?: ResourceMonitorService;
   startedAt?: number;
@@ -425,6 +431,8 @@ export class DaemonRpcServer {
   private readonly businessService: DaemonBusinessService | undefined;
   private readonly overnightService: OvernightRouteService | undefined;
   private readonly diagnosticsService: ServiceDiagnosticsService | undefined;
+  private readonly cliUpdateRouteService: CliUpdateRouteService | undefined;
+  private readonly quotaService: OfficialQuotaService | undefined;
   private readonly portScannerService: PortScannerService | undefined;
   private readonly resourceMonitorService: ResourceMonitorService | undefined;
   private readonly startedAt: number;
@@ -465,6 +473,11 @@ export class DaemonRpcServer {
     this.businessService = options.businessService;
     this.overnightService = options.overnightService;
     this.diagnosticsService = options.diagnosticsService;
+    this.cliUpdateRouteService =
+      options.cliUpdateService !== undefined
+        ? new CliUpdateRouteService(options.cliUpdateService)
+        : undefined;
+    this.quotaService = options.quotaService;
     this.portScannerService = options.portScannerService;
     this.resourceMonitorService = options.resourceMonitorService;
     this.startedAt = options.startedAt ?? Date.now();
@@ -1847,6 +1860,35 @@ export class DaemonRpcServer {
       return true;
     }
 
+    if (pathname.startsWith("/v1/cli-updates/")) {
+      if (!this.cliUpdateRouteService) {
+        throw new BusinessRouteError(
+          503,
+          "CLI_UPDATES_UNAVAILABLE",
+          "CliUpdateService is not configured."
+        );
+      }
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+
+      if (method === "GET" && pathname === "/v1/cli-updates/check") {
+        const result = await this.cliUpdateRouteService.handleCheck(
+          requestUrl.searchParams
+        );
+        writeJsonResponse(res, result.statusCode, result.payload);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/cli-updates/install") {
+        const rawBody = await readJsonBody(req);
+        const result = await this.cliUpdateRouteService.handleInstall(
+          rawBody,
+          trustedCallerScope
+        );
+        writeJsonResponse(res, result.statusCode, result.payload);
+        return true;
+      }
+    }
+
     if (pathname.startsWith("/v1/overnight/")) {
       if (!this.overnightService) {
         throw new BusinessRouteError(
@@ -1943,6 +1985,24 @@ export class DaemonRpcServer {
           trustedCallerScope
         );
         writeJsonResponse(res, 200, result);
+        return true;
+      }
+    }
+
+    if (pathname.startsWith("/v1/quota/")) {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      const quotaResponse = await handleQuotaRoute(
+        {
+          method,
+          pathname,
+          searchParams: requestUrl.searchParams,
+          callerScope: trustedCallerScope
+        },
+        this.quotaService
+      );
+      if (quotaResponse !== null) {
+        writeJsonResponse(res, quotaResponse.statusCode, quotaResponse.payload);
         return true;
       }
     }
