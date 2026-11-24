@@ -41,6 +41,18 @@ export function resolveChatCanvasLayout({
   findBar?: PreviewMiniPlayerObstacles["detailsCard"];
 }) {
   const centeredWidth = Math.max(0, Math.min(maxChatWidth, container.width - padding * 2));
+  const composerLaneRight = container.width - padding;
+  const composerCenterLeft = (container.width - centeredWidth) / 2;
+  const composerNormalLeft = Math.max(
+    padding,
+    Math.min(composerCenterLeft, composerLaneRight - centeredWidth),
+  );
+  let composer = {
+    left: composerNormalLeft,
+    width: centeredWidth,
+    insetStart: 0,
+    insetEnd: Math.max(0, container.width - composerNormalLeft * 2 - centeredWidth),
+  };
   const laneRight = detailsCard
     ? detailsCard.left - DETAILS_CARD_CLEARANCE
     : container.width - padding;
@@ -169,6 +181,33 @@ export function resolveChatCanvasLayout({
       }
     }
   }
+  if (frame && preview) {
+    const composerBeside = (player: PreviewMiniPlayerFrame) => {
+      const composerRight = composerNormalLeft + centeredWidth;
+      if (player.x >= composerRight + GAP) return composer;
+      const width = Math.min(maxChatWidth, player.x - GAP - padding);
+      if (width < minChatWidth) return null;
+      const left = Math.min(composerNormalLeft, player.x - GAP - width);
+      return {
+        left,
+        width,
+        insetStart: 0,
+        insetEnd: Math.max(0, container.width - left * 2 - width),
+      };
+    };
+    if (!overlapsChat) {
+      const nextComposer = composerBeside(frame);
+      if (nextComposer) composer = nextComposer;
+    } else if (preview.lastInteraction === "resize") {
+      const width = Math.min(centeredWidth, minChatWidth);
+      composer = {
+        left: padding,
+        width,
+        insetStart: 0,
+        insetEnd: Math.max(0, container.width - padding * 2 - width),
+      };
+    }
+  }
   const overlapsDetailsCard = Boolean(
     frame &&
     detailsCard &&
@@ -176,5 +215,5 @@ export function resolveChatCanvasLayout({
     frame.x + frame.width > detailsCard.left &&
     frame.y < detailsCard.bottom,
   );
-  return { chat, frame, overlapsChat, overlapsDetailsCard };
+  return { chat, composer, frame, overlapsChat, overlapsDetailsCard };
 }

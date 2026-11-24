@@ -72,9 +72,47 @@ export function ChatCanvas({
     const findBar =
       detailsCardTopInset > 0 ? element.querySelector<HTMLElement>("[data-thread-find-bar]") : null;
     let disposed = false;
+    let currentComposerStack: HTMLElement | null = null;
+    let stopObservingComposerStack: (() => void) | null = null;
+    let observedOverlayHost: HTMLElement | null = null;
+    let overlayClassObserver: MutationObserver | null = null;
     // Seeking forces layout, so it runs once when a transition starts, not every frame.
     let transitionWidths: ReturnType<typeof measureTransitionWidths> = null;
+    const syncComposerStackObserver = () => {
+      const nextStack = element.querySelector<HTMLElement>('[data-chat-composer-stack="true"]');
+      const changed = nextStack !== currentComposerStack;
+      if (changed) {
+        stopObservingComposerStack?.();
+        stopObservingComposerStack = null;
+        currentComposerStack = nextStack;
+        if (currentComposerStack) {
+          stopObservingComposerStack = observeResize(currentComposerStack, measure);
+        }
+      }
+      const nextOverlayHost = element.querySelector<HTMLElement>(
+        '[data-chat-composer-overlay="true"]',
+      );
+      if (nextOverlayHost !== observedOverlayHost) {
+        overlayClassObserver?.disconnect();
+        overlayClassObserver = null;
+        observedOverlayHost = nextOverlayHost;
+        if (observedOverlayHost && typeof MutationObserver !== "undefined") {
+          overlayClassObserver = new MutationObserver(() => {
+            if (disposed) return;
+            syncComposerStackObserver();
+            measure();
+          });
+          overlayClassObserver.observe(observedOverlayHost, {
+            childList: true,
+            attributes: true,
+            attributeFilter: ["class"],
+          });
+        }
+      }
+      return changed;
+    };
     const measure = () => {
+      syncComposerStackObserver();
       const width = element.clientWidth;
       const transitions = panelWidthTransitions(element);
       if (
@@ -101,6 +139,12 @@ export function ChatCanvas({
       }
       const canvasBounds = element.getBoundingClientRect();
       const findBarBounds = findBar?.getBoundingClientRect();
+      const composerOverlayBounds = composerOverlayElement?.getBoundingClientRect();
+      const composerStackBounds = currentComposerStack?.getBoundingClientRect();
+      const composerReservedBottom =
+        composerStackBounds && composerStackBounds.height > 0 && canvasBounds.height > 0
+          ? Math.max(0, Math.round(canvasBounds.bottom - composerStackBounds.top))
+          : Math.max(0, Math.round(composerOverlayBounds?.height ?? 0));
       const styles = getComputedStyle(probe);
       store.getState().setMeasurements({
         findBar:
@@ -117,7 +161,8 @@ export function ChatCanvas({
         padding: Number.parseFloat(styles.paddingLeft),
         maxChatWidth: Number.parseFloat(styles.width),
         minChatWidth: Number.parseFloat(styles.minWidth),
-        composerHeight: composerOverlayElement?.getBoundingClientRect().height ?? 0,
+        composerHeight: composerOverlayBounds?.height ?? 0,
+        composerReservedBottom,
         timelineGutter: timelineElement
           ? (timelineElement.offsetWidth - timelineElement.clientWidth) / 2
           : 0,
@@ -129,11 +174,31 @@ export function ChatCanvas({
     if (composerOverlayElement) observed.push(composerOverlayElement);
     if (timelineElement) observed.push(timelineElement);
     const stopObserving = observeResize(observed, measure);
+    const canvasChildrenObserver =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => {
+            if (disposed) return;
+            if (syncComposerStackObserver()) {
+              measure();
+            }
+          })
+        : null;
+    canvasChildrenObserver?.observe(element, { childList: true });
     return () => {
       disposed = true;
       stopObserving();
+      stopObservingComposerStack?.();
+      overlayClassObserver?.disconnect();
+      canvasChildrenObserver?.disconnect();
     };
-  }, [store, composerOverlayElement, timelineElement, detailsCardTopInset]);
+  }, [
+    store,
+    composerOverlayElement,
+    timelineElement,
+    detailsCardTopInset,
+    threadRef?.environmentId,
+    threadRef?.threadId,
+  ]);
   const detailsCardInlineOpen = useRightPanelStore((state) =>
     threadRef === null
       ? false
@@ -153,6 +218,7 @@ export function ChatCanvas({
     previewKey: preview?.key ?? null,
     registerTimeline,
     measureDetailsCard: store.getState().measureDetailsCard,
+    composerReservedBottom: model.composerReservedBottom,
     detailsCardTopInset: model.detailsCardTopInset,
     preferredDetailsCard: model.preferredDetailsCard,
     detailsCardPlacement: model.detailsCardPlacement,
@@ -171,6 +237,8 @@ export function ChatCanvas({
             "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
             "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
             "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
+            "--chat-composer-inset-start": `${layout.composer.insetStart}px`,
+            "--chat-composer-inset-end": `${layout.composer.insetEnd}px`,
           } as CSSProperties
         }
       >

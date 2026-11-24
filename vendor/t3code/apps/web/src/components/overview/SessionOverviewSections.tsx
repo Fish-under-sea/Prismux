@@ -160,8 +160,11 @@ function subagentStatusTone(status: string): {
   readonly pulse: boolean;
   readonly label: string;
 } {
-  if (status === "running" || status === "starting") {
+  if (status === "running" || status === "starting" || status === "in_progress") {
     return { tone: "sky", pulse: true, label: "运行中" };
+  }
+  if (status === "waiting_input") {
+    return { tone: "amber", pulse: true, label: "等待输入" };
   }
   if (status === "pending" || status === "queued") {
     return { tone: "amber", pulse: false, label: "排队中" };
@@ -180,10 +183,12 @@ function subagentStatusTone(status: string): {
 
 export function SubagentsOverviewSection(props: {
   readonly items: ReadonlyArray<OverviewSubagentItem>;
+  readonly maxVisibleItems?: number;
   readonly onOpenSubagent: (item: OverviewSubagentItem) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.items, showAll, limit);
 
   return (
     <OverviewSectionBlock
@@ -191,6 +196,7 @@ export function SubagentsOverviewSection(props: {
       title="子智能体"
       count={props.items.length}
       emptyHint="当前会话暂无子智能体"
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
     >
@@ -223,13 +229,15 @@ export function SubagentsOverviewSection(props: {
 
 export function SideQuestionsOverviewSection(props: {
   readonly items: ReadonlyArray<OverviewSideQuestionItem>;
+  readonly maxVisibleItems?: number;
   readonly composerOpen: boolean;
   readonly composerSlot: ReactNode;
   readonly onToggleComposer: () => void;
   readonly onSelectItem: (item: OverviewSideQuestionItem) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.items, showAll, limit);
 
   return (
     <OverviewSectionBlock
@@ -238,6 +246,7 @@ export function SideQuestionsOverviewSection(props: {
       count={props.items.length}
       emptyHint="点击右上角 + 发起只读旁路提问，不打断主对话"
       forceExpanded={props.composerOpen}
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
       headerAction={
@@ -307,10 +316,12 @@ export function SideQuestionsOverviewSection(props: {
 
 export function BackgroundTasksOverviewSection(props: {
   readonly items: ReadonlyArray<OverviewBackgroundTaskItem>;
+  readonly maxVisibleItems?: number;
   readonly onOpenTask: (item: OverviewBackgroundTaskItem) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.items, showAll, limit);
 
   const renderIcon = (kind: OverviewBackgroundTaskItem["kind"]) => {
     switch (kind) {
@@ -329,6 +340,7 @@ export function BackgroundTasksOverviewSection(props: {
       title="后台任务"
       count={props.items.length}
       emptyHint="暂无运行中的 PTY 或自动化任务"
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
     >
@@ -372,9 +384,11 @@ export function BackgroundTasksOverviewSection(props: {
 
 export function GoalsOverviewSection(props: {
   readonly summary: OverviewGoalsSummary;
+  readonly maxVisibleItems?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.summary.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.summary.items, showAll, limit);
 
   const renderGoalIcon = (status: OverviewGoalItem["status"]) => {
     if (status === "completed") {
@@ -390,13 +404,15 @@ export function GoalsOverviewSection(props: {
     <OverviewSectionBlock
       id="goals"
       title="目标"
-      count={props.summary.totalCount}
+      count={props.summary.items.length}
+      totalItems={props.summary.items.length}
       badgeExtra={
         props.summary.totalCount > 0
           ? `${props.summary.completedCount}/${props.summary.totalCount}`
           : null
       }
       emptyHint="当前会话暂无计划或任务步骤"
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
     >
@@ -424,10 +440,12 @@ export function GoalsOverviewSection(props: {
 
 export function ArtifactsOverviewSection(props: {
   readonly items: ReadonlyArray<OverviewArtifactItem>;
+  readonly maxVisibleItems?: number;
   readonly onOpenArtifact: (item: OverviewArtifactItem) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.items, showAll, limit);
 
   return (
     <OverviewSectionBlock
@@ -435,6 +453,7 @@ export function ArtifactsOverviewSection(props: {
       title="产物文档"
       count={props.items.length}
       emptyHint="当前会话暂无计划或 Markdown 报告文档"
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
     >
@@ -466,10 +485,12 @@ export function ArtifactsOverviewSection(props: {
 
 export function ModifiedFilesOverviewSection(props: {
   readonly items: ReadonlyArray<OverviewModifiedFileItem>;
+  readonly maxVisibleItems?: number;
   readonly onOpenFileDiff: (item: OverviewModifiedFileItem) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.items, showAll, limit);
 
   return (
     <OverviewSectionBlock
@@ -477,6 +498,7 @@ export function ModifiedFilesOverviewSection(props: {
       title="已修改文件"
       count={props.items.length}
       emptyHint="工作区暂无已修改文件"
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
     >
@@ -530,11 +552,13 @@ export function ModifiedFilesOverviewSection(props: {
 
 export function UploadsOverviewSection(props: {
   readonly items: ReadonlyArray<OverviewUploadItem>;
+  readonly maxVisibleItems?: number;
   readonly imageUrlById: ReadonlyMap<string, string>;
   readonly onOpenUpload: (item: OverviewUploadItem, previewUrl: string | null) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.items, showAll, limit);
 
   return (
     <OverviewSectionBlock
@@ -542,6 +566,7 @@ export function UploadsOverviewSection(props: {
       title="上传内容"
       count={props.items.length}
       emptyHint="本会话暂无上传的图片或附件"
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
     >
@@ -591,9 +616,11 @@ export function UploadsOverviewSection(props: {
  */
 export function UsedSkillsOverviewSection(props: {
   readonly items: ReadonlyArray<OverviewUsedSkillItem>;
+  readonly maxVisibleItems?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { visible } = sliceOverviewItems(props.items, showAll);
+  const limit = props.maxVisibleItems ?? DEFAULT_OVERVIEW_SECTION_LIMIT;
+  const { visible } = sliceOverviewItems(props.items, showAll, limit);
 
   return (
     <OverviewSectionBlock
@@ -601,6 +628,7 @@ export function UsedSkillsOverviewSection(props: {
       title="已使用技能"
       count={props.items.length}
       emptyHint="本会话暂未触发斜杠命令或技能引用"
+      defaultVisibleCount={limit}
       showAll={showAll}
       onToggleShowAll={() => setShowAll((prev) => !prev)}
     >

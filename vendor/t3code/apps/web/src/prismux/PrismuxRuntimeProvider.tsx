@@ -11,7 +11,6 @@ import {
   type ThemeMode,
 } from "@prismux/appearance";
 import {
-  createBuiltinWallpapers,
   createDefaultSettings,
   createWallpaperStore,
   normalizeWallpaperSettingsPatch,
@@ -785,7 +784,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     };
     const store = createWallpaperStore({
       settings: initialSettings,
-      includeBuiltins: true,
+      includeBuiltins: false,
     });
     wallpaperStoreRef.current = store;
     lastSyncedWallpaperRef.current = store.getSnapshot().settings;
@@ -1145,7 +1144,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       }
       if (!info.ready) {
         return {
-          wallpapers: createBuiltinWallpapers(),
+          wallpapers: [],
           steamRoots: [],
           customDir: opts?.customDir ?? "",
           error: null,
@@ -1174,7 +1173,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
         };
       } catch (err) {
         return {
-          wallpapers: createBuiltinWallpapers(),
+          wallpapers: [],
           steamRoots: [],
           customDir: "",
           error: err instanceof Error ? err.message : String(err),

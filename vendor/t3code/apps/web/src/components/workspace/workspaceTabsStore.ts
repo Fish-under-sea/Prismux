@@ -8,7 +8,13 @@ import type {
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { DraftId } from "../../composerDraftStore";
+import {
+  composerDraftHasUserContent,
+  useComposerDraftStore,
+  type ComposerThreadDraftState,
+  type DraftId,
+  type DraftSessionState,
+} from "../../composerDraftStore";
 import { resolveStorage } from "../../lib/storage";
 import { containsUuidNoise, formatAgentBrandName } from "../../prismux/agentBrand";
 import type { ThreadRouteTarget } from "../../threadRoutes";
@@ -92,6 +98,11 @@ export interface OpenWorkspaceTabInput {
   readonly pinned?: boolean | undefined;
   /** If true (default for thread/draft), focuses an existing matching tab instead of duplicating. */
   readonly reuseExisting?: boolean | undefined;
+  /**
+   * Optional unused draft/agent tab ID in the primary pane to reuse in-place when opening a draft
+   * whose draftId does not yet match any existing tab.
+   */
+  readonly reuseUnusedDraftTabId?: string | null | undefined;
 }
 
 export interface SyncRouteTargetInput {
@@ -104,6 +115,19 @@ export interface SyncRouteTargetInput {
   readonly threadId?: ThreadId | null | undefined;
   /** When false, syncs metadata without stealing focus from a tool tab in the same pane. */
   readonly activate?: boolean | undefined;
+  /**
+   * Optional unused draft/agent tab ID in the primary pane to bind/reuse in-place when syncing
+   * a draft route target whose draftId does not yet match any existing tab.
+   */
+  readonly reuseUnusedDraftTabId?: string | null | undefined;
+}
+
+export interface WorkspaceDraftStateLookup {
+  readonly getDraftSession: (
+    draftId: DraftId,
+  ) => Pick<DraftSessionState, "promotedTo"> | null;
+  readonly getComposerDraft: (draftId: DraftId) => ComposerThreadDraftState | null;
+  readonly getPromotedDraftRedirect?: (draftId: DraftId) => ScopedThreadRef | null;
 }
 
 export interface WorkspaceTabsStateData {
@@ -165,6 +189,10 @@ export interface WorkspaceTabsStore extends WorkspaceTabsStateData {
       >
     >,
   ) => void;
+  pruneDuplicateDraftTabs: (options?: {
+    readonly lookup?: WorkspaceDraftStateLookup | null | undefined;
+    readonly keepTabId?: string | null | undefined;
+  }) => void;
   resetWorkspace: () => void;
 }
 
@@ -347,8 +375,181 @@ export function createInitialWorkspaceTabsState(): WorkspaceTabsStateData {
   };
 }
 
-export function sanitizeRehydratedState(
+export function getLiveComposerDraftStateLookup(): WorkspaceDraftStateLookup {
+  const draftStore = useComposerDraftStore.getState();
+  return {
+    getDraftSession: draftStore.getDraftSession,
+    getComposerDraft: draftStore.getComposerDraft,
+    getPromotedDraftRedirect: draftStore.getPromotedDraftRedirect,
+  };
+}
+
+function getSafeLiveComposerDraftStateLookup(): WorkspaceDraftStateLookup | null {
+  try {
+    return getLiveComposerDraftStateLookup();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pure predicate deciding whether a workspace tab is an unused blank new-conversation slot:
+ * - Any `kind === "agent"` tab, OR
+ * - Any `kind === "draft"` tab that has not been promoted to a server thread and whose
+ *   composer draft contains no user-authored content (prompt/images/files/attachments/contexts).
+ */
+export function isUnusedDraftTab(
+  tab: WorkspaceTab | null | undefined,
+  lookup?: WorkspaceDraftStateLookup | null,
+): boolean {
+  if (!tab) return false;
+  if (tab.kind === "agent") return true;
+  if (tab.kind !== "draft") return false;
+  if (!tab.draftId) return true;
+  if (!lookup) return true;
+  if (lookup.getPromotedDraftRedirect?.(tab.draftId)) {
+    return false;
+  }
+  const draftSession = lookup.getDraftSession(tab.draftId);
+  if (draftSession?.promotedTo) {
+    return false;
+  }
+  const composerDraft = lookup.getComposerDraft(tab.draftId);
+  return !composerDraftHasUserContent(composerDraft);
+}
+
+function pickPreferredUnusedDraftTab(
+  unusedTabs: ReadonlyArray<WorkspaceTab>,
+  activeTabId: string | null,
+  lookup?: WorkspaceDraftStateLookup | null,
+  preferredTabId?: string | null,
+): WorkspaceTab | null {
+  if (unusedTabs.length === 0) return null;
+
+  if (preferredTabId) {
+    const preferred = unusedTabs.find((tab) => tab.id === preferredTabId);
+    if (preferred) return preferred;
+  }
+
+  if (activeTabId) {
+    const activeUnused = unusedTabs.find((tab) => tab.id === activeTabId);
+    if (activeUnused) return activeUnused;
+  }
+
+  if (lookup) {
+    const liveUnused = unusedTabs.filter(
+      (tab) =>
+        tab.kind === "draft" &&
+        tab.draftId != null &&
+        lookup.getDraftSession(tab.draftId) !== null &&
+        !lookup.getDraftSession(tab.draftId)?.promotedTo &&
+        !lookup.getPromotedDraftRedirect?.(tab.draftId),
+    );
+    if (liveUnused.length > 0) {
+      return liveUnused.reduce((best, candidate) =>
+        candidate.lastActiveAt > best.lastActiveAt ? candidate : best,
+      );
+    }
+  }
+
+  return unusedTabs.reduce((best, candidate) => {
+    if (candidate.lastActiveAt !== best.lastActiveAt) {
+      return candidate.lastActiveAt > best.lastActiveAt ? candidate : best;
+    }
+    if (best.kind === "agent" && candidate.kind === "draft") {
+      return candidate;
+    }
+    return best;
+  });
+}
+
+export function findPrimaryUnusedDraftTab(
+  state: Pick<WorkspaceTabsStateData, "layout" | "panes" | "tabs" | "primaryPaneId">,
+  lookup?: WorkspaceDraftStateLookup | null,
+  preferredTabId?: string | null,
+): WorkspaceTab | null {
+  const primaryPane =
+    state.panes[state.primaryPaneId] ?? state.panes[findFirstLeafPaneId(state.layout)];
+  if (!primaryPane) return null;
+
+  const unusedTabs: WorkspaceTab[] = [];
+  for (const tabId of primaryPane.tabIds) {
+    const tab = state.tabs[tabId];
+    if (tab && isUnusedDraftTab(tab, lookup)) {
+      unusedTabs.push(tab);
+    }
+  }
+  return pickPreferredUnusedDraftTab(unusedTabs, primaryPane.activeTabId, lookup, preferredTabId);
+}
+
+/**
+ * Enforces the primary-pane singleton invariant: at most 1 unused blank draft/agent tab
+ * may exist in `primaryPaneId`. Drafts with user-authored content and real server threads
+ * are never touched.
+ */
+export function pruneDuplicateDraftTabsInState(
+  state: WorkspaceTabsStateData,
+  options?: {
+    readonly lookup?: WorkspaceDraftStateLookup | null | undefined;
+    readonly keepTabId?: string | null | undefined;
+  },
+): WorkspaceTabsStateData {
+  const primaryPane =
+    state.panes[state.primaryPaneId] ?? state.panes[findFirstLeafPaneId(state.layout)];
+  if (!primaryPane) return state;
+
+  const lookup = options?.lookup ?? null;
+  const unusedTabs: WorkspaceTab[] = [];
+  for (const tabId of primaryPane.tabIds) {
+    const tab = state.tabs[tabId];
+    if (tab && isUnusedDraftTab(tab, lookup)) {
+      unusedTabs.push(tab);
+    }
+  }
+  if (unusedTabs.length <= 1) {
+    return state;
+  }
+
+  const keeper = pickPreferredUnusedDraftTab(
+    unusedTabs,
+    primaryPane.activeTabId,
+    lookup,
+    options?.keepTabId,
+  );
+  if (!keeper) return state;
+
+  const removedIds = new Set(
+    unusedTabs.filter((tab) => tab.id !== keeper.id).map((tab) => tab.id),
+  );
+  if (removedIds.size === 0) return state;
+
+  const nextTabIds = primaryPane.tabIds.filter((id) => !removedIds.has(id));
+  const nextTabs: Record<string, WorkspaceTab> = { ...state.tabs };
+  for (const id of removedIds) {
+    delete nextTabs[id];
+  }
+  const nextActiveTabId =
+    primaryPane.activeTabId && removedIds.has(primaryPane.activeTabId)
+      ? keeper.id
+      : primaryPane.activeTabId;
+
+  return {
+    ...state,
+    tabs: nextTabs,
+    panes: {
+      ...state.panes,
+      [primaryPane.id]: {
+        ...primaryPane,
+        tabIds: nextTabIds,
+        activeTabId: nextActiveTabId,
+      },
+    },
+  };
+}
+
+export function sanitizePersistedWorkspaceTabsState(
   raw: Partial<WorkspaceTabsStateData> | undefined,
+  lookup?: WorkspaceDraftStateLookup | null,
 ): WorkspaceTabsStateData {
   const initial = createInitialWorkspaceTabsState();
   if (!raw || !raw.layout || !raw.panes || !raw.tabs) {
@@ -393,9 +594,44 @@ export function sanitizeRehydratedState(
   }
 
   const cleanPanes: Record<string, WorkspacePane> = {};
+  const referencedTabIds = new Set<string>();
   for (const paneId of leafIds) {
     const pane = raw.panes[paneId];
-    const validTabIds = (pane?.tabIds ?? []).filter((tabId) => Object.hasOwn(cleanTabs, tabId));
+    const seenIds = new Set<string>();
+    const keyToKeeperId = new Map<string, string>();
+    const rawValidIds = (pane?.tabIds ?? []).filter((tabId) => {
+      if (!Object.hasOwn(cleanTabs, tabId) || seenIds.has(tabId)) {
+        return false;
+      }
+      seenIds.add(tabId);
+      return true;
+    });
+
+    // Prefer the pane's active tab when deduplicating identical dedupe keys (e.g. duplicate draftId/threadId).
+    const activeCandidateId = pane?.activeTabId ?? null;
+    if (activeCandidateId && rawValidIds.includes(activeCandidateId)) {
+      const activeTab = cleanTabs[activeCandidateId];
+      const activeKey = activeTab ? workspaceTabDedupeKey(activeTab) : null;
+      if (activeKey) {
+        keyToKeeperId.set(activeKey, activeCandidateId);
+      }
+    }
+
+    const validTabIds: string[] = [];
+    for (const tabId of rawValidIds) {
+      const tab = cleanTabs[tabId]!;
+      const key = workspaceTabDedupeKey(tab);
+      if (key) {
+        const existingKeeper = keyToKeeperId.get(key);
+        if (existingKeeper && existingKeeper !== tabId) {
+          continue;
+        }
+        keyToKeeperId.set(key, tabId);
+      }
+      validTabIds.push(tabId);
+      referencedTabIds.add(tabId);
+    }
+
     const activeTabId =
       pane?.activeTabId && validTabIds.includes(pane.activeTabId)
         ? pane.activeTabId
@@ -407,6 +643,12 @@ export function sanitizeRehydratedState(
     };
   }
 
+  for (const id of Object.keys(cleanTabs)) {
+    if (!referencedTabIds.has(id)) {
+      delete cleanTabs[id];
+    }
+  }
+
   const focusedPaneId =
     raw.focusedPaneId && Object.hasOwn(cleanPanes, raw.focusedPaneId)
       ? raw.focusedPaneId
@@ -415,7 +657,7 @@ export function sanitizeRehydratedState(
     ? resolvedPrimaryPaneId
     : firstPaneId;
 
-  return {
+  const baseState: WorkspaceTabsStateData = {
     layout: raw.layout,
     panes: cleanPanes,
     tabs: cleanTabs,
@@ -426,7 +668,11 @@ export function sanitizeRehydratedState(
         ? Math.max(0, Math.floor(raw.terminalCounter))
         : 0,
   };
+
+  return pruneDuplicateDraftTabsInState(baseState, { lookup });
 }
+
+export const sanitizeRehydratedState = sanitizePersistedWorkspaceTabsState;
 
 function findMatchingTabInState(
   state: WorkspaceTabsStateData,
@@ -517,7 +763,7 @@ function collapsePaneInState(
     activeTabId: targetPane.activeTabId ?? mergedTabIds[0] ?? null,
   };
 
-  return {
+  const collapsed: WorkspaceTabsStateData = {
     ...state,
     layout: nextLayout,
     panes: nextPanes,
@@ -527,6 +773,12 @@ function collapsePaneInState(
     primaryPaneId:
       state.primaryPaneId === paneIdToRemove ? fallbackPaneId : state.primaryPaneId,
   };
+
+  return fallbackPaneId === collapsed.primaryPaneId
+    ? pruneDuplicateDraftTabsInState(collapsed, {
+        lookup: getSafeLiveComposerDraftStateLookup(),
+      })
+    : collapsed;
 }
 
 export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
@@ -538,11 +790,7 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         const { target } = input;
         if (!target) return null;
         const now = Date.now();
-        const state = get();
-        const primaryPane =
-          state.panes[state.primaryPaneId] ??
-          state.panes[findFirstLeafPaneId(state.layout)]!;
-        const primaryPaneId = primaryPane.id;
+        const draftLookup = getSafeLiveComposerDraftStateLookup();
 
         const lookupInput =
           target.kind === "server"
@@ -556,91 +804,163 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
                 draftId: target.draftId,
               };
 
-        const existing = findMatchingTabInState(state, lookupInput, primaryPaneId);
-        if (existing) {
-          const prevTab = existing.tab;
-          const nextTitle = input.title?.trim() || prevTab.title;
-          const nextProviderId =
-            input.providerId !== undefined ? input.providerId : prevTab.providerId;
-          const nextInstanceId =
-            input.instanceId !== undefined ? input.instanceId : prevTab.instanceId;
-          const nextModel = input.model !== undefined ? input.model : prevTab.model;
-          const nextEnvId =
-            input.environmentId !== undefined ? input.environmentId : prevTab.environmentId;
-          const nextThreadId =
-            input.threadId !== undefined ? input.threadId : prevTab.threadId;
+        let resultTabId: string | null = null;
+        set((current) => {
+          const primaryPane =
+            current.panes[current.primaryPaneId] ??
+            current.panes[findFirstLeafPaneId(current.layout)]!;
+          const primaryPaneId = primaryPane.id;
 
-          const metadataChanged =
-            nextTitle !== prevTab.title ||
-            nextProviderId !== prevTab.providerId ||
-            nextInstanceId !== prevTab.instanceId ||
-            nextModel !== prevTab.model ||
-            nextEnvId !== prevTab.environmentId ||
-            nextThreadId !== prevTab.threadId;
+          const existing = findMatchingTabInState(current, lookupInput, primaryPaneId);
+          if (existing) {
+            resultTabId = existing.tab.id;
+            const prevTab = existing.tab;
+            const nextTitle = input.title?.trim() || prevTab.title;
+            const nextProviderId =
+              input.providerId !== undefined ? input.providerId : prevTab.providerId;
+            const nextInstanceId =
+              input.instanceId !== undefined ? input.instanceId : prevTab.instanceId;
+            const providerChanged =
+              nextProviderId !== prevTab.providerId || nextInstanceId !== prevTab.instanceId;
+            const nextModel =
+              input.model !== undefined
+                ? input.model
+                : providerChanged
+                  ? null
+                  : prevTab.model;
+            const nextEnvId =
+              input.environmentId !== undefined ? input.environmentId : prevTab.environmentId;
+            const nextThreadId =
+              input.threadId !== undefined ? input.threadId : prevTab.threadId;
 
-          const shouldActivate = input.activate !== false;
-          const targetPane = state.panes[existing.paneId]!;
-          const needsActivation = shouldActivate && targetPane.activeTabId !== prevTab.id;
+            const metadataChanged =
+              nextTitle !== prevTab.title ||
+              nextProviderId !== prevTab.providerId ||
+              nextInstanceId !== prevTab.instanceId ||
+              nextModel !== prevTab.model ||
+              nextEnvId !== prevTab.environmentId ||
+              nextThreadId !== prevTab.threadId;
 
-          if (!metadataChanged && !needsActivation) {
-            return prevTab.id;
+            const shouldActivate = input.activate !== false;
+            const targetPane = current.panes[existing.paneId]!;
+            const needsActivation = shouldActivate && targetPane.activeTabId !== prevTab.id;
+
+            const baseUpdated: WorkspaceTabsStateData =
+              !metadataChanged && !needsActivation
+                ? current
+                : {
+                    ...current,
+                    tabs: {
+                      ...current.tabs,
+                      [prevTab.id]: {
+                        ...prevTab,
+                        title: nextTitle,
+                        providerId: nextProviderId,
+                        instanceId: nextInstanceId,
+                        model: nextModel,
+                        environmentId: nextEnvId,
+                        threadId: nextThreadId,
+                        lastActiveAt: shouldActivate ? now : prevTab.lastActiveAt,
+                      },
+                    },
+                    panes: shouldActivate
+                      ? {
+                          ...current.panes,
+                          [existing.paneId]: {
+                            ...targetPane,
+                            activeTabId: prevTab.id,
+                          },
+                        }
+                      : current.panes,
+                  };
+
+            return existing.paneId === primaryPaneId && target.kind === "draft"
+              ? pruneDuplicateDraftTabsInState(baseUpdated, {
+                  lookup: draftLookup,
+                  keepTabId: prevTab.id,
+                })
+              : baseUpdated;
           }
 
-          set((current) => {
-            const paneNow = current.panes[existing.paneId];
-            if (!paneNow) return current;
-            const currentTab = current.tabs[prevTab.id];
-            if (!currentTab) return current;
-            return {
-              ...current,
-              tabs: {
-                ...current.tabs,
-                [prevTab.id]: {
-                  ...currentTab,
-                  title: nextTitle,
-                  providerId: nextProviderId,
-                  instanceId: nextInstanceId,
-                  model: nextModel,
-                  environmentId: nextEnvId,
-                  threadId: nextThreadId,
-                  lastActiveAt: shouldActivate ? now : currentTab.lastActiveAt,
+          if (target.kind === "draft") {
+            const reusableTab = findPrimaryUnusedDraftTab(
+              current,
+              draftLookup,
+              input.reuseUnusedDraftTabId,
+            );
+            if (reusableTab) {
+              resultTabId = reusableTab.id;
+              const shouldActivate = input.activate !== false || primaryPane.activeTabId === null;
+              const nextProviderId =
+                input.providerId !== undefined ? input.providerId : reusableTab.providerId;
+              const nextInstanceId =
+                input.instanceId !== undefined ? input.instanceId : reusableTab.instanceId;
+              const providerChanged =
+                nextProviderId !== reusableTab.providerId ||
+                nextInstanceId !== reusableTab.instanceId;
+              const nextModel =
+                input.model !== undefined
+                  ? input.model
+                  : providerChanged
+                    ? null
+                    : reusableTab.model;
+
+              const updatedState: WorkspaceTabsStateData = {
+                ...current,
+                tabs: {
+                  ...current.tabs,
+                  [reusableTab.id]: {
+                    ...reusableTab,
+                    kind: "draft",
+                    draftId: target.draftId,
+                    environmentId: input.environmentId !== undefined ? input.environmentId : null,
+                    threadId: input.threadId !== undefined ? input.threadId : null,
+                    providerId: nextProviderId,
+                    instanceId: nextInstanceId,
+                    model: nextModel,
+                    title: input.title?.trim() || reusableTab.title || "新会话",
+                    lastActiveAt: shouldActivate ? now : reusableTab.lastActiveAt,
+                  },
                 },
-              },
-              panes: shouldActivate
-                ? {
-                    ...current.panes,
-                    [existing.paneId]: {
-                      ...paneNow,
-                      activeTabId: prevTab.id,
-                    },
-                  }
-                : current.panes,
-            };
-          });
-          return prevTab.id;
-        }
+                panes: shouldActivate
+                  ? {
+                      ...current.panes,
+                      [primaryPaneId]: {
+                        ...primaryPane,
+                        activeTabId: reusableTab.id,
+                      },
+                    }
+                  : current.panes,
+              };
 
-        const newTabId = nextUid("tab");
-        const newTab: WorkspaceTab = {
-          id: newTabId,
-          kind: target.kind === "server" ? "thread" : "draft",
-          title: input.title?.trim() || (target.kind === "draft" ? "新会话" : "会话"),
-          providerId: input.providerId ?? null,
-          instanceId: input.instanceId ?? null,
-          model: input.model ?? null,
-          environmentId:
-            target.kind === "server" ? target.threadRef.environmentId : (input.environmentId ?? null),
-          threadId:
-            target.kind === "server" ? target.threadRef.threadId : (input.threadId ?? null),
-          draftId: target.kind === "draft" ? target.draftId : null,
-          createdAt: now,
-          lastActiveAt: now,
-        };
+              return pruneDuplicateDraftTabsInState(updatedState, {
+                lookup: draftLookup,
+                keepTabId: reusableTab.id,
+              });
+            }
+          }
 
-        set((current) => {
-          const paneNow =
-            current.panes[primaryPaneId] ?? current.panes[findFirstLeafPaneId(current.layout)]!;
-          const shouldActivate = input.activate !== false || paneNow.activeTabId === null;
+          const newTabId = nextUid("tab");
+          resultTabId = newTabId;
+          const shouldActivate = input.activate !== false || primaryPane.activeTabId === null;
+          const newTab: WorkspaceTab = {
+            id: newTabId,
+            kind: target.kind === "server" ? "thread" : "draft",
+            title: input.title?.trim() || (target.kind === "draft" ? "新会话" : "会话"),
+            providerId: input.providerId ?? null,
+            instanceId: input.instanceId ?? null,
+            model: input.model ?? null,
+            environmentId:
+              target.kind === "server"
+                ? target.threadRef.environmentId
+                : (input.environmentId ?? null),
+            threadId:
+              target.kind === "server" ? target.threadRef.threadId : (input.threadId ?? null),
+            draftId: target.kind === "draft" ? target.draftId : null,
+            createdAt: now,
+            lastActiveAt: now,
+          };
+
           return {
             ...current,
             tabs: {
@@ -649,15 +969,15 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
             },
             panes: {
               ...current.panes,
-              [paneNow.id]: {
-                ...paneNow,
-                tabIds: [...paneNow.tabIds, newTabId],
-                activeTabId: shouldActivate ? newTabId : paneNow.activeTabId,
+              [primaryPaneId]: {
+                ...primaryPane,
+                tabIds: [...primaryPane.tabIds, newTabId],
+                activeTabId: shouldActivate ? newTabId : primaryPane.activeTabId,
               },
             },
           };
         });
-        return newTabId;
+        return resultTabId;
       },
 
       promoteDraftTab(draftId, threadRef, metadata) {
@@ -722,26 +1042,47 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
 
       openTab(input, requestedPaneId) {
         const now = Date.now();
-        const state = get();
-        const resolvedPaneId =
-          requestedPaneId && state.panes[requestedPaneId]
-            ? requestedPaneId
-            : state.panes[state.focusedPaneId]
-              ? state.focusedPaneId
-              : findFirstLeafPaneId(state.layout);
+        const draftLookup = getSafeLiveComposerDraftStateLookup();
+        let resultTabId = "";
 
-        const reuseExisting =
-          input.reuseExisting ??
-          (input.kind === "thread" || input.kind === "draft" || input.kind === "diff" || input.kind === "simulator");
+        set((current) => {
+          const resolvedPaneId =
+            requestedPaneId && current.panes[requestedPaneId]
+              ? requestedPaneId
+              : current.panes[current.focusedPaneId]
+                ? current.focusedPaneId
+                : findFirstLeafPaneId(current.layout);
 
-        if (reuseExisting) {
-          const existing = findMatchingTabInState(state, input, resolvedPaneId);
-          if (existing) {
-            set((current) => {
+          const isPrimaryPane = resolvedPaneId === current.primaryPaneId;
+          const reuseExisting =
+            input.reuseExisting ??
+            (input.kind === "thread" ||
+              input.kind === "draft" ||
+              input.kind === "diff" ||
+              input.kind === "simulator" ||
+              (input.kind === "agent" && isPrimaryPane));
+
+          if (reuseExisting) {
+            const existing = findMatchingTabInState(current, input, resolvedPaneId);
+            if (existing) {
+              resultTabId = existing.tab.id;
               const targetPane = current.panes[existing.paneId];
               const existingTab = current.tabs[existing.tab.id];
               if (!targetPane || !existingTab) return current;
-              return {
+              const nextProviderId =
+                input.providerId !== undefined ? input.providerId : existingTab.providerId;
+              const nextInstanceId =
+                input.instanceId !== undefined ? input.instanceId : existingTab.instanceId;
+              const providerChanged =
+                nextProviderId !== existingTab.providerId ||
+                nextInstanceId !== existingTab.instanceId;
+              const nextModel =
+                input.model !== undefined
+                  ? input.model
+                  : providerChanged
+                    ? null
+                    : existingTab.model;
+              const updatedState: WorkspaceTabsStateData = {
                 ...current,
                 focusedPaneId: existing.paneId,
                 tabs: {
@@ -749,11 +1090,18 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
                   [existing.tab.id]: {
                     ...existingTab,
                     title: input.title.trim() || existingTab.title,
-                    ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
-                    ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
-                    ...(input.model !== undefined ? { model: input.model } : {}),
+                    providerId: nextProviderId,
+                    instanceId: nextInstanceId,
+                    model: nextModel,
+                    ...(input.environmentId !== undefined
+                      ? { environmentId: input.environmentId }
+                      : {}),
+                    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+                    ...(input.draftId !== undefined ? { draftId: input.draftId } : {}),
                     ...(input.url !== undefined ? { url: input.url } : {}),
-                    ...(input.hostThreadRef !== undefined ? { hostThreadRef: input.hostThreadRef } : {}),
+                    ...(input.hostThreadRef !== undefined
+                      ? { hostThreadRef: input.hostThreadRef }
+                      : {}),
                     lastActiveAt: now,
                   },
                 },
@@ -765,45 +1113,117 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
                   },
                 },
               };
-            });
-            return existing.tab.id;
-          }
-        }
+              return existing.paneId === current.primaryPaneId && existingTab.kind === "draft"
+                ? pruneDuplicateDraftTabsInState(updatedState, {
+                    lookup: draftLookup,
+                    keepTabId: existing.tab.id,
+                  })
+                : updatedState;
+            }
 
-        let nextTerminalCounter = state.terminalCounter;
-        let title = input.title.trim();
-        let resourceId = input.resourceId ?? null;
-        if (input.kind === "terminal") {
-          nextTerminalCounter += 1;
-          if (!title) {
-            title = `Terminal ${nextTerminalCounter}`;
-          }
-          if (!resourceId) {
-            resourceId = `ws-term-${nextTerminalCounter}`;
-          }
-        }
+            if (isPrimaryPane && (input.kind === "draft" || input.kind === "agent")) {
+              const reusableTab = findPrimaryUnusedDraftTab(
+                current,
+                draftLookup,
+                input.reuseUnusedDraftTabId,
+              );
+              if (reusableTab) {
+                resultTabId = reusableTab.id;
+                const targetPane =
+                  current.panes[resolvedPaneId] ??
+                  current.panes[findFirstLeafPaneId(current.layout)]!;
+                const nextProviderId =
+                  input.providerId !== undefined ? input.providerId : reusableTab.providerId;
+                const nextInstanceId =
+                  input.instanceId !== undefined ? input.instanceId : reusableTab.instanceId;
+                const providerChanged =
+                  nextProviderId !== reusableTab.providerId ||
+                  nextInstanceId !== reusableTab.instanceId;
+                const nextModel =
+                  input.model !== undefined
+                    ? input.model
+                    : providerChanged
+                      ? null
+                      : reusableTab.model;
 
-        const tabId = nextUid("tab");
-        const tab: WorkspaceTab = {
-          id: tabId,
-          kind: input.kind,
-          title: title || "新标签页",
-          providerId: input.providerId ?? null,
-          instanceId: input.instanceId ?? null,
-          model: input.model ?? null,
-          environmentId: input.environmentId ?? input.hostThreadRef?.environmentId ?? null,
-          threadId: input.threadId ?? input.hostThreadRef?.threadId ?? null,
-          draftId: input.draftId ?? null,
-          url: input.url ?? null,
-          shell: input.shell ?? null,
-          hostThreadRef: input.hostThreadRef ?? null,
-          resourceId,
-          pinned: input.pinned ?? false,
-          createdAt: now,
-          lastActiveAt: now,
-        };
+                const updatedState: WorkspaceTabsStateData = {
+                  ...current,
+                  focusedPaneId: targetPane.id,
+                  tabs: {
+                    ...current.tabs,
+                    [reusableTab.id]: {
+                      ...reusableTab,
+                      kind: input.kind,
+                      title: input.title.trim() || reusableTab.title || "新会话",
+                      providerId: nextProviderId,
+                      instanceId: nextInstanceId,
+                      model: nextModel,
+                      environmentId:
+                        input.environmentId !== undefined
+                          ? input.environmentId
+                          : (input.hostThreadRef?.environmentId ?? null),
+                      threadId:
+                        input.threadId !== undefined
+                          ? input.threadId
+                          : (input.hostThreadRef?.threadId ?? null),
+                      draftId: input.draftId !== undefined ? input.draftId : null,
+                      ...(input.url !== undefined ? { url: input.url } : {}),
+                      ...(input.hostThreadRef !== undefined
+                        ? { hostThreadRef: input.hostThreadRef }
+                        : {}),
+                      lastActiveAt: now,
+                    },
+                  },
+                  panes: {
+                    ...current.panes,
+                    [targetPane.id]: {
+                      ...targetPane,
+                      activeTabId: reusableTab.id,
+                    },
+                  },
+                };
+                return pruneDuplicateDraftTabsInState(updatedState, {
+                  lookup: draftLookup,
+                  keepTabId: reusableTab.id,
+                });
+              }
+            }
+          }
 
-        set((current) => {
+          let nextTerminalCounter = current.terminalCounter;
+          let title = input.title.trim();
+          let resourceId = input.resourceId ?? null;
+          if (input.kind === "terminal") {
+            nextTerminalCounter += 1;
+            if (!title) {
+              title = `Terminal ${nextTerminalCounter}`;
+            }
+            if (!resourceId) {
+              resourceId = `ws-term-${nextTerminalCounter}`;
+            }
+          }
+
+          const tabId = nextUid("tab");
+          resultTabId = tabId;
+          const tab: WorkspaceTab = {
+            id: tabId,
+            kind: input.kind,
+            title: title || "新标签页",
+            providerId: input.providerId ?? null,
+            instanceId: input.instanceId ?? null,
+            model: input.model ?? null,
+            environmentId: input.environmentId ?? input.hostThreadRef?.environmentId ?? null,
+            threadId: input.threadId ?? input.hostThreadRef?.threadId ?? null,
+            draftId: input.draftId ?? null,
+            url: input.url ?? null,
+            shell: input.shell ?? null,
+            hostThreadRef: input.hostThreadRef ?? null,
+            resourceId,
+            pinned: input.pinned ?? false,
+            createdAt: now,
+            lastActiveAt: now,
+          };
+
           const pane =
             current.panes[resolvedPaneId] ??
             current.panes[findFirstLeafPaneId(current.layout)]!;
@@ -825,7 +1245,7 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
             },
           };
         });
-        return tabId;
+        return resultTabId;
       },
 
       closeTab(tabId, explicitPaneId) {
@@ -1081,10 +1501,17 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
             },
           };
 
-          if (nextFromIds.length === 0 && countLeafPanes(movedState.layout) > 1) {
-            return collapsePaneInState(movedState, fromPaneId, false);
-          }
-          return movedState;
+          const nextState =
+            nextFromIds.length === 0 && countLeafPanes(movedState.layout) > 1
+              ? collapsePaneInState(movedState, fromPaneId, false)
+              : movedState;
+
+          return toPaneId === nextState.primaryPaneId
+            ? pruneDuplicateDraftTabsInState(nextState, {
+                lookup: getSafeLiveComposerDraftStateLookup(),
+                keepTabId: tabId,
+              })
+            : nextState;
         });
       },
 
@@ -1141,6 +1568,19 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         });
       },
 
+      pruneDuplicateDraftTabs(options) {
+        const lookup =
+          options?.lookup !== undefined
+            ? options.lookup
+            : getSafeLiveComposerDraftStateLookup();
+        set((current) =>
+          pruneDuplicateDraftTabsInState(current, {
+            lookup,
+            keepTabId: options?.keepTabId,
+          }),
+        );
+      },
+
       resetWorkspace() {
         set(createInitialWorkspaceTabsState());
       },
@@ -1159,7 +1599,10 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         terminalCounter: state.terminalCounter,
       }),
       merge: (persisted, current) => {
-        const sanitized = sanitizeRehydratedState(persisted as Partial<WorkspaceTabsStateData>);
+        const sanitized = sanitizePersistedWorkspaceTabsState(
+          persisted as Partial<WorkspaceTabsStateData>,
+          getSafeLiveComposerDraftStateLookup(),
+        );
         return {
           ...current,
           ...sanitized,

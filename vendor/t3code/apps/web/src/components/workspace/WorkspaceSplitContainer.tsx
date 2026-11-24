@@ -6,6 +6,7 @@ import {
   type EnvironmentId,
   type ProviderInstanceId,
   type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
@@ -21,7 +22,7 @@ import {
 } from "react";
 
 import { cn } from "~/lib/utils";
-import { useComposerDraftStore } from "../../composerDraftStore";
+import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -66,12 +67,159 @@ import {
 import {
   clampSplitRatio,
   countLeafPanes,
+  findPrimaryUnusedDraftTab,
+  getLiveComposerDraftStateLookup,
   listLeafPaneIds,
   useWorkspaceTabsStore,
   type SplitDirection,
   type WorkspaceSplitLayoutNode,
   type WorkspaceTab,
 } from "./workspaceTabsStore";
+
+export interface PendingDraftTabBinding {
+  readonly token: object;
+  readonly tabId: string | null;
+  readonly title: string;
+  readonly providerId: string | null;
+  readonly instanceId: ProviderInstanceId | null;
+  readonly model: string | null;
+}
+
+/**
+ * Primary-pane single-unused-draft launch/switch orchestration:
+ * 1. If the primary pane already has a live, non-promoted unused draft tab, switches its
+ *    Agent/Model in-place without calling `handleNewThread` or creating a second tab.
+ * 2. If an unused draft tab exists with an expired/missing draft session (or none exists yet),
+ *    calls `handleNewThread(..., { forceNew: false })` and binds/reuses the target tab in-place
+ *    so at most one unused blank draft tab ever exists in the primary pane.
+ */
+export async function launchPrimaryAgentDraft(input: {
+  readonly agent: QuickLaunchAgentOption;
+  readonly resolvedPaneId: string;
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly resolveProjectRef: () => Promise<{
+    readonly projectRef: ReturnType<typeof scopeProjectRef>;
+    readonly fromScratch: boolean;
+  } | null>;
+  readonly handleNewThread: (
+    projectRef: ReturnType<typeof scopeProjectRef>,
+    options?: {
+      readonly envMode?: "local" | "worktree";
+      readonly forceNew?: boolean;
+      readonly modelSelection?: ReturnType<typeof createModelSelection> | null;
+    },
+  ) => Promise<{ readonly draftId: DraftId; readonly threadId: ThreadId } | null>;
+  readonly onNavigateToDraft: (draftId: DraftId) => void;
+  readonly onNavigateHome: () => void;
+  readonly setPendingBinding?: (binding: PendingDraftTabBinding | null) => void;
+  readonly getPendingBinding?: () => PendingDraftTabBinding | null;
+}): Promise<string | null> {
+  const {
+    agent,
+    resolvedPaneId,
+    instanceEntries,
+    resolveProjectRef,
+    handleNewThread,
+    onNavigateToDraft,
+    onNavigateHome,
+    setPendingBinding,
+    getPendingBinding,
+  } = input;
+
+  const store = useWorkspaceTabsStore.getState();
+  const resolved = resolveQuickLaunchAgentTarget(agent, instanceEntries);
+  const draftStore = useComposerDraftStore.getState();
+  const draftLookup = getLiveComposerDraftStateLookup();
+  const existingUnusedTab = findPrimaryUnusedDraftTab(store, draftLookup);
+
+  // Branch 1: Primary pane already has a live unused blank draft tab -> switch Agent/Model in place!
+  if (existingUnusedTab?.kind === "draft" && existingUnusedTab.draftId) {
+    const existingDraftId = existingUnusedTab.draftId;
+    const existingDraftSession = draftStore.getDraftSession(existingDraftId);
+    const existingPromotedRedirect = draftStore.getPromotedDraftRedirect(existingDraftId);
+    if (existingDraftSession && !existingDraftSession.promotedTo && !existingPromotedRedirect) {
+      if (resolved.modelSelection) {
+        draftStore.setModelSelection(existingDraftId, resolved.modelSelection, {
+          explicit: true,
+          replaceOptions: true,
+        });
+      }
+      const tabId = useWorkspaceTabsStore.getState().openTab(
+        {
+          kind: "draft",
+          title: agent.displayName,
+          providerId: resolved.providerId,
+          instanceId: resolved.instanceId,
+          model: resolved.model,
+          environmentId: existingDraftSession.environmentId,
+          threadId: existingDraftSession.threadId,
+          draftId: existingDraftId,
+          reuseExisting: true,
+          reuseUnusedDraftTabId: existingUnusedTab.id,
+        },
+        resolvedPaneId,
+      );
+      onNavigateToDraft(existingDraftId);
+      return tabId;
+    }
+  }
+
+  // Branch 2 & 3: Existing unused tab's draft expired/missing, or no unused draft tab exists yet.
+  const resolvedProject = await resolveProjectRef();
+  if (resolvedProject) {
+    const { projectRef, fromScratch } = resolvedProject;
+    const reuseTabId = existingUnusedTab?.id ?? null;
+    const bindingToken = {};
+    setPendingBinding?.({
+      token: bindingToken,
+      tabId: reuseTabId,
+      title: agent.displayName,
+      providerId: resolved.providerId,
+      instanceId: resolved.instanceId,
+      model: resolved.model,
+    });
+    try {
+      const opened = await handleNewThread(projectRef, {
+        forceNew: false,
+        ...(fromScratch ? { envMode: "local" as const } : {}),
+        ...(resolved.modelSelection ? { modelSelection: resolved.modelSelection } : {}),
+      }).catch(() => null);
+
+      if (opened) {
+        if (resolved.modelSelection) {
+          useComposerDraftStore
+            .getState()
+            .setModelSelection(opened.draftId, resolved.modelSelection, {
+              explicit: true,
+              replaceOptions: true,
+            });
+        }
+        return useWorkspaceTabsStore.getState().openTab(
+          {
+            kind: "draft",
+            title: agent.displayName,
+            providerId: resolved.providerId,
+            instanceId: resolved.instanceId,
+            model: resolved.model,
+            environmentId: projectRef.environmentId,
+            threadId: opened.threadId,
+            draftId: opened.draftId,
+            reuseExisting: true,
+            reuseUnusedDraftTabId: reuseTabId,
+          },
+          resolvedPaneId,
+        );
+      }
+    } finally {
+      if (getPendingBinding?.()?.token === bindingToken) {
+        setPendingBinding?.(null);
+      }
+    }
+  }
+
+  onNavigateHome();
+  return null;
+}
 
 export interface WorkspaceSplitContainerProps {
   /** The primary T3 Code route view (`ThreadRouteView` or `<Outlet />`), kept mounted in primary pane. */
@@ -268,6 +416,9 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const routeDraftSession = useComposerDraftStore((store) =>
     routeDraftId ? store.getDraftSession(routeDraftId) : null,
   );
+  const routePromotedRedirect = useComposerDraftStore((store) =>
+    routeDraftId ? store.getPromotedDraftRedirect(routeDraftId) : null,
+  );
   const routeComposerDraft = useComposerDraftStore((store) =>
     shownTarget
       ? store.getComposerDraft(
@@ -383,28 +534,36 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       : `draft:${shownTarget.draftId}`
     : null;
   const lastSyncedRouteKeyRef = useRef<string | null>(null);
+  const pendingDraftTabBindingRef = useRef<PendingDraftTabBinding | null>(null);
 
-  const routeActiveProviderId = useMemo(() => {
+  // Deduplicate any legacy persisted duplicate unused draft/agent tabs on mount.
+  useEffect(() => {
+    useWorkspaceTabsStore.getState().pruneDuplicateDraftTabs({
+      lookup: getLiveComposerDraftStateLookup(),
+    });
+  }, []);
+
+  const routeActiveSelection = useMemo(() => {
     const draftProvider = routeComposerDraft?.activeProvider ?? null;
     const draftSelection = draftProvider
       ? routeComposerDraft?.modelSelectionByProvider[draftProvider]
       : null;
-    const instanceId = draftSelection?.instanceId ?? routeThreadShell?.modelSelection?.instanceId ?? null;
+    return draftSelection ?? routeThreadShell?.modelSelection ?? null;
+  }, [routeComposerDraft, routeThreadShell]);
+
+  const routeActiveProviderId = useMemo(() => {
+    const draftProvider = routeComposerDraft?.activeProvider ?? null;
+    const instanceId = routeActiveSelection?.instanceId ?? null;
     if (instanceId) {
       const entry = instanceEntries.find((candidate) => candidate.instanceId === instanceId);
       if (entry) return entry.driverKind;
       return instanceId;
     }
     return draftProvider;
-  }, [instanceEntries, routeComposerDraft, routeThreadShell]);
+  }, [instanceEntries, routeActiveSelection?.instanceId, routeComposerDraft?.activeProvider]);
 
-  const routeActiveInstanceId = useMemo(() => {
-    const draftProvider = routeComposerDraft?.activeProvider ?? null;
-    const draftSelection = draftProvider
-      ? routeComposerDraft?.modelSelectionByProvider[draftProvider]
-      : null;
-    return draftSelection?.instanceId ?? routeThreadShell?.modelSelection?.instanceId ?? null;
-  }, [routeComposerDraft, routeThreadShell]);
+  const routeActiveInstanceId = routeActiveSelection?.instanceId ?? null;
+  const routeActiveModel = routeActiveSelection?.model ?? null;
 
   const routeActiveEntry = useMemo(() => {
     if (!routeActiveInstanceId) return null;
@@ -455,11 +614,25 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     if (!shownTarget || !routeKey) return;
     const isRouteChanged = lastSyncedRouteKeyRef.current !== routeKey;
     lastSyncedRouteKeyRef.current = routeKey;
+    const pendingBinding =
+      shownTarget.kind === "draft" ? pendingDraftTabBindingRef.current : null;
+    const draftLookup = getLiveComposerDraftStateLookup();
+    const reuseUnusedDraftTabId =
+      shownTarget.kind === "draft"
+        ? (pendingBinding?.tabId ??
+          findPrimaryUnusedDraftTab(useWorkspaceTabsStore.getState(), draftLookup)?.id ??
+          null)
+        : null;
+    const resolvedProviderId = pendingBinding?.providerId ?? routeActiveProviderId;
+    const resolvedInstanceId = pendingBinding?.instanceId ?? routeActiveInstanceId;
+    const resolvedModel = pendingBinding?.model ?? routeActiveModel;
+
     useWorkspaceTabsStore.getState().syncRouteTarget({
       target: shownTarget,
-      title: routeDisplayTitle,
-      providerId: routeActiveProviderId,
-      instanceId: routeActiveInstanceId,
+      title: pendingBinding?.title ?? routeDisplayTitle,
+      ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}),
+      ...(resolvedInstanceId ? { instanceId: resolvedInstanceId } : {}),
+      ...(resolvedModel ? { model: resolvedModel } : {}),
       environmentId:
         shownTarget.kind === "server"
           ? shownTarget.threadRef.environmentId
@@ -469,9 +642,11 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           ? shownTarget.threadRef.threadId
           : (routeDraftSession?.threadId ?? null),
       activate: isRouteChanged,
+      reuseUnusedDraftTabId,
     });
   }, [
     routeActiveInstanceId,
+    routeActiveModel,
     routeActiveProviderId,
     routeDisplayTitle,
     routeDraftSession?.environmentId,
@@ -481,14 +656,15 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   ]);
 
   // Promote draft tabs in-place when T3 promotes a draft into a server thread
+  const promotedTarget = routeDraftSession?.promotedTo ?? routePromotedRedirect;
   useEffect(() => {
-    if (routeDraftId && routeDraftSession?.promotedTo) {
-      useWorkspaceTabsStore.getState().promoteDraftTab(routeDraftId, routeDraftSession.promotedTo, {
+    if (routeDraftId && promotedTarget) {
+      useWorkspaceTabsStore.getState().promoteDraftTab(routeDraftId, promotedTarget, {
         title: routeDisplayTitle,
         providerId: routeActiveProviderId,
       });
     }
-  }, [routeActiveProviderId, routeDisplayTitle, routeDraftId, routeDraftSession?.promotedTo]);
+  }, [promotedTarget, routeActiveProviderId, routeDisplayTitle, routeDraftId]);
 
   const openTabsList = useMemo<ReadonlyArray<QuickLaunchOpenTabMatch>>(() => {
     const list: QuickLaunchOpenTabMatch[] = [];
@@ -546,15 +722,24 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     async (tab: WorkspaceTab) => {
       if (materializingTabIdsRef.current.has(tab.id)) return;
       materializingTabIdsRef.current.add(tab.id);
+      const bindingToken = {};
       try {
-        const resolvedProject = await resolveProjectRefForMainLaunch();
-        if (!resolvedProject) {
-          const store = useWorkspaceTabsStore.getState();
-          store.closeTab(tab.id, store.primaryPaneId);
-          void navigate({ to: "/" });
-          return;
-        }
-        const { projectRef, fromScratch } = resolvedProject;
+        const store = useWorkspaceTabsStore.getState();
+        const primaryPane = store.panes[store.primaryPaneId];
+        const tabStillInPrimary = Boolean(
+          primaryPane?.tabIds.includes(tab.id) && store.tabs[tab.id],
+        );
+        const draftStore = useComposerDraftStore.getState();
+        const draftLookup = getLiveComposerDraftStateLookup();
+        const existingPrimaryUnused = findPrimaryUnusedDraftTab(
+          store,
+          draftLookup,
+          tabStillInPrimary ? tab.id : null,
+        );
+        const targetReuseTabId = tabStillInPrimary
+          ? tab.id
+          : (existingPrimaryUnused?.id ?? null);
+
         const matchedEntry =
           (tab.instanceId
             ? instanceEntries.find((entry) => entry.instanceId === tab.instanceId)
@@ -582,14 +767,85 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           matchedEntry && resolvedModel
             ? createModelSelection(matchedEntry.instanceId, resolvedModel)
             : null;
+        const resolvedProviderId = matchedEntry?.driverKind ?? tab.providerId ?? null;
+        const resolvedInstanceId = matchedEntry?.instanceId ?? tab.instanceId ?? null;
+        const resolvedTitle = matchedEntry
+          ? resolveProviderEntryDisplayName(matchedEntry)
+          : tab.providerId
+            ? formatAgentBrandName(tab.providerId)
+            : "新会话";
+
+        // If another live unused draft tab already exists in the primary pane (e.g. handoff from
+        // a secondary pane or duplicate legacy tab), reuse that live draft directly in-place.
+        if (
+          !tabStillInPrimary &&
+          existingPrimaryUnused?.kind === "draft" &&
+          existingPrimaryUnused.draftId
+        ) {
+          const liveDraftId = existingPrimaryUnused.draftId;
+          const liveSession = draftStore.getDraftSession(liveDraftId);
+          if (
+            liveSession &&
+            !liveSession.promotedTo &&
+            !draftStore.getPromotedDraftRedirect(liveDraftId)
+          ) {
+            if (modelSelection) {
+              draftStore.setModelSelection(liveDraftId, modelSelection, {
+                explicit: true,
+                replaceOptions: true,
+              });
+            }
+            useWorkspaceTabsStore.getState().openTab(
+              {
+                kind: "draft",
+                draftId: liveDraftId,
+                environmentId: liveSession.environmentId,
+                threadId: liveSession.threadId,
+                providerId: resolvedProviderId,
+                instanceId: resolvedInstanceId,
+                model: resolvedModel,
+                title: resolvedTitle,
+                reuseExisting: true,
+                reuseUnusedDraftTabId: existingPrimaryUnused.id,
+              },
+              store.primaryPaneId,
+            );
+            void navigate({
+              to: "/draft/$draftId",
+              params: buildDraftThreadRouteParams(liveDraftId),
+            });
+            return;
+          }
+        }
+
+        const resolvedProject = await resolveProjectRefForMainLaunch();
+        if (!resolvedProject) {
+          if (tabStillInPrimary) {
+            const latestStore = useWorkspaceTabsStore.getState();
+            latestStore.closeTab(tab.id, latestStore.primaryPaneId);
+          }
+          void navigate({ to: "/" });
+          return;
+        }
+        const { projectRef, fromScratch } = resolvedProject;
+        pendingDraftTabBindingRef.current = {
+          token: bindingToken,
+          tabId: targetReuseTabId,
+          title: resolvedTitle,
+          providerId: resolvedProviderId,
+          instanceId: resolvedInstanceId,
+          model: resolvedModel,
+        };
         const opened = await handleNewThread(projectRef, {
-          forceNew: true,
+          forceNew: false,
           ...(fromScratch ? { envMode: "local" as const } : {}),
           ...(modelSelection ? { modelSelection } : {}),
         }).catch(() => null);
         if (!opened) {
-          const store = useWorkspaceTabsStore.getState();
-          store.closeTab(tab.id, store.primaryPaneId);
+          if (tabStillInPrimary) {
+            const latestStore = useWorkspaceTabsStore.getState();
+            latestStore.closeTab(tab.id, latestStore.primaryPaneId);
+          }
           void navigate({ to: "/" });
           return;
         }
@@ -599,21 +855,26 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             replaceOptions: true,
           });
         }
-        useWorkspaceTabsStore.getState().updateTab(tab.id, {
-          kind: "draft",
-          draftId: opened.draftId,
-          environmentId: projectRef.environmentId,
-          threadId: opened.threadId,
-          providerId: matchedEntry?.driverKind ?? tab.providerId ?? null,
-          instanceId: matchedEntry?.instanceId ?? tab.instanceId ?? null,
-          model: resolvedModel,
-          title: matchedEntry
-            ? resolveProviderEntryDisplayName(matchedEntry)
-            : tab.providerId
-              ? formatAgentBrandName(tab.providerId)
-              : "新会话",
-        });
+        const latestStore = useWorkspaceTabsStore.getState();
+        latestStore.openTab(
+          {
+            kind: "draft",
+            draftId: opened.draftId,
+            environmentId: projectRef.environmentId,
+            threadId: opened.threadId,
+            providerId: resolvedProviderId,
+            instanceId: resolvedInstanceId,
+            model: resolvedModel,
+            title: resolvedTitle,
+            reuseExisting: true,
+            reuseUnusedDraftTabId: targetReuseTabId,
+          },
+          latestStore.primaryPaneId,
+        );
       } finally {
+        if (pendingDraftTabBindingRef.current?.token === bindingToken) {
+          pendingDraftTabBindingRef.current = null;
+        }
         materializingTabIdsRef.current.delete(tab.id);
       }
     },
@@ -634,6 +895,14 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     (paneId: string, tab: WorkspaceTab | undefined) => {
       if (!tab || paneId !== useWorkspaceTabsStore.getState().primaryPaneId) return;
       if (tab.kind === "thread" && tab.environmentId && tab.threadId) {
+        if (
+          !modalOpen &&
+          shownTarget?.kind === "server" &&
+          shownTarget.threadRef.environmentId === tab.environmentId &&
+          shownTarget.threadRef.threadId === tab.threadId
+        ) {
+          return;
+        }
         void navigate({
           to: "/$environmentId/$threadId",
           params: buildThreadRouteParams(scopeThreadRef(tab.environmentId, tab.threadId)),
@@ -649,27 +918,39 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           });
           return;
         }
-        if (draftStore.getDraftSession(tab.draftId)) {
+        const draftSession = draftStore.getDraftSession(tab.draftId);
+        if (draftSession?.promotedTo) {
+          useWorkspaceTabsStore.getState().promoteDraftTab(tab.draftId, draftSession.promotedTo);
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(draftSession.promotedTo),
+          });
+          return;
+        }
+        if (draftSession) {
+          if (!modalOpen && shownTarget?.kind === "draft" && shownTarget.draftId === tab.draftId) {
+            return;
+          }
           void navigate({
             to: "/draft/$draftId",
             params: buildDraftThreadRouteParams(tab.draftId),
           });
           return;
         }
-        // Draft was pruned across reload; re-materialize as a real full-ChatView draft instead of a blank shell.
+        // Draft was pruned across reload; re-materialize in-place onto this same tab ID.
         void materializePrimaryConversationTab(tab);
       } else if (tab.kind === "agent" || (tab.kind === "draft" && !tab.draftId)) {
         void materializePrimaryConversationTab(tab);
       }
     },
-    [materializePrimaryConversationTab, navigate],
+    [materializePrimaryConversationTab, modalOpen, navigate, shownTarget],
   );
 
   const handleActivateTab = useCallback(
     (paneId: string, tabId: string) => {
       const store = useWorkspaceTabsStore.getState();
       store.activateTab(paneId, tabId);
-      navigateToTabIfPrimaryRoute(paneId, store.tabs[tabId]);
+      navigateToTabIfPrimaryRoute(paneId, useWorkspaceTabsStore.getState().tabs[tabId]);
     },
     [navigateToTabIfPrimaryRoute],
   );
@@ -677,10 +958,16 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const handleCloseTab = useCallback(
     (paneId: string, tabId: string) => {
       const store = useWorkspaceTabsStore.getState();
+      const prevActiveTabId = store.panes[paneId]?.activeTabId ?? null;
       store.closeTab(tabId, paneId);
       const after = useWorkspaceTabsStore.getState();
       const paneAfter = after.panes[paneId];
-      if (paneAfter && paneAfter.id === after.primaryPaneId && paneAfter.activeTabId) {
+      if (
+        paneAfter &&
+        paneAfter.id === after.primaryPaneId &&
+        paneAfter.activeTabId &&
+        paneAfter.activeTabId !== prevActiveTabId
+      ) {
         navigateToTabIfPrimaryRoute(paneAfter.id, after.tabs[paneAfter.activeTabId]);
       }
     },
@@ -722,7 +1009,6 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       const store = useWorkspaceTabsStore.getState();
       const resolvedPaneId =
         targetPaneId && store.panes[targetPaneId] ? targetPaneId : store.primaryPaneId;
-      const resolved = resolveQuickLaunchAgentTarget(agent, instanceEntries);
 
       // Secondary panes route parallel agent sessions to the right sidebar instead of a blank shell.
       if (resolvedPaneId !== store.primaryPaneId) {
@@ -730,53 +1016,38 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         return;
       }
 
-      // Main workspace: create a fresh independent draft conversation tab bound to the chosen Agent & default model.
-      const resolvedProject = await resolveProjectRefForMainLaunch();
-      if (resolvedProject) {
-        const { projectRef, fromScratch } = resolvedProject;
-        const opened = await handleNewThread(projectRef, {
-          forceNew: true,
-          ...(fromScratch ? { envMode: "local" as const } : {}),
-          ...(resolved.modelSelection ? { modelSelection: resolved.modelSelection } : {}),
-        }).catch(() => null);
-
-        if (opened) {
-          if (resolved.modelSelection) {
-            useComposerDraftStore
-              .getState()
-              .setModelSelection(opened.draftId, resolved.modelSelection, {
-                explicit: true,
-                replaceOptions: true,
-              });
+      await launchPrimaryAgentDraft({
+        agent,
+        resolvedPaneId,
+        instanceEntries,
+        resolveProjectRef: resolveProjectRefForMainLaunch,
+        handleNewThread,
+        onNavigateToDraft: (draftId) => {
+          if (!modalOpen && shownTarget?.kind === "draft" && shownTarget.draftId === draftId) {
+            return;
           }
-          useWorkspaceTabsStore.getState().openTab(
-            {
-              kind: "draft",
-              title: agent.displayName,
-              providerId: resolved.providerId,
-              instanceId: resolved.instanceId,
-              model: resolved.model,
-              environmentId: projectRef.environmentId,
-              threadId: opened.threadId,
-              draftId: opened.draftId,
-              reuseExisting: true,
-            },
-            resolvedPaneId,
-          );
-          return;
-        }
-      }
-
-      // Never fall back to a stripped pseudo-chat stage in the primary workspace;
-      // route to "/" so the full AGY 2.0 welcome stage / NoProjectsHero handles onboarding cleanly.
-      void navigate({ to: "/" });
+          void navigate({
+            to: "/draft/$draftId",
+            params: buildDraftThreadRouteParams(draftId),
+          });
+        },
+        onNavigateHome: () => {
+          void navigate({ to: "/" });
+        },
+        setPendingBinding: (binding) => {
+          pendingDraftTabBindingRef.current = binding;
+        },
+        getPendingBinding: () => pendingDraftTabBindingRef.current,
+      });
     },
     [
       handleNewThread,
       instanceEntries,
+      modalOpen,
       navigate,
       openAgentInRightSidebar,
       resolveProjectRefForMainLaunch,
+      shownTarget,
     ],
   );
 
@@ -966,31 +1237,61 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         input.instanceId && input.model
           ? createModelSelection(input.instanceId, input.model)
           : null;
-      const opened = await handleNewThread(projectRef, {
-        forceNew: true,
-        prompt: input.prompt,
-        ...(fromScratch ? { envMode: "local" as const } : {}),
-        ...(modelSelection ? { modelSelection } : {}),
-      });
-      if (opened) {
-        if (modelSelection) {
-          useComposerDraftStore.getState().setModelSelection(opened.draftId, modelSelection, {
-            explicit: true,
-            replaceOptions: true,
-          });
-        }
-        const matchedEntry = input.instanceId
-          ? instanceEntries.find((candidate) => candidate.instanceId === input.instanceId)
-          : undefined;
-        useWorkspaceTabsStore.getState().updateTab(input.tabId, {
-          kind: "draft",
-          draftId: opened.draftId,
-          environmentId: projectRef.environmentId,
-          threadId: opened.threadId,
-          title: matchedEntry
-            ? resolveProviderEntryDisplayName(matchedEntry)
-            : formatAgentBrandName(input.providerId),
+      const matchedEntry = input.instanceId
+        ? instanceEntries.find((candidate) => candidate.instanceId === input.instanceId)
+        : undefined;
+      const resolvedTitle = matchedEntry
+        ? resolveProviderEntryDisplayName(matchedEntry)
+        : formatAgentBrandName(input.providerId);
+      const store = useWorkspaceTabsStore.getState();
+      const primaryPane = store.panes[store.primaryPaneId];
+      const reuseTabId = primaryPane?.tabIds.includes(input.tabId)
+        ? input.tabId
+        : (findPrimaryUnusedDraftTab(store, getLiveComposerDraftStateLookup())?.id ?? null);
+      const bindingToken = {};
+      pendingDraftTabBindingRef.current = {
+        token: bindingToken,
+        tabId: reuseTabId,
+        title: resolvedTitle,
+        providerId: matchedEntry?.driverKind ?? input.providerId,
+        instanceId: input.instanceId,
+        model: input.model,
+      };
+      try {
+        const opened = await handleNewThread(projectRef, {
+          forceNew: false,
+          prompt: input.prompt,
+          ...(fromScratch ? { envMode: "local" as const } : {}),
+          ...(modelSelection ? { modelSelection } : {}),
         });
+        if (opened) {
+          if (modelSelection) {
+            useComposerDraftStore.getState().setModelSelection(opened.draftId, modelSelection, {
+              explicit: true,
+              replaceOptions: true,
+            });
+          }
+          const latestStore = useWorkspaceTabsStore.getState();
+          latestStore.openTab(
+            {
+              kind: "draft",
+              draftId: opened.draftId,
+              environmentId: projectRef.environmentId,
+              threadId: opened.threadId,
+              providerId: matchedEntry?.driverKind ?? input.providerId,
+              instanceId: input.instanceId,
+              model: input.model,
+              title: resolvedTitle,
+              reuseExisting: true,
+              reuseUnusedDraftTabId: reuseTabId,
+            },
+            latestStore.primaryPaneId,
+          );
+        }
+      } finally {
+        if (pendingDraftTabBindingRef.current?.token === bindingToken) {
+          pendingDraftTabBindingRef.current = null;
+        }
       }
     },
     [handleNewThread, instanceEntries, resolveProjectRefForMainLaunch],
@@ -1168,6 +1469,72 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
                   const store = useWorkspaceTabsStore.getState();
                   if (fromPaneId !== store.primaryPaneId) {
                     store.closeTab(sourceTab.id, fromPaneId);
+                  }
+                  if (sourceTab.kind === "thread" && sourceTab.environmentId && sourceTab.threadId) {
+                    store.openTab(
+                      {
+                        kind: "thread",
+                        title: sourceTab.title,
+                        providerId: sourceTab.providerId ?? null,
+                        instanceId: sourceTab.instanceId ?? null,
+                        environmentId: sourceTab.environmentId,
+                        threadId: sourceTab.threadId,
+                      },
+                      store.primaryPaneId,
+                    );
+                    void navigate({
+                      to: "/$environmentId/$threadId",
+                      params: buildThreadRouteParams(
+                        scopeThreadRef(sourceTab.environmentId, sourceTab.threadId),
+                      ),
+                    });
+                    return;
+                  }
+                  if (sourceTab.kind === "draft" && sourceTab.draftId) {
+                    const draftStore = useComposerDraftStore.getState();
+                    const promoted =
+                      draftStore.getPromotedDraftRedirect(sourceTab.draftId) ??
+                      draftStore.getDraftSession(sourceTab.draftId)?.promotedTo ??
+                      null;
+                    if (promoted) {
+                      store.openTab(
+                        {
+                          kind: "thread",
+                          title: sourceTab.title,
+                          providerId: sourceTab.providerId ?? null,
+                          instanceId: sourceTab.instanceId ?? null,
+                          environmentId: promoted.environmentId,
+                          threadId: promoted.threadId,
+                        },
+                        store.primaryPaneId,
+                      );
+                      void navigate({
+                        to: "/$environmentId/$threadId",
+                        params: buildThreadRouteParams(promoted),
+                      });
+                      return;
+                    }
+                    if (draftStore.getDraftSession(sourceTab.draftId)) {
+                      store.openTab(
+                        {
+                          kind: "draft",
+                          title: sourceTab.title,
+                          providerId: sourceTab.providerId ?? null,
+                          instanceId: sourceTab.instanceId ?? null,
+                          model: sourceTab.model ?? null,
+                          environmentId: sourceTab.environmentId ?? null,
+                          threadId: sourceTab.threadId ?? null,
+                          draftId: sourceTab.draftId,
+                          reuseExisting: true,
+                        },
+                        store.primaryPaneId,
+                      );
+                      void navigate({
+                        to: "/draft/$draftId",
+                        params: buildDraftThreadRouteParams(sourceTab.draftId),
+                      });
+                      return;
+                    }
                   }
                   void materializePrimaryConversationTab(sourceTab);
                 }}

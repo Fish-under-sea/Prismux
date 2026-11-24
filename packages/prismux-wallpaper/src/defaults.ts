@@ -198,10 +198,6 @@ export const GLASS_SURFACE_POLICIES: readonly { id: GlassSurfacePolicyId; label:
   { id: "extra", label: "额外选择器" },
 ];
 
-function svgDataUrl(svg: string): string {
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
 export interface BuiltinSceneDefinition {
   id: string;
   presetId: BuiltinScenePresetId;
@@ -211,48 +207,7 @@ export interface BuiltinSceneDefinition {
   tags: string[];
 }
 
-export const BUILTIN_WEBWALLGL_SCENES: readonly BuiltinSceneDefinition[] = [
-  {
-    id: "builtin:aurora-prism",
-    presetId: "aurora-prism",
-    title: "极光棱镜 · Aurora Prism",
-    schemeColor: "#38bdf8",
-    tags: ["builtin", "webwallgl", "aurora", "prism"],
-    previewUrl: svgDataUrl(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#071124"/><stop offset="52%" stop-color="#143a72"/><stop offset="100%" stop-color="#0d264c"/></linearGradient><radialGradient id="r" cx="62%" cy="38%" r="55%"><stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.72"/><stop offset="55%" stop-color="#3b82f6" stop-opacity="0.28"/><stop offset="100%" stop-color="#071124" stop-opacity="0"/></radialGradient></defs><rect width="320" height="180" fill="url(#g)"/><ellipse cx="195" cy="70" rx="145" ry="62" fill="url(#r)"/></svg>`,
-    ),
-  },
-  {
-    id: "builtin:midnight-abyss",
-    presetId: "midnight-abyss",
-    title: "午夜深海 · Midnight Abyss",
-    schemeColor: "#2dd4bf",
-    tags: ["builtin", "webwallgl", "ocean", "abyss"],
-    previewUrl: svgDataUrl(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#03131e"/><stop offset="55%" stop-color="#0a2b3f"/><stop offset="100%" stop-color="#04101a"/></linearGradient><radialGradient id="r" cx="42%" cy="46%" r="52%"><stop offset="0%" stop-color="#2dd4bf" stop-opacity="0.58"/><stop offset="55%" stop-color="#0284c7" stop-opacity="0.22"/><stop offset="100%" stop-color="#03131e" stop-opacity="0"/></radialGradient></defs><rect width="320" height="180" fill="url(#g)"/><ellipse cx="135" cy="84" rx="140" ry="68" fill="url(#r)"/></svg>`,
-    ),
-  },
-  {
-    id: "builtin:liquid-silk",
-    presetId: "liquid-silk",
-    title: "液态绸光 · Liquid Silk",
-    schemeColor: "#818cf8",
-    tags: ["builtin", "webwallgl", "silk", "glass"],
-    previewUrl: svgDataUrl(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#12142b"/><stop offset="50%" stop-color="#292c63"/><stop offset="100%" stop-color="#172447"/></linearGradient><radialGradient id="r" cx="54%" cy="50%" r="56%"><stop offset="0%" stop-color="#c4b5fd" stop-opacity="0.65"/><stop offset="55%" stop-color="#60a5fa" stop-opacity="0.24"/><stop offset="100%" stop-color="#12142b" stop-opacity="0"/></radialGradient></defs><rect width="320" height="180" fill="url(#g)"/><ellipse cx="168" cy="92" rx="146" ry="54" fill="url(#r)"/></svg>`,
-    ),
-  },
-  {
-    id: "builtin:cyber-twilight",
-    presetId: "cyber-twilight",
-    title: "赛博暮光 · Cyber Twilight",
-    schemeColor: "#f472b6",
-    tags: ["builtin", "webwallgl", "twilight", "dusk"],
-    previewUrl: svgDataUrl(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#140c24"/><stop offset="50%" stop-color="#3a1954"/><stop offset="100%" stop-color="#1c1538"/></linearGradient><radialGradient id="r" cx="52%" cy="62%" r="55%"><stop offset="0%" stop-color="#fb923c" stop-opacity="0.62"/><stop offset="48%" stop-color="#ec4899" stop-opacity="0.34"/><stop offset="100%" stop-color="#140c24" stop-opacity="0"/></radialGradient></defs><rect width="320" height="180" fill="url(#g)"/><ellipse cx="164" cy="108" rx="150" ry="62" fill="url(#r)"/></svg>`,
-    ),
-  },
-];
+export const BUILTIN_WEBWALLGL_SCENES: readonly BuiltinSceneDefinition[] = [];
 
 export function createBuiltinWallpapers(): WallpaperItem[] {
   return BUILTIN_WEBWALLGL_SCENES.map((scene) => ({
@@ -323,7 +278,7 @@ export function createBuiltinWallpapers(): WallpaperItem[] {
 export function createDefaultSettings(): WallpaperSettingsState {
   return {
     // Selection & playback
-    selectedId: "builtin:aurora-prism",
+    selectedId: null,
     playing: true,
     videoAudioEnabled: false,
     videoVolume: 0,

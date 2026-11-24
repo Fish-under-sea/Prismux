@@ -14,6 +14,7 @@ import { Popover, PopoverPopup, PopoverCreateHandle } from "../ui/popover";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import { useChatCanvas } from "./ChatCanvasContext";
 import {
+  OVERVIEW_COMPOSER_CLEARANCE,
   THREAD_DETAILS_CARD_GAP,
   resolveThreadDetailsCardDensity,
 } from "./threadDetailsCardLayout";
@@ -34,7 +35,7 @@ export function ThreadDetailsCard({
   /** Changes when the set of rendered items changes, so cached heights are measured again. */
   contentKey: string;
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
-  children: (density: "full" | "compact" | "essential") => ReactNode;
+  children: (density: "full" | "compact" | "essential", availableHeightPx: number) => ReactNode;
 }) {
   const gt = useGT();
   const detailsArea = workspaceAreaProps("details", 3, gt("Thread details"));
@@ -43,6 +44,8 @@ export function ThreadDetailsCard({
   const placement = canvas?.detailsCardPlacement ?? null;
   const mode = placement ? "inline" : "popover";
   const topInset = canvas?.detailsCardTopInset ?? 0;
+  const containerHeight = canvas?.container.height ?? 0;
+  const composerReservedBottom = Math.max(0, canvas?.composerReservedBottom ?? 0);
   const inlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
@@ -56,7 +59,16 @@ export function ThreadDetailsCard({
   });
   const contentHeights =
     measurements.key === measurementKey ? measurements.heights : { full: 0, compact: 0 };
-  const height = placement?.height ?? Math.max(0, (canvas?.container.height ?? 0) - 52);
+  const popoverBottomReserve = Math.max(
+    THREAD_DETAILS_CARD_GAP,
+    composerReservedBottom > 0 ? composerReservedBottom + OVERVIEW_COMPOSER_CLEARANCE : 52,
+  );
+  const effectiveMaxHeight = placement
+    ? placement.height
+    : containerHeight > 0
+      ? Math.max(160, containerHeight - topInset - THREAD_DETAILS_CARD_GAP - popoverBottomReserve)
+      : undefined;
+  const height = effectiveMaxHeight ?? Math.max(0, containerHeight - 52);
   const density = resolveThreadDetailsCardDensity(height, contentHeights);
   const measureDetailsCard = canvas?.measureDetailsCard;
   const cardWidth = preferredPlacement?.width;
@@ -121,12 +133,13 @@ export function ThreadDetailsCard({
         mode === "popover" &&
           "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
       )}
-      style={placement ? { maxHeight: height } : undefined}
+      style={effectiveMaxHeight !== undefined ? { maxHeight: effectiveMaxHeight } : undefined}
       onContextMenu={onContextMenu}
       data-thread-details-card
+      data-overview-max-height={effectiveMaxHeight}
     >
       <ScrollArea scrollFade className="min-h-0">
-        <div ref={setContentElement}>{children(density)}</div>
+        <div ref={setContentElement}>{children(density, height)}</div>
       </ScrollArea>
     </div>
   );

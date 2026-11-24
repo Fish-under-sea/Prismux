@@ -17,9 +17,11 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  DEFAULT_OVERVIEW_DISPLAY_PREFS,
   DEFAULT_OVERVIEW_SECTION_LIMIT,
   buildSideQuestionContextSummary,
   buildSideQuestionPrompt,
+  computeDynamicOverviewSectionLimit,
   createSideQuestionRecord,
   deriveSideQuestionTitle,
   extractOverviewArtifacts,
@@ -31,10 +33,12 @@ import {
   extractOverviewUploads,
   extractOverviewUsedSkills,
   formatByteSize,
+  loadOverviewDisplayPrefs,
   loadPersistedSideQuestions,
   removeSideQuestionRecord,
   resolveFileTypeBadge,
   resolveOverviewDiffStats,
+  saveOverviewDisplayPrefs,
   savePersistedSideQuestions,
   sliceOverviewItems,
   splitRelativePath,
@@ -253,18 +257,29 @@ describe("sessionOverview.logic", () => {
       },
     ] as unknown as OrchestrationV2ThreadShell[];
 
-    const subagents = extractOverviewSubagents({
+    const activeSubagents = extractOverviewSubagents({
       projection,
       relationshipShells: shells,
       currentThreadId: mainId,
     });
-    expect(subagents).toHaveLength(2);
+    // Active-only by default: completed subagent is hidden, running subagent remains
+    expect(activeSubagents).toHaveLength(1);
+    expect(activeSubagents[0]?.title).toContain("Running Reviewer");
+    expect(activeSubagents.some((s) => s.childThreadId === sideChildId)).toBe(false);
+
+    const allSubagents = extractOverviewSubagents({
+      projection,
+      relationshipShells: shells,
+      currentThreadId: mainId,
+      activeOnly: false,
+    });
+    expect(allSubagents).toHaveLength(2);
     // Running subagent sorted first
-    expect(subagents[0]?.title).toContain("Running Reviewer");
-    expect(subagents.some((s) => s.childThreadId === sideChildId)).toBe(false);
+    expect(allSubagents[0]?.title).toContain("Running Reviewer");
+    expect(allSubagents.some((s) => s.childThreadId === sideChildId)).toBe(false);
   });
 
-  it("extracts and merges persisted side questions with native sideChat shells without duplicates", () => {
+  it("extracts and merges persisted side questions with native sideChat shells, hiding finished items by default", () => {
     const mainId = ThreadId.make("thread-main");
     const linkedId = ThreadId.make("thread-side-linked");
     const otherNativeId = ThreadId.make("thread-side-native");
@@ -278,6 +293,14 @@ describe("sessionOverview.logic", () => {
         answer: "不会，因为外层保持单层玻璃。",
         linkedSideThreadId: linkedId,
         nowIso: "2026-11-23T14:00:00.000Z",
+      }),
+      createSideQuestionRecord({
+        id: "sq-done",
+        question: "已完成回答的历史提问",
+        contextSummary: "当前会话：概览面板",
+        status: "answered",
+        answer: "已回答完毕。",
+        nowIso: "2026-11-23T13:55:00.000Z",
       }),
     ];
 
@@ -300,19 +323,28 @@ describe("sessionOverview.logic", () => {
       },
     ] as unknown as OrchestrationV2ThreadShell[];
 
-    const items = extractOverviewSideQuestions({
+    const activeItems = extractOverviewSideQuestions({
       persisted,
       relationshipShells: shells,
       currentThreadId: mainId,
     });
-    expect(items).toHaveLength(2);
-    expect(items[0]?.id).toBe("sq-1");
-    expect(items[0]?.status).toBe("pending"); // live running shell upgrades status
-    expect(items[1]?.id).toBe(`native:${otherNativeId}`);
-    expect(items[1]?.source).toBe("native");
+    expect(activeItems).toHaveLength(1);
+    expect(activeItems[0]?.id).toBe("sq-1");
+    expect(activeItems[0]?.status).toBe("pending"); // live running shell upgrades status
+
+    const allItems = extractOverviewSideQuestions({
+      persisted,
+      relationshipShells: shells,
+      currentThreadId: mainId,
+      activeOnly: false,
+    });
+    expect(allItems).toHaveLength(3);
+    expect(allItems[1]?.id).toBe("sq-done");
+    expect(allItems[2]?.id).toBe(`native:${otherNativeId}`);
+    expect(allItems[2]?.source).toBe("native");
   });
 
-  it("aggregates background tasks from Daemon PTYs, running commands, servers, and automations", () => {
+  it("aggregates background tasks and hides exited/paused tasks by default unless activeOnly is false", () => {
     const mainId = ThreadId.make("thread-main");
     const projection = createBaseProjection({
       turnItems: [
@@ -323,10 +355,17 @@ describe("sessionOverview.logic", () => {
           status: "running",
           monitor: true,
         },
+        {
+          id: TurnItemId.make("cmd-finished"),
+          type: "command_execution",
+          input: "pnpm test",
+          status: "completed",
+          monitor: true,
+        },
       ] as unknown as OrchestrationV2ThreadProjection["turnItems"],
     });
 
-    const tasks = extractOverviewBackgroundTasks({
+    const baseInput = {
       currentThreadId: mainId,
       projection,
       daemonPtys: [
@@ -337,6 +376,15 @@ describe("sessionOverview.logic", () => {
           cwd: "D:/Fish-code/AGY/Prismux",
           pid: 12345,
           alive: true,
+        },
+        {
+          id: "pty-exited",
+          title: "finished build shell",
+          command: "pnpm build",
+          cwd: "D:/Fish-code/AGY/Prismux",
+          pid: null,
+          alive: false,
+          stale: false,
         },
         {
           id: "pty-stale-dead",
@@ -365,19 +413,35 @@ describe("sessionOverview.logic", () => {
           enabled: true,
           lastRunStatus: "succeeded",
         } as unknown as ScheduledTask,
+        {
+          id: ScheduledTaskId.make("task-paused"),
+          threadId: mainId,
+          title: "已暂停巡检",
+          enabled: false,
+          lastRunStatus: "succeeded",
+        } as unknown as ScheduledTask,
       ],
-    });
+    };
 
-    expect(tasks.map((t) => t.kind)).toEqual([
+    const activeTasks = extractOverviewBackgroundTasks(baseInput);
+    expect(activeTasks.map((t) => t.kind)).toEqual([
       "daemon-pty",
       "command",
       "server",
       "automation",
     ]);
-    expect(tasks.some((t) => t.id.includes("pty-stale-dead"))).toBe(false);
+    expect(activeTasks.some((t) => t.id.includes("pty-exited"))).toBe(false);
+    expect(activeTasks.some((t) => t.id.includes("pty-stale-dead"))).toBe(false);
+    expect(activeTasks.some((t) => t.id.includes("cmd-finished"))).toBe(false);
+    expect(activeTasks.some((t) => t.id.includes("task-paused"))).toBe(false);
+
+    const allTasks = extractOverviewBackgroundTasks({ ...baseInput, activeOnly: false });
+    expect(allTasks.some((t) => t.id.includes("pty-exited"))).toBe(true);
+    expect(allTasks.some((t) => t.id.includes("cmd-finished"))).toBe(true);
+    expect(allTasks.some((t) => t.id.includes("task-paused"))).toBe(true);
   });
 
-  it("extracts goals from structured todo_list plans and falls back to Markdown checklists", () => {
+  it("extracts goals, hides completed steps while in progress, and hides 100%-completed checklists by default", () => {
     const withTodo = createBaseProjection({
       plans: [
         {
@@ -393,9 +457,35 @@ describe("sessionOverview.logic", () => {
       ] as unknown as OrchestrationV2ThreadProjection["plans"],
     });
 
-    const structured = extractOverviewGoals({ projection: withTodo });
-    expect(structured.completedCount).toBe(1);
-    expect(structured.totalCount).toBe(3);
+    const structuredActive = extractOverviewGoals({ projection: withTodo });
+    expect(structuredActive.completedCount).toBe(1);
+    expect(structuredActive.totalCount).toBe(3);
+    expect(structuredActive.allCompleted).toBe(false);
+    expect(structuredActive.items.map((item) => item.id)).toEqual(["s2", "s3"]);
+
+    const structuredAll = extractOverviewGoals({ projection: withTodo, activeOnly: false });
+    expect(structuredAll.items).toHaveLength(3);
+
+    const allDoneTodo = createBaseProjection({
+      plans: [
+        {
+          id: PlanId.make("plan-done"),
+          kind: "todo_list",
+          status: "completed",
+          steps: [
+            { id: "s1", text: "步骤一", status: "completed" },
+            { id: "s2", text: "步骤二", status: "completed" },
+          ],
+        },
+      ] as unknown as OrchestrationV2ThreadProjection["plans"],
+    });
+    const hiddenDone = extractOverviewGoals({ projection: allDoneTodo });
+    expect(hiddenDone).toEqual({ items: [], completedCount: 2, totalCount: 0, allCompleted: true });
+
+    const shownDone = extractOverviewGoals({ projection: allDoneTodo, activeOnly: false });
+    expect(shownDone.items).toHaveLength(2);
+    expect(shownDone.totalCount).toBe(2);
+    expect(shownDone.allCompleted).toBe(true);
 
     const withMarkdownChecklist = createBaseProjection({
       plans: [
@@ -415,20 +505,40 @@ describe("sessionOverview.logic", () => {
         },
       ] as unknown as OrchestrationV2ThreadProjection["plans"],
     });
-    const parsed = extractOverviewGoals({ projection: withMarkdownChecklist });
-    expect(parsed.totalCount).toBe(3);
-    expect(parsed.completedCount).toBe(1);
-    expect(parsed.items[1]?.status).toBe("running");
+    const parsedActive = extractOverviewGoals({ projection: withMarkdownChecklist });
+    expect(parsedActive.totalCount).toBe(3);
+    expect(parsedActive.completedCount).toBe(1);
+    expect(parsedActive.items).toHaveLength(2);
+    expect(parsedActive.items[0]?.status).toBe("running");
+
+    const parsedAll = extractOverviewGoals({
+      projection: withMarkdownChecklist,
+      activeOnly: false,
+    });
+    expect(parsedAll.items).toHaveLength(3);
+    expect(parsedAll.items[1]?.status).toBe("running");
   });
 
-  it("extracts artifacts from proposed plans, modified .md files, and assistant links while skipping external URLs", () => {
+  it("extracts artifacts, always skipping superseded plans and hiding completed plans by default", () => {
     const projection = createBaseProjection({
       plans: [
         {
-          id: PlanId.make("plan-1"),
+          id: PlanId.make("plan-superseded"),
+          kind: "proposed_plan",
+          status: "superseded",
+          markdown: "# 已废弃方案\n\n旧版本",
+        },
+        {
+          id: PlanId.make("plan-active"),
+          kind: "proposed_plan",
+          status: "active",
+          markdown: "# 进行中设计方案\n\n详细内容...",
+        },
+        {
+          id: PlanId.make("plan-completed"),
           kind: "proposed_plan",
           status: "completed",
-          markdown: "# AGY 概览设计方案\n\n详细内容...",
+          markdown: "# 已完成历史方案\n\n归档内容...",
         },
       ] as unknown as OrchestrationV2ThreadProjection["plans"],
       messages: [
@@ -449,14 +559,29 @@ describe("sessionOverview.logic", () => {
       },
     });
 
-    const artifacts = extractOverviewArtifacts({ projection, modifiedFiles });
-    expect(artifacts.map((a) => a.title)).toEqual([
-      "AGY 概览设计方案",
+    const activeArtifacts = extractOverviewArtifacts({ projection, modifiedFiles });
+    expect(activeArtifacts.map((a) => a.title)).toEqual([
+      "进行中设计方案",
       "summary.md",
       "walkthrough.md",
     ]);
-    expect(artifacts.some((a) => a.title.includes("remote"))).toBe(false);
-    expect(artifacts[0]?.markdown).toContain("详细内容");
+    expect(activeArtifacts.some((a) => a.title.includes("remote"))).toBe(false);
+    expect(activeArtifacts.some((a) => a.title.includes("已完成历史方案"))).toBe(false);
+    expect(activeArtifacts.some((a) => a.title.includes("已废弃方案"))).toBe(false);
+    expect(activeArtifacts[0]?.markdown).toContain("详细内容");
+
+    const allArtifacts = extractOverviewArtifacts({
+      projection,
+      modifiedFiles,
+      activeOnly: false,
+    });
+    expect(allArtifacts.map((a) => a.title)).toEqual([
+      "进行中设计方案",
+      "已完成历史方案",
+      "summary.md",
+      "walkthrough.md",
+    ]);
+    expect(allArtifacts.some((a) => a.title.includes("已废弃方案"))).toBe(false);
   });
 
   it("extracts uploaded images and files deduplicated across messages and threadAttachments", () => {
@@ -580,5 +705,100 @@ describe("sessionOverview.logic", () => {
     const afterRemove = removeSideQuestionRecord(loaded, "sq-a");
     savePersistedSideQuestions("env-1", "thread-1", afterRemove, storage);
     expect(loadPersistedSideQuestions("env-1", "thread-1", storage)).toHaveLength(1);
+  });
+
+  it("dynamically scales per-section visible limits across compact window, medium window, fullscreen, and explicit modes", () => {
+    // Compact window (320px height, 3 active sections) -> 1 item per section
+    expect(
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: 320,
+        activeSectionCount: 3,
+        limitMode: "auto",
+      }),
+    ).toBe(1);
+
+    // Compact window with 2 active sections at 360px -> 2 items per section
+    expect(
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: 360,
+        activeSectionCount: 2,
+        limitMode: "auto",
+      }),
+    ).toBe(2);
+
+    // Medium window (540px height, 3 sections) -> 3 items per section
+    expect(
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: 540,
+        activeSectionCount: 3,
+        limitMode: "auto",
+      }),
+    ).toBe(3);
+
+    // Fullscreen (860px height, 2 sections -> clamped to 8; 5 sections -> 3)
+    expect(
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: 860,
+        activeSectionCount: 2,
+        limitMode: "auto",
+      }),
+    ).toBe(8);
+    expect(
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: 860,
+        activeSectionCount: 5,
+        limitMode: "auto",
+      }),
+    ).toBe(3);
+
+    // Linked PR strip deducts vertical chrome budget
+    const withoutPr = computeDynamicOverviewSectionLimit({
+      availableHeightPx: 430,
+      activeSectionCount: 2,
+      limitMode: "auto",
+      hasLinkedPrs: false,
+    });
+    const withPr = computeDynamicOverviewSectionLimit({
+      availableHeightPx: 430,
+      activeSectionCount: 2,
+      limitMode: "auto",
+      hasLinkedPrs: true,
+    });
+    expect(withPr).toBeLessThanOrEqual(withoutPr);
+
+    // Explicit fixed modes override dynamic calculation
+    for (const fixed of [2, 3, 5, 8] as const) {
+      expect(
+        computeDynamicOverviewSectionLimit({
+          availableHeightPx: 320,
+          activeSectionCount: 6,
+          limitMode: fixed,
+        }),
+      ).toBe(fixed);
+    }
+
+    // Fallback to default limit when availableHeightPx is unavailable (0 / SSR)
+    expect(
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: 0,
+        activeSectionCount: 3,
+        limitMode: "auto",
+      }),
+    ).toBe(DEFAULT_OVERVIEW_SECTION_LIMIT);
+  });
+
+  it("persists and validates overview display preferences in storage", () => {
+    const storage = makeMemoryStorage();
+    expect(loadOverviewDisplayPrefs(storage)).toEqual(DEFAULT_OVERVIEW_DISPLAY_PREFS);
+
+    saveOverviewDisplayPrefs({ limitMode: 5, showCompleted: true }, storage);
+    expect(loadOverviewDisplayPrefs(storage)).toEqual({ limitMode: 5, showCompleted: true });
+
+    // Corrupted JSON or invalid limitMode gracefully falls back
+    storage.setItem("prismux.overview.displayPrefs.v1", '{"limitMode":99,"showCompleted":false}');
+    expect(loadOverviewDisplayPrefs(storage)).toEqual({ limitMode: "auto", showCompleted: false });
+
+    storage.setItem("prismux.overview.displayPrefs.v1", "not-json");
+    expect(loadOverviewDisplayPrefs(storage)).toEqual(DEFAULT_OVERVIEW_DISPLAY_PREFS);
   });
 });

@@ -23,6 +23,10 @@ import {
 } from "../../rightPanelStore";
 import { TooltipProvider } from "../ui/tooltip";
 import { shouldPreservePopoverOnSubmenuDismiss } from "./WorkspaceNewTabPopover";
+import {
+  launchPrimaryAgentDraft,
+  type PendingDraftTabBinding,
+} from "./WorkspaceSplitContainer";
 import { WorkspacePaneContent } from "./WorkspacePaneContent";
 import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import { PrismuxStageFrame } from "./WorkspaceTopbarPortalContext";
@@ -37,7 +41,11 @@ import {
   clampSplitRatio,
   countLeafPanes,
   DEFAULT_PRIMARY_PANE_ID,
+  findPrimaryUnusedDraftTab,
+  getLiveComposerDraftStateLookup,
+  isUnusedDraftTab,
   listLeafPaneIds,
+  sanitizePersistedWorkspaceTabsState,
   sanitizeRehydratedState,
   useWorkspaceTabsStore,
   WORKSPACE_MAX_SPLIT_PANES,
@@ -838,5 +846,577 @@ describe("WorkspaceTabBar markup", () => {
     );
     expect(splitSource).toContain('activeTab.kind === "agent"');
     expect(splitSource).not.toContain('kind: "agent",\n          draftId: null');
+    expect(splitSource).not.toContain("forceNew: true");
+  });
+});
+
+describe("single unused draft tab invariant", () => {
+  const PROJECT_REF = {
+    environmentId: ENV_LOCAL,
+    projectId: ProjectId.make("proj-single-draft"),
+  };
+  const LOGICAL_PROJECT_KEY = "logical:proj-single-draft";
+  const DRAFT_A = "draft-single-a" as DraftId;
+  const DRAFT_B = "draft-single-b" as DraftId;
+  const DRAFT_C = "draft-single-c" as DraftId;
+  const DRAFT_EXPIRED = "draft-single-expired" as DraftId;
+
+  const providers = deriveProviderInstanceEntries([
+    makeProvider({ instanceId: "codex", driver: "codex" }),
+    makeProvider({ instanceId: "claudeAgent", driver: "claudeAgent" }),
+    makeProvider({ instanceId: "antigravity", driver: "antigravity" }),
+  ]);
+  const agentOptions = buildQuickLaunchAgentOptions({
+    instanceEntries: providers,
+    historyThreads: [],
+  });
+  const codexAgent = agentOptions.find((agent) => agent.brandId === "codex")!;
+  const claudeAgent = agentOptions.find((agent) => agent.brandId === "claude-code")!;
+  const antigravityAgent = agentOptions.find((agent) => agent.brandId === "antigravity")!;
+
+  beforeEach(() => {
+    useWorkspaceTabsStore.getState().resetWorkspace();
+    const draftStore = useComposerDraftStore.getState();
+    for (const draftId of [DRAFT_A, DRAFT_B, DRAFT_C, DRAFT_EXPIRED]) {
+      draftStore.clearDraftThread(draftId);
+    }
+  });
+
+  it("classifies unused blank draft/agent tabs cleanly via isUnusedDraftTab", () => {
+    const draftStore = useComposerDraftStore.getState();
+    draftStore.setLogicalProjectDraftThreadId(LOGICAL_PROJECT_KEY, PROJECT_REF, DRAFT_A, {
+      threadId: THREAD_A,
+    });
+    const liveLookup = getLiveComposerDraftStateLookup();
+
+    expect(
+      isUnusedDraftTab(
+        {
+          id: "tab-agent",
+          kind: "agent",
+          title: "Codex",
+          providerId: "codex",
+          createdAt: 1,
+          lastActiveAt: 1,
+        },
+        liveLookup,
+      ),
+    ).toBe(true);
+
+    const draftTab = {
+      id: "tab-draft",
+      kind: "draft" as const,
+      title: "Codex",
+      providerId: "codex",
+      draftId: DRAFT_A,
+      createdAt: 1,
+      lastActiveAt: 1,
+    };
+    expect(isUnusedDraftTab(draftTab, liveLookup)).toBe(true);
+
+    // Populating user prompt content disqualifies it as an unused blank draft.
+    draftStore.setPrompt(DRAFT_A, "帮我排查登录 bug");
+    expect(isUnusedDraftTab(draftTab, getLiveComposerDraftStateLookup())).toBe(false);
+
+    // Clearing prompt returns it to unused state, while promotedTo disqualifies it.
+    draftStore.setPrompt(DRAFT_A, "   ");
+    expect(isUnusedDraftTab(draftTab, getLiveComposerDraftStateLookup())).toBe(true);
+    expect(
+      isUnusedDraftTab(draftTab, {
+        getDraftSession: () => ({
+          promotedTo: { environmentId: ENV_LOCAL, threadId: THREAD_A },
+        }),
+        getComposerDraft: () => null,
+      }),
+    ).toBe(false);
+
+    // Server thread and tool tabs are never unused draft tabs.
+    expect(
+      isUnusedDraftTab(
+        {
+          id: "tab-thread",
+          kind: "thread",
+          title: "正式会话",
+          environmentId: ENV_LOCAL,
+          threadId: THREAD_A,
+          createdAt: 1,
+          lastActiveAt: 1,
+        },
+        liveLookup,
+      ),
+    ).toBe(false);
+    expect(
+      isUnusedDraftTab(
+        {
+          id: "tab-terminal",
+          kind: "terminal",
+          title: "Terminal 1",
+          createdAt: 1,
+          lastActiveAt: 1,
+        },
+        liveLookup,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps strictly 1 unused draft tab across repeated + launches and switches Agent/Model in place", async () => {
+    const navigatedTo: string[] = [];
+    let nextDraftCounter = 0;
+    const draftIds = [DRAFT_A, DRAFT_B, DRAFT_C];
+    const threadIds = [THREAD_A, THREAD_B, THREAD_C];
+    const handleNewThread = vi.fn(
+      async (
+        projectRef: typeof PROJECT_REF,
+        options?: { readonly forceNew?: boolean; readonly modelSelection?: { instanceId: ProviderInstanceId; model: string } | null },
+      ) => {
+        expect(options?.forceNew).toBe(false);
+        const idx = nextDraftCounter++;
+        const draftId = draftIds[idx]!;
+        const threadId = threadIds[idx]!;
+        const draftStore = useComposerDraftStore.getState();
+        draftStore.setLogicalProjectDraftThreadId(LOGICAL_PROJECT_KEY, projectRef, draftId, {
+          threadId,
+        });
+        if (options?.modelSelection) {
+          draftStore.setModelSelection(draftId, options.modelSelection, {
+            explicit: true,
+            replaceOptions: true,
+          });
+        }
+        return { draftId, threadId };
+      },
+    );
+
+    const runLaunch = (agent: typeof codexAgent) =>
+      launchPrimaryAgentDraft({
+        agent,
+        resolvedPaneId: DEFAULT_PRIMARY_PANE_ID,
+        instanceEntries: providers,
+        resolveProjectRef: async () => ({ projectRef: PROJECT_REF, fromScratch: false }),
+        handleNewThread,
+        onNavigateToDraft: (draftId) => navigatedTo.push(`/draft/${draftId}`),
+        onNavigateHome: () => navigatedTo.push("/"),
+      });
+
+    // 1. First launch (+ -> Codex) creates 1 unused draft tab.
+    const firstTabId = await runLaunch(codexAgent);
+    expect(firstTabId).toBeTruthy();
+    expect(handleNewThread).toHaveBeenCalledTimes(1);
+    let state = useWorkspaceTabsStore.getState();
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([firstTabId]);
+    expect(state.tabs[firstTabId!]).toMatchObject({
+      kind: "draft",
+      draftId: DRAFT_A,
+      providerId: "codex",
+      instanceId: "codex",
+      model: "codex-default",
+      title: "Codex",
+    });
+
+    // 2. Repeatedly clicking + -> Codex MUST NOT create a second tab or call handleNewThread.
+    const secondTabId = await runLaunch(codexAgent);
+    const thirdTabId = await runLaunch(codexAgent);
+    expect(secondTabId).toBe(firstTabId);
+    expect(thirdTabId).toBe(firstTabId);
+    expect(handleNewThread).toHaveBeenCalledTimes(1);
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      firstTabId,
+    ]);
+
+    // 3. Switching + -> Claude Code -> Antigravity mutates the SAME tab & draft modelSelection in place.
+    const claudeTabId = await runLaunch(claudeAgent);
+    expect(claudeTabId).toBe(firstTabId);
+    expect(handleNewThread).toHaveBeenCalledTimes(1);
+    state = useWorkspaceTabsStore.getState();
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([firstTabId]);
+    expect(state.tabs[firstTabId!]).toMatchObject({
+      kind: "draft",
+      draftId: DRAFT_A,
+      providerId: "claude-code",
+      instanceId: "claudeAgent",
+      model: "claudeAgent-default",
+      title: "Claude Code",
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(DRAFT_A)?.activeProvider).toBe(
+      "claudeAgent",
+    );
+
+    const agyTabId = await runLaunch(antigravityAgent);
+    expect(agyTabId).toBe(firstTabId);
+    expect(handleNewThread).toHaveBeenCalledTimes(1);
+    state = useWorkspaceTabsStore.getState();
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([firstTabId]);
+    expect(state.tabs[firstTabId!]).toMatchObject({
+      kind: "draft",
+      draftId: DRAFT_A,
+      providerId: "antigravity",
+      instanceId: "antigravity",
+      model: "antigravity-default",
+      title: "Antigravity",
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(DRAFT_A)?.activeProvider).toBe(
+      "antigravity",
+    );
+    expect(navigatedTo).toEqual([
+      `/draft/${DRAFT_A}`,
+      `/draft/${DRAFT_A}`,
+      `/draft/${DRAFT_A}`,
+      `/draft/${DRAFT_A}`,
+    ]);
+
+    // 4. Once user types content in DRAFT_A, launching another Agent creates 1 new unused draft tab,
+    //    and subsequent launches reuse that new unused tab without touching the populated draft.
+    useComposerDraftStore.getState().setPrompt(DRAFT_A, "保留这段已输入内容");
+    const secondUnusedTabId = await runLaunch(codexAgent);
+    expect(secondUnusedTabId).not.toBe(firstTabId);
+    expect(handleNewThread).toHaveBeenCalledTimes(2);
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      firstTabId,
+      secondUnusedTabId,
+    ]);
+
+    const switchedSecondId = await runLaunch(claudeAgent);
+    expect(switchedSecondId).toBe(secondUnusedTabId);
+    expect(handleNewThread).toHaveBeenCalledTimes(2);
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      firstTabId,
+      secondUnusedTabId,
+    ]);
+    expect(useWorkspaceTabsStore.getState().tabs[secondUnusedTabId!]?.title).toBe("Claude Code");
+  });
+
+  it("never creates new tabs when switching between existing server threads and an unused draft tab", () => {
+    const store = useWorkspaceTabsStore.getState();
+    useComposerDraftStore
+      .getState()
+      .setLogicalProjectDraftThreadId(LOGICAL_PROJECT_KEY, PROJECT_REF, DRAFT_A, {
+        threadId: THREAD_B,
+      });
+
+    const threadTabId = store.openTab({
+      kind: "thread",
+      title: "已有正式会话",
+      providerId: "codex",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_A,
+    });
+    const draftTabId = store.openTab({
+      kind: "draft",
+      title: "Codex",
+      providerId: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "codex-default",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_B,
+      draftId: DRAFT_A,
+    });
+
+    // Switch back to server thread tab and sync its route target.
+    store.activateTab(DEFAULT_PRIMARY_PANE_ID, threadTabId);
+    const syncedThread = store.syncRouteTarget({
+      target: { kind: "server", threadRef: { environmentId: ENV_LOCAL, threadId: THREAD_A } },
+      title: "已有正式会话",
+      providerId: "codex",
+    });
+    expect(syncedThread).toBe(threadTabId);
+    let state = useWorkspaceTabsStore.getState();
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([threadTabId, draftTabId]);
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.activeTabId).toBe(threadTabId);
+
+    // Switch back to the live blank draft tab and sync its route target -> count stays 2.
+    store.activateTab(DEFAULT_PRIMARY_PANE_ID, draftTabId);
+    const syncedDraft = store.syncRouteTarget({
+      target: { kind: "draft", draftId: DRAFT_A },
+      title: "Codex",
+      providerId: "codex",
+    });
+    expect(syncedDraft).toBe(draftTabId);
+    state = useWorkspaceTabsStore.getState();
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([threadTabId, draftTabId]);
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.activeTabId).toBe(draftTabId);
+  });
+
+  it("allows opening 1 new blank draft tab after the previous draft is promoted to a server thread", () => {
+    const store = useWorkspaceTabsStore.getState();
+    const firstTabId = store.syncRouteTarget({
+      target: { kind: "draft", draftId: DRAFT_A },
+      title: "Codex",
+      providerId: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "codex-default",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_A,
+    })!;
+
+    // Before promotion, syncing another blank draft reuses firstTabId in place.
+    const reusedBeforePromote = store.syncRouteTarget({
+      target: { kind: "draft", draftId: DRAFT_B },
+      title: "Claude Code",
+      providerId: "claudeAgent",
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claudeAgent-default",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_B,
+    });
+    expect(reusedBeforePromote).toBe(firstTabId);
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      firstTabId,
+    ]);
+
+    // Promote DRAFT_B to a real server thread -> tab becomes kind: "thread".
+    store.promoteDraftTab(
+      DRAFT_B,
+      { environmentId: ENV_LOCAL, threadId: THREAD_B },
+      { title: "已完成首条提问" },
+    );
+    expect(useWorkspaceTabsStore.getState().tabs[firstTabId]?.kind).toBe("thread");
+
+    // Now opening a new blank draft creates a brand-new 2nd tab cleanly.
+    const nextDraftTabId = store.openTab({
+      kind: "draft",
+      title: "Antigravity",
+      providerId: "antigravity",
+      instanceId: ProviderInstanceId.make("antigravity"),
+      model: "antigravity-default",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_C,
+      draftId: DRAFT_C,
+    });
+    expect(nextDraftTabId).not.toBe(firstTabId);
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      firstTabId,
+      nextDraftTabId,
+    ]);
+  });
+
+  it("deduplicates legacy multiple draft/agent tabs down to at most 1 in sanitizePersistedWorkspaceTabsState", () => {
+    const sanitized = sanitizePersistedWorkspaceTabsState({
+      layout: { type: "leaf", paneId: DEFAULT_PRIMARY_PANE_ID },
+      panes: {
+        [DEFAULT_PRIMARY_PANE_ID]: {
+          id: DEFAULT_PRIMARY_PANE_ID,
+          tabIds: [
+            "tab-thread-1",
+            "tab-draft-1",
+            "tab-draft-2",
+            "tab-draft-3",
+            "tab-agent-unbacked",
+            "tab-agent-legacy-backed",
+          ],
+          activeTabId: "tab-draft-2",
+        },
+      },
+      tabs: {
+        "tab-thread-1": {
+          id: "tab-thread-1",
+          kind: "thread",
+          title: "历史对话",
+          providerId: "codex",
+          environmentId: ENV_LOCAL,
+          threadId: THREAD_A,
+          createdAt: 1,
+          lastActiveAt: 10,
+        },
+        "tab-draft-1": {
+          id: "tab-draft-1",
+          kind: "draft",
+          title: "Codex",
+          providerId: "codex",
+          draftId: DRAFT_A,
+          createdAt: 2,
+          lastActiveAt: 20,
+        },
+        "tab-draft-2": {
+          id: "tab-draft-2",
+          kind: "draft",
+          title: "Codex",
+          providerId: "codex",
+          draftId: DRAFT_B,
+          createdAt: 3,
+          lastActiveAt: 30,
+        },
+        "tab-draft-3": {
+          id: "tab-draft-3",
+          kind: "draft",
+          title: "Codex",
+          providerId: "codex",
+          draftId: DRAFT_C,
+          createdAt: 4,
+          lastActiveAt: 40,
+        },
+        "tab-agent-unbacked": {
+          id: "tab-agent-unbacked",
+          kind: "agent",
+          title: "Codex",
+          providerId: "codex",
+          createdAt: 5,
+          lastActiveAt: 50,
+        },
+        "tab-agent-legacy-backed": {
+          id: "tab-agent-legacy-backed",
+          kind: "agent",
+          title: "Claude Code",
+          providerId: "claudeAgent",
+          draftId: DRAFT_EXPIRED,
+          createdAt: 6,
+          lastActiveAt: 60,
+        },
+      },
+      focusedPaneId: DEFAULT_PRIMARY_PANE_ID,
+      primaryPaneId: DEFAULT_PRIMARY_PANE_ID,
+      terminalCounter: 0,
+    });
+
+    // Preserves the active draft tab and the real thread tab, stripping all other duplicate unused drafts/agents.
+    expect(sanitized.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      "tab-thread-1",
+      "tab-draft-2",
+    ]);
+    expect(sanitized.panes[DEFAULT_PRIMARY_PANE_ID]?.activeTabId).toBe("tab-draft-2");
+    expect(sanitized.tabs["tab-draft-1"]).toBeUndefined();
+    expect(sanitized.tabs["tab-draft-3"]).toBeUndefined();
+    expect(sanitized.tabs["tab-agent-unbacked"]).toBeUndefined();
+    expect(sanitized.tabs["tab-agent-legacy-backed"]).toBeUndefined();
+
+    // Preserves a draft with user-authored content alongside at most 1 unused draft tab.
+    useComposerDraftStore.getState().setPrompt(DRAFT_A, "尚未发送的重要草稿");
+    const withUserDraft = sanitizePersistedWorkspaceTabsState(
+      {
+        layout: { type: "leaf", paneId: DEFAULT_PRIMARY_PANE_ID },
+        panes: {
+          [DEFAULT_PRIMARY_PANE_ID]: {
+            id: DEFAULT_PRIMARY_PANE_ID,
+            tabIds: ["tab-draft-user", "tab-draft-empty-1", "tab-draft-empty-2"],
+            activeTabId: "tab-draft-user",
+          },
+        },
+        tabs: {
+          "tab-draft-user": {
+            id: "tab-draft-user",
+            kind: "draft",
+            title: "Codex",
+            providerId: "codex",
+            draftId: DRAFT_A,
+            createdAt: 1,
+            lastActiveAt: 10,
+          },
+          "tab-draft-empty-1": {
+            id: "tab-draft-empty-1",
+            kind: "draft",
+            title: "Codex",
+            providerId: "codex",
+            draftId: DRAFT_B,
+            createdAt: 2,
+            lastActiveAt: 20,
+          },
+          "tab-draft-empty-2": {
+            id: "tab-draft-empty-2",
+            kind: "draft",
+            title: "Claude Code",
+            providerId: "claudeAgent",
+            draftId: DRAFT_C,
+            createdAt: 3,
+            lastActiveAt: 30,
+          },
+        },
+        focusedPaneId: DEFAULT_PRIMARY_PANE_ID,
+        primaryPaneId: DEFAULT_PRIMARY_PANE_ID,
+        terminalCounter: 0,
+      },
+      getLiveComposerDraftStateLookup(),
+    );
+
+    expect(withUserDraft.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      "tab-draft-user",
+      "tab-draft-empty-2",
+    ]);
+    expect(withUserDraft.tabs["tab-draft-empty-1"]).toBeUndefined();
+
+    // Runtime store action pruneDuplicateDraftTabs collapses redundant empty drafts once emptied.
+    const store = useWorkspaceTabsStore.getState();
+    const t1 = store.openTab({ kind: "draft", title: "Codex", providerId: "codex", draftId: DRAFT_A });
+    const t2 = store.openTab({ kind: "draft", title: "Claude Code", providerId: "claudeAgent", draftId: DRAFT_B });
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([t1, t2]);
+    useComposerDraftStore.getState().setPrompt(DRAFT_A, "");
+    store.pruneDuplicateDraftTabs();
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([t2]);
+    expect(useWorkspaceTabsStore.getState().tabs[t1]).toBeUndefined();
+  });
+
+  it("reuses target tab in-place without duplication when syncRouteTarget races ahead of materialize/openTab", async () => {
+    const store = useWorkspaceTabsStore.getState();
+    const threadTabId = store.openTab({
+      kind: "thread",
+      title: "正式会话",
+      providerId: "codex",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_A,
+    });
+    // Simulate an expired draft tab restored across reload (no session in composerDraftStore).
+    const expiredTabId = store.openTab({
+      kind: "draft",
+      title: "Codex",
+      providerId: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
+      draftId: DRAFT_EXPIRED,
+    });
+    expect(
+      findPrimaryUnusedDraftTab(
+        useWorkspaceTabsStore.getState(),
+        getLiveComposerDraftStateLookup(),
+      )?.id,
+    ).toBe(expiredTabId);
+
+    let pendingBinding: PendingDraftTabBinding | null = null;
+    const handleNewThreadWithSyncRace = vi.fn(async (projectRef: typeof PROJECT_REF) => {
+      useComposerDraftStore
+        .getState()
+        .setLogicalProjectDraftThreadId(LOGICAL_PROJECT_KEY, projectRef, DRAFT_B, {
+          threadId: THREAD_B,
+        });
+      // Simulate React effect firing syncRouteTarget during router.navigate BEFORE handleNewThread resolves!
+      const syncedId = useWorkspaceTabsStore.getState().syncRouteTarget({
+        target: { kind: "draft", draftId: DRAFT_B },
+        title: pendingBinding?.title ?? "Claude Code",
+        providerId: pendingBinding?.providerId ?? "claudeAgent",
+        instanceId: pendingBinding?.instanceId ?? ProviderInstanceId.make("claudeAgent"),
+        model: pendingBinding?.model ?? "claudeAgent-default",
+        environmentId: projectRef.environmentId,
+        threadId: THREAD_B,
+        activate: true,
+        reuseUnusedDraftTabId: pendingBinding?.tabId ?? null,
+      });
+      expect(syncedId).toBe(expiredTabId);
+      return { draftId: DRAFT_B, threadId: THREAD_B };
+    });
+
+    const resultTabId = await launchPrimaryAgentDraft({
+      agent: claudeAgent,
+      resolvedPaneId: DEFAULT_PRIMARY_PANE_ID,
+      instanceEntries: providers,
+      resolveProjectRef: async () => ({ projectRef: PROJECT_REF, fromScratch: false }),
+      handleNewThread: handleNewThreadWithSyncRace,
+      onNavigateToDraft: vi.fn(),
+      onNavigateHome: vi.fn(),
+      setPendingBinding: (binding) => {
+        pendingBinding = binding;
+      },
+      getPendingBinding: () => pendingBinding,
+    });
+
+    expect(resultTabId).toBe(expiredTabId);
+    expect(pendingBinding).toBeNull();
+    const finalState = useWorkspaceTabsStore.getState();
+    expect(finalState.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([threadTabId, expiredTabId]);
+    expect(finalState.panes[DEFAULT_PRIMARY_PANE_ID]?.activeTabId).toBe(expiredTabId);
+    expect(finalState.tabs[expiredTabId]).toMatchObject({
+      kind: "draft",
+      draftId: DRAFT_B,
+      threadId: THREAD_B,
+      providerId: "claude-code",
+      instanceId: "claudeAgent",
+      model: "claudeAgent-default",
+      title: "Claude Code",
+    });
   });
 });

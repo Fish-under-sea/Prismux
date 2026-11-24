@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { resolveChatCanvasModel } from "./canvasStore";
 import { resolveChatCanvasLayout, type ChatCanvasPreview } from "./chatCanvasLayout";
 import { resizePreviewMiniPlayer } from "../preview/previewMiniPlayerLayout";
 import {
+  OVERVIEW_COMPOSER_CLEARANCE,
   resolveThreadDetailsCardDensity,
   resolveThreadDetailsCardLayout,
 } from "./threadDetailsCardLayout";
@@ -370,5 +373,92 @@ describe("workspace card beside chat", () => {
     expect(place(1344, 1124)).toMatchObject({ x: 1052 });
     // A window resize mid-animation leaves the sampled ends wider than the canvas.
     expect(place(900, 1344)).toBeNull();
+  });
+
+  it("keeps the bottom composer centered even when the overview details card shifts and narrows chat", () => {
+    for (const width of [1012, 1028, 1108, 1344, 1500]) {
+      const result = withCard(width);
+      const expectedLeft = (width - 736) / 2;
+      expect(result.composer).toEqual({
+        left: expectedLeft,
+        width: 736,
+        insetStart: 0,
+        insetEnd: 0,
+      });
+    }
+    // Verify chat WAS shifted/narrowed at 1028px while composer remained 100% centered.
+    const narrow = withCard(1028);
+    expect(narrow.chat.insetEnd).toBe(276);
+    expect(narrow.composer.insetStart).toBe(0);
+    expect(narrow.composer.insetEnd).toBe(0);
+  });
+
+  it("reserves a clear vertical gap above the composer stack via bottomInset in both layout and canvas model", () => {
+    const container = { width: 1440, height: 800 };
+    const composerReservedBottom = 180;
+    const bottomInset = composerReservedBottom + OVERVIEW_COMPOSER_CLEARANCE;
+    const card = resolveThreadDetailsCardLayout({
+      container,
+      lane: { padding: 48, minChatWidth: 640 },
+      frame: null,
+      bottomInset,
+    })!;
+    expect(card).not.toBeNull();
+    expect(card.y + card.height).toBeLessThanOrEqual(container.height - bottomInset);
+    expect(container.height - composerReservedBottom - (card.y + card.height)).toBeGreaterThanOrEqual(
+      OVERVIEW_COMPOSER_CLEARANCE,
+    );
+
+    // Multiline composer growth shrinks available overview height dynamically.
+    const tallComposerCard = resolveThreadDetailsCardLayout({
+      container,
+      lane: { padding: 48, minChatWidth: 640 },
+      frame: null,
+      bottomInset: 320 + OVERVIEW_COMPOSER_CLEARANCE,
+    })!;
+    expect(tallComposerCard.height).toBeLessThan(card.height);
+    expect(tallComposerCard.y + tallComposerCard.height).toBeLessThanOrEqual(
+      container.height - (320 + OVERVIEW_COMPOSER_CLEARANCE),
+    );
+
+    // Very short window where <160px remains above composer falls back to popover mode (null).
+    const tooShort = resolveThreadDetailsCardLayout({
+      container: { width: 1440, height: 340 },
+      lane: { padding: 48, minChatWidth: 640 },
+      frame: null,
+      bottomInset: 180 + OVERVIEW_COMPOSER_CLEARANCE,
+    });
+    expect(tooShort).toBeNull();
+
+    // End-to-end via resolveChatCanvasModel: composerReservedBottom caps inline overview placement
+    // while keeping layout.composer centered.
+    const threadRef = {
+      environmentId: EnvironmentId.make("env-1"),
+      threadId: ThreadId.make("thread-1"),
+    };
+    const model = resolveChatCanvasModel({
+      measurements: {
+        width: 1120,
+        height: 760,
+        padding: 48,
+        maxChatWidth: 736,
+        minChatWidth: 640,
+        composerHeight: 0,
+        composerReservedBottom: 220,
+        timelineGutter: 0,
+        findBar: null,
+      },
+      detailsCardMeasurement: { threadRef, width: 280, fullContentHeight: 600 },
+      threadRef,
+      preview: null,
+      detailsCardInlineOpen: true,
+    });
+    expect(model.detailsCardPlacement).not.toBeNull();
+    expect(
+      model.detailsCardPlacement!.y + model.detailsCardPlacement!.height,
+    ).toBeLessThanOrEqual(760 - 220 - OVERVIEW_COMPOSER_CLEARANCE);
+    expect(model.layout.composer.insetStart).toBe(0);
+    expect(model.layout.composer.insetEnd).toBe(0);
+    expect(model.layout.chat.insetEnd).toBeGreaterThan(0);
   });
 });

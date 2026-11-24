@@ -1438,7 +1438,7 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
 }
 
 .pmx-wp-qp__settings {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
   padding: 0 8px;
 }

@@ -33,7 +33,11 @@ import {
   normalizeWallpaperScrim,
   pickNextWallpaperId,
 } from "../store.js";
-import { createDefaultSettings } from "../defaults.js";
+import {
+  BUILTIN_WEBWALLGL_SCENES,
+  createBuiltinWallpapers,
+  createDefaultSettings,
+} from "../defaults.js";
 import type { StorageLike } from "../store.js";
 import type { WallpaperItem } from "../types.js";
 import { weColorToHex, weEvalCondition, weHexToColor } from "../userProps.js";
@@ -655,14 +659,27 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     store.dispose();
   });
 
-  it("deduplicates daemon-supplied builtin WebWallGL scenes and hydrates preview & userProperties", () => {
+  it("removes all synthetic builtin WebWallGL scenes and migrates legacy builtin selectedId to null", () => {
+    assert.equal(BUILTIN_WEBWALLGL_SCENES.length, 0);
+    assert.deepEqual(createBuiltinWallpapers(), []);
+    assert.equal(createDefaultSettings().selectedId, null);
+
+    // Even when legacy includeBuiltins: true or legacy builtin-* selectedId is supplied, builtins stay excluded
     const store = createWallpaperStore({
       includeBuiltins: true,
       storage: createMemoryStorage(),
+      settings: {
+        selectedId: "builtin:aurora-prism",
+      },
     });
-    assert.equal(store.getSnapshot().wallpapers.length, 4);
+    assert.equal(store.getSnapshot().wallpapers.length, 0);
+    assert.equal(
+      store.getSnapshot().settings.selectedId,
+      null,
+      "legacy builtin:aurora-prism selectedId must auto-migrate to null",
+    );
 
-    // Daemon returns its own builtin-* metadata items without SVG previews or props
+    // Supplying a mix of legacy daemon builtin-* entries and a real custom wallpaper retains ONLY real wallpapers
     store.setWallpapers([
       {
         id: "builtin-aurora-prism",
@@ -690,24 +707,26 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
         orientation: "landscape",
         contentRating: "everyone",
       },
+      sampleWallpapers[0]!,
     ]);
 
     const list = store.getSnapshot().wallpapers;
-    assert.equal(list.length, 2, "must not duplicate builtin scenes when host supplies them");
-    assert.ok(list[0]!.previewUrl?.startsWith("data:image/svg+xml"));
-    assert.equal(list[0]!.builtinSceneId, "aurora-prism");
-    assert.equal(list[1]!.builtinSceneId, "midnight-abyss");
-    assert.ok((list[0]!.userProperties?.length ?? 0) >= 4);
-    assert.equal(
-      store.getSnapshot().settings.selectedId,
-      "builtin-aurora-prism",
-      "default builtin:aurora-prism selectedId must auto-migrate to daemon builtin-aurora-prism",
+    assert.deepEqual(
+      list.map((w) => w.id),
+      ["w1"],
+      "mergeWallpapers must strip all source: 'builtin' synthetic scenes",
     );
-    assert.equal(
-      findWallpaperById(list, "builtin:midnight-abyss")?.id,
-      "builtin-midnight-tide",
-      "findWallpaperById must bridge colon/hyphen builtin aliases",
-    );
+    assert.equal(findWallpaperById(list, "builtin-aurora-prism"), null);
+    assert.equal(findWallpaperById(list, "builtin:midnight-abyss"), null);
+    assert.equal(findWallpaperById(list, "w1")?.id, "w1");
+
+    // Updating settings or selecting a legacy builtin-* ID clears selectedId to null, while real IDs remain intact
+    store.selectWallpaper("w1");
+    assert.equal(store.getSnapshot().settings.selectedId, "w1");
+    store.updateSettings({ selectedId: "builtin-aurora-prism" });
+    assert.equal(store.getSnapshot().settings.selectedId, null);
+    store.selectWallpaper("builtin:liquid-silk");
+    assert.equal(store.getSnapshot().settings.selectedId, null);
     store.dispose();
   });
 
@@ -772,20 +791,30 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     closeInlineAppearanceInStore(store, "playback");
     assert.equal(resolveQuickPanelTab(store.getSnapshot().ui.qpTab), "playback");
 
-    // Verify WallpaperQuickPanel source wires bottom "外观与玻璃" to handleOpenInlineAppearance (NOT openSettingsSection)
+    // Verify WallpaperQuickPanel routes top 3-tab "外观与玻璃" to handleOpenInlineAppearance
+    // and removes duplicate bottom trigger, 壁纸属性 button, and duplicate audio section on wallpaper tab
     const testDir = dirname(fileURLToPath(import.meta.url));
     const pkgRoot = join(testDir, "..", "..");
     const panelSrc = await readFile(join(pkgRoot, "src", "WallpaperQuickPanel.tsx"), "utf8");
-    const triggerMatch = panelSrc.match(
-      /data-pmx-inline-appearance-trigger="1"[\s\S]{0,240}?onClick=\{([^}]+)\}/,
+    assert.match(panelSrc, /id:\s*"appearance",\s*label:\s*"外观与玻璃"/);
+    assert.match(panelSrc, /if \(t\.id === "appearance"\)\s*\{\s*handleOpenInlineAppearance\(\);/);
+    assert.doesNotMatch(
+      panelSrc,
+      /data-pmx-inline-appearance-trigger="1"/,
+      "duplicate bottom 外观与玻璃 button must be removed",
     );
-    assert.ok(triggerMatch, "bottom inline appearance trigger must exist");
+    assert.doesNotMatch(
+      panelSrc,
+      /壁纸属性/,
+      "壁纸属性 drill-down button must be removed from WallpaperQuickPanel",
+    );
     assert.equal(
-      triggerMatch[1]?.trim(),
-      "handleOpenInlineAppearance",
-      "bottom 外观与玻璃 button must open inline studio rather than navigating away",
+      (panelSrc.match(/<PlaybackAudioSection\b/g) ?? []).length,
+      1,
+      "PlaybackAudioSection must render ONLY on the 播放 tab (never duplicated on 壁纸 tab)",
     );
     assert.match(panelSrc, /data-pmx-inline-appearance="1"/);
+    assert.match(panelSrc, /data-pmx-open-wallpaper-settings="1"/);
     assert.match(panelSrc, /← 返回壁纸/);
 
     // Verify stylesheet keeps QuickPanel transparent over rightSidebar glass & provides light/dark contrast tokens

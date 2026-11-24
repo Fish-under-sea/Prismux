@@ -3,7 +3,10 @@ import { createStore } from "zustand";
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import type { DetailsCardMeasurement } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout, type ChatCanvasPreview } from "./chatCanvasLayout";
-import { resolveThreadDetailsCardLayout } from "./threadDetailsCardLayout";
+import {
+  OVERVIEW_COMPOSER_CLEARANCE,
+  resolveThreadDetailsCardLayout,
+} from "./threadDetailsCardLayout";
 
 interface CanvasEdges {
   readonly left: number;
@@ -19,6 +22,8 @@ export interface ChatCanvasMeasurements {
   readonly maxChatWidth: number;
   readonly minChatWidth: number;
   readonly composerHeight: number;
+  /** Distance from canvas bottom edge to the top of the bottom composer stack (both draft hero & active chat). */
+  readonly composerReservedBottom?: number;
   readonly timelineGutter: number;
   /** The find bar's box in canvas coordinates while it is shown. */
   readonly findBar: CanvasEdges | null;
@@ -38,6 +43,7 @@ const INITIAL_MEASUREMENTS: ChatCanvasMeasurements = {
   maxChatWidth: 768,
   minChatWidth: 640,
   composerHeight: 0,
+  composerReservedBottom: 0,
   timelineGutter: 0,
   findBar: null,
 };
@@ -54,6 +60,7 @@ const sameMeasurements = (a: ChatCanvasMeasurements, b: ChatCanvasMeasurements) 
   a.maxChatWidth === b.maxChatWidth &&
   a.minChatWidth === b.minChatWidth &&
   a.composerHeight === b.composerHeight &&
+  (a.composerReservedBottom ?? 0) === (b.composerReservedBottom ?? 0) &&
   a.timelineGutter === b.timelineGutter &&
   sameEdges(a.findBar, b.findBar);
 
@@ -98,6 +105,9 @@ export function resolveChatCanvasModel({
   const container = { width: measurements.width, height: measurements.height };
   const { findBar } = measurements;
   const detailsCardTopInset = findBar?.bottom ?? 0;
+  const composerReservedBottom = Math.max(0, measurements.composerReservedBottom ?? 0);
+  const detailsCardBottomInset =
+    composerReservedBottom > 0 ? composerReservedBottom + OVERVIEW_COMPOSER_CLEARANCE : 0;
   const lane = { padding: measurements.padding, minChatWidth: measurements.minChatWidth };
   // The preview avoids where an open inline card would sit, whether or not a
   // preview overlap has pushed the card itself into popover mode.
@@ -107,6 +117,7 @@ export function resolveChatCanvasModel({
     lane,
     frame: null,
     topInset: detailsCardTopInset,
+    bottomInset: detailsCardBottomInset,
   });
   // The canvas outlives thread switches, so a measurement only counts for the
   // thread whose card is shown now.
@@ -147,12 +158,14 @@ export function resolveChatCanvasModel({
     frame: layout.frame,
     overlapsDetailsCard: layout.overlapsDetailsCard,
     topInset: detailsCardTopInset,
+    bottomInset: detailsCardBottomInset,
   });
   const detailsCardMode: ThreadPanelPresentation = detailsCardPlacement ? "inline" : "popover";
   return {
     container,
     lane,
     layout,
+    composerReservedBottom,
     detailsCardTopInset,
     preferredDetailsCard,
     detailsCardPlacement,

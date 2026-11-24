@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync
@@ -18,6 +19,7 @@ import { CHIEF_PROVIDER_KINDS, OFFICIAL_PLUGIN_IDS } from "@prismux/protocol";
 import { WebSocketServer } from "ws";
 import {
   AppearanceConfigStore,
+  BUILTIN_WEBWALLGL_WALLPAPERS,
   createDefaultAppearanceConfig,
   PrismuxDaemon,
   parseWindowsRegistryFontOutput,
@@ -89,7 +91,7 @@ function buildDeterministicTgz(files: Record<string, string>): Buffer {
   return gzipSync(Buffer.concat(blocks));
 }
 
-test("Steam 431960 scan, built-in scenes, custom import, HTTP 206 streaming, and path-traversal blocking", async () => {
+test("Steam 431960 scan, zero built-in scenes, custom import dedup, HTTP 206 streaming, and path-traversal blocking", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "prismux-wp-data-"));
   const steamPrimary = mkdtempSync(join(tmpdir(), "prismux-steam-primary-"));
   const steamSecondary = mkdtempSync(join(tmpdir(), "prismux-steam-secondary-"));
@@ -259,17 +261,12 @@ test("Steam 431960 scan, built-in scenes, custom import, HTTP 206 streaming, and
     }>;
   };
 
-  for (const builtinId of [
-    "builtin-aurora-prism",
-    "builtin-midnight-tide",
-    "builtin-liquid-silk",
-    "builtin-cyber-dusk"
-  ]) {
-    const found = inv.items.find((x) => x.id === builtinId);
-    assert.ok(found, `Missing built-in WebWallGL wallpaper ${builtinId}`);
-    assert.equal(found.source, "builtin");
-    assert.equal(found.type, "scene");
-  }
+  assert.equal(BUILTIN_WEBWALLGL_WALLPAPERS.length, 0);
+  assert.equal(
+    inv.items.some((x) => x.source === "builtin"),
+    false,
+    "inventory must contain 0 synthetic built-in scene wallpapers"
+  );
 
   const steamVideo = inv.items.find((x) => x.id === "9001001");
   assert.ok(steamVideo);
@@ -405,7 +402,7 @@ test("Steam 431960 scan, built-in scenes, custom import, HTTP 206 streaming, and
   assert.ok(foundCustom);
   assert.equal(foundCustom.width, 2560);
 
-  // Import via sourcePath & base64
+  // Import via sourcePath & base64 + SHA-256 duplicate reuse (no -1/-2 copies created)
   const importFile = join(importSrcDir, "imported-photo.png");
   writeFileSync(importFile, createMinimalPngBuffer(1440, 1440));
   const importPathRes = await fetch(`${ready.httpUrl}/v1/wallpapers/import`, {
@@ -418,6 +415,25 @@ test("Steam 431960 scan, built-in scenes, custom import, HTTP 206 streaming, and
   });
   assert.equal(importPathRes.status, 200);
   assert.equal(existsSync(importFile), true); // Source untouched
+  const firstImportedPath = (await importPathRes.json()) as {
+    item: { id: string; filePath: string };
+  };
+
+  // Re-importing the exact same sourcePath reuses the existing file without creating imported-photo-1.png
+  const importPathDupRes = await fetch(`${ready.httpUrl}/v1/wallpapers/import`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ sourcePath: importFile })
+  });
+  assert.equal(importPathDupRes.status, 200);
+  const dupImportedPath = (await importPathDupRes.json()) as {
+    item: { id: string; filePath: string };
+  };
+  assert.equal(dupImportedPath.item.id, firstImportedPath.item.id);
+  assert.equal(dupImportedPath.item.filePath, firstImportedPath.item.filePath);
 
   const b64Png = createMinimalPngBuffer(800, 600).toString("base64");
   const importB64Res = await fetch(`${ready.httpUrl}/v1/wallpapers/import`, {
@@ -432,6 +448,74 @@ test("Steam 431960 scan, built-in scenes, custom import, HTTP 206 streaming, and
     })
   });
   assert.equal(importB64Res.status, 200);
+  const firstImportedB64 = (await importB64Res.json()) as {
+    item: { id: string; filePath: string };
+  };
+  assert.notEqual(firstImportedB64.item.id, firstImportedPath.item.id);
+
+  // Re-importing the exact same base64 payload (even under another filename) reuses the existing file
+  const importB64DupRes = await fetch(`${ready.httpUrl}/v1/wallpapers/import`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({
+      fileName: "uploaded-canvas-duplicate.png",
+      base64: `data:image/png;base64,${b64Png}`
+    })
+  });
+  assert.equal(importB64DupRes.status, 200);
+  const dupImportedB64 = (await importB64DupRes.json()) as {
+    item: { id: string; filePath: string };
+  };
+  assert.equal(dupImportedB64.item.id, firstImportedB64.item.id);
+  assert.equal(dupImportedB64.item.filePath, firstImportedB64.item.filePath);
+
+  // Verify no -1 duplicate files were written in ~/.prismux/wallpapers
+  const managedFiles = readdirSync(join(dataDir, "wallpapers")).sort();
+  assert.deepEqual(managedFiles, ["imported-photo.png", "uploaded-canvas.png"]);
+
+  // Scanning custom directory with pre-existing byte-identical duplicates (-1/-2) keeps ONLY canonical shortest name,
+  // while keeping a different image of the exact same byte length
+  const dupBytes = createMinimalPngBuffer(1920, 1200);
+  const distinctSameSizeBytes = createMinimalPngBuffer(1600, 900);
+  assert.equal(dupBytes.byteLength, distinctSameSizeBytes.byteLength);
+  writeFileSync(join(extraCustomDir, "media_dup.png"), dupBytes);
+  writeFileSync(join(extraCustomDir, "media_dup-1.png"), dupBytes);
+  writeFileSync(join(extraCustomDir, "media_dup-2.png"), dupBytes);
+  writeFileSync(join(extraCustomDir, "media_distinct.png"), distinctSameSizeBytes);
+
+  const dedupRescanRes = await fetch(`${ready.httpUrl}/v1/wallpapers/rescan`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ customDirs: [extraCustomDir] })
+  });
+  assert.equal(dedupRescanRes.status, 200);
+  const dedupRescanned = (await dedupRescanRes.json()) as {
+    items: Array<{ title: string; source: string }>;
+  };
+  const dupMatches = dedupRescanned.items.filter(
+    (x) => x.source === "custom" && x.title.startsWith("media_dup")
+  );
+  assert.deepEqual(
+    dupMatches.map((x) => x.title),
+    ["media_dup"],
+    "scanCustomDirectory must deduplicate identical files and prefer the canonical non-suffixed filename"
+  );
+  assert.equal(
+    dedupRescanned.items.some((x) => x.source === "custom" && x.title === "media_distinct"),
+    true,
+    "different files with identical byte length must NOT be falsely deduplicated"
+  );
+  assert.equal(
+    dedupRescanned.items.some((x) => x.source === "builtin"),
+    false,
+    "rescan must return 0 builtin scene wallpapers"
+  );
 
   // Disallow unsafe extensions on import
   const badExtRes = await fetch(`${ready.httpUrl}/v1/wallpapers/import`, {
@@ -1114,13 +1198,13 @@ export function apply(ctx) {
     currentVersion: string;
     policy: { routePreference: string; includePrerelease: boolean };
   };
-  assert.equal(updaterStatus.currentVersion, "0.1.2-preview.4");
+  assert.equal(updaterStatus.currentVersion, "0.1.3-preview.1");
   assert.equal(updaterStatus.policy.routePreference, "domestic");
   assert.equal(updaterStatus.policy.includePrerelease, false);
 
   const healthCheckRes = await fetch(`${ready.httpUrl}/health`);
   assert.equal(healthCheckRes.status, 200);
-  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.2-preview.4");
+  assert.equal(((await healthCheckRes.json()) as { version: string }).version, "0.1.3-preview.1");
 });
 
 test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electron protocol CORS + PRISMUX_CATALOG_PATH resolution", async () => {

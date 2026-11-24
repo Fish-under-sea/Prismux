@@ -204,84 +204,7 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".vert": "text/plain; charset=utf-8"
 };
 
-export const BUILTIN_WEBWALLGL_WALLPAPERS: readonly WallpaperInventoryItem[] = [
-  {
-    id: "builtin-aurora-prism",
-    title: "Aurora Prism · 极光棱镜",
-    type: "scene",
-    source: "builtin",
-    previewUrl: null,
-    mediaUrl: null,
-    filePath: null,
-    dirPath: null,
-    width: null,
-    height: null,
-    orientation: "landscape",
-    contentRating: "everyone",
-    tags: ["builtin", "WebWallGL", "aurora"],
-    schemeColor: "#5e9bff",
-    builtinSceneId: "aurora-prism",
-    sceneLiveSupported: true,
-    webLiveSupported: false
-  },
-  {
-    id: "builtin-midnight-tide",
-    title: "Midnight Tide · 午夜潮汐",
-    type: "scene",
-    source: "builtin",
-    previewUrl: null,
-    mediaUrl: null,
-    filePath: null,
-    dirPath: null,
-    width: null,
-    height: null,
-    orientation: "landscape",
-    contentRating: "everyone",
-    tags: ["builtin", "WebWallGL", "ocean"],
-    schemeColor: "#38bdf8",
-    builtinSceneId: "midnight-abyss",
-    sceneLiveSupported: true,
-    webLiveSupported: false
-  },
-  {
-    id: "builtin-liquid-silk",
-    title: "Liquid Silk · 液态丝绸",
-    type: "scene",
-    source: "builtin",
-    previewUrl: null,
-    mediaUrl: null,
-    filePath: null,
-    dirPath: null,
-    width: null,
-    height: null,
-    orientation: "landscape",
-    contentRating: "everyone",
-    tags: ["builtin", "WebWallGL", "silk"],
-    schemeColor: "#c084fc",
-    builtinSceneId: "liquid-silk",
-    sceneLiveSupported: true,
-    webLiveSupported: false
-  },
-  {
-    id: "builtin-cyber-dusk",
-    title: "Cyber Dusk · 赛博暮光",
-    type: "scene",
-    source: "builtin",
-    previewUrl: null,
-    mediaUrl: null,
-    filePath: null,
-    dirPath: null,
-    width: null,
-    height: null,
-    orientation: "landscape",
-    contentRating: "everyone",
-    tags: ["builtin", "WebWallGL", "cyber"],
-    schemeColor: "#f472b6",
-    builtinSceneId: "cyber-twilight",
-    sceneLiveSupported: true,
-    webLiveSupported: false
-  }
-];
+export const BUILTIN_WEBWALLGL_WALLPAPERS: readonly WallpaperInventoryItem[] = [];
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -806,6 +729,122 @@ function sanitizeImportFileName(rawName: string): string {
   return collapsed.length > 0 ? collapsed : `wallpaper-${Date.now()}`;
 }
 
+export function computeBufferSha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function computeFileSha256(filePath: string): string {
+  const hash = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(256 * 1024);
+  const fd = openSync(filePath, "r");
+  try {
+    let offset = 0;
+    while (true) {
+      const bytesRead = readSync(fd, chunk, 0, chunk.length, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      hash.update(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+function hasNumericDuplicateSuffix(fileName: string): boolean {
+  const ext = extname(fileName);
+  const stem = ext.length > 0 ? fileName.slice(0, -ext.length) : fileName;
+  return /-\d+$/.test(stem);
+}
+
+/**
+ * Deterministic preference ordering for byte-identical wallpaper files:
+ * prefers canonical filenames without `-1` / `-2` duplicate suffixes, then shorter filenames.
+ */
+function compareCanonicalFilePath(aPath: string, bPath: string): number {
+  const aBase = basename(aPath);
+  const bBase = basename(bPath);
+  const aSuffixed = hasNumericDuplicateSuffix(aBase) ? 1 : 0;
+  const bSuffixed = hasNumericDuplicateSuffix(bBase) ? 1 : 0;
+  if (aSuffixed !== bSuffixed) {
+    return aSuffixed - bSuffixed;
+  }
+  if (aBase.length !== bBase.length) {
+    return aBase.length - bBase.length;
+  }
+  if (aPath.length !== bPath.length) {
+    return aPath.length - bPath.length;
+  }
+  const baseCmp = aBase.localeCompare(bBase);
+  if (baseCmp !== 0) {
+    return baseCmp;
+  }
+  return aPath.localeCompare(bPath);
+}
+
+export function findExistingDuplicateByHash(
+  dir: string,
+  sizeBytes: number,
+  sha256: string
+): string | null {
+  if (!existsSync(dir)) {
+    return null;
+  }
+  const sizeMatches: string[] = [];
+  const stack: string[] = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const dirent of entries) {
+      if (dirent.name.startsWith(".")) {
+        continue;
+      }
+      const fullPath = join(current, dirent.name);
+      if (dirent.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (!dirent.isFile()) {
+        continue;
+      }
+      const ext = extname(dirent.name).toLowerCase();
+      if (!ALLOWED_IMPORT_EXTENSIONS.has(ext)) {
+        continue;
+      }
+      if (!isPathStrictlyInsideDir(fullPath, dir)) {
+        continue;
+      }
+      try {
+        const st = statSync(fullPath);
+        if (st.isFile() && st.size === sizeBytes) {
+          sizeMatches.push(fullPath);
+        }
+      } catch {
+        // ignore unreadable candidate
+      }
+    }
+  }
+
+  sizeMatches.sort(compareCanonicalFilePath);
+  for (const candidate of sizeMatches) {
+    try {
+      if (computeFileSha256(candidate) === sha256) {
+        return candidate;
+      }
+    } catch {
+      // ignore unreadable candidate
+    }
+  }
+  return null;
+}
+
 function ensureUniqueDestPath(targetDir: string, preferredName: string): string {
   const ext = extname(preferredName);
   const stem = ext.length > 0 ? preferredName.slice(0, -ext.length) : preferredName;
@@ -956,33 +995,23 @@ export class WallpaperMediaService {
     this.itemsById.clear();
     const collected: WallpaperInventoryItem[] = [];
 
-    // 1. Built-in WebWallGL scenes
-    for (const builtin of BUILTIN_WEBWALLGL_WALLPAPERS) {
-      const copy: WallpaperInventoryItem = { ...builtin };
-      collected.push(copy);
-      this.itemsById.set(copy.id, {
-        item: copy,
-        allowedRoot: this.customWallpaperDir,
-        mediaFile: null,
-        previewFile: null,
-        webRootDir: null,
-        webEntryRelPath: null
-      });
-    }
-
-    // 2. Steam Workshop 431960 items
+    // 1. Steam Workshop 431960 items
     for (const workshopDir of workshopDirs) {
       this.scanWorkshopDirectory(workshopDir, collected);
     }
 
-    // 3. Local managed custom wallpaper dir + extra user-configured customDirs
+    // 2. Local managed custom wallpaper dir + extra user-configured customDirs (deduplicated by size + SHA-256)
+    const seenCustomBySize = new Map<
+      number,
+      Array<{ filePath: string; sha256: string | null }>
+    >();
     const localScanDirs = [
       this.customWallpaperDir,
       ...this.customDirs.filter((d) => d !== this.customWallpaperDir)
     ];
     for (const dir of localScanDirs) {
       if (existsSync(dir)) {
-        this.scanCustomDirectory(dir, collected);
+        this.scanCustomDirectory(dir, collected, seenCustomBySize);
       }
     }
 
@@ -1041,16 +1070,26 @@ export class WallpaperMediaService {
         );
       }
 
-      const preferredName =
-        typeof request.fileName === "string" && request.fileName.trim().length > 0
-          ? sanitizeImportFileName(request.fileName)
-          : sanitizeImportFileName(basename(resolvedSrc));
-      const finalName = extname(preferredName).toLowerCase() === ext
-        ? preferredName
-        : `${preferredName}${ext}`;
-      destPath = ensureUniqueDestPath(this.customWallpaperDir, finalName);
+      const sourceSha256 = computeFileSha256(resolvedSrc);
+      const existingDup = findExistingDuplicateByHash(
+        this.customWallpaperDir,
+        st.size,
+        sourceSha256
+      );
+      if (existingDup !== null) {
+        destPath = existingDup;
+      } else {
+        const preferredName =
+          typeof request.fileName === "string" && request.fileName.trim().length > 0
+            ? sanitizeImportFileName(request.fileName)
+            : sanitizeImportFileName(basename(resolvedSrc));
+        const finalName = extname(preferredName).toLowerCase() === ext
+          ? preferredName
+          : `${preferredName}${ext}`;
+        destPath = ensureUniqueDestPath(this.customWallpaperDir, finalName);
 
-      this.atomicCopyFile(resolvedSrc, destPath);
+        this.atomicCopyFile(resolvedSrc, destPath);
+      }
     } else if (
       typeof request.fileName === "string" &&
       request.fileName.trim().length > 0 &&
@@ -1078,8 +1117,18 @@ export class WallpaperMediaService {
         );
       }
 
-      destPath = ensureUniqueDestPath(this.customWallpaperDir, safeName);
-      this.atomicWriteBytes(destPath, bytes);
+      const payloadSha256 = computeBufferSha256(bytes);
+      const existingDup = findExistingDuplicateByHash(
+        this.customWallpaperDir,
+        bytes.byteLength,
+        payloadSha256
+      );
+      if (existingDup !== null) {
+        destPath = existingDup;
+      } else {
+        destPath = ensureUniqueDestPath(this.customWallpaperDir, safeName);
+        this.atomicWriteBytes(destPath, bytes);
+      }
     } else {
       throw new WallpaperServiceError(
         400,
@@ -1442,8 +1491,18 @@ export class WallpaperMediaService {
 
   private scanCustomDirectory(
     rootDir: string,
-    out: WallpaperInventoryItem[]
+    out: WallpaperInventoryItem[],
+    seenBySize: Map<number, Array<{ filePath: string; sha256: string | null }>>
   ): void {
+    interface CustomCandidate {
+      fullPath: string;
+      fileName: string;
+      ext: string;
+      fileSize: number | undefined;
+      mtimeMs: number | undefined;
+    }
+
+    const candidates: CustomCandidate[] = [];
     const stack: string[] = [rootDir];
     while (stack.length > 0) {
       const current = stack.pop()!;
@@ -1453,7 +1512,6 @@ export class WallpaperMediaService {
       } catch {
         continue;
       }
-      entries.sort((a, b) => a.name.localeCompare(b.name));
 
       for (const dirent of entries) {
         if (dirent.name.startsWith(".")) {
@@ -1475,23 +1533,6 @@ export class WallpaperMediaService {
           continue;
         }
 
-        const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
-        const type: WallpaperMediaType = isVideo ? "video" : "image";
-        const idHash = createHash("sha256")
-          .update(resolve(fullPath).toLowerCase())
-          .digest("hex")
-          .slice(0, 10);
-        const rawSlug = basename(dirent.name, ext)
-          .toLowerCase()
-          .replace(/[^a-z0-9_-]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 32);
-        const id = `custom-${rawSlug || "media"}-${idHash}`;
-        if (this.itemsById.has(id)) {
-          continue;
-        }
-
-        const dimensions = isVideo ? null : readImageDimensions(fullPath);
         let fileSize: number | undefined;
         let mtimeMs: number | undefined;
         try {
@@ -1502,42 +1543,108 @@ export class WallpaperMediaService {
           // ignore
         }
 
-        const encodedId = encodeURIComponent(id);
-        const mediaUrl = `/v1/wallpapers/media/${encodedId}`;
-        const previewUrl = isVideo ? null : `/v1/wallpapers/preview/${encodedId}`;
-
-        const item: WallpaperInventoryItem = {
-          id,
-          title: basename(dirent.name, ext),
-          type,
-          source: "custom",
-          previewUrl,
-          mediaUrl,
-          filePath: fullPath,
-          dirPath: dirname(fullPath),
-          width: dimensions?.width ?? null,
-          height: dimensions?.height ?? null,
-          orientation: classifyOrientation(
-            dimensions?.width ?? null,
-            dimensions?.height ?? null
-          ),
-          contentRating: "everyone",
-          sceneLiveSupported: false,
-          webLiveSupported: false,
-          ...(fileSize !== undefined ? { fileSize } : {}),
-          ...(mtimeMs !== undefined ? { mtimeMs } : {})
-        };
-
-        out.push(item);
-        this.itemsById.set(id, {
-          item,
-          allowedRoot: rootDir,
-          mediaFile: fullPath,
-          previewFile: isVideo ? null : fullPath,
-          webRootDir: null,
-          webEntryRelPath: null
+        candidates.push({
+          fullPath,
+          fileName: dirent.name,
+          ext,
+          fileSize,
+          mtimeMs
         });
       }
+    }
+
+    // Prefer canonical shortest filenames (without -1/-2 suffix) before deduplicating byte-identical files
+    candidates.sort((a, b) => compareCanonicalFilePath(a.fullPath, b.fullPath));
+
+    for (const candidate of candidates) {
+      const { fullPath, fileName, ext, fileSize, mtimeMs } = candidate;
+
+      if (fileSize !== undefined) {
+        const bucket = seenBySize.get(fileSize);
+        if (!bucket) {
+          seenBySize.set(fileSize, [{ filePath: fullPath, sha256: null }]);
+        } else {
+          let candidateSha: string | null = null;
+          try {
+            candidateSha = computeFileSha256(fullPath);
+          } catch {
+            candidateSha = null;
+          }
+          if (candidateSha !== null) {
+            let isDuplicate = false;
+            for (const existing of bucket) {
+              if (existing.sha256 === null) {
+                try {
+                  existing.sha256 = computeFileSha256(existing.filePath);
+                } catch {
+                  existing.sha256 = "";
+                }
+              }
+              if (existing.sha256 === candidateSha) {
+                isDuplicate = true;
+                break;
+              }
+            }
+            if (isDuplicate) {
+              continue;
+            }
+            bucket.push({ filePath: fullPath, sha256: candidateSha });
+          }
+        }
+      }
+
+      const isVideo = ALLOWED_VIDEO_EXTENSIONS.has(ext);
+      const type: WallpaperMediaType = isVideo ? "video" : "image";
+      const idHash = createHash("sha256")
+        .update(resolve(fullPath).toLowerCase())
+        .digest("hex")
+        .slice(0, 10);
+      const rawSlug = basename(fileName, ext)
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 32);
+      const id = `custom-${rawSlug || "media"}-${idHash}`;
+      if (this.itemsById.has(id)) {
+        continue;
+      }
+
+      const dimensions = isVideo ? null : readImageDimensions(fullPath);
+      const encodedId = encodeURIComponent(id);
+      const mediaUrl = `/v1/wallpapers/media/${encodedId}`;
+      const previewUrl = isVideo ? null : `/v1/wallpapers/preview/${encodedId}`;
+
+      const item: WallpaperInventoryItem = {
+        id,
+        title: basename(fileName, ext),
+        type,
+        source: "custom",
+        previewUrl,
+        mediaUrl,
+        filePath: fullPath,
+        dirPath: dirname(fullPath),
+        width: dimensions?.width ?? null,
+        height: dimensions?.height ?? null,
+        orientation: classifyOrientation(
+          dimensions?.width ?? null,
+          dimensions?.height ?? null
+        ),
+        contentRating: "everyone",
+        sceneLiveSupported: false,
+        webLiveSupported: false,
+        ...(fileSize !== undefined ? { fileSize } : {}),
+        ...(mtimeMs !== undefined ? { mtimeMs } : {})
+      };
+
+      out.push(item);
+      this.itemsById.set(id, {
+        item,
+        allowedRoot: rootDir,
+        mediaFile: fullPath,
+        previewFile: isVideo ? null : fullPath,
+        webRootDir: null,
+        webEntryRelPath: null
+      });
     }
   }
 

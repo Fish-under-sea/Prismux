@@ -17,6 +17,8 @@ export const ChatCanvasContext = createContext<{
   previewKey: string | null;
   registerTimeline: (element: HTMLElement | null) => void;
   measureDetailsCard: (measurement: DetailsCardMeasurement) => void;
+  /** Reserved bottom height occupied by the composer stack (used to keep the overview card clear of it). */
+  composerReservedBottom?: number;
   detailsCardTopInset: number;
   /** Where an inline card sits when nothing overlaps it; null when the canvas is too narrow. */
   preferredDetailsCard: ReturnType<typeof resolveThreadDetailsCardLayout>;

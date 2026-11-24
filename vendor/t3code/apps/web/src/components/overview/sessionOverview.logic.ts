@@ -14,9 +14,26 @@ import type { KnownTerminalSession } from "@t3tools/client-runtime/state/termina
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 
 export const DEFAULT_OVERVIEW_SECTION_LIMIT = 4;
+export const OVERVIEW_DISPLAY_PREFS_STORAGE_KEY = "prismux.overview.displayPrefs.v1";
 export const SIDE_QUESTIONS_STORAGE_PREFIX = "prismux.overview.sideQuestions.v1:";
 const MAX_PERSISTED_SIDE_QUESTIONS = 50;
 const DEFAULT_CONTEXT_SUMMARY_MAX_CHARS = 1_800;
+
+export type OverviewSectionLimitMode = "auto" | 2 | 3 | 5 | 8;
+
+export const OVERVIEW_SECTION_LIMIT_OPTIONS: ReadonlyArray<OverviewSectionLimitMode> = Object.freeze(
+  ["auto", 2, 3, 5, 8],
+);
+
+export interface OverviewDisplayPrefs {
+  readonly limitMode: OverviewSectionLimitMode;
+  readonly showCompleted: boolean;
+}
+
+export const DEFAULT_OVERVIEW_DISPLAY_PREFS: OverviewDisplayPrefs = Object.freeze({
+  limitMode: "auto",
+  showCompleted: false,
+});
 
 export interface OverviewDiffFileStat {
   readonly path: string;
@@ -116,6 +133,7 @@ export interface OverviewGoalsSummary {
   readonly items: ReadonlyArray<OverviewGoalItem>;
   readonly completedCount: number;
   readonly totalCount: number;
+  readonly allCompleted: boolean;
 }
 
 export interface OverviewArtifactItem {
@@ -324,6 +342,44 @@ export function formatByteSize(bytes: number | null | undefined): string {
   return `${mb >= 100 ? Math.round(mb) : mb.toFixed(1)} MB`;
 }
 
+const OVERVIEW_HEADER_HEIGHT_PX = 42;
+const OVERVIEW_QUICK_ACTIONS_HEIGHT_PX = 108;
+const OVERVIEW_LINKED_PR_STRIP_HEIGHT_PX = 34;
+const OVERVIEW_VERTICAL_PADDING_PX = 12;
+const OVERVIEW_SECTION_HEADER_HEIGHT_PX = 36;
+const OVERVIEW_ITEM_ROW_HEIGHT_PX = 30;
+const MIN_DYNAMIC_SECTION_LIMIT = 1;
+const MAX_DYNAMIC_SECTION_LIMIT = 8;
+
+/**
+ * Computes the per-section maximum visible item count based on the overview card's
+ * live available height (windowed vs. fullscreen) and active section count.
+ */
+export function computeDynamicOverviewSectionLimit(input: {
+  readonly availableHeightPx: number;
+  readonly activeSectionCount: number;
+  readonly limitMode?: OverviewSectionLimitMode;
+  readonly hasLinkedPrs?: boolean;
+}): number {
+  const mode = input.limitMode ?? "auto";
+  if (mode !== "auto") {
+    return mode;
+  }
+  if (!Number.isFinite(input.availableHeightPx) || input.availableHeightPx <= 0) {
+    return DEFAULT_OVERVIEW_SECTION_LIMIT;
+  }
+  const sectionCount = Math.max(1, Math.floor(input.activeSectionCount));
+  const chromeHeight =
+    OVERVIEW_HEADER_HEIGHT_PX +
+    OVERVIEW_QUICK_ACTIONS_HEIGHT_PX +
+    (input.hasLinkedPrs ? OVERVIEW_LINKED_PR_STRIP_HEIGHT_PX : 0) +
+    OVERVIEW_VERTICAL_PADDING_PX;
+  const sectionHeadersHeight = OVERVIEW_SECTION_HEADER_HEIGHT_PX * sectionCount;
+  const remaining = Math.max(0, input.availableHeightPx - chromeHeight - sectionHeadersHeight);
+  const rawLimit = Math.floor(remaining / sectionCount / OVERVIEW_ITEM_ROW_HEIGHT_PX);
+  return Math.min(MAX_DYNAMIC_SECTION_LIMIT, Math.max(MIN_DYNAMIC_SECTION_LIMIT, rawLimit));
+}
+
 export function sliceOverviewItems<T>(
   items: ReadonlyArray<T>,
   expanded: boolean,
@@ -530,15 +586,26 @@ export function resolveOverviewDiffStats(input: {
   };
 }
 
+const ACTIVE_SUBAGENT_STATUSES = new Set([
+  "running",
+  "pending",
+  "starting",
+  "queued",
+  "waiting_input",
+  "in_progress",
+]);
+
 function isRunningSubagentStatus(status: string): boolean {
-  return status === "running" || status === "pending" || status === "starting" || status === "queued";
+  return ACTIVE_SUBAGENT_STATUSES.has(status.trim().toLowerCase());
 }
 
 export function extractOverviewSubagents(input: {
   readonly projection?: OrchestrationV2ThreadProjection | null | undefined;
   readonly relationshipShells?: ReadonlyArray<OrchestrationV2ThreadShell> | undefined;
   readonly currentThreadId: ThreadId;
+  readonly activeOnly?: boolean;
 }): ReadonlyArray<OverviewSubagentItem> {
+  const activeOnly = input.activeOnly !== false;
   const items: OverviewSubagentItem[] = [];
   const seenKeys = new Set<string>();
 
@@ -608,7 +675,11 @@ export function extractOverviewSubagents(input: {
     });
   }
 
-  return items.toSorted((a, b) => {
+  const filtered = activeOnly
+    ? items.filter((item) => isRunningSubagentStatus(item.status))
+    : items;
+
+  return filtered.toSorted((a, b) => {
     const aRunning = isRunningSubagentStatus(a.status) ? 0 : 1;
     const bRunning = isRunningSubagentStatus(b.status) ? 0 : 1;
     return aRunning - bRunning;
@@ -619,7 +690,9 @@ export function extractOverviewSideQuestions(input: {
   readonly persisted: ReadonlyArray<SideQuestionRecord>;
   readonly relationshipShells?: ReadonlyArray<OrchestrationV2ThreadShell> | undefined;
   readonly currentThreadId: ThreadId;
+  readonly activeOnly?: boolean;
 }): ReadonlyArray<OverviewSideQuestionItem> {
+  const activeOnly = input.activeOnly !== false;
   const result: OverviewSideQuestionItem[] = [];
   const linkedThreadIds = new Set<string>();
   const shellById = new Map(
@@ -675,6 +748,11 @@ export function extractOverviewSideQuestions(input: {
     });
   }
 
+  if (activeOnly) {
+    return result.filter(
+      (item) => item.status === "pending" || item.status === "offline" || item.status === "error",
+    );
+  }
   return result;
 }
 
@@ -685,7 +763,9 @@ export function extractOverviewBackgroundTasks(input: {
   readonly discoveredServers?: ReadonlyArray<DiscoveredLocalServer> | undefined;
   readonly projection?: OrchestrationV2ThreadProjection | null | undefined;
   readonly currentThreadId: ThreadId;
+  readonly activeOnly?: boolean;
 }): ReadonlyArray<OverviewBackgroundTaskItem> {
+  const activeOnly = input.activeOnly !== false;
   const tasks: OverviewBackgroundTaskItem[] = [];
   const seenIds = new Set<string>();
 
@@ -795,7 +875,10 @@ export function extractOverviewBackgroundTasks(input: {
     failed: 2,
     idle: 3,
   };
-  return tasks.toSorted((a, b) => order[a.status] - order[b.status]);
+  const filtered = activeOnly
+    ? tasks.filter((task) => task.status === "running" || task.status === "scheduled")
+    : tasks;
+  return filtered.toSorted((a, b) => order[a.status] - order[b.status]);
 }
 
 function parseMarkdownChecklistItems(markdown: string): ReadonlyArray<OverviewGoalItem> {
@@ -829,12 +912,43 @@ function parseMarkdownChecklistItems(markdown: string): ReadonlyArray<OverviewGo
   return items;
 }
 
+function finalizeOverviewGoals(
+  allItems: ReadonlyArray<OverviewGoalItem>,
+  activeOnly: boolean,
+): OverviewGoalsSummary {
+  const rawTotal = allItems.length;
+  if (rawTotal === 0) {
+    return { items: [], completedCount: 0, totalCount: 0, allCompleted: false };
+  }
+  const completedCount = allItems.filter((item) => item.status === "completed").length;
+  const allCompleted = completedCount === rawTotal;
+  if (activeOnly) {
+    if (allCompleted) {
+      return { items: [], completedCount, totalCount: 0, allCompleted: true };
+    }
+    return {
+      items: allItems.filter((item) => item.status !== "completed"),
+      completedCount,
+      totalCount: rawTotal,
+      allCompleted: false,
+    };
+  }
+  return {
+    items: allItems,
+    completedCount,
+    totalCount: rawTotal,
+    allCompleted,
+  };
+}
+
 export function extractOverviewGoals(input: {
   readonly projection?: OrchestrationV2ThreadProjection | null | undefined;
+  readonly activeOnly?: boolean;
 }): OverviewGoalsSummary {
+  const activeOnly = input.activeOnly !== false;
   const projection = input.projection;
   if (!projection) {
-    return { items: [], completedCount: 0, totalCount: 0 };
+    return { items: [], completedCount: 0, totalCount: 0, allCompleted: false };
   }
 
   // 1. Structured todo_list from projection.plans (latest active/completed non-superseded)
@@ -849,8 +963,7 @@ export function extractOverviewGoals(input: {
       text: step.text,
       status: step.status,
     }));
-    const completedCount = items.filter((item) => item.status === "completed").length;
-    return { items, completedCount, totalCount: items.length };
+    return finalizeOverviewGoals(items, activeOnly);
   }
 
   // 2. Fallback to latest todo_list turn item
@@ -862,8 +975,7 @@ export function extractOverviewGoals(input: {
         text: step.text,
         status: step.status,
       }));
-      const completedCount = items.filter((step) => step.status === "completed").length;
-      return { items, completedCount, totalCount: items.length };
+      return finalizeOverviewGoals(items, activeOnly);
     }
   }
 
@@ -878,8 +990,7 @@ export function extractOverviewGoals(input: {
   if (latestProposed?.markdown) {
     const parsed = parseMarkdownChecklistItems(latestProposed.markdown);
     if (parsed.length > 0) {
-      const completedCount = parsed.filter((step) => step.status === "completed").length;
-      return { items: parsed, completedCount, totalCount: parsed.length };
+      return finalizeOverviewGoals(parsed, activeOnly);
     }
   }
 
@@ -896,11 +1007,7 @@ export function extractOverviewGoals(input: {
       });
     }
   }
-  return {
-    items: goalItems,
-    completedCount: 0,
-    totalCount: goalItems.length,
-  };
+  return finalizeOverviewGoals(goalItems, activeOnly);
 }
 
 function extractFirstMarkdownHeading(markdown: string): string | null {
@@ -920,7 +1027,9 @@ function isMarkdownFilePath(path: string): boolean {
 export function extractOverviewArtifacts(input: {
   readonly projection?: OrchestrationV2ThreadProjection | null | undefined;
   readonly modifiedFiles?: ReadonlyArray<OverviewModifiedFileItem> | undefined;
+  readonly activeOnly?: boolean;
 }): ReadonlyArray<OverviewArtifactItem> {
+  const activeOnly = input.activeOnly !== false;
   const artifacts: OverviewArtifactItem[] = [];
   const seenKeys = new Set<string>();
   const markdownContentByPath = new Map<string, string>();
@@ -940,10 +1049,12 @@ export function extractOverviewArtifacts(input: {
     }
   }
 
-  // 1. Proposed plans from projection.plans
+  // 1. Proposed plans from projection.plans (always skip superseded; hide completed plans when activeOnly)
   let planIndex = 0;
   for (const plan of input.projection?.plans ?? []) {
     if (plan.kind !== "proposed_plan" || !plan.markdown.trim()) continue;
+    if (plan.status === "superseded") continue;
+    if (activeOnly && plan.status === "completed") continue;
     planIndex += 1;
     const key = `plan:${plan.id}`;
     if (seenKeys.has(key)) continue;
@@ -1252,6 +1363,50 @@ function resolveBrowserStorage(storage?: Storage | null): Storage | null {
     return window.localStorage;
   } catch {
     return null;
+  }
+}
+
+function normalizeOverviewLimitMode(value: unknown): OverviewSectionLimitMode {
+  if (value === "auto" || value === 2 || value === 3 || value === 5 || value === 8) {
+    return value;
+  }
+  return DEFAULT_OVERVIEW_DISPLAY_PREFS.limitMode;
+}
+
+export function loadOverviewDisplayPrefs(storage?: Storage | null): OverviewDisplayPrefs {
+  const target = resolveBrowserStorage(storage);
+  if (!target) return DEFAULT_OVERVIEW_DISPLAY_PREFS;
+  try {
+    const raw = target.getItem(OVERVIEW_DISPLAY_PREFS_STORAGE_KEY);
+    if (!raw) return DEFAULT_OVERVIEW_DISPLAY_PREFS;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return DEFAULT_OVERVIEW_DISPLAY_PREFS;
+    const rec = parsed as Record<string, unknown>;
+    return {
+      limitMode: normalizeOverviewLimitMode(rec.limitMode),
+      showCompleted: rec.showCompleted === true,
+    };
+  } catch {
+    return DEFAULT_OVERVIEW_DISPLAY_PREFS;
+  }
+}
+
+export function saveOverviewDisplayPrefs(
+  prefs: OverviewDisplayPrefs,
+  storage?: Storage | null,
+): void {
+  const target = resolveBrowserStorage(storage);
+  if (!target) return;
+  try {
+    target.setItem(
+      OVERVIEW_DISPLAY_PREFS_STORAGE_KEY,
+      JSON.stringify({
+        limitMode: normalizeOverviewLimitMode(prefs.limitMode),
+        showCompleted: prefs.showCompleted === true,
+      }),
+    );
+  } catch {
+    // Ignore quota / private mode failures gracefully.
   }
 }
 

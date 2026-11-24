@@ -346,7 +346,7 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
       codeFontFamily: ""
     },
     wallpaper: {
-      selectedId: "builtin-aurora-prism",
+      selectedId: null,
       playing: true,
       videoAudioEnabled: false,
       videoVolume: 0.35,

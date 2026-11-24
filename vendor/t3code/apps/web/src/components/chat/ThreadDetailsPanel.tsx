@@ -18,7 +18,7 @@ export type { OverviewDiffFileStat, OverviewDiffStats };
 
 export interface ThreadDetailsPanelProps
   extends Pick<ComponentProps<typeof ThreadDetailsCard>, "anchor" | "handle">,
-    Omit<SessionOverviewPanelProps, "density"> {}
+    Omit<SessionOverviewPanelProps, "density" | "availableHeightPx"> {}
 
 export function ThreadDetailsPanel({ anchor, handle, ...overviewProps }: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
@@ -54,9 +54,13 @@ export function ThreadDetailsPanel({ anchor, handle, ...overviewProps }: ThreadD
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
     >
-      {(density) => (
+      {(density, availableHeightPx) => (
         <>
-          <SessionOverviewPanel {...overviewProps} density={density} />
+          <SessionOverviewPanel
+            {...overviewProps}
+            density={density}
+            availableHeightPx={availableHeightPx}
+          />
 
           <Menu
             open={menuPosition !== null}

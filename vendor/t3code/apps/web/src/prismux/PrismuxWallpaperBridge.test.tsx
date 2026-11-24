@@ -51,8 +51,39 @@ function renderQuickPanelWithInlineStudio(
 }
 
 describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Chief Pill", () => {
-  it("renders bottom inline appearance trigger in wallpaper mode and switches in-place without route navigation", () => {
-    const store = createWallpaperStore({ includeBuiltins: true });
+  it("renders top 3-tab appearance switch in wallpaper mode, removes duplicate footer/props/audio controls, and switches in-place without route navigation", () => {
+    const store = createWallpaperStore({
+      includeBuiltins: false,
+      wallpapers: [
+        {
+          id: "steam:1001",
+          title: "Real Workshop Scene",
+          type: "scene",
+          source: "steam",
+          previewUrl: null,
+          mediaUrl: null,
+          filePath: null,
+          width: 1920,
+          height: 1080,
+          orientation: "landscape",
+          contentRating: "everyone",
+          userProperties: [
+            {
+              name: "speed",
+              ptype: "slider",
+              text: "速度",
+              order: 1,
+              value: 1,
+              defaultValue: 1,
+              overridden: false,
+            },
+          ],
+        },
+      ],
+      settings: {
+        selectedId: "steam:1001",
+      },
+    });
     const openSettingsSection = vi.fn();
     const adapter: WallpaperHostAdapter = {
       openSettingsSection,
@@ -63,13 +94,36 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
 
       const wallpaperHtml = renderQuickPanelWithInlineStudio(store, adapter);
       expect(wallpaperHtml).toContain('data-pmx-qp-view="wallpaper"');
-      expect(wallpaperHtml).toContain('data-pmx-inline-appearance-trigger="1"');
+      // Top 3-tab capsule contains 外观与玻璃
+      expect(wallpaperHtml).toContain('data-pmx-qp-tab="wallpaper"');
+      expect(wallpaperHtml).toContain('data-pmx-qp-tab="playback"');
+      expect(wallpaperHtml).toContain('data-pmx-qp-tab="appearance"');
       expect(wallpaperHtml).toContain("外观与玻璃");
+      // Bottom footer renders ONLY single 壁纸引擎设置 › button (no duplicate 外观与玻璃 trigger)
+      expect(wallpaperHtml).not.toContain('data-pmx-inline-appearance-trigger="1"');
+      expect(wallpaperHtml).not.toContain('data-pmx-open-full-appearance="1"');
+      expect(wallpaperHtml).toContain('data-pmx-open-wallpaper-settings="1"');
       expect(wallpaperHtml).toContain("壁纸引擎设置 ›");
+      // Wallpaper tab omits 壁纸属性 button and duplicate audio section (音量 / 壁纸音轨)
+      expect(wallpaperHtml).not.toContain("壁纸属性");
+      expect(wallpaperHtml).not.toContain('data-pmx-section="audio"');
+      expect(wallpaperHtml).not.toContain("音量");
+      expect(wallpaperHtml).not.toContain("壁纸音轨");
       expect(wallpaperHtml).not.toContain('data-pmx-inline-appearance="1"');
       expect(openSettingsSection).not.toHaveBeenCalled();
 
+      // Playback tab retains audio controls (声音 / 音量 / 壁纸音轨) and single footer button
+      store.setUiState("qpTab", "playback");
+      const playbackHtml = renderQuickPanelWithInlineStudio(store, adapter);
+      expect(playbackHtml).toContain('data-pmx-qp-view="playback"');
+      expect(playbackHtml).toContain('data-pmx-section="audio"');
+      expect(playbackHtml).toContain("音量");
+      expect(playbackHtml).toContain("壁纸音轨");
+      expect(playbackHtml).not.toContain('data-pmx-inline-appearance-trigger="1"');
+      expect(playbackHtml).not.toContain("壁纸属性");
+
       // Switch in-place into InlineAppearanceStudio (must NOT trigger route jump)
+      store.setUiState("qpTab", "wallpaper");
       openInlineAppearanceInStore(store);
       expect(openSettingsSection).not.toHaveBeenCalled();
 
@@ -199,10 +253,15 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
     expect(idxRight).toBeGreaterThan(idxBottom);
     expect(idxMax).toBeGreaterThan(idxRight);
 
-    // Right sidebar mounts WallpaperQuickPanel cleanly
+    // Right sidebar mounts WallpaperQuickPanel cleanly with top 3-tab capsule, no duplicate footer/props/audio, and 0 synthetic builtin scenes
     expect(html).toContain("data-pmx-right-sidebar");
     expect(html).toContain('data-pmx-quick-panel="1"');
-    expect(html).toContain('data-pmx-inline-appearance-trigger="1"');
+    expect(html).toContain('data-pmx-qp-tab="appearance"');
+    expect(html).not.toContain('data-pmx-inline-appearance-trigger="1"');
+    expect(html).not.toContain("壁纸属性");
+    expect(html).not.toContain("壁纸音轨");
+    expect(html).not.toContain("Aurora Prism");
+    expect(html).not.toContain("极光棱镜");
   });
 
   it("renders /settings/appearance PrismuxAppearanceIntegration with 5-zone glass configurator and no sidebar corner radius controls", () => {

@@ -18,7 +18,6 @@ import {
   PlaybackAudioSection,
   PlaybackEffectsSection,
 } from "./renderers/PlaybackSections.js";
-import { UserPropsDrillPanel } from "./renderers/UserPropsDrillPanel.js";
 import type { WallpaperStore } from "./store.js";
 import {
   computeVirtualWindow,
@@ -238,10 +237,9 @@ function formatTypeMeta(w: WallpaperItem, settings: WallpaperSettingsState): str
  *   - Top rotating 40px vinyl card (`clip-path: circle(50%)` + `::after` central ring hole)
  *   - Rotation bar (group select + next + auto-rotation toggle)
  *   - Sliding-pill 3-tab bar (`壁纸 / 播放 / 外观与玻璃`)
- *   - Clicking bottom `外观与玻璃` switches in-place (NEVER navigates away to /settings/appearance)
- *   - In-pane `壁纸属性` drill-down toggle button
+ *   - Clicking the top `外观与玻璃` tab switches in-place (NEVER navigates away to /settings/appearance)
  *   - Virtual-scrolled Cards/List library with deterministic 2-row filter bar & scroll preservation
- *   - Bottom Audio section & Shared PlaybackSections (`surface="sidebar"`)
+ *   - Shared PlaybackSections (`surface="sidebar"`) with audio controls solely on the `播放` tab
  */
 export function WallpaperQuickPanel({
   store,
@@ -269,13 +267,6 @@ export function WallpaperQuickPanel({
   );
 
   const playbackLive = Boolean(current && settings.playing && !snap.occluded);
-  const resolvedProps = current ? store.getResolvedUserProps(current.id) : [];
-  const propsAvailable = Boolean(
-    current &&
-      (current.type === "scene" ||
-        current.type === "web" ||
-        resolvedProps.length > 0),
-  );
 
   const playable = useMemo(
     () => filterPlayableWallpapers(wallpapers, settings),
@@ -302,8 +293,7 @@ export function WallpaperQuickPanel({
   const cardsView = ui.qpView === "cards";
   const vItemH = cardsView ? QP_CARD_H : QP_ROW_H;
   const vGap = cardsView ? QP_CARD_GAP : QP_ROW_GAP;
-  const showPropsDrill = effectiveTab === "wallpaper" && snap.propsPanelOpen && propsAvailable;
-  const listActive = effectiveTab === "wallpaper" && !showPropsDrill;
+  const listActive = effectiveTab === "wallpaper";
   const vwin = useQuickPanelVirtualWindow(
     listRef,
     filtered.length,
@@ -585,28 +575,6 @@ export function WallpaperQuickPanel({
         ))}
       </div>
 
-      {/* ③b 壁纸属性页内下钻开关按钮 */}
-      {!isAppearanceView && propsAvailable ? (
-        <button
-          type="button"
-          className={
-            "pmx-wp-btn pmx-wp-qp__propsbtn" + (snap.propsPanelOpen ? " is-on" : "")
-          }
-          aria-expanded={snap.propsPanelOpen}
-          title="调节壁纸作者提供的自定义属性（改动立即生效）"
-          onClick={() => {
-            if (effectiveTab === "wallpaper") {
-              store.setPropsPanelOpen(!snap.propsPanelOpen);
-            } else {
-              store.setUiState("qpTab", "wallpaper");
-              store.setPropsPanelOpen(true);
-            }
-          }}
-        >
-          {snap.propsPanelOpen ? "收起壁纸属性" : "壁纸属性"}
-        </button>
-      ) : null}
-
       {/* ④ 主内容区（含滚动链隔离 overscroll-behavior: contain） */}
       <div
         className={
@@ -644,10 +612,6 @@ export function WallpaperQuickPanel({
               </div>
             )}
           </div>
-        ) : showPropsDrill ? (
-          <div className="pmx-wp-qp__propsview pmx-wp-qp__propsview--drill">
-            <UserPropsDrillPanel store={store} adapter={adapter} />
-          </div>
         ) : effectiveTab === "playback" ? (
           <>
             <PlaybackEffectsSection
@@ -658,9 +622,8 @@ export function WallpaperQuickPanel({
             <PlaybackAudioSection store={store} />
           </>
         ) : (
-          <>
-            {/* 壁纸库（搜索 + 分级/类型/方向筛选 + 列表/卡片切换 + 虚拟滚动列表） */}
-            <div className="pmx-wp-qp__section pmx-wp-qp__library">
+          /* 壁纸库（搜索 + 分级/类型/方向筛选 + 列表/卡片切换 + 虚拟滚动列表） */
+          <div className="pmx-wp-qp__section pmx-wp-qp__library">
               {snap.inventoryError ? (
                 <div className="pmx-wp-qp__error-box">
                   <div className="pmx-wp-error">壁纸库扫描失败：{snap.inventoryError}</div>
@@ -843,16 +806,10 @@ export function WallpaperQuickPanel({
                 </>
               )}
             </div>
-
-            {/* 底部声音节（与播放页同源渲染器） */}
-            <div className="pmx-wp-qp__section">
-              <PlaybackAudioSection store={store} />
-            </div>
-          </>
         )}
       </div>
 
-      {/* ⑤ 底栏：壁纸态点击「外观与玻璃」就地切入实时调节面板（不跳转设置页）；内嵌态保留次级完整外观与壁纸设置入口 */}
+      {/* ⑤ 底栏：壁纸/播放页仅保留单颗全宽「壁纸引擎设置 ›」；外观与玻璃页额外保留「更多外观设置 ↗」 */}
       <div className="pmx-wp-qp__foot">
         {isAppearanceView ? (
           <button
@@ -864,17 +821,7 @@ export function WallpaperQuickPanel({
           >
             更多外观设置 ↗
           </button>
-        ) : (
-          <button
-            type="button"
-            className="pmx-wp-btn pmx-wp-qp__settings"
-            data-pmx-inline-appearance-trigger="1"
-            title="就地展开外观与分区液态玻璃实时调节（不跳转设置页）"
-            onClick={handleOpenInlineAppearance}
-          >
-            外观与玻璃
-          </button>
-        )}
+        ) : null}
         <button
           type="button"
           className="pmx-wp-btn pmx-wp-qp__settings"
