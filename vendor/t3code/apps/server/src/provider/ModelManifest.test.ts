@@ -152,102 +152,6 @@ const REMOTE_MANIFEST: ModelManifest.ModelManifestData = {
   },
 };
 
-const REMOTE_CLAUDE_MANIFEST: ModelManifest.ModelManifestData = {
-  version: 1,
-  updatedAt: REMOTE_UPDATED_AT,
-  currentModels: {},
-  providers: {
-    claudeAgent: {
-      profiles: {
-        synthetic: {
-          adapter: { claudeCode: { effortMap: { extreme: "high" } } },
-        },
-      },
-      models: [
-        {
-          slug: "remote-only-model",
-          name: "Remote Only Model",
-          status: "current",
-          profile: "synthetic",
-        },
-      ],
-    },
-  },
-};
-
-const remoteClaudeManifestWithCompatibility = (
-  compatibility: unknown,
-): ModelManifest.ModelManifestData => ({
-  ...REMOTE_CLAUDE_MANIFEST,
-  providers: {
-    claudeAgent: {
-      profiles: REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.profiles,
-      models: REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.models.map((model) => ({
-        ...model,
-        adapter: { claudeCode: compatibility },
-      })),
-    },
-  },
-});
-
-const INVALID_REMOTE_MANIFESTS: ReadonlyArray<ModelManifest.ModelManifestData> = [
-  {
-    ...REMOTE_CLAUDE_MANIFEST,
-    providers: {
-      claudeAgent: {
-        profiles: {
-          synthetic: {
-            adapter: { claudeCode: { effortMap: { extreme: 123 } } },
-          },
-        },
-        models: REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.models,
-      },
-    },
-  },
-  {
-    ...REMOTE_CLAUDE_MANIFEST,
-    providers: {
-      claudeAgent: {
-        profiles: {},
-        models: REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.models,
-      },
-    },
-  },
-  {
-    ...REMOTE_CLAUDE_MANIFEST,
-    providers: {
-      claudeAgent: {
-        profiles: REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.profiles,
-        models: [
-          ...REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.models,
-          {
-            slug: "remote-only-model",
-            name: "Duplicate Remote Model",
-            status: "current",
-            profile: "synthetic",
-          },
-        ],
-      },
-    },
-  },
-  {
-    ...REMOTE_CLAUDE_MANIFEST,
-    providers: {
-      claudeAgent: {
-        defaults: { chat: "absent-model" },
-        profiles: REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.profiles,
-        models: REMOTE_CLAUDE_MANIFEST.providers!.claudeAgent!.models,
-      },
-    },
-  },
-  remoteClaudeManifestWithCompatibility({ minVersion: "2.x" }),
-  remoteClaudeManifestWithCompatibility({ maxVersionExclusive: "2.x" }),
-  remoteClaudeManifestWithCompatibility({
-    minVersion: "2.2",
-    maxVersionExclusive: "2.1",
-  }),
-];
-
 const layerHttpClient = (handler: () => Response) =>
   Layer.succeed(
     HttpClient.HttpClient,
@@ -265,107 +169,38 @@ const layerService = (input: {
     Layer.provideMerge(layerHttpClient(input.response)),
   );
 
-describe("ModelManifest service", () => {
-  it.effect("prefers a fetched manifest over the bundle and caches it to disk", () =>
-    Effect.gen(function* () {
-      const service = yield* ModelManifest.make;
-      const refreshed = yield* service.refresh;
-      assert.deepStrictEqual(refreshed, REMOTE_MANIFEST);
-
-      const rebooted = yield* ModelManifest.make;
-      assert.deepStrictEqual(yield* rebooted.current, REMOTE_MANIFEST);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        layerService({
-          prefix: "model-manifest-fetch-test",
-          response: () => Response.json(REMOTE_MANIFEST),
-        }),
-      ),
-    ),
-  );
-
+describe("ModelManifest service (Prismux local-only hardening)", () => {
   it.effect(
-    "ignores older remote edits without replacing the current manifest or disk cache",
+    "performs zero outbound HTTP fetches during current, refresh, forceRefresh, refreshOnDemand, and refreshInBackground even when enableProviderUpdateChecks is true",
     () => {
-      let remote = { ...REMOTE_MANIFEST, updatedAt: "2000-01-01T00:00:00Z" };
+      let fetchCount = 0;
       return Effect.gen(function* () {
         const service = yield* ModelManifest.make;
-        assert.deepStrictEqual(yield* service.refresh, ModelManifest.BUNDLED_MODEL_MANIFEST);
         assert.deepStrictEqual(yield* service.current, ModelManifest.BUNDLED_MODEL_MANIFEST);
-
-        remote = { ...REMOTE_MANIFEST, updatedAt: REMOTE_UPDATED_AT };
-        assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
-        remote = { ...REMOTE_MANIFEST, updatedAt: ModelManifest.BUNDLED_MODEL_MANIFEST.updatedAt! };
-        assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
-        const rebooted = yield* ModelManifest.make;
-        assert.deepStrictEqual(yield* rebooted.current, REMOTE_MANIFEST);
+        assert.deepStrictEqual(yield* service.refresh, ModelManifest.BUNDLED_MODEL_MANIFEST);
+        assert.deepStrictEqual(yield* service.forceRefresh, ModelManifest.BUNDLED_MODEL_MANIFEST);
+        assert.deepStrictEqual(
+          yield* service.refreshOnDemand,
+          ModelManifest.BUNDLED_MODEL_MANIFEST,
+        );
+        yield* service.refreshInBackground;
+        yield* TestClock.adjust("2 hours");
+        assert.strictEqual(fetchCount, 0);
       }).pipe(
         Effect.scoped,
         Effect.provide(
           layerService({
-            prefix: "model-manifest-stale-fetch-test",
-            response: () => Response.json(remote),
+            prefix: "model-manifest-zero-network-test",
+            settings: { enableProviderUpdateChecks: true },
+            response: () => {
+              fetchCount += 1;
+              return Response.json(REMOTE_MANIFEST);
+            },
           }),
         ),
       );
     },
   );
-
-  it.effect("preserves the last-good remote cache when later payloads are invalid", () => {
-    let responseIndex = 0;
-    const responses = [REMOTE_CLAUDE_MANIFEST, ...INVALID_REMOTE_MANIFESTS];
-
-    return Effect.gen(function* () {
-      const service = yield* ModelManifest.make;
-      assert.deepStrictEqual(yield* service.refresh, REMOTE_CLAUDE_MANIFEST);
-
-      for (const _invalid of INVALID_REMOTE_MANIFESTS) {
-        yield* TestClock.adjust("1 hour");
-        responseIndex += 1;
-        assert.deepStrictEqual(yield* service.refresh, REMOTE_CLAUDE_MANIFEST);
-      }
-
-      const rebooted = yield* ModelManifest.make;
-      assert.deepStrictEqual(yield* rebooted.current, REMOTE_CLAUDE_MANIFEST);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        layerService({
-          prefix: "model-manifest-last-good-test",
-          response: () => Response.json(responses[responseIndex]),
-        }),
-      ),
-    );
-  });
-
-  it.effect("refetches for an opened model picker after five minutes, not an hour", () => {
-    let fetches = 0;
-    return Effect.gen(function* () {
-      const service = yield* ModelManifest.make;
-      yield* service.refresh;
-      yield* TestClock.adjust("4 minutes");
-      yield* service.refreshOnDemand;
-      assert.strictEqual(fetches, 1);
-
-      yield* TestClock.adjust("1 minute");
-      yield* service.refresh;
-      assert.strictEqual(fetches, 1);
-      yield* service.refreshOnDemand;
-      assert.strictEqual(fetches, 2);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        layerService({
-          prefix: "model-manifest-on-demand-test",
-          response: () => {
-            fetches += 1;
-            return Response.json(REMOTE_MANIFEST);
-          },
-        }),
-      ),
-    );
-  });
 
   it.effect("drops a disk cache of a manifest older than the bundled one", () =>
     Effect.gen(function* () {

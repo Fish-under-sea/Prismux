@@ -408,11 +408,79 @@ function spanToTraceRecord(span: SerializableSpan): EffectTraceRecord {
   };
 }
 
-// WebSocket tickets and their DPoP proofs ride in URL queries and stay valid after the request.
-const URL_CREDENTIAL_PARAMS = /(^|[?&"\s])(wsTicket|dpop)=[^&#"\\\s]*/g;
+// WebSocket tickets, tokens, API keys, CLI launchArgs secrets, cookies, and private/intranet URLs.
+const INTRANET_URL_PATTERN =
+  /\b(?:https?|wss?):\/\/(?:[^\s"'`<>()[\]{}\\]+@)?(?:(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2})|(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:internal|corp|lan|local|intranet|home\.arpa|ts\.net)))(?::\d{1,5})?(?:\/[^\s"'`<>()[\]{}\\]*)?/gi;
+const URL_USERINFO_PATTERN = /(\b(?:https?|wss?):\/\/)[^\s/@"'`<>\\]+:[^\s/@"'`<>\\]+@/gi;
+const URL_CREDENTIAL_PARAMS =
+  /(^|[?&"\s])(wsTicket|dpop|token|access_token|refresh_token|id_token|api_key|apiKey|apikey|secret|client_secret|password|passwd|auth|code|state|challenge|pairingUrl|clientOwner|clientDevice|sig|signature|x-api-key)=[^&#"\\\s]*/gi;
+const CLI_SENSITIVE_FLAG_PATTERN =
+  /(^|[\s(])(--(?:api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|auth[-_]?token|bearer|password|passwd|secret|client[-_]?secret|authorization|cookie|set[-_]?cookie|header|proxy|https?[-_]?proxy|all[-_]?proxy|base[-_]?url|api[-_]?base|endpoint)|-H)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s"'`\\);]+)/gi;
+const ENV_ASSIGNMENT_SECRET_PATTERN =
+  /\b([A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|AUTH_TOKEN|ID_TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|PRIVATE_KEY|BEARER|CREDENTIAL)[A-Z0-9_]*)=([^\s"',;}\\]+)/g;
+const AUTH_SCHEME_TOKEN_PATTERN = /\b(Bearer|Basic|DPoP)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const HEADER_SECRET_PATTERN =
+  /\b(Authorization|Proxy-Authorization|Cookie|Set-Cookie|X-Api-Key|Api-Key)\s*:\s*(?:(?:Bearer|Basic|DPoP|Token)\s+)?[^\s"'\r\n\\;]+(?:;\s*[^\s"'\r\n\\;=]+(?:=[^\s"'\r\n\\;]+)?)*(?:;)?/gi;
+const KNOWN_TOKEN_PREFIX_PATTERN =
+  /\b(?:sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{12,}|phc_[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})\b/g;
+const JWT_TOKEN_PATTERN = /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g;
+const SENSITIVE_KEY_PATTERN =
+  /(?:^|[._-])(launchArgs|launch_args|command_args|authorization|proxy-authorization|cookie|set-cookie|password|passwd|secret|client_secret|api_?key|access_?token|refresh_?token|id_?token|dpop|wsTicket|private_?key|credentials?|cookieHeader|bearer)$/i;
 
-const redactUrlCredentials = (text: string) =>
-  text.replace(URL_CREDENTIAL_PARAMS, "$1$2=<redacted>");
+export function isSensitiveTelemetryKey(key: string): boolean {
+  return SENSITIVE_KEY_PATTERN.test(key);
+}
+
+/**
+ * Redacts credentials, tokens, cookies, sensitive CLI `launchArgs` flags,
+ * environment secrets, and private/intranet URLs from diagnostic/trace/feedback text.
+ */
+export function sanitizeSensitiveText(text: string): string {
+  return text
+    .replace(INTRANET_URL_PATTERN, "<redacted-intranet-url>")
+    .replace(URL_USERINFO_PATTERN, "$1<redacted>@")
+    .replace(URL_CREDENTIAL_PARAMS, "$1$2=<redacted>")
+    .replace(CLI_SENSITIVE_FLAG_PATTERN, "$1$2=<redacted>")
+    .replace(ENV_ASSIGNMENT_SECRET_PATTERN, "$1=<redacted>")
+    .replace(AUTH_SCHEME_TOKEN_PATTERN, "$1 <redacted>")
+    .replace(HEADER_SECRET_PATTERN, "$1: <redacted>")
+    .replace(JWT_TOKEN_PATTERN, "<redacted-jwt>")
+    .replace(KNOWN_TOKEN_PREFIX_PATTERN, "<redacted-token>");
+}
+
+export function sanitizeSensitiveValue(
+  value: unknown,
+  keyHint?: string,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (keyHint !== undefined && isSensitiveTelemetryKey(keyHint)) {
+    return "<redacted>";
+  }
+  if (typeof value === "string") {
+    return sanitizeSensitiveText(value);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitizeSensitiveValue(item, undefined, seen));
+    }
+    const output: Record<string, unknown> = {};
+    for (const [entryKey, entryValue] of Object.entries(value)) {
+      output[entryKey] = sanitizeSensitiveValue(entryValue, entryKey, seen);
+    }
+    return output;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+const redactUrlCredentials = sanitizeSensitiveText;
 
 export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: TraceSinkOptions) {
   const sink = yield* makeAsyncRotatingFileSink({
@@ -531,7 +599,12 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
     filePath: options.filePath,
     push(record) {
       try {
-        const text = `${redactUrlCredentials(JSON.stringify(record))}\n`;
+        const text = `${JSON.stringify(record, (key, value) => {
+          if (key !== "" && isSensitiveTelemetryKey(key)) {
+            return "<redacted>";
+          }
+          return typeof value === "string" ? sanitizeSensitiveText(value) : value;
+        })}\n`;
         const bytes = Buffer.byteLength(text);
         if (bytes > options.maxBytes) return;
         if (bufferBytes + bytes > maxBufferBytes) {
@@ -638,22 +711,19 @@ class LocalFileSpan implements Tracer.Span {
   }
 
   attribute(key: string, value: unknown): void {
-    const recorded =
-      (key === "url.full" || key === "url.query") && typeof value === "string"
-        ? redactUrlCredentials(value)
-        : value;
+    const recorded = sanitizeSensitiveValue(value, key);
     this.attributes.set(key, recorded);
     this.delegate.attribute(key, recorded);
   }
 
   event(name: string, startTime: bigint, attributes?: Record<string, unknown>): void {
-    const cause = attributes?.["effect.cause"];
+    const safeName = sanitizeSensitiveText(name);
     const nextAttributes =
-      typeof cause === "string"
-        ? { ...attributes, "effect.cause": redactUrlCredentials(cause) }
-        : (attributes ?? {});
-    this.events.push([name, startTime, nextAttributes]);
-    this.delegate.event(name, startTime, nextAttributes);
+      attributes !== undefined
+        ? (sanitizeSensitiveValue(attributes) as Record<string, unknown>)
+        : {};
+    this.events.push([safeName, startTime, nextAttributes]);
+    this.delegate.event(safeName, startTime, nextAttributes);
   }
 
   addLinks(links: ReadonlyArray<Tracer.SpanLink>): void {
@@ -696,6 +766,124 @@ const SPAN_KIND_MAP: Record<number, OtlpTraceRecord["kind"]> = {
   4: "producer",
   5: "consumer",
 };
+
+function sanitizeOtlpAnyValue(
+  value: OtlpResource.AnyValue,
+  keyHint?: string,
+): OtlpResource.AnyValue {
+  if (keyHint !== undefined && isSensitiveTelemetryKey(keyHint)) {
+    return { stringValue: "<redacted>" };
+  }
+  if ("stringValue" in value && typeof value.stringValue === "string") {
+    return { stringValue: sanitizeSensitiveText(value.stringValue) };
+  }
+  if ("arrayValue" in value && value.arrayValue) {
+    return {
+      arrayValue: {
+        values: (value.arrayValue.values ?? []).map((entry) => sanitizeOtlpAnyValue(entry)),
+      },
+    };
+  }
+  if ("kvlistValue" in value && value.kvlistValue) {
+    return {
+      kvlistValue: {
+        values: sanitizeOtlpAttributes(value.kvlistValue.values),
+      },
+    };
+  }
+  return value;
+}
+
+function sanitizeOtlpAttributes(
+  attributes: ReadonlyArray<OtlpResource.KeyValue> | undefined,
+): Array<OtlpResource.KeyValue> {
+  return (attributes ?? []).map((attribute) => ({
+    key: attribute.key,
+    value: sanitizeOtlpAnyValue(attribute.value, attribute.key),
+  }));
+}
+
+/**
+ * Sanitizes an OTLP/JSON trace batch in-place-safe (returns a new object)
+ * before local persistence or forwarding to a user-configured OTLP collector.
+ */
+export function sanitizeOtlpTraceData(payload: OtlpTracer.TraceData): OtlpTracer.TraceData {
+  if (!payload.resourceSpans) return payload;
+  return {
+    ...payload,
+    resourceSpans: payload.resourceSpans.map((resourceSpan) => ({
+      ...resourceSpan,
+      ...(resourceSpan.resource
+        ? {
+            resource: {
+              ...resourceSpan.resource,
+              attributes: sanitizeOtlpAttributes(resourceSpan.resource.attributes),
+            },
+          }
+        : {}),
+      ...(resourceSpan.scopeSpans
+        ? {
+            scopeSpans: resourceSpan.scopeSpans.map((scopeSpan) => {
+              const scope = scopeSpan.scope as Partial<OtlpScope> | undefined;
+              return {
+                ...scopeSpan,
+                ...(scope
+                  ? {
+                      scope: {
+                        ...scope,
+                        ...("attributes" in scope && Array.isArray(scope.attributes)
+                          ? { attributes: sanitizeOtlpAttributes(scope.attributes) }
+                          : {}),
+                      } as typeof scopeSpan.scope,
+                    }
+                  : {}),
+                ...(scopeSpan.spans
+                  ? {
+                      spans: scopeSpan.spans.map((span) => ({
+                        ...span,
+                        name: sanitizeSensitiveText(span.name),
+                        ...(span.attributes
+                          ? { attributes: sanitizeOtlpAttributes(span.attributes) }
+                          : {}),
+                        ...(span.events
+                          ? {
+                              events: span.events.map((event) => ({
+                                ...event,
+                                name: sanitizeSensitiveText(event.name),
+                                ...(event.attributes
+                                  ? { attributes: sanitizeOtlpAttributes(event.attributes) }
+                                  : {}),
+                              })),
+                            }
+                          : {}),
+                        ...(span.links
+                          ? {
+                              links: span.links.map((link) => ({
+                                ...link,
+                                ...(link.attributes
+                                  ? { attributes: sanitizeOtlpAttributes(link.attributes) }
+                                  : {}),
+                              })),
+                            }
+                          : {}),
+                        ...(span.status?.message
+                          ? {
+                              status: {
+                                ...span.status,
+                                message: sanitizeSensitiveText(span.status.message),
+                              },
+                            }
+                          : {}),
+                      })),
+                    }
+                  : {}),
+              };
+            }),
+          }
+        : {}),
+    })),
+  };
+}
 
 export function decodeOtlpTraceRecords(
   payload: OtlpTracer.TraceData,

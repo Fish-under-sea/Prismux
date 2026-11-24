@@ -1,4 +1,5 @@
 import { pipe } from "effect/Function";
+import { sanitizeSensitiveText } from "@t3tools/shared/observability";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
@@ -8981,8 +8982,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 Effect.andThen(
                   client.request("feedback/upload", {
                     classification: "bug",
-                    includeLogs: true,
-                    ...(feedbackInput.reason ? { reason: feedbackInput.reason } : {}),
+                    // Prismux never auto-uploads local Codex logs to prevent leaking
+                    // launchArgs, environment secrets, local paths, or intranet URLs.
+                    includeLogs: false,
+                    ...(feedbackInput.reason
+                      ? { reason: sanitizeSensitiveText(feedbackInput.reason) }
+                      : {}),
                     threadId,
                   }),
                 ),

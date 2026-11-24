@@ -99,6 +99,7 @@ vi.mock("../../cloud/publicConfig", () => ({
   }),
   resolveRelayClerkTokenOptions: () => ({ template: "t3-relay" }),
   resolveRelayTracingConfig: () => null,
+  setT3ConnectOptIn: vi.fn(),
 }));
 
 vi.mock("../../cloud/useCloudLinkController", () => ({
@@ -242,6 +243,18 @@ describe("prismuxRemoteConnect logic & T3 Connect account remote control", () =>
       }),
     ).toEqual({
       kind: "ready",
+      relayUrl: "https://relay.t3.codes",
+      hostedAppUrl: "https://app.t3.codes",
+    });
+
+    expect(
+      resolveT3ConnectAvailability({
+        publicConfig,
+        cloudConfigReady: false,
+        isElectronHost: true,
+      }),
+    ).toEqual({
+      kind: "opt-in-required",
       relayUrl: "https://relay.t3.codes",
       hostedAppUrl: "https://app.t3.codes",
     });
@@ -439,7 +452,10 @@ describe("prismuxRemoteConnect logic & T3 Connect account remote control", () =>
       path.join(webSrc, "components/sidebar/PrismuxSidebarQuickNav.tsx"),
       "utf8",
     );
-    expect(quickNavSource).toContain("openPrismuxRemoteConnectDialog");
+    expect(quickNavSource).toContain("openPrismuxRemoteConnectDialog()");
+    // Both collapsed 54px icon-rail and expanded quick-nav render `prismux-nav-mobile` wired to `handleOpenRemoteConnect`
+    expect(quickNavSource.match(/data-testid="prismux-nav-mobile"/g)?.length).toBe(2);
+    expect(quickNavSource.match(/onClick=\{handleOpenRemoteConnect\}/g)?.length).toBe(2);
     expect(quickNavSource).not.toContain("Built-in Phone Simulator");
     expect(quickNavSource).not.toContain("prismux-mobile-open-simulator");
     expect(quickNavSource).not.toContain("prismux-mobile-open-lan-qr");
@@ -448,7 +464,7 @@ describe("prismuxRemoteConnect logic & T3 Connect account remote control", () =>
       path.join(webSrc, "components/sidebar/SidebarChrome.tsx"),
       "utf8",
     );
-    expect(sidebarChromeSource).toContain("openPrismuxRemoteConnectDialog()");
+    expect(sidebarChromeSource).not.toContain("SidebarCollapsedPeekDrawer");
 
     const traySyncSource = fs.readFileSync(
       path.join(webSrc, "prismux/usePrismuxTraySync.ts"),
@@ -462,5 +478,19 @@ describe("prismuxRemoteConnect logic & T3 Connect account remote control", () =>
     );
     expect(connectionsSource).toContain("<CloudLinkRow");
     expect(connectionsSource).toContain("<ConnectDeviceApprovalSettings");
+  });
+
+  it("disables Clerk SDK telemetry in both Electron and Browser managed auth shells", () => {
+    const webSrc = path.resolve(import.meta.dirname, "../..");
+    const electronShell = fs.readFileSync(
+      path.join(webSrc, "components/clerk/ElectronManagedAuthShell.tsx"),
+      "utf8",
+    );
+    const browserShell = fs.readFileSync(
+      path.join(webSrc, "components/clerk/BrowserManagedAuthShell.tsx"),
+      "utf8",
+    );
+    expect(electronShell).toContain("telemetry={false}");
+    expect(browserShell).toContain("telemetry={false}");
   });
 });

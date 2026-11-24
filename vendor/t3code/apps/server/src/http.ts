@@ -7,7 +7,11 @@ import {
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { FILE_PREVIEW_SCROLL_SCRIPT } from "@t3tools/shared/htmlRender";
-import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import {
+  decodeOtlpTraceRecords,
+  sanitizeOtlpTraceData,
+  sanitizeSensitiveText,
+} from "@t3tools/shared/observability";
 import * as ByteSize from "effect/ByteSize";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -374,7 +378,8 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
     const browserTraceCollector = yield* BrowserTraceCollector.BrowserTraceCollector;
     const httpClient = yield* HttpClient.HttpClient;
     const serialization = yield* OtlpSerialization.OtlpSerialization;
-    const bodyJson = cast<unknown, OtlpTracer.TraceData>(yield* request.json);
+    const rawBodyJson = cast<unknown, OtlpTracer.TraceData>(yield* request.json);
+    const bodyJson = sanitizeOtlpTraceData(rawBodyJson);
 
     yield* Effect.try({
       try: () => decodeOtlpTraceRecords(bodyJson),
@@ -399,7 +404,7 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
         Effect.tapError((cause) =>
           Effect.logWarning("Failed to export browser OTLP traces", {
             cause,
-            otlpTracesUrl,
+            otlpTracesUrl: sanitizeSensitiveText(otlpTracesUrl),
           }),
         ),
         Effect.orElseSucceed(() =>

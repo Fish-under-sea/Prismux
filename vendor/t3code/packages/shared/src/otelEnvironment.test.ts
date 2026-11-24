@@ -387,13 +387,15 @@ describe("OtelEnvironment", () => {
 });
 
 describe("isRelayTracingEnabled", () => {
-  it("defaults on and respects the T3CODE SDK override of the standard kill switch", () => {
-    assert.isTrue(OtelEnvironment.isRelayTracingEnabled({}));
+  it("always returns false in Prismux regardless of legacy telemetry/OTEL env flags", () => {
+    assert.isFalse(OtelEnvironment.isRelayTracingEnabled({}));
+    assert.isFalse(OtelEnvironment.isRelayTracingEnabled({ T3CODE_TELEMETRY_ENABLED: "true" }));
     assert.isFalse(OtelEnvironment.isRelayTracingEnabled({ OTEL_SDK_DISABLED: "true" }));
-    assert.isTrue(
+    assert.isFalse(
       OtelEnvironment.isRelayTracingEnabled({
         OTEL_SDK_DISABLED: "true",
         T3CODE_OTEL_SDK_DISABLED: "false",
+        T3CODE_TELEMETRY_ENABLED: "true",
       }),
     );
     assert.isFalse(
@@ -404,7 +406,7 @@ describe("isRelayTracingEnabled", () => {
     );
   });
 
-  it.effect("product opt-out beats SDK enable without disabling user-configured tracing", () =>
+  it.effect("hard-disables relay tracing without disabling user-configured tracing", () =>
     Effect.gen(function* () {
       const env = {
         T3CODE_TELEMETRY_ENABLED: "false",

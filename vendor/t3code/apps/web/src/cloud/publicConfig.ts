@@ -27,16 +27,35 @@ export interface CloudPublicConfig {
   };
 }
 
+export const T3_CONNECT_OPT_IN_STORAGE_KEY = "prismux:t3-connect-opt-in";
+
 export function trimNonEmpty(value: string | undefined): string | null {
   return value?.trim() || null;
 }
 
-function normalizeSecureUrl(value: string): string | null {
+/**
+ * In the Electron desktop app, T3 Connect (Clerk + relay.t3.codes) is strictly
+ * opt-in OFF by default so cold startup never makes silent outbound requests.
+ */
+export function isT3ConnectOptedIn(): boolean {
+  if (typeof window === "undefined") return false;
   try {
-    const url = new URL(value);
-    return url.protocol === "https:" ? url.toString() : null;
+    return window.localStorage?.getItem(T3_CONNECT_OPT_IN_STORAGE_KEY) === "1";
   } catch {
-    return null;
+    return false;
+  }
+}
+
+export function setT3ConnectOptIn(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (enabled) {
+      window.localStorage?.setItem(T3_CONNECT_OPT_IN_STORAGE_KEY, "1");
+    } else {
+      window.localStorage?.removeItem(T3_CONNECT_OPT_IN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage access errors in restricted environments.
   }
 }
 
@@ -49,40 +68,22 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
     relayUrl: normalizeSecureRelayUrl(
       (import.meta.env.VITE_T3CODE_RELAY_URL as string | undefined) ?? "",
     ),
+    // Prismux hard-disables built-in upstream Axiom/OTLP relay trace export.
     relayTracing: {
-      tracesUrl: normalizeSecureUrl(
-        (import.meta.env.VITE_RELAY_OTLP_TRACES_URL as string | undefined) ?? "",
-      ),
-      tracesDataset: trimNonEmpty(
-        import.meta.env.VITE_RELAY_OTLP_TRACES_DATASET as string | undefined,
-      ),
-      tracesToken: trimNonEmpty(import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN as string | undefined),
+      tracesUrl: null,
+      tracesDataset: null,
+      tracesToken: null,
     },
   };
 }
 
-let desktopRelayTelemetry: boolean | null = null;
-
-/** Whether relay spans may be exported now; the desktop host may not know yet at startup. */
-export function relayTelemetryEnabled(): boolean | null {
-  if (typeof window === "undefined" || !window.desktopBridge) return true;
-  desktopRelayTelemetry ??= window.desktopBridge.getRelayTelemetryEnabled();
-  return desktopRelayTelemetry;
+/** Prismux hard-disables relay telemetry export in both browser and desktop builds. */
+export function relayTelemetryEnabled(): boolean {
+  return false;
 }
 
-export function resolveRelayTracingConfig() {
-  // The relay exporter is created during module initialization, so this must be synchronous.
-  if (relayTelemetryEnabled() === false) {
-    return null;
-  }
-  const { relayTracing } = resolveCloudPublicConfig();
-  return relayTracing.tracesUrl && relayTracing.tracesDataset && relayTracing.tracesToken
-    ? {
-        tracesUrl: relayTracing.tracesUrl,
-        tracesDataset: relayTracing.tracesDataset,
-        tracesToken: relayTracing.tracesToken,
-      }
-    : null;
+export function resolveRelayTracingConfig(): null {
+  return null;
 }
 
 export function hasCloudPublicConfig(): boolean {
@@ -91,12 +92,14 @@ export function hasCloudPublicConfig(): boolean {
     return false;
   }
 
-  // Electron has its own auth runtime; development keys also support private browser origins.
-  if (
-    typeof window === "undefined" ||
-    window.desktopBridge !== undefined ||
-    !config.clerkPublishableKey.startsWith("pk_live_")
-  ) {
+  // Electron requires explicit user opt-in before mounting Clerk so desktop startup
+  // never phones home to clerk.t3.codes or relay.t3.codes without user action.
+  if (typeof window !== "undefined" && window.desktopBridge !== undefined) {
+    return isT3ConnectOptedIn();
+  }
+
+  // Development keys also support private browser origins.
+  if (typeof window === "undefined" || !config.clerkPublishableKey.startsWith("pk_live_")) {
     return true;
   }
 

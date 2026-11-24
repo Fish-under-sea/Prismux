@@ -555,3 +555,12 @@ describe("server model preferences", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+describe("Prismux privacy-safe default server settings", () => {
+  it("disables background provider update checks and guest sharing by default", () => {
+    expect(DEFAULT_SERVER_SETTINGS.enableProviderUpdateChecks).toBe(false);
+    expect(DEFAULT_SERVER_SETTINGS.guestSharingEnabled).toBe(false);
+    expect(decodeServerSettings({}).enableProviderUpdateChecks).toBe(false);
+    expect(decodeServerSettings({}).guestSharingEnabled).toBe(false);
+  });
+});

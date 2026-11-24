@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { hasCloudPublicConfig } from "./publicConfig.ts";
+import {
+  hasCloudPublicConfig,
+  isT3ConnectOptedIn,
+  relayTelemetryEnabled,
+  resolveCloudPublicConfig,
+  resolveRelayTracingConfig,
+  setT3ConnectOptIn,
+  T3_CONNECT_OPT_IN_STORAGE_KEY,
+} from "./publicConfig.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -69,10 +77,43 @@ describe("hasCloudPublicConfig", () => {
       expect(hasCloudPublicConfig()).toBe(expected);
     });
 
-    it("keeps production keys available in the Electron auth shell", () => {
-      vi.stubGlobal("window", { location: new URL("file:///app/index.html"), desktopBridge: {} });
+    it("defaults T3 Connect OFF in Electron until explicitly opted in", () => {
+      const storage = new Map<string, string>();
+      vi.stubGlobal("window", {
+        location: new URL("file:///app/index.html"),
+        desktopBridge: {},
+        localStorage: {
+          getItem: (key: string) => storage.get(key) ?? null,
+          setItem: (key: string, value: string) => void storage.set(key, value),
+          removeItem: (key: string) => void storage.delete(key),
+        },
+      });
 
+      expect(isT3ConnectOptedIn()).toBe(false);
+      expect(hasCloudPublicConfig()).toBe(false);
+
+      setT3ConnectOptIn(true);
+      expect(storage.get(T3_CONNECT_OPT_IN_STORAGE_KEY)).toBe("1");
+      expect(isT3ConnectOptedIn()).toBe(true);
       expect(hasCloudPublicConfig()).toBe(true);
+
+      setT3ConnectOptIn(false);
+      expect(isT3ConnectOptedIn()).toBe(false);
+      expect(hasCloudPublicConfig()).toBe(false);
+    });
+  });
+
+  it("hard-disables relay OTLP telemetry even when VITE_RELAY_OTLP_TRACES_* env vars exist", () => {
+    vi.stubEnv("VITE_RELAY_OTLP_TRACES_URL", "https://api.axiom.co/v1/traces");
+    vi.stubEnv("VITE_RELAY_OTLP_TRACES_DATASET", "t3code-relay");
+    vi.stubEnv("VITE_RELAY_OTLP_TRACES_TOKEN", "xaat-synthetic-token");
+
+    expect(relayTelemetryEnabled()).toBe(false);
+    expect(resolveRelayTracingConfig()).toBeNull();
+    expect(resolveCloudPublicConfig().relayTracing).toEqual({
+      tracesUrl: null,
+      tracesDataset: null,
+      tracesToken: null,
     });
   });
 });

@@ -318,18 +318,13 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
   Effect.orDie,
 );
 
-export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
-  Config.all({
-    ...sdkFlags,
-    telemetry: flag("T3CODE_TELEMETRY_ENABLED", T3CODE_TRUE, T3CODE_FALSE, String),
-  }).pipe(
-    Effect.map(
-      ({ telemetry, t3, spec }) => telemetry.value !== false && !(t3.value ?? spec.value ?? false),
-    ),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
-    Effect.orDie,
-    Effect.runSync,
-  );
+/**
+ * Prismux hard-disables built-in relay tracing to upstream Axiom/OTLP endpoints.
+ * User-configured `OTEL_EXPORTER_OTLP_*` tracing via `OtelEnvironment.load` is unaffected.
+ */
+export const isRelayTracingEnabled = (
+  _env: Readonly<Record<string, string | undefined>>,
+): boolean => false;
 
 export type SignalName = "traces" | "metrics" | "logs";
 

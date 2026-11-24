@@ -245,4 +245,43 @@ describe("ProcessDiagnostics", () => {
       expect(diagnostics.totalRssBytes).toBe(0);
     }),
   );
+
+  it.effect("redacts CLI launchArgs secrets, tokens, and intranet URLs in process commands", () =>
+    Effect.gen(function* () {
+      const snapshot = makeNativeSnapshot([
+        {
+          pid: CHILD_PID,
+          ppid: SERVER_PID,
+          startTimeMs: 2_000,
+          runTimeMs: 4_000,
+          name: "codex",
+          command:
+            "codex --api-key sk-ant-secretProcessKey123456 --base-url https://10.1.2.3:8443/v1 --proxy http://corpuser:corppass@proxy.corp.internal:3128",
+          status: "Running",
+          cpuPercent: 1.5,
+          cpuTimeMs: 60,
+          residentBytes: 2_048,
+          virtualBytes: 4_096,
+          ioReadBytes: 300,
+          ioWriteBytes: 400,
+          ioSemantics: "storage",
+        },
+      ]);
+      const layer = ProcessDiagnostics.layer.pipe(Layer.provide(layerTelemetryFor(snapshot)));
+
+      const diagnostics = yield* Effect.service(ProcessDiagnostics.ProcessDiagnostics).pipe(
+        Effect.flatMap((processDiagnostics) => processDiagnostics.read),
+        Effect.provide(layer),
+      );
+
+      expect(diagnostics.processes).toHaveLength(1);
+      const command = diagnostics.processes[0]!.command;
+      expect(command).not.toContain("sk-ant-secretProcessKey123456");
+      expect(command).not.toContain("10.1.2.3");
+      expect(command).not.toContain("corpuser");
+      expect(command).not.toContain("corppass");
+      expect(command).not.toContain("proxy.corp.internal");
+      expect(command).toContain("--api-key=<redacted>");
+    }),
+  );
 });

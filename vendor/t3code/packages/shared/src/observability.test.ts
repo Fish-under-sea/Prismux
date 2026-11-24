@@ -26,6 +26,9 @@ import {
   type EffectTraceRecord,
   type TraceRecord,
   OtlpHeadersFromString,
+  sanitizeOtlpTraceData,
+  sanitizeSensitiveText,
+  sanitizeSensitiveValue,
   truncateTraceAttributes,
   processServiceInstanceId,
 } from "./observability.ts";
@@ -654,5 +657,112 @@ describe("OtlpHeadersFromString", () => {
     { name: "rejects a malformed percent-encoding", input: "authorization=%E0" },
   ])("$name", ({ input }) => {
     expect(() => decode(input)).toThrow();
+  });
+});
+
+describe("Prismux sensitive payload sanitization", () => {
+  it("redacts CLI launchArgs secrets, tokens, cookies, env secrets, and private/intranet URLs", () => {
+    const raw = [
+      'codex --api-key sk-ant-syntheticSecretKey123456 --proxy "http://proxyuser:proxypass@10.20.30.40:8080"',
+      "--base-url https://llm-gateway.corp.internal/v1 --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signature123'",
+      "OPENAI_API_KEY=sk-proj-syntheticOpenAiSecret987654 Cookie: session_id=secret-cookie-val",
+      "https://admin:topsecret@api.example.com/v1?api_key=abc123&token=tok999&clientOwner=deadbeef",
+      "ws://192.168.1.50:3773/ws https://box.myteam.ts.net/app http://127.0.0.1:3773/ws?wsTicket=t1&clientSurface=web",
+    ].join(" ");
+
+    const sanitized = sanitizeSensitiveText(raw);
+
+    for (const secret of [
+      "sk-ant-syntheticSecretKey123456",
+      "proxyuser",
+      "proxypass",
+      "10.20.30.40",
+      "llm-gateway.corp.internal",
+      "eyJhbGciOiJIUzI1NiJ9",
+      "sk-proj-syntheticOpenAiSecret987654",
+      "secret-cookie-val",
+      "admin:topsecret",
+      "abc123",
+      "tok999",
+      "deadbeef",
+      "192.168.1.50",
+      "box.myteam.ts.net",
+      "t1",
+    ]) {
+      expect(sanitized).not.toContain(secret);
+    }
+
+    expect(sanitized).toContain("<redacted-intranet-url>");
+    expect(sanitized).toContain("https://<redacted>@api.example.com/v1");
+    expect(sanitized).toContain("http://127.0.0.1:3773/ws?wsTicket=<redacted>&clientSurface=web");
+  });
+
+  it("redacts sensitive keys and nested values in sanitizeSensitiveValue and sanitizeOtlpTraceData", () => {
+    const sanitizedObject = sanitizeSensitiveValue({
+      launchArgs: "--api-key sk-secret1234567890 --base-url https://10.0.0.1/v1",
+      authorization: "Bearer synthetic-bearer-token-12345",
+      cookie: "sid=secret-cookie",
+      safeField: "connecting to https://git.corp.internal/repo",
+      nested: {
+        apiKey: "sk-nested-key-1234567890",
+        count: 3,
+      },
+    }) as Record<string, unknown>;
+
+    expect(sanitizedObject.launchArgs).toBe("<redacted>");
+    expect(sanitizedObject.authorization).toBe("<redacted>");
+    expect(sanitizedObject.cookie).toBe("<redacted>");
+    expect(sanitizedObject.safeField).toBe("connecting to <redacted-intranet-url>");
+    expect((sanitizedObject.nested as Record<string, unknown>).apiKey).toBe("<redacted>");
+    expect((sanitizedObject.nested as Record<string, unknown>).count).toBe(3);
+
+    const otlpPayload = cast<unknown, OtlpTracer.TraceData>({
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              { key: "launchArgs", value: { stringValue: "--token super-secret-value" } },
+              { key: "endpoint", value: { stringValue: "https://10.1.2.3:8443/private" } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "trace-sanitize-1",
+                  spanId: "span-sanitize-1",
+                  name: "POST https://internal.corp/api?token=secret-query-token",
+                  startTimeUnixNano: "1000000",
+                  endTimeUnixNano: "2000000",
+                  attributes: [
+                    { key: "http.header.cookie", value: { stringValue: "session=cookie-secret" } },
+                    { key: "detail", value: { stringValue: "Bearer secret-bearer-12345678" } },
+                  ],
+                  status: {
+                    code: 2,
+                    message: "failed calling https://user:pass@192.168.10.5/rpc",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const sanitizedOtlp = sanitizeOtlpTraceData(otlpPayload);
+    const serialized = JSON.stringify(sanitizedOtlp);
+    for (const leaked of [
+      "super-secret-value",
+      "10.1.2.3",
+      "internal.corp",
+      "secret-query-token",
+      "cookie-secret",
+      "secret-bearer-12345678",
+      "192.168.10.5",
+      "user:pass",
+    ]) {
+      expect(serialized).not.toContain(leaked);
+    }
   });
 });

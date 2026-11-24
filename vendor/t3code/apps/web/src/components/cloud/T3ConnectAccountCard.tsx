@@ -26,9 +26,10 @@ import { msg, useGT, useMessages } from "gt-react";
 import { useEffect, useEffectEvent, useState, useSyncExternalStore } from "react";
 
 import { useManagedTunnelUsage } from "../../cloud/managedRelayState";
-import { resolveCloudPublicConfig } from "../../cloud/publicConfig";
+import { resolveCloudPublicConfig, setT3ConnectOptIn } from "../../cloud/publicConfig";
 import { useCloudLinkController } from "../../cloud/useCloudLinkController";
 import { useT3ConnectTurnOn } from "../../cloud/useT3ConnectTurnOn";
+import { isElectron } from "../../env";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { getI18nSnapshot, subscribeI18n } from "../../i18n/runtime";
 import { cn } from "../../lib/utils";
@@ -101,7 +102,15 @@ function UnavailableT3ConnectAccountCard({
   readonly className?: string | undefined;
 }) {
   const copy = useRemoteConnectCopy();
+  const isOptInRequired = availability.kind === "opt-in-required";
   const isDesktopOrHosted = availability.kind === "desktop-or-hosted-required";
+
+  const handleEnableCloudRelay = () => {
+    setT3ConnectOptIn(true);
+    if (typeof window !== "undefined") {
+      window.location.reload();
+    }
+  };
 
   return (
     <div
@@ -123,13 +132,15 @@ function UnavailableT3ConnectAccountCard({
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-semibold text-foreground">{copy.t3ConnectTitle}</h3>
               <Badge variant="outline" size="sm">
-                T3 Connect
+                {isOptInRequired ? copy.t3ConnectOptInBadge : "T3 Connect"}
               </Badge>
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              {isDesktopOrHosted
-                ? copy.t3ConnectDesktopRequiredDesc
-                : copy.t3ConnectUnconfiguredDesc}
+              {isOptInRequired
+                ? copy.t3ConnectOptInDesc
+                : isDesktopOrHosted
+                  ? copy.t3ConnectDesktopRequiredDesc
+                  : copy.t3ConnectUnconfiguredDesc}
             </p>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-[11px] text-muted-foreground">
               {availability.relayUrl ? (
@@ -142,17 +153,31 @@ function UnavailableT3ConnectAccountCard({
             </div>
           </div>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          className="shrink-0"
-          render={
-            <a href={availability.hostedAppUrl} target="_blank" rel="noreferrer noopener" />
-          }
-        >
-          <span>{copy.t3ConnectOpenHosted}</span>
-          <ExternalLinkIcon aria-hidden className="size-3.5" />
-        </Button>
+        {isOptInRequired ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="default"
+            data-testid="t3-connect-enable-opt-in-button"
+            className="shrink-0"
+            onClick={handleEnableCloudRelay}
+          >
+            <LogInIcon aria-hidden className="size-3.5" />
+            <span>{copy.t3ConnectOptInEnableButton}</span>
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            render={
+              <a href={availability.hostedAppUrl} target="_blank" rel="noreferrer noopener" />
+            }
+          >
+            <span>{copy.t3ConnectOpenHosted}</span>
+            <ExternalLinkIcon aria-hidden className="size-3.5" />
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -480,17 +505,35 @@ function ConfiguredT3ConnectAccountCard({
               </Button>
             </>
           ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="default"
-              data-testid="t3-connect-sign-in-button"
-              disabled={isOpeningAuth}
-              onClick={handleOpenSignIn}
-            >
-              {isOpeningAuth ? <Spinner size="xs" /> : <LogInIcon aria-hidden className="size-3.5" />}
-              <span>{isOpeningAuth ? copy.t3ConnectSigningIn : copy.t3ConnectSignInButton}</span>
-            </Button>
+            <>
+              {isElectron ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  data-testid="t3-connect-disable-opt-in-button"
+                  onClick={() => {
+                    setT3ConnectOptIn(false);
+                    if (typeof window !== "undefined") {
+                      window.location.reload();
+                    }
+                  }}
+                >
+                  <span>{copy.t3ConnectOptInDisableButton}</span>
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                data-testid="t3-connect-sign-in-button"
+                disabled={isOpeningAuth}
+                onClick={handleOpenSignIn}
+              >
+                {isOpeningAuth ? <Spinner size="xs" /> : <LogInIcon aria-hidden className="size-3.5" />}
+                <span>{isOpeningAuth ? copy.t3ConnectSigningIn : copy.t3ConnectSignInButton}</span>
+              </Button>
+            </>
           )}
         </div>
       </div>

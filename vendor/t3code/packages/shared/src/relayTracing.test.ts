@@ -2,10 +2,14 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import {
+  layer as relayTracingLayer,
   nonInterferingTracer,
   RelayClientTracer,
   withLocalTracing,
@@ -115,6 +119,42 @@ describe("withLocalTracing", () => {
         "environment.orchestration.threadSnapshot",
       ]);
       expect(localSpans).toEqual(["sql.execute", "ServerSecretStore.get"]);
+    }),
+  );
+});
+
+describe("RelayTracing.layer (Prismux hard cutoff)", () => {
+  it.effect("never exports spans or issues HTTP requests even with Axiom OTLP credentials", () =>
+    Effect.gen(function* () {
+      const requests: Array<string> = [];
+      const client = HttpClient.make((request) =>
+        Effect.sync(() => {
+          requests.push(request.url);
+          return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }));
+        }),
+      );
+
+      const resolvedTracer = yield* RelayClientTracer.pipe(
+        Effect.provide(
+          relayTracingLayer(
+            {
+              tracesUrl: "https://api.axiom.co/v1/traces",
+              tracesDataset: "t3code-relay",
+              tracesToken: "xaat-synthetic-token",
+            },
+            {
+              serviceName: "prismux-test",
+              runtime: "node",
+              serviceInstanceId: "instance-1",
+              client: "desktop",
+            },
+            { isEnabled: () => true },
+          ).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, client))),
+        ),
+      );
+
+      expect(Option.isNone(resolvedTracer)).toBe(true);
+      expect(requests).toEqual([]);
     }),
   );
 });

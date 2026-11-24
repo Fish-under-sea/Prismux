@@ -76,6 +76,48 @@ describe("loadRepoEnv", () => {
     expect(disabled.T3CODE_RELAY_URL).toBeUndefined();
     expect(disabled.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
   });
+
+  it("strips built-in upstream Axiom/OTLP relay and mobile trace env vars from all sources", () => {
+    const repoRoot = makeTemporaryDirectory();
+    NodeFS.writeFileSync(
+      NodePath.join(repoRoot, ".env"),
+      [
+        "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
+        "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET=relay-ds",
+        "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-root-token",
+        "T3CODE_MOBILE_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
+        "T3CODE_MOBILE_OTLP_TRACES_DATASET=mobile-ds",
+        "T3CODE_MOBILE_OTLP_TRACES_TOKEN=xaat-mobile-token",
+      ].join("\n"),
+    );
+
+    const resolved = loadRepoEnv({
+      baseEnv: {
+        VITE_RELAY_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
+        VITE_RELAY_OTLP_TRACES_DATASET: "vite-ds",
+        VITE_RELAY_OTLP_TRACES_TOKEN: "xaat-vite-token",
+        EXPO_PUBLIC_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
+      },
+      repoRoot,
+    });
+
+    for (const blockedKey of [
+      "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL",
+      "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET",
+      "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN",
+      "VITE_RELAY_OTLP_TRACES_URL",
+      "VITE_RELAY_OTLP_TRACES_DATASET",
+      "VITE_RELAY_OTLP_TRACES_TOKEN",
+      "T3CODE_MOBILE_OTLP_TRACES_URL",
+      "T3CODE_MOBILE_OTLP_TRACES_DATASET",
+      "T3CODE_MOBILE_OTLP_TRACES_TOKEN",
+      "EXPO_PUBLIC_OTLP_TRACES_URL",
+      "EXPO_PUBLIC_OTLP_TRACES_DATASET",
+      "EXPO_PUBLIC_OTLP_TRACES_TOKEN",
+    ]) {
+      expect(resolved[blockedKey]).toBeUndefined();
+    }
+  });
 });
 
 function makeTemporaryDirectory() {

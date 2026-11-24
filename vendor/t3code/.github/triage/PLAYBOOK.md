@@ -152,8 +152,10 @@ of `main` for that work, never the tag-pinned diagnosis clone.
 ## 9. Redact
 
 Never read the secrets directory named in the context file. Scrub anything you
-quote in an issue or comment: API keys, tokens, pairing credentials, and the
-user's home directory path. When in doubt, leave it out.
+quote in an issue or comment: API keys, tokens, cookies, pairing credentials,
+CLI launchArgs and environment variables, hostnames/host IDs (including
+`usage-host-id`), private or intranet URLs, and the user's home directory path.
+When in doubt, leave it out.
 
 ## 10. Prefer duplicates over new issues
 

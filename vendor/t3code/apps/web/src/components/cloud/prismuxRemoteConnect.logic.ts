@@ -45,6 +45,11 @@ export type T3ConnectAvailability =
       readonly hostedAppUrl: string;
     }
   | {
+      readonly kind: "opt-in-required";
+      readonly relayUrl: string;
+      readonly hostedAppUrl: string;
+    }
+  | {
       readonly kind: "desktop-or-hosted-required";
       readonly relayUrl: string;
       readonly hostedAppUrl: string;
@@ -89,6 +94,13 @@ export function resolveT3ConnectAvailability(input?: {
   }
 
   const inElectron = input?.isElectronHost ?? isElectron;
+  if (inElectron && config.relayUrl) {
+    return {
+      kind: "opt-in-required",
+      relayUrl: config.relayUrl,
+      hostedAppUrl,
+    };
+  }
   if (!inElectron && config.clerkPublishableKey?.startsWith("pk_live_") && config.relayUrl) {
     return {
       kind: "desktop-or-hosted-required",
@@ -289,6 +301,10 @@ export interface PrismuxRemoteConnectCopy {
   readonly t3ConnectRelayServerLabel: string;
   readonly t3ConnectDesktopRequiredDesc: string;
   readonly t3ConnectUnconfiguredDesc: string;
+  readonly t3ConnectOptInBadge: string;
+  readonly t3ConnectOptInDesc: string;
+  readonly t3ConnectOptInEnableButton: string;
+  readonly t3ConnectOptInDisableButton: string;
   readonly t3ConnectHostCommandHint: string;
   readonly t3ConnectSignOutFailedTitle: string;
   readonly t3ConnectSignInFailedTitle: string;
@@ -338,6 +354,11 @@ const ZH_COPY: PrismuxRemoteConnectCopy = {
     "当前页面运行在本地浏览器域，T3 Code 账户登录需在 Prismux 桌面客户端或 app.t3.codes 中完成，也可在主机终端执行 `t3 connect` 绑定。",
   t3ConnectUnconfiguredDesc:
     "当前构建未启用 T3 Connect 公共中继配置，请配置 T3CODE_RELAY_URL 与 Clerk 公钥后重试，或使用局域网 / Tailscale 直连。",
+  t3ConnectOptInBadge: "默认关闭 · 零静默外连",
+  t3ConnectOptInDesc:
+    "为保护本地隐私，Prismux 默认不连接任何 T3 Connect / Clerk 云端服务器。仅当你主动点击启用后，才会加载云端认证并重载窗口。",
+  t3ConnectOptInEnableButton: "启用 T3 Connect 云端远控",
+  t3ConnectOptInDisableButton: "停用云端连接",
   t3ConnectHostCommandHint: "命令行备选：t3 connect",
   t3ConnectSignOutFailedTitle: "退出 T3 Code 账户失败",
   t3ConnectSignInFailedTitle: "无法打开 T3 Code 登录",
@@ -391,6 +412,11 @@ const EN_COPY: PrismuxRemoteConnectCopy = {
     "T3 Code account sign-in requires the Prismux desktop app or app.t3.codes on private HTTP browser origins. You can also run `t3 connect` on the host.",
   t3ConnectUnconfiguredDesc:
     "T3 Connect public relay configuration is disabled in this build. Configure T3CODE_RELAY_URL and Clerk keys, or use LAN / Tailscale pairing.",
+  t3ConnectOptInBadge: "Off by default · Local-first",
+  t3ConnectOptInDesc:
+    "To guarantee zero silent outbound requests on startup, Prismux keeps T3 Connect and Clerk disabled by default. Enable it explicitly to load cloud sign-in and reload this window.",
+  t3ConnectOptInEnableButton: "Enable T3 Connect Cloud Relay",
+  t3ConnectOptInDisableButton: "Disable cloud",
   t3ConnectHostCommandHint: "CLI alternative: t3 connect",
   t3ConnectSignOutFailedTitle: "Could not sign out of T3 Code account",
   t3ConnectSignInFailedTitle: "Could not start T3 Code sign-in",

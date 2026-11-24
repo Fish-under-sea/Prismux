@@ -5,6 +5,7 @@ import type {
   ServerProcessSignal,
   ServerSignalProcessResult,
 } from "@t3tools/contracts";
+import { sanitizeSensitiveText } from "@t3tools/shared/observability";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -71,7 +72,7 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* () {
           cpuPercent: entry.cpuPercent,
           rssBytes: entry.residentBytes,
           elapsed: formatElapsed(entry.runTimeMs),
-          command: entry.command || entry.name || "unknown",
+          command: sanitizeSensitiveText(entry.command || entry.name || "unknown"),
           depth: Math.max(0, entry.depth - 1),
           childPids: entry.childPids,
         }));
