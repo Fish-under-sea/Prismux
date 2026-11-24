@@ -1,6 +1,6 @@
 {
   "name": "@prismux/appearance",
-  "version": "0.1.3-preview.1",
+  "version": "0.1.3-preview.2",
   "private": true,
   "type": "module",
   "description": "Prismux celestial 3-state theme capsule, floating liquid-glass color popover, appearance cards, contrast-clamped glass engine, and T3 Code Tailwind v4 token bridge.",

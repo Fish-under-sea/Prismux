@@ -42,7 +42,7 @@ prismux-plugin-example/
 | 字段 | 要求 | 说明 |
 | :--- | :--- | :--- |
 | `name` | 社区插件使用 `prismux-plugin-<name>` | 官方插件保留 `@prismux/plugin-<id>` 作用域；第三方社区插件统一使用 `prismux-plugin-` 前缀 |
-| `version` | 严格 SemVer 2.0 | 须与 `plugin.manifest.json` 中的 `version` 保持一致（如 `0.1.0`、`0.1.3-preview.1`） |
+| `version` | 严格 SemVer 2.0 | 须与 `plugin.manifest.json` 中的 `version` 保持一致（如 `0.1.0`、`0.1.3-preview.2`） |
 | `type` | 必须为 `"module"` | 守护进程通过原生 ESM `import()` 动态加载插件入口 |
 | `engines.prismux` | **必填顶层字段** | 宿主内核直接解析顶层 `engines.prismux` SemVer 范围，**绝不回退读取 `peerDependencies`** |
 | `exports` / `main` | 指向包内编译后 JS 文件 | 守护进程加载顺序：`exports["./daemon"]` → `exports["."]`（字符串或 `{ import }`）→ `main`，禁止越界跳出插件目录 |
@@ -50,7 +50,7 @@ prismux-plugin-example/
 | `keywords` | 推荐包含 `"prismux-plugin"` | 便于社区检索与 GitHub Topic `prismux-plugin` 对齐 |
 
 > [!IMPORTANT]
-> **关于 `engines.prismux` 与预发布版本兼容**：Prismux 当前处于 `0.1.x-preview.*` 预发布阶段。依据 `@prismux/cordis-kernel` 的 SemVer 引擎规则，当范围下界包含预发布标记（如 `>=0.1.0-0 <2.0.0`）时，可同时匹配 `0.1.3-preview.1` 与后续 `0.1.x` / `1.x` 正式版；若只写 `^0.1.0`，则不会匹配 `0.1.x-preview.*` 预发布宿主。建议统一声明：
+> **关于 `engines.prismux` 与预发布版本兼容**：Prismux 当前处于 `0.1.x-preview.*` 预发布阶段。依据 `@prismux/cordis-kernel` 的 SemVer 引擎规则，当范围下界包含预发布标记（如 `>=0.1.0-0 <2.0.0`）时，可同时匹配 `0.1.3-preview.2` 与后续 `0.1.x` / `1.x` 正式版；若只写 `^0.1.0`，则不会匹配 `0.1.x-preview.*` 预发布宿主。建议统一声明：
 >
 > ```json
 > "engines": {

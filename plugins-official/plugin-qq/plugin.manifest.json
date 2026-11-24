@@ -1,6 +1,6 @@
 {
   "id": "qq",
-  "version": "0.1.3-preview.1",
+  "version": "0.1.3-preview.2",
   "realms": ["daemon", "ui"],
   "permissions": [
     "network:outbound",
