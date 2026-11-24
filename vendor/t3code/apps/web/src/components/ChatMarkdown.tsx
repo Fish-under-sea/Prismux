@@ -149,6 +149,7 @@ import { hostEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { rightPanelHostRef, useRightPanelStore } from "../rightPanelStore";
+import { parseSidecarSwarmLink } from "../prismux/agentAux/agentAux.logic";
 import { useOpenIssueLink } from "../lib/openIssueLink";
 import { issueTrackerEnvironment } from "../state/issueTrackers";
 import { useEnvironmentQuery } from "../state/query";
@@ -441,6 +442,7 @@ function markdownUrlTransform(href: string) {
   if (parseAssistantCitationHref(href)) return href;
   if (parseComposerContextHref(href)) return href;
   if (parseThreadLinkHref(href)) return href;
+  if (parseSidecarSwarmLink(href)) return href;
   if (isWindowsDrivePathHref(href)) return href;
   if (isLocalEditorFileHref(href)) return href;
   return rewriteMarkdownFileUriHref(href) ?? safeUrl(href);
@@ -1299,6 +1301,28 @@ const CHAT_MARKDOWN_COMPONENTS = {
         />
       ) : (
         <span>{label ?? gt("Thread")}</span>
+      );
+    }
+    const sidecarSwarmLink = href ? parseSidecarSwarmLink(href) : null;
+    if (sidecarSwarmLink) {
+      const label = hastPlainTextDeep(node) || "蜂群侧边栏";
+      return (
+        <button
+          type="button"
+          data-sidecar-swarm-link={href}
+          className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[12.5px] font-medium text-primary transition-colors hover:bg-primary/18"
+          onClick={() => {
+            if (!threadRef) return;
+            useRightPanelStore.getState().openAgentAux(rightPanelHostRef(threadRef), {
+              title: "蜂群协作",
+              auxKind: "agy-swarm",
+              provider: "antigravity",
+            });
+          }}
+        >
+          <span aria-hidden="true">🐝</span>
+          <span>{label}</span>
+        </button>
       );
     }
     const contextReference = href ? parseComposerContextHref(href) : null;

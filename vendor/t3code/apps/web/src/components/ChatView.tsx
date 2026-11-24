@@ -322,6 +322,7 @@ import {
   useThreadHistory,
   useQuietThreadShell,
   useThreadCheckpointSummaries,
+  useThreadShells,
 } from "../state/entities";
 import { useEnvironmentShellHasSnapshot } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
@@ -339,6 +340,7 @@ import { useCitedHistory } from "./chat/citationProcedure";
 import type { MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ThreadTimeline } from "./chat/ThreadTimeline";
 import { NativeChildWorkDialog } from "./chat/NativeChildWorkDialog";
+import { useAgentAuxActivation } from "../prismux/agentAux/useAgentAuxActivation";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveScrollToEndClearance } from "./composerFooterLayout";
@@ -3484,6 +3486,26 @@ export default function ChatView(props: ChatViewProps) {
     cwd: activeContinueCwd,
     projection: serverProjection,
   });
+  const allAgentAuxShells = useThreadShells(isServerThread);
+  const agentAuxRelationshipShells =
+    isServerThread && activeThreadRef
+      ? allAgentAuxShells.filter(
+          (shell) =>
+            shell.environmentId === activeThreadRef.environmentId &&
+            shell.lineage.parentThreadId === activeThreadRef.threadId,
+        )
+      : undefined;
+  const agentAux = useAgentAuxActivation({
+    activeThreadRef,
+    isServerThread,
+    embedded,
+    provider: selectedProvider,
+    cwd: activeContinueCwd,
+    projection: serverProjection,
+    relationshipShells: agentAuxRelationshipShells,
+    isProviderNativeSubagent:
+      showProviderSubagentBar && selectedProviderEntry?.driverKind === "antigravity",
+  });
   const dualModeSupported = selectedProvider
     ? supportsDualLaunchMode({
         driver: selectedProvider,
@@ -3708,6 +3730,14 @@ export default function ChatView(props: ChatViewProps) {
           pendingSurfaceIds: pendingFileSurfaceIds,
           onOpenFile: openFileSurfaceStable,
           onPendingChange: handleFilePendingChangeStable,
+        }}
+        agentAux={{
+          model: agentAux.model,
+          isLoading: agentAux.isLoading,
+          onRefresh: agentAux.refresh,
+          onOpenChildThread: (childThreadId) => {
+            useRightPanelStore.getState().openThread(activeThreadRef, childThreadId);
+          },
         }}
       />
     )
@@ -4495,6 +4525,8 @@ export default function ChatView(props: ChatViewProps) {
                   {...(continueInTerminalPlan
                     ? { continueInTerminalLabel: continueInTerminalPlan.command }
                     : {})}
+                  agentAuxEntry={agentAux.overviewEntry}
+                  onOpenAgentAux={agentAux.openAuxPanel}
                   {...(sideChat.available ? { onOpenSideChat: sendSideChatStable } : {})}
                   sideChatAvailable={sideChat.available}
                   sideChatDisabledReason={sideChatDisabledReason}

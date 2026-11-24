@@ -682,6 +682,8 @@ function surfaceTitle(
       return "壁纸";
     case "agent-session":
       return surface.title;
+    case "agent-aux":
+      return surface.title || "智能体协同";
     case "thread":
       // Until the thread's own title loads.
       return resolve(msg("Thread"));
@@ -802,6 +804,21 @@ function SurfaceIcon({
       return <ImageIcon className="size-3 shrink-0" />;
     case "agent-session":
       return <AgentBrandLogo provider={surface.providerId} size={12} className="shrink-0" />;
+    case "agent-aux":
+      return surface.auxKind === "agy-swarm" ? (
+        <span
+          aria-hidden
+          className="inline-flex size-3 shrink-0 items-center justify-center text-[11px] leading-none"
+        >
+          🐝
+        </span>
+      ) : (
+        <AgentBrandLogo
+          provider={surface.provider ?? "antigravity"}
+          size={12}
+          className="shrink-0"
+        />
+      );
   }
 }
 
@@ -1149,6 +1166,16 @@ function RightPanelTab(
                 onClick={() => onActivate(surface)}
               >
                 <span className="truncate">{title}</span>
+                {surface.kind === "agent-aux" &&
+                typeof surface.activeCount === "number" &&
+                surface.activeCount > 0 ? (
+                  <span
+                    data-agent-aux-tab-badge="1"
+                    className="ml-1 inline-flex shrink-0 items-center rounded-full bg-emerald-500/15 px-1 text-[10px] font-medium text-emerald-600 tabular-nums dark:text-emerald-400"
+                  >
+                    {surface.activeCount}
+                  </span>
+                ) : null}
               </button>
             }
           />

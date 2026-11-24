@@ -1770,3 +1770,290 @@ export const installCliUpdate = (provider: string): Promise<DaemonCliUpdateInsta
 export const fetchQuotaSummary = (
   force = false,
 ): Promise<DaemonOfficialQuotaSummaryResponse> => prismuxDaemonClient.fetchQuotaSummary(force);
+
+// ---------------------------------------------------------------------------
+// Read-only Multi-Agent Native Auxiliary Runtime Inspector (AGY / CC / Codex)
+// ---------------------------------------------------------------------------
+
+export type DaemonAgentAuxKind =
+  | "agy-swarm"
+  | "agy-subagents"
+  | "claude-team"
+  | "codex-collab"
+  | "provider-subagents";
+
+export interface DaemonAgentAuxSwarmFailureDto {
+  readonly kind: "quota" | "error";
+  readonly text: string;
+}
+
+export interface DaemonAgentAuxSwarmMemberDto {
+  readonly name: string;
+  readonly conversationId: string;
+  readonly model: string;
+  readonly role: string;
+  readonly wakeMode: string;
+  readonly status: "working" | "waiting" | "killed";
+  readonly waitSince: number;
+  readonly lastReadSeq: number;
+  readonly unread: number;
+  readonly killed: boolean;
+  readonly steps: number;
+  readonly activity: string;
+  readonly activityKind: "tool" | "thinking" | "";
+  readonly replied: boolean;
+  readonly replyAsk: string;
+  readonly narrator: boolean;
+  readonly roleWorker: boolean;
+  readonly failure: DaemonAgentAuxSwarmFailureDto | null;
+  readonly transcriptMtime: number;
+  readonly posts: number;
+  readonly lastPostSeq: number;
+  readonly lastPostTime: string;
+  readonly lastPostTs: number | null;
+  readonly workspace?: string;
+  readonly workspaceMode?: string;
+  readonly channels?: readonly string[];
+}
+
+export interface DaemonAgentAuxSwarmMessageDto {
+  readonly seq: number;
+  readonly agent: string;
+  readonly text: string;
+  readonly time: string;
+  readonly ts: number | null;
+  readonly mentions: readonly string[];
+  readonly all: boolean;
+  readonly channel?: string;
+  readonly control?: Record<string, unknown>;
+}
+
+export interface DaemonAgentAuxEdgeDto {
+  readonly from: string;
+  readonly to: string;
+  readonly count: number;
+  readonly direct: number;
+  readonly viaAll: number;
+}
+
+export interface DaemonAgentAuxSystemAttentionDto {
+  readonly id: string;
+  readonly kind: "quota" | "error" | "stuck";
+  readonly member: string;
+  readonly conversationId: string;
+  readonly text: string;
+  readonly detail: string;
+  readonly since?: number;
+}
+
+export interface DaemonAgentAuxSwarmPlanDto {
+  readonly goal?: { readonly title?: string; readonly line?: string } | null;
+  readonly tasks?: Readonly<Record<string, string>>;
+  readonly threads?: ReadonlyArray<{
+    readonly id?: string;
+    readonly title: string;
+    readonly goal?: string;
+    readonly tasks: readonly string[];
+  }>;
+}
+
+export interface DaemonAgentAuxSwarmViewDto {
+  readonly as_of_seq?: number;
+  readonly updated_at?: string;
+  readonly headline?: string;
+  readonly running_summary?: string;
+  readonly phase?: { readonly label?: string; readonly index?: number; readonly total?: number };
+  readonly goal?: { readonly title?: string; readonly line?: string };
+  readonly now?: Readonly<Record<string, string>>;
+  readonly attention?: ReadonlyArray<{
+    readonly id?: string;
+    readonly kind?: string;
+    readonly severity?: string;
+    readonly title?: string;
+    readonly why?: string;
+    readonly refs?: ReadonlyArray<{ readonly seq?: number; readonly member?: string }>;
+    readonly actions?: ReadonlyArray<{
+      readonly type?: string;
+      readonly target?: string | number;
+      readonly label?: string;
+    }>;
+  }>;
+  readonly workstreams?: ReadonlyArray<{
+    readonly id?: string;
+    readonly title?: string;
+    readonly owners?: readonly string[];
+    readonly state?: string;
+    readonly note?: string;
+    readonly progress?: { readonly done?: number; readonly total?: number; readonly label?: string } | number;
+    readonly blocked_on?: string;
+    readonly refs?: ReadonlyArray<{ readonly seq?: number; readonly member?: string }>;
+  }>;
+  readonly threads?: ReadonlyArray<{
+    readonly id?: string;
+    readonly title?: string;
+    readonly goal?: string;
+    readonly now?: string;
+    readonly state?: string;
+    readonly workstreams?: readonly string[];
+    readonly attention?: readonly string[];
+  }>;
+  readonly milestones?: ReadonlyArray<{ readonly id?: string; readonly text?: string }>;
+  readonly risks?: ReadonlyArray<{ readonly id?: string; readonly text?: string }>;
+}
+
+export interface DaemonAgentAuxSwarmSnapshotDto {
+  readonly id: string;
+  readonly title: string;
+  readonly selfMember: string | null;
+  readonly head: number;
+  readonly members: readonly DaemonAgentAuxSwarmMemberDto[];
+  readonly messages: readonly DaemonAgentAuxSwarmMessageDto[];
+  readonly edges: readonly DaemonAgentAuxEdgeDto[];
+  readonly plan: DaemonAgentAuxSwarmPlanDto | null;
+  readonly view: DaemonAgentAuxSwarmViewDto | null;
+  readonly systemAttention: readonly DaemonAgentAuxSystemAttentionDto[];
+}
+
+export interface DaemonAgentAuxNativeStepDto {
+  readonly index: number;
+  readonly type: string;
+  readonly status: string | null;
+  readonly text: string | null;
+  readonly toolCalls: ReadonlyArray<{ readonly name: string; readonly summary: string }>;
+}
+
+export interface DaemonAgentAuxNativeSubagentDto {
+  readonly conversationId: string;
+  readonly role: string;
+  readonly state: string;
+  readonly status: "working" | "waiting" | "done" | "killed";
+  readonly stepsCount: number;
+  readonly activity: string;
+  readonly activityKind: "tool" | "thinking" | "";
+  readonly steps: readonly DaemonAgentAuxNativeStepDto[];
+  readonly transcriptMtime: number;
+}
+
+export interface DaemonAgentAuxClaudeTeamMemberDto {
+  readonly agentId: string;
+  readonly name: string;
+  readonly agentType: string;
+  readonly model: string;
+  readonly color: string;
+  readonly cwd: string;
+  readonly backendType: string;
+  readonly status: "working" | "waiting" | "done";
+  readonly isLead: boolean;
+  readonly joinedAt?: number;
+}
+
+export interface DaemonAgentAuxClaudeTeamMessageDto {
+  readonly seq: number;
+  readonly agent: string;
+  readonly recipient: string;
+  readonly text: string;
+  readonly summary: string;
+  readonly time: string;
+  readonly ts: number | null;
+  readonly mentions: readonly string[];
+  readonly all: boolean;
+  readonly read: boolean;
+  readonly color?: string;
+}
+
+export interface DaemonAgentAuxClaudeTeamSnapshotDto {
+  readonly teamName: string;
+  readonly description: string;
+  readonly leadSessionId: string;
+  readonly members: readonly DaemonAgentAuxClaudeTeamMemberDto[];
+  readonly messages: readonly DaemonAgentAuxClaudeTeamMessageDto[];
+  readonly edges: readonly DaemonAgentAuxEdgeDto[];
+}
+
+export interface DaemonAgentAuxCodexGoalDto {
+  readonly threadId: string;
+  readonly goalId: string;
+  readonly objective: string;
+  readonly status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
+  readonly tokenBudget: number | null;
+  readonly tokensUsed: number;
+  readonly timeUsedSeconds: number;
+  readonly createdAtMs: number;
+  readonly updatedAtMs: number;
+}
+
+export interface DaemonAgentAuxCodexSpawnedThreadDto {
+  readonly threadId: string;
+  readonly parentThreadId: string;
+  readonly status: string;
+  readonly title: string;
+  readonly nickname: string;
+  readonly role: string;
+  readonly model: string;
+  readonly reasoningEffort: string;
+  readonly cwd: string;
+  readonly updatedAtMs: number;
+}
+
+export interface DaemonAgentAuxCodexSnapshotDto {
+  readonly goals: readonly DaemonAgentAuxCodexGoalDto[];
+  readonly spawnedThreads: readonly DaemonAgentAuxCodexSpawnedThreadDto[];
+}
+
+export interface DaemonAgentAuxTaskItemDto {
+  readonly id: string;
+  readonly subject: string;
+  readonly description: string;
+  readonly activeForm?: string;
+  readonly status: "pending" | "in_progress" | "completed" | "blocked";
+  readonly owner: string;
+  readonly blockedBy: readonly string[];
+  readonly blocks: readonly string[];
+  readonly source: "claude-tasks" | "codex-goals";
+  readonly progressLabel?: string;
+}
+
+export interface DaemonAgentAuxInspectResponse {
+  readonly ok: boolean;
+  readonly active: boolean;
+  readonly hasLiveWork: boolean;
+  readonly kind: DaemonAgentAuxKind | null;
+  readonly title: string;
+  readonly activationKey: string | null;
+  readonly swarm?: DaemonAgentAuxSwarmSnapshotDto;
+  readonly agySubagents?: readonly DaemonAgentAuxNativeSubagentDto[];
+  readonly claudeTeam?: DaemonAgentAuxClaudeTeamSnapshotDto;
+  readonly codex?: DaemonAgentAuxCodexSnapshotDto;
+  readonly tasks?: readonly DaemonAgentAuxTaskItemDto[];
+  readonly updatedAt: number;
+}
+
+export interface InspectAgentAuxParams {
+  readonly provider?: string | null;
+  readonly sessionId?: string | null;
+  readonly cwd?: string | null;
+  readonly signal?: AbortSignal;
+}
+
+export const inspectAgentAux = (
+  params: InspectAgentAuxParams,
+): Promise<DaemonAgentAuxInspectResponse> => {
+  const query = new URLSearchParams();
+  if (params.provider && params.provider.trim().length > 0) {
+    query.set("provider", params.provider.trim());
+  }
+  if (params.sessionId && params.sessionId.trim().length > 0) {
+    query.set("sessionId", params.sessionId.trim());
+  }
+  if (params.cwd && params.cwd.trim().length > 0) {
+    query.set("cwd", params.cwd.trim());
+  }
+  const qs = query.toString();
+  return prismuxDaemonClient.requestJson<DaemonAgentAuxInspectResponse>(
+    `/v1/agent-aux/inspect${qs ? `?${qs}` : ""}`,
+    {
+      method: "GET",
+      ...(params.signal ? { signal: params.signal } : {}),
+    },
+  );
+};

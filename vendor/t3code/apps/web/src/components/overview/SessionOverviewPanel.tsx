@@ -37,6 +37,10 @@ import { openSideThread } from "~/lib/sideChatPane";
 import { cn } from "~/lib/utils";
 import { useThreadDiscoveredPorts } from "~/portDiscoveryState";
 import { prismuxDaemonClient } from "~/prismux/daemonClient";
+import {
+  AgentAuxOverviewEntryButton,
+  type AgentAuxOverviewEntryData,
+} from "~/prismux/agentAux/AgentAuxPanel";
 import { useRightPanelStore } from "~/rightPanelStore";
 import {
   useProject,
@@ -91,6 +95,8 @@ import {
   type SideQuestionAskExecutor,
 } from "./SideQuestionWidget";
 import {
+  OVERVIEW_SECTION_LIMIT_OPTIONS,
+  computeDynamicOverviewSectionLimit,
   extractOverviewArtifacts,
   extractOverviewBackgroundTasks,
   extractOverviewGoals,
@@ -99,12 +105,16 @@ import {
   extractOverviewSubagents,
   extractOverviewUploads,
   extractOverviewUsedSkills,
+  loadOverviewDisplayPrefs,
   resolveOverviewDiffStats,
+  saveOverviewDisplayPrefs,
   type DaemonPtySessionItem,
   type OverviewArtifactItem,
   type OverviewBackgroundTaskItem,
   type OverviewDiffStats,
+  type OverviewDisplayPrefs,
   type OverviewModifiedFileItem,
+  type OverviewSectionLimitMode,
   type OverviewSideQuestionItem,
   type OverviewSubagentItem,
   type OverviewUploadItem,
@@ -117,6 +127,8 @@ const DAEMON_PTY_POLL_INTERVAL_MS = 15_000;
 
 export interface SessionOverviewPanelProps {
   readonly density?: "full" | "compact" | "essential";
+  /** Live available height (px) inside the overview card, used to dynamically scale per-section limits. */
+  readonly availableHeightPx?: number;
   readonly forceNewWorktree?: boolean;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -161,6 +173,8 @@ export interface SessionOverviewPanelProps {
   readonly onContinueInTerminal?: () => void;
   readonly continueInTerminalDisabled?: boolean;
   readonly continueInTerminalLabel?: string | null;
+  readonly agentAuxEntry?: AgentAuxOverviewEntryData | null;
+  readonly onOpenAgentAux?: () => void;
   readonly onOpenDiffReview?: (filePath?: string) => void;
   readonly onOpenFiles?: () => void;
   readonly onOpenFile?: (relativePath: string, line?: number) => void;
@@ -176,6 +190,89 @@ export interface SessionOverviewPanelProps {
   /** Optional overrides primarily used by tests or custom host adapters. */
   readonly onAskSideQuestion?: SideQuestionAskExecutor;
   readonly daemonPtysOverride?: ReadonlyArray<DaemonPtySessionItem>;
+  readonly displayPrefsOverride?: Partial<OverviewDisplayPrefs>;
+  readonly defaultMoreMenuOpen?: boolean;
+}
+
+export function OverviewDisplayPrefsMenuSection(props: {
+  readonly prefs: OverviewDisplayPrefs;
+  readonly effectiveLimit: number;
+  readonly autoLimit: number;
+  readonly onToggleShowCompleted: () => void;
+  readonly onSelectLimitMode: (mode: OverviewSectionLimitMode) => void;
+}) {
+  return (
+    <section
+      aria-label="概览显示设置"
+      data-overview-more-section="display-prefs"
+      className="mb-1 space-y-1.5 border-b border-border/50 pb-2"
+    >
+      <div className="px-2 pt-0.5 text-[10.5px] font-semibold tracking-wide text-muted-foreground">
+        概览显示
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={props.prefs.showCompleted}
+        data-overview-toggle-completed="1"
+        onClick={props.onToggleShowCompleted}
+        className="flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 text-left text-xs font-medium text-foreground/90 transition-colors hover:bg-black/[0.045] hover:text-foreground dark:hover:bg-white/[0.075]"
+      >
+        <span className="truncate">显示已结束项</span>
+        <span
+          aria-hidden
+          className={cn(
+            "inline-flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 transition-colors",
+            props.prefs.showCompleted ? "bg-primary/90" : "bg-foreground/15 dark:bg-white/20",
+          )}
+        >
+          <span
+            className={cn(
+              "block size-3 rounded-full bg-white shadow-xs transition-transform",
+              props.prefs.showCompleted && "translate-x-3",
+            )}
+          />
+        </span>
+      </button>
+
+      <div className="px-2" data-overview-limit-mode={String(props.prefs.limitMode)}>
+        <div className="mb-1 flex items-center justify-between gap-2 text-[11px]">
+          <span className="font-medium text-foreground/85">每区最多显示</span>
+          <span className="tabular-nums text-muted-foreground">
+            {props.prefs.limitMode === "auto"
+              ? `自动 (当前 ${props.autoLimit} 项)`
+              : `${props.effectiveLimit} 项`}
+          </span>
+        </div>
+        <div
+          role="group"
+          aria-label="每区最多显示数量"
+          className="grid grid-cols-5 gap-1 rounded-lg bg-foreground/[0.05] p-0.5 dark:bg-white/[0.06]"
+        >
+          {OVERVIEW_SECTION_LIMIT_OPTIONS.map((option) => {
+            const active = props.prefs.limitMode === option;
+            return (
+              <button
+                key={String(option)}
+                type="button"
+                aria-pressed={active}
+                data-overview-limit-option={String(option)}
+                onClick={() => props.onSelectLimitMode(option)}
+                className={cn(
+                  "h-6 cursor-pointer rounded-md px-1 text-[11px] font-medium tabular-nums transition-colors",
+                  active
+                    ? "bg-background text-foreground shadow-xs ring-1 ring-border/60 dark:bg-white/15"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {option === "auto" ? "自动" : String(option)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function parseDaemonPtySessionsPayload(raw: unknown): DaemonPtySessionItem[] {
@@ -342,7 +439,31 @@ function SessionOverviewPanelContent(
   const navigate = useNavigate();
   const visible = useClientSettings(resolveThreadDetailsVisibility);
 
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(props.defaultMoreMenuOpen === true);
+  const [displayPrefs, setDisplayPrefs] = useState<OverviewDisplayPrefs>(() =>
+    loadOverviewDisplayPrefs(),
+  );
+  const effectiveDisplayPrefs = useMemo<OverviewDisplayPrefs>(
+    () =>
+      props.displayPrefsOverride
+        ? {
+            limitMode: props.displayPrefsOverride.limitMode ?? displayPrefs.limitMode,
+            showCompleted: props.displayPrefsOverride.showCompleted ?? displayPrefs.showCompleted,
+          }
+        : displayPrefs,
+    [displayPrefs, props.displayPrefsOverride],
+  );
+  const updateDisplayPrefs = useCallback(
+    (updater: (current: OverviewDisplayPrefs) => OverviewDisplayPrefs) => {
+      setDisplayPrefs((current) => {
+        const next = updater(current);
+        saveOverviewDisplayPrefs(next);
+        return next;
+      });
+    },
+    [],
+  );
+  const activeOnly = !effectiveDisplayPrefs.showCompleted;
   const [sideComposerOpen, setSideComposerOpen] = useState(false);
   const [activeSideQuestionId, setActiveSideQuestionId] = useState<string | null>(null);
   const [previewArtifact, setPreviewArtifact] = useState<OverviewArtifactItem | null>(null);
@@ -424,8 +545,9 @@ function SessionOverviewPanelContent(
         projection,
         relationshipShells,
         currentThreadId: props.threadId,
+        activeOnly,
       }),
-    [projection, props.threadId, relationshipShells],
+    [activeOnly, projection, props.threadId, relationshipShells],
   );
 
   const effectiveSideChatAvailable =
@@ -446,22 +568,43 @@ function SessionOverviewPanelContent(
     onAskSideQuestion: props.onAskSideQuestion,
   });
 
-  const sideQuestions = useMemo(
+  const allSideQuestions = useMemo(
     () =>
       extractOverviewSideQuestions({
         persisted: sideQuestionController.records,
         relationshipShells,
         currentThreadId: props.threadId,
+        activeOnly: false,
       }),
     [props.threadId, relationshipShells, sideQuestionController.records],
   );
 
+  const sideQuestions = useMemo(
+    () =>
+      activeOnly
+        ? extractOverviewSideQuestions({
+            persisted: sideQuestionController.records,
+            relationshipShells,
+            currentThreadId: props.threadId,
+            activeOnly: true,
+          })
+        : allSideQuestions,
+    [
+      activeOnly,
+      allSideQuestions,
+      props.threadId,
+      relationshipShells,
+      sideQuestionController.records,
+    ],
+  );
+
+  // Resolve against allSideQuestions so an open detail dialog stays open when an item finishes answering.
   const activeSideQuestion = useMemo(
     () =>
       activeSideQuestionId
-        ? (sideQuestions.find((item) => item.id === activeSideQuestionId) ?? null)
+        ? (allSideQuestions.find((item) => item.id === activeSideQuestionId) ?? null)
         : null,
-    [activeSideQuestionId, sideQuestions],
+    [activeSideQuestionId, allSideQuestions],
   );
 
   const backgroundTasks = useMemo(
@@ -473,8 +616,10 @@ function SessionOverviewPanelContent(
         discoveredServers,
         projection,
         currentThreadId: props.threadId,
+        activeOnly,
       }),
     [
+      activeOnly,
       daemonPtys,
       discoveredServers,
       projection,
@@ -484,11 +629,14 @@ function SessionOverviewPanelContent(
     ],
   );
 
-  const goalsSummary = useMemo(() => extractOverviewGoals({ projection }), [projection]);
+  const goalsSummary = useMemo(
+    () => extractOverviewGoals({ projection, activeOnly }),
+    [activeOnly, projection],
+  );
 
   const artifacts = useMemo(
-    () => extractOverviewArtifacts({ projection, modifiedFiles }),
-    [modifiedFiles, projection],
+    () => extractOverviewArtifacts({ projection, modifiedFiles, activeOnly }),
+    [activeOnly, modifiedFiles, projection],
   );
 
   const uploads = useMemo(
@@ -707,25 +855,56 @@ function SessionOverviewPanelContent(
   const showSubagents = subagents.length > 0;
   const showSideQuestions = sideQuestions.length > 0 || sideComposerOpen;
   const showBackgroundTasks = backgroundTasks.length > 0;
-  const showGoals = goalsSummary.totalCount > 0;
+  const showGoals = goalsSummary.items.length > 0;
   const showArtifacts = artifacts.length > 0;
   const showModifiedFiles = modifiedFiles.length > 0;
   const showUploads = uploads.length > 0;
   const showUsedSkills = usedSkills.length > 0;
-  const hasAnyOverviewSection =
-    showSubagents ||
-    showSideQuestions ||
-    showBackgroundTasks ||
-    showGoals ||
-    showArtifacts ||
-    showModifiedFiles ||
-    showUploads ||
-    showUsedSkills;
+  const activeSectionCount = [
+    showSubagents,
+    showSideQuestions,
+    showBackgroundTasks,
+    showGoals,
+    showArtifacts,
+    showModifiedFiles,
+    showUploads,
+    showUsedSkills,
+  ].filter(Boolean).length;
+  const hasAnyOverviewSection = activeSectionCount > 0;
+
+  const dynamicAutoLimit = useMemo(
+    () =>
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: props.availableHeightPx ?? 0,
+        activeSectionCount,
+        limitMode: "auto",
+        hasLinkedPrs: hasLinkedPullRequests,
+      }),
+    [activeSectionCount, hasLinkedPullRequests, props.availableHeightPx],
+  );
+
+  const dynamicSectionLimit = useMemo(
+    () =>
+      computeDynamicOverviewSectionLimit({
+        availableHeightPx: props.availableHeightPx ?? 0,
+        activeSectionCount,
+        limitMode: effectiveDisplayPrefs.limitMode,
+        hasLinkedPrs: hasLinkedPullRequests,
+      }),
+    [
+      activeSectionCount,
+      effectiveDisplayPrefs.limitMode,
+      hasLinkedPullRequests,
+      props.availableHeightPx,
+    ],
+  );
 
   return (
     <div
       data-pmx-glass-zone="rightSidebar"
       data-session-overview-panel="1"
+      data-overview-section-limit={dynamicSectionLimit}
+      data-overview-show-completed={effectiveDisplayPrefs.showCompleted ? "1" : "0"}
       className="flex min-w-0 flex-col overflow-hidden rounded-2xl bg-clip-padding text-foreground"
     >
       {/* Top Header Bar: 概览 + ⋮ More Menu (losslessly housing workspace/host, open-in, scripts, git & usage) */}
@@ -776,6 +955,19 @@ function SessionOverviewPanelContent(
                   <span className="flex-1 truncate">发起旁路提问</span>
                 </button>
               </div>
+
+              {/* AGY-style overview display preferences (show completed items + per-section max visible count) */}
+              <OverviewDisplayPrefsMenuSection
+                prefs={effectiveDisplayPrefs}
+                effectiveLimit={dynamicSectionLimit}
+                autoLimit={dynamicAutoLimit}
+                onToggleShowCompleted={() =>
+                  updateDisplayPrefs((prev) => ({ ...prev, showCompleted: !prev.showCompleted }))
+                }
+                onSelectLimitMode={(limitMode) =>
+                  updateDisplayPrefs((prev) => ({ ...prev, limitMode }))
+                }
+              />
 
               {/* Lossless original workspace controls: Environment/Host, Open In Explorer/Editor, Project Scripts */}
               <section
@@ -974,6 +1166,11 @@ function SessionOverviewPanelContent(
             aria-hidden
           />
         </button>
+
+        <AgentAuxOverviewEntryButton
+          entry={props.agentAuxEntry}
+          onOpen={props.onOpenAgentAux}
+        />
       </nav>
 
       {/* Compact linked pull request strip when the thread is attached to PR(s) */}
@@ -994,12 +1191,17 @@ function SessionOverviewPanelContent(
       {hasAnyOverviewSection ? (
         <div data-thread-relationships-panel className="flex flex-col pb-1.5">
           {showSubagents ? (
-            <SubagentsOverviewSection items={subagents} onOpenSubagent={handleOpenSubagent} />
+            <SubagentsOverviewSection
+              items={subagents}
+              maxVisibleItems={dynamicSectionLimit}
+              onOpenSubagent={handleOpenSubagent}
+            />
           ) : null}
 
           {showSideQuestions ? (
             <SideQuestionsOverviewSection
               items={sideQuestions}
+              maxVisibleItems={dynamicSectionLimit}
               composerOpen={sideComposerOpen}
               onToggleComposer={() => setSideComposerOpen((prev) => !prev)}
               onSelectItem={(item) => setActiveSideQuestionId(item.id)}
@@ -1025,19 +1227,27 @@ function SessionOverviewPanelContent(
           {showBackgroundTasks ? (
             <BackgroundTasksOverviewSection
               items={backgroundTasks}
+              maxVisibleItems={dynamicSectionLimit}
               onOpenTask={handleOpenBackgroundTask}
             />
           ) : null}
 
-          {showGoals ? <GoalsOverviewSection summary={goalsSummary} /> : null}
+          {showGoals ? (
+            <GoalsOverviewSection summary={goalsSummary} maxVisibleItems={dynamicSectionLimit} />
+          ) : null}
 
           {showArtifacts ? (
-            <ArtifactsOverviewSection items={artifacts} onOpenArtifact={handleOpenArtifact} />
+            <ArtifactsOverviewSection
+              items={artifacts}
+              maxVisibleItems={dynamicSectionLimit}
+              onOpenArtifact={handleOpenArtifact}
+            />
           ) : null}
 
           {showModifiedFiles ? (
             <ModifiedFilesOverviewSection
               items={modifiedFiles}
+              maxVisibleItems={dynamicSectionLimit}
               onOpenFileDiff={handleOpenFileDiff}
             />
           ) : null}
@@ -1045,12 +1255,18 @@ function SessionOverviewPanelContent(
           {showUploads ? (
             <UploadsOverviewSection
               items={uploads}
+              maxVisibleItems={dynamicSectionLimit}
               imageUrlById={imageUrlById}
               onOpenUpload={handleOpenUpload}
             />
           ) : null}
 
-          {showUsedSkills ? <UsedSkillsOverviewSection items={usedSkills} /> : null}
+          {showUsedSkills ? (
+            <UsedSkillsOverviewSection
+              items={usedSkills}
+              maxVisibleItems={dynamicSectionLimit}
+            />
+          ) : null}
         </div>
       ) : null}
 

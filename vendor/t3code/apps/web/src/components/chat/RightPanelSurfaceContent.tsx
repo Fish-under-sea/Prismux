@@ -7,6 +7,7 @@ import type {
   ProjectId,
   ResolvedKeybindingsConfig,
   ScopedThreadRef,
+  ThreadId,
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
@@ -34,6 +35,8 @@ import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
 import { PrismuxWallpaperQuickPanel } from "../../prismux/PrismuxWallpaperBridge";
+import { AgentAuxPanel } from "../../prismux/agentAux/AgentAuxPanel";
+import type { AgentAuxViewModel } from "../../prismux/agentAux/agentAux.logic";
 
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -77,6 +80,13 @@ interface RightPanelFileProps {
   readonly onPendingChange: (relativePath: string, pending: boolean) => void;
 }
 
+interface RightPanelAgentAuxProps {
+  readonly model: AgentAuxViewModel | null;
+  readonly isLoading?: boolean;
+  readonly onRefresh?: () => void;
+  readonly onOpenChildThread?: (threadId: ThreadId) => void;
+}
+
 export function RightPanelSurfaceContent(props: {
   readonly surface: RightPanelSurface | null;
   readonly activeSurfaceId: string | null;
@@ -101,6 +111,7 @@ export function RightPanelSurfaceContent(props: {
   readonly issuesSupported: boolean;
   readonly files: RightPanelFileProps;
   readonly sideChatParentPanel: SideChatParentPanel;
+  readonly agentAux?: RightPanelAgentAuxProps | undefined;
 }) {
   const { surface, threadRef, visible, onCloseSurface } = props;
   const gt = useGT();
@@ -306,6 +317,15 @@ export function RightPanelSurfaceContent(props: {
       );
     case "wallpaper":
       return <PrismuxWallpaperQuickPanel />;
+    case "agent-aux":
+      return (
+        <AgentAuxPanel
+          model={props.agentAux?.model ?? null}
+          isLoading={props.agentAux?.isLoading === true}
+          onRefresh={props.agentAux?.onRefresh}
+          onOpenChildThread={props.agentAux?.onOpenChildThread}
+        />
+      );
     case "files":
     case "file": {
       const files = props.files;

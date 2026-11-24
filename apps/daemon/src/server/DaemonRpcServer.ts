@@ -76,6 +76,10 @@ import {
   BusinessRouteError,
   type DaemonBusinessService
 } from "./DaemonBusinessRoutes.js";
+import {
+  AgentAuxService,
+  AgentAuxValidationError
+} from "../agentAux/AgentAuxService.js";
 import type { OvernightRouteService } from "./OvernightRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
 import { handleQuotaRoute } from "./QuotaRoutes.js";
@@ -114,6 +118,7 @@ export interface DaemonRpcServerOptions {
   quotaService?: OfficialQuotaService;
   portScannerService?: PortScannerService;
   resourceMonitorService?: ResourceMonitorService;
+  agentAuxService?: AgentAuxService;
   startedAt?: number;
   onRequestShutdown?: (reason?: string) => void | Promise<void>;
 }
@@ -435,6 +440,7 @@ export class DaemonRpcServer {
   private readonly quotaService: OfficialQuotaService | undefined;
   private readonly portScannerService: PortScannerService | undefined;
   private readonly resourceMonitorService: ResourceMonitorService | undefined;
+  private readonly agentAuxService: AgentAuxService;
   private readonly startedAt: number;
   private readonly onRequestShutdown:
     | ((reason?: string) => void | Promise<void>)
@@ -480,6 +486,7 @@ export class DaemonRpcServer {
     this.quotaService = options.quotaService;
     this.portScannerService = options.portScannerService;
     this.resourceMonitorService = options.resourceMonitorService;
+    this.agentAuxService = options.agentAuxService ?? new AgentAuxService();
     this.startedAt = options.startedAt ?? Date.now();
     this.onRequestShutdown = options.onRequestShutdown;
   }
@@ -888,6 +895,8 @@ export class DaemonRpcServer {
         if (trustedCallerScope === null) {
           return;
         }
+        req.socket?.setTimeout?.(0);
+        res.setTimeout?.(0);
         const rawBody = await readJsonBody(req);
         const result = await this.executeUpdaterDownload(rawBody);
         writeJsonResponse(res, 200, result);
@@ -2007,6 +2016,39 @@ export class DaemonRpcServer {
       }
     }
 
+    if (method === "GET" && pathname === "/v1/agent-aux/inspect") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        writeJsonResponse(res, 403, {
+          ok: false,
+          error: {
+            code: "FORBIDDEN_SCOPE",
+            message: `Scope "${trustedCallerScope}" is not permitted to inspect agent aux state.`
+          }
+        });
+        return true;
+      }
+      try {
+        const result = this.agentAuxService.inspect({
+          provider: requestUrl.searchParams.get("provider") ?? undefined,
+          sessionId: requestUrl.searchParams.get("sessionId") ?? undefined,
+          cwd: requestUrl.searchParams.get("cwd") ?? undefined
+        });
+        writeJsonResponse(res, 200, result);
+      } catch (err) {
+        if (err instanceof AgentAuxValidationError) {
+          writeJsonResponse(res, err.statusCode, {
+            ok: false,
+            error: { code: err.code, message: err.message }
+          });
+          return true;
+        }
+        throw err;
+      }
+      return true;
+    }
+
     return false;
   }
 
@@ -2853,6 +2895,11 @@ export class DaemonRpcServer {
     res: ServerResponse
   ): void {
     const updater = this.requireAppUpdater();
+
+    req.socket?.setTimeout?.(0);
+    req.socket?.setNoDelay?.(true);
+    req.socket?.setKeepAlive?.(true, 15_000);
+    res.setTimeout?.(0);
 
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",

@@ -51,6 +51,7 @@ const RIGHT_PANEL_KINDS = [
   "linked-thread",
   "wallpaper",
   "agent-session",
+  "agent-aux",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -134,7 +135,25 @@ export type RightPanelSurface =
   /** Prismux liquid-glass & wallpaper engine right-sidebar quick panel. */
   | { id: "wallpaper"; kind: "wallpaper" }
   /** Quick-launched multi-agent conversation hosted seamlessly inside the right sidebar. */
-  | AgentSessionSurface;
+  | AgentSessionSurface
+  /** Read-only native multi-agent auxiliary sidebar (AGY Swarm / CC Teams / Codex Collab). */
+  | AgentAuxSurface;
+
+export interface AgentAuxSurface {
+  readonly id: "agent-aux";
+  readonly kind: "agent-aux";
+  readonly title: string;
+  readonly auxKind: string;
+  readonly provider?: string | null | undefined;
+  readonly activeCount?: number | undefined;
+}
+
+export interface OpenAgentAuxInput {
+  readonly title: string;
+  readonly auxKind: string;
+  readonly provider?: string | null | undefined;
+  readonly activeCount?: number | undefined;
+}
 
 export interface AgentSessionSurface {
   readonly id: `agent-session:${string}`;
@@ -526,6 +545,13 @@ interface RightPanelStoreState {
     surfaceId: string,
     patch: Partial<Omit<AgentSessionSurface, "id" | "kind">>,
   ) => void;
+  /** Opens or focuses the read-only native multi-agent auxiliary sidebar (only when activated). */
+  openAgentAux: (ref: ScopedThreadRef, input: OpenAgentAuxInput, automatic?: boolean) => void;
+  /** Silently refreshes metadata on an already-open agent-aux surface without stealing focus. */
+  updateAgentAux: (
+    ref: ScopedThreadRef,
+    patch: Partial<Omit<AgentAuxSurface, "id" | "kind">>,
+  ) => void;
   /** Opens a side chat or subagent of `ref`'s environment as a tab; `ref` itself has no tab. */
   openThread: (ref: ScopedThreadRef, threadId: ThreadId) => void;
   openLinkedThread: (ref: ScopedThreadRef, target: LinkedThreadTarget) => void;
@@ -597,7 +623,14 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<
       RightPanelKind,
-      "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread" | "agent-session"
+      | "file"
+      | "terminal"
+      | "pull-request"
+      | "issue"
+      | "thread"
+      | "linked-thread"
+      | "agent-session"
+      | "agent-aux"
     >,
   ) => void;
   setThreadPanelOpen: (
@@ -670,6 +703,13 @@ const singletonSurface = (
         kind: "agent-session",
         title: "Codex",
         providerId: "codex",
+      };
+    case "agent-aux":
+      return {
+        id: "agent-aux",
+        kind: "agent-aux",
+        title: "智能体协同",
+        auxKind: "provider-subagents",
       };
   }
 };
@@ -1060,6 +1100,16 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       }
                       return [surface];
                     }
+                    if (surface.kind === "agent-aux") {
+                      if (
+                        surface.id !== "agent-aux" ||
+                        typeof surface.title !== "string" ||
+                        typeof surface.auxKind !== "string"
+                      ) {
+                        return [];
+                      }
+                      return [surface];
+                    }
                     if (surface.kind !== "terminal") return [surface];
                     if (
                       !("resourceId" in surface) ||
@@ -1301,6 +1351,64 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return changed ? { ...current, surfaces } : current;
           }),
         ),
+      openAgentAux: (ref, input, automatic = false) =>
+        set((state) =>
+          (automatic ? automaticUpdate : userAction)(state, scopedThreadKey(ref), (current) => {
+            const nextSurface: AgentAuxSurface = {
+              id: "agent-aux",
+              kind: "agent-aux",
+              title: input.title.trim() || "智能体协同",
+              auxKind: input.auxKind,
+              ...(input.provider !== undefined ? { provider: input.provider } : {}),
+              ...(input.activeCount !== undefined ? { activeCount: input.activeCount } : {}),
+            };
+            const exists = current.surfaces.some((entry) => entry.id === "agent-aux");
+            return {
+              ...current,
+              isOpen: true,
+              activeSurfaceId: "agent-aux",
+              surfaces: exists
+                ? current.surfaces.map((entry) => (entry.id === "agent-aux" ? nextSurface : entry))
+                : [...current.surfaces, nextSurface],
+            };
+          }),
+        ),
+      updateAgentAux: (ref, patch) =>
+        set((state) => {
+          const threadKey = scopedThreadKey(rightPanelHostRef(ref));
+          const existing = state.byThreadKey[threadKey]?.surfaces.find(
+            (surface): surface is AgentAuxSurface =>
+              surface.id === "agent-aux" && surface.kind === "agent-aux",
+          );
+          if (!existing) return state;
+          const nextTitle = patch.title !== undefined ? patch.title.trim() || existing.title : existing.title;
+          const nextAuxKind = patch.auxKind !== undefined ? patch.auxKind : existing.auxKind;
+          const nextProvider = patch.provider !== undefined ? patch.provider : existing.provider;
+          const nextActiveCount =
+            patch.activeCount !== undefined ? patch.activeCount : existing.activeCount;
+          if (
+            nextTitle === existing.title &&
+            nextAuxKind === existing.auxKind &&
+            nextProvider === existing.provider &&
+            nextActiveCount === existing.activeCount
+          ) {
+            return state;
+          }
+          return automaticUpdate(state, threadKey, (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) =>
+              surface.id === "agent-aux" && surface.kind === "agent-aux"
+                ? {
+                    ...surface,
+                    title: nextTitle,
+                    auxKind: nextAuxKind,
+                    ...(nextProvider !== undefined ? { provider: nextProvider } : {}),
+                    ...(nextActiveCount !== undefined ? { activeCount: nextActiveCount } : {}),
+                  }
+                : surface,
+            ),
+          }));
+        }),
       openDevice: (ref, target, automatic = false) =>
         set((state) =>
           (automatic ? automaticUpdate : userAction)(state, scopedThreadKey(ref), (current) => {
@@ -1968,6 +2076,7 @@ useRightPanelStore.subscribe((next, previous) => {
       if (
         surface.kind === "terminal" ||
         surface.kind === "agent-session" ||
+        surface.kind === "agent-aux" ||
         surface.kind === "pull-request-empty" ||
         surface.kind === "side-chat-empty" ||
         (surface.kind === "preview" && surface.resourceId !== null)

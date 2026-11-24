@@ -121,7 +121,11 @@ vi.mock(import("~/state/vcs"), async (importOriginal) => {
   };
 });
 
-import { SessionOverviewPanel, type SessionOverviewPanelProps } from "./SessionOverviewPanel";
+import {
+  OverviewDisplayPrefsMenuSection,
+  SessionOverviewPanel,
+  type SessionOverviewPanelProps,
+} from "./SessionOverviewPanel";
 import {
   ModifiedFilesOverviewSection,
   OverviewSectionBlock,
@@ -166,6 +170,14 @@ function createRichProjection(): OrchestrationV2ThreadProjection {
         childThreadId: ThreadId.make("thread-sub-1"),
         prompt: "Inspect layout contrast",
       },
+      {
+        id: NodeId.make("sub-finished"),
+        title: "Finished Audit Worker",
+        status: "completed",
+        driver: "codex",
+        childThreadId: ThreadId.make("thread-sub-done"),
+        prompt: "Done audit",
+      },
     ],
     providerSessions: [],
     providerThreads: [],
@@ -198,8 +210,14 @@ function createRichProjection(): OrchestrationV2ThreadProjection {
       {
         id: PlanId.make("plan-doc-1"),
         kind: "proposed_plan",
-        status: "completed",
+        status: "active",
         markdown: "# 概览面板实施方案\n\n- 保留原有能力到更多菜单",
+      },
+      {
+        id: PlanId.make("plan-doc-completed"),
+        kind: "proposed_plan",
+        status: "completed",
+        markdown: "# 已归档旧方案\n\n- 历史归档",
       },
     ],
     turnItems: [
@@ -266,6 +284,14 @@ function makeBaseProps(
         pid: 4321,
         alive: true,
       },
+      {
+        id: "pty-exited",
+        title: "exited build shell",
+        command: "pnpm build",
+        cwd: "/work/prismux",
+        pid: null,
+        alive: false,
+      },
     ],
     ...overrides,
   };
@@ -316,11 +342,16 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     }
     expect(html).not.toContain('data-overview-section="side-questions"');
 
-    // Real data assertions across visible sections
-    expect(html).toContain("UI Verifier"); // subagents
-    expect(html).toContain("vp dev"); // background tasks (Daemon PTY)
+    // Real data assertions across visible sections (active-only by default)
+    expect(html).toContain("UI Verifier"); // active subagent
+    expect(html).not.toContain("Finished Audit Worker"); // completed subagent hidden by default
+    expect(html).toContain("vp dev"); // active background task (Daemon PTY)
+    expect(html).not.toContain("exited build shell"); // exited PTY hidden by default
     expect(html).toContain("1/2"); // goals completion count
-    expect(html).toContain("概览面板实施方案"); // artifacts (proposed_plan)
+    expect(html).toContain("接入 8 大结构化区块"); // active goal remains
+    expect(html).not.toContain("重构顶部三项快捷入口"); // completed goal step hidden while active-only
+    expect(html).toContain("概览面板实施方案"); // active plan
+    expect(html).not.toContain("已归档旧方案"); // completed plan hidden by default
     expect(html).toContain("SessionOverviewPanel.tsx"); // modified files
     expect(html).toContain(">TSX<"); // colored file type micro-badge
     expect(html).toContain("查看全部 (6)"); // default 4 items + expand toggle
@@ -328,6 +359,139 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     expect(html).toContain("design-spec.pdf"); // uploads (file)
     expect(html).toContain("/handoff"); // used skills (read-only slash command)
     expect(html).toContain(">tdd<"); // used skills (read-only skill ref)
+  });
+
+  it("reveals finished items when showCompleted is toggled on and hides 100%-completed goals by default", () => {
+    const withCompleted = renderToStaticMarkup(
+      <SessionOverviewPanel
+        {...makeBaseProps({
+          displayPrefsOverride: { showCompleted: true },
+        })}
+      />,
+    );
+    expect(withCompleted).toContain('data-overview-show-completed="1"');
+    expect(withCompleted).toContain("Finished Audit Worker");
+    expect(withCompleted).toContain("exited build shell");
+    expect(withCompleted).toContain("重构顶部三项快捷入口");
+    expect(withCompleted).toContain("已归档旧方案");
+
+    // When all goals are completed and showCompleted is off, the goals section vanishes cleanly.
+    mockState.projection = {
+      ...createRichProjection(),
+      plans: [
+        {
+          id: PlanId.make("plan-all-done"),
+          kind: "todo_list",
+          status: "completed",
+          steps: [
+            { id: "g1", text: "任务 A", status: "completed" },
+            { id: "g2", text: "任务 B", status: "completed" },
+          ],
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+
+    const allDoneHidden = renderToStaticMarkup(<SessionOverviewPanel {...makeBaseProps()} />);
+    expect(allDoneHidden).not.toContain('data-overview-section="goals"');
+
+    const allDoneShown = renderToStaticMarkup(
+      <SessionOverviewPanel
+        {...makeBaseProps({ displayPrefsOverride: { showCompleted: true } })}
+      />,
+    );
+    expect(allDoneShown).toContain('data-overview-section="goals"');
+    expect(allDoneShown).toContain("2/2");
+  });
+
+  it("dynamically scales per-section visible item counts from availableHeightPx and explicit limitMode", () => {
+    // Only modified-files populated (6 files) to inspect slice behavior across window vs fullscreen heights
+    mockState.projection = null;
+    const baseOverrides = {
+      isServerThread: false,
+      gitCwd: null,
+      isGitRepo: false,
+      threadAttachments: [],
+      daemonPtysOverride: [],
+      diffStats: {
+        insertions: 60,
+        deletions: 6,
+        files: [
+          { path: "src/One.tsx", insertions: 10, deletions: 1 },
+          { path: "src/Two.ts", insertions: 10, deletions: 1 },
+          { path: "src/Three.css", insertions: 10, deletions: 1 },
+          { path: "src/Four.json", insertions: 10, deletions: 1 },
+          { path: "src/Five.md", insertions: 10, deletions: 1 },
+          { path: "src/Six.ts", insertions: 10, deletions: 1 },
+        ],
+      },
+    } satisfies Partial<SessionOverviewPanelProps>;
+
+    // Compact windowed height (~240px available) -> auto limit shrinks to 1 item
+    const compactHtml = renderToStaticMarkup(
+      <SessionOverviewPanel {...makeBaseProps({ ...baseOverrides, availableHeightPx: 240 })} />,
+    );
+    expect(compactHtml).toContain('data-overview-section-limit="1"');
+    expect(compactHtml).toContain("One.tsx");
+    expect(compactHtml).not.toContain("Two.ts");
+    expect(compactHtml).toContain("查看全部 (6)");
+
+    // Fullscreen height (860px available, 2 sections: artifacts + modified-files) -> auto limit expands to 8
+    const fullscreenHtml = renderToStaticMarkup(
+      <SessionOverviewPanel {...makeBaseProps({ ...baseOverrides, availableHeightPx: 860 })} />,
+    );
+    expect(fullscreenHtml).toContain('data-overview-section-limit="8"');
+    expect(fullscreenHtml).toContain("One.tsx");
+    expect(fullscreenHtml).toContain("Six.ts");
+    expect(fullscreenHtml).not.toContain("查看全部 (6)");
+
+    // Explicit user cap (limitMode: 2) caps even in fullscreen
+    const fixedTwoHtml = renderToStaticMarkup(
+      <SessionOverviewPanel
+        {...makeBaseProps({
+          ...baseOverrides,
+          availableHeightPx: 860,
+          displayPrefsOverride: { limitMode: 2 },
+        })}
+      />,
+    );
+    expect(fixedTwoHtml).toContain('data-overview-section-limit="2"');
+    expect(fixedTwoHtml).toContain("Two.ts");
+    expect(fixedTwoHtml).not.toContain("Three.css");
+    expect(fixedTwoHtml).toContain("查看全部 (6)");
+  });
+
+  it("renders overview display preferences controls for the more menu (showCompleted toggle + per-section limit options)", () => {
+    const autoMenuHtml = renderToStaticMarkup(
+      <OverviewDisplayPrefsMenuSection
+        prefs={{ limitMode: "auto", showCompleted: false }}
+        effectiveLimit={3}
+        autoLimit={3}
+        onToggleShowCompleted={() => {}}
+        onSelectLimitMode={() => {}}
+      />,
+    );
+    expect(autoMenuHtml).toContain('data-overview-toggle-completed="1"');
+    expect(autoMenuHtml).toContain('aria-checked="false"');
+    expect(autoMenuHtml).toContain("显示已结束项");
+    expect(autoMenuHtml).toContain('data-overview-limit-mode="auto"');
+    expect(autoMenuHtml).toContain("每区最多显示");
+    expect(autoMenuHtml).toContain("自动 (当前 3 项)");
+    for (const option of ["auto", "2", "3", "5", "8"]) {
+      expect(autoMenuHtml).toContain(`data-overview-limit-option="${option}"`);
+    }
+
+    const fixedMenuHtml = renderToStaticMarkup(
+      <OverviewDisplayPrefsMenuSection
+        prefs={{ limitMode: 5, showCompleted: true }}
+        effectiveLimit={5}
+        autoLimit={3}
+        onToggleShowCompleted={() => {}}
+        onSelectLimitMode={() => {}}
+      />,
+    );
+    expect(fixedMenuHtml).toContain('aria-checked="true"');
+    expect(fixedMenuHtml).toContain('data-overview-limit-mode="5"');
+    expect(fixedMenuHtml).toContain("5 项");
   });
 
   it("hides +0 -0 diff badge and all 8 zero-count sections (plus orphan divider) when no data exists", () => {
@@ -447,23 +611,33 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
   });
 
   it("renders SideQuestionComposer and persisted SideQuestion items with status labels", () => {
+    const persisted = [
+      createSideQuestionRecord({
+        id: "sq-1",
+        question: "如何避免主对话被污染？",
+        contextSummary: "当前会话：测试",
+        status: "answered",
+        answer: "使用独立支线会话。",
+      }),
+      createSideQuestionRecord({
+        id: "sq-2",
+        question: "离线时问题会不会丢失？",
+        contextSummary: "当前会话：测试",
+        status: "offline",
+      }),
+    ];
+    // Active-only default keeps pending/offline/error and hides answered
+    const activeItems = extractOverviewSideQuestions({
+      currentThreadId: ThreadId.make("thread-1"),
+      persisted,
+    });
+    expect(activeItems.map((item) => item.id)).toEqual(["sq-2"]);
+
+    // With activeOnly: false (显示已结束项开启), answered items also render with their status badge
     const items = extractOverviewSideQuestions({
       currentThreadId: ThreadId.make("thread-1"),
-      persisted: [
-        createSideQuestionRecord({
-          id: "sq-1",
-          question: "如何避免主对话被污染？",
-          contextSummary: "当前会话：测试",
-          status: "answered",
-          answer: "使用独立支线会话。",
-        }),
-        createSideQuestionRecord({
-          id: "sq-2",
-          question: "离线时问题会不会丢失？",
-          contextSummary: "当前会话：测试",
-          status: "offline",
-        }),
-      ],
+      persisted,
+      activeOnly: false,
     });
 
     const html = renderToStaticMarkup(
@@ -535,5 +709,38 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     expect(mockState.useQuietThreadShellSpy).not.toHaveBeenCalled();
     expect(mockState.useThreadProjectionSpy).not.toHaveBeenCalled();
     expect(mockState.useThreadRelationshipShellsSpy).not.toHaveBeenCalled();
+  });
+
+  it("renders agent-aux entry strictly below continue-in-terminal only when active", () => {
+    const inactiveHtml = renderToStaticMarkup(<SessionOverviewPanel {...makeBaseProps()} />);
+    expect(inactiveHtml).not.toContain('data-overview-action="agent-aux"');
+
+    const activeHtml = renderToStaticMarkup(
+      <SessionOverviewPanel
+        {...makeBaseProps({
+          agentAuxEntry: {
+            active: true,
+            hasLiveActivity: true,
+            kind: "agy-swarm",
+            providerBrand: "antigravity",
+            title: "蜂群协作任务",
+            badgeLabel: "🐝 蜂群协作",
+            entryLabel: "蜂群侧边栏",
+            activeCount: 3,
+            memberCount: 4,
+            statusLine: "3 运行中 · 1 等待中 · 12 条消息",
+          },
+          onOpenAgentAux: () => {},
+        })}
+      />,
+    );
+
+    const terminalIdx = activeHtml.indexOf('data-overview-action="continue-in-terminal"');
+    const auxIdx = activeHtml.indexOf('data-overview-action="agent-aux"');
+    expect(terminalIdx).toBeGreaterThan(-1);
+    expect(auxIdx).toBeGreaterThan(terminalIdx);
+    expect(activeHtml).toContain("蜂群侧边栏");
+    expect(activeHtml).toContain("3 活跃");
+    expect(activeHtml).not.toContain("插件");
   });
 });
