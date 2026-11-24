@@ -8,7 +8,6 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   unlinkSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -87,16 +86,8 @@ function createTempMarketRoot(): {
   const tempRoot = mkdtempSync(join(tmpdir(), "prismux-official-market-"));
   tempRoots.push(tempRoot);
 
-  const scopeDir = join(tempRoot, "node_modules", "@prismux");
-  mkdirSync(scopeDir, { recursive: true });
-  const protocolLink = join(scopeDir, "protocol");
-  symlinkSync(
-    join(repoRoot, "packages", "protocol"),
-    protocolLink,
-    process.platform === "win32" ? "junction" : "dir"
-  );
-  cleanupJunctions.push(protocolLink);
-
+  // NOTE: Intentionally NO node_modules/@prismux/protocol symlink here —
+  // official plugins must load cleanly as zero-external-dependency ESM inside ~/.prismux/plugins/<id>/.
   const archiveOutDir = join(tempRoot, "archives");
   const pluginsDir = join(tempRoot, "plugins");
   const dataDir = join(tempRoot, "data");
@@ -145,7 +136,7 @@ function packOfficialPluginArchive(
   return readFileSync(legacyPath);
 }
 
-test("official catalog metadata verifies all 4 plugins and deterministic .wb-plugin market install mounts/unmounts with zero residual", async () => {
+test("official catalog metadata verifies active qq & fishdock-hook plugins, documents retired pet & ssh, and deterministic .wb-plugin market install mounts/unmounts with zero residual and zero node_modules", async () => {
   const { repoRoot, archiveOutDir, pluginsDir, dataDir } = createTempMarketRoot();
   const rootVersion = readRootPackageVersion(repoRoot);
   const installer = new CordisStreamingInstaller({
@@ -165,10 +156,20 @@ test("official catalog metadata verifies all 4 plugins and deterministic .wb-plu
     assert.ok((item.bytes ?? 0) > 0, `${item.id} must have positive bytes`);
   }
 
-  assert.equal(catalog.plugins.length, 4);
+  assert.equal(catalog.plugins.length, 2);
   assert.equal(entryById.has("purge"), false);
-  for (const expectedId of ["qq", "pet", "fishdock-hook", "ssh"]) {
+  assert.equal(entryById.has("pet"), false);
+  assert.equal(entryById.has("ssh"), false);
+  for (const expectedId of ["qq", "fishdock-hook"]) {
     assert.ok(entryById.has(expectedId), `Catalog must include ${expectedId}`);
+  }
+  const retiredList = catalog.retiredPlugins ?? [];
+  for (const retiredId of ["pet", "ssh"]) {
+    const retired = retiredList.find((item) => item.id === retiredId);
+    assert.ok(retired !== undefined, `Catalog retiredPlugins must include ${retiredId}`);
+    assert.equal(retired.status, "deprecated");
+    assert.equal(retired.replacedByBuiltin, true);
+    assert.match(retired.noticeZh, /已停用/);
   }
 
   const host = new CordisPluginHost("daemon");
@@ -177,7 +178,7 @@ test("official catalog metadata verifies all 4 plugins and deterministic .wb-plu
     masterKey: "official-plugins-market-test-master-key"
   });
 
-  for (const targetId of ["qq", "pet"] as const) {
+  for (const targetId of ["qq", "fishdock-hook"] as const) {
     const entry = entryById.get(targetId);
     assert.ok(entry !== undefined);
 
@@ -224,15 +225,15 @@ test("official catalog metadata verifies all 4 plugins and deterministic .wb-plu
   }
 
   const mountedCounts = host.getActiveResourceCounts();
-  assert.ok(mountedCounts.routes >= 10);
+  assert.ok(mountedCounts.routes >= 9);
   assert.ok(mountedCounts.hooks >= 4);
   assert.ok(mountedCounts.effects >= 2);
 
   await host.unmountPlugin("qq");
-  await host.unmountPlugin("pet");
+  await host.unmountPlugin("fishdock-hook");
 
   assert.equal(host.isMounted("qq"), false);
-  assert.equal(host.isMounted("pet"), false);
+  assert.equal(host.isMounted("fishdock-hook"), false);
   assert.deepEqual(host.getActiveResourceCounts(), {
     routes: 0,
     hooks: 0,

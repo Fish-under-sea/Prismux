@@ -708,7 +708,8 @@ function matchesPrimitiveComparator(
 
 function matchesComparatorSet(
   version: ParsedSemver,
-  set: ComparatorSet
+  set: ComparatorSet,
+  options?: { includePrerelease?: boolean }
 ): boolean {
   for (const comp of set) {
     if (!matchesPrimitiveComparator(version, comp)) {
@@ -716,9 +717,6 @@ function matchesComparatorSet(
     }
   }
 
-  // SemVer/npm prerelease guard: a prerelease version only satisfies a comparator set
-  // if at least one comparator in that set explicitly includes a prerelease on the same
-  // [major, minor, patch] tuple.
   if (version.prerelease.length > 0) {
     const hasMatchingTuplePrerelease = set.some(
       (comp) =>
@@ -727,7 +725,36 @@ function matchesComparatorSet(
         comp.version.minor === version.minor &&
         comp.version.patch === version.patch
     );
-    if (!hasMatchingTuplePrerelease) {
+    if (hasMatchingTuplePrerelease) {
+      return true;
+    }
+
+    // Never allow a prerelease of an excluded upper-bound tuple (e.g. `2.0.0-alpha.1`
+    // against `<2.0.0`) unless a comparator explicitly opted into that exact tuple.
+    const isBlockedByExclusiveUpperBound = set.some(
+      (comp) =>
+        comp.op === "<" &&
+        !comp.allowPrereleaseOnTuple &&
+        comp.version.major === version.major &&
+        comp.version.minor === version.minor &&
+        comp.version.patch === version.patch
+    );
+    if (isBlockedByExclusiveUpperBound) {
+      return false;
+    }
+
+    if (options?.includePrerelease === true) {
+      return true;
+    }
+
+    // Allow prerelease versions across subsequent patch/minor tuples when a lower bound
+    // explicitly opted into prereleases (e.g. `>=0.1.0-0 <2.0.0` matching `0.1.2-preview.2`).
+    const hasLowerBoundPrereleaseOptIn = set.some(
+      (comp) =>
+        comp.allowPrereleaseOnTuple &&
+        (comp.op === ">=" || comp.op === ">")
+    );
+    if (!hasLowerBoundPrereleaseOptIn) {
       return false;
     }
   }
@@ -739,7 +766,11 @@ function matchesComparatorSet(
  * Evaluates whether a SemVer 2.0 `version` satisfies a SemVer range (`>=`, `>`, `<=`, `=`, `<`, `^`, `~`, `*`,
  * whitespace AND intersection, `||` OR union, hyphen ranges, and prerelease comparisons).
  */
-export function satisfiesSemverRange(version: string, range: string): boolean {
+export function satisfiesSemverRange(
+  version: string,
+  range: string,
+  options?: { includePrerelease?: boolean }
+): boolean {
   const parsedVersion = parseSemver(version);
   if (parsedVersion === null) {
     return false;
@@ -748,7 +779,9 @@ export function satisfiesSemverRange(version: string, range: string): boolean {
   if (!parsedRange.valid) {
     return false;
   }
-  return parsedRange.sets.some((set) => matchesComparatorSet(parsedVersion, set));
+  return parsedRange.sets.some((set) =>
+    matchesComparatorSet(parsedVersion, set, options)
+  );
 }
 
 /**
@@ -793,9 +826,12 @@ export function checkTopLevelEngineCompatibility(
     };
   }
 
-  const matched = validatedRange.sets.some((set) =>
-    matchesComparatorSet(parsedHost, set)
-  );
+  const matched =
+    validatedRange.sets.some((set) => matchesComparatorSet(parsedHost, set)) ||
+    (parsedHost.prerelease.length > 0 &&
+      validatedRange.sets.some((set) =>
+        matchesComparatorSet(parsedHost, set, { includePrerelease: true })
+      ));
   if (!matched) {
     return {
       compatible: false,

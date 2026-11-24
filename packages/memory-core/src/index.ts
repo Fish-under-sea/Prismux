@@ -9,6 +9,7 @@ import type { MemoryStore, MemoryStoreConfig } from "./types.js";
 export * from "./types.js";
 export * from "./ulid.js";
 export * from "./CollectorAndGuard.js";
+export * from "./sqliteVecResolver.js";
 export * from "./SqliteMemoryStore.js";
 export * from "./ObsidianImporter.js";
 export * from "./obsidianImport.js";

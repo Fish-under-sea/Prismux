@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type {
   HookInvocationContext,
   PluginContext,
@@ -32,9 +33,22 @@ export * from "./onebot.js";
 export * from "./pacing.js";
 export * from "./router.js";
 
+function readBundledManifestVersion(fallback: string): string {
+  try {
+    const raw = readFileSync(new URL("../plugin.manifest.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.trim().length > 0) {
+      return parsed.version.trim();
+    }
+  } catch {
+    // Fallback to static version if manifest file is unavailable.
+  }
+  return fallback;
+}
+
 export const manifest: PluginManifest = {
   id: "qq",
-  version: "0.1.0",
+  version: readBundledManifestVersion("0.1.2-preview.2"),
   realms: ["daemon", "ui"],
   permissions: [
     "network:outbound",

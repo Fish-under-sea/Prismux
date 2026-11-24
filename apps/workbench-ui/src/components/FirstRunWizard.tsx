@@ -43,9 +43,7 @@ const INSTALL_WRITE_QUEUE = [
 
 const OFFICIAL_EXCLUDED_PLUGINS = [
   { id: "qq", label: "QQ 机器人 (@prismux/plugin-qq)" },
-  { id: "pet", label: "桌宠联动 (@prismux/plugin-pet)" },
-  { id: "fishdock-hook", label: "FISH-Dock 灵动岛桥接 (@prismux/plugin-fishdock-hook)" },
-  { id: "ssh", label: "SSH 运维面板 (@prismux/plugin-ssh)" }
+  { id: "fishdock-hook", label: "FISH-Dock 灵动岛桥接 (@prismux/plugin-fishdock-hook)" }
 ] as const;
 
 const PROVIDER_LABELS: Record<ChiefProviderKind, string> = {

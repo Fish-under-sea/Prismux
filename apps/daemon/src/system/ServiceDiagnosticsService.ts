@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import type { SqliteMemoryStore } from "@prismux/memory-core";
@@ -29,6 +29,12 @@ import { resolve7zaBinary, type AppUpdater } from "../updater/AppUpdater.js";
 import type { WallpaperMediaService } from "../wallpapers/WallpaperMediaService.js";
 import type { OvernightFactory } from "../workflows/OvernightFactory.js";
 import type { ResourceMonitorService } from "./ResourceMonitorService.js";
+import {
+  buildSafeCliSpawnSpec,
+  findExecutableOnPath,
+  refreshWindowsEnvironmentFromRegistry,
+  type WindowsEnvRefreshResult
+} from "./WindowsEnvRefresh.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -92,6 +98,11 @@ export interface ServiceDiagnosticsOptions {
   detectAndroidSdk?: () => { sdkRoot: string | null; adbPath: string | null };
   /** Injectable 7za path resolver for deterministic tests. */
   resolve7za?: () => string | null;
+  /**
+   * Injectable environment refresher called before every uncached/forced
+   * diagnostics run (defaults to Windows HKLM + HKCU registry refresh).
+   */
+  refreshEnv?: () => Promise<WindowsEnvRefreshResult | void> | void;
 }
 
 const CATEGORY_LABELS: Record<DiagnosticCategoryId, string> = {
@@ -103,33 +114,33 @@ const CATEGORY_LABELS: Record<DiagnosticCategoryId, string> = {
   dormant_engines: "沉睡内核状态摘要"
 };
 
-function findExecutableOnPath(commandNames: readonly string[]): string | null {
-  const pathEnv = process.env["PATH"] ?? process.env["Path"] ?? "";
-  const sep = process.platform === "win32" ? ";" : ":";
-  const exts =
-    process.platform === "win32"
-      ? ["", ".exe", ".cmd", ".bat"]
-      : [""];
-
-  for (const rawDir of pathEnv.split(sep)) {
-    const dir = rawDir.trim().replace(/^"|"$/g, "");
-    if (!dir) continue;
-    for (const cmd of commandNames) {
-      const hasExt = /\.[a-z0-9]+$/i.test(cmd);
-      const variants = hasExt ? [cmd] : exts.map((ext) => `${cmd}${ext}`);
-      for (const variant of variants) {
-        const candidate = join(dir, variant);
-        try {
-          if (existsSync(candidate) && statSync(candidate).isFile()) {
-            return candidate;
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
+function getDefaultCliExtraDirs(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir()
+): string[] {
+  const dirs: string[] = [];
+  if (platform === "win32") {
+    const appData = env["APPDATA"]?.trim() || join(homeDir, "AppData", "Roaming");
+    const localAppData =
+      env["LOCALAPPDATA"]?.trim() || join(homeDir, "AppData", "Local");
+    const userProfile = env["USERPROFILE"]?.trim() || homeDir;
+    const pnpmHome = env["PNPM_HOME"]?.trim();
+    if (pnpmHome) dirs.push(pnpmHome);
+    dirs.push(
+      join(appData, "npm"),
+      join(localAppData, "pnpm"),
+      join(userProfile, ".local", "bin"),
+      join(localAppData, "agy", "bin"),
+      join(localAppData, "Microsoft", "WinGet", "Links"),
+      join(userProfile, "scoop", "shims")
+    );
+  } else {
+    const pnpmHome = env["PNPM_HOME"]?.trim();
+    if (pnpmHome) dirs.push(pnpmHome);
+    dirs.push(join(homeDir, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin");
   }
-  return null;
+  return dirs;
 }
 
 function extractFirstVersionLine(output: string): string | null {
@@ -144,13 +155,55 @@ function extractFirstVersionLine(output: string): string | null {
   return first.length > 100 ? `${first.slice(0, 97)}...` : first;
 }
 
-async function defaultCliProbe(
+async function execSafeCli(
+  executablePath: string,
+  args: readonly string[],
+  timeoutMs: number,
+  options: {
+    env?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+    maxBuffer?: number;
+  } = {}
+): Promise<{ stdout: string; stderr: string }> {
+  const spec = buildSafeCliSpawnSpec(executablePath, args, {
+    env: options.env ?? process.env,
+    platform: options.platform ?? process.platform
+  });
+  const result = await execFileAsync(spec.file, spec.args, {
+    timeout: timeoutMs,
+    windowsHide: true,
+    maxBuffer: options.maxBuffer ?? 512 * 1024,
+    env: spec.env,
+    windowsVerbatimArguments: spec.windowsVerbatimArguments
+  });
+  return {
+    stdout: String(result.stdout ?? ""),
+    stderr: String(result.stderr ?? "")
+  };
+}
+
+export async function defaultCliProbe(
   command: string,
   args: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  options: {
+    env?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+    includeFallbackDirs?: boolean;
+  } = {}
 ): Promise<CliProbeResult> {
   const started = performance.now();
-  const located = findExecutableOnPath([command]);
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const extraDirs =
+    options.includeFallbackDirs === false
+      ? []
+      : getDefaultCliExtraDirs(env, platform);
+  const located = findExecutableOnPath([command], {
+    env,
+    platform,
+    extraDirs
+  });
   if (!located) {
     return {
       found: false,
@@ -162,24 +215,11 @@ async function defaultCliProbe(
   }
 
   try {
-    const isWinCmd =
-      process.platform === "win32" && /\.(cmd|bat)$/i.test(located);
-    const { stdout, stderr } = isWinCmd
-      ? await execFileAsync(
-          process.env["COMSPEC"] || "cmd.exe",
-          ["/d", "/s", "/c", located, ...args],
-          {
-            timeout: timeoutMs,
-            windowsHide: true,
-            maxBuffer: 512 * 1024
-          }
-        )
-      : await execFileAsync(located, args, {
-          timeout: timeoutMs,
-          windowsHide: true,
-          maxBuffer: 512 * 1024
-        });
-    const combined = `${stdout ?? ""}\n${stderr ?? ""}`;
+    const { stdout, stderr } = await execSafeCli(located, args, timeoutMs, {
+      env,
+      platform
+    });
+    const combined = `${stdout}\n${stderr}`;
     return {
       found: true,
       path: located,
@@ -313,57 +353,174 @@ async function defaultNetworkProbe(
   });
 }
 
-function defaultDetectAndroidSdk(): {
+function isExistingFile(filePath: string): boolean {
+  try {
+    return existsSync(filePath) && statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function inferAndroidSdkRootFromAdb(adbPath: string): string | null {
+  const parentDir = dirname(adbPath);
+  if (basename(parentDir).toLowerCase() === "platform-tools") {
+    return dirname(parentDir);
+  }
+  return null;
+}
+
+function scanWinGetPlatformToolsCandidates(localAppData: string): string[] {
+  const packagesDir = join(localAppData, "Microsoft", "WinGet", "Packages");
+  const candidates: string[] = [];
+  try {
+    if (!existsSync(packagesDir)) {
+      return candidates;
+    }
+    const entries = readdirSync(packagesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (/^google\.platformtools/i.test(entry.name)) {
+        const pkgRoot = join(packagesDir, entry.name);
+        candidates.push(join(pkgRoot, "platform-tools", "adb.exe"));
+        candidates.push(join(pkgRoot, "adb.exe"));
+      }
+    }
+  } catch {
+    // ignore inaccessible WinGet package directories
+  }
+  return candidates;
+}
+
+export function defaultDetectAndroidSdk(
+  options: {
+    env?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+    scanWellKnownDirs?: boolean;
+  } = {}
+): {
   sdkRoot: string | null;
   adbPath: string | null;
 } {
-  const candidates: string[] = [];
-  const envHome = process.env["ANDROID_HOME"]?.trim();
-  const envSdkRoot = process.env["ANDROID_SDK_ROOT"]?.trim();
-  if (envHome) candidates.push(resolve(envHome));
-  if (envSdkRoot) candidates.push(resolve(envSdkRoot));
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const homeDir = options.homeDir ?? homedir();
+  const scanWellKnownDirs = options.scanWellKnownDirs !== false;
+  const adbBin = platform === "win32" ? "adb.exe" : "adb";
 
-  if (process.platform === "win32") {
-    const localAppData =
-      process.env["LOCALAPPDATA"]?.trim() ||
-      join(homedir(), "AppData", "Local");
-    candidates.push(join(localAppData, "Android", "Sdk"));
-  } else if (process.platform === "darwin") {
-    candidates.push(join(homedir(), "Library", "Android", "sdk"));
-  } else {
-    candidates.push(join(homedir(), "Android", "Sdk"));
-  }
+  const envCandidates: string[] = [];
+  const envHome = env["ANDROID_HOME"]?.trim();
+  const envSdkRoot = env["ANDROID_SDK_ROOT"]?.trim();
+  if (envHome) envCandidates.push(resolve(envHome));
+  if (envSdkRoot) envCandidates.push(resolve(envSdkRoot));
 
   let sdkRoot: string | null = null;
-  let adbPath: string | null = null;
-  const adbBin = process.platform === "win32" ? "adb.exe" : "adb";
 
-  for (const dir of candidates) {
-    if (existsSync(dir)) {
-      if (sdkRoot === null) {
-        sdkRoot = dir;
-      }
-      const adbCandidate = join(dir, "platform-tools", adbBin);
-      if (existsSync(adbCandidate)) {
-        sdkRoot = dir;
-        adbPath = adbCandidate;
-        break;
-      }
+  // 1. Explicit ANDROID_HOME / ANDROID_SDK_ROOT (supports both SDK root and direct platform-tools dir)
+  for (const dir of envCandidates) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+    if (sdkRoot === null) {
+      sdkRoot =
+        basename(dir).toLowerCase() === "platform-tools" ? dirname(dir) : dir;
+    }
+    const nestedAdb = join(dir, "platform-tools", adbBin);
+    if (isExistingFile(nestedAdb)) {
+      return { sdkRoot: dir, adbPath: nestedAdb };
+    }
+    const directAdb = join(dir, adbBin);
+    if (isExistingFile(directAdb)) {
+      return {
+        sdkRoot: inferAndroidSdkRootFromAdb(directAdb) ?? sdkRoot,
+        adbPath: directAdb
+      };
     }
   }
 
-  if (adbPath === null) {
-    adbPath = findExecutableOnPath([adbBin]);
+  // 2. Refreshed PATH lookup (covers WinGet, Scoop, Chocolatey, Android Studio, custom PATH)
+  const pathAdb = findExecutableOnPath([adbBin], { env, platform });
+  if (pathAdb) {
+    return {
+      sdkRoot: sdkRoot ?? inferAndroidSdkRootFromAdb(pathAdb),
+      adbPath: pathAdb
+    };
   }
 
-  return { sdkRoot, adbPath };
+  if (!scanWellKnownDirs) {
+    return { sdkRoot, adbPath: null };
+  }
+
+  // 3. Well-known platform SDK roots & Windows package manager locations
+  const wellKnownRoots: string[] = [];
+  const directAdbCandidates: string[] = [];
+
+  if (platform === "win32") {
+    const userProfile = env["USERPROFILE"]?.trim() || homeDir;
+    const localAppData =
+      env["LOCALAPPDATA"]?.trim() || join(userProfile, "AppData", "Local");
+    wellKnownRoots.push(
+      join(localAppData, "Android", "Sdk"),
+      join(userProfile, "AppData", "Local", "Android", "Sdk"),
+      "C:\\Android\\Sdk",
+      "D:\\Android\\Sdk"
+    );
+    directAdbCandidates.push(
+      join(localAppData, "Microsoft", "WinGet", "Links", "adb.exe"),
+      ...scanWinGetPlatformToolsCandidates(localAppData),
+      join(userProfile, "scoop", "shims", "adb.exe"),
+      join(userProfile, "scoop", "apps", "adb", "current", "platform-tools", "adb.exe"),
+      "C:\\ProgramData\\chocolatey\\bin\\adb.exe",
+      "C:\\platform-tools\\adb.exe"
+    );
+  } else if (platform === "darwin") {
+    wellKnownRoots.push(
+      join(homeDir, "Library", "Android", "sdk"),
+      "/opt/homebrew/share/android-commandlinetools",
+      "/usr/local/share/android-commandlinetools"
+    );
+  } else {
+    wellKnownRoots.push(
+      join(homeDir, "Android", "Sdk"),
+      "/opt/android-sdk",
+      "/usr/lib/android-sdk"
+    );
+  }
+
+  for (const dir of wellKnownRoots) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+    if (sdkRoot === null) {
+      sdkRoot = dir;
+    }
+    const adbCandidate = join(dir, "platform-tools", adbBin);
+    if (isExistingFile(adbCandidate)) {
+      return { sdkRoot: dir, adbPath: adbCandidate };
+    }
+  }
+
+  for (const directAdb of directAdbCandidates) {
+    if (isExistingFile(directAdb)) {
+      return {
+        sdkRoot: sdkRoot ?? inferAndroidSdkRootFromAdb(directAdb),
+        adbPath: directAdb
+      };
+    }
+  }
+
+  return { sdkRoot, adbPath: null };
 }
 
 function detectLocalToolchainPackage(
   packageBinary: string,
   dataDir: string
 ): string | null {
-  const onPath = findExecutableOnPath([packageBinary]);
+  const onPath = findExecutableOnPath([packageBinary], {
+    extraDirs: getDefaultCliExtraDirs()
+  });
   if (onPath) {
     return onPath;
   }
@@ -469,9 +626,11 @@ export class ServiceDiagnosticsService {
     adbPath: string | null;
   };
   private readonly resolve7zaFn: () => string | null;
+  private readonly refreshEnvFn: () => Promise<WindowsEnvRefreshResult | void> | void;
 
   private cachedReport: ServiceDiagnosticsResponse | null = null;
   private inflightRun: Promise<ServiceDiagnosticsResponse> | null = null;
+  private generation = 0;
 
   constructor(options: ServiceDiagnosticsOptions) {
     this.opts = options;
@@ -487,14 +646,26 @@ export class ServiceDiagnosticsService {
     this.cliProbeFn = options.cliProbe ?? defaultCliProbe;
     this.networkProbeFn = options.networkProbe ?? defaultNetworkProbe;
     this.detectAndroidSdkFn =
-      options.detectAndroidSdk ?? defaultDetectAndroidSdk;
+      options.detectAndroidSdk ?? (() => defaultDetectAndroidSdk());
     this.resolve7zaFn =
       options.resolve7za ??
       (() => this.opts.appUpdater?.resolve7zaPath() ?? resolve7zaBinary());
+    this.refreshEnvFn =
+      options.refreshEnv ??
+      (() =>
+        refreshWindowsEnvironmentFromRegistry({
+          timeoutMs: Math.min(600, this.singleCheckTimeoutMs)
+        }));
   }
 
   clearCache(): void {
+    this.generation += 1;
     this.cachedReport = null;
+    this.inflightRun = null;
+  }
+
+  invalidateCache(): void {
+    this.clearCache();
   }
 
   async runDiagnostics(force = false): Promise<ServiceDiagnosticsResponse> {
@@ -514,7 +685,13 @@ export class ServiceDiagnosticsService {
       return this.inflightRun;
     }
 
-    const run = this.executeAllChecks().finally(() => {
+    if (force) {
+      this.generation += 1;
+      this.cachedReport = null;
+    }
+
+    const runGeneration = this.generation;
+    const run = this.executeAllChecks(runGeneration).finally(() => {
       if (this.inflightRun === run) {
         this.inflightRun = null;
       }
@@ -523,10 +700,24 @@ export class ServiceDiagnosticsService {
     return run;
   }
 
-  private async executeAllChecks(): Promise<ServiceDiagnosticsResponse> {
+  private async executeAllChecks(
+    runGeneration: number
+  ): Promise<ServiceDiagnosticsResponse> {
     const startedAt = performance.now();
     const budget = this.globalBudgetMs;
-    const perCheckTimeout = Math.min(this.singleCheckTimeoutMs, budget);
+
+    // Refresh Windows HKLM + HKCU environment variables before probing so
+    // newly installed CLIs / WinGet tools / SDK variables take effect immediately.
+    const envRefreshTimeoutMs = Math.min(650, Math.max(150, Math.floor(budget / 3)));
+    await withTimeoutFallback(
+      Promise.resolve().then(() => this.refreshEnvFn()),
+      envRefreshTimeoutMs,
+      () => undefined
+    );
+
+    const elapsedAfterEnvMs = Math.max(0, performance.now() - startedAt);
+    const remainingBudget = Math.max(400, budget - elapsedAfterEnvMs);
+    const perCheckTimeout = Math.min(this.singleCheckTimeoutMs, remainingBudget);
 
     const checkSpecs: Array<{
       id: string;
@@ -566,21 +757,21 @@ export class ServiceDiagnosticsService {
         id: "memory.sqlite_wal",
         category: "memory_sync",
         name: "memory.db (SQLite WAL + FTS5)",
-        settingsRoute: "/settings/memory-sync",
+        settingsRoute: "/settings/memory",
         run: async () => this.checkMemoryDb()
       },
       {
         id: "memory.sqlite_vec",
         category: "memory_sync",
         name: "sqlite-vec 混合向量引擎",
-        settingsRoute: "/settings/memory-sync",
+        settingsRoute: "/settings/memory",
         run: async () => this.checkSqliteVec()
       },
       {
         id: "sync.vault",
         category: "memory_sync",
         name: "SyncVault 加密同步通道",
-        settingsRoute: "/settings/memory-sync",
+        settingsRoute: "/settings/sync",
         run: async () => this.checkSyncVault()
       },
 
@@ -855,7 +1046,7 @@ export class ServiceDiagnosticsService {
       checkSpecs.map((spec) =>
         withTimeoutFallback(
           spec.run(),
-          Math.min(perCheckTimeout + 150, budget),
+          Math.min(perCheckTimeout + 150, remainingBudget),
           (): DiagnosticCheckItem => ({
             id: spec.id,
             category: spec.category,
@@ -908,7 +1099,9 @@ export class ServiceDiagnosticsService {
       items: settledItems
     };
 
-    this.cachedReport = report;
+    if (runGeneration === this.generation) {
+      this.cachedReport = report;
+    }
     return report;
   }
 
@@ -1109,7 +1302,7 @@ export class ServiceDiagnosticsService {
         name: "memory.db (SQLite WAL + FTS5)",
         status: "error",
         summary: "记忆存储未初始化",
-        settingsRoute: "/settings/memory-sync"
+        settingsRoute: "/settings/memory"
       };
     }
     const exists = dbPath === ":memory:" || existsSync(dbPath);
@@ -1126,31 +1319,43 @@ export class ServiceDiagnosticsService {
         ? `SQLite WAL + FTS5 就绪${sizeKb !== null ? `（${sizeKb} KB）` : ""}`
         : "memory.db 尚未落盘",
       detail: dbPath,
-      settingsRoute: "/settings/memory-sync"
+      settingsRoute: "/settings/memory"
     };
   }
 
   private checkSqliteVec(): DiagnosticCheckItem {
-    const loaded = this.opts.memoryStore?.isVectorSearchEnabled() ?? false;
+    const vecStatus = this.opts.memoryStore?.getVectorExtensionStatus();
+    const loaded =
+      vecStatus?.loaded ?? this.opts.memoryStore?.isVectorSearchEnabled() ?? false;
     if (loaded) {
+      const version = vecStatus?.version ?? null;
+      const extPath = vecStatus?.extensionPath ?? null;
       return {
         id: "memory.sqlite_vec",
         category: "memory_sync",
         name: "sqlite-vec 混合向量引擎",
         status: "ok",
-        summary: "FTS5 + sqlite-vec 混合态",
-        detail: "已加载 vec0 原生向量扩展，支持 RRF 混合检索。",
-        settingsRoute: "/settings/memory-sync"
+        ...(version !== null ? { version } : {}),
+        summary: version
+          ? `FTS5 + sqlite-vec 混合态（vec0 ${version}）`
+          : "FTS5 + sqlite-vec 混合态",
+        detail: extPath
+          ? `已加载 vec0 原生向量扩展（${extPath}），支持 RRF 混合检索。`
+          : "已加载 vec0 原生向量扩展，支持 RRF 混合检索。",
+        settingsRoute: "/settings/memory"
       };
     }
+    const reason = vecStatus?.error?.trim();
     return {
       id: "memory.sqlite_vec",
       category: "memory_sync",
       name: "sqlite-vec 混合向量引擎",
       status: "degraded",
       summary: "FTS5 降级态（缺 vec0.dll，无兼容风险）",
-      detail: "当前自动使用 SQLite FTS5 trigram 全文检索，记忆读写与隔离完全正常。",
-      settingsRoute: "/settings/memory-sync"
+      detail: reason
+        ? `当前自动使用 SQLite FTS5 trigram 全文检索（${reason}），记忆读写与隔离完全正常。`
+        : "当前自动使用 SQLite FTS5 trigram 全文检索，记忆读写与隔离完全正常。",
+      settingsRoute: "/settings/memory"
     };
   }
 
@@ -1162,7 +1367,7 @@ export class ServiceDiagnosticsService {
         name: "SyncVault 加密同步通道",
         status: "degraded",
         summary: "SyncVault 引擎未启用",
-        settingsRoute: "/settings/memory-sync"
+        settingsRoute: "/settings/sync"
       };
     }
     const status = this.opts.syncVault.getStatus();
@@ -1177,7 +1382,7 @@ export class ServiceDiagnosticsService {
         detail: status.portable.isPortable
           ? `便携模式 (${status.portable.dataDir})`
           : `看门狗 ${Math.round(status.watchdog.stallTimeoutMs / 1000)}s`,
-        settingsRoute: "/settings/memory-sync"
+        settingsRoute: "/settings/sync"
       };
     }
     return {
@@ -1186,8 +1391,8 @@ export class ServiceDiagnosticsService {
       name: "SyncVault 加密同步通道",
       status: "degraded",
       summary: "尚未启用远程加密同步通道（仅本地存储）",
-      fixAction: "前往「记忆与同步」配置 WebDAV / S3 / GitHub 加密同步",
-      settingsRoute: "/settings/memory-sync"
+      fixAction: "前往「云同步」配置 WebDAV / S3 / GitHub 加密同步",
+      settingsRoute: "/settings/sync"
     };
   }
 
@@ -1262,9 +1467,7 @@ export class ServiceDiagnosticsService {
     const started = performance.now();
     let version: string | null = null;
     try {
-      const { stdout } = await execFileAsync(binPath, ["i"], {
-        timeout: timeoutMs,
-        windowsHide: true,
+      const { stdout } = await execSafeCli(binPath, ["i"], timeoutMs, {
         maxBuffer: 256 * 1024
       });
       version = extractFirstVersionLine(stdout);
@@ -1323,11 +1526,12 @@ export class ServiceDiagnosticsService {
       let version: string | null = null;
       const started = performance.now();
       try {
-        const { stdout } = await execFileAsync(detected.adbPath, ["version"], {
-          timeout: timeoutMs,
-          windowsHide: true,
-          maxBuffer: 256 * 1024
-        });
+        const { stdout } = await execSafeCli(
+          detected.adbPath,
+          ["version"],
+          timeoutMs,
+          { maxBuffer: 256 * 1024 }
+        );
         version = extractFirstVersionLine(stdout);
       } catch {
         // adb exists even if version failed
@@ -1521,7 +1725,8 @@ export class ServiceDiagnosticsService {
       name: "OvernightFactory（夜间全自动工场）",
       status: "ok",
       summary: `待命就绪（模式 ${cfg.mode} · 标签 ${cfg.matchAliasOrTag} · ${stages.length} 阶段）`,
-      detail: `已处理任务邮件 ${processedCount} 封（只读摘要）`
+      detail: `已处理任务邮件 ${processedCount} 封（只读摘要）`,
+      settingsRoute: "/settings/overnight-factory"
     };
   }
 

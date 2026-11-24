@@ -65,12 +65,10 @@ prismux/
 │   ├── daemon/                        # @prismux/daemon：24h 无头守护服务（主秘书槽位、五大原语、双源更新器、夜间工场）
 │   ├── workbench-ui/                  # @prismux/workbench-ui：[待退役原型壳] v0.0.1 原型验证界面，正按 v0.1.0 方案退役并替换为真实 T3 Code 融合界面
 │   └── desktop-tauri/                 # prismux-desktop：[历史/阶段原生壳] 原 Tauri v2 壳（v0.1.0 起主桌面端切换为 T3 Code 原生 Electron 44 桌面端，不纳入 pnpm workspace）
-└── plugins-official/                  # 官方认证独立插件源码与索引（默认全部不预装）
-    ├── catalog/official.json          # 官方插件权威索引（version / engines / sha256 / bytes / status）
+└── plugins-official/                  # 官方认证独立插件源码与索引（活跃 2 款默认全部不预装；pet / ssh 已停用：已被内置功能取代）
+    ├── catalog/official.json          # 官方插件权威索引（活跃 qq / fishdock-hook + retiredPlugins 停用说明）
     ├── plugin-qq/                     # @prismux/plugin-qq：OneBot v11 私聊主秘书 + 群聊隔离陪聊插件
-    ├── plugin-pet/                    # @prismux/plugin-pet：带租约锁与分阶段交还的桌宠联动插件
-    ├── plugin-fishdock-hook/          # @prismux/plugin-fishdock-hook：FISH-Dock 灵动岛审批与回执桥接插件
-    └── plugin-ssh/                    # @prismux/plugin-ssh：按需选装的 SSH 主机池、Web PTY 与 SFTP 插件
+    └── plugin-fishdock-hook/          # @prismux/plugin-fishdock-hook：FISH-Dock 灵动岛审批与回执桥接插件
 ```
 
 ### Workspace 与技术栈边界
@@ -96,8 +94,9 @@ prismux/
 3. **内生单文件 SQLite 记忆中枢与物理防泄密**
    - 记忆引擎固定为单文件 `~/.prismux/data/memory.db`（`SQLite WAL + FTS5 + sqlite-vec`），**零 PostgreSQL、零 Qdrant、零 MinIO、零本地 Obsidian 客户端运行依赖**（仅在 `apps/daemon` 暴露 `POST /v1/memory/import-obsidian` 接口承接历史笔记迁移）。
    - 查询层强制在传输层通过 `forwardIdentity` 注入并覆写 `_callerScope`，**绝不信任模型自报参数**；当 `_callerScope` 为 `qq_group:<gid>` 时，SQL 构造器底层硬编码绑定 `WHERE namespace = 'social/qq-group-' || :gid AND deleted_at IS NULL`，物理杜绝读取 `private/chief` 与 `workspace/*`。
-4. **四大官方插件默认绝不预装**
-   - `qq`、`pet`、`fishdock-hook`、`ssh` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序与默认守护进程启动链路保持极简，不捆绑预装。
+4. **官方独立插件默认绝不预装（活跃 2 款；`pet` / `ssh` 已停用）**
+   - 活跃官方插件 `qq` 与 `fishdock-hook` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序与默认守护进程启动链路保持极简，不捆绑预装。
+   - 原 `pet`（桌宠联动）与 `ssh`（SSH 远程主机终端）插件已彻底移除并标注为「已停用：已被 Prismux 内置功能取代」，不再打包或上架安装。
 5. **视觉层对模型 0 Token 开销与强制设计规范**
    - `WebWallGL` 动态壁纸、360° Fresnel 液态玻璃、字体调色、系统音频律动、桌宠演出与安装包向导属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
    - `@prismux/appearance`、`@prismux/wallpaper`、T3 Code 融合桌面端/前端定制、安装包向导与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、无障碍对比度及降级兜底红线。
@@ -111,8 +110,8 @@ prismux/
 | **M1：骨架、只读 T3 桥接与守护中枢** | 初始化 pnpm Monorepo 与 `scripts/` 工具链；拉取只读 `vendor/t3code` 并写入 `UPSTREAM_LOCK.json`；实现 `apps/daemon` 进程监督、环境变量清洗、主秘书槽位（`Chief Thread Slot`）与 `PersistentPtyPool`（默认每终端 `2 MB` 环形缓冲） | `pnpm -r typecheck`、`pnpm -r build`、`pnpm test:scripts` 与 `pnpm upstream:check` 全绿；`node apps/daemon/dist/cli.js start --headless` 可无界面连上 T3 Server RPC 并在重连后无损回放 PTY 历史流 |
 | **M2：内生三域记忆库与五大标杆原语** | 实现 `packages/memory-core`（SQLite WAL + FTS5 + `sqlite-vec` + Obsidian 导入）；实现 `forwardIdentity` 作用域硬隔离与 60 s 熔断、`LifecycleHookBus`（6 类事件、退出码 `2` 拦截、安全钩子默认 `onFailure: "block"`、四档权限）、`HandoffEngine`（`/handoff` + 三档拨盘）与 `WorktreeSandbox`（OS 级写隔离 + 域名白名单网关） | 越权单测验证 `qq_group:<gid>` 查询 `private/chief` 与 `workspace/*` **100% 返回空集**；安全 Hook 超时或抛错时必定阻断执行；`/handoff` 可无损提纯 `{ goal, decisions, touchedFiles, openQuestions }` 并续跑新线程 |
 | **M3：Cordis 双轨插件商城与 Magpie 同步** | 实现 `packages/cordis-kernel`（顶层 `engines.prismux` SemVer 校验、`ctx.effect()` 卸载零残留、官方 SHA-256 校验、免 Git 无脚本 `npm` Tarball 安装器 + `distribution: "managed"` 锁）；实现 `packages/sync-vault`（Argon2id + AEAD 密封、WebDAV/S3/Git 独立开关、`If-Match` 乐观锁、60 s 停滞看门狗与 `data/` 便携模式） | 慢速流模拟测试 3 分钟持续低速传输不断连、连续 60 s 零字节准时触发停滞报错；双机并发上传验证 `If-Match`（及降级 `HEAD ETag`）拦截覆盖；`npm` 插件启停与卸载无残留监听、路由或 DOM |
-| **M4：真实 T3 Code 融合底座、液态玻璃、四把手术刀与壁纸引擎** | 完成 `@prismux/appearance`（1:1 FISH-Dock 天体三态胶囊、浮窗调色盘、≥ 4.5:1 对比度钳制、T3 Glass 桥接）与 `@prismux/wallpaper`（右侧壁纸边栏、5 页签设置页、Z-0 多源渲染舞台与 Steam `431960` 扫描器）；通过 `docs/t3code-patch-manifest.md` 6 大最小入侵挂载点融入真实 T3 Code（Electron 44 `apps/desktop` + `apps/server` + `apps/web`），逐步退役旧原型壳 `apps/workbench-ui`，并集成 4 大内置效率增强与 NSIS 安装包 | `@prismux/appearance`、`@prismux/wallpaper` 与 T3 Code（`server / web / desktop`）编译与单测全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成八态、对比度、`prefers-reduced-motion` 与无 GPU 兜底核验；**真实桌面二进制冷启动直达工作台、窗口拖拽区与最小化/最大化/关闭三键 100% 可用，并通过多场景实机截图自审（天体三态胶囊、右侧壁纸边栏、设置页、遮挡 `0 FPS` 挂起、四大官方插件零预装声明）** |
-| **M5：夜间全自动工场与官方独立插件** | 完成 `OvernightFactory`（Gmail OAuth2 / IMAP `#factory` 监听 → 记忆补全与 Handoff 立项 → Worktree 沙箱编码与提交 → Oracle 只读 `review` 挑刺 → HTML 完工早报回信与 `prismux://review/<threadId>` 深链）；完成 `plugins-official/` 下 `plugin-qq`、`plugin-pet`（定向实例、Lease 锁、进度订阅、分阶段交还）、`plugin-fishdock-hook` 与 `plugin-ssh` | 跑通端到端模拟邮件入站 → 自动拉分支改代码过单测 → 产出带 Diff 与 Oracle 评语的 HTML 邮件全文；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
+| **M4：真实 T3 Code 融合底座、液态玻璃、四把手术刀与壁纸引擎** | 完成 `@prismux/appearance`（1:1 FISH-Dock 天体三态胶囊、浮窗调色盘、≥ 4.5:1 对比度钳制、T3 Glass 桥接）与 `@prismux/wallpaper`（右侧壁纸边栏、5 页签设置页、Z-0 多源渲染舞台与 Steam `431960` 扫描器）；通过 `docs/t3code-patch-manifest.md` 6 大最小入侵挂载点融入真实 T3 Code（Electron 44 `apps/desktop` + `apps/server` + `apps/web`），逐步退役旧原型壳 `apps/workbench-ui`，并集成 4 大内置效率增强与 NSIS 安装包 | `@prismux/appearance`、`@prismux/wallpaper` 与 T3 Code（`server / web / desktop`）编译与单测全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成八态、对比度、`prefers-reduced-motion` 与无 GPU 兜底核验；**真实桌面二进制冷启动直达工作台、窗口拖拽区与最小化/最大化/关闭三键 100% 可用，并通过多场景实机截图自审（天体三态胶囊、右侧壁纸边栏、设置页、遮挡 `0 FPS` 挂起、官方插件零预装声明）** |
+| **M5：夜间全自动工场与官方独立插件** | 完成 `OvernightFactory`（Gmail OAuth2 / IMAP `#factory` 监听 → 记忆补全与 Handoff 立项 → Worktree 沙箱编码与提交 → Oracle 只读 `review` 挑刺 → HTML 完工早报回信与 `prismux://review/<threadId>` 深链）；维护 `plugins-official/` 下活跃官方插件 `plugin-qq` 与 `plugin-fishdock-hook`（原 `plugin-pet` 与 `plugin-ssh` 已停用并移除：已被 Prismux 内置功能取代） | 跑通端到端模拟邮件入站 → 自动拉分支改代码过单测 → 产出带 Diff 与 Oracle 评语的 HTML 邮件全文；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
 
 ## 四、核心工具脚本与插件打包契约
 

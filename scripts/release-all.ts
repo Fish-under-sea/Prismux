@@ -45,9 +45,9 @@ export interface ReleaseAllResult {
 }
 
 /**
- * Full v0.1.0-alpha.1 release coordinator: builds the T3-based Prismux desktop
- * installer cleanly (with zero prebundled plugins), packs the 4 standalone
- * `.wb-plugin` archives + updates `plugins-official/catalog/official.json`,
+ * Full release coordinator: builds the T3-based Prismux desktop
+ * installer cleanly (with zero prebundled plugins), packs the 2 active standalone
+ * `.wb-plugin` archives (`qq`, `fishdock-hook`) + updates `plugins-official/catalog/official.json`,
  * generates standalone npm plugin wrapper packages, and emits `SHA256SUMS.txt`.
  */
 export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult {

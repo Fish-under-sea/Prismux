@@ -60,7 +60,10 @@ import {
 import {
   buildPrismuxDesktop,
   parseBuildDesktopArgs,
+  resolveSqliteVecLibraryFilename,
+  resolveSqliteVecPackageName,
   sanitizeDesktopBuildEnv,
+  stageSqliteVecBinaryForDesktop,
   type DesktopCommandInvocation,
 } from '../build-prismux-desktop.ts';
 import { runReleaseAll } from '../release-all.ts';
@@ -828,14 +831,12 @@ describe('release-and-npm-packages', () => {
       outDir: unscopedOut,
       version,
     });
-    assert.equal(unscopedBuilt.length, 4);
+    assert.equal(unscopedBuilt.length, 2);
     assert.deepEqual(
       unscopedBuilt.map((b) => b.packageName),
       [
         'prismux-plugin-qq',
-        'prismux-plugin-pet',
         'prismux-plugin-fishdock-hook',
-        'prismux-plugin-ssh',
       ],
     );
 
@@ -1095,13 +1096,18 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     assert.equal(parsed.options.outDir, '.work/custom-out');
   });
 
-  it('orchestrates 4-step desktop build + NSIS archiving + 7z verification + sha256 and supports --skip-rust', () => {
+  it('orchestrates desktop build with mandatory sqlite-vec staging, NSIS archiving, 7z verification, sha256 and --skip-rust', () => {
     const mockRepo = createTempDir('prismux-desktop-build-');
     writeTextFile(
       join(mockRepo, 'package.json'),
       JSON.stringify({ name: 'prismux-monorepo', version: '0.1.0-alpha.1' }),
     );
     mkdirSync(join(mockRepo, 'vendor', 't3code', 'scripts'), { recursive: true });
+
+    const vecLibName = resolveSqliteVecLibraryFilename();
+    const vecPkgName = resolveSqliteVecPackageName();
+    const mockVecBinary = join(mockRepo, 'node_modules', vecPkgName, vecLibName);
+    writeBinaryFile(mockVecBinary, Buffer.alloc(1024, 0x5a));
 
     const monitorExe = join(
       mockRepo,
@@ -1144,16 +1150,21 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
 
     assert.deepEqual(result.executedSteps, [
       'root-build',
+      'sqlite-vec-stage',
       'rust-build',
       't3-build-desktop',
       'nsis-installer',
     ]);
+    assert.ok(result.sqliteVecPath !== null && existsSync(result.sqliteVecPath));
+    assert.equal(result.sqliteVecPath.includes('.asar'), false);
+    assert.equal(result.sqliteVecBytes, 1024);
     assert.equal(invocations.length, 4);
     assert.ok(invocations[1]!.args.includes('-j'));
     assert.ok(invocations[1]!.args.includes('1'));
     assert.equal(invocations[2]!.command, 'pnpm');
     assert.deepEqual(invocations[2]!.args, ['exec', 'vp', 'run', 'build:desktop']);
     assert.equal(invocations[3]!.env['T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR'], '1');
+    assert.equal(invocations[3]!.env['PRISMUX_SQLITE_VEC_PATH'], result.sqliteVecPath);
     assert.ok(invocations[3]!.args.includes('--platform'));
     assert.ok(invocations[3]!.args.includes('win'));
     assert.ok(invocations[3]!.args.includes('nsis'));
@@ -1184,7 +1195,11 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
         return { status: 0, stdout: '', stderr: '' };
       },
     });
-    assert.deepEqual(skipResult.executedSteps, ['rust-skipped', 't3-build-desktop']);
+    assert.deepEqual(skipResult.executedSteps, [
+      'sqlite-vec-stage',
+      'rust-skipped',
+      't3-build-desktop',
+    ]);
     assert.equal(skipInvocations.some((i) => i.command === 'cargo'), false);
 
     rmSync(monitorExe, { force: true });
@@ -1197,6 +1212,48 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
           runner: () => ({ status: 0, stdout: '', stderr: '' }),
         }),
       /missing/i,
+    );
+  });
+
+  it('rejects missing, empty, or .asar-targeted sqlite-vec native binary during desktop staging', () => {
+    const emptyRepo = createTempDir('prismux-vec-missing-');
+    writeTextFile(
+      join(emptyRepo, 'package.json'),
+      JSON.stringify({ name: 'prismux-monorepo', version: '0.1.2-preview.2' }),
+    );
+    mkdirSync(join(emptyRepo, 'vendor', 't3code', 'scripts'), { recursive: true });
+
+    assert.throws(
+      () =>
+        stageSqliteVecBinaryForDesktop({
+          repoRoot: emptyRepo,
+          env: {},
+        }),
+      /Missing native sqlite-vec library/i,
+    );
+
+    const vecLibName = resolveSqliteVecLibraryFilename();
+    const vecPkgName = resolveSqliteVecPackageName();
+    const zeroByteDll = join(emptyRepo, 'node_modules', vecPkgName, vecLibName);
+    writeBinaryFile(zeroByteDll, Buffer.alloc(0));
+    assert.throws(
+      () =>
+        stageSqliteVecBinaryForDesktop({
+          repoRoot: emptyRepo,
+          env: {},
+        }),
+      /empty \(0 bytes\)/i,
+    );
+
+    writeBinaryFile(zeroByteDll, Buffer.alloc(512, 0x42));
+    assert.throws(
+      () =>
+        stageSqliteVecBinaryForDesktop({
+          repoRoot: emptyRepo,
+          targetPath: join(emptyRepo, 'resources', 'app.asar', 'native', vecLibName),
+          env: {},
+        }),
+      /outside \.asar/i,
     );
   });
 
@@ -1260,9 +1317,9 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     });
 
     assert.equal(releaseRes.version, version);
-    assert.equal(releaseRes.plugins.length, 4);
-    assert.equal(releaseRes.unscopedNpmPackages.length, 4);
-    assert.equal(releaseRes.scopedNpmPackages.length, 4);
+    assert.equal(releaseRes.plugins.length, 2);
+    assert.equal(releaseRes.unscopedNpmPackages.length, 2);
+    assert.equal(releaseRes.scopedNpmPackages.length, 2);
     assert.ok(existsSync(join(outDir, 'plugins', `prismux-plugin-qq-${version}.wb-plugin`)));
     assert.equal(existsSync(join(outDir, 'plugins', `prismux-plugin-qq-${version}.sha256`)), false);
     assert.ok(existsSync(join(outDir, RELEASE_CATALOG_FILENAME)));

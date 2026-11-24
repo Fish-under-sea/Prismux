@@ -216,19 +216,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/protocol
 
-  plugins-official/plugin-pet:
-    dependencies:
-      '@prismux/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-
   plugins-official/plugin-qq:
-    dependencies:
-      '@prismux/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-
-  plugins-official/plugin-ssh:
     dependencies:
       '@prismux/protocol':
         specifier: workspace:*

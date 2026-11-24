@@ -17,9 +17,11 @@ import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_SAMPLE_TIMEOUT_MS = 3_500;
-const DEFAULT_TREE_CACHE_TTL_MS = 2_000;
+const DEFAULT_SAMPLE_TIMEOUT_MS = 5_000;
+const DEFAULT_TREE_CACHE_TTL_MS = 1_500;
 const DEFAULT_BACKGROUND_SAMPLE_INTERVAL_MS = 2_000;
+const WARMUP_INITIAL_DELAY_MS = 120;
+const WARMUP_SECOND_FRAME_DELAY_MS = 280;
 const HOST_METRICS_FRESH_TTL_MS = 15_000;
 const STALE_IDLE_THRESHOLD_MS = 30 * 60 * 1000;
 const MAX_HISTORY_SAMPLES = 30;
@@ -183,6 +185,13 @@ interface PreviousProcCpu {
   lastCpuPercent: number | null;
 }
 
+interface PreviousElectronCpu {
+  cumulativeCpuSeconds: number | null;
+  collectedAtMs: number;
+  lastCpuPercent: number | null;
+  pushCount: number;
+}
+
 interface CachedHostMetrics {
   report: HostMetricsReport;
   receivedAt: number;
@@ -191,6 +200,12 @@ interface CachedHostMetrics {
 interface CachedProcessTree {
   entries: Map<number, OsProcessSnapshotEntry>;
   sampledAtMs: number;
+}
+
+interface ProcessTreeLookupResult {
+  entries: Map<number, OsProcessSnapshotEntry>;
+  sampledAtMs: number;
+  fromCache: boolean;
 }
 
 function readHostCpuTotals(): CpuTotals {
@@ -213,10 +228,43 @@ function roundOneDecimal(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+function roundTwoDecimals(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function clampPercent(value: number): number {
   if (!Number.isFinite(value) || value < 0) return 0;
   if (value > 100) return 100;
   return roundOneDecimal(value);
+}
+
+function clampPercentPrecise(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  if (value > 100) return 100;
+  return roundTwoDecimals(value);
+}
+
+/**
+ * Windows Task Manager standard total-system CPU% normalization formula:
+ * `processCpuPercent = (deltaCpuSeconds / (elapsedSeconds * logicalCpuCores)) * 100`,
+ * clamped to `[0, 100]` with 2-decimal precision so summing many low-CPU processes
+ * never drops real usage due to premature 1-decimal truncation.
+ */
+export function computeNormalizedCpuPercent(
+  deltaCpuSeconds: number,
+  elapsedSeconds: number,
+  cpuCores: number
+): number {
+  if (
+    !Number.isFinite(deltaCpuSeconds) ||
+    !Number.isFinite(elapsedSeconds) ||
+    elapsedSeconds <= 0
+  ) {
+    return 0;
+  }
+  const safeDelta = Math.max(0, deltaCpuSeconds);
+  const safeCores = Math.max(1, Number.isFinite(cpuCores) ? cpuCores : 1);
+  return clampPercentPrecise((safeDelta / (elapsedSeconds * safeCores)) * 100);
 }
 
 function parsePositiveInt(raw: unknown): number | null {
@@ -351,7 +399,8 @@ export function parseUnixProcessTreeOutput(
       memoryBytes: Number.isFinite(rssKb) && rssKb >= 0 ? rssKb * 1024 : null,
       privateMemoryBytes: null,
       cpuSeconds: null,
-      cpuPercent: Number.isFinite(rawCpu) && rawCpu >= 0 ? clampPercent(rawCpu / cores) : null
+      cpuPercent:
+        Number.isFinite(rawCpu) && rawCpu >= 0 ? clampPercentPrecise(rawCpu / cores) : null
     });
   }
   return map;
@@ -479,7 +528,7 @@ async function defaultSampleProcesses(
       const rssKb = Number.parseInt(match[3]!, 10);
       map.set(pid, {
         pid,
-        cpuPercent: Number.isFinite(cpu) ? clampPercent(cpu / cpuCores) : null,
+        cpuPercent: Number.isFinite(cpu) ? clampPercentPrecise(cpu / cpuCores) : null,
         memoryBytes: Number.isFinite(rssKb) ? rssKb * 1024 : null
       });
     }
@@ -702,7 +751,7 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
   const cpuScale =
     rec["cpuScale"] === "system-total" || rec["cpuScale"] === "single-core"
       ? rec["cpuScale"]
-      : "single-core";
+      : "system-total";
 
   let t3Server: HostT3ServerInfo | null | undefined;
   if (rec["t3Server"] === null) {
@@ -840,17 +889,18 @@ export class ResourceMonitorService {
   private daemonCpuWindow: number[] = [];
 
   private readonly previousProcCpuByPid = new Map<number, PreviousProcCpu>();
+  private readonly previousElectronCpuByPid = new Map<number, PreviousElectronCpu>();
   private appMemoryHistory: number[] = [];
   private readonly workspaceMemoryHistory = new Map<string, number[]>();
 
   private latestHostMetrics: CachedHostMetrics | null = null;
-  private hostMetricsPushCount = 0;
 
   private cachedProcessTree: CachedProcessTree | null = null;
-  private inflightProcessTree: Promise<Map<number, OsProcessSnapshotEntry>> | null = null;
+  private inflightProcessTree: Promise<CachedProcessTree> | null = null;
 
   private backgroundTimer: NodeJS.Timeout | undefined;
   private warmupTimer: NodeJS.Timeout | undefined;
+  private warmupFollowupTimer: NodeJS.Timeout | undefined;
 
   constructor(options: ResourceMonitorServiceOptions) {
     this.sampleTimeoutMs = options.sampleTimeoutMs ?? DEFAULT_SAMPLE_TIMEOUT_MS;
@@ -896,11 +946,13 @@ export class ResourceMonitorService {
     this.backgroundTimer.unref();
 
     // Only warm up the OS process tree in live mode (skip when unit tests inject custom samplers).
+    // Performs a two-frame warm-up (baseline + follow-up 280ms later) so the first UI popover open
+    // already displays real non-zero OS CPU% deltas instead of cold-start 0.0%.
     if (!this.customSampleProcessesFn && !this.sampleProcessTreeFn) {
       this.warmupTimer = setTimeout(() => {
         this.warmupTimer = undefined;
-        void this.primeProcessTreeBaseline();
-      }, 450);
+        void this.primeProcessTreeBaseline(true);
+      }, WARMUP_INITIAL_DELAY_MS);
       this.warmupTimer.unref();
     }
   }
@@ -914,20 +966,32 @@ export class ResourceMonitorService {
       clearTimeout(this.warmupTimer);
       this.warmupTimer = undefined;
     }
+    if (this.warmupFollowupTimer !== undefined) {
+      clearTimeout(this.warmupFollowupTimer);
+      this.warmupFollowupTimer = undefined;
+    }
   }
 
-  private async primeProcessTreeBaseline(): Promise<void> {
+  private async primeProcessTreeBaseline(scheduleFollowup: boolean): Promise<void> {
     try {
-      const tree = await this.getProcessTree(true);
-      const now = Date.now();
-      for (const entry of tree.values()) {
-        if (entry.cpuSeconds !== null && !this.previousProcCpuByPid.has(entry.pid)) {
-          this.previousProcCpuByPid.set(entry.pid, {
-            cpuSeconds: entry.cpuSeconds,
-            sampledAtMs: now,
-            lastCpuPercent: null
-          });
+      const { entries, sampledAtMs, fromCache } = await this.getProcessTree(true);
+      const cpuCores = Math.max(1, os.cpus().length);
+      for (const entry of entries.values()) {
+        if (entry.cpuSeconds !== null) {
+          this.resolveDerivedCpuPercent(
+            { pid: entry.pid, cpuPercent: entry.cpuPercent, cpuSeconds: entry.cpuSeconds },
+            sampledAtMs,
+            cpuCores,
+            fromCache
+          );
         }
+      }
+      if (scheduleFollowup && this.backgroundTimer !== undefined) {
+        this.warmupFollowupTimer = setTimeout(() => {
+          this.warmupFollowupTimer = undefined;
+          void this.primeProcessTreeBaseline(false);
+        }, WARMUP_SECOND_FRAME_DELAY_MS);
+        this.warmupFollowupTimer.unref();
       }
     } catch {
       // Non-fatal baseline warm-up
@@ -937,11 +1001,88 @@ export class ResourceMonitorService {
   /**
    * Ingests a real-time host process snapshot pushed by the Electron desktop host
    * (`app.getAppMetrics()` + `DesktopBackendPool` primary T3 Server PID).
+   *
+   * Derives per-PID total-system CPU% from monotonic `cumulativeCpuSeconds` deltas
+   * whenever available (100% immune to competing `app.getAppMetrics()` interval resets
+   * from T3 DesktopTelemetryPublisher), falling back to `cpuPercent` normalized by
+   * `report.cpuScale` without ever double-dividing by logical CPU cores.
    */
   ingestHostMetrics(report: HostMetricsReport): HostMetricsIngestResult {
     const receivedAt = Date.now();
     this.latestHostMetrics = { report, receivedAt };
-    this.hostMetricsPushCount += 1;
+
+    const effectiveCores = Math.max(1, report.cpuCores ?? os.cpus().length);
+    const reportTimeMs =
+      Number.isFinite(report.collectedAt) && report.collectedAt > 0
+        ? report.collectedAt
+        : receivedAt;
+
+    const seenPids = new Set<number>();
+    for (const metric of report.electronProcesses) {
+      seenPids.add(metric.pid);
+      const prev = this.previousElectronCpuByPid.get(metric.pid);
+      const pushCount = (prev?.pushCount ?? 0) + 1;
+
+      let directPct: number | null = null;
+      if (
+        metric.cpuPercent !== null &&
+        Number.isFinite(metric.cpuPercent) &&
+        metric.cpuPercent >= 0
+      ) {
+        directPct =
+          report.cpuScale === "single-core"
+            ? clampPercentPrecise(metric.cpuPercent / effectiveCores)
+            : clampPercentPrecise(metric.cpuPercent);
+      }
+
+      const curCum =
+        metric.cumulativeCpuSeconds !== undefined &&
+        metric.cumulativeCpuSeconds !== null &&
+        Number.isFinite(metric.cumulativeCpuSeconds) &&
+        metric.cumulativeCpuSeconds >= 0
+          ? metric.cumulativeCpuSeconds
+          : null;
+
+      let cumulativeDeltaPct: number | null = null;
+      if (curCum !== null && prev && prev.cumulativeCpuSeconds !== null) {
+        const elapsedSec = (reportTimeMs - prev.collectedAtMs) / 1000;
+        if (elapsedSec >= 0.05 && curCum >= prev.cumulativeCpuSeconds) {
+          cumulativeDeltaPct = computeNormalizedCpuPercent(
+            curCum - prev.cumulativeCpuSeconds,
+            elapsedSec,
+            effectiveCores
+          );
+        } else if (elapsedSec < 0.05 && prev.lastCpuPercent !== null) {
+          cumulativeDeltaPct = prev.lastCpuPercent;
+        }
+      }
+
+      let resolvedPct: number | null = null;
+      if (cumulativeDeltaPct !== null) {
+        resolvedPct = cumulativeDeltaPct;
+      } else if (directPct !== null) {
+        // A PID's very first Electron app.getAppMetrics() push often reports 0 (unprimed baseline);
+        // keep null so getResources() can fall back to OS-derived delta until push #2 arrives.
+        resolvedPct = pushCount <= 1 && directPct === 0 ? null : directPct;
+      } else if (prev?.lastCpuPercent !== undefined) {
+        resolvedPct = prev.lastCpuPercent;
+      }
+
+      this.previousElectronCpuByPid.set(metric.pid, {
+        cumulativeCpuSeconds: curCum,
+        collectedAtMs: reportTimeMs,
+        lastCpuPercent: resolvedPct,
+        pushCount
+      });
+    }
+
+    if (report.electronProcesses.length > 0) {
+      for (const trackedPid of this.previousElectronCpuByPid.keys()) {
+        if (!seenPids.has(trackedPid)) {
+          this.previousElectronCpuByPid.delete(trackedPid);
+        }
+      }
+    }
 
     return {
       ok: true,
@@ -978,14 +1119,15 @@ export class ResourceMonitorService {
 
   private resolveDerivedCpuPercent(
     reading: Pick<ProcessUsageReading, "pid" | "cpuPercent" | "cpuSeconds"> | undefined,
-    nowMs: number,
-    cpuCores: number
+    sampledAtMs: number,
+    cpuCores: number,
+    fromCache: boolean
   ): number | null {
     if (!reading) {
       return null;
     }
     if (reading.cpuPercent !== null) {
-      return clampPercent(reading.cpuPercent);
+      return clampPercentPrecise(reading.cpuPercent);
     }
     if (reading.cpuSeconds === undefined || reading.cpuSeconds === null) {
       return null;
@@ -994,20 +1136,36 @@ export class ResourceMonitorService {
     if (!prev) {
       this.previousProcCpuByPid.set(reading.pid, {
         cpuSeconds: reading.cpuSeconds,
-        sampledAtMs: nowMs,
+        sampledAtMs,
         lastCpuPercent: null
       });
       return null;
     }
-    const elapsedSec = (nowMs - prev.sampledAtMs) / 1000;
-    if (elapsedSec <= 0.05) {
+    // Cached snapshot or non-advancing timestamp: preserve previous delta instead of wiping to 0.0%.
+    if (fromCache || sampledAtMs <= prev.sampledAtMs) {
       return prev.lastCpuPercent;
     }
-    const deltaCpuSec = Math.max(0, reading.cpuSeconds - prev.cpuSeconds);
-    const normalized = clampPercent((deltaCpuSec / (elapsedSec * Math.max(1, cpuCores))) * 100);
+    const elapsedSec = (sampledAtMs - prev.sampledAtMs) / 1000;
+    if (elapsedSec < 0.05) {
+      return prev.lastCpuPercent;
+    }
+    // Guard against PID reuse or counter reset.
+    if (reading.cpuSeconds < prev.cpuSeconds) {
+      this.previousProcCpuByPid.set(reading.pid, {
+        cpuSeconds: reading.cpuSeconds,
+        sampledAtMs,
+        lastCpuPercent: null
+      });
+      return null;
+    }
+    const normalized = computeNormalizedCpuPercent(
+      reading.cpuSeconds - prev.cpuSeconds,
+      elapsedSec,
+      cpuCores
+    );
     this.previousProcCpuByPid.set(reading.pid, {
       cpuSeconds: reading.cpuSeconds,
-      sampledAtMs: nowMs,
+      sampledAtMs,
       lastCpuPercent: normalized
     });
     return normalized;
@@ -1046,7 +1204,7 @@ export class ResourceMonitorService {
     );
     const cpuCores = Math.max(1, os.cpus().length);
     const safeElapsedMs = Math.max(1, elapsedMs);
-    const instantPercent = clampPercent(
+    const instantPercent = clampPercentPrecise(
       (deltaCpuMicros / (safeElapsedMs * 1000 * cpuCores)) * 100
     );
 
@@ -1059,7 +1217,7 @@ export class ResourceMonitorService {
       }
       // Weighted recent smoothing favors latest burst while preventing brief 0.0% flicker.
       const sum = this.daemonCpuWindow.reduce((acc, v) => acc + v, 0);
-      const smoothed = clampPercent(sum / this.daemonCpuWindow.length);
+      const smoothed = clampPercentPrecise(sum / this.daemonCpuWindow.length);
       this.lastDaemonCpuPercent = Math.max(instantPercent, smoothed);
       return this.lastDaemonCpuPercent;
     }
@@ -1068,19 +1226,26 @@ export class ResourceMonitorService {
     return instantPercent;
   }
 
-  private async getProcessTree(
-    forceRefresh: boolean
-  ): Promise<Map<number, OsProcessSnapshotEntry>> {
+  private async getProcessTree(forceRefresh: boolean): Promise<ProcessTreeLookupResult> {
     const now = Date.now();
     if (
       !forceRefresh &&
       this.cachedProcessTree !== null &&
       now - this.cachedProcessTree.sampledAtMs < this.treeCacheTtlMs
     ) {
-      return this.cachedProcessTree.entries;
+      return {
+        entries: this.cachedProcessTree.entries,
+        sampledAtMs: this.cachedProcessTree.sampledAtMs,
+        fromCache: true
+      };
     }
     if (this.inflightProcessTree !== null) {
-      return this.inflightProcessTree;
+      const snapshot = await this.inflightProcessTree;
+      return {
+        entries: snapshot.entries,
+        sampledAtMs: snapshot.sampledAtMs,
+        fromCache: false
+      };
     }
 
     const fetcher = this.sampleProcessTreeFn
@@ -1089,10 +1254,17 @@ export class ResourceMonitorService {
 
     const run = fetcher()
       .then((entries) => {
-        this.cachedProcessTree = { entries, sampledAtMs: Date.now() };
-        return entries;
+        const snapshot: CachedProcessTree = { entries, sampledAtMs: Date.now() };
+        this.cachedProcessTree = snapshot;
+        return snapshot;
       })
-      .catch(() => this.cachedProcessTree?.entries ?? new Map<number, OsProcessSnapshotEntry>())
+      .catch(
+        () =>
+          this.cachedProcessTree ?? {
+            entries: new Map<number, OsProcessSnapshotEntry>(),
+            sampledAtMs: Date.now()
+          }
+      )
       .finally(() => {
         if (this.inflightProcessTree === run) {
           this.inflightProcessTree = null;
@@ -1100,51 +1272,38 @@ export class ResourceMonitorService {
       });
 
     this.inflightProcessTree = run;
-    return run;
+    const snapshot = await run;
+    return {
+      entries: snapshot.entries,
+      sampledAtMs: snapshot.sampledAtMs,
+      fromCache: false
+    };
   }
 
-  private normalizeElectronCpuPercent(
+  private resolveElectronCpuPercent(
     metric: HostElectronProcessMetric,
     report: HostMetricsReport,
     cpuCores: number,
-    osDerivedCpu: number | null,
-    nowMs: number
+    osDerivedCpu: number | null
   ): number | null {
-    const effectiveCores = Math.max(1, report.cpuCores ?? cpuCores);
-    // Prefer cumulative CPU delta when available (macOS/Linux) or Electron percentCPUUsage.
-    let electronPct: number | null = null;
-    if (metric.cpuPercent !== null && Number.isFinite(metric.cpuPercent) && metric.cpuPercent >= 0) {
-      electronPct =
-        report.cpuScale === "system-total"
-          ? clampPercent(metric.cpuPercent)
-          : clampPercent(metric.cpuPercent / effectiveCores);
+    const tracked = this.previousElectronCpuByPid.get(metric.pid);
+    if (tracked && tracked.lastCpuPercent !== null) {
+      return tracked.lastCpuPercent;
     }
-
-    // If Electron's first unprimed getAppMetrics() call returned 0, prefer OS-derived delta when available.
-    if (
-      (electronPct === null || (electronPct === 0 && this.hostMetricsPushCount <= 1)) &&
-      osDerivedCpu !== null
-    ) {
+    if (osDerivedCpu !== null) {
       return osDerivedCpu;
     }
-
+    const effectiveCores = Math.max(1, report.cpuCores ?? cpuCores);
     if (
-      electronPct === null &&
-      metric.cumulativeCpuSeconds !== undefined &&
-      metric.cumulativeCpuSeconds !== null
+      metric.cpuPercent !== null &&
+      Number.isFinite(metric.cpuPercent) &&
+      metric.cpuPercent >= 0
     ) {
-      return this.resolveDerivedCpuPercent(
-        {
-          pid: metric.pid,
-          cpuPercent: null,
-          cpuSeconds: metric.cumulativeCpuSeconds
-        },
-        nowMs,
-        effectiveCores
-      );
+      return report.cpuScale === "single-core"
+        ? clampPercentPrecise(metric.cpuPercent / effectiveCores)
+        : clampPercentPrecise(metric.cpuPercent);
     }
-
-    return electronPct ?? osDerivedCpu;
+    return null;
   }
 
   async getResources(
@@ -1178,6 +1337,8 @@ export class ResourceMonitorService {
     // Collect process samples either via injected test sampler OR full cached OS process tree.
     let osTree = new Map<number, OsProcessSnapshotEntry>();
     let legacySampledMap = new Map<number, ProcessUsageReading>();
+    let osSampledAtMs = now;
+    let osFromCache = false;
 
     if (this.customSampleProcessesFn && !this.sampleProcessTreeFn) {
       const pidsToSample: number[] = [];
@@ -1204,8 +1365,13 @@ export class ResourceMonitorService {
         pidsToSample.length > 0
           ? await this.customSampleProcessesFn(pidsToSample)
           : new Map();
+      osSampledAtMs = Date.now();
+      osFromCache = false;
     } else {
-      osTree = await this.getProcessTree(forceRefresh);
+      const treeLookup = await this.getProcessTree(forceRefresh);
+      osTree = treeLookup.entries;
+      osSampledAtMs = treeLookup.sampledAtMs;
+      osFromCache = treeLookup.fromCache;
       // Fallback to targeted Get-Process/ps if full tree came back empty (e.g. restricted WMI).
       if (osTree.size === 0 && !this.sampleProcessTreeFn) {
         const fallbackPids = new Set<number>([process.pid]);
@@ -1224,6 +1390,8 @@ export class ResourceMonitorService {
           [...fallbackPids],
           this.sampleTimeoutMs
         );
+        osSampledAtMs = Date.now();
+        osFromCache = false;
       }
     }
 
@@ -1330,20 +1498,50 @@ export class ResourceMonitorService {
       }
     }
 
-    // Derive CPU% once per PID so each PID advances its delta tracker at most once per getResources() call.
+    // Derive CPU% once per PID using the actual OS snapshot timestamp and cache status so cached reads
+    // never overwrite previous deltas with 0.0%.
     const derivedOsCpuByPid = new Map<number, number | null>();
     for (const pid of familyPids) {
       const reading = getOsReading(pid);
       if (reading) {
-        derivedOsCpuByPid.set(pid, this.resolveDerivedCpuPercent(reading, now, cpuCores));
+        derivedOsCpuByPid.set(
+          pid,
+          this.resolveDerivedCpuPercent(reading, osSampledAtMs, cpuCores, osFromCache)
+        );
       }
     }
 
-    // Prune stale PID CPU history entries no longer part of the live family.
-    for (const trackedPid of this.previousProcCpuByPid.keys()) {
-      if (!familyPids.has(trackedPid)) {
+    // Prune exited PID CPU history entries while preserving baselines of live OS processes that
+    // may join familyPids on a subsequent host-metrics push.
+    for (const [trackedPid, prevState] of this.previousProcCpuByPid.entries()) {
+      const stillAliveInTree = osTree.size > 0 && osTree.has(trackedPid);
+      const stale = now - prevState.sampledAtMs > 60_000;
+      if (!familyPids.has(trackedPid) && (!stillAliveInTree || stale)) {
         this.previousProcCpuByPid.delete(trackedPid);
       }
+    }
+
+    // Resolve the single authoritative CPU% per PID once so cards, sections, and totals agree 100%.
+    const resolvedCpuByPid = new Map<number, number | null>();
+    for (const pid of familyPids) {
+      if (pid === process.pid) {
+        resolvedCpuByPid.set(pid, daemonCpuPercent);
+        continue;
+      }
+      const electronMetric = electronByPid.get(pid);
+      if (electronMetric && hostReport) {
+        resolvedCpuByPid.set(
+          pid,
+          this.resolveElectronCpuPercent(
+            electronMetric,
+            hostReport,
+            cpuCores,
+            derivedOsCpuByPid.get(pid) ?? null
+          )
+        );
+        continue;
+      }
+      resolvedCpuByPid.set(pid, derivedOsCpuByPid.get(pid) ?? null);
     }
 
     // Build Daemon self metrics.
@@ -1354,18 +1552,7 @@ export class ResourceMonitorService {
     // Build T3 Server metrics (never returns null when desktop/env/RPC knows about T3 Server!).
     const t3OsReading = t3Pid !== null ? getOsReading(t3Pid) : undefined;
     const t3ElectronMetric = t3Pid !== null ? electronByPid.get(t3Pid) : undefined;
-    const t3DerivedCpu =
-      t3Pid !== null
-        ? t3ElectronMetric && hostReport
-          ? this.normalizeElectronCpuPercent(
-              t3ElectronMetric,
-              hostReport,
-              cpuCores,
-              derivedOsCpuByPid.get(t3Pid) ?? null,
-              now
-            )
-          : derivedOsCpuByPid.get(t3Pid) ?? null
-        : null;
+    const t3DerivedCpu = t3Pid !== null ? (resolvedCpuByPid.get(t3Pid) ?? null) : null;
     const t3MemoryBytes =
       t3OsReading?.memoryBytes ??
       (t3ElectronMetric ? t3ElectronMetric.workingSetBytes : null);
@@ -1417,7 +1604,7 @@ export class ResourceMonitorService {
     const ptyEntries: PtyResourceEntry[] = ptyInfos.map((info) => {
       const sample = info.pid !== null ? getOsReading(info.pid) : undefined;
       const cpuPercent =
-        info.pid !== null ? (derivedOsCpuByPid.get(info.pid) ?? null) : null;
+        info.pid !== null ? (resolvedCpuByPid.get(info.pid) ?? null) : null;
       const memoryBytes = sample?.memoryBytes ?? null;
       const idleMs = Math.max(0, now - info.lastActivityAt);
       const normalizedCwd = resolve(info.cwd);
@@ -1493,24 +1680,16 @@ export class ResourceMonitorService {
         }
       );
 
-      let cpuPercent: number | null;
+      const cpuPercent: number | null = resolvedCpuByPid.get(pid) ?? null;
       let memoryBytes: number | null;
       let privateMemoryBytes: number | null | undefined;
       let source: ProcessAttributionEntry["source"];
 
       if (pid === process.pid) {
-        cpuPercent = daemonCpuPercent;
         memoryBytes = daemonMemBytes;
         privateMemoryBytes = daemonPrivateMemBytes;
         source = "daemon-self";
       } else if (electronMetric && hostReport) {
-        cpuPercent = this.normalizeElectronCpuPercent(
-          electronMetric,
-          hostReport,
-          cpuCores,
-          derivedOsCpuByPid.get(pid) ?? null,
-          now
-        );
         memoryBytes =
           electronMetric.workingSetBytes > 0
             ? electronMetric.workingSetBytes
@@ -1522,7 +1701,6 @@ export class ResourceMonitorService {
           undefined;
         source = "electron";
       } else {
-        cpuPercent = derivedOsCpuByPid.get(pid) ?? null;
         memoryBytes = osRow?.memoryBytes ?? legacyRow?.memoryBytes ?? null;
         privateMemoryBytes =
           osRow?.privateMemoryBytes ?? legacyRow?.privateMemoryBytes ?? undefined;

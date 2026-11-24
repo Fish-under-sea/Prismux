@@ -19,9 +19,7 @@ import { packPlugin, type PackPluginResult } from './pack-plugin.ts';
 
 export const OFFICIAL_PLUGIN_IDS = [
   'qq',
-  'pet',
   'fishdock-hook',
-  'ssh',
 ] as const;
 
 export const RELEASE_CATALOG_FILENAME = 'prismux-plugins-official.json' as const;
@@ -451,7 +449,7 @@ export function buildReleasePackages(options: BuildReleaseOptions = {}): BuildRe
       `Prismux Portable Mode (${version})`,
       '',
       '检测到同级 data/ 目录时，SQLite 记忆库、同步缓存与加密插件凭据全部收敛至 data/ 内，不在系统用户目录写入残留。',
-      '官方四大独立插件（qq / pet / fishdock-hook / ssh）默认不预装，启动后可在内置插件市场按需单装。',
+      '官方两大独立插件（qq / fishdock-hook）默认不预装，启动后可在内置插件市场按需单装（原 pet / ssh 已停用：已被 Prismux 内置功能取代）。',
       '',
     ].join('\n'),
     'utf8',

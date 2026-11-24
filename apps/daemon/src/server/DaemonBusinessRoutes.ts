@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -16,6 +16,7 @@ import {
   EncryptedPluginCredentialStore,
   EngineIncompatibleError,
   PermissionAuditRequiredError,
+  PluginDeprecatedError,
   RegistryHttpError,
   RegistryNetworkError,
   type CordisPluginModule,
@@ -32,6 +33,7 @@ import {
   DEFAULT_CHIEF_SECRETARY_NAME,
   DIAL_MODES,
   MEMORY_KINDS,
+  RETIRED_OFFICIAL_PLUGIN_IDS,
   isValidMemoryNamespace,
   normalizeChiefProviderKind,
   normalizeChiefReasoningEffort,
@@ -51,6 +53,7 @@ import {
   type ObsidianImportPlanResponse,
   type OfficialPluginCatalogEntry,
   type PrismuxPluginModule,
+  type RetiredOfficialPluginEntry,
   type SyncChannelOperationResult,
   type SyncNowResponse,
   type SyncOperationChannel,
@@ -75,7 +78,13 @@ import {
   type ResourceMonitorService
 } from "../system/ResourceMonitorService.js";
 import type { T3RpcClient } from "../t3/T3RpcClient.js";
+import type { AppUpdater } from "../updater/AppUpdater.js";
 import { isPathStrictlyInsideDir } from "../wallpapers/WallpaperMediaService.js";
+import {
+  downloadOfficialPluginReleaseArchive,
+  getOfficialNpmFallbackSpecs,
+  type OfficialPluginSourceConfig
+} from "./OfficialPluginDownloader.js";
 
 const SYNC_CREDENTIAL_BUCKET = "sync-vault" as const;
 const SYNC_INSTALL_META_FILENAME = ".prismux-install.json" as const;
@@ -157,6 +166,8 @@ export interface DaemonBusinessContext {
   pluginHost?: CordisPluginHost;
   pluginInstaller?: CordisStreamingInstaller;
   pluginCredentialStore?: EncryptedPluginCredentialStore;
+  appUpdater?: AppUpdater;
+  officialPluginSources?: OfficialPluginSourceConfig;
   resourceMonitorService?: ResourceMonitorService;
   onMountPlugin?: (
     record: InstalledPluginRecord,
@@ -398,23 +409,49 @@ export function getOfficialPluginArchiveCandidateFilenames(
 
 function findOfficialArchiveInSearchDirs(
   entry: OfficialPluginCatalogEntry,
-  searchRoots: readonly string[]
-): Buffer | null {
+  searchRoots: readonly string[],
+  extraDirs: readonly string[] = []
+): { bytes: Buffer; filePath: string } | null {
   const filenames = getOfficialPluginArchiveCandidateFilenames(
     entry.id,
     entry.version
   );
+  const expectedSha = entry.sha256?.trim().toLowerCase() ?? "";
+  const hasExpectedSha = /^[0-9a-f]{64}$/.test(expectedSha);
+
+  const candidateDirs: string[] = [];
+  for (const dir of extraDirs) {
+    if (dir.trim().length > 0) {
+      candidateDirs.push(dir);
+    }
+  }
   for (const root of searchRoots) {
-    const dirs = [
+    candidateDirs.push(
       join(root, "plugins-official", "dist"),
       join(root, ".work", "plugin-dist")
-    ];
-    for (const dir of dirs) {
-      for (const filename of filenames) {
-        const candidate = join(dir, filename);
-        if (existsSync(candidate)) {
-          return readFileSync(candidate);
+    );
+  }
+
+  for (const dir of candidateDirs) {
+    for (const filename of filenames) {
+      const candidate = join(dir, filename);
+      if (!existsSync(candidate)) {
+        continue;
+      }
+      try {
+        const bytes = readFileSync(candidate);
+        if (bytes.byteLength === 0) {
+          continue;
         }
+        if (hasExpectedSha) {
+          const actualSha = createHash("sha256").update(bytes).digest("hex");
+          if (actualSha !== expectedSha) {
+            continue;
+          }
+        }
+        return { bytes, filePath: candidate };
+      } catch {
+        continue;
       }
     }
   }
@@ -444,19 +481,23 @@ function updateInstallMetadataEnabledFlag(
 
 async function tryLoadDaemonPluginModule(
   pluginsDir: string,
-  record: InstalledPluginRecord
+  record: InstalledPluginRecord,
+  onError?: (reason: string) => void
 ): Promise<PrismuxPluginModule | CordisPluginModule | null> {
   const pluginDir = join(pluginsDir, record.manifest.id);
   if (!existsSync(pluginDir)) {
+    onError?.(`插件目录不存在：${pluginDir}`);
     return null;
   }
   const pkgJsonPath = join(pluginDir, "package.json");
   if (!existsSync(pkgJsonPath)) {
+    onError?.(`缺少 package.json：${pkgJsonPath}`);
     return null;
   }
   try {
     const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as unknown;
     if (!isPlainRecord(pkg)) {
+      onError?.("package.json 不是合法 JSON 对象。");
       return null;
     }
     let relEntry: string | null = null;
@@ -479,12 +520,12 @@ async function tryLoadDaemonPluginModule(
       !isPathStrictlyInsideDir(candidate, pluginDir) ||
       !existsSync(candidate)
     ) {
+      onError?.(`插件入口文件不存在或越界：${relEntry}`);
       return null;
     }
-    const loaded = (await import(pathToFileURL(candidate).href)) as Record<
-      string,
-      unknown
-    >;
+    const cacheTag = `${record.manifest.version}-${record.installedAt || Date.now()}`;
+    const entryHref = `${pathToFileURL(candidate).href}?v=${encodeURIComponent(cacheTag)}`;
+    const loaded = (await import(entryHref)) as Record<string, unknown>;
     const modCandidate =
       isPlainRecord(loaded["default"]) &&
       typeof loaded["default"]["apply"] === "function"
@@ -493,6 +534,7 @@ async function tryLoadDaemonPluginModule(
           ? loaded
           : null;
     if (!modCandidate) {
+      onError?.(`插件入口 ${relEntry} 未导出 apply(ctx) 函数。`);
       return null;
     }
     const modManifest = isPlainRecord(modCandidate["manifest"])
@@ -502,7 +544,10 @@ async function tryLoadDaemonPluginModule(
       manifest: modManifest as PrismuxPluginModule["manifest"],
       apply: modCandidate["apply"] as CordisPluginModule["apply"]
     };
-  } catch {
+  } catch (err) {
+    onError?.(
+      `加载插件模块失败：${err instanceof Error ? err.message : String(err)}`
+    );
     return null;
   }
 }
@@ -1913,8 +1958,15 @@ export class DaemonBusinessService {
       installedList.map((entry) => [entry.manifest.id, entry])
     );
 
-    const entries = catalog.plugins.map((entry) => {
+    const activeCatalogEntries = catalog.plugins.filter(
+      (entry) => entry.status !== "deprecated"
+    );
+    const entries = activeCatalogEntries.map((entry) => {
       const installedRecord = installedById.get(entry.id);
+      const prevVersionRaw =
+        installedRecord !== undefined
+          ? (installedRecord as { previousVersion?: unknown }).previousVersion
+          : undefined;
       return {
         ...entry,
         installed: installedRecord !== undefined,
@@ -1923,11 +1975,20 @@ export class DaemonBusinessService {
         ...(installedRecord !== undefined
           ? {
               installedVersion: installedRecord.manifest.version,
-              distribution: installedRecord.distribution
+              distribution: installedRecord.distribution,
+              ...(typeof prevVersionRaw === "string" && prevVersionRaw.length > 0
+                ? { previousVersion: prevVersionRaw }
+                : {})
             }
           : {})
       };
     });
+
+    const retiredPlugins: RetiredOfficialPluginEntry[] = Array.isArray(
+      catalog.retiredPlugins
+    )
+      ? catalog.retiredPlugins
+      : [];
 
     return {
       ok: true,
@@ -1935,6 +1996,7 @@ export class DaemonBusinessService {
       generatedAt: catalog.generatedAt,
       officialCatalogPath: catalogPath,
       plugins: entries,
+      retiredPlugins,
       installedCount: installedList.length
     };
   }
@@ -1949,6 +2011,49 @@ export class DaemonBusinessService {
       plugins,
       totalCount: plugins.length
     };
+  }
+
+  /**
+   * Hydrates already-installed plugins with `enabled: true` from `dataDir/plugins`
+   * during daemon startup. No-op on a fresh dataDir (strictly zero preinstalled plugins).
+   */
+  async hydrateInstalledPlugins(): Promise<number> {
+    if (
+      !this.ctx.pluginInstaller ||
+      !this.ctx.pluginHost ||
+      !this.ctx.onMountPlugin
+    ) {
+      return 0;
+    }
+
+    let hydrated = 0;
+    const diskRecords = await this.ctx.pluginInstaller.listInstalled();
+    for (const rec of diskRecords) {
+      if (!rec.enabled || this.ctx.pluginHost.isMounted(rec.manifest.id)) {
+        continue;
+      }
+      try {
+        const mod = await tryLoadDaemonPluginModule(
+          this.ctx.pluginInstaller.getPluginsDir(),
+          rec,
+          (reason) => {
+            this.recordPluginLog(rec.manifest.id, "warn", "daemon", reason);
+          }
+        );
+        if (mod) {
+          await this.ctx.onMountPlugin(rec, mod);
+          hydrated += 1;
+        }
+      } catch (err) {
+        this.recordPluginLog(
+          rec.manifest.id,
+          "error",
+          "daemon",
+          `启动加载已安装插件失败：${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+    return hydrated;
   }
 
   async installPlugin(
@@ -1972,50 +2077,46 @@ export class DaemonBusinessService {
     }
 
     const confirmedAudit = rawBody["confirmedAudit"] === true;
-    const requestedSource =
-      rawBody["source"] === "official" || rawBody["source"] === "npm"
-        ? rawBody["source"]
-        : typeof rawBody["pluginId"] === "string" &&
-            typeof rawBody["packageNameOrTarball"] !== "string"
-          ? "official"
-          : "npm";
+    const rawSource = rawBody["source"];
+    const hasArchiveInput =
+      (typeof rawBody["archiveBase64"] === "string" &&
+        rawBody["archiveBase64"].trim().length > 0) ||
+      (typeof rawBody["archivePath"] === "string" &&
+        rawBody["archivePath"].trim().length > 0);
+    const requestedSource: "official" | "npm" | "local-archive" =
+      rawSource === "official" ||
+      rawSource === "npm" ||
+      rawSource === "local-archive"
+        ? rawSource
+        : rawSource === "local"
+          ? "local-archive"
+          : typeof rawBody["pluginId"] === "string" &&
+              typeof rawBody["packageNameOrTarball"] !== "string"
+            ? "official"
+            : hasArchiveInput && typeof rawBody["packageNameOrTarball"] !== "string"
+              ? "local-archive"
+              : "npm";
+
+    const rawNetworkPref: NetworkRoutePreference | undefined =
+      rawBody["networkPreference"] === "auto" ||
+      rawBody["networkPreference"] === "domestic" ||
+      rawBody["networkPreference"] === "global"
+        ? rawBody["networkPreference"]
+        : undefined;
+    const updaterSnapshot = this.ctx.appUpdater?.getStatus();
+    const effectiveNetworkPref: NetworkRoutePreference =
+      rawNetworkPref ?? updaterSnapshot?.policy.routePreference ?? "auto";
 
     let details: InstalledPluginDetails;
     try {
-      if (requestedSource === "official") {
-        const pluginId =
-          typeof rawBody["pluginId"] === "string"
-            ? rawBody["pluginId"].trim()
-            : "";
-        if (pluginId.length === 0) {
-          throw new BusinessRouteError(
-            400,
-            "INVALID_PARAMS",
-            "Official plugin install requires non-empty pluginId."
-          );
-        }
-        const catalogPath = resolveDefaultOfficialCatalogPath(
-          this.ctx.officialCatalogPath
-        );
-        if (!catalogPath) {
-          throw new BusinessRouteError(
-            404,
-            "OFFICIAL_CATALOG_NOT_FOUND",
-            "Official plugin catalog not found."
-          );
-        }
-        const catalog =
-          await this.ctx.pluginInstaller.loadOfficialCatalog(catalogPath);
-        const entry = catalog.plugins.find((p) => p.id === pluginId);
-        if (!entry) {
-          throw new BusinessRouteError(
-            404,
-            "OFFICIAL_PLUGIN_NOT_FOUND",
-            `Official plugin "${pluginId}" is not in catalog.`
-          );
-        }
-
+      if (requestedSource === "local-archive") {
         let archiveBytes: Buffer | null = null;
+        let fileName =
+          typeof rawBody["fileName"] === "string" &&
+          rawBody["fileName"].trim().length > 0
+            ? rawBody["fileName"].trim()
+            : "local-plugin.wb-plugin";
+
         if (
           typeof rawBody["archiveBase64"] === "string" &&
           rawBody["archiveBase64"].trim().length > 0
@@ -2030,34 +2131,243 @@ export class DaemonBusinessService {
             throw new BusinessRouteError(
               404,
               "ARCHIVE_NOT_FOUND",
-              `Archive not found at "${resolvedArchive}".`
+              `本地插件归档不存在：${resolvedArchive}`
             );
           }
           archiveBytes = readFileSync(resolvedArchive);
-        } else {
-          const catalogRepoRoot = resolve(dirname(catalogPath), "..", "..");
-          archiveBytes = findOfficialArchiveInSearchDirs(entry, [
-            catalogRepoRoot,
-            process.cwd()
-          ]);
+          fileName = basename(resolvedArchive);
         }
 
         if (!archiveBytes || archiveBytes.byteLength === 0) {
           throw new BusinessRouteError(
             400,
             "ARCHIVE_REQUIRED",
-            `Official plugin "${pluginId}" requires archivePath or archiveBase64 (no local .wb-plugin archive built yet).`
+            "导入本地插件需要提供非空的 .wb-plugin 或 .tgz 归档内容。"
           );
         }
 
-        details = await this.ctx.pluginInstaller.installOfficialEntry(
-          entry,
-          archiveBytes,
-          {
-            confirmedAudit,
-            hostVersion: this.ctx.hostVersion
-          }
+        details = await this.ctx.pluginInstaller.installLocalArchive(archiveBytes, {
+          fileName,
+          ...(typeof rawBody["expectedSha256"] === "string" &&
+          rawBody["expectedSha256"].trim().length > 0
+            ? { expectedSha256: rawBody["expectedSha256"].trim() }
+            : {}),
+          confirmedAudit,
+          hostVersion: this.ctx.hostVersion
+        });
+      } else if (requestedSource === "official") {
+        const pluginId =
+          typeof rawBody["pluginId"] === "string"
+            ? rawBody["pluginId"].trim()
+            : "";
+        if (pluginId.length === 0) {
+          throw new BusinessRouteError(
+            400,
+            "INVALID_PARAMS",
+            "官方插件安装需要提供非空 pluginId。"
+          );
+        }
+        const catalogPath = resolveDefaultOfficialCatalogPath(
+          this.ctx.officialCatalogPath
         );
+        if (!catalogPath) {
+          throw new BusinessRouteError(
+            404,
+            "OFFICIAL_CATALOG_NOT_FOUND",
+            "未找到官方插件目录文件 plugins-official/catalog/official.json。"
+          );
+        }
+        const catalog =
+          await this.ctx.pluginInstaller.loadOfficialCatalog(catalogPath);
+
+        const retiredEntry = catalog.retiredPlugins?.find(
+          (item) => item.id === pluginId
+        );
+        const rawEntry = catalog.plugins.find((p) => p.id === pluginId);
+        if (
+          retiredEntry !== undefined ||
+          rawEntry?.status === "deprecated" ||
+          (RETIRED_OFFICIAL_PLUGIN_IDS as readonly string[]).includes(pluginId)
+        ) {
+          throw new BusinessRouteError(
+            410,
+            "PLUGIN_RETIRED",
+            retiredEntry?.noticeZh ??
+              `官方插件 "${pluginId}" 已停用：已被 Prismux 内置功能取代，不再支持安装。`,
+            retiredEntry
+          );
+        }
+
+        if (!rawEntry) {
+          throw new BusinessRouteError(
+            404,
+            "OFFICIAL_PLUGIN_NOT_FOUND",
+            `官方插件目录中不存在 "${pluginId}"。`
+          );
+        }
+        const entry = rawEntry;
+
+        if (
+          typeof rawBody["archiveBase64"] === "string" &&
+          rawBody["archiveBase64"].trim().length > 0
+        ) {
+          const archiveBytes = Buffer.from(
+            rawBody["archiveBase64"].trim(),
+            "base64"
+          );
+          details = await this.ctx.pluginInstaller.installOfficialEntry(
+            entry,
+            archiveBytes,
+            {
+              confirmedAudit,
+              hostVersion: this.ctx.hostVersion,
+              sourceUsed: "inline-base64"
+            }
+          );
+        } else if (
+          typeof rawBody["archivePath"] === "string" &&
+          rawBody["archivePath"].trim().length > 0
+        ) {
+          const resolvedArchive = resolve(rawBody["archivePath"].trim());
+          if (!existsSync(resolvedArchive)) {
+            throw new BusinessRouteError(
+              404,
+              "ARCHIVE_NOT_FOUND",
+              `指定的插件归档不存在：${resolvedArchive}`
+            );
+          }
+          const archiveBytes = readFileSync(resolvedArchive);
+          details = await this.ctx.pluginInstaller.installOfficialEntry(
+            entry,
+            archiveBytes,
+            {
+              confirmedAudit,
+              hostVersion: this.ctx.hostVersion,
+              sourceUsed: `local-file:${resolvedArchive}`
+            }
+          );
+        } else {
+          // Multi-source resolution:
+          // 1) Verified local cache (plugins-official/dist, .work/plugin-dist, <dataDir>/plugins-cache)
+          // 2) GitHub / Gitee Release `.wb-plugin` mirrors with strict SHA-256 verification
+          // 3) Automatic npm Registry fallback (`prismux-plugin-<id>`) with nested `.wb-plugin` unwrap
+          const catalogRepoRoot = resolve(dirname(catalogPath), "..", "..");
+          const localCached = findOfficialArchiveInSearchDirs(
+            entry,
+            [catalogRepoRoot, process.cwd()],
+            [
+              join(this.ctx.dataDir, "plugins-cache"),
+              join(dirname(catalogPath), "..", "dist")
+            ]
+          );
+
+          if (localCached !== null) {
+            details = await this.ctx.pluginInstaller.installOfficialEntry(
+              entry,
+              localCached.bytes,
+              {
+                confirmedAudit,
+                hostVersion: this.ctx.hostVersion,
+                sourceUsed: `local-cache:${localCached.filePath}`
+              }
+            );
+          } else {
+            const mergedSourceConfig: OfficialPluginSourceConfig = {
+              ...(updaterSnapshot?.policy.customGhProxyPrefix
+                ? { customGhProxyPrefix: updaterSnapshot.policy.customGhProxyPrefix }
+                : {}),
+              ...this.ctx.officialPluginSources
+            };
+
+            const releaseDl = await downloadOfficialPluginReleaseArchive(entry, {
+              preference: effectiveNetworkPref,
+              config: mergedSourceConfig,
+              recommendedSource: updaterSnapshot?.lastProbe?.recommendedSource
+            });
+
+            if (releaseDl.ok) {
+              details = await this.ctx.pluginInstaller.installOfficialEntry(
+                entry,
+                releaseDl.bytes,
+                {
+                  confirmedAudit,
+                  hostVersion: this.ctx.hostVersion,
+                  sourceUsed: releaseDl.sourceUsed
+                }
+              );
+            } else if (releaseDl.tamperError !== undefined) {
+              throw releaseDl.tamperError;
+            } else if (mergedSourceConfig.disableRemoteFallback === true) {
+              const summary = releaseDl.attempts
+                .map((a) => `${a.source}(${a.reason ?? "failed"})`)
+                .join("; ");
+              throw new BusinessRouteError(
+                502,
+                "PLUGIN_DOWNLOAD_FAILED",
+                `无法下载官方插件 "${entry.id}"：${summary || "所有发布源均不可用"}。`
+              );
+            } else {
+              // Release tag may not yet be published (e.g. preview build) or blocked;
+              // gracefully fall back to npm Registry (`prismux-plugin-<id>`) across npmmirror <-> npmjs.
+              const npmFallbackErrors: string[] = [];
+              let npmDetails: InstalledPluginDetails | null = null;
+              for (const spec of getOfficialNpmFallbackSpecs(entry)) {
+                try {
+                  const installed = await this.ctx.pluginInstaller.installFromNpm({
+                    packageNameOrTarball: spec,
+                    expectedPluginId: entry.id,
+                    networkPreference: effectiveNetworkPref,
+                    ...(mergedSourceConfig.npmRegistryUrl
+                      ? { registryUrl: mergedSourceConfig.npmRegistryUrl }
+                      : {}),
+                    ...(mergedSourceConfig.npmMirrorRegistryUrl
+                      ? {
+                          fallbackRegistryUrl:
+                            mergedSourceConfig.npmMirrorRegistryUrl
+                        }
+                      : {}),
+                    ignoreScripts: true,
+                    confirmedAudit,
+                    hostVersion: this.ctx.hostVersion
+                  });
+                  npmDetails = {
+                    ...installed,
+                    sourceUsed: `npm-fallback:${spec}`
+                  };
+                  break;
+                } catch (npmErr) {
+                  if (
+                    npmErr instanceof PermissionAuditRequiredError ||
+                    npmErr instanceof EngineIncompatibleError ||
+                    npmErr instanceof ChecksumMismatchError
+                  ) {
+                    throw npmErr;
+                  }
+                  npmFallbackErrors.push(
+                    `${spec}: ${npmErr instanceof Error ? npmErr.message : String(npmErr)}`
+                  );
+                }
+              }
+
+              if (npmDetails === null) {
+                const releaseSummary = releaseDl.attempts
+                  .slice(0, 4)
+                  .map((a) => `${a.source}(${a.reason ?? "failed"})`)
+                  .join("；");
+                throw new BusinessRouteError(
+                  502,
+                  "PLUGIN_DOWNLOAD_FAILED",
+                  `无法从 GitHub / Gitee Release 或 npm 镜像下载官方插件 "${entry.id}"（已尝试：${releaseSummary || "Release 不可达"}；npm 回退：${npmFallbackErrors[0] ?? "不可达"}）。请检查网络/镜像设置，或点击「导入本地 .wb-plugin」离线安装。`,
+                  {
+                    releaseAttempts: releaseDl.attempts,
+                    npmFallbackErrors
+                  }
+                );
+              }
+              details = npmDetails;
+            }
+          }
+        }
       } else {
         const packageNameOrTarball =
           typeof rawBody["packageNameOrTarball"] === "string"
@@ -2067,26 +2377,26 @@ export class DaemonBusinessService {
           throw new BusinessRouteError(
             400,
             "INVALID_PARAMS",
-            "Community npm install requires non-empty packageNameOrTarball."
+            "社区 npm 安装需要提供非空包名或归档 URL（packageNameOrTarball）。"
           );
         }
-
-        const networkPref: NetworkRoutePreference | undefined =
-          rawBody["networkPreference"] === "auto" ||
-          rawBody["networkPreference"] === "domestic" ||
-          rawBody["networkPreference"] === "global"
-            ? rawBody["networkPreference"]
-            : undefined;
 
         details = await this.ctx.pluginInstaller.installFromNpm({
           packageNameOrTarball,
           ...(typeof rawBody["registryUrl"] === "string"
             ? { registryUrl: rawBody["registryUrl"].trim() }
-            : {}),
+            : this.ctx.officialPluginSources?.npmRegistryUrl
+              ? { registryUrl: this.ctx.officialPluginSources.npmRegistryUrl }
+              : {}),
           ...(typeof rawBody["fallbackRegistryUrl"] === "string"
             ? { fallbackRegistryUrl: rawBody["fallbackRegistryUrl"].trim() }
-            : {}),
-          ...(networkPref !== undefined ? { networkPreference: networkPref } : {}),
+            : this.ctx.officialPluginSources?.npmMirrorRegistryUrl
+              ? {
+                  fallbackRegistryUrl:
+                    this.ctx.officialPluginSources.npmMirrorRegistryUrl
+                }
+              : {}),
+          networkPreference: effectiveNetworkPref,
           ...(typeof rawBody["expectedSha256"] === "string"
             ? { expectedSha256: rawBody["expectedSha256"].trim() }
             : {}),
@@ -2098,6 +2408,9 @@ export class DaemonBusinessService {
     } catch (err) {
       if (err instanceof BusinessRouteError) {
         throw err;
+      }
+      if (err instanceof PluginDeprecatedError) {
+        throw new BusinessRouteError(410, "PLUGIN_RETIRED", err.message);
       }
       if (err instanceof PermissionAuditRequiredError) {
         throw new BusinessRouteError(
@@ -2128,10 +2441,17 @@ export class DaemonBusinessService {
       );
     }
 
+    if (this.ctx.pluginHost.isMounted(details.manifest.id)) {
+      await this.ctx.pluginHost.unmountPlugin(details.manifest.id);
+    }
+
     let mounted = false;
     const mod = await tryLoadDaemonPluginModule(
       this.ctx.pluginInstaller.getPluginsDir(),
-      details
+      details,
+      (reason) => {
+        this.recordPluginLog(details.manifest.id, "warn", "daemon", reason);
+      }
     );
     if (mod && this.ctx.onMountPlugin) {
       await this.ctx.onMountPlugin(details, mod);
@@ -2142,12 +2462,97 @@ export class DaemonBusinessService {
       details.manifest.id,
       "info",
       "daemon",
-      `已安装插件 ${details.manifest.id}@${details.manifest.version}（mounted=${String(mounted)}）。`
+      `已安装插件 ${details.manifest.id}@${details.manifest.version}（source=${details.sourceUsed ?? details.registryUsed ?? requestedSource}，mounted=${String(mounted)}）。`
     );
 
     return {
       ok: true,
       plugin: details,
+      mounted,
+      ...(details.sourceUsed !== undefined
+        ? { sourceUsed: details.sourceUsed }
+        : details.registryUsed !== undefined
+          ? { sourceUsed: details.registryUsed }
+          : {})
+    };
+  }
+
+  async rollbackPlugin(
+    rawBody: unknown,
+    trustedCallerScope: CallerScope
+  ): Promise<Record<string, unknown>> {
+    assertOwnerChief(trustedCallerScope, "/v1/plugins/rollback");
+    if (!this.ctx.pluginInstaller || !this.ctx.pluginHost) {
+      throw new BusinessRouteError(
+        503,
+        "PLUGIN_SUBSYSTEM_UNAVAILABLE",
+        "Plugin installer or host is not initialized."
+      );
+    }
+    if (!isPlainRecord(rawBody)) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "Request body must be a JSON object."
+      );
+    }
+    const pluginId =
+      typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
+    if (pluginId.length === 0) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "回滚插件需要提供非空 pluginId。"
+      );
+    }
+    const targetVersion =
+      typeof rawBody["targetVersion"] === "string" &&
+      rawBody["targetVersion"].trim().length > 0
+        ? rawBody["targetVersion"].trim()
+        : undefined;
+
+    if (this.ctx.pluginHost.isMounted(pluginId)) {
+      await this.ctx.pluginHost.unmountPlugin(pluginId);
+    }
+
+    let restored: InstalledPluginDetails;
+    try {
+      restored = await this.ctx.pluginInstaller.rollback(pluginId, targetVersion);
+    } catch (err) {
+      throw new BusinessRouteError(
+        404,
+        "PLUGIN_ROLLBACK_FAILED",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+
+    let mounted = false;
+    if (restored.enabled) {
+      const mod = await tryLoadDaemonPluginModule(
+        this.ctx.pluginInstaller.getPluginsDir(),
+        restored,
+        (reason) => {
+          this.recordPluginLog(pluginId, "warn", "daemon", reason);
+        }
+      );
+      if (mod && this.ctx.onMountPlugin) {
+        await this.ctx.onMountPlugin(restored, mod);
+        mounted = this.ctx.pluginHost.isMounted(pluginId);
+      }
+    }
+
+    this.recordPluginLog(
+      pluginId,
+      "info",
+      "daemon",
+      `已回滚插件 ${pluginId} 至 v${restored.manifest.version}（mounted=${String(mounted)}）。`
+    );
+
+    return {
+      ok: true,
+      pluginId,
+      version: restored.manifest.version,
+      plugin: restored,
       mounted
     };
   }
@@ -2195,6 +2600,7 @@ export class DaemonBusinessService {
       );
     }
 
+    let mountedFreshFromDisk = false;
     if (
       diskRecord &&
       !hostRecord &&
@@ -2204,14 +2610,22 @@ export class DaemonBusinessService {
     ) {
       const mod = await tryLoadDaemonPluginModule(
         this.ctx.pluginInstaller.getPluginsDir(),
-        diskRecord
+        diskRecord,
+        (reason) => {
+          this.recordPluginLog(pluginId, "warn", "daemon", reason);
+        }
       );
       if (mod) {
-        await this.ctx.onMountPlugin(diskRecord, mod);
+        await this.ctx.onMountPlugin({ ...diskRecord, enabled: true }, mod);
+        mountedFreshFromDisk = true;
       }
     }
 
-    if (this.ctx.pluginHost.getRecord(pluginId) && this.ctx.onTogglePlugin) {
+    if (
+      !mountedFreshFromDisk &&
+      this.ctx.pluginHost.getRecord(pluginId) &&
+      this.ctx.onTogglePlugin
+    ) {
       await this.ctx.onTogglePlugin(pluginId, enabled);
     }
     const mounted = this.ctx.pluginHost.isMounted(pluginId);

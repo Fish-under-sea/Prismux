@@ -14,6 +14,11 @@ import {
   type MemoryUpsertInput
 } from "@prismux/protocol";
 import { validateTrustedCallerScope } from "./CollectorAndGuard.js";
+import {
+  loadSqliteVecExtension,
+  type SqliteVecCandidateSource,
+  type SqliteVecLoadStatus
+} from "./sqliteVecResolver.js";
 import type { ListEntriesOptions, MemoryStore, MemoryStoreConfig } from "./types.js";
 import { generateUlid } from "./ulid.js";
 
@@ -25,6 +30,10 @@ export interface SqliteMemoryStoreConfig extends MemoryStoreConfig {
   loadVectorExtension?: boolean;
   /** Optional explicit extension shared-library path override (for testing/packaging). */
   vectorExtensionPath?: string;
+  /** Optional Electron `resourcesPath` override for packaged resource discovery & tests. */
+  resourcesPath?: string | null;
+  /** Whether to allow fallback `import("sqlite-vec")` lookup (default: true). */
+  allowPackageImport?: boolean;
 }
 
 type DbRow = Record<string, SQLOutputValue>;
@@ -132,6 +141,10 @@ export class SqliteMemoryStore implements MemoryStore {
   readonly config: SqliteMemoryStoreConfig;
   private db: DatabaseSync | undefined;
   private vecEnabled = false;
+  private vecVersion: string | null = null;
+  private vecExtensionPath: string | null = null;
+  private vecSource: SqliteVecCandidateSource | null = null;
+  private vecLoadError: string | null = null;
 
   constructor(config: SqliteMemoryStoreConfig) {
     if (!Number.isInteger(config.embeddingDimensions) || config.embeddingDimensions <= 0) {
@@ -148,6 +161,25 @@ export class SqliteMemoryStore implements MemoryStore {
 
   getRetrievalMode(): "fts5+sqlite-vec" | "fts5-only" {
     return this.vecEnabled ? "fts5+sqlite-vec" : "fts5-only";
+  }
+
+  getVectorExtensionVersion(): string | null {
+    return this.vecVersion;
+  }
+
+  getVectorExtensionPath(): string | null {
+    return this.vecExtensionPath;
+  }
+
+  getVectorExtensionStatus(): SqliteVecLoadStatus {
+    return {
+      loaded: this.vecEnabled,
+      mode: this.getRetrievalMode(),
+      version: this.vecVersion,
+      extensionPath: this.vecExtensionPath,
+      source: this.vecSource,
+      error: this.vecLoadError
+    };
   }
 
   async initialize(): Promise<void> {
@@ -215,21 +247,46 @@ export class SqliteMemoryStore implements MemoryStore {
       `);
 
       this.vecEnabled = false;
+      this.vecVersion = null;
+      this.vecExtensionPath = null;
+      this.vecSource = null;
+      this.vecLoadError = null;
       if (this.config.loadVectorExtension !== false) {
-        try {
-          let extPath = this.config.vectorExtensionPath;
-          if (!extPath) {
-            const sqliteVec = await import("sqlite-vec");
-            extPath = sqliteVec.getLoadablePath();
+        const vecLoad = await loadSqliteVecExtension(db, {
+          ...(this.config.vectorExtensionPath !== undefined
+            ? { explicitPath: this.config.vectorExtensionPath }
+            : {}),
+          ...(this.config.resourcesPath !== undefined
+            ? { resourcesPath: this.config.resourcesPath }
+            : {}),
+          ...(this.config.allowPackageImport !== undefined
+            ? { allowPackageImport: this.config.allowPackageImport }
+            : {})
+        });
+        if (vecLoad.loaded) {
+          try {
+            db.exec(
+              `CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${this.config.embeddingDimensions}] distance_metric=cosine)`
+            );
+            this.vecEnabled = true;
+            this.vecVersion = vecLoad.version;
+            this.vecExtensionPath = vecLoad.extensionPath;
+            this.vecSource = vecLoad.source;
+            this.vecLoadError = null;
+          } catch (error) {
+            this.vecEnabled = false;
+            this.vecVersion = null;
+            this.vecExtensionPath = null;
+            this.vecSource = null;
+            this.vecLoadError = `创建 memory_vec 虚拟表失败：${
+              error instanceof Error ? error.message : String(error)
+            }`;
           }
-          db.loadExtension(extPath);
-          db.exec(
-            `CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${this.config.embeddingDimensions}] distance_metric=cosine)`
-          );
-          this.vecEnabled = true;
-        } catch {
-          this.vecEnabled = false;
+        } else {
+          this.vecLoadError = vecLoad.error;
         }
+      } else {
+        this.vecLoadError = "已显式禁用 sqlite-vec 扩展加载（loadVectorExtension=false）。";
       }
 
       this.db = db;
@@ -692,6 +749,10 @@ export class SqliteMemoryStore implements MemoryStore {
       }
       this.db = undefined;
       this.vecEnabled = false;
+      this.vecVersion = null;
+      this.vecExtensionPath = null;
+      this.vecSource = null;
+      this.vecLoadError = null;
     }
   }
 

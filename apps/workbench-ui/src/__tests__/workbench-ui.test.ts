@@ -405,7 +405,7 @@ describe("ThemeEngine .wb-theme sanitization & document sync", () => {
 });
 
 describe("Plugin market catalog & 0 FPS occlusion resolver", () => {
-  it("lists all 4 un-preinstalled official plugins and flags modelVisible community plugins", () => {
+  it("lists both active un-preinstalled official plugins and flags modelVisible community plugins", () => {
     assert.deepEqual(
       DEFAULT_OFFICIAL_PLUGIN_CATALOG.map((p) => p.id),
       [...OFFICIAL_PLUGIN_IDS]

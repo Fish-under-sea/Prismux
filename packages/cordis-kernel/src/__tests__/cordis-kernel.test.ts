@@ -32,6 +32,7 @@ import {
   ManagedPluginSelfUpdateError,
   PermissionAuditRequiredError,
   PluginCredentialError,
+  PluginDeprecatedError,
   ReversibleEffectScope,
   TarSecurityError,
   assertPluginSelfUpdateAllowed,
@@ -1146,5 +1147,231 @@ test("EncryptedPluginCredentialStore: isolated <plugin-id>.enc, ChaCha20-Poly130
     await assert.rejects(() => handleA.get("apiKey"), PluginCredentialError);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("SemVer prerelease host compatibility: 0.1.2-preview.2 satisfies >=0.1.0-0 <2.0.0 and >=0.1.0 <2.0.0 without bypassing upper bounds", () => {
+  // Prerelease opt-in on lower bound matches subsequent preview tuples
+  assert.equal(satisfiesSemverRange("0.1.2-preview.2", ">=0.1.0-0 <2.0.0"), true);
+  assert.equal(satisfiesSemverRange("0.1.9-rc.1", ">=0.1.0-0 <2.0.0"), true);
+  // Exclusive upper-bound prereleases remain blocked
+  assert.equal(satisfiesSemverRange("2.0.0-alpha.1", ">=0.1.0-0 <2.0.0"), false);
+  assert.equal(satisfiesSemverRange("2.0.0-alpha.1", ">=0.1.0 <2.0.0"), false);
+
+  // Prerelease host evaluating standard plugin ranges
+  assert.equal(
+    checkTopLevelEngineCompatibility({ prismux: ">=0.1.0-0 <2.0.0" }, "0.1.2-preview.2").compatible,
+    true
+  );
+  assert.equal(
+    checkTopLevelEngineCompatibility({ prismux: ">=0.1.0 <2.0.0" }, "0.1.2-preview.2").compatible,
+    true
+  );
+  assert.equal(
+    checkTopLevelEngineCompatibility({ prismux: "^0.1.0" }, "0.1.2-preview.2").compatible,
+    true
+  );
+  // Strict bounds still enforced on prerelease hosts
+  assert.equal(
+    checkTopLevelEngineCompatibility({ prismux: ">=0.1.0 <2.0.0" }, "0.1.0-preview.1").compatible,
+    false
+  );
+  assert.equal(
+    checkTopLevelEngineCompatibility({ prismux: ">=0.1.0 <2.0.0" }, "2.0.0-alpha.1").compatible,
+    false
+  );
+  assert.equal(
+    checkTopLevelEngineCompatibility({ prismux: "^2.0.0" }, "0.1.2-preview.2").compatible,
+    false
+  );
+});
+
+test("CordisStreamingInstaller: unwraps official npm .wb-plugin wrappers, blocks deprecated entries, and supports local archive + snapshot rollback", async () => {
+  const workDir = mkdtempSync(join(tmpdir(), "prismux-wrapper-rollback-"));
+  try {
+    const pluginsDir = join(workDir, "plugins");
+    const installer = new CordisStreamingInstaller({
+      pluginsDir,
+      hostVersion: "0.1.2-preview.2"
+    });
+
+    // 1. Deprecated official entry is strictly rejected
+    const deprecatedEntry: OfficialPluginCatalogEntry = {
+      id: "pet",
+      packageName: "@prismux/plugin-pet",
+      version: "0.1.2-preview.1",
+      description: "Deprecated pet plugin",
+      engines: { prismux: ">=0.1.0-0 <2.0.0" },
+      realms: ["ui"],
+      permissions: [],
+      modelVisible: false,
+      sha256: "0".repeat(64),
+      status: "deprecated"
+    };
+    await assert.rejects(
+      () => installer.installOfficialEntry(deprecatedEntry, Buffer.from("dummy")),
+      PluginDeprecatedError
+    );
+
+    // 2. Official npm wrapper tarball containing a nested `.wb-plugin` unpacks real dist/index.js
+    const innerWbV1 = createGzipTestTarball([
+      {
+        path: "package.json",
+        content: JSON.stringify({
+          name: "@prismux/plugin-qq",
+          version: "0.1.2-preview.1",
+          main: "./dist/index.js",
+          engines: { prismux: ">=0.1.0-0 <2.0.0" }
+        })
+      },
+      {
+        path: "plugin.manifest.json",
+        content: JSON.stringify({
+          id: "qq",
+          version: "0.1.2-preview.1",
+          realms: ["daemon", "ui"],
+          permissions: ["network:outbound"],
+          modelVisible: false
+        })
+      },
+      {
+        path: "dist/index.js",
+        content: "export const marker = 'v1-unwrapped'; export function apply() {}\n"
+      }
+    ]);
+    const wrapperNpmTgz = createGzipTestTarball([
+      {
+        path: "package/package.json",
+        content: JSON.stringify({
+          name: "prismux-plugin-qq",
+          version: "0.1.2-preview.1",
+          bin: { "prismux-plugin-qq": "bin/install.mjs" },
+          engines: { prismux: ">=0.1.0-0 <2.0.0" },
+          scripts: { postinstall: "echo must-never-run" }
+        })
+      },
+      {
+        path: "package/plugin.manifest.json",
+        content: JSON.stringify({
+          id: "qq",
+          version: "0.1.2-preview.1",
+          realms: ["daemon", "ui"],
+          permissions: ["network:outbound"],
+          modelVisible: false
+        })
+      },
+      {
+        path: "package/prismux-plugin-qq-0.1.2-preview.1.wb-plugin",
+        content: innerWbV1
+      }
+    ]);
+
+    const wrapperSha512 = `sha512-${createHash("sha512").update(wrapperNpmTgz).digest("base64")}`;
+    const registry = await startHttpServer((req, res) => {
+      if (req.url === "/prismux-plugin-qq") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            name: "prismux-plugin-qq",
+            "dist-tags": { latest: "0.1.2-preview.1" },
+            versions: {
+              "0.1.2-preview.1": {
+                version: "0.1.2-preview.1",
+                engines: { prismux: ">=0.1.0-0 <2.0.0" },
+                dist: {
+                  tarball: `${registry.baseUrl}/tarballs/prismux-plugin-qq-0.1.2-preview.1.tgz`,
+                  integrity: wrapperSha512
+                }
+              }
+            }
+          })
+        );
+        return;
+      }
+      if (req.url === "/tarballs/prismux-plugin-qq-0.1.2-preview.1.tgz") {
+        res.statusCode = 200;
+        res.end(wrapperNpmTgz);
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    try {
+      const installedV1 = await installer.installFromNpm({
+        packageNameOrTarball: "prismux-plugin-qq",
+        registryUrl: registry.baseUrl,
+        fallbackRegistryUrl: registry.baseUrl,
+        expectedPluginId: "qq",
+        ignoreScripts: true,
+        distribution: "managed"
+      });
+      assert.equal(installedV1.manifest.id, "qq");
+      assert.equal(installedV1.manifest.version, "0.1.2-preview.1");
+      assert.equal(installedV1.distribution, "managed");
+      assert.equal(installedV1.packageName, "@prismux/plugin-qq");
+      assert.deepEqual(installedV1.ignoredInstallScripts, ["postinstall"]);
+      assert.ok(existsSync(join(installedV1.installPath, "dist", "index.js")));
+      assert.match(
+        readFileSync(join(installedV1.installPath, "dist", "index.js"), "utf8"),
+        /v1-unwrapped/
+      );
+
+      // 3. Upgrade via installLocalArchive to v2 and verify previous snapshot + rollback
+      const innerWbV2 = createGzipTestTarball([
+        {
+          path: "package.json",
+          content: JSON.stringify({
+            name: "@prismux/plugin-qq",
+            version: "0.1.2-preview.2",
+            main: "./dist/index.js",
+            engines: { prismux: ">=0.1.0 <2.0.0" }
+          })
+        },
+        {
+          path: "plugin.manifest.json",
+          content: JSON.stringify({
+            id: "qq",
+            version: "0.1.2-preview.2",
+            realms: ["daemon", "ui"],
+            permissions: ["network:outbound"],
+            modelVisible: false
+          })
+        },
+        {
+          path: "dist/index.js",
+          content: "export const marker = 'v2-upgraded'; export function apply() {}\n"
+        }
+      ]);
+
+      const installedV2 = await installer.installLocalArchive(innerWbV2, {
+        fileName: "prismux-plugin-qq-0.1.2-preview.2.wb-plugin"
+      });
+      assert.equal(installedV2.manifest.version, "0.1.2-preview.2");
+      assert.equal(installedV2.previousVersion, "0.1.2-preview.1");
+      assert.deepEqual(installer.listSnapshots("qq"), ["0.1.2-preview.1"]);
+      assert.match(
+        readFileSync(join(installedV2.installPath, "dist", "index.js"), "utf8"),
+        /v2-upgraded/
+      );
+
+      const rolledBack = await installer.rollback("qq", "0.1.2-preview.1");
+      assert.equal(rolledBack.manifest.version, "0.1.2-preview.1");
+      assert.equal(rolledBack.previousVersion, "0.1.2-preview.2");
+      assert.match(
+        readFileSync(join(rolledBack.installPath, "dist", "index.js"), "utf8"),
+        /v1-unwrapped/
+      );
+
+      // 4. Uninstall cleans both plugin dir and snapshots dir
+      await installer.uninstall("qq");
+      assert.equal(existsSync(join(pluginsDir, "qq")), false);
+      assert.deepEqual(installer.listSnapshots("qq"), []);
+    } finally {
+      await closeHttpServer(registry.server);
+    }
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
   }
 });

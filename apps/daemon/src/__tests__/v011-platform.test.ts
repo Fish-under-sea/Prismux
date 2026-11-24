@@ -657,6 +657,47 @@ test("ServiceDiagnosticsService enforces < 3s timeout protection under hanging p
   } finally {
     await storeFtsOnly.close();
   }
+
+  // Verify healthy sqlite-vec loaded state reports ok + real vec0 version & path.
+  const storeHybrid = new SqliteMemoryStore({
+    dbPath: ":memory:",
+    machineId: "win-1",
+    embeddingDimensions: 4,
+    enableWal: false
+  });
+  await storeHybrid.initialize();
+  try {
+    assert.equal(storeHybrid.isVectorSearchEnabled(), true);
+    const hybridSvc = new ServiceDiagnosticsService({
+      dataDir: tempRoot,
+      version: "0.1.2-preview.2",
+      headless: true,
+      startedAt: Date.now() - 1000,
+      memoryStore: storeHybrid,
+      memoryDbPath: ":memory:",
+      singleCheckTimeoutMs: 250,
+      globalBudgetMs: 900,
+      resolve7za: () => null,
+      detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
+      cliProbe: async () => ({ found: false, latencyMs: 1 }),
+      networkProbe: async () => ({ reachable: false, statusCode: null, latencyMs: 1 })
+    });
+    const report = await hybridSvc.runDiagnostics(true);
+    const vecCheck = report.items.find((i) => i.id === "memory.sqlite_vec");
+    assert.ok(vecCheck !== undefined);
+    assert.equal(vecCheck.status, "ok");
+    assert.ok(
+      typeof vecCheck.version === "string" && /^v?\d+\.\d+\.\d+/.test(vecCheck.version),
+      `Expected real vec0 version in diagnostics, got: ${String(vecCheck.version)}`
+    );
+    assert.ok(
+      vecCheck.summary.includes(vecCheck.version),
+      `Expected diagnostics summary to include vec0 version, got: ${vecCheck.summary}`
+    );
+    assert.ok(vecCheck.detail?.includes("vec0"));
+  } finally {
+    await storeHybrid.close();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -760,11 +801,8 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
       retrievalMode: string;
     };
     assert.equal(memStats.ok, true);
-    assert.equal(typeof memStats.sqliteVecLoaded, "boolean");
-    assert.equal(
-      memStats.retrievalMode,
-      memStats.sqliteVecLoaded ? "fts5+sqlite-vec" : "fts5-only"
-    );
+    assert.equal(memStats.sqliteVecLoaded, true);
+    assert.equal(memStats.retrievalMode, "fts5+sqlite-vec");
 
     // 2. /v1/updater/status & /v1/updater/events (SSE)
     const upStatusRes = await fetch(`${ready.httpUrl}/v1/updater/status`, {

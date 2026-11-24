@@ -1,10 +1,12 @@
-import {
-  BRAND,
-  type ApprovalGuideCard,
-  type HookInvocationContext,
-  type IslandHookEvent,
-  type RiskLevel
+import type {
+  ApprovalGuideCard,
+  HookInvocationContext,
+  IslandHookEvent,
+  RiskLevel
 } from "@prismux/protocol";
+
+const PRISMUX_APP_NAME = "Prismux";
+const PRISMUX_URI_SCHEME = "prismux";
 
 export interface ApprovalIslandCardInput {
   cardId?: string;
@@ -57,11 +59,11 @@ function isRiskLevel(value: unknown): value is RiskLevel {
 }
 
 function buildDefaultApprovalDeepLink(requestId: string): string {
-  return `${BRAND.uriScheme}://approval/${encodeURIComponent(requestId)}`;
+  return `${PRISMUX_URI_SCHEME}://approval/${encodeURIComponent(requestId)}`;
 }
 
 export function buildFactoryReviewDeepLink(threadId: string): string {
-  return `${BRAND.uriScheme}://review/${encodeURIComponent(threadId)}`;
+  return `${PRISMUX_URI_SCHEME}://review/${encodeURIComponent(threadId)}`;
 }
 
 /**
@@ -132,8 +134,8 @@ export function createEmailIslandCard(input: EmailAlertInput): IslandHookEvent {
   const deepLink =
     input.deepLink ??
     (input.threadId !== undefined && input.threadId.length > 0
-      ? `${BRAND.uriScheme}://thread/${encodeURIComponent(input.threadId)}`
-      : `${BRAND.uriScheme}://email/${encodeURIComponent(input.messageId)}`);
+      ? `${PRISMUX_URI_SCHEME}://thread/${encodeURIComponent(input.threadId)}`
+      : `${PRISMUX_URI_SCHEME}://email/${encodeURIComponent(input.messageId)}`);
 
   return {
     cardId,
@@ -169,7 +171,7 @@ export function createFactoryCompleteIslandCard(
   return {
     cardId,
     kind: "factory_complete",
-    title: `${BRAND.appName} 夜间工场已完工`,
+    title: `${PRISMUX_APP_NAME} 夜间工场已完工`,
     subtitle,
     deepLink,
     actions: ["open_workbench", "dismiss"],

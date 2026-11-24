@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  cpSync,
   createReadStream,
   existsSync,
   mkdirSync,
@@ -56,6 +57,8 @@ const DEFAULT_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
 const DEFAULT_MAX_ENTRY_BYTES = 32 * 1024 * 1024;
 const INSTALL_METADATA_FILENAME = ".prismux-install.json";
+const SNAPSHOTS_DIR_NAME = ".snapshots";
+const MAX_PLUGIN_SNAPSHOTS = 3;
 const SAFE_PLUGIN_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 const INSTALL_LIFECYCLE_SCRIPT_NAMES = [
@@ -128,6 +131,7 @@ export interface StreamingInstallOptions {
   fallbackRegistryUrl?: string;
   networkPreference?: NetworkRoutePreference;
   expectedSha256?: string;
+  expectedPluginId?: string;
   ignoreScripts: true;
   distribution?: PluginDistribution;
   confirmedAudit?: boolean;
@@ -138,12 +142,24 @@ export interface StreamingInstallOptions {
 export interface OfficialInstallOptions {
   confirmedAudit?: boolean;
   hostVersion?: string;
+  sourceUsed?: string;
+}
+
+export interface LocalArchiveInstallOptions {
+  fileName?: string;
+  expectedSha256?: string;
+  expectedPluginId?: string;
+  confirmedAudit?: boolean;
+  hostVersion?: string;
+  distribution?: PluginDistribution;
 }
 
 export interface InstalledPluginDetails extends InstalledPluginRecord {
   audit: PermissionAuditCard;
   registryUsed?: string;
   usedFallbackRegistry?: boolean;
+  sourceUsed?: string;
+  previousVersion?: string;
   ignoredInstallScripts: string[];
 }
 
@@ -269,6 +285,19 @@ export class PermissionAuditRequiredError extends Error {
     );
     this.name = "PermissionAuditRequiredError";
     this.audit = audit;
+  }
+}
+
+export class PluginDeprecatedError extends Error {
+  readonly pluginId: string;
+
+  constructor(pluginId: string, noticeZh?: string) {
+    super(
+      noticeZh ??
+        `官方插件 "${pluginId}" 已停用（已被 Prismux 内置功能取代），无法继续安装。`
+    );
+    this.name = "PluginDeprecatedError";
+    this.pluginId = pluginId;
   }
 }
 
@@ -1536,6 +1565,10 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     archiveBytes: Uint8Array,
     options?: OfficialInstallOptions
   ): Promise<InstalledPluginDetails> {
+    if (entry.status === "deprecated") {
+      throw new PluginDeprecatedError(entry.id);
+    }
+
     const hostVersion = options?.hostVersion ?? this.hostVersion;
     const expectedSha = entry.sha256?.trim().toLowerCase() ?? "";
     if (!/^[0-9a-f]{64}$/.test(expectedSha)) {
@@ -1566,7 +1599,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       throw new EngineIncompatibleError(entryEngineResult);
     }
 
-    return this.installFromReadable(Readable.from([buf]), {
+    const details = await this.installFromReadable(Readable.from([buf]), {
       packageNameHint: entry.packageName,
       expectedSha256: expectedSha,
       expectedPluginId: entry.id,
@@ -1574,6 +1607,39 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       confirmedAudit: options?.confirmedAudit,
       hostVersion
     });
+    return options?.sourceUsed !== undefined
+      ? { ...details, sourceUsed: options.sourceUsed }
+      : details;
+  }
+
+  /**
+   * Installs a local `.wb-plugin` or `.tgz` archive buffer directly without requiring
+   * an official catalog entry, while still enforcing Tar-Slip protection, zero install
+   * scripts, top-level `engines.prismux` compatibility, `modelVisible` audit, and
+   * `distribution: "managed"`.
+   */
+  async installLocalArchive(
+    archiveBytes: Uint8Array,
+    options?: LocalArchiveInstallOptions
+  ): Promise<InstalledPluginDetails> {
+    const buf = Buffer.isBuffer(archiveBytes)
+      ? archiveBytes
+      : Buffer.from(archiveBytes);
+    if (buf.byteLength === 0) {
+      throw new TarFormatError("Local plugin archive is empty.");
+    }
+    const hostVersion = options?.hostVersion ?? this.hostVersion;
+    const details = await this.installFromReadable(Readable.from([buf]), {
+      packageNameHint: options?.fileName?.trim() || "local-plugin.wb-plugin",
+      expectedSha256: options?.expectedSha256,
+      expectedPluginId: options?.expectedPluginId,
+      confirmedAudit: options?.confirmedAudit,
+      hostVersion
+    });
+    return {
+      ...details,
+      sourceUsed: "local-archive"
+    };
   }
 
   async installFromNpm(
@@ -1585,6 +1651,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     if (/^https?:\/\//i.test(specInput)) {
       return this.installFromHttpTarballUrl(specInput, {
         expectedSha256: options.expectedSha256,
+        expectedPluginId: options.expectedPluginId,
         confirmedAudit: options.confirmedAudit,
         hostVersion,
         headers: options.headers,
@@ -1599,6 +1666,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       return this.installFromReadable(createReadStream(localPath), {
         packageNameHint: localPath,
         expectedSha256: options.expectedSha256,
+        expectedPluginId: options.expectedPluginId,
         confirmedAudit: options.confirmedAudit,
         hostVersion
       });
@@ -1650,6 +1718,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         parsedSpec,
         {
           expectedSha256: options.expectedSha256,
+          expectedPluginId: options.expectedPluginId,
           confirmedAudit: options.confirmedAudit,
           hostVersion,
           headers: options.headers
@@ -1674,6 +1743,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         parsedSpec,
         {
           expectedSha256: options.expectedSha256,
+          expectedPluginId: options.expectedPluginId,
           confirmedAudit: options.confirmedAudit,
           hostVersion,
           headers: options.headers
@@ -1728,6 +1798,104 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     return records;
   }
 
+  listSnapshots(pluginId: string): string[] {
+    const safeId = validateSafePluginId(pluginId);
+    const pluginSnapRoot = resolve(this.pluginsDir, SNAPSHOTS_DIR_NAME, safeId);
+    if (!existsSync(pluginSnapRoot)) {
+      return [];
+    }
+    const entries = readdirSync(pluginSnapRoot, { withFileTypes: true });
+    const versions: Array<{ version: string; mtimeMs: number }> = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const metaPath = join(pluginSnapRoot, entry.name, INSTALL_METADATA_FILENAME);
+      if (!existsSync(metaPath)) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(
+          readFileSync(metaPath, "utf8")
+        ) as InstalledPluginDetails;
+        const ver = parsed.manifest?.version ?? entry.name;
+        const mtimeMs = statSync(metaPath).mtimeMs;
+        versions.push({ version: ver, mtimeMs });
+      } catch {
+        // Ignore corrupted snapshot entries.
+      }
+    }
+    return versions
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .map((item) => item.version);
+  }
+
+  async rollback(
+    pluginId: string,
+    targetVersion?: string
+  ): Promise<InstalledPluginDetails> {
+    const safeId = validateSafePluginId(pluginId);
+    const current = await this.getInstalledRecord(safeId);
+    const pluginSnapRoot = resolve(this.pluginsDir, SNAPSHOTS_DIR_NAME, safeId);
+    if (!existsSync(pluginSnapRoot)) {
+      throw new Error(`插件 "${safeId}" 没有可回滚的历史版本快照。`);
+    }
+
+    const desiredVersion =
+      targetVersion?.trim() ||
+      current?.previousVersion?.trim() ||
+      this.listSnapshots(safeId)[0];
+    if (!desiredVersion) {
+      throw new Error(`插件 "${safeId}" 没有找到可回滚的目标版本快照。`);
+    }
+
+    const snapDir = resolve(
+      pluginSnapRoot,
+      sanitizeSnapshotSegment(desiredVersion)
+    );
+    const snapMetaPath = join(snapDir, INSTALL_METADATA_FILENAME);
+    if (!existsSync(snapMetaPath)) {
+      throw new Error(
+        `插件 "${safeId}" 的目标版本快照 v${desiredVersion} 不存在或已损坏。`
+      );
+    }
+
+    const snapshotRecord = JSON.parse(
+      readFileSync(snapMetaPath, "utf8")
+    ) as InstalledPluginDetails;
+    const stagingDir = resolve(this.pluginsDir, `.rollback-${randomUUID()}`);
+    const targetDir = resolve(this.pluginsDir, safeId);
+
+    try {
+      cpSync(snapDir, stagingDir, { recursive: true, force: true });
+      const restored: InstalledPluginDetails = {
+        ...snapshotRecord,
+        distribution: "managed",
+        enabled: current?.enabled ?? true,
+        installPath: targetDir,
+        installedAt: Date.now(),
+        ...(current && current.manifest.version !== snapshotRecord.manifest.version
+          ? { previousVersion: current.manifest.version }
+          : {})
+      };
+      writeFileSync(
+        join(stagingDir, INSTALL_METADATA_FILENAME),
+        `${JSON.stringify(restored, null, 2)}\n`,
+        "utf8"
+      );
+
+      await this.atomicReplacePluginDirectory(
+        stagingDir,
+        targetDir,
+        safeId,
+        snapshotRecord.manifest.version
+      );
+      return restored;
+    } finally {
+      rmSync(stagingDir, { recursive: true, force: true });
+    }
+  }
+
   async uninstall(pluginId: string): Promise<void> {
     const safeId = validateSafePluginId(pluginId);
     const targetDir = resolve(this.pluginsDir, safeId);
@@ -1736,6 +1904,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       throw new Error(`Unsafe plugin uninstall path: "${targetDir}".`);
     }
     rmSync(targetDir, { recursive: true, force: true });
+    const snapDir = resolve(this.pluginsDir, SNAPSHOTS_DIR_NAME, safeId);
+    rmSync(snapDir, { recursive: true, force: true });
   }
 
   private async installFromRegistryBase(
@@ -1743,6 +1913,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     spec: { name: string; rangeOrTag: string },
     options: {
       expectedSha256?: string;
+      expectedPluginId?: string;
       confirmedAudit?: boolean;
       hostVersion: string;
       headers?: Record<string, string>;
@@ -1783,6 +1954,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
 
     return this.installFromHttpTarballUrl(tarballUrl, {
       expectedSha256: options.expectedSha256,
+      expectedPluginId: options.expectedPluginId,
       integrity: versionDoc.dist?.integrity,
       shasum: versionDoc.dist?.shasum,
       confirmedAudit: options.confirmedAudit,
@@ -1796,6 +1968,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     tarballUrl: string,
     options: {
       expectedSha256?: string;
+      expectedPluginId?: string;
       integrity?: string;
       shasum?: string;
       confirmedAudit?: boolean;
@@ -1817,6 +1990,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     return this.installFromReadable(response.stream, {
       packageNameHint: options.packageNameHint,
       expectedSha256: options.expectedSha256,
+      expectedPluginId: options.expectedPluginId,
       integrity: options.integrity,
       shasum: options.shasum,
       confirmedAudit: options.confirmedAudit,
@@ -1853,18 +2027,60 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         shasum: options.shasum
       });
 
-      const pluginRoot = resolvePluginRootInStaging(stagingDir, extracted.files);
-      const packageJson = readJsonFileRecord(
+      let pluginRoot = resolvePluginRootInStaging(stagingDir, extracted.files);
+      let packageJson = readJsonFileRecord(
         join(pluginRoot, "package.json"),
         "package.json"
       ) as PluginPackageJsonLike;
 
-      const engineResult = checkPackageEngineCompatibility(
+      const outerEngineResult = checkPackageEngineCompatibility(
         packageJson,
         options.hostVersion
       );
-      if (!engineResult.compatible) {
-        throw new EngineIncompatibleError(engineResult);
+      if (!outerEngineResult.compatible) {
+        throw new EngineIncompatibleError(outerEngineResult);
+      }
+
+      const outerIgnoredScripts: string[] = [];
+      if (isPlainRecord(packageJson.scripts)) {
+        for (const scriptName of INSTALL_LIFECYCLE_SCRIPT_NAMES) {
+          const val = packageJson.scripts[scriptName];
+          if (typeof val === "string" && val.trim().length > 0) {
+            outerIgnoredScripts.push(scriptName);
+          }
+        }
+      }
+
+      let effectiveSha256 = extracted.sha256;
+
+      // Official npm wrapper packages (e.g. `prismux-plugin-qq`) embed a single
+      // `.wb-plugin` payload alongside `bin/install.mjs` without a `main`/`exports` entry.
+      // Transparently unwrap the nested `.wb-plugin` under the same security guarantees.
+      const nestedWbArchive = findNestedWbPluginArchive(pluginRoot, packageJson);
+      if (nestedWbArchive !== null) {
+        const unwrappedDir = resolve(stagingDir, ".unwrapped");
+        mkdirSync(unwrappedDir, { recursive: true });
+        const innerExtracted = await streamArchiveToStaging(
+          createReadStream(nestedWbArchive),
+          unwrappedDir,
+          {
+            maxArchiveBytes: this.maxArchiveBytes,
+            maxUncompressedBytes: this.maxUncompressedBytes
+          }
+        );
+        pluginRoot = resolvePluginRootInStaging(unwrappedDir, innerExtracted.files);
+        packageJson = readJsonFileRecord(
+          join(pluginRoot, "package.json"),
+          "package.json"
+        ) as PluginPackageJsonLike;
+        const innerEngineResult = checkPackageEngineCompatibility(
+          packageJson,
+          options.hostVersion
+        );
+        if (!innerEngineResult.compatible) {
+          throw new EngineIncompatibleError(innerEngineResult);
+        }
+        effectiveSha256 = innerExtracted.sha256;
       }
 
       const manifestRaw = readJsonFileRecord(
@@ -1891,6 +2107,13 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       }
 
       const audit = buildPermissionAuditCard(manifest, packageJson);
+      if (outerIgnoredScripts.length > 0) {
+        for (const scriptName of outerIgnoredScripts) {
+          if (!audit.ignoredInstallScripts.includes(scriptName)) {
+            audit.ignoredInstallScripts.push(scriptName);
+          }
+        }
+      }
       if (manifest.modelVisible === true && options.confirmedAudit !== true) {
         throw new PermissionAuditRequiredError(audit);
       }
@@ -1899,6 +2122,22 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       const relTarget = relative(this.pluginsDir, targetDir);
       if (relTarget.startsWith("..") || isAbsolute(relTarget) || relTarget === "") {
         throw new Error(`Unsafe plugin installation target: "${targetDir}".`);
+      }
+
+      let previousVersion: string | undefined;
+      const existingMetaPath = join(targetDir, INSTALL_METADATA_FILENAME);
+      if (existsSync(existingMetaPath)) {
+        try {
+          const existingRecord = JSON.parse(
+            readFileSync(existingMetaPath, "utf8")
+          ) as InstalledPluginDetails;
+          const prevVer = existingRecord.manifest?.version;
+          if (typeof prevVer === "string" && prevVer.length > 0 && prevVer !== manifest.version) {
+            previousVersion = prevVer;
+          }
+        } catch {
+          // Ignore malformed legacy metadata
+        }
       }
 
       const packageName =
@@ -1914,8 +2153,9 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         enabled: true,
         installPath: targetDir,
         installedAt: Date.now(),
-        sha256: extracted.sha256,
+        sha256: effectiveSha256,
         audit,
+        ...(previousVersion !== undefined ? { previousVersion } : {}),
         ignoredInstallScripts: [...audit.ignoredInstallScripts]
       };
 
@@ -1925,35 +2165,83 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         "utf8"
       );
 
-      this.atomicReplacePluginDirectory(pluginRoot, targetDir, manifest.id);
+      await this.atomicReplacePluginDirectory(
+        pluginRoot,
+        targetDir,
+        manifest.id,
+        manifest.version
+      );
       return details;
     } finally {
       rmSync(stagingDir, { recursive: true, force: true });
     }
   }
 
-  private atomicReplacePluginDirectory(
-    stagedPluginRoot: string,
-    targetDir: string,
-    pluginId: string
+  private saveVersionSnapshot(
+    existingDir: string,
+    pluginId: string,
+    nextVersion: string
   ): void {
-    const hasExisting = existsSync(targetDir);
-    if (!hasExisting) {
-      renameSync(stagedPluginRoot, targetDir);
+    const existingMetaPath = join(existingDir, INSTALL_METADATA_FILENAME);
+    if (!existsSync(existingMetaPath)) {
       return;
     }
+    try {
+      const existingRecord = JSON.parse(
+        readFileSync(existingMetaPath, "utf8")
+      ) as InstalledPluginDetails;
+      const prevVer = existingRecord.manifest?.version;
+      if (typeof prevVer !== "string" || prevVer.length === 0 || prevVer === nextVersion) {
+        return;
+      }
+
+      const snapRoot = resolve(this.pluginsDir, SNAPSHOTS_DIR_NAME, pluginId);
+      mkdirSync(snapRoot, { recursive: true });
+      const snapTarget = join(snapRoot, sanitizeSnapshotSegment(prevVer));
+      rmSync(snapTarget, { recursive: true, force: true });
+      cpSync(existingDir, snapTarget, { recursive: true, force: true });
+
+      // Keep at most MAX_PLUGIN_SNAPSHOTS snapshots per plugin (most recent first).
+      const allSnaps = readdirSync(snapRoot, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => {
+          const dir = join(snapRoot, e.name);
+          return { dir, mtimeMs: statSync(dir).mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      for (const stale of allSnaps.slice(MAX_PLUGIN_SNAPSHOTS)) {
+        rmSync(stale.dir, { recursive: true, force: true });
+      }
+    } catch {
+      // Snapshot failure should never block an install/upgrade.
+    }
+  }
+
+  private async atomicReplacePluginDirectory(
+    stagedPluginRoot: string,
+    targetDir: string,
+    pluginId: string,
+    nextVersion: string
+  ): Promise<void> {
+    const hasExisting = existsSync(targetDir);
+    if (!hasExisting) {
+      await moveDirectoryResilient(stagedPluginRoot, targetDir);
+      return;
+    }
+
+    this.saveVersionSnapshot(targetDir, pluginId, nextVersion);
 
     const backupDir = resolve(
       this.pluginsDir,
       `.backup-${pluginId}-${randomUUID()}`
     );
-    renameSync(targetDir, backupDir);
+    await moveDirectoryResilient(targetDir, backupDir);
     try {
-      renameSync(stagedPluginRoot, targetDir);
+      await moveDirectoryResilient(stagedPluginRoot, targetDir);
     } catch (error) {
       if (!existsSync(targetDir) && existsSync(backupDir)) {
         try {
-          renameSync(backupDir, targetDir);
+          await moveDirectoryResilient(backupDir, targetDir);
         } catch {
           // Best-effort restore
         }
@@ -1961,6 +2249,84 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       throw error;
     }
     rmSync(backupDir, { recursive: true, force: true });
+  }
+}
+
+function findNestedWbPluginArchive(
+  pluginRoot: string,
+  packageJson: PluginPackageJsonLike
+): string | null {
+  const hasMain =
+    typeof packageJson["main"] === "string" && packageJson["main"].trim().length > 0;
+  const hasExports = packageJson["exports"] !== undefined;
+  if (
+    hasMain ||
+    hasExports ||
+    existsSync(join(pluginRoot, "dist", "index.js")) ||
+    existsSync(join(pluginRoot, "index.js"))
+  ) {
+    return null;
+  }
+
+  let wbCandidates: string[];
+  try {
+    wbCandidates = readdirSync(pluginRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".wb-plugin"))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return null;
+  }
+
+  if (wbCandidates.length !== 1) {
+    return null;
+  }
+  return join(pluginRoot, wbCandidates[0]!);
+}
+
+function sanitizeSnapshotSegment(version: string): string {
+  return version.trim().replace(/[^a-zA-Z0-9._-]/g, "_") || "previous";
+}
+
+function isRetryableFsRenameError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  const code = String((error as { code?: unknown }).code ?? "");
+  return (
+    code === "EPERM" ||
+    code === "EBUSY" ||
+    code === "EACCES" ||
+    code === "ENOTEMPTY" ||
+    code === "EXDEV"
+  );
+}
+
+async function moveDirectoryResilient(src: string, dest: string): Promise<void> {
+  const maxAttempts = 5;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      renameSync(src, dest);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableFsRenameError(error)) {
+        throw error;
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, attempt * 35));
+      }
+    }
+  }
+
+  // Fallback for Windows AV/indexer locks or cross-device EXDEV moves:
+  // copy cleanly into destination and remove source.
+  try {
+    cpSync(src, dest, { recursive: true, force: true });
+    rmSync(src, { recursive: true, force: true });
+  } catch {
+    throw lastError;
   }
 }
 

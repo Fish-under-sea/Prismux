@@ -4,7 +4,9 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -66,10 +68,18 @@ export interface BuildPrismuxDesktopResult {
   version: string;
   outDir: string;
   resourceMonitorPath: string;
+  sqliteVecPath: string | null;
+  sqliteVecBytes: number | null;
   installerExePath: string | null;
   installerSha256: string | null;
   checksumPath: string | null;
   executedSteps: string[];
+}
+
+export interface StagedSqliteVecBinary {
+  sourcePath: string;
+  stagedPath: string;
+  bytes: number;
 }
 
 export interface ParsedBuildDesktopCliArgs {
@@ -245,6 +255,174 @@ function findProducedInstallerExe(stageDir: string): string {
   return join(stageDir, preferred);
 }
 
+export function resolveSqliteVecLibraryFilename(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === 'win32') return 'vec0.dll';
+  if (platform === 'darwin') return 'vec0.dylib';
+  return 'vec0.so';
+}
+
+export function resolveSqliteVecPackageName(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  const osToken = platform === 'win32' ? 'windows' : platform;
+  return `sqlite-vec-${osToken}-${arch}`;
+}
+
+/**
+ * Resolves the prebuilt native `sqlite-vec` shared library (`vec0.dll` on Windows x64)
+ * across explicit `PRISMUX_SQLITE_VEC_PATH` overrides, workspace `node_modules`, and
+ * pnpm sibling package directories.
+ */
+export function resolveSqliteVecBinaryPath(options: {
+  repoRoot: string;
+  platform?: NodeJS.Platform;
+  arch?: string;
+  env?: Readonly<Record<string, string | undefined>>;
+}): string {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const env = options.env ?? process.env;
+  const libName = resolveSqliteVecLibraryFilename(platform);
+  const pkgName = resolveSqliteVecPackageName(platform, arch);
+
+  const candidates: string[] = [];
+  const envOverride = env['PRISMUX_SQLITE_VEC_PATH']?.trim();
+  if (envOverride) {
+    candidates.push(resolve(envOverride));
+    if (!envOverride.toLowerCase().endsWith(libName.toLowerCase())) {
+      candidates.push(resolve(envOverride, libName));
+    }
+  }
+
+  candidates.push(
+    join(options.repoRoot, 'packages', 'memory-core', 'node_modules', pkgName, libName),
+    join(options.repoRoot, 'apps', 'daemon', 'node_modules', pkgName, libName),
+    join(options.repoRoot, 'node_modules', pkgName, libName),
+    join(options.repoRoot, 'node_modules', '.pnpm', 'node_modules', pkgName, libName),
+  );
+
+  const sqliteVecLink = join(
+    options.repoRoot,
+    'packages',
+    'memory-core',
+    'node_modules',
+    'sqlite-vec',
+  );
+  if (existsSync(sqliteVecLink)) {
+    try {
+      const realSqliteVec = realpathSync(sqliteVecLink);
+      candidates.push(join(dirname(realSqliteVec), pkgName, libName));
+    } catch {
+      // Ignore broken symlink; fall through to .pnpm scan.
+    }
+  }
+
+  const pnpmDir = join(options.repoRoot, 'node_modules', '.pnpm');
+  if (existsSync(pnpmDir)) {
+    const prefix = `${pkgName}@`;
+    const entries = readdirSync(pnpmDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+    for (const entry of entries) {
+      candidates.push(join(pnpmDir, entry, 'node_modules', pkgName, libName));
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    try {
+      const stat = statSync(candidate);
+      if (stat.isFile()) {
+        if (stat.size <= 0) {
+          throw new Error(
+            `[desktop:build] Found ${libName} at ${candidate}, but the file is empty (0 bytes).`,
+          );
+        }
+        return candidate;
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('file is empty')) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error(
+    `[desktop:build] Missing native sqlite-vec library (${libName} from ${pkgName}). Run \`pnpm install\` or set PRISMUX_SQLITE_VEC_PATH. Searched: ${candidates.join(', ')}`,
+  );
+}
+
+/**
+ * Copies `vec0.dll` (or platform native library) into a real non-ASAR disk directory
+ * under `vendor/t3code/apps/desktop/prod-resources/native/sqlite-vec/` and asserts
+ * the staged file exists and is non-empty so release builds never silently omit it.
+ */
+export function stageSqliteVecBinaryForDesktop(options: {
+  repoRoot: string;
+  targetPath?: string;
+  platform?: NodeJS.Platform;
+  arch?: string;
+  env?: Readonly<Record<string, string | undefined>>;
+}): StagedSqliteVecBinary {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const libName = resolveSqliteVecLibraryFilename(platform);
+  const sourcePath = resolveSqliteVecBinaryPath({
+    repoRoot: options.repoRoot,
+    platform,
+    arch,
+    env: options.env,
+  });
+
+  const stagedPath = resolve(
+    options.targetPath ??
+      join(
+        options.repoRoot,
+        'vendor',
+        't3code',
+        'apps',
+        'desktop',
+        'prod-resources',
+        'native',
+        'sqlite-vec',
+        libName,
+      ),
+  );
+
+  if (/\.asar([\\/]|$)/i.test(stagedPath) && !/\.asar\.unpacked([\\/]|$)/i.test(stagedPath)) {
+    throw new Error(
+      `[desktop:build] sqlite-vec native library must be staged outside .asar on real disk: ${stagedPath}`,
+    );
+  }
+
+  mkdirSync(dirname(stagedPath), { recursive: true });
+  copyFileSync(sourcePath, stagedPath);
+
+  if (!existsSync(stagedPath)) {
+    throw new Error(
+      `[desktop:build] Expected staged sqlite-vec binary at ${stagedPath}, but it does not exist after copy.`,
+    );
+  }
+  const stagedStat = statSync(stagedPath);
+  if (!stagedStat.isFile() || stagedStat.size <= 0) {
+    throw new Error(
+      `[desktop:build] Staged sqlite-vec binary at ${stagedPath} is empty or not a regular file (${stagedStat.size} bytes).`,
+    );
+  }
+
+  return {
+    sourcePath,
+    stagedPath,
+    bytes: stagedStat.size,
+  };
+}
+
 function assertCleanDesktopReleaseDir(dir: string): void {
   if (!existsSync(dir)) {
     return;
@@ -308,6 +486,8 @@ export function buildPrismuxDesktop(
       version,
       outDir,
       resourceMonitorPath,
+      sqliteVecPath: null,
+      sqliteVecBytes: null,
       installerExePath: null,
       installerSha256: null,
       checksumPath: null,
@@ -332,6 +512,13 @@ export function buildPrismuxDesktop(
     });
     executedSteps.push('root-build');
   }
+
+  // Step 1.5: Stage and assert sqlite-vec native library (`vec0.dll`) outside .asar on disk
+  const sqliteVecStaged = stageSqliteVecBinaryForDesktop({
+    repoRoot,
+    env: baseEnv,
+  });
+  executedSteps.push('sqlite-vec-stage');
 
   // Step 2: Build or reuse native/resource-monitor
   if (options.skipRust) {
@@ -372,9 +559,16 @@ export function buildPrismuxDesktop(
     rmSync(stageOutputDir, { recursive: true, force: true });
     mkdirSync(stageOutputDir, { recursive: true });
 
+    if (!existsSync(sqliteVecStaged.stagedPath) || statSync(sqliteVecStaged.stagedPath).size <= 0) {
+      throw new Error(
+        `[desktop:build] Staged sqlite-vec native binary disappeared before NSIS build: ${sqliteVecStaged.stagedPath}`,
+      );
+    }
+
     const installerEnv = sanitizeDesktopBuildEnv(baseEnv, {
       T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: '1',
       T3CODE_DESKTOP_VERSION: version,
+      PRISMUX_SQLITE_VEC_PATH: sqliteVecStaged.stagedPath,
     });
 
     runStepCommand(runner, {
@@ -421,6 +615,8 @@ export function buildPrismuxDesktop(
     version,
     outDir,
     resourceMonitorPath,
+    sqliteVecPath: sqliteVecStaged.stagedPath,
+    sqliteVecBytes: sqliteVecStaged.bytes,
     installerExePath,
     installerSha256,
     checksumPath,
@@ -469,6 +665,9 @@ function main(): void {
   console.log(`\n[desktop:build] Completed v${result.version}`);
   console.log(`  Steps:            ${result.executedSteps.join(' -> ')}`);
   console.log(`  ResourceMonitor:  ${result.resourceMonitorPath}`);
+  if (result.sqliteVecPath && result.sqliteVecBytes !== null) {
+    console.log(`  SqliteVec:        ${result.sqliteVecPath} (${result.sqliteVecBytes} bytes)`);
+  }
   if (result.installerExePath && result.installerSha256) {
     console.log(`  Installer:        ${result.installerExePath}`);
     console.log(`  SHA-256:          ${result.installerSha256}`);

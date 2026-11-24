@@ -28,6 +28,8 @@ import { PersistentPtyPool } from "./pty/PersistentPtyPool.js";
 import { WorktreeSandbox } from "./sandbox/WorktreeSandbox.js";
 import { DaemonBusinessService } from "./server/DaemonBusinessRoutes.js";
 import { DaemonRpcServer } from "./server/DaemonRpcServer.js";
+import type { OfficialPluginSourceConfig } from "./server/OfficialPluginDownloader.js";
+import { OvernightRouteService } from "./server/OvernightRoutes.js";
 import { PairingManager } from "./server/PairingManager.js";
 import { PortScannerService } from "./system/PortScannerService.js";
 import { ResourceMonitorService } from "./system/ResourceMonitorService.js";
@@ -54,11 +56,14 @@ export * from "./chief/ChiefObsidianCurator.js";
 export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
 export * from "./server/DaemonBusinessRoutes.js";
+export * from "./server/OvernightRoutes.js";
+export * from "./server/OfficialPluginDownloader.js";
 export * from "./server/DaemonRpcServer.js";
 export * from "./system/PortScannerService.js";
 export * from "./system/ResourceMonitorService.js";
 export * from "./system/ServiceDiagnosticsService.js";
 export * from "./system/SystemFontService.js";
+export * from "./system/WindowsEnvRefresh.js";
 export * from "./updater/AppUpdater.js";
 export * from "./wallpapers/WallpaperMediaService.js";
 
@@ -153,6 +158,7 @@ export interface DaemonStartOptions {
   defaultChiefProvider?: ChiefProviderKind;
   defaultChiefModel?: string;
   officialCatalogPath?: string;
+  officialPluginSources?: OfficialPluginSourceConfig;
   steamRootsDiscoverer?: () => Promise<string[]>;
   disableAutoUpdateCheck?: boolean;
   onShutdownRequested?: (reason?: string) => void | Promise<void>;
@@ -190,6 +196,7 @@ export class PrismuxDaemon {
   readonly fontService: SystemFontService;
   readonly appearanceStore: AppearanceConfigStore;
   readonly businessService: DaemonBusinessService;
+  readonly overnightRouteService: OvernightRouteService;
   readonly portScannerService: PortScannerService;
   readonly resourceMonitorService: ResourceMonitorService;
   readonly diagnosticsService: ServiceDiagnosticsService;
@@ -220,7 +227,7 @@ export class PrismuxDaemon {
     this.sandbox = new WorktreeSandbox();
     this.overnightFactory = new OvernightFactory();
 
-    // Official plugins (qq, pet, fishdock-hook, ssh) are NEVER preinstalled by default.
+    // Official plugins (qq, fishdock-hook) are NEVER preinstalled by default.
     this.pluginHost = new CordisPluginHost("daemon");
     this.pluginMasterKey = loadOrGeneratePluginMasterKey(
       options.dataDir,
@@ -376,12 +383,23 @@ export class PrismuxDaemon {
       pluginHost: this.pluginHost,
       pluginInstaller: this.pluginInstaller,
       pluginCredentialStore: this.pluginCredentialStore,
+      appUpdater: this.appUpdater,
+      ...(options.officialPluginSources !== undefined
+        ? { officialPluginSources: options.officialPluginSources }
+        : {}),
       resourceMonitorService: this.resourceMonitorService,
       onMountPlugin: (record, mod) => this.mountPluginModule(record, mod),
       onTogglePlugin: (pluginId, enabled) => this.togglePlugin(pluginId, enabled),
       onUninstallPlugin: (pluginId) => this.uninstallPlugin(pluginId)
     });
     this.businessService.restorePersistedSyncConfig();
+    this.overnightRouteService = new OvernightRouteService({
+      dataDir: options.dataDir,
+      overnightFactory: this.overnightFactory,
+      credentialStore: this.pluginCredentialStore,
+      memoryStore: this.memoryStore,
+      onConfigChanged: () => this.diagnosticsService.clearCache()
+    });
 
     this.rpcServer = new DaemonRpcServer({
       host: options.host ?? "127.0.0.1",
@@ -405,6 +423,7 @@ export class PrismuxDaemon {
       fontService: this.fontService,
       appearanceStore: this.appearanceStore,
       businessService: this.businessService,
+      overnightService: this.overnightRouteService,
       diagnosticsService: this.diagnosticsService,
       portScannerService: this.portScannerService,
       resourceMonitorService: this.resourceMonitorService,
@@ -433,6 +452,7 @@ export class PrismuxDaemon {
     this.pluginModules.set(pluginId, module);
     const credentials = this.pluginCredentialStore.openForPlugin(pluginId);
     await this.pluginHost.mountPlugin(record, module, credentials);
+    this.diagnosticsService.clearCache();
   }
 
   async togglePlugin(
@@ -446,6 +466,7 @@ export class PrismuxDaemon {
 
     if (!enabled) {
       await this.pluginHost.unmountPlugin(pluginId);
+      this.diagnosticsService.clearCache();
       return { pluginId, enabled: false };
     }
 
@@ -462,6 +483,7 @@ export class PrismuxDaemon {
       module,
       credentials
     );
+    this.diagnosticsService.clearCache();
     return { pluginId, enabled: true };
   }
 
@@ -469,6 +491,7 @@ export class PrismuxDaemon {
     await this.pluginHost.uninstallPlugin(pluginId);
     await this.pluginInstaller.uninstall(pluginId);
     this.pluginModules.delete(pluginId);
+    this.diagnosticsService.clearCache();
   }
 
   async start(): Promise<DaemonReadyInfo> {
@@ -623,6 +646,7 @@ export class PrismuxDaemon {
     try {
       this.ensureMasterKeyPersisted();
       await this.memoryStore.initialize();
+      await this.businessService.hydrateInstalledPlugins();
       const slot = await this.chiefManager.init();
 
       if (this.t3Supervisor !== undefined) {
@@ -697,6 +721,7 @@ export class PrismuxDaemon {
       this.readyInfo = info;
       this.running = true;
       this.resourceMonitorService.start();
+      this.overnightRouteService.startSchedulerIfEnabled();
       if (
         !this.options.disableAutoUpdateCheck &&
         process.env["PRISMUX_DISABLE_AUTO_UPDATE_CHECK"] !== "1"
@@ -711,6 +736,7 @@ export class PrismuxDaemon {
   }
 
   private async performStop(): Promise<void> {
+    this.overnightRouteService.stop();
     this.resourceMonitorService.stop();
     this.appUpdater.stopAutoCheck();
     this.clearT3ConnectLoop();

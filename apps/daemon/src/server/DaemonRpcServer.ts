@@ -73,6 +73,7 @@ import {
   BusinessRouteError,
   type DaemonBusinessService
 } from "./DaemonBusinessRoutes.js";
+import type { OvernightRouteService } from "./OvernightRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
@@ -103,6 +104,7 @@ export interface DaemonRpcServerOptions {
   fontService?: SystemFontService;
   appearanceStore?: AppearanceConfigStore;
   businessService?: DaemonBusinessService;
+  overnightService?: OvernightRouteService;
   diagnosticsService?: ServiceDiagnosticsService;
   portScannerService?: PortScannerService;
   resourceMonitorService?: ResourceMonitorService;
@@ -421,6 +423,7 @@ export class DaemonRpcServer {
   private readonly fontService: SystemFontService;
   private readonly appearanceStore: AppearanceConfigStore | undefined;
   private readonly businessService: DaemonBusinessService | undefined;
+  private readonly overnightService: OvernightRouteService | undefined;
   private readonly diagnosticsService: ServiceDiagnosticsService | undefined;
   private readonly portScannerService: PortScannerService | undefined;
   private readonly resourceMonitorService: ResourceMonitorService | undefined;
@@ -460,6 +463,7 @@ export class DaemonRpcServer {
     this.fontService = options.fontService ?? new SystemFontService();
     this.appearanceStore = options.appearanceStore;
     this.businessService = options.businessService;
+    this.overnightService = options.overnightService;
     this.diagnosticsService = options.diagnosticsService;
     this.portScannerService = options.portScannerService;
     this.resourceMonitorService = options.resourceMonitorService;
@@ -1016,6 +1020,7 @@ export class DaemonRpcServer {
         }
       }
       const inventory = await this.wallpaperService.rescan(rescanReq);
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, inventory);
       return true;
     }
@@ -1057,6 +1062,7 @@ export class DaemonRpcServer {
         ...(typeof rawBody["title"] === "string" ? { title: rawBody["title"] } : {})
       };
       const result = await this.wallpaperService.importWallpaper(importReq);
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, { ok: true, ...result });
       return true;
     }
@@ -1239,6 +1245,7 @@ export class DaemonRpcServer {
         rawBody,
         trustedCallerScope
       );
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1261,6 +1268,7 @@ export class DaemonRpcServer {
         rawBody,
         trustedCallerScope
       );
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1401,6 +1409,7 @@ export class DaemonRpcServer {
         rawBody,
         trustedCallerScope
       );
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1443,14 +1452,21 @@ export class DaemonRpcServer {
       return true;
     }
 
-    if (method === "GET" && pathname === "/v1/diagnostics/services") {
+    if (
+      (method === "GET" &&
+        (pathname === "/v1/diagnostics/services" ||
+          pathname === "/v1/diagnostics")) ||
+      (method === "POST" &&
+        (pathname === "/v1/diagnostics/refresh" ||
+          pathname === "/v1/diagnostics/services/refresh"))
+    ) {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
       if (trustedCallerScope !== "owner_chief") {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to access /v1/diagnostics/services.`
+          `Scope "${trustedCallerScope}" is not permitted to access ${pathname}.`
         );
       }
       if (!this.diagnosticsService) {
@@ -1460,8 +1476,15 @@ export class DaemonRpcServer {
           "ServiceDiagnosticsService is not configured."
         );
       }
+      const isRefreshPost = method === "POST";
       const forceParam = requestUrl.searchParams.get("force")?.trim().toLowerCase();
-      const force = forceParam === "1" || forceParam === "true";
+      const refreshParam = requestUrl.searchParams.get("refresh")?.trim().toLowerCase();
+      const force =
+        isRefreshPost ||
+        forceParam === "1" ||
+        forceParam === "true" ||
+        refreshParam === "1" ||
+        refreshParam === "true";
       const report = await this.diagnosticsService.runDiagnostics(force);
       writeJsonResponse(res, 200, report);
       return true;
@@ -1713,7 +1736,12 @@ export class DaemonRpcServer {
       return true;
     }
 
-    if (method === "POST" && pathname === "/v1/plugins/install") {
+    if (
+      method === "POST" &&
+      (pathname === "/v1/plugins/install" ||
+        pathname === "/v1/plugins/install-official" ||
+        pathname === "/v1/plugins/install-npm")
+    ) {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
       if (!this.businessService) {
@@ -1724,15 +1752,27 @@ export class DaemonRpcServer {
         );
       }
       const rawBody = await readJsonBody(req, MAX_IMPORT_JSON_BODY_BYTES);
+      const normalizedBody =
+        pathname === "/v1/plugins/install-official" && isRecord(rawBody)
+          ? { ...rawBody, source: "official" }
+          : pathname === "/v1/plugins/install-npm" && isRecord(rawBody)
+            ? { ...rawBody, source: "npm" }
+            : rawBody;
       const result = await this.businessService.installPlugin(
-        rawBody,
+        normalizedBody,
         trustedCallerScope
       );
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }
 
-    if (method === "POST" && pathname === "/v1/plugins/toggle") {
+    if (
+      method === "POST" &&
+      (pathname === "/v1/plugins/toggle" ||
+        pathname === "/v1/plugins/enable" ||
+        pathname === "/v1/plugins/disable")
+    ) {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
       if (!this.businessService) {
@@ -1743,10 +1783,37 @@ export class DaemonRpcServer {
         );
       }
       const rawBody = await readJsonBody(req);
+      const normalizedBody =
+        pathname === "/v1/plugins/enable" && isRecord(rawBody)
+          ? { ...rawBody, enabled: true }
+          : pathname === "/v1/plugins/disable" && isRecord(rawBody)
+            ? { ...rawBody, enabled: false }
+            : rawBody;
       const result = await this.businessService.togglePlugin(
+        normalizedBody,
+        trustedCallerScope
+      );
+      this.diagnosticsService?.clearCache();
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/plugins/rollback") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const result = await this.businessService.rollbackPlugin(
         rawBody,
         trustedCallerScope
       );
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1766,6 +1833,7 @@ export class DaemonRpcServer {
         rawBody,
         trustedCallerScope
       );
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1774,8 +1842,109 @@ export class DaemonRpcServer {
       if (this.authenticateHttpRequest(req, res) === null) return true;
       const rawBody = await readJsonBody(req);
       const result = await this.executeUpdaterSetPolicy(rawBody);
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
+    }
+
+    if (pathname.startsWith("/v1/overnight/")) {
+      if (!this.overnightService) {
+        throw new BusinessRouteError(
+          503,
+          "OVERNIGHT_UNAVAILABLE",
+          "OvernightRouteService is not configured."
+        );
+      }
+      if (method === "GET" && pathname === "/v1/overnight/oauth/gmail/callback") {
+        const callbackRes = await this.overnightService.handleGmailOAuthCallback(
+          requestUrl.searchParams
+        );
+        res.writeHead(callbackRes.statusCode, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store"
+        });
+        res.end(callbackRes.html);
+        return true;
+      }
+
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+
+      if (method === "GET" && pathname === "/v1/overnight/config") {
+        const snapshot = await this.overnightService.getConfigSnapshot(
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, snapshot);
+        return true;
+      }
+      if (method === "PUT" && pathname === "/v1/overnight/config") {
+        const rawBody = await readJsonBody(req);
+        const snapshot = await this.overnightService.updateConfig(
+          rawBody,
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, snapshot);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/overnight/test-mail") {
+        const rawBody = await readJsonBody(req);
+        const result = await this.overnightService.testMailConnection(
+          rawBody,
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/overnight/send-test-report") {
+        const rawBody = await readJsonBody(req);
+        const result = await this.overnightService.sendTestMorningReport(
+          rawBody,
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/overnight/poll-now") {
+        const rawBody = await readJsonBody(req);
+        const result = await this.overnightService.pollNow(
+          rawBody,
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "GET" && pathname === "/v1/overnight/runs") {
+        const limitParam = requestUrl.searchParams.get("limit");
+        const parsedLimit =
+          limitParam !== null && limitParam.trim().length > 0
+            ? Number.parseInt(limitParam, 10)
+            : null;
+        const result = this.overnightService.getRuns(
+          parsedLimit !== null && Number.isFinite(parsedLimit) ? parsedLimit : null,
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/overnight/oauth/gmail/start") {
+        const rawBody = await readJsonBody(req);
+        const origin =
+          this.boundPort !== undefined ? this.getHttpUrl() : requestUrl.origin;
+        const result = await this.overnightService.startGmailOAuth(
+          rawBody,
+          trustedCallerScope,
+          origin
+        );
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/overnight/oauth/gmail/disconnect") {
+        const result = await this.overnightService.disconnectGmail(
+          trustedCallerScope
+        );
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
     }
 
     return false;

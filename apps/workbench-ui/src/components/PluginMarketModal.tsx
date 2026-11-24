@@ -505,7 +505,7 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
                   type="text"
                   className="pmx-input"
                   aria-label="输入社区 npm 插件包名"
-                  placeholder="输入无作用域或社区 npm 包名，例如 prismux-plugin-qq、prismux-plugin-pet 或 @scope/prismux-plugin-foo"
+                  placeholder="输入无作用域或社区 npm 包名，例如 prismux-plugin-qq、prismux-plugin-fishdock-hook 或 @scope/prismux-plugin-foo"
                   value={npmPackageInput}
                   onChange={(e) => setNpmPackageInput(e.target.value)}
                   style={{ flex: 1 }}
@@ -540,13 +540,13 @@ export const PluginMarketModal: React.FC<PluginMarketModalProps> = ({
                   type="button"
                   className="pmx-btn pmx-btn-sm"
                   onClick={() =>
-                    handlePrepareCommunityInstall("prismux-plugin-pet", {
+                    handlePrepareCommunityInstall("prismux-plugin-fishdock-hook", {
                       modelVisible: false,
                       modifiesSystemPrompt: false
                     })
                   }
                 >
-                  导入 prismux-plugin-pet（0 Token）
+                  导入 prismux-plugin-fishdock-hook（0 Token）
                 </button>
                 <button
                   type="button"

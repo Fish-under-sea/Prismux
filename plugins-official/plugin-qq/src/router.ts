@@ -4,7 +4,20 @@ import type {
   MemoryQueryRequest,
   MemoryQueryResponse
 } from "@prismux/protocol";
-import { isScopeAllowedForNamespace } from "@prismux/protocol";
+
+function isScopeAllowedForNamespace(
+  callerScope: CallerScope,
+  namespace: MemoryNamespace
+): boolean {
+  if (callerScope === "owner_chief") {
+    return true;
+  }
+  if (callerScope.startsWith("qq_group:")) {
+    const groupId = callerScope.slice("qq_group:".length);
+    return groupId.length > 0 && namespace === `social/qq-group-${groupId}`;
+  }
+  return false;
+}
 import {
   buildOneBotSendGroupMsgAction,
   buildOneBotSendPrivateMsgAction,

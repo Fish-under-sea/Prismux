@@ -67,7 +67,8 @@ export const PERMISSION_ZH_LABELS: Record<string, { label: string; elevated: boo
 
 /**
  * Built-in mirror of `plugins-official/catalog/official.json`.
- * All 4 official plugins are strictly NOT preinstalled in the minimal core.
+ * Both active official plugins (`qq`, `fishdock-hook`) are strictly NOT preinstalled in the minimal core.
+ * (`pet` and `ssh` have been retired and replaced by Prismux built-in capabilities.)
  */
 export const DEFAULT_OFFICIAL_PLUGIN_CATALOG: ReadonlyArray<OfficialPluginCatalogDisplayEntry> =
   [
@@ -92,21 +93,6 @@ export const DEFAULT_OFFICIAL_PLUGIN_CATALOG: ReadonlyArray<OfficialPluginCatalo
       status: "source-only"
     },
     {
-      id: "pet",
-      packageName: `${BRAND.npmScope}/plugin-pet`,
-      unscopedPackageName: formatCommunityPluginPackageName("pet"),
-      version: APP_CURRENT_VERSION,
-      description:
-        "支持定向实例绑定、租约锁（Lease Token）、进度订阅与动作/气泡分阶段交还的桌宠联动插件",
-      engines: { prismux: ">=0.0.1-0 <2.0.0" },
-      realms: ["ui", "daemon"],
-      permissions: ["pet:lease", "ui:panel", "hooks:subscribe"],
-      modelVisible: false,
-      sha256: null,
-      bytes: null,
-      status: "source-only"
-    },
-    {
       id: "fishdock-hook",
       packageName: `${BRAND.npmScope}/plugin-fishdock-hook`,
       unscopedPackageName: formatCommunityPluginPackageName("fishdock-hook"),
@@ -116,26 +102,6 @@ export const DEFAULT_OFFICIAL_PLUGIN_CATALOG: ReadonlyArray<OfficialPluginCatalo
       engines: { prismux: ">=0.0.1-0 <2.0.0" },
       realms: ["daemon"],
       permissions: ["network:outbound", "hooks:subscribe", "notifications:push"],
-      modelVisible: false,
-      sha256: null,
-      bytes: null,
-      status: "source-only"
-    },
-    {
-      id: "ssh",
-      packageName: `${BRAND.npmScope}/plugin-ssh`,
-      unscopedPackageName: formatCommunityPluginPackageName("ssh"),
-      version: APP_CURRENT_VERSION,
-      description: "按需选装的 SSH 主机连接池、Web PTY 与 SFTP 运维插件",
-      engines: { prismux: ">=0.0.1-0 <2.0.0" },
-      realms: ["daemon", "ui"],
-      permissions: [
-        "network:outbound",
-        "pty:spawn",
-        "fs:read",
-        "fs:write",
-        "ui:panel"
-      ],
       modelVisible: false,
       sha256: null,
       bytes: null,
