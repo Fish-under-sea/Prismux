@@ -425,21 +425,6 @@ function useOptionalWallpaperSnapshot(
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-function builtinWallpaperLabel(item: WallpaperItem, gt: ReturnType<typeof useGT>): string {
-  switch (item.builtinSceneId) {
-    case "aurora-prism":
-      return gt("Aurora Prism");
-    case "midnight-abyss":
-      return gt("Midnight Abyss");
-    case "liquid-silk":
-      return gt("Liquid Silk");
-    case "cyber-twilight":
-      return gt("Cyber Twilight");
-    default:
-      return item.title;
-  }
-}
-
 function AppearanceSection({
   runtime,
   wallpaperSnapshot,
@@ -449,15 +434,15 @@ function AppearanceSection({
 }) {
   const gt = useGT();
   const mode = runtime.appearance.themeMode;
-  const builtins = wallpaperSnapshot.wallpapers
-    .filter((item) => item.source === "builtin")
+  const availableWallpapers: readonly WallpaperItem[] = wallpaperSnapshot.wallpapers
+    .filter((item) => item.source !== "builtin")
     .slice(0, 4);
   const selectedId = wallpaperSnapshot.settings.selectedId;
 
   const handleThemeModeChange = (nextMode: ThemeMode) => {
     runtime.setThemeMode(nextMode);
-    if (nextMode === "glass" && selectedId === null && builtins[0]) {
-      runtime.wallpaperStore.selectWallpaper(builtins[0].id);
+    if (nextMode === "glass" && selectedId === null && availableWallpapers[0]) {
+      runtime.wallpaperStore.selectWallpaper(availableWallpapers[0].id);
     }
   };
 
@@ -483,7 +468,7 @@ function AppearanceSection({
               {activeModeLabel}
             </span>
           </div>
-          <div className="max-w-sm pt-0.5">
+          <div className="w-full pt-0.5">
             <CelestialThemeCapsule
               mode={mode}
               onChange={handleThemeModeChange}
@@ -499,26 +484,22 @@ function AppearanceSection({
           </div>
         </div>
 
-        {builtins.length > 0 ? (
+        {availableWallpapers.length > 0 ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-medium text-muted-foreground">
-                <T>Curated built-in wallpapers</T>
+                <T>Wallpaper</T>
               </span>
               <span className="text-2xs text-muted-foreground">
                 {selectedId === null
                   ? gt("Solid background")
-                  : (builtins.find((item) => item.id === selectedId)
-                      ? builtinWallpaperLabel(
-                          builtins.find((item) => item.id === selectedId)!,
-                          gt,
-                        )
-                      : gt("Custom wallpaper"))}
+                  : (availableWallpapers.find((item) => item.id === selectedId)?.title ??
+                    gt("Custom wallpaper"))}
               </span>
             </div>
             <div
               role="radiogroup"
-              aria-label={gt("Curated built-in wallpapers")}
+              aria-label={gt("Wallpaper")}
               className="grid grid-cols-2 gap-2 sm:grid-cols-5"
             >
               <button
@@ -545,9 +526,9 @@ function AppearanceSection({
                   </span>
                 ) : null}
               </button>
-              {builtins.map((item) => {
+              {availableWallpapers.map((item) => {
                 const active = selectedId === item.id;
-                const shortTitle = builtinWallpaperLabel(item, gt);
+                const shortTitle = item.title;
                 return (
                   <button
                     key={item.id}

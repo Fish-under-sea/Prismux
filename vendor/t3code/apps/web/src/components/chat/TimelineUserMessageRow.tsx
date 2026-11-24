@@ -324,11 +324,12 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       ) : null}
       <div
         className={cn(
-          "min-w-0 max-w-[80%] rounded-2xl bg-message text-message-foreground",
+          "min-w-0 max-w-[80%] rounded-[22px] border border-border/55 bg-message text-message-foreground",
           BUBBLE_CHIP_CLASS_NAME,
           expanded && "w-full",
         )}
         data-user-message-bubble=""
+        data-user-message-bubble-surface="1"
       >
         <MessageAuthorHeading>{gt("Automation")}</MessageAuthorHeading>
         <FoldedMessageHeader
@@ -938,17 +939,22 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ) : null}
       <div
         className={cn(
-          "relative min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
+          "relative min-w-0 max-w-[80%] rounded-[22px] text-message-foreground",
           (mediaAboveText || row.groupedWithPrevious) && "rounded-tr-md",
           row.groupedWithNext && "rounded-br-md",
           BUBBLE_CHIP_CLASS_NAME,
           userMessage.attribution === "guest"
             ? guestBubbleClassName(false)
-            : !mediaOnly && !fileCardsOnly && !audioOnly && "bg-message",
-          !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "p-3",
+            : !mediaOnly && !fileCardsOnly && !audioOnly && "border border-border/55 bg-message",
+          !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "px-4 py-2",
           folded && expanded && "w-full",
         )}
         data-user-message-bubble=""
+        data-user-message-bubble-surface={
+          !mediaOnly && !fileCardsOnly && !audioOnly && userMessage.attribution !== "guest"
+            ? "1"
+            : undefined
+        }
       >
         {/* Outside the fold so a collapsed message still has a heading to navigate to. */}
         {mediaAboveText ? null : (

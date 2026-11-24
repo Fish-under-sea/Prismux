@@ -43,10 +43,11 @@ import { KeepAwakeStatusPopover } from "./statusBar/KeepAwakeStatusPopover";
 import { PortsStatusPopover } from "./statusBar/PortsStatusPopover";
 import {
   aggregateQuotaSummary,
-  buildQuotaStatusBarPill,
+  buildQuotaStatusBarDisplay,
   loadQuotaPreferences,
   saveQuotaPreferences,
   type QuotaPreferences,
+  type QuotaTone,
 } from "./statusBar/quotaStatus.logic";
 import { QuotaStatusPopover } from "./statusBar/QuotaStatusPopover";
 import { ResourcesStatusPopover } from "./statusBar/ResourcesStatusPopover";
@@ -115,7 +116,23 @@ const QUOTA_POLL_INTERVAL_MS = 3 * 60 * 1_000;
 const STATUS_POPOVER_POPUP_CLASS =
   "overflow-hidden rounded-xl border border-border bg-popover bg-clip-padding p-0 shadow-xl before:hidden";
 
-export function PrismuxStatusBar() {
+function quotaMiniBarColorClass(tone: QuotaTone): string {
+  switch (tone) {
+    case "critical":
+      return "bg-[#ef4444]";
+    case "warning":
+      return "bg-[#f59e0b]";
+    default:
+      return "bg-[#22c55e]";
+  }
+}
+
+export interface PrismuxStatusBarProps {
+  /** Optional initial daemon quota snapshot (primarily for deterministic UI tests). */
+  readonly initialDaemonQuota?: DaemonOfficialQuotaSummaryResponse | null | undefined;
+}
+
+export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBarProps = {}) {
   usePrismuxTraySync();
   const runtime = useOptionalPrismuxRuntime();
   const scrollStripRef = useRef<HTMLDivElement | null>(null);
@@ -147,7 +164,9 @@ export function PrismuxStatusBar() {
   const [manualResourcesLoading, setManualResourcesLoading] = useState(false);
   const [liveResourcesError, setLiveResourcesError] = useState<string | null>(null);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
-  const [daemonQuota, setDaemonQuota] = useState<DaemonOfficialQuotaSummaryResponse | null>(null);
+  const [daemonQuota, setDaemonQuota] = useState<DaemonOfficialQuotaSummaryResponse | null>(
+    initialDaemonQuota,
+  );
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [quotaMinuteTick, setQuotaMinuteTick] = useState<number>(() => Date.now());
   const quotaInflightRef = useRef<Promise<void> | null>(null);
@@ -256,9 +275,9 @@ export function PrismuxStatusBar() {
     () => aggregateQuotaSummary(daemonQuota, allProviders, quotaNow),
     [allProviders, daemonQuota, quotaNow],
   );
-  const quotaPill = useMemo(
-    () => buildQuotaStatusBarPill(quotaSummary, quotaPrefs.percentMode),
-    [quotaPrefs.percentMode, quotaSummary],
+  const quotaDisplay = useMemo(
+    () => buildQuotaStatusBarDisplay(quotaSummary, quotaPrefs),
+    [quotaPrefs, quotaSummary],
   );
 
   // Prefer whichever resources snapshot is newer between runtime context and live status-bar sampling.
@@ -775,7 +794,7 @@ export function PrismuxStatusBar() {
         className="flex h-full min-w-0 flex-1 items-center justify-between gap-1.5 overflow-x-auto overflow-y-hidden px-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {/* Left Zone: Local Token Usage Overview + Standalone Official Quota Pill */}
-        <div className="flex h-full shrink-0 items-center gap-1">
+        <div className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-hidden">
           {visibility.usage ? (
             <Popover open={usageOpen} onOpenChange={handleUsageOpenChange}>
               <PopoverTrigger
@@ -784,7 +803,7 @@ export function PrismuxStatusBar() {
                     type="button"
                     data-testid="status-bar-usage-trigger"
                     aria-label="打开用量总览详情"
-                    className="inline-flex h-4 cursor-pointer items-center gap-1 rounded-sm px-1.5 font-medium text-foreground tabular-nums transition-colors hover:bg-accent/70 active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                    className="inline-flex h-4 shrink-0 cursor-pointer items-center gap-1 rounded-sm px-1.5 font-medium text-foreground tabular-nums transition-colors hover:bg-accent/70 active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
                   />
                 }
               >
@@ -837,7 +856,7 @@ export function PrismuxStatusBar() {
           {visibility.quota ? (
             <div
               data-testid="status-bar-quota-capsule"
-              className="inline-flex h-4 items-center rounded-sm transition-colors hover:bg-accent/70"
+              className="inline-flex h-4 min-w-0 max-w-full items-center overflow-hidden rounded-sm transition-colors hover:bg-accent/70"
             >
               <Popover open={quotaOpen} onOpenChange={handleQuotaOpenChange}>
                 <PopoverTrigger
@@ -845,26 +864,90 @@ export function PrismuxStatusBar() {
                     <button
                       type="button"
                       data-testid="status-bar-quota-trigger"
+                      data-quota-bar-mode={quotaPrefs.viewMode}
+                      data-quota-percent-mode={quotaPrefs.percentMode}
+                      title={quotaDisplay ? quotaDisplay.fullText : undefined}
                       aria-label={
-                        quotaPill ? `打开实时额度详情：${quotaPill.text}` : "打开实时额度详情"
+                        quotaDisplay
+                          ? `打开实时额度详情：${quotaDisplay.fullText}`
+                          : "打开实时额度详情"
                       }
                       className={cn(
-                        "inline-flex h-4 cursor-pointer items-center gap-1 rounded-l-sm pl-1.5 pr-1 font-medium tabular-nums active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                        quotaPill?.tone === "critical"
+                        "inline-flex h-4 min-w-0 max-w-full cursor-pointer items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-l-sm pl-1.5 pr-1 font-medium tabular-nums active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                        quotaDisplay?.tone === "critical"
                           ? "text-red-700 dark:text-red-300"
-                          : quotaPill?.tone === "warning"
+                          : quotaDisplay?.tone === "warning"
                             ? "text-amber-700 dark:text-amber-300"
                             : "text-foreground",
                       )}
                     />
                   }
                 >
-                  {quotaPill ? (
+                  {quotaDisplay ? (
                     <>
-                      <span className="text-muted-foreground">{quotaPill.modePrefix}</span>
-                      <AgentBrandLogo provider={quotaPill.brandProvider} size={11} />
-                      <span className="max-w-32 truncate">
-                        {quotaPill.shortLabel} {quotaPill.displayPercent}%
+                      <span className="shrink-0 text-muted-foreground">
+                        {quotaDisplay.modePrefix}
+                      </span>
+                      <span className="inline-flex min-w-0 items-center gap-1.5 overflow-hidden">
+                        {quotaDisplay.segments.map((segment, segIndex) => (
+                          <span
+                            key={segment.agentId}
+                            data-testid={`status-bar-quota-segment-${segment.agentId}`}
+                            className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap"
+                          >
+                            {segIndex > 0 ? (
+                              <span
+                                aria-hidden
+                                className="shrink-0 text-muted-foreground/50"
+                              >
+                                |
+                              </span>
+                            ) : null}
+                            <AgentBrandLogo provider={segment.brandProvider} size={11} />
+                            {quotaDisplay.viewMode === "detailed" ? (
+                              <span
+                                aria-hidden
+                                data-testid={`status-bar-quota-minibar-${segment.agentId}`}
+                                className="inline-flex h-[5px] w-9 shrink-0 overflow-hidden rounded-full bg-black/[0.14] dark:bg-white/[0.16] [[data-pmx-glass='1']_&]:bg-white/20 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/15"
+                              >
+                                <span
+                                  data-testid={`status-bar-quota-minibar-fill-${segment.agentId}`}
+                                  className={cn(
+                                    "block h-full rounded-full transition-[width] duration-200 motion-reduce:transition-none",
+                                    quotaMiniBarColorClass(segment.tone),
+                                  )}
+                                  style={{ width: `${segment.barWidthPercent}%` }}
+                                />
+                              </span>
+                            ) : null}
+                            <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden">
+                              {segment.windows.map((win, winIndex) => (
+                                <span
+                                  key={win.id}
+                                  data-testid={`status-bar-quota-window-${win.id}`}
+                                  className="inline-flex shrink-0 items-center gap-1"
+                                >
+                                  {winIndex > 0 ? (
+                                    <span aria-hidden className="text-muted-foreground/60">
+                                      ·
+                                    </span>
+                                  ) : null}
+                                  <span
+                                    className={cn(
+                                      win.tone === "critical"
+                                        ? "text-red-700 dark:text-red-300"
+                                        : win.tone === "warning"
+                                          ? "text-amber-700 dark:text-amber-300"
+                                          : undefined,
+                                    )}
+                                  >
+                                    {win.text}
+                                  </span>
+                                </span>
+                              ))}
+                            </span>
+                          </span>
+                        ))}
                       </span>
                     </>
                   ) : quotaRefreshing ? (
@@ -912,7 +995,7 @@ export function PrismuxStatusBar() {
                   event.stopPropagation();
                   void handleRefreshQuota(true);
                 }}
-                className="inline-flex h-4 w-4 cursor-pointer items-center justify-center rounded-r-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                className="inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-r-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
               >
                 <RefreshCwIcon
                   aria-hidden

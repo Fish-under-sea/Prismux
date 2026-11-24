@@ -220,6 +220,7 @@ function terminalProcessLabel(count: number, resolve: MessageResolver): string {
 function SidebarProviderStack(props: {
   thread: SidebarThreadSummary;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
+  activeBreathing?: boolean;
 }) {
   const stack = resolveThreadProviderStack(props.thread);
   const currentInstanceId = stack[stack.length - 1]!;
@@ -238,11 +239,19 @@ function SidebarProviderStack(props: {
       acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
       showBadge={showInstanceBadge}
       size="compact"
-      iconClassName="opacity-60"
+      iconClassName="opacity-92 text-sidebar-foreground/90"
     />
   );
+  const breathingAttr = props.activeBreathing ? "1" : "0";
   if (stack.length === 1) {
-    return <span className="inline-flex shrink-0 items-center">{current}</span>;
+    return (
+      <span
+        data-agent-logo-breathing={breathingAttr}
+        className="inline-flex shrink-0 items-center"
+      >
+        {current}
+      </span>
+    );
   }
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5">
@@ -256,11 +265,16 @@ function SidebarProviderStack(props: {
             displayName={entry.displayName}
             acpRegistryAgentId={entry.acpRegistryAgentId}
             acpRegistryIconUrl={entry.acpRegistryIconUrl}
-            iconClassName="size-3 opacity-35 grayscale"
+            iconClassName="size-3 opacity-65"
           />
         );
       })}
-      <span className="relative z-10 inline-flex items-center">{current}</span>
+      <span
+        data-agent-logo-breathing={breathingAttr}
+        className="relative z-10 inline-flex items-center"
+      >
+        {current}
+      </span>
     </span>
   );
 }
@@ -369,7 +383,7 @@ function SidebarThreadTooltip({
               showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
               badgeContent="none"
               badgeClassName="h-2 min-w-2 px-0"
-              iconClassName="size-3 shrink-0 opacity-60"
+              iconClassName="size-3 shrink-0 opacity-90"
             />
             <div className="min-w-0 truncate text-foreground/75">
               {showInstanceBadge && providerEntry
@@ -1073,20 +1087,35 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     }
   };
 
+  const isAgentActive = agentLamp.state !== "idle";
+  const isCardVariant = variant === "card";
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-lg border border-transparent text-left outline-none select-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "group/sidebar-row relative w-full cursor-pointer overflow-hidden border text-left outline-none select-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    isCardVariant ? "rounded-xl" : "rounded-lg border-transparent",
     variantAction === "unsettle" &&
       !props.isActive &&
       "[&:not(:hover):not(:focus-within)_*:not(.live-activity-focus_*)]:text-secondary-label",
     props.isActive
-      ? "border-sidebar-border/65 bg-sidebar-row-active text-sidebar-foreground shadow-[0_1px_2px_rgb(0_0_0/6%)] dark:shadow-[0_1px_3px_rgb(0_0_0/28%)]"
+      ? isCardVariant
+        ? "border-sidebar-border/85 bg-sidebar-row-active text-sidebar-foreground shadow-[0_1px_3px_rgb(0_0_0/8%)] dark:shadow-[0_1px_4px_rgb(0_0_0/34%)]"
+        : "border-sidebar-border/65 bg-sidebar-row-active text-sidebar-foreground shadow-[0_1px_2px_rgb(0_0_0/6%)] dark:shadow-[0_1px_3px_rgb(0_0_0/28%)]"
       : isSelected || props.sweepAction !== null
-        ? "border-sidebar-border/60 bg-sidebar-row-selected text-sidebar-foreground"
+        ? isCardVariant
+          ? "border-sidebar-border/75 bg-sidebar-row-selected text-sidebar-foreground"
+          : "border-sidebar-border/60 bg-sidebar-row-selected text-sidebar-foreground"
         : hasUnsentDraft
-          ? cn(draftSurfaceClassName, "text-sidebar-foreground")
+          ? cn(
+              draftSurfaceClassName,
+              isCardVariant && "border-sidebar-border/65",
+              "text-sidebar-foreground",
+            )
           : shouldRecede
-            ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+            ? isCardVariant
+              ? "border-sidebar-border/55 bg-sidebar-control-surface/40 text-sidebar-muted-foreground/90 hover:border-sidebar-border/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+              : "text-sidebar-muted-foreground/90 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+            : isCardVariant
+              ? "border-sidebar-border/60 bg-sidebar-control-surface/45 text-sidebar-foreground hover:border-sidebar-border/85 hover:bg-sidebar-row-hover"
+              : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
     shouldRecede &&
       (status === "preparing" || status === "working") &&
       "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
@@ -1153,7 +1182,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             ? cn(
                 "truncate",
                 shouldRecede
-                  ? "text-foreground/75 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
+                  ? "text-foreground/90 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
                   : status === "failed" && !isUnread && !isWoke
                     ? "text-foreground/95"
                     : "text-foreground",
@@ -1166,7 +1195,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     ? "text-foreground"
                     : isUnread
                       ? "text-muted-foreground"
-                      : "text-secondary-label/70",
+                      : "text-secondary-label/90",
               ),
       )}
       dir={textDirection(thread.title)}
@@ -1322,21 +1351,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     )
   ) : null;
 
-  const agentLampStatusText = messages(agentLamp.labelMessage);
-  const agentLampAriaLabel = gt("Agent status: {status}", { status: agentLampStatusText });
-  const agentLampIndicator = (
-    <span
-      role="img"
-      aria-label={agentLampAriaLabel}
-      data-testid={`sidebar-agent-lamp-${thread.id}`}
-      data-agent-lamp={agentLamp.state}
-      title={agentLampAriaLabel}
-      className="inline-flex size-2 shrink-0 items-center justify-center"
-    >
-      <span aria-hidden className={cn("size-1.5 rounded-full", agentLamp.dotClassName)} />
-    </span>
-  );
-
   const portMicroBadge = portBadgeLabel ? (
     <button
       type="button"
@@ -1414,6 +1428,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <SidebarProviderStack
           thread={thread}
           providerEntryByInstanceId={props.providerEntryByInstanceId}
+          activeBreathing={isAgentActive}
         />
       </span>
     </div>
@@ -1423,6 +1438,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       <SidebarProviderStack
         thread={thread}
         providerEntryByInstanceId={props.providerEntryByInstanceId}
+        activeBreathing={isAgentActive}
       />
     </span>
   ) : null;
@@ -1450,6 +1466,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 tabIndex={0}
                 data-sidebar-row={threadKey}
                 data-sidebar-parent={props.navigationParent}
+                data-sidebar-agent-active={isAgentActive ? "1" : "0"}
+                data-agent-lamp={agentLamp.state}
                 aria-label={accessibility.label}
                 aria-current={accessibility.current}
                 data-testid={inFolder ? "sidebar-row-folder" : "sidebar-row-slim"}
@@ -1484,7 +1502,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   ) : null}
                 </span>
               )}
-              {agentLampIndicator}
               {draftIndicator}
               {title}
               {multiline ? titleLineIcons : null}
@@ -1641,11 +1658,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       data-thread-item={threadKey}
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
-      // The hints are the rendered heights inside py-0.5. Revealing the open thread measures rows
+      // The hints are the rendered heights inside py-1. Revealing the open thread measures rows
       // that have not rendered yet, so a hint off by a pixel lands it a pixel short per row above.
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
+        "list-none py-1 [content-visibility:auto] [contain-intrinsic-size:auto_82px]",
+        metaLineEmpty && "[contain-intrinsic-size:auto_64px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1658,6 +1675,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               tabIndex={0}
               data-sidebar-row={threadKey}
               data-sidebar-parent={props.navigationParent}
+              data-sidebar-card="1"
+              data-sidebar-card-active={props.isActive ? "1" : "0"}
+              data-sidebar-agent-active={isAgentActive ? "1" : "0"}
+              data-agent-lamp={agentLamp.state}
               aria-label={accessibility.label}
               aria-current={accessibility.current}
               data-testid="sidebar-row-card"
@@ -1677,7 +1698,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             )}
           >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
-              {agentLampIndicator}
               {draftIndicator}
               {props.project ? (
                 <ProjectFavicon project={props.project} className="size-4 shrink-0" />
@@ -2009,7 +2029,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
                 "group/sidebar-row group/v2-row flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1 text-left text-sm outline-none",
                 props.isHighlighted || props.isRouteActive
                   ? "bg-sidebar-row-active text-sidebar-foreground"
-                  : "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+                  : "text-sidebar-muted-foreground/90 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
                 isFileDragOver && "ring-1 ring-inset ring-primary/70",
                 isFileDragOver && !props.isRouteActive && "bg-sidebar-row-hover",
               )}
@@ -2038,7 +2058,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
                   isRegeneratingTitle
                     ? "relative text-muted-foreground"
                     : props.isSettled && !props.isHighlighted && !props.isRouteActive
-                      ? "text-secondary-label/70 group-hover/sidebar-row:text-foreground"
+                      ? "text-secondary-label/90 group-hover/sidebar-row:text-foreground"
                       : "text-foreground",
                 )}
               >
@@ -2057,7 +2077,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
                   settled={props.isSettled}
                 />
               </span>
-              <span className="w-8 shrink-0 text-right text-xs text-muted-foreground/55 tabular-nums">
+              <span className="w-8 shrink-0 text-right text-xs text-secondary-label/85 tabular-nums">
                 <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
               </span>
             </span>

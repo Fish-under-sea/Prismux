@@ -67,6 +67,34 @@ export interface QuotaStatusBarPillData {
   readonly text: string;
 }
 
+export interface QuotaStatusBarWindowItem {
+  readonly id: string;
+  readonly shortLabel: string;
+  readonly displayPercent: number;
+  readonly tone: QuotaTone;
+  readonly text: string;
+}
+
+export interface QuotaStatusBarSegmentData {
+  readonly agentId: string;
+  readonly brandProvider: string;
+  readonly displayName: string;
+  readonly tone: QuotaTone;
+  readonly barWidthPercent: number;
+  readonly primaryPercent: number;
+  readonly windows: readonly QuotaStatusBarWindowItem[];
+  readonly summaryText: string;
+}
+
+export interface QuotaStatusBarDisplayData {
+  readonly viewMode: QuotaViewMode;
+  readonly percentMode: QuotaPercentMode;
+  readonly modePrefix: "已用" | "剩余";
+  readonly tone: QuotaTone;
+  readonly segments: readonly QuotaStatusBarSegmentData[];
+  readonly fullText: string;
+}
+
 export interface QuotaPreferences {
   readonly viewMode: QuotaViewMode;
   readonly percentMode: QuotaPercentMode;
@@ -436,6 +464,16 @@ export function aggregateQuotaSummary(
   };
 }
 
+function toneRank(tone: QuotaTone): number {
+  if (tone === "critical") return 2;
+  if (tone === "warning") return 1;
+  return 0;
+}
+
+function pickMoreSevereTone(a: QuotaTone, b: QuotaTone): QuotaTone {
+  return toneRank(b) > toneRank(a) ? b : a;
+}
+
 /**
  * Builds the compact bottom status-bar pill representation matching Fig 1:
  * `已用 [AGY] Gemini 周 7%` or `剩余 [AGY] Gemini 周 93%`.
@@ -459,5 +497,78 @@ export function buildQuotaStatusBarPill(
     displayPercent,
     tone: win.tone,
     text: `${modePrefix} ${win.shortLabel} ${displayPercent}%`,
+  };
+}
+
+/**
+ * Builds the bottom status-bar quota readout synced with `prefs.viewMode` (`detailed` vs `compact`)
+ * and `prefs.percentMode` (`used` vs `remaining`), mirroring Orca's `StatusBarProviderSegment`:
+ * - `compact`: 1 primary window per available agent (`剩余 [AGY] Gemini 周 90%`)
+ * - `detailed`: inline mini progress bar + all quota windows separated by ` · `
+ *   (`剩余 [AGY] [████░] Gemini 周 90% · Gemini 5h 84% · Claude/GPT 周 100% · Claude/GPT 5h 100%`)
+ */
+export function buildQuotaStatusBarDisplay(
+  summary: QuotaStatusSummary,
+  prefs: QuotaPreferences,
+): QuotaStatusBarDisplayData | null {
+  if (summary.availableAgents.length === 0) {
+    return null;
+  }
+
+  const modePrefix: "已用" | "剩余" = prefs.percentMode === "remaining" ? "剩余" : "已用";
+  const segments: QuotaStatusBarSegmentData[] = [];
+  let overallTone: QuotaTone = "normal";
+
+  for (const agent of summary.availableAgents) {
+    const primaryWin = agent.primaryWindow ?? agent.windows[0] ?? null;
+    if (!primaryWin) continue;
+
+    const selectedWindows = prefs.viewMode === "detailed" ? agent.windows : [primaryWin];
+    const windows: QuotaStatusBarWindowItem[] = [];
+    let segmentTone: QuotaTone = primaryWin.tone;
+
+    for (const win of selectedWindows) {
+      const displayPercent = getQuotaDisplayPercent(win, prefs.percentMode);
+      segmentTone = pickMoreSevereTone(segmentTone, win.tone);
+      windows.push({
+        id: win.id,
+        shortLabel: win.shortLabel,
+        displayPercent,
+        tone: win.tone,
+        text: `${win.shortLabel} ${displayPercent}%`,
+      });
+    }
+
+    if (windows.length === 0) continue;
+
+    overallTone = pickMoreSevereTone(overallTone, segmentTone);
+    segments.push({
+      agentId: agent.id,
+      brandProvider: agent.brandProvider,
+      displayName: agent.displayName,
+      tone: segmentTone,
+      barWidthPercent: getQuotaBarWidthPercent(primaryWin, prefs.percentMode),
+      primaryPercent: getQuotaDisplayPercent(primaryWin, prefs.percentMode),
+      windows,
+      summaryText: windows.map((w) => w.text).join(" · "),
+    });
+  }
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  const fullText =
+    segments.length === 1
+      ? `${modePrefix} ${segments[0]!.summaryText}`
+      : `${modePrefix} ${segments.map((seg) => `${seg.displayName} ${seg.summaryText}`).join(" | ")}`;
+
+  return {
+    viewMode: prefs.viewMode,
+    percentMode: prefs.percentMode,
+    modePrefix,
+    tone: overallTone,
+    segments,
+    fullText,
   };
 }

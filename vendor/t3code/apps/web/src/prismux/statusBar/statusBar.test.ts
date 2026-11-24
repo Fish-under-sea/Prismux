@@ -28,6 +28,7 @@ import { PortsStatusPopover } from "./PortsStatusPopover";
 import { QuotaStatusPopover } from "./QuotaStatusPopover";
 import {
   aggregateQuotaSummary,
+  buildQuotaStatusBarDisplay,
   buildQuotaStatusBarPill,
   formatQuotaResetDuration,
   formatQuotaResetLabel,
@@ -679,11 +680,60 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
     const summary = aggregateQuotaSummary(daemonQuota, upstreamProviders, now);
     expect(summary.availableAgents.map((a) => a.displayName)).toEqual(["Antigravity", "Codex"]);
 
-    // Bottom status bar pill text (Fig 1): used vs remaining
+    // Bottom status bar pill text (Fig 1): used vs remaining (backward compatibility)
     const usedPill = buildQuotaStatusBarPill(summary, "used");
     expect(usedPill?.text).toBe("已用 Gemini 周 7%");
     const remainingPill = buildQuotaStatusBarPill(summary, "remaining");
     expect(remainingPill?.text).toBe("剩余 Gemini 周 93%");
+
+    // Bottom status bar display synced with Detailed / Compact & Used / Remaining (Orca parity)
+    const detailedRemaining = buildQuotaStatusBarDisplay(summary, {
+      viewMode: "detailed",
+      percentMode: "remaining",
+    });
+    expect(detailedRemaining).not.toBeNull();
+    expect(detailedRemaining?.modePrefix).toBe("剩余");
+    expect(detailedRemaining?.segments).toHaveLength(2);
+    expect(detailedRemaining?.segments[0]?.barWidthPercent).toBe(93);
+    expect(detailedRemaining?.segments[0]?.windows.map((w) => w.text)).toEqual([
+      "Gemini 周 93%",
+      "Gemini 5h 95%",
+      "Claude/GPT 周 100%",
+      "Claude/GPT 5h 100%",
+    ]);
+    expect(detailedRemaining?.segments[0]?.summaryText).toBe(
+      "Gemini 周 93% · Gemini 5h 95% · Claude/GPT 周 100% · Claude/GPT 5h 100%",
+    );
+    expect(detailedRemaining?.segments[1]?.windows.map((w) => w.text)).toEqual(["周 82%"]);
+
+    const detailedUsed = buildQuotaStatusBarDisplay(summary, {
+      viewMode: "detailed",
+      percentMode: "used",
+    });
+    expect(detailedUsed?.modePrefix).toBe("已用");
+    expect(detailedUsed?.segments[0]?.barWidthPercent).toBe(7);
+    expect(detailedUsed?.segments[0]?.windows.map((w) => w.text)).toEqual([
+      "Gemini 周 7%",
+      "Gemini 5h 5%",
+      "Claude/GPT 周 0%",
+      "Claude/GPT 5h 0%",
+    ]);
+
+    const compactRemaining = buildQuotaStatusBarDisplay(summary, {
+      viewMode: "compact",
+      percentMode: "remaining",
+    });
+    expect(compactRemaining?.segments[0]?.windows.map((w) => w.text)).toEqual(["Gemini 周 93%"]);
+    expect(compactRemaining?.segments[1]?.windows.map((w) => w.text)).toEqual(["周 82%"]);
+
+    const compactUsed = buildQuotaStatusBarDisplay(summary, {
+      viewMode: "compact",
+      percentMode: "used",
+    });
+    expect(compactUsed?.segments[0]?.windows.map((w) => w.text)).toEqual(["Gemini 周 7%"]);
+
+    const emptySummary = aggregateQuotaSummary(null, [], now);
+    expect(buildQuotaStatusBarDisplay(emptySummary, { viewMode: "detailed", percentMode: "used" })).toBeNull();
 
     // Detailed View (Fig 3)
     const detailedHtml = renderToStaticMarkup(

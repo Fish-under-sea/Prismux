@@ -259,7 +259,12 @@
     -116px 9px 0 -3px rgba(218, 240, 255, 0.52),
     -152px 10px 0 -3.5px rgba(218, 240, 255, 0.48),
     -190px 12px 0 -4.5px rgba(218, 240, 255, 0.44),
-    -230px 13px 0 -5.5px rgba(218, 240, 255, 0.38);
+    -230px 13px 0 -5.5px rgba(218, 240, 255, 0.38),
+    -274px 11px 0 -4px rgba(218, 240, 255, 0.42),
+    -320px 12px 0 -4.5px rgba(218, 240, 255, 0.38),
+    -370px 13px 0 -5px rgba(218, 240, 255, 0.34),
+    -424px 12px 0 -5px rgba(218, 240, 255, 0.3),
+    -480px 13px 0 -5.5px rgba(218, 240, 255, 0.26);
 }
 
 .pmx-theme-pill .dtp-cloud-front {
@@ -280,6 +285,11 @@
     -176px 10px 0 -3.5px #ffffff,
     -212px 12px 0 -4.5px rgba(255, 255, 255, 0.96),
     -248px 13px 0 -5.5px rgba(255, 255, 255, 0.92),
+    -290px 11px 0 -4px rgba(255, 255, 255, 0.9),
+    -336px 12px 0 -4.5px rgba(255, 255, 255, 0.86),
+    -386px 13px 0 -5px rgba(255, 255, 255, 0.82),
+    -440px 12px 0 -5px rgba(255, 255, 255, 0.78),
+    -496px 13px 0 -5.5px rgba(255, 255, 255, 0.72),
     0 -2px 8px rgba(255, 255, 255, 0.48);
 }
 
@@ -854,10 +864,14 @@
   pointer-events: auto;
 }
 
+.pmx-theme-pill .dtp-hit:focus,
 .pmx-theme-pill .dtp-hit:focus-visible {
-  outline: 2px solid #ffffff;
-  outline-offset: -3px;
-  border-radius: 999px;
+  outline: none;
+}
+
+.pmx-theme-pill .dtp-track:has(.dtp-hit:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--dock-accent, var(--pmx-accent, #5e9bff)) 72%, transparent);
+  outline-offset: 2px;
 }
 
 /* Layer 11c: Pixel-exact orb-aligned 3-mode text labels with spring accent bar.

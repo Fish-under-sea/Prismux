@@ -1571,7 +1571,7 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     // 3. Warm-wallpaper dark-glass contrast lift & anti-bleed-through floating peek drawer CSS contract.
     const here = path.dirname(fileURLToPath(import.meta.url));
     const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
-    assert.match(bridgeCss, /--sidebar-muted-foreground:\s*rgba\(255,\s*255,\s*255,\s*0\.86\)/);
+    assert.match(bridgeCss, /--sidebar-muted-foreground:\s*rgba\(255,\s*255,\s*255,\s*0\.8[68]\)/);
     assert.match(bridgeCss, /text-shadow:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.4[58]\)/);
     assert.match(bridgeCss, /filter:\s*drop-shadow\(0 1px 1\.5px rgba\(0,\s*0,\s*0,\s*0\.38\)\)/);
     assert.match(bridgeCss, /\[data-pmx-sidebar-peek='1'\][\s\S]*?isolation:\s*isolate;/);
@@ -2797,6 +2797,89 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     assert.match(
       bridgeCss,
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-topbar-toggle-kind='wallpaper'\] \[data-pmx-wallpaper-icon='1'\][\s\S]*?animation:\s*none\s*!important;/,
+    );
+  });
+
+  it('enforces sharp sidebar --contrast-secondary-label tokens, 4-edge sidebar glass cards, active RGB border marquee & breathing logo, and AGY Light/Dark liquid glass user message pills', () => {
+    const bridgeCss = fs.readFileSync(new URL('../../src/styles/t3-glass-bridge.css', import.meta.url), 'utf8');
+
+    // Balanced braces & zero prefers-color-scheme
+    const noComments = bridgeCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.equal(noComments.includes('prefers-color-scheme'), false);
+    assert.equal(
+      (noComments.match(/\{/g) ?? []).length,
+      (noComments.match(/\}/g) ?? []).length,
+      't3-glass-bridge.css braces must stay balanced',
+    );
+
+    // 1. Sidebar Dark & Light Glass contrast token overrides + custom-muted binding
+    assert.match(
+      bridgeCss,
+      /html\.dark\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(255,\s*255,\s*255,\s*0\.88\);[\s\S]*?--contrast-secondary-label:\s*rgba\(255,\s*255,\s*255,\s*0\.88\);[\s\S]*?--contrast-icon-muted:\s*rgba\(255,\s*255,\s*255,\s*0\.9\);/,
+    );
+    assert.match(
+      bridgeCss,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(15,\s*23,\s*42,\s*0\.84\);[\s\S]*?--contrast-secondary-label:\s*rgba\(15,\s*23,\s*42,\s*0\.84\);[\s\S]*?--contrast-icon-muted:\s*rgba\(15,\s*23,\s*42,\s*0\.86\);/,
+    );
+    assert.match(
+      bridgeCss,
+      /html\[data-pmx-custom-muted='1'\]\[data-theme-id\]\s*\[data-app-sidebar\]\s*\{[\s\S]*?--contrast-secondary-label:\s*var\(--pmx-muted-color\);[\s\S]*?--contrast-icon-muted:\s*var\(--pmx-muted-color\);/,
+    );
+
+    // 2. 4-edge Sidebar session glass cards (Dark & Light rest/hover/active, zero nested blur)
+    assert.match(
+      bridgeCss,
+      /html\.dark\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\][\s\S]*?background:\s*rgba\(16,\s*20,\s*32,\s*0\.34\);[\s\S]*?border:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.16\);[\s\S]*?backdrop-filter:\s*none;/,
+    );
+    assert.match(
+      bridgeCss,
+      /html\.dark\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\]\[data-sidebar-card-active='1'\]/,
+    );
+    assert.match(
+      bridgeCss,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\][\s\S]*?background:\s*rgba\(255,\s*255,\s*255,\s*0\.52\);[\s\S]*?border:\s*1px solid rgba\(15,\s*23,\s*42,\s*0\.13\);[\s\S]*?backdrop-filter:\s*none;/,
+    );
+    assert.match(
+      bridgeCss,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\]\[data-sidebar-card-active='1'\]/,
+    );
+
+    // 3. Active agent RGB border marquee + breathing logo + reduced-motion fallback
+    assert.match(bridgeCss, /@property --pmx-rgb-border-angle\s*\{[\s\S]*?syntax:\s*'<angle>';/);
+    assert.match(bridgeCss, /@keyframes pmx-rgb-border-spin\b/);
+    assert.match(bridgeCss, /@keyframes pmx-agent-logo-breathe\b/);
+    assert.match(
+      bridgeCss,
+      /\[data-sidebar-card='1'\]\[data-sidebar-agent-active='1'\]::before[\s\S]*?conic-gradient\([\s\S]*?from var\(--pmx-rgb-border-angle\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
+    );
+    assert.match(
+      bridgeCss,
+      /\[data-agent-logo-breathing='1'\][\s\S]*?animation:\s*pmx-agent-logo-breathe 2\.2s ease-in-out infinite;/,
+    );
+    assert.match(
+      bridgeCss,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-sidebar-card='1'\]\[data-sidebar-agent-active='1'\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-agent-logo-breathing='1'\][\s\S]*?animation:\s*none\s*!important;/,
+    );
+
+    // 4. AGY flat large-radius user message capsule bubbles (Dark/Light Liquid Glass + solid + 3 fallbacks)
+    assert.match(
+      bridgeCss,
+      /html\.dark\[data-pmx-glass='1'\][\s\S]*?\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\][\s\S]*?backdrop-filter:\s*blur\(14px\) saturate\(1\.18\);[\s\S]*?border:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.24\);/,
+    );
+    assert.match(
+      bridgeCss,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\][\s\S]*?\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\][\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.56\);[\s\S]*?backdrop-filter:\s*blur\(14px\) saturate\(1\.22\);[\s\S]*?border:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.8\);/,
+    );
+    const fallbackSection = bridgeCss.slice(
+      bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
+    );
+    assert.ok(
+      (fallbackSection.match(/\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\]/g) ?? []).length >= 7,
+      'all 3 solid fallbacks (dark + light) + forced-colors must cover user message capsule bubbles',
+    );
+    assert.ok(
+      (fallbackSection.match(/\[data-sidebar-card='1'\]/g) ?? []).length >= 13,
+      'all 3 solid fallbacks (dark + light, rest + active) + forced-colors must cover sidebar cards',
     );
   });
 });

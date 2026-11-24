@@ -860,38 +860,19 @@ it("integrates Celestial 3-state theme capsule, built-in wallpapers, genuine Ant
     </RegistryContext.Provider>,
   );
 
-  // Appearance band with 1:1 Celestial 3-state capsule & built-in wallpapers
+  // Appearance band with 1:1 Celestial 3-state capsule and zero synthetic built-in scenes
   expect(document.querySelector('[data-pmx-welcome-appearance="1"]')).not.toBeNull();
   expect(document.querySelector(".pmx-theme-pill")).not.toBeNull();
-  expect(document.querySelector('[data-pmx-welcome-wallpaper="none"]')).not.toBeNull();
-  expect(document.querySelector('[data-pmx-welcome-wallpaper="builtin:aurora-prism"]')).not.toBeNull();
+  expect(document.querySelector('[data-pmx-welcome-wallpaper="builtin:aurora-prism"]')).toBeNull();
+  expect(document.querySelector('[data-pmx-welcome-wallpaper="builtin:liquid-silk"]')).toBeNull();
 
-  // Select Solid background first, then switch to Glass -> auto-enables a built-in wallpaper & glass sheet
-  const solidTile = document.querySelector<HTMLButtonElement>('[data-pmx-welcome-wallpaper="none"]');
-  expect(solidTile).not.toBeNull();
-  await act(async () => solidTile?.click());
-  expect(solidTile?.getAttribute("aria-checked")).toBe("true");
-  expect(document.querySelector('[data-pmx-welcome-sheet="solid"]')).not.toBeNull();
-
+  // Switch to Glass mode cleanly without synthetic scene presets
   const glassStop = document.querySelector<HTMLButtonElement>('.dtp-label-btn[data-dtp-stop="glass"]');
   expect(glassStop).not.toBeNull();
   await act(async () => glassStop?.click());
   await vi.waitFor(() =>
     expect(document.querySelector('[data-pmx-welcome-sheet="glass"]')).not.toBeNull(),
   );
-  expect(
-    document
-      .querySelector('[data-pmx-welcome-wallpaper="builtin:aurora-prism"]')
-      ?.getAttribute("aria-checked"),
-  ).toBe("true");
-
-  // Switch built-in wallpaper preset live
-  const liquidSilk = document.querySelector<HTMLButtonElement>(
-    '[data-pmx-welcome-wallpaper="builtin:liquid-silk"]',
-  );
-  expect(liquidSilk).not.toBeNull();
-  await act(async () => liquidSilk?.click());
-  expect(liquidSilk?.getAttribute("aria-checked")).toBe("true");
 
   // Featured Antigravity row renders visibly with genuine 4-color SVG & UUID noise is stripped from Codex
   const antigravityRow = document.querySelector('[data-pmx-welcome-agent="antigravity"]');

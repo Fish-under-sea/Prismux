@@ -343,4 +343,46 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       "拖入 Prismux 或 VS Code .json 文件",
     );
   });
+
+  it("auto-detects supported UI languages by host IANA timezone on default system mode and never overrides explicit user choices", async () => {
+    const { resolveLocale } = await import("@t3tools/client-runtime/locales");
+    const { resolveEffectiveSystemLocales, resolveLocaleFromTimezone } = await import("./runtime");
+    const { DEFAULT_LOCALE, SUPPORTED_LOCALES } = await import("./locales");
+
+    expect(resolveLocaleFromTimezone("Asia/Shanghai")).toBe("zh");
+    expect(resolveLocaleFromTimezone("Asia/Tokyo")).toBe("ja");
+    expect(resolveLocaleFromTimezone("Asia/Seoul")).toBe("ko");
+    expect(resolveLocaleFromTimezone("Europe/Berlin")).toBe("de");
+    expect(resolveLocaleFromTimezone("Europe/Paris")).toBe("fr");
+    expect(resolveLocaleFromTimezone("Europe/Madrid")).toBe("es");
+    expect(resolveLocaleFromTimezone("America/Sao_Paulo")).toBe("pt-BR");
+    expect(resolveLocaleFromTimezone("Europe/Moscow")).toBe("ru");
+    expect(resolveLocaleFromTimezone("Europe/Stockholm")).toBe("sv");
+    expect(resolveLocaleFromTimezone("America/New_York")).toBeNull();
+
+    // Default "system" mode on Windows Electron (navigator.languages = ["en-US"]) in Asia/Shanghai -> zh
+    const cnEffective = resolveEffectiveSystemLocales({
+      navigatorLanguages: ["en-US"],
+      timeZone: "Asia/Shanghai",
+    });
+    expect(resolveLocale("system", cnEffective, SUPPORTED_LOCALES, DEFAULT_LOCALE)).toBe("zh");
+
+    // Default "system" mode in Asia/Tokyo -> ja
+    const jpEffective = resolveEffectiveSystemLocales({
+      navigatorLanguages: ["en-US"],
+      timeZone: "Asia/Tokyo",
+    });
+    expect(resolveLocale("system", jpEffective, SUPPORTED_LOCALES, DEFAULT_LOCALE)).toBe("ja");
+
+    // Unsupported/English timezone stays English
+    const usEffective = resolveEffectiveSystemLocales({
+      navigatorLanguages: ["en-US"],
+      timeZone: "America/New_York",
+    });
+    expect(resolveLocale("system", usEffective, SUPPORTED_LOCALES, DEFAULT_LOCALE)).toBe("en");
+
+    // Explicit user override ("en" or "fr") is NEVER replaced by timezone detection!
+    expect(resolveLocale("en", cnEffective, SUPPORTED_LOCALES, DEFAULT_LOCALE)).toBe("en");
+    expect(resolveLocale("fr", cnEffective, SUPPORTED_LOCALES, DEFAULT_LOCALE)).toBe("fr");
+  });
 });

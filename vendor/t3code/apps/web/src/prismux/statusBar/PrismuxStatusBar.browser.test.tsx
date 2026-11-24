@@ -1,3 +1,5 @@
+import "~/index.css";
+
 import { useState } from "react";
 import {
   createMemoryHistory,
@@ -9,15 +11,20 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
+import type { DaemonOfficialQuotaSummaryResponse } from "../daemonClient";
 import { PrismuxStatusBar } from "../PrismuxStatusBar";
-import { aggregateQuotaSummary, type QuotaPreferences } from "./quotaStatus.logic";
+import {
+  aggregateQuotaSummary,
+  QUOTA_PREFS_STORAGE_KEY,
+  type QuotaPreferences,
+} from "./quotaStatus.logic";
 import { QuotaStatusPopover } from "./QuotaStatusPopover";
 import { ResourcesStatusPopover } from "./ResourcesStatusPopover";
 import { STATUS_BAR_VISIBILITY_STORAGE_KEY } from "./statusBarVisibility";
 
-function renderStatusBarInRouter() {
+function renderStatusBarInRouter(initialDaemonQuota?: DaemonOfficialQuotaSummaryResponse | null) {
   const rootRoute = createRootRoute({
-    component: () => <PrismuxStatusBar />,
+    component: () => <PrismuxStatusBar initialDaemonQuota={initialDaemonQuota} />,
   });
   const router = createRouter({
     routeTree: rootRoute,
@@ -82,7 +89,10 @@ describe("PrismuxStatusBar (browser)", () => {
     expect(scrollLeftValue).toBe(64);
 
     // Never performs any unsolicited Antigravity / remote quota fetch.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    const fetchedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
+    expect(
+      fetchedUrls.filter((url) => !url.includes("/.well-known/t3/environment")),
+    ).toEqual([]);
   });
 
   it("highlights the active option in ResourcesStatusPopover [内存 | CPU | 名称] segmented switcher across clicks", async () => {
@@ -254,5 +264,140 @@ describe("PrismuxStatusBar (browser)", () => {
     // Navigate back to list view
     await userEvent.click(screen.getByTestId("quota-detail-back"));
     expect(screen.getByTestId("prismux-quota-popover").element().getAttribute("data-quota-view")).toBe("compact");
+  });
+
+  it("syncs bottom status bar quota windows and mini progress bar live with Detailed/Compact and Used/Remaining toggles", async () => {
+    window.localStorage.removeItem(STATUS_BAR_VISIBILITY_STORAGE_KEY);
+    window.localStorage.setItem(
+      QUOTA_PREFS_STORAGE_KEY,
+      JSON.stringify({ viewMode: "detailed", percentMode: "remaining" }),
+    );
+    const now = Date.parse("2026-11-24T06:00:00Z");
+    const quotaSnapshot: DaemonOfficialQuotaSummaryResponse = {
+      ok: true,
+      cached: false,
+      cacheTtlMs: 180_000,
+      fetchedAt: now - 5_000,
+      fetchedAtIso: new Date(now - 5_000).toISOString(),
+      providers: [],
+      antigravity: {
+        id: "antigravity",
+        providerId: "antigravity",
+        displayName: "Antigravity",
+        source: "official-cli",
+        command: 'agy -p "/usage"',
+        status: "ok",
+        available: true,
+        executablePath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+        remainingCredits: 0,
+        fetchedAt: now - 5_000,
+        fetchedAtIso: new Date(now - 5_000).toISOString(),
+        error: null,
+        windows: [
+          {
+            id: "gemini:weekly",
+            group: "Gemini",
+            groupId: "gemini",
+            window: "weekly",
+            shortLabel: "Gemini 周",
+            detailLabel: "Gemini · 每周",
+            remainingPercent: 90,
+            usedPercent: 10,
+            resetAtIso: "2026-11-30T20:03:11.000Z",
+            resetAtMs: Date.parse("2026-11-30T20:03:11.000Z"),
+          },
+          {
+            id: "gemini:5h",
+            group: "Gemini",
+            groupId: "gemini",
+            window: "5h",
+            shortLabel: "Gemini 5h",
+            detailLabel: "Gemini · 5h",
+            remainingPercent: 84,
+            usedPercent: 16,
+            resetAtIso: "2026-11-24T07:33:00.000Z",
+            resetAtMs: Date.parse("2026-11-24T07:33:00.000Z"),
+          },
+          {
+            id: "claude-gpt:weekly",
+            group: "Claude/GPT",
+            groupId: "claude-gpt",
+            window: "weekly",
+            shortLabel: "Claude/GPT 周",
+            detailLabel: "Claude/GPT · 每周",
+            remainingPercent: 100,
+            usedPercent: 0,
+            resetAtIso: "2026-12-01T05:30:00.000Z",
+            resetAtMs: Date.parse("2026-12-01T05:30:00.000Z"),
+          },
+          {
+            id: "claude-gpt:5h",
+            group: "Claude/GPT",
+            groupId: "claude-gpt",
+            window: "5h",
+            shortLabel: "Claude/GPT 5h",
+            detailLabel: "Claude/GPT · 5h",
+            remainingPercent: 100,
+            usedPercent: 0,
+            resetAtIso: "2026-11-24T10:59:30.000Z",
+            resetAtMs: Date.parse("2026-11-24T10:59:30.000Z"),
+          },
+        ],
+      },
+    };
+
+    await using screen = await renderStatusBarInRouter(quotaSnapshot);
+    const barEl = screen.getByRole("contentinfo", { name: "Prismux 状态栏" }).element() as HTMLElement;
+    expect(Math.round(barEl.getBoundingClientRect().height)).toBe(20);
+
+    const trigger = screen.getByTestId("status-bar-quota-trigger").element() as HTMLButtonElement;
+    expect(trigger.getAttribute("data-quota-bar-mode")).toBe("detailed");
+    expect(trigger.getAttribute("data-quota-percent-mode")).toBe("remaining");
+    expect(trigger.textContent).toContain("剩余");
+    expect(trigger.textContent).toContain("Gemini 周 90%");
+    expect(trigger.textContent).toContain("Gemini 5h 84%");
+    expect(trigger.textContent).toContain("Claude/GPT 周 100%");
+    expect(trigger.textContent).toContain("Claude/GPT 5h 100%");
+
+    // Mini progress bar is present in detailed mode with 90% remaining fill width
+    const miniBarFill = screen
+      .getByTestId("status-bar-quota-minibar-fill-antigravity")
+      .element() as HTMLElement;
+    expect(miniBarFill.style.width).toBe("90%");
+
+    // Open popover and switch Remaining -> Used: both bottom bar, mini bar, and popover sync live
+    await userEvent.click(trigger);
+    await expect.element(screen.getByTestId("prismux-quota-popover")).toBeVisible();
+    await userEvent.click(screen.getByTestId("quota-percent-mode-toggle"));
+
+    expect(trigger.getAttribute("data-quota-percent-mode")).toBe("used");
+    expect(trigger.textContent).toContain("已用");
+    expect(trigger.textContent).toContain("Gemini 周 10%");
+    expect(trigger.textContent).toContain("Gemini 5h 16%");
+    expect(trigger.textContent).toContain("Claude/GPT 周 0%");
+    expect(trigger.textContent).toContain("Claude/GPT 5h 0%");
+    expect(
+      (screen.getByTestId("status-bar-quota-minibar-fill-antigravity").element() as HTMLElement)
+        .style.width,
+    ).toBe("10%");
+
+    // Switch Detailed -> Compact: bottom bar immediately collapses to single primary window without mini bar
+    await userEvent.click(screen.getByTestId("quota-view-compact"));
+    expect(trigger.getAttribute("data-quota-bar-mode")).toBe("compact");
+    expect(trigger.textContent).toContain("Gemini 周 10%");
+    expect(trigger.textContent).not.toContain("Gemini 5h");
+    expect(trigger.textContent).not.toContain("Claude/GPT 周");
+    expect(screen.getByTestId("status-bar-quota-minibar-antigravity").query()).toBeNull();
+
+    // Switch back Compact -> Detailed: all 4 windows & mini progress bar return immediately
+    await userEvent.click(screen.getByTestId("quota-view-detailed"));
+    expect(trigger.getAttribute("data-quota-bar-mode")).toBe("detailed");
+    expect(trigger.textContent).toContain("Gemini 周 10%");
+    expect(trigger.textContent).toContain("Gemini 5h 16%");
+    expect(trigger.textContent).toContain("Claude/GPT 周 0%");
+    expect(trigger.textContent).toContain("Claude/GPT 5h 0%");
+    expect(screen.getByTestId("status-bar-quota-minibar-antigravity").element()).toBeTruthy();
+
+    window.localStorage.removeItem(QUOTA_PREFS_STORAGE_KEY);
   });
 });
