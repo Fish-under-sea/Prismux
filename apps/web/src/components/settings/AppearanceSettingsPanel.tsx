@@ -32,7 +32,7 @@ export function AppearanceSettingsPanel() {
   } as CSSProperties;
 
   const panelAnimationsAdvanced = (
-    <SettingsSection id="appearance-motion" title={gt("Motion")} hideTitle>
+    <SettingsSection id="appearance-motion" title={gt("Panel animations")} hideTitle>
       <AdvancedSettings targetIds={[searchableSetting("panel-animations").id]}>
         <SettingsRow
           {...searchableSetting("panel-animations")}

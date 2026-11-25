@@ -108,28 +108,54 @@ export function FloatingColorPopover({
     const vh = window.innerHeight;
     const margin = 12;
 
-    let left = margin;
-    let top = margin;
+    const host =
+      portalContainer && portalContainer !== document.body && portalContainer !== document.documentElement
+        ? portalContainer
+        : null;
+    const hostRect = host ? host.getBoundingClientRect() : null;
+    const minLeft = hostRect ? hostRect.left + margin : margin;
+    const maxLeft = hostRect
+      ? Math.max(minLeft, hostRect.right - popW - margin)
+      : Math.max(margin, vw - popW - margin);
+    const minTop = hostRect ? hostRect.top + margin : margin;
+    const maxTop = hostRect
+      ? Math.max(minTop, hostRect.bottom - popH - margin)
+      : Math.max(margin, vh - popH - margin);
+
+    let left = minLeft;
+    let top = minTop;
 
     if (anchorEl && anchorEl.isConnected) {
       const rect = anchorEl.getBoundingClientRect();
       left = rect.right - popW;
-      left = clampNumber(left, margin, Math.max(margin, vw - popW - margin));
+      left = clampNumber(left, minLeft, maxLeft);
       top = rect.bottom + 8;
-      if (top + popH > vh - margin) {
+      if (top + popH > (hostRect ? hostRect.bottom : vh) - margin) {
         const above = rect.top - popH - 8;
-        top = above >= margin ? above : Math.max(margin, vh - popH - margin);
+        top = above >= minTop ? above : maxTop;
       }
     } else if (anchorPoint) {
-      left = clampNumber(anchorPoint.x - popW / 2, margin, Math.max(margin, vw - popW - margin));
+      left = clampNumber(anchorPoint.x - popW / 2, minLeft, maxLeft);
       top = anchorPoint.y + 8;
-      if (top + popH > vh - margin) {
-        top = Math.max(margin, anchorPoint.y - popH - 8);
+      if (top + popH > (hostRect ? hostRect.bottom : vh) - margin) {
+        top = Math.max(minTop, anchorPoint.y - popH - 8);
       }
     }
 
-    setPos({ left: Math.round(left), top: Math.round(top) });
-  }, [anchorEl, anchorPoint]);
+    // When portaled inside a modal popup with backdrop-filter/transform, `position: fixed`
+    // anchors to that containing block (`pop.offsetParent`) rather than the viewport.
+    const containingEl =
+      pop?.offsetParent &&
+      pop.offsetParent !== document.body &&
+      pop.offsetParent !== document.documentElement
+        ? pop.offsetParent
+        : null;
+    const containingRect = containingEl ? containingEl.getBoundingClientRect() : null;
+    const localLeft = containingRect ? left - containingRect.left : left;
+    const localTop = containingRect ? top - containingRect.top : top;
+
+    setPos({ left: Math.round(localLeft), top: Math.round(localTop) });
+  }, [anchorEl, anchorPoint, portalContainer]);
 
   useLayoutEffect(() => {
     if (!open) return;

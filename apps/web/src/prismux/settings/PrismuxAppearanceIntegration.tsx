@@ -270,6 +270,9 @@ export function PrismuxAppearanceIntegration({
     },
   ];
 
+  const colorPopoverPortalContainer =
+    pickerReq?.anchorEl?.closest<HTMLElement>('[data-slot="dialog-popup"]') ?? undefined;
+
   return (
     <>
       <SettingsSegmentedTabs
@@ -291,6 +294,7 @@ export function PrismuxAppearanceIntegration({
         value={activeColorValue}
         fallbackColor={pickerReq?.fallbackColor ?? "#5e9bff"}
         anchorEl={pickerReq?.anchorEl ?? null}
+        portalContainer={colorPopoverPortalContainer}
         title={pickerReq?.title ?? gt("Pick color")}
         onChange={(hex) => {
           if (pickerReq) applySlotColor(pickerReq.slot, hex);

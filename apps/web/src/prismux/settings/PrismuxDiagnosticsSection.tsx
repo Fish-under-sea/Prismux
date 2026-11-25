@@ -967,7 +967,7 @@ export function PrismuxDiagnosticsSection({
                 className="shrink-0"
                 render={<Link to="/settings/memory" />}
               >
-                <span>{gt("Memory")}</span>
+                <span>{gt("Chief & memory", { $context: "settings navigation item" })}</span>
                 <ArrowRightIcon className="size-3" />
               </Button>
             </div>

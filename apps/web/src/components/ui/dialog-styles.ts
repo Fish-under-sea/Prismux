@@ -19,6 +19,7 @@ const TRANSIENT_NESTED_POPUP_SELECTOR = [
   '[data-slot="popover-popup"][data-open]',
   '[data-slot="combobox-popup"][data-open]',
   '[data-slot="autocomplete-popup"][data-open]',
+  ".pmx-cp-popover",
 ].join(",");
 
 const NESTED_MODAL_SELECTOR = [
