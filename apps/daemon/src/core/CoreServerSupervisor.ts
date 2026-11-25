@@ -21,11 +21,11 @@ export const DEFAULT_SUPERVISOR_HEALTH_TIMEOUT_MS = 1_000;
 export const DEFAULT_SUPERVISOR_START_TIMEOUT_MS = 15_000;
 
 /**
- * Resolves the bundled Prismux core server CLI entry point (`vendor/t3code` during Phase 1).
+ * Resolves the bundled Prismux core server CLI entry point (`apps/server/dist/bin.mjs`).
  */
 export function resolveDefaultCoreServerEntry(): string {
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(currentDir, "../../../../vendor/t3code/apps/server/dist/bin.mjs");
+  return resolve(currentDir, "../../../server/dist/bin.mjs");
 }
 
 /**

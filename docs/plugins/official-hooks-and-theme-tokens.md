@@ -1,6 +1,6 @@
 # Prismux 官方 Hook 钩子与浅色 / 深色 / 液态玻璃主题样式参考
 
-> 本文档完整整理自 `packages/protocol/src/hooks.ts`、`apps/daemon/src/hooks/LifecycleHookBus.ts`、`packages/prismux-appearance/src/{types.ts,glassEngine.ts,styles/t3-glass-bridge.css,styles/appearance-cards.css}` 与 `vendor/t3code/apps/web/src/index.css`，所有事件名、DOM 属性名与 CSS 自定义属性均与真实运行态 100% 一致。
+> 本文档完整整理自 `packages/protocol/src/hooks.ts`、`apps/daemon/src/hooks/LifecycleHookBus.ts`、`packages/prismux-appearance/src/{types.ts,glassEngine.ts,styles/prismux-glass-bridge.css,styles/appearance-cards.css}` 与 `apps/web/src/index.css`，所有事件名、DOM 属性名与 CSS 自定义属性均与真实运行态 100% 一致。
 >
 > 插件脚手架、打包与发布流程请查阅 [Prismux 插件创作完全指南](./plugin-development-guide.md)。
 
@@ -106,7 +106,7 @@ Prismux 视觉层对大模型保持 **0 Token 开销**。插件的声明式 UI�
 
 | 选择器 / 属性 | 真实取值 | 用途说明 |
 | :--- | :--- | :--- |
-| `html[data-pmx-theme]`（镜像 `data-prismux-theme`） | `"light"` \| `"dark"` | 当前生效底色极性（玻璃态下对应 `glassBasePolarity`）；同步附加类名 `.pmx-light` / `.pmx-dark` 及 T3 Code 的 `html.dark` |
+| `html[data-pmx-theme]`（镜像 `data-prismux-theme`） | `"light"` \| `"dark"` | 当前生效底色极性（玻璃态下对应 `glassBasePolarity`）；同步附加类名 `.pmx-light` / `.pmx-dark` 及工作台 `html.dark` |
 | `html[data-pmx-mode]`（镜像 `data-prismux-mode`） | `"light"` \| `"dark"` \| `"glass"` | 用户在天体三态胶囊选择的模式 |
 | `html[data-pmx-glass]`（镜像 `data-prismux-glass`） | `"0"` \| `"1"` | 液态玻璃是否视觉激活；同步附加类名 `.pmx-glass` |
 | `html[data-pmx-gpu]`（镜像 `data-prismux-gpu`） | `"0"` \| `"1"` | 硬件 GPU 加速是否可用；`"0"` 时强制退回实底无模糊 |
@@ -159,7 +159,7 @@ Prismux 将工作台划分为 8 个可独立调节（`inherit` / `custom` / `sol
 
 ### 2.3 背景、卡片、边框、文字与强调色语义变量对照表
 
-宿主通过 `t3-glass-bridge.css` 自动把 Prismux 玻璃与字体配置桥接到 Tailwind v4 语义变量，插件在**浅色 / 深色 / 液态玻璃三态**下均可零分支直接复用：
+宿主通过 `prismux-glass-bridge.css` 自动把 Prismux 玻璃与字体配置桥接到 Tailwind v4 语义变量，插件在**浅色 / 深色 / 液态玻璃三态**下均可零分支直接复用：
 
 | 语义分类 | 推荐 CSS 变量（及 Tailwind 工具类） | 浅色态默认表现 | 深色态默认表现 | 液态玻璃态自动映射 |
 | :--- | :--- | :--- | :--- | :--- |

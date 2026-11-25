@@ -696,8 +696,8 @@ export class PortScannerService {
         cmdLower.includes("prismux-daemon") ||
         cmdLower.includes("apps\\daemon\\dist\\cli.js") ||
         cmdLower.includes("apps/daemon/dist/cli.js") ||
-        cmdLower.includes("vendor\\t3code\\apps\\server") ||
-        cmdLower.includes("vendor/t3code/apps/server")
+        cmdLower.includes("apps\\server\\dist") ||
+        cmdLower.includes("apps/server/dist")
       ) {
         return {
           protected: true,

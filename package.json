@@ -9,20 +9,44 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
-    "build": "pnpm -r build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "typecheck:core": "vp run --filter @prismux/core-contracts --filter @prismux/core-shared --filter @prismux/client-runtime --filter @prismux/provider-acp-registry --filter @prismux/desktop --filter @prismux/web --filter @prismux/server typecheck",
+    "build": "pnpm -r --if-present build",
+    "build:desktop": "vp run --filter @prismux/desktop --filter @prismux/server build",
+    "build:desktop:bundle": "vp run --filter @prismux/desktop build:bundle",
+    "build:resource-monitor": "cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml",
+    "dev": "node scripts/dev-runner.ts dev",
+    "dev:server": "node scripts/dev-runner.ts dev:server",
+    "dev:web": "node scripts/dev-runner.ts dev:web",
+    "dev:desktop": "node scripts/dev-runner.ts dev:desktop",
+    "start": "vp run --filter @prismux/server start",
+    "start:desktop": "vp run --filter @prismux/desktop start",
+    "lint": "vp lint --report-unused-disable-directives",
+    "fmt": "vp fmt",
+    "fmt:check": "vp fmt --check",
     "test": "pnpm -r --if-present test",
     "test:scripts": "node --test scripts/__tests__/scripts.test.ts",
-    "upstream:check": "node scripts/sync-t3-upstream.ts --check",
-    "upstream:sync": "node scripts/sync-t3-upstream.ts --sync",
+    "test:resource-monitor": "cargo test --locked --manifest-path native/resource-monitor/Cargo.toml",
     "brand:rename": "node scripts/rename-brand.ts",
     "plugin:pack": "node scripts/pack-plugin.ts",
     "release:build": "node scripts/release-all.ts",
     "desktop:build": "node scripts/build-prismux-desktop.ts",
-    "desktop:installer": "node scripts/build-prismux-desktop.ts --installer"
+    "desktop:installer": "node scripts/build-prismux-desktop.ts --installer",
+    "dist:desktop:artifact": "node scripts/build-desktop-artifact.ts",
+    "dist:desktop:win": "node scripts/build-desktop-artifact.ts --platform win --target nsis",
+    "dist:desktop:win:x64": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64",
+    "dist:desktop:dmg": "node scripts/build-desktop-artifact.ts --platform mac --target dmg",
+    "dist:desktop:linux": "node scripts/build-desktop-artifact.ts --platform linux --target AppImage --arch x64",
+    "i18n:check": "node scripts/i18n-check.ts",
+    "i18n:untranslated": "node scripts/i18n-untranslated.ts",
+    "icons:export": "node scripts/export-brand-icons.ts",
+    "icons:check": "node scripts/export-brand-icons.ts --check"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.67.1",
+    "@shadcn/lint": "0.1.5",
+    "@types/node": "catalog:",
     "typescript": "^5.8.3",
-    "@types/node": "^24.0.0"
+    "vite-plus": "catalog:"
   }
 }

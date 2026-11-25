@@ -343,7 +343,7 @@ export function applyGhProxyPrefix(rawUrl: string, prefix: string): string {
  * 2. `PRISMUX_7ZA_PATH` environment variable
  * 3. Bundled `process.resourcesPath/tools/7za.exe` (Electron packaged app)
  * 4. Adjacent `<execDir>/resources/tools/7za.exe` & `<execDir>/tools/7za.exe`
- * 5. Monorepo dev fallback `vendor/t3code/node_modules/7zip-bin/win/x64/7za.exe`
+ * 5. Monorepo dev fallback `node_modules/7zip-bin/win/x64/7za.exe`
  * 6. Standard Windows 7-Zip install paths (`C:\Program Files\7-Zip\7z.exe`, etc.)
  * 7. PATH lookup (`7za.exe`, `7z.exe`, `7za`, `7z`)
  */
@@ -377,16 +377,7 @@ export function resolve7zaBinary(explicitPath?: string): string | null {
   for (let depth = 0; depth < 6; depth += 1) {
     candidates.push(join(cursor, "resources", "tools", exeName));
     candidates.push(
-      join(
-        cursor,
-        "vendor",
-        "t3code",
-        "node_modules",
-        "7zip-bin",
-        "win",
-        "x64",
-        "7za.exe"
-      )
+      join(cursor, "node_modules", "7zip-bin", "win", "x64", "7za.exe")
     );
     const parent = dirname(cursor);
     if (parent === cursor) {

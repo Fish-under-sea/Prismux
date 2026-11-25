@@ -1857,7 +1857,7 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
 test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 Server + Agent/Terminal descendants without double counting", async () => {
   const sampleTsv = [
     "1000\t1\tPrismux.exe\t150000000\t100000000\t10000000\t20000000\t\"C:\\Program Files\\Prismux\\Prismux.exe\"",
-    "2000\t1000\tnode.exe\t120000000\t88000000\t5000000\t15000000\tnode vendor\\t3code\\apps\\server\\dist\\index.mjs --mode desktop",
+    "2000\t1000\tnode.exe\t120000000\t88000000\t5000000\t15000000\tnode apps\\server\\dist\\index.mjs --mode desktop",
     "2100\t2000\tpwsh.exe\t64000000\t42000000\t2000000\t4000000\tpwsh.exe -NoLogo",
     "2101\t2100\tnode.exe\t95000000\t71000000\t3000000\t9000000\tnode C:\\Users\\Fish\\AppData\\Roaming\\npm\\claude.js",
     `${process.pid}\t1000\tnode.exe\t82000000\t55000000\t1000000\t2000000\tnode apps\\daemon\\dist\\cli.js`,

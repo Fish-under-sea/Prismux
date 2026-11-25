@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.core.json",
+  "compilerOptions": {
+    "composite": true,
+    "types": ["node"],
+    "lib": ["ESNext", "esnext.disposable"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": [
+    "__tests__/**",
+    "build-npm-plugin-packages.ts",
+    "build-prismux-desktop.ts",
+    "build-release-packages.ts",
+    "pack-plugin.ts",
+    "publish-gitee-release.ts",
+    "release-all.ts",
+    "rename-brand.ts",
+    "sync-t3-upstream.ts"
+  ]
+}

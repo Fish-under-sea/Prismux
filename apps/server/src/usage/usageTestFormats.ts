@@ -1,0 +1,17 @@
+import type { UsageProviderKind } from "@prismux/core-contracts";
+import type { TranscriptUsageFormat } from "@prismux/provider-core/server/usage";
+
+import { claudeUsageFormat } from "../provider/Drivers/claudeUsage.ts";
+import { codexUsageFormat } from "../provider/Drivers/codexUsage.ts";
+
+export const TEST_FORMATS: Record<
+  "claude" | "codex",
+  TranscriptUsageFormat<unknown>
+> = {
+  claude: claudeUsageFormat,
+  codex: codexUsageFormat,
+};
+
+export const TEST_FORMAT_MAP = new Map<UsageProviderKind, TranscriptUsageFormat<unknown>>(
+  Object.entries(TEST_FORMATS) as Array<[UsageProviderKind, TranscriptUsageFormat<unknown>]>,
+);

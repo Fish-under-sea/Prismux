@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "ARK85ZXQ4Z.io.prismux.desktop",
+          "ARK85ZXQ4Z.io.prismux.desktop.preview",
+          "ARK85ZXQ4Z.io.prismux.desktop.dev"
+        ],
+        "components": [{ "/": "/threads/*" }]
+      }
+    ]
+  }
+}

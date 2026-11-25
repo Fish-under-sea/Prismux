@@ -632,8 +632,6 @@ function detectT3ServerFromOsEntry(
     cmd.includes("apps\\server\\") ||
     cmd.includes("apps/server/") ||
     cmd.includes("t3-server") ||
-    cmd.includes("vendor\\t3code\\apps\\server") ||
-    cmd.includes("vendor/t3code/apps/server") ||
     (cmd.includes("resources\\server\\") || cmd.includes("resources/server/")) ||
     (cmd.includes("dist\\index.mjs") || cmd.includes("dist/index.mjs"))
   );

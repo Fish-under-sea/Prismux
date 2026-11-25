@@ -49,7 +49,7 @@ Zero silent telemetry out of the box, pure QR remote pairing (zero T3 Connect cl
 
 <h2 id="intro"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-intro-en-dark.png"><img src="assets/readme/section-intro-en-light.png" alt="INTRO · Overview" width="100%"></picture></h2>
 
-**Prismux** is a local-first AI Super Workbench and 24/7 headless secretary built on the real **T3 Code** desktop runtime (**Electron 44 + TypeScript + React 19**), paired with an isolated **0-Token visual shell** and an **on-demand dual-realm plugin kernel**. Whether you orchestrate multiple coding agents interactively or leave overnight runs unattended, Prismux converges sessions, collaboration, durable memory, diagnostics, and desktop craft into one focused space:
+**Prismux** is a local-first AI Super Workbench and 24/7 headless secretary built on a unified first-party **Electron 44 + Effect + TypeScript + React 19** desktop runtime, paired with an isolated **0-Token visual shell** and an **on-demand dual-realm plugin kernel**. Whether you orchestrate multiple coding agents interactively or leave overnight runs unattended, Prismux converges sessions, collaboration, durable memory, diagnostics, and desktop craft into one focused space:
 
 - **Local-First, Zero Telemetry & Pure QR Remote Connect**: Permanently severs all upstream silent telemetry, fingerprinting, and cold-start phone-home calls, completely removes T3 Connect / Clerk cloud accounts, promos, and `Copy prompt link`, and keeps remote mobile access strictly **LAN / Tailscale QR pairing** (compatible with the T3 mobile app and mobile browsers). Every byte stays 100% local by default.
 - **Unified Multi-Agent Control & First-Class `dsh`**: Run Claude Code, Codex, Antigravity (strictly official `agy acp`), first-class **`DeepSeek Harness (dsh)`**, OpenCode, and OMP side by side. Drag-and-drop reorder providers and models globally from Settings, switch agents in one click via the always-visible Logo bar, greet users with their **real OS username**, and follow live teamwork in the pixel-queen-bee AGY Swarm or read-only Claude / Codex collaboration sidebars.
@@ -217,93 +217,89 @@ npx prismux-plugin-qq --out ./plugins-stage
 
 <h2 id="develop"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-develop-en-dark.png"><img src="assets/readme/section-develop-en-light.png" alt="DEVELOP · Development &amp; QA" width="100%"></picture></h2>
 
-> **Prerequisites**: `Node.js >= 24.12.0`, `pnpm >= 10.0.0` (repo pins `pnpm@12.3.4`), `Electron 44`, `React 19`, and `Rust >= 1.85` (only for building `vendor/t3code/native/resource-monitor`; pass `-j 1` and `NO_PROXY=*` on Windows). Read [`AGENTS.md`](AGENTS.md), [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md), and your contributor profile `docs/agents/local/<normalized-username>.md` first.
+> **Prerequisites**: `Node.js >= 24.12.0`, `pnpm >= 10.0.0` (repo pins `pnpm@12.3.4`), `Electron 44`, `React 19`, `vite-plus` (`vp`), and `Rust >= 1.85` (only for building `native/resource-monitor`; pass `-j 1` and `NO_PROXY=*` on Windows). Read [`AGENTS.md`](AGENTS.md), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and your contributor profile `docs/agents/local/<normalized-username>.md` first.
 
 ```powershell
-# 1. Install workspace dependencies (9 first-party TypeScript workspace packages)
+# 1. Install unified monorepo dependencies (keep VP_GIT_HOOKS=0 so .git/config stays clean)
+$env:VP_GIT_HOOKS = "0"
 pnpm install
 
-# 2. Build, typecheck, and test all root workspace packages and ops scripts
-pnpm -r build
-pnpm -r typecheck
-pnpm -r --if-present test
+# 2. Build first-party packages, run unified workspace typecheck, and run script tests
+pnpm --filter @prismux/protocol --filter @prismux/memory-core --filter @prismux/cordis-kernel --filter @prismux/sync-vault --filter @prismux/appearance --filter @prismux/wallpaper --filter @prismux/daemon --filter @prismux/plugin-qq --filter @prismux/plugin-fishdock-hook build
+vp run --filter '!prismux-monorepo' typecheck
 pnpm test:scripts
 
-# 3. Verify the vendor/t3code managed-fork lock contract and patch manifest
-pnpm upstream:check
+# 3. Build the Electron 44 desktop runtime (web + server + desktop)
+vp run build:desktop
 
-# 4. Typecheck and build the Electron 44 T3 Code runtime (web + server + desktop)
-pnpm --dir vendor/t3code exec vp run --filter @t3tools/web typecheck
-pnpm --dir vendor/t3code exec vp run --filter @t3tools/desktop typecheck
-pnpm --dir vendor/t3code exec vp run build:desktop
-
-# 5. Orchestrate full desktop build & Windows NSIS installer (with 7z check & SHA256SUMS)
+# 4. Orchestrate full desktop build & Windows NSIS installer (with 7z check & SHA256SUMS)
 pnpm desktop:build
 pnpm desktop:installer
 
-# 6. Deterministically pack an official plugin (.wb-plugin + gunzip loopback check)
+# 5. Deterministically pack an official plugin (.wb-plugin + gunzip loopback check)
 pnpm plugin:pack -- --plugin plugins-official/plugin-qq
 ```
 
 <details>
-<summary><strong>Expand: Monorepo Structure &amp; T3 Code Minimal-Invasion Boundary</strong></summary>
+<summary><strong>Expand: Unified First-Party Monorepo Structure</strong></summary>
 
 ```text
 prismux/
 ├── AGENTS.md                            # Cross-machine engineering rules, guardrails & DoD gates
 ├── LICENSE                              # Standard MIT License
+├── THIRD_PARTY_NOTICES.md               # Third-party open-source licenses & historical attributions
 ├── README.md / README.en.md             # Bilingual project homepages (with 8s live GPU demo)
-├── .gitattributes                       # Marks vendor/t3code/** linguist-vendored for focused stats
-├── UPSTREAM_LOCK.json                   # pingdotgg/t3code baseline SHA, managed-fork mode & manifest pointer
-├── pnpm-workspace.yaml                  # 9 first-party TS workspace packages (excludes vendor/t3code)
+├── pnpm-workspace.yaml                  # Unified workspace allowlist (apps/*, packages/*, plugins-official/plugin-*, oxlint-plugin-prismux, scripts)
 ├── package.json                         # Root orchestration scripts (0.2.0-rc.1)
-├── tsconfig.base.json                   # Shared strict TypeScript 5.8+ baseline (ES2024 + NodeNext)
+├── tsconfig.base.json                   # Strict TS 5.8+ baseline for daemon & core packages (ES2024 + NodeNext)
+├── tsconfig.core.json / vite.config.ts  # Unified Vite+ (vp) build, lint, format & test config
 ├── assets/
-│   ├── logo.png                         # Transparent 1024×1024 mascot master icon
+│   ├── prismux/                         # Brand icons and desktop application artwork
 │   └── readme/                          # Pixel headers, 8s live GPU demo, screenshots & templates
-├── docs/
-│   ├── t3code-patch-manifest.md         # Authoritative registry of T3 Code minimal-invasion mounts
-│   ├── agents/                          # Per-developer local environment profiles & templates
-│   ├── plugins/                         # Source-verified plugin guide, Hooks & 8-zone theme token reference
-│   └── specs/
-│       ├── master-prompt-v1.3.md        # Full-stack architectural constitution
-│       └── ui-ux-design-mandate.md      # Mandatory UI/UX, theme & installer specification
-├── scripts/                             # Operational tooling & README renderer (Node 24 native TS / ESM)
-│   ├── build-prismux-desktop.ts         # Unified desktop & NSIS installer orchestrator (--installer / --skip-rust)
-│   ├── release-all.ts                   # Desktop + 2 active official plugins + npm packages + SHA256SUMS bundler
-│   ├── sync-t3-upstream.ts              # managed-fork / upstream lock verifier (--check / --sync)
-│   ├── pack-plugin.ts                   # Deterministic ustar + gunzip loopback plugin packer
-│   ├── build-npm-plugin-packages.ts     # Script-free npm & GitHub Packages generator
-│   ├── rename-brand.ts                  # Safe repository-wide brand identifier renamer
-│   ├── render-readme.mjs                # Edge CDP pixel-header & section-banner renderer
-│   └── __tests__/scripts.test.ts        # node:test regression suite
-├── vendor/
-│   └── t3code/                          # T3 Code base (Electron 44 + server + web), tracked by patch manifest
-├── packages/                            # 6 core workspace packages
-│   ├── protocol/                        # @prismux/protocol: brand, RPC, hooks, memory, plugin & updater types
+├── apps/
+│   ├── daemon/                          # @prismux/daemon: 24h supervisor, Chief slot, 5 primitives, unified probe, waiver guard & Overnight Factory
+│   ├── desktop/                         # @prismux/desktop: Electron 44 desktop host (window, tray, IPC, keep-awake, preview, migrations)
+│   ├── server/                          # @prismux/server: Effect orchestration server, provider drivers, Git/worktree, terminal & CLI
+│   └── web/                             # @prismux/web: React 19 workbench UI, 8-zone Liquid Glass, Orca sidebar/splits & Settings
+├── packages/                            # Unified @prismux/* workspace packages
+│   ├── protocol/                        # @prismux/protocol: brand, RPC, hooks, probe, memory, plugin & updater types
 │   ├── cordis-kernel/                   # @prismux/cordis-kernel: dual-realm host, declarative UI, dual-route installer & 0600 secrets
 │   ├── memory-core/                     # @prismux/memory-core: SQLite WAL + FTS5 + sqlite-vec, Mnemopi recall & query isolation
 │   ├── sync-vault/                      # @prismux/sync-vault: Argon2id + AEAD sync, optimistic locks & 60 s watchdog
 │   ├── prismux-appearance/              # @prismux/appearance: Celestial capsule, 8-zone glass, Fresnel bubbles & effort slider
-│   └── prismux-wallpaper/               # @prismux/wallpaper: decluttered wallpaper studio, Z-0 stage, SHA-256 dedup & Steam 431960
-├── apps/
-│   └── daemon/                          # @prismux/daemon: 24h supervisor, Chief slot, 5 primitives, diagnostics & Overnight Factory
-└── plugins-official/                    # 2 active optional official plugins (workspace packages) + catalog (pet/ssh retired)
-    ├── catalog/official.json            # Authoritative plugin index (active qq / fishdock-hook + retiredPlugins notices)
-    ├── plugin-qq/                       # @prismux/plugin-qq
-    └── plugin-fishdock-hook/            # @prismux/plugin-fishdock-hook
+│   ├── prismux-wallpaper/               # @prismux/wallpaper: decluttered wallpaper studio, Z-0 stage, SHA-256 dedup & Steam 431960
+│   ├── contracts/ / shared/ / client-runtime/ # @prismux/core-contracts, @prismux/core-shared, @prismux/client-runtime
+│   ├── provider-*/ / effect-*/          # Provider protocols, ACP / dsh detection, OpenCode / FX & replay testkit
+│   └── source-control-*/ / ssh/ / tailscale/  # Source-control providers, native SSH & Tailscale remote access
+├── plugins-official/                    # 2 active optional official plugins (workspace packages) + catalog (pet/ssh retired)
+│   ├── catalog/official.json            # Authoritative plugin index (active qq / fishdock-hook + retiredPlugins notices)
+│   ├── plugin-qq/                       # @prismux/plugin-qq
+│   └── plugin-fishdock-hook/            # @prismux/plugin-fishdock-hook
+├── native/                              # Rust native resource monitor & Linux window-capture helpers
+├── packaging/ / patches/                # Platform packaging manifests & pnpm dependency patches
+├── oxlint-plugin-prismux/               # Prismux workspace Oxlint plugin (`prismux/*` rules)
+├── scripts/                             # Operational, desktop build, release & regression test scripts (Node 24 TS / ESM)
+└── docs/
+    ├── agents/                          # Per-developer local environment profiles & templates
+    ├── archive/                         # Historical evolution archives (transitional lock & patch manifest)
+    ├── plans/                           # Release roadmaps & iteration plans
+    ├── plugins/                         # Source-verified plugin guide, Hooks & 8-zone theme token reference
+    └── specs/
+        ├── master-prompt-v1.3.md        # Full-stack architectural constitution
+        └── ui-ux-design-mandate.md      # Mandatory UI/UX, theme & installer specification
 ```
 
 </details>
 
 <details>
-<summary><strong>Expand: Five Non-Negotiable Engineering Guardrails</strong></summary>
+<summary><strong>Expand: Non-Negotiable Engineering Guardrails</strong></summary>
 
-1. **Minimal-Invasion Layering on T3 Code**: `vendor/t3code/` changes remain strictly registered in [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md) with zero edits to `vendor/t3code/pnpm-lock.yaml`; heavy domain logic and visual engines reside in root `packages/*` and `apps/daemon`.
-2. **Never reintroduce the 4 eliminated bloat modules (native lightweight archiving & Orca lightweight Workspace Board / Tasks preserved)**: Heavy session-detached Task Boards, AgentTeam DAG, Skill Lens, Visual Companion, and custom heavy Session Archive backends remain excluded in favor of the five core primitives; T3 Code's native lightweight `/settings/archived` view and Orca's lightweight `/workspace-board` & `/tasks` views are preserved per project decision.
+1. **Unified First-Party Runtime & Zero-Telemetry Independence**: All runtime code lives inside the single first-party `@prismux/*` monorepo with zero silent telemetry, zero cloud account lock-in, and pure LAN / Tailscale QR remote pairing; domain and visual engines stay modular in dedicated workspace packages.
+2. **Never reintroduce the 4 eliminated bloat modules (native lightweight archiving & Orca lightweight Workspace Board / Tasks preserved)**: Heavy session-detached Task Boards, AgentTeam DAG, Skill Lens, Visual Companion, and custom heavy Session Archive backends remain excluded in favor of the five core primitives; the native lightweight `/settings/archived` view and Orca's lightweight `/workspace-board` & `/tasks` views are preserved per project decision.
 3. **Single-file hybrid memory & physical isolation**: All memories reside in `~/.prismux/data/memory.db` (SQLite WAL + FTS5 + `sqlite-vec`) with zero PostgreSQL / Qdrant / MinIO / Obsidian client dependencies, enforced at transport level via `_callerScope`.
-4. **Official plugins are never preinstalled**: Active official plugins `qq` and `fishdock-hook` remain isolated in `plugins-official/` and are excluded from desktop installers, installed strictly on demand (`pet` and `ssh` are retired and replaced by Prismux built-in capabilities).
-5. **Zero model token cost for the visual layer**: Wallpapers, 8-zone 360° Fresnel liquid glass, 24-hour dynamic sky, animated model effort sliders, typography tinting, audio FFT sync, and installer screens inject zero tool schemas or prompts into any LLM.
+4. **Official Antigravity compliance & unified subscription risk waiver**: Antigravity runs strictly through the official local `agy` CLI / `agy acp` with zero credential scraping or private endpoints; `PrismuxProviderProbeService` + `SubscriptionOrchestrationGuard` classify provider auth modes without false positives and gate cross-agent orchestration over `subscription_oauth`.
+5. **Official plugins are never preinstalled**: Active official plugins `qq` and `fishdock-hook` remain isolated in `plugins-official/` and are excluded from desktop installers, installed strictly on demand (`pet` and `ssh` are retired and replaced by Prismux built-in capabilities).
+6. **Zero model token cost for the visual layer**: Wallpapers, 8-zone 360° Fresnel liquid glass, 24-hour dynamic sky, animated model effort sliders, typography tinting, audio FFT sync, and installer screens inject zero tool schemas or prompts into any LLM.
 
 </details>
 
@@ -312,13 +308,13 @@ prismux/
 
 | Milestone | Scope Delivered | Status |
 | :--- | :--- | :--- |
-| **M1** | Monorepo scaffold, T3 Code baseline lock, `apps/daemon` supervision, env sanitization, Chief Thread Slot &amp; `2 MB` ring-buffered `PersistentPtyPool` | Complete &amp; Verified |
+| **M1** | Monorepo scaffold, core server bridge, `apps/daemon` supervision, env sanitization, Chief Thread Slot &amp; `2 MB` ring-buffered `PersistentPtyPool` | Complete &amp; Verified |
 | **M2** | Single-file SQLite WAL + FTS5 + `sqlite-vec` memory (out-of-the-box non-ASAR `vec0.dll`), Mnemopi prompt-cache recall, `forwardIdentity` isolation, `LifecycleHookBus`, `HandoffEngine` &amp; `WorktreeSandbox` | Complete &amp; Verified |
 | **M3** | `cordis-kernel` (prerelease-compatible `engines.prismux`, zero-leak `ctx.effect()`, multi-source verified download, declarative glass UI, script-free npm tarball installer, `managed` lock) &amp; `sync-vault` (Argon2id + AEAD, `If-Match`, `60 s` stall watchdog, portable `data/`) | Complete &amp; Verified |
-| **M4 / v0.1.0–v0.1.2** | `@prismux/appearance` &amp; `@prismux/wallpaper` extraction, real T3 Code Electron 44 runtime integration, full-width Celestial capsule, `dsh-fish` effort slider, direct Windows Codex launch, official `agy acp` quota integration, per-user NSIS installer &amp; redesigned Plugin Center | Complete &amp; Live-Verified |
+| **M4 / v0.1.0–v0.1.2** | `@prismux/appearance` &amp; `@prismux/wallpaper` extraction, real Electron 44 runtime integration, full-width Celestial capsule, `dsh-fish` effort slider, direct Windows Codex launch, official `agy acp` quota integration, per-user NSIS installer &amp; redesigned Plugin Center | Complete &amp; Live-Verified |
 | **M5** | `OvernightFactory` end-to-end closed loop, deterministic `.wb-plugin` packaging/verification for active official plugins (`qq`, `fishdock-hook`), and dual-route split auto-updates (`pet` &amp; `ssh` retired) | Complete &amp; Verified |
 | **v0.1.3-Preview.1–3** | Full-stack zero-telemetry cutoff, AGY Swarm &amp; Claude/Codex read-only collaboration sidebars, streamlined 7-item right panel with bi-directional drag sync, native `/btw` side questions, 24h 288-frame SVG dynamic sky, Logo-only Agent switcher &amp; bilingual `/` palette, `54px` icon rail, `20px` Orca quota bar &amp; Electron 44 BoringSSL E2EE sync hardening | Complete &amp; Live-Verified |
-| **v0.2.0-RC.1** | Orca compact tree sidebar &amp; normalized model short names, per-turn Simplified Chinese auto-summarized titles, **2×2+ Orca Split Anything (zero interior radius + 1px draggable dividers)**, **8-zone Liquid Glass (independent Fresnel user bubbles &amp; translucent Overview)**, right-feathered 24h sky &amp; day/night adaptive send arrow, DSH complete thinking &amp; tool-call 3-control workflow, first-class `dsh` promotion &amp; global drag-sort providers/models, clean English Title-Case speed toggles &amp; 7 untruncated effort labels, full De-T3 pure QR remote pairing &amp; streamlined settings, real OS username greeting, legacy shell retirement &amp; NSIS upgrade sweeper | Complete &amp; Live-Verified |
+| **v0.2.0-RC.1** | Orca compact tree sidebar &amp; normalized model short names, per-turn Simplified Chinese auto-summarized titles, **2×2+ Orca Split Anything (zero interior radius + 1px draggable dividers)**, **8-zone Liquid Glass (independent Fresnel user bubbles &amp; translucent Overview)**, right-feathered 24h sky &amp; day/night adaptive send arrow, DSH complete thinking &amp; tool-call 3-control workflow, first-class `dsh` promotion &amp; global drag-sort providers/models, clean English Title-Case speed toggles &amp; 7 untruncated effort labels, pure QR remote pairing &amp; streamlined settings, real OS username greeting, unified monorepo consolidation &amp; NSIS upgrade sweeper | Complete &amp; Live-Verified |
 
 </details>
 
@@ -328,8 +324,8 @@ prismux/
 
 | Document | Purpose |
 | :--- | :--- |
-| [`AGENTS.md`](AGENTS.md) | Cross-machine engineering rules, five guardrails, script/plugin contracts &amp; commit conventions |
-| [`docs/t3code-patch-manifest.md`](docs/t3code-patch-manifest.md) | Authoritative registry of T3 Code minimal-invasion mounts, Provider extensions &amp; upstream merge guide |
+| [`AGENTS.md`](AGENTS.md) | Cross-machine engineering rules, unified monorepo layout, guardrails, script/plugin contracts &amp; commit conventions |
+| [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | Third-party open-source license attributions, core dependency table &amp; historical notices |
 | [`docs/plugins/plugin-development-guide.md`](docs/plugins/plugin-development-guide.md) | Complete Prismux plugin authoring guide (Cordis dual-realm, declarative UI, `0600` secrets &amp; packaging) |
 | [`docs/plugins/official-hooks-and-theme-tokens.md`](docs/plugins/official-hooks-and-theme-tokens.md) | Official 6-event `LifecycleHookBus` hook reference &amp; Light / Dark / 8-Zone Liquid Glass theme token guide |
 | [`docs/specs/ui-ux-design-mandate.md`](docs/specs/ui-ux-design-mandate.md) | UI/UX craftsmanship, Celestial tri-state capsule, liquid-glass sync contract &amp; installer mandate |
@@ -337,18 +333,18 @@ prismux/
 | [`docs/agents/README.md`](docs/agents/README.md) | Contributor local environment profile naming rules, template &amp; maintenance workflow |
 | [`assets/readme/MAINTAINING.md`](assets/readme/MAINTAINING.md) | README pixel-art header/banner &amp; live demo asset maintenance guide |
 
-### Upstream Credits &amp; MIT Open-Source Attributions
+### Open-Source Credits
 
-- [pingdotgg/t3code](https://github.com/pingdotgg/t3code) (MIT): Upstream Electron 44 + `apps/server` + `apps/web` runtime and provider bridge core.
 - [stablyai/orca](https://github.com/stablyai/orca) (MIT): Reference for the compact tree project/workspace sidebar, Split Anything arbitrary pane layout, port scanning &amp; resource monitoring, ultra-compact status bar, multi-window quota bar, and declarative plugin UI.
-- [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT): Reference for Mnemopi prompt-cache-friendly recall &amp; scoped caches, `omp acp` `_session/steering` / `_omp/usage`, and status-bar telemetry gauges.
+- [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT): Reference for Mnemopi prompt-cache-friendly recall &amp; scoped caches and status-bar telemetry gauges.
 - `dsh-better-reasoning-effort-fish` ([HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) PR #9 + [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort), MIT) &amp; `DeepSeek Harness (dsh)`: Source for the model-recognizing animated reasoning effort slider (`<PrismuxReasoningEffortSlider />`, 8 model family themes &amp; RGBA WebP runners) and thinking / tool-call work-step presentation.
 - [yetone/magpie](https://github.com/yetone/magpie): Inspiration for passphrase-sealed AEAD sync, `If-Match` optimistic locking, 60-second stall watchdogs, and portable mode.
 - [Amp](https://ampcode.com/): Inspiration for `/handoff` distillation and `agent / oracle / review` dial workflows.
 - [FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock): Reference for the Warm Paper / Dark Olive stereomorphic README design system, 1:1 Celestial capsule &amp; 360° Fresnel liquid-glass theme hooks, and Dynamic Island approval bridging.
+- Full historical upstream foundation and core dependency attributions are documented in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ### License Boundary
 
-Prismux core source code and README layout tooling are licensed under the **MIT License** (see [`LICENSE`](LICENSE)); the bundled pixel font `Jersey20-Regular.ttf` is licensed under [SIL Open Font License 1.1](assets/readme/OFL-Jersey20.txt); the managed `vendor/t3code` fork and ported MIT references above preserve their original MIT licenses and notices.
+Prismux core source code and README layout tooling are licensed under the **MIT License** (see [`LICENSE`](LICENSE)); the bundled pixel font `Jersey20-Regular.ttf` is licensed under [SIL Open Font License 1.1](assets/readme/OFL-Jersey20.txt); all third-party libraries and historical open-source attributions are preserved in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 <p align="center"><sub>Prismux v0.2.0-RC.1 · Electron 44 + TypeScript + React 19 · Local-First Zero Telemetry · 8-Zone Liquid Glass · Orca Split Anything · 2 Optional Official Plugins</sub></p>

@@ -28,17 +28,6 @@ import {
   splitUstarPath,
 } from '../pack-plugin.ts';
 import {
-  GIT_SYNC_FLAGS,
-  checkUpstream,
-  parseSyncUpstreamArgs,
-  runSyncUpstreamCli,
-  syncUpstream,
-  validateLockData,
-  validateUpstreamContract,
-  type GitRunner,
-  type UpstreamLockData,
-} from '../sync-t3-upstream.ts';
-import {
   OFFICIAL_PLUGIN_IDS,
   RELEASE_CATALOG_FILENAME,
   assertStageContainsNoOfficialPlugins,
@@ -152,7 +141,7 @@ describe('rename-brand', () => {
 
     writeTextFile(join(root, 'README.md'), '# Prismux\n');
     writeTextFile(join(root, '.git/config'), 'url = https://example.com/Prismux.git\n');
-    writeTextFile(join(root, 'vendor/t3code/README.md'), 'Prismux should never touch vendor\n');
+    writeTextFile(join(root, 'vendor/upstream/README.md'), 'Prismux should never touch vendor\n');
     writeTextFile(join(root, 'node_modules/pkg/index.js'), 'const a = "prismux";\n');
     writeTextFile(join(root, 'dist/index.js'), 'const b = "prismux";\n');
     writeTextFile(join(root, '.work/scratch.txt'), 'Prismux scratch\n');
@@ -182,7 +171,7 @@ describe('rename-brand', () => {
     assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), '# Aurora\n');
 
     assert.match(readFileSync(join(root, '.git/config'), 'utf8'), /Prismux/);
-    assert.match(readFileSync(join(root, 'vendor/t3code/README.md'), 'utf8'), /Prismux/);
+    assert.match(readFileSync(join(root, 'vendor/upstream/README.md'), 'utf8'), /Prismux/);
     assert.match(readFileSync(join(root, 'node_modules/pkg/index.js'), 'utf8'), /prismux/);
     assert.match(readFileSync(join(root, 'dist/index.js'), 'utf8'), /prismux/);
     assert.match(readFileSync(join(root, '.work/scratch.txt'), 'utf8'), /Prismux/);
@@ -517,253 +506,6 @@ describe('pack-plugin', () => {
   });
 });
 
-describe('sync-t3-upstream', () => {
-  const SAMPLE_COMMIT = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
-
-  function createValidUpstreamFixture(repoRoot: string): UpstreamLockData {
-    const vendorDir = join(repoRoot, 'vendor/t3code');
-    writeTextFile(
-      join(vendorDir, 'apps/server/package.json'),
-      JSON.stringify({ name: '@t3code/server', version: '0.1.0' }),
-    );
-    mkdirSync(join(vendorDir, 'packages/client-runtime'), { recursive: true });
-    mkdirSync(join(vendorDir, 'packages/contracts'), { recursive: true });
-    writeTextFile(join(vendorDir, 'docs/internals/overview.md'), '# T3 Code Internals\n');
-
-    const lockData: UpstreamLockData = {
-      upstreamRepo: 'https://github.com/pingdotgg/t3code.git',
-      branch: 'main',
-      commit: SAMPLE_COMMIT,
-      syncedAt: '2026-11-22T00:00:00.000Z',
-      license: 'MIT',
-      readOnly: true,
-      requiredPaths: [
-        'apps/server/package.json',
-        'packages/client-runtime',
-        'packages/contracts',
-        'docs/internals/overview.md',
-      ],
-    };
-    writeTextFile(join(repoRoot, 'UPSTREAM_LOCK.json'), JSON.stringify(lockData, null, 2));
-    return lockData;
-  }
-
-  it('passes contract validation in clean locked state', () => {
-    const repoRoot = createTempDir('prismux-upstream-ok-');
-    const lockData = createValidUpstreamFixture(repoRoot);
-
-    const result = validateUpstreamContract(repoRoot, lockData, '', SAMPLE_COMMIT);
-    assert.equal(result.ok, true);
-    assert.equal(result.errors.length, 0);
-    assert.equal(result.commit, SAMPLE_COMMIT);
-    assert.equal(result.checkedPaths.length, 4);
-  });
-
-  it('fails sternly when vendor/t3code has dirty local modifications (git status --porcelain non-empty)', () => {
-    const repoRoot = createTempDir('prismux-upstream-dirty-');
-    const lockData = createValidUpstreamFixture(repoRoot);
-
-    assert.throws(
-      () =>
-        validateUpstreamContract(
-          repoRoot,
-          lockData,
-          ' M apps/server/src/main.ts\n?? local-hack.ts\n',
-          SAMPLE_COMMIT,
-        ),
-      /vendor\/t3code.*只读|read-only|红线/i,
-    );
-  });
-
-  it('fails on commit mismatch, missing requiredPaths, invalid server package.json, or readOnly !== true', () => {
-    const repoRoot = createTempDir('prismux-upstream-fail-');
-    const lockData = createValidUpstreamFixture(repoRoot);
-
-    assert.throws(
-      () =>
-        validateUpstreamContract(
-          repoRoot,
-          lockData,
-          '',
-          'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
-        ),
-      /commit/i,
-    );
-
-    assert.throws(
-      () =>
-        validateLockData({
-          ...lockData,
-          readOnly: false,
-        }),
-      /readOnly/i,
-    );
-
-    rmSync(join(repoRoot, 'vendor/t3code/docs/internals/overview.md'));
-    assert.throws(
-      () => validateUpstreamContract(repoRoot, lockData, '', SAMPLE_COMMIT),
-      /docs\/internals\/overview\.md/,
-    );
-
-    writeTextFile(join(repoRoot, 'vendor/t3code/docs/internals/overview.md'), '# Restored\n');
-    writeTextFile(join(repoRoot, 'vendor/t3code/apps/server/package.json'), '{ invalid json');
-    assert.throws(
-      () => validateUpstreamContract(repoRoot, lockData, '', SAMPLE_COMMIT),
-      /JSON/i,
-    );
-  });
-
-  it('supports mocked checkUpstream and syncUpstream with required git flags', () => {
-    const repoRoot = createTempDir('prismux-upstream-sync-');
-    createValidUpstreamFixture(repoRoot);
-    // Simulate initialized submodule marker so checkUpstream invokes gitRunner
-    writeTextFile(join(repoRoot, 'vendor/t3code/.git'), 'gitdir: ../../.git/modules/vendor/t3code\n');
-
-    const newCommit = '11223344556677889900aabbccddeeff00112233';
-    const recordedCalls: string[][] = [];
-    let currentHead = SAMPLE_COMMIT;
-
-    const fakeGit: GitRunner = {
-      run(args: readonly string[]): string {
-        recordedCalls.push([...args]);
-        if (args.includes('status') && args.includes('--porcelain')) {
-          return '';
-        }
-        if (args.includes('fetch')) {
-          return '';
-        }
-        if (args.includes('checkout')) {
-          currentHead = newCommit;
-          return '';
-        }
-        if (args.includes('rev-parse') && args.includes('HEAD')) {
-          return `${currentHead}\n`;
-        }
-        throw new Error(`Unexpected git args: ${args.join(' ')}`);
-      },
-    };
-
-    const initialCheck = checkUpstream({ root: repoRoot }, fakeGit);
-    assert.equal(initialCheck.ok, true);
-
-    const synced = syncUpstream({ root: repoRoot }, fakeGit);
-    assert.equal(synced.lockData.commit, newCommit);
-    assert.equal(synced.checkResult.commit, newCommit);
-
-    const fetchCall = recordedCalls.find((call) => call.includes('fetch'));
-    assert.ok(fetchCall);
-    for (const flag of GIT_SYNC_FLAGS) {
-      assert.ok(fetchCall.includes(flag), `Missing expected git sync flag: ${flag}`);
-    }
-    assert.ok(fetchCall.includes('--depth'));
-    assert.ok(fetchCall.includes('1'));
-
-    const persistedLock = JSON.parse(
-      readFileSync(join(repoRoot, 'UPSTREAM_LOCK.json'), 'utf8'),
-    ) as UpstreamLockData;
-    assert.equal(persistedLock.commit, newCommit);
-
-    const parsedArgs = parseSyncUpstreamArgs(['--sync', '--root', repoRoot]);
-    assert.equal(parsedArgs.mode, 'sync');
-    assert.equal(parsedArgs.root, repoRoot);
-
-    assert.throws(
-      () => parseSyncUpstreamArgs(['--check', '--sync']),
-      /--check.*--sync/i,
-    );
-
-    const dirtyGit: GitRunner = {
-      run(args: readonly string[]): string {
-        if (args.includes('status') && args.includes('--porcelain')) {
-          return ' M apps/server/package.json\n';
-        }
-        throw new Error(`Should not execute ${args.join(' ')} when dirty`);
-      },
-    };
-    assert.throws(
-      () => syncUpstream({ root: repoRoot }, dirtyGit),
-      /vendor\/t3code.*红线|dirty/i,
-    );
-
-    const helpCode = runSyncUpstreamCli(['--help'], {
-      log: () => {},
-      error: () => {},
-    });
-    assert.equal(helpCode, 0);
-  });
-
-  it('supports managed-fork mode without vendor/t3code/.git, requires patchManifest, and blocks destructive sync', () => {
-    const repoRoot = createTempDir('prismux-upstream-managed-fork-');
-    const vendorDir = join(repoRoot, 'vendor/t3code');
-    writeTextFile(
-      join(vendorDir, 'apps/server/package.json'),
-      JSON.stringify({ name: 't3', version: '0.1.11' }),
-    );
-    writeTextFile(
-      join(vendorDir, 'apps/web/package.json'),
-      JSON.stringify({ name: '@t3tools/web', version: '0.1.11' }),
-    );
-    writeTextFile(
-      join(vendorDir, 'apps/desktop/package.json'),
-      JSON.stringify({ name: '@t3tools/desktop', version: '0.1.11' }),
-    );
-    mkdirSync(join(vendorDir, 'packages/client-runtime'), { recursive: true });
-    mkdirSync(join(vendorDir, 'packages/contracts'), { recursive: true });
-    writeTextFile(join(vendorDir, 'docs/internals/overview.md'), '# T3 Code Internals\n');
-    writeTextFile(join(repoRoot, 'docs/t3code-patch-manifest.md'), '# Patch Manifest\n');
-
-    const lockData: UpstreamLockData = {
-      upstreamRepo: 'https://github.com/pingdotgg/t3code.git',
-      repository: 'https://github.com/pingdotgg/t3code.git',
-      branch: 'main',
-      commit: SAMPLE_COMMIT,
-      syncedAt: '2026-11-22T00:00:00.000Z',
-      license: 'MIT',
-      mode: 'managed-fork',
-      readOnly: false,
-      patchManifest: 'docs/t3code-patch-manifest.md',
-      requiredPaths: [
-        'apps/server/package.json',
-        'apps/web/package.json',
-        'apps/desktop/package.json',
-        'packages/client-runtime',
-        'packages/contracts',
-        'docs/internals/overview.md',
-      ],
-    };
-    writeTextFile(join(repoRoot, 'UPSTREAM_LOCK.json'), JSON.stringify(lockData, null, 2));
-
-    const neverCalledGit: GitRunner = {
-      run(): string {
-        throw new Error('git must not be called in managed-fork mode');
-      },
-    };
-
-    const result = checkUpstream({ root: repoRoot }, neverCalledGit);
-    assert.equal(result.ok, true);
-    assert.equal(result.mode, 'managed-fork');
-    assert.equal(result.commit, SAMPLE_COMMIT);
-    assert.equal(result.checkedPaths.length, 6);
-    assert.equal(result.patchManifest, 'docs/t3code-patch-manifest.md');
-
-    assert.throws(
-      () => syncUpstream({ root: repoRoot }, neverCalledGit),
-      /managed-fork/i,
-    );
-
-    assert.throws(
-      () => validateLockData({ ...lockData, readOnly: true }),
-      /readOnly/i,
-    );
-
-    rmSync(join(repoRoot, 'docs/t3code-patch-manifest.md'));
-    assert.throws(
-      () => checkUpstream({ root: repoRoot }, neverCalledGit),
-      /patchManifest/i,
-    );
-  });
-});
-
 describe('release-and-npm-packages', () => {
   it('converts SemVer prerelease versions to 4-part Windows VIProductVersion and blocks plugins in release stage', () => {
     assert.equal(toWindowsProductVersion('0.0.1-alpha.1'), '0.0.1.1');
@@ -1065,7 +807,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
         ELECTRON_RUN_AS_NODE: '1',
         ELECTRON_NO_ATTACH_CONSOLE: '1',
       },
-      { T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: '1' },
+      { PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR: '1' },
     );
 
     assert.equal(cleanEnv['HTTP_PROXY'], undefined);
@@ -1077,7 +819,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     assert.equal(cleanEnv['ELECTRON_RUN_AS_NODE'], undefined);
     assert.equal(cleanEnv['ELECTRON_NO_ATTACH_CONSOLE'], undefined);
     assert.equal(cleanEnv['NO_PROXY'], '*');
-    assert.equal(cleanEnv['T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR'], '1');
+    assert.equal(cleanEnv['PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR'], '1');
 
     const parsed = parseBuildDesktopArgs([
       '--installer',
@@ -1102,7 +844,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
       join(mockRepo, 'package.json'),
       JSON.stringify({ name: 'prismux-monorepo', version: '0.1.0-alpha.1' }),
     );
-    mkdirSync(join(mockRepo, 'vendor', 't3code', 'scripts'), { recursive: true });
+    mkdirSync(join(mockRepo, 'scripts'), { recursive: true });
 
     const vecLibName = resolveSqliteVecLibraryFilename();
     const vecPkgName = resolveSqliteVecPackageName();
@@ -1111,8 +853,6 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
 
     const monitorExe = join(
       mockRepo,
-      'vendor',
-      't3code',
       'native',
       'resource-monitor',
       'target',
@@ -1163,7 +903,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     assert.ok(invocations[1]!.args.includes('1'));
     assert.equal(invocations[2]!.command, 'pnpm');
     assert.deepEqual(invocations[2]!.args, ['exec', 'vp', 'run', 'build:desktop']);
-    assert.equal(invocations[3]!.env['T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR'], '1');
+    assert.equal(invocations[3]!.env['PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR'], '1');
     assert.equal(invocations[3]!.env['PRISMUX_SQLITE_VEC_PATH'], result.sqliteVecPath);
     assert.ok(invocations[3]!.args.includes('--platform'));
     assert.ok(invocations[3]!.args.includes('win'));
@@ -1221,7 +961,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
       join(emptyRepo, 'package.json'),
       JSON.stringify({ name: 'prismux-monorepo', version: '0.1.2-preview.2' }),
     );
-    mkdirSync(join(emptyRepo, 'vendor', 't3code', 'scripts'), { recursive: true });
+    mkdirSync(join(emptyRepo, 'scripts'), { recursive: true });
 
     assert.throws(
       () =>

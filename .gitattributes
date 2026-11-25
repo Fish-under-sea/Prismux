@@ -1,3 +1,2 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
-vendor/t3code/** linguist-vendored

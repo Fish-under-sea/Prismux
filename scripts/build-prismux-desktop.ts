@@ -360,7 +360,7 @@ export function resolveSqliteVecBinaryPath(options: {
 
 /**
  * Copies `vec0.dll` (or platform native library) into a real non-ASAR disk directory
- * under `vendor/t3code/apps/desktop/prod-resources/native/sqlite-vec/` and asserts
+ * under `apps/desktop/prod-resources/native/sqlite-vec/` and asserts
  * the staged file exists and is non-empty so release builds never silently omit it.
  */
 export function stageSqliteVecBinaryForDesktop(options: {
@@ -384,8 +384,6 @@ export function stageSqliteVecBinaryForDesktop(options: {
     options.targetPath ??
       join(
         options.repoRoot,
-        'vendor',
-        't3code',
         'apps',
         'desktop',
         'prod-resources',
@@ -441,16 +439,15 @@ function assertCleanDesktopReleaseDir(dir: string): void {
 }
 
 /**
- * Orchestrates building Prismux v0.1.0-alpha.1 core packages, T3 Code native
- * Rust resource-monitor, T3 desktop/web/server bundles, and optional NSIS Windows
- * installer archiving with 7-Zip integrity checks + SHA-256 checksums.
+ * Orchestrates building Prismux core packages, native Rust resource-monitor,
+ * Electron desktop/web/server bundles, and optional NSIS Windows installer
+ * archiving with 7-Zip integrity checks + SHA-256 checksums.
  */
 export function buildPrismuxDesktop(
   options: BuildPrismuxDesktopOptions = {},
 ): BuildPrismuxDesktopResult {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = resolve(options.repoRoot ?? resolve(here, '..'));
-  const vendorDir = join(repoRoot, 'vendor', 't3code');
   const version = (options.version ?? readRepoVersion(repoRoot)).trim();
   const outDir = resolve(
     options.outDir ?? join(repoRoot, '.work', `release-v${version}`),
@@ -458,12 +455,8 @@ export function buildPrismuxDesktop(
   const runner = options.runner ?? defaultDesktopCommandRunner;
   const verifySevenZip = options.verifySevenZip ?? verifyArchiveWithSevenZip;
 
-  if (!existsSync(vendorDir)) {
-    throw new Error(`T3 Code base repository directory missing: ${vendorDir}`);
-  }
-
   const resourceMonitorPath = join(
-    vendorDir,
+    repoRoot,
     'native',
     'resource-monitor',
     'target',
@@ -477,7 +470,6 @@ export function buildPrismuxDesktop(
   if (options.dryRun) {
     console.log(`[desktop:build] Dry run for Prismux v${version}`);
     console.log(`  repoRoot: ${repoRoot}`);
-    console.log(`  vendorDir: ${vendorDir}`);
     console.log(`  outDir: ${outDir}`);
     console.log(`  skipRootBuild: ${Boolean(options.skipRootBuild)}`);
     console.log(`  skipRust: ${Boolean(options.skipRust)}`);
@@ -529,7 +521,7 @@ export function buildPrismuxDesktop(
     }
     executedSteps.push('rust-skipped');
   } else {
-    runCargoMonitorWithRetry(runner, vendorDir, baseEnv);
+    runCargoMonitorWithRetry(runner, repoRoot, baseEnv);
     if (!existsSync(resourceMonitorPath)) {
       throw new Error(
         `cargo build completed without producing ${resourceMonitorPath}`,
@@ -538,12 +530,12 @@ export function buildPrismuxDesktop(
     executedSteps.push('rust-build');
   }
 
-  // Step 3: Build real T3 Code web + server + desktop bundles
+  // Step 3: Build real Prismux web + server + desktop bundles
   runStepCommand(runner, {
-    label: 'vendor/t3code vp run build:desktop',
+    label: 'vp run build:desktop',
     command: 'pnpm',
     args: ['exec', 'vp', 'run', 'build:desktop'],
-    cwd: vendorDir,
+    cwd: repoRoot,
     env: baseEnv,
   });
   executedSteps.push('t3-build-desktop');
@@ -566,13 +558,13 @@ export function buildPrismuxDesktop(
     }
 
     const installerEnv = sanitizeDesktopBuildEnv(baseEnv, {
-      T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: '1',
-      T3CODE_DESKTOP_VERSION: version,
+      PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR: '1',
+      PRISMUX_DESKTOP_VERSION: version,
       PRISMUX_SQLITE_VEC_PATH: sqliteVecStaged.stagedPath,
     });
 
     runStepCommand(runner, {
-      label: 'vendor/t3code NSIS installer build',
+      label: 'NSIS installer build',
       command: process.execPath,
       args: [
         'scripts/build-desktop-artifact.ts',
@@ -588,7 +580,7 @@ export function buildPrismuxDesktop(
         stageOutputDir,
         '--skip-build',
       ],
-      cwd: vendorDir,
+      cwd: repoRoot,
       env: installerEnv,
     });
 
