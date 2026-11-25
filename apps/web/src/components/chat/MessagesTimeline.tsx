@@ -1792,6 +1792,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
               displayLabel={row.displayLabel}
               isLive={row.isLive}
               autoExpandReasoning={row.autoExpandReasoning}
+              autoExpandDetails={row.autoExpandDetails}
             />
           ) : null}
           {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
@@ -1972,47 +1973,45 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 
   return (
     <div
-      className="group/timeline-row border-b border-border/50 pb-2 pe-0.5 pt-1"
+      className="group/timeline-row"
       data-turn-fold-bar="true"
       data-open={row.expanded ? "true" : undefined}
     >
-      <div className="relative flex min-h-6 items-center gap-1">
-        <button
-          type="button"
-          aria-expanded={row.expanded}
-          data-open={row.expanded ? "true" : undefined}
-          data-scroll-anchor-ignore
-          onClick={toggle}
-          aria-busy={loading}
-          className="flex min-h-6 w-full cursor-pointer select-none items-center gap-1.5 rounded-md px-1 text-left text-sm leading-snug text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-        >
-          <span className="inline-flex min-w-0 items-baseline gap-0.5 truncate">
-            {row.labelPrefix !== undefined && row.durationNumber ? (
-              <>
-                <span>{row.labelPrefix}</span>
-                <span className="font-mono tabular-nums">{row.durationNumber}</span>
-              </>
-            ) : (
-              <span>{row.label}</span>
-            )}
-            {error ? <span className="truncate"> · {error}</span> : null}
-          </span>
-          <ChevronDownIcon
-            aria-hidden="true"
-            data-disclosure-chevron="true"
-            className={cn(
-              "size-3.5 shrink-0 transition-transform duration-200",
-              row.expanded && "rotate-180",
-            )}
+      <button
+        type="button"
+        aria-expanded={row.expanded}
+        data-open={row.expanded ? "true" : undefined}
+        data-scroll-anchor-ignore
+        onClick={toggle}
+        aria-busy={loading}
+        className="box-border flex h-[33px] w-full min-w-0 cursor-pointer select-none items-center border-b border-border/50 pb-2 text-left text-sm leading-6 text-muted-foreground transition-colors duration-100 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none [[data-pmx-glass='1']_&]:border-foreground/15"
+      >
+        <span className="inline-flex min-w-0 items-baseline truncate leading-6">
+          {row.labelPrefix !== undefined && row.durationNumber ? (
+            <>
+              <span>{row.labelPrefix}</span>
+              <span className="font-mono tabular-nums">{row.durationNumber}</span>
+            </>
+          ) : (
+            <span>{row.label}</span>
+          )}
+          {error ? <span className="truncate"> · {error}</span> : null}
+        </span>
+        <ChevronDownIcon
+          aria-hidden="true"
+          data-disclosure-chevron="true"
+          className={cn(
+            "ml-1 size-3.5 shrink-0 transition-transform duration-200 ease-out motion-reduce:transition-none",
+            row.expanded && "rotate-180",
+          )}
+        />
+        <span className="ms-auto">
+          <TimelineRowTimestamp
+            createdAt={row.createdAt}
+            timestampFormat={ctx.timestampFormat}
           />
-          <span className="ms-auto">
-            <TimelineRowTimestamp
-              createdAt={row.createdAt}
-              timestampFormat={ctx.timestampFormat}
-            />
-          </span>
-        </button>
-      </div>
+        </span>
+      </button>
       {loading ? <WorkHistorySkeleton /> : null}
     </div>
   );
@@ -2033,13 +2032,13 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
         data-superseded-attempt-id={row.attemptId}
         onClick={toggle}
         aria-busy={loading}
-        className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2 text-left transition-colors duration-200 ease-out hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none [[data-pmx-glass='1']_&]:border-foreground/15 [[data-pmx-glass='1']_&]:bg-card/65 [[data-pmx-glass='1']_&]:hover:bg-card/80"
       >
         <ChevronRightIcon
           aria-hidden="true"
           data-disclosure-chevron="true"
           className={cn(
-            "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
+            "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
             row.expanded && "rotate-90",
           )}
         />

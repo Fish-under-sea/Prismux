@@ -1190,12 +1190,51 @@ export function TypographyCard({
   const rows: ReadonlyArray<{
     role: 'headingColor' | 'textColor' | 'mutedColor';
     label: string;
+    note: string;
     fallback: string;
   }> = [
-    { role: 'headingColor', label: '标题与重点字', fallback: fallbacks.headingColor },
-    { role: 'textColor', label: '正文与控件字', fallback: fallbacks.textColor },
-    { role: 'mutedColor', label: '次要与说明字', fallback: fallbacks.mutedColor },
+    {
+      role: 'headingColor',
+      label: '一级标题字色',
+      note: '设置分区标题、面板大标题与卡片主标题',
+      fallback: fallbacks.headingColor,
+    },
+    {
+      role: 'textColor',
+      label: '正文与设置项名',
+      note: '设置项名称、按钮标签与对话正文',
+      fallback: fallbacks.textColor,
+    },
+    {
+      role: 'mutedColor',
+      label: '二级说明与辅助字',
+      note: '设置项说明、副标题、占位提示与时间戳',
+      fallback: fallbacks.mutedColor,
+    },
   ];
+
+  const resolvedPreviewHeading = normalizeHex(palette.headingColor, true) || fallbacks.headingColor;
+  const resolvedPreviewText = normalizeHex(palette.textColor, true) || fallbacks.textColor;
+  const resolvedPreviewMuted = normalizeHex(palette.mutedColor, true) || fallbacks.mutedColor;
+  const hasAnyPolarityColorOverride = Boolean(
+    normalizeHex(palette.headingColor, true) ||
+      normalizeHex(palette.textColor, true) ||
+      normalizeHex(palette.mutedColor, true),
+  );
+
+  const resetPolarityColors = () => {
+    onChange({
+      ...config,
+      typography: {
+        ...config.typography,
+        [editingPolarity]: {
+          headingColor: '',
+          textColor: '',
+          mutedColor: '',
+        },
+      },
+    });
+  };
 
   const uniqueSystemFonts = useMemo(() => {
     const seen = new Set<string>();
@@ -1239,12 +1278,12 @@ export function TypographyCard({
       <div className="ilook-hero-head">
         <div className="ilook-box-head">
           <span className="ilook-box-title">
-            {showFontFamilySelectors ? '全局字体与排版配色' : '明暗文字配色'}
+            {showFontFamilySelectors ? '全局字体与分级排版配色' : '分级文字配色（标题 / 正文 / 二级说明）'}
           </span>
           <span className="ilook-box-note">
             {showFontFamilySelectors
-              ? '支持本机系统字体选择；浅色与深色文字颜色独立存储。'
-              : '浅色与深色文字颜色独立存储，留空即跟随主题默认色。'}
+              ? '支持本机系统字体选择；分别控制一级标题、正文与二级说明字色，浅色与深色组独立存储。'
+              : '分别控制一级标题、正文与设置项名及二级说明字色；浅色与深色组独立存储，留空即跟随主题默认。'}
           </span>
         </div>
         <div className="seg" role="group" aria-label="编辑浅色或深色文字配色">
@@ -1368,7 +1407,7 @@ export function TypographyCard({
       ) : null}
 
       {/* 3 independent light/dark typography colors */}
-      {rows.map(({ role, label, fallback }) => {
+      {rows.map(({ role, label, note, fallback }) => {
         const val = normalizeHex(palette[role], true);
         const preview = val || fallback;
         const open = isSameSlot(activeSlot, {
@@ -1379,7 +1418,10 @@ export function TypographyCard({
         return (
           <div key={role} className="ilook-typo-item">
             <div className="ilook-typo-row">
-              <span className="ilook-typo-lbl">{label}</span>
+              <div className="grow">
+                <div className="ilook-typo-lbl">{label}</div>
+                <div className="ilook-typo-sub">{note}</div>
+              </div>
               <div className="ilook-typo-actions">
                 <button
                   type="button"
@@ -1411,6 +1453,50 @@ export function TypographyCard({
           </div>
         );
       })}
+
+      {/* Live Hierarchy Preview Box (Settings section header + setting title + secondary description) */}
+      <div
+        className="pmx-typo-preview"
+        data-pmx-typography-preview="1"
+        data-preview-polarity={editingPolarity}
+      >
+        <div className="pmx-typo-preview-bar">
+          <div className="pmx-typo-preview-eyebrow">
+            <span>主次层级实时预览</span>
+            <span className="pmx-typo-preview-pill">
+              {editingPolarity === 'light' ? '浅色组' : '深色组'}
+            </span>
+          </div>
+          {hasAnyPolarityColorOverride ? (
+            <button type="button" className="pbtn sm" onClick={resetPolarityColors}>
+              恢复本组默认
+            </button>
+          ) : null}
+        </div>
+        <div
+          className="pmx-typo-preview-section"
+          data-pmx-preview-role="heading"
+          style={{ color: resolvedPreviewHeading }}
+        >
+          工作台与通用设置
+        </div>
+        <div className="pmx-typo-preview-card">
+          <div
+            className="pmx-typo-preview-title"
+            data-pmx-preview-role="text"
+            style={{ color: resolvedPreviewText }}
+          >
+            默认液态玻璃与高可读文字层级
+          </div>
+          <div
+            className="pmx-typo-preview-desc"
+            data-pmx-preview-role="muted"
+            style={{ color: resolvedPreviewMuted }}
+          >
+            二级说明以更小字号与柔和辅助字色呈现，与上方设置项名拉开清晰主次对比，减轻长时间浏览的视觉疲劳。
+          </div>
+        </div>
+      </div>
 
       {/* Optional inline Caret + 5-item UI Custom Colors for standalone TypographyCard callers */}
       {showUiColorsAndCaret ? (

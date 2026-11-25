@@ -44,7 +44,12 @@ import {
 } from "@prismux/provider-acp/server/sessionConfig";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
-import { findDeepSeekCliArgStart, isDeepSeekHarnessSpawn } from "./dshLocal.ts";
+import {
+  findDeepSeekCliArgStart,
+  isDeepSeekHarnessSpawn,
+  resolveDshInstalledVersion,
+  selectPreferredDshVersion,
+} from "./dshLocal.ts";
 import { isDeepSeekHarnessAgentInfo } from "./dshAcp.ts";
 import { augmentDshAvailableCommands } from "./dshSkills.ts";
 
@@ -513,6 +518,7 @@ export function acpRegistryProbeResult(
   icon: string | null = null,
   spawn?: AcpRegistryAuthSpawnContext,
   liveConfiguration?: AcpRegistryLiveConfiguration,
+  agentVersionOverride?: string | null,
 ): AcpRegistryProbeResult {
   const configuration =
     liveConfiguration ??
@@ -521,13 +527,13 @@ export function acpRegistryProbeResult(
       parseSessionModeState(started.sessionSetupResult),
       started.sessionSetupResult.models,
     );
+  const rawAgentVersion =
+    agentVersionOverride?.trim() || started.initializeResult.agentInfo?.version?.trim() || "";
   return AcpRegistryProbeResult.make({
     instanceId,
     ready: true,
     icon,
-    ...(started.initializeResult.agentInfo?.version?.trim()
-      ? { agentVersion: boundedText(started.initializeResult.agentInfo.version, MAX_ID_LENGTH) }
-      : {}),
+    ...(rawAgentVersion ? { agentVersion: boundedText(rawAgentVersion, MAX_ID_LENGTH) } : {}),
     authMethods: normalizeAcpRegistryAuthMethods(started.initializeResult.authMethods, spawn),
     sessionManagement: {
       canList: started.initializeResult.agentCapabilities?.sessionCapabilities?.list != null,
@@ -580,7 +586,7 @@ export type AcpRegistryConfigurationProbe<Requirements = never> = (
   input: AcpRegistryConfigurationProbeInput,
 ) => Effect.Effect<AcpRegistryConfigurationProbeResult, AcpRegistryOperationError, Requirements>;
 
-const isolateDeepSeekProbeHistory = Effect.fn("AcpRegistryProbe.isolateDeepSeekProbeHistory")(
+export const isolateDeepSeekProbeHistory = Effect.fn("AcpRegistryProbe.isolateDeepSeekProbeHistory")(
   function* (commandPath: string, spawn: AcpSessionRuntime.AcpSpawnInput) {
     if (!isDeepSeekHarnessSpawn(commandPath || spawn.command, spawn.args)) return spawn;
 
@@ -874,11 +880,27 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
           })
         : rawCommands;
 
+      const installedDshVersion = isDsh
+        ? resolveDshInstalledVersion({
+            command: resolved.spawn.command,
+            args: resolved.spawn.args,
+            env: resolved.spawn.env ?? input.environment,
+            platform,
+          })
+        : undefined;
+      const preferredAgentVersion = isDsh
+        ? selectPreferredDshVersion(
+            installedDshVersion,
+            started.initializeResult.agentInfo?.version,
+          )
+        : undefined;
+
       return {
         resolved,
         started,
         commands,
         liveConfiguration,
+        preferredAgentVersion,
       };
     }).pipe(
       Effect.scoped,
@@ -906,6 +928,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
           args: result.resolved.spawn.args,
         },
         result.liveConfiguration,
+        result.preferredAgentVersion,
       ),
       slashCommands: result.commands.slashCommands,
       skills: result.commands.skills,

@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { CheckIcon, MoreVertical, PlusIcon, ServerIcon } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -29,7 +30,20 @@ import {
   textGeneratorBrand,
   textGeneratorDisplayName,
 } from "../../textGenerators";
-import { getTextGenerationModelOptionsByInstance } from "../../modelSelection";
+import {
+  getTextGenerationModelOptionsByInstance,
+  resolveTextGenerationProviders,
+} from "../../modelSelection";
+import type { ProviderInstanceEntry } from "../../providerInstances";
+import {
+  AGY_TEXT_GEN_WAIVER_PILL_TEXT,
+  AgyWaiverRequiredBadge,
+  SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  isAntigravityControlledAutomationAllowed,
+  isAntigravityProviderLike,
+  resolveAntigravityComplianceBlock,
+  useSubscriptionWaiverState,
+} from "../../prismux/SubscriptionRiskWaiverSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import {
@@ -545,15 +559,43 @@ function TextGenerationTaskPicker({
   readonly settingKey: (typeof TASKS)[number]["key"];
   readonly label: string;
 }) {
+  const navigate = useNavigate();
   const settings = useEnvironmentSettings(environmentId);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const waiver = useSubscriptionWaiverState();
+  const allowAntigravityTextGeneration = isAntigravityControlledAutomationAllowed(waiver);
+  const openSubscriptionWaiver = () => {
+    void navigate({
+      to: "/settings/providers",
+      hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
+    });
+  };
+  const isPrimaryTextGenTask = settingKey === "textGenerationModelSelection";
+  const hasBlockedAntigravityProvider =
+    !allowAntigravityTextGeneration &&
+    providers.some(
+      (provider) =>
+        (provider.enabled || provider.installed) &&
+        provider.availability !== "unavailable" &&
+        isAntigravityProviderLike(provider.driver),
+    );
+  const getProviderComplianceBlock = (entry: ProviderInstanceEntry) =>
+    resolveAntigravityComplianceBlock({
+      entry,
+      waiver,
+      mode: "controlled",
+      onOpenWaiver: openSubscriptionWaiver,
+    });
   const own = settings[settingKey];
   // Source control and voice follow the text generation model until they get their own.
   const selection = own ?? settings.textGenerationModelSelection;
+  const eligibleProviders = isPrimaryTextGenTask
+    ? resolveTextGenerationProviders(providers, { allowAntigravityTextGeneration })
+    : providers.filter((provider) => provider.supportsTextGeneration !== false);
   const targets = useTextGenerationTargets({
     environmentId,
     settings,
-    providers: providers.filter((provider) => provider.supportsTextGeneration !== false),
+    providers: eligibleProviders,
     projectId: null,
     selections: [selection],
   });
@@ -595,6 +637,14 @@ function TextGenerationTaskPicker({
             <T>Follows the text generation model</T>
           </span>
         ) : null}
+        {isPrimaryTextGenTask && hasBlockedAntigravityProvider ? (
+          <div className="pt-0.5">
+            <AgyWaiverRequiredBadge
+              label={AGY_TEXT_GEN_WAIVER_PILL_TEXT}
+              onClick={openSubscriptionWaiver}
+            />
+          </div>
+        ) : null}
       </div>
       <div className="justify-self-end">
         <ProviderModelPicker
@@ -608,11 +658,23 @@ function TextGenerationTaskPicker({
             targets.providers,
             selection.instanceId,
             selection.model,
+            {
+              allowAntigravityTextGeneration: isPrimaryTextGenTask
+                ? allowAntigravityTextGeneration
+                : true,
+            },
           )}
+          getProviderComplianceBlock={getProviderComplianceBlock}
           triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-          onInstanceModelChange={(instanceId, model) =>
-            updateSettings({ [settingKey]: pickModelSelection(selection, instanceId, model) })
-          }
+          onInstanceModelChange={(instanceId, model) => {
+            const targetEntry = targets.entries.find((entry) => entry.instanceId === instanceId);
+            const complianceBlock = targetEntry ? getProviderComplianceBlock(targetEntry) : null;
+            if (complianceBlock) {
+              complianceBlock.onOpenWaiver();
+              return;
+            }
+            updateSettings({ [settingKey]: pickModelSelection(selection, instanceId, model) });
+          }}
         />
       </div>
       <div className="justify-self-end">

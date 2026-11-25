@@ -1,9 +1,18 @@
+import { useAtomValue } from "@effect/atom-react";
 import { formatEffortLabel } from "@prismux/appearance";
 import { memo, useEffect, useState } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { cn } from "../lib/utils";
-import { AgentBrandLogo, formatAgentBrandName } from "./agentBrand";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderProviderInstanceEntries,
+  resolveConfiguredProviderLabel,
+} from "../providerInstances";
+import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../state/server";
+import { AgentBrandLogo } from "./agentBrand";
 import { isCustomChiefDisplayName, normalizeChiefDisplayName } from "./chiefMention";
 import { useOptionalPrismuxRuntime, type PrismuxDialMode } from "./PrismuxRuntimeProvider";
 
@@ -210,7 +219,19 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
     isGlassActiveProp ??
     Boolean(runtime && runtime.appearance.themeMode === "glass" && runtime.appearance.glassPreset !== "off");
 
-  const brandName = formatAgentBrandName(effectiveProvider);
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const serverSettings = useAtomValue(primaryServerSettingsAtom);
+  const configuredEntries = disambiguateProviderInstanceDisplayNames(
+    orderProviderInstanceEntries(
+      brandProviderInstanceEntries(
+        deriveProviderInstanceEntries(serverProviders),
+        serverSettings,
+      ),
+      serverSettings.providerOrder,
+    ),
+  );
+
+  const brandName = resolveConfiguredProviderLabel(effectiveProvider, configuredEntries);
   const pillLabel = hasCustomName ? effectiveSecretaryName : brandName;
   const modelLabel =
     effectiveModel && effectiveModel.trim().length > 0 ? effectiveModel.trim() : "跟随提供方默认";

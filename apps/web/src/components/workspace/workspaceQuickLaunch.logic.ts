@@ -21,6 +21,7 @@ import {
   disambiguateProviderInstanceDisplayNames,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
+import { orderProviderInstanceEntries } from "../chat/ProviderModelPicker.logic";
 import type { WorkspaceTab } from "./workspaceTabsStore";
 
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -161,24 +162,66 @@ function defaultModelForEntry(entry: ProviderInstanceEntry): string | null {
 }
 
 const DEFAULT_FALLBACK_AGENTS: ReadonlyArray<{
+  readonly instanceId: ProviderInstanceId;
   readonly driverKind: string;
   readonly providerId: string;
 }> = [
-  { driverKind: "claudeAgent", providerId: "claude-code" },
-  { driverKind: "codex", providerId: "codex" },
-  { driverKind: "antigravity", providerId: "antigravity" },
+  {
+    instanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("claudeAgent")),
+    driverKind: "claudeAgent",
+    providerId: "claude-code",
+  },
+  {
+    instanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("codex")),
+    driverKind: "codex",
+    providerId: "codex",
+  },
+  {
+    instanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("antigravity")),
+    driverKind: "antigravity",
+    providerId: "antigravity",
+  },
 ];
 
 /**
+ * Resolves a provider instance entry into its canonical brand/provider identifier for tab icons
+ * and brand matching. For `acpRegistry` agents (e.g. DeepSeek Harness / `dsh`), prefers
+ * `acpRegistryAgentId` / `instanceId` / `displayName` so custom user renames keep the true brand icon.
+ */
+export function resolveProviderBrandIdForEntry(
+  entry: Pick<
+    ProviderInstanceEntry,
+    "driverKind" | "instanceId" | "displayName" | "acpRegistryAgentId"
+  >,
+): string {
+  if (entry.driverKind === "acpRegistry") {
+    const candidates = [entry.acpRegistryAgentId, entry.instanceId, entry.displayName];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      const resolved = resolveAgentBrandId(candidate);
+      if (resolved !== "custom" && resolved !== "acp") {
+        return resolved;
+      }
+    }
+    return entry.acpRegistryAgentId || entry.displayName || entry.instanceId;
+  }
+  return entry.driverKind;
+}
+
+/**
  * Builds the Orca-style Agent launch list from active/enabled T3 provider entries,
- * normalizing names via `formatAgentBrandName` and attaching per-agent recent threads
+ * respecting `providerOrder` + user custom display names and attaching per-agent recent threads
  * for the Safe Triangle hover submenu.
  */
 export function buildQuickLaunchAgentOptions(input: {
   readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly historyThreads: ReadonlyArray<QuickLaunchHistoryThread>;
+  readonly providerOrder?: ReadonlyArray<ProviderInstanceId> | null | undefined;
 }): ReadonlyArray<QuickLaunchAgentOption> {
-  const enabledEntries = input.instanceEntries.filter((entry) => entry.enabled);
+  const enabledEntries = orderProviderInstanceEntries(
+    input.instanceEntries.filter((entry) => entry.enabled),
+    input.providerOrder,
+  );
   const byBrandThreads = new Map<string, QuickLaunchHistoryThread[]>();
 
   for (const thread of input.historyThreads) {
@@ -196,7 +239,11 @@ export function buildQuickLaunchAgentOptions(input: {
   }
 
   if (enabledEntries.length === 0) {
-    return DEFAULT_FALLBACK_AGENTS.map((fallback) => {
+    const orderedFallbacks = orderProviderInstanceEntries(
+      DEFAULT_FALLBACK_AGENTS,
+      input.providerOrder,
+    );
+    return orderedFallbacks.map((fallback) => {
       const brandId = resolveAgentBrandId(fallback.providerId);
       return {
         id: `fallback:${fallback.providerId}`,
@@ -220,9 +267,7 @@ export function buildQuickLaunchAgentOptions(input: {
   );
 
   return normalizedEnabledEntries.map((entry) => {
-    const brandId = resolveAgentBrandId(
-      entry.driverKind === "acpRegistry" ? entry.displayName || entry.instanceId : entry.driverKind,
-    );
+    const brandId = resolveAgentBrandId(resolveProviderBrandIdForEntry(entry));
     const canonicalName = entry.displayName;
     const defaultModel = defaultModelForEntry(entry);
     const exactThreads = byBrandThreads.get(`instance:${entry.instanceId}`) ?? [];
@@ -267,7 +312,6 @@ export function resolveQuickLaunchAgentTarget(
   agent: Pick<QuickLaunchAgentOption, "brandId" | "driverKind" | "instanceId" | "defaultModel">,
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>,
 ): ResolvedQuickLaunchAgentTarget {
-  const providerId = agent.brandId === "custom" ? String(agent.driverKind) : agent.brandId;
   const matchedEntry =
     (agent.instanceId
       ? instanceEntries.find((entry) => entry.instanceId === agent.instanceId)
@@ -275,12 +319,17 @@ export function resolveQuickLaunchAgentTarget(
     instanceEntries.find(
       (entry) =>
         entry.enabled &&
-        resolveAgentBrandId(
-          entry.driverKind === "acpRegistry" ? entry.displayName || entry.instanceId : entry.driverKind,
-        ) === agent.brandId,
+        resolveAgentBrandId(resolveProviderBrandIdForEntry(entry)) === agent.brandId,
     ) ??
     instanceEntries.find((entry) => entry.driverKind === agent.driverKind) ??
     null;
+
+  const providerId =
+    agent.brandId === "custom"
+      ? matchedEntry
+        ? resolveProviderBrandIdForEntry(matchedEntry)
+        : String(agent.driverKind)
+      : agent.brandId;
 
   const resolvedInstanceId: ProviderInstanceId | null =
     matchedEntry?.instanceId ??

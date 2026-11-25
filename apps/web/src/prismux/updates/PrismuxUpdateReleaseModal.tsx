@@ -12,11 +12,11 @@ import {
   RefreshCwIcon,
   RotateCwIcon,
   ShieldCheckIcon,
-  SparklesIcon,
   XIcon,
 } from "lucide-react";
 
 import { APP_VERSION } from "../../branding";
+import { T3AppIcon } from "../../components/T3AppIcon";
 import { openSafeExternalHttpsUrl, validateSafeHttpsUrl } from "../../components/settings/prismuxProviderMeta";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -340,12 +340,7 @@ export function PrismuxUpdateReleaseModal() {
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border/60 px-5 pt-4 pb-3.5">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
-              <span
-                aria-hidden="true"
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/25"
-              >
-                <SparklesIcon className="size-4" />
-              </span>
+              <T3AppIcon className="size-7 shrink-0 rounded-lg object-contain ring-1 ring-border/35 [[data-pmx-glass='1']_&]:ring-foreground/15" />
               <h2 id={titleId} className="text-base font-semibold tracking-tight text-foreground">
                 发现新版本
               </h2>

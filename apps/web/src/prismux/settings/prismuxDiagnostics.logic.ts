@@ -5,6 +5,7 @@ import type {
   DaemonDiagnosticsStatus,
 } from "../daemonClient";
 import type { DiagnosticsBadgeTone } from "../../components/sidebar/prismuxSidebarQuickNav.logic";
+import { getActiveLocale } from "../../i18n/messages";
 
 export type DiagnosticCategoryKey =
   | "host_core"
@@ -76,14 +77,18 @@ const DEFAULT_CATEGORY_LABELS: Readonly<Record<string, string>> = {
 };
 
 const ALLOWED_SETTINGS_ROUTE_PREFIX = "/settings/";
-const ALLOWED_STANDALONE_ROUTES: ReadonlySet<string> = new Set(["/overnight-factory"]);
+const ALLOWED_STANDALONE_ROUTES: ReadonlySet<string> = new Set([
+  "/overnight-factory",
+  "/diagnostics",
+]);
 
 export function sanitizeDiagnosticsSettingsRoute(raw: string | null | undefined): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
+  const normalizedStandalone = trimmed.replace(/\/+$/, "");
   if (
     !trimmed.startsWith(ALLOWED_SETTINGS_ROUTE_PREFIX) &&
-    !ALLOWED_STANDALONE_ROUTES.has(trimmed)
+    !ALLOWED_STANDALONE_ROUTES.has(normalizedStandalone)
   ) {
     return null;
   }
@@ -113,8 +118,8 @@ export function resolveDiagnosticsSettingsRoute(
   if (normalizedPath === "/settings/access") {
     return "/settings/connections";
   }
-  if (normalizedPath === "/settings/diagnostics") {
-    return "/settings/maintenance";
+  if (normalizedPath === "/settings/diagnostics" || normalizedPath === "/diagnostics") {
+    return "/diagnostics";
   }
   return sanitized;
 }
@@ -428,9 +433,57 @@ export function resolveNormalizedDiagnosticsBadgeTone(
   return null;
 }
 
+export function isDiagnosticsStandalonePathname(pathname: string): boolean {
+  const normalized = pathname.trim().replace(/\/+$/, "");
+  return normalized === "/diagnostics";
+}
+
 export function isDiagnosticsViewPathname(pathname: string): boolean {
   const normalized = pathname.trim().replace(/\/+$/, "");
-  return normalized === "/settings/diagnostics" || normalized === "/settings/maintenance";
+  return normalized === "/diagnostics" || normalized === "/settings/diagnostics";
+}
+
+export function isDiagnosticsEscapeTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName;
+  if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+    return true;
+  }
+  return target.isContentEditable || target.closest("[role='dialog']") !== null;
+}
+
+export interface DiagnosticsStandaloneCopy {
+  readonly isZh: boolean;
+  readonly closeLabel: string;
+  readonly closeTooltip: string;
+  readonly summaryHealthyPill: (ok: number, total: number) => string;
+  readonly summaryDegradedPill: (degraded: number) => string;
+  readonly summaryErrorPill: (error: number) => string;
+}
+
+const ZH_STANDALONE_COPY: DiagnosticsStandaloneCopy = {
+  isZh: true,
+  closeLabel: "关闭服务体检面板",
+  closeTooltip: "返回主会话 (Esc)",
+  summaryHealthyPill: (ok, total) => `${ok}/${total} 正常`,
+  summaryDegradedPill: (degraded) => `${degraded} 降级`,
+  summaryErrorPill: (error) => `${error} 异常`,
+};
+
+const EN_STANDALONE_COPY: DiagnosticsStandaloneCopy = {
+  isZh: false,
+  closeLabel: "Close service diagnostics",
+  closeTooltip: "Return to main session (Esc)",
+  summaryHealthyPill: (ok, total) => `${ok}/${total} healthy`,
+  summaryDegradedPill: (degraded) => `${degraded} degraded`,
+  summaryErrorPill: (error) => `${error} errors`,
+};
+
+export function getDiagnosticsStandaloneCopy(
+  locale: string | null | undefined,
+): DiagnosticsStandaloneCopy {
+  const normalized = (locale ?? getActiveLocale() ?? "en").toLowerCase();
+  return normalized.startsWith("zh") ? ZH_STANDALONE_COPY : EN_STANDALONE_COPY;
 }
 
 export const DORMANT_ENGINES_GROUP_ID = "dormant_engines" as const;

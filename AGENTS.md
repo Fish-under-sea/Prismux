@@ -86,8 +86,8 @@ prismux/
 ├── packaging/                         # Linux AUR 等平台打包清单
 ├── patches/                           # pnpm patchedDependencies 维护补丁
 ├── oxlint-plugin-prismux/             # Prismux 专属 Oxlint 静态规则插件（规则前缀 `prismux/`）
-├── assets/                            # 品牌图标（assets/prismux/、dev/nightly/prod）与 README 立体像素视觉资产
-├── scripts/                           # 运维、桌面打包、发布与 i18n/图标校验脚本（含 node:test 回归单测）
+├── assets/                            # 品牌图标（assets/prismux/、logo.png）与 README 立体像素视觉资产
+├── scripts/                           # 运维、桌面打包、发布与 i18n/品牌资产脚本（含 node:test 回归单测）
 └── docs/
     ├── agents/                        # 个人本机环境档案说明、模板与按人档案
     ├── archive/                       # 历史演进归档（过渡期上游锁、补丁台账与同步脚本，仅供审计参考）

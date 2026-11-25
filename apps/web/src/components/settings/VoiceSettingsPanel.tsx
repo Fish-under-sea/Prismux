@@ -60,6 +60,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { msg, T, useGT, useLocale, useMessages, Var } from "gt-react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -88,6 +89,14 @@ import {
   getTextGenerationModelOptionsByInstance,
   resolveAppModelSelectionState,
 } from "../../modelSelection";
+import type { ProviderInstanceEntry } from "../../providerInstances";
+import {
+  AgyWaiverRequiredBadge,
+  SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  isAntigravityControlledAutomationAllowed,
+  resolveAntigravityComplianceBlock,
+  useSubscriptionWaiverState,
+} from "../../prismux/SubscriptionRiskWaiverSection";
 import { useTextGenerationTargets } from "../../textGenerators";
 import { useEnvironmentProviders, useEnvironments } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
@@ -563,9 +572,25 @@ function ProjectDictionaryRow() {
 function CleanupModelRow() {
   const setting = useSearchableSetting();
   const gt = useGT();
+  const navigate = useNavigate();
   const { environment, connectedEnvironments } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const waiver = useSubscriptionWaiverState();
+  const allowAntigravityTextGeneration = isAntigravityControlledAutomationAllowed(waiver);
+  const openSubscriptionWaiver = () => {
+    void navigate({
+      to: "/settings/providers",
+      hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
+    });
+  };
+  const getProviderComplianceBlock = (entry: ProviderInstanceEntry) =>
+    resolveAntigravityComplianceBlock({
+      entry,
+      waiver,
+      mode: "controlled",
+      onOpenWaiver: openSubscriptionWaiver,
+    });
   const providersByEnvironment = useEnvironmentProviders();
   const providers =
     (environment?.serverConfig
@@ -594,16 +619,26 @@ function CleanupModelRow() {
       ),
     },
     textGenerationProviders,
+    { allowAntigravityTextGeneration },
   );
+  // Keep AGY models in the picker map so unsigned AGY renders grayed out with the red waiver overlay.
   const modelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,
     textGenerationProviders,
     selection.instanceId,
     selection.model,
+    { allowAntigravityTextGeneration: true },
   );
   const instanceEntry = instanceEntries.find((entry) => entry.instanceId === selection.instanceId);
+  const activeComplianceBlock = instanceEntry ? getProviderComplianceBlock(instanceEntry) : null;
   const modelDisabledReason = useScopedModelDisabledReason(settings, instanceEntries, true);
   const setModel = (next: ReturnType<typeof createModelSelection>) => {
+    const targetEntry = instanceEntries.find((entry) => entry.instanceId === next.instanceId);
+    const complianceBlock = targetEntry ? getProviderComplianceBlock(targetEntry) : null;
+    if (complianceBlock) {
+      complianceBlock.onOpenWaiver();
+      return;
+    }
     const reason = modelDisabledReason(next.instanceId, next.model);
     if (reason) {
       toastManager.add({
@@ -647,10 +682,18 @@ function CleanupModelRow() {
                   modelOptionsByInstance={modelOptionsByInstance}
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                   getModelDisabledReason={modelDisabledReason}
+                  getProviderComplianceBlock={getProviderComplianceBlock}
                   onInstanceModelChange={(instanceId, model) =>
                     setModel(pickModelSelection(selection, instanceId, model))
                   }
                 />
+                {activeComplianceBlock ? (
+                  <AgyWaiverRequiredBadge
+                    label={activeComplianceBlock.badgeText}
+                    title={activeComplianceBlock.tooltip}
+                    onClick={activeComplianceBlock.onOpenWaiver}
+                  />
+                ) : null}
                 <TraitsPicker
                   provider={instanceEntry.driverKind}
                   models={instanceEntry.models}

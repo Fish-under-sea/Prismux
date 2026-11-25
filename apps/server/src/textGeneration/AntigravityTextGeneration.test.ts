@@ -2,15 +2,26 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  type ServerProvider,
 } from "@prismux/core-contracts";
+import type { ProviderInstance } from "@prismux/provider-core/server/driver";
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as TextGeneration from "./TextGeneration.ts";
+import * as TextGenerators from "./TextGenerators.ts";
+import * as HostProcess from "@prismux/core-shared/HostProcess";
 import { symlinksSupported } from "@prismux/core-shared/testing/symlinks";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -22,9 +33,12 @@ import { expect } from "vite-plus/test";
 
 import type * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
 import { removeAntigravitySessionFiles } from "../provider/acp/AntigravitySessionFiles.ts";
+import { ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE } from "../provider/antigravityAuthSupport.ts";
 
 import {
+  ANTIGRAVITY_WAIVER_REQUIRED_DETAIL,
   type AntigravityTextGenerationOptions,
+  isAntigravitySubscriptionWaiverSigned,
   isAntigravityTextGenerationAvailable,
   makeAntigravityTextGeneration,
 } from "./AntigravityTextGeneration.ts";
@@ -64,6 +78,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
     readonly startupSkills?: boolean;
     readonly initialModel?: string;
     readonly rejectThinkingUpdate?: boolean;
+    readonly waiverState?: "signed" | "missing" | "unsigned" | "signed-switch-off" | "corrupt";
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -71,6 +86,38 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-text-test-" });
   const profileDirectory = path.join(root, "profile");
   const projectDirectory = path.join(root, "project");
+  const waiverFilePath = path.join(root, "prismux-data", "config", "subscription-waiver.json");
+  const waiverState = options.waiverState ?? "signed";
+  if (waiverState !== "missing") {
+    yield* fs.makeDirectory(path.dirname(waiverFilePath), { recursive: true });
+    const waiverContent =
+      waiverState === "signed"
+        ? JSON.stringify({
+            signed: true,
+            waiverVersion: "v3-2026",
+            signedAt: "2026-11-25T00:00:00.000Z",
+            allowAntigravityAsControlledAgent: true,
+            allowExternalSubscriptionAgentsInSwarm: false,
+          })
+        : waiverState === "signed-switch-off"
+          ? JSON.stringify({
+              signed: true,
+              waiverVersion: "v3-2026",
+              signedAt: "2026-11-25T00:00:00.000Z",
+              allowAntigravityAsControlledAgent: false,
+              allowExternalSubscriptionAgentsInSwarm: true,
+            })
+          : waiverState === "unsigned"
+            ? JSON.stringify({
+                signed: false,
+                waiverVersion: null,
+                signedAt: null,
+                allowAntigravityAsControlledAgent: true,
+                allowExternalSubscriptionAgentsInSwarm: false,
+              })
+            : "{not-valid-json";
+    yield* fs.writeFileString(waiverFilePath, waiverContent);
+  }
   const conversations = path.join(profileDirectory, "antigravity-acp", "conversations");
   const nativeSessionId = options.sessionId ?? SESSION_ID;
   const sessionBase = path.join(conversations, SESSION_ID);
@@ -292,6 +339,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
 
   const textGeneration = yield* makeAntigravityTextGeneration({
     profileDirectory,
+    waiverFilePath,
     makeRuntime,
     withProcess,
   });
@@ -315,6 +363,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
     path,
     profileDirectory,
     projectDirectory,
+    waiverFilePath,
     sessionBase,
     brainDirectory,
     state,
@@ -494,7 +543,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
   it.effect.each([
     {
       code: -32000,
-      detail: "Sign in to Antigravity in Settings before you continue.",
+      detail: ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE,
     },
     { code: -32603, detail: "Antigravity text generation failed." },
   ])("maps ACP error $code from the prompt request to a fixed detail", ({ code, detail }) =>
@@ -700,6 +749,196 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       );
       expect(yield* fixture.fs.readFileString(`${fixture.sessionBase}.meta`)).toBe(metadata);
     }),
+  );
+
+  it.effect.each(["missing", "unsigned", "signed-switch-off", "corrupt"] as const)(
+    "blocks Antigravity text generation when persisted subscription waiver is %s",
+    (waiverState) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({ waiverState });
+        expect(
+          yield* isAntigravitySubscriptionWaiverSigned({
+            waiverFilePath: fixture.waiverFilePath,
+          }),
+        ).toBe(false);
+        const error = yield* fixture.textGeneration
+          .generateThreadTitle(fixture.titleInput)
+          .pipe(Effect.flip);
+        expect(error.detail).toBe(ANTIGRAVITY_WAIVER_REQUIRED_DETAIL);
+        expect(error.detail).toContain("ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+        expect(fixture.state.workspaces).toEqual([]);
+      }),
+  );
+
+  it.effect("immediately re-locks Antigravity text generation when the waiver file is revoked", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ waiverState: "signed" });
+      expect(yield* fixture.textGeneration.generateThreadTitle(fixture.titleInput)).toEqual({
+        title: "Repair login",
+      });
+      yield* fixture.fs.writeFileString(
+        fixture.waiverFilePath,
+        JSON.stringify({
+          signed: false,
+          waiverVersion: null,
+          signedAt: null,
+          allowAntigravityAsControlledAgent: false,
+          allowExternalSubscriptionAgentsInSwarm: false,
+        }),
+      );
+      const denied = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.flip);
+      expect(denied.detail).toContain("ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+      expect(fixture.state.workspaces).toHaveLength(1);
+    }),
+  );
+
+  it.effect(
+    "TextGeneration router blocks unsigned Antigravity, falls back to ready DSH/ACP Registry, and allows Antigravity once waiver is signed",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const tempDataDir = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-tg-waiver-" });
+        const waiverPath = path.join(tempDataDir, "config", "subscription-waiver.json");
+        const testEnv = {
+          ...HostProcess.Environment.defaultValue(),
+          PRISMUX_DATA_DIR: tempDataDir,
+        };
+
+        const agyId = ProviderInstanceId.make("antigravity");
+        const dshId = ProviderInstanceId.make("dsh");
+        const calls: Array<ProviderInstanceId> = [];
+        const makeStubInstance = (
+          instanceId: ProviderInstanceId,
+          driver: ProviderDriverKind,
+          modelSlug: string,
+        ): ProviderInstance => ({
+          instanceId,
+          driverKind: driver,
+          continuationIdentity: { driverKind: driver, continuationKey: instanceId },
+          displayName: instanceId,
+          enabled: true,
+          snapshot: {
+            getSnapshot: Effect.succeed<ServerProvider>({
+              instanceId,
+              driver,
+              enabled: true,
+              installed: true,
+              status: "ready",
+              auth: { status: "authenticated" },
+              version: "1.0.0",
+              checkedAt: "2026-11-25T00:00:00Z",
+              supportsTextGeneration: true,
+              models: [
+                {
+                  slug: modelSlug,
+                  name: modelSlug,
+                  isCustom: false,
+                  isDefault: true,
+                  capabilities: null,
+                },
+              ],
+              slashCommands: [],
+              skills: [],
+            }),
+          } as ProviderInstance["snapshot"],
+          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          textGeneration: TextGeneration.TextGeneration.of({
+            generateCommitMessage: () => Effect.die("unused"),
+            generatePrContent: () => Effect.die("unused"),
+            generateBranchName: () => Effect.die("unused"),
+            generateReviewGuide: () => Effect.die("unused"),
+            generateTranscriptionPostProcessing: () => Effect.die("unused"),
+            generateThreadTitle: () =>
+              Effect.sync(() => {
+                calls.push(instanceId);
+                return { title: `Generated by ${instanceId}` };
+              }),
+          }),
+        });
+
+        const buildService = (instances: ReadonlyArray<ProviderInstance>) =>
+          TextGeneration.make.pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+                  listInstances: Effect.succeed(instances),
+                  getInstance: (id) =>
+                    Effect.succeed(instances.find((candidate) => candidate.instanceId === id)),
+                }),
+                ServerSettings.layerTest({
+                  providerInstances: Object.fromEntries(
+                    instances.map((inst) => [
+                      inst.instanceId,
+                      { driver: inst.driverKind, config: { enabled: true } },
+                    ]),
+                  ),
+                  defaultModelSelection: { instanceId: dshId, model: "deepseek-v4-flash" },
+                }),
+                Layer.mock(TextGenerators.TextGenerators)({ runner: () => Effect.undefined }),
+                Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+                  resolveLink: () => Effect.die("unused"),
+                }),
+                ProviderInstallationGate.layer,
+              ),
+            ),
+          );
+
+        const agyOnly = yield* buildService([
+          makeStubInstance(agyId, ProviderDriverKind.make("antigravity"), "gemini-test"),
+        ]);
+        const denied = yield* agyOnly
+          .generateThreadTitle({
+            cwd: tempDataDir,
+            message: "hello",
+            linkedContext: "",
+            modelSelection: { instanceId: agyId, model: "gemini-test" },
+          })
+          .pipe(Effect.provideService(HostProcess.Environment, testEnv), Effect.flip);
+        expect(denied.detail).toContain("ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+        expect(calls).toEqual([]);
+
+        // With DSH also enabled, unsigned AGY falls back cleanly to DSH!
+        const withDsh = yield* buildService([
+          makeStubInstance(agyId, ProviderDriverKind.make("antigravity"), "gemini-test"),
+          makeStubInstance(dshId, ProviderDriverKind.make("acpRegistry"), "deepseek-v4-flash"),
+        ]);
+        const fallbackResult = yield* withDsh
+          .generateThreadTitle({
+            cwd: tempDataDir,
+            message: "hello",
+            linkedContext: "",
+            modelSelection: { instanceId: agyId, model: "gemini-test" },
+          })
+          .pipe(Effect.provideService(HostProcess.Environment, testEnv));
+        expect(fallbackResult).toEqual({ title: "Generated by dsh" });
+        expect(calls).toEqual([dshId]);
+
+        // Once the waiver is signed + Switch A enabled, direct AGY succeeds!
+        yield* fs.makeDirectory(path.dirname(waiverPath), { recursive: true });
+        yield* fs.writeFileString(
+          waiverPath,
+          JSON.stringify({
+            signed: true,
+            waiverVersion: "v3-2026",
+            signedAt: "2026-11-25T00:00:00.000Z",
+            allowAntigravityAsControlledAgent: true,
+            allowExternalSubscriptionAgentsInSwarm: false,
+          }),
+        );
+        const allowed = yield* agyOnly
+          .generateThreadTitle({
+            cwd: tempDataDir,
+            message: "hello",
+            linkedContext: "",
+            modelSelection: { instanceId: agyId, model: "gemini-test" },
+          })
+          .pipe(Effect.provideService(HostProcess.Environment, testEnv));
+        expect(allowed).toEqual({ title: "Generated by antigravity" });
+        expect(calls).toEqual([dshId, agyId]);
+      }),
   );
 });
 

@@ -17,6 +17,7 @@ import { Route as GuestRouteImport } from './routes/guest'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as ChatDiagnosticsRouteImport } from './routes/_chat.diagnostics'
 import { Route as ChatIssuesRouteImport } from './routes/_chat.issues'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatOvernightFactoryRouteImport } from './routes/_chat.overnight-factory'
@@ -104,6 +105,11 @@ const WelcomeRoute = WelcomeRouteImport.update({
 const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatDiagnosticsRoute = ChatDiagnosticsRouteImport.update({
+  id: '/diagnostics',
+  path: '/diagnostics',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatIssuesRoute = ChatIssuesRouteImport.update({
@@ -370,6 +376,7 @@ export interface FileRoutesByFullPath {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/diagnostics': typeof ChatDiagnosticsRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/overnight-factory': typeof ChatOvernightFactoryRoute
@@ -427,6 +434,7 @@ export interface FileRoutesByTo {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/diagnostics': typeof ChatDiagnosticsRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/overnight-factory': typeof ChatOvernightFactoryRoute
@@ -487,6 +495,7 @@ export interface FileRoutesById {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/_chat/diagnostics': typeof ChatDiagnosticsRoute
   '/_chat/issues': typeof ChatIssuesRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/overnight-factory': typeof ChatOvernightFactoryRoute
@@ -548,6 +557,7 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/diagnostics'
     | '/issues'
     | '/new'
     | '/overnight-factory'
@@ -605,6 +615,7 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/diagnostics'
     | '/issues'
     | '/new'
     | '/overnight-factory'
@@ -664,6 +675,7 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/_chat/diagnostics'
     | '/_chat/issues'
     | '/_chat/new'
     | '/_chat/overnight-factory'
@@ -784,6 +796,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof ChatIndexRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/diagnostics': {
+      id: '/_chat/diagnostics'
+      path: '/diagnostics'
+      fullPath: '/diagnostics'
+      preLoaderRoute: typeof ChatDiagnosticsRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/issues': {
@@ -1213,6 +1232,7 @@ const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(
 )
 
 interface ChatRouteChildren {
+  ChatDiagnosticsRoute: typeof ChatDiagnosticsRoute
   ChatIssuesRoute: typeof ChatIssuesRoute
   ChatNewRoute: typeof ChatNewRoute
   ChatOvernightFactoryRoute: typeof ChatOvernightFactoryRoute
@@ -1229,6 +1249,7 @@ interface ChatRouteChildren {
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
+  ChatDiagnosticsRoute: ChatDiagnosticsRoute,
   ChatIssuesRoute: ChatIssuesRoute,
   ChatNewRoute: ChatNewRoute,
   ChatOvernightFactoryRoute: ChatOvernightFactoryRoute,

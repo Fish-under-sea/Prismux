@@ -19,13 +19,8 @@ const APP_BUNDLE_ID = isDevelopment
   : "io.prismux.desktop";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["prismux-dev"] : ["prismux"];
 const LAUNCHER_VERSION = 20;
-const developmentMacIconPngPath = NodePath.join(
-  repoRoot,
-  "assets",
-  "dev",
-  "blueprint-macos-1024.png",
-);
-const productionMacIconPngPath = NodePath.join(repoRoot, "assets", "prod", "black-macos-1024.png");
+const developmentMacIconPngPath = NodePath.join(repoRoot, "assets", "prismux", "prismux-1024.png");
+const productionMacIconPngPath = NodePath.join(repoRoot, "assets", "prismux", "prismux-1024.png");
 // oxlint-disable-next-line prismux/no-global-process-runtime -- Standalone launcher script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
 

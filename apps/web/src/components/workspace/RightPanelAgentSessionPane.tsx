@@ -43,6 +43,7 @@ import {
   resolveAgentBrandId,
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
+import { LocalizedErrorCard } from "../../prismux/LocalizedErrorCard";
 import {
   providerInstanceEntriesFor,
   type ProviderInstanceEntry,
@@ -64,9 +65,11 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
 import { BackgroundThreadContext } from "../chat/backgroundThread";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { orderProviderInstanceEntries } from "../chat/ProviderModelPicker.logic";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { resolveProviderBrandIdForEntry } from "./workspaceQuickLaunch.logic";
 
 const ChatView = lazy(() => import("../ChatView"));
 
@@ -146,10 +149,9 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
       : [...environmentServerConfigs.values()][0];
     const providers = serverConfig?.providers ?? [];
     const settings = serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
-    const entries: ReadonlyArray<ProviderInstanceEntry> = providerInstanceEntriesFor(
-      providers,
-      settings,
-      resolvedProjectId,
+    const entries: ReadonlyArray<ProviderInstanceEntry> = orderProviderInstanceEntries(
+      providerInstanceEntriesFor(providers, settings, resolvedProjectId),
+      settings.providerOrder,
     );
     const optionsMap = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>();
     for (const entry of entries) {
@@ -164,21 +166,27 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
       if (exact) return exact;
     }
     const targetName = fallbackBrandName.toLowerCase();
+    const targetBrand = resolveAgentBrandId(surface.providerId || fallbackBrandName);
     return (
       instanceEntries.find(
         (entry) =>
           entry.enabled &&
-          resolveProviderEntryDisplayName(entry).toLowerCase() === targetName,
+          (resolveProviderEntryDisplayName(entry).toLowerCase() === targetName ||
+            (targetBrand !== "custom" &&
+              resolveAgentBrandId(resolveProviderBrandIdForEntry(entry)) === targetBrand)),
       ) ??
       instanceEntries.find((entry) => entry.enabled) ??
       instanceEntries[0] ??
       null
     );
-  }, [fallbackBrandName, instanceEntries, surface.instanceId]);
+  }, [fallbackBrandName, instanceEntries, surface.instanceId, surface.providerId]);
 
   const brandName = matchedEntry
     ? resolveProviderEntryDisplayName(matchedEntry)
     : fallbackBrandName;
+  const brandProviderId = matchedEntry
+    ? resolveProviderBrandIdForEntry(matchedEntry)
+    : surface.providerId || brandName;
 
   const activeInstanceId = matchedEntry?.instanceId ?? null;
   const activeModel =
@@ -188,9 +196,7 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
     DEFAULT_MODEL;
 
   const relatedThreads = useMemo(() => {
-    const targetBrandId = resolveAgentBrandId(
-      matchedEntry?.driverKind ?? surface.providerId ?? brandName,
-    );
+    const targetBrandId = resolveAgentBrandId(brandProviderId);
     const targetLower = brandName.toLowerCase();
     return [...visibleThreads]
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
@@ -202,12 +208,17 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
         ) {
           return false;
         }
-        const instanceId = thread.modelSelection?.instanceId ?? null;
+        const instanceId =
+          thread.runtime?.providerInstanceId ??
+          thread.modelSelection?.instanceId ??
+          thread.providerInstanceId ??
+          null;
         if (!instanceId) return false;
         if (matchedEntry && instanceId === matchedEntry.instanceId) return true;
         const entry = instanceEntries.find((candidate) => candidate.instanceId === instanceId);
         if (targetBrandId !== "custom") {
-          return resolveAgentBrandId(entry?.driverKind ?? instanceId) === targetBrandId;
+          const entryBrandSource = entry ? resolveProviderBrandIdForEntry(entry) : instanceId;
+          return resolveAgentBrandId(entryBrandSource) === targetBrandId;
         }
         const label = entry
           ? resolveProviderEntryDisplayName(entry)
@@ -215,7 +226,7 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
         return label.toLowerCase() === targetLower;
       })
       .slice(0, 3);
-  }, [brandName, hostThreadRef, instanceEntries, matchedEntry, surface.providerId, visibleThreads]);
+  }, [brandName, brandProviderId, hostThreadRef, instanceEntries, matchedEntry, visibleThreads]);
 
   const resolveProjectRefForCreation = async (): Promise<ScopedProjectRef | null> => {
     const firstOpen = projects.find((project) => project.archivedAt == null);
@@ -377,8 +388,10 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
       {/* Compact Right-Sidebar Session Action Strip */}
       <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border/50 px-2.5">
         <div className="flex min-w-0 items-center gap-1.5">
-          <AgentBrandLogo provider={surface.providerId || brandName} size={13} className="shrink-0" />
-          <span className="truncate text-xs font-medium text-foreground">{surface.title}</span>
+          <AgentBrandLogo provider={brandProviderId} size={13} className="shrink-0" />
+          <span className="truncate text-xs font-medium text-foreground">
+            {surface.environmentId && surface.threadId ? surface.title : brandName}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <Tooltip>
@@ -450,7 +463,7 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
           <div className="my-auto flex flex-col items-center gap-4 py-4">
             <div className="flex flex-col items-center gap-2 text-center">
               <div className="flex size-10 items-center justify-center rounded-xl border border-border/60 bg-muted/35 [[data-pmx-glass='1']_&]:border-white/20 [[data-pmx-glass='1']_&]:bg-white/10">
-                <AgentBrandLogo provider={surface.providerId || brandName} size={22} />
+                <AgentBrandLogo provider={brandProviderId} size={22} />
               </div>
               <div className="space-y-0.5">
                 <h3 className="text-sm font-semibold tracking-tight text-foreground">
@@ -496,9 +509,9 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
             {errorMessage ? (
               <div
                 role="alert"
-                className="rounded-lg border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive"
+                className="rounded-lg border border-destructive/40 bg-destructive/10 px-2.5 py-2"
               >
-                {errorMessage}
+                <LocalizedErrorCard error={errorMessage} providerName={brandName} compact />
               </div>
             ) : null}
             <div
@@ -538,7 +551,9 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
                           : brandName;
                         onUpdateSurface({
                           instanceId: nextInstanceId,
-                          providerId: nextEntry?.driverKind ?? surface.providerId,
+                          providerId: nextEntry
+                            ? resolveProviderBrandIdForEntry(nextEntry)
+                            : surface.providerId,
                           model: nextModel,
                           title: nextBrand,
                         });
@@ -546,7 +561,7 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
                     />
                   ) : (
                     <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <AgentBrandLogo provider={surface.providerId || brandName} size={12} />
+                      <AgentBrandLogo provider={brandProviderId} size={12} />
                       {brandName}
                     </span>
                   )}

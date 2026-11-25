@@ -1,4 +1,6 @@
 /* oxlint-disable prismux/no-untranslated-copy -- Prismux v3 spec mandates verbatim Chinese unified personal-subscription risk waiver copy */
+import { useAtomValue } from "@effect/atom-react";
+import type { ServerProvider } from "@prismux/core-contracts";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -8,13 +10,23 @@ import {
   ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState, type MouseEvent } from "react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Switch } from "../components/ui/switch";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { cn } from "../lib/utils";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderItemsByConfiguredProviderOrder,
+  orderProviderInstanceEntries,
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceOrderSettings,
+} from "../providerInstances";
+import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../state/server";
 import { AgentBrandLogo, formatAgentBrandName } from "./agentBrand";
 import { prismuxDaemonClient, type PrismuxDaemonClient } from "./daemonClient";
 
@@ -22,7 +34,13 @@ export const SUBSCRIPTION_WAIVER_ENDPOINT = "/v1/security/subscription-waiver" a
 export const PROVIDERS_PROBE_ENDPOINT = "/v1/providers/probe" as const;
 export const SUBSCRIPTION_WAIVER_VERSION = "v3-unified-2026" as const;
 export const SUBSCRIPTION_WAIVER_ANCHOR_ID = "subscription-risk-waiver" as const;
+export const SUBSCRIPTION_WAIVER_ROUTE = "/settings/providers#subscription-risk-waiver" as const;
 export const LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID = "antigravity-controlled-lock" as const;
+export const SUBSCRIPTION_WAIVER_CHANGE_EVENT = "prismux:subscription-waiver-change" as const;
+export const UNIFORM_API_CUSTOM_AUTH_LABEL = "API / 自定义端点注入（已放行）" as const;
+export const AGY_WAIVER_REQUIRED_BADGE_TEXT = "需签署免责" as const;
+export const AGY_UNATTENDED_FORBIDDEN_BADGE_TEXT = "无人值守禁止个人 AGY · 查看合规" as const;
+export const AGY_TEXT_GEN_WAIVER_PILL_TEXT = "Antigravity 需签署免责 →" as const;
 
 export type ProviderProbeAuthMode =
   | "api_or_custom"
@@ -61,11 +79,145 @@ export interface SubscriptionWaiverState {
   readonly defaultLocked: true;
 }
 
+export interface ProviderComplianceBlock {
+  readonly badgeText: string;
+  readonly tooltip?: string | undefined;
+  readonly onOpenWaiver: () => void;
+}
+
+export interface AntigravityProviderLikeInput {
+  readonly driverKind?: string | null | undefined;
+  readonly instanceId?: string | null | undefined;
+  readonly acpRegistryAgentId?: string | null | undefined;
+}
+
+export interface AgyWaiverRequiredBadgeProps {
+  readonly label?: string | undefined;
+  readonly title?: string | undefined;
+  readonly onClick?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
+  readonly className?: string | undefined;
+  readonly size?: "xs" | "sm" | undefined;
+  readonly variant?: "inline" | "overlay" | undefined;
+  readonly interactive?: boolean | undefined;
+}
+
+export function isAntigravityProviderLike(raw: string | null | undefined): boolean {
+  if (typeof raw !== "string") return false;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized === "antigravity" ||
+    normalized === "agy" ||
+    normalized.startsWith("antigravity") ||
+    normalized.startsWith("agy-") ||
+    normalized.startsWith("agy_") ||
+    normalized.startsWith("agy:") ||
+    /(?:^|[:/_\-\s(])(?:antigravity|agy)(?:$|[:/_\-\s)])/.test(normalized)
+  );
+}
+
+export function isAntigravityProviderInstance(
+  entry: AntigravityProviderLikeInput | null | undefined,
+): boolean {
+  if (!entry) return false;
+  return (
+    isAntigravityProviderLike(entry.driverKind) ||
+    isAntigravityProviderLike(entry.instanceId) ||
+    isAntigravityProviderLike(entry.acpRegistryAgentId)
+  );
+}
+
+export function resolveAntigravityComplianceBlock(input: {
+  readonly entry: AntigravityProviderLikeInput | null | undefined;
+  readonly waiver: Pick<SubscriptionWaiverState, "signed" | "allowAntigravityAsControlledAgent">;
+  readonly mode: "controlled" | "unattended";
+  readonly onOpenWaiver: () => void;
+}): ProviderComplianceBlock | null {
+  if (!isAntigravityProviderInstance(input.entry)) {
+    return null;
+  }
+  if (input.mode === "unattended") {
+    const signed = input.waiver.signed === true;
+    return {
+      badgeText: signed ? AGY_UNATTENDED_FORBIDDEN_BADGE_TEXT : AGY_WAIVER_REQUIRED_BADGE_TEXT,
+      tooltip: signed
+        ? "无人值守 / 定时任务永久禁止自动唤醒个人版 Antigravity：点击查看合规设置"
+        : "需签署免责：点击前往签署个人订阅风险免责协议（且定时任务永久禁止个人版 AGY）",
+      onOpenWaiver: input.onOpenWaiver,
+    };
+  }
+  if (isAntigravityControlledAutomationAllowed(input.waiver)) {
+    return null;
+  }
+  return {
+    badgeText: AGY_WAIVER_REQUIRED_BADGE_TEXT,
+    tooltip: "需签署免责：点击前往签署个人订阅风险免责协议",
+    onOpenWaiver: input.onOpenWaiver,
+  };
+}
+
+export function AgyWaiverRequiredBadge({
+  label = AGY_WAIVER_REQUIRED_BADGE_TEXT,
+  title = "需签署免责：点击前往签署个人订阅风险免责协议",
+  onClick,
+  className,
+  size = "xs",
+  variant = "inline",
+  interactive = true,
+}: AgyWaiverRequiredBadgeProps) {
+  const sharedClassName = cn(
+    "inline-flex shrink-0 items-center gap-1 rounded-md border font-semibold leading-tight text-destructive transition-colors",
+    variant === "overlay"
+      ? "border-destructive bg-background/95 shadow-xs hover:bg-destructive/10"
+      : "border-destructive/90 bg-destructive/10 hover:bg-destructive/18",
+    size === "sm" ? "px-2 py-0.5 text-xs" : "px-1.5 py-0.5 text-2xs",
+    interactive &&
+      "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive/40",
+    className,
+  );
+
+  if (!interactive) {
+    return (
+      <span
+        data-pmx-agy-waiver-badge="true"
+        aria-label={title}
+        className={sharedClassName}
+      >
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      data-pmx-agy-waiver-badge="true"
+      aria-label={title}
+      className={sharedClassName}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+      }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick?.(event);
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 export interface SubscriptionRiskWaiverSectionProps {
   readonly daemon?: Pick<PrismuxDaemonClient, "requestJson">;
   readonly readOnly?: boolean;
   readonly className?: string;
   readonly onWaiverChange?: (state: SubscriptionWaiverState) => void;
+  readonly serverProvidersOverride?: ReadonlyArray<ServerProvider>;
+  readonly settingsOverride?: ProviderInstanceOrderSettings | null;
 }
 
 const DEFAULT_WAIVER_STATE: SubscriptionWaiverState = {
@@ -76,6 +228,99 @@ const DEFAULT_WAIVER_STATE: SubscriptionWaiverState = {
   allowExternalSubscriptionAgentsInSwarm: false,
   defaultLocked: true,
 };
+
+type WaiverStateListener = (state: SubscriptionWaiverState) => void;
+const waiverStateListeners = new Set<WaiverStateListener>();
+let cachedWaiverState: SubscriptionWaiverState = DEFAULT_WAIVER_STATE;
+
+export function isAntigravityControlledAutomationAllowed(
+  waiver:
+    | Pick<SubscriptionWaiverState, "signed" | "allowAntigravityAsControlledAgent">
+    | null
+    | undefined,
+): boolean {
+  return waiver?.signed === true && waiver.allowAntigravityAsControlledAgent === true;
+}
+
+export function getCachedSubscriptionWaiverState(): SubscriptionWaiverState {
+  return cachedWaiverState;
+}
+
+export function publishSubscriptionWaiverState(next: SubscriptionWaiverState): void {
+  const normalized = normalizeSubscriptionWaiverResponse(next);
+  cachedWaiverState = normalized;
+  for (const listener of waiverStateListeners) {
+    listener(normalized);
+  }
+  if (
+    typeof window !== "undefined" &&
+    typeof window.dispatchEvent === "function" &&
+    typeof CustomEvent === "function"
+  ) {
+    window.dispatchEvent(
+      new CustomEvent<SubscriptionWaiverState>(SUBSCRIPTION_WAIVER_CHANGE_EVENT, {
+        detail: normalized,
+      }),
+    );
+  }
+}
+
+export function subscribeSubscriptionWaiverState(listener: WaiverStateListener): () => void {
+  waiverStateListeners.add(listener);
+  return () => {
+    waiverStateListeners.delete(listener);
+  };
+}
+
+export function resetSubscriptionWaiverStateCache(): void {
+  cachedWaiverState = DEFAULT_WAIVER_STATE;
+}
+
+export function useSubscriptionWaiverState(
+  daemon: Pick<PrismuxDaemonClient, "requestJson"> = prismuxDaemonClient,
+): SubscriptionWaiverState {
+  const [waiver, setWaiver] = useState<SubscriptionWaiverState>(cachedWaiverState);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to local waiver updates and fetches live waiver policy from local daemon
+  useEffect(() => {
+    let active = true;
+    const unsubscribe = subscribeSubscriptionWaiverState((next) => {
+      if (active) setWaiver(next);
+    });
+    const handleWindowWaiverChange = (event: Event) => {
+      if (!active) return;
+      const detail = (event as CustomEvent<unknown>).detail;
+      const normalized = normalizeSubscriptionWaiverResponse(detail);
+      cachedWaiverState = normalized;
+      setWaiver(normalized);
+    };
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener(SUBSCRIPTION_WAIVER_CHANGE_EVENT, handleWindowWaiverChange);
+    }
+
+    void daemon
+      .requestJson<SubscriptionWaiverState>(SUBSCRIPTION_WAIVER_ENDPOINT)
+      .then((response) => {
+        if (!active) return;
+        const normalized = normalizeSubscriptionWaiverResponse(response);
+        cachedWaiverState = normalized;
+        setWaiver(normalized);
+      })
+      .catch(() => {
+        // Keep safe default locked state if daemon is temporarily unavailable.
+      });
+
+    return () => {
+      active = false;
+      unsubscribe();
+      if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+        window.removeEventListener(SUBSCRIPTION_WAIVER_CHANGE_EVENT, handleWindowWaiverChange);
+      }
+    };
+  }, [daemon]);
+
+  return waiver;
+}
 
 export function normalizeSubscriptionWaiverResponse(raw: unknown): SubscriptionWaiverState {
   if (typeof raw !== "object" || raw === null) {
@@ -145,10 +390,10 @@ function normalizeProbeResponse(raw: unknown): ReadonlyArray<ProviderProbeSnapsh
         ? entry.endpoint.trim()
         : null,
       authLabel:
-        typeof entry.authLabel === "string" && entry.authLabel.trim().length > 0
-          ? entry.authLabel.trim()
-          : authMode === "api_or_custom"
-            ? "API / 自定义端点注入（已放行）"
+        authMode === "api_or_custom"
+          ? UNIFORM_API_CUSTOM_AUTH_LABEL
+          : typeof entry.authLabel === "string" && entry.authLabel.trim().length > 0
+            ? entry.authLabel.trim()
             : authMode === "local"
               ? "本地运行时（已放行）"
               : authMode === "subscription_oauth"
@@ -165,7 +410,24 @@ export function SubscriptionRiskWaiverSection({
   readOnly = false,
   className,
   onWaiverChange,
+  serverProvidersOverride,
+  settingsOverride,
 }: SubscriptionRiskWaiverSectionProps) {
+  const liveServerProviders = useAtomValue(primaryServerProvidersAtom);
+  const liveServerSettings = useAtomValue(primaryServerSettingsAtom);
+  const effectiveProviders = serverProvidersOverride ?? liveServerProviders;
+  const effectiveSettings =
+    settingsOverride !== undefined ? settingsOverride : liveServerSettings;
+  const configuredEntries = useMemo(() => {
+    const derived = deriveProviderInstanceEntries(effectiveProviders);
+    const branded = effectiveSettings
+      ? brandProviderInstanceEntries(derived, effectiveSettings)
+      : derived;
+    return disambiguateProviderInstanceDisplayNames(
+      orderProviderInstanceEntries(branded, effectiveSettings?.providerOrder),
+    );
+  }, [effectiveProviders, effectiveSettings]);
+
   const [waiver, setWaiver] = useState<SubscriptionWaiverState>(DEFAULT_WAIVER_STATE);
   const [probes, setProbes] = useState<ReadonlyArray<ProviderProbeSnapshot>>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -202,6 +464,7 @@ export function SubscriptionRiskWaiverSection({
         if (!active) return;
         const normalized = normalizeSubscriptionWaiverResponse(response);
         setWaiver(normalized);
+        publishSubscriptionWaiverState(normalized);
         onWaiverChange?.(normalized);
       })
       .catch(() => {
@@ -280,6 +543,7 @@ export function SubscriptionRiskWaiverSection({
       setWaiver(normalized);
       setModalOpen(false);
       setWaiverChecked(false);
+      publishSubscriptionWaiverState(normalized);
       onWaiverChange?.(normalized);
     } catch (error) {
       setErrorMessage(
@@ -305,6 +569,7 @@ export function SubscriptionRiskWaiverSection({
       setWaiver(normalized);
       setModalOpen(false);
       setWaiverChecked(false);
+      publishSubscriptionWaiverState(normalized);
       onWaiverChange?.(normalized);
     } catch (error) {
       setErrorMessage(
@@ -334,6 +599,7 @@ export function SubscriptionRiskWaiverSection({
       );
       const normalized = normalizeSubscriptionWaiverResponse(response);
       setWaiver(normalized);
+      publishSubscriptionWaiverState(normalized);
       onWaiverChange?.(normalized);
     } catch (error) {
       setErrorMessage(
@@ -349,7 +615,16 @@ export function SubscriptionRiskWaiverSection({
     isSigned &&
     (waiver.allowAntigravityAsControlledAgent || waiver.allowExternalSubscriptionAgentsInSwarm);
   const switchesDisabled = !isSigned || readOnly || saving || loading;
-  const visibleProbes = probes.filter((entry) => entry.installed || entry.status !== "not_installed");
+  const visibleProbes = useMemo(
+    () =>
+      orderItemsByConfiguredProviderOrder(
+        probes.filter((entry) => entry.installed || entry.status !== "not_installed"),
+        (entry) => entry.providerId,
+        configuredEntries,
+        effectiveSettings?.providerOrder,
+      ),
+    [configuredEntries, effectiveSettings?.providerOrder, probes],
+  );
 
   return (
     <section
@@ -495,7 +770,11 @@ export function SubscriptionRiskWaiverSection({
                 >
                   <AgentBrandLogo provider={entry.providerId} size={13} />
                   <span className="font-medium text-foreground">
-                    {formatAgentBrandName(entry.providerId, entry.displayName)}
+                    {resolveConfiguredProviderLabel(
+                      entry.providerId,
+                      configuredEntries,
+                      entry.displayName,
+                    )}
                   </span>
                   <Badge
                     variant={isAllowedMode ? "success" : isSubscriptionMode ? "warning" : "secondary"}

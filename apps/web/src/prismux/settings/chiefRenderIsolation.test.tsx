@@ -10,11 +10,13 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+const mockNavigate = vi.fn(() => Promise.resolve());
+
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, ...props }: { children?: unknown; [key: string]: unknown }) => (
     <a {...props}>{children as never}</a>
   ),
-  useNavigate: () => () => Promise.resolve(),
+  useNavigate: () => mockNavigate,
   useLocation: (opts?: {
     select?: (loc: { hash: string; pathname: string; state: Record<string, unknown> }) => unknown;
   }) => {
@@ -83,8 +85,18 @@ vi.mock("../../components/ui/select", () => ({
   ),
   SelectValue: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   SelectPopup: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  SelectItem: ({ value, children }: { value: string; children?: ReactNode }) => (
-    <div data-mock-select-item={value}>{children}</div>
+  SelectItem: ({
+    value,
+    children,
+    ...props
+  }: {
+    value: string;
+    children?: ReactNode;
+    [key: string]: unknown;
+  }) => (
+    <div data-mock-select-item={value} {...props}>
+      {children}
+    </div>
   ),
 }));
 
@@ -106,6 +118,7 @@ vi.mock("../../components/ui/switch", () => ({
   },
 }));
 
+import { resetSubscriptionWaiverStateCache } from "../SubscriptionRiskWaiverSection";
 import { ChiefIdentityAndAgentsMdSection } from "./ChiefIdentityAndAgentsMdSection";
 import { ObsidianAgentImportCard } from "./ObsidianAgentImportCard";
 import { PrismuxMemoryEngineSection } from "./PrismuxMemoryEngineSection";
@@ -444,6 +457,8 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     selectHandlers.clear();
     syncSwitchHandlers.clear();
     effortSliderHandler = null;
+    mockNavigate.mockClear();
+    resetSubscriptionWaiverStateCache();
     dom = installMinimalDom();
   });
 
@@ -487,9 +502,27 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
           { slug: "claude-opus-4-6", name: "Claude Opus 4.6", isCustom: false } as ServerProvider["models"][number],
         ],
       }),
+      makeMockProvider({
+        instanceId: "acpRegistry_dsh",
+        driver: "acpRegistry",
+        displayName: "DeepSeek Harness",
+        models: [
+          { slug: "deepseek-v4-pro", name: "DeepSeek V4 Pro", isCustom: false } as ServerProvider["models"][number],
+        ],
+      }),
     ];
 
     const requestJson = vi.fn(async (endpoint: string) => {
+      if (endpoint === "/v1/security/subscription-waiver") {
+        return {
+          signed: false,
+          waiverVersion: null,
+          signedAt: null,
+          allowAntigravityAsControlledAgent: false,
+          allowExternalSubscriptionAgentsInSwarm: false,
+          defaultLocked: true,
+        };
+      }
       if (endpoint === "/v1/chief") {
         return {
           ok: true,
@@ -593,9 +626,49 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     expect(container.querySelector("[data-pmx-chief-effort-slider]")).not.toBeNull();
     expect(typeof effortSliderHandler).toBe("function");
 
-    // 1. Switch Provider: Codex -> Antigravity
+    // 0. Selecting unsigned Antigravity is blocked, keeps Codex selected, renders red 需签署免责 badge, and navigates to waiver
+    const blockedAgyOption = container.querySelector('[data-pmx-chief-provider-blocked="antigravity"]');
+    expect(blockedAgyOption).not.toBeNull();
+    expect(blockedAgyOption?.getAttribute("aria-disabled")).toBe("true");
+    expect(blockedAgyOption?.textContent).toContain("需签署免责");
     await act(async () => {
       selectHandlers.get("provider")?.("antigravity");
+    });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: "/settings/providers",
+      hash: "subscription-risk-waiver",
+    });
+    expect(container.querySelector("[data-pmx-chief-provider-select]")?.textContent).toContain(
+      "Codex",
+    );
+    expect(renderCounts.identityAgentsMd).toBe(baseline.identityAgentsMd);
+    expect(renderCounts.memory).toBe(baseline.memory);
+    expect(renderCounts.obsidian).toBe(baseline.obsidian);
+    expect(renderCounts.sync).toBe(baseline.sync);
+
+    // Clicking the blocked Antigravity option directly also routes straight to the waiver section
+    mockNavigate.mockClear();
+    const blockedPropsKey = Object.keys(blockedAgyOption as unknown as Record<string, unknown>).find(
+      (key) => key.startsWith("__reactProps$"),
+    );
+    const blockedOnClick = blockedPropsKey
+      ? (
+          (blockedAgyOption as unknown as Record<string, unknown>)[blockedPropsKey] as
+            | { onClick?: (event: { preventDefault: () => void; stopPropagation: () => void }) => void }
+            | undefined
+        )?.onClick
+      : undefined;
+    await act(async () => {
+      blockedOnClick?.({ preventDefault: () => {}, stopPropagation: () => {} });
+    });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: "/settings/providers",
+      hash: "subscription-risk-waiver",
+    });
+
+    // 1. Switch Provider: Codex -> DeepSeek Harness (canonical dsh)
+    await act(async () => {
+      selectHandlers.get("provider")?.("dsh");
     });
 
     expect(renderCounts.chiefSlot).toBeGreaterThan(baseline.chiefSlot);
@@ -605,13 +678,13 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     expect(renderCounts.sync).toBe(baseline.sync);
     expect(requestJson.mock.calls.length).toBe(baselineRequests);
     expect(container.querySelector("[data-pmx-chief-provider-select]")?.textContent).toContain(
-      "Antigravity",
+      "DeepSeek Harness",
     );
 
-    // 2. Switch Model: default -> Gemini 4 Hydrogen
+    // 2. Switch Model: default -> DeepSeek V4 Pro
     const afterProviderChiefRenders = renderCounts.chiefSlot;
     await act(async () => {
-      selectHandlers.get("model")?.("gemini-4-hydrogen");
+      selectHandlers.get("model")?.("deepseek-v4-pro");
     });
 
     expect(renderCounts.chiefSlot).toBeGreaterThan(afterProviderChiefRenders);
@@ -621,7 +694,7 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     expect(renderCounts.sync).toBe(baseline.sync);
     expect(requestJson.mock.calls.length).toBe(baselineRequests);
     expect(container.querySelector("[data-pmx-chief-model-select]")?.textContent).toContain(
-      "Gemini 4 Hydrogen",
+      "DeepSeek V4 Pro",
     );
 
     // 3. Switch Effort via single reasoning slider: high -> max

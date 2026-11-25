@@ -1,19 +1,23 @@
 import { managedRuntimeModeDenial } from "@prismux/client-runtime/contract-labels";
 import {
+  DEFAULT_REASONING_EFFORT_LEVELS,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
+  type ReasoningEffortLevel,
   type WorktreeSubmodules,
 } from "@prismux/core-contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@prismux/core-contracts/settings";
 import { createModelSelection, pickModelSelection } from "@prismux/core-shared/model";
 import { resolvePastedPath } from "@prismux/core-shared/path";
 import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
+import { GaugeIcon } from "lucide-react";
 import { type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
 
 import { useClientSettings } from "../../hooks/useSettings";
 import {
+  applyDefaultReasoningEffortToSelection,
   defaultModelSelectionsAreMixed,
   getCustomModelOptionsByInstance,
 } from "../../modelSelection";
@@ -53,6 +57,19 @@ import {
 const WORKTREE_SUBMODULES_OPTIONS = ["recursive", "top-level", "none"] as const;
 function isWorktreeSubmodules(value: string | null): value is WorktreeSubmodules {
   return value !== null && (WORKTREE_SUBMODULES_OPTIONS as readonly string[]).includes(value);
+}
+
+const REASONING_EFFORT_LABELS: Readonly<Record<ReasoningEffortLevel, string>> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  max: "Max",
+};
+
+function isReasoningEffortLevel(value: string | null): value is ReasoningEffortLevel {
+  return (
+    value !== null && (DEFAULT_REASONING_EFFORT_LEVELS as readonly string[]).includes(value)
+  );
 }
 
 export type ProjectDefaultsSettingsCategory = ProjectSettingsCategory | "models";
@@ -115,7 +132,14 @@ export function ProjectDefaultsSettings({
     targets.length > 0 &&
     targets.every((candidate) => candidate.settings.defaultModelSelection === null);
   const mixedFallback = useScopedSettingsMixed(["fallbackModelSelection"]);
-  const fallbackSelection = settings.fallbackModelSelection ?? selection;
+  const rawFallbackSelection = settings.fallbackModelSelection ?? selection;
+  const fallbackSelection = rawFallbackSelection
+    ? applyDefaultReasoningEffortToSelection(
+        rawFallbackSelection,
+        providers,
+        settings.defaultReasoningEffort,
+      )
+    : null;
   const fallbackEntry = entries.find((entry) => entry.instanceId === fallbackSelection?.instanceId);
   const fallbackModelOptions = getCustomModelOptionsByInstance(
     settings,
@@ -123,6 +147,7 @@ export function ProjectDefaultsSettings({
     fallbackSelection?.instanceId,
     fallbackSelection?.model,
   );
+  const mixedDefaultReasoningEffort = useScopedSettingsMixed(["defaultReasoningEffort"]);
   const mixedPermissions = useScopedSettingsMixed(["defaultRuntimeMode"]);
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
@@ -195,6 +220,7 @@ export function ProjectDefaultsSettings({
               lockedProvider={null}
               instanceEntries={entries}
               modelOptionsByInstance={modelOptions}
+              displayFullModelName
               triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
               {...(mixedModel
                 ? {
@@ -230,7 +256,7 @@ export function ProjectDefaultsSettings({
             ) : null}
           </div>
         ) : (
-          <span className="text-sm text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             {mixedModel
               ? gt("Mixed", { $context: "values differ across targets" })
               : gt("No providers available")}
@@ -312,6 +338,7 @@ export function ProjectDefaultsSettings({
               lockedProvider={null}
               instanceEntries={entries}
               modelOptionsByInstance={fallbackModelOptions}
+              displayFullModelName
               triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
               triggerAriaLabel={gt("Fallback model")}
               {...(mixedFallback
@@ -360,13 +387,79 @@ export function ProjectDefaultsSettings({
             ) : null}
           </div>
         ) : (
-          <span className="text-sm text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             <T>No providers available</T>
           </span>
         )
       }
     />
   ) : null;
+
+  const defaultReasoningEffortRow = (
+    <SettingsRow
+      serverScoped
+      settingKeys={["defaultReasoningEffort"]}
+      mixed={mixedDefaultReasoningEffort}
+      {...searchableSetting("default-reasoning-effort")}
+      description={
+        isProjectScope
+          ? gt(
+              "Default reasoning effort for models without an explicit override in this project. Automatically maps to each model's closest supported level.",
+            )
+          : gt(
+              "Default reasoning effort for models without an explicit override. Automatically maps to each model's closest supported level.",
+            )
+      }
+      resetAction={
+        settings.defaultReasoningEffort !== DEFAULT_SERVER_SETTINGS.defaultReasoningEffort ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset default reasoning effort to default")}
+            onClick={() =>
+              updateSettings({
+                defaultReasoningEffort: DEFAULT_SERVER_SETTINGS.defaultReasoningEffort,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Select
+          value={mixedDefaultReasoningEffort ? null : settings.defaultReasoningEffort}
+          onValueChange={(value) => {
+            if (isReasoningEffortLevel(value)) {
+              updateSettings({ defaultReasoningEffort: value });
+            }
+          }}
+        >
+          <SelectTrigger
+            size="sm"
+            className="w-full sm:w-48"
+            aria-label={gt("Default reasoning effort")}
+          >
+            {!mixedDefaultReasoningEffort ? (
+              <GaugeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : null}
+            <SelectValue>
+              {(value: string | null) =>
+                isReasoningEffortLevel(value)
+                  ? REASONING_EFFORT_LABELS[value]
+                  : unavailable
+                    ? gt("Unavailable", { $context: "setting value cannot be read" })
+                    : gt("Mixed", { $context: "values differ across targets" })
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {DEFAULT_REASONING_EFFORT_LEVELS.map((level) => (
+              <SelectItem hideIndicator key={level} value={level}>
+                {REASONING_EFFORT_LABELS[level]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
 
   return (
     <SettingsSection
@@ -391,11 +484,13 @@ export function ProjectDefaultsSettings({
         <>
           {modelRow}
           {fallbackRow}
+          {defaultReasoningEffortRow}
         </>
       ) : category === "project" ? (
         <>
           {modelRow}
           {fallbackRow}
+          {defaultReasoningEffortRow}
           {workspaceRow}
         </>
       ) : category === "general" ? (
@@ -457,11 +552,11 @@ export function ProjectDefaultsSettings({
                         className="min-w-64"
                       >
                         <div className="grid gap-0.5">
-                          <span className="inline-flex items-center gap-1.5 font-medium">
+                          <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
                             <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                             {m(option.label)}
                           </span>
-                          <span className="text-xs leading-4 text-muted-foreground">
+                          <span className="text-[11.5px] font-normal leading-[1.45] text-muted-foreground">
                             {managedReason ?? m(option.description)}
                           </span>
                         </div>

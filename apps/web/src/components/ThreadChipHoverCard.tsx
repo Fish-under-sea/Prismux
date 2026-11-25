@@ -1,11 +1,21 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@prismux/client-runtime/state/models";
 import { resolveProviderInstanceDisplayName } from "@prismux/client-runtime/state/provider-instance-display";
+import type { ServerSettings } from "@prismux/core-contracts";
+import { Atom } from "effect/reactivity";
 import { CircleAlertIcon, GitBranchIcon } from "lucide-react";
 import { useGT } from "gt-react";
 
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
+import { resolveProviderEntryDisplayName } from "~/prismux/agentBrand";
+import {
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  providerInstanceEntriesFor,
+} from "~/providerInstances";
 import type { useProject } from "~/state/entities";
 import { useEnvironmentProviders } from "~/state/environments";
+import { serverEnvironment } from "~/state/server";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
@@ -14,6 +24,8 @@ import { ThreadPullRequestsMiniList } from "./ThreadStatusIndicators";
 import { MiddleTruncate } from "./ui/middle-truncate";
 
 type ChipProject = NonNullable<ReturnType<typeof useProject>>;
+
+const noThreadChipServerSettingsAtom = Atom.make<ServerSettings | null>(null);
 
 export function ThreadChipHoverCard(props: {
   title: string;
@@ -24,16 +36,25 @@ export function ThreadChipHoverCard(props: {
   const gt = useGT();
   const { shell } = props;
   const providers = useEnvironmentProviders();
+  const settings = useAtomValue(
+    shell ? serverEnvironment.settingsValueAtom(shell.environmentId) : noThreadChipServerSettingsAtom,
+  );
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(
     shell?.environmentId ?? null,
   );
   const instanceId = shell
     ? (shell.runtime?.providerInstanceId ?? shell.modelSelection.instanceId)
     : null;
+  const envProviders = shell ? (providers.get(shell.environmentId) ?? []) : [];
+  const providerEntries = settings
+    ? providerInstanceEntriesFor(envProviders, settings, shell?.projectId ?? null)
+    : disambiguateProviderInstanceDisplayNames(deriveProviderInstanceEntries(envProviders));
+  const providerEntry = instanceId
+    ? (providerEntries.find((entry) => entry.instanceId === instanceId) ?? null)
+    : null;
   const provider =
     shell && instanceId
-      ? (providers.get(shell.environmentId)?.find((entry) => entry.instanceId === instanceId) ??
-        null)
+      ? (envProviders.find((entry) => entry.instanceId === instanceId) ?? null)
       : null;
   const model = shell
     ? provider?.models.find((entry) => entry.slug === shell.modelSelection.model)
@@ -41,6 +62,11 @@ export function ThreadChipHoverCard(props: {
   const modelLabel = model
     ? getTriggerDisplayModelName(model, provider?.driver)
     : shell?.modelSelection.model.trim();
+  const providerDisplayName = providerEntry
+    ? resolveProviderEntryDisplayName(providerEntry)
+    : provider
+      ? resolveProviderInstanceDisplayName(provider)
+      : "";
   return (
     <ThreadHoverCard
       title={props.title}
@@ -67,9 +93,12 @@ export function ThreadChipHoverCard(props: {
       {provider && modelLabel ? (
         <div className="flex min-w-0 items-center gap-2">
           <ProviderInstanceIcon
-            driverKind={provider.driver}
-            displayName={resolveProviderInstanceDisplayName(provider)}
-            acpRegistryIconUrl={provider.iconUrl}
+            driverKind={providerEntry?.driverKind ?? provider.driver}
+            displayName={providerDisplayName}
+            instanceId={providerEntry?.instanceId ?? provider.instanceId}
+            accentColor={providerEntry?.accentColor}
+            acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
+            acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl ?? provider.iconUrl}
             iconClassName="size-3 shrink-0 opacity-60"
           />
           <div className="min-w-0 truncate text-foreground/75">{modelLabel}</div>

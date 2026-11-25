@@ -19,6 +19,7 @@ import {
   type EffortDisplay,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+  ReasoningTranslationProvider,
   type ResponseStreamingMode,
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
@@ -55,8 +56,19 @@ import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state
 import {
   getTextGenerationModelOptionsByInstance,
   resolveAppModelSelectionState,
+  resolveTextGenerationProviders,
   selectsPlanAgent,
 } from "../../modelSelection";
+import {
+  AGY_TEXT_GEN_WAIVER_PILL_TEXT,
+  AgyWaiverRequiredBadge,
+  SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  isAntigravityControlledAutomationAllowed,
+  isAntigravityProviderLike,
+  resolveAntigravityComplianceBlock,
+  useSubscriptionWaiverState,
+} from "../../prismux/SubscriptionRiskWaiverSection";
+import type { ProviderInstanceEntry } from "../../providerInstances";
 import { useTextGenerationTargets } from "../../textGenerators";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
@@ -102,12 +114,20 @@ import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
 import { DiagnosticsSettingsSections } from "./DiagnosticsSettings";
-import { PrismuxDiagnosticsSection } from "../../prismux/settings/PrismuxDiagnosticsSection";
 import { PrismuxUpdatesSettingsPage } from "../../prismux/settings/PrismuxUpdatesSettingsPage";
 
 const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
   label: msg("Word", { $context: "show effort as a word" }),
   bars: msg("Bars", { $context: "show effort as bars" }),
+};
+
+const REASONING_TRANSLATION_PROVIDER_LABELS: Record<ReasoningTranslationProvider, string> = {
+  off: msg("Off (keep original)", { $context: "reasoning translation provider" }),
+  bing: msg("Bing Translate (no key)", { $context: "reasoning translation provider" }),
+  google: msg("Google Translate (no key)", { $context: "reasoning translation provider" }),
+  text_model: msg("Designated text generation model", {
+    $context: "reasoning translation provider",
+  }),
 };
 
 const WORK_STEPS_DISPLAY_LABELS: Record<WorkStepsDisplay, string> = {
@@ -130,6 +150,7 @@ const COLLAPSED_ASSISTANT_REPLY_MODE_LABELS: Record<CollapsedAssistantReplyMode,
 const isWorkStepsDisplay = Schema.is(WorkStepsDisplay);
 const isWorkStepsCollapseTiming = Schema.is(WorkStepsCollapseTiming);
 const isCollapsedAssistantReplyMode = Schema.is(CollapsedAssistantReplyMode);
+const isReasoningTranslationProvider = Schema.is(ReasoningTranslationProvider);
 
 export const CHAT_TAB_IDS = {
   composer: "composer",
@@ -154,6 +175,7 @@ export const CHAT_TAB_HASH_ANCHORS = {
     "work-steps-collapse-timing",
     "collapsed-assistant-reply-mode",
     "effort-display",
+    "reasoning-translation",
     "math-rendering",
     "thread-details-items",
     "response-streaming",
@@ -184,7 +206,6 @@ export const CHAT_TAB_HASH_ANCHORS = {
 
 export const MAINTENANCE_TAB_IDS = {
   runtime: "runtime",
-  diagnostics: "diagnostics",
   telemetry: "telemetry",
 } as const;
 
@@ -198,7 +219,6 @@ export const MAINTENANCE_TAB_HASH_ANCHORS = {
     "storage-artifacts",
     "storage-delete-now",
   ] as const,
-  diagnostics: ["diagnostics", "prismux-diagnostics"] as const,
   telemetry: ["telemetry-export", "processes"] as const,
 } as const;
 
@@ -271,6 +291,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.effortDisplay !== DEFAULT_UNIFIED_SETTINGS.effortDisplay
       ? [gt("Effort display")]
+      : []),
+    ...(settings.reasoningTranslationProvider !==
+    DEFAULT_UNIFIED_SETTINGS.reasoningTranslationProvider
+      ? [gt("Reasoning translation")]
       : []),
     ...(settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled
       ? [gt("Render math")]
@@ -408,6 +432,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? [gt("Quit shortcut")] : []),
     ...(isTextGenerationModelDirty ? [gt("Text generation model")] : []),
+    ...(settings.defaultReasoningEffort !== DEFAULT_UNIFIED_SETTINGS.defaultReasoningEffort
+      ? [gt("Default reasoning effort")]
+      : []),
     ...(settings.threadTitleInstructions !== DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions
       ? [gt("Thread title instructions")]
       : []),
@@ -472,6 +499,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
+      reasoningTranslationProvider: DEFAULT_UNIFIED_SETTINGS.reasoningTranslationProvider,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
       workStepsDisplay: DEFAULT_UNIFIED_SETTINGS.workStepsDisplay,
       workStepsCollapseTiming: DEFAULT_UNIFIED_SETTINGS.workStepsCollapseTiming,
@@ -523,6 +551,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+      defaultReasoningEffort: DEFAULT_UNIFIED_SETTINGS.defaultReasoningEffort,
       threadTitleInstructions: DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
@@ -1386,6 +1415,78 @@ export function ChatSettingsPanel() {
               }
             />
             <SettingsRow
+              {...setting("reasoning-translation")}
+              description={
+                settings.reasoningTranslationProvider === "off" ? (
+                  gt(
+                    "Enable real-time Chinese translation of model reasoning. Click 'View original' anytime to switch back.",
+                  )
+                ) : settings.reasoningTranslationProvider === "text_model" ? (
+                  <>
+                    {gt(
+                      "Reuses your configured Text generation model for high-quality translation (follows the subscription risk waiver guard),",
+                    )}{" "}
+                    <Link
+                      to="/settings/providers"
+                      hash="text-generation-model"
+                      className="inline-flex items-center font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      {gt("Configure text generation model →")}
+                    </Link>
+                  </>
+                ) : (
+                  gt(
+                    "No sign-in or API key required. When enabled, reasoning text is sent to the selected online translation service and may contain code or conversation details.",
+                  )
+                )
+              }
+              resetAction={
+                settings.reasoningTranslationProvider !==
+                DEFAULT_UNIFIED_SETTINGS.reasoningTranslationProvider ? (
+                  <SettingResetButton
+                    ariaLabel={gt("Reset reasoning translation to default")}
+                    onClick={() =>
+                      updateSettings({
+                        reasoningTranslationProvider:
+                          DEFAULT_UNIFIED_SETTINGS.reasoningTranslationProvider,
+                      })
+                    }
+                  />
+                ) : null
+              }
+              control={
+                <Select
+                  value={settings.reasoningTranslationProvider}
+                  onValueChange={(value) => {
+                    if (isReasoningTranslationProvider(value)) {
+                      updateSettings({ reasoningTranslationProvider: value });
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full sm:w-52"
+                    aria-label={gt("Reasoning translation")}
+                  >
+                    <SelectValue>
+                      {messages(
+                        REASONING_TRANSLATION_PROVIDER_LABELS[
+                          settings.reasoningTranslationProvider
+                        ],
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    {ReasoningTranslationProvider.literals.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {messages(REASONING_TRANSLATION_PROVIDER_LABELS[value])}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              }
+            />
+            <SettingsRow
               {...setting("math-rendering")}
               description={gt(
                 "Typeset LaTeX math, such as $x^2$ or \\[x^2\\], in messages and Markdown previews.",
@@ -2033,10 +2134,35 @@ function ScopedTextGenerationSettingsSection() {
       ? providersByEnvironment.get(environment.environmentId)
       : undefined) ?? EMPTY_SERVER_PROVIDERS;
 
+  const waiver = useSubscriptionWaiverState();
+  const allowAntigravityTextGeneration = isAntigravityControlledAutomationAllowed(waiver);
+  const textGenerationEligibility = { allowAntigravityTextGeneration } as const;
+  const openSubscriptionWaiver = () => {
+    void navigate({
+      to: "/settings/providers",
+      hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
+    });
+  };
+  const hasBlockedAntigravityProvider =
+    !allowAntigravityTextGeneration &&
+    serverProviders.some(
+      (provider) =>
+        (provider.enabled || provider.installed) &&
+        provider.availability !== "unavailable" &&
+        isAntigravityProviderLike(provider.driver),
+    );
+  const getProviderComplianceBlock = (entry: ProviderInstanceEntry) =>
+    resolveAntigravityComplianceBlock({
+      entry,
+      waiver,
+      mode: "controlled",
+      onOpenWaiver: openSubscriptionWaiver,
+    });
+
   const textGenerationTargets = useTextGenerationTargets({
     environmentId,
     settings,
-    providers: serverProviders.filter((provider) => provider.supportsTextGeneration !== false),
+    providers: resolveTextGenerationProviders(serverProviders, textGenerationEligibility),
     projectId: target?.projectId ?? null,
     selections: [settings.textGenerationModelSelection],
   });
@@ -2044,6 +2170,7 @@ function ScopedTextGenerationSettingsSection() {
   const textGenerationModelSelection = resolveAppModelSelectionState(
     settings,
     textGenerationProviders,
+    textGenerationEligibility,
   );
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const textGenModel = textGenerationModelSelection.model;
@@ -2062,6 +2189,7 @@ function ScopedTextGenerationSettingsSection() {
     textGenerationProviders,
     textGenInstanceId,
     textGenModel,
+    textGenerationEligibility,
   );
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -2102,9 +2230,17 @@ function ScopedTextGenerationSettingsSection() {
               <T>Connect an environment to choose its text generation model.</T>
             </span>
           ) : !hasTextGenerationProvider ? (
-            <span className="text-sm text-muted-foreground">
-              <T>No text generation providers available.</T>
-            </span>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <span className="text-sm text-muted-foreground">
+                <T>No text generation providers available.</T>
+              </span>
+              {hasBlockedAntigravityProvider ? (
+                <AgyWaiverRequiredBadge
+                  label={AGY_TEXT_GEN_WAIVER_PILL_TEXT}
+                  onClick={openSubscriptionWaiver}
+                />
+              ) : null}
+            </div>
           ) : (
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               <ProviderModelPicker
@@ -2117,6 +2253,7 @@ function ScopedTextGenerationSettingsSection() {
                 triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                 {...(mixedTextGenerationModel ? { triggerLabel: gt("Mixed") } : {})}
                 getModelDisabledReason={textGenerationModelDisabledReason}
+                getProviderComplianceBlock={getProviderComplianceBlock}
                 {...(environmentId
                   ? {
                       onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
@@ -2128,6 +2265,16 @@ function ScopedTextGenerationSettingsSection() {
                     }
                   : {})}
                 onInstanceModelChange={(instanceId, model) => {
+                  const targetEntry = textGenerationModelInstanceEntries.find(
+                    (entry) => entry.instanceId === instanceId,
+                  );
+                  const complianceBlock = targetEntry
+                    ? getProviderComplianceBlock(targetEntry)
+                    : null;
+                  if (complianceBlock) {
+                    complianceBlock.onOpenWaiver();
+                    return;
+                  }
                   const reason = textGenerationModelDisabledReason(instanceId, model);
                   if (reason) {
                     toastManager.add({
@@ -2148,6 +2295,7 @@ function ScopedTextGenerationSettingsSection() {
                         ),
                       },
                       textGenerationProviders,
+                      textGenerationEligibility,
                     ),
                   });
                 }}
@@ -2173,9 +2321,16 @@ function ScopedTextGenerationSettingsSection() {
                           ),
                         },
                         textGenerationProviders,
+                        textGenerationEligibility,
                       ),
                     });
                   }}
+                />
+              ) : null}
+              {hasBlockedAntigravityProvider ? (
+                <AgyWaiverRequiredBadge
+                  label={AGY_TEXT_GEN_WAIVER_PILL_TEXT}
+                  onClick={openSubscriptionWaiver}
                 />
               ) : null}
             </div>
@@ -2490,21 +2645,11 @@ export function MaintenanceSettingsPanel() {
       ),
     },
     {
-      id: MAINTENANCE_TAB_IDS.diagnostics,
-      label: gt("Service diagnostics"),
-      hashAnchors: MAINTENANCE_TAB_HASH_ANCHORS.diagnostics,
-      content: (
-        <div id="diagnostics" className="space-y-6">
-          <PrismuxDiagnosticsSection variant="full" />
-        </div>
-      ),
-    },
-    {
       id: MAINTENANCE_TAB_IDS.telemetry,
       label: gt("Telemetry & tracing"),
       hashAnchors: MAINTENANCE_TAB_HASH_ANCHORS.telemetry,
       content: (
-        <div id="processes" className="[&_#prismux-diagnostics]:hidden">
+        <div id="processes">
           <DiagnosticsSettingsSections />
         </div>
       ),

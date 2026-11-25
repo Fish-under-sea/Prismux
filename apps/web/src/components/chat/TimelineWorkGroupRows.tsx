@@ -1,5 +1,5 @@
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
-import { WorkLogButton, WorkLogList, WorkLogRow } from "./WorkLog";
+import { WorkLogList, WorkLogRow } from "./WorkLog";
 import type { WorktreeSetupSnapshot } from "@prismux/core-contracts";
 import { type ToolActivityIcon } from "@prismux/core-contracts";
 import {
@@ -18,7 +18,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { workEntryDisplayIndicatesToolFailure } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { assetMediaActionsSource } from "./ChatMarkdownMedia";
-import { ChevronRightIcon, Minimize2Icon, XIcon } from "lucide-react";
+import { Minimize2Icon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import {
@@ -32,7 +32,6 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Spinner } from "../ui/spinner";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
 import { cn } from "~/lib/utils";
-import { type TimestampFormat } from "@prismux/core-contracts/settings";
 import {
   TimelineRowCtx,
   TimelineRowActivityCtx,
@@ -41,7 +40,7 @@ import {
   type TimelineWorkEntry,
   type TimelineRow,
 } from "./timelineRowContext";
-import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
+import { ActivityShimmerOverlay } from "./TimelineRowParts";
 import {
   failedToolIconClassName,
   toolIconAcceptsTint,
@@ -49,6 +48,7 @@ import {
   ToolActivityIconView,
 } from "./TimelineToolActivityIcon";
 import {
+  DshDisclosureLeadingSlot,
   useThreadReadTarget,
   threadReadLabel,
   ThreadReadLabel,
@@ -87,24 +87,6 @@ function useDebouncedLiveTitle(value: string, active: boolean): string {
   return active ? displayed : value;
 }
 
-/**
- * Single clean directional chevron for collapsible group headers (smoothly rotates 90° on expand).
- * Never duplicates a chevron in the leading icon slot.
- */
-function SingleDisclosureChevron({ expanded }: { expanded: boolean }) {
-  return (
-    <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-      <ChevronRightIcon
-        data-disclosure-chevron="true"
-        className={cn(
-          "size-3.5 shrink-0 text-icon-muted transition-transform duration-200 group-hover/timeline-row:text-foreground/80 group-hover/live-work:text-foreground/80",
-          expanded && "rotate-90 text-foreground/80",
-        )}
-      />
-    </span>
-  );
-}
-
 export const WorkGroupSection = memo(function WorkGroupSection({
   anchorKey,
   disclosureAnchorKey = anchorKey,
@@ -113,6 +95,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
   displayLabel,
   isLive = false,
   autoExpandReasoning = false,
+  autoExpandDetails = false,
 }: {
   anchorKey: string;
   disclosureAnchorKey?: string;
@@ -121,6 +104,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
   displayLabel?: string | undefined;
   isLive?: boolean | undefined;
   autoExpandReasoning?: boolean | undefined;
+  autoExpandDetails?: boolean | undefined;
 }) {
   const {
     workspaceRoot,
@@ -143,7 +127,8 @@ export const WorkGroupSection = memo(function WorkGroupSection({
     return (
       <div
         data-work-group-tree-rail="true"
-        className="relative ml-2.5 mt-1 mb-1.5 border-l border-border/55 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
+        data-work-group-depth="2"
+        className="pmx-disclosure-enter relative ml-2.5 mt-0.5 mb-1.5 border-l border-border/45 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
       >
         <ReasoningTraceContent entries={nonEmptyEntries} />
       </div>
@@ -159,6 +144,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
         groupedEntries={groupedEntries}
         workspaceRoot={workspaceRoot}
         isLive={isLive}
+        autoExpandDetails={autoExpandDetails}
       />
     );
   }
@@ -172,6 +158,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
           workspaceRoot={workspaceRoot}
           displayLabel={displayLabel}
           autoExpandReasoning={autoExpandReasoning}
+          autoExpandDetails={autoExpandDetails}
           onToggleEntry={(collapsed) =>
             onToggleWorkEntry(disclosureAnchorKey, collapsed, workEntry.id)
           }
@@ -246,6 +233,7 @@ function ExpandedWorkGroupEntries({
   groupedEntries,
   workspaceRoot,
   isLive = false,
+  autoExpandDetails = false,
 }: {
   anchorKey: string;
   disclosureAnchorKey: string;
@@ -253,6 +241,7 @@ function ExpandedWorkGroupEntries({
   groupedEntries: ReadonlyArray<TimelineWorkEntry>;
   workspaceRoot: string | undefined;
   isLive?: boolean;
+  autoExpandDetails?: boolean;
 }) {
   const {
     workGroupViewState: viewState,
@@ -342,7 +331,12 @@ function ExpandedWorkGroupEntries({
   }, [updateScrollFades]);
 
   const renderEntry = ({ item }: { item: TimelineWorkEntry }) => (
-    <SimpleWorkEntryRow key={item.id} workEntry={item} workspaceRoot={workspaceRoot} />
+    <SimpleWorkEntryRow
+      key={item.id}
+      workEntry={item}
+      workspaceRoot={workspaceRoot}
+      autoExpandDetails={autoExpandDetails}
+    />
   );
 
   const updateExpandedContentHeight = () => {
@@ -365,7 +359,8 @@ function ExpandedWorkGroupEntries({
     <WorkGroupViewCtx value={groupView}>
       <div
         data-work-group-tree-rail="true"
-        className="relative ml-2.5 mt-1 mb-1.5 border-l border-border/55 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
+        data-work-group-depth="2"
+        className="pmx-disclosure-enter relative ml-2.5 mt-0.5 mb-1.5 border-l border-border/45 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
       >
         <WorkLogList>
           <LegendList
@@ -626,60 +621,49 @@ function LiveActivityContent({
   const showTrailingFailureMark =
     failed && iconName !== undefined && !toolIconAcceptsTint(toolIcon);
   const iconContent = iconName ? (
-    <span
-      className={cn(
-        "relative flex size-4 items-center justify-center",
+    <DshDisclosureLeadingSlot
+      icon={
+        <ToolActivityIconView
+          icon={toolIcon}
+          fallbackName={iconName}
+          className="block size-3.5 shrink-0 stroke-2"
+          muted={!highlighted && !liveAccent}
+        />
+      }
+      expandable={expandable && !highlighted}
+      expanded={expanded}
+      groupScope="live-work"
+      iconClassName={cn(
         failed
           ? failedToolIconClassName
           : liveAccent
             ? "text-primary"
             : highlighted
               ? "text-foreground"
-              : "text-icon-muted",
+              : "text-inherit",
       )}
       role={announceFailure ? "img" : undefined}
-      aria-label={announceFailure ? gt("Tool call failed") : undefined}
-    >
-      <ToolActivityIconView
-        icon={toolIcon}
-        fallbackName={iconName}
-        className="block size-4 shrink-0 stroke-2"
-        muted={!highlighted && !liveAccent}
-      />
-      {liveAccent && !highlighted ? (
-        <span
-          aria-hidden="true"
-          className="absolute -right-0.5 -bottom-0.5 size-1.5 animate-pulse rounded-full bg-primary ring-2 ring-background"
-        />
-      ) : null}
-    </span>
+      ariaLabel={announceFailure ? gt("Tool call failed") : undefined}
+      liveDot={liveAccent && !highlighted}
+    />
   ) : null;
 
   return (
-    <WorkLogRow
-      icon={iconContent}
-      label={
-        <span
-          className={cn(
-            "block truncate",
-            highlighted ? "text-foreground" : "text-foreground/90",
-            active && "live-tool-shine",
-          )}
-        >
-          {label}
-        </span>
-      }
-      trailing={
-        showTrailingFailureMark || expandable ? (
-          <>
-            {showTrailingFailureMark ? (
-              <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
-            ) : null}
-            {expandable ? <SingleDisclosureChevron expanded={expanded} /> : null}
-          </>
-        ) : null
-      }
-    />
+    <div className="flex h-6 w-full min-w-0 items-center gap-1.5 text-sm leading-6 text-muted-foreground transition-colors duration-200 ease-out group-hover/live-work:text-foreground motion-reduce:transition-none">
+      {iconContent}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          highlighted ? "text-foreground" : "text-inherit",
+          active && "live-tool-shine",
+        )}
+      >
+        {label}
+      </span>
+      {showTrailingFailureMark ? (
+        <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+      ) : null}
+    </div>
   );
 }
 
@@ -816,15 +800,18 @@ export function WorkGroupToggleTimelineRow({
   row: Extract<TimelineRow, { kind: "work-toggle" }>;
 }) {
   const ctx = use(TimelineRowCtx);
+  const iconName =
+    row.toolSurface ??
+    (row.dshPrimaryCategory
+      ? dshActivityCategoryIconName(row.dshPrimaryCategory)
+      : toolGroupSummaryIconName(row.summaryKind));
   return (
     <WorkGroupHeader
       label={row.summary}
-      iconName={row.toolSurface ?? toolGroupSummaryIconName(row.summaryKind)}
+      iconName={iconName}
       toolIcon={row.toolIcon}
       failed={row.hasFailure}
       expanded={row.expanded}
-      createdAt={row.createdAt}
-      timestampFormat={ctx.timestampFormat}
       onToggle={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
     />
   );
@@ -836,13 +823,12 @@ function WorkGroupHeader(props: {
   toolIcon?: ToolActivityIcon | undefined;
   failed?: boolean | undefined;
   expanded: boolean;
-  createdAt: string;
-  timestampFormat: TimestampFormat;
   onToggle: () => void;
 }) {
   const gt = useGT();
   return (
-    <WorkLogButton
+    <button
+      type="button"
       data-work-group-toggle="true"
       data-open={props.expanded ? "true" : undefined}
       aria-label={
@@ -850,32 +836,26 @@ function WorkGroupHeader(props: {
       }
       aria-expanded={props.expanded}
       onClick={props.onToggle}
-      icon={
-        <span
-          className={cn(
-            "flex size-4 shrink-0 items-center justify-center",
-            props.failed ? failedToolIconClassName : "text-icon-muted",
-          )}
-        >
+      className={cn(
+        "group/timeline-row flex min-h-6 w-full max-w-full min-w-0 cursor-pointer select-none items-center gap-1.5 rounded-md text-left text-sm leading-6 text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none",
+        props.expanded && "pb-1",
+      )}
+    >
+      <DshDisclosureLeadingSlot
+        icon={
           <ToolActivityIconView
             icon={props.toolIcon}
             fallbackName={props.iconName}
-            className="size-4 shrink-0 stroke-2"
+            className="block size-3.5 shrink-0 stroke-2"
             muted={!props.failed}
           />
-        </span>
-      }
-      label={
-        <span className="block truncate text-foreground/88 group-hover/timeline-row:text-foreground">
-          {props.label}
-        </span>
-      }
-      trailing={
-        <>
-          <TimelineRowTimestamp createdAt={props.createdAt} timestampFormat={props.timestampFormat} />
-          <SingleDisclosureChevron expanded={props.expanded} />
-        </>
-      }
-    />
+        }
+        expandable
+        expanded={props.expanded}
+        groupScope="timeline-row"
+        iconClassName={props.failed ? failedToolIconClassName : "text-inherit"}
+      />
+      <span className="min-w-0 truncate">{props.label}</span>
+    </button>
   );
 }

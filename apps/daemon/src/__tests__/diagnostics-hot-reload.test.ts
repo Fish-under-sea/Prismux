@@ -514,6 +514,7 @@ describe("Diagnostics hot-reload routes, cache invalidation & real-machine smoke
         assert.ok(dsh, "provider.dsh item must exist when DSH NEXT is installed");
         assert.equal(dsh.status, "ok", `expected dsh ok, got: ${JSON.stringify(dsh)}`);
         assert.ok(dsh.version && dsh.version.length > 0, "dsh version must be populated");
+        assert.notEqual(dsh.version, "0.0.1", "dsh version must not be hardcoded 0.0.1");
       }
       assert.equal(
         report.items.find((i) => i.id === "provider.omp"),

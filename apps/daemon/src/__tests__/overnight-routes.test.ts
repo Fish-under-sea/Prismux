@@ -123,6 +123,73 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
     }
   });
 
+  it("supports Gmail generic IMAP/SMTP preset with automatic SSL host/port defaults and reload persistence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pmx-overnight-gmail-imap-"));
+    try {
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.id, "gmail");
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.label, "谷歌邮箱 (Gmail)");
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.imapHost, "imap.gmail.com");
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.imapPort, 993);
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.imapSecure, true);
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.smtpHost, "smtp.gmail.com");
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.smtpPort, 465);
+      assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.smtpSecure, true);
+
+      const store = new EncryptedPluginCredentialStore({
+        dataDir: dir,
+        masterKey: randomBytes(32)
+      });
+      const service = new OvernightRouteService({
+        dataDir: dir,
+        credentialStore: store
+      });
+
+      const initial = await service.getConfigSnapshot("owner_chief");
+      assert.equal(initial.config.mode, "imap");
+
+      // Patching preset="gmail" without explicit host/port auto-fills Gmail SSL defaults
+      const updated = await service.updateConfig(
+        {
+          mode: "imap",
+          imapSmtp: {
+            preset: "gmail",
+            email: "dev@gmail.com"
+          },
+          secrets: {
+            imapPassword: "abcd efgh ijkl mnop"
+          }
+        },
+        "owner_chief"
+      );
+
+      assert.equal(updated.config.mode, "imap");
+      assert.equal(updated.config.imapSmtp.preset, "gmail");
+      assert.equal(updated.config.imapSmtp.email, "dev@gmail.com");
+      assert.equal(updated.config.imapSmtp.imapHost, "imap.gmail.com");
+      assert.equal(updated.config.imapSmtp.imapPort, 993);
+      assert.equal(updated.config.imapSmtp.imapSecure, true);
+      assert.equal(updated.config.imapSmtp.smtpHost, "smtp.gmail.com");
+      assert.equal(updated.config.imapSmtp.smtpPort, 465);
+      assert.equal(updated.config.imapSmtp.smtpSecure, true);
+      assert.equal(updated.secrets.hasImapPassword, true);
+      assert.equal(updated.secrets.hasSmtpPassword, true);
+      service.stop();
+
+      // Reload from persisted JSON preserves "gmail" preset and SSL endpoints
+      const reloaded = new OvernightRouteService({
+        dataDir: dir,
+        credentialStore: store
+      });
+      const snap = await reloaded.getConfigSnapshot("owner_chief");
+      assert.equal(snap.config.imapSmtp.preset, "gmail");
+      assert.equal(snap.config.imapSmtp.imapHost, "imap.gmail.com");
+      assert.equal(snap.config.imapSmtp.smtpHost, "smtp.gmail.com");
+      reloaded.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("handles Gmail OAuth2 PKCE start -> callback -> token seal -> connectivity test -> disconnect", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pmx-overnight-oauth-"));
     try {
@@ -390,18 +457,25 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       const unauth = await fetch(`${ready.httpUrl}/v1/overnight/config`);
       assert.equal(unauth.status, 401);
 
-      // Authenticated GET returns default config & secret badges
+      // Authenticated GET returns default config (Generic IMAP/SMTP mode) & secret badges
       const getRes = await fetch(`${ready.httpUrl}/v1/overnight/config`, {
         headers: authHeaders
       });
       assert.equal(getRes.status, 200);
       const getJson = (await getRes.json()) as {
         ok: boolean;
-        config: { enabled: boolean; strategy: { triggerTag: string } };
+        config: {
+          enabled: boolean;
+          mode: string;
+          imapSmtp: { preset: string };
+          strategy: { triggerTag: string };
+        };
         secrets: { hasImapPassword: boolean };
       };
       assert.equal(getJson.ok, true);
       assert.equal(getJson.config.enabled, false);
+      assert.equal(getJson.config.mode, "imap");
+      assert.equal(getJson.config.imapSmtp.preset, "qq");
       assert.equal(getJson.config.strategy.triggerTag, "#factory");
       assert.equal(getJson.secrets.hasImapPassword, false);
 

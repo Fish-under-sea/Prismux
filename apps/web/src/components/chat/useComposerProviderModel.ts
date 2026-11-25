@@ -18,7 +18,6 @@ import {
 } from "../../providerInstances";
 import { type UnifiedSettings } from "@prismux/core-contracts/settings";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
-import { orderProviderInstanceEntries } from "./ProviderModelPicker.logic";
 import { resolveComposerProviderSelection } from "../ChatView.logic";
 
 const NO_PROVIDER_MODELS: ServerProvider["models"] = [];
@@ -55,10 +54,7 @@ export function useComposerProviderModel(
   } = input;
   const draftModelState = useComposerDraftModelState(threadRef);
   const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> =
-    orderProviderInstanceEntries(
-      providerInstanceEntriesFor(providerStatuses, settings, activeProjectId),
-      settings.providerOrder,
-    );
+    providerInstanceEntriesFor(providerStatuses, settings, activeProjectId);
   const selection = resolveComposerProviderSelection({
     entries: providerInstanceEntries,
     candidateInstanceIds: [

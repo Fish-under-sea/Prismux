@@ -121,10 +121,13 @@ import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { resolveProviderEntryDisplayName } from "../../prismux/agentBrand";
 import {
   brandProviderInstanceEntries,
   deriveProviderInstanceEntries,
   disambiguateProviderInstanceDisplayNames,
+  orderProviderInstanceEntries,
+  providerInstanceEntriesFor,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import {
@@ -663,24 +666,31 @@ function useWelcomeAgents(environmentId: EnvironmentId) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const managedPolicy = serverConfig?.managedPolicy;
+  const providerOrder = serverConfig?.settings.providerOrder;
   const derivedEntries = deriveProviderInstanceEntries(providers ?? []);
   const brandedEntries = serverConfig?.settings
     ? brandProviderInstanceEntries(derivedEntries, serverConfig.settings)
     : derivedEntries;
-  const disambiguatedEntries = disambiguateProviderInstanceDisplayNames(brandedEntries);
+  const orderedEntries = orderProviderInstanceEntries(brandedEntries, providerOrder);
+  const disambiguatedEntries = disambiguateProviderInstanceDisplayNames(orderedEntries);
   const entryById = new Map<ProviderInstanceId, ProviderInstanceEntry>(
     disambiguatedEntries.map((entry) => [entry.instanceId, entry] as const),
   );
-  const nameOf = (provider: ServerProvider) =>
-    entryById.get(provider.instanceId)?.displayName ?? agentName(provider);
+  const nameOf = (provider: ServerProvider) => {
+    const entry = entryById.get(provider.instanceId);
+    return entry ? resolveProviderEntryDisplayName(entry) : agentName(provider);
+  };
+  const grouped = groupWelcomeAgents(providers, serverConfig?.settings, nameOf, (provider) =>
+    isManagedDriverAllowed(managedPolicy, provider.driver),
+  );
   return {
     providers,
     serverConfig,
     entryById,
     nameOf,
-    ...groupWelcomeAgents(providers, serverConfig?.settings, nameOf, (provider) =>
-      isManagedDriverAllowed(managedPolicy, provider.driver),
-    ),
+    ...grouped,
+    found: orderProviderInstanceEntries(grouped.found, providerOrder),
+    available: orderProviderInstanceEntries(grouped.available, providerOrder),
   };
 }
 
@@ -1376,6 +1386,7 @@ function OnboardingCodexSetup({
       }
     });
   };
+  const brandedEntry = providerInstanceEntriesFor([provider], serverConfig.settings, null)[0];
   return (
     <CodexSetupSection
       presentation="onboarding"
@@ -1386,7 +1397,9 @@ function OnboardingCodexSetup({
       enabled={provider.enabled}
       readOnly={!canManageProviders}
       existingCliDisabled={!canOperateTerminal}
-      displayName={agentName(provider)}
+      displayName={
+        brandedEntry ? resolveProviderEntryDisplayName(brandedEntry) : agentName(provider)
+      }
       onModeChange={changeMode}
     />
   );

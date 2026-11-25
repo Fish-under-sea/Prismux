@@ -242,7 +242,10 @@ import {
   subscribeOpenCreateWorkspace,
   writeSidebarProjectsSectionOpen,
 } from "./sidebar/prismuxSidebarQuickNav.logic";
-import { formatAgentBrandName } from "../prismux/agentBrand";
+import {
+  formatAgentBrandName,
+  resolveProviderEntryDisplayName,
+} from "../prismux/agentBrand";
 import { OrcaActivityView } from "./sidebar/orcaProjects/OrcaActivityView";
 import {
   OrcaBrowseFolderFallbackDialog,
@@ -319,18 +322,26 @@ import {
   SidebarSectionPlaceholder,
 } from "./sidebar/SidebarListMarkers";
 
+type SidebarConfiguredProviderEntry = SidebarProviderEntry & {
+  readonly hasCustomDisplayName?: boolean | undefined;
+};
+
 function sameSidebarProviderEntries(
-  left: ReadonlyMap<string, SidebarProviderEntry>,
-  right: ReadonlyMap<string, SidebarProviderEntry>,
+  left: ReadonlyMap<string, SidebarConfiguredProviderEntry>,
+  right: ReadonlyMap<string, SidebarConfiguredProviderEntry>,
 ): boolean {
   if (left.size !== right.size) return false;
+  const leftIter = left.entries();
   for (const [instanceId, entry] of right) {
-    const other = left.get(instanceId);
+    const leftStep = leftIter.next();
+    if (leftStep.done) return false;
+    const [leftInstanceId, other] = leftStep.value;
     if (
-      other === undefined ||
+      leftInstanceId !== instanceId ||
       other.driverKind !== entry.driverKind ||
       other.enabled !== entry.enabled ||
       other.displayName !== entry.displayName ||
+      other.hasCustomDisplayName !== entry.hasCustomDisplayName ||
       other.accentColor !== entry.accentColor ||
       other.acpRegistryAgentId !== entry.acpRegistryAgentId ||
       other.acpRegistryIconUrl !== entry.acpRegistryIconUrl ||
@@ -352,9 +363,9 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
     ),
   );
   const previous = Option.getOrNull(
-    get.self<ReadonlyMap<string, ReadonlyMap<string, SidebarProviderEntry>>>(),
+    get.self<ReadonlyMap<string, ReadonlyMap<string, SidebarConfiguredProviderEntry>>>(),
   );
-  const next = new Map<string, ReadonlyMap<string, SidebarProviderEntry>>();
+  const next = new Map<string, ReadonlyMap<string, SidebarConfiguredProviderEntry>>();
   let changed = previous === null || previous.size !== derived.size;
   for (const [environmentId, entries] of derived) {
     const prior = previous?.get(environmentId);
@@ -3019,10 +3030,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         localLastVisitedAt: localLastVisitedAtById[key],
         projectName,
         providerDriverKind: providerEntry?.driverKind ?? null,
-        providerLabel: formatAgentBrandName(
-          providerEntry?.driverKind ?? thread.providerInstanceId,
-          providerEntry?.displayName,
-        ),
+        providerLabel: providerEntry
+          ? resolveProviderEntryDisplayName(providerEntry)
+          : formatAgentBrandName(thread.providerInstanceId),
       });
     });
   }, [listedThreads, localLastVisitedAtById, projectDisplayNameByKey, providerEntriesByEnvironment]);
@@ -3050,7 +3060,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           providerInstanceId: entry.instanceId,
           driverKind: entry.driverKind,
           model: modelSlug,
-          displayName: entry.displayName,
+          displayName: resolveProviderEntryDisplayName(entry),
           modelLabel,
           online: true,
         });
@@ -3063,30 +3073,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const fallbackAgentOptions = useMemo<readonly OrcaWorkspaceAgentOption[]>(
     () => [
       {
-        id: "claudeAgent:claude-opus-4-6",
+        id: "claudeAgent:",
         providerInstanceId: "claudeAgent",
         driverKind: "claudeAgent",
-        model: "claude-opus-4-6",
-        displayName: "Claude Code",
-        modelLabel: "Claude Opus 4.6",
+        model: "",
+        displayName: formatAgentBrandName("claudeAgent"),
+        modelLabel: "",
         online: true,
       },
       {
-        id: "codex:gpt-5.4",
+        id: "codex:",
         providerInstanceId: "codex",
         driverKind: "codex",
-        model: "gpt-5.4",
-        displayName: "Codex",
-        modelLabel: "GPT-5.4",
+        model: "",
+        displayName: formatAgentBrandName("codex"),
+        modelLabel: "",
         online: true,
       },
       {
-        id: "antigravity:gemini-2.5-pro",
+        id: "antigravity:",
         providerInstanceId: "antigravity",
         driverKind: "antigravity",
-        model: "gemini-2.5-pro",
-        displayName: "Antigravity",
-        modelLabel: "Gemini 2.5 Pro",
+        model: "",
+        displayName: formatAgentBrandName("antigravity"),
+        modelLabel: "",
         online: true,
       },
     ],

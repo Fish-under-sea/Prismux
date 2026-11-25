@@ -1,6 +1,10 @@
 import type * as AcpSchema from "@prismux/effect-acp/compat";
 import type { AcpAdapterV2SubagentUpdate } from "@prismux/provider-acp/server/adapter";
-import type { AcpToolCallState } from "@prismux/provider-acp/server/runtimeModel";
+import {
+  extractAcpTodoToolPlanUpdate,
+  type AcpPlanUpdate,
+  type AcpToolCallState,
+} from "@prismux/provider-acp/server/runtimeModel";
 
 import type { AcpRegistrySettings } from "../settings.ts";
 import { isDeepSeekHarnessSpawn } from "./dshLocal.ts";
@@ -51,7 +55,21 @@ const DSH_READ_TOOLS = new Set(["read", "read_file", "read_image", "view_file"])
 const DSH_EDIT_TOOLS = new Set(["edit", "write", "write_file", "apply_patch"]);
 const DSH_SEARCH_TOOLS = new Set(["glob", "grep", "web_search"]);
 const DSH_FETCH_TOOLS = new Set(["web_fetch"]);
-const DSH_THINK_TOOLS = new Set(["todo_write", "exit_plan_mode", "get_goal", "update_goal"]);
+const DSH_TODO_TOOLS = new Set([
+  "todo_write",
+  "todowrite",
+  "todo",
+  "todos",
+  "write_todos",
+  "update_plan",
+  "update_steps",
+]);
+const DSH_THINK_TOOLS = new Set([
+  ...DSH_TODO_TOOLS,
+  "exit_plan_mode",
+  "get_goal",
+  "update_goal",
+]);
 
 function extractDshFilePath(rawInput: Record<string, unknown> | undefined): string | undefined {
   return (
@@ -182,7 +200,7 @@ export function normalizeDshSessionUpdate(
       nextLocations = [{ path: url }];
     }
     nextTitle = url ? `Fetch ${url}` : "Web fetch";
-  } else if (toolName === "todo_write") {
+  } else if (DSH_TODO_TOOLS.has(toolName)) {
     nextTitle = "Update plan";
   } else if (toolName === "exit_plan_mode") {
     nextTitle = "Submit plan";
@@ -273,6 +291,24 @@ export function normalizeDshToolCall(toolCall: AcpToolCallState): AcpToolCallSta
   }
 
   return toolCall;
+}
+
+/**
+ * Extracts structured `todo_list` plan updates from DeepSeek Harness `todo_write` / `update_plan` calls.
+ */
+export function extractDshTodoPlanUpdate(toolCall: AcpToolCallState): AcpPlanUpdate | undefined {
+  const meta = asRecord(toolCall.data.meta);
+  const dshToolName =
+    asNonEmptyString(meta?.dshToolName)?.toLowerCase() ??
+    asNonEmptyString(toolCall.data.title)?.toLowerCase();
+  if (
+    dshToolName !== undefined &&
+    !DSH_TODO_TOOLS.has(dshToolName) &&
+    dshToolName !== "update plan"
+  ) {
+    return undefined;
+  }
+  return extractAcpTodoToolPlanUpdate(toolCall);
 }
 
 /**

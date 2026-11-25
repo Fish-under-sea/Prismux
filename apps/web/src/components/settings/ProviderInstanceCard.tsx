@@ -545,7 +545,9 @@ export function ProviderEnvironmentSection(props: {
                   <code className="min-w-0 truncate text-xs sm:w-44 sm:shrink-0">
                     {variable.name}
                   </code>
-                  <span className="text-xs text-muted-foreground">{props.managed.reason}</span>
+                  <span className="text-[11.5px] leading-[1.45] text-muted-foreground">
+                    {props.managed.reason}
+                  </span>
                 </div>
               );
             }
@@ -671,7 +673,7 @@ export function ProviderEnvironmentSection(props: {
               </Fragment>
             );
           })}
-          <p className="text-xs text-muted-foreground">
+          <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
             {rows.some((row) => row.valueRedacted === true)
               ? gt(
                   "Sensitive values are stored separately and never returned to the app. Enter a new value to rename a saved one or make it plain text.",
@@ -1292,7 +1294,7 @@ export function ProviderInstanceCard({
             </p>
             <p
               className={cn(
-                "text-xs leading-snug [overflow-wrap:anywhere]",
+                "text-[11.5px] font-normal leading-[1.5] [overflow-wrap:anywhere]",
                 versionAdvisory.emphasis === "strong" ? "text-warning" : "text-muted-foreground",
               )}
             >
@@ -1377,7 +1379,7 @@ export function ProviderInstanceCard({
             <p
               aria-live="polite"
               className={cn(
-                "text-xs leading-snug [overflow-wrap:anywhere]",
+                "text-[11.5px] font-normal leading-[1.5] [overflow-wrap:anywhere]",
                 updateProblem ? "text-warning" : "text-muted-foreground",
               )}
             >
@@ -1549,11 +1551,11 @@ export function ProviderInstanceCard({
           {listIconNode}
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1.5">
-              <span className="min-w-0 truncate text-sm font-semibold tracking-tight text-foreground">
+              <span className="min-w-0 truncate text-[13.5px] font-semibold tracking-tight text-foreground">
                 {displayName}
               </span>
               {versionLabel ? (
-                <code className="shrink-0 font-mono text-2xs text-muted-foreground/65 tabular-nums">
+                <code className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
                   {versionLabel}
                 </code>
               ) : null}
@@ -1563,7 +1565,7 @@ export function ProviderInstanceCard({
                 </span>
               ) : null}
             </span>
-            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-2xs font-normal leading-snug text-muted-foreground/65">
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] font-normal leading-snug text-muted-foreground">
               {statusDotNode && !updateProgress ? (
                 <span className="flex shrink-0 items-center">{statusDotNode}</span>
               ) : null}
@@ -1635,7 +1637,7 @@ export function ProviderInstanceCard({
     <ProviderStatusDiagnostic detail={statusDiagnostic}>
       <div
         tabIndex={statusDiagnostic ? 0 : undefined}
-        className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground/80"
+        className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] font-normal leading-[1.45] text-muted-foreground"
       >
         {!needsAttention ? headerStatusDot : null}
         <span className="flex min-w-0 items-center gap-1.5 truncate">{editorStatusNode}</span>
@@ -1776,7 +1778,7 @@ export function ProviderInstanceCard({
             {restartNotice ? (
               <p
                 aria-live="polite"
-                className="text-xs leading-snug text-muted-foreground [overflow-wrap:anywhere]"
+                className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground [overflow-wrap:anywhere]"
               >
                 {restartNotice}
               </p>
@@ -1790,7 +1792,7 @@ export function ProviderInstanceCard({
               />
             ) : null}
             {urlAuthAction && onAcceptUrlAuth ? (
-              <div className="grid max-w-xl gap-1.5 text-xs">
+              <div className="grid max-w-xl gap-1.5 text-[11.5px] leading-[1.45] text-muted-foreground">
                 <p>{urlAuthAction.message}</p>
                 <code className="break-all text-2xs text-muted-foreground">
                   {urlAuthAction.url}
@@ -1820,14 +1822,17 @@ export function ProviderInstanceCard({
 
       {/* Card 1 — Basic configuration (Identity & Launch) */}
       <section aria-label={gt("Basic configuration")} className="space-y-2">
-        <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+        <h3
+          data-pmx-heading="1"
+          className="px-1 text-[13px] font-semibold tracking-tight text-foreground/95"
+        >
           {gt("Basic configuration")}
         </h3>
         <div className="divide-y divide-border/45 rounded-xl border border-border/60 bg-card/40 shadow-xs/5">
           <div className="flex flex-col gap-2.5 px-4 py-3 @min-[22rem]/detail-card:flex-row @min-[22rem]/detail-card:items-center @min-[22rem]/detail-card:justify-between @min-[22rem]/detail-card:gap-4">
             <label
               htmlFor={displayNameInputId}
-              className="shrink-0 text-sm font-medium text-foreground"
+              className="shrink-0 text-[13.5px] font-semibold leading-snug tracking-tight text-foreground"
             >
               {gt("Display name")}
             </label>
@@ -1861,7 +1866,7 @@ export function ProviderInstanceCard({
             <div className="flex flex-col gap-2.5 px-4 py-3 @min-[22rem]/detail-card:flex-row @min-[22rem]/detail-card:items-center @min-[22rem]/detail-card:justify-between @min-[22rem]/detail-card:gap-4">
               <div className="min-w-0 flex-1 space-y-0.5">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-medium text-foreground">
+                  <span className="text-[13.5px] font-semibold leading-snug tracking-tight text-foreground">
                     {gt("Default launch mode")}
                   </span>
                   {isLaunchModeOverridden && onLaunchModeReset ? (
@@ -1873,7 +1878,7 @@ export function ProviderInstanceCard({
                     />
                   ) : null}
                 </div>
-                <p className="text-xs leading-snug text-muted-foreground">
+                <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                   {gt("Choose whether new sessions open in Chat or CLI mode.")}
                 </p>
               </div>
@@ -1885,7 +1890,10 @@ export function ProviderInstanceCard({
 
       {/* Card 2 — Connection & runtime + Collapsible Advanced */}
       <section aria-label={gt("Connection & runtime")} className="space-y-2">
-        <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+        <h3
+          data-pmx-heading="1"
+          className="px-1 text-[13px] font-semibold tracking-tight text-foreground/95"
+        >
           {gt("Connection & runtime")}
         </h3>
         <div className="divide-y divide-border/45 overflow-hidden rounded-xl border border-border/60 bg-card/40 shadow-xs/5">
@@ -1934,7 +1942,9 @@ export function ProviderInstanceCard({
                     advancedOpen && "rotate-90",
                   )}
                 />
-                <span className="text-sm font-medium text-foreground">{gt("Advanced")}</span>
+                <span className="text-[13.5px] font-semibold leading-snug tracking-tight text-foreground">
+                  {gt("Advanced")}
+                </span>
               </span>
               <span className="flex shrink-0 items-center gap-1.5">
                 {localCommandSummary ? (
@@ -2008,7 +2018,10 @@ export function ProviderInstanceCard({
       {/* Card 3 — Models */}
       {driverOption !== undefined ? (
         <section aria-label={gt("Models")} className="space-y-2">
-          <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+          <h3
+            data-pmx-heading="1"
+            className="px-1 text-[13px] font-semibold tracking-tight text-foreground/95"
+          >
             {gt("Models")}
           </h3>
           <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3.5 shadow-xs/5 sm:px-5 sm:py-4">
@@ -2035,16 +2048,22 @@ export function ProviderInstanceCard({
       {/* Compact Danger Zone */}
       {onDelete && !readOnly ? (
         <section aria-label={gt("Danger zone")} className="space-y-2">
-          <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+          <h3
+            data-pmx-heading="1"
+            className="px-1 text-[13px] font-semibold tracking-tight text-foreground/95"
+          >
             {gt("Danger zone")}
           </h3>
           <div className="rounded-xl border border-destructive/25 bg-destructive/[0.03] px-4 py-3 shadow-xs/5">
             <div className="flex flex-col gap-2.5 @min-[22rem]/detail-card:flex-row @min-[22rem]/detail-card:items-center @min-[22rem]/detail-card:justify-between @min-[22rem]/detail-card:gap-4">
               <div className="min-w-0 flex-1 space-y-0.5">
-                <h4 className="text-sm font-medium text-foreground">
+                <h4
+                  data-pmx-setting-title="1"
+                  className="text-[13.5px] font-semibold leading-snug tracking-tight text-foreground"
+                >
                   {gt("Delete provider configuration")}
                 </h4>
-                <p className="text-xs leading-snug text-muted-foreground">
+                <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                   {removalKind === "remove-builtin"
                     ? gt(
                         "Remove this built-in provider from your configured list and clear its custom settings. Existing conversation history is kept, and you can restore it anytime from Add provider.",

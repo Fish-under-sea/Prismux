@@ -53,11 +53,14 @@ import {
 } from "lucide-react";
 
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
+import { resolveProviderEntryDisplayName } from "../../prismux/agentBrand";
 import {
-  applyProviderInstanceSettings,
   brandProviderInstanceEntries,
   deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
   hasInstanceBadge,
+  orderProviderInstanceEntries,
+  providerInstanceEntriesFor,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
@@ -312,18 +315,20 @@ export function EnvironmentSubagentAvatar({
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(providerEnvironmentId));
   const entries = (providers: ReadonlyArray<ServerProvider> | null | undefined) => {
     const derived = deriveProviderInstanceEntries(providers ?? []);
-    return settings ? brandProviderInstanceEntries(derived, settings) : derived;
+    const branded = settings ? brandProviderInstanceEntries(derived, settings) : derived;
+    return disambiguateProviderInstanceDisplayNames(
+      orderProviderInstanceEntries(branded, settings?.providerOrder),
+    );
   };
   const providerDriver = useAtomValue(
     providersAtom,
     (providers) =>
       providers?.find((provider) => provider.instanceId === providerInstanceId)?.driver,
   );
-  const displayName = useAtomValue(
-    providersAtom,
-    (providers) =>
-      entries(providers).find((entry) => entry.instanceId === providerInstanceId)?.displayName,
-  );
+  const displayName = useAtomValue(providersAtom, (providers) => {
+    const entry = entries(providers).find((candidate) => candidate.instanceId === providerInstanceId);
+    return entry ? resolveProviderEntryDisplayName(entry) : undefined;
+  });
   const accentColor = useAtomValue(
     providersAtom,
     (providers) =>
@@ -598,7 +603,11 @@ function SubagentTimelineTooltip(
   // Read providers only in the open popup to avoid per-row subscriptions.
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
   const parent = useThreadShell(props.parentRef)?.source;
+  const providerEntries = settings
+    ? providerInstanceEntriesFor(providers, settings, parent?.projectId ?? null)
+    : disambiguateProviderInstanceDisplayNames(deriveProviderInstanceEntries(providers));
   const child = useThreadShell(
     props.threadId ? scopeThreadRef(environmentId, props.threadId) : null,
   )?.source;
@@ -615,6 +624,7 @@ function SubagentTimelineTooltip(
       modelSelection={props.modelSelection}
       provider={providers.find((provider) => provider.instanceId === props.providerInstanceId)}
       providers={providers}
+      providerEntries={providerEntries}
       driver={props.driver}
       elapsed={props.elapsed}
       status={props.status}
@@ -681,8 +691,9 @@ export function HandoffRow(props: {
   const gt = useGT();
   const { from: fromEndpoints, to } = props.endpoints;
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
-  const derived = deriveProviderInstanceEntries(props.providers);
-  const entries = settings ? applyProviderInstanceSettings(derived, settings, null) : derived;
+  const entries = settings
+    ? providerInstanceEntriesFor(props.providers, settings, null)
+    : disambiguateProviderInstanceDisplayNames(deriveProviderInstanceEntries(props.providers));
   return (
     <TimelineSystemDivider
       label={props.pending ? gt("Context handoff pending") : gt("Context handoff")}
@@ -724,6 +735,7 @@ function HandoffEndpoint(props: {
   readonly model?: string | undefined;
 }) {
   const entry = props.entries.find((candidate) => candidate.instanceId === props.instanceId);
+  const entryDisplayName = entry ? resolveProviderEntryDisplayName(entry) : props.instanceId;
   const showBadge = entry !== undefined && shouldShowInstanceBadge(entry, props.entries);
   const model = props.model?.trim();
   const providerModel =
@@ -735,7 +747,7 @@ function HandoffEndpoint(props: {
       ? getTriggerDisplayModelName(providerModel, entry?.driverKind)
       : model !== undefined && model.length > 0
         ? model
-        : (entry?.displayName ?? props.instanceId);
+        : entryDisplayName;
   const labelColor = providerTextColor(
     entry?.driverKind ?? ProviderDriverKind.make(props.instanceId),
   );
@@ -749,7 +761,8 @@ function HandoffEndpoint(props: {
           >
             <ProviderInstanceIcon
               driverKind={entry?.driverKind ?? ProviderDriverKind.make(props.instanceId)}
-              displayName={entry?.displayName ?? props.instanceId}
+              displayName={entryDisplayName}
+              instanceId={entry?.instanceId ?? props.instanceId}
               accentColor={entry?.accentColor}
               acpRegistryAgentId={entry?.acpRegistryAgentId}
               acpRegistryIconUrl={entry?.acpRegistryIconUrl}
@@ -768,7 +781,7 @@ function HandoffEndpoint(props: {
         }
       />
       <TooltipPopup>
-        {entry?.displayName ?? props.instanceId} · {label}
+        {entryDisplayName} · {label}
       </TooltipPopup>
     </Tooltip>
   );

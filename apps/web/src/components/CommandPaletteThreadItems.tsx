@@ -20,10 +20,12 @@ import { useState } from "react";
 import { useGT, useMessages } from "gt-react";
 
 import {
-  applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  providerInstanceEntriesFor,
   type ProviderInstanceEntry,
 } from "../providerInstances";
+import { resolveProviderEntryDisplayName } from "../prismux/agentBrand";
 import { useDelegatedUnderParent, useVisibleThreadShells } from "../state/entities";
 import {
   useEnvironmentProviders,
@@ -53,13 +55,14 @@ function useProviderEntryByEnvironmentAndInstanceId() {
   return new Map<string, ProviderInstanceEntry>(
     environments.flatMap((environment) => {
       const serverConfig = environment.serverConfig;
-      const derived = deriveProviderInstanceEntries(
+      const environmentProviders =
         providersByEnvironment.get(environment.environmentId) ??
-          (environment.environmentId === primaryEnvironmentId ? providers : []),
-      );
+        (environment.environmentId === primaryEnvironmentId ? providers : []);
       const entries = serverConfig
-        ? applyProviderInstanceSettings(derived, serverConfig.settings, null)
-        : derived;
+        ? providerInstanceEntriesFor(environmentProviders, serverConfig.settings, null)
+        : disambiguateProviderInstanceDisplayNames(
+            deriveProviderInstanceEntries(environmentProviders),
+          );
       return entries.map(
         (entry) => [`${environment.environmentId}:${entry.instanceId}`, entry] as const,
       );
@@ -159,7 +162,10 @@ export function useCommandPaletteThreadItems(input: {
             }
             driverKind={providerEntry?.driverKind ?? null}
             providerDisplayName={
-              thread.runtime?.providerName ?? providerEntry?.displayName ?? modelInstanceId
+              providerEntry?.hasCustomDisplayName
+                ? resolveProviderEntryDisplayName(providerEntry)
+                : (thread.runtime?.providerName ??
+                  (providerEntry ? resolveProviderEntryDisplayName(providerEntry) : modelInstanceId))
             }
             acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
             acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}

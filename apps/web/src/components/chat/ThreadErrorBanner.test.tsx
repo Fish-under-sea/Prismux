@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vite-plus/test";
+import { GTProvider, initializeGT } from "gt-react";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeAll, describe, expect, it } from "vite-plus/test";
+import { CHATGPT_USAGE_LIMIT_CODE } from "@prismux/core-shared/usageLimits";
 
 import {
   dismissThreadErrorBannerForSession,
@@ -6,7 +10,16 @@ import {
   getThreadErrorBannerMessage,
   isThreadErrorBannerDismissedForSession,
   shouldShowThreadErrorBanner,
+  ThreadErrorBanner,
 } from "./ThreadErrorBanner";
+
+beforeAll(async () => {
+  await initializeGT({
+    defaultLocale: "en",
+    locales: ["en", "zh"],
+    loadTranslations: async () => ({}),
+  });
+});
 
 describe("getThreadErrorBannerMessage", () => {
   it("extracts a readable nested message without trimming its whitespace", () => {
@@ -58,5 +71,49 @@ describe("ThreadErrorBanner", () => {
         isThreadErrorBannerDismissedForSession(laterRunKey),
       ),
     ).toBe(true);
+  });
+
+  it("renders LocalizedErrorCard with Chinese diagnosis and collapsed raw error for model failures", () => {
+    const rawError = JSON.stringify({
+      error: {
+        code: "rate_limit_exceeded",
+        message: "Too many requests from org-secret-raw-id",
+      },
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: {} },
+        createElement(ThreadErrorBanner, {
+          error: rawError,
+          providerName: "DeepSeek Harness",
+        }),
+      ),
+    );
+
+    expect(html).toContain('data-localized-error-card="1"');
+    expect(html).toContain("请求频率受限或模型服务繁忙（429）");
+    expect(html).toContain("查看原始报错");
+    expect(html).toContain("复制原始报错");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('data-localized-error-raw="1"');
+    expect(html).not.toContain("org-secret-raw-id");
+  });
+
+  it("preserves ChatGPT usage limit banner layout when errorCode matches CHATGPT_USAGE_LIMIT_CODE", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "en", translations: {} },
+        createElement(ThreadErrorBanner, {
+          error: "ChatGPT usage limit reached",
+          errorClass: "usage_limit",
+          errorCode: CHATGPT_USAGE_LIMIT_CODE,
+        }),
+      ),
+    );
+
+    expect(html).toContain("ChatGPT usage limit reached");
+    expect(html).toContain('data-variant="warning"');
   });
 });

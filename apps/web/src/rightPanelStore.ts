@@ -32,7 +32,10 @@ import {
   type LinkedThreadSurface,
 } from "./linkedThreadSurface";
 import type { ThreadPanelPresentation } from "./rightPanelLayout";
-import { formatAgentBrandName } from "./prismux/agentBrand";
+import {
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
+} from "./providerInstances";
 import type { ChatFileAttachment } from "./types";
 
 const RIGHT_PANEL_KINDS = [
@@ -174,6 +177,7 @@ export interface OpenAgentSessionInput {
   readonly model?: string | null | undefined;
   readonly environmentId?: EnvironmentId | null | undefined;
   readonly threadId?: ThreadId | null | undefined;
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
 }
 
 export type ThreadSurface = { id: `thread:${string}`; kind: "thread"; threadId: ThreadId };
@@ -1319,7 +1323,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const nextSurface: AgentSessionSurface = {
               id: surfaceId,
               kind: "agent-session",
-              title: input.title.trim() || formatAgentBrandName(input.providerId),
+              title:
+                input.title.trim() ||
+                resolveConfiguredProviderLabel(
+                  input.instanceId ?? input.providerId,
+                  input.providerEntries ?? [],
+                ),
               providerId: input.providerId,
               ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),

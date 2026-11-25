@@ -13,6 +13,7 @@ import { extractDroidElicitationForm } from "./droidAcp.ts";
 import {
   extractDshProposedPlanMarkdown,
   extractDshSubagentUpdate,
+  extractDshTodoPlanUpdate,
   isDeepSeekHarnessAgentInfo,
   isDeepSeekHarnessSettings,
   normalizeDshSessionUpdate,
@@ -396,6 +397,8 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
               isDshRuntime ? normalizeDshToolCall(toolCall) : toolCall,
             extractProposedPlanMarkdown: (toolCall) =>
               isDshRuntime ? extractDshProposedPlanMarkdown(toolCall) : undefined,
+            extractTodoPlanUpdate: (toolCall) =>
+              isDshRuntime ? extractDshTodoPlanUpdate(toolCall) : undefined,
             ...(!isClaude
               ? {
                   extractSubagentUpdate: (toolCall) =>

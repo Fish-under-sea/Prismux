@@ -1,4 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { ProviderSetupError, TextGenerationError } from "@prismux/core-contracts";
+import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -56,8 +60,95 @@ type AntigravityTextRuntime = Pick<
   | "handleUnknownExtRequest"
 >;
 
+export const ANTIGRAVITY_WAIVER_REQUIRED_DETAIL =
+  "Antigravity automated text generation is locked by default (ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED). Sign the Subscription Risk Waiver and enable controlled Antigravity mode in Settings → Providers (/settings/providers#subscription-risk-waiver), or choose another text generation model." as const;
+
+export interface AntigravitySubscriptionWaiverLookupOptions {
+  readonly waiverFilePath?: string;
+  readonly userHome?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+}
+
+function readCaseInsensitiveEnv(
+  environment: NodeJS.ProcessEnv,
+  key: string,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const direct = environment[key]?.trim();
+  if (direct && direct.length > 0) return direct;
+  if (platform === "win32") {
+    const upper = key.toUpperCase();
+    for (const [candidateKey, candidateValue] of Object.entries(environment)) {
+      if (candidateKey.toUpperCase() === upper) {
+        const trimmed = candidateValue?.trim();
+        if (trimmed && trimmed.length > 0) return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function resolveAntigravitySubscriptionWaiverPath(
+  options: AntigravitySubscriptionWaiverLookupOptions = {},
+): string {
+  const explicit = options.waiverFilePath?.trim();
+  if (explicit && explicit.length > 0) {
+    return explicit;
+  }
+  const platform = options.platform ?? HostProcess.Platform.defaultValue();
+  const environment = options.environment ?? HostProcess.Environment.defaultValue();
+  const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
+  const overrideDataDir = readCaseInsensitiveEnv(environment, "PRISMUX_DATA_DIR", platform);
+  const userHome = options.userHome?.trim() || HostProcess.HomeDirectory.defaultValue();
+  const dataDir =
+    overrideDataDir && overrideDataDir.length > 0
+      ? overrideDataDir
+      : pathApi.join(userHome, ".prismux");
+  return pathApi.join(dataDir, "config", "subscription-waiver.json");
+}
+
+export function parseAntigravitySubscriptionWaiverSigned(raw: string): boolean {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return false;
+    }
+    const record = parsed as Record<string, unknown>;
+    return record.signed === true && record.allowAntigravityAsControlledAgent === true;
+  } catch {
+    return false;
+  }
+}
+
+export function readAntigravitySubscriptionWaiverSignedSync(
+  options: AntigravitySubscriptionWaiverLookupOptions = {},
+): boolean {
+  const waiverPath = resolveAntigravitySubscriptionWaiverPath(options);
+  try {
+    return parseAntigravitySubscriptionWaiverSigned(NodeFS.readFileSync(waiverPath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+export const isAntigravitySubscriptionWaiverSigned = Effect.fn(
+  "isAntigravitySubscriptionWaiverSigned",
+)(function* (options: AntigravitySubscriptionWaiverLookupOptions = {}) {
+  const fs = yield* FileSystem.FileSystem;
+  const waiverPath = resolveAntigravitySubscriptionWaiverPath(options);
+  return yield* fs.readFileString(waiverPath).pipe(
+    Effect.map(parseAntigravitySubscriptionWaiverSigned),
+    Effect.orElseSucceed(() => false),
+  );
+});
+
 export interface AntigravityTextGenerationOptions {
   readonly profileDirectory: string;
+  readonly waiverFilePath?: string;
+  readonly userHome?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
   readonly defaultModel?: Effect.Effect<string | undefined>;
   readonly makeRuntime: (
     cwd: string,
@@ -141,6 +232,12 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(Path.Path, path),
   );
+  const waiverSigned = isAntigravitySubscriptionWaiverSigned({
+    ...(options.waiverFilePath !== undefined ? { waiverFilePath: options.waiverFilePath } : {}),
+    ...(options.userHome !== undefined ? { userHome: options.userHome } : {}),
+    ...(options.environment !== undefined ? { environment: options.environment } : {}),
+    ...(options.platform !== undefined ? { platform: options.platform } : {}),
+  }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
 
   const runAntigravityJson = Effect.fn("AntigravityTextGeneration.runJson")(
     function* <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) {
@@ -148,6 +245,12 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       const scope = yield* Scope.make();
       yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
       const helper = Effect.gen(function* () {
+        if (!(yield* waiverSigned)) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: ANTIGRAVITY_WAIVER_REQUIRED_DETAIL,
+          });
+        }
         if (!(yield* available)) {
           return yield* new TextGenerationError({
             operation,

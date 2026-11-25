@@ -262,12 +262,12 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
               </span>
 
               <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                <h1 className="truncate text-[14px] font-semibold tracking-tight text-foreground">
                   {copy.pageTitle}
                 </h1>
                 <span
                   data-testid="scheduled-tasks-summary-badge"
-                  className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-2xs font-medium text-foreground/85 tabular-nums"
+                  className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-muted-foreground tabular-nums"
                 >
                   {copy.summaryBadge(summary.enabled, summary.total)}
                 </span>
@@ -290,7 +290,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                   />
                   <EnvironmentMachineIcon
                     kind={resolveEnvironmentMachineKind(defaultEnvironment.serverConfig)}
-                    className="size-3.5 shrink-0 text-foreground/75"
+                    className="size-3.5 shrink-0 text-muted-foreground"
                   />
                   <span className="truncate font-medium text-foreground">
                     {availableEnvironments.length > 1 && selectedMachineValue === "all"
@@ -407,7 +407,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                         "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                         active
                           ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-                          : "border-border/75 bg-card text-foreground/90 shadow-xs hover:bg-accent hover:text-foreground",
+                          : "border-border/75 bg-card text-muted-foreground shadow-xs hover:bg-accent hover:text-foreground",
                       )}
                     >
                       {chip.id === "webhook" ? (
@@ -419,7 +419,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                           "rounded-full px-1.5 py-px text-3xs leading-none font-semibold tabular-nums",
                           active
                             ? "bg-primary-foreground/20 text-primary-foreground"
-                            : "bg-muted/85 text-foreground/75",
+                            : "bg-muted/85 text-muted-foreground",
                         )}
                       >
                         {chip.count}
@@ -439,7 +439,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                   aria-label={copy.searchPlaceholder}
                   data-testid="scheduled-tasks-search-input"
                   data-pmx-work-panel-control="1"
-                  className="h-8 w-full rounded-lg border border-input bg-card pr-7 pl-8 text-xs text-foreground shadow-xs outline-none placeholder:text-muted-foreground/75 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  className="h-8 w-full rounded-lg border border-input bg-card pr-7 pl-8 text-xs text-foreground shadow-xs outline-none placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 />
                 {query.trim().length > 0 ? (
                   <button
@@ -469,8 +469,12 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                     >
                       <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
                       <div className="space-y-0.5">
-                        <p className="font-semibold text-foreground">{copy.taskUnavailableTitle}</p>
-                        <p className="text-muted-foreground">{copy.taskUnavailableDescription}</p>
+                        <p className="text-[13px] font-semibold text-foreground">
+                          {copy.taskUnavailableTitle}
+                        </p>
+                        <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
+                          {copy.taskUnavailableDescription}
+                        </p>
                       </div>
                     </div>
                   ) : null}
@@ -487,7 +491,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                         <h2 className="text-sm font-semibold text-foreground">
                           {copy.noEnvironmentsTitle}
                         </h2>
-                        <p className="text-xs leading-relaxed text-muted-foreground">
+                        <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                           {copy.noEnvironmentsDescription}
                         </p>
                       </div>
@@ -513,7 +517,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                           <h2 className="text-sm font-semibold text-foreground">
                             {copy.emptyTitle}
                           </h2>
-                          <p className="text-xs leading-relaxed text-muted-foreground">
+                          <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                             {copy.emptyDescription}
                           </p>
                         </div>
@@ -532,7 +536,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
 
                       {/* Full-width Quick Templates Grid */}
                       <div className="space-y-2.5">
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground/85">
+                        <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-foreground">
                           <LayoutTemplateIcon className="size-3.5 text-primary" aria-hidden="true" />
                           <span>{copy.quickTemplatesHeading}</span>
                         </div>
@@ -549,7 +553,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                             >
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between gap-2">
-                                  <span className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/80 px-2 py-0.5 text-3xs font-medium text-foreground/85">
+                                  <span className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/80 px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
                                     {preset.scheduleMode === "webhook" ? (
                                       <WebhookIcon className="size-3 text-primary" />
                                     ) : (
@@ -559,10 +563,10 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                                   </span>
                                   <ArrowRightIcon className="size-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
                                 </div>
-                                <h3 className="text-xs font-semibold text-foreground">
+                                <h3 className="text-[13px] font-semibold leading-snug text-foreground">
                                   {preset.title}
                                 </h3>
-                                <p className="text-2xs leading-relaxed text-muted-foreground">
+                                <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                                   {preset.description}
                                 </p>
                               </div>
@@ -583,7 +587,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                         <h2 className="text-sm font-semibold text-foreground">
                           {copy.noMatchesTitle}
                         </h2>
-                        <p className="text-xs leading-relaxed text-muted-foreground">
+                        <p className="text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                           {copy.noMatchesDescription}
                         </p>
                       </div>
@@ -627,17 +631,17 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                                       kind={resolveEnvironmentMachineKind(envEntry.serverConfig)}
                                       className="size-4 shrink-0 text-muted-foreground"
                                     />
-                                    <span className="truncate text-xs font-semibold text-foreground">
+                                    <span className="truncate text-[13px] font-semibold tracking-tight text-foreground">
                                       {primary}
                                     </span>
-                                    <span className="hidden truncate text-2xs text-muted-foreground sm:inline">
+                                    <span className="hidden truncate text-[11px] font-normal text-muted-foreground sm:inline">
                                       <ScheduledTaskEnvironmentSubtitle
                                         environment={envEntry}
                                         secondary={secondary}
                                       />
                                     </span>
                                   </div>
-                                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                  <div className="flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
                                     <ConnectionStatusDot
                                       dotClassName={connectionPhaseDotClassName(
                                         envEntry.connection.phase,
@@ -657,7 +661,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                               {!connected ? (
                                 <div
                                   data-pmx-work-panel-control="1"
-                                  className="rounded-lg border border-border/70 bg-card px-4 py-3 text-xs text-muted-foreground"
+                                  className="rounded-lg border border-border/70 bg-card px-4 py-3 text-[11.5px] font-normal leading-[1.5] text-muted-foreground"
                                 >
                                   {copy.disconnectedPrefix} · {primary}
                                 </div>

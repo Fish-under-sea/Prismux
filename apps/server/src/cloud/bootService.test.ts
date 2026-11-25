@@ -191,6 +191,8 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-boot-service-test-" });
+  const localAppData = path.join(home, "AppData", "Local");
+  yield* fs.makeDirectory(localAppData, { recursive: true });
   const managerUnitDir = path.join(
     managerXdgConfigHome !== undefined && path.isAbsolute(managerXdgConfigHome)
       ? managerXdgConfigHome
@@ -394,7 +396,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
                   : { PRISMUX_INSTALL_BIN_DIR: serviceInstallBinDir }),
                 ...(xdgConfigHome === undefined ? {} : { XDG_CONFIG_HOME: xdgConfigHome }),
                 USERPROFILE: home,
-                LOCALAPPDATA: path.join(home, "AppData", "Local"),
+                LOCALAPPDATA: localAppData,
                 USERDOMAIN: "PC",
                 USERNAME: "theo",
                 ...(environmentPath === undefined || environmentPath === ""

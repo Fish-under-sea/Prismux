@@ -13,23 +13,33 @@ import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import { createModelCapabilities } from "@prismux/core-shared/model";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { AcpRequestError } from "@prismux/effect-acp/errors";
+import * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
+import {
+  collectSessionConfigOptionValues,
+  findModelConfigOption,
+} from "@prismux/provider-acp/server/runtimeModel";
 
 import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
 import { AcpRegistryAdapterV2Driver, type AcpRegistryAdapterV2DriverEnv } from "./adapter.ts";
 import type { ProviderTextGeneration } from "@prismux/provider-core/server/textGeneration";
+import * as TextGenerationOperations from "@prismux/provider-core/server/textGenerationOperations";
 import { ProviderDriverError } from "@prismux/provider-core/server/errors";
 import { makeManagedServerProvider } from "@prismux/provider-core/server/managedProvider";
 import { mergeProviderInstanceEnvironment } from "@prismux/provider-core/server/instanceEnvironment";
@@ -55,6 +65,7 @@ import {
   type AcpRegistryLiveConfiguration,
   deleteAcpRegistrySession,
   disableAcpRegistryProvider,
+  isolateDeepSeekProbeHistory,
   listAcpRegistrySessions,
   listAcpRegistryProviders,
   logoutAcpRegistry,
@@ -68,6 +79,12 @@ import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
 import { isDeepSeekHarnessSettings } from "./dshAcp.ts";
+import {
+  isPlaceholderDshVersion,
+  resolveDshInstalledVersion,
+  resolvePackagedDshDesktopSpawn,
+  selectPreferredDshVersion,
+} from "./dshLocal.ts";
 import { augmentDshAvailableCommands } from "./dshSkills.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
@@ -139,22 +156,343 @@ const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   packageName: null,
 });
 
-const makeUnsupportedTextGeneration = (): ProviderTextGeneration => {
-  const unsupported = (operation: string) =>
-    Effect.fail(
-      new TextGenerationError({
-        operation,
-        detail: "ACP Registry instances do not provide application text generation.",
-      }),
-    );
-  return {
-    generateCommitMessage: () => unsupported("generateCommitMessage"),
-    generatePrContent: () => unsupported("generatePrContent"),
-    generateBranchName: () => unsupported("generateBranchName"),
-    generateThreadTitle: () => unsupported("generateThreadTitle"),
-    generateReviewGuide: () => unsupported("generateReviewGuide"),
-    generateTranscriptionPostProcessing: () => unsupported("generateTranscriptionPostProcessing"),
-  };
+const ACP_TEXT_GENERATION_TIMEOUT_MS = 180_000;
+const ACP_TEXT_GENERATION_MAX_OUTPUT_CHARS = 128_000;
+const ACP_TEXT_GENERATION_SESSION_CLEANUP_TIMEOUT = "5 seconds";
+const isTextGenerationError = Schema.is(TextGenerationError);
+
+function isAntigravityAcpSettings(settings: AcpRegistrySettings): boolean {
+  if (settings.source === "local") {
+    const base = settings.commandPath.trim().split(/[\\/]/u).at(-1) ?? "";
+    return /^agy(?:\.exe|\.cmd)?$/iu.test(base);
+  }
+  const agentId = settings.agentId.trim().toLowerCase();
+  return agentId === "antigravity-acp" || agentId === "antigravity" || agentId === "agy";
+}
+
+function resolvePrismuxWaiverPath(
+  pathService: Path.Path,
+  homeDirectory: string,
+  environment: NodeJS.ProcessEnv,
+): string {
+  const overrideDataDir = environment.PRISMUX_DATA_DIR?.trim();
+  const dataDir =
+    overrideDataDir && overrideDataDir.length > 0
+      ? overrideDataDir
+      : pathService.join(homeDirectory, ".prismux");
+  return pathService.join(dataDir, "config", "subscription-waiver.json");
+}
+
+function readAntigravityWaiverSignedEffect(
+  fileSystem: FileSystem.FileSystem,
+  waiverPath: string,
+): Effect.Effect<boolean> {
+  return fileSystem.readFileString(waiverPath).pipe(
+    Effect.map((raw) => {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return false;
+        }
+        const record = parsed as Record<string, unknown>;
+        return (
+          record.signed === true && record.allowAntigravityAsControlledAgent === true
+        );
+      } catch {
+        return false;
+      }
+    }),
+    Effect.orElseSucceed(() => false),
+  );
+}
+
+const makeAcpRegistryTextGeneration = (input: {
+  readonly settings: AcpRegistrySettings;
+  readonly environment: NodeJS.ProcessEnv;
+  readonly providerLabel: string;
+  readonly isDsh: boolean;
+  readonly isAntigravityAcp: boolean;
+  readonly isAntigravityWaiverSigned: Effect.Effect<boolean>;
+  readonly catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"];
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: Path.Path;
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  readonly random: SecureRandom.SecureRandom["Service"];
+}): ProviderTextGeneration => {
+  const {
+    settings,
+    environment,
+    providerLabel,
+    isDsh,
+    isAntigravityAcp,
+    isAntigravityWaiverSigned,
+    catalog,
+    fileSystem,
+    path,
+    spawner,
+    random,
+  } = input;
+
+  const runAcpJson: TextGenerationOperations.Runner = Effect.fn("AcpRegistryTextGeneration.runJson")(
+    function* <S extends Schema.Top>(request: TextGenerationOperations.Request<S>) {
+      const { operation } = request;
+      if (isAntigravityAcp && !(yield* isAntigravityWaiverSigned)) {
+        return yield* new TextGenerationError({
+          operation,
+          detail:
+            "Antigravity automated text generation is locked by default (ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED). Sign the Subscription Risk Waiver and enable controlled Antigravity mode in Settings → Providers (/settings/providers#subscription-risk-waiver), or choose another text generation model.",
+        });
+      }
+
+      const helperCwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-acp-text-" });
+      const resolved = yield* catalog.resolve(settings, helperCwd, environment);
+      const spawn = isDsh
+        ? yield* isolateDeepSeekProbeHistory(settings.commandPath, resolved.spawn)
+        : resolved.spawn;
+
+      const runtimeContext = yield* Layer.build(
+        AcpSessionRuntime.layer({
+          spawn,
+          cwd: helperCwd,
+          clientCapabilities: {
+            auth: { terminal: false },
+            elicitation: {},
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+          },
+          clientInfo: { name: "prismux-text-generation", version: "0.0.0" },
+          mcpServers: [],
+          authenticateOnAuthRequired: false,
+          ...(settings.authMethodId ? { authMethodId: settings.authMethodId } : {}),
+        }).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Layer.succeed(SecureRandom.SecureRandom, random),
+            ),
+          ),
+        ),
+      );
+      const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+        Effect.provide(runtimeContext),
+      );
+
+      yield* runtime.getEvents().pipe(
+        Stream.runForEach((event) =>
+          event._tag === "EventStreamBarrier"
+            ? Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+
+      const output = yield* Ref.make("");
+      const rejected = yield* Deferred.make<never, TextGenerationError>();
+      let sessionId: string | undefined;
+
+      const reject = (detail: string) =>
+        Deferred.fail(rejected, new TextGenerationError({ operation, detail })).pipe(Effect.asVoid);
+      const rejectToolRequest = () =>
+        reject(`${providerLabel} text generation requested a tool or user input.`).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new AcpRequestError({
+                code: -32601,
+                errorMessage: "Tools and user input are disabled for text generation.",
+              }),
+            ),
+          ),
+        );
+
+      yield* runtime.handleRequestPermission(() =>
+        reject(`${providerLabel} text generation requested a tool permission or user input.`).pipe(
+          Effect.as({ outcome: { outcome: "cancelled" as const } }),
+        ),
+      );
+      yield* runtime.handleElicitation(() =>
+        reject(`${providerLabel} text generation requested user input.`).pipe(
+          Effect.as({ action: "decline" as const }),
+        ),
+      );
+      yield* runtime.handleReadTextFile(rejectToolRequest);
+      yield* runtime.handleWriteTextFile(rejectToolRequest);
+      yield* runtime.handleCreateTerminal(rejectToolRequest);
+      yield* runtime.handleTerminalOutput(rejectToolRequest);
+      yield* runtime.handleTerminalWaitForExit(rejectToolRequest);
+      yield* runtime.handleTerminalKill(rejectToolRequest);
+      yield* runtime.handleTerminalRelease(rejectToolRequest);
+      yield* runtime.handleUnknownExtRequest(rejectToolRequest);
+      yield* runtime.handleSessionUpdate((notification) =>
+        Effect.gen(function* () {
+          const update = notification.update;
+          if (
+            update.sessionUpdate === "tool_call" ||
+            update.sessionUpdate === "tool_call_update"
+          ) {
+            return yield* reject(`${providerLabel} attempted tool work during text generation.`);
+          }
+          if (
+            (sessionId !== undefined && notification.sessionId !== sessionId) ||
+            update.sessionUpdate !== "agent_message_chunk" ||
+            update.content.type !== "text"
+          ) {
+            return;
+          }
+          const text = update.content.text;
+          const exceeded = yield* Ref.modify(output, (current) =>
+            current.length + text.length > ACP_TEXT_GENERATION_MAX_OUTPUT_CHARS
+              ? [true, current]
+              : [false, current + text],
+          );
+          if (exceeded) {
+            return yield* reject(`${providerLabel} text generation exceeded the output limit.`);
+          }
+        }),
+      );
+
+      const rawResult = yield* Effect.gen(function* () {
+        const started = yield* runtime.start();
+        sessionId = started.sessionId;
+        yield* Effect.addFinalizer(() => {
+          const caps = started.initializeResult.agentCapabilities?.sessionCapabilities;
+          const cleanup =
+            caps?.delete != null
+              ? runtime.deleteSession(started.sessionId)
+              : caps?.close != null
+                ? runtime.closeSession(started.sessionId)
+                : Effect.void;
+          return cleanup.pipe(
+            Effect.timeoutOption(ACP_TEXT_GENERATION_SESSION_CLEANUP_TIMEOUT),
+            Effect.ignore,
+          );
+        });
+
+        const initialOptions = yield* runtime.getConfigOptions;
+        const modelOption = findModelConfigOption(initialOptions);
+        const currentModel =
+          modelOption?.type === "select"
+            ? modelOption.currentValue
+            : started.sessionSetupResult.models?.currentModelId;
+        const requestedModel = request.modelSelection.model.trim();
+        if (
+          requestedModel.length > 0 &&
+          requestedModel !== "default" &&
+          requestedModel !== currentModel
+        ) {
+          yield* runtime.setModel(requestedModel).pipe(
+            Effect.mapError(
+              (cause) =>
+                new TextGenerationError({
+                  operation,
+                  detail: `Could not select the ${providerLabel} model for text generation.`,
+                  cause,
+                }),
+            ),
+          );
+        }
+
+        const savedOptions = request.modelSelection.options;
+        if (savedOptions?.length) {
+          const latestOptions = yield* runtime.getConfigOptions;
+          for (const saved of savedOptions) {
+            if (typeof saved.value !== "string") continue;
+            const descriptor = latestOptions.find(
+              (option) =>
+                option.id === saved.id &&
+                option.type === "select" &&
+                option.category !== "model" &&
+                option.id !== "model",
+            );
+            if (
+              descriptor?.type === "select" &&
+              saved.value !== descriptor.currentValue &&
+              collectSessionConfigOptionValues(descriptor).includes(saved.value)
+            ) {
+              yield* runtime.setConfigOption(descriptor.id, saved.value).pipe(
+                Effect.catchTags({
+                  AcpRequestError: (error) =>
+                    error.code === -32602
+                      ? Effect.logDebug(`${providerLabel} rejected saved text generation option`, {
+                          optionId: descriptor.id,
+                          value: saved.value,
+                        })
+                      : Effect.fail(error),
+                }),
+              );
+            }
+          }
+        }
+
+        const result = yield* runtime.prompt({
+          prompt: [
+            {
+              type: "text",
+              text: [
+                "Use only the input below. Do not use tools, read or write files, run commands, or ask questions.",
+                "Return only the requested JSON object.",
+                "",
+                request.prompt,
+              ].join("\n"),
+            },
+          ],
+        });
+        if (yield* Deferred.isDone(rejected)) {
+          return yield* Deferred.await(rejected);
+        }
+        if (result.stopReason === "cancelled") {
+          return yield* new TextGenerationError({
+            operation,
+            detail: `${providerLabel} text generation was cancelled.`,
+          });
+        }
+        return (yield* Ref.get(output)).trim();
+      }).pipe(
+        Effect.onInterrupt(() => runtime.cancel.pipe(Effect.timeoutOption(2_000), Effect.ignore)),
+        Effect.raceFirst(Deferred.await(rejected)),
+      );
+
+      if (!rawResult) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: `${providerLabel} returned empty text generation output.`,
+        });
+      }
+      return yield* TextGenerationOperations.decodeJsonReply(request, providerLabel, rawResult);
+    },
+    (effect, request) =>
+      effect.pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.scoped,
+        Effect.timeoutOption(ACP_TEXT_GENERATION_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new TextGenerationError({
+                  operation: request.operation,
+                  detail: `${providerLabel} text generation timed out.`,
+                }),
+              ),
+            onSome: Effect.succeed,
+          }),
+        ),
+        Effect.mapError((cause) =>
+          isTextGenerationError(cause)
+            ? cause
+            : new TextGenerationError({
+                operation: request.operation,
+                detail: `${providerLabel} text generation failed.`,
+                cause,
+              }),
+        ),
+      ),
+  );
+
+  return TextGenerationOperations.fromRunner(
+    "AcpRegistryTextGeneration",
+    TextGenerationOperations.withoutInvestigation(providerLabel, runAcpJson),
+  );
 };
 
 function modelsFromDiscovery(
@@ -298,6 +636,7 @@ function baseSnapshot(
     readonly message?: string;
     readonly probe?: AcpRegistryConfigurationProbeResult;
     readonly probeError?: AcpRegistryOperationError;
+    readonly supportsTextGeneration?: boolean;
   },
 ): ServerProvider {
   const iconUrl =
@@ -312,7 +651,9 @@ function baseSnapshot(
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
-    supportsTextGeneration: false,
+    supportsTextGeneration:
+      input.supportsTextGeneration ??
+      (input.installed && input.auth.status !== "unauthenticated"),
     enabled: input.settings.enabled,
     installed: input.installed,
     version: input.version,
@@ -492,7 +833,14 @@ export function buildCheckedAcpRegistrySnapshot(
     installed: readiness.installed,
     version:
       input.settings.source === "local"
-        ? (input.probe?.probe.agentVersion ?? readiness.version)
+        ? isDeepSeekHarnessSettings(input.settings)
+          ? (selectPreferredDshVersion(
+              isPlaceholderDshVersion(input.probe?.probe.agentVersion)
+                ? readiness.version
+                : input.probe?.probe.agentVersion,
+              readiness.version ?? input.probe?.probe.agentVersion,
+            ) ?? null)
+          : (input.probe?.probe.agentVersion ?? readiness.version)
         : readiness.version,
     // Failed discovery is a warning: an installed agent may still run real turns.
     status: probeFailed ? "warning" : readiness.status,
@@ -650,6 +998,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const path = yield* Path.Path;
     const hostEnvironment = yield* HostProcess.Environment;
     const hostPlatform = yield* HostProcess.Platform;
+    const hostHomeDirectory = yield* HostProcess.HomeDirectory;
     const host = yield* ProviderHost.ProviderHost;
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
@@ -663,10 +1012,39 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     };
     const effectiveConfig = { ...config, enabled } satisfies AcpRegistrySettings;
     const isDsh = isDeepSeekHarnessSettings(effectiveConfig);
+    const isAntigravityAcp = isAntigravityAcpSettings(effectiveConfig);
     const processEnvironment = yield* mergeProviderInstanceEnvironment(
       environment,
       hostEnvironment,
     );
+    const waiverPath = resolvePrismuxWaiverPath(path, hostHomeDirectory, processEnvironment);
+    const isAntigravityWaiverSigned = isAntigravityAcp
+      ? readAntigravityWaiverSignedEffect(fileSystem, waiverPath)
+      : Effect.succeed(true);
+    const resolveLocalDshVersionFast = (): string | null => {
+      if (!isDsh || effectiveConfig.source !== "local") return null;
+      const direct = resolveDshInstalledVersion({
+        command: effectiveConfig.commandPath,
+        args: effectiveConfig.commandArgs,
+        env: processEnvironment,
+        platform: hostPlatform,
+      });
+      if (direct !== undefined) return direct;
+      const packaged = resolvePackagedDshDesktopSpawn({
+        commandArgs: effectiveConfig.commandArgs,
+        platform: hostPlatform,
+        env: processEnvironment,
+      });
+      if (packaged === undefined) return null;
+      return (
+        resolveDshInstalledVersion({
+          command: packaged.command,
+          args: packaged.args,
+          env: packaged.env,
+          platform: hostPlatform,
+        }) ?? null
+      );
+    };
     const orchestrationAdapter = yield* AcpRegistryAdapterV2Driver.create({
       instanceId,
       displayName,
@@ -772,7 +1150,15 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               );
             }),
           );
-      return overlayDshCommandsForCwd(merged, host.paths.cwd);
+      const withCommandsAndConfig = overlayDshCommandsForCwd(merged, host.paths.cwd);
+      const waiverAllowsTextGen = isAntigravityAcp ? yield* isAntigravityWaiverSigned : true;
+      const resolvedSupportsTextGen =
+        withCommandsAndConfig.installed &&
+        withCommandsAndConfig.auth.status !== "unauthenticated" &&
+        waiverAllowsTextGen;
+      return withCommandsAndConfig.supportsTextGeneration === resolvedSupportsTextGen
+        ? withCommandsAndConfig
+        : { ...withCommandsAndConfig, supportsTextGeneration: resolvedSupportsTextGen };
     });
     // A local executable's version comes only from probing it, so readiness checks reuse the last report.
     const reportedLocalVersion = yield* Ref.make<string | null>(null);
@@ -780,11 +1166,18 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap((provider) =>
         Ref.get(reportedLocalVersion).pipe(
-          Effect.map((version) =>
-            provider.installed && provider.version === null && version !== null
-              ? { ...provider, version }
-              : provider,
-          ),
+          Effect.map((version) => {
+            if (!provider.installed) return provider;
+            const resolvedVersion =
+              provider.version !== null && (!isDsh || !isPlaceholderDshVersion(provider.version))
+                ? provider.version
+                : version !== null && (!isDsh || !isPlaceholderDshVersion(version))
+                  ? version
+                  : resolveLocalDshVersionFast() ?? provider.version;
+            return resolvedVersion !== provider.version
+              ? { ...provider, version: resolvedVersion }
+              : provider;
+          }),
         ),
       ),
       Effect.flatMap(withLiveRuntimeState),
@@ -1081,7 +1474,21 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
       ),
       orchestrationAdapter,
-      textGeneration: makeUnsupportedTextGeneration(),
+      textGeneration: makeAcpRegistryTextGeneration({
+        settings: effectiveConfig,
+        environment: processEnvironment,
+        providerLabel:
+          displayName?.trim() ||
+          (isDsh ? "DeepSeek Harness" : effectiveConfig.agentId || "ACP Registry"),
+        isDsh,
+        isAntigravityAcp,
+        isAntigravityWaiverSigned,
+        catalog,
+        fileSystem,
+        path,
+        spawner,
+        random,
+      }),
       acpSessionManagement: {
         listSessions: ({ cwd, cursor }) =>
           provideAcpManagementServices(

@@ -37,6 +37,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   formatAgentBrandName,
+  resolveAgentBrandId,
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
 import {
@@ -44,6 +45,7 @@ import {
   PrismuxWallpaperQuickPanel,
 } from "../../prismux/PrismuxWallpaperBridge";
 import {
+  NO_PROVIDER_MODEL_SELECTION,
   providerInstanceEntriesFor,
   resolveProjectDefaultProviderModelSelection,
   type ProviderInstanceEntry,
@@ -58,11 +60,13 @@ import {
   type ThreadRouteTarget,
 } from "../../threadRoutes";
 import { resolveComposerProviderSelection } from "../ChatView.logic";
+import { orderProviderInstanceEntries } from "../chat/ProviderModelPicker.logic";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { RightPanelAgentSessionPane } from "./RightPanelAgentSessionPane";
 import { WorkspacePaneContent } from "./WorkspacePaneContent";
 import {
   buildQuickLaunchAgentOptions,
+  resolveProviderBrandIdForEntry,
   resolveQuickLaunchAgentTarget,
   type QuickLaunchAgentOption,
   type QuickLaunchHistoryThread,
@@ -109,9 +113,12 @@ import {
   type WorkspaceTab,
 } from "./workspaceTabsStore";
 
+export { resolveProviderBrandIdForEntry };
+
 export interface PendingDraftTabBinding {
   readonly token: object;
   readonly tabId: string | null;
+  readonly originRouteKey?: string | null | undefined;
   readonly title: string;
   readonly providerId: string | null;
   readonly instanceId: ProviderInstanceId | null;
@@ -126,18 +133,90 @@ export interface WorkspaceRouteProviderMetadata {
   readonly title: string;
 }
 
-export function resolveProviderBrandIdForEntry(entry: ProviderInstanceEntry): string {
-  if (entry.driverKind === "acpRegistry") {
-    return entry.acpRegistryAgentId || entry.displayName || entry.instanceId;
+/**
+ * Decides whether a pending `+` launch binding should apply to the current draft route sync
+ * and whether it must be consumed/cleared immediately so it can NEVER revert subsequent
+ * composer model/provider switches.
+ */
+export function resolvePendingDraftBindingForSync(input: {
+  readonly shownTarget: ThreadRouteTarget | null;
+  readonly routeKey: string | null;
+  readonly pendingBinding: PendingDraftTabBinding | null;
+  readonly routeComposerDraft: {
+    readonly activeProvider: ProviderInstanceId | null;
+    readonly modelSelectionByProvider: Readonly<Partial<Record<ProviderInstanceId, ModelSelection>>>;
+    readonly modelSelectionExplicit?: boolean | undefined;
+  } | null;
+  readonly activeChatProvider?: WorkspaceActiveChatProviderSnapshot | null | undefined;
+}): {
+  readonly applied: PendingDraftTabBinding | null;
+  readonly shouldClear: boolean;
+} {
+  const { shownTarget, routeKey, pendingBinding, routeComposerDraft, activeChatProvider } = input;
+  if (!pendingBinding) {
+    return { applied: null, shouldClear: false };
   }
-  return entry.driverKind;
+  // Keep in-flight launch bindings untouched while still on a server route waiting to navigate.
+  if (shownTarget?.kind !== "draft") {
+    return { applied: null, shouldClear: false };
+  }
+
+  // If the user explicitly switched provider or model in the composer, discard stale pending binding!
+  const explicitComposerProvider = routeComposerDraft?.modelSelectionExplicit
+    ? routeComposerDraft.activeProvider
+    : null;
+  const explicitComposerModel = explicitComposerProvider
+    ? (routeComposerDraft?.modelSelectionByProvider[explicitComposerProvider]?.model ?? null)
+    : null;
+  if (
+    explicitComposerProvider !== null &&
+    ((pendingBinding.instanceId !== null && explicitComposerProvider !== pendingBinding.instanceId) ||
+      (explicitComposerModel !== null &&
+        pendingBinding.model !== null &&
+        explicitComposerModel !== pendingBinding.model))
+  ) {
+    return { applied: null, shouldClear: true };
+  }
+
+  // If the mounted ChatView for this exact route already reports a newer explicit provider/instance, discard!
+  const liveChatSnapshot =
+    activeChatProvider && routeKey && activeChatProvider.routeKey === routeKey
+      ? activeChatProvider
+      : null;
+  if (
+    liveChatSnapshot?.instanceId != null &&
+    pendingBinding.instanceId !== null &&
+    liveChatSnapshot.instanceId !== pendingBinding.instanceId &&
+    (routeComposerDraft?.modelSelectionExplicit === true ||
+      pendingBinding.originRouteKey === routeKey)
+  ) {
+    return { applied: null, shouldClear: true };
+  }
+
+  // Still sitting on the origin draft waiting for `handleNewThread` to navigate to a brand-new draft.
+  if (
+    pendingBinding.originRouteKey &&
+    routeKey &&
+    pendingBinding.originRouteKey === routeKey &&
+    pendingBinding.tabId === null
+  ) {
+    return { applied: null, shouldClear: false };
+  }
+
+  // Consume once applied so future `useEffect` runs never overwrite tab harness with stale data.
+  return { applied: pendingBinding, shouldClear: true };
 }
 
 /**
  * Resolves the workspace tab's live provider, instance, model, and fallback display title
- * using the exact same priority chain as `ChatView` (composer draft selection -> live ChatView
- * snapshot -> sticky provider -> project/server default & fallback selection -> healthy selectable
- * provider), so scratch (`无项目 ~`) and untitled draft tabs never stale-default to Codex.
+ * using the exact same priority chain as `ChatView`:
+ * - For real server threads (`!isDraft`), ALWAYS trusts the thread's actual live harness
+ *   (`liveChatSnapshot` matching `routeKey`, `routeThreadShell.runtime.providerInstanceId`,
+ *   `routeThreadShell.modelSelection.instanceId`, `routeThreadShell.providerInstanceId`) and
+ *   matches by `instanceId` first (even for `acpRegistry` agents like DSH), never letting a
+ *   stale `stickyActiveProvider` or wrong default override it.
+ * - For draft threads (`isDraft`), matches composer draft selection -> live ChatView snapshot
+ *   -> sticky provider -> project/server default & fallback selection -> healthy selectable provider.
  */
 export function resolveWorkspaceRouteProviderMetadata(input: {
   readonly shownTarget: ThreadRouteTarget | null;
@@ -145,6 +224,10 @@ export function resolveWorkspaceRouteProviderMetadata(input: {
   readonly routeThreadShell: {
     readonly title?: string | null | undefined;
     readonly modelSelection?: ModelSelection | null | undefined;
+    readonly providerInstanceId?: ProviderInstanceId | null | undefined;
+    readonly runtime?: {
+      readonly providerInstanceId?: ProviderInstanceId | null | undefined;
+    } | null | undefined;
   } | null;
   readonly routeComposerDraft: {
     readonly activeProvider: ProviderInstanceId | null;
@@ -208,37 +291,90 @@ export function resolveWorkspaceRouteProviderMetadata(input: {
     ? draftModelResolution.selection
     : (projectDefaultModelSelection ?? draftModelResolution?.selection ?? null);
 
-  const candidateInstanceIds: Array<ProviderInstanceId | null | undefined> = isDraft
-    ? [
+  let resolvedEntry: ProviderInstanceEntry | null = null;
+  let instanceId: ProviderInstanceId | null = null;
+
+  if (!isDraft) {
+    // Real server threads: ALWAYS trust the thread's live harness by exact instanceId first.
+    const serverAuthoritativeIds = [
+      liveChatSnapshot?.instanceId,
+      routeThreadShell?.runtime?.providerInstanceId,
+      routeThreadShell?.modelSelection?.instanceId,
+      routeThreadShell?.providerInstanceId,
+    ].filter(
+      (candidate): candidate is ProviderInstanceId =>
+        candidate != null && candidate !== NO_PROVIDER_MODEL_SELECTION.instanceId,
+    );
+
+    const authoritativeInstanceId = serverAuthoritativeIds[0] ?? null;
+    if (authoritativeInstanceId !== null) {
+      resolvedEntry =
+        instanceEntries.find((candidate) => candidate.instanceId === authoritativeInstanceId) ??
+        null;
+      instanceId = resolvedEntry?.instanceId ?? authoritativeInstanceId;
+    } else {
+      const serverFallbackCandidates: Array<ProviderInstanceId | null | undefined> = [
         routeComposerDraft?.modelSelectionExplicit ? routeComposerDraft.activeProvider : null,
-        liveChatSnapshot?.instanceId,
-        routeComposerDraft?.activeProvider,
-        stickyActiveProvider,
-        effectiveDefaultSelection?.instanceId,
-      ]
-    : [
-        routeComposerDraft?.modelSelectionExplicit ? routeComposerDraft.activeProvider : null,
-        liveChatSnapshot?.instanceId,
-        routeThreadShell?.modelSelection?.instanceId,
         routeComposerDraft?.activeProvider,
         effectiveDefaultSelection?.instanceId,
       ];
+      const { selectedProviderEntry, requestedInstanceId } = resolveComposerProviderSelection({
+        entries: instanceEntries,
+        candidateInstanceIds: serverFallbackCandidates,
+        lockedProvider: null,
+        lockedInstanceId: null,
+      });
+      resolvedEntry =
+        selectedProviderEntry ??
+        (requestedInstanceId
+          ? (instanceEntries.find((candidate) => candidate.instanceId === requestedInstanceId) ??
+            null)
+          : null);
+      instanceId =
+        resolvedEntry?.instanceId ?? requestedInstanceId ?? liveChatSnapshot?.instanceId ?? null;
+    }
+  } else {
+    const draftCandidateInstanceIds: Array<ProviderInstanceId | null | undefined> = [
+      routeComposerDraft?.modelSelectionExplicit ? routeComposerDraft.activeProvider : null,
+      liveChatSnapshot?.instanceId,
+      routeComposerDraft?.activeProvider,
+      stickyActiveProvider,
+      effectiveDefaultSelection?.instanceId,
+    ];
 
-  const { selectedProviderEntry, requestedInstanceId } = resolveComposerProviderSelection({
-    entries: instanceEntries,
-    candidateInstanceIds,
-    lockedProvider: null,
-    lockedInstanceId: null,
-  });
+    const explicitDraftInstanceId =
+      routeComposerDraft?.modelSelectionExplicit &&
+      routeComposerDraft.activeProvider &&
+      routeComposerDraft.activeProvider !== NO_PROVIDER_MODEL_SELECTION.instanceId
+        ? routeComposerDraft.activeProvider
+        : null;
+    const explicitEnabledEntry = explicitDraftInstanceId
+      ? (instanceEntries.find(
+          (candidate) => candidate.instanceId === explicitDraftInstanceId && candidate.enabled,
+        ) ?? null)
+      : null;
 
-  const resolvedEntry =
-    selectedProviderEntry ??
-    (requestedInstanceId
-      ? (instanceEntries.find((candidate) => candidate.instanceId === requestedInstanceId) ?? null)
-      : null);
+    if (explicitEnabledEntry) {
+      resolvedEntry = explicitEnabledEntry;
+      instanceId = explicitEnabledEntry.instanceId;
+    } else {
+      const { selectedProviderEntry, requestedInstanceId } = resolveComposerProviderSelection({
+        entries: instanceEntries,
+        candidateInstanceIds: draftCandidateInstanceIds,
+        lockedProvider: null,
+        lockedInstanceId: null,
+      });
 
-  const instanceId: ProviderInstanceId | null =
-    resolvedEntry?.instanceId ?? requestedInstanceId ?? liveChatSnapshot?.instanceId ?? null;
+      resolvedEntry =
+        selectedProviderEntry ??
+        (requestedInstanceId
+          ? (instanceEntries.find((candidate) => candidate.instanceId === requestedInstanceId) ??
+            null)
+          : null);
+      instanceId =
+        resolvedEntry?.instanceId ?? requestedInstanceId ?? liveChatSnapshot?.instanceId ?? null;
+    }
+  }
 
   const providerId: string | null = resolvedEntry
     ? resolveProviderBrandIdForEntry(resolvedEntry)
@@ -268,13 +404,18 @@ export function resolveWorkspaceRouteProviderMetadata(input: {
       ? liveChatSnapshot.model
       : null;
 
-  const model =
-    draftSelectedModel ??
-    liveSnapshotModel ??
-    stickySelectedModel ??
-    shellSelectedModel ??
-    defaultSelectedModel ??
-    null;
+  const model = isDraft
+    ? (draftSelectedModel ??
+      liveSnapshotModel ??
+      stickySelectedModel ??
+      shellSelectedModel ??
+      defaultSelectedModel ??
+      null)
+    : (liveSnapshotModel ??
+      shellSelectedModel ??
+      draftSelectedModel ??
+      defaultSelectedModel ??
+      null);
 
   let title: string;
   if (routeThreadShell?.title?.trim()) {
@@ -328,6 +469,7 @@ export async function launchPrimaryAgentDraft(input: {
   ) => Promise<{ readonly draftId: DraftId; readonly threadId: ThreadId } | null>;
   readonly onNavigateToDraft: (draftId: DraftId) => void;
   readonly onNavigateHome: () => void;
+  readonly originRouteKey?: string | null | undefined;
   readonly setPendingBinding?: (binding: PendingDraftTabBinding | null) => void;
   readonly getPendingBinding?: () => PendingDraftTabBinding | null;
 }): Promise<string | null> {
@@ -339,6 +481,7 @@ export async function launchPrimaryAgentDraft(input: {
     handleNewThread,
     onNavigateToDraft,
     onNavigateHome,
+    originRouteKey,
     setPendingBinding,
     getPendingBinding,
   } = input;
@@ -390,6 +533,7 @@ export async function launchPrimaryAgentDraft(input: {
     setPendingBinding?.({
       token: bindingToken,
       tabId: reuseTabId,
+      ...(originRouteKey !== undefined ? { originRouteKey } : {}),
       title: agent.displayName,
       providerId: resolved.providerId,
       instanceId: resolved.instanceId,
@@ -719,6 +863,8 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const stickyModelSelectionByProvider = useComposerDraftStore(
     (store) => store.stickyModelSelectionByProvider,
   );
+  const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
+  const promotedDraftRedirects = useComposerDraftStore((store) => store.promotedDraftRedirects);
 
   const activeEnvironmentId: EnvironmentId | null =
     routeServerRef?.environmentId ??
@@ -789,10 +935,9 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       const providers =
         liveProviders && liveProviders.length > 0 ? liveProviders : (serverConfig?.providers ?? []);
       const settings = serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
-      const entries: ReadonlyArray<ProviderInstanceEntry> = providerInstanceEntriesFor(
-        providers,
-        settings,
-        activeProjectId,
+      const entries: ReadonlyArray<ProviderInstanceEntry> = orderProviderInstanceEntries(
+        providerInstanceEntriesFor(providers, settings, activeProjectId),
+        settings.providerOrder,
       );
       const optionsMap = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>();
       for (const entry of entries) {
@@ -819,7 +964,11 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
       .slice(0, 40)
       .map((thread) => {
-        const instanceId = thread.modelSelection?.instanceId ?? null;
+        const instanceId =
+          thread.runtime?.providerInstanceId ??
+          thread.modelSelection?.instanceId ??
+          thread.providerInstanceId ??
+          null;
         const entry = instanceId
           ? instanceEntries.find((candidate) => candidate.instanceId === instanceId)
           : undefined;
@@ -828,7 +977,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           threadId: thread.id,
           title: thread.title || "未命名会话",
           projectName: projectNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
-          providerId: entry?.driverKind ?? instanceId,
+          providerId: entry ? resolveProviderBrandIdForEntry(entry) : instanceId,
           instanceId,
           updatedAt: thread.updatedAt,
         };
@@ -836,8 +985,13 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   }, [instanceEntries, projectNameByKey, visibleThreads]);
 
   const quickLaunchAgents = useMemo(
-    () => buildQuickLaunchAgentOptions({ instanceEntries, historyThreads }),
-    [historyThreads, instanceEntries],
+    () =>
+      buildQuickLaunchAgentOptions({
+        instanceEntries,
+        historyThreads,
+        providerOrder: activeServerSettings.providerOrder,
+      }),
+    [activeServerSettings.providerOrder, historyThreads, instanceEntries],
   );
 
   // Sync active T3 route target into the primary workspace pane seamlessly
@@ -876,34 +1030,114 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const routeActiveModel = routeProviderMetadata.model;
   const routeDisplayTitle = routeProviderMetadata.title;
 
-  // Keep open draft & blank agent tab titles & brand icons synchronized immediately when a provider changes in Settings.
+  // Keep open draft, blank agent, AND server thread tabs synchronized immediately when provider
+  // settings (display name / brand / acpRegistry) or live server thread modelSelection changes.
   useEffect(() => {
-    if (instanceEntries.length === 0) return;
+    if (instanceEntries.length === 0 && visibleThreads.length === 0) return;
     const entryById = new Map(instanceEntries.map((entry) => [entry.instanceId, entry] as const));
+    const threadByKey = new Map<string, (typeof visibleThreads)[number]>(
+      visibleThreads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread] as const),
+    );
+    const activeServerKey =
+      shownTarget?.kind === "server"
+        ? `${shownTarget.threadRef.environmentId}:${shownTarget.threadRef.threadId}`
+        : null;
+    const activeRouteHasLiveSnapshot = Boolean(
+      activeServerKey && activeChatProvider && routeKey && activeChatProvider.routeKey === routeKey,
+    );
     const store = useWorkspaceTabsStore.getState();
     for (const tab of Object.values(store.tabs)) {
-      if ((tab.kind !== "agent" && tab.kind !== "draft") || !tab.instanceId) continue;
-      const entry = entryById.get(tab.instanceId);
-      if (!entry) continue;
-      const nextTitle = resolveProviderEntryDisplayName(entry);
-      const nextProviderId = resolveProviderBrandIdForEntry(entry);
-      const titleChanged = Boolean(nextTitle && tab.title !== nextTitle);
-      const providerChanged = Boolean(nextProviderId && tab.providerId !== nextProviderId);
-      if (titleChanged || providerChanged) {
-        store.updateTab(tab.id, {
-          ...(titleChanged ? { title: nextTitle } : {}),
-          ...(providerChanged ? { providerId: nextProviderId } : {}),
-        });
+      if ((tab.kind === "agent" || tab.kind === "draft") && tab.instanceId) {
+        const entry = entryById.get(tab.instanceId);
+        if (!entry) continue;
+        const nextTitle = resolveProviderEntryDisplayName(entry);
+        const nextProviderId = resolveProviderBrandIdForEntry(entry);
+        const titleChanged = Boolean(nextTitle && tab.title !== nextTitle);
+        const providerChanged = Boolean(nextProviderId && tab.providerId !== nextProviderId);
+        if (titleChanged || providerChanged) {
+          store.updateTab(tab.id, {
+            ...(titleChanged ? { title: nextTitle } : {}),
+            ...(providerChanged ? { providerId: nextProviderId } : {}),
+          });
+        }
+        continue;
+      }
+
+      if (tab.kind === "thread" && tab.environmentId && tab.threadId) {
+        const key = `${tab.environmentId}:${tab.threadId}`;
+        const threadShell = threadByKey.get(key);
+        const isCurrentActiveRouteWithLive =
+          activeServerKey === key &&
+          (activeRouteHasLiveSnapshot || routeComposerDraft?.modelSelectionExplicit === true);
+
+        const nextTitle = threadShell?.title?.trim() || tab.title;
+        const shellInstanceId =
+          threadShell?.runtime?.providerInstanceId ??
+          threadShell?.modelSelection?.instanceId ??
+          threadShell?.providerInstanceId ??
+          tab.instanceId ??
+          null;
+        const effectiveInstanceId = isCurrentActiveRouteWithLive
+          ? (tab.instanceId ?? shellInstanceId)
+          : shellInstanceId;
+        const entry = effectiveInstanceId ? entryById.get(effectiveInstanceId) : undefined;
+        const nextProviderId = entry
+          ? resolveProviderBrandIdForEntry(entry)
+          : effectiveInstanceId && effectiveInstanceId !== tab.instanceId
+            ? effectiveInstanceId
+            : (tab.providerId ?? null);
+        const nextModel = isCurrentActiveRouteWithLive
+          ? (tab.model ?? threadShell?.modelSelection?.model ?? null)
+          : (threadShell?.modelSelection?.model ??
+            (effectiveInstanceId !== tab.instanceId ? null : (tab.model ?? null)));
+
+        const titleChanged = Boolean(nextTitle && tab.title !== nextTitle);
+        const instanceChanged =
+          !isCurrentActiveRouteWithLive &&
+          effectiveInstanceId !== null &&
+          tab.instanceId !== effectiveInstanceId;
+        const providerChanged =
+          !isCurrentActiveRouteWithLive &&
+          nextProviderId !== null &&
+          tab.providerId !== nextProviderId;
+        const modelChanged =
+          !isCurrentActiveRouteWithLive &&
+          nextModel !== null &&
+          tab.model !== nextModel;
+
+        if (titleChanged || instanceChanged || providerChanged || modelChanged) {
+          store.updateTab(tab.id, {
+            ...(titleChanged ? { title: nextTitle } : {}),
+            ...(instanceChanged ? { instanceId: effectiveInstanceId } : {}),
+            ...(providerChanged ? { providerId: nextProviderId } : {}),
+            ...(modelChanged ? { model: nextModel } : {}),
+          });
+        }
       }
     }
-  }, [instanceEntries]);
+  }, [
+    activeChatProvider,
+    instanceEntries,
+    routeComposerDraft?.modelSelectionExplicit,
+    routeKey,
+    shownTarget,
+    visibleThreads,
+  ]);
 
   useEffect(() => {
     if (!shownTarget || !routeKey) return;
     const isRouteChanged = lastSyncedRouteKeyRef.current !== routeKey;
     lastSyncedRouteKeyRef.current = routeKey;
-    const pendingBinding =
-      shownTarget.kind === "draft" ? pendingDraftTabBindingRef.current : null;
+    const { applied: pendingBinding, shouldClear } = resolvePendingDraftBindingForSync({
+      shownTarget,
+      routeKey,
+      pendingBinding: pendingDraftTabBindingRef.current,
+      routeComposerDraft,
+      activeChatProvider,
+    });
+    if (shouldClear) {
+      pendingDraftTabBindingRef.current = null;
+    }
     const draftLookup = getLiveComposerDraftStateLookup();
     const reuseUnusedDraftTabId =
       shownTarget.kind === "draft"
@@ -931,11 +1165,14 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           : (routeDraftSession?.threadId ?? null),
       activate: isRouteChanged,
       reuseUnusedDraftTabId,
+      draftLookup,
     });
   }, [
+    activeChatProvider,
     routeActiveInstanceId,
     routeActiveModel,
     routeActiveProviderId,
+    routeComposerDraft,
     routeDisplayTitle,
     routeDraftSession?.environmentId,
     routeDraftSession?.threadId,
@@ -943,16 +1180,60 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     shownTarget,
   ]);
 
-  // Promote draft tabs in-place when T3 promotes a draft into a server thread
+  // Promote draft tabs in-place when T3 promotes a draft into a server thread (preserving full harness metadata)
   const promotedTarget = routeDraftSession?.promotedTo ?? routePromotedRedirect;
   useEffect(() => {
     if (routeDraftId && promotedTarget) {
       useWorkspaceTabsStore.getState().promoteDraftTab(routeDraftId, promotedTarget, {
         title: routeDisplayTitle,
         providerId: routeActiveProviderId,
+        instanceId: routeActiveInstanceId,
+        model: routeActiveModel,
       });
     }
-  }, [promotedTarget, routeActiveProviderId, routeDisplayTitle, routeDraftId]);
+  }, [
+    promotedTarget,
+    routeActiveInstanceId,
+    routeActiveModel,
+    routeActiveProviderId,
+    routeDisplayTitle,
+    routeDraftId,
+  ]);
+
+  // Reactively reconcile all draft tabs so promoted drafts merge immediately (zero zombie "新会话"
+  // tabs waiting to be clicked) and orphan non-active draft tabs vanish after send errors.
+  useEffect(() => {
+    const entryById = new Map(instanceEntries.map((entry) => [entry.instanceId, entry] as const));
+    const threadByKey = new Map<string, (typeof visibleThreads)[number]>(
+      visibleThreads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread] as const),
+    );
+    useWorkspaceTabsStore.getState().reconcileDraftTabs({
+      activeRouteTarget: shownTarget,
+      lookup: getLiveComposerDraftStateLookup(),
+      resolveThreadMetadata: (threadRef) => {
+        const shell = threadByKey.get(`${threadRef.environmentId}:${threadRef.threadId}`);
+        if (!shell) return null;
+        const instanceId =
+          shell.runtime?.providerInstanceId ??
+          shell.modelSelection?.instanceId ??
+          shell.providerInstanceId ??
+          null;
+        const entry = instanceId ? entryById.get(instanceId) : undefined;
+        return {
+          title: shell.title?.trim() || undefined,
+          providerId: entry ? resolveProviderBrandIdForEntry(entry) : instanceId,
+          instanceId,
+          model: shell.modelSelection?.model ?? null,
+        };
+      },
+    });
+  }, [
+    draftThreadsByThreadKey,
+    instanceEntries,
+    promotedDraftRedirects,
+    shownTarget,
+    visibleThreads,
+  ]);
 
   const openTabsList = useMemo<ReadonlyArray<QuickLaunchOpenTabMatch>>(() => {
     const list: QuickLaunchOpenTabMatch[] = [];
@@ -1036,7 +1317,10 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             ? instanceEntries.find(
                 (entry) =>
                   entry.enabled &&
-                  (entry.driverKind === tab.providerId ||
+                  (resolveProviderBrandIdForEntry(entry) === tab.providerId ||
+                    entry.driverKind === tab.providerId ||
+                    resolveAgentBrandId(resolveProviderBrandIdForEntry(entry)) ===
+                      resolveAgentBrandId(tab.providerId) ||
                     formatAgentBrandName(entry.driverKind).toLowerCase() ===
                       formatAgentBrandName(tab.providerId).toLowerCase()),
               )
@@ -1128,6 +1412,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         pendingDraftTabBindingRef.current = {
           token: bindingToken,
           tabId: targetReuseTabId,
+          originRouteKey: routeKey,
           title: resolvedTitle,
           providerId: resolvedProviderId,
           instanceId: resolvedInstanceId,
@@ -1180,6 +1465,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       instanceEntries,
       navigate,
       resolveProjectRefForMainLaunch,
+      routeKey,
       routeProviderMetadata.entry,
       stickyActiveProvider,
     ],
@@ -1214,20 +1500,34 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       } else if (tab.kind === "draft" && tab.draftId) {
         const draftStore = useComposerDraftStore.getState();
         const promotedRedirect = draftStore.getPromotedDraftRedirect(tab.draftId);
-        if (promotedRedirect) {
-          useWorkspaceTabsStore.getState().promoteDraftTab(tab.draftId, promotedRedirect);
-          void navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(promotedRedirect),
-          });
-          return;
-        }
         const draftSession = draftStore.getDraftSession(tab.draftId);
-        if (draftSession?.promotedTo) {
-          useWorkspaceTabsStore.getState().promoteDraftTab(tab.draftId, draftSession.promotedTo);
+        const promotedRef = promotedRedirect ?? draftSession?.promotedTo ?? null;
+        if (promotedRef) {
+          const promotedShell = visibleThreads.find(
+            (candidate) =>
+              candidate.environmentId === promotedRef.environmentId &&
+              candidate.id === promotedRef.threadId,
+          );
+          const promotedInstanceId =
+            promotedShell?.runtime?.providerInstanceId ??
+            promotedShell?.modelSelection?.instanceId ??
+            promotedShell?.providerInstanceId ??
+            tab.instanceId ??
+            null;
+          const promotedEntry = promotedInstanceId
+            ? instanceEntries.find((candidate) => candidate.instanceId === promotedInstanceId)
+            : undefined;
+          useWorkspaceTabsStore.getState().promoteDraftTab(tab.draftId, promotedRef, {
+            title: promotedShell?.title?.trim() || undefined,
+            providerId: promotedEntry
+              ? resolveProviderBrandIdForEntry(promotedEntry)
+              : (promotedInstanceId ?? tab.providerId ?? null),
+            instanceId: promotedInstanceId,
+            model: promotedShell?.modelSelection?.model ?? tab.model ?? null,
+          });
           void navigate({
             to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(draftSession.promotedTo),
+            params: buildThreadRouteParams(promotedRef),
           });
           return;
         }
@@ -1247,7 +1547,14 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         void materializePrimaryConversationTab(tab);
       }
     },
-    [materializePrimaryConversationTab, modalOpen, navigate, shownTarget],
+    [
+      instanceEntries,
+      materializePrimaryConversationTab,
+      modalOpen,
+      navigate,
+      shownTarget,
+      visibleThreads,
+    ],
   );
 
   const handleActivateTab = useCallback(
@@ -1338,6 +1645,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         onNavigateHome: () => {
           void navigate({ to: "/" });
         },
+        originRouteKey: routeKey,
         setPendingBinding: (binding) => {
           pendingDraftTabBindingRef.current = binding;
         },
@@ -1351,6 +1659,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       navigate,
       openAgentInRightSidebar,
       resolveProjectRefForMainLaunch,
+      routeKey,
       shownTarget,
     ],
   );
@@ -1657,12 +1966,16 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       const reuseTabId = primaryPane?.tabIds.includes(input.tabId)
         ? input.tabId
         : (findPrimaryUnusedDraftTab(store, getLiveComposerDraftStateLookup())?.id ?? null);
+      const resolvedProviderId = matchedEntry
+        ? resolveProviderBrandIdForEntry(matchedEntry)
+        : input.providerId;
       const bindingToken = {};
       pendingDraftTabBindingRef.current = {
         token: bindingToken,
         tabId: reuseTabId,
+        originRouteKey: routeKey,
         title: resolvedTitle,
-        providerId: matchedEntry?.driverKind ?? input.providerId,
+        providerId: resolvedProviderId,
         instanceId: input.instanceId,
         model: input.model,
       };
@@ -1687,7 +2000,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
               draftId: opened.draftId,
               environmentId: projectRef.environmentId,
               threadId: opened.threadId,
-              providerId: matchedEntry?.driverKind ?? input.providerId,
+              providerId: resolvedProviderId,
               instanceId: input.instanceId,
               model: input.model,
               title: resolvedTitle,
@@ -1703,7 +2016,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         }
       }
     },
-    [handleNewThread, instanceEntries, resolveProjectRefForMainLaunch],
+    [handleNewThread, instanceEntries, resolveProjectRefForMainLaunch, routeKey],
   );
 
   const paneCount = countLeafPanes(layout);

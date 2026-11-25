@@ -496,17 +496,192 @@ export function parseSessionModeState(
 function normalizePlanStepStatus(
   raw: unknown,
 ): "pending" | "inProgress" | "completed" | "cancelled" {
-  switch (raw) {
+  if (typeof raw !== "string") return "pending";
+  const normalized = raw.trim().toLowerCase().replace(/[\s-]+/gu, "_");
+  switch (normalized) {
     case "completed":
+    case "complete":
+    case "done":
+    case "finished":
+    case "success":
+    case "succeeded":
       return "completed";
     case "cancelled":
+    case "canceled":
+    case "skipped":
+    case "omitted":
       return "cancelled";
     case "in_progress":
-    case "inProgress":
+    case "inprogress":
+    case "running":
+    case "active":
+    case "working":
+    case "started":
       return "inProgress";
     default:
       return "pending";
   }
+}
+
+const ACP_TODO_TOOL_NAMES = new Set([
+  "todo",
+  "todos",
+  "todowrite",
+  "todo_write",
+  "update_plan",
+  "updateplan",
+  "update_steps",
+  "updatesteps",
+  "write_todos",
+  "writetodos",
+]);
+
+function normalizeAcpTodoToolName(raw: string): string {
+  const stripped = raw
+    .trim()
+    .replace(/^run(?:ning)?\s+/iu, "")
+    .replace(/\?+$/u, "")
+    .trim();
+  const segments = stripped.split(/[./:]/u);
+  const tail = segments.at(-1) ?? stripped;
+  return tail
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/gu, "_");
+}
+
+function parseAcpTodoStepItem(
+  entry: unknown,
+  index: number,
+): { readonly step: string; readonly status: "pending" | "inProgress" | "completed" | "cancelled" } | undefined {
+  if (typeof entry === "string") {
+    const trimmed = entry.trim();
+    if (!trimmed) return undefined;
+    const checkbox = /^(?:[-*+]\s+)?\[([ xX~/-])\]\s+(.+)$/u.exec(trimmed);
+    if (checkbox) {
+      const marker = checkbox[1]?.toLowerCase() ?? " ";
+      const text = checkbox[2]?.trim() ?? "";
+      if (!text) return undefined;
+      const status =
+        marker === "x"
+          ? "completed"
+          : marker === "/" || marker === "~"
+            ? "inProgress"
+            : marker === "-"
+              ? "cancelled"
+              : "pending";
+      return { step: text, status };
+    }
+    return { step: trimmed, status: "pending" };
+  }
+  if (!isRecord(entry)) return undefined;
+  const textCandidates = [
+    entry.title,
+    entry.content,
+    entry.step,
+    entry.text,
+    entry.task,
+    entry.description,
+    entry.subject,
+    entry.label,
+    entry.activeForm,
+  ];
+  const rawText = textCandidates.find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (!rawText) return undefined;
+  const rawStatus =
+    typeof entry.status === "string"
+      ? entry.status
+      : typeof entry.state === "string"
+        ? entry.state
+        : entry.completed === true || entry.done === true
+          ? "completed"
+          : "pending";
+  return {
+    step: rawText.trim() || `Step ${index + 1}`,
+    status: normalizePlanStepStatus(rawStatus),
+  };
+}
+
+function extractTodoArrayFromContainer(container: unknown): {
+  readonly items: ReadonlyArray<unknown>;
+  readonly explanation?: string;
+} | undefined {
+  if (Array.isArray(container)) {
+    return container.length > 0 ? { items: container } : undefined;
+  }
+  if (typeof container === "string") {
+    const trimmed = container.trim();
+    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+      try {
+        return extractTodoArrayFromContainer(JSON.parse(trimmed));
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+  if (!isRecord(container)) return undefined;
+  const explanation =
+    [container.explanation, container.summary, container.note].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    )?.trim() || undefined;
+  const keys = ["todos", "steps", "plan", "items", "tasks", "entries"] as const;
+  for (const key of keys) {
+    const field = container[key];
+    if (Array.isArray(field) && field.length > 0) {
+      return explanation ? { items: field, explanation } : { items: field };
+    }
+    if (typeof field === "string") {
+      const nested = extractTodoArrayFromContainer(field);
+      if (nested) {
+        return explanation && !nested.explanation ? { ...nested, explanation } : nested;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extracts a canonical ACP `items` plan update from todo/step-tracking tool calls
+ * emitted by Antigravity (`update_steps`), DeepSeek Harness (`todo_write`),
+ * Claude/OpenCode (`TodoWrite`/`todowrite`), Codex (`update_plan`), or `write_todos`.
+ */
+export function extractAcpTodoToolPlanUpdate(
+  toolCall: AcpToolCallState,
+): Extract<AcpPlanUpdate, { readonly kind: "items" }> | undefined {
+  const meta = isRecord(toolCall.data.meta) ? toolCall.data.meta : undefined;
+  const candidateNames = [
+    typeof meta?.dshToolName === "string" ? meta.dshToolName : undefined,
+    typeof meta?.toolName === "string" ? meta.toolName : undefined,
+    typeof toolCall.data.name === "string" ? toolCall.data.name : undefined,
+    typeof toolCall.data.title === "string" ? toolCall.data.title : undefined,
+    toolCall.title,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  const isTodoTool = candidateNames.some((name) =>
+    ACP_TODO_TOOL_NAMES.has(normalizeAcpTodoToolName(name)),
+  );
+  if (!isTodoTool) return undefined;
+
+  const extracted =
+    extractTodoArrayFromContainer(toolCall.data.rawInput) ??
+    extractTodoArrayFromContainer(toolCall.data.rawOutput);
+  if (!extracted) return undefined;
+
+  const plan = extracted.items.flatMap((entry, index) => {
+    const parsed = parseAcpTodoStepItem(entry, index);
+    return parsed ? [parsed] : [];
+  });
+  if (plan.length === 0) return undefined;
+
+  return {
+    nativePlanId: "legacy",
+    kind: "items",
+    ...(extracted.explanation === undefined ? {} : { explanation: extracted.explanation }),
+    plan,
+  };
 }
 
 function normalizeToolCallStatus(

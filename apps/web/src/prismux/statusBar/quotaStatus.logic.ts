@@ -1,11 +1,18 @@
 import type { ServerProvider, ServerProviderUsageWindow } from "@prismux/core-contracts";
 
+import {
+  orderItemsByConfiguredProviderOrder,
+  resolveConfiguredProviderLabel,
+} from "../../providerInstances";
 import type {
   DaemonOfficialQuotaProviderStatus,
   DaemonOfficialQuotaSummaryResponse,
   DaemonOfficialQuotaWindowKind,
 } from "../daemonClient";
-import { canonicalProviderDisplayName } from "./statusBarUsage";
+import {
+  canonicalProviderDisplayName,
+  type StatusBarProviderDisplayOptions,
+} from "./statusBarUsage";
 import type {
   StorageLike,
   UsagePercentMode,
@@ -614,7 +621,9 @@ export function aggregateQuotaSummary(
   upstreamProviders: readonly ServerProvider[] = [],
   now = Date.now(),
   agyCredits?: DaemonOfficialQuotaCreditsResponse | number | null,
+  displayOptions?: StatusBarProviderDisplayOptions,
 ): QuotaStatusSummary {
+  const configuredEntries = displayOptions?.entries ?? [];
   const agents: QuotaAgentEntry[] = [];
   const resetTimes: number[] = [];
 
@@ -685,10 +694,19 @@ export function aggregateQuotaSummary(
               ? agy.remainingCredits
               : null;
 
+    const agyDisplayName =
+      configuredEntries.length > 0
+        ? resolveConfiguredProviderLabel(
+            "antigravity",
+            configuredEntries,
+            agy.displayName || "Antigravity",
+          )
+        : agy.displayName || "Antigravity";
+
     agents.push({
       id: "antigravity",
       brandProvider: "antigravity",
-      displayName: agy.displayName || "Antigravity",
+      displayName: agyDisplayName,
       source: "official-cli",
       available: true,
       status: agy.status,
@@ -708,6 +726,15 @@ export function aggregateQuotaSummary(
     const rawWindows = provider.usageLimits?.windows;
     if (!Array.isArray(rawWindows) || rawWindows.length === 0) continue;
 
+    const providerDisplayName =
+      configuredEntries.length > 0
+        ? resolveConfiguredProviderLabel(
+            provider.instanceId,
+            configuredEntries,
+            canonicalProviderDisplayName(provider.displayName, provider.driver),
+          )
+        : canonicalProviderDisplayName(provider.displayName, provider.driver);
+
     const windows: QuotaWindowItem[] = [];
     for (const rawWin of rawWindows) {
       const usedPercent = readUpstreamWindowPercent(rawWin);
@@ -725,7 +752,7 @@ export function aggregateQuotaSummary(
       const normalized = normalizeUpstreamWindowKind(rawWin);
       windows.push({
         id: `${provider.instanceId}:${rawWin.id}`,
-        group: canonicalProviderDisplayName(provider.displayName, provider.driver),
+        group: providerDisplayName,
         window: normalized.kind,
         shortLabel: normalized.shortLabel,
         detailLabel: normalized.detailLabel,
@@ -747,7 +774,7 @@ export function aggregateQuotaSummary(
     agents.push({
       id: provider.instanceId,
       brandProvider: provider.driver,
-      displayName: canonicalProviderDisplayName(provider.displayName, provider.driver),
+      displayName: providerDisplayName,
       source: "upstream-provider",
       available: true,
       status: "ok",
@@ -760,7 +787,18 @@ export function aggregateQuotaSummary(
     });
   }
 
-  const availableAgents = agents.filter((a) => a.available && a.windows.length > 0);
+  const orderedAgents =
+    (displayOptions?.providerOrder && displayOptions.providerOrder.length > 0) ||
+    configuredEntries.length > 0
+      ? orderItemsByConfiguredProviderOrder(
+          agents,
+          (agent) => agent.id || agent.brandProvider,
+          configuredEntries,
+          displayOptions?.providerOrder,
+        )
+      : agents;
+
+  const availableAgents = orderedAgents.filter((a) => a.available && a.windows.length > 0);
   const primaryAgent = availableAgents[0] ?? null;
   const primaryWindow = primaryAgent?.primaryWindow ?? null;
   const hasExplicitUnauthAgy = upstreamProviders.some(
@@ -785,7 +823,7 @@ export function aggregateQuotaSummary(
       : null;
 
   return {
-    agents,
+    agents: orderedAgents,
     availableAgents,
     primaryAgent,
     primaryWindow,

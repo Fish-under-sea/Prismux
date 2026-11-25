@@ -12,6 +12,7 @@ export function isAppModalPage(pathname: string) {
 export function isSidebarUtilityPage(pathname: string) {
   return (
     pathname.startsWith("/projects/") ||
+    pathname === "/diagnostics" ||
     pathname === "/pull-requests" ||
     pathname === "/issues" ||
     pathname === "/tasks" ||
@@ -23,13 +24,14 @@ export function isSidebarUtilityPage(pathname: string) {
 }
 
 /**
- * Sidebar pages that expose a dedicated toggleable sidebar button (4 top QuickNav work panels
- * plus the bottom-left Issues / Pull Requests icons). Clicking the active button again closes
+ * Sidebar pages that expose a dedicated toggleable sidebar button (top QuickNav work panels,
+ * footer utility panels, plus Issues / Pull Requests). Clicking the active button again closes
  * the panel and returns to the prior thread/chat session.
  */
 export function isSidebarToggleablePanelPage(pathname: string): boolean {
   const normalized = normalizeSidebarPathname(pathname);
   return (
+    normalized === "/diagnostics" ||
     normalized === "/tasks" ||
     normalized === "/workspace-board" ||
     normalized === "/scheduled-tasks" ||

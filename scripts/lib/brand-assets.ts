@@ -1,9 +1,7 @@
 export const BRAND_ASSET_PATHS = {
-  developmentIconComposerProject: "assets/dev/app-icon.icon",
   developmentIosIconPng: "assets/prismux/prismux-1024.png",
   developmentUniversalIconPng: "assets/prismux/prismux-512.png",
 
-  productionIconComposerProject: "assets/prod/app-icon.icon",
   productionIosIconPng: "assets/prismux/prismux-1024.png",
   productionMacIconPng: "assets/prismux/prismux-1024.png",
   productionLinuxIconPng: "assets/prismux/prismux-512.png",
@@ -15,7 +13,6 @@ export const BRAND_ASSET_PATHS = {
   productionWebIcon192Png: "assets/prismux/prismux-256.png",
   productionWebIcon512Png: "assets/prismux/prismux-512.png",
 
-  nightlyIconComposerProject: "assets/nightly/app-icon.icon",
   nightlyIosIconPng: "assets/prismux/prismux-1024.png",
   nightlyMacIconPng: "assets/prismux/prismux-1024.png",
   nightlyLinuxIconPng: "assets/prismux/prismux-512.png",

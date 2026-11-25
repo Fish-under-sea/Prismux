@@ -161,9 +161,11 @@ import {
 } from "./ProviderSettingsPanel.logic";
 import { supportsDualLaunchMode } from "./prismuxProviderMeta";
 import {
+  isAntigravityControlledAutomationAllowed,
   LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID,
   SUBSCRIPTION_WAIVER_ANCHOR_ID,
   SubscriptionRiskWaiverSection,
+  useSubscriptionWaiverState,
 } from "../../prismux/SubscriptionRiskWaiverSection";
 import { formatAgentBrandName } from "../../prismux/agentBrand";
 import {
@@ -364,6 +366,7 @@ export const PROVIDERS_TAB_HASH_ANCHORS = {
     "default-chat-models",
     "default-model",
     "fallback-model",
+    "default-reasoning-effort",
     "text-generation",
     "text-generation-model",
     "thread-title-instructions",
@@ -633,6 +636,9 @@ export function EnvironmentProviderSettings({
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
   const settings = useEnvironmentSettings(environmentId);
+  const subscriptionWaiver = useSubscriptionWaiverState();
+  const allowAntigravityTextGeneration =
+    isAntigravityControlledAutomationAllowed(subscriptionWaiver);
   const {
     state: launchModeState,
     setGlobalDefaultMode,
@@ -901,7 +907,9 @@ export function EnvironmentProviderSettings({
       const isDisabling = next.enabled === false && resolveProviderInstanceEnabled(previous);
       const shouldClearTextGen =
         isDisabling &&
-        resolveAppModelSelectionState(settings, serverProviders).instanceId === instanceId &&
+        resolveAppModelSelectionState(settings, serverProviders, {
+          allowAntigravityTextGeneration,
+        }).instanceId === instanceId &&
         readEnvironmentScope(environmentId, AuthSettingsWriteScope);
       return persistInstance(
         instanceId,
@@ -937,7 +945,9 @@ export function EnvironmentProviderSettings({
     setIsDeletingProvider(true);
     try {
       const shouldClearTextGen =
-        resolveAppModelSelectionState(settings, serverProviders).instanceId === target.instanceId &&
+        resolveAppModelSelectionState(settings, serverProviders, {
+          allowAntigravityTextGeneration,
+        }).instanceId === target.instanceId &&
         readEnvironmentScope(environmentId, AuthSettingsWriteScope);
       const mutation = buildProviderRemovalMutation({
         instanceId: target.instanceId,

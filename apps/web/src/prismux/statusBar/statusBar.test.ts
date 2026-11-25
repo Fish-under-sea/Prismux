@@ -2,7 +2,12 @@
 import fs from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import path from "node:path";
-import type { ServerProvider } from "@prismux/core-contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@prismux/core-contracts";
+import { providerInstanceEntriesFor } from "../../providerInstances";
 import type { MergedUsage } from "@prismux/core-shared/usageMerge";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -673,7 +678,7 @@ describe("statusBarUsage compliance and urgency sorting", () => {
         authMode: "api_or_custom",
         authSource: "ccs_or_magpie",
         endpoint: "http://127.0.0.1:8317/v1",
-        authLabel: "CCS / Magpie API 注入（已放行）",
+        authLabel: "API / 自定义端点注入（已放行）",
         checkedAt: "2026-11-25T14:29:00.000Z",
       },
       {
@@ -2040,5 +2045,149 @@ describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
     );
     // SidebarCollapsedPeekDrawer was removed in v0.1.3+; SidebarChrome no longer pins legacy peek overlays.
     expect(sidebarChromeSource).not.toContain("SidebarCollapsedPeekDrawer");
+  });
+
+  it("applies configured SSOT providerOrder and custom display names across Status Bar Usage and Quota summaries", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const agyId = ProviderInstanceId.make("antigravity");
+    const providers: ServerProvider[] = [
+      {
+        instanceId: codexId,
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+        usageLimits: {
+          checkedAt: "2026-11-26T00:00:00.000Z",
+          windows: [{ id: "5h", label: "5h", kind: "session", usedPercent: 30 }],
+        },
+      },
+      {
+        instanceId: claudeId,
+        driver: ProviderDriverKind.make("claudeAgent"),
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+        usageLimits: {
+          checkedAt: "2026-11-26T00:00:00.000Z",
+          windows: [{ id: "7d", label: "7d", kind: "weekly", usedPercent: 45 }],
+        },
+      },
+      {
+        instanceId: agyId,
+        driver: ProviderDriverKind.make("antigravity"),
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+    ];
+    const providerOrder = [claudeId, agyId, codexId];
+    const entries = providerInstanceEntriesFor(
+      providers,
+      {
+        providerOrder,
+        providerInstances: {
+          [claudeId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            displayName: "主力 Claude",
+          },
+          [agyId]: {
+            driver: ProviderDriverKind.make("antigravity"),
+            enabled: true,
+            displayName: "我的 AGY",
+          },
+          [codexId]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: "备用 Codex",
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    const displayOptions = { entries, providerOrder };
+
+    const usageSummary = collectStatusBarUsageSummary(
+      providers,
+      Date.parse("2026-11-26T00:00:00.000Z"),
+      null,
+      undefined,
+      null,
+      displayOptions,
+    );
+    expect(usageSummary.telemetry.providers.map((p) => p.providerName)).toEqual([
+      "主力 Claude",
+      "备用 Codex",
+    ]);
+    expect(usageSummary.antigravityEntries[0]?.providerName).toBe("我的 AGY");
+
+    const quotaSummary = aggregateQuotaSummary(
+      {
+        ok: true,
+        cached: false,
+        cacheTtlMs: 60_000,
+        fetchedAt: Date.parse("2026-11-26T00:00:00.000Z"),
+        fetchedAtIso: "2026-11-26T00:00:00.000Z",
+        providers: [],
+        antigravity: {
+          id: "antigravity",
+          providerId: "antigravity",
+          displayName: "Antigravity",
+          source: "official-cli",
+          command: 'agy -p "/usage"',
+          executablePath: "agy",
+          status: "ok",
+          available: true,
+          fetchedAt: Date.parse("2026-11-26T00:00:00.000Z"),
+          fetchedAtIso: "2026-11-26T00:00:00.000Z",
+          remainingCredits: 100,
+          error: null,
+          windows: [
+            {
+              id: "gemini-weekly",
+              groupId: "gemini",
+              group: "Gemini",
+              window: "weekly",
+              shortLabel: "Gemini 周",
+              detailLabel: "Gemini 每周",
+              usedPercent: 12,
+              remainingPercent: 88,
+              resetAtIso: null,
+              resetAtMs: null,
+            },
+          ],
+        },
+      },
+      providers,
+      Date.parse("2026-11-26T00:00:00.000Z"),
+      null,
+      displayOptions,
+    );
+    expect(quotaSummary.agents.map((a) => a.displayName)).toEqual([
+      "主力 Claude",
+      "我的 AGY",
+      "备用 Codex",
+    ]);
   });
 });

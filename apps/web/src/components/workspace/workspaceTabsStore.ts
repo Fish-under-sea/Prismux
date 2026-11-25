@@ -133,6 +133,8 @@ export interface SyncRouteTargetInput {
    * a draft route target whose draftId does not yet match any existing tab.
    */
   readonly reuseUnusedDraftTabId?: string | null | undefined;
+  /** Optional draft lookup override (defaults to live `useComposerDraftStore`). */
+  readonly draftLookup?: WorkspaceDraftStateLookup | null | undefined;
 }
 
 export interface WorkspaceDraftStateLookup {
@@ -141,6 +143,19 @@ export interface WorkspaceDraftStateLookup {
   ) => Pick<DraftSessionState, "promotedTo"> | null;
   readonly getComposerDraft: (draftId: DraftId) => ComposerThreadDraftState | null;
   readonly getPromotedDraftRedirect?: (draftId: DraftId) => ScopedThreadRef | null;
+}
+
+export interface PromoteDraftTabMetadata {
+  readonly title?: string | undefined;
+  readonly providerId?: string | null | undefined;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
+  readonly model?: string | null | undefined;
+}
+
+export interface ReconcileDraftTabsInput {
+  readonly activeRouteTarget?: ThreadRouteTarget | null | undefined;
+  readonly lookup?: WorkspaceDraftStateLookup | null | undefined;
+  readonly resolveThreadMetadata?: (threadRef: ScopedThreadRef) => PromoteDraftTabMetadata | null;
 }
 
 export interface WorkspaceTabsStateData {
@@ -163,8 +178,9 @@ export interface WorkspaceTabsStore extends WorkspaceTabsStateData {
   promoteDraftTab: (
     draftId: DraftId,
     threadRef: ScopedThreadRef,
-    metadata?: { readonly title?: string; readonly providerId?: string | null },
+    metadata?: PromoteDraftTabMetadata,
   ) => void;
+  reconcileDraftTabs: (input?: ReconcileDraftTabsInput) => void;
   openTab: (input: OpenWorkspaceTabInput, targetPaneId?: string) => string;
   closeTab: (tabId: string, paneId?: string) => void;
   activateTab: (paneId: string, tabId: string) => void;
@@ -836,6 +852,316 @@ function collapsePaneInState(
     : collapsed;
 }
 
+function matchesScopedThreadRef(
+  candidate: ScopedThreadRef | null | undefined,
+  target: ScopedThreadRef,
+): boolean {
+  return (
+    candidate != null &&
+    candidate.environmentId === target.environmentId &&
+    candidate.threadId === target.threadId
+  );
+}
+
+function resolveDraftTabPromotedTarget(
+  tab: WorkspaceTab,
+  lookup?: WorkspaceDraftStateLookup | null,
+): ScopedThreadRef | null {
+  if (tab.kind !== "draft" || !tab.draftId || !lookup) {
+    return null;
+  }
+  return (
+    lookup.getPromotedDraftRedirect?.(tab.draftId) ??
+    lookup.getDraftSession(tab.draftId)?.promotedTo ??
+    null
+  );
+}
+
+function draftTabMatchesServerThreadRef(
+  tab: WorkspaceTab,
+  threadRef: ScopedThreadRef,
+  lookup?: WorkspaceDraftStateLookup | null,
+): boolean {
+  if (tab.kind !== "draft") return false;
+  if (tab.environmentId === threadRef.environmentId && tab.threadId === threadRef.threadId) {
+    return true;
+  }
+  return matchesScopedThreadRef(resolveDraftTabPromotedTarget(tab, lookup), threadRef);
+}
+
+function findMatchingDraftTabForServerRef(
+  state: WorkspaceTabsStateData,
+  threadRef: ScopedThreadRef,
+  preferredPaneId?: string,
+  lookup?: WorkspaceDraftStateLookup | null,
+): { readonly tab: WorkspaceTab; readonly paneId: string } | null {
+  if (preferredPaneId && state.panes[preferredPaneId]) {
+    for (const tabId of state.panes[preferredPaneId]!.tabIds) {
+      const candidate = state.tabs[tabId];
+      if (candidate && draftTabMatchesServerThreadRef(candidate, threadRef, lookup)) {
+        return { tab: candidate, paneId: preferredPaneId };
+      }
+    }
+  }
+  for (const pane of Object.values(state.panes)) {
+    if (pane.id === preferredPaneId) continue;
+    for (const tabId of pane.tabIds) {
+      const candidate = state.tabs[tabId];
+      if (candidate && draftTabMatchesServerThreadRef(candidate, threadRef, lookup)) {
+        return { tab: candidate, paneId: pane.id };
+      }
+    }
+  }
+  return null;
+}
+
+function removeDuplicateDraftTabsForServerRefInState(
+  state: WorkspaceTabsStateData,
+  keepTabId: string,
+  threadRef: ScopedThreadRef,
+  lookup?: WorkspaceDraftStateLookup | null,
+): WorkspaceTabsStateData {
+  const duplicateIds = new Set<string>();
+  for (const tab of Object.values(state.tabs)) {
+    if (tab.id === keepTabId) continue;
+    if (draftTabMatchesServerThreadRef(tab, threadRef, lookup)) {
+      duplicateIds.add(tab.id);
+    }
+  }
+  if (duplicateIds.size === 0) return state;
+
+  const nextTabs: Record<string, WorkspaceTab> = { ...state.tabs };
+  for (const id of duplicateIds) {
+    delete nextTabs[id];
+  }
+  const nextPanes: Record<string, WorkspacePane> = { ...state.panes };
+  for (const [paneId, pane] of Object.entries(state.panes)) {
+    if (!pane.tabIds.some((id) => duplicateIds.has(id))) continue;
+    const nextTabIds = pane.tabIds.filter((id) => !duplicateIds.has(id));
+    const nextActiveTabId =
+      pane.activeTabId && duplicateIds.has(pane.activeTabId)
+        ? nextTabIds.includes(keepTabId)
+          ? keepTabId
+          : (nextTabIds[0] ?? null)
+        : pane.activeTabId;
+    nextPanes[paneId] = {
+      ...pane,
+      tabIds: nextTabIds,
+      activeTabId: nextActiveTabId,
+    };
+  }
+  return {
+    ...state,
+    tabs: nextTabs,
+    panes: nextPanes,
+  };
+}
+
+export function promoteDraftTabInState(
+  state: WorkspaceTabsStateData,
+  draftId: DraftId,
+  threadRef: ScopedThreadRef,
+  metadata?: PromoteDraftTabMetadata,
+): WorkspaceTabsStateData {
+  const draftTab = Object.values(state.tabs).find(
+    (tab) => tab.kind === "draft" && tab.draftId === draftId,
+  );
+  if (!draftTab) return state;
+
+  const promotedKey = workspaceTabDedupeKey({
+    kind: "thread",
+    environmentId: threadRef.environmentId,
+    threadId: threadRef.threadId,
+  });
+  const duplicateServerTab = Object.values(state.tabs).find(
+    (tab) => tab.id !== draftTab.id && workspaceTabDedupeKey(tab) === promotedKey,
+  );
+
+  const nextProviderId =
+    metadata?.providerId !== undefined ? metadata.providerId : draftTab.providerId;
+  const nextInstanceId =
+    metadata?.instanceId !== undefined ? metadata.instanceId : draftTab.instanceId;
+  const providerChanged =
+    nextProviderId !== draftTab.providerId || nextInstanceId !== draftTab.instanceId;
+  const nextModel =
+    metadata?.model !== undefined
+      ? metadata.model
+      : providerChanged
+        ? null
+        : draftTab.model;
+
+  if (duplicateServerTab) {
+    // Merge into existing server tab (preserving harness metadata) and remove the stale draft tab.
+    const paneId = findTabPaneId(state.panes, draftTab.id);
+    const nextTabs = { ...state.tabs };
+    delete nextTabs[draftTab.id];
+
+    const mergedTitle = metadata?.title?.trim() || duplicateServerTab.title;
+    const mergedProviderId =
+      metadata?.providerId !== undefined
+        ? metadata.providerId
+        : (duplicateServerTab.providerId ?? draftTab.providerId);
+    const mergedInstanceId =
+      metadata?.instanceId !== undefined
+        ? metadata.instanceId
+        : (duplicateServerTab.instanceId ?? draftTab.instanceId);
+    const mergedProviderChanged =
+      mergedProviderId !== duplicateServerTab.providerId ||
+      mergedInstanceId !== duplicateServerTab.instanceId;
+    const mergedModel =
+      metadata?.model !== undefined
+        ? metadata.model
+        : mergedProviderChanged
+          ? (draftTab.model ?? null)
+          : (duplicateServerTab.model ?? draftTab.model);
+
+    nextTabs[duplicateServerTab.id] = {
+      ...duplicateServerTab,
+      title: mergedTitle,
+      providerId: mergedProviderId,
+      instanceId: mergedInstanceId,
+      model: mergedModel,
+    };
+
+    if (!paneId) return { ...state, tabs: nextTabs };
+    const pane = state.panes[paneId]!;
+    const nextTabIds = pane.tabIds.filter((id) => id !== draftTab.id);
+    return {
+      ...state,
+      tabs: nextTabs,
+      panes: {
+        ...state.panes,
+        [paneId]: {
+          ...pane,
+          tabIds: nextTabIds,
+          activeTabId:
+            pane.activeTabId === draftTab.id
+              ? duplicateServerTab.id in nextTabs && nextTabIds.includes(duplicateServerTab.id)
+                ? duplicateServerTab.id
+                : (nextTabIds[0] ?? null)
+              : pane.activeTabId,
+        },
+      },
+    };
+  }
+
+  return {
+    ...state,
+    tabs: {
+      ...state.tabs,
+      [draftTab.id]: {
+        ...draftTab,
+        kind: "thread",
+        draftId: null,
+        environmentId: threadRef.environmentId,
+        threadId: threadRef.threadId,
+        title: metadata?.title?.trim() || draftTab.title,
+        providerId: nextProviderId,
+        instanceId: nextInstanceId,
+        model: nextModel,
+      },
+    },
+  };
+}
+
+/**
+ * Reconciles all open draft tabs against live composerDraftStore state:
+ * 1. Immediately promotes/merges any `draft` tab whose draftId already promoted (`promotedTo` or
+ *    `promotedDraftRedirect`), preventing zombie `"新会话"` tabs from lingering until clicked.
+ * 2. Prunes non-active orphan `draft` tabs whose draft session no longer exists and contains no
+ *    user-authored composer content (e.g. after a send failure or cleared draft).
+ * 3. Enforces the primary-pane single unused draft tab invariant.
+ */
+export function reconcileDraftTabsInState(
+  state: WorkspaceTabsStateData,
+  input?: ReconcileDraftTabsInput,
+): WorkspaceTabsStateData {
+  const lookup = input?.lookup ?? null;
+  const activeRouteTarget = input?.activeRouteTarget ?? null;
+  let nextState = state;
+
+  // Pass 1: Auto-promote / merge any draft tab that already promoted to a server thread.
+  if (lookup) {
+    const promotedCandidates: Array<{
+      readonly draftId: DraftId;
+      readonly promotedTo: ScopedThreadRef;
+    }> = [];
+    for (const tab of Object.values(nextState.tabs)) {
+      if (tab.kind !== "draft" || !tab.draftId) continue;
+      const promotedTo = resolveDraftTabPromotedTarget(tab, lookup);
+      if (promotedTo) {
+        promotedCandidates.push({ draftId: tab.draftId, promotedTo });
+      }
+    }
+    for (const candidate of promotedCandidates) {
+      const metadata = input?.resolveThreadMetadata?.(candidate.promotedTo) ?? undefined;
+      nextState = promoteDraftTabInState(
+        nextState,
+        candidate.draftId,
+        candidate.promotedTo,
+        metadata,
+      );
+    }
+  }
+
+  // Pass 2: Prune non-active orphan draft tabs whose draft session disappeared and have no content.
+  if (lookup) {
+    const orphanIds = new Set<string>();
+    for (const pane of Object.values(nextState.panes)) {
+      for (const tabId of pane.tabIds) {
+        const tab = nextState.tabs[tabId];
+        if (!tab || tab.kind !== "draft") continue;
+        const isActiveInPane = pane.activeTabId === tab.id;
+        const isActiveRouteDraft =
+          activeRouteTarget?.kind === "draft" &&
+          tab.draftId != null &&
+          activeRouteTarget.draftId === tab.draftId;
+        if (isActiveInPane || isActiveRouteDraft) continue;
+
+        if (!tab.draftId) {
+          orphanIds.add(tab.id);
+          continue;
+        }
+        const session = lookup.getDraftSession(tab.draftId);
+        if (session !== null) continue;
+        const composerDraft = lookup.getComposerDraft(tab.draftId);
+        if (!composerDraftHasUserContent(composerDraft)) {
+          orphanIds.add(tab.id);
+        }
+      }
+    }
+
+    if (orphanIds.size > 0) {
+      const nextTabs: Record<string, WorkspaceTab> = { ...nextState.tabs };
+      for (const id of orphanIds) {
+        delete nextTabs[id];
+      }
+      const nextPanes: Record<string, WorkspacePane> = { ...nextState.panes };
+      for (const [paneId, pane] of Object.entries(nextState.panes)) {
+        if (!pane.tabIds.some((id) => orphanIds.has(id))) continue;
+        const nextTabIds = pane.tabIds.filter((id) => !orphanIds.has(id));
+        const nextActiveTabId =
+          pane.activeTabId && orphanIds.has(pane.activeTabId)
+            ? (nextTabIds[0] ?? null)
+            : pane.activeTabId;
+        nextPanes[paneId] = {
+          ...pane,
+          tabIds: nextTabIds,
+          activeTabId: nextActiveTabId,
+        };
+      }
+      nextState = {
+        ...nextState,
+        tabs: nextTabs,
+        panes: nextPanes,
+      };
+    }
+  }
+
+  // Pass 3: Collapse any duplicate blank draft tabs in primary pane.
+  return pruneDuplicateDraftTabsInState(nextState, { lookup });
+}
+
 export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
   persist(
     (set, get) => ({
@@ -857,7 +1183,10 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         const { target } = input;
         if (!target) return null;
         const now = Date.now();
-        const draftLookup = getSafeLiveComposerDraftStateLookup();
+        const draftLookup =
+          input.draftLookup !== undefined
+            ? input.draftLookup
+            : getSafeLiveComposerDraftStateLookup();
 
         const lookupInput =
           target.kind === "server"
@@ -941,12 +1270,86 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
                       : current.panes,
                   };
 
+            if (target.kind === "server") {
+              return removeDuplicateDraftTabsForServerRefInState(
+                baseUpdated,
+                prevTab.id,
+                target.threadRef,
+                draftLookup,
+              );
+            }
+
             return existing.paneId === primaryPaneId && target.kind === "draft"
               ? pruneDuplicateDraftTabsInState(baseUpdated, {
                   lookup: draftLookup,
                   keepTabId: prevTab.id,
                 })
               : baseUpdated;
+          }
+
+          // Before creating a brand-new server thread tab, promote any existing draft tab whose
+          // thread coordinates or promoted redirect already point to this server thread in-place!
+          if (target.kind === "server") {
+            const matchingDraft = findMatchingDraftTabForServerRef(
+              current,
+              target.threadRef,
+              primaryPaneId,
+              draftLookup,
+            );
+            if (matchingDraft) {
+              const draftTab = matchingDraft.tab;
+              resultTabId = draftTab.id;
+              const targetPane = current.panes[matchingDraft.paneId]!;
+              const shouldActivate = input.activate !== false || targetPane.activeTabId === null;
+              const nextTitle = input.title?.trim() || draftTab.title;
+              const nextProviderId =
+                input.providerId !== undefined ? input.providerId : draftTab.providerId;
+              const nextInstanceId =
+                input.instanceId !== undefined ? input.instanceId : draftTab.instanceId;
+              const providerChanged =
+                nextProviderId !== draftTab.providerId || nextInstanceId !== draftTab.instanceId;
+              const nextModel =
+                input.model !== undefined
+                  ? input.model
+                  : providerChanged
+                    ? null
+                    : draftTab.model;
+
+              const promotedState: WorkspaceTabsStateData = {
+                ...current,
+                tabs: {
+                  ...current.tabs,
+                  [draftTab.id]: {
+                    ...draftTab,
+                    kind: "thread",
+                    draftId: null,
+                    environmentId: target.threadRef.environmentId,
+                    threadId: target.threadRef.threadId,
+                    title: nextTitle,
+                    providerId: nextProviderId,
+                    instanceId: nextInstanceId,
+                    model: nextModel,
+                    lastActiveAt: shouldActivate ? now : draftTab.lastActiveAt,
+                  },
+                },
+                panes: shouldActivate
+                  ? {
+                      ...current.panes,
+                      [matchingDraft.paneId]: {
+                        ...targetPane,
+                        activeTabId: draftTab.id,
+                      },
+                    }
+                  : current.panes,
+              };
+
+              return removeDuplicateDraftTabsForServerRefInState(
+                promotedState,
+                draftTab.id,
+                target.threadRef,
+                draftLookup,
+              );
+            }
           }
 
           if (target.kind === "draft") {
@@ -1048,63 +1451,18 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
       },
 
       promoteDraftTab(draftId, threadRef, metadata) {
-        set((current) => {
-          const draftTab = Object.values(current.tabs).find(
-            (tab) => tab.kind === "draft" && tab.draftId === draftId,
-          );
-          if (!draftTab) return current;
-          const promotedKey = workspaceTabDedupeKey({
-            kind: "thread",
-            environmentId: threadRef.environmentId,
-            threadId: threadRef.threadId,
-          });
-          const duplicateServerTab = Object.values(current.tabs).find(
-            (tab) => tab.id !== draftTab.id && workspaceTabDedupeKey(tab) === promotedKey,
-          );
-          if (duplicateServerTab) {
-            // Merge into existing server tab and remove the stale draft tab.
-            const paneId = findTabPaneId(current.panes, draftTab.id);
-            const nextTabs = { ...current.tabs };
-            delete nextTabs[draftTab.id];
-            if (!paneId) return { ...current, tabs: nextTabs };
-            const pane = current.panes[paneId]!;
-            const nextTabIds = pane.tabIds.filter((id) => id !== draftTab.id);
-            return {
-              ...current,
-              tabs: nextTabs,
-              panes: {
-                ...current.panes,
-                [paneId]: {
-                  ...pane,
-                  tabIds: nextTabIds,
-                  activeTabId:
-                    pane.activeTabId === draftTab.id
-                      ? (duplicateServerTab.id in nextTabs &&
-                        nextTabIds.includes(duplicateServerTab.id)
-                          ? duplicateServerTab.id
-                          : (nextTabIds[0] ?? null))
-                      : pane.activeTabId,
-                },
-              },
-            };
-          }
-          return {
-            ...current,
-            tabs: {
-              ...current.tabs,
-              [draftTab.id]: {
-                ...draftTab,
-                kind: "thread",
-                draftId: null,
-                environmentId: threadRef.environmentId,
-                threadId: threadRef.threadId,
-                title: metadata?.title?.trim() || draftTab.title,
-                providerId:
-                  metadata?.providerId !== undefined ? metadata.providerId : draftTab.providerId,
-              },
-            },
-          };
-        });
+        set((current) => promoteDraftTabInState(current, draftId, threadRef, metadata));
+      },
+
+      reconcileDraftTabs(input) {
+        const lookup =
+          input?.lookup !== undefined ? input.lookup : getSafeLiveComposerDraftStateLookup();
+        set((current) =>
+          reconcileDraftTabsInState(current, {
+            ...input,
+            lookup,
+          }),
+        );
       },
 
       openTab(input, requestedPaneId) {

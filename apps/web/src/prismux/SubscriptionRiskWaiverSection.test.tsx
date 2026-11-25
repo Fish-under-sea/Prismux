@@ -3,6 +3,11 @@ import { act, type ChangeEvent, type MouseEvent, type ReactNode } from "react";
 // oxlint-disable-next-line prismux/require-disposable-render -- Headless Node unit test explicitly unmounts its React root in try/finally.
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@prismux/core-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PrismuxDaemonClient } from "./daemonClient";
 
@@ -91,13 +96,23 @@ vi.mock("../components/ui/button", () => ({
 }));
 
 import {
+  AGY_UNATTENDED_FORBIDDEN_BADGE_TEXT,
+  AGY_WAIVER_REQUIRED_BADGE_TEXT,
+  AgyWaiverRequiredBadge,
   LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID,
   PROVIDERS_PROBE_ENDPOINT,
   SUBSCRIPTION_WAIVER_ANCHOR_ID,
   SUBSCRIPTION_WAIVER_ENDPOINT,
+  SUBSCRIPTION_WAIVER_ROUTE,
   SUBSCRIPTION_WAIVER_VERSION,
   SubscriptionRiskWaiverSection,
+  UNIFORM_API_CUSTOM_AUTH_LABEL,
+  isAntigravityControlledAutomationAllowed,
+  isAntigravityProviderLike,
   normalizeSubscriptionWaiverResponse,
+  resetSubscriptionWaiverStateCache,
+  resolveAntigravityComplianceBlock,
+  subscribeSubscriptionWaiverState,
   type ProvidersProbeResponse,
   type SubscriptionWaiverState,
 } from "./SubscriptionRiskWaiverSection";
@@ -390,6 +405,7 @@ const SAMPLE_PROBE_RESPONSE: ProvidersProbeResponse = {
 beforeEach(() => {
   switchHandlers.clear();
   buttonHandlers.clear();
+  resetSubscriptionWaiverStateCache();
 });
 
 afterEach(() => {
@@ -613,6 +629,346 @@ describe("SubscriptionRiskWaiverSection", () => {
           defaultLocked: true,
         }),
       );
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("renders uniform API / 自定义端点注入（已放行） across Claude, Codex, and DeepSeek Harness and broadcasts waiver changes immediately", async () => {
+    const { container } = installMinimalDom();
+    const mixedApiProbes: ProvidersProbeResponse = {
+      ok: true,
+      generatedAt: "2026-11-25T15:00:00.000Z",
+      providers: [
+        {
+          providerId: "claudeAgent",
+          displayName: "Claude Code (claude)",
+          installed: true,
+          version: "2.1.0",
+          binaryPath: "C:\\bin\\claude.exe",
+          status: "ready",
+          authMode: "api_or_custom",
+          authSource: "custom_endpoint",
+          endpoint: "http://127.0.0.1:3426",
+          authLabel: "API / 自定义端点注入（已放行）",
+          checkedAt: "2026-11-25T15:00:00.000Z",
+        },
+        {
+          providerId: "codex",
+          displayName: "Codex (codex)",
+          installed: true,
+          version: "0.90.0",
+          binaryPath: "C:\\bin\\codex.exe",
+          status: "ready",
+          authMode: "api_or_custom",
+          authSource: "ccs_or_magpie",
+          endpoint: "http://127.0.0.1:3426/v1",
+          // Even if an older daemon snapshot passes a legacy label, UI normalizes uniformly!
+          authLabel: "CCS / Magpie API 注入（已放行）",
+          checkedAt: "2026-11-25T15:00:00.000Z",
+        },
+        {
+          providerId: "dsh",
+          displayName: "DeepSeek Harness",
+          installed: true,
+          version: "0.2.2-rc.4",
+          binaryPath: "C:\\bin\\dsh.exe",
+          status: "ready",
+          authMode: "api_or_custom",
+          authSource: "api_key",
+          endpoint: null,
+          authLabel: "API / 自定义端点注入（已放行）",
+          checkedAt: "2026-11-25T15:00:00.000Z",
+        },
+      ],
+    };
+
+    const observedStates: SubscriptionWaiverState[] = [];
+    const unsubscribe = subscribeSubscriptionWaiverState((state) => {
+      observedStates.push(state);
+    });
+
+    const requestJson = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith(PROVIDERS_PROBE_ENDPOINT)) return mixedApiProbes;
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body ?? "{}")) as Partial<SubscriptionWaiverState>;
+        return {
+          signed: body.signed ?? true,
+          waiverVersion: SUBSCRIPTION_WAIVER_VERSION,
+          signedAt: "2026-11-25T15:10:00.000Z",
+          allowAntigravityAsControlledAgent: body.allowAntigravityAsControlledAgent ?? false,
+          allowExternalSubscriptionAgentsInSwarm: false,
+          defaultLocked: true as const,
+        };
+      }
+      return {
+        signed: true,
+        waiverVersion: SUBSCRIPTION_WAIVER_VERSION,
+        signedAt: "2026-11-25T15:10:00.000Z",
+        allowAntigravityAsControlledAgent: false,
+        allowExternalSubscriptionAgentsInSwarm: false,
+        defaultLocked: true as const,
+      };
+    });
+
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(<SubscriptionRiskWaiverSection daemon={{ requestJson: requestJson as never }} />);
+      });
+      await flushMicrotasks();
+
+      const claudeBadge = container.findByAttr("data-pmx-probe-auth-badge", "claudeAgent");
+      const codexBadge = container.findByAttr("data-pmx-probe-auth-badge", "codex");
+      const dshBadge = container.findByAttr("data-pmx-probe-auth-badge", "dsh");
+      expect(claudeBadge?.textContent).toContain(UNIFORM_API_CUSTOM_AUTH_LABEL);
+      expect(codexBadge?.textContent).toContain(UNIFORM_API_CUSTOM_AUTH_LABEL);
+      expect(dshBadge?.textContent).toContain(UNIFORM_API_CUSTOM_AUTH_LABEL);
+      expect(codexBadge?.textContent).not.toContain("CCS / Magpie API 注入（已放行）");
+
+      // Enabling Switch A broadcasts immediately so Text Generation pickers unlock AGY live.
+      expect(isAntigravityControlledAutomationAllowed(observedStates.at(-1))).toBe(false);
+      await act(async () => {
+        switchHandlers.get("agy-controlled")?.onChange(true);
+      });
+      await flushMicrotasks();
+      expect(isAntigravityControlledAutomationAllowed(observedStates.at(-1))).toBe(true);
+    } finally {
+      unsubscribe();
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("exports reusable AGY compliance helpers and red-bordered AgyWaiverRequiredBadge", () => {
+    expect(SUBSCRIPTION_WAIVER_ROUTE).toBe("/settings/providers#subscription-risk-waiver");
+
+    expect(isAntigravityProviderLike("antigravity")).toBe(true);
+    expect(isAntigravityProviderLike("agy")).toBe(true);
+    expect(isAntigravityProviderLike("antigravity-cli")).toBe(true);
+    expect(isAntigravityProviderLike("acpRegistry:agy")).toBe(true);
+    expect(isAntigravityProviderLike("codex")).toBe(false);
+    expect(isAntigravityProviderLike("dsh")).toBe(false);
+    expect(isAntigravityProviderLike(null)).toBe(false);
+
+    const onOpenWaiver = vi.fn();
+    const unsignedWaiver = { signed: false, allowAntigravityAsControlledAgent: false };
+    const signedLockedWaiver = { signed: true, allowAntigravityAsControlledAgent: false };
+    const signedAllowedWaiver = { signed: true, allowAntigravityAsControlledAgent: true };
+
+    // Controlled automation blocks AGY until signed + switch A ON
+    expect(
+      resolveAntigravityComplianceBlock({
+        entry: { driverKind: "antigravity", instanceId: "antigravity" },
+        waiver: unsignedWaiver,
+        mode: "controlled",
+        onOpenWaiver,
+      })?.badgeText,
+    ).toBe(AGY_WAIVER_REQUIRED_BADGE_TEXT);
+    expect(
+      resolveAntigravityComplianceBlock({
+        entry: { driverKind: "antigravity", instanceId: "antigravity" },
+        waiver: signedLockedWaiver,
+        mode: "controlled",
+        onOpenWaiver,
+      })?.badgeText,
+    ).toBe(AGY_WAIVER_REQUIRED_BADGE_TEXT);
+    expect(
+      resolveAntigravityComplianceBlock({
+        entry: { driverKind: "antigravity", instanceId: "antigravity" },
+        waiver: signedAllowedWaiver,
+        mode: "controlled",
+        onOpenWaiver,
+      }),
+    ).toBeNull();
+    expect(
+      resolveAntigravityComplianceBlock({
+        entry: { driverKind: "codex", instanceId: "codex" },
+        waiver: unsignedWaiver,
+        mode: "controlled",
+        onOpenWaiver,
+      }),
+    ).toBeNull();
+
+    // Unattended / cron permanently blocks personal AGY (showing 需签署免责 when unsigned, 无人值守禁止个人 AGY · 查看合规 when signed)
+    expect(
+      resolveAntigravityComplianceBlock({
+        entry: { driverKind: "antigravity", instanceId: "antigravity" },
+        waiver: unsignedWaiver,
+        mode: "unattended",
+        onOpenWaiver,
+      })?.badgeText,
+    ).toBe(AGY_WAIVER_REQUIRED_BADGE_TEXT);
+    expect(
+      resolveAntigravityComplianceBlock({
+        entry: { driverKind: "antigravity", instanceId: "antigravity" },
+        waiver: signedAllowedWaiver,
+        mode: "unattended",
+        onOpenWaiver,
+      })?.badgeText,
+    ).toBe(AGY_UNATTENDED_FORBIDDEN_BADGE_TEXT);
+
+    const badgeHtml = renderToStaticMarkup(<AgyWaiverRequiredBadge onClick={onOpenWaiver} />);
+    expect(badgeHtml).toContain("需签署免责");
+    expect(badgeHtml).toContain("border-destructive");
+    expect(badgeHtml).toContain("text-destructive");
+    expect(badgeHtml).toContain('data-pmx-agy-waiver-badge="true"');
+  });
+
+  it("orders live probe badges by settings.providerOrder and renders configured custom display names", async () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const agyId = ProviderInstanceId.make("antigravity");
+    const mockProviders: ServerProvider[] = [
+      {
+        instanceId: codexId,
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+      {
+        instanceId: claudeId,
+        driver: ProviderDriverKind.make("claudeAgent"),
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+      {
+        instanceId: agyId,
+        driver: ProviderDriverKind.make("antigravity"),
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+    ];
+    const daemon: Pick<PrismuxDaemonClient, "requestJson"> = {
+      requestJson: vi.fn(async (endpoint: string) => {
+        if (endpoint.startsWith(PROVIDERS_PROBE_ENDPOINT)) {
+          return {
+            ok: true,
+            generatedAt: "2026-11-26T00:00:00.000Z",
+            providers: [
+              {
+                providerId: "codex",
+                displayName: "Codex",
+                installed: true,
+                version: "1.0.0",
+                binaryPath: "codex",
+                status: "ready",
+                authMode: "subscription_oauth",
+                authSource: "official_oauth",
+                endpoint: null,
+                authLabel: "官方个人订阅 OAuth（默认锁定）",
+                checkedAt: "2026-11-26T00:00:00.000Z",
+              },
+              {
+                providerId: "claude-code",
+                displayName: "Claude Code",
+                installed: true,
+                version: "1.0.0",
+                binaryPath: "claude",
+                status: "ready",
+                authMode: "api_or_custom",
+                authSource: "ccs_or_magpie",
+                endpoint: "https://proxy.example.com",
+                authLabel: UNIFORM_API_CUSTOM_AUTH_LABEL,
+                checkedAt: "2026-11-26T00:00:00.000Z",
+              },
+              {
+                providerId: "antigravity",
+                displayName: "Antigravity",
+                installed: true,
+                version: "1.0.0",
+                binaryPath: "agy",
+                status: "ready",
+                authMode: "subscription_oauth",
+                authSource: "official_oauth",
+                endpoint: null,
+                authLabel: "官方个人订阅 OAuth（默认锁定）",
+                checkedAt: "2026-11-26T00:00:00.000Z",
+              },
+            ],
+          } as never;
+        }
+        return {
+          signed: false,
+          waiverVersion: null,
+          signedAt: null,
+          allowAntigravityAsControlledAgent: false,
+          allowExternalSubscriptionAgentsInSwarm: false,
+          defaultLocked: true,
+        } as never;
+      }),
+    };
+
+    const { container } = installMinimalDom();
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(
+          <SubscriptionRiskWaiverSection
+            daemon={daemon}
+            serverProvidersOverride={mockProviders}
+            settingsOverride={{
+              providerOrder: [claudeId, agyId, codexId],
+              providerInstances: {
+                [claudeId]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  enabled: true,
+                  displayName: "主力 Claude",
+                },
+                [agyId]: {
+                  driver: ProviderDriverKind.make("antigravity"),
+                  enabled: true,
+                  displayName: "我的 AGY",
+                },
+                [codexId]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  enabled: true,
+                  displayName: "备用 Codex",
+                },
+              },
+              projectSettingsOverrides: {},
+            }}
+          />,
+        );
+      });
+      await flushMicrotasks();
+
+      const probeList = container.findByAttr("data-pmx-probe-badge-list", "true");
+      const providerNodes = (probeList?.childNodes ?? []).filter(
+        (node) => node.getAttribute("data-pmx-probe-provider") !== null,
+      );
+      expect(providerNodes.map((node) => node.getAttribute("data-pmx-probe-provider"))).toEqual([
+        "claude-code",
+        "antigravity",
+        "codex",
+      ]);
+      expect(providerNodes[0]?.textContent).toContain("主力 Claude");
+      expect(providerNodes[1]?.textContent).toContain("我的 AGY");
+      expect(providerNodes[2]?.textContent).toContain("备用 Codex");
     } finally {
       await act(async () => {
         root.unmount();

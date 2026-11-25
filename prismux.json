@@ -1,6 +1,6 @@
 {
   "$schema": "https://prismux.app/schema/prismux.json",
-  "iconPath": "assets/dev/blueprint-web-apple-touch-180.png",
+  "iconPath": "assets/prismux/prismux-256.png",
   "scripts": [
     {
       "name": "Dev",

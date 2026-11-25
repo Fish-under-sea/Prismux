@@ -77,6 +77,30 @@ describe("agentBrand canonical naming & official logos", () => {
         displayName: "工作 Codex",
       }),
     ).toBe("工作 Codex");
+    expect(
+      resolveProviderEntryDisplayName({
+        driverKind: "claudeAgent",
+        instanceId: "claudeAgent",
+        displayName: "Claude",
+        hasCustomDisplayName: true,
+      }),
+    ).toBe("Claude");
+    expect(
+      resolveProviderEntryDisplayName({
+        driverKind: "acpRegistry",
+        instanceId: "acpRegistry_dsh",
+        displayName: "dsh",
+        hasCustomDisplayName: true,
+      }),
+    ).toBe("dsh");
+    expect(
+      resolveProviderEntryDisplayName({
+        driverKind: "claudeAgent",
+        instanceId: "claudeAgent",
+        displayName: "Claude",
+        hasCustomDisplayName: false,
+      }),
+    ).toBe("Claude Code");
     expect(containsUuidNoise("Codex 048c43c3 0798 480e Bc42 1...")).toBe(true);
     expect(stripUuidNoise("Codex 048c43c3 0798 480e Bc42 1...")).toBe("Codex");
   });

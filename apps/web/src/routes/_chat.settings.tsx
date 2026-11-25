@@ -99,11 +99,7 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
       </SettingsScopeNotice>
     );
   }
-  if (
-    SETTINGS_DEVICE_ONLY_PATHS.has(pathname) ||
-    pathname === "/settings/projects" ||
-    pathname === "/settings/diagnostics"
-  ) {
+  if (SETTINGS_DEVICE_ONLY_PATHS.has(pathname) || pathname === "/settings/projects") {
     return children;
   }
   if (scope.kind === "unavailable")
@@ -132,7 +128,7 @@ function SettingsContentLayout() {
   const location = useLocation();
   const { search, environment } = useSettingsScope();
   const contentScopeKey =
-    location.pathname === "/settings/diagnostics" || location.pathname === "/settings/providers"
+    location.pathname === "/settings/providers"
       ? environment?.environmentId
       : JSON.stringify(search);
   const [restoreSignal, setRestoreSignal] = useState(0);
@@ -198,6 +194,15 @@ export const Route = createFileRoute("/_chat/settings")({
   beforeLoad: async ({ location }) => {
     if (location.pathname === "/settings") {
       throw redirect({ to: "/settings/general", replace: true });
+    }
+    if (
+      location.pathname === "/settings/diagnostics" ||
+      location.pathname === "/settings/diagnostics/"
+    ) {
+      throw redirect({
+        to: "/diagnostics",
+        replace: true,
+      });
     }
     if (
       location.pathname === "/settings/automations" ||

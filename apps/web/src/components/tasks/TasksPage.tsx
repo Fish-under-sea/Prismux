@@ -106,7 +106,7 @@ function PresetChip({
         "inline-flex h-7 cursor-pointer items-center rounded-lg border px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-          : "border-border/75 bg-card text-foreground/90 shadow-xs hover:bg-accent hover:text-foreground",
+          : "border-border/75 bg-card text-muted-foreground shadow-xs hover:bg-accent hover:text-foreground",
       )}
     >
       {label}
@@ -536,11 +536,11 @@ export const TasksPage = memo(function TasksPage() {
               </Tooltip>
 
               <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                <h1 className="truncate text-[14px] font-semibold tracking-tight text-foreground">
                   {copy.pageTitle}
                 </h1>
                 {activeResultCount > 0 ? (
-                  <span className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-foreground/85 tabular-nums">
+                  <span className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-muted-foreground tabular-nums">
                     {activeResultCount}
                   </span>
                 ) : null}
@@ -588,7 +588,7 @@ export const TasksPage = memo(function TasksPage() {
                         "h-6 cursor-pointer rounded-md px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring",
                         active
                           ? "bg-primary font-semibold text-primary-foreground shadow-xs"
-                          : "text-foreground/80 hover:bg-accent/70 hover:text-foreground",
+                          : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
                       )}
                     >
                       {tab.label}
@@ -772,7 +772,7 @@ export const TasksPage = memo(function TasksPage() {
                   <p className="text-sm font-semibold text-foreground">
                     {copy.noProjectsConfiguredTitle}
                   </p>
-                  <p className="mt-1.5 max-w-md text-xs leading-relaxed text-muted-foreground">
+                  <p className="mt-1.5 max-w-md text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                     {copy.noProjectsConfiguredDescription}
                   </p>
                   <Button
@@ -801,21 +801,21 @@ export const TasksPage = memo(function TasksPage() {
                       >
                         <div className="min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
+                            <span className="flex min-w-0 items-center gap-2 text-[13.5px] font-semibold tracking-tight text-foreground">
                               <FolderGit2Icon className="size-4 shrink-0 text-primary/85" />
                               <span className="truncate">{project.title}</span>
                             </span>
                             {envName ? (
-                              <span className="shrink-0 rounded-full border border-border/60 bg-muted/80 px-2 py-0.5 text-[10px] font-medium text-foreground/80">
+                              <span className="shrink-0 rounded-full border border-border/60 bg-muted/80 px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
                                 {envName}
                               </span>
                             ) : null}
                           </div>
-                          <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                          <p className="mt-1 truncate font-mono text-[11px] font-normal text-muted-foreground">
                             {project.repositoryIdentity?.canonicalKey ?? project.workspaceRoot}
                           </p>
                         </div>
-                        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/45 pt-2.5 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/45 pt-2.5 text-[11.5px]">
                           <span className="text-muted-foreground tabular-nums">
                             {copy.projectsLinkedThreads(count)}
                           </span>
@@ -1145,7 +1145,7 @@ export const TasksPage = memo(function TasksPage() {
                     data-testid="tasks-table-header"
                     data-pmx-work-panel-control="1"
                     className={cn(
-                      "sticky top-0 z-10 grid h-8 min-w-[660px] items-center gap-3 border-b border-border/70 bg-muted/85 px-3.5 text-[11px] font-semibold tracking-wider text-foreground/85",
+                      "sticky top-0 z-10 grid h-8 min-w-[660px] items-center gap-3 border-b border-border/70 bg-muted/85 px-3.5 text-[11px] font-semibold tracking-wider text-muted-foreground",
                       tableGridClass,
                     )}
                   >
@@ -1198,7 +1198,7 @@ export const TasksPage = memo(function TasksPage() {
                       <p className="text-sm font-semibold text-foreground">
                         {emptyState.title}
                       </p>
-                      <p className="mt-1.5 max-w-md text-xs leading-relaxed text-muted-foreground">
+                      <p className="mt-1.5 max-w-md text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
                         {emptyState.description}
                       </p>
                       {emptyState.kind === "no-sources" ? (
@@ -1259,10 +1259,10 @@ export const TasksPage = memo(function TasksPage() {
                               <span className="truncate">{entry.displayKey}</span>
                             </span>
                             <div className="min-w-0">
-                              <div className="truncate font-medium text-foreground">
+                              <div className="truncate text-[13px] font-semibold leading-snug text-foreground">
                                 {entry.title}
                               </div>
-                              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
                                 <span className="truncate font-mono">{entry.scope}</span>
                                 {entry.labels.slice(0, 3).map((label) => (
                                   <PullRequestLabelChip key={label.name} label={label} />
@@ -1281,7 +1281,7 @@ export const TasksPage = memo(function TasksPage() {
                                   ))}
                                 </span>
                               ) : (
-                                <span className="text-[11px] text-muted-foreground/70">
+                                <span className="text-[11px] text-placeholder">
                                   {copy.unassignedLabel}
                                 </span>
                               )}
@@ -1358,10 +1358,10 @@ export const TasksPage = memo(function TasksPage() {
                               <span>#{entry.number}</span>
                             </span>
                             <div className="min-w-0">
-                              <div className="truncate font-medium text-foreground">
+                              <div className="truncate text-[13px] font-semibold leading-snug text-foreground">
                                 {entry.title}
                               </div>
-                              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
                                 <span className="truncate font-mono">{entry.repository}</span>
                                 <span className="inline-flex items-center gap-0.5 truncate font-mono opacity-80">
                                   <GitBranchIcon className="size-3 shrink-0" />
@@ -1378,7 +1378,7 @@ export const TasksPage = memo(function TasksPage() {
                                   </span>
                                 </>
                               ) : (
-                                <span className="text-[11px] text-muted-foreground/70">—</span>
+                                <span className="text-[11px] text-placeholder">—</span>
                               )}
                             </div>
                             <div>

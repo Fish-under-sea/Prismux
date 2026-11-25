@@ -8,9 +8,15 @@ import {
   ProviderInstanceId,
   type ServerProvider,
 } from "@prismux/core-contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@prismux/core-contracts/settings";
 import { GTProvider, initializeGT } from "gt-react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { DSH_BRAND_COLOR, DSH_FISH_LOGO_PATH } from "../agentBrand";
+import {
+  publishSubscriptionWaiverState,
+  resetSubscriptionWaiverStateCache,
+} from "../SubscriptionRiskWaiverSection";
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -42,7 +48,6 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 import {
-  BUILTIN_CHIEF_FALLBACK_PROVIDERS,
   PrismuxMemorySettingsPage,
   PrismuxMemorySyncSettingsPage,
   buildChiefModelDropdownItems,
@@ -83,6 +88,10 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       loadTranslations: async () => ({}),
       cacheExpiryTime: null,
     });
+  });
+
+  beforeEach(() => {
+    resetSubscriptionWaiverStateCache();
   });
 
   const mockProviders: ServerProvider[] = [
@@ -182,11 +191,59 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     }),
   ];
 
-  it("merges live Prismux providers with canonical brand names and deduplicates aliases", () => {
+  it("only includes live configured & enabled providers, deduplicates acpRegistry_dsh with whale logo, and excludes unconfigured or retired providers", () => {
     const options = buildChiefProviderOptions({
-      serverProviders: mockProviders,
+      serverProviders: [
+        ...mockProviders,
+        // Real acpRegistry DeepSeek Harness entry must merge into canonical "dsh" (no duplicate, no ACP hexagon)
+        makeMockProvider({
+          instanceId: "acpRegistry_dsh",
+          driver: "acpRegistry",
+          displayName: "DeepSeek Harness",
+          models: [
+            {
+              slug: "deepseek-v4-pro",
+              name: "DeepSeek V4 Pro",
+              isCustom: false,
+            } as ServerProvider["models"][number],
+          ],
+        }),
+        // Disabled / unconfigured providers must NOT appear
+        makeMockProvider({
+          instanceId: "cursor",
+          driver: "cursor",
+          displayName: "Cursor",
+          enabled: false,
+          models: [{ slug: "cursor-fast", name: "Cursor Fast", isCustom: false } as ServerProvider["models"][number]],
+        }),
+        makeMockProvider({
+          instanceId: "opencode",
+          driver: "opencode",
+          displayName: "OpenCode",
+          enabled: false,
+          models: [],
+        }),
+        // Retired omp must never appear even if marked enabled
+        makeMockProvider({
+          instanceId: "omp",
+          driver: "omp",
+          displayName: "oh-my-pi",
+          enabled: true,
+          models: [],
+        }),
+      ],
       settings: null,
-      daemonAvailableProviders: ["claude-code", "codex", "antigravity", "dsh", "opencode"],
+      daemonAvailableProviders: [
+        "claude-code",
+        "codex",
+        "antigravity",
+        "dsh",
+        "opencode",
+        "cursor",
+        "gemini",
+        "pi",
+        "omp",
+      ],
     });
 
     const codexOpt = options.find((o) => o.value === "codex");
@@ -199,14 +256,20 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     expect(agyOpt?.label).toBe("Antigravity");
     expect(dshOpt?.label).toBe("DeepSeek Harness");
 
-    // Ensure no raw lowercase duplicates exist.
-    expect(options.filter((o) => o.value === "claude-code")).toHaveLength(1);
+    // Strictly configured & enabled providers ONLY: no Cursor, Gemini CLI, OpenCode, Pi, OMP, or generic ACP duplicate!
+    expect(options.map((o) => o.value)).toEqual(["codex", "claude-code", "antigravity", "dsh"]);
+    expect(options.every((o) => o.configured)).toBe(true);
+    expect(options.filter((o) => o.value === "dsh")).toHaveLength(1);
+    expect(options.some((o) => o.value === "acp" || o.value === "acpRegistry")).toBe(false);
     expect(options.some((o) => o.value === "claudeAgent")).toBe(false);
     expect(options.some((o) => o.label === "codex")).toBe(false);
+    expect(
+      options.some((o) => /^(cursor|gemini|opencode|pi|omp|oh-my-pi)$/i.test(o.value)),
+    ).toBe(false);
 
-    // Ensure placeholder slugs ("antigravity-default", "default") are filtered out while real & proxy models stay.
+    // Ensure placeholder slugs ("antigravity-default", "default") are filtered out while real & merged models stay.
     expect(agyOpt?.models.map((m) => m.slug)).toEqual(["gemini-3-pro", "claude-sonnet-4-5"]);
-    expect(dshOpt?.models.map((m) => m.slug)).toEqual(["deepseek-r1"]);
+    expect(dshOpt?.models.map((m) => m.slug)).toEqual(["deepseek-r1", "deepseek-v4-pro"]);
     expect(claudeOpt?.models.map((m) => m.slug)).toEqual([
       "claude-opus-5-5",
       "custom-claude-proxy",
@@ -214,21 +277,201 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     expect(claudeOpt?.models[1]?.subtitle).toContain("OpenRouter");
   });
 
-  it("provides built-in fallback providers with DeepSeek Harness and zero oh-my-pi when server catalog is empty", () => {
+  it("orders Chief providers by settings.providerOrder and preserves user custom display names", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const dshId = ProviderInstanceId.make("acpRegistry_dsh");
     const options = buildChiefProviderOptions({
-      serverProviders: [],
-      settings: null,
+      serverProviders: [
+        makeMockProvider({
+          instanceId: codexId,
+          driver: "codex",
+          enabled: true,
+          models: [{ slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, capabilities: null }],
+        }),
+        makeMockProvider({
+          instanceId: claudeId,
+          driver: "claudeAgent",
+          enabled: true,
+          models: [
+            {
+              slug: "claude-sonnet-4-6",
+              name: "Claude Sonnet 4.6",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        }),
+        makeMockProvider({
+          instanceId: dshId,
+          driver: "acpRegistry",
+          displayName: "DeepSeek Harness",
+          enabled: true,
+          models: [
+            {
+              slug: "deepseek-chat",
+              name: "DeepSeek Chat",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        }),
+      ],
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerOrder: [dshId, claudeId, codexId],
+        providerInstances: {
+          [dshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "dsh",
+            config: { agentId: "dsh" },
+          },
+          [claudeId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            displayName: "主力 Claude",
+          },
+          [codexId]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: "备用 Codex",
+          },
+        },
+      },
     });
-    expect(options.map((o) => o.value)).toEqual([...BUILTIN_CHIEF_FALLBACK_PROVIDERS]);
-    expect(options.map((o) => o.label)).toEqual([
-      "Codex",
-      "Claude Code",
-      "Antigravity",
-      "DeepSeek Harness",
-    ]);
-    expect(options.some((o) => /oh-my-pi|^omp$/i.test(o.value) || /oh-my-pi/i.test(o.label))).toBe(
-      false,
+
+    expect(options.map((opt) => opt.value)).toEqual(["dsh", "claude-code", "codex"]);
+    expect(options.map((opt) => opt.label)).toEqual(["dsh", "主力 Claude", "备用 Codex"]);
+  });
+
+  it("falls back gracefully ONLY to currentProvider during cold start (never dumps dead unconfigured providers) and renders empty hint when none are configured", () => {
+    expect(
+      buildChiefProviderOptions({
+        serverProviders: [],
+        settings: null,
+      }),
+    ).toEqual([]);
+
+    expect(
+      buildChiefProviderOptions({
+        serverProviders: [],
+        settings: null,
+        daemonAvailableProviders: ["cursor", "gemini", "opencode", "pi", "omp"],
+        currentProvider: "codex",
+      }).map((o) => o.value),
+    ).toEqual(["codex"]);
+
+    // Retired omp is excluded even if persisted as currentProvider
+    expect(
+      buildChiefProviderOptions({
+        serverProviders: [],
+        settings: null,
+        currentProvider: "omp",
+      }),
+    ).toEqual([]);
+
+    // All providers disabled -> empty list and clean empty hint linking to /settings/providers
+    const disabledOnlyProviders = [
+      makeMockProvider({
+        instanceId: "codex",
+        driver: "codex",
+        enabled: false,
+        models: [],
+      }),
+    ];
+    expect(
+      buildChiefProviderOptions({
+        serverProviders: disabledOnlyProviders,
+        settings: null,
+      }),
+    ).toEqual([]);
+
+    const emptyHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxMemorySyncSettingsPage
+          serverProvidersOverride={disabledOnlyProviders}
+          settingsOverride={null}
+          daemonReadyOverride
+          initialTabOverride="chief"
+        />
+      </GTProvider>,
     );
+    expect(emptyHtml).toContain("data-pmx-chief-empty-providers");
+    expect(emptyHtml).toContain('href="/settings/providers"');
+    expect(emptyHtml).toContain("智能体配置");
+  });
+
+  it("renders DeepSeek Harness with whale icon (no hexagon) and blocks unsigned Antigravity with red waiver warning & disabled save button", () => {
+    const dshOnlyProviders = [
+      makeMockProvider({
+        instanceId: "acpRegistry_dsh",
+        driver: "acpRegistry",
+        displayName: "DeepSeek Harness",
+        models: [
+          { slug: "deepseek-v4-pro", name: "DeepSeek V4 Pro", isCustom: false } as ServerProvider["models"][number],
+        ],
+      }),
+    ];
+    const dshHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxMemorySyncSettingsPage
+          serverProvidersOverride={dshOnlyProviders}
+          settingsOverride={null}
+          daemonReadyOverride
+          initialTabOverride="chief"
+        />
+      </GTProvider>,
+    );
+    expect(dshHtml).toContain("DeepSeek Harness");
+    expect(dshHtml).toContain(DSH_FISH_LOGO_PATH);
+    expect(dshHtml).toContain(DSH_BRAND_COLOR);
+
+    // When only Antigravity is configured & waiver is unsigned, show red warning banner & disable save
+    const agyOnlyProviders = [
+      makeMockProvider({
+        instanceId: "antigravity",
+        driver: "antigravity",
+        models: [
+          { slug: "gemini-3-pro", name: "Gemini 3 Pro", isCustom: false } as ServerProvider["models"][number],
+        ],
+      }),
+    ];
+    const blockedAgyHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxMemorySyncSettingsPage
+          serverProvidersOverride={agyOnlyProviders}
+          settingsOverride={null}
+          daemonReadyOverride
+          initialTabOverride="chief"
+        />
+      </GTProvider>,
+    );
+    expect(blockedAgyHtml).toContain('data-pmx-chief-agy-waiver-banner="true"');
+    expect(blockedAgyHtml).toContain("Antigravity 需签署订阅风险免责协议后方可用于主秘书引擎");
+    expect(blockedAgyHtml).toContain("前往签署免责 →");
+    expect(blockedAgyHtml).toMatch(/data-pmx-chief-save-button=""[^>]*disabled|disabled[^>]*data-pmx-chief-save-button=""/);
+
+    // Once waiver is signed + switch A ON, warning banner disappears and save button unlocks
+    publishSubscriptionWaiverState({
+      signed: true,
+      waiverVersion: "v3-unified-2026",
+      signedAt: "2026-11-25T16:00:00.000Z",
+      allowAntigravityAsControlledAgent: true,
+      allowExternalSubscriptionAgentsInSwarm: false,
+      defaultLocked: true,
+    });
+    const allowedAgyHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxMemorySyncSettingsPage
+          serverProvidersOverride={agyOnlyProviders}
+          settingsOverride={null}
+          daemonReadyOverride
+          initialTabOverride="chief"
+        />
+      </GTProvider>,
+    );
+    expect(allowedAgyHtml).not.toContain('data-pmx-chief-agy-waiver-banner="true"');
   });
 
   it("preserves a compatibility fallback model item when a saved custom model is absent from the catalog", () => {

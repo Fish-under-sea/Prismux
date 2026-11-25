@@ -1,7 +1,20 @@
-import type { UsageProviderKind } from "@prismux/core-contracts";
+import { useAtomValue } from "@effect/atom-react";
+import {
+  ProviderDriverKind,
+  type ProviderInstanceId,
+  type UsageProviderKind,
+} from "@prismux/core-contracts";
 
-import { ProviderDriverKind } from "@prismux/core-contracts";
-
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderItemsByConfiguredProviderOrder,
+  orderProviderInstanceEntries,
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
+} from "../../providerInstances";
+import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../../state/server";
 import type { UsageMetric } from "./usageShortcuts";
 
 type UsageProviderPresentation = {
@@ -50,6 +63,82 @@ export const PROVIDER_PRESENTATION = {
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
 export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];
+
+export function resolveUsageProviderLabel(
+  provider: UsageProviderKind | string,
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+): string {
+  const presentation =
+    provider in PROVIDER_PRESENTATION
+      ? PROVIDER_PRESENTATION[provider as UsageProviderKind]
+      : undefined;
+  if (entries && entries.length > 0) {
+    return resolveConfiguredProviderLabel(
+      presentation?.driverKind ?? provider,
+      entries,
+      presentation?.label,
+    );
+  }
+  return presentation?.label ?? provider;
+}
+
+export function orderUsageProviders<T extends string>(
+  providers: readonly T[],
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+  providerOrder?: ReadonlyArray<ProviderInstanceId> | null,
+): readonly T[] {
+  if (
+    providers.length <= 1 ||
+    (!providerOrder?.length && (!entries || entries.length === 0))
+  ) {
+    return providers;
+  }
+  return orderItemsByConfiguredProviderOrder(
+    providers,
+    (provider) =>
+      provider in PROVIDER_PRESENTATION
+        ? PROVIDER_PRESENTATION[provider as UsageProviderKind].driverKind
+        : provider,
+    entries ?? [],
+    providerOrder,
+  );
+}
+
+export function useConfiguredUsageProviders(overrides?: {
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  readonly providerOrder?: ReadonlyArray<ProviderInstanceId> | null | undefined;
+}) {
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const serverSettings = useAtomValue(primaryServerSettingsAtom);
+  const effectiveProviderOrder =
+    overrides?.providerOrder !== undefined
+      ? overrides.providerOrder
+      : serverSettings.providerOrder;
+  const entries: ReadonlyArray<ProviderInstanceEntry> =
+    overrides?.providerEntries !== undefined
+      ? overrides.providerEntries
+      : disambiguateProviderInstanceDisplayNames(
+          orderProviderInstanceEntries(
+            brandProviderInstanceEntries(
+              deriveProviderInstanceEntries(serverProviders),
+              serverSettings,
+            ),
+            serverSettings.providerOrder,
+          ),
+        );
+
+  const getLabel = (provider: UsageProviderKind | string) =>
+    resolveUsageProviderLabel(provider, entries);
+  const orderProviders = <T extends string>(providers: readonly T[]) =>
+    orderUsageProviders(providers, entries, effectiveProviderOrder);
+
+  return {
+    entries,
+    providerOrder: effectiveProviderOrder,
+    getLabel,
+    orderProviders,
+  };
+}
 
 export function providersWithUsage(
   totals: readonly {

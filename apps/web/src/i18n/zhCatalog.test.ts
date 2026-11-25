@@ -165,6 +165,67 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
         ),
       ),
     ).toBe("用于生成会话标题和其他文本。版本控制有单独的设置。“智能体配置”中添加的文本生成器也会显示在这里。");
+    expect(m(msg("Default reasoning effort"))).toBe("默认思考强度");
+    expect(
+      m(
+        msg(
+          "Default reasoning effort for models without an explicit override. Automatically maps to each model's closest supported level.",
+        ),
+      ),
+    ).toBe("未单独覆盖时模型的默认思考强度，会自动映射到各模型最接近的支持档位。");
+    expect(
+      m(
+        msg(
+          "Default reasoning effort for models without an explicit override in this project. Automatically maps to each model's closest supported level.",
+        ),
+      ),
+    ).toBe("此项目中未单独覆盖时模型的默认思考强度，会自动映射到各模型最接近的支持档位。");
+    expect(m(msg("Reset default reasoning effort to default"))).toBe("将默认思考强度重置为默认值");
+
+    // Reasoning / CoT translation (思考过程汉化)
+    expect(m(msg("Reasoning translation"))).toBe("思考过程汉化");
+    expect(
+      m(msg("Off (keep original)", { $context: "reasoning translation provider" })),
+    ).toBe("关闭（保留原文）");
+    expect(
+      m(msg("Bing Translate (no key)", { $context: "reasoning translation provider" })),
+    ).toBe("Bing 翻译（免密）");
+    expect(
+      m(msg("Google Translate (no key)", { $context: "reasoning translation provider" })),
+    ).toBe("Google 翻译（免密）");
+    expect(
+      m(msg("Designated text generation model", { $context: "reasoning translation provider" })),
+    ).toBe("指定文本生成模型");
+    expect(
+      m(
+        msg(
+          "Enable real-time Chinese translation of model reasoning. Click 'View original' anytime to switch back.",
+        ),
+      ),
+    ).toBe("开启后可实时将模型英文思考过程汉化为中文，点击「查看原文」可随时切回。");
+    expect(
+      m(
+        msg(
+          "No sign-in or API key required. When enabled, reasoning text is sent to the selected online translation service and may contain code or conversation details.",
+        ),
+      ),
+    ).toBe("无需额外登录或 API Key；开启后思考内容会发送至所选在线翻译服务，可能包含代码或对话细节。");
+    expect(
+      m(
+        msg(
+          "Reuses your configured Text generation model for high-quality translation (follows the subscription risk waiver guard),",
+        ),
+      ),
+    ).toBe("将复用「文本生成模型」设置的模型进行高质量汉化（遵循订阅免责护栏），");
+    expect(m(msg("Configure text generation model →"))).toBe("配置文本生成模型 →");
+    expect(m(msg("Reset reasoning translation to default"))).toBe("将思考过程汉化重置为默认值");
+    expect(m(msg("Translating reasoning…"))).toBe("正在汉化思考过程…");
+    expect(m(msg("View original"))).toBe("查看原文");
+    expect(m(msg("View translation"))).toBe("查看译文");
+    expect(m(msg("Translation unavailable, showing original"))).toBe("翻译暂不可用，已显示原文");
+    expect(m(msg("Antigravity subscription waiver required; showing original."))).toBe(
+      "Antigravity 需签署免责后方可自动汉化，已显示原文。",
+    );
   });
 
   it("finds Prismux settings items by both Chinese and English queries", () => {
@@ -200,6 +261,9 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["智能体提供方", "providers"],
       ["秘书与记忆", "prismux-memory"],
       ["主秘书与记忆", "prismux-memory"],
+      ["默认思考强度", "default-reasoning-effort"],
+      ["思考过程汉化", "reasoning-translation"],
+      ["思维链翻译", "reasoning-translation"],
     ];
 
     for (const [query, expectedId] of cases) {
@@ -339,9 +403,11 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(zhCatalog).not.toHaveProperty("0a3d168145e42282");
     expect(enCatalog).not.toHaveProperty("d18fbf732abd8379");
     expect(zhCatalog).not.toHaveProperty("d18fbf732abd8379");
-    expect(searchSettings("服务体检", SETTINGS_SEARCH_ITEMS, m)[0]?.id).toBe(
-      "prismux-diagnostics",
-    );
+    expect(
+      (SETTINGS_SEARCH_ITEMS as ReadonlyArray<{ readonly id: string }>).some(
+        (item) => item.id === "prismux-diagnostics",
+      ),
+    ).toBe(false);
 
     // RC.2 segmented settings tab & Antigravity compliance labels
     expect(m(msg("Theme & colors"))).toBe("主题与配色");
@@ -422,6 +488,25 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("Avg speed"))).toBe("平均速度");
     expect(m(msg("Cache hit rate"))).toBe("实际缓存命中率");
     expect(m(msg("Call Logs"))).toBe("调用日志");
+
+    // 4-tier work steps Chinese action labels
+    expect(m(msg("Edited file"))).toBe("已修改文件");
+    expect(m(msg("Searched"))).toBe("已搜索");
+    expect(m(msg("Thought for {duration}"), { duration: "2.4s" })).toBe("思考了 2.4s");
+    expect(m(msg("Web fetch"))).toBe("网页抓取");
+    expect(m(msg("Reasoning"))).toBe("思考过程");
+    expect(m(msg("Result"))).toBe("结果");
+    expect(m(msg("MCP tool"))).toBe("MCP 工具");
+    expect(m(msg("Todo list"))).toBe("任务清单");
+    expect(m(msg("Plan"))).toBe("执行计划");
+    expect(m(msg("Edited {fileName}"), { fileName: "app.ts" })).toBe("已修改 app.ts");
+    expect(m(msg("Created {fileName}"), { fileName: "new.ts" })).toBe("已创建 new.ts");
+    expect(m(msg("Deleted {fileName}"), { fileName: "old.ts" })).toBe("已删除 old.ts");
+    expect(m(msg("Fetched {url}"), { url: "https://prismux.dev" })).toBe("已抓取 https://prismux.dev");
+    expect(m(msg("Updating plan"))).toBe("正在更新计划");
+    expect(m(msg("Updated plan"))).toBe("已更新计划");
+    expect(m(msg("Running tool"))).toBe("正在调用工具");
+    expect(m(msg("Used tool"))).toBe("已调用工具");
   });
 
   it("enforces Prismux brand cleanup across zh.json while preserving T3 Connect relay copy", () => {

@@ -82,6 +82,7 @@ import {
   applyAcpAgentTerminalUpdate,
   acpContentBlockDisplayText,
   embeddedTerminalIdsFromSessionUpdate,
+  extractAcpTodoToolPlanUpdate,
   extractMcpToolCallIdentity,
   findModelConfigOption,
   mergeToolCallState,
@@ -627,6 +628,7 @@ export interface AcpAdapterV2Flavor {
   readonly normalizeToolCall?: (toolCall: AcpToolCallState) => AcpToolCallState;
   readonly isCancelledToolCall?: (payload: unknown) => boolean;
   readonly extractProposedPlanMarkdown?: (toolCall: AcpToolCallState) => string | undefined;
+  readonly extractTodoPlanUpdate?: (toolCall: AcpToolCallState) => AcpPlanUpdate | undefined;
   readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
   /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
   readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
@@ -1685,6 +1687,8 @@ interface ActiveAcpTurn {
   contextUsage: ThreadTokenUsageSnapshot | null;
   nativeMetadata: OrchestrationV2ProviderThreadNativeMetadata | null;
   readonly tools: Map<string, AcpToolCallState & { readonly backgroundCommandTaskId?: string }>;
+  /** Todo-tool call IDs already projected as `todo_list` plan items (suppress raw duplicate `dynamic_tool`). */
+  readonly todoPlanToolCallIds: Set<string>;
   /** Tools the agent failed after Stop; later updates keep them interrupted. */
   readonly stoppedToolCallIds: Set<string>;
   readonly toolUpdatesSkipped: Map<string, number>;
@@ -4607,6 +4611,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             );
             if (followsAgentWorkState) yield* syncNativeChildren(context);
             if (subagentUpdate.suppressNormalTool !== false) {
+              yield* rearmDeferredFinalize(context);
+              return;
+            }
+          }
+          const todoPlanUpdate =
+            flavor.extractTodoPlanUpdate?.(toolCall) ?? extractAcpTodoToolPlanUpdate(toolCall);
+          if (todoPlanUpdate !== undefined && todoPlanUpdate.kind === "items" && todoPlanUpdate.plan.length > 0) {
+            yield* emitPlan(context, todoPlanUpdate, false).pipe(Effect.orDie);
+            if (previous === undefined || context.todoPlanToolCallIds.has(toolCall.toolCallId)) {
+              context.todoPlanToolCallIds.add(toolCall.toolCallId);
               yield* rearmDeferredFinalize(context);
               return;
             }
@@ -9510,6 +9524,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               contextUsage: rememberedContextUsage ?? turnInput.providerThread.contextUsage ?? null,
               nativeMetadata: initialNativeMetadata,
               tools: new Map(),
+              todoPlanToolCallIds: new Set(),
               stoppedToolCallIds: new Set(),
               toolUpdatesSkipped: new Map(),
               toolStartedAt: new Map(),

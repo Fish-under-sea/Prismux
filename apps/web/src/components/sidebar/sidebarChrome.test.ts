@@ -969,6 +969,11 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(zhFactoryHtml).toContain('data-testid="prismux-nav-overnight-factory"');
       expect(zhFactoryHtml).toContain('aria-current="page"');
 
+      const zhDiagnosticsHtml = renderCollapsedRail("zh", "/diagnostics", false);
+      expect(zhDiagnosticsHtml).toContain('data-testid="prismux-nav-diagnostics"');
+      expect(zhDiagnosticsHtml).toContain('aria-current="page"');
+      expect(zhDiagnosticsHtml).toContain('aria-pressed="true"');
+
       // Project settings utility page still renders Back button tooltip on the right
       const zhUtilityHtml = renderCollapsedRail("zh", "/projects/demo", true);
       const zhUtilityTexts = extractPopups(zhUtilityHtml).map((popup) => popup.text);

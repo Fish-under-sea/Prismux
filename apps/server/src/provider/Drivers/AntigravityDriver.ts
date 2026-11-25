@@ -25,8 +25,10 @@ import * as AcpErrors from "@prismux/effect-acp/errors";
 
 import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
 import {
+  isAntigravitySubscriptionWaiverSigned,
   isAntigravityTextGenerationAvailable,
   makeAntigravityTextGeneration,
+  resolveAntigravitySubscriptionWaiverPath,
 } from "../../textGeneration/AntigravityTextGeneration.ts";
 import { makeAntigravityAuth, type AntigravityAuth } from "../AntigravityAuth.ts";
 import * as AntigravityInstallation from "../AntigravityInstallation.ts";
@@ -472,6 +474,11 @@ export const AntigravityDriver: ProviderDriver<
       userHome,
       authMethod: auth.authMethod,
     });
+    const waiverFilePath = resolveAntigravitySubscriptionWaiverPath({
+      userHome,
+      environment: processEnvironment,
+      platform: hostPlatform,
+    });
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,
       stampIdentity: classifyModels,
@@ -492,7 +499,11 @@ export const AntigravityDriver: ProviderDriver<
           Effect.provideService(Path.Path, path),
           Effect.catch(() => Effect.logWarning("Could not save Antigravity permission modes.")),
         ),
-      supportsTextGeneration: isAntigravityTextGenerationAvailable(localGeminiHome).pipe(
+      supportsTextGeneration: Effect.all([
+        isAntigravityTextGenerationAvailable(localGeminiHome),
+        isAntigravitySubscriptionWaiverSigned({ waiverFilePath }),
+      ]).pipe(
+        Effect.map(([profileSafe, waiverSigned]) => profileSafe && waiverSigned),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
         Effect.orElseSucceed(() => false),
@@ -540,6 +551,7 @@ export const AntigravityDriver: ProviderDriver<
     });
     const textGeneration = yield* makeAntigravityTextGeneration({
       profileDirectory: localGeminiHome,
+      waiverFilePath,
       defaultModel,
       withProcess: authFlow.withProcess,
       makeRuntime: (cwd) =>

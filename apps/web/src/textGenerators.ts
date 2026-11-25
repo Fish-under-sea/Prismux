@@ -21,6 +21,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 
 import {
   deriveProviderInstanceEntries,
+  orderProviderInstanceEntries,
   type ProviderInstanceEntry,
   providerInstanceEntriesFor,
 } from "./providerInstances";
@@ -283,7 +284,8 @@ export function useTextGenerationTargets(input: {
   readonly settings: Pick<
     ServerSettings,
     "providerInstances" | "projectSettingsOverrides" | "textGenerators"
-  >;
+  > &
+    Partial<Pick<ServerSettings, "providerOrder">>;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly projectId: ProjectId | null;
   readonly selections: ReadonlyArray<ModelSelection | null | undefined>;
@@ -333,9 +335,12 @@ export function useTextGenerationTargets(input: {
   return {
     providers: [...providers, ...generatorProviders],
     // Project provider overrides do not apply to text generators, so their entries skip them.
-    entries: [
-      ...providerInstanceEntriesFor(providers, settings, input.projectId),
-      ...deriveProviderInstanceEntries(generatorProviders),
-    ],
+    entries: orderProviderInstanceEntries(
+      [
+        ...providerInstanceEntriesFor(providers, settings, input.projectId),
+        ...deriveProviderInstanceEntries(generatorProviders),
+      ],
+      settings.providerOrder,
+    ),
   };
 }

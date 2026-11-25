@@ -577,18 +577,33 @@ describe("Prismux privacy-safe default server settings", () => {
     expect(client.workStepsDisplay).toBe("detailed");
     expect(client.workStepsCollapseTiming).toBe("after-turn");
     expect(client.collapsedAssistantReplyMode).toBe("all");
+    expect(client.reasoningTranslationProvider).toBe("bing");
 
     const clientPatch = decodeClientSettingsPatch({
       workStepsDisplay: "expanded",
       workStepsCollapseTiming: "next-message",
       collapsedAssistantReplyMode: "final-only",
+      reasoningTranslationProvider: "off",
     });
     expect(clientPatch).toEqual({
       workStepsDisplay: "expanded",
       workStepsCollapseTiming: "next-message",
       collapsedAssistantReplyMode: "final-only",
+      reasoningTranslationProvider: "off",
+    });
+    expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "bing" })).toEqual({
+      reasoningTranslationProvider: "bing",
+    });
+    expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "google" })).toEqual({
+      reasoningTranslationProvider: "google",
+    });
+    expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "text_model" })).toEqual({
+      reasoningTranslationProvider: "text_model",
     });
     expect(() => decodeClientSettingsPatch({ workStepsDisplay: "invalid" })).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ reasoningTranslationProvider: "deepl" }),
+    ).toThrow();
 
     const server = decodeServerSettings({});
     expect(server.branchNamePrefix).toBe("prismux");
@@ -606,5 +621,26 @@ describe("Prismux privacy-safe default server settings", () => {
       providerOrder: ["dsh", "claudeAgent", "codex"],
     });
     expect(orderPatch.providerOrder).toEqual(["dsh", "claudeAgent", "codex"]);
+
+    expect(DEFAULT_SERVER_SETTINGS.defaultReasoningEffort).toBe("high");
+    expect(server.defaultReasoningEffort).toBe("high");
+    expect(decodeServerSettings({ defaultReasoningEffort: "low" }).defaultReasoningEffort).toBe(
+      "low",
+    );
+    expect(decodeServerSettings({ defaultReasoningEffort: "max" }).defaultReasoningEffort).toBe(
+      "max",
+    );
+    expect(decodeServerSettingsPatch({ defaultReasoningEffort: "medium" })).toEqual({
+      defaultReasoningEffort: "medium",
+    });
+    expect(() => decodeServerSettingsPatch({ defaultReasoningEffort: "ultra" })).toThrow();
+    expect(PROJECT_SCOPED_SERVER_SETTING_KEYS).toContain("defaultReasoningEffort");
+    expect(
+      decodeServerSettings({
+        projectSettingsOverrides: {
+          project: { defaultReasoningEffort: "low" },
+        },
+      }).projectSettingsOverrides[ProjectId.make("project")]?.defaultReasoningEffort,
+    ).toBe("low");
   });
 });

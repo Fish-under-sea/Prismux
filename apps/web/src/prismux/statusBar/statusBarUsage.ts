@@ -1,10 +1,21 @@
 import type {
+  ProviderInstanceId,
   ServerProvider,
   ServerProviderUsageWindow,
   UsageProviderKind,
 } from "@prismux/core-contracts";
 import type { MergedUsage } from "@prismux/core-shared/usageMerge";
+import {
+  orderItemsByConfiguredProviderOrder,
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
+} from "../../providerInstances";
 import type { UsagePercentMode } from "./statusBarVisibility";
+
+export interface StatusBarProviderDisplayOptions {
+  readonly entries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  readonly providerOrder?: ReadonlyArray<ProviderInstanceId> | null | undefined;
+}
 
 export interface PrismuxProviderProbeSnapshot {
   readonly providerId: string;
@@ -345,12 +356,26 @@ function computeCacheHitPercent(
   return Math.round((cachedInput / totalInput) * 1000) / 10;
 }
 
+function resolveStatusBarProviderName(
+  idOrDriver: string,
+  fallbackDisplayName: string | undefined,
+  driver: string | undefined,
+  entries: ReadonlyArray<ProviderInstanceEntry> | undefined,
+): string {
+  const fallback = canonicalProviderDisplayName(fallbackDisplayName, driver ?? idOrDriver);
+  if (entries && entries.length > 0) {
+    return resolveConfiguredProviderLabel(idOrDriver, entries, fallback);
+  }
+  return fallback;
+}
+
 export function buildUsageTelemetrySummary(
   mergedUsage: MergedUsage | null | undefined,
   providers: readonly ServerProvider[],
   todayDayKey?: string,
   windowProviderKinds?: ReadonlySet<string>,
   probeSnapshots?: readonly PrismuxProviderProbeSnapshot[] | null,
+  displayOptions?: StatusBarProviderDisplayOptions,
 ): StatusBarUsageTelemetrySummary {
   const todayBucket =
     mergedUsage && todayDayKey
@@ -400,7 +425,12 @@ export function buildUsageTelemetrySummary(
   >();
   for (const provider of providers) {
     const kind = normalizeUsageProviderKind(provider.driver);
-    const displayName = canonicalProviderDisplayName(provider.displayName, provider.driver);
+    const displayName = resolveStatusBarProviderName(
+      provider.instanceId,
+      provider.displayName,
+      provider.driver,
+      displayOptions?.entries,
+    );
     const isCustomEndpoint = detectCustomEndpointProvider(provider);
     const isAntigravity = kind === "antigravity";
     const autoInsert = provider.enabled && !isAntigravity;
@@ -458,7 +488,13 @@ export function buildUsageTelemetrySummary(
         key: `usage:${kind}`,
         providerKind: kind,
         providerName:
-          configured?.displayName ?? canonicalProviderDisplayName(undefined, normalizedKind),
+          configured?.displayName ??
+          resolveStatusBarProviderName(
+            normalizedKind,
+            undefined,
+            normalizedKind,
+            displayOptions?.entries,
+          ),
         todayTokens: todayProv?.totalTokens ?? 0,
         todayCostUsd: todayProv?.costUsd ?? 0,
         weekTokens: provTotals.totalTokens,
@@ -499,13 +535,22 @@ export function buildUsageTelemetrySummary(
     });
   }
 
-  const providerRows = [...ledgerByKind.values()].sort(
+  const defaultSortedRows = [...ledgerByKind.values()].sort(
     (a, b) =>
       b.todayTokens - a.todayTokens ||
       b.weekTokens - a.weekTokens ||
       b.weekRecords - a.weekRecords ||
       a.providerName.localeCompare(b.providerName),
   );
+  const providerRows =
+    displayOptions?.providerOrder && displayOptions.providerOrder.length > 0
+      ? orderItemsByConfiguredProviderOrder(
+          defaultSortedRows,
+          (row) => row.providerKind,
+          displayOptions.entries ?? [],
+          displayOptions.providerOrder,
+        )
+      : defaultSortedRows;
 
   const weekTokens = mergedUsage?.totalTokens ?? 0;
   const weekCostUsd = mergedUsage?.costUsd ?? 0;
@@ -543,6 +588,7 @@ export function collectStatusBarUsageSummary(
   mergedUsage?: MergedUsage | null,
   todayDayKey?: string,
   probeSnapshots?: readonly PrismuxProviderProbeSnapshot[] | null,
+  displayOptions?: StatusBarProviderDisplayOptions,
 ): StatusBarUsageSummary {
   const windows: StatusBarUsageWindowEntry[] = [];
   const antigravityEntries: StatusBarAntigravityAcpEntry[] = [];
@@ -557,7 +603,12 @@ export function collectStatusBarUsageSummary(
       const authenticated = provider.auth?.status === "authenticated";
       antigravityEntries.push({
         providerInstanceId: provider.instanceId,
-        providerName: canonicalProviderDisplayName(provider.displayName, provider.driver),
+        providerName: resolveStatusBarProviderName(
+          provider.instanceId,
+          provider.displayName,
+          provider.driver,
+          displayOptions?.entries,
+        ),
         authenticated,
         tierLabel: extractAntigravityAcpTierLabel(provider),
         cliCommands: ["/usage", "/credits"],
@@ -592,7 +643,12 @@ export function collectStatusBarUsageSummary(
       windows.push({
         key: `${provider.instanceId}:${win.id}`,
         providerInstanceId: provider.instanceId,
-        providerName: canonicalProviderDisplayName(provider.displayName, provider.driver),
+        providerName: resolveStatusBarProviderName(
+          provider.instanceId,
+          provider.displayName,
+          provider.driver,
+          displayOptions?.entries,
+        ),
         driver: provider.driver,
         windowId: win.id,
         label: win.label || win.id,
@@ -616,17 +672,28 @@ export function collectStatusBarUsageSummary(
     return a.providerName.localeCompare(b.providerName) || a.label.localeCompare(b.label);
   });
 
+  const orderedAntigravityEntries =
+    displayOptions?.providerOrder && displayOptions.providerOrder.length > 0
+      ? orderItemsByConfiguredProviderOrder(
+          antigravityEntries,
+          (entry) => entry.providerInstanceId,
+          displayOptions.entries ?? [],
+          displayOptions.providerOrder,
+        )
+      : antigravityEntries;
+
   const telemetry = buildUsageTelemetrySummary(
     mergedUsage,
     providers,
     todayDayKey,
     windowProviderKinds,
     probeSnapshots,
+    displayOptions,
   );
 
   return {
     windows,
-    antigravityEntries,
+    antigravityEntries: orderedAntigravityEntries,
     primaryWindow: windows[0] ?? null,
     telemetry,
     enabledProviderCount,

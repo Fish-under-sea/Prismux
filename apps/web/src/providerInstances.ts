@@ -19,6 +19,12 @@ import {
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@prismux/client-runtime/state/provider-instance-display";
+import {
+  formatAgentBrandName,
+  resolveAgentBrandId,
+  resolveProviderEntryDisplayName,
+  toCanonicalChiefProviderId,
+} from "./prismux/agentBrand";
 
 export {
   containsUuidNoise,
@@ -102,7 +108,16 @@ export function deriveProviderInstanceEntries(
     const defaultId = defaultInstanceIdForDriver(driverKind);
     const isDefault = instanceId === defaultId;
     const rawSnapshotName = snapshot.displayName?.trim();
-    const hasCustomDisplayName = Boolean(rawSnapshotName && !containsUuidNoise(rawSnapshotName));
+    const canonicalDriverBrand = formatAgentBrandName(driverKind);
+    const formattedSnapshotName = rawSnapshotName
+      ? formatAgentBrandName(driverKind, rawSnapshotName)
+      : "";
+    const hasCustomDisplayName = Boolean(
+      rawSnapshotName &&
+        !containsUuidNoise(rawSnapshotName) &&
+        formattedSnapshotName.toLowerCase() === rawSnapshotName.toLowerCase() &&
+        formattedSnapshotName.toLowerCase() !== canonicalDriverBrand.toLowerCase(),
+    );
     return {
       instanceId,
       driverKind,
@@ -124,13 +139,251 @@ export function deriveProviderInstanceEntries(
   });
 }
 
+export type ProviderInstanceOrderSettings = Pick<
+  ServerSettings,
+  "providerInstances" | "projectSettingsOverrides"
+> &
+  Partial<Pick<ServerSettings, "providerOrder">>;
+
+/**
+ * Orders provider instance entries according to the user's persisted `providerOrder`,
+ * preserving original relative order for any unlisted or newly discovered instances.
+ */
+export function orderProviderInstanceEntries<
+  T extends { readonly instanceId: ProviderInstanceId },
+>(
+  entries: ReadonlyArray<T>,
+  providerOrder: ReadonlyArray<ProviderInstanceId> | null | undefined,
+): ReadonlyArray<T> {
+  if (!providerOrder || providerOrder.length === 0 || entries.length <= 1) {
+    return entries;
+  }
+  const rankById = new Map<ProviderInstanceId, number>();
+  for (const [index, instanceId] of providerOrder.entries()) {
+    if (!rankById.has(instanceId)) {
+      rankById.set(instanceId, index);
+    }
+  }
+  if (rankById.size === 0) {
+    return entries;
+  }
+  return entries
+    .map((entry, originalIndex) => ({
+      entry,
+      rank: rankById.get(entry.instanceId) ?? Number.POSITIVE_INFINITY,
+      originalIndex,
+    }))
+    .toSorted((left, right) =>
+      left.rank !== right.rank ? left.rank - right.rank : left.originalIndex - right.originalIndex,
+    )
+    .map((item) => item.entry);
+}
+
+function normalizeProviderLookupKey(raw: string | null | undefined): string {
+  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+}
+
+function resolveLookupCanonicalId(rawKey: string): string | null {
+  const trimmed = rawKey.trim();
+  if (!trimmed) return null;
+  const brand = resolveAgentBrandId(trimmed);
+  if (brand !== "custom" && brand !== "acp") {
+    return toCanonicalChiefProviderId(trimmed);
+  }
+  return normalizeProviderLookupKey(trimmed);
+}
+
+function resolveEntryCanonicalId(
+  entry: Pick<
+    ProviderInstanceEntry,
+    "instanceId" | "driverKind" | "acpRegistryAgentId" | "displayName"
+  >,
+): string | null {
+  const candidates = [
+    entry.acpRegistryAgentId,
+    entry.driverKind !== "acpRegistry" ? entry.driverKind : undefined,
+    entry.instanceId,
+    entry.displayName,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const brand = resolveAgentBrandId(candidate);
+    if (brand !== "custom" && brand !== "acp") {
+      return toCanonicalChiefProviderId(candidate);
+    }
+  }
+  if (entry.acpRegistryAgentId?.trim()) {
+    return normalizeProviderLookupKey(entry.acpRegistryAgentId);
+  }
+  if (entry.driverKind === "acpRegistry") {
+    return normalizeProviderLookupKey(entry.instanceId);
+  }
+  return normalizeProviderLookupKey(toCanonicalChiefProviderId(entry.driverKind || entry.instanceId));
+}
+
+function pickPreferredConfiguredEntry(
+  matches: ReadonlyArray<ProviderInstanceEntry>,
+): ProviderInstanceEntry | undefined {
+  if (matches.length === 0) return undefined;
+  const enabledMatches = matches.filter((entry) => entry.enabled);
+  const pool = enabledMatches.length > 0 ? enabledMatches : matches;
+  return pool.find((entry) => entry.hasCustomDisplayName === true) ?? pool[0];
+}
+
+/**
+ * Single-Source-of-Truth label resolver for any provider ID, instance ID, driver kind, or alias.
+ * Matches exact `instanceId`, then `acpRegistryAgentId` / canonical brand ID (`toCanonicalChiefProviderId`),
+ * preferring enabled configured instances with `hasCustomDisplayName` or disambiguated `displayName`,
+ * and falling back to `formatAgentBrandName(idOrDriver, fallbackDisplayName)`.
+ */
+export function resolveConfiguredProviderLabel(
+  idOrDriver: string | null | undefined,
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  fallbackDisplayName?: string | null,
+): string {
+  const trimmed = typeof idOrDriver === "string" ? idOrDriver.trim() : "";
+  if (!trimmed || entries.length === 0) {
+    return formatAgentBrandName(idOrDriver, fallbackDisplayName);
+  }
+
+  const exactMatch = entries.find((entry) => entry.instanceId === trimmed);
+  if (exactMatch) {
+    return resolveProviderEntryDisplayName(exactMatch);
+  }
+
+  const normalizedKey = normalizeProviderLookupKey(trimmed);
+  const directMatches = entries.filter(
+    (entry) =>
+      normalizeProviderLookupKey(entry.instanceId) === normalizedKey ||
+      (entry.acpRegistryAgentId !== undefined &&
+        normalizeProviderLookupKey(entry.acpRegistryAgentId) === normalizedKey),
+  );
+  const preferredDirect = pickPreferredConfiguredEntry(directMatches);
+  if (preferredDirect) {
+    return resolveProviderEntryDisplayName(preferredDirect);
+  }
+
+  const lookupCanonical = resolveLookupCanonicalId(trimmed);
+  if (lookupCanonical) {
+    const canonicalMatches = entries.filter(
+      (entry) => resolveEntryCanonicalId(entry) === lookupCanonical,
+    );
+    const preferredCanonical = pickPreferredConfiguredEntry(canonicalMatches);
+    if (preferredCanonical) {
+      return resolveProviderEntryDisplayName(preferredCanonical);
+    }
+  }
+
+  return formatAgentBrandName(idOrDriver, fallbackDisplayName);
+}
+
+/**
+ * Maps arbitrary provider-keyed items (Daemon probes, Status Bar cards, Usage charts,
+ * Chief/Overnight selectors, Diagnostics CLIs) into the exact order configured in `智能体配置`
+ * (`providerOrder` + ordered `entries`), preserving relative order for unconfigured items.
+ */
+export function orderItemsByConfiguredProviderOrder<T>(
+  items: ReadonlyArray<T>,
+  getKey: (item: T) => string | null | undefined,
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  providerOrder?: ReadonlyArray<ProviderInstanceId> | null,
+): ReadonlyArray<T> {
+  if (items.length <= 1) {
+    return items;
+  }
+  const hasExplicitOrder = Boolean(providerOrder && providerOrder.length > 0);
+  if (!hasExplicitOrder && entries.length === 0) {
+    return items;
+  }
+
+  const orderedEntries = orderProviderInstanceEntries(entries, providerOrder);
+  const rankByExactKey = new Map<string, number>();
+  const rankByCanonicalId = new Map<string, number>();
+
+  const recordKeyRank = (rawKey: string | null | undefined, rank: number): void => {
+    const normalized = normalizeProviderLookupKey(rawKey);
+    if (!normalized) return;
+    if (!rankByExactKey.has(normalized)) {
+      rankByExactKey.set(normalized, rank);
+    }
+    const canonical = resolveLookupCanonicalId(normalized);
+    if (canonical && !rankByCanonicalId.has(canonical)) {
+      rankByCanonicalId.set(canonical, rank);
+    }
+  };
+
+  const recordEntryRank = (entry: ProviderInstanceEntry, rank: number): void => {
+    recordKeyRank(entry.instanceId, rank);
+    recordKeyRank(entry.acpRegistryAgentId, rank);
+    const canonical = resolveEntryCanonicalId(entry);
+    if (canonical && !rankByCanonicalId.has(canonical)) {
+      rankByCanonicalId.set(canonical, rank);
+    }
+    if (entry.driverKind !== "acpRegistry") {
+      recordKeyRank(entry.driverKind, rank);
+    }
+  };
+
+  let nextRank = 0;
+  if (hasExplicitOrder && providerOrder) {
+    const entryById = new Map(orderedEntries.map((entry) => [entry.instanceId, entry] as const));
+    const seenIds = new Set<ProviderInstanceId>();
+    for (const instanceId of providerOrder) {
+      if (seenIds.has(instanceId)) continue;
+      seenIds.add(instanceId);
+      const rank = nextRank++;
+      recordKeyRank(instanceId, rank);
+      const entry = entryById.get(instanceId);
+      if (entry) {
+        recordEntryRank(entry, rank);
+      }
+    }
+    for (const entry of orderedEntries) {
+      if (seenIds.has(entry.instanceId)) continue;
+      recordEntryRank(entry, nextRank++);
+    }
+  } else {
+    for (const entry of orderedEntries) {
+      recordEntryRank(entry, nextRank++);
+    }
+  }
+
+  if (rankByExactKey.size === 0 && rankByCanonicalId.size === 0) {
+    return items;
+  }
+
+  const resolveItemRank = (item: T): number => {
+    const normalized = normalizeProviderLookupKey(getKey(item));
+    if (!normalized) return Number.POSITIVE_INFINITY;
+    const exactRank = rankByExactKey.get(normalized);
+    if (exactRank !== undefined) return exactRank;
+    const canonical = resolveLookupCanonicalId(normalized);
+    if (canonical) {
+      const canonicalRank = rankByCanonicalId.get(canonical);
+      if (canonicalRank !== undefined) return canonicalRank;
+    }
+    return Number.POSITIVE_INFINITY;
+  };
+
+  return items
+    .map((item, originalIndex) => ({
+      item,
+      rank: resolveItemRank(item),
+      originalIndex,
+    }))
+    .toSorted((left, right) =>
+      left.rank !== right.rank ? left.rank - right.rank : left.originalIndex - right.originalIndex,
+    )
+    .map((entry) => entry.item);
+}
+
 /** Instance ids repeat across environments; lookups must stay scoped. */
 export function deriveProviderEntriesByEnvironment(
   providersByEnvironment: Iterable<
     readonly [
       string,
       ReadonlyArray<ServerProvider>,
-      Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">?,
+      ProviderInstanceOrderSettings?,
     ]
   >,
 ): ReadonlyMap<string, ReadonlyMap<string, ProviderInstanceEntry>> {
@@ -138,7 +391,8 @@ export function deriveProviderEntriesByEnvironment(
   for (const [environmentId, providers, settings] of providersByEnvironment) {
     const derived = deriveProviderInstanceEntries(providers);
     const branded = settings ? brandProviderInstanceEntries(derived, settings) : derived;
-    const entries = disambiguateProviderInstanceDisplayNames(branded);
+    const ordered = orderProviderInstanceEntries(branded, settings?.providerOrder);
+    const entries = disambiguateProviderInstanceDisplayNames(ordered);
     byEnvironment.set(
       environmentId,
       new Map(entries.map((entry) => [entry.instanceId as string, entry] as const)),
@@ -221,16 +475,17 @@ function applyProviderInstanceBranding(
   };
 }
 
-/** Picker order: each driver's default instance first, then its custom instances. */
+/** Picker order: each driver's default instance first, then its custom instances, then user's `providerOrder`. */
 export function providerInstanceEntriesFor(
   providers: ReadonlyArray<ServerProvider>,
-  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
+  settings: ProviderInstanceOrderSettings,
   projectId: ProjectId | null,
 ): ReadonlyArray<ProviderInstanceEntry> {
   return pipe(
     deriveProviderInstanceEntries(providers),
     (entries) => applyProviderInstanceSettings(entries, settings, projectId),
     sortProviderInstanceEntries,
+    (entries) => orderProviderInstanceEntries(entries, settings.providerOrder),
     disambiguateProviderInstanceDisplayNames,
   );
 }

@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   PrismuxReasoningEffortSlider,
   formatEffortLabel,
@@ -63,8 +64,11 @@ import { usePrimarySettings } from "../../hooks/useSettings";
 import { getAppModelOptionsForInstance } from "../../modelSelection";
 import {
   brandProviderInstanceEntries,
+  containsUuidNoise,
   deriveProviderInstanceEntries,
   disambiguateProviderInstanceDisplayNames,
+  orderItemsByConfiguredProviderOrder,
+  orderProviderInstanceEntries,
 } from "../../providerInstances";
 import { primaryServerProvidersAtom } from "../../state/server";
 import {
@@ -77,6 +81,13 @@ import { DEFAULT_CHIEF_DISPLAY_NAME, normalizeChiefDisplayName } from "../chiefM
 import { prismuxDaemonClient, type PrismuxDaemonClient } from "../daemonClient";
 import { emitChiefSlotUpdated } from "../PrismuxChiefStatusPill";
 import { useOptionalPrismuxRuntime } from "../PrismuxRuntimeProvider";
+import {
+  AGY_WAIVER_REQUIRED_BADGE_TEXT,
+  SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  isAntigravityControlledAutomationAllowed,
+  isAntigravityProviderLike,
+  useSubscriptionWaiverState,
+} from "../SubscriptionRiskWaiverSection";
 import {
   ChiefIdentityAndAgentsMdSection,
   type ActiveChiefSlotSnapshot,
@@ -211,6 +222,48 @@ function isPlaceholderModelSlug(slug: string): boolean {
   );
 }
 
+function isRetiredChiefProviderId(raw: string | null | undefined): boolean {
+  if (typeof raw !== "string") return false;
+  const normalized = raw.trim().toLowerCase();
+  return (
+    normalized === "omp" ||
+    normalized === "oh-my-pi" ||
+    normalized === "oh_my_pi" ||
+    normalized.startsWith("omp:") ||
+    normalized.startsWith("omp-") ||
+    normalized.startsWith("oh-my-pi")
+  );
+}
+
+function resolveCanonicalChiefProviderInput(entry: {
+  readonly driverKind: string;
+  readonly acpRegistryAgentId?: string | undefined;
+  readonly instanceId: string;
+  readonly displayName: string;
+}): string {
+  if (entry.driverKind !== "acpRegistry") {
+    return entry.driverKind;
+  }
+  const candidates = [
+    entry.acpRegistryAgentId,
+    entry.instanceId,
+    entry.displayName,
+    entry.driverKind,
+  ];
+  return (
+    candidates.find(
+      (candidate) =>
+        typeof candidate === "string" &&
+        candidate.trim().length > 0 &&
+        toCanonicalChiefProviderId(candidate) !== "acp",
+    ) ??
+    entry.acpRegistryAgentId ??
+    entry.instanceId ??
+    entry.displayName ??
+    entry.driverKind
+  );
+}
+
 function createInitialChiefState(
   runtimeChiefProvider: string,
   runtimeDialMode: DialModeValue,
@@ -223,7 +276,7 @@ function createInitialChiefState(
     model: "",
     reasoningEffort: "",
     dialMode: runtimeDialMode,
-    availableProviders: [...BUILTIN_CHIEF_FALLBACK_PROVIDERS],
+    availableProviders: [],
     t3Connected: false,
     updatedAt: null,
   };
@@ -251,9 +304,10 @@ function sameChiefSummary(a: ChiefCommittedSummary, b: ChiefCommittedSummary): b
 }
 
 /**
- * Merges live Prismux server providers, custom model catalogs, built-in fallbacks
- * (`codex / claude-code / antigravity / omp`), and Daemon availableProviders into
- * canonical, de-duplicated Provider dropdown options with official brand names.
+ * Derives canonical, de-duplicated Chief Provider dropdown options strictly from
+ * live configured & enabled Prismux server providers (plus live custom models).
+ * Never injects unconfigured providers or retired drivers (e.g. `omp`); during
+ * cold start before live providers arrive, falls back gracefully only to `currentProvider`.
  */
 export function buildChiefProviderOptions(input: {
   readonly serverProviders: ReadonlyArray<ServerProvider>;
@@ -261,9 +315,13 @@ export function buildChiefProviderOptions(input: {
   readonly daemonAvailableProviders?: readonly string[];
   readonly currentProvider?: string | null;
 }): ChiefProviderDropdownOption[] {
+  const providerOrder = input.settings?.providerOrder;
   const derivedEntries = deriveProviderInstanceEntries(input.serverProviders);
+  const branded = input.settings
+    ? brandProviderInstanceEntries(derivedEntries, input.settings)
+    : derivedEntries;
   const brandedEntries = disambiguateProviderInstanceDisplayNames(
-    input.settings ? brandProviderInstanceEntries(derivedEntries, input.settings) : derivedEntries,
+    orderProviderInstanceEntries(branded, providerOrder),
   );
 
   interface ProviderBucket {
@@ -300,22 +358,45 @@ export function buildChiefProviderOptions(input: {
   };
 
   for (const entry of brandedEntries) {
-    const canonicalId = toCanonicalChiefProviderId(entry.driverKind);
-    const resolvedEntryLabel = resolveProviderEntryDisplayName(entry);
-    const defaultBrandLabel = formatAgentBrandName(canonicalId);
-    const bucket = ensureBucket(canonicalId);
-    if (entry.enabled) {
-      bucket.configured = true;
-      bucket.enabledInstanceCount += 1;
-      if (
-        resolvedEntryLabel.length > 0 &&
-        resolvedEntryLabel.toLowerCase() !== defaultBrandLabel.toLowerCase()
-      ) {
-        bucket.customNames.add(resolvedEntryLabel);
-      }
+    if (!entry.enabled || !entry.isAvailable) {
+      continue;
     }
-    if (entry.enabled && entry.isAvailable) {
-      bucket.available = true;
+    const rawCanonicalInput = resolveCanonicalChiefProviderInput(entry);
+    if (isRetiredChiefProviderId(rawCanonicalInput)) {
+      continue;
+    }
+    const canonicalId = toCanonicalChiefProviderId(rawCanonicalInput);
+    if (isRetiredChiefProviderId(canonicalId)) {
+      continue;
+    }
+    const defaultBrandLabel = formatAgentBrandName(canonicalId);
+    const explicitSettingsName =
+      input.settings?.providerInstances?.[entry.instanceId]?.displayName?.trim() ?? "";
+    const hasExplicitSettingsName =
+      explicitSettingsName.length > 0 && !containsUuidNoise(explicitSettingsName);
+    const candidateDisplayName = hasExplicitSettingsName
+      ? explicitSettingsName
+      : entry.hasCustomDisplayName
+        ? resolveProviderEntryDisplayName(entry)
+        : resolveProviderEntryDisplayName({
+            driverKind: canonicalId,
+            displayName: entry.displayName,
+            instanceId: entry.instanceId,
+          });
+    const resolvedEntryLabel =
+      canonicalId !== "acp" && candidateDisplayName.trim().toLowerCase() === "acp"
+        ? defaultBrandLabel
+        : candidateDisplayName;
+    const bucket = ensureBucket(canonicalId);
+    bucket.configured = true;
+    bucket.available = true;
+    bucket.enabledInstanceCount += 1;
+    if (
+      hasExplicitSettingsName ||
+      (resolvedEntryLabel.length > 0 &&
+        resolvedEntryLabel.toLowerCase() !== defaultBrandLabel.toLowerCase())
+    ) {
+      bucket.customNames.add(resolvedEntryLabel);
     }
     if (bucket.enabledInstanceCount === 1 && bucket.customNames.size === 1) {
       bucket.label = [...bucket.customNames][0]!;
@@ -370,27 +451,24 @@ export function buildChiefProviderOptions(input: {
     }
   }
 
-  for (const fallbackId of BUILTIN_CHIEF_FALLBACK_PROVIDERS) {
-    ensureBucket(fallbackId);
-  }
-
-  if (Array.isArray(input.daemonAvailableProviders)) {
-    for (const rawId of input.daemonAvailableProviders) {
-      if (typeof rawId === "string" && rawId.trim().length > 0) {
-        ensureBucket(rawId);
-      }
+  // Only fall back to the active currentProvider during cold start before serverProviders arrive.
+  if (
+    input.serverProviders.length === 0 &&
+    typeof input.currentProvider === "string" &&
+    input.currentProvider.trim().length > 0 &&
+    !isRetiredChiefProviderId(input.currentProvider)
+  ) {
+    const canonicalCurrent = toCanonicalChiefProviderId(input.currentProvider);
+    if (!isRetiredChiefProviderId(canonicalCurrent)) {
+      ensureBucket(canonicalCurrent);
     }
-  }
-
-  if (typeof input.currentProvider === "string" && input.currentProvider.trim().length > 0) {
-    ensureBucket(input.currentProvider);
   }
 
   const fallbackOrder = new Map<string, number>(
     BUILTIN_CHIEF_FALLBACK_PROVIDERS.map((id, idx) => [id, idx]),
   );
 
-  return [...buckets.values()]
+  const sortedOptions: ChiefProviderDropdownOption[] = [...buckets.values()]
     .sort((a, b) => {
       if (a.available !== b.available) return a.available ? -1 : 1;
       if (a.configured !== b.configured) return a.configured ? -1 : 1;
@@ -406,6 +484,17 @@ export function buildChiefProviderOptions(input: {
       available,
       models,
     }));
+
+  return providerOrder && providerOrder.length > 0
+    ? [
+        ...orderItemsByConfiguredProviderOrder(
+          sortedOptions,
+          (option) => option.value,
+          brandedEntries,
+          providerOrder,
+        ),
+      ]
+    : sortedOptions;
 }
 
 /**
@@ -567,6 +656,16 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
 }: ChiefSlotControlsSectionProps) {
   onRender?.();
 
+  const navigate = useNavigate();
+  const waiver = useSubscriptionWaiverState(daemon);
+  const agyAllowed = isAntigravityControlledAutomationAllowed(waiver);
+  const openSubscriptionWaiver = useCallback(() => {
+    void navigate({
+      to: "/settings/providers",
+      hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
+    });
+  }, [navigate]);
+
   const liveServerProviders = useAtomValue(primaryServerProvidersAtom);
   const liveSettings = usePrimarySettings();
   const serverProviders = serverProvidersOverride ?? liveServerProviders;
@@ -590,19 +689,21 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   const selectedDialRef = useRef(selectedDial);
   selectedDialRef.current = selectedDial;
 
-  // Base catalog excludes selectedProvider so switching between known providers hits cache in O(1)
-  // without recomputing deriveProviderInstanceEntries / brandProviderInstanceEntries / model lists.
+  // Base catalog derives strictly from live configured serverProviders so switching between
+  // configured providers hits cache in O(1) without recomputing provider instance metadata.
   const baseProviderOptions = useMemo(
     () =>
       buildChiefProviderOptions({
         serverProviders,
         settings: unifiedSettings,
-        daemonAvailableProviders: chief.availableProviders,
       }),
-    [chief.availableProviders, serverProviders, unifiedSettings],
+    [serverProviders, unifiedSettings],
   );
 
   const providerOptions = useMemo(() => {
+    if (serverProviders.length > 0) {
+      return baseProviderOptions;
+    }
     const canonicalSelected = toCanonicalChiefProviderId(selectedProvider);
     if (baseProviderOptions.some((opt) => opt.value === canonicalSelected)) {
       return baseProviderOptions;
@@ -610,22 +711,32 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
     return buildChiefProviderOptions({
       serverProviders,
       settings: unifiedSettings,
-      daemonAvailableProviders: chief.availableProviders,
       currentProvider: selectedProvider,
     });
-  }, [baseProviderOptions, chief.availableProviders, selectedProvider, serverProviders, unifiedSettings]);
+  }, [baseProviderOptions, selectedProvider, serverProviders, unifiedSettings]);
 
   const activeProviderOption = useMemo(
-    () => providerOptions.find((opt) => opt.value === selectedProvider) ?? providerOptions[0],
-    [providerOptions, selectedProvider],
+    () =>
+      providerOptions.find((opt) => opt.value === selectedProvider) ??
+      providerOptions.find((opt) => !(isAntigravityProviderLike(opt.value) && !agyAllowed)) ??
+      providerOptions[0],
+    [agyAllowed, providerOptions, selectedProvider],
   );
 
+  const effectiveSelectedProvider = activeProviderOption?.value ?? selectedProvider;
+  const isSelectedAgyBlocked =
+    !agyAllowed &&
+    (isAntigravityProviderLike(selectedProvider) ||
+      isAntigravityProviderLike(effectiveSelectedProvider));
+
   const activeProviderLabel =
-    activeProviderOption?.label ?? formatAgentBrandName(selectedProvider);
+    activeProviderOption?.label ?? formatAgentBrandName(effectiveSelectedProvider);
+  const providerOptionsRef = useRef(providerOptions);
+  providerOptionsRef.current = providerOptions;
 
   // Keep shared draft snapshot ref synced without triggering parent re-renders.
   activeSlotRef.current = {
-    provider: selectedProvider,
+    provider: effectiveSelectedProvider,
     providerLabel: activeProviderLabel,
     model: selectedModel,
     reasoningEffort: selectedEffort,
@@ -649,37 +760,73 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   const effortSpec = useMemo(
     () =>
       resolveChiefEffortSpec({
-        provider: selectedProvider,
+        provider: effectiveSelectedProvider,
         modelSlug: selectedModel,
         modelOption: activeModelOption,
       }),
-    [activeModelOption, selectedModel, selectedProvider],
+    [activeModelOption, effectiveSelectedProvider, selectedModel],
   );
 
   // Cache rendered <SelectItem> trees so opening dropdowns or switching unrelated fields
   // avoids recreating every option node & SVG logo on each render.
   const providerSelectItems = useMemo(
     () =>
-      providerOptions.map((opt) => (
-        <SelectItem key={opt.value} value={opt.value}>
-          <div className="flex items-center justify-between gap-2">
-            <span className="inline-flex min-w-0 items-center gap-2">
-              <AgentBrandLogo
-                provider={opt.value}
-                size={14}
-                iconClassName="size-3.5 opacity-100 text-current"
-              />
-              <span className="truncate font-medium">{opt.label}</span>
-            </span>
-            {opt.configured ? (
-              <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                已配置
+      providerOptions.map((opt) => {
+        const isAgyBlocked = !agyAllowed && isAntigravityProviderLike(opt.value);
+        if (isAgyBlocked) {
+          return (
+            <SelectItem
+              key={opt.value}
+              value={opt.value}
+              aria-disabled="true"
+              data-pmx-chief-provider-blocked={opt.value}
+              className="cursor-not-allowed"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openSubscriptionWaiver();
+              }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex min-w-0 items-center gap-2 opacity-60">
+                  <AgentBrandLogo
+                    provider={opt.value}
+                    size={14}
+                    iconClassName="size-3.5 opacity-75 grayscale text-current"
+                  />
+                  <span className="truncate font-medium text-muted-foreground">{opt.label}</span>
+                </span>
+                <span
+                  data-pmx-agy-waiver-badge="true"
+                  className="inline-flex shrink-0 cursor-pointer items-center rounded border border-destructive bg-background/95 px-1.5 py-0.5 text-2xs font-semibold leading-tight text-destructive"
+                >
+                  {AGY_WAIVER_REQUIRED_BADGE_TEXT}
+                </span>
+              </div>
+            </SelectItem>
+          );
+        }
+        return (
+          <SelectItem key={opt.value} value={opt.value}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <AgentBrandLogo
+                  provider={opt.value}
+                  size={14}
+                  iconClassName="size-3.5 opacity-100 text-current"
+                />
+                <span className="truncate font-medium">{opt.label}</span>
               </span>
-            ) : null}
-          </div>
-        </SelectItem>
-      )),
-    [providerOptions],
+              {opt.configured ? (
+                <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                  已配置
+                </span>
+              ) : null}
+            </div>
+          </SelectItem>
+        );
+      }),
+    [agyAllowed, openSubscriptionWaiver, providerOptions],
   );
 
   const modelSelectItems = useMemo(
@@ -722,10 +869,11 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         asString(slot?.reasoningEffort) || asString(slot?.defaultEffort);
       const mode = asDialMode(root?.dialMode, runtimeDialMode);
       const providers = Array.isArray(root?.availableProviders)
-        ? root.availableProviders.filter((p): p is string => typeof p === "string")
-        : [...BUILTIN_CHIEF_FALLBACK_PROVIDERS];
-      const nextAvailableProviders =
-        providers.length > 0 ? providers : [...BUILTIN_CHIEF_FALLBACK_PROVIDERS];
+        ? root.availableProviders.filter(
+            (p): p is string => typeof p === "string" && !isRetiredChiefProviderId(p),
+          )
+        : [];
+      const nextAvailableProviders = providers;
       const nextChief: ChiefStateView = {
         threadId: asString(slot?.threadId),
         provider,
@@ -739,6 +887,9 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         updatedAt: typeof slot?.updatedAt === "number" ? slot.updatedAt : null,
       };
       chiefStateCache.set(daemon as object, nextChief);
+      const resolvedProviderLabel =
+        providerOptionsRef.current.find((opt) => opt.value === provider)?.label ??
+        formatAgentBrandName(provider);
 
       startTransition(() => {
         setChief((prev) => ({
@@ -755,7 +906,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
           secretaryName,
           agentsMdPath,
           provider,
-          providerLabel: formatAgentBrandName(provider),
+          providerLabel: resolvedProviderLabel,
           model,
           reasoningEffort,
           dialMode: mode,
@@ -783,6 +934,11 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   const handleProviderChange = useCallback(
     (nextRaw: string | null) => {
       if (!nextRaw) return;
+      const nextCanonical = toCanonicalChiefProviderId(nextRaw);
+      if (!agyAllowed && isAntigravityProviderLike(nextCanonical)) {
+        openSubscriptionWaiver();
+        return;
+      }
       const reconciled = reconcileChiefSelectionOnProviderChange({
         nextProviderRaw: nextRaw,
         providerOptions,
@@ -801,7 +957,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       setSelectedModel(reconciled.model);
       setSelectedEffort(reconciled.reasoningEffort);
     },
-    [activeSlotRef, providerOptions],
+    [activeSlotRef, agyAllowed, openSubscriptionWaiver, providerOptions],
   );
 
   const handleModelChange = useCallback(
@@ -810,7 +966,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       const nextModel = nextRaw === CHIEF_DEFAULT_MODEL_SENTINEL ? "" : nextRaw;
       const nextModelOpt = activeProviderOption?.models.find((item) => item.slug === nextModel);
       const nextEffortSpec = resolveChiefEffortSpec({
-        provider: selectedProvider,
+        provider: effectiveSelectedProvider,
         modelSlug: nextModel,
         modelOption: nextModelOpt,
       });
@@ -830,7 +986,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         setSelectedEffort(nextEffort);
       }
     },
-    [activeProviderOption, activeSlotRef, selectedProvider],
+    [activeProviderOption, activeSlotRef, effectiveSelectedProvider],
   );
 
   const handleSliderEffortChange = useCallback(
@@ -853,11 +1009,18 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   }, [activeSlotRef]);
 
   const handleSaveChief = useCallback(async () => {
+    const normalizedProvider = toCanonicalChiefProviderId(effectiveSelectedProvider);
+    if (!agyAllowed && isAntigravityProviderLike(normalizedProvider)) {
+      openSubscriptionWaiver();
+      return;
+    }
+    if (providerOptions.length === 0) {
+      return;
+    }
     setSavingChief(true);
     onError(null);
     onStatus(null);
     try {
-      const normalizedProvider = toCanonicalChiefProviderId(selectedProvider);
       const trimmedModel = selectedModel.trim();
       const trimmedEffort = selectedEffort.trim();
       const currentSecretaryName = secretaryNameRef.current;
@@ -877,7 +1040,9 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         secretaryName: currentSecretaryName,
         agentsMdPath: currentAgentsMdPath,
       });
-      const brandLabel = formatAgentBrandName(normalizedProvider);
+      const brandLabel =
+        providerOptionsRef.current.find((opt) => opt.value === normalizedProvider)?.label ??
+        formatAgentBrandName(normalizedProvider);
       const modelSummary = trimmedModel.length > 0 ? ` · 模型：${trimmedModel}` : "";
       const effortSummary =
         trimmedEffort.length > 0
@@ -906,17 +1071,20 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
     }
   }, [
     agentsMdPathRef,
+    agyAllowed,
     chief.t3Connected,
     daemon,
+    effectiveSelectedProvider,
     loadChiefState,
     onChiefSummaryChange,
     onError,
     onStatus,
+    openSubscriptionWaiver,
+    providerOptions.length,
     secretaryNameRef,
     selectedDial,
     selectedEffort,
     selectedModel,
-    selectedProvider,
   ]);
 
   const trimmedSelectedModel = selectedModel.trim();
@@ -928,25 +1096,63 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         title="主秘书引擎"
         description="选择负责主秘书对话的代理引擎，热切换保留当前上下文。"
         control={
-          <div className={`${SETTINGS_CONTROL_MD} max-w-full`}>
-            <Select modal={false} value={selectedProvider} onValueChange={handleProviderChange}>
-              <SelectTrigger size="sm" data-pmx-chief-provider-select="">
-                <SelectValue>
-                  <span className="inline-flex min-w-0 items-center gap-2">
-                    <AgentBrandLogo
-                      provider={selectedProvider}
-                      size={14}
-                      iconClassName="size-3.5 opacity-100 text-current"
-                    />
-                    <span className="truncate font-medium">{activeProviderLabel}</span>
-                  </span>
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>{providerSelectItems}</SelectPopup>
-            </Select>
-          </div>
+          providerOptions.length === 0 ? (
+            <div
+              data-pmx-chief-empty-providers="true"
+              className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground"
+            >
+              <span>暂无已配置的智能体</span>
+              <Button size="xs" variant="outline" render={<Link to="/settings/providers" />}>
+                前往智能体配置 →
+              </Button>
+            </div>
+          ) : (
+            <div className={`${SETTINGS_CONTROL_MD} max-w-full`}>
+              <Select
+                modal={false}
+                value={effectiveSelectedProvider}
+                onValueChange={handleProviderChange}
+              >
+                <SelectTrigger size="sm" data-pmx-chief-provider-select="">
+                  <SelectValue>
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <AgentBrandLogo
+                        provider={effectiveSelectedProvider}
+                        size={14}
+                        iconClassName="size-3.5 opacity-100 text-current"
+                      />
+                      <span className="truncate font-medium">{activeProviderLabel}</span>
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup alignItemWithTrigger={false}>{providerSelectItems}</SelectPopup>
+              </Select>
+            </div>
+          )
         }
-      />
+      >
+        {isSelectedAgyBlocked ? (
+          <div
+            role="alert"
+            data-pmx-chief-agy-waiver-banner="true"
+            className="mt-2.5 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
+              <AlertTriangleIcon className="size-3.5 shrink-0" aria-hidden />
+              <span>Antigravity 需签署订阅风险免责协议后方可用于主秘书引擎</span>
+            </span>
+            <Button
+              type="button"
+              size="xs"
+              variant="destructive-outline"
+              data-pmx-chief-open-waiver="true"
+              onClick={openSubscriptionWaiver}
+            >
+              前往签署免责 →
+            </Button>
+          </div>
+        ) : null}
+      </SettingsRow>
 
       <SettingsRow
         title="默认模型"
@@ -1016,7 +1222,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
           <MemoizedReasoningEffortSlider
             modelId={trimmedSelectedModel || null}
             modelName={activeModelOption?.label ?? null}
-            provider={selectedProvider}
+            provider={effectiveSelectedProvider}
             options={effortSpec.stops}
             value={trimmedSelectedEffort || undefined}
             locale="zh"
@@ -1067,7 +1273,8 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
           <div className="flex justify-end">
             <Button
               size="sm"
-              disabled={savingChief}
+              data-pmx-chief-save-button=""
+              disabled={savingChief || isSelectedAgyBlocked || providerOptions.length === 0}
               onClick={() => {
                 void handleSaveChief();
               }}

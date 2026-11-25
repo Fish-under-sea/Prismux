@@ -31,6 +31,7 @@ import {
   MODEL_REASONING_EFFORT_OPTION_IDS,
   createModelSelection,
 } from "@prismux/core-shared/model";
+import { useAtomValue } from "@effect/atom-react";
 import { useRouter } from "@tanstack/react-router";
 import {
   AlertTriangleIcon,
@@ -52,15 +53,27 @@ import { useWorkspaceTabsStore } from "../components/workspace/workspaceTabsStor
 import { getClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { cn, newDraftId, newMessageId, newProjectId, newThreadId } from "../lib/utils";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderProviderInstanceEntries,
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
+} from "../providerInstances";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readProjects, waitForProject } from "../state/entities";
 import { localEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { projectEnvironment } from "../state/projects";
-import { environmentServerConfigsAtom } from "../state/server";
+import {
+  environmentServerConfigsAtom,
+  primaryServerProvidersAtom,
+  primaryServerSettingsAtom,
+} from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
-import { formatAgentBrandName, resolveAgentBrandId } from "./agentBrand";
+import { resolveAgentBrandId } from "./agentBrand";
 import { prismuxDaemonClient } from "./daemonClient";
 import {
   PRISMUX_SUBSCRIPTION_BLOCKED_EVENT,
@@ -225,7 +238,10 @@ export function buildDispatchModelSelection(
   return createModelSelection(instanceId, modelId, options);
 }
 
-export function deriveDispatchThreadTitle(envelope: PrismuxDispatchEnvelope): string {
+export function deriveDispatchThreadTitle(
+  envelope: PrismuxDispatchEnvelope,
+  configuredEntries: ReadonlyArray<ProviderInstanceEntry> = [],
+): string {
   const firstLine =
     envelope.prompt
       .split(/\r?\n/)
@@ -234,7 +250,7 @@ export function deriveDispatchThreadTitle(envelope: PrismuxDispatchEnvelope): st
   if (firstLine.length > 0) {
     return firstLine.length > 64 ? `${firstLine.slice(0, 61)}...` : firstLine;
   }
-  return `${formatAgentBrandName(envelope.provider)} · ${formatDispatchCallerLabel(envelope)}`;
+  return `${resolveConfiguredProviderLabel(envelope.provider, configuredEntries)} · ${formatDispatchCallerLabel(envelope)}`;
 }
 
 export function isValidDispatchEnvelope(value: unknown): value is PrismuxDispatchEnvelope {
@@ -530,6 +546,7 @@ export interface PrismuxDispatchConfirmationBannerProps {
   readonly items: ReadonlyArray<StagedPrismuxDispatch>;
   readonly busyTaskId: string | null;
   readonly errorMessage: string | null;
+  readonly configuredEntries?: ReadonlyArray<ProviderInstanceEntry>;
   readonly onConfirm: (staged: StagedPrismuxDispatch) => void;
   readonly onCancel: (staged: StagedPrismuxDispatch) => void;
 }
@@ -538,6 +555,7 @@ export function PrismuxDispatchConfirmationBanner({
   items,
   busyTaskId,
   errorMessage,
+  configuredEntries = [],
   onConfirm,
   onCancel,
 }: PrismuxDispatchConfirmationBannerProps) {
@@ -548,7 +566,7 @@ export function PrismuxDispatchConfirmationBanner({
   const sourceLabel = formatDispatchCallerLabel(envelope);
   const replyDetail = formatDispatchReplyChannelDetail(envelope.replyChannel);
   const targetPath = envelope.worktreePath?.trim() || envelope.workspacePath.trim();
-  const providerDisplay = formatAgentBrandName(envelope.provider);
+  const providerDisplay = resolveConfiguredProviderLabel(envelope.provider, configuredEntries);
   const isAgy = isAntigravityDispatchProvider(envelope.provider);
   const headline = isAgy
     ? // oxlint-disable-next-line prismux/no-em-dash-copy -- Prismux v3 spec mandates verbatim Chinese confirmation copy with ——
@@ -692,6 +710,17 @@ export function PrismuxIpcDispatchBridge() {
   const router = useRouter();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const startTurnCommand = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const primaryProviders = useAtomValue(primaryServerProvidersAtom);
+  const primarySettings = useAtomValue(primaryServerSettingsAtom);
+  const configuredEntries = disambiguateProviderInstanceDisplayNames(
+    orderProviderInstanceEntries(
+      brandProviderInstanceEntries(
+        deriveProviderInstanceEntries(primaryProviders),
+        primarySettings,
+      ),
+      primarySettings.providerOrder,
+    ),
+  );
   const [stagedQueue, setStagedQueue] = useState<ReadonlyArray<StagedPrismuxDispatch>>([]);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -699,6 +728,20 @@ export function PrismuxIpcDispatchBridge() {
     null,
   );
   const queuePromiseRef = useRef<Promise<void>>(Promise.resolve());
+
+  const resolveLatestConfiguredEntries = (): ReadonlyArray<ProviderInstanceEntry> => {
+    const localEnvId =
+      appAtomRegistry.get(localEnvironmentIdAtom) ?? EnvironmentId.make("primary");
+    const config = appAtomRegistry.get(environmentServerConfigsAtom).get(localEnvId);
+    if (!config) {
+      return configuredEntries;
+    }
+    const derived = deriveProviderInstanceEntries(config.providers);
+    const branded = brandProviderInstanceEntries(derived, config.settings);
+    return disambiguateProviderInstanceDisplayNames(
+      orderProviderInstanceEntries(branded, config.settings.providerOrder),
+    );
+  };
 
   const buildExecutionDeps = (): DispatchExecutionDeps => {
     const draftStore = useComposerDraftStore.getState();
@@ -851,9 +894,13 @@ export function PrismuxIpcDispatchBridge() {
         ]);
       },
       onAutoSent: (envelope) => {
+        const providerLabel = resolveConfiguredProviderLabel(
+          envelope.provider,
+          resolveLatestConfiguredEntries(),
+        );
         toastManager.add({
           type: "info",
-          title: `已通过工作台派发至 ${formatAgentBrandName(envelope.provider)}`,
+          title: `已通过工作台派发至 ${providerLabel}`,
           description: `${envelope.modelId} · ${envelope.reasoningEffort}`,
         });
       },
@@ -953,10 +1000,14 @@ export function PrismuxIpcDispatchBridge() {
         setStagedQueue((prev) =>
           prev.filter((item) => item.envelope.taskId !== staged.envelope.taskId),
         );
+        const providerLabel = resolveConfiguredProviderLabel(
+          staged.envelope.provider,
+          resolveLatestConfiguredEntries(),
+        );
         toastManager.add({
           type: "success",
           title: "已确认放行并发送",
-          description: `${formatAgentBrandName(staged.envelope.provider)} · ${staged.envelope.modelId}`,
+          description: `${providerLabel} · ${staged.envelope.modelId}`,
         });
       } finally {
         setBusyTaskId(null);
@@ -1017,6 +1068,7 @@ export function PrismuxIpcDispatchBridge() {
         items={stagedQueue}
         busyTaskId={busyTaskId}
         errorMessage={errorMessage}
+        configuredEntries={configuredEntries}
         onConfirm={handleConfirmStaged}
         onCancel={handleCancelStaged}
       />

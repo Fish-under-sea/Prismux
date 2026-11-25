@@ -25,7 +25,8 @@ import {
   SubscriptionWaiverError,
   SubscriptionWaiverStore,
   classifyProviderAuth,
-  parseCodexRoutingConfigToml
+  parseCodexRoutingConfigToml,
+  resolveDshInstalledVersionFastSync
 } from "../index.js";
 
 const tempDirs: string[] = [];
@@ -88,7 +89,8 @@ describe("Prismux v3 Unified Provider Probe + Merged Subscription Risk Waiver", 
     });
     assert.equal(ccsRes.authMode, "api_or_custom");
     assert.equal(ccsRes.authSource, "ccs_or_magpie");
-    assert.equal(ccsRes.authLabel, AUTH_LABEL_CCS_MAGPIE);
+    assert.equal(AUTH_LABEL_CCS_MAGPIE, AUTH_LABEL_API_CUSTOM);
+    assert.equal(ccsRes.authLabel, AUTH_LABEL_API_CUSTOM);
     assert.equal(ccsRes.endpoint, "https://ccs.internal.example/v1");
     assert.ok(!JSON.stringify(ccsRes).includes("sk-ccs-super-secret-value"));
     assert.ok(!JSON.stringify(ccsRes).includes("do-not-leak"));
@@ -190,8 +192,21 @@ describe("Prismux v3 Unified Provider Probe + Merged Subscription Risk Waiver", 
     });
     assert.equal(codexTomlRes.authMode, "api_or_custom");
     assert.equal(codexTomlRes.authSource, "ccs_or_magpie");
+    assert.equal(codexTomlRes.authLabel, AUTH_LABEL_API_CUSTOM);
     assert.equal(codexTomlRes.endpoint, "https://relay.magpie.example/v1/codex");
     assert.ok(!JSON.stringify(codexTomlRes).includes("user:pass"));
+
+    // 1b. Localhost Codex custom endpoint MUST show the exact same unified label as Claude & DSH!
+    const codexLocalhostRes = classifyProviderAuth({
+      providerId: "codex",
+      installed: true,
+      env: { OPENAI_BASE_URL: "http://127.0.0.1:3426/v1" },
+      homeDir: emptyHome
+    });
+    assert.equal(codexLocalhostRes.authMode, "api_or_custom");
+    assert.equal(codexLocalhostRes.authSource, "ccs_or_magpie");
+    assert.equal(codexLocalhostRes.authLabel, AUTH_LABEL_API_CUSTOM);
+    assert.equal(codexLocalhostRes.authLabel, "API / 自定义端点注入（已放行）");
 
     // 2. requiresOpenaiAuth === false WITH auth.status === "unknown" -> 100% api_or_custom (NEVER subscription_oauth!)
     const reqFalseUnknown = classifyProviderAuth({
@@ -642,7 +657,7 @@ describe("Prismux v3 Unified Provider Probe + Merged Subscription Risk Waiver", 
     assert.ok(cliProbeCount >= 6);
     const codexDiag = aiGroup.items.find((i) => i.id === "provider.codex");
     assert.equal(codexDiag?.status, "ok");
-    assert.ok(codexDiag?.summary.includes(AUTH_LABEL_CCS_MAGPIE));
+    assert.ok(codexDiag?.summary.includes(AUTH_LABEL_API_CUSTOM));
     // Uninstalled optional CLIs (claude, dsh, gemini, opencode) MUST be omitted, never degraded!
     assert.equal(aiGroup.items.find((i) => i.id === "provider.claude"), undefined);
     assert.equal(aiGroup.degradedCount, 0);
@@ -833,5 +848,76 @@ describe("Prismux v3 Unified Provider Probe + Merged Subscription Risk Waiver", 
     const relockedJson =
       (await relockedRes.json()) as SubscriptionOrchestrationBlockedPayload;
     assert.equal(relockedJson.code, SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE);
+  });
+
+  test("Daemon DSH probe resolves real installed version from Electron app.asar and overrides placeholder 0.0.1", async () => {
+    const root = makeTempDir("pmx-dsh-asar-ver-");
+    const appDir = join(root, "AppData", "Local", "Programs", "DSH NEXT");
+    const resDir = join(appDir, "resources");
+    mkdirSync(resDir, { recursive: true });
+    const exePath = join(appDir, "DSH NEXT.exe");
+    writeFileSync(exePath, "");
+    const asarPath = join(resDir, "app.asar");
+
+    const entries: Record<string, string> = {
+      "package.json": JSON.stringify({ name: "dsh-desktop-next", version: "2.0.24-next" }),
+      "node_modules/@deepseek-ai/dsh/package.json": JSON.stringify({
+        name: "@deepseek-ai/dsh",
+        version: "0.2.2-rc.4"
+      }),
+      "lib/desktop-cli.js": "export {};"
+    };
+    const headerTree: { files: Record<string, unknown> } = { files: {} };
+    const chunks: Buffer[] = [];
+    let offset = 0;
+    for (const [rel, content] of Object.entries(entries)) {
+      const buf = Buffer.from(content, "utf8");
+      const parts = rel.split("/");
+      let cursor = headerTree.files;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        const seg = parts[i]!;
+        if (!cursor[seg] || typeof cursor[seg] !== "object") {
+          cursor[seg] = { files: {} };
+        }
+        cursor = (cursor[seg] as { files: Record<string, unknown> }).files;
+      }
+      cursor[parts.at(-1)!] = { size: buf.length, offset: String(offset) };
+      chunks.push(buf);
+      offset += buf.length;
+    }
+    const jsonBytes = Buffer.from(JSON.stringify(headerTree), "utf8");
+    const alignedJsonSize = Math.ceil(jsonBytes.length / 4) * 4;
+    const headerSize = alignedJsonSize + 8;
+    const header = Buffer.alloc(16 + alignedJsonSize);
+    header.writeUInt32LE(4, 0);
+    header.writeUInt32LE(headerSize, 4);
+    header.writeUInt32LE(headerSize - 4, 8);
+    header.writeUInt32LE(jsonBytes.length, 12);
+    jsonBytes.copy(header, 16);
+    writeFileSync(asarPath, Buffer.concat([header, ...chunks]));
+
+    const fastVer = resolveDshInstalledVersionFastSync({
+      binaryPath: exePath,
+      platform: "win32",
+      env: { LOCALAPPDATA: join(root, "AppData", "Local") },
+      homeDir: root
+    });
+    assert.equal(fastVer, "0.2.2-rc.4");
+
+    const probeService = new PrismuxProviderProbeService({
+      homeDir: root,
+      platform: "win32",
+      env: { LOCALAPPDATA: join(root, "AppData", "Local") },
+      refreshEnv: () => undefined,
+      cliProbe: async (command) =>
+        command === "dsh"
+          ? { found: true, path: exePath, version: "0.0.1", latencyMs: 5 }
+          : { found: false, path: null, version: null, latencyMs: 1 }
+    });
+    const snap = await probeService.probeProvider("dsh", { refresh: true });
+    assert.equal(snap.installed, true);
+    assert.equal(snap.status, "ready");
+    assert.equal(snap.version, "0.2.2-rc.4");
+    assert.equal(snap.authLabel, AUTH_LABEL_API_CUSTOM);
   });
 });

@@ -1,15 +1,27 @@
 /* oxlint-disable prismux/no-untranslated-copy -- Prismux v3 spec mandates verbatim Chinese subscription orchestration interception dialog copy */
+import { useAtomValue } from "@effect/atom-react";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
   defaultInstanceIdForDriver,
+  type ServerProvider,
 } from "@prismux/core-contracts";
 import { KeyRoundIcon, ShieldAlertIcon, ShieldCheckIcon, XIcon } from "lucide-react";
 import { useEffect, useId } from "react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { AgentBrandLogo, formatAgentBrandName, resolveAgentBrandId } from "./agentBrand";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderProviderInstanceEntries,
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
+  type ProviderInstanceOrderSettings,
+} from "../providerInstances";
+import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../state/server";
+import { AgentBrandLogo, resolveAgentBrandId } from "./agentBrand";
 import { SUBSCRIPTION_WAIVER_ANCHOR_ID } from "./SubscriptionRiskWaiverSection";
 
 export const ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED =
@@ -184,8 +196,9 @@ export function resolveBlockedProviderInstanceId(
 
 export function formatSubscriptionBlockedCopy(
   detail: Pick<SubscriptionOrchestrationBlockedDetail, "providerId" | "authLabel">,
+  configuredEntries: ReadonlyArray<ProviderInstanceEntry> = [],
 ): string {
-  const agentName = formatAgentBrandName(detail.providerId);
+  const agentName = resolveConfiguredProviderLabel(detail.providerId, configuredEntries);
   const authLabel = detail.authLabel.trim() || DEFAULT_SUBSCRIPTION_AUTH_LABEL;
   return `当前 ${agentName} 运行在官方个人订阅模式（${authLabel}），为避免违反厂商服务条款导致封号，默认禁止参与蜂群或跨代理自动化调用；若你使用 API Key 或 CCS / Magpie 注入 API 模式则不受限制`;
 }
@@ -195,6 +208,8 @@ export interface SubscriptionOrchestrationBlockedDialogProps {
   readonly onClose: () => void;
   readonly onConfigureApi: (detail: SubscriptionOrchestrationBlockedDetail) => void;
   readonly onOpenWaiver: (detail: SubscriptionOrchestrationBlockedDetail) => void;
+  readonly serverProvidersOverride?: ReadonlyArray<ServerProvider>;
+  readonly settingsOverride?: ProviderInstanceOrderSettings | null;
 }
 
 export function SubscriptionOrchestrationBlockedDialog({
@@ -202,9 +217,23 @@ export function SubscriptionOrchestrationBlockedDialog({
   onClose,
   onConfigureApi,
   onOpenWaiver,
+  serverProvidersOverride,
+  settingsOverride,
 }: SubscriptionOrchestrationBlockedDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const liveServerProviders = useAtomValue(primaryServerProvidersAtom);
+  const liveServerSettings = useAtomValue(primaryServerSettingsAtom);
+  const effectiveProviders = serverProvidersOverride ?? liveServerProviders;
+  const effectiveSettings =
+    settingsOverride !== undefined ? settingsOverride : liveServerSettings;
+  const derivedEntries = deriveProviderInstanceEntries(effectiveProviders);
+  const brandedEntries = effectiveSettings
+    ? brandProviderInstanceEntries(derivedEntries, effectiveSettings)
+    : derivedEntries;
+  const configuredEntries = disambiguateProviderInstanceDisplayNames(
+    orderProviderInstanceEntries(brandedEntries, effectiveSettings?.providerOrder),
+  );
 
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- binds Escape dismissal while interception dialog is open
   useEffect(() => {
@@ -222,8 +251,8 @@ export function SubscriptionOrchestrationBlockedDialog({
 
   if (!detail) return null;
 
-  const agentName = formatAgentBrandName(detail.providerId);
-  const bodyCopy = formatSubscriptionBlockedCopy(detail);
+  const agentName = resolveConfiguredProviderLabel(detail.providerId, configuredEntries);
+  const bodyCopy = formatSubscriptionBlockedCopy(detail, configuredEntries);
 
   return (
     <div

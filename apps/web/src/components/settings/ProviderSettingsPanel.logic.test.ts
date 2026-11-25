@@ -377,6 +377,7 @@ describe("provider configuration deletion logic", () => {
     for (const anchor of [
       "default-model",
       "fallback-model",
+      "default-reasoning-effort",
       "text-generation",
       "text-generation-model",
       "thread-title-instructions",

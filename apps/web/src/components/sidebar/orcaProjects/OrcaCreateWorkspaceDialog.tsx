@@ -12,7 +12,11 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn, isMacPlatform } from "~/lib/utils";
 import type { DraftThreadEnvMode } from "../../../composerDraftStore";
-import { AgentBrandLogo, formatAgentBrandName } from "../../../prismux/agentBrand";
+import {
+  AgentBrandLogo,
+  containsUuidNoise,
+  formatAgentBrandName,
+} from "../../../prismux/agentBrand";
 import type { SidebarProjectSnapshot } from "../../../sidebarProjectGrouping";
 import { EnvironmentMachineIcon } from "../../EnvironmentMachineIcon";
 import { ProjectFavicon } from "../../ProjectFavicon";
@@ -44,6 +48,14 @@ import {
   type OrcaWorkspaceAgentOption,
 } from "./orcaProjects.logic";
 import { useOrcaProjectsCopy } from "./orcaProjectsCopy";
+
+function resolveWorkspaceAgentLabel(agent: OrcaWorkspaceAgentOption): string {
+  const trimmed = agent.displayName.trim();
+  if (trimmed.length > 0 && !containsUuidNoise(trimmed)) {
+    return trimmed;
+  }
+  return formatAgentBrandName(agent.driverKind, agent.displayName);
+}
 
 export interface OrcaCreateWorkspaceDialogProps {
   readonly open: boolean;
@@ -587,8 +599,7 @@ export const OrcaCreateWorkspaceDialog = memo(function OrcaCreateWorkspaceDialog
                           size={15}
                         />
                         <span className="truncate text-xs font-medium">
-                          {formatAgentBrandName(selectedAgent.driverKind, selectedAgent.displayName)}{" "}
-                          (Chat)
+                          {resolveWorkspaceAgentLabel(selectedAgent)} (Chat)
                           {selectedAgent.modelLabel ? ` · ${selectedAgent.modelLabel}` : ""}
                         </span>
                       </span>
@@ -615,7 +626,7 @@ export const OrcaCreateWorkspaceDialog = memo(function OrcaCreateWorkspaceDialog
                     <span className="text-xs text-muted-foreground">{copy.defaultAgentOption}</span>
                   </SelectItem>
                   {availableAgents.map((agent) => {
-                    const canonicalName = formatAgentBrandName(agent.driverKind, agent.displayName);
+                    const displayLabel = resolveWorkspaceAgentLabel(agent);
                     return (
                       <SelectItem key={agent.id} value={agent.id}>
                         <span className="inline-flex min-w-0 items-center gap-2">
@@ -625,7 +636,7 @@ export const OrcaCreateWorkspaceDialog = memo(function OrcaCreateWorkspaceDialog
                             size={14}
                           />
                           <span className="truncate text-xs font-medium">
-                            {canonicalName} (Chat)
+                            {displayLabel} (Chat)
                           </span>
                           {agent.modelLabel ? (
                             <span className="truncate text-xs text-muted-foreground">

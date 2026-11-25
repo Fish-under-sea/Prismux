@@ -75,6 +75,7 @@ import {
   DEFAULT_WORK_STEPS_COLLAPSE_TIMING,
 } from "@prismux/core-contracts/settings";
 import {
+  classifyPrimaryStepGroupActivity,
   formatDshStepGroupSummary,
   formatDshTurnFoldLabel,
   resolveTurnFoldExpanded,
@@ -82,6 +83,7 @@ import {
   shouldGroupWorkStepsForTurn,
   shouldKeepIntermediateAssistantRepliesVisible,
   stripShellCommandWrapper,
+  type DshActivityCategory,
   type WorkStepsPresentationPolicy,
 } from "./dshWorkSteps.logic";
 import { resolveT3McpToolDefinition } from "@prismux/core-shared/t3McpToolPresentation";
@@ -117,6 +119,13 @@ function workEntryIsActiveTurnActivity(entry: WorkLogEntry): boolean {
     entry.toolLifecycleStatus === "inProgress" ||
     (entry.toolLifecycleStatus === undefined &&
       (entry.sourceActivityKind === "task.progress" || workLogEntryIsToolLike(entry)))
+  );
+}
+
+function isReasoningWorkEntry(entry: WorkLogEntry): boolean {
+  return (
+    entry.itemType === "reasoning" ||
+    (entry.tone === "thinking" && entry.sourceActivityKind !== "task.progress")
   );
 }
 
@@ -573,6 +582,7 @@ type MessagesTimelineRowContent =
       displayLabel?: string;
       isLive?: boolean;
       autoExpandReasoning?: boolean;
+      autoExpandDetails?: boolean;
     }
   | {
       kind: "work-live";
@@ -613,6 +623,7 @@ type MessagesTimelineRowContent =
       expanded: boolean;
       summary: string;
       summaryKind: ToolGroupSummaryKind;
+      dshPrimaryCategory?: DshActivityCategory;
       toolSurface?: WorkLogEntry["toolSurface"];
       toolIcon?: WorkLogEntry["toolIcon"];
       hasFailure: boolean;
@@ -1837,6 +1848,7 @@ export function deriveMessagesTimelineRows(
       runId: fold.runId,
       isBottomCompletedTurn: fold.isBottomCompletedTurn,
       collapseTiming,
+      defaultTurnFoldOpen: dshPolicy?.defaultTurnFoldOpen,
       expandedRunIds: input.expandedRunIds,
       collapsedRunIds: input.collapsedRunIds,
     });
@@ -1901,6 +1913,7 @@ export function deriveMessagesTimelineRows(
       const entry = timelineEntries[index]!;
       if (
         entry.kind !== "work" ||
+        (dshPolicy !== null && isReasoningWorkEntry(entry.entry)) ||
         entry.entry.tone === "error" ||
         entry.entry.sourceActivityKind === "runtime.error" ||
         entry.entry.itemType === "system_notice" ||
@@ -1964,7 +1977,7 @@ export function deriveMessagesTimelineRows(
             groupId,
             expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
             active: latestToolKeepsActivityLive,
-            ...(latestThoughtEntry && (dshPolicy === null || dshPolicy.liveProcessDetail)
+            ...(latestThoughtEntry && dshPolicy === null
               ? { thought: latestThoughtEntry.entry }
               : {}),
             ...(dshPolicy !== null
@@ -2222,6 +2235,28 @@ export function deriveMessagesTimelineRows(
     }
 
     if (timelineEntry.kind === "work") {
+      // DSH strict hierarchy (L1): reasoning NEVER merges into tool/command groups (`work-toggle` / `work-live`).
+      // Each reasoning block always emits its own independent top-level row on the timeline axis.
+      if (dshPolicy !== null && isReasoningWorkEntry(timelineEntry.entry)) {
+        const isLiveEntry = workEntryIsInActiveRun(timelineEntry.entry);
+        if (workEntryIsVisibleInGroup(timelineEntry.entry, isLiveEntry)) {
+          if (isLiveEntry) {
+            hasActivityRow = true;
+          }
+          nextRows.push({
+            kind: "work",
+            id: timelineEntry.id,
+            createdAt: timelineEntry.createdAt,
+            groupedEntries: [timelineEntry.entry],
+            isExpandedToolGroup: false,
+            ...(isLiveEntry ? { isLive: true } : {}),
+            ...(dshPolicy.defaultExpandLongItems
+              ? { autoExpandReasoning: true, autoExpandDetails: true }
+              : {}),
+          });
+        }
+        continue;
+      }
       if (
         isPendingApproval(timelineEntry.entry) ||
         (timelineEntry.entry.runId != null && itemizedRunIds.has(timelineEntry.entry.runId)) ||
@@ -2240,6 +2275,7 @@ export function deriveMessagesTimelineRows(
           createdAt: timelineEntry.createdAt,
           groupedEntries: [timelineEntry.entry],
           isExpandedToolGroup: false,
+          ...(dshPolicy?.defaultExpandLongItems ? { autoExpandDetails: true } : {}),
         });
         continue;
       }
@@ -2256,9 +2292,7 @@ export function deriveMessagesTimelineRows(
             groupedEntries: [timelineEntry.entry],
             isExpandedToolGroup: false,
             ...(isLiveEntry ? { isLive: true } : {}),
-            ...(dshPolicy?.mode === "expanded" && timelineEntry.entry.itemType === "reasoning"
-              ? { autoExpandReasoning: true }
-              : {}),
+            ...(dshPolicy?.defaultExpandLongItems ? { autoExpandDetails: true } : {}),
           });
           nextRows.push(
             ...viewedImagesRows(workGroupId(timelineEntry.id), timelineEntry.createdAt, [
@@ -2275,6 +2309,7 @@ export function deriveMessagesTimelineRows(
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||
+          (dshPolicy !== null && isReasoningWorkEntry(nextEntry.entry)) ||
           nextEntry.entry.sourceActivityKind === "context-compaction" ||
           (nextEntry.entry.itemType === "error" &&
             nextEntry.entry.toolLifecycleStatus === "failed") ||
@@ -2327,9 +2362,9 @@ export function deriveMessagesTimelineRows(
             );
           }
         } else if (
+          dshPolicy === null &&
           visibleGroupedEntries.length === 1 &&
-          (workLogEntryIsToolLike(visibleGroupedEntries[0]!) ||
-            (dshPolicy !== null && visibleGroupedEntries[0]!.itemType === "reasoning"))
+          workLogEntryIsToolLike(visibleGroupedEntries[0]!)
         ) {
           const singleEntry = visibleGroupedEntries[0]!;
           nextRows.push({
@@ -2338,19 +2373,17 @@ export function deriveMessagesTimelineRows(
             createdAt: timelineEntry.createdAt,
             groupedEntries: visibleGroupedEntries,
             isExpandedToolGroup: false,
-            ...(singleEntry.itemType === "reasoning"
-              ? {}
-              : {
-                  displayLabel:
-                    toolGroupAction(singleEntry) === "edit"
-                      ? summarizeToolGroup(visibleGroupedEntries, resolve).summary
-                      : singleToolCallLabel(singleEntry, resolve),
-                }),
+            displayLabel:
+              toolGroupAction(singleEntry) === "edit"
+                ? summarizeToolGroup(visibleGroupedEntries, resolve).summary
+                : singleToolCallLabel(singleEntry, resolve),
           });
         } else {
           const groupId = workGroupId(timelineEntry.id);
           const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
           const summaryKind = toolGroupSummaryKind(visibleGroupedEntries);
+          const dshPrimaryCategory =
+            dshPolicy !== null ? classifyPrimaryStepGroupActivity(visibleGroupedEntries) : undefined;
           const primarySourceEntry = visibleGroupedEntries.find(
             (entry) => entry.toolSource !== undefined,
           );
@@ -2386,6 +2419,7 @@ export function deriveMessagesTimelineRows(
             expanded,
             summary,
             summaryKind,
+            ...(dshPrimaryCategory !== undefined ? { dshPrimaryCategory } : {}),
             ...(groupToolSurface ? { toolSurface: groupToolSurface } : {}),
             ...(groupToolIcon ? { toolIcon: groupToolIcon } : {}),
             hasFailure:
@@ -3088,6 +3122,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.displayLabel === bw.displayLabel &&
         a.isLive === bw.isLive &&
         a.autoExpandReasoning === bw.autoExpandReasoning &&
+        a.autoExpandDetails === bw.autoExpandDetails &&
         Equal.equals(a.groupedEntries, bw.groupedEntries)
       );
     }
@@ -3116,6 +3151,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.expanded === bw.expanded &&
         a.summary === bw.summary &&
         a.summaryKind === bw.summaryKind &&
+        a.dshPrimaryCategory === bw.dshPrimaryCategory &&
         a.toolSurface === bw.toolSurface &&
         Equal.equals(a.toolIcon, bw.toolIcon) &&
         a.hasFailure === bw.hasFailure

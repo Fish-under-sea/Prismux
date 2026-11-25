@@ -547,7 +547,7 @@ export interface DaemonKillSystemPortResponse {
 }
 
 export type DaemonOvernightInboundMode = "gmail-oauth2" | "imap";
-export type DaemonOvernightMailPreset = "qq" | "163" | "outlook" | "custom";
+export type DaemonOvernightMailPreset = "qq" | "163" | "gmail" | "outlook" | "custom";
 export type DaemonOvernightWindowMode = "scheduled" | "always";
 export type DaemonOvernightRunStatus =
   | "completed"

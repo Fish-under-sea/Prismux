@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -179,28 +180,34 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         : [stubBackendInstance]),
   );
 
-  const layerEnvironment = DesktopEnvironment.layer({
-    dirname: "/repo/apps/desktop/src",
-    homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
-    platform: options.platform ?? "darwin",
-    processArch: "x64",
-    appVersion: options.appVersion ?? "1.2.3",
-    appPath: "/repo",
-    isPackaged: true,
-    resourcesPath: "/missing/resources",
-    runningUnderArm64Translation: false,
-  }).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        NodeServices.layer,
-        DesktopConfig.layerTest({
-          PRISMUX_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
-          PRISMUX_DESKTOP_MOCK_UPDATES: "true",
-          PRISMUX_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
-          ...options.env,
-        }),
-      ),
-    ),
+  const layerEnvironmentAndConfig = Layer.unwrap(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "prismux-desktop-updates-",
+      });
+      const homeDirectory = path.join(tempRoot, "home");
+      const prismuxHome = path.join(tempRoot, "prismux-home");
+      const layerConfig = DesktopConfig.layerTest({
+        PRISMUX_HOME: prismuxHome,
+        PRISMUX_DESKTOP_MOCK_UPDATES: "true",
+        PRISMUX_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
+        ...options.env,
+      });
+
+      return DesktopEnvironment.layer({
+        dirname: "/repo/apps/desktop/src",
+        homeDirectory,
+        platform: options.platform ?? "darwin",
+        processArch: "x64",
+        appVersion: options.appVersion ?? "1.2.3",
+        appPath: "/repo",
+        isPackaged: true,
+        resourcesPath: "/missing/resources",
+        runningUnderArm64Translation: false,
+      }).pipe(Layer.provideMerge(layerConfig));
+    }),
   );
 
   let testSettings: DesktopAppSettings.DesktopSettings = {
@@ -302,15 +309,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     Layer.provideMerge(layerSshEnvironment),
     Layer.provideMerge(DesktopState.layer),
     Layer.provideMerge(layerSettings),
-    Layer.provideMerge(
-      DesktopConfig.layerTest({
-        PRISMUX_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
-        PRISMUX_DESKTOP_MOCK_UPDATES: "true",
-        PRISMUX_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
-        ...options.env,
-      }),
-    ),
-    Layer.provideMerge(layerEnvironment),
+    Layer.provideMerge(layerEnvironmentAndConfig),
     Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
