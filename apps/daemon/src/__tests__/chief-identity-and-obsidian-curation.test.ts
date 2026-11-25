@@ -61,7 +61,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
     assert.ok(afterRenameMd.includes("@猫猫"));
     assert.ok(afterRenameMd.includes(customBodyMarker));
 
-    // Hot-switch engines across Codex -> Antigravity -> oh-my-pi: identity & AGENTS.md remain 100% intact
+    // Hot-switch engines across Codex -> Antigravity -> Gemini: identity & AGENTS.md remain 100% intact
     const switched1 = await manager.switchProvider("codex", "gpt-5.4", "high");
     assert.equal(switched1.secretaryName, "猫猫");
     assert.equal(switched1.agentsMdPath, initial.agentsMdPath);
@@ -69,7 +69,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
     const switched2 = await manager.switchProvider("antigravity", "gemini-3-pro");
     assert.equal(switched2.secretaryName, "猫猫");
 
-    const switched3 = await manager.switchProvider("omp");
+    const switched3 = await manager.switchProvider("gemini");
     assert.equal(switched3.secretaryName, "猫猫");
     assert.equal(readFileSync(initial.agentsMdPath, "utf8"), afterRenameMd);
 
@@ -77,7 +77,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
     const reloadedManager = new ChiefThreadManager({ dataDir });
     const reloadedSlot = await reloadedManager.init();
     assert.equal(reloadedSlot.secretaryName, "猫猫");
-    assert.equal(reloadedSlot.activeProvider, "omp");
+    assert.equal(reloadedSlot.activeProvider, "gemini");
     assert.equal(reloadedSlot.agentsMdPath, initial.agentsMdPath);
 
     // Build runtime Chief system context

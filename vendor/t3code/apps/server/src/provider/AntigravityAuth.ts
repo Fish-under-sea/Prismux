@@ -21,20 +21,12 @@ import * as AcpErrors from "effect-acp/errors";
 
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
-  antigravityLoginResponse,
-  parseAntigravityAuthorizationUrl,
-  type AntigravityAuthorizationUrl,
+  ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE,
+  isAntigravitySignInRequiredError,
 } from "./antigravityAuthSupport.ts";
-import {
-  forwardAntigravityCallback,
-  validateAntigravityCallbackUrl,
-} from "./antigravityCallback.ts";
 import type { ProviderAuthController } from "./ProviderAuthService.ts";
 
 const AUTH_TIMEOUT_MS = 300_000;
-// Once initialized, a healthy agent shows the Google link within seconds; its bundled Python has no
-// IPv4 fallback, so broken IPv6 stalls each Google request. Startup is timed separately: the
-// one-file runtime unpacks on every launch (about a minute on Windows) before it answers initialize.
 const NO_RESPONSE_HINT_MS = 30_000;
 const STARTUP_HINT_MS = 90_000;
 const NOT_STARTED_MESSAGE =
@@ -42,11 +34,12 @@ const NOT_STARTED_MESSAGE =
 const NOT_RESPONDING_MESSAGE =
   "Antigravity did not respond. Its runtime may not run on this machine.";
 const NO_RESPONSE_MESSAGE =
-  "Antigravity has not reached Google after 30 seconds. Check this machine's network connection. Broken IPv6 is a common cause.";
+  "Local agy CLI has not responded after 30 seconds. Check that you are signed in via 'agy' in a terminal and check your network connection.";
 const UNREACHABLE_MESSAGE =
-  "Antigravity could not reach Google. Check this machine's network connection, then start sign-in again.";
-const FORWARDING_FAILED_MESSAGE = "Could not deliver the sign-in response. Start sign-in again.";
-const LOGIN_CODE_FIELD = "code";
+  "Local agy CLI could not finish connecting. Sign in with 'agy' or 'agy acp --login' in a terminal, then reconnect.";
+const UNSUPPORTED_IN_APP_OAUTH_MESSAGE =
+  "Antigravity uses your official local agy CLI session and does not accept in-app OAuth callbacks or codes. Sign in in a terminal with 'agy' or 'agy acp --login', then reconnect.";
+
 const isSetupError = Schema.is(ProviderSetupError);
 const isAcpRequestError = Schema.is(AcpErrors.AcpRequestError);
 const isAcpProcessExitedError = Schema.is(AcpErrors.AcpProcessExitedError);
@@ -54,7 +47,6 @@ const isAcpProcessExitedError = Schema.is(AcpErrors.AcpProcessExitedError);
 interface AuthSnapshot {
   readonly ownerSessionId: string | null;
   readonly state: ProviderAuthState;
-  readonly codeLogin?: boolean;
 }
 
 interface AuthFlow {
@@ -62,13 +54,8 @@ interface AuthFlow {
   readonly ownerSessionId: string;
   readonly expiresAtMillis: number;
   state: ProviderAuthState;
-  pending: AntigravityAuthorizationUrl | undefined;
   initialized: boolean;
-  callbackSent: boolean;
-  codeLogin: boolean;
-  submitCode: ((response: string) => Effect.Effect<void>) | undefined;
   fiber: Fiber.Fiber<void> | undefined;
-  forwarding: Fiber.Fiber<void, ProviderSetupError> | undefined;
 }
 
 interface OwnedProcess {
@@ -86,42 +73,25 @@ export interface AntigravityAuth {
   readonly onSignedInElsewhere: Effect.Effect<void>;
 }
 
-/** `agy acp --login`: it prints a Google link and reads the code the Antigravity page shows. */
-export interface AntigravityCodeLogin {
-  readonly submit: (response: string) => Effect.Effect<void>;
-  /** Succeeds once the runtime has stored the sign-in. */
-  readonly completed: Effect.Effect<void, ProviderSetupError>;
-}
-
 export type AntigravityAuthRuntime = Pick<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
-  "initialize" | "start" | "request"
+  "initialize" | "start"
 >;
 
 export interface AntigravityAuthOptions<
   Runtime extends AntigravityAuthRuntime = AcpSessionRuntime.AcpSessionRuntime["Service"],
 > {
   readonly instanceId: ProviderInstanceId;
-  readonly makeRuntime: (input: {
-    readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, AcpErrors.AcpError>;
-  }) => Effect.Effect<Runtime, AcpErrors.AcpError | ProviderSetupError, Scope.Scope>;
+  readonly makeRuntime: () => Effect.Effect<
+    Runtime,
+    AcpErrors.AcpError | ProviderSetupError,
+    Scope.Scope
+  >;
   readonly onAuthenticated: (
     result: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     runtime: Runtime,
   ) => Effect.Effect<void>;
   readonly onSignedOut: Effect.Effect<void>;
-  readonly forwardCallback?: (callback: URL) => Effect.Effect<void, ProviderSetupError>;
-  readonly usesBrowser?: boolean;
-  /** Reuses local `~/.gemini/antigravity-cli` sign-in without destructive logout. */
-  readonly localCli?: boolean;
-  /** Undefined when the runtime signs in through ACP `authenticate` and T3's browser helper. */
-  readonly codeLogin?: (input: {
-    readonly onAuthorizationUrl: (url: string) => Effect.Effect<void, AcpErrors.AcpError>;
-  }) => Effect.Effect<
-    AntigravityCodeLogin | undefined,
-    AcpErrors.AcpError | ProviderSetupError,
-    Scope.Scope
-  >;
 }
 
 function visibleSnapshot(snapshot: AuthSnapshot, ownerSessionId: string): ProviderAuthState {
@@ -135,19 +105,18 @@ function visibleSnapshot(snapshot: AuthSnapshot, ownerSessionId: string): Provid
     authorizationUrl: null,
     interaction: null,
     expiresAt: null,
-    ...(busy ? { message: "Sign-in is in progress in another client." } : {}),
+    ...(busy ? { message: "Local agy CLI connection is in progress in another client." } : {}),
   };
 }
 
-function safeAuthFailure(
-  cause: Cause.Cause<unknown>,
-  usesBrowser: boolean,
-  localCli: boolean,
-): string {
+function safeAuthFailure(cause: Cause.Cause<unknown>): string {
   const error = Cause.findErrorOption(cause);
   if (Option.isSome(error)) {
     if (isSetupError(error.value)) {
       return error.value.detail;
+    }
+    if (isAntigravitySignInRequiredError(error.value)) {
+      return ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE;
     }
     if (isAcpProcessExitedError(error.value)) {
       const { code, signal } = error.value;
@@ -157,32 +126,18 @@ function safeAuthFailure(
           : code !== undefined
             ? ` with code ${code}`
             : "";
-      return `Antigravity exited unexpectedly${reason}. Start sign-in again.`;
+      return `Local agy CLI exited unexpectedly${reason}. Check your local agy CLI installation and retry.`;
     }
     if (isAcpRequestError(error.value)) {
-      if (localCli && error.value.code === -32000) {
-        return "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then reconnect.";
-      }
       if (error.value.errorMessage.includes("SUBSCRIPTION_REQUIRED")) {
         return "Google requires an eligible Antigravity subscription for this account.";
       }
-      if (/access_denied|denied access|cancelled/i.test(error.value.errorMessage)) {
-        return "Google sign-in was not approved. Start sign-in again.";
-      }
       if (error.value.method === "session/new" && error.value.code === -32603) {
-        return "Antigravity authenticated, but could not initialize a session or load models.";
-      }
-      if (!usesBrowser && error.value.code === -32602) {
-        return "Antigravity rejected the configured credentials. Check the provider settings.";
+        return "Local agy CLI connected, but could not initialize a session or load models.";
       }
     }
   }
-  if (localCli) {
-    return "Could not connect to local agy CLI. Sign in with 'agy' or 'agy acp --login' and try again.";
-  }
-  return usesBrowser
-    ? "Google sign-in failed. Start sign-in again."
-    : "Antigravity could not authenticate with the configured credentials.";
+  return "Could not connect to local agy CLI. Sign in with 'agy' or 'agy acp --login' in a terminal and try again.";
 }
 
 export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
@@ -192,8 +147,6 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
 ): Effect.fn.Return<AntigravityAuth, never, SecureRandom.SecureRandom | Scope.Scope> {
   const random = yield* SecureRandom.SecureRandom;
   const instanceScope = yield* Scope.Scope;
-  const usesBrowser = options.usesBrowser ?? true;
-  const localCli = options.localCli ?? false;
   const lock = yield* Semaphore.make(1);
   const closed = yield* Deferred.make<void>();
   const emptyState: ProviderAuthState = {
@@ -223,7 +176,6 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
     return SubscriptionRef.set(snapshot, {
       ownerSessionId: flow.ownerSessionId,
       state,
-      codeLogin: flow.codeLogin,
     });
   };
   const stopOwnedProcesses = Effect.suspend(() =>
@@ -250,7 +202,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
             if (operation !== "idle") {
               return yield* setupError(
                 "startProcess",
-                "Antigravity sign-in or sign-out is in progress. Try again after it finishes.",
+                "Local agy CLI connection or disconnect is in progress. Try again after it finishes.",
               );
             }
             processes.add(owned);
@@ -284,50 +236,16 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
         if (activeFlow !== flow) return;
         activeFlow = undefined;
         operation = "idle";
-        flow.pending = undefined;
         yield* publishFlow(flow, {
           ...flow.state,
           phase: Exit.isSuccess(result) ? "succeeded" : "failed",
           authorizationUrl: null,
           expiresAt: null,
           message: Exit.isSuccess(result)
-            ? localCli
-              ? "Connected via local agy CLI."
-              : usesBrowser
-                ? "Signed in with Google."
-                : "Connected to Antigravity."
-            : safeAuthFailure(result.cause, usesBrowser, localCli),
+            ? "Connected via local agy CLI."
+            : safeAuthFailure(result.cause),
         });
       }),
-    );
-
-  const receiveAuthorizationUrl = (flow: AuthFlow, url: string, redirect: "loopback" | "code") =>
-    parseAntigravityAuthorizationUrl(url, redirect).pipe(
-      Effect.flatMap((authorization) =>
-        lock.withPermits(1)(
-          Effect.gen(function* () {
-            if (activeFlow !== flow || operation !== "auth") return;
-            if (flow.pending) {
-              if (flow.pending.authorizationUrl === authorization.authorizationUrl) return;
-              return yield* new AcpErrors.AcpTransportError({
-                detail: "Antigravity started more than one Google sign-in request.",
-                cause: undefined,
-              });
-            }
-            flow.pending = authorization;
-            flow.codeLogin = redirect === "code";
-            yield* publishFlow(flow, {
-              ...flow.state,
-              phase: "waiting",
-              authorizationUrl: authorization.authorizationUrl,
-              message:
-                redirect === "loopback"
-                  ? "Open the Google sign-in link. If you are remote, paste the redirect URL here."
-                  : "Open the Google sign-in link, then paste the code from the Antigravity page here.",
-            });
-          }),
-        ),
-      ),
     );
 
   const publishStartingHint = (flow: AuthFlow, delayMs: number, message: string) =>
@@ -343,27 +261,10 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
       Effect.forkScoped,
     );
 
-  const runSignIn = Effect.fn("AntigravityAuth.runSignIn")(
+  const runConnect = Effect.fn("AntigravityAuth.runConnect")(
     function* (flow: AuthFlow, stopSessions: Effect.Effect<void, ProviderSetupError>) {
       yield* stopSessions.pipe(Effect.ensuring(stopOwnedProcesses));
-      const signedIn = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const login = yield* (
-            options.codeLogin?.({
-              onAuthorizationUrl: (url) => receiveAuthorizationUrl(flow, url, "code"),
-            }) ?? Effect.undefined
-          );
-          if (login === undefined) return false;
-          flow.submitCode = login.submit;
-          yield* login.completed;
-          return true;
-        }),
-      );
-      const runtime = yield* options.makeRuntime(
-        signedIn
-          ? {}
-          : { onAuthorizationUrl: (url) => receiveAuthorizationUrl(flow, url, "loopback") },
-      );
+      const runtime = yield* options.makeRuntime();
       const startupHint = yield* publishStartingHint(flow, STARTUP_HINT_MS, NOT_STARTED_MESSAGE);
       // `start` reuses this memoized handshake.
       yield* runtime.initialize();
@@ -374,12 +275,11 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
       yield* lock.withPermits(1)(
         Effect.gen(function* () {
           if (activeFlow !== flow) return;
-          flow.pending = undefined;
           yield* publishFlow(flow, {
             ...flow.state,
             phase: "verifying",
             authorizationUrl: null,
-            message: "Checking Antigravity access and models.",
+            message: "Checking local agy CLI and loading models.",
           });
         }),
       );
@@ -394,11 +294,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
             Effect.fail(
               setupError(
                 "start",
-                flow.state.phase !== "starting"
-                  ? "Google sign-in expired. Start sign-in again."
-                  : flow.initialized
-                    ? UNREACHABLE_MESSAGE
-                    : NOT_RESPONDING_MESSAGE,
+                flow.initialized ? UNREACHABLE_MESSAGE : NOT_RESPONDING_MESSAGE,
               ),
             ),
         }),
@@ -415,7 +311,6 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
             if (activeFlow !== flow) return false;
             activeFlow = undefined;
             operation = "cancel";
-            flow.pending = undefined;
             yield* publishFlow(flow, {
               ...flow.state,
               phase,
@@ -427,7 +322,6 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
           }),
         );
         if (!detached) return;
-        if (flow.forwarding) yield* Fiber.interrupt(flow.forwarding);
         if (flow.fiber) yield* Fiber.interrupt(flow.fiber);
         yield* lock.withPermits(1)(
           Effect.sync(() => {
@@ -444,11 +338,11 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
   ) {
     const flow = activeFlow;
     if (!flow || flow.id !== flowId || flow.ownerSessionId !== ownerSessionId) {
-      return yield* setupError(name, "This sign-in is no longer active in this client.");
+      return yield* setupError(name, "This connection is no longer active in this client.");
     }
     const now = yield* Clock.currentTimeMillis;
     if (now >= flow.expiresAtMillis) {
-      return yield* setupError(name, "Google sign-in expired. Start sign-in again.");
+      return yield* setupError(name, "Local agy CLI connection expired. Try again.");
     }
     return flow;
   });
@@ -468,7 +362,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
               .uuidV4()
               .pipe(
                 Effect.mapError(() =>
-                  setupError("start", "Could not start Google sign-in. Try again."),
+                  setupError("start", "Could not start local agy CLI connection. Try again."),
                 ),
               );
             const expiresAtMillis = (yield* Clock.currentTimeMillis) + AUTH_TIMEOUT_MS;
@@ -477,29 +371,20 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
               phase: "starting",
               flowId,
               expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAtMillis)),
-              message: localCli
-                ? "Connecting to local agy CLI."
-                : usesBrowser
-                  ? "Starting Google sign-in."
-                  : "Checking credentials.",
+              message: "Connecting to local agy CLI.",
             };
             const flow: AuthFlow = {
               id: flowId,
               ownerSessionId,
               expiresAtMillis,
               state,
-              pending: undefined,
               initialized: false,
-              callbackSent: false,
-              codeLogin: false,
-              submitCode: undefined,
               fiber: undefined,
-              forwarding: undefined,
             };
             activeFlow = flow;
             operation = "auth";
             yield* publishFlow(flow, state);
-            flow.fiber = yield* runSignIn(flow, stopSessions).pipe(
+            flow.fiber = yield* runConnect(flow, stopSessions).pipe(
               Effect.interruptible,
               Effect.forkIn(instanceScope),
             );
@@ -507,93 +392,11 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
           }),
         ),
       ),
-    complete: Effect.fn("AntigravityAuth.complete")(function* (ownerSessionId, input) {
-      const pending = yield* lock.withPermits(1)(
-        Effect.gen(function* () {
-          const flow = yield* requireFlow(ownerSessionId, input.flowId, "complete");
-          if (!flow.pending || flow.callbackSent) {
-            return yield* setupError(
-              "complete",
-              flow.callbackSent
-                ? "The sign-in response was already sent. Wait for Google to finish."
-                : "Wait for the Google sign-in link before you send a redirect URL.",
-            );
-          }
-          const callback = yield* validateAntigravityCallbackUrl(
-            options.instanceId,
-            flow.pending,
-            input.callbackUrl,
-          );
-          flow.callbackSent = true;
-          yield* publishFlow(flow, {
-            ...flow.state,
-            phase: "verifying",
-            authorizationUrl: null,
-            message: "Waiting for Google to finish sign-in.",
-          });
-          const forwarding = yield* (
-            options.forwardCallback?.(callback) ??
-            forwardAntigravityCallback(options.instanceId, callback)
-          ).pipe(
-            // stopFlow interrupts this fiber, so it runs from a sibling fiber.
-            Effect.tapError(() =>
-              stopFlow(flow, "failed", FORWARDING_FAILED_MESSAGE).pipe(
-                Effect.forkIn(instanceScope),
-              ),
-            ),
-            Effect.interruptible,
-            Effect.forkIn(instanceScope),
-          );
-          flow.forwarding = forwarding;
-          return { flow, forwarding };
-        }),
-      );
-      const forwarded = yield* Fiber.await(pending.forwarding);
-      if (Exit.isFailure(forwarded)) {
-        return yield* setupError("complete", FORWARDING_FAILED_MESSAGE);
-      }
-      return pending.flow.state;
-    }),
-    respond: Effect.fn("AntigravityAuth.respond")(function* (ownerSessionId, input) {
-      return yield* lock.withPermits(1)(
-        Effect.gen(function* () {
-          const flow = yield* requireFlow(ownerSessionId, input.flowId, "respond");
-          if (!flow.pending || !flow.submitCode || flow.callbackSent) {
-            return yield* setupError(
-              "respond",
-              flow.callbackSent
-                ? "The sign-in response was already sent. Wait for Google to finish."
-                : "Wait for the Google sign-in link before you send a code.",
-            );
-          }
-          const response =
-            input.interactionId === flow.id && input.response.type === "credentials"
-              ? antigravityLoginResponse(
-                  flow.pending,
-                  input.response.values[LOGIN_CODE_FIELD] ?? "",
-                )
-              : undefined;
-          if (response === undefined) {
-            return yield* setupError(
-              "respond",
-              "Paste the code from the Antigravity page, or that page's full URL.",
-            );
-          }
-          flow.callbackSent = true;
-          yield* flow.submitCode(response);
-          yield* publishFlow(flow, {
-            ...flow.state,
-            phase: "verifying",
-            authorizationUrl: null,
-            message: "Waiting for Google to finish sign-in.",
-          });
-          return flow.state;
-        }),
-      );
-    }),
+    complete: () => setupError("complete", UNSUPPORTED_IN_APP_OAUTH_MESSAGE),
+    respond: () => setupError("respond", UNSUPPORTED_IN_APP_OAUTH_MESSAGE),
     cancel: Effect.fn("AntigravityAuth.cancel")(function* (ownerSessionId, flowId) {
       const flow = yield* lock.withPermits(1)(requireFlow(ownerSessionId, flowId, "cancel"));
-      yield* stopFlow(flow, "cancelled", "Google sign-in was cancelled.");
+      yield* stopFlow(flow, "cancelled", "Local agy CLI connection was cancelled.");
       return flow.state;
     }),
     logout: Effect.fn("AntigravityAuth.logout")(function* (stopSessions) {
@@ -608,46 +411,32 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
               const currentFlow = activeFlow;
               activeFlow = undefined;
               if (currentFlow) {
-                currentFlow.pending = undefined;
                 yield* publishFlow(currentFlow, {
                   ...currentFlow.state,
                   phase: "cancelled",
                   authorizationUrl: null,
                   expiresAt: null,
-                  message: "Google sign-in was cancelled by sign-out.",
+                  message: "Local agy CLI connection was cancelled by disconnect.",
                 });
               }
               return currentFlow;
             }),
           );
           const stopRemaining = Effect.gen(function* () {
-            if (flow?.forwarding) yield* Fiber.interrupt(flow.forwarding);
             if (flow?.fiber) yield* Fiber.interrupt(flow.fiber);
             yield* stopOwnedProcesses;
           });
           const result = yield* restore(
             Effect.gen(function* () {
               yield* stopSessions.pipe(Effect.ensuring(stopRemaining));
-              if (localCli) {
-                // Keep the user's global `~/.gemini/antigravity-cli` sign-in intact.
-                yield* options.onSignedOut;
-                return;
-              }
-              const runtime = yield* options.makeRuntime({});
-              const initialized = yield* runtime.initialize();
-              if (!initialized.agentCapabilities?.auth?.logout) {
-                return yield* setupError(
-                  "logout",
-                  "This Antigravity version does not support sign-out. Update the provider.",
-                );
-              }
-              yield* runtime.request("logout", {});
+              // Keep the user's global `~/.gemini/antigravity-cli` sign-in intact.
               yield* options.onSignedOut;
             }).pipe(
               Effect.scoped,
               Effect.timeoutOrElse({
                 duration: "90 seconds",
-                orElse: () => Effect.fail(setupError("logout", "Antigravity sign-out timed out.")),
+                orElse: () =>
+                  Effect.fail(setupError("logout", "Local agy CLI disconnect timed out.")),
               }),
             ),
           ).pipe(Effect.exit);
@@ -660,10 +449,8 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
                   ...emptyState,
                   phase: Exit.isSuccess(result) ? "idle" : "failed",
                   message: Exit.isSuccess(result)
-                    ? localCli
-                      ? "Disconnected local agy CLI session."
-                      : "Signed out of Google."
-                    : "Antigravity sign-out failed. Try again.",
+                    ? "Disconnected local agy CLI session."
+                    : "Local agy CLI disconnect failed. Try again.",
                 },
               });
             }),
@@ -672,7 +459,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
             const failure = Cause.findErrorOption(result.cause);
             return yield* Option.isSome(failure) && isSetupError(failure.value)
               ? failure.value
-              : setupError("logout", "Antigravity sign-out failed. Try again.");
+              : setupError("logout", "Local agy CLI disconnect failed. Try again.");
           }
           return yield* currentState("");
         }),
@@ -682,38 +469,13 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
     }),
     subscribe: (ownerSessionId) =>
       SubscriptionRef.changes(snapshot).pipe(
-        Stream.map((value) => {
-          const state = visibleSnapshot(value, ownerSessionId);
-          return {
-            ...state,
-            credentialOwner: "provider" as const,
-            interaction:
-              state.phase === "waiting" && state.authorizationUrl && state.flowId
-                ? value.codeLogin
-                  ? {
-                      type: "credentials" as const,
-                      id: state.flowId,
-                      fields: [
-                        {
-                          name: LOGIN_CODE_FIELD,
-                          label: "Code from the Antigravity page",
-                          secret: false,
-                        },
-                      ],
-                    }
-                  : {
-                      type: "browser" as const,
-                      id: state.flowId,
-                      url: state.authorizationUrl,
-                      requiresConsent: false,
-                      acceptsCallback: true,
-                    }
-                : null,
-          };
-        }),
+        Stream.map((value) => ({
+          ...visibleSnapshot(value, ownerSessionId),
+          credentialOwner: "provider" as const,
+          interaction: null,
+        })),
         Stream.interruptWhen(Deferred.await(closed)),
       ),
-    isLogoutPrompt: (text, hasAttachments) => !hasAttachments && text.trim() === "/logout",
   };
 
   yield* Effect.addFinalizer(() =>
@@ -721,10 +483,8 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
       operation = "closed";
       const flow = activeFlow;
       activeFlow = undefined;
-      if (flow) {
-        flow.pending = undefined;
-        if (flow.forwarding) yield* Fiber.interrupt(flow.forwarding);
-        if (flow.fiber) yield* Fiber.interrupt(flow.fiber);
+      if (flow?.fiber) {
+        yield* Fiber.interrupt(flow.fiber);
       }
       yield* stopOwnedProcesses;
       yield* Deferred.succeed(closed, undefined);

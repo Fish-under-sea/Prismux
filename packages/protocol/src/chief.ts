@@ -2,7 +2,6 @@ export const CHIEF_PROVIDER_KINDS = [
   "claude-code",
   "codex",
   "antigravity",
-  "omp",
   "gemini",
   "opencode",
   "cursor",
@@ -29,12 +28,6 @@ export const CHIEF_PROVIDER_ALIASES: Readonly<Record<string, ChiefProviderKind>>
   antigravity_cli: "antigravity",
   "antigravity cli": "antigravity",
   agy: "antigravity",
-  omp: "omp",
-  "oh-my-pi": "omp",
-  oh_my_pi: "omp",
-  "oh my pi": "omp",
-  pi: "omp",
-  "pi-coding-agent": "omp",
   gemini: "gemini",
   "gemini-cli": "gemini",
   gemini_cli: "gemini",
@@ -54,7 +47,7 @@ export const CHIEF_PROVIDER_ALIASES: Readonly<Record<string, ChiefProviderKind>>
 
 /**
  * Normalizes a Chief provider ID or well-known alias (e.g. `claudeAgent` -> `claude-code`,
- * `oh-my-pi` / `pi` -> `omp`) into a canonical `ChiefProviderKind`, returning `null` if unknown.
+ * `agy` -> `antigravity`) into a canonical `ChiefProviderKind`, returning `null` if unknown.
  */
 export function normalizeChiefProviderKind(value: unknown): ChiefProviderKind | null {
   if (typeof value !== "string") {

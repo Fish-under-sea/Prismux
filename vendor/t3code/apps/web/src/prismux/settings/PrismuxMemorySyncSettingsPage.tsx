@@ -49,10 +49,16 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import {
+  SETTINGS_CONTROL_LG,
+  SETTINGS_CONTROL_MD,
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
 } from "../../components/settings/settingsLayout";
+import {
+  SettingsSegmentedTabs,
+  type SettingsSegmentedTabItem,
+} from "../../components/settings/SettingsSegmentedTabs";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { getAppModelOptionsForInstance } from "../../modelSelection";
 import {
@@ -75,10 +81,13 @@ import {
   ChiefIdentityAndAgentsMdSection,
   type ActiveChiefSlotSnapshot,
 } from "./ChiefIdentityAndAgentsMdSection";
+import { ObsidianAgentImportCard } from "./ObsidianAgentImportCard";
 import { PrismuxMemoryEngineSection } from "./PrismuxMemoryEngineSection";
 import { PrismuxSyncEngineSection } from "./PrismuxSyncEngineSection";
 
 type DialModeValue = "agent" | "oracle" | "review";
+
+export type PrismuxMemorySettingsTabId = "chief" | "memory" | "obsidian" | "sync";
 
 export type PrismuxMemorySyncSectionKey =
   | "chiefSlot"
@@ -93,7 +102,7 @@ export const BUILTIN_CHIEF_FALLBACK_PROVIDERS = [
   "codex",
   "claude-code",
   "antigravity",
-  "omp",
+  "dsh",
 ] as const;
 
 export interface ChiefModelDropdownOption {
@@ -156,6 +165,8 @@ export interface PrismuxMemorySyncSettingsPageProps {
   readonly settingsOverride?: UnifiedSettings | null;
   readonly daemonOverride?: MemorySyncDaemonSubset;
   readonly daemonReadyOverride?: boolean;
+  /** Optional default tab override for deterministic unit testing. */
+  readonly initialTabOverride?: PrismuxMemorySettingsTabId;
   /** Optional render probe used by unit tests to verify sibling sections skip re-rendering on Provider/Model switches. */
   readonly onSectionRender?: (section: PrismuxMemorySyncSectionKey) => void;
 }
@@ -688,16 +699,6 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
     [modelDropdownItems],
   );
 
-  const effortSelectItems = useMemo(
-    () =>
-      effortSpec.stops.map((stop) => (
-        <SelectItem key={stop.value} value={stop.value}>
-          <span>{stop.label}</span>
-        </SelectItem>
-      )),
-    [effortSpec.stops],
-  );
-
   const loadChiefState = useCallback(async () => {
     try {
       const chiefRes = await daemon.requestJson<unknown>("/v1/chief");
@@ -832,19 +833,6 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
     [activeProviderOption, activeSlotRef, selectedProvider],
   );
 
-  const handleEffortSelectChange = useCallback(
-    (val: string | null) => {
-      if (!val) return;
-      const nextEffort = val === CHIEF_DEFAULT_EFFORT_SENTINEL ? "" : val;
-      activeSlotRef.current = {
-        ...activeSlotRef.current,
-        reasoningEffort: nextEffort,
-      };
-      setSelectedEffort(nextEffort);
-    },
-    [activeSlotRef],
-  );
-
   const handleSliderEffortChange = useCallback(
     (nextValue: string) => {
       activeSlotRef.current = {
@@ -937,14 +925,10 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   return (
     <>
       <SettingsRow
-        title="当前主秘书 Provider"
-        description={
-          chief.threadId
-            ? `活动槽位线程：${chief.threadId}`
-            : "选择接任主秘书槽位的代理引擎（自动读取已配置提供方，热切换不丢失上下文）"
-        }
+        title="主秘书引擎"
+        description="选择负责主秘书对话的代理引擎，热切换保留当前上下文。"
         control={
-          <div className="w-full sm:w-56">
+          <div className={`${SETTINGS_CONTROL_MD} max-w-full`}>
             <Select modal={false} value={selectedProvider} onValueChange={handleProviderChange}>
               <SelectTrigger size="sm" data-pmx-chief-provider-select="">
                 <SelectValue>
@@ -965,14 +949,14 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       />
 
       <SettingsRow
-        title="可选模型"
+        title="默认模型"
         description={
           activeProviderOption && activeProviderOption.models.length > 0
-            ? `已自动同步 ${activeProviderOption.label} 模型目录（共 ${activeProviderOption.models.length} 个），切换 Provider 时自动联动刷新。`
-            : "留空则跟随当前提供方的默认模型；连接已配置提供方后自动列出可用模型与自定义代理模型。"
+            ? `已同步 ${activeProviderOption.label} 的 ${activeProviderOption.models.length} 个可用模型，留空则跟随引擎默认。`
+            : "留空则跟随所选引擎的默认模型。"
         }
         control={
-          <div className="w-full sm:w-72">
+          <div className={`${SETTINGS_CONTROL_LG} max-w-full`}>
             <Select
               modal={false}
               value={trimmedSelectedModel.length > 0 ? trimmedSelectedModel : CHIEF_DEFAULT_MODEL_SENTINEL}
@@ -1004,39 +988,15 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       />
 
       <SettingsRow
-        title="默认思考强度"
-        description={`已按当前模型族（${effortSpec.familyDisplayName}）自动识别支持档位，并持久化至 Daemon 主秘书槽位。`}
+        title="思考强度"
+        description="拖动或点选档位调整主秘书的默认推理深度。"
         control={
-          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
-            <div className="w-full sm:w-52">
-              <Select
-                modal={false}
-                value={trimmedSelectedEffort.length > 0 ? trimmedSelectedEffort : CHIEF_DEFAULT_EFFORT_SENTINEL}
-                onValueChange={handleEffortSelectChange}
-              >
-                <SelectTrigger size="sm" data-pmx-chief-effort-select="">
-                  <SelectValue>
-                    <span className="truncate">
-                      {trimmedSelectedEffort.length === 0
-                        ? "跟随提供方默认"
-                        : formatEffortLabel(trimmedSelectedEffort)}
-                    </span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={CHIEF_DEFAULT_EFFORT_SENTINEL}>
-                    跟随提供方默认
-                  </SelectItem>
-                  {trimmedSelectedEffort.length > 0 &&
-                  !effortSpec.stops.some((stop) => stop.value === trimmedSelectedEffort) ? (
-                    <SelectItem value={trimmedSelectedEffort}>
-                      当前配置：{formatEffortLabel(trimmedSelectedEffort)}
-                    </SelectItem>
-                  ) : null}
-                  {effortSelectItems}
-                </SelectPopup>
-              </Select>
-            </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Badge variant={trimmedSelectedEffort.length > 0 ? "info" : "outline"} size="sm">
+              {trimmedSelectedEffort.length === 0
+                ? "跟随提供方默认"
+                : formatEffortLabel(trimmedSelectedEffort)}
+            </Badge>
             {trimmedSelectedEffort.length > 0 ? (
               <Button
                 type="button"
@@ -1062,8 +1022,8 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
             locale="zh"
             label={
               trimmedSelectedEffort.length > 0
-                ? `已指定默认强度 · ${effortSpec.familyDisplayName}`
-                : `当前跟随提供方默认 · ${effortSpec.familyDisplayName}（点击档位或拖动可指定覆盖）`
+                ? `${effortSpec.familyDisplayName} · 已指定 ${formatEffortLabel(trimmedSelectedEffort)}`
+                : `${effortSpec.familyDisplayName} · 跟随默认（点击档位可覆盖）`
             }
             showStops
             showRunner
@@ -1074,8 +1034,8 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       </SettingsRow>
 
       <SettingsRow
-        title="Handoff 三档拨盘（Agent / Oracle / Review）"
-        description="切换主秘书当前的工作档位，并同步更新工具栏实时状态。"
+        title="工作模式"
+        description="切换主秘书的执行权限与分析深度。"
       >
         <div className="mt-2.5 space-y-3 pb-2">
           <div className="grid gap-2 sm:grid-cols-3">
@@ -1095,7 +1055,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
                   className={
                     active
                       ? "rounded-lg border border-primary bg-primary/10 px-3 py-2.5 text-left transition-colors"
-                      : "rounded-lg border border-border bg-background/60 px-3 py-2.5 text-left transition-colors hover:bg-accent/60"
+                      : "rounded-lg border border-border/60 bg-foreground/[0.025] px-3 py-2.5 text-left transition-colors hover:bg-accent/60 dark:bg-white/[0.03]"
                   }
                 >
                   <div className="text-xs font-semibold text-foreground">{item.label}</div>
@@ -1113,7 +1073,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
               }}
             >
               <SaveIcon className="size-3.5" />
-              {savingChief ? "切换中…" : "应用主秘书槽位与档位"}
+              {savingChief ? "应用中…" : "应用主秘书配置"}
             </Button>
           </div>
         </div>
@@ -1130,6 +1090,7 @@ interface PrismuxMemorySyncSettingsPageShellProps {
   readonly runtimeDialMode: DialModeValue;
   readonly serverProvidersOverride?: ReadonlyArray<ServerProvider> | undefined;
   readonly settingsOverride?: UnifiedSettings | null | undefined;
+  readonly initialTabOverride?: PrismuxMemorySettingsTabId | undefined;
   readonly onSectionRender?: ((section: PrismuxMemorySyncSectionKey) => void) | undefined;
 }
 
@@ -1141,6 +1102,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
   runtimeDialMode,
   serverProvidersOverride,
   settingsOverride,
+  initialTabOverride,
   onSectionRender,
 }: PrismuxMemorySyncSettingsPageShellProps) {
   const showSyncSection = mode === "all";
@@ -1221,7 +1183,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
     setStatusMsg(msg);
   }, []);
 
-  const handleSyncCompleted = useCallback(() => {
+  const handleMemoryDataChanged = useCallback(() => {
     startTransition(() => {
       setMemoryRefreshTick((prev) => prev + 1);
     });
@@ -1234,28 +1196,142 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
     });
   }, []);
 
+  const tabs: SettingsSegmentedTabItem[] = [
+    {
+      id: "chief",
+      label: "主秘书与人设",
+      hashAnchors: [
+        "prismux-memory",
+        "prismux-memory-sync",
+        "prismux-chief-slot",
+        "chief-identity",
+        "chief-agents-md",
+      ],
+      content: (
+        <SettingsSection id="prismux-chief-slot" title="主秘书引擎与人设">
+          <ChiefSlotControlsSection
+            daemon={daemon}
+            refreshTick={refreshTick}
+            runtimeChiefProvider={runtimeChiefProvider}
+            runtimeDialMode={runtimeDialMode}
+            serverProvidersOverride={serverProvidersOverride}
+            settingsOverride={settingsOverride}
+            activeSlotRef={activeSlotRef}
+            secretaryNameRef={secretaryNameRef}
+            agentsMdPathRef={agentsMdPathRef}
+            onChiefSummaryChange={handleChiefSummaryChange}
+            onRender={handleChiefSlotRender}
+            onError={handleError}
+            onStatus={handleStatus}
+          />
+
+          <ChiefIdentityAndAgentsMdSection
+            daemon={daemon}
+            secretaryName={chiefSummary.secretaryName}
+            agentsMdPath={chiefSummary.agentsMdPath}
+            activeProvider={chiefSummary.provider}
+            activeProviderLabel={chiefSummary.providerLabel}
+            activeModel={chiefSummary.model}
+            activeEffort={chiefSummary.reasoningEffort}
+            activeDialMode={chiefSummary.dialMode}
+            activeSlotRef={activeSlotRef}
+            onRender={handleIdentityRender}
+            onIdentityUpdated={handleIdentityUpdated}
+            onError={handleError}
+            onStatus={handleStatus}
+          />
+        </SettingsSection>
+      ),
+    },
+    {
+      id: "memory",
+      label: "混合记忆库",
+      hashAnchors: ["prismux-memory-engine", "memory-search"],
+      content: (
+        <PrismuxMemoryEngineSection
+          daemon={daemon}
+          refreshTick={refreshTick + memoryRefreshTick}
+          secretaryName={chiefSummary.secretaryName}
+          activeProvider={chiefSummary.provider}
+          activeProviderLabel={chiefSummary.providerLabel}
+          activeModel={chiefSummary.model}
+          activeSlotRef={activeSlotRef}
+          includeObsidian={false}
+          onRender={handleMemoryRender}
+          onObsidianRender={handleObsidianRender}
+          onError={handleError}
+          onStatus={handleStatus}
+        />
+      ),
+    },
+    {
+      id: "obsidian",
+      label: "Obsidian 迁移",
+      hashAnchors: ["prismux-obsidian-import", "obsidian-import"],
+      content: (
+        <SettingsSection id="prismux-obsidian-import" title="Obsidian 笔记迁移">
+          <ObsidianAgentImportCard
+            daemon={daemon}
+            secretaryName={chiefSummary.secretaryName}
+            activeProvider={chiefSummary.provider}
+            activeProviderLabel={chiefSummary.providerLabel}
+            activeModel={chiefSummary.model}
+            activeSlotRef={activeSlotRef}
+            onRender={handleObsidianRender}
+            onCommitted={handleMemoryDataChanged}
+            onError={handleError}
+            onStatus={handleStatus}
+          />
+        </SettingsSection>
+      ),
+    },
+    ...(showSyncSection
+      ? [
+          {
+            id: "sync",
+            label: "加密同步",
+            hashAnchors: ["prismux-e2ee-sync", "prismux-sync"],
+            content: (
+              <PrismuxSyncEngineSection
+                daemon={daemon}
+                daemonReady={daemonReady}
+                refreshTick={refreshTick}
+                onRender={handleSyncRender}
+                onSynced={handleMemoryDataChanged}
+                onError={handleError}
+                onStatus={handleStatus}
+              />
+            ),
+          } satisfies SettingsSegmentedTabItem,
+        ]
+      : []),
+  ];
+
   return (
-    <SettingsPageContainer width="wide">
+    <SettingsPageContainer width="readable">
       <div
         id={showSyncSection ? "prismux-memory-sync" : "prismux-memory"}
         data-pmx-memory-settings-page={showSyncSection ? undefined : ""}
-        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 bg-card/70 px-4 py-3"
+        className="flex flex-wrap items-center justify-between gap-3 px-1"
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <DatabaseIcon className="size-4 text-primary" />
-          <span className="text-sm font-medium text-foreground">
-            {showSyncSection
-              ? "主秘书槽位 · 单文件 SQLite 记忆中枢 · Prismux 端到端加密同步"
-              : "主秘书槽位 · 单文件 SQLite 记忆中枢"}
-          </span>
-          <Badge variant={daemonReady ? "success" : "warning"}>
-            {daemonReady ? "Daemon 在线" : "Daemon 未连接"}
-          </Badge>
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <DatabaseIcon className="size-4 text-primary" />
+            <h1 className="text-base font-semibold tracking-tight text-foreground">
+              主秘书与记忆
+            </h1>
+            <Badge variant={daemonReady ? "success" : "warning"} size="sm">
+              {daemonReady ? "服务在线" : "服务未连接"}
+            </Badge>
+            <Badge variant={chiefSummary.t3Connected ? "info" : "outline"} size="sm" className="gap-1">
+              <BotIcon className="size-3" />
+              {chiefSummary.t3Connected ? "已桥接" : "本地模式"}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            管理主秘书默认引擎与人设、检索本地长期记忆或导入 Obsidian 笔记。
+          </p>
         </div>
-        <Button size="xs" variant="outline" onClick={handleRefreshAll}>
-          <RefreshCwIcon className="size-3.5" />
-          刷新实时状态
-        </Button>
       </div>
 
       {errorMsg ? (
@@ -1279,95 +1355,33 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
         </div>
       ) : null}
 
-      {/* Section 1: Chief Thread Slot & 3-mode Dial + Independent Identity/AGENTS.md */}
-      <SettingsSection
-        id="prismux-chief-slot"
-        title="主秘书槽位（Chief Thread Slot）与三档拨盘"
-        headerAction={
-          <Badge variant={chiefSummary.t3Connected ? "success" : "outline"} className="gap-1">
-            <BotIcon className="size-3" />
-            {chiefSummary.t3Connected ? "T3 Server 已桥接" : "本地独立运行"}
-          </Badge>
+      <SettingsSegmentedTabs
+        tabs={tabs}
+        defaultTabId={initialTabOverride ?? "chief"}
+        ariaLabel="主秘书与记忆分区"
+        trailingAction={
+          <Button type="button" size="xs" variant="outline" onClick={handleRefreshAll}>
+            <RefreshCwIcon className="size-3.5" />
+            刷新状态
+          </Button>
         }
-      >
-        <p className="px-4 py-2.5 text-xs text-muted-foreground">
-          任意代理均可热切换接任 24h 主秘书槽位，并通过 Agent / Oracle / Review 三档拨盘即时切换执行权限与深度。
-        </p>
-
-        <ChiefSlotControlsSection
-          daemon={daemon}
-          refreshTick={refreshTick}
-          runtimeChiefProvider={runtimeChiefProvider}
-          runtimeDialMode={runtimeDialMode}
-          serverProvidersOverride={serverProvidersOverride}
-          settingsOverride={settingsOverride}
-          activeSlotRef={activeSlotRef}
-          secretaryNameRef={secretaryNameRef}
-          agentsMdPathRef={agentsMdPathRef}
-          onChiefSummaryChange={handleChiefSummaryChange}
-          onRender={handleChiefSlotRender}
-          onError={handleError}
-          onStatus={handleStatus}
-        />
-
-        <ChiefIdentityAndAgentsMdSection
-          daemon={daemon}
-          secretaryName={chiefSummary.secretaryName}
-          agentsMdPath={chiefSummary.agentsMdPath}
-          activeProvider={chiefSummary.provider}
-          activeProviderLabel={chiefSummary.providerLabel}
-          activeModel={chiefSummary.model}
-          activeEffort={chiefSummary.reasoningEffort}
-          activeDialMode={chiefSummary.dialMode}
-          activeSlotRef={activeSlotRef}
-          onRender={handleIdentityRender}
-          onIdentityUpdated={handleIdentityUpdated}
-          onError={handleError}
-          onStatus={handleStatus}
-        />
-      </SettingsSection>
-
-      {/* Section 2: Single-file SQLite Hybrid Memory Engine */}
-      <PrismuxMemoryEngineSection
-        daemon={daemon}
-        refreshTick={refreshTick + memoryRefreshTick}
-        secretaryName={chiefSummary.secretaryName}
-        activeProvider={chiefSummary.provider}
-        activeProviderLabel={chiefSummary.providerLabel}
-        activeModel={chiefSummary.model}
-        activeSlotRef={activeSlotRef}
-        onRender={handleMemoryRender}
-        onObsidianRender={handleObsidianRender}
-        onError={handleError}
-        onStatus={handleStatus}
       />
-
-      {/* Section 3: Prismux E2EE Sync Engine (legacy combined mode only) */}
-      {showSyncSection ? (
-        <PrismuxSyncEngineSection
-          daemon={daemon}
-          refreshTick={refreshTick}
-          onRender={handleSyncRender}
-          onSynced={handleSyncCompleted}
-          onError={handleError}
-          onStatus={handleStatus}
-        />
-      ) : null}
     </SettingsPageContainer>
   );
 });
 
 /**
- * Dedicated `/settings/memory` control center:
- * 1. Chief Thread Slot (custom secretary name, independent plain-text ~/.prismux/chief/AGENTS.md,
- *    canonical Agent brand, auto-fetched model dropdown, model-aware reasoning effort, Agent/Oracle/Review 3-mode dial)
- * 2. Single-file SQLite WAL + FTS5 + sqlite-vec hybrid memory & Agent-curated Obsidian Vault import
+ * Dedicated `/settings/memory` control center ("主秘书与记忆"), organized into 3 segmented tabs:
+ * 1. `chief` (主秘书与人设)
+ * 2. `memory` (混合记忆库)
+ * 3. `obsidian` (Obsidian 迁移)
  */
 export function PrismuxMemorySettingsPage({
   serverProvidersOverride,
   settingsOverride,
   daemonOverride,
   daemonReadyOverride,
+  initialTabOverride,
   onSectionRender,
 }: PrismuxMemorySyncSettingsPageProps = {}) {
   const runtime = useOptionalPrismuxRuntime();
@@ -1385,6 +1399,7 @@ export function PrismuxMemorySettingsPage({
       runtimeDialMode={runtimeDialMode}
       serverProvidersOverride={serverProvidersOverride}
       settingsOverride={settingsOverride}
+      initialTabOverride={initialTabOverride}
       onSectionRender={onSectionRender}
     />
   );
@@ -1400,6 +1415,7 @@ export function PrismuxMemorySyncSettingsPage({
   settingsOverride,
   daemonOverride,
   daemonReadyOverride,
+  initialTabOverride,
   onSectionRender,
 }: PrismuxMemorySyncSettingsPageProps = {}) {
   const runtime = useOptionalPrismuxRuntime();
@@ -1417,6 +1433,7 @@ export function PrismuxMemorySyncSettingsPage({
       runtimeDialMode={runtimeDialMode}
       serverProvidersOverride={serverProvidersOverride}
       settingsOverride={settingsOverride}
+      initialTabOverride={initialTabOverride}
       onSectionRender={onSectionRender}
     />
   );

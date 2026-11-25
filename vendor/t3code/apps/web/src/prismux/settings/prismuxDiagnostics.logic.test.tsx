@@ -19,17 +19,19 @@ import {
   filterDiagnosticsReport,
   getLatestNormalizedDiagnosticsReport,
   isDiagnosticsAutoRefreshSettingsPath,
+  isDiagnosticsViewPathname,
+  isOmittedAiProviderDiagnosticItem,
   normalizeDiagnosticsResponse,
   publishDiagnosticsReport,
   requestDiagnosticsRefresh,
   resetDiagnosticsLiveStoreForTests,
   resolveDiagnosticsSettingsRoute,
+  resolveNormalizedDiagnosticsBadgeTone,
   sanitizeDiagnosticsSettingsRoute,
   subscribeDiagnosticsRefreshRequest,
   subscribeDiagnosticsReport,
   toggleDiagnosticStatusFilter,
 } from "./prismuxDiagnostics.logic";
-import { resolveDiagnosticsBadgeTone } from "../../components/sidebar/prismuxSidebarQuickNav.logic";
 import {
   DiagnosticItemCard,
   PrismuxDiagnosticsSection,
@@ -44,6 +46,7 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
       cacheExpiryTime: null,
     });
   });
+
   it("normalizes all 6 canonical groups, counts, memory retrieval mode, and dormant engines", () => {
     const report = normalizeDiagnosticsResponse({
       ok: true,
@@ -65,16 +68,17 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
           category: "memory_sync",
           name: "sqlite-vec",
           status: "degraded",
-          summary: "FTS5 降级态（缺 vec0.dll，无兼容风险）",
+          summary: "全文检索可用，向量扩展暂未加载",
           settingsRoute: "/settings/memory-sync",
         },
         {
-          id: "provider.omp",
+          id: "provider.dsh",
           category: "ai_providers",
-          name: "omp CLI",
+          name: "DeepSeek Harness CLI",
           status: "error",
-          summary: "PATH 中未找到 omp",
-          fixCommand: "npm i -g @oh-my-pi/pi-coding-agent",
+          summary: "本机 CLI 启动或探测异常（需修复）",
+          detail: "已发现可执行文件，但版本探测未返回",
+          fixCommand: "dsh --version",
           settingsRoute: "/settings/providers",
         },
         {
@@ -119,12 +123,182 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(report.groups.map((g) => g.id)).toEqual([...CANONICAL_DIAGNOSTIC_CATEGORIES]);
     expect(report.summary).toEqual({ total: 8, ok: 5, degraded: 2, error: 1 });
     expect(report.memoryRetrievalState).toBe("fts5-only");
-    expect(report.memoryRetrievalDetail).toContain("FTS5");
+    expect(report.memoryRetrievalDetail).toContain("全文检索");
     expect(report.dormantEngines.map((e) => e.id)).toEqual([
       "engine.overnight_factory",
       "engine.lifecycle_hook_bus",
       "engine.worktree_sandbox",
     ]);
+  });
+
+  it("omits uninstalled optional AI Provider CLIs and retired omp from cards, summary counts, and sidebar badge tone while keeping broken installed CLIs", () => {
+    expect(
+      isOmittedAiProviderDiagnosticItem({
+        id: "provider.codex",
+        category: "ai_providers",
+        name: "Codex CLI",
+        status: "degraded",
+        summary: "未检测到本机 CLI（可选）",
+      }),
+    ).toBe(true);
+    expect(
+      isOmittedAiProviderDiagnosticItem({
+        id: "provider.claude",
+        category: "ai_providers",
+        name: "Claude Code CLI",
+        status: "degraded",
+        summary: "Not installed",
+        state: "not_installed",
+      }),
+    ).toBe(true);
+    expect(
+      isOmittedAiProviderDiagnosticItem({
+        id: "provider.omp",
+        category: "ai_providers",
+        name: "omp CLI",
+        status: "ok",
+        summary: "Detected",
+      }),
+    ).toBe(true);
+    expect(
+      isOmittedAiProviderDiagnosticItem({
+        id: "provider.dsh",
+        category: "ai_providers",
+        name: "DeepSeek Harness CLI",
+        status: "degraded",
+        summary: "本机 CLI 启动或探测异常（需修复）",
+        detail: "已发现可执行文件，但版本探测未返回",
+      }),
+    ).toBe(false);
+
+    // Case 1: Only uninstalled optional CLIs + retired omp were degraded in raw Daemon payload
+    // -> omitted completely, ai_providers group hidden, summary.degraded === 0, sidebar badge tone === "ok"
+    const allUninstalledReport = normalizeDiagnosticsResponse({
+      ok: true,
+      checkedAt: 1_763_000_000_000,
+      durationMs: 95,
+      cached: false,
+      summary: { total: 4, ok: 1, degraded: 2, error: 1 },
+      groups: [
+        {
+          id: "host_core",
+          status: "ok",
+          items: [
+            {
+              id: "host.daemon",
+              category: "host_core",
+              name: "Prismux Daemon",
+              status: "ok",
+              summary: "Running",
+            },
+          ],
+        },
+        {
+          id: "ai_providers",
+          status: "error",
+          items: [
+            {
+              id: "provider.codex",
+              category: "ai_providers",
+              name: "Codex CLI",
+              status: "degraded",
+              summary: "未检测到本机 CLI",
+            },
+            {
+              id: "provider.dsh",
+              category: "ai_providers",
+              name: "DeepSeek Harness",
+              status: "degraded",
+              installed: false,
+              summary: "PATH 中未找到 dsh",
+            },
+            {
+              id: "provider.omp",
+              category: "ai_providers",
+              name: "omp CLI",
+              status: "error",
+              summary: "PATH 中未找到 omp",
+            },
+          ],
+        },
+      ],
+      items: [
+        {
+          id: "host.daemon",
+          category: "host_core",
+          name: "Prismux Daemon",
+          status: "ok",
+          summary: "Running",
+        },
+        {
+          id: "provider.codex",
+          category: "ai_providers",
+          name: "Codex CLI",
+          status: "degraded",
+          summary: "未检测到本机 CLI",
+        },
+        {
+          id: "provider.dsh",
+          category: "ai_providers",
+          name: "DeepSeek Harness",
+          status: "degraded",
+          installed: false,
+          summary: "PATH 中未找到 dsh",
+        },
+        {
+          id: "provider.omp",
+          category: "ai_providers",
+          name: "omp CLI",
+          status: "error",
+          summary: "PATH 中未找到 omp",
+        },
+      ],
+    });
+
+    expect(allUninstalledReport.items.map((item) => item.id)).toEqual(["host.daemon"]);
+    expect(allUninstalledReport.groups.map((g) => g.id)).toEqual(["host_core"]);
+    expect(allUninstalledReport.summary).toEqual({ total: 1, ok: 1, degraded: 0, error: 0 });
+    expect(resolveNormalizedDiagnosticsBadgeTone(allUninstalledReport)).toBe("ok");
+
+    // Case 2: Installed-but-broken CLI stays visible as degraded and triggers degraded tone
+    const brokenInstalledReport = normalizeDiagnosticsResponse({
+      ok: true,
+      checkedAt: 1_763_000_000_000,
+      durationMs: 110,
+      cached: false,
+      summary: { total: 3, ok: 1, degraded: 2, error: 0 },
+      items: [
+        {
+          id: "host.daemon",
+          category: "host_core",
+          name: "Prismux Daemon",
+          status: "ok",
+          summary: "Running",
+        },
+        {
+          id: "provider.codex",
+          category: "ai_providers",
+          name: "Codex CLI",
+          status: "degraded",
+          summary: "未检测到本机 CLI",
+        },
+        {
+          id: "provider.claude",
+          category: "ai_providers",
+          name: "Claude Code CLI",
+          status: "degraded",
+          summary: "本机 CLI 启动或探测异常（需修复）",
+          detail: "已发现可执行文件，但版本探测未返回",
+        },
+      ],
+    });
+
+    expect(brokenInstalledReport.items.map((item) => item.id)).toEqual([
+      "host.daemon",
+      "provider.claude",
+    ]);
+    expect(brokenInstalledReport.summary).toEqual({ total: 2, ok: 1, degraded: 1, error: 0 });
+    expect(resolveNormalizedDiagnosticsBadgeTone(brokenInstalledReport)).toBe("degraded");
   });
 
   it("detects FTS5 + sqlite-vec hybrid state when memory.sqlite_vec is ok", () => {
@@ -134,7 +308,7 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
         category: "memory_sync",
         name: "sqlite-vec",
         status: "ok",
-        summary: "FTS5 + sqlite-vec 混合态",
+        summary: "混合检索已启用",
         detail: null,
         fixAction: null,
         fixCommand: null,
@@ -146,7 +320,7 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(hybrid.state).toBe("fts5+sqlite-vec");
   });
 
-  it("sanitizes settings routes to internal /settings/* paths only and maps legacy /settings/memory-sync precisely", () => {
+  it("sanitizes settings routes to internal /settings/* paths only and maps legacy routes precisely", () => {
     expect(sanitizeDiagnosticsSettingsRoute("/settings/updates")).toBe("/settings/updates");
     expect(sanitizeDiagnosticsSettingsRoute("/settings/memory")).toBe("/settings/memory");
     expect(sanitizeDiagnosticsSettingsRoute("/settings/sync")).toBe("/settings/sync");
@@ -155,7 +329,7 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(sanitizeDiagnosticsSettingsRoute("javascript:alert(1)")).toBeNull();
     expect(sanitizeDiagnosticsSettingsRoute("/settings/../etc/passwd")).toBeNull();
 
-    // Legacy /settings/memory-sync routes automatically target the exact split page by item id
+    // Legacy routes automatically target canonical destinations
     expect(resolveDiagnosticsSettingsRoute("/settings/memory-sync", "memory.sqlite_wal")).toBe(
       "/settings/memory",
     );
@@ -164,6 +338,9 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     );
     expect(resolveDiagnosticsSettingsRoute("/settings/memory-sync", "sync.vault")).toBe(
       "/settings/sync",
+    );
+    expect(resolveDiagnosticsSettingsRoute("/settings/diagnostics", "host.daemon")).toBe(
+      "/settings/maintenance",
     );
     expect(resolveDiagnosticsSettingsRoute("/settings/sync", "sync.vault")).toBe("/settings/sync");
     expect(resolveDiagnosticsSettingsRoute("/settings/memory", "memory.sqlite_vec")).toBe(
@@ -205,17 +382,17 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
           name: "sqlite-vec",
           status: "degraded",
           summary: "FTS5 degraded mode",
-          detail: "vec0.dll not found under C:\\Users\\Prismux\\extensions",
+          detail: "Vector extension not loaded under Prismux extensions directory",
           settingsRoute: "/settings/memory-sync",
         },
         {
-          id: "provider.omp",
+          id: "provider.dsh",
           category: "ai_providers",
-          name: "omp CLI",
+          name: "DeepSeek Harness CLI",
           status: "error",
-          summary: "PATH 中未找到 omp",
-          detail: "Run npm global install or configure custom binary path in Settings",
-          fixCommand: "npm install -g @oh-my-pi/pi-coding-agent",
+          summary: "本机 CLI 启动或探测异常（需修复）",
+          detail: "已发现可执行文件，但版本探测未返回",
+          fixCommand: "dsh --version",
           settingsRoute: "/settings/providers",
         },
       ],
@@ -262,7 +439,7 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     // No redundant <code> command block rendered under the copy button
     expect(fullHtml).not.toContain("<code");
     expect(fullHtml).toContain('data-diagnostic-copy-command="true"');
-    expect(fullHtml).toContain('title="npm install -g @oh-my-pi/pi-coding-agent"');
+    expect(fullHtml).toContain('title="dsh --version"');
 
     // Copied feedback renders checkmark state on DiagnosticItemCard
     const copiedCardHtml = renderToStaticMarkup(
@@ -277,13 +454,13 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(copiedCardHtml).toContain("Copied ✓");
     expect(copiedCardHtml).not.toContain("<code");
 
-    // Memory retrieval banner links directly to the split /settings/memory page
+    // Streamlined single-line memory retrieval status strip links directly to /settings/memory
     expect(fullHtml).toContain('data-diagnostic-memory-banner="true"');
     expect(fullHtml).toContain('href="/settings/memory"');
     expect(fullHtml).not.toContain('href="/settings/memory-sync"');
   });
 
-  it("renders dormant_engines exactly once as a deduplicated read-only summary container", () => {
+  it("renders dormant_engines exactly once as a flattened read-only summary section", () => {
     const report = normalizeDiagnosticsResponse({
       ok: true,
       checkedAt: 1_763_000_000_000,
@@ -379,12 +556,12 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
           summary: "Running",
         },
         {
-          id: "provider.omp",
+          id: "provider.dsh",
           category: "ai_providers",
-          name: "omp CLI",
+          name: "DeepSeek Harness CLI",
           status: "error",
-          summary: "Not found on PATH",
-          fixCommand: "npm i -g @oh-my-pi/pi-coding-agent",
+          summary: "本机 CLI 启动或探测异常（需修复）",
+          fixCommand: "dsh --version",
         },
         {
           id: "engine.overnight_factory",
@@ -552,11 +729,11 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(controller.trigger("visibility")).toBe(false);
   });
 
-  it("broadcasts published diagnostics reports and refresh requests to keep Diagnostics page and sidebar dot in sync", () => {
+  it("broadcasts published normalized reports and keeps sidebar dot free of uninstalled CLI false positives", () => {
     resetDiagnosticsLiveStoreForTests();
-    const tones: Array<ReturnType<typeof resolveDiagnosticsBadgeTone>> = [];
-    const unsubReport = subscribeDiagnosticsReport(({ response }) => {
-      tones.push(resolveDiagnosticsBadgeTone(response));
+    const tones: Array<ReturnType<typeof resolveNormalizedDiagnosticsBadgeTone>> = [];
+    const unsubReport = subscribeDiagnosticsReport(({ report }) => {
+      tones.push(resolveNormalizedDiagnosticsBadgeTone(report));
     });
 
     const reasons: string[] = [];
@@ -565,6 +742,7 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     });
 
     try {
+      // Uninstalled optional CLI should be filtered -> tone stays "ok"
       publishDiagnosticsReport({
         ok: true,
         checkedAt: 1_763_000_001_000,
@@ -572,11 +750,49 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
         cached: false,
         summary: { total: 2, ok: 1, degraded: 1, error: 0 },
         items: [
-          { id: "provider.codex", category: "ai_providers", name: "Codex CLI", status: "degraded", summary: "missing" },
-          { id: "tool.android_sdk", category: "simulators_media", name: "Android SDK", status: "ok", summary: "ok" },
+          {
+            id: "provider.codex",
+            category: "ai_providers",
+            name: "Codex CLI",
+            status: "degraded",
+            summary: "未检测到本机 CLI",
+          },
+          {
+            id: "tool.android_sdk",
+            category: "simulators_media",
+            name: "Android SDK",
+            status: "ok",
+            summary: "ok",
+          },
         ],
       });
 
+      // Installed-but-broken CLI -> tone becomes "degraded"
+      publishDiagnosticsReport({
+        ok: true,
+        checkedAt: 1_763_000_003_000,
+        durationMs: 160,
+        cached: false,
+        summary: { total: 2, ok: 1, degraded: 1, error: 0 },
+        items: [
+          {
+            id: "provider.codex",
+            category: "ai_providers",
+            name: "Codex CLI",
+            status: "degraded",
+            summary: "本机 CLI 启动或探测异常（需修复）",
+          },
+          {
+            id: "tool.android_sdk",
+            category: "simulators_media",
+            name: "Android SDK",
+            status: "ok",
+            summary: "ok",
+          },
+        ],
+      });
+
+      // Fixed CLI -> tone recovers to "ok"
       publishDiagnosticsReport({
         ok: true,
         checkedAt: 1_763_000_005_000,
@@ -584,12 +800,24 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
         cached: false,
         summary: { total: 2, ok: 2, degraded: 0, error: 0 },
         items: [
-          { id: "provider.codex", category: "ai_providers", name: "Codex CLI", status: "ok", summary: "codex-cli 0.171.0" },
-          { id: "tool.android_sdk", category: "simulators_media", name: "Android SDK", status: "ok", summary: "adb ok" },
+          {
+            id: "provider.codex",
+            category: "ai_providers",
+            name: "Codex CLI",
+            status: "ok",
+            summary: "codex-cli 0.171.0",
+          },
+          {
+            id: "tool.android_sdk",
+            category: "simulators_media",
+            name: "Android SDK",
+            status: "ok",
+            summary: "adb ok",
+          },
         ],
       });
 
-      expect(tones).toEqual(["degraded", "ok"]);
+      expect(tones).toEqual(["ok", "degraded", "ok"]);
       expect(getLatestNormalizedDiagnosticsReport()?.summary).toEqual({
         total: 2,
         ok: 2,
@@ -600,10 +828,15 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
       requestDiagnosticsRefresh("plugin-mutated");
       expect(reasons).toEqual(["plugin-mutated"]);
 
+      expect(isDiagnosticsViewPathname("/settings/maintenance")).toBe(true);
+      expect(isDiagnosticsViewPathname("/settings/diagnostics")).toBe(true);
+      expect(isDiagnosticsViewPathname("/settings/memory")).toBe(false);
+
       expect(isDiagnosticsAutoRefreshSettingsPath("/settings/providers")).toBe(true);
       expect(isDiagnosticsAutoRefreshSettingsPath("/settings/plugins")).toBe(true);
       expect(isDiagnosticsAutoRefreshSettingsPath("/settings/memory")).toBe(true);
       expect(isDiagnosticsAutoRefreshSettingsPath("/settings/sync")).toBe(true);
+      expect(isDiagnosticsAutoRefreshSettingsPath("/settings/about")).toBe(true);
       expect(isDiagnosticsAutoRefreshSettingsPath("/settings/diagnostics")).toBe(false);
       expect(isDiagnosticsAutoRefreshSettingsPath("/tasks")).toBe(false);
     } finally {

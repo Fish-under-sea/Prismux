@@ -18,7 +18,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { workEntryDisplayIndicatesToolFailure } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { assetMediaActionsSource } from "./ChatMarkdownMedia";
-import { ChevronDownIcon, ChevronUpIcon, Minimize2Icon, XIcon } from "lucide-react";
+import { ChevronRightIcon, Minimize2Icon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import {
@@ -88,36 +88,17 @@ function useDebouncedLiveTitle(value: string, active: boolean): string {
 }
 
 /**
- * Leading 16px activity icon slot that swaps smoothly on hover/focus/open
- * to ChevronDown (collapsed) or ChevronUp (expanded), matching DSH ChatGroupSeat.
+ * Single clean directional chevron for collapsible group headers (smoothly rotates 90° on expand).
+ * Never duplicates a chevron in the leading icon slot.
  */
-function HoverChevronIconSlot({
-  expanded,
-  children,
-}: {
-  expanded: boolean;
-  children: ReactNode;
-}) {
-  const Chevron = expanded ? ChevronUpIcon : ChevronDownIcon;
+function SingleDisclosureChevron({ expanded }: { expanded: boolean }) {
   return (
-    <span className="relative flex size-4 shrink-0 items-center justify-center">
-      <span
+    <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
+      <ChevronRightIcon
+        data-disclosure-chevron="true"
         className={cn(
-          "flex size-4 items-center justify-center transition-opacity duration-150",
-          expanded
-            ? "opacity-0"
-            : "opacity-100 group-hover/timeline-row:opacity-0 group-focus-visible/timeline-row:opacity-0 group-hover/live-work:opacity-0 group-focus-visible/live-work:opacity-0",
-        )}
-      >
-        {children}
-      </span>
-      <Chevron
-        aria-hidden="true"
-        className={cn(
-          "pointer-events-none absolute inset-0 m-auto size-3.5 text-icon-muted transition-opacity duration-150",
-          expanded
-            ? "opacity-100"
-            : "opacity-0 group-hover/timeline-row:opacity-100 group-focus-visible/timeline-row:opacity-100 group-hover/live-work:opacity-100 group-focus-visible/live-work:opacity-100",
+          "size-3.5 shrink-0 text-icon-muted transition-transform duration-200 group-hover/timeline-row:text-foreground/80 group-hover/live-work:text-foreground/80",
+          expanded && "rotate-90 text-foreground/80",
         )}
       />
     </span>
@@ -159,7 +140,14 @@ export const WorkGroupSection = memo(function WorkGroupSection({
 
   if (nonEmptyEntries.length === 0) return null;
   if (isExpandedToolGroup && nonEmptyEntries.every((entry) => entry.itemType === "reasoning")) {
-    return <ReasoningTraceContent entries={nonEmptyEntries} />;
+    return (
+      <div
+        data-work-group-tree-rail="true"
+        className="relative ml-2.5 mt-1 mb-1.5 border-l border-border/55 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
+      >
+        <ReasoningTraceContent entries={nonEmptyEntries} />
+      </div>
+    );
   }
   if (isExpandedToolGroup) {
     return (
@@ -375,44 +363,49 @@ function ExpandedWorkGroupEntries({
 
   return (
     <WorkGroupViewCtx value={groupView}>
-      <WorkLogList>
-        <LegendList
-          ref={listRef}
-          data={entries}
-          extraData={workspaceRoot}
-          keyExtractor={workEntryKey}
-          renderItem={renderEntry}
-          estimatedItemSize={compactWorkEntryHeight}
-          drawDistance={240}
-          recycleItems
-          {...(initialScrollIndex ? { initialScrollIndex } : { initialScrollAtEnd: isLive })}
-          maintainScrollAtEnd={
-            appendState.follow || isLive ? { animated: false, on: { dataChange: true } } : false
-          }
-          maintainScrollAtEndThreshold={1 / Math.max(1, fades.viewportHeight)}
-          // Measure the restored row even when an intra-row offset puts its
-          // estimated bounds outside the list's small bootstrap render window.
-          {...(restoringPosition && initialScrollIndex
-            ? { alwaysRender: { indices: [initialScrollIndex.index] } }
-            : {})}
-          maintainVisibleContentPosition
-          onLoad={handleLoad}
-          onScroll={handleScroll}
-          onLayout={updateScrollFades}
-          onItemSizeChanged={updateExpandedContentHeight}
-          tabIndex={0}
-          role="region"
-          aria-label={gt("Tool calls")}
-          data-tool-group-scroll
-          data-scroll-fade-top={fades.top ? "true" : undefined}
-          data-scroll-fade-bottom={fades.bottom ? "true" : undefined}
-          style={{ maxHeight: `calc(min(25rem, 50dvh) + ${expandedContentHeight}px)` }}
-          className={cn(
-            "scrollbar-gutter-stable scroll-py-6 overflow-x-hidden rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
-            getVirtualizedScrollFadeClassName(fades),
-          )}
-        />
-      </WorkLogList>
+      <div
+        data-work-group-tree-rail="true"
+        className="relative ml-2.5 mt-1 mb-1.5 border-l border-border/55 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
+      >
+        <WorkLogList>
+          <LegendList
+            ref={listRef}
+            data={entries}
+            extraData={workspaceRoot}
+            keyExtractor={workEntryKey}
+            renderItem={renderEntry}
+            estimatedItemSize={compactWorkEntryHeight}
+            drawDistance={240}
+            recycleItems
+            {...(initialScrollIndex ? { initialScrollIndex } : { initialScrollAtEnd: isLive })}
+            maintainScrollAtEnd={
+              appendState.follow || isLive ? { animated: false, on: { dataChange: true } } : false
+            }
+            maintainScrollAtEndThreshold={1 / Math.max(1, fades.viewportHeight)}
+            // Measure the restored row even when an intra-row offset puts its
+            // estimated bounds outside the list's small bootstrap render window.
+            {...(restoringPosition && initialScrollIndex
+              ? { alwaysRender: { indices: [initialScrollIndex.index] } }
+              : {})}
+            maintainVisibleContentPosition
+            onLoad={handleLoad}
+            onScroll={handleScroll}
+            onLayout={updateScrollFades}
+            onItemSizeChanged={updateExpandedContentHeight}
+            tabIndex={0}
+            role="region"
+            aria-label={gt("Tool calls")}
+            data-tool-group-scroll
+            data-scroll-fade-top={fades.top ? "true" : undefined}
+            data-scroll-fade-bottom={fades.bottom ? "true" : undefined}
+            style={{ maxHeight: `calc(min(25rem, 50dvh) + ${expandedContentHeight}px)` }}
+            className={cn(
+              "scrollbar-gutter-stable scroll-py-6 overflow-x-hidden rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+              getVirtualizedScrollFadeClassName(fades),
+            )}
+          />
+        </WorkLogList>
+      </div>
     </WorkGroupViewCtx>
   );
 }
@@ -519,6 +512,8 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
   if (isPreparingWorktree || isCompacting) return <WorkLogRow label="" />;
   // A failed group keeps this disclosure while an approval waits, but nothing is thinking then.
   const live = ctx.pendingApprovals.size === 0;
+  const { groupId } = row;
+  const expandable = groupId !== undefined;
   const activity = (
     <LiveActivityRow
       label={
@@ -530,14 +525,15 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
       iconName="brain"
       active={live}
       shimmer={live}
+      expandable={expandable}
+      expanded={row.expanded === true}
     />
   );
-  const { groupId } = row;
-  if (groupId === undefined) return activity;
+  if (!expandable) return activity;
   return (
     <button
       type="button"
-      className="group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+      className="group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
       aria-expanded={row.expanded === true}
       onClick={() => ctx.onToggleWorkGroup(groupId, row.id)}
     >
@@ -570,7 +566,10 @@ function LiveActivityRow({
   return (
     <div
       ref={animated ? observeVisibleAnimation : undefined}
-      className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed"
+      className={cn(
+        "relative min-h-6 max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed",
+        expandable ? "w-full" : "w-fit",
+      )}
     >
       <LiveActivityContent
         label={label}
@@ -579,6 +578,7 @@ function LiveActivityRow({
         failed={failed}
         announceFailure={failed}
         active={animated && !shimmer}
+        liveAccent={animated}
         expandable={expandable}
         expanded={expanded}
       />
@@ -589,7 +589,8 @@ function LiveActivityRow({
             iconName={iconName}
             toolIcon={toolIcon}
             highlighted
-            expandable={expandable}
+            liveAccent={animated}
+            expandable={false}
             expanded={expanded}
           />
         </ActivityShimmerOverlay>
@@ -606,6 +607,7 @@ function LiveActivityContent({
   announceFailure = false,
   active = false,
   highlighted = false,
+  liveAccent = false,
   expandable = false,
   expanded = false,
 }: {
@@ -616,6 +618,7 @@ function LiveActivityContent({
   announceFailure?: boolean;
   active?: boolean;
   highlighted?: boolean;
+  liveAccent?: boolean;
   expandable?: boolean;
   expanded?: boolean;
 }) {
@@ -625,12 +628,14 @@ function LiveActivityContent({
   const iconContent = iconName ? (
     <span
       className={cn(
-        "flex size-4 items-center justify-center",
+        "relative flex size-4 items-center justify-center",
         failed
           ? failedToolIconClassName
-          : highlighted
-            ? "text-foreground"
-            : "text-icon-muted",
+          : liveAccent
+            ? "text-primary"
+            : highlighted
+              ? "text-foreground"
+              : "text-icon-muted",
       )}
       role={announceFailure ? "img" : undefined}
       aria-label={announceFailure ? gt("Tool call failed") : undefined}
@@ -639,27 +644,25 @@ function LiveActivityContent({
         icon={toolIcon}
         fallbackName={iconName}
         className="block size-4 shrink-0 stroke-2"
-        muted={!highlighted}
+        muted={!highlighted && !liveAccent}
       />
+      {liveAccent && !highlighted ? (
+        <span
+          aria-hidden="true"
+          className="absolute -right-0.5 -bottom-0.5 size-1.5 animate-pulse rounded-full bg-primary ring-2 ring-background"
+        />
+      ) : null}
     </span>
   ) : null;
 
   return (
     <WorkLogRow
-      icon={
-        iconContent ? (
-          expandable ? (
-            <HoverChevronIconSlot expanded={expanded}>{iconContent}</HoverChevronIconSlot>
-          ) : (
-            iconContent
-          )
-        ) : null
-      }
+      icon={iconContent}
       label={
         <span
           className={cn(
             "block truncate",
-            highlighted && "text-foreground",
+            highlighted ? "text-foreground" : "text-foreground/90",
             active && "live-tool-shine",
           )}
         >
@@ -667,8 +670,13 @@ function LiveActivityContent({
         </span>
       }
       trailing={
-        showTrailingFailureMark ? (
-          <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+        showTrailingFailureMark || expandable ? (
+          <>
+            {showTrailingFailureMark ? (
+              <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+            ) : null}
+            {expandable ? <SingleDisclosureChevron expanded={expanded} /> : null}
+          </>
         ) : null
       }
     />
@@ -719,7 +727,7 @@ export function LiveWorkEntryTimelineRow({
       data-work-live-header="true"
       data-work-live-mode={row.dshMode}
       className={cn(
-        "group/live-work flex w-full max-w-full cursor-pointer rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+        "group/live-work flex w-full max-w-full cursor-pointer rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
         thoughtLine ? "flex-col items-start" : "min-h-6 items-center",
       )}
       aria-label={
@@ -735,7 +743,7 @@ export function LiveWorkEntryTimelineRow({
       {thoughtLine ? (
         <WorkLogRow
           icon={
-            <span className="flex size-4 items-center justify-center text-icon-muted">
+            <span className="flex size-4 items-center justify-center text-primary/80">
               <ToolActivityIconView
                 icon={undefined}
                 fallbackName="brain"
@@ -843,18 +851,30 @@ function WorkGroupHeader(props: {
       aria-expanded={props.expanded}
       onClick={props.onToggle}
       icon={
-        <HoverChevronIconSlot expanded={props.expanded}>
+        <span
+          className={cn(
+            "flex size-4 shrink-0 items-center justify-center",
+            props.failed ? failedToolIconClassName : "text-icon-muted",
+          )}
+        >
           <ToolActivityIconView
             icon={props.toolIcon}
             fallbackName={props.iconName}
-            className="size-4 shrink-0 stroke-2 text-icon-muted"
-            muted
+            className="size-4 shrink-0 stroke-2"
+            muted={!props.failed}
           />
-        </HoverChevronIconSlot>
+        </span>
       }
-      label={<span className="block truncate">{props.label}</span>}
+      label={
+        <span className="block truncate text-foreground/88 group-hover/timeline-row:text-foreground">
+          {props.label}
+        </span>
+      }
       trailing={
-        <TimelineRowTimestamp createdAt={props.createdAt} timestampFormat={props.timestampFormat} />
+        <>
+          <TimelineRowTimestamp createdAt={props.createdAt} timestampFormat={props.timestampFormat} />
+          <SingleDisclosureChevron expanded={props.expanded} />
+        </>
       }
     />
   );

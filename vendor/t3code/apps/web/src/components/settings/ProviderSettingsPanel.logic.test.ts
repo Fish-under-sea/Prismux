@@ -136,7 +136,7 @@ describe("provider configuration deletion logic", () => {
   const codexId = ProviderInstanceId.make("codex");
   const claudeId = ProviderInstanceId.make("claudeAgent");
   const antigravityId = ProviderInstanceId.make("antigravity");
-  const ompId = ProviderInstanceId.make("omp");
+  const dshId = ProviderInstanceId.make("dsh");
   const codexWorkId = ProviderInstanceId.make("codex_work");
 
   const visibleProviderSettings = [
@@ -180,7 +180,7 @@ describe("provider configuration deletion logic", () => {
   });
 
   it("builds visible rows, hides deleted optional/built-in providers permanently, and restores on re-add", () => {
-    const withAntigravityAndOmp = buildProviderInstanceRows({
+    const withAntigravityAndDsh = buildProviderInstanceRows({
       visibleProviderSettings,
       providerInstances: {
         [antigravityId]: {
@@ -188,38 +188,38 @@ describe("provider configuration deletion logic", () => {
           displayName: "Antigravity CLI",
           enabled: true,
         },
-        [ompId]: {
+        [dshId]: {
           driver: acpDriver,
-          displayName: "OMP (oh-my-pi)",
+          displayName: "DeepSeek Harness (dsh)",
           enabled: true,
-          config: { source: "local", commandPath: "omp", commandArgs: ["acp"] },
+          config: { source: "local", commandPath: "dsh", commandArgs: ["acp"] },
         },
       },
       hiddenDefaultProviderInstances: [],
     });
 
-    expect(withAntigravityAndOmp.map((row) => [row.instanceId, row.removalKind])).toEqual([
+    expect(withAntigravityAndDsh.map((row) => [row.instanceId, row.removalKind])).toEqual([
       [codexId, "remove-builtin"],
       [claudeId, "remove-builtin"],
       [antigravityId, "delete-optional"],
-      [ompId, "delete-custom"],
+      [dshId, "delete-custom"],
     ]);
 
     // After deleting Antigravity CLI (removed from providerInstances) and Codex (recorded in hiddenDefaultProviderInstances):
     const afterDeletes = buildProviderInstanceRows({
       visibleProviderSettings,
       providerInstances: {
-        [ompId]: {
+        [dshId]: {
           driver: acpDriver,
-          displayName: "OMP (oh-my-pi)",
+          displayName: "DeepSeek Harness (dsh)",
           enabled: true,
-          config: { source: "local", commandPath: "omp", commandArgs: ["acp"] },
+          config: { source: "local", commandPath: "dsh", commandArgs: ["acp"] },
         },
       },
       hiddenDefaultProviderInstances: [codexId],
     });
 
-    expect(afterDeletes.map((row) => row.instanceId)).toEqual([claudeId, ompId]);
+    expect(afterDeletes.map((row) => row.instanceId)).toEqual([claudeId, dshId]);
 
     // Deep-linked targetInstanceId does not keep a dismissed default-off provider in the list.
     const afterDeepLinkDelete = buildProviderInstanceRows({
@@ -288,7 +288,7 @@ describe("provider configuration deletion logic", () => {
     expect(
       extractAcpRegistryManagedAgentId({
         driver: acpDriver,
-        config: { source: "local", commandPath: "omp", agentId: "omp" },
+        config: { source: "local", commandPath: "dsh", agentId: "dsh" },
       }),
     ).toBeNull();
 
@@ -309,21 +309,21 @@ describe("provider configuration deletion logic", () => {
           displayName: "Antigravity CLI",
           enabled: true,
         },
-        [ompId]: {
+        [dshId]: {
           driver: acpDriver,
-          displayName: "OMP (oh-my-pi)",
+          displayName: "DeepSeek Harness (dsh)",
           enabled: true,
-          config: { source: "local", commandPath: "omp", commandArgs: ["acp"] },
+          config: { source: "local", commandPath: "dsh", commandArgs: ["acp"] },
         },
       },
       hiddenDefaultProviderInstances: [],
-      providerOrder: [ompId, claudeId],
+      providerOrder: [dshId, claudeId],
     });
-    expect(ordered.map((row) => row.instanceId)).toEqual([ompId, claudeId, codexId, antigravityId]);
+    expect(ordered.map((row) => row.instanceId)).toEqual([dshId, claudeId, codexId, antigravityId]);
 
     expect(
-      reorderProviderInstanceIds([codexId, claudeId, antigravityId, ompId], ompId, claudeId),
-    ).toEqual([codexId, ompId, claudeId, antigravityId]);
+      reorderProviderInstanceIds([codexId, claudeId, antigravityId, dshId], dshId, claudeId),
+    ).toEqual([codexId, dshId, claudeId, antigravityId]);
     expect(reorderProviderInstanceIds([codexId, claudeId], codexId, codexId)).toBeNull();
     expect(
       orderProviderInstanceRows(

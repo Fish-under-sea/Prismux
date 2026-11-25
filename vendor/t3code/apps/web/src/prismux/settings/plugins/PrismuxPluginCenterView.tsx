@@ -18,7 +18,7 @@ import {
   XIcon,
 } from "lucide-react";
 
-import { SettingsSection } from "../../../components/settings/settingsLayout";
+import { SETTINGS_CONTROL_LG, SettingsSection } from "../../../components/settings/settingsLayout";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -89,10 +89,33 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(parts.join(""));
 }
 
-const NETWORK_PREFERENCE_LABELS: Readonly<Record<"auto" | "domestic" | "global", string>> = {
+export type PluginRegistryOverrideValue = "auto" | "npmmirror" | "npmjs";
+
+export function pluginRegistryOverrideToNetworkPreference(
+  override: PluginRegistryOverrideValue,
+): "auto" | "domestic" | "global" {
+  if (override === "npmmirror") return "domestic";
+  if (override === "npmjs") return "global";
+  return "auto";
+}
+
+export function parsePluginRegistryOverrideFromUpdaterStatus(
+  payload: unknown,
+): PluginRegistryOverrideValue {
+  if (typeof payload !== "object" || payload === null) return "auto";
+  const policy = (payload as Record<string, unknown>).policy;
+  if (typeof policy !== "object" || policy === null) return "auto";
+  const raw = (policy as Record<string, unknown>).pluginRegistryOverride;
+  if (raw === "npmmirror" || raw === "npmjs" || raw === "auto") {
+    return raw;
+  }
+  return "auto";
+}
+
+const REGISTRY_OVERRIDE_LABELS: Readonly<Record<PluginRegistryOverrideValue, string>> = {
   auto: "智能测速（自动切换）",
-  domestic: "国内优先（npmmirror 镜像）",
-  global: "国际优先（npmjs 官方源）",
+  npmmirror: "国内镜像（npmmirror）",
+  npmjs: "国际官方（npmjs）",
 };
 
 const PREV_VERSION_STORAGE_KEY = "prismux.plugins.previousVersions.v1";
@@ -179,13 +202,13 @@ export function PrismuxPluginCenterView({
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
-  // Community npm, local archive import & creator guide state
+  // Community npm, local archive import & creator guide state (single source of truth in Daemon policy)
   const [npmInput, setNpmInput] = useState("");
-  const [networkPreference, setNetworkPreference] = useState<"auto" | "domestic" | "global">(
-    "auto",
-  );
+  const [registryOverride, setRegistryOverride] = useState<PluginRegistryOverrideValue>("auto");
+  const [savingRegistry, setSavingRegistry] = useState(false);
   const [creatorGuideOpen, setCreatorGuideOpen] = useState(false);
   const localFileInputRef = useRef<HTMLInputElement>(null);
+  const networkPreference = pluginRegistryOverrideToNetworkPreference(registryOverride);
 
   // Detail drawer, runtime logs, rollback dialog & trust audit modal
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
@@ -235,18 +258,42 @@ export function PrismuxPluginCenterView({
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [catalogRes, installedRes] = await Promise.all([
+      const [catalogRes, installedRes, updaterRes] = await Promise.all([
         daemon.requestJson<unknown>("/v1/plugins/catalog"),
         daemon.requestJson<unknown>("/v1/plugins/installed"),
+        daemon.requestJson<unknown>("/v1/updater/status").catch(() => null),
       ]);
       setCatalogRaw(parseCatalogPluginsPayload(catalogRes));
       setInstalledRaw(parseInstalledPluginsPayload(installedRes));
+      if (updaterRes !== null) {
+        setRegistryOverride(parsePluginRegistryOverrideFromUpdaterStatus(updaterRes));
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   }, [daemon]);
+
+  const handleRegistryOverrideChange = useCallback(
+    async (next: PluginRegistryOverrideValue) => {
+      setRegistryOverride(next);
+      setSavingRegistry(true);
+      setErrorMsg(null);
+      try {
+        await daemon.requestJson<unknown>("/v1/updater/policy", {
+          method: "POST",
+          body: JSON.stringify({ pluginRegistryOverride: next }),
+        });
+        setStatusMsg(`插件下载源已切换为「${REGISTRY_OVERRIDE_LABELS[next]}」。`);
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSavingRegistry(false);
+      }
+    },
+    [daemon],
+  );
 
   useEffect(() => {
     if (!skipInitialFetch) {
@@ -427,7 +474,7 @@ export function PrismuxPluginCenterView({
         setAuditError(null);
         const verb = operation === "upgrade" ? "升级" : "安装";
         setStatusMsg(
-          `已成功验签并${verb}官方插件 ${plugin.packageName}@${plugin.latestVersion}（distribution: "managed"）。`,
+          `已校验并${verb}官方插件 ${plugin.packageName}@${plugin.latestVersion}。`,
         );
         appendPluginLog(
           plugin.id,
@@ -585,7 +632,7 @@ export function PrismuxPluginCenterView({
         const installedId = res?.plugin?.manifest?.id ?? fileName;
         const installedVer = res?.plugin?.manifest?.version;
         setStatusMsg(
-          `已成功导入并安装本地插件归档 ${installedId}${installedVer ? `@${installedVer}` : ""}（distribution: "managed"，脚本已禁用）。`,
+          `已安全导入本地扩展 ${installedId}${installedVer ? `@${installedVer}` : ""}。`,
         );
         if (!skipInitialFetch) {
           await loadAll();
@@ -729,12 +776,12 @@ export function PrismuxPluginCenterView({
           method: "POST",
           body: JSON.stringify({ pluginId }),
         });
-        setStatusMsg(`插件 ${pluginId} 已安全卸载并释放全部 ctx.effect() 监听（零残留）。`);
+        setStatusMsg(`插件 ${pluginId} 已安全卸载，不留残留。`);
         appendPluginLog(
           pluginId,
           "info",
           "cordis-host",
-          "已安全卸载，全部监听、面板、路由与订阅已通过 ctx.effect() 零残留清理。",
+          "已安全卸载，全部监听、面板、路由与订阅已清理。",
         );
         if (!skipInitialFetch) {
           await loadAll();
@@ -897,7 +944,7 @@ export function PrismuxPluginCenterView({
               {plugin.source === "official" ? "官方认证" : "社区 npm"}
             </Badge>
             <Badge variant={plugin.modelVisible ? "warning" : "outline"} size="sm">
-              {plugin.modelVisible ? "modelVisible · 需审计" : "0 Token 纯净"}
+              {plugin.modelVisible ? "影响 AI 行为 · 需确认" : "纯界面扩展"}
             </Badge>
             {plugin.declarativeUi ? (
               <Badge variant="outline" size="sm">
@@ -1202,7 +1249,7 @@ export function PrismuxPluginCenterView({
 
   return (
     <div className="space-y-6" data-testid="prismux-plugin-center">
-      {/* Compact Zero-Preinstall Status Banner (matches Sync & Overnight Factory settings pages) */}
+      {/* Compact Zero-Preinstall Status Banner (<= 2 header badges, denoised copy) */}
       <div
         id="prismux-plugins"
         className="rounded-xl border border-border/60 bg-card/40 px-4 py-3.5 shadow-xs/5"
@@ -1215,10 +1262,10 @@ export function PrismuxPluginCenterView({
                 两大官方插件默认零预装声明
               </h3>
               <Badge variant="info" size="sm">
-                纯净内核 · 按需安装
+                按需安装
               </Badge>
               <Badge variant={daemonReady ? "success" : "warning"} size="sm">
-                {daemonReady ? "Daemon 在线" : "Daemon 未连接"}
+                {daemonReady ? "服务在线" : "服务未连接"}
               </Badge>
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
@@ -1230,9 +1277,7 @@ export function PrismuxPluginCenterView({
               <code className="rounded bg-foreground/[0.06] px-1 py-0.5 font-mono text-[11px] text-foreground dark:bg-white/[0.08]">
                 fishdock-hook
               </code>{" "}
-              默认绝不预装，按需通过 Cordis 双域可逆内核（<code className="font-mono text-[11px]">ctx.effect()</code> 零残留卸载）、顶层{" "}
-              <code className="font-mono text-[11px]">engines.prismux</code> SemVer 校验、SHA-256 验签与{" "}
-              <code className="font-mono text-[11px]">0600</code> 独立加密凭据隔离安装。
+              默认均不预装，按需安装并支持随时无残留卸载。
             </p>
           </div>
         </div>
@@ -1265,8 +1310,7 @@ export function PrismuxPluginCenterView({
         groupKey: "official",
         id: "prismux-plugins-official",
         title: "官方认证插件目录",
-        subtitle:
-          "实时读取 plugins-official/catalog/official.json，支持 GitHub / Gitee Release 与 npm 镜像多源自动回退，严格校验 SHA-256 与顶层 engines.prismux 版本范围。",
+        subtitle: "经过官方校验的精选扩展，支持一键按需安装与升级。",
         visibility: officialVisibility,
         emptyText:
           activeTab === "updates"
@@ -1281,14 +1325,13 @@ export function PrismuxPluginCenterView({
             groupKey: "community",
             id: "prismux-plugins-community-installed",
             title: "社区与扩展插件",
-            subtitle:
-              "通过免 Git 流式 npm 安装器或本地归档引入的第三方扩展，全部受 distribution: managed 单写锁与独立 0600 凭据保护。",
+            subtitle: "已安装的第三方扩展，由插件中心统一管理并隔离凭据。",
             visibility: communityVisibility,
             emptyText: "当前筛选条件下没有匹配的社区插件。",
           })
         : null}
 
-      {/* Community npm Import & Plugin Creator Studio Card */}
+      {/* Community npm Import & Single-Source npm Registry Selector */}
       <SettingsSection
         id="prismux-plugins-community"
         title="社区 npm 插件流式导入"
@@ -1309,7 +1352,7 @@ export function PrismuxPluginCenterView({
       >
         <div className="space-y-3.5 p-4">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            直接通过 HTTPS 从 npm Registry 拉取 .tgz 并校验解包：完全不调用本机 git，强制禁用 preinstall / install / postinstall 生命周期脚本，自动写入 distribution: managed 托管锁。
+            输入 npm 包名或导入本地扩展包，安装全程不依赖本地 Git 且自动禁用安装脚本。
           </p>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -1318,7 +1361,7 @@ export function PrismuxPluginCenterView({
               size="sm"
               aria-label="npm 包名或 Tarball 地址"
               className="flex-1 font-mono"
-              placeholder="例如：prismux-plugin-notion 或 https://registry.npmmirror.com/.../.tgz"
+              placeholder="例如：prismux-plugin-notion 或 .tgz 地址"
               value={npmInput}
               onChange={(event) => setNpmInput(event.target.value)}
               onKeyDown={(event) => {
@@ -1327,22 +1370,23 @@ export function PrismuxPluginCenterView({
                 }
               }}
             />
-            <div className="w-full sm:w-52">
+            <div className={`${SETTINGS_CONTROL_LG} max-w-full shrink-0`}>
               <Select
-                value={networkPreference}
+                value={registryOverride}
+                disabled={savingRegistry}
                 onValueChange={(val) => {
-                  if (val === "auto" || val === "domestic" || val === "global") {
-                    setNetworkPreference(val);
+                  if (val === "auto" || val === "npmmirror" || val === "npmjs") {
+                    void handleRegistryOverrideChange(val);
                   }
                 }}
               >
-                <SelectTrigger size="sm">
-                  <SelectValue>{NETWORK_PREFERENCE_LABELS[networkPreference]}</SelectValue>
+                <SelectTrigger size="sm" aria-label="插件 npm 镜像源" data-testid="plugin-registry-select">
+                  <SelectValue>{REGISTRY_OVERRIDE_LABELS[registryOverride]}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
-                  <SelectItem value="auto">{NETWORK_PREFERENCE_LABELS.auto}</SelectItem>
-                  <SelectItem value="domestic">{NETWORK_PREFERENCE_LABELS.domestic}</SelectItem>
-                  <SelectItem value="global">{NETWORK_PREFERENCE_LABELS.global}</SelectItem>
+                  <SelectItem value="auto">{REGISTRY_OVERRIDE_LABELS.auto}</SelectItem>
+                  <SelectItem value="npmmirror">{REGISTRY_OVERRIDE_LABELS.npmmirror}</SelectItem>
+                  <SelectItem value="npmjs">{REGISTRY_OVERRIDE_LABELS.npmjs}</SelectItem>
                 </SelectPopup>
               </Select>
             </div>
@@ -1354,7 +1398,7 @@ export function PrismuxPluginCenterView({
               }}
             >
               <DownloadIcon className="size-3.5" />
-              {busyKey === "install:npm" ? "流式安装中…" : "安装插件"}
+              {busyKey === "install:npm" ? "安装中…" : "安装插件"}
             </Button>
             <input
               ref={localFileInputRef}
@@ -1383,7 +1427,7 @@ export function PrismuxPluginCenterView({
 
           <div className="flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-3 text-[11px] text-muted-foreground">
             <LockIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <span>安全契约：</span>
+            <span>安全保护：</span>
             <Badge variant="outline" size="sm">
               免 Git 依赖
             </Badge>
@@ -1391,10 +1435,10 @@ export function PrismuxPluginCenterView({
               禁用安装脚本
             </Badge>
             <Badge variant="outline" size="sm">
-              顶层 SemVer 强制校验
+              版本兼容校验
             </Badge>
             <Badge variant="outline" size="sm">
-              modelVisible 强制审计
+              敏感权限二次确认
             </Badge>
           </div>
         </div>

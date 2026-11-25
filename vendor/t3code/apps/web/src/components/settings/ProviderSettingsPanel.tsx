@@ -33,12 +33,7 @@ import {
   resolveProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts/settings";
-import {
-  getBackgroundActivityPresetSettings,
-  resolveServerBackgroundActivitySettings,
-} from "@t3tools/shared/backgroundActivitySettings";
 import * as Arr from "effect/Array";
-import * as Duration from "effect/Duration";
 import * as Result from "effect/Result";
 import {
   DndContext,
@@ -121,27 +116,20 @@ import {
 } from "./ProviderDeleteDialog";
 import { useManagedPolicy } from "~/state/managedPolicy";
 import { ExpandableText } from "./ExpandableText";
-import { IntervalSecondsField } from "./IntervalSecondsField";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
 import { Badge } from "../ui/badge";
 import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
-import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
+import { ProviderSetupSection } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import { providerClients } from "./providerDriverMeta";
 import { useSearchableSetting } from "./settingsSearch";
 import { CompactIdleThreadsRow, ProviderUpdateChecksRow } from "./SettingsPanels";
+import { buildProviderInstanceUpdatePatch } from "./SettingsPanels.logic";
 import {
-  backgroundActivityOverrideSettings,
-  buildProviderInstanceUpdatePatch,
-  durationToSeconds,
-  PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
-} from "./SettingsPanels.logic";
-import {
-  PolicyTooltip,
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
@@ -166,6 +154,7 @@ import {
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
 import { supportsDualLaunchMode } from "./prismuxProviderMeta";
+import { AntigravityControlledLockSection } from "../../prismux/AntigravityControlledLockSection";
 import { formatAgentBrandName } from "../../prismux/agentBrand";
 import {
   resolveEffectiveLaunchMode,
@@ -411,7 +400,7 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
   {
     if (
       !target.scoped &&
-      (searchTargetId === searchableSetting("provider-health-check-interval").id ||
+      (searchTargetId === searchableSetting("antigravity-controlled-lock").id ||
         searchTargetId === searchableSetting("usage-providers").id) &&
       !selectedEnvironmentCanRenderSettings &&
       searchableEnvironmentId !== undefined
@@ -606,6 +595,8 @@ export function EnvironmentProviderSettings({
 }) {
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
+  const searchTargetId = useSettingsSearchTargetId();
+  const antigravityLockTargetId = searchableSetting("antigravity-controlled-lock").id;
   const settings = useEnvironmentSettings(environmentId);
   const {
     state: launchModeState,
@@ -650,6 +641,9 @@ export function EnvironmentProviderSettings({
   >(() => new Set());
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
     targetInstanceId ?? null,
+  );
+  const [seenAntigravityLockTarget, setSeenAntigravityLockTarget] = useState<boolean>(
+    () => searchTargetId === antigravityLockTargetId,
   );
   const [updatingProviderInstanceIds, setUpdatingProviderInstanceIds] = useState<
     ReadonlySet<ProviderInstanceId>
@@ -708,14 +702,6 @@ export function EnvironmentProviderSettings({
           provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
       ),
   );
-  const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
-  const providerHealthPreset = getBackgroundActivityPresetSettings(
-    resolvedBackgroundActivity.profile,
-  ).providerHealthRefreshInterval;
-  const providerHealthRefreshIntervalSeconds = durationToSeconds(
-    resolvedBackgroundActivity.providerHealthRefreshInterval,
-  );
-  const defaultProviderHealthRefreshIntervalSeconds = durationToSeconds(providerHealthPreset);
 
   const refreshProviders = () => {
     if (refreshingRef.current || !readEnvironmentScope(environmentId, AuthOrchestrationReadScope))
@@ -834,6 +820,7 @@ export function EnvironmentProviderSettings({
     updateSettings({ providerOrder: nextOrder });
   };
 
+  const antigravityRow = rows.find((row) => row.driver === "antigravity") ?? null;
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
     selectedInstanceId === targetInstanceId &&
@@ -841,7 +828,19 @@ export function EnvironmentProviderSettings({
     !rows.some((row) => row.instanceId === targetInstanceId);
   const selectedRow =
     rows.find((row) => row.instanceId === selectedInstanceId) ??
-    (targetInstanceMissing ? null : (rows[0] ?? null));
+    (targetInstanceMissing
+      ? null
+      : searchTargetId === antigravityLockTargetId && antigravityRow
+        ? antigravityRow
+        : (rows[0] ?? null));
+  if (searchTargetId === antigravityLockTargetId && !seenAntigravityLockTarget) {
+    setSeenAntigravityLockTarget(true);
+    if (antigravityRow && selectedRow?.instanceId !== antigravityRow.instanceId) {
+      setSelectedInstanceId(antigravityRow.instanceId);
+    }
+  } else if (searchTargetId !== antigravityLockTargetId && seenAntigravityLockTarget) {
+    setSeenAntigravityLockTarget(false);
+  }
 
   const persistInstance = async (
     instanceId: ProviderInstanceId,
@@ -1375,78 +1374,14 @@ export function EnvironmentProviderSettings({
         />
       ) : null}
 
+      {selectedRow?.driver !== "antigravity" &&
+      (antigravityRow !== null || searchTargetId === antigravityLockTargetId) ? (
+        <div id={antigravityLockTargetId} tabIndex={-1}>
+          <AntigravityControlledLockSection readOnly={readOnly} />
+        </div>
+      ) : null}
+
       <SettingsSection title={gt("Advanced")}>
-        <SettingsRow
-          id={searchableSetting("provider-health-check-interval").id}
-          title={
-            <span className="inline-flex items-center gap-1.5">
-              {searchableSetting("provider-health-check-interval").title}
-              <PolicyTooltip>
-                {gt(
-                  "This interval is configured here, then the shared Background activity policy decides whether provider probes may run when the timer fires. Custom intervals appear as Advanced in Maintenance settings.",
-                )}
-              </PolicyTooltip>
-            </span>
-          }
-          description={gt(
-            "Refresh provider status, versions, and models in the background. Set to 0 to disable.",
-          )}
-          resetAction={
-            providerHealthRefreshIntervalSeconds !== defaultProviderHealthRefreshIntervalSeconds ? (
-              <span
-                inert={!canWriteSettings}
-                className={!canWriteSettings ? "opacity-50" : undefined}
-              >
-                <SettingResetButton
-                  ariaLabel={gt("Reset provider health check interval to default")}
-                  onClick={() =>
-                    updateSettings(
-                      backgroundActivityOverrideSettings(
-                        settings.backgroundActivity,
-                        resolvedBackgroundActivity,
-                        { providerHealthRefreshInterval: undefined },
-                      ),
-                    )
-                  }
-                />
-              </span>
-            ) : null
-          }
-          control={
-            <div
-              inert={!canWriteSettings}
-              aria-disabled={!canWriteSettings || undefined}
-              className={cn(
-                "flex shrink-0 items-center gap-2",
-                !canWriteSettings && "opacity-50 select-none",
-              )}
-            >
-              <IntervalSecondsField
-                labels={{
-                  decrease: gt("Decrease provider health check interval"),
-                  input: gt("Provider health check interval in seconds"),
-                  increase: gt("Increase provider health check interval"),
-                }}
-                value={providerHealthRefreshIntervalSeconds}
-                min={0}
-                step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
-                onCommit={(seconds, options) =>
-                  updateSettings(
-                    backgroundActivityOverrideSettings(
-                      settings.backgroundActivity,
-                      resolvedBackgroundActivity,
-                      { providerHealthRefreshInterval: Duration.seconds(seconds) },
-                    ),
-                    options,
-                  )
-                }
-              />
-              <span className="text-xs text-muted-foreground">
-                <T>seconds</T>
-              </span>
-            </div>
-          }
-        />
         <CompactIdleThreadsRow />
       </SettingsSection>
 
@@ -1710,33 +1645,21 @@ function ProviderInstanceRow({
       canWriteSettings={canWriteSettings}
       setup={
         mode === "editor" && driver === "antigravity" ? (
-          <ProviderSetupSection
-            environmentId={environmentId}
-            environmentLabel={environmentLabel}
-            instanceId={instanceId}
-            provider={liveProvider}
-            binaryPath={configuredBinaryPath(instance.config)}
-            authMethod={readAntigravityAuthMethod(instance.config)}
-            enabled={resolveProviderInstanceEnabled(instance)}
-            readOnly={readOnly}
-            onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
-            onUseLocalCli={
-              readOnly
-                ? undefined
-                : () =>
-                    actions.enableInstance(instanceId, {
-                      ...instance,
-                      enabled: true,
-                      config: {
-                        ...(instance.config !== null && typeof instance.config === "object"
-                          ? instance.config
-                          : {}),
-                        enabled: true,
-                        authMethod: "local-cli",
-                      },
-                    })
-            }
-          />
+          <div className="divide-y divide-border/50">
+            <ProviderSetupSection
+              environmentId={environmentId}
+              environmentLabel={environmentLabel}
+              instanceId={instanceId}
+              provider={liveProvider}
+              binaryPath={configuredBinaryPath(instance.config)}
+              enabled={resolveProviderInstanceEnabled(instance)}
+              readOnly={readOnly}
+              onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
+            />
+            <div id="antigravity-controlled-lock" tabIndex={-1} className="px-3 py-3 sm:px-4">
+              <AntigravityControlledLockSection readOnly={readOnly} />
+            </div>
+          </div>
         ) : mode === "editor" && codexSetupMode === "managed" ? (
           <CodexSetupSection
             environmentId={environmentId}

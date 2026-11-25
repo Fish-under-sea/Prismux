@@ -143,7 +143,7 @@ describe("searchSettings", () => {
     expect(searchSettings("environment identification")).toEqual([]);
     expect(searchSettings("work steps display")[0]).toMatchObject({
       id: "work-steps-display",
-      to: "/settings/appearance",
+      to: "/settings/chat",
     });
     expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "color-scheme")?.targetId).toBe(
       "prismux-appearance",
@@ -151,6 +151,50 @@ describe("searchSettings", () => {
     expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "theme")?.targetId).toBe(
       "prismux-appearance",
     );
+  });
+
+  it("reflects all RC.2 settings route/tab moves, Antigravity lock search entry, and mobile-app dedup", () => {
+    const byId = new Map<string, SettingsSearchItem>(
+      SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const),
+    );
+    // Moved from /settings/appearance, /settings/source-control, and /settings/general -> /settings/chat
+    for (const id of [
+      "work-steps-display",
+      "work-steps-collapse-timing",
+      "collapsed-assistant-reply-mode",
+      "effort-display",
+      "math-rendering",
+      "thread-details-items",
+      "composer-context",
+      "proactive-panels",
+      "working-shelf",
+    ]) {
+      expect(byId.get(id)?.to, id).toBe("/settings/chat");
+    }
+    // Moved from /settings/chat -> /settings/projects
+    for (const id of ["add-project-starts-in", "ghq-clone-layout"]) {
+      expect(byId.get(id)?.to, id).toBe("/settings/projects");
+    }
+    // Retargeted from /settings/providers -> /settings/maintenance#background-activity
+    expect(byId.get("provider-health-check-interval")).toMatchObject({
+      to: "/settings/maintenance",
+      targetId: "background-activity",
+      environmentOnly: true,
+      scope: "environment-defaults",
+    });
+    // Deduplicated mobile-app removed from /settings/about; mobile-qr-pairing kept under /settings/connections
+    expect(byId.has("mobile-app")).toBe(false);
+    expect(byId.has("reopen-onboarding")).toBe(false);
+    expect(byId.get("mobile-qr-pairing")).toMatchObject({
+      to: "/settings/connections",
+      targetId: "mobile-qr-pairing",
+    });
+    // Added Antigravity controlled-agent lock under /settings/providers#antigravity-controlled-lock
+    expect(searchSettings("Antigravity controlled-agent lock")[0]).toMatchObject({
+      id: "antigravity-controlled-lock",
+      to: "/settings/providers",
+      targetId: "antigravity-controlled-lock",
+    });
   });
 
   it("matches query words across fields and ranks the strongest result first", () => {
@@ -486,6 +530,17 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/memory-sync", "")).toBe("/settings/memory");
     expect(movedSettingsPath("/settings/memory-sync", "sync")).toBe("/settings/sync");
     expect(movedSettingsPath("/settings/memory-sync", "prismux-e2ee-sync")).toBe("/settings/sync");
+    expect(movedSettingsPath("/settings/appearance", "work-steps-display")).toBe("/settings/chat");
+    expect(movedSettingsPath("/settings/appearance", "composer-context")).toBe("/settings/chat");
+    expect(movedSettingsPath("/settings/source-control", "proactive-panels")).toBe("/settings/chat");
+    expect(movedSettingsPath("/settings/general", "working-shelf")).toBe("/settings/chat");
+    expect(movedSettingsPath("/settings/general", "reopen-onboarding")).toBe("/settings/about");
+    expect(movedSettingsPath("/settings/chat", "add-project-starts-in")).toBe("/settings/projects");
+    expect(movedSettingsPath("/settings/chat", "ghq-clone-layout")).toBe("/settings/projects");
+    expect(movedSettingsPath("/settings/providers", "provider-health-check-interval")).toBe(
+      "/settings/maintenance",
+    );
+    expect(movedSettingsPath("/settings/about", "mobile-app")).toBe("/settings/connections");
   });
 
   it("leaves current pages alone", () => {

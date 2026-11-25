@@ -61,7 +61,10 @@ export function ProviderAuthenticationSection({
   const terminalQueue = useRef<ProviderAuthRespondInput[]>([]);
   const terminalSending = useRef(false);
   const auth = query.data;
-  const interaction = auth?.interaction;
+  const isAntigravity = provider.driver === "antigravity";
+  // Antigravity strictly reuses the user's official local `agy` CLI session — never render
+  // in-app browser OAuth URLs, callback inputs, code-paste forms, or sign-out buttons for it.
+  const interaction = isAntigravity ? null : auth?.interaction;
   const active =
     auth?.phase === "starting" || auth?.phase === "waiting" || auth?.phase === "verifying";
   const signedIn =
@@ -78,11 +81,7 @@ export function ProviderAuthenticationSection({
     !signedIn &&
     (provider.setup?.canAuthenticate === false ||
       (provider.driver === "acpRegistry" && auth?.methods?.length === 0));
-  const usesLocalCli =
-    provider.driver === "antigravity" && provider.auth.type === "local-cli";
-  const usesCredentials =
-    provider.driver === "antigravity" &&
-    (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
+  const usesLocalCli = isAntigravity;
   const localCliPlan =
     usesLocalCli && provider.auth.label
       ? provider.auth.label.replace(/^Local agy CLI(?:\s*·\s*)?/, "").trim()
@@ -90,22 +89,18 @@ export function ProviderAuthenticationSection({
   const accountDescription = active
     ? auth?.phase === "starting"
       ? (auth.message ??
-        (usesLocalCli
-          ? gt("Connecting to local agy CLI…")
-          : usesCredentials
-            ? gt("Connecting…")
-            : gt("Starting sign-in…")))
+        (usesLocalCli ? gt("Connecting to local agy CLI…") : gt("Starting sign-in…")))
       : auth?.phase === "verifying"
         ? usesLocalCli
           ? gt("Checking local agy CLI and loading models…")
-          : usesCredentials
-            ? gt("Checking credentials and loading models…")
-            : gt("Checking your account…")
-        : interaction?.type === "terminal"
-          ? gt("Complete sign-in in the terminal below.")
-          : interaction?.type === "credentials"
-            ? gt("Enter your credentials below.")
-            : gt("Finish signing in in your browser.")
+          : gt("Checking your account…")
+        : usesLocalCli
+          ? gt("Connecting to local agy CLI…")
+          : interaction?.type === "terminal"
+            ? gt("Complete sign-in in the terminal below.")
+            : interaction?.type === "credentials"
+              ? gt("Enter your credentials below.")
+              : gt("Finish signing in in your browser.")
     : signedIn
       ? usesLocalCli
         ? localCliPlan
@@ -128,15 +123,14 @@ export function ProviderAuthenticationSection({
                   environment: environmentLabel,
                 },
               )
-            : usesCredentials
-              ? gt("Connect on {environment} to load models.", { environment: environmentLabel })
-              : gt("Sign in on {environment}.", { environment: environmentLabel });
+            : gt("Sign in on {environment}.", { environment: environmentLabel });
   const statusMessage = auth?.phase === "failed" ? auth.message : null;
   const disabled = readOnly || pending || query.error !== null || isDiscovering;
   const draftId = `${auth?.flowId ?? ""}:${interaction?.id ?? ""}`;
   const values = draft.id === draftId ? draft.values : {};
-  const url =
-    interaction?.type === "browser" || interaction?.type === "deviceCode"
+  const url = isAntigravity
+    ? null
+    : interaction?.type === "browser" || interaction?.type === "deviceCode"
       ? interaction.url
       : auth?.authorizationUrl;
 
@@ -234,7 +228,7 @@ export function ProviderAuthenticationSection({
       }
       control={
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          {!active && (auth?.methods?.length ?? 0) > 1 ? (
+          {!active && !isAntigravity && (auth?.methods?.length ?? 0) > 1 ? (
             <Select
               value={auth?.methods?.some((method) => method.id === methodId) ? methodId : ""}
               disabled={disabled}
@@ -356,17 +350,16 @@ export function ProviderAuthenticationSection({
                   : auth?.phase === "failed" || auth?.phase === "cancelled"
                     ? usesLocalCli
                       ? gt("Retry sync")
-                      : usesCredentials
-                        ? gt("Retry connection")
-                        : gt("Retry sign-in")
+                      : gt("Retry sign-in")
                     : usesLocalCli
                       ? gt("Connect local CLI")
-                      : usesCredentials
-                        ? gt("Connect")
-                        : gt("Sign in")}
+                      : gt("Sign in")}
               </Button>
             ) : null}
-            {!active && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate) ? (
+            {!active &&
+            !isAntigravity &&
+            signedIn &&
+            (provider.auth.canLogout ?? provider.setup?.canAuthenticate) ? (
               <Button
                 size="sm"
                 variant="ghost"

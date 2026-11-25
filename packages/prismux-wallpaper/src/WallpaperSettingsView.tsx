@@ -49,6 +49,12 @@ export interface WallpaperSettingsViewProps {
   onTabChange?: (tab: WallpaperSettingsTabId) => void;
   /** Optional explicit shortcut callback to jump directly to /settings/appearance. */
   onOpenAppearanceSettings?: () => void;
+  /** Optional anchor ID attached to the root container for settings search deep links. */
+  id?: string;
+  /** Optional single status badge displayed beside the playable count (keeps header <= 2 badges). */
+  headerStatusBadge?: ReactNode;
+  /** Optional right-slot action rendered in the segmented Tab bar row (replaces default rescan button). */
+  trailingAction?: ReactNode;
   className?: string;
 }
 
@@ -88,6 +94,9 @@ export function WallpaperSettingsView({
   activeTab: controlledTab,
   onTabChange,
   onOpenAppearanceSettings,
+  id,
+  headerStatusBadge,
+  trailingAction,
   className,
 }: WallpaperSettingsViewProps) {
   const snap = useWallpaperStore(store);
@@ -267,19 +276,23 @@ export function WallpaperSettingsView({
 
   return (
     <div
+      id={id}
       className={"pmx-wp-settings" + (className ? ` ${className}` : "")}
       data-pmx-cards={settings.pickerLayout}
       data-pmx-settings-view="1"
     >
-      {/* 顶部标题卡 */}
+      {/* 精简单层页头（最多 2 枚状态徽章） */}
       <div className="pmx-wp-card-head">
-        <span className="pmx-wp-card-name">壁纸引擎</span>
-        <span className="pmx-wp-card-badge">{visibleList.length} 个可播放</span>
+        <div className="pmx-wp-card-head__main">
+          <span className="pmx-wp-card-name">壁纸引擎</span>
+          <span className="pmx-wp-card-badge">{visibleList.length} 个可播放</span>
+          {headerStatusBadge ?? null}
+        </div>
         {onOpenAppearanceSettings || adapter?.openSettingsSection ? (
           <button
             type="button"
             className="pmx-wp-btn pmx-wp-btn--mini pmx-wp-card-head__action"
-            title="主题模式、液态玻璃、侧边栏圆角、全局配色与字体设置"
+            title="调整主题模式、液态玻璃与字体设置"
             onClick={() => {
               if (onOpenAppearanceSettings) {
                 onOpenAppearanceSettings();
@@ -292,34 +305,48 @@ export function WallpaperSettingsView({
           </button>
         ) : null}
         <span className="pmx-wp-card-desc">
-          支持 Steam Workshop 431960 · 本地图片/视频 · 内置 WebWallGL 着色器（0 Token）
+          支持 Steam 创意工坊壁纸与本地图片或视频，自动适配当前主题。
         </span>
       </div>
 
-      {/* 4 页签滑动胶囊导航 */}
-      <div className="pmx-wp-tabs" role="tablist" aria-label="壁纸设置分区">
-        <span
-          className="pmx-wp-tabs__pill"
-          aria-hidden="true"
-          style={{
-            width: `calc((100% - 6px) / ${SETTINGS_TABS.length})`,
-            transform: `translateX(${tabIdx * 100}%)`,
-          }}
-        />
-        {SETTINGS_TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={
-              "pmx-wp-tabs__tab" + (tab === t.id ? " pmx-wp-tabs__tab--active" : "")
-            }
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* 4 页签滑动胶囊导航 + 右侧唯一重扫操作槽 */}
+      <div className="pmx-wp-tabs-row">
+        <div className="pmx-wp-tabs" role="tablist" aria-label="壁纸设置分区">
+          <span
+            className="pmx-wp-tabs__pill"
+            aria-hidden="true"
+            style={{
+              width: `calc((100% - 6px) / ${SETTINGS_TABS.length})`,
+              transform: `translateX(${tabIdx * 100}%)`,
+            }}
+          />
+          {SETTINGS_TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={
+                "pmx-wp-tabs__tab" + (tab === t.id ? " pmx-wp-tabs__tab--active" : "")
+              }
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="pmx-wp-tabs-trailing" data-pmx-wp-tabs-trailing="1">
+          {trailingAction ?? (
+            <button
+              type="button"
+              className="pmx-wp-btn"
+              disabled={snap.loading}
+              onClick={() => void store.refreshLibrary(adapter, true)}
+            >
+              {snap.loading ? "扫描中…" : "重新扫描"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Tab 1: 壁纸库 ── */}
@@ -341,10 +368,10 @@ export function WallpaperSettingsView({
                 {current
                   ? `${CARD_TYPE_LABELS[current.type]} · 来源：${
                       current.source === "steam"
-                        ? "Steam 431960"
+                        ? "Steam 创意工坊"
                         : current.source === "custom"
                           ? "本地导入"
-                          : "内置 WebWallGL"
+                          : "内置动态场景"
                     }${current.width && current.height ? ` · ${current.width}×${current.height}` : ""} · ${
                       playbackLive ? "播放中" : "已暂停"
                     }`
@@ -372,14 +399,6 @@ export function WallpaperSettingsView({
               <button
                 type="button"
                 className="pmx-wp-btn"
-                disabled={snap.loading}
-                onClick={() => void store.refreshLibrary(adapter, true)}
-              >
-                {snap.loading ? "扫描中…" : "刷新库"}
-              </button>
-              <button
-                type="button"
-                className="pmx-wp-btn"
                 disabled={!current}
                 onClick={() => store.clearWallpaper()}
               >
@@ -397,7 +416,7 @@ export function WallpaperSettingsView({
             <div className="pmx-wp-row">
               <CtlText
                 label="导入本地图片 / 视频壁纸"
-                hint="支持 .jpg / .png / .webp / .gif / .bmp / .mp4 / .webm / .mov，安全存入 ~/.prismux/wallpapers/"
+                hint="支持常见图片与视频格式，导入后自动保存到本地壁纸库。"
               />
               <button
                 type="button"
@@ -909,7 +928,7 @@ export function WallpaperSettingsView({
       {tab === "system" ? (
         <div className="pmx-wp-tabpanel">
           <div className="pmx-wp-section">
-            <SectionHead label="Steam Workshop 431960 与本地壁纸目录" />
+            <SectionHead label="壁纸来源目录" />
             <div className="pmx-wp-uploads">
               <div className="pmx-wp-row">
                 <span className="pmx-wp-label">Steam 根目录</span>
@@ -917,7 +936,7 @@ export function WallpaperSettingsView({
                   type="text"
                   className="pmx-wp-text"
                   value={steamDirDraft}
-                  placeholder="留空自动从注册表与 libraryfolders.vdf 扫描多盘 Steam 库"
+                  placeholder="留空时自动扫描本机 Steam 创意工坊目录"
                   onChange={(e) => setSteamDirDraft(e.target.value)}
                 />
                 {adapter?.selectDirectory ? (
@@ -944,7 +963,7 @@ export function WallpaperSettingsView({
                     void store.refreshLibrary(adapter, true);
                   }}
                 >
-                  应用并刷新
+                  保存
                 </button>
               </div>
               {snap.steamRoots.length > 0 ? (
@@ -959,7 +978,7 @@ export function WallpaperSettingsView({
                   type="text"
                   className="pmx-wp-text"
                   value={customDirDraft}
-                  placeholder="默认 ~/.prismux/wallpapers/"
+                  placeholder="留空时使用默认本地壁纸目录"
                   onChange={(e) => setCustomDirDraft(e.target.value)}
                 />
                 {adapter?.selectDirectory ? (

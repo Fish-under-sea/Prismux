@@ -5,7 +5,7 @@ import { SessionPermissions } from "./SessionPermissions";
 import { useSearch } from "@tanstack/react-router";
 import { ChevronRightIcon, EllipsisIcon, QrCodeIcon } from "lucide-react";
 import { useAtom, useAtomValue } from "@effect/atom-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 import {
   AuthAccessReadScope,
@@ -29,6 +29,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 
+import { cn } from "../../lib/utils";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import {
   applyWslEnableSelection,
@@ -39,7 +40,15 @@ import {
 } from "./ConnectionsSettings.logic";
 import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
 import { useAccessEnvironment } from "./useAccessEnvironment";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  SETTINGS_REVEAL_TARGET_EVENT,
+  type SettingsRevealTargetEventDetail,
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+  useSettingsSearchTargetId,
+} from "./settingsLayout";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { ManagedByOrganization } from "../ManagedPolicy";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { useSearchableSetting } from "./settingsSearch";
@@ -149,6 +158,22 @@ import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 
+export const CONNECTIONS_MULTI_MACHINE_ANCHORS = [
+  "multi-machine-collaboration",
+  "multi-environment-linking",
+  "linked-environments-beta",
+  "linked-environments",
+  "load-balancing",
+  "pull-request-routing",
+] as const;
+
+function isConnectionsMultiMachineAnchor(targetId: string | null): boolean {
+  return (
+    targetId !== null &&
+    (CONNECTIONS_MULTI_MACHINE_ANCHORS as ReadonlyArray<string>).includes(targetId)
+  );
+}
+
 // Colons are invalid in distro names, keeping picker sentinels collision-free.
 const BACKEND_VALUE_DEFAULT_WSL = "backend:default-wsl";
 const BACKEND_VALUE_WSL_OFF = "backend:wsl-off";
@@ -241,7 +266,7 @@ function AccessWrappedConnectionsSettings({
             if (next !== null) setSelectedEnvironmentId(next);
           }}
         >
-          <SelectTrigger size="sm" className="w-auto max-w-72" aria-label={gt("Environment")}>
+          <SelectTrigger size="sm" className="w-48 min-w-0" aria-label={gt("Environment")}>
             <SelectValue>
               {(value: EnvironmentId) => {
                 const environment = candidates.find(
@@ -302,6 +327,31 @@ function ConnectionsSettingsContent({
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
   const m = useMessages();
+  const searchTargetId = useSettingsSearchTargetId();
+  const [multiMachineOpen, setMultiMachineOpen] = useState(() =>
+    isConnectionsMultiMachineAnchor(searchTargetId),
+  );
+  const [seenSearchTargetId, setSeenSearchTargetId] = useState<string | null>(searchTargetId);
+  if (seenSearchTargetId !== searchTargetId) {
+    setSeenSearchTargetId(searchTargetId);
+    if (isConnectionsMultiMachineAnchor(searchTargetId) && !multiMachineOpen) {
+      setMultiMachineOpen(true);
+    }
+  }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window SETTINGS_REVEAL_TARGET_EVENT to unfold hidden multi-machine sections on search navigation
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onReveal = (event: Event) => {
+      const detail = (event as CustomEvent<SettingsRevealTargetEventDetail | undefined>).detail;
+      if (isConnectionsMultiMachineAnchor(detail?.targetId ?? null)) {
+        setMultiMachineOpen(true);
+      }
+    };
+    window.addEventListener(SETTINGS_REVEAL_TARGET_EVENT, onReveal);
+    return () => {
+      window.removeEventListener(SETTINGS_REVEAL_TARGET_EVENT, onReveal);
+    };
+  }, []);
   const desktopBridge = window.desktopBridge;
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -1076,7 +1126,7 @@ function ConnectionsSettingsContent({
             >
               <SelectTrigger
                 size="sm"
-                className="w-full sm:w-56"
+                className="w-full sm:w-48"
                 aria-label={gt("WSL backend")}
                 disabled={isUpdatingWslBackend}
               >
@@ -1269,6 +1319,14 @@ function ConnectionsSettingsContent({
     (accessPolicy !== undefined && isManagedSettingPath(accessPolicy, "enablePreviewTunnel")
       ? gt("Managed by {organization}.", { organization: accessPolicy.organization })
       : undefined);
+  const qrLanHeading = gt("QR remote control & LAN access");
+  const qrPairingDescription = gt(
+    "Scan with your phone or tablet browser over LAN or Tailscale to control Prismux directly without a cloud account.",
+  );
+  const primarySectionTitle = accessEnvironment?.label
+    ? `${qrLanHeading} · ${accessEnvironment.label}`
+    : qrLanHeading;
+
   const primarySettings = (
     <>
       {accessEnvironmentPicker}
@@ -1276,10 +1334,7 @@ function ConnectionsSettingsContent({
         <>
           <SettingsSection
             {...searchableSetting("connections-environment")}
-            title={
-              accessEnvironment?.label ??
-              (desktopBridge ? gt("This machine") : gt("Primary environment"))
-            }
+            title={primarySectionTitle}
             icon={
               <EnvironmentMachineIcon
                 aria-hidden
@@ -1315,9 +1370,35 @@ function ConnectionsSettingsContent({
             }
           >
             {accessServerConfig?.managedPolicy ? (
-              <div className="px-3 py-2 sm:px-4">
+              <div className="px-4 py-2 sm:px-5">
                 <ManagedByOrganization policy={accessServerConfig.managedPolicy} />
               </div>
+            ) : null}
+            <SettingsRow
+              id="mobile-qr-pairing"
+              title={gt("QR code pairing")}
+              description={qrPairingDescription}
+              control={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openPrismuxRemoteConnectDialog()}
+                >
+                  <QrCodeIcon className="size-3.5" />
+                  {gt("Show QR code")}
+                </Button>
+              }
+            />
+            {canManageLocalBackend && desktopBridge ? (
+              <>
+                {renderNetworkAccessRow()}
+                {renderEndpointRows()}
+                {renderTailscaleRow()}
+                {renderWslRow()}
+              </>
+            ) : canManageLocalBackend ? (
+              renderDisabledNetworkAccessRow()
             ) : null}
             {canManageLocalBackend ? (
               <SettingsRow
@@ -1366,34 +1447,6 @@ function ConnectionsSettingsContent({
                 }
               />
             ) : null}
-            {canManageLocalBackend && desktopBridge ? (
-              <>
-                {renderNetworkAccessRow()}
-                {renderEndpointRows()}
-                {renderTailscaleRow()}
-                {renderWslRow()}
-              </>
-            ) : canManageLocalBackend ? (
-              renderDisabledNetworkAccessRow()
-            ) : null}
-            <SettingsRow
-              id="mobile-qr-pairing"
-              title={gt("QR code pairing")}
-              description={gt(
-                "Scan with your phone browser or T3 mobile app over LAN or Tailscale to connect directly without a cloud account.",
-              )}
-              control={
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => openPrismuxRemoteConnectDialog()}
-                >
-                  <QrCodeIcon className="size-3.5" />
-                  {gt("Show QR code")}
-                </Button>
-              }
-            />
             {accessServerConfig?.environment.capabilities.previewTunnelSetting ? (
               <SettingsRow
                 title={searchableSetting("preview-tunnel").title}
@@ -1414,7 +1467,7 @@ function ConnectionsSettingsContent({
               />
             ) : null}
             {accessEnvironment ? (
-              <details className="group px-3 sm:px-4">
+              <details className="group px-4 sm:px-5">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
                   <T>Permissions</T>
                   <ChevronRightIcon
@@ -1791,24 +1844,29 @@ function ConnectionsSettingsContent({
 
   if (!showsEnvironments) {
     return (
-      <SettingsPageContainer>
-        <div id="remote-access" className="space-y-8">
+      <SettingsPageContainer width="readable">
+        <div id="remote-access" className="flex flex-col gap-7">
           {primarySettings}
         </div>
       </SettingsPageContainer>
     );
   }
 
+  const environmentsHeading = gt("Compute environments");
+  const multiMachineHeading = gt("Multi-machine collaboration & experimental");
+  const multiMachineSummary = gt("Linked environments · Load balancing · PR routing");
+
   return (
-    <SettingsPageContainer>
-      {desktopBridge ? (
-        <SettingsSection id="this-app" title={gt("This app")}>
-          <LocalEnvironmentSetting />
-        </SettingsSection>
+    <SettingsPageContainer width="readable">
+      {showsAccess ? (
+        <div id="remote-access" className="flex flex-col gap-7">
+          {primarySettings}
+        </div>
       ) : null}
+
       <SettingsSection
         {...searchableSetting("remote-environments")}
-        title={gt("Environments")}
+        title={environmentsHeading}
         titleAction={
           roomForMap ? (
             <ToggleGroup
@@ -1885,24 +1943,51 @@ function ConnectionsSettingsContent({
           </>
         )}
       </SettingsSection>
-      {showsAccess ? (
-        <div id="remote-access" className="space-y-8">
-          {primarySettings}
-        </div>
+
+      {desktopBridge ? (
+        <SettingsSection id="this-app" title={gt("This app")}>
+          <LocalEnvironmentSetting />
+        </SettingsSection>
       ) : null}
-      <LinkedEnvironmentsToggleSection />
-      {environmentsView === "list"
-        ? peerLinkHosts.map((environment, index) => (
-            <LinkedEnvironmentsSettings
-              key={environment.environmentId}
-              environmentId={environment.environmentId}
-              environmentLabel={peerLinkHosts.length > 1 ? environment.label : null}
-              isSearchTarget={index === 0}
-            />
-          ))
-        : null}
-      <LoadBalancingSettings environments={loadBalancingEnvironments} />
-      <PullRequestRoutingSettings environments={loadBalancingEnvironments} />
+
+      <section id="multi-machine-collaboration" className="outline-none">
+        <Collapsible open={multiMachineOpen} onOpenChange={setMultiMachineOpen}>
+          <div className="mb-3 flex min-h-6 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1">
+            <CollapsibleTrigger className="flex min-h-7 cursor-pointer items-center gap-2 rounded-md text-sm font-semibold tracking-tight text-foreground/85 transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+              <ChevronRightIcon
+                aria-hidden
+                className={cn(
+                  "size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
+                  multiMachineOpen && "rotate-90",
+                )}
+              />
+              <span>{multiMachineHeading}</span>
+            </CollapsibleTrigger>
+            {!multiMachineOpen ? (
+              <span className="min-w-0 truncate text-xs text-muted-foreground">
+                {multiMachineSummary}
+              </span>
+            ) : null}
+          </div>
+          <CollapsiblePanel>
+            <div className="flex flex-col gap-7 pt-1">
+              <LinkedEnvironmentsToggleSection />
+              {environmentsView === "list"
+                ? peerLinkHosts.map((environment, index) => (
+                    <LinkedEnvironmentsSettings
+                      key={environment.environmentId}
+                      environmentId={environment.environmentId}
+                      environmentLabel={peerLinkHosts.length > 1 ? environment.label : null}
+                      isSearchTarget={index === 0}
+                    />
+                  ))
+                : null}
+              <LoadBalancingSettings environments={loadBalancingEnvironments} />
+              <PullRequestRoutingSettings environments={loadBalancingEnvironments} />
+            </div>
+          </CollapsiblePanel>
+        </Collapsible>
+      </section>
     </SettingsPageContainer>
   );
 }

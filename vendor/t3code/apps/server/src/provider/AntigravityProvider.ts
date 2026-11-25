@@ -50,9 +50,10 @@ import {
 const EMPTY_MODEL_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAX_WORKSPACE_SNAPSHOTS = 32;
 const HEALTH_CHECK_TIMEOUT_MS = 90_000;
-const SIGN_IN_MESSAGE = "Sign in with Google to use Antigravity.";
+const SIGN_IN_MESSAGE =
+  "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then sync models.";
 const AUTH_UNCHECKED_MESSAGE =
-  "Antigravity is installed. Google account access is not checked yet.";
+  "Antigravity is installed. Connect with Local agy CLI to load models.";
 // Set while a finished quota read republishes, so that health check does not read again.
 const PublishingUsage = Context.Reference<boolean>("t3/provider/AntigravityPublishingUsage", {
   defaultValue: () => false,
@@ -202,19 +203,10 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   settings: AntigravitySettings,
   options: AntigravityProviderOptions,
 ) {
-  const usesLocalCli = options.auth?.type === "local-cli";
-  const usesCredentials =
-    options.auth?.type === "gemini-api-key" || options.auth?.type === "agent-platform";
-  const signInMessage = usesLocalCli
-    ? "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then sync models."
-    : usesCredentials
-      ? `Connect with ${options.auth.label} to use Antigravity and load models.`
-      : SIGN_IN_MESSAGE;
-  const authUncheckedMessage = usesLocalCli
-    ? "Antigravity is installed. Connect with Local agy CLI to load models."
-    : usesCredentials
-      ? `Antigravity is installed. Connect with ${options.auth.label} to load models.`
-      : AUTH_UNCHECKED_MESSAGE;
+  const authType = "local-cli";
+  const baseAuthLabel = options.auth?.label ?? "Local agy CLI";
+  const signInMessage = SIGN_IN_MESSAGE;
+  const authUncheckedMessage = AUTH_UNCHECKED_MESSAGE;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const initialDraft = {
     ...buildServerProvider({
@@ -230,7 +222,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         installed: false,
         version: null,
         status: "warning",
-        auth: { status: "unknown", ...(options.auth ? { type: options.auth.type } : {}) },
+        auth: { status: "unknown", type: authType },
         message: settings.enabled
           ? "Checking Antigravity availability."
           : "Antigravity is disabled in T3 Code settings.",
@@ -390,7 +382,6 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     if (initialized !== undefined) yield* refreshUsage();
     if (
       initialized !== undefined &&
-      usesLocalCli &&
       next.draft.models.length === 0 &&
       !hydratedCatalogOnce &&
       options.hydrateCatalog !== undefined
@@ -447,7 +438,6 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       const { message: _previousMessage, ...draft } = state.draft;
       const workspaces = draft.workspaceSnapshots ?? [];
       const workspace = cwd ? workspaces.find((entry) => entry.cwd === cwd) : undefined;
-      const baseAuthLabel = options.auth?.label ?? "Google account";
       const tierName = antigravitySessionTierName(started.sessionSetupResult);
       const authLabel = tierName ? `${baseAuthLabel} · ${tierName}` : baseAuthLabel;
       const next = {
@@ -459,9 +449,9 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           version: started.initializeResult.agentInfo?.version || draft.version,
           auth: {
             status: "authenticated",
-            type: options.auth?.type ?? "oauth-personal",
+            type: authType,
             label: authLabel,
-            ...(usesLocalCli ? { canLogout: false } : {}),
+            canLogout: false,
           },
           checkedAt: updatedAt,
           models: buildAntigravityModelsFromSession(started.sessionSetupResult, thinkingLevels),
@@ -552,8 +542,9 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           ...state.draft,
           auth: {
             status: "unauthenticated",
-            ...(usesCredentials || usesLocalCli ? options.auth : {}),
-            ...(usesLocalCli ? { canLogout: false } : {}),
+            type: authType,
+            label: baseAuthLabel,
+            canLogout: false,
           },
           status: "warning",
           message: signInMessage,

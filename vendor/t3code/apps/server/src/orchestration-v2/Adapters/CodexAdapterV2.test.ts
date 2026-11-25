@@ -184,12 +184,74 @@ describe("CodexAdapterV2 runtime policy", () => {
               },
             });
             assert.equal(params.effort, reasoningEffort);
-            // Some Responses providers reject `detailed`; `auto` is the most detailed a model supports.
-            assert.equal(params.summary, "auto");
+            // Non-Bedrock providers request `detailed` so GPT-5.5/6.* catalogues (whose default is `none`) still emit summaries.
+            assert.equal(params.summary, "detailed");
             assert.equal(params.additionalContext !== undefined, hasT3Mcp === true);
           }
         }
       }),
+  );
+
+  it.effect("resolves Codex reasoning summary: detailed by default, auto on Bedrock, explicit user config respected", () =>
+    Effect.gen(function* () {
+      assert.equal(CodexAdapterV2.resolveCodexReasoningSummary({}), "detailed");
+      assert.equal(
+        CodexAdapterV2.resolveCodexReasoningSummary({
+          configuredReasoningSummary: "auto",
+          modelProvider: "magpie",
+        }),
+        "detailed",
+      );
+      assert.equal(
+        CodexAdapterV2.resolveCodexReasoningSummary({
+          configuredReasoningSummary: undefined,
+          modelProvider: "amazon-bedrock",
+        }),
+        "auto",
+      );
+      assert.equal(
+        CodexAdapterV2.resolveCodexReasoningSummary({
+          configuredReasoningSummary: "auto",
+          modelProvider: "bedrock",
+        }),
+        "auto",
+      );
+      assert.equal(
+        CodexAdapterV2.resolveCodexReasoningSummary({
+          configuredReasoningSummary: "concise",
+          modelProvider: "openai",
+        }),
+        "concise",
+      );
+      assert.equal(
+        CodexAdapterV2.resolveCodexReasoningSummary({
+          configuredReasoningSummary: "none",
+          modelProvider: "openai",
+        }),
+        "none",
+      );
+
+      const bedrockParams = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-bedrock",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6.2-astra" },
+        modelProvider: "amazon-bedrock",
+      });
+      assert.equal(bedrockParams.summary, "auto");
+
+      const defaultParams = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-magpie",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "dragonapi/gpt-promax/gpt-6.2-astra",
+        },
+        modelProvider: "magpie",
+      });
+      assert.equal(defaultParams.summary, "detailed");
+    }),
   );
 
   it.effect("derives concrete Codex turn policies from every T3 runtime mode", () =>
@@ -800,7 +862,7 @@ function codexReplayPreamble(input: {
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
           ...input.turnPolicy,
-          summary: "auto",
+          summary: "detailed",
           ...(input.effort === undefined ? {} : { effort: input.effort }),
           collaborationMode: {
             mode: "default",
@@ -3928,7 +3990,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               cwd: "/workspace",
               model: "gpt-5.4",
               ...turnPolicies[turnModes[index]!],
-              summary: "auto",
+              summary: "detailed",
               collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
             },
           },
@@ -5093,7 +5155,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   approvalPolicy: "never",
                   approvalsReviewer: "user",
                   sandboxPolicy: { type: "dangerFullAccess" },
-                  summary: "auto",
+                  summary: "detailed",
                   collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
                   ...(changedTier === undefined ? {} : { serviceTier: changedTier }),
                 },
@@ -9871,7 +9933,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 approvalPolicy: "never",
                 approvalsReviewer: "user",
                 sandboxPolicy: { type: "dangerFullAccess" },
-                summary: "auto",
+                summary: "detailed",
                 collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
               },
             },
@@ -10017,7 +10079,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   approvalPolicy: "never",
                   approvalsReviewer: "user",
                   sandboxPolicy: { type: "dangerFullAccess" },
-                  summary: "auto",
+                  summary: "detailed",
                   collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
                 },
               },

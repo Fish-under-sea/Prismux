@@ -1,26 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { PrismuxDaemonClient } from "../daemonClient";
-import {
-  resolveDiagnosticsBadgeTone,
-  type DiagnosticsBadgeTone,
-} from "../../components/sidebar/prismuxSidebarQuickNav.logic";
+import type { DiagnosticsBadgeTone } from "../../components/sidebar/prismuxSidebarQuickNav.logic";
 import {
   createDiagnosticsRefreshController,
   DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
-  getLatestDiagnosticsResponse,
+  getLatestNormalizedDiagnosticsReport,
   isDiagnosticsAutoRefreshSettingsPath,
+  isDiagnosticsViewPathname,
   publishDiagnosticsReport,
+  resolveNormalizedDiagnosticsBadgeTone,
   subscribeDiagnosticsRefreshRequest,
   subscribeDiagnosticsReport,
 } from "./prismuxDiagnostics.logic";
 
-const DIAGNOSTICS_ROUTE = "/settings/diagnostics";
-
 /**
- * Keeps the left sidebar "Service Diagnostics" status dot live and in lockstep
- * with `/settings/diagnostics`, window focus / visibility hot-reloads (3s
- * cooldown), plugin mutations, and leaving provider/plugin settings pages.
+ * Keeps the sidebar diagnostics dot synced with normalized reports (so uninstalled optional
+ * AI Provider CLIs never trigger a false-positive amber dot) and handles 3s debounced refreshes.
  */
 export function useLiveDiagnosticsBadgeTone(
   daemon: PrismuxDaemonClient | null,
@@ -28,7 +24,7 @@ export function useLiveDiagnosticsBadgeTone(
   pathname: string,
 ): DiagnosticsBadgeTone {
   const [tone, setTone] = useState<DiagnosticsBadgeTone>(() =>
-    resolveDiagnosticsBadgeTone(getLatestDiagnosticsResponse()),
+    resolveNormalizedDiagnosticsBadgeTone(getLatestNormalizedDiagnosticsReport()),
   );
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
@@ -43,8 +39,8 @@ export function useLiveDiagnosticsBadgeTone(
         const response = force
           ? await daemon.refreshDiagnosticsServices()
           : await daemon.fetchDiagnosticsServices(false);
-        publishDiagnosticsReport(response);
-        setTone(resolveDiagnosticsBadgeTone(response));
+        const report = publishDiagnosticsReport(response);
+        setTone(resolveNormalizedDiagnosticsBadgeTone(report));
       } catch {
         // Leave existing tone intact if Daemon diagnostics is temporarily unreachable.
       } finally {
@@ -80,8 +76,8 @@ export function useLiveDiagnosticsBadgeTone(
 
   // 1. Live sync whenever any diagnostics view publishes a fresh report.
   useEffect(() => {
-    return subscribeDiagnosticsReport(({ response }) => {
-      setTone(resolveDiagnosticsBadgeTone(response));
+    return subscribeDiagnosticsReport(({ report }) => {
+      setTone(resolveNormalizedDiagnosticsBadgeTone(report));
       controllerRef.current.markRefreshed();
     });
   }, []);
@@ -90,9 +86,9 @@ export function useLiveDiagnosticsBadgeTone(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads read-only daemon badge summary when daemon becomes ready
   useEffect(() => {
     if (!daemon || !daemonReady) return;
-    const existing = getLatestDiagnosticsResponse();
+    const existing = getLatestNormalizedDiagnosticsReport();
     if (existing) {
-      setTone(resolveDiagnosticsBadgeTone(existing));
+      setTone(resolveNormalizedDiagnosticsBadgeTone(existing));
       return;
     }
     void runFetch(false);
@@ -102,9 +98,9 @@ export function useLiveDiagnosticsBadgeTone(
   useEffect(() => {
     if (!daemon || !daemonReady) return;
     return subscribeDiagnosticsRefreshRequest((reason) => {
-      // When already on /settings/diagnostics, PrismuxDiagnosticsSection handles the refresh
+      // When already on the diagnostics view, PrismuxDiagnosticsSection handles the refresh
       // and publishes the result back to this hook via subscribeDiagnosticsReport.
-      if (pathnameRef.current === DIAGNOSTICS_ROUTE) return;
+      if (isDiagnosticsViewPathname(pathnameRef.current)) return;
       controllerRef.current.trigger(reason, { bypassCooldown: true });
     });
   }, [daemon, daemonReady]);
@@ -115,12 +111,12 @@ export function useLiveDiagnosticsBadgeTone(
     if (typeof window === "undefined" || typeof document === "undefined") return;
 
     const handleFocus = () => {
-      if (pathnameRef.current === DIAGNOSTICS_ROUTE) return;
+      if (isDiagnosticsViewPathname(pathnameRef.current)) return;
       controllerRef.current.trigger("focus");
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
-      if (pathnameRef.current === DIAGNOSTICS_ROUTE) return;
+      if (isDiagnosticsViewPathname(pathnameRef.current)) return;
       controllerRef.current.trigger("visibility");
     };
 
@@ -138,7 +134,7 @@ export function useLiveDiagnosticsBadgeTone(
     prevPathnameRef.current = pathname;
     if (!daemon || !daemonReady) return;
     if (prev === pathname) return;
-    if (pathname === DIAGNOSTICS_ROUTE) return;
+    if (isDiagnosticsViewPathname(pathname)) return;
     if (isDiagnosticsAutoRefreshSettingsPath(prev)) {
       controllerRef.current.trigger("settings-left", { bypassCooldown: true });
     }

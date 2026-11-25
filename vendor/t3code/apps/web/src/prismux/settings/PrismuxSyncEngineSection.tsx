@@ -2,10 +2,13 @@ import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   CloudIcon,
+  DownloadIcon,
+  HardDriveIcon,
   KeyRoundIcon,
   LockIcon,
   RefreshCwIcon,
   SaveIcon,
+  UploadIcon,
   WifiIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -19,7 +22,15 @@ import {
   type ReactNode,
 } from "react";
 
-import { SettingsRow, SettingsSection } from "../../components/settings/settingsLayout";
+import {
+  SETTINGS_CONTROL_LG,
+  SettingsRow,
+  SettingsSection,
+} from "../../components/settings/settingsLayout";
+import {
+  SettingsSegmentedTabs,
+  type SettingsSegmentedTabItem,
+} from "../../components/settings/SettingsSegmentedTabs";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -28,6 +39,7 @@ import { cn } from "../../lib/utils";
 import type { PrismuxDaemonClient } from "../daemonClient";
 
 export type SyncChannelKey = "webdav" | "s3" | "github";
+export type PrismuxSyncSettingsTabId = "overview" | "channels";
 
 interface SyncChannelReportItem {
   readonly channel: string;
@@ -119,6 +131,10 @@ export interface PrismuxSyncEngineSectionProps {
     "requestJson" | "triggerSyncNow" | "testSyncConnection"
   >;
   readonly refreshTick: number;
+  readonly daemonReady?: boolean;
+  readonly initialTabOverride?: PrismuxSyncSettingsTabId | undefined;
+  readonly initialChannelOverride?: SyncChannelKey | undefined;
+  readonly onRefresh?: () => void;
   readonly onRender?: (() => void) | undefined;
   readonly onSynced?: () => void;
   readonly onError?: (message: string) => void;
@@ -130,13 +146,22 @@ const SYNC_DOMAIN_META: ReadonlyArray<{
   readonly label: string;
   readonly desc: string;
 }> = [
-  { key: "privateMemory", label: "私人主秘书记忆", desc: "private/chief 个人偏好与决策记忆" },
-  { key: "workspaceMemory", label: "工作区项目记忆", desc: "workspace/* 跨机器工程约定" },
-  { key: "socialMemory", label: "社交隔离记忆", desc: "social/* 群聊/外部隔离域记忆" },
-  { key: "commandsAndMcp", label: "命令与 MCP 配置", desc: "自定义指令与外部服务声明" },
-  { key: "plugins", label: "插件清单与设置", desc: "已装插件记录（不含裸密钥）" },
-  { key: "appearancePresets", label: "外观与玻璃预设", desc: "主题胶囊、玻璃参数与壁纸偏好" },
-  { key: "usageLedger", label: "用量账本", desc: "Token 与工场执行统计记录" },
+  { key: "privateMemory", label: "主秘书记忆", desc: "个人偏好、习惯与长期决策记录" },
+  { key: "workspaceMemory", label: "工作区项目记忆", desc: "跨设备共享的工程约定与项目背景" },
+  { key: "socialMemory", label: "社交隔离记忆", desc: "外部消息与群聊记录，默认不参与同步" },
+  { key: "commandsAndMcp", label: "命令与扩展服务", desc: "自定义指令与外部工具配置" },
+  { key: "plugins", label: "插件清单与设置", desc: "已装扩展与偏好，不含明文密钥" },
+  { key: "appearancePresets", label: "外观与壁纸预设", desc: "主题、液态玻璃参数与壁纸偏好" },
+  { key: "usageLedger", label: "用量统计记录", desc: "历史调用与任务执行摘要" },
+];
+
+const SYNC_CHANNEL_TABS: ReadonlyArray<{
+  readonly key: SyncChannelKey;
+  readonly label: string;
+}> = [
+  { key: "github", label: "GitHub 私有仓库" },
+  { key: "webdav", label: "WebDAV" },
+  { key: "s3", label: "S3 对象存储" },
 ];
 
 const DEFAULT_SYNC_MATRIX: SyncMatrixState = {
@@ -518,31 +543,6 @@ function SyncFieldLabel({
   );
 }
 
-function CollapsibleSyncChannelBody({
-  channel,
-  open,
-  children,
-}: {
-  readonly channel: SyncChannelKey;
-  readonly open: boolean;
-  readonly children: ReactNode;
-}) {
-  return (
-    <div
-      data-pmx-sync-channel={channel}
-      data-pmx-sync-channel-expanded={open ? "true" : "false"}
-      aria-hidden={!open}
-      inert={!open}
-      className={cn(
-        "grid transition-[grid-template-rows,opacity] duration-220 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-        open ? "grid-rows-[1fr] opacity-100" : "pointer-events-none grid-rows-[0fr] opacity-0",
-      )}
-    >
-      <div className="min-h-0 overflow-hidden">{children}</div>
-    </div>
-  );
-}
-
 function SyncChannelCardFooter({
   channel,
   isDirty,
@@ -565,7 +565,7 @@ function SyncChannelCardFooter({
   return (
     <div
       data-pmx-sync-channel-footer={channel}
-      className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5 pb-1.5"
+      className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3 pb-1"
     >
       <div className="min-w-0 flex-1 text-[11px]">
         {feedback ? (
@@ -587,10 +587,10 @@ function SyncChannelCardFooter({
         ) : isDirty ? (
           <span className="inline-flex items-center gap-1 text-warning-foreground">
             <AlertTriangleIcon className="size-3 shrink-0" />
-            <span>有未保存修改（测试连通性时将自动保存）</span>
+            <span>有未保存修改，测试连通时将自动保存。</span>
           </span>
         ) : (
-          <span className="text-muted-foreground">修改配置后可直接保存或立即测试此通道</span>
+          <span className="text-muted-foreground">修改后可保存或直接测试此通道。</span>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -622,14 +622,16 @@ function SyncChannelCardFooter({
 }
 
 /**
- * Isolated memoized E2EE Sync section (Argon2id + AEAD, WebDAV / S3 / GitHub
- * independent channel forms with contextual footer saves, inline passphrase save,
- * header matrix save, and auto-save before connectivity probe / sync).
- * Never re-renders when switching Chief Provider / Model / Reasoning Effort.
+ * Isolated memoized E2EE Sync section with 2 segmented tabs (`overview` | `channels`),
+ * strict <= 2 card layers, flattened 7-domain sync list, and GitHub/WebDAV/S3 segmented selector.
  */
 export const PrismuxSyncEngineSection = memo(function PrismuxSyncEngineSection({
   daemon,
   refreshTick,
+  daemonReady = true,
+  initialTabOverride,
+  initialChannelOverride,
+  onRefresh,
   onRender,
   onSynced,
   onError,
@@ -647,9 +649,22 @@ export const PrismuxSyncEngineSection = memo(function PrismuxSyncEngineSection({
   const [webdav, setWebdav] = useState<WebDavFormState>(initialSnapshot.webdav);
   const [s3, setS3] = useState<S3FormState>(initialSnapshot.s3);
   const [github, setGithub] = useState<GitHubFormState>(initialSnapshot.github);
+  const [activeChannel, setActiveChannel] = useState<SyncChannelKey>(
+    () =>
+      initialChannelOverride ??
+      (initialSnapshot.github.enabled
+        ? "github"
+        : initialSnapshot.webdav.enabled
+          ? "webdav"
+          : initialSnapshot.s3.enabled
+            ? "s3"
+            : "github"),
+  );
 
   const [savingScope, setSavingScope] = useState<SavingScope>(null);
-  const [syncingNow, setSyncingNow] = useState(false);
+  const [syncingDirection, setSyncingDirection] = useState<"both" | "upload" | "download" | null>(
+    null,
+  );
   const [testingScope, setTestingScope] = useState<"all" | SyncChannelKey | null>(null);
   const [syncOperationReport, setSyncOperationReport] = useState<SyncOperationReport | null>(null);
   const [topFeedback, setTopFeedback] = useState<InlineFeedback | null>(null);
@@ -663,6 +678,7 @@ export const PrismuxSyncEngineSection = memo(function PrismuxSyncEngineSection({
     github: null,
   });
 
+  const syncingNow = syncingDirection !== null;
   const isPassphraseDirty = passphraseInput.length > 0;
   const isWebdavDirty = useMemo(
     () => isWebDavDirtyAgainst(webdav, savedSnapshot.webdav),
@@ -679,6 +695,8 @@ export const PrismuxSyncEngineSection = memo(function PrismuxSyncEngineSection({
   );
   const isDirty = isPassphraseDirty || isWebdavDirty || isS3Dirty || isGithubDirty || isMatrixDirty;
   const isBusy = savingScope !== null || syncingNow || testingScope !== null;
+  const enabledChannelCount =
+    (github.enabled ? 1 : 0) + (webdav.enabled ? 1 : 0) + (s3.enabled ? 1 : 0);
 
   const hydrateSyncResponse = useCallback(
     (
@@ -1091,131 +1109,1030 @@ export const PrismuxSyncEngineSection = memo(function PrismuxSyncEngineSection({
     }
   }, [daemon, github, isDirty, onError, onStatus, persistFullConfig, s3, webdav]);
 
-  const handleTriggerSyncNow = useCallback(async () => {
-    setSyncingNow(true);
-    setTopFeedback(null);
-    const typedPassphrase = passphraseInput;
-    try {
-      const validationErr = validateEnabledSyncChannels({ webdav, s3, github });
-      if (validationErr) {
-        setSyncOperationReport({
-          kind: "sync",
-          ok: false,
-          timestamp: Date.now(),
-          message: validationErr,
-          channels: [],
-        });
-        onError?.(validationErr);
-        return;
-      }
-
-      if (isDirty) {
-        const saveRes = await persistFullConfig();
-        if (!saveRes.ok) {
+  const handleTriggerSyncNow = useCallback(
+    async (direction: "both" | "upload" | "download" = "both") => {
+      setSyncingDirection(direction);
+      setTopFeedback(null);
+      const typedPassphrase = passphraseInput;
+      try {
+        const validationErr = validateEnabledSyncChannels({ webdav, s3, github });
+        if (validationErr) {
           setSyncOperationReport({
             kind: "sync",
             ok: false,
             timestamp: Date.now(),
-            message: saveRes.error,
+            message: validationErr,
             channels: [],
           });
-          onError?.(saveRes.error);
+          onError?.(validationErr);
           return;
         }
-      }
 
-      const res = await daemon.triggerSyncNow({
-        direction: "both",
-        ...(typedPassphrase.length > 0 ? { passphrase: typedPassphrase } : {}),
-      });
-      const timestamp =
-        typeof res.syncedAt === "number"
-          ? res.syncedAt
-          : typeof res.timestamp === "number"
-            ? res.timestamp
-            : Date.now();
-      const channels = parseSyncChannelResults(res);
-      const uploaded = typeof res.uploaded === "number" ? res.uploaded : undefined;
-      const downloaded = typeof res.downloaded === "number" ? res.downloaded : undefined;
-      const conflictDetected =
-        typeof res.conflictDetected === "boolean" ? res.conflictDetected : undefined;
-      const etag = typeof res.etag === "string" ? res.etag : null;
-      const message =
-        res.message ||
-        res.error ||
-        (res.ok ? "端到端加密同步已完成。" : "加密同步未全部成功，请检查通道详情。");
-      setSyncOperationReport({
-        kind: "sync",
-        ok: Boolean(res.ok),
-        timestamp,
-        ...(uploaded !== undefined ? { uploaded } : {}),
-        ...(downloaded !== undefined ? { downloaded } : {}),
-        ...(conflictDetected !== undefined ? { conflictDetected } : {}),
-        etag,
-        message,
-        channels,
-      });
-      if (res.ok) {
-        onStatus?.(message);
-        await loadSyncStatus();
-        onSynced?.();
-      } else {
-        onError?.(message);
+        if (isDirty) {
+          const saveRes = await persistFullConfig();
+          if (!saveRes.ok) {
+            setSyncOperationReport({
+              kind: "sync",
+              ok: false,
+              timestamp: Date.now(),
+              message: saveRes.error,
+              channels: [],
+            });
+            onError?.(saveRes.error);
+            return;
+          }
+        }
+
+        const res = await daemon.triggerSyncNow({
+          direction,
+          ...(typedPassphrase.length > 0 ? { passphrase: typedPassphrase } : {}),
+        });
+        const timestamp =
+          typeof res.syncedAt === "number"
+            ? res.syncedAt
+            : typeof res.timestamp === "number"
+              ? res.timestamp
+              : Date.now();
+        const channels = parseSyncChannelResults(res);
+        const uploaded = typeof res.uploaded === "number" ? res.uploaded : undefined;
+        const downloaded = typeof res.downloaded === "number" ? res.downloaded : undefined;
+        const conflictDetected =
+          typeof res.conflictDetected === "boolean" ? res.conflictDetected : undefined;
+        const etag = typeof res.etag === "string" ? res.etag : null;
+        const message =
+          res.message ||
+          res.error ||
+          (res.ok ? "端到端加密同步已完成。" : "加密同步未全部成功，请检查通道详情。");
+        setSyncOperationReport({
+          kind: "sync",
+          ok: Boolean(res.ok),
+          timestamp,
+          ...(uploaded !== undefined ? { uploaded } : {}),
+          ...(downloaded !== undefined ? { downloaded } : {}),
+          ...(conflictDetected !== undefined ? { conflictDetected } : {}),
+          etag,
+          message,
+          channels,
+        });
+        if (res.ok) {
+          onStatus?.(message);
+          await loadSyncStatus();
+          onSynced?.();
+        } else {
+          onError?.(message);
+        }
+      } catch (err) {
+        const msgText = err instanceof Error ? err.message : String(err);
+        onError?.(msgText);
+        setSyncOperationReport({
+          kind: "sync",
+          ok: false,
+          timestamp: Date.now(),
+          message: msgText,
+          channels: [],
+        });
+      } finally {
+        setSyncingDirection(null);
       }
-    } catch (err) {
-      const msgText = err instanceof Error ? err.message : String(err);
-      onError?.(msgText);
-      setSyncOperationReport({
-        kind: "sync",
-        ok: false,
-        timestamp: Date.now(),
-        message: msgText,
-        channels: [],
-      });
-    } finally {
-      setSyncingNow(false);
+    },
+    [
+      daemon,
+      github,
+      isDirty,
+      loadSyncStatus,
+      onError,
+      onStatus,
+      onSynced,
+      passphraseInput,
+      persistFullConfig,
+      s3,
+      webdav,
+    ],
+  );
+
+  const renderActiveChannelEditor = () => {
+    if (activeChannel === "github") {
+      return (
+        <div
+          id="sync-github"
+          data-pmx-sync-channel="github"
+          data-pmx-sync-channel-expanded={github.enabled ? "true" : "false"}
+        >
+          <SettingsRow
+            title={
+              <span className="inline-flex items-center gap-2">
+                <LockIcon className="size-3.5 text-muted-foreground" />
+                <span>启用 GitHub 私有仓库</span>
+                {github.hasSecret ? (
+                  <Badge variant="outline" size="sm">
+                    已存凭据
+                  </Badge>
+                ) : null}
+                {isGithubDirty ? (
+                  <Badge variant="warning" size="sm">
+                    未保存
+                  </Badge>
+                ) : null}
+              </span>
+            }
+            description="将加密快照同步至指定私有仓库，无需安装本地 Git。"
+            control={
+              <div className="flex items-center gap-2">
+                {!github.enabled && isGithubDirty ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    data-pmx-sync-save-channel-collapsed="github"
+                    disabled={isBusy}
+                    onClick={() => {
+                      void handleSaveChannel("github");
+                    }}
+                  >
+                    <SaveIcon className="size-3" />
+                    {savingScope === "github" ? "保存中…" : "保存关闭"}
+                  </Button>
+                ) : null}
+                <Switch
+                  aria-label="启用 GitHub 同步通道"
+                  data-pmx-sync-channel-switch="github"
+                  checked={github.enabled}
+                  onCheckedChange={(checked) => {
+                    setGithub((prev) => ({ ...prev, enabled: Boolean(checked) }));
+                    setSingleChannelFeedback("github", null);
+                  }}
+                />
+              </div>
+            }
+          >
+            {github.enabled ? (
+              <div className="mt-3 space-y-3 pb-1">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <SyncFieldLabel label="Owner" required>
+                    <Input
+                      nativeInput
+                      size="sm"
+                      data-pmx-sync-input="github.owner"
+                      placeholder="GitHub 用户名或组织"
+                      value={github.owner}
+                      onChange={(event) => {
+                        setGithub((prev) => ({ ...prev, owner: event.target.value }));
+                        setSingleChannelFeedback("github", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                  <SyncFieldLabel label="私有仓库名" required>
+                    <Input
+                      nativeInput
+                      size="sm"
+                      data-pmx-sync-input="github.repo"
+                      placeholder="例如 prismux-vault"
+                      value={github.repo}
+                      onChange={(event) => {
+                        setGithub((prev) => ({ ...prev, repo: event.target.value }));
+                        setSingleChannelFeedback("github", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                  <SyncFieldLabel label="分支">
+                    <Input
+                      nativeInput
+                      size="sm"
+                      data-pmx-sync-input="github.branch"
+                      placeholder="默认 main"
+                      value={github.branch}
+                      onChange={(event) => {
+                        setGithub((prev) => ({ ...prev, branch: event.target.value }));
+                        setSingleChannelFeedback("github", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                  <SyncFieldLabel label="密文文件路径">
+                    <Input
+                      nativeInput
+                      size="sm"
+                      data-pmx-sync-input="github.filePath"
+                      placeholder="prismux-vault.prismux-backup"
+                      value={github.filePath}
+                      onChange={(event) => {
+                        setGithub((prev) => ({ ...prev, filePath: event.target.value }));
+                        setSingleChannelFeedback("github", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                  <SyncFieldLabel label="Personal Access Token" className="sm:col-span-2">
+                    <Input
+                      nativeInput
+                      type="password"
+                      size="sm"
+                      data-pmx-sync-input="github.token"
+                      autoComplete="new-password"
+                      placeholder={
+                        github.hasSecret
+                          ? "访问令牌已加密保存（留空不变）"
+                          : "填写具有目标仓库读写权限的访问令牌"
+                      }
+                      value={github.token}
+                      onChange={(event) => {
+                        setGithub((prev) => ({ ...prev, token: event.target.value }));
+                        setSingleChannelFeedback("github", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                </div>
+                <SyncChannelCardFooter
+                  channel="github"
+                  isDirty={isGithubDirty}
+                  savingThisChannel={savingScope === "github"}
+                  testingThisChannel={testingScope === "github"}
+                  isBusy={isBusy}
+                  feedback={channelFeedback.github}
+                  onTest={() => {
+                    void handleTestSingleChannel("github");
+                  }}
+                  onSave={() => {
+                    void handleSaveChannel("github");
+                  }}
+                />
+              </div>
+            ) : null}
+          </SettingsRow>
+        </div>
+      );
     }
-  }, [
-    daemon,
-    github,
-    isDirty,
-    loadSyncStatus,
-    onError,
-    onStatus,
-    onSynced,
-    passphraseInput,
-    persistFullConfig,
-    s3,
-    webdav,
-  ]);
+
+    if (activeChannel === "webdav") {
+      return (
+        <div
+          id="sync-webdav"
+          data-pmx-sync-channel="webdav"
+          data-pmx-sync-channel-expanded={webdav.enabled ? "true" : "false"}
+        >
+          <SettingsRow
+            title={
+              <span className="inline-flex items-center gap-2">
+                <CloudIcon className="size-3.5 text-muted-foreground" />
+                <span>启用 WebDAV 通道</span>
+                {webdav.hasSecret ? (
+                  <Badge variant="outline" size="sm">
+                    已存密码
+                  </Badge>
+                ) : null}
+                {isWebdavDirty ? (
+                  <Badge variant="warning" size="sm">
+                    未保存
+                  </Badge>
+                ) : null}
+              </span>
+            }
+            description="支持坚果云、Nextcloud 与 Alist 等标准 WebDAV 网盘。"
+            control={
+              <div className="flex items-center gap-2">
+                {!webdav.enabled && isWebdavDirty ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    data-pmx-sync-save-channel-collapsed="webdav"
+                    disabled={isBusy}
+                    onClick={() => {
+                      void handleSaveChannel("webdav");
+                    }}
+                  >
+                    <SaveIcon className="size-3" />
+                    {savingScope === "webdav" ? "保存中…" : "保存关闭"}
+                  </Button>
+                ) : null}
+                <Switch
+                  aria-label="启用 WebDAV 同步通道"
+                  data-pmx-sync-channel-switch="webdav"
+                  checked={webdav.enabled}
+                  onCheckedChange={(checked) => {
+                    setWebdav((prev) => ({ ...prev, enabled: Boolean(checked) }));
+                    setSingleChannelFeedback("webdav", null);
+                  }}
+                />
+              </div>
+            }
+          >
+            {webdav.enabled ? (
+              <div className="mt-3 space-y-3 pb-1">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <SyncFieldLabel label="Endpoint URL" required>
+                    <Input
+                      nativeInput
+                      size="sm"
+                      data-pmx-sync-input="webdav.endpointUrl"
+                      placeholder="https://dav.example.com/dav"
+                      value={webdav.endpointUrl}
+                      onChange={(event) => {
+                        setWebdav((prev) => ({ ...prev, endpointUrl: event.target.value }));
+                        setSingleChannelFeedback("webdav", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                  <SyncFieldLabel label="远端路径">
+                    <Input
+                      nativeInput
+                      size="sm"
+                      data-pmx-sync-input="webdav.remotePath"
+                      placeholder="/prismux/vault.prismux-backup"
+                      value={webdav.remotePath}
+                      onChange={(event) => {
+                        setWebdav((prev) => ({ ...prev, remotePath: event.target.value }));
+                        setSingleChannelFeedback("webdav", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                  <SyncFieldLabel label="用户名">
+                    <Input
+                      nativeInput
+                      size="sm"
+                      data-pmx-sync-input="webdav.username"
+                      placeholder="WebDAV 登录账号"
+                      value={webdav.username}
+                      onChange={(event) => {
+                        setWebdav((prev) => ({ ...prev, username: event.target.value }));
+                        setSingleChannelFeedback("webdav", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                  <SyncFieldLabel label="应用专用密码">
+                    <Input
+                      nativeInput
+                      type="password"
+                      size="sm"
+                      data-pmx-sync-input="webdav.password"
+                      autoComplete="new-password"
+                      placeholder={webdav.hasSecret ? "密码已加密保存（留空不变）" : "输入应用专用密码"}
+                      value={webdav.password}
+                      onChange={(event) => {
+                        setWebdav((prev) => ({ ...prev, password: event.target.value }));
+                        setSingleChannelFeedback("webdav", null);
+                      }}
+                    />
+                  </SyncFieldLabel>
+                </div>
+                <SyncChannelCardFooter
+                  channel="webdav"
+                  isDirty={isWebdavDirty}
+                  savingThisChannel={savingScope === "webdav"}
+                  testingThisChannel={testingScope === "webdav"}
+                  isBusy={isBusy}
+                  feedback={channelFeedback.webdav}
+                  onTest={() => {
+                    void handleTestSingleChannel("webdav");
+                  }}
+                  onSave={() => {
+                    void handleSaveChannel("webdav");
+                  }}
+                />
+              </div>
+            ) : null}
+          </SettingsRow>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        id="sync-s3"
+        data-pmx-sync-channel="s3"
+        data-pmx-sync-channel-expanded={s3.enabled ? "true" : "false"}
+      >
+        <SettingsRow
+          title={
+            <span className="inline-flex items-center gap-2">
+              <CloudIcon className="size-3.5 text-muted-foreground" />
+              <span>启用 S3 对象存储</span>
+              {s3.hasSecret ? (
+                <Badge variant="outline" size="sm">
+                  已存密钥
+                </Badge>
+              ) : null}
+              {isS3Dirty ? (
+                <Badge variant="warning" size="sm">
+                  未保存
+                </Badge>
+              ) : null}
+            </span>
+          }
+          description="兼容 Cloudflare R2、AWS S3、阿里云 OSS 与自建对象存储。"
+          control={
+            <div className="flex items-center gap-2">
+              {!s3.enabled && isS3Dirty ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  data-pmx-sync-save-channel-collapsed="s3"
+                  disabled={isBusy}
+                  onClick={() => {
+                    void handleSaveChannel("s3");
+                  }}
+                >
+                  <SaveIcon className="size-3" />
+                  {savingScope === "s3" ? "保存中…" : "保存关闭"}
+                </Button>
+              ) : null}
+              <Switch
+                aria-label="启用 S3 同步通道"
+                data-pmx-sync-channel-switch="s3"
+                checked={s3.enabled}
+                onCheckedChange={(checked) => {
+                  setS3((prev) => ({ ...prev, enabled: Boolean(checked) }));
+                  setSingleChannelFeedback("s3", null);
+                }}
+              />
+            </div>
+          }
+        >
+          {s3.enabled ? (
+            <div className="mt-3 space-y-3 pb-1">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                <Switch
+                  size="sm"
+                  checked={s3.forcePathStyle}
+                  onCheckedChange={(checked) => {
+                    setS3((prev) => ({ ...prev, forcePathStyle: Boolean(checked) }));
+                    setSingleChannelFeedback("s3", null);
+                  }}
+                />
+                使用路径风格地址（Path-Style）
+              </label>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <SyncFieldLabel label="Endpoint URL" required>
+                  <Input
+                    nativeInput
+                    size="sm"
+                    data-pmx-sync-input="s3.endpointUrl"
+                    placeholder="https://s3.example.com"
+                    value={s3.endpointUrl}
+                    onChange={(event) => {
+                      setS3((prev) => ({ ...prev, endpointUrl: event.target.value }));
+                      setSingleChannelFeedback("s3", null);
+                    }}
+                  />
+                </SyncFieldLabel>
+                <SyncFieldLabel label="Region">
+                  <Input
+                    nativeInput
+                    size="sm"
+                    data-pmx-sync-input="s3.region"
+                    placeholder="auto / us-east-1"
+                    value={s3.region}
+                    onChange={(event) => {
+                      setS3((prev) => ({ ...prev, region: event.target.value }));
+                      setSingleChannelFeedback("s3", null);
+                    }}
+                  />
+                </SyncFieldLabel>
+                <SyncFieldLabel label="Bucket" required>
+                  <Input
+                    nativeInput
+                    size="sm"
+                    data-pmx-sync-input="s3.bucket"
+                    placeholder="存储桶名称"
+                    value={s3.bucket}
+                    onChange={(event) => {
+                      setS3((prev) => ({ ...prev, bucket: event.target.value }));
+                      setSingleChannelFeedback("s3", null);
+                    }}
+                  />
+                </SyncFieldLabel>
+                <SyncFieldLabel label="Access Key ID">
+                  <Input
+                    nativeInput
+                    size="sm"
+                    data-pmx-sync-input="s3.accessKeyId"
+                    placeholder="输入 Access Key ID"
+                    value={s3.accessKeyId}
+                    onChange={(event) => {
+                      setS3((prev) => ({ ...prev, accessKeyId: event.target.value }));
+                      setSingleChannelFeedback("s3", null);
+                    }}
+                  />
+                </SyncFieldLabel>
+                <SyncFieldLabel label="Secret Access Key" className="sm:col-span-2">
+                  <Input
+                    nativeInput
+                    type="password"
+                    size="sm"
+                    data-pmx-sync-input="s3.secretAccessKey"
+                    autoComplete="new-password"
+                    placeholder={
+                      s3.hasSecret ? "密钥已加密保存（留空不变）" : "输入 Secret Access Key"
+                    }
+                    value={s3.secretAccessKey}
+                    onChange={(event) => {
+                      setS3((prev) => ({ ...prev, secretAccessKey: event.target.value }));
+                      setSingleChannelFeedback("s3", null);
+                    }}
+                  />
+                </SyncFieldLabel>
+              </div>
+              <SyncChannelCardFooter
+                channel="s3"
+                isDirty={isS3Dirty}
+                savingThisChannel={savingScope === "s3"}
+                testingThisChannel={testingScope === "s3"}
+                isBusy={isBusy}
+                feedback={channelFeedback.s3}
+                onTest={() => {
+                  void handleTestSingleChannel("s3");
+                }}
+                onSave={() => {
+                  void handleSaveChannel("s3");
+                }}
+              />
+            </div>
+          ) : null}
+        </SettingsRow>
+      </div>
+    );
+  };
+
+  const tabs: SettingsSegmentedTabItem[] = [
+    {
+      id: "overview",
+      label: "同步概览与策略",
+      hashAnchors: ["prismux-sync", "prismux-e2ee-sync", "sync-overview", "sync-matrix"],
+      content: (
+        <>
+          <SettingsSection id="prismux-e2ee-sync" title="同步概览">
+            <div
+              id="sync-overview"
+              className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-5"
+            >
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <span className="font-medium text-foreground">
+                  {hasPassphrase ? "端到端加密已就绪" : "尚未设置主加密口令"}
+                </span>
+                <span className="text-border" aria-hidden="true">
+                  ·
+                </span>
+                <span className="text-muted-foreground">
+                  {enabledChannelCount > 0 ? `已启用 ${enabledChannelCount} 个云端通道` : "暂未启用云端通道"}
+                </span>
+                {syncOperationReport ? (
+                  <>
+                    <span className="text-border" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      上次操作 {formatOperationTimestamp(syncOperationReport.timestamp)}
+                    </span>
+                  </>
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  data-pmx-sync-upload=""
+                  disabled={isBusy}
+                  onClick={() => {
+                    void handleTriggerSyncNow("upload");
+                  }}
+                >
+                  <UploadIcon className="size-3.5" />
+                  {syncingDirection === "upload" ? "上传中…" : "上传"}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  data-pmx-sync-download=""
+                  disabled={isBusy}
+                  onClick={() => {
+                    void handleTriggerSyncNow("download");
+                  }}
+                >
+                  <DownloadIcon className="size-3.5" />
+                  {syncingDirection === "download" ? "下载中…" : "下载"}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  data-pmx-sync-test-all=""
+                  disabled={isBusy}
+                  onClick={() => {
+                    void handleTestSyncConnection();
+                  }}
+                >
+                  <WifiIcon className="size-3.5" />
+                  {testingScope === "all" ? "检测中…" : "测试连通"}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  data-pmx-sync-now=""
+                  disabled={isBusy}
+                  onClick={() => {
+                    void handleTriggerSyncNow("both");
+                  }}
+                >
+                  <RefreshCwIcon className={syncingDirection === "both" ? "size-3.5 animate-spin" : "size-3.5"} />
+                  {syncingDirection === "both" ? "同步中…" : "立即同步"}
+                </Button>
+              </div>
+            </div>
+
+            {topFeedback ? (
+              <div
+                data-pmx-sync-save-feedback={topFeedback.ok ? "success" : "error"}
+                className={cn(
+                  "flex items-center gap-2 border-t border-border/50 px-4 py-2.5 text-xs sm:px-5",
+                  topFeedback.ok
+                    ? "bg-success/[0.06] text-success-foreground"
+                    : "bg-destructive/[0.06] text-destructive",
+                )}
+              >
+                {topFeedback.ok ? (
+                  <CheckCircle2Icon className="size-3.5 shrink-0" />
+                ) : (
+                  <XCircleIcon className="size-3.5 shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 break-all">{topFeedback.message}</span>
+              </div>
+            ) : null}
+
+            {syncOperationReport ? (
+              <div
+                data-sync-operation-kind={syncOperationReport.kind}
+                className={cn(
+                  "space-y-2 border-t border-border/50 px-4 py-3 text-xs sm:px-5",
+                  syncOperationReport.ok ? "bg-emerald-500/[0.045]" : "bg-destructive/[0.05]",
+                )}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-medium text-foreground">
+                    {syncOperationReport.ok ? (
+                      <CheckCircle2Icon className="size-3.5 text-emerald-500" />
+                    ) : (
+                      <XCircleIcon className="size-3.5 text-destructive" />
+                    )}
+                    <span>
+                      {syncOperationReport.kind === "sync" ? "同步结果" : "连通性结果"}
+                    </span>
+                    <Badge variant={syncOperationReport.ok ? "success" : "error"} size="sm">
+                      {syncOperationReport.ok ? "成功" : "异常"}
+                    </Badge>
+                    {syncOperationReport.conflictDetected ? (
+                      <Badge variant="warning" size="sm">
+                        检测到并发冲突
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                    {formatOperationTimestamp(syncOperationReport.timestamp)}
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-foreground/85">{syncOperationReport.message}</p>
+
+                {syncOperationReport.kind === "sync" &&
+                (syncOperationReport.uploaded !== undefined ||
+                  syncOperationReport.downloaded !== undefined) ? (
+                  <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] tabular-nums text-muted-foreground">
+                    {syncOperationReport.uploaded !== undefined ? (
+                      <span>上传 {syncOperationReport.uploaded}</span>
+                    ) : null}
+                    {syncOperationReport.downloaded !== undefined ? (
+                      <span>下载 {syncOperationReport.downloaded}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {syncOperationReport.channels.length > 0 ? (
+                  <div className="divide-y divide-border/40 border-t border-border/40 pt-1">
+                    {syncOperationReport.channels.map((ch) => (
+                      <div
+                        key={ch.channel}
+                        className="flex flex-wrap items-center justify-between gap-2 py-1.5 text-[11px]"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="font-medium text-foreground">
+                            {channelDisplayName(ch.channel)}
+                          </span>
+                          <Badge
+                            variant={!ch.enabled ? "secondary" : ch.ok ? "success" : "error"}
+                            size="sm"
+                          >
+                            {!ch.enabled ? "未启用" : ch.ok ? "正常" : "失败"}
+                          </Badge>
+                          {ch.error || ch.message ? (
+                            <span className="truncate text-muted-foreground">
+                              {ch.error ?? ch.message}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 font-mono text-[10.5px] tabular-nums text-muted-foreground">
+                          {ch.latencyMs !== null ? <span>{ch.latencyMs} ms</span> : null}
+                          {ch.uploaded !== undefined ? <span>↑{ch.uploaded}</span> : null}
+                          {ch.downloaded !== undefined ? <span>↓{ch.downloaded}</span> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </SettingsSection>
+
+          {/* Flattened 7-domain sync switches (strictly <= 2 card layers, zero bordered sub-boxes) */}
+          <SettingsSection
+            id="sync-matrix"
+            title="同步内容策略"
+            headerAction={
+              isMatrixDirty || matrixFeedback ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {matrixFeedback ? (
+                    <span
+                      data-pmx-sync-matrix-feedback={matrixFeedback.ok ? "success" : "error"}
+                      className={cn(
+                        "inline-flex items-center gap-1 text-xs",
+                        matrixFeedback.ok ? "text-success-foreground" : "text-destructive",
+                      )}
+                    >
+                      {matrixFeedback.ok ? (
+                        <CheckCircle2Icon className="size-3.5 shrink-0" />
+                      ) : (
+                        <AlertTriangleIcon className="size-3.5 shrink-0" />
+                      )}
+                      <span>{matrixFeedback.message}</span>
+                    </span>
+                  ) : null}
+                  {isMatrixDirty ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      data-pmx-sync-save-matrix=""
+                      disabled={isBusy}
+                      onClick={() => {
+                        void handleSaveSyncMatrix();
+                      }}
+                    >
+                      <SaveIcon className="size-3.5" />
+                      {savingScope === "matrix" ? "保存中…" : "保存策略"}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : undefined
+            }
+          >
+            <div data-pmx-sync-matrix-list="" className="divide-y divide-border/50">
+              {SYNC_DOMAIN_META.map((meta) => {
+                const entry = syncMatrix[meta.key];
+                return (
+                  <div
+                    key={meta.key}
+                    className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-foreground">{meta.label}</div>
+                      <div className="text-xs text-muted-foreground">{meta.desc}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-5 text-xs text-muted-foreground">
+                      <label className="inline-flex cursor-pointer items-center gap-2">
+                        <Switch
+                          size="sm"
+                          data-pmx-sync-matrix-switch={`${meta.key}.upload`}
+                          checked={entry.upload}
+                          onCheckedChange={(checked) => {
+                            setSyncMatrix((prev) => ({
+                              ...prev,
+                              [meta.key]: { ...prev[meta.key], upload: Boolean(checked) },
+                            }));
+                            setMatrixFeedback(null);
+                          }}
+                        />
+                        上传
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-2">
+                        <Switch
+                          size="sm"
+                          data-pmx-sync-matrix-switch={`${meta.key}.download`}
+                          checked={entry.download}
+                          onCheckedChange={(checked) => {
+                            setSyncMatrix((prev) => ({
+                              ...prev,
+                              [meta.key]: { ...prev[meta.key], download: Boolean(checked) },
+                            }));
+                            setMatrixFeedback(null);
+                          }}
+                        />
+                        下载
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </SettingsSection>
+        </>
+      ),
+    },
+    {
+      id: "channels",
+      label: "云端通道与密钥",
+      ...(enabledChannelCount > 0 ? { badge: enabledChannelCount } : {}),
+      hashAnchors: [
+        "sync-channels",
+        "sync-passphrase",
+        "sync-portable",
+        "sync-github",
+        "sync-webdav",
+        "sync-s3",
+      ],
+      content: (
+        <>
+          <SettingsSection id="sync-channels" title="云端通道配置">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/50 px-4 py-3 sm:px-5">
+              <div
+                role="tablist"
+                aria-label="选择云端同步通道"
+                data-slot="tabs-list"
+                className="inline-flex flex-wrap items-center gap-1 rounded-full border border-border/60 bg-muted/40 p-1"
+              >
+                {SYNC_CHANNEL_TABS.map((ch) => {
+                  const selected = activeChannel === ch.key;
+                  const enabled =
+                    ch.key === "github"
+                      ? github.enabled
+                      : ch.key === "webdav"
+                        ? webdav.enabled
+                        : s3.enabled;
+                  const dirty =
+                    ch.key === "github"
+                      ? isGithubDirty
+                      : ch.key === "webdav"
+                        ? isWebdavDirty
+                        : isS3Dirty;
+                  return (
+                    <button
+                      key={ch.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      data-slot="tabs-trigger"
+                      data-active={selected ? "" : undefined}
+                      data-pmx-sync-channel-tab={ch.key}
+                      onClick={() => setActiveChannel(ch.key)}
+                      className={cn(
+                        "inline-flex min-h-7 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                        selected
+                          ? "bg-background font-semibold text-foreground shadow-xs"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <span>{ch.label}</span>
+                      {enabled ? (
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-emerald-500"
+                        />
+                      ) : null}
+                      {dirty ? (
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-amber-500"
+                        />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="text-xs text-muted-foreground">
+                支持同时启用多个通道互为备份。
+              </span>
+            </div>
+
+            {renderActiveChannelEditor()}
+          </SettingsSection>
+
+          <SettingsSection id="sync-passphrase" title="密钥与存储模式">
+            <SettingsRow
+              title="主加密口令"
+              description="所有同步数据会在本地加密后再上传，留空则保持当前口令不变。"
+              status={
+                passphraseFeedback ? (
+                  <span
+                    data-pmx-sync-passphrase-feedback={passphraseFeedback.ok ? "success" : "error"}
+                    className={cn(
+                      "inline-flex items-center gap-1 text-[11px]",
+                      passphraseFeedback.ok ? "text-success-foreground" : "text-destructive",
+                    )}
+                  >
+                    {passphraseFeedback.ok ? (
+                      <CheckCircle2Icon className="size-3 shrink-0" />
+                    ) : (
+                      <AlertTriangleIcon className="size-3 shrink-0" />
+                    )}
+                    <span>{passphraseFeedback.message}</span>
+                  </span>
+                ) : syncConfigPath ? (
+                  <span className="font-mono text-[11px]">{syncConfigPath}</span>
+                ) : undefined
+              }
+              control={
+                <div className="flex w-full items-center gap-2 sm:w-auto">
+                  <KeyRoundIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <Input
+                    nativeInput
+                    type="password"
+                    size="sm"
+                    className={`${SETTINGS_CONTROL_LG} max-w-full`}
+                    data-pmx-sync-passphrase-input=""
+                    autoComplete="new-password"
+                    placeholder={hasPassphrase ? "已保存（输入新口令以更新）" : "输入主加密口令"}
+                    value={passphraseInput}
+                    onChange={(event) => {
+                      setPassphraseInput(event.target.value);
+                      setPassphraseFeedback(null);
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={passphraseInput.length > 0 ? "default" : "outline"}
+                    data-pmx-sync-save-passphrase=""
+                    disabled={passphraseInput.length === 0 || isBusy}
+                    onClick={() => {
+                      void handleSavePassphrase();
+                    }}
+                  >
+                    <SaveIcon className="size-3.5" />
+                    {savingScope === "passphrase" ? "保存中…" : "保存口令"}
+                  </Button>
+                </div>
+              }
+            />
+
+            <SettingsRow
+              id="sync-portable"
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  <HardDriveIcon className="size-3.5 text-muted-foreground" />
+                  <span>便携模式</span>
+                </span>
+              }
+              description={
+                syncPortable
+                  ? "当前数据与配置集中保存在程序同级 data 目录中，便于随身携带。"
+                  : "当前使用系统标准用户目录保存配置，在程序同级新建 data 目录即可启用便携模式。"
+              }
+              control={
+                <Badge variant={syncPortable ? "info" : "outline"} size="sm">
+                  {syncPortable ? "便携模式已启用" : "标准目录"}
+                </Badge>
+              }
+            />
+          </SettingsSection>
+        </>
+      ),
+    },
+  ];
 
   return (
-    <SettingsSection
-      id="prismux-e2ee-sync"
-      title="Prismux 端到端加密同步（Argon2id + AEAD）"
-      headerAction={
-        <div className="flex items-center gap-1.5">
-          <Badge variant={hasPassphrase ? "success" : "warning"}>
-            {hasPassphrase ? "主口令已密封" : "尚未设置主口令"}
-          </Badge>
-          {syncPortable ? <Badge variant="info">便携模式 data/</Badge> : null}
-        </div>
-      }
-    >
-      <p className="px-4 py-2.5 text-xs text-muted-foreground">
-        本地加密密封后再上传至 WebDAV / S3 / GitHub 独立通道；支持 If-Match 乐观锁与 60s 停滞看门狗。敏感口令与 Token 仅支持只写更新，绝不回显明文。
-      </p>
-
-      {/* Top Row: Instant Sync & Connectivity Probe (+ Dirty Save-All Pill) */}
-      <SettingsRow
-        title="即时同步与通道连通性"
-        description="手动执行一次端到端加密同步，或对已启用的 WebDAV / S3 / GitHub 通道进行脱敏连通性探测（如有未保存修改将自动保存后再执行）。"
-        control={
+    <div className="space-y-6">
+      {/* Single clean borderless page header (<= 2 status badges) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+        <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
+            <CloudIcon className="size-4 text-primary" />
+            <h1 className="text-base font-semibold tracking-tight text-foreground">
+              Prismux 端到端加密同步
+            </h1>
+            <Badge variant={hasPassphrase ? "success" : "warning"} size="sm">
+              {hasPassphrase ? "主口令已密封" : "未设主口令"}
+            </Badge>
+            <Badge
+              variant={syncPortable ? "info" : daemonReady ? "success" : "warning"}
+              size="sm"
+            >
+              {syncPortable ? "便携模式" : daemonReady ? "服务在线" : "服务未连接"}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            在本地加密记忆与配置后同步到你的私有云端，明文口令与令牌绝不外泄。
+          </p>
+        </div>
+      </div>
+
+      <SettingsSegmentedTabs
+        tabs={tabs}
+        defaultTabId={initialTabOverride ?? "overview"}
+        ariaLabel="加密同步设置分区"
+        trailingAction={
+          <div className="flex items-center gap-2">
             {isDirty ? (
               <Button
                 type="button"
-                size="sm"
+                size="xs"
                 variant="outline"
                 data-pmx-sync-save-all=""
                 data-pmx-sync-dirty="true"
@@ -1226,704 +2143,18 @@ export const PrismuxSyncEngineSection = memo(function PrismuxSyncEngineSection({
                 }}
               >
                 <SaveIcon className="size-3.5" />
-                {savingScope === "all" ? "正在保存…" : "有未保存修改 · 保存全部"}
+                {savingScope === "all" ? "保存中…" : "保存全部"}
               </Button>
             ) : null}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              data-pmx-sync-test-all=""
-              disabled={isBusy}
-              onClick={() => {
-                void handleTestSyncConnection();
-              }}
-            >
-              <WifiIcon className="size-3.5" />
-              {testingScope === "all" ? "检测连通中…" : "测试通道连通性"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              data-pmx-sync-now=""
-              disabled={isBusy}
-              onClick={() => {
-                void handleTriggerSyncNow();
-              }}
-            >
-              <RefreshCwIcon className={syncingNow ? "size-3.5 animate-spin" : "size-3.5"} />
-              {syncingNow ? "加密同步中…" : "立即加密同步"}
-            </Button>
-          </div>
-        }
-      >
-        {topFeedback ? (
-          <div
-            data-pmx-sync-save-feedback={topFeedback.ok ? "success" : "error"}
-            className={cn(
-              "mt-2 mb-1.5 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs",
-              topFeedback.ok
-                ? "border-success/35 bg-success/10 text-success-foreground"
-                : "border-destructive/40 bg-destructive/10 text-destructive",
-            )}
-          >
-            {topFeedback.ok ? (
-              <CheckCircle2Icon className="size-3.5 shrink-0" />
-            ) : (
-              <XCircleIcon className="size-3.5 shrink-0" />
-            )}
-            <span className="min-w-0 flex-1 break-all">{topFeedback.message}</span>
-          </div>
-        ) : null}
-
-        {syncOperationReport ? (
-          <div
-            data-sync-operation-kind={syncOperationReport.kind}
-            className={
-              syncOperationReport.ok
-                ? "mt-2.5 mb-2 space-y-2 rounded-lg border border-emerald-500/35 bg-emerald-500/5 px-3 py-2.5 text-xs"
-                : "mt-2.5 mb-2 space-y-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-xs"
-            }
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 font-medium text-foreground">
-                {syncOperationReport.ok ? (
-                  <CheckCircle2Icon className="size-3.5 text-emerald-500" />
-                ) : (
-                  <XCircleIcon className="size-3.5 text-destructive" />
-                )}
-                <span>
-                  {syncOperationReport.kind === "sync" ? "加密同步结果" : "通道连通性结果"}
-                </span>
-                <Badge variant={syncOperationReport.ok ? "success" : "error"} className="text-[10px]">
-                  {syncOperationReport.ok ? "成功" : "异常"}
-                </Badge>
-                {syncOperationReport.conflictDetected ? (
-                  <Badge variant="warning" className="text-[10px]">
-                    检测到并发冲突
-                  </Badge>
-                ) : null}
-              </div>
-              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                {formatOperationTimestamp(syncOperationReport.timestamp)}
-              </span>
-            </div>
-
-            <p className="text-[11px] text-foreground/90">{syncOperationReport.message}</p>
-
-            {syncOperationReport.kind === "sync" &&
-            (syncOperationReport.uploaded !== undefined ||
-              syncOperationReport.downloaded !== undefined ||
-              syncOperationReport.etag) ? (
-              <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums text-muted-foreground">
-                {syncOperationReport.uploaded !== undefined ? (
-                  <span>上传：{syncOperationReport.uploaded}</span>
-                ) : null}
-                {syncOperationReport.downloaded !== undefined ? (
-                  <span>下载：{syncOperationReport.downloaded}</span>
-                ) : null}
-                {syncOperationReport.etag ? (
-                  <span className="truncate">ETag：{syncOperationReport.etag}</span>
-                ) : null}
-              </div>
+            {onRefresh ? (
+              <Button type="button" size="xs" variant="outline" onClick={onRefresh}>
+                <RefreshCwIcon className="size-3.5" />
+                刷新状态
+              </Button>
             ) : null}
-
-            {syncOperationReport.channels.length > 0 ? (
-              <div className="grid gap-1.5 sm:grid-cols-3">
-                {syncOperationReport.channels.map((ch) => (
-                  <div
-                    key={ch.channel}
-                    className="rounded-md border border-border/60 bg-background/65 px-2.5 py-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="font-medium text-foreground">
-                        {channelDisplayName(ch.channel)}
-                      </span>
-                      <Badge
-                        variant={!ch.enabled ? "secondary" : ch.ok ? "success" : "error"}
-                        className="text-[10px]"
-                      >
-                        {!ch.enabled ? "未启用" : ch.ok ? "正常" : "失败"}
-                      </Badge>
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
-                      {ch.latencyMs !== null ? <span>{ch.latencyMs} ms</span> : null}
-                      {ch.uploaded !== undefined ? <span>↑{ch.uploaded}</span> : null}
-                      {ch.downloaded !== undefined ? <span>↓{ch.downloaded}</span> : null}
-                    </div>
-                    {ch.error || ch.message ? (
-                      <p className="mt-0.5 break-all text-[10px] text-muted-foreground">
-                        {ch.error ?? ch.message}
-                      </p>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </SettingsRow>
-
-      {/* Master Encryption Passphrase with Inline Save */}
-      <SettingsRow
-        title="端到端主加密口令（Passphrase）"
-        description={
-          syncConfigPath
-            ? `配置文件：${syncConfigPath}（留空保存将保留现有加密口令）`
-            : "用于派生 Argon2id 密封密钥，留空保存将保持现有口令不变。"
-        }
-        status={
-          passphraseFeedback ? (
-            <span
-              data-pmx-sync-passphrase-feedback={passphraseFeedback.ok ? "success" : "error"}
-              className={cn(
-                "inline-flex items-center gap-1 text-[11px]",
-                passphraseFeedback.ok
-                  ? "text-success-foreground"
-                  : "text-destructive",
-              )}
-            >
-              {passphraseFeedback.ok ? (
-                <CheckCircle2Icon className="size-3 shrink-0" />
-              ) : (
-                <AlertTriangleIcon className="size-3 shrink-0" />
-              )}
-              <span>{passphraseFeedback.message}</span>
-            </span>
-          ) : undefined
-        }
-        control={
-          <div className="flex w-full items-center gap-2 sm:w-96">
-            <KeyRoundIcon className="size-4 shrink-0 text-muted-foreground" />
-            <Input
-              nativeInput
-              type="password"
-              size="sm"
-              data-pmx-sync-passphrase-input=""
-              autoComplete="new-password"
-              placeholder={hasPassphrase ? "已保存（输入新口令以更新）" : "输入端到端主口令"}
-              value={passphraseInput}
-              onChange={(event) => {
-                setPassphraseInput(event.target.value);
-                setPassphraseFeedback(null);
-              }}
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant={passphraseInput.length > 0 ? "default" : "outline"}
-              data-pmx-sync-save-passphrase=""
-              disabled={passphraseInput.length === 0 || isBusy}
-              onClick={() => {
-                void handleSavePassphrase();
-              }}
-            >
-              <SaveIcon className="size-3.5" />
-              {savingScope === "passphrase" ? "保存中…" : "保存口令"}
-            </Button>
           </div>
         }
       />
-
-      {/* Independent Channel 1: WebDAV */}
-      <SettingsRow
-        className={webdav.enabled ? undefined : "py-3"}
-        title={
-          <span className="inline-flex items-center gap-2">
-            <CloudIcon className="size-3.5 text-muted-foreground" />
-            <span>WebDAV 通道</span>
-            {webdav.hasSecret ? <Badge variant="outline">已保存密码</Badge> : null}
-            {isWebdavDirty ? (
-              <Badge variant="warning" size="sm">
-                未保存
-              </Badge>
-            ) : null}
-          </span>
-        }
-        description="兼容坚果云 / Nextcloud / Alist 等支持 ETag / If-Match 的 WebDAV 服务。"
-        control={
-          <div className="flex items-center gap-2">
-            {!webdav.enabled && isWebdavDirty ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                data-pmx-sync-save-channel-collapsed="webdav"
-                disabled={isBusy}
-                onClick={() => {
-                  void handleSaveChannel("webdav");
-                }}
-              >
-                <SaveIcon className="size-3" />
-                {savingScope === "webdav" ? "保存中…" : "保存关闭"}
-              </Button>
-            ) : null}
-            <Switch
-              aria-label="启用 WebDAV 同步通道"
-              data-pmx-sync-channel-switch="webdav"
-              checked={webdav.enabled}
-              onCheckedChange={(checked) => {
-                setWebdav((prev) => ({ ...prev, enabled: Boolean(checked) }));
-                setSingleChannelFeedback("webdav", null);
-              }}
-            />
-          </div>
-        }
-      >
-        <CollapsibleSyncChannelBody channel="webdav" open={webdav.enabled}>
-          <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
-            <SyncFieldLabel label="Endpoint URL" required>
-              <Input
-                nativeInput
-                size="sm"
-                data-pmx-sync-input="webdav.endpointUrl"
-                placeholder="例如 https://dav.example.com/dav"
-                value={webdav.endpointUrl}
-                onChange={(event) => {
-                  setWebdav((prev) => ({ ...prev, endpointUrl: event.target.value }));
-                  setSingleChannelFeedback("webdav", null);
-                }}
-              />
-            </SyncFieldLabel>
-            <SyncFieldLabel label="远端路径">
-              <Input
-                nativeInput
-                size="sm"
-                data-pmx-sync-input="webdav.remotePath"
-                placeholder="例如 /prismux/vault.prismux-backup"
-                value={webdav.remotePath}
-                onChange={(event) => {
-                  setWebdav((prev) => ({ ...prev, remotePath: event.target.value }));
-                  setSingleChannelFeedback("webdav", null);
-                }}
-              />
-            </SyncFieldLabel>
-            <SyncFieldLabel label="用户名">
-              <Input
-                nativeInput
-                size="sm"
-                data-pmx-sync-input="webdav.username"
-                placeholder="WebDAV 登录用户名"
-                value={webdav.username}
-                onChange={(event) => {
-                  setWebdav((prev) => ({ ...prev, username: event.target.value }));
-                  setSingleChannelFeedback("webdav", null);
-                }}
-              />
-            </SyncFieldLabel>
-            <SyncFieldLabel label="应用专用密码">
-              <Input
-                nativeInput
-                type="password"
-                size="sm"
-                data-pmx-sync-input="webdav.password"
-                autoComplete="new-password"
-                placeholder={webdav.hasSecret ? "密码已加密保存（留空不变）" : "输入应用专用密码"}
-                value={webdav.password}
-                onChange={(event) => {
-                  setWebdav((prev) => ({ ...prev, password: event.target.value }));
-                  setSingleChannelFeedback("webdav", null);
-                }}
-              />
-            </SyncFieldLabel>
-          </div>
-          <SyncChannelCardFooter
-            channel="webdav"
-            isDirty={isWebdavDirty}
-            savingThisChannel={savingScope === "webdav"}
-            testingThisChannel={testingScope === "webdav"}
-            isBusy={isBusy}
-            feedback={channelFeedback.webdav}
-            onTest={() => {
-              void handleTestSingleChannel("webdav");
-            }}
-            onSave={() => {
-              void handleSaveChannel("webdav");
-            }}
-          />
-        </CollapsibleSyncChannelBody>
-      </SettingsRow>
-
-      {/* Independent Channel 2: S3 */}
-      <SettingsRow
-        className={s3.enabled ? undefined : "py-3"}
-        title={
-          <span className="inline-flex items-center gap-2">
-            <CloudIcon className="size-3.5 text-muted-foreground" />
-            <span>S3 兼容对象存储通道</span>
-            {s3.hasSecret ? <Badge variant="outline">已保存 SecretKey</Badge> : null}
-            {isS3Dirty ? (
-              <Badge variant="warning" size="sm">
-                未保存
-              </Badge>
-            ) : null}
-          </span>
-        }
-        description="兼容 Cloudflare R2 / AWS S3 / 阿里云 OSS / MinIO 兼容端点。"
-        control={
-          <div className="flex items-center gap-2">
-            {!s3.enabled && isS3Dirty ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                data-pmx-sync-save-channel-collapsed="s3"
-                disabled={isBusy}
-                onClick={() => {
-                  void handleSaveChannel("s3");
-                }}
-              >
-                <SaveIcon className="size-3" />
-                {savingScope === "s3" ? "保存中…" : "保存关闭"}
-              </Button>
-            ) : null}
-            <Switch
-              aria-label="启用 S3 同步通道"
-              data-pmx-sync-channel-switch="s3"
-              checked={s3.enabled}
-              onCheckedChange={(checked) => {
-                setS3((prev) => ({ ...prev, enabled: Boolean(checked) }));
-                setSingleChannelFeedback("s3", null);
-              }}
-            />
-          </div>
-        }
-      >
-        <CollapsibleSyncChannelBody channel="s3" open={s3.enabled}>
-          <div className="mt-2.5 space-y-2.5">
-            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-              <Switch
-                size="sm"
-                checked={s3.forcePathStyle}
-                onCheckedChange={(checked) => {
-                  setS3((prev) => ({ ...prev, forcePathStyle: Boolean(checked) }));
-                  setSingleChannelFeedback("s3", null);
-                }}
-              />
-              Force Path-Style
-            </label>
-            <div className="grid gap-2.5 sm:grid-cols-3">
-              <SyncFieldLabel label="Endpoint URL" required>
-                <Input
-                  nativeInput
-                  size="sm"
-                  data-pmx-sync-input="s3.endpointUrl"
-                  placeholder="例如 https://s3.example.com"
-                  value={s3.endpointUrl}
-                  onChange={(event) => {
-                    setS3((prev) => ({ ...prev, endpointUrl: event.target.value }));
-                    setSingleChannelFeedback("s3", null);
-                  }}
-                />
-              </SyncFieldLabel>
-              <SyncFieldLabel label="Region">
-                <Input
-                  nativeInput
-                  size="sm"
-                  data-pmx-sync-input="s3.region"
-                  placeholder="例如 auto / us-east-1"
-                  value={s3.region}
-                  onChange={(event) => {
-                    setS3((prev) => ({ ...prev, region: event.target.value }));
-                    setSingleChannelFeedback("s3", null);
-                  }}
-                />
-              </SyncFieldLabel>
-              <SyncFieldLabel label="Bucket" required>
-                <Input
-                  nativeInput
-                  size="sm"
-                  data-pmx-sync-input="s3.bucket"
-                  placeholder="对象存储桶名称"
-                  value={s3.bucket}
-                  onChange={(event) => {
-                    setS3((prev) => ({ ...prev, bucket: event.target.value }));
-                    setSingleChannelFeedback("s3", null);
-                  }}
-                />
-              </SyncFieldLabel>
-              <SyncFieldLabel label="Access Key ID">
-                <Input
-                  nativeInput
-                  size="sm"
-                  data-pmx-sync-input="s3.accessKeyId"
-                  placeholder="输入 Access Key ID"
-                  value={s3.accessKeyId}
-                  onChange={(event) => {
-                    setS3((prev) => ({ ...prev, accessKeyId: event.target.value }));
-                    setSingleChannelFeedback("s3", null);
-                  }}
-                />
-              </SyncFieldLabel>
-              <SyncFieldLabel label="Secret Access Key" className="sm:col-span-2">
-                <Input
-                  nativeInput
-                  type="password"
-                  size="sm"
-                  data-pmx-sync-input="s3.secretAccessKey"
-                  autoComplete="new-password"
-                  placeholder={
-                    s3.hasSecret ? "Secret Access Key 已加密保存（留空不变）" : "输入 Secret Access Key"
-                  }
-                  value={s3.secretAccessKey}
-                  onChange={(event) => {
-                    setS3((prev) => ({ ...prev, secretAccessKey: event.target.value }));
-                    setSingleChannelFeedback("s3", null);
-                  }}
-                />
-              </SyncFieldLabel>
-            </div>
-          </div>
-          <SyncChannelCardFooter
-            channel="s3"
-            isDirty={isS3Dirty}
-            savingThisChannel={savingScope === "s3"}
-            testingThisChannel={testingScope === "s3"}
-            isBusy={isBusy}
-            feedback={channelFeedback.s3}
-            onTest={() => {
-              void handleTestSingleChannel("s3");
-            }}
-            onSave={() => {
-              void handleSaveChannel("s3");
-            }}
-          />
-        </CollapsibleSyncChannelBody>
-      </SettingsRow>
-
-      {/* Independent Channel 3: GitHub */}
-      <SettingsRow
-        className={github.enabled ? undefined : "py-3"}
-        title={
-          <span className="inline-flex items-center gap-2">
-            <LockIcon className="size-3.5 text-muted-foreground" />
-            <span>GitHub 私有仓库通道</span>
-            {github.hasSecret ? <Badge variant="outline">已保存 Token</Badge> : null}
-            {isGithubDirty ? (
-              <Badge variant="warning" size="sm">
-                未保存
-              </Badge>
-            ) : null}
-          </span>
-        }
-        description="通过 GitHub Contents API 同步端到端密文包，无需本机 git 进程。"
-        control={
-          <div className="flex items-center gap-2">
-            {!github.enabled && isGithubDirty ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                data-pmx-sync-save-channel-collapsed="github"
-                disabled={isBusy}
-                onClick={() => {
-                  void handleSaveChannel("github");
-                }}
-              >
-                <SaveIcon className="size-3" />
-                {savingScope === "github" ? "保存中…" : "保存关闭"}
-              </Button>
-            ) : null}
-            <Switch
-              aria-label="启用 GitHub 同步通道"
-              data-pmx-sync-channel-switch="github"
-              checked={github.enabled}
-              onCheckedChange={(checked) => {
-                setGithub((prev) => ({ ...prev, enabled: Boolean(checked) }));
-                setSingleChannelFeedback("github", null);
-              }}
-            />
-          </div>
-        }
-      >
-        <CollapsibleSyncChannelBody channel="github" open={github.enabled}>
-          <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
-            <SyncFieldLabel label="Owner" required>
-              <Input
-                nativeInput
-                size="sm"
-                data-pmx-sync-input="github.owner"
-                placeholder="GitHub 用户名或组织，例如 Fish-under-sea"
-                value={github.owner}
-                onChange={(event) => {
-                  setGithub((prev) => ({ ...prev, owner: event.target.value }));
-                  setSingleChannelFeedback("github", null);
-                }}
-              />
-            </SyncFieldLabel>
-            <SyncFieldLabel label="私有仓库名" required>
-              <Input
-                nativeInput
-                size="sm"
-                data-pmx-sync-input="github.repo"
-                placeholder="仓库名（Repo），例如 prismux-vault"
-                value={github.repo}
-                onChange={(event) => {
-                  setGithub((prev) => ({ ...prev, repo: event.target.value }));
-                  setSingleChannelFeedback("github", null);
-                }}
-              />
-            </SyncFieldLabel>
-            <SyncFieldLabel label="分支">
-              <Input
-                nativeInput
-                size="sm"
-                data-pmx-sync-input="github.branch"
-                placeholder="默认 main"
-                value={github.branch}
-                onChange={(event) => {
-                  setGithub((prev) => ({ ...prev, branch: event.target.value }));
-                  setSingleChannelFeedback("github", null);
-                }}
-              />
-            </SyncFieldLabel>
-            <SyncFieldLabel label="密文文件路径">
-              <Input
-                nativeInput
-                size="sm"
-                data-pmx-sync-input="github.filePath"
-                placeholder="例如 prismux-vault.prismux-backup"
-                value={github.filePath}
-                onChange={(event) => {
-                  setGithub((prev) => ({ ...prev, filePath: event.target.value }));
-                  setSingleChannelFeedback("github", null);
-                }}
-              />
-            </SyncFieldLabel>
-            <SyncFieldLabel label="Personal Access Token" className="sm:col-span-2">
-              <Input
-                nativeInput
-                type="password"
-                size="sm"
-                data-pmx-sync-input="github.token"
-                autoComplete="new-password"
-                placeholder={
-                  github.hasSecret
-                    ? "Personal Access Token 已加密保存（留空不变）"
-                    : "Fine-grained PAT（仅需目标私有仓库 Contents 读写权限）"
-                }
-                value={github.token}
-                onChange={(event) => {
-                  setGithub((prev) => ({ ...prev, token: event.target.value }));
-                  setSingleChannelFeedback("github", null);
-                }}
-              />
-            </SyncFieldLabel>
-          </div>
-          <SyncChannelCardFooter
-            channel="github"
-            isDirty={isGithubDirty}
-            savingThisChannel={savingScope === "github"}
-            testingThisChannel={testingScope === "github"}
-            isBusy={isBusy}
-            feedback={channelFeedback.github}
-            onTest={() => {
-              void handleTestSingleChannel("github");
-            }}
-            onSave={() => {
-              void handleSaveChannel("github");
-            }}
-          />
-        </CollapsibleSyncChannelBody>
-      </SettingsRow>
-
-      {/* Sync Matrix with Compact Inline Header Save Action */}
-      <SettingsRow
-        title="同步域矩阵（Upload / Download 独立控制）"
-        description="按数据域细粒度控制允许上传与下载的内容，社交隔离记忆默认关闭同步。"
-        control={
-          isMatrixDirty || matrixFeedback ? (
-            <div className="flex flex-wrap items-center gap-2">
-              {matrixFeedback ? (
-                <span
-                  data-pmx-sync-matrix-feedback={matrixFeedback.ok ? "success" : "error"}
-                  className={cn(
-                    "inline-flex items-center gap-1 text-xs",
-                    matrixFeedback.ok
-                      ? "text-success-foreground"
-                      : "text-destructive",
-                  )}
-                >
-                  {matrixFeedback.ok ? (
-                    <CheckCircle2Icon className="size-3.5 shrink-0" />
-                  ) : (
-                    <AlertTriangleIcon className="size-3.5 shrink-0" />
-                  )}
-                  <span>{matrixFeedback.message}</span>
-                </span>
-              ) : null}
-              {isMatrixDirty ? (
-                <>
-                  <Badge variant="warning" size="sm">
-                    未保存
-                  </Badge>
-                  <Button
-                    type="button"
-                    size="sm"
-                    data-pmx-sync-save-matrix=""
-                    disabled={isBusy}
-                    onClick={() => {
-                      void handleSaveSyncMatrix();
-                    }}
-                  >
-                    <SaveIcon className="size-3.5" />
-                    {savingScope === "matrix" ? "保存中…" : "保存矩阵"}
-                  </Button>
-                </>
-              ) : null}
-            </div>
-          ) : undefined
-        }
-      >
-        <div className="mt-2.5 space-y-2 pb-2">
-          {SYNC_DOMAIN_META.map((meta) => {
-            const entry = syncMatrix[meta.key];
-            return (
-              <div
-                key={meta.key}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{meta.label}</div>
-                  <div className="text-[11px] text-muted-foreground">{meta.desc}</div>
-                </div>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <label className="inline-flex cursor-pointer items-center gap-1.5">
-                    <Switch
-                      size="sm"
-                      data-pmx-sync-matrix-switch={`${meta.key}.upload`}
-                      checked={entry.upload}
-                      onCheckedChange={(checked) => {
-                        setSyncMatrix((prev) => ({
-                          ...prev,
-                          [meta.key]: { ...prev[meta.key], upload: Boolean(checked) },
-                        }));
-                        setMatrixFeedback(null);
-                      }}
-                    />
-                    上传
-                  </label>
-                  <label className="inline-flex cursor-pointer items-center gap-1.5">
-                    <Switch
-                      size="sm"
-                      data-pmx-sync-matrix-switch={`${meta.key}.download`}
-                      checked={entry.download}
-                      onCheckedChange={(checked) => {
-                        setSyncMatrix((prev) => ({
-                          ...prev,
-                          [meta.key]: { ...prev[meta.key], download: Boolean(checked) },
-                        }));
-                        setMatrixFeedback(null);
-                      }}
-                    />
-                    下载
-                  </label>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </SettingsRow>
-    </SettingsSection>
+    </div>
   );
 });

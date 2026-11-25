@@ -4,7 +4,7 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { useAtomValue } from "@effect/atom-react";
-import { ArrowUpCircleIcon, CheckIcon, ChevronDownIcon, ExternalLinkIcon, TerminalIcon } from "lucide-react";
+import { ArrowUpCircleIcon, CheckIcon, ChevronDownIcon, ExternalLinkIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import type { MessageResolver } from "../../i18n/messages";
@@ -69,7 +69,6 @@ import { useSecretSources } from "./SecretSourceInput";
 import { serverEnvironment } from "../../state/server";
 import {
   DSH_LOCAL_ACP_PRESET,
-  OMP_LOCAL_ACP_PRESET,
   openSafeExternalHttpsFromAnchor,
   resolveAgentCliMeta,
   resolveSafeAgentHomepageUrl,
@@ -599,37 +598,6 @@ export function AddProviderInstanceDialog({
     setHasAttemptedSubmit(false);
   };
 
-  const handleOmpLocalAcpPreset = () => {
-    setSelectedFeaturedPreset(null);
-    const nextInstanceId = deriveAvailableInstanceId(
-      () => OMP_LOCAL_ACP_PRESET.instanceId,
-      OMP_LOCAL_ACP_PRESET.label,
-      existingIds,
-    );
-    setDriver(ACP_REGISTRY_DRIVER_KIND);
-    setSelectedAcp(null);
-    setIsManualAcpConfiguration(true);
-    setShowMoreProviders(true);
-    setConfigByDriver((existing) => ({
-      ...existing,
-      [ACP_REGISTRY_DRIVER_KIND]: {
-        source: "local",
-        commandPath: OMP_LOCAL_ACP_PRESET.command,
-        commandArgs: [...OMP_LOCAL_ACP_PRESET.args],
-        homepageUrl: OMP_LOCAL_ACP_PRESET.homepageUrl,
-      },
-    }));
-    setIdentityByDriver((existing) =>
-      updateProviderIdentityDraft(existing, ACP_REGISTRY_DRIVER_KIND, {
-        label: OMP_LOCAL_ACP_PRESET.label,
-        instanceIdOverride: nextInstanceId,
-      }),
-    );
-    setLocalEnvironment([]);
-    setHasAttemptedSubmit(false);
-    setWizardStep(1);
-  };
-
   // A policy that owns this driver's launch settings also rules out ChatGPT's own runtime.
   const driverLocks = managedInstanceLocks(managedPolicy, driver, m);
 
@@ -771,55 +739,6 @@ export function AddProviderInstanceDialog({
                   }
                   aria-labelledby="add-instance-driver-label"
                 />
-                {acpRegistryAllowed ? (
-                  <div
-                    data-preset="omp-local-acp"
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/25 px-3 py-2.5 text-xs"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5 font-medium text-foreground">
-                        <TerminalIcon className="size-3.5 text-primary" />
-                        <span>{OMP_LOCAL_ACP_PRESET.label}</span>
-                        <Badge variant="outline" size="sm" className="font-mono text-2xs">
-                          {OMP_LOCAL_ACP_PRESET.command} {OMP_LOCAL_ACP_PRESET.args.join(" ")}
-                        </Badge>
-                      </div>
-                      <p className="mt-0.5 text-2xs text-muted-foreground">
-                        <T>One-click local ACP preset for oh-my-pi with live steering and usage support.</T>
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      {validateSafeHttpsUrl(OMP_LOCAL_ACP_PRESET.homepageUrl) ? (
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          render={
-                            <a
-                              href={OMP_LOCAL_ACP_PRESET.homepageUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(event) => {
-                                openSafeExternalHttpsFromAnchor(event);
-                              }}
-                            />
-                          }
-                        >
-                          <span>{gt("Install guide")}</span>
-                          <ExternalLinkIcon className="size-3" />
-                        </Button>
-                      ) : null}
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={isPreparingRegistryAgent}
-                        onClick={handleOmpLocalAcpPreset}
-                      >
-                        <T>Use omp ACP preset</T>
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
                 {(() => {
                   const selectedLive = liveProvidersByDriver.get(driver);
                   if (!selectedLive || selectedLive.installed) return null;
@@ -1125,26 +1044,6 @@ export function AddProviderInstanceDialog({
                       size="sm"
                       onClick={() => setAddingChatGptAccount(true)}
                     />
-                  )}
-                </>
-              ) : wizardStep === 0 && driver === "antigravity" ? (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => navigateToStep(1)}>
-                    <T>Configure manually</T>
-                  </Button>
-                  {driverLocks?.configKeys.has("authMethod") ? null : (
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setConfigByDriver((existing) => ({
-                          ...existing,
-                          [driver]: { ...existing[driver], authMethod: "local-cli" },
-                        }));
-                        navigateToStep(1);
-                      }}
-                    >
-                      <T>Use local agy CLI</T>
-                    </Button>
                   )}
                 </>
               ) : wizardStep < (isAcpRegistry ? 1 : 2) ? (

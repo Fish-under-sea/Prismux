@@ -8,6 +8,7 @@ import {
   MessageSquareIcon,
   MessageSquarePlusIcon,
   MoreHorizontalIcon,
+  RotateCcwIcon,
   Rows2Icon,
   SmartphoneIcon,
   TabletSmartphoneIcon,
@@ -19,7 +20,7 @@ import { memo, useState, type DragEvent as ReactDragEvent, type ReactNode, type 
 import { isElectron } from "../../env";
 import { cn } from "~/lib/utils";
 import { AgentBrandLogo } from "../../prismux/agentBrand";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   dispatchSplitDragEvent,
@@ -61,6 +62,7 @@ export interface WorkspaceTabBarProps {
   readonly onActivateTab: (paneId: string, tabId: string) => void;
   readonly onCloseTab: (paneId: string, tabId: string) => void;
   readonly onSplitPane: (paneId: string, direction: SplitDirection) => void;
+  readonly onResetSplitRatio?: (() => void) | undefined;
   readonly onClosePane: (paneId: string) => void;
   readonly onMoveTabToPane: (
     tabId: string,
@@ -121,6 +123,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
     onActivateTab,
     onCloseTab,
     onSplitPane,
+    onResetSplitRatio,
     onClosePane,
     onMoveTabToPane,
     onReorderTab,
@@ -343,7 +346,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
         />
       </div>
 
-      {/* Right: Unified Topbar Controls (Chief Pill + Overview + Right Panel) + Compact Split Controls */}
+      {/* Right: Unified Topbar Controls (Chief Pill + Overview + Right Panel) + Pane Menu */}
       <div
         data-workspace-split-controls={pane.id}
         className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
@@ -360,78 +363,59 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
         ) : null}
 
         {showSplitControls ? (
-          <>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    data-workspace-split-horizontal={pane.id}
-                    disabled={!canSplit}
-                    aria-label="左右分屏"
-                    onClick={() => onSplitPane(pane.id, "horizontal")}
-                    className="flex size-6.5 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+          <Menu>
+            <MenuTrigger
+              render={
+                <button
+                  type="button"
+                  data-workspace-pane-menu={pane.id}
+                  aria-label="更多窗格操作"
+                  className="flex size-6.5 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                >
+                  <MoreHorizontalIcon className="size-3.5" aria-hidden />
+                </button>
+              }
+            />
+            <MenuPopup align="end" side="bottom" sideOffset={4}>
+              <MenuItem
+                data-workspace-menu-split-horizontal={pane.id}
+                disabled={!canSplit}
+                onClick={() => onSplitPane(pane.id, "horizontal")}
+              >
+                <Columns2Icon className="size-3.5" aria-hidden />
+                <span>左右分屏</span>
+              </MenuItem>
+              <MenuItem
+                data-workspace-menu-split-vertical={pane.id}
+                disabled={!canSplit}
+                onClick={() => onSplitPane(pane.id, "vertical")}
+              >
+                <Rows2Icon className="size-3.5" aria-hidden />
+                <span>上下分屏</span>
+              </MenuItem>
+              {isSplit ? (
+                <>
+                  <MenuSeparator />
+                  {onResetSplitRatio ? (
+                    <MenuItem
+                      data-workspace-menu-reset-split-ratio={pane.id}
+                      onClick={onResetSplitRatio}
+                    >
+                      <RotateCcwIcon className="size-3.5" aria-hidden />
+                      <span>重置分屏比例</span>
+                    </MenuItem>
+                  ) : null}
+                  <MenuItem
+                    data-workspace-menu-close-pane={pane.id}
+                    onClick={() => onClosePane(pane.id)}
                   >
-                    <Columns2Icon className="size-3.5" aria-hidden />
-                  </button>
-                }
-              />
-              <TooltipPopup side="bottom">
-                {canSplit ? "左右分屏" : `最多支持 ${WORKSPACE_MAX_SPLIT_PANES} 个分屏窗格`}
-              </TooltipPopup>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    data-workspace-split-vertical={pane.id}
-                    disabled={!canSplit}
-                    aria-label="上下分屏"
-                    onClick={() => onSplitPane(pane.id, "vertical")}
-                    className="flex size-6.5 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Rows2Icon className="size-3.5" aria-hidden />
-                  </button>
-                }
-              />
-              <TooltipPopup side="bottom">
-                {canSplit ? "上下分屏" : `最多支持 ${WORKSPACE_MAX_SPLIT_PANES} 个分屏窗格`}
-              </TooltipPopup>
-            </Tooltip>
-
-            <Menu>
-              <MenuTrigger
-                render={
-                  <button
-                    type="button"
-                    data-workspace-pane-menu={pane.id}
-                    aria-label="更多窗格操作"
-                    className="flex size-6.5 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  >
-                    <MoreHorizontalIcon className="size-3.5" aria-hidden />
-                  </button>
-                }
-              />
-              <MenuPopup align="end" side="bottom" sideOffset={4}>
-                <MenuItem disabled={!canSplit} onClick={() => onSplitPane(pane.id, "horizontal")}>
-                  <Columns2Icon className="size-3.5" aria-hidden />
-                  <span>左右分屏</span>
-                </MenuItem>
-                <MenuItem disabled={!canSplit} onClick={() => onSplitPane(pane.id, "vertical")}>
-                  <Rows2Icon className="size-3.5" aria-hidden />
-                  <span>上下分屏</span>
-                </MenuItem>
-                {isSplit ? (
-                  <MenuItem onClick={() => onClosePane(pane.id)}>
                     <XIcon className="size-3.5" aria-hidden />
                     <span>关闭当前分屏</span>
                   </MenuItem>
-                ) : null}
-              </MenuPopup>
-            </Menu>
-          </>
+                </>
+              ) : null}
+            </MenuPopup>
+          </Menu>
         ) : null}
 
         {isSplit ? (

@@ -35,9 +35,8 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(formatAgentBrandName("antigravity-cli")).toBe("Antigravity");
     expect(formatAgentBrandName("agy")).toBe("Antigravity");
 
-    expect(formatAgentBrandName("omp")).toBe("oh-my-pi");
-    expect(formatAgentBrandName("oh-my-pi")).toBe("oh-my-pi");
-    expect(formatAgentBrandName("pi")).toBe("oh-my-pi");
+    expect(formatAgentBrandName("dsh")).toBe("DeepSeek Harness");
+    expect(formatAgentBrandName("deepseek-harness")).toBe("DeepSeek Harness");
 
     expect(formatAgentBrandName("gemini")).toBe("Gemini CLI");
     expect(formatAgentBrandName("gemini-cli")).toBe("Gemini CLI");
@@ -83,11 +82,12 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(resolveAgentBrandId("claudeAgent")).toBe("claude-code");
     expect(resolveAgentBrandId("openai-codex")).toBe("codex");
     expect(resolveAgentBrandId("agy")).toBe("antigravity");
-    expect(resolveAgentBrandId("oh-my-pi")).toBe("omp");
+    expect(resolveAgentBrandId("omp")).toBe("custom");
+    expect(resolveAgentBrandId("oh-my-pi")).toBe("custom");
     expect(resolveAgentBrandId("unknown-bot")).toBe("custom");
 
     expect(toCanonicalChiefProviderId("claudeAgent")).toBe("claude-code");
-    expect(toCanonicalChiefProviderId("pi")).toBe("omp");
+    expect(toCanonicalChiefProviderId("dsh")).toBe("dsh");
     expect(toCanonicalChiefProviderId("antigravity-cli")).toBe("antigravity");
     expect(getAgentBrandMeta("codex").displayName).toBe("Codex");
   });
@@ -113,9 +113,6 @@ describe("agentBrand canonical naming & official logos", () => {
     );
     expect(antigravityHtml).toContain('data-agent-brand="antigravity"');
     expect(antigravityHtml).toContain("linearGradient");
-
-    const ompHtml = renderToStaticMarkup(<AgentBrandLogo provider="omp" online />);
-    expect(ompHtml).toContain('data-agent-brand="omp"');
 
     expect(AGENT_BRAND_BREATHE_CSS).toContain("@keyframes pmx-brand-breathe");
     expect(AGENT_BRAND_BREATHE_CSS).toContain("prefers-reduced-motion: reduce");

@@ -3017,15 +3017,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         modelLabel: "Gemini 2.5 Pro",
         online: true,
       },
-      {
-        id: "omp:default",
-        providerInstanceId: "omp",
-        driverKind: "omp",
-        model: "default",
-        displayName: "oh-my-pi",
-        modelLabel: "Default",
-        online: true,
-      },
     ],
     [],
   );

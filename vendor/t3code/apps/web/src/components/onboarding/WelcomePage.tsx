@@ -886,7 +886,11 @@ function AgentsSection({
       );
     }
     return settingsAction(
-      state === "signIn" ? gt("Sign in") : state === "attention" ? gt("Details") : gt("Set up"),
+      state === "signIn" && provider.driver !== "antigravity"
+        ? gt("Sign in")
+        : state === "attention"
+          ? gt("Details")
+          : gt("Set up"),
     );
   };
 
@@ -1525,7 +1529,7 @@ function AgentRow({
       : compact || state === "ready" || state === "checking"
         ? null
         : state === "disabled" && provider.driver === "antigravity"
-          ? gt("Turn on to connect local agy CLI or your Google account.")
+          ? gt("Turn on to connect your local agy CLI.")
           : state === "attention"
             ? (provider.unavailableReason ??
               brokenMessage ??

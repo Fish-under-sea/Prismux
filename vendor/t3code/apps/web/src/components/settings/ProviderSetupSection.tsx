@@ -7,8 +7,6 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  ANTIGRAVITY_AUTH_METHODS,
-  type AntigravityAuthMethod,
   type EnvironmentId,
   type ProviderInstanceId,
   type ServerProvider,
@@ -32,21 +30,9 @@ interface ProviderSetupSectionProps {
   readonly instanceId: ProviderInstanceId;
   readonly provider: ServerProvider | undefined;
   readonly binaryPath?: string | undefined;
-  readonly authMethod?: AntigravityAuthMethod | undefined;
   readonly enabled: boolean;
   readonly readOnly: boolean;
   readonly onEnable: () => void;
-  readonly onUseLocalCli?: (() => void) | undefined;
-}
-
-export function readAntigravityAuthMethod(config: unknown): AntigravityAuthMethod {
-  const value =
-    config !== null && typeof config === "object" && "authMethod" in config
-      ? config.authMethod
-      : undefined;
-  return (
-    ANTIGRAVITY_AUTH_METHODS.find((method) => method.value === value)?.value ?? "oauth-personal"
-  );
 }
 
 export function ProviderSetupSection(props: ProviderSetupSectionProps) {
@@ -91,9 +77,7 @@ export function ProviderSetupSection(props: ProviderSetupSectionProps) {
           instanceId={props.instanceId}
           provider={props.provider}
           binaryPath={props.binaryPath}
-          authMethod={props.authMethod ?? "oauth-personal"}
           enabled={props.enabled}
-          onUseLocalCli={props.onUseLocalCli}
         />
       )}
     </section>
@@ -107,14 +91,11 @@ function ProviderSetupActions({
   provider,
   enabled,
   binaryPath,
-  authMethod,
-  onUseLocalCli,
 }: Pick<
   ProviderSetupSectionProps,
-  "environmentId" | "environmentLabel" | "instanceId" | "enabled" | "binaryPath" | "onUseLocalCli"
+  "environmentId" | "environmentLabel" | "instanceId" | "enabled" | "binaryPath"
 > & {
   readonly provider: ServerProvider;
-  readonly authMethod: AntigravityAuthMethod;
 }) {
   const gt = useGT();
   const target = { environmentId, input: { instanceId } };
@@ -141,7 +122,6 @@ function ProviderSetupActions({
     installation?.phase === "downloading" ||
     installation?.phase === "extracting" ||
     installation?.phase === "verifying";
-  const usesLocalCli = authMethod === "local-cli";
   const usesCustomBinary = Boolean(binaryPath?.trim());
   const installed =
     provider.installed || (!usesCustomBinary && installation?.installedVersion != null);
@@ -164,7 +144,7 @@ function ProviderSetupActions({
           : installation?.phase === "verifying"
             ? gt("Checking the downloaded runtime.")
             : installed
-              ? usesLocalCli && !installation?.installedVersion
+              ? !installation?.installedVersion
                 ? gt("Using local agy CLI.")
                 : gt("Installed.")
               : usesCustomBinary
@@ -210,7 +190,7 @@ function ProviderSetupActions({
   async function removeRuntime() {
     const confirmed = await ensureLocalApi().dialogs.confirm(
       gt(
-        "Remove the downloaded Antigravity runtime from {environment}? Google sign-in and thread history are kept.",
+        "Remove the downloaded Antigravity runtime from {environment}? Your local agy CLI sign-in and thread history are kept.",
         { environment: environmentLabel },
       ),
     );
@@ -229,11 +209,7 @@ function ProviderSetupActions({
       <SettingsRow
         title={gt("Runtime")}
         className="@max-lg/setup:[&>div:first-child]:flex @max-lg/setup:[&>div:first-child]:items-stretch @max-lg/setup:[&>div:first-child]:gap-3"
-        description={
-          usesLocalCli
-            ? gt("Uses local agy CLI on PATH or the custom binary path below.")
-            : gt("Install and manage Antigravity.")
-        }
+        description={gt("Uses local agy CLI on PATH or the custom binary path below.")}
         status={
           <div className="space-y-2">
             {usesCustomBinary ? (
@@ -350,28 +326,6 @@ function ProviderSetupActions({
         provider={provider}
         readOnly={false}
       />
-
-      {!usesLocalCli &&
-      authMethod === "oauth-personal" &&
-      provider.auth.status !== "authenticated" &&
-      onUseLocalCli ? (
-        <SettingsRow
-          title={gt("Local agy CLI")}
-          description={gt(
-            "Already signed in with agy CLI? Reuse it directly via the official agy acp channel with the native Google Antigravity icon.",
-          )}
-          control={
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={actionsDisabled || authActive}
-              onClick={onUseLocalCli}
-            >
-              <T>Use local agy CLI</T>
-            </Button>
-          }
-        />
-      ) : null}
 
       {error || queryError ? (
         <div className="grid gap-2 px-3 py-3 sm:px-4">

@@ -1,5 +1,6 @@
 export * from "./brand.js";
 export * from "./chief.js";
+export * from "./dispatch.js";
 export * from "./memory.js";
 export * from "./hooks.js";
 export * from "./handoff.js";

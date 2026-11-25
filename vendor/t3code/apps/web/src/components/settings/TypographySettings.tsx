@@ -33,6 +33,7 @@ import { discoverInstalledFonts, FontFamilyPicker, useFontEnumeration } from "./
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import {
+  SETTINGS_CONTROL_MD,
   SettingResetButton,
   SettingsRow,
   SettingsSection,
@@ -68,7 +69,13 @@ function useFontDefaultFamilies() {
   };
 }
 
-function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
+function InterfaceFontRow({
+  preview,
+  onClearAppearanceFontOverride,
+}: {
+  preview?: ReactNode;
+  onClearAppearanceFontOverride?: (kind: "sans" | "code") => void;
+}) {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
   const settings = useScopedSettings();
@@ -82,13 +89,17 @@ function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
       defaultFamily={defaults.sans}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilySans}
       value={settings.fontFamilySans}
-      onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
-      onReset={() =>
+      onValueChange={(fontFamilySans) => {
+        onClearAppearanceFontOverride?.("sans");
+        updateSettings({ fontFamilySans });
+      }}
+      onReset={() => {
+        onClearAppearanceFontOverride?.("sans");
         updateSettings({
           fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
           fontSizeInterface: DEFAULT_UNIFIED_SETTINGS.fontSizeInterface,
-        })
-      }
+        });
+      }}
       size={{
         label: gt("Interface font size"),
         min: MIN_INTERFACE_FONT_SIZE,
@@ -141,11 +152,13 @@ function CodeFontRow({
   resetLabel,
   description,
   preview,
+  onClearAppearanceFontOverride,
 }: {
   title?: string;
   resetLabel?: string;
   description?: string;
   preview?: ReactNode;
+  onClearAppearanceFontOverride?: (kind: "sans" | "code") => void;
 }) {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
@@ -161,13 +174,17 @@ function CodeFontRow({
       defaultFamily={defaults.code}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilyCode}
       value={settings.fontFamilyCode}
-      onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
-      onReset={() =>
+      onValueChange={(fontFamilyCode) => {
+        onClearAppearanceFontOverride?.("code");
+        updateSettings({ fontFamilyCode });
+      }}
+      onReset={() => {
+        onClearAppearanceFontOverride?.("code");
         updateSettings({
           fontFamilyCode: DEFAULT_UNIFIED_SETTINGS.fontFamilyCode,
           fontSizeCode: DEFAULT_UNIFIED_SETTINGS.fontSizeCode,
-        })
-      }
+        });
+      }}
       requireMonospace
       size={{
         label: gt("Code font size"),
@@ -285,12 +302,18 @@ function WordWrapRow() {
   );
 }
 
-function FontSettingsGroup() {
+function FontSettingsGroup({
+  onClearAppearanceFontOverride,
+}: {
+  onClearAppearanceFontOverride?: (kind: "sans" | "code") => void;
+}) {
   return (
     <>
-      <InterfaceFontRow />
+      <InterfaceFontRow
+        {...(onClearAppearanceFontOverride ? { onClearAppearanceFontOverride } : {})}
+      />
       <PromptFontRow />
-      <CodeFontRow />
+      <CodeFontRow {...(onClearAppearanceFontOverride ? { onClearAppearanceFontOverride } : {})} />
       <TerminalFontRow />
     </>
   );
@@ -322,16 +345,24 @@ function SeparateFontsRow({
   );
 }
 
-function SimpleFontRows() {
+function SimpleFontRows({
+  onClearAppearanceFontOverride,
+}: {
+  onClearAppearanceFontOverride?: (kind: "sans" | "code") => void;
+}) {
   const gt = useGT();
   const settings = useScopedSettings();
   return (
     <>
-      <InterfaceFontRow preview={<PromptFontPreview />} />
+      <InterfaceFontRow
+        preview={<PromptFontPreview />}
+        {...(onClearAppearanceFontOverride ? { onClearAppearanceFontOverride } : {})}
+      />
       <CodeFontRow
         title={gt("Monospace font")}
         resetLabel={gt("Reset monospace font to default")}
         description={gt("Code blocks, diffs, file previews, and the terminal.")}
+        {...(onClearAppearanceFontOverride ? { onClearAppearanceFontOverride } : {})}
         preview={
           <>
             <CodeFontPreview />
@@ -354,7 +385,11 @@ function SimpleFontRows() {
   );
 }
 
-export function TypographySection() {
+export function TypographySection({
+  onClearAppearanceFontOverride,
+}: {
+  readonly onClearAppearanceFontOverride?: (kind: "sans" | "code") => void;
+} = {}) {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
   const [advanced, setAdvanced] = useLocalStorage(
@@ -374,7 +409,15 @@ export function TypographySection() {
     advanced || (searchTargetId !== null && isAdvancedTypographyTarget(searchTargetId));
   return (
     <SettingsSection id="typography" title={gt("Typography")}>
-      {showAdvanced ? <FontSettingsGroup /> : <SimpleFontRows />}
+      {showAdvanced ? (
+        <FontSettingsGroup
+          {...(onClearAppearanceFontOverride ? { onClearAppearanceFontOverride } : {})}
+        />
+      ) : (
+        <SimpleFontRows
+          {...(onClearAppearanceFontOverride ? { onClearAppearanceFontOverride } : {})}
+        />
+      )}
       <WordWrapRow />
       <AdvancedSettings
         targetIds={[searchableSetting("separate-fonts").id, searchableSetting("font-smoothing").id]}
@@ -535,7 +578,7 @@ function FontFamilySettingsRow({
     );
   const control = (
     <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto @min-[32rem]/settings-row:flex-nowrap">
-      <div className="min-w-36 flex-1 sm:w-44 sm:flex-none">{familyControl}</div>
+      <div className={`min-w-36 flex-1 sm:flex-none ${SETTINGS_CONTROL_MD}`}>{familyControl}</div>
       <Select
         value={String(size.value)}
         onValueChange={(next) => {

@@ -63,6 +63,7 @@ import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 import { cn } from "../lib/utils";
+import { PrismuxIpcDispatchBridge } from "../prismux/PrismuxIpcDispatchBridge";
 import { PrismuxWallpaperBackdrop } from "../prismux/PrismuxWallpaperBridge";
 import { PrismuxStatusBar } from "../prismux/PrismuxStatusBar";
 
@@ -200,6 +201,7 @@ function RootRouteBranch() {
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
       <PrismuxRemoteConnectDialogHost />
+      <PrismuxIpcDispatchBridge />
       <SshPasswordPromptDialog />
       <SnapShotCoordinator />
       <ReopenClosedViewShortcut />

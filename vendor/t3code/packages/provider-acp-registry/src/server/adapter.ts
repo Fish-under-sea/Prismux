@@ -11,17 +11,6 @@ import {
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
 import { makeKimiPromptOutcomeWatch } from "./kimiAcp.ts";
-import {
-  applyOmpModelSelection,
-  createOmpSessionUpdateNormalizer,
-  createOmpSteering,
-  extractOmpElicitationForm,
-  extractOmpMissingApiKeyDetails,
-  formatOmpMissingApiKeyGuidance,
-  isOmpLostSessionError,
-  isOmpMissingApiKeyError,
-  isOmpSettings,
-} from "./ompAcp.ts";
 import { extractOpenCodeElicitationForm } from "./opencodeAcp.ts";
 import {
   copilotClientCapabilitiesMeta,
@@ -131,16 +120,6 @@ export function registerMistralVibeAcpExtensions(context: AcpAdapterV2ExtensionC
 }
 
 export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
-  const ompMissingKey = extractOmpMissingApiKeyDetails(cause);
-  if (ompMissingKey !== undefined) {
-    return makeProviderFailure({
-      cause,
-      class: "permission_error",
-      code: "auth_required",
-      retryable: false,
-      message: formatOmpMissingApiKeyGuidance(ompMissingKey),
-    });
-  }
   return makeProviderFailure({
     cause,
     ...(isAcpRequestError(cause)
@@ -220,7 +199,6 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const isAntigravityCli =
     options.settings.source === "local" &&
     /^agy(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? "");
-  const isOmp = isOmpSettings(options.settings);
   const isOpenCode =
     registryAgentId === "opencode" ||
     registryAgentId === "opencode-v2" ||
@@ -293,24 +271,12 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     compactViaAdvertisedCommand: true,
     ...(isAntigravityCli ? { wakeOnDetachedRequest: true, replyEndsWithUsageUpdate: true } : {}),
     promptFailure: (cause) =>
-      acpRegistryPromptFailure(
-        isVibe ? "mistral-vibe" : isOmp ? "omp" : registryAgentId,
-        cause,
-      ),
+      acpRegistryPromptFailure(isVibe ? "mistral-vibe" : registryAgentId, cause),
     ...(isDroid
       ? { extractElicitationForm: extractDroidElicitationForm }
-      : isOmp
-        ? {
-            extractElicitationForm: extractOmpElicitationForm,
-            steering: createOmpSteering(),
-            normalizeSessionUpdate: createOmpSessionUpdateNormalizer(),
-            applyModelSelection: applyOmpModelSelection,
-            requiresSignIn: isOmpMissingApiKeyError,
-            restartRuntimeAfterPromptError: isOmpLostSessionError,
-          }
-        : isOpenCode
-          ? { extractElicitationForm: extractOpenCodeElicitationForm }
-          : {}),
+      : isOpenCode
+        ? { extractElicitationForm: extractOpenCodeElicitationForm }
+        : {}),
     // glm-acp-agent is the one agent whose per-turn usage a live probe has verified.
     ...(isGlm ? { reportsPerTurnPromptUsage: true } : {}),
     ...(watchKimiPromptOutcome === undefined

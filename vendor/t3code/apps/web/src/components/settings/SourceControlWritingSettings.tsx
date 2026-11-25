@@ -239,7 +239,7 @@ export function SourceControlWritingSettingsSection() {
           >
             <SelectTrigger
               size="sm"
-              className="w-full sm:w-56"
+              className="w-full sm:w-48"
               aria-label={gt("Commit and pull request writing")}
             >
               <SelectValue>

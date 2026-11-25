@@ -57,11 +57,11 @@ describe("Antigravity with unchecked sign-in", () => {
     driver: ProviderDriverKind.make("antigravity"),
     status: "warning",
     auth: { status: "unknown" },
-    message: "Antigravity is installed. Google account access is not checked yet.",
+    message: "Antigravity is installed. Connect with Local agy CLI to load models.",
   };
 
-  it("presents an unchecked Google sign-in neutrally without claiming authentication is required", () => {
-    for (const auth of [unchecked.auth, { status: "unknown", type: "oauth-personal" }] as const) {
+  it("presents an unchecked local-cli sign-in neutrally without claiming authentication is required", () => {
+    for (const auth of [unchecked.auth, { status: "unknown", type: "local-cli" }] as const) {
       const candidate = { ...unchecked, auth };
       expect.soft(getProviderSummary(candidate)).toEqual({
         headline: "Installed · Sign-in not checked",
@@ -72,7 +72,7 @@ describe("Antigravity with unchecked sign-in", () => {
   });
 
   // regression: #18623 neutral unchecked-sign-in display must not mask real warnings
-  it("preserves actionable warnings, failures and disabled states outside unchecked Google sign-in", () => {
+  it("preserves actionable warnings, failures and disabled states outside unchecked local-cli sign-in", () => {
     const cases = [
       {
         name: "confirmed sign-out",
@@ -96,18 +96,6 @@ describe("Antigravity with unchecked sign-in", () => {
         name: "missing CLI",
         change: { installed: false },
         headline: "Not found",
-        status: "warning",
-      },
-      {
-        name: "API key authentication",
-        change: { auth: { status: "unknown", type: "gemini-api-key" } },
-        headline: "Needs attention",
-        status: "warning",
-      },
-      {
-        name: "Agent Platform authentication",
-        change: { auth: { status: "unknown", type: "agent-platform" } },
-        headline: "Needs attention",
         status: "warning",
       },
       {

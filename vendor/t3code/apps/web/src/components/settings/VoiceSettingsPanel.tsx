@@ -41,10 +41,10 @@ import {
   ArrowDownUpIcon,
   AudioLinesIcon,
   CheckIcon,
+  ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
   GlobeIcon,
-  InfoIcon,
   LanguagesIcon,
   KeyRoundIcon,
   LaptopIcon,
@@ -104,6 +104,7 @@ import { ProviderPackageIcon } from "../chat/ProviderPackageIcon";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { VoiceInputSetup } from "../chat/VoiceInputSetup";
 import { Badge } from "../ui/badge";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -147,6 +148,11 @@ import {
   SettingsSearchTarget,
   SettingsSection,
 } from "./settingsLayout";
+import {
+  SettingsSegmentedTabs,
+  dispatchSettingsRevealTarget,
+  type SettingsSegmentedTabItem,
+} from "./SettingsSegmentedTabs";
 import { useSearchableSetting } from "./settingsSearch";
 import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeContext";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
@@ -794,22 +800,48 @@ function useVoiceModels(prepared: PreparedConnection | null) {
 
 type VoiceModels = ReturnType<typeof useVoiceModels>;
 
-function AdvancedSpeechSettings({
-  prepared,
-  catalog,
-}: {
-  prepared: PreparedConnection;
-  catalog: VoiceModels;
-}) {
-  const messages = useMessages();
+export const VOICE_TAB_IDS = {
+  dictation: "dictation",
+  models: "models",
+} as const;
+
+export const VOICE_TAB_HASH_ANCHORS = {
+  dictation: [
+    "voice-input",
+    "voice-microphone",
+    "microphone-test",
+    "dictation-shortcut-mode",
+    "voice-transcription",
+    "voice-transcription-destination",
+    "speech-language",
+    "speech-silence-filtering",
+    "remove-filler-words",
+    "speech-streaming",
+    "speech-post-processing",
+    "speech-post-processing-model",
+    "speech-correction-word",
+  ] as const,
+  models: [
+    "voice-local-models",
+    "speech-models",
+    "transcription-test",
+    "speech-hardware",
+    "voice-mirror-guide",
+    "voice-dictionary",
+    "speech-dictionary",
+    "speech-project-dictionary",
+  ] as const,
+} as const;
+
+function StreamingTranscriptionAdvanced({ catalog }: { catalog: VoiceModels }) {
   const setting = useSearchableSetting();
   const gt = useGT();
   const settings = useClientSettings();
-  const { run, controlsDisabled, status } = catalog;
+  const { status } = catalog;
   if (!status?.supported) return null;
   const supported = status;
   return (
-    <AdvancedSettings targetIds={[setting("speech-streaming").id, setting("speech-hardware").id]}>
+    <AdvancedSettings targetIds={[setting("speech-streaming").id]}>
       <SettingsRow
         {...setting("speech-streaming")}
         title={gt("Streaming transcription")}
@@ -829,6 +861,25 @@ function AdvancedSpeechSettings({
           />
         }
       />
+    </AdvancedSettings>
+  );
+}
+
+function LocalModelHardwareSettings({
+  prepared,
+  catalog,
+}: {
+  prepared: PreparedConnection;
+  catalog: VoiceModels;
+}) {
+  const messages = useMessages();
+  const setting = useSearchableSetting();
+  const gt = useGT();
+  const { run, controlsDisabled, status } = catalog;
+  if (!status?.supported) return null;
+  const supported = status;
+  return (
+    <AdvancedSettings targetIds={[setting("speech-hardware").id]}>
       <SettingsRow
         {...setting("speech-hardware")}
         title={gt("Hardware")}
@@ -846,7 +897,11 @@ function AdvancedSpeechSettings({
                 );
             }}
           >
-            <SelectTrigger size="sm" aria-label={gt("Transcription hardware")} className="max-w-72">
+            <SelectTrigger
+              size="sm"
+              aria-label={gt("Transcription hardware")}
+              className="w-full sm:w-48"
+            >
               <SelectValue>
                 {supported.acceleration === "auto"
                   ? gt("Auto")
@@ -892,7 +947,11 @@ function AdvancedSpeechSettings({
                 );
             }}
           >
-            <SelectTrigger size="sm" aria-label={gt("Unload model")} className="max-w-72">
+            <SelectTrigger
+              size="sm"
+              aria-label={gt("Unload model")}
+              className="w-full sm:w-48"
+            >
               <SelectValue>{messages(UNLOAD_LABELS[supported.modelUnloadTimeout])}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -1327,6 +1386,7 @@ const HF_MIRROR_POWERSHELL_USER_CMD = `[Environment]::SetEnvironmentVariable("HF
 
 function PrismuxVoiceMirrorGuideRow() {
   const gt = useGT();
+  const [open, setOpen] = useState(false);
   const isWindows = isWindowsPlatform(typeof navigator === "undefined" ? "" : navigator.platform);
   const { copyToClipboard: copySessionCmd, isCopied: copiedSession } = useCopyToClipboard({
     target: {
@@ -1346,60 +1406,73 @@ function PrismuxVoiceMirrorGuideRow() {
   });
 
   return (
-    <SettingsRow
-      title={
-        <span className="inline-flex items-center gap-1.5">
-          <GlobeIcon aria-hidden className="size-3.5 text-muted-foreground" />
-          <span>{gt("Whisper model download mirror (HF_ENDPOINT)")}</span>
-        </span>
-      }
-      description={gt(
-        "If HuggingFace downloads are slow or unreachable in mainland China, set HF_ENDPOINT to https://hf-mirror.com and restart Prismux before downloading local Whisper models.",
-      )}
-    >
-      <div className="mt-2.5 space-y-2 pb-2 text-xs">
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2">
-          <span className="shrink-0 font-medium text-muted-foreground">
-            {isWindows ? gt("PowerShell (current session):") : gt("Shell export:")}
+    <div id="voice-mirror-guide">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="group flex min-h-10 w-full items-center gap-1.5 px-4 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5">
+          <ChevronRightIcon
+            aria-hidden
+            className="size-3.5 shrink-0 transition-transform duration-150 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+          />
+          <GlobeIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <span>
+            <T>Download troubleshooting / China mirror</T>
           </span>
-          <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
-            {isWindows ? HF_MIRROR_POWERSHELL_SESSION_CMD : `export HF_ENDPOINT=${HF_MIRROR_URL}`}
-          </code>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            onClick={() =>
-              copySessionCmd(
-                isWindows ? HF_MIRROR_POWERSHELL_SESSION_CMD : `export HF_ENDPOINT=${HF_MIRROR_URL}`,
-              )
-            }
-          >
-            {copiedSession ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-            {copiedSession ? gt("Copied") : gt("Copy")}
-          </Button>
-        </div>
-        {isWindows ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2">
-            <span className="shrink-0 font-medium text-muted-foreground">
-              {gt("Windows user env (persistent):")}
-            </span>
-            <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
-              {HF_MIRROR_POWERSHELL_USER_CMD}
-            </code>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => copyUserCmd(HF_MIRROR_POWERSHELL_USER_CMD)}
-            >
-              {copiedUser ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-              {copiedUser ? gt("Copied") : gt("Copy")}
-            </Button>
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <div className="border-t border-border/50 px-4 py-3.5 sm:px-5">
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {gt(
+                "If HuggingFace downloads are slow or unreachable in mainland China, set HF_ENDPOINT to https://hf-mirror.com and restart Prismux before downloading local Whisper models.",
+              )}
+            </p>
+            <div className="mt-2.5 space-y-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2">
+                <span className="shrink-0 font-medium text-muted-foreground">
+                  {isWindows ? gt("PowerShell (current session):") : gt("Shell export:")}
+                </span>
+                <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
+                  {isWindows ? HF_MIRROR_POWERSHELL_SESSION_CMD : `export HF_ENDPOINT=${HF_MIRROR_URL}`}
+                </code>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() =>
+                    copySessionCmd(
+                      isWindows
+                        ? HF_MIRROR_POWERSHELL_SESSION_CMD
+                        : `export HF_ENDPOINT=${HF_MIRROR_URL}`,
+                    )
+                  }
+                >
+                  {copiedSession ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+                  {copiedSession ? gt("Copied") : gt("Copy")}
+                </Button>
+              </div>
+              {isWindows ? (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2">
+                  <span className="shrink-0 font-medium text-muted-foreground">
+                    {gt("Windows user env (persistent):")}
+                  </span>
+                  <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
+                    {HF_MIRROR_POWERSHELL_USER_CMD}
+                  </code>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => copyUserCmd(HF_MIRROR_POWERSHELL_USER_CMD)}
+                  >
+                    {copiedUser ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+                    {copiedUser ? gt("Copied") : gt("Copy")}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           </div>
-        ) : null}
-      </div>
-    </SettingsRow>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -1500,6 +1573,548 @@ export function VoiceSettingsPanel() {
     chosenEnvironment.serverConfig.environment.capabilities.voiceTranscription !== true;
   const model = prepared && modelStatus?.supported ? modelStatus : null;
 
+  const dictationHashAnchors = prepared
+    ? VOICE_TAB_HASH_ANCHORS.dictation
+    : [
+        ...VOICE_TAB_HASH_ANCHORS.dictation,
+        "speech-models",
+        "speech-hardware",
+        "transcription-test",
+      ];
+  const modelsHashAnchors = prepared
+    ? VOICE_TAB_HASH_ANCHORS.models
+    : VOICE_TAB_HASH_ANCHORS.models.filter(
+        (anchor) =>
+          anchor !== "speech-models" &&
+          anchor !== "speech-hardware" &&
+          anchor !== "transcription-test",
+      );
+
+  const tabs: ReadonlyArray<SettingsSegmentedTabItem> = [
+    {
+      id: VOICE_TAB_IDS.dictation,
+      label: gt("Dictation & transcription"),
+      hashAnchors: dictationHashAnchors,
+      content: (
+        <>
+          <SettingsSection id="voice-input" title={gt("Input")}>
+            <SettingsRow
+              {...setting("voice-microphone")}
+              title={gt("Microphone")}
+              description={gt("Voice input uses the first connected microphone in this list.")}
+              control={
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label={gt("Refresh microphones")}
+                        onClick={() => void refreshMicrophones()}
+                      >
+                        <RefreshCwIcon />
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup>
+                    <T>Refresh microphones</T>
+                  </TooltipPopup>
+                </Tooltip>
+              }
+            >
+              <div className="mt-3 pb-2">
+                <MicrophoneOrderList order={order} devices={microphones} />
+              </div>
+            </SettingsRow>
+            <MicrophoneTest
+              key={selectedMicrophone}
+              microphoneId={selectedMicrophone}
+              onMicrophoneAccess={() => void refreshMicrophones()}
+            />
+            <SettingsRow
+              {...setting("dictation-shortcut-mode")}
+              title={gt("Dictation shortcut")}
+              description={`${messages(SHORTCUT_MODES[settings.voiceShortcutMode].hint)}.`}
+              control={
+                <Select
+                  value={settings.voiceShortcutMode}
+                  onValueChange={(value) => {
+                    if (value)
+                      void updateClientSettings({ voiceShortcutMode: value as VoiceShortcutMode });
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full sm:w-48"
+                    aria-label={gt("Dictation shortcut mode")}
+                  >
+                    <SelectValue>
+                      {messages(SHORTCUT_MODES[settings.voiceShortcutMode].label)}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    {(Object.keys(SHORTCUT_MODES) as VoiceShortcutMode[]).map((mode) => (
+                      <SelectItem key={mode} value={mode}>
+                        <span className="flex flex-col">
+                          {messages(SHORTCUT_MODES[mode].label)}
+                          <span className="text-xs text-muted-foreground">
+                            {messages(SHORTCUT_MODES[mode].hint)}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              }
+            />
+          </SettingsSection>
+
+          <SettingsSection id="voice-transcription" title={gt("Transcription")}>
+            <SettingsRow
+              {...setting("voice-transcription-destination")}
+              title={gt("Transcribe with")}
+              description={
+                destination.environmentId && chosenUnsupported
+                  ? gt("{label} can’t transcribe audio locally. Choose another destination.", {
+                      label: chosenEnvironment.label,
+                    })
+                  : gt("Where your speech is turned into text.")
+              }
+              control={
+                <div className="flex w-full min-w-0 items-center gap-1.5 @min-[32rem]/settings-row:w-auto">
+                  <Select
+                    value={
+                      isWindows && !appleSpeechAvailable && destination.device
+                        ? OFF
+                        : destinationValue
+                    }
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      const cloud = cloudChoices.find((choice) => choice.value === value);
+                      if (cloud) {
+                        setPendingCloud({
+                          environmentId: cloud.environment.environmentId,
+                          provider: cloud.provider,
+                        });
+                        return;
+                      }
+                      setPendingCloud(null);
+                      const chosen = environmentChoices.find((choice) => choice.value === value);
+                      if (value === OFF) chooseAudioDestination(null);
+                      else if (value === DEVICE) chooseAudioDestination({ kind: "device" });
+                      else if (chosen)
+                        chooseAudioDestination({
+                          kind: "environment",
+                          environmentId: chosen.environment.environmentId,
+                        });
+                    }}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      aria-label={gt("Transcribe with")}
+                      className="min-w-0 w-full sm:w-60"
+                    >
+                      <SelectValue>
+                        <span className="flex min-w-0 items-center gap-2">
+                          {destination.device && !(isWindows && !appleSpeechAvailable) ? (
+                            <LaptopIcon aria-hidden className="size-4" />
+                          ) : destination.cloudProvider ? (
+                            <CloudSpeechLogo provider={destination.cloudProvider} />
+                          ) : destination.environmentId ? (
+                            <MonitorIcon aria-hidden className="size-4" />
+                          ) : (
+                            <MicOffIcon aria-hidden className="size-4" />
+                          )}
+                          <span className="truncate">
+                            {destination.device && !(isWindows && !appleSpeechAvailable)
+                              ? appleSpeechLabel
+                              : destination.cloudProvider
+                                ? CLOUD_SPEECH_LABELS[destination.cloudProvider]
+                                : destination.environmentId
+                                  ? (chosenEnvironment?.label ??
+                                    gt("Chosen environment (unavailable)"))
+                                  : gt("Off")}
+                            {destination.cloudProvider && (
+                              <span className="text-muted-foreground">
+                                {" via "}
+                                {chosenEnvironment?.label ?? gt("unavailable environment")}
+                              </span>
+                            )}
+                          </span>
+                        </span>
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup align="end" alignItemWithTrigger={false}>
+                      <SelectItem value={OFF}>
+                        <span className="flex items-center gap-2">
+                          <MicOffIcon aria-hidden className="size-4" />
+                          <T>Off</T>
+                        </span>
+                      </SelectItem>
+                      {!isWindows && (appleSpeechAvailable || destination.device) && (
+                        <SelectGroup>
+                          <SelectGroupLabel>
+                            <T>On this Mac</T>
+                          </SelectGroupLabel>
+                          <SelectItem value={DEVICE}>
+                            <span className="flex items-center gap-2">
+                              <LaptopIcon aria-hidden className="size-4" />
+                              {appleSpeechLabel}
+                            </span>
+                          </SelectItem>
+                        </SelectGroup>
+                      )}
+                      {environmentChoices.length > 0 && (
+                        <SelectGroup>
+                          <SelectGroupLabel>
+                            <T>On an environment</T>
+                          </SelectGroupLabel>
+                          {environmentChoices.map(({ environment, value }) => (
+                            <SelectItem key={value} value={value}>
+                              <span className="flex items-center gap-2">
+                                <MonitorIcon aria-hidden className="size-4" />
+                                {environment.label}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      )}
+                      {cloudGroups.map(({ environment, choices }) => (
+                        <SelectGroup key={environment.environmentId}>
+                          <SelectGroupLabel>
+                            <T>
+                              Cloud via <Var>{environment.label}</Var>
+                            </T>
+                          </SelectGroupLabel>
+                          {choices.map(({ value, provider }) => (
+                            <SelectItem
+                              key={value}
+                              value={value}
+                              aria-label={`${CLOUD_SPEECH_LABELS[provider]} via ${environment.label}`}
+                            >
+                              <span className="flex items-center gap-2">
+                                <CloudSpeechLogo provider={provider} />
+                                {CLOUD_SPEECH_LABELS[provider]}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                      {destination.environmentId &&
+                      (!chosenEnvironment ||
+                        (destination.cloudProvider &&
+                          !cloudChoices.some((option) => option.value === destinationValue))) ? (
+                        <SelectItem value={destinationValue}>
+                          <T>Chosen environment (unavailable)</T>
+                        </SelectItem>
+                      ) : null}
+                    </SelectPopup>
+                  </Select>
+                  {destination.cloudProvider &&
+                    chosenEnvironment &&
+                    (canManageKey || destination.cloudProvider === "openrouter") && (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              size="icon-sm"
+                              type="button"
+                              variant="ghost"
+                              aria-label={manageLabel}
+                              onClick={() => {
+                                if (destination.cloudProvider)
+                                  setPendingCloud({
+                                    provider: destination.cloudProvider,
+                                    environmentId: chosenEnvironment.environmentId,
+                                  });
+                              }}
+                            >
+                              <KeyRoundIcon aria-hidden className="size-4" />
+                            </Button>
+                          }
+                        />
+                        <TooltipPopup>{manageLabel}</TooltipPopup>
+                      </Tooltip>
+                    )}
+                </div>
+              }
+            />
+            {pendingCloud && cloudEnvironment && (
+              <CloudVoiceConfiguration
+                key={JSON.stringify(pendingCloud)}
+                provider={pendingCloud.provider}
+                environment={cloudEnvironment}
+                active={
+                  destination.environmentId === pendingCloud.environmentId &&
+                  destination.cloudProvider === pendingCloud.provider
+                }
+                close={() => setPendingCloud(null)}
+              />
+            )}
+            {(model || destination.cloudProvider || destination.device) && (
+              <SettingsRow
+                {...setting("speech-language")}
+                title={gt("Language")}
+                description={
+                  destination.device
+                    ? gt(
+                        "Automatic uses your Mac’s language. The first use of a language downloads it.",
+                      )
+                    : destination.cloudProvider
+                      ? gt("The provider detects your language automatically.")
+                      : model?.supportsLanguageDetection
+                        ? gt("{model} detects the language automatically.", { model: model.model })
+                        : model
+                          ? gt("{model} uses one fixed language.", { model: model.model })
+                          : gt("This model uses one fixed language.")
+                }
+                control={
+                  <SpeechLanguageSelect
+                    automaticLabel={
+                      destination.device
+                        ? gt("Auto", { $context: "automatic language detection" })
+                        : undefined
+                    }
+                    model={
+                      destination.device
+                        ? { languages: appleSpeechLanguages, supportsLanguageDetection: true }
+                        : destination.cloudProvider
+                          ? cloudSpeechLanguages
+                          : model
+                    }
+                  />
+                }
+              />
+            )}
+            {model?.supportsTranslation ? (
+              <SettingsRow
+                title={gt("Translate to English")}
+                description={gt("Speak any language and get English text.")}
+                control={
+                  <Switch
+                    aria-label={gt("Translate to English")}
+                    checked={settings.speechTranslateToEnglish}
+                    onCheckedChange={(checked) =>
+                      void updateClientSettings({ speechTranslateToEnglish: checked })
+                    }
+                  />
+                }
+              />
+            ) : null}
+            <SettingsRow
+              {...setting("speech-silence-filtering")}
+              title={gt("Silence filtering")}
+              description={
+                destination.device
+                  ? gt("Apple Speech handles silence itself.")
+                  : destination.cloudProvider === "openai"
+                    ? gt("OpenAI handles silence itself.")
+                    : gt("Skip silence and background noise before transcribing.")
+              }
+              control={
+                <Switch
+                  aria-label={gt("Silence filtering")}
+                  disabled={destination.device || destination.cloudProvider === "openai"}
+                  checked={settings.speechSilenceFiltering}
+                  onCheckedChange={(checked) =>
+                    void updateClientSettings({ speechSilenceFiltering: checked })
+                  }
+                />
+              }
+            />
+            <SettingsRow
+              {...setting("remove-filler-words")}
+              title={gt("Remove filler words")}
+              description={
+                destination.device
+                  ? gt("Not available with Apple Speech.")
+                  : gt("Drop “um” and “uh” from transcripts.")
+              }
+              control={
+                <Switch
+                  aria-label={gt("Remove filler words")}
+                  disabled={destination.device}
+                  checked={settings.speechRemoveFillerWords}
+                  onCheckedChange={(checked) =>
+                    void updateClientSettings({ speechRemoveFillerWords: checked })
+                  }
+                />
+              }
+            />
+            {prepared && <StreamingTranscriptionAdvanced catalog={catalog} />}
+          </SettingsSection>
+
+          <SettingsSection id={setting("speech-post-processing").id} title={gt("Cleanup")}>
+            <SettingsRow
+              title={gt("Clean up transcripts")}
+              description={gt(
+                "Off by default. Sends the transcript and nearby draft text, never audio, to the cleanup model.",
+              )}
+              control={
+                <Switch
+                  aria-label={gt("Clean up transcripts")}
+                  checked={cleanupEnabled}
+                  onCheckedChange={chooseTranscriptCleanup}
+                />
+              }
+            />
+            {cleanupEnabled ? (
+              <SettingsRow
+                title={gt("Instructions")}
+                description={
+                  settings.speechPostProcessingPrompt.mode === "custom"
+                    ? gt("Your own instructions for cleanup.")
+                    : gt("Fix punctuation, numbers, lists, and spoken corrections.")
+                }
+                control={
+                  <Select
+                    value={settings.speechPostProcessingPrompt.mode}
+                    onValueChange={(value) => {
+                      if (value === "default" || value === "custom")
+                        void updateClientSettings({
+                          speechPostProcessingPrompt: {
+                            mode: value,
+                            customInstructions:
+                              value === "custom" &&
+                              !settings.speechPostProcessingPrompt.customInstructions.trim()
+                                ? DEFAULT_SPEECH_POST_PROCESSING_PROMPT
+                                : settings.speechPostProcessingPrompt.customInstructions,
+                          },
+                        });
+                    }}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="w-full sm:w-48"
+                      aria-label={gt("Cleanup instructions")}
+                    >
+                      <SelectValue>
+                        {settings.speechPostProcessingPrompt.mode === "custom"
+                          ? gt("Custom")
+                          : gt("Built-in")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup align="end" alignItemWithTrigger={false}>
+                      <SelectItem value="default">
+                        <T>Built-in</T>
+                      </SelectItem>
+                      <SelectItem value="custom">
+                        <T>Custom</T>
+                      </SelectItem>
+                    </SelectPopup>
+                  </Select>
+                }
+              >
+                {settings.speechPostProcessingPrompt.mode === "custom" ? (
+                  <div className="mt-3 pb-2">
+                    <Textarea
+                      aria-label={gt("Custom cleanup instructions")}
+                      maxLength={10_000}
+                      value={settings.speechPostProcessingPrompt.customInstructions}
+                      onChange={(event) =>
+                        void updateClientSettings({
+                          speechPostProcessingPrompt: {
+                            mode: "custom",
+                            customInstructions: event.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                ) : null}
+              </SettingsRow>
+            ) : null}
+            {cleanupEnabled && settingsScope !== null ? <CleanupModelRow /> : null}
+            {cleanupEnabled ? (
+              <SettingsRow
+                {...setting("speech-correction-word")}
+                title={gt("Correction cue")}
+                description={gt("The phrase you say to fix a mistake, like “scratch that”.")}
+                control={
+                  <Input
+                    key={settings.speechCorrectionWord}
+                    defaultValue={settings.speechCorrectionWord}
+                    maxLength={50}
+                    placeholder="sorry"
+                    aria-label={gt("Correction cue")}
+                    className="w-full sm:w-48"
+                    onBlur={(event) => {
+                      const next = event.target.value.trim();
+                      if (next !== settings.speechCorrectionWord)
+                        void updateClientSettings({ speechCorrectionWord: next });
+                    }}
+                  />
+                }
+              />
+            ) : null}
+          </SettingsSection>
+        </>
+      ),
+    },
+    {
+      id: VOICE_TAB_IDS.models,
+      label: gt("Local models & dictionary"),
+      hashAnchors: modelsHashAnchors,
+      content: (
+        <>
+          <SettingsSection id="voice-local-models" title={gt("Models")}>
+            {prepared ? (
+              <>
+                <SpeechModelBrowser
+                  key={prepared.environmentId}
+                  prepared={prepared}
+                  catalog={catalog}
+                  testEnvironmentId={
+                    project?.environmentId ?? target?.environmentId ?? prepared.environmentId
+                  }
+                  projectId={project?.id ?? null}
+                  projectName={project?.title ?? null}
+                />
+                <LocalModelHardwareSettings prepared={prepared} catalog={catalog} />
+                <PrismuxVoiceMirrorGuideRow />
+              </>
+            ) : (
+              <SettingsRow
+                title={gt("Models")}
+                description={gt(
+                  "Choose a local or remote compute environment in Dictation & transcription first to manage local speech models and hardware acceleration.",
+                )}
+                control={
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => dispatchSettingsRevealTarget("voice-transcription-destination")}
+                  >
+                    <T>Configure now</T>
+                  </Button>
+                }
+              />
+            )}
+          </SettingsSection>
+
+          <SettingsSection id="voice-dictionary" title={gt("Dictionary")}>
+            <SettingsRow
+              {...setting("speech-dictionary")}
+              title={gt("Your dictionary")}
+              description={gt("Names and terms to spell your way, saved on this device.")}
+            >
+              <div className="mt-3 pb-2">
+                <DictionaryEditor
+                  label="dictionary"
+                  words={settings.speechCustomWords}
+                  onChange={(words) => void updateClientSettings({ speechCustomWords: words })}
+                />
+              </div>
+            </SettingsRow>
+            <ProjectDictionaryRow />
+          </SettingsSection>
+        </>
+      ),
+    },
+  ];
+
   return (
     <SettingsPageContainer
       searchTargetFallbacks={{
@@ -1520,475 +2135,11 @@ export function VoiceSettingsPanel() {
         "speech-correction-word": cleanupEnabled ? undefined : "speech-post-processing",
       }}
     >
-      <SettingsSection id="voice-input" title={gt("Input")}>
-        <SettingsRow
-          {...setting("voice-microphone")}
-          title={gt("Microphone")}
-          description={gt("Voice input uses the first connected microphone in this list.")}
-          control={
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label={gt("Refresh microphones")}
-                    onClick={() => void refreshMicrophones()}
-                  >
-                    <RefreshCwIcon />
-                  </Button>
-                }
-              />
-              <TooltipPopup>
-                <T>Refresh microphones</T>
-              </TooltipPopup>
-            </Tooltip>
-          }
-        >
-          <div className="mt-3 pb-2">
-            <MicrophoneOrderList order={order} devices={microphones} />
-          </div>
-        </SettingsRow>
-        <MicrophoneTest
-          key={selectedMicrophone}
-          microphoneId={selectedMicrophone}
-          onMicrophoneAccess={() => void refreshMicrophones()}
-        />
-        <SettingsRow
-          {...setting("dictation-shortcut-mode")}
-          title={gt("Dictation shortcut")}
-          description={`${messages(SHORTCUT_MODES[settings.voiceShortcutMode].hint)}.`}
-          control={
-            <Select
-              value={settings.voiceShortcutMode}
-              onValueChange={(value) => {
-                if (value)
-                  void updateClientSettings({ voiceShortcutMode: value as VoiceShortcutMode });
-              }}
-            >
-              <SelectTrigger size="sm" aria-label={gt("Dictation shortcut mode")}>
-                <SelectValue>
-                  {messages(SHORTCUT_MODES[settings.voiceShortcutMode].label)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {(Object.keys(SHORTCUT_MODES) as VoiceShortcutMode[]).map((mode) => (
-                  <SelectItem key={mode} value={mode}>
-                    <span className="flex flex-col">
-                      {messages(SHORTCUT_MODES[mode].label)}
-                      <span className="text-xs text-muted-foreground">
-                        {messages(SHORTCUT_MODES[mode].hint)}
-                      </span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection id="voice-transcription" title={gt("Transcription")}>
-        <SettingsRow
-          {...setting("voice-transcription-destination")}
-          title={gt("Transcribe with")}
-          description={
-            destination.environmentId && chosenUnsupported
-              ? gt("{label} can’t transcribe audio locally. Choose another destination.", {
-                  label: chosenEnvironment.label,
-                })
-              : gt("Where your speech is turned into text.")
-          }
-          control={
-            <div className="flex w-full min-w-0 items-center gap-1.5 @min-[32rem]/settings-row:w-auto">
-              <Select
-                value={isWindows && !appleSpeechAvailable && destination.device ? OFF : destinationValue}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  const cloud = cloudChoices.find((choice) => choice.value === value);
-                  if (cloud) {
-                    setPendingCloud({
-                      environmentId: cloud.environment.environmentId,
-                      provider: cloud.provider,
-                    });
-                    return;
-                  }
-                  setPendingCloud(null);
-                  const chosen = environmentChoices.find((choice) => choice.value === value);
-                  if (value === OFF) chooseAudioDestination(null);
-                  else if (value === DEVICE) chooseAudioDestination({ kind: "device" });
-                  else if (chosen)
-                    chooseAudioDestination({
-                      kind: "environment",
-                      environmentId: chosen.environment.environmentId,
-                    });
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  aria-label={gt("Transcribe with")}
-                  className="min-w-0 @min-[32rem]/settings-row:w-auto @min-[32rem]/settings-row:max-w-72"
-                >
-                  <SelectValue>
-                    <span className="flex min-w-0 items-center gap-2">
-                      {destination.device && !(isWindows && !appleSpeechAvailable) ? (
-                        <LaptopIcon aria-hidden className="size-4" />
-                      ) : destination.cloudProvider ? (
-                        <CloudSpeechLogo provider={destination.cloudProvider} />
-                      ) : destination.environmentId ? (
-                        <MonitorIcon aria-hidden className="size-4" />
-                      ) : (
-                        <MicOffIcon aria-hidden className="size-4" />
-                      )}
-                      <span className="truncate">
-                        {destination.device && !(isWindows && !appleSpeechAvailable)
-                          ? appleSpeechLabel
-                          : destination.cloudProvider
-                            ? CLOUD_SPEECH_LABELS[destination.cloudProvider]
-                            : destination.environmentId
-                              ? (chosenEnvironment?.label ?? gt("Chosen environment (unavailable)"))
-                              : gt("Off")}
-                        {destination.cloudProvider && (
-                          <span className="text-muted-foreground">
-                            {" via "}
-                            {chosenEnvironment?.label ?? gt("unavailable environment")}
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value={OFF}>
-                    <span className="flex items-center gap-2">
-                      <MicOffIcon aria-hidden className="size-4" />
-                      <T>Off</T>
-                    </span>
-                  </SelectItem>
-                  {!isWindows && (appleSpeechAvailable || destination.device) && (
-                    <SelectGroup>
-                      <SelectGroupLabel>
-                        <T>On this Mac</T>
-                      </SelectGroupLabel>
-                      <SelectItem value={DEVICE}>
-                        <span className="flex items-center gap-2">
-                          <LaptopIcon aria-hidden className="size-4" />
-                          {appleSpeechLabel}
-                        </span>
-                      </SelectItem>
-                    </SelectGroup>
-                  )}
-                  {environmentChoices.length > 0 && (
-                    <SelectGroup>
-                      <SelectGroupLabel>
-                        <T>On an environment</T>
-                      </SelectGroupLabel>
-                      {environmentChoices.map(({ environment, value }) => (
-                        <SelectItem key={value} value={value}>
-                          <span className="flex items-center gap-2">
-                            <MonitorIcon aria-hidden className="size-4" />
-                            {environment.label}
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  )}
-                  {cloudGroups.map(({ environment, choices }) => (
-                    <SelectGroup key={environment.environmentId}>
-                      <SelectGroupLabel>
-                        <T>
-                          Cloud via <Var>{environment.label}</Var>
-                        </T>
-                      </SelectGroupLabel>
-                      {choices.map(({ value, provider }) => (
-                        <SelectItem
-                          key={value}
-                          value={value}
-                          aria-label={`${CLOUD_SPEECH_LABELS[provider]} via ${environment.label}`}
-                        >
-                          <span className="flex items-center gap-2">
-                            <CloudSpeechLogo provider={provider} />
-                            {CLOUD_SPEECH_LABELS[provider]}
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                  {destination.environmentId &&
-                  (!chosenEnvironment ||
-                    (destination.cloudProvider &&
-                      !cloudChoices.some((option) => option.value === destinationValue))) ? (
-                    <SelectItem value={destinationValue}>
-                      <T>Chosen environment (unavailable)</T>
-                    </SelectItem>
-                  ) : null}
-                </SelectPopup>
-              </Select>
-              {destination.cloudProvider &&
-                chosenEnvironment &&
-                (canManageKey || destination.cloudProvider === "openrouter") && (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          size="icon-sm"
-                          type="button"
-                          variant="ghost"
-                          aria-label={manageLabel}
-                          onClick={() => {
-                            if (destination.cloudProvider)
-                              setPendingCloud({
-                                provider: destination.cloudProvider,
-                                environmentId: chosenEnvironment.environmentId,
-                              });
-                          }}
-                        >
-                          <KeyRoundIcon aria-hidden className="size-4" />
-                        </Button>
-                      }
-                    />
-                    <TooltipPopup>{manageLabel}</TooltipPopup>
-                  </Tooltip>
-                )}
-            </div>
-          }
-        />
-        {pendingCloud && cloudEnvironment && (
-          <CloudVoiceConfiguration
-            key={JSON.stringify(pendingCloud)}
-            provider={pendingCloud.provider}
-            environment={cloudEnvironment}
-            active={
-              destination.environmentId === pendingCloud.environmentId &&
-              destination.cloudProvider === pendingCloud.provider
-            }
-            close={() => setPendingCloud(null)}
-          />
-        )}
-        {(model || destination.cloudProvider || destination.device) && (
-          <SettingsRow
-            {...setting("speech-language")}
-            title={gt("Language")}
-            description={
-              destination.device
-                ? gt(
-                    "Automatic uses your Mac’s language. The first use of a language downloads it.",
-                  )
-                : destination.cloudProvider
-                  ? gt("The provider detects your language automatically.")
-                  : model?.supportsLanguageDetection
-                    ? gt("{model} detects the language automatically.", { model: model.model })
-                    : model
-                      ? gt("{model} uses one fixed language.", { model: model.model })
-                      : gt("This model uses one fixed language.")
-            }
-            control={
-              <SpeechLanguageSelect
-                automaticLabel={
-                  destination.device
-                    ? gt("Auto", { $context: "automatic language detection" })
-                    : undefined
-                }
-                model={
-                  destination.device
-                    ? { languages: appleSpeechLanguages, supportsLanguageDetection: true }
-                    : destination.cloudProvider
-                      ? cloudSpeechLanguages
-                      : model
-                }
-              />
-            }
-          />
-        )}
-        {model?.supportsTranslation ? (
-          <SettingsRow
-            title={gt("Translate to English")}
-            description={gt("Speak any language and get English text.")}
-            control={
-              <Switch
-                aria-label={gt("Translate to English")}
-                checked={settings.speechTranslateToEnglish}
-                onCheckedChange={(checked) =>
-                  void updateClientSettings({ speechTranslateToEnglish: checked })
-                }
-              />
-            }
-          />
-        ) : null}
-        <SettingsRow
-          {...setting("speech-silence-filtering")}
-          title={gt("Silence filtering")}
-          description={
-            destination.device
-              ? gt("Apple Speech handles silence itself.")
-              : destination.cloudProvider === "openai"
-                ? gt("OpenAI handles silence itself.")
-                : gt("Skip silence and background noise before transcribing.")
-          }
-          control={
-            <Switch
-              aria-label={gt("Silence filtering")}
-              disabled={destination.device || destination.cloudProvider === "openai"}
-              checked={settings.speechSilenceFiltering}
-              onCheckedChange={(checked) =>
-                void updateClientSettings({ speechSilenceFiltering: checked })
-              }
-            />
-          }
-        />
-        <SettingsRow
-          {...setting("remove-filler-words")}
-          title={gt("Remove filler words")}
-          description={
-            destination.device
-              ? gt("Not available with Apple Speech.")
-              : gt("Drop “um” and “uh” from transcripts.")
-          }
-          control={
-            <Switch
-              aria-label={gt("Remove filler words")}
-              disabled={destination.device}
-              checked={settings.speechRemoveFillerWords}
-              onCheckedChange={(checked) =>
-                void updateClientSettings({ speechRemoveFillerWords: checked })
-              }
-            />
-          }
-        />
-        {prepared ? (
-          <SpeechModelBrowser
-            key={prepared.environmentId}
-            prepared={prepared}
-            catalog={catalog}
-            testEnvironmentId={
-              project?.environmentId ?? target?.environmentId ?? prepared.environmentId
-            }
-            projectId={project?.id ?? null}
-            projectName={project?.title ?? null}
-          />
-        ) : null}
-        <PrismuxVoiceMirrorGuideRow />
-        {prepared && <AdvancedSpeechSettings prepared={prepared} catalog={catalog} />}
-      </SettingsSection>
-
-      <SettingsSection id="voice-dictionary" title={gt("Dictionary")}>
-        <SettingsRow
-          {...setting("speech-dictionary")}
-          title={gt("Your dictionary")}
-          description={gt("Names and terms to spell your way, saved on this device.")}
-        >
-          <div className="mt-3 pb-2">
-            <DictionaryEditor
-              label="dictionary"
-              words={settings.speechCustomWords}
-              onChange={(words) => void updateClientSettings({ speechCustomWords: words })}
-            />
-          </div>
-        </SettingsRow>
-        <ProjectDictionaryRow />
-      </SettingsSection>
-
-      <SettingsSection id={setting("speech-post-processing").id} title={gt("Cleanup")}>
-        <SettingsRow
-          title={gt("Clean up transcripts")}
-          description={gt(
-            "Off by default. Sends the transcript and nearby draft text, never audio, to the cleanup model.",
-          )}
-          control={
-            <Switch
-              aria-label={gt("Clean up transcripts")}
-              checked={cleanupEnabled}
-              onCheckedChange={chooseTranscriptCleanup}
-            />
-          }
-        />
-        {cleanupEnabled ? (
-          <SettingsRow
-            title={gt("Instructions")}
-            description={
-              settings.speechPostProcessingPrompt.mode === "custom"
-                ? gt("Your own instructions for cleanup.")
-                : gt("Fix punctuation, numbers, lists, and spoken corrections.")
-            }
-            control={
-              <Select
-                value={settings.speechPostProcessingPrompt.mode}
-                onValueChange={(value) => {
-                  if (value === "default" || value === "custom")
-                    void updateClientSettings({
-                      speechPostProcessingPrompt: {
-                        mode: value,
-                        customInstructions:
-                          value === "custom" &&
-                          !settings.speechPostProcessingPrompt.customInstructions.trim()
-                            ? DEFAULT_SPEECH_POST_PROCESSING_PROMPT
-                            : settings.speechPostProcessingPrompt.customInstructions,
-                      },
-                    });
-                }}
-              >
-                <SelectTrigger size="sm" aria-label={gt("Cleanup instructions")}>
-                  <SelectValue>
-                    {settings.speechPostProcessingPrompt.mode === "custom"
-                      ? gt("Custom")
-                      : gt("Built-in")}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="default">
-                    <T>Built-in</T>
-                  </SelectItem>
-                  <SelectItem value="custom">
-                    <T>Custom</T>
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-            }
-          >
-            {settings.speechPostProcessingPrompt.mode === "custom" ? (
-              <div className="mt-3 pb-2">
-                <Textarea
-                  aria-label={gt("Custom cleanup instructions")}
-                  maxLength={10_000}
-                  value={settings.speechPostProcessingPrompt.customInstructions}
-                  onChange={(event) =>
-                    void updateClientSettings({
-                      speechPostProcessingPrompt: {
-                        mode: "custom",
-                        customInstructions: event.target.value,
-                      },
-                    })
-                  }
-                />
-              </div>
-            ) : null}
-          </SettingsRow>
-        ) : null}
-        {cleanupEnabled && settingsScope !== null ? <CleanupModelRow /> : null}
-        {cleanupEnabled ? (
-          <SettingsRow
-            {...setting("speech-correction-word")}
-            title={gt("Correction cue")}
-            description={gt("The phrase you say to fix a mistake, like “scratch that”.")}
-            control={
-              <Input
-                key={settings.speechCorrectionWord}
-                defaultValue={settings.speechCorrectionWord}
-                maxLength={50}
-                placeholder="sorry"
-                aria-label={gt("Correction cue")}
-                className="@min-[32rem]/settings-row:w-40"
-                onBlur={(event) => {
-                  const next = event.target.value.trim();
-                  if (next !== settings.speechCorrectionWord)
-                    void updateClientSettings({ speechCorrectionWord: next });
-                }}
-              />
-            }
-          />
-        ) : null}
-      </SettingsSection>
+      <SettingsSegmentedTabs
+        tabs={tabs}
+        defaultTabId={VOICE_TAB_IDS.dictation}
+        ariaLabel={gt("Voice settings sections")}
+      />
     </SettingsPageContainer>
   );
 }

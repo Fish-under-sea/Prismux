@@ -4,18 +4,23 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   type ServerProvider,
+  type ServerSettings,
 } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
-import { deriveProviderInstanceEntries } from "../../providerInstances";
+import {
+  deriveProviderInstanceEntries,
+  providerInstanceEntriesFor,
+} from "../../providerInstances";
 import {
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
@@ -25,6 +30,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { shouldPreservePopoverOnSubmenuDismiss } from "./WorkspaceNewTabPopover";
 import {
   launchPrimaryAgentDraft,
+  resolveWorkspaceRouteProviderMetadata,
   type PendingDraftTabBinding,
 } from "./WorkspaceSplitContainer";
 import { WorkspacePaneContent } from "./WorkspacePaneContent";
@@ -62,6 +68,9 @@ function makeProvider(input: {
   driver: string;
   displayName?: string;
   enabled?: boolean;
+  installed?: boolean;
+  status?: ServerProvider["status"];
+  authStatus?: ServerProvider["auth"]["status"];
   models?: ServerProvider["models"];
 }): ServerProvider {
   return {
@@ -69,10 +78,10 @@ function makeProvider(input: {
     driver: ProviderDriverKind.make(input.driver),
     ...(input.displayName ? { displayName: input.displayName } : {}),
     enabled: input.enabled ?? true,
-    installed: true,
+    installed: input.installed ?? true,
     version: "1.0.0",
-    status: "ready",
-    auth: { status: "authenticated" },
+    status: input.status ?? "ready",
+    auth: { status: input.authStatus ?? "authenticated" },
     checkedAt: "2026-11-23T00:00:00.000Z",
     models: input.models ?? [
       {
@@ -339,7 +348,7 @@ describe("workspaceQuickLaunch.logic", () => {
       makeProvider({ instanceId: "claudeAgent", driver: "claudeAgent" }),
       makeProvider({ instanceId: "codex", driver: "codex" }),
       makeProvider({ instanceId: "antigravity", driver: "antigravity" }),
-      makeProvider({ instanceId: "omp", driver: "acpRegistry", displayName: "omp" }),
+      makeProvider({ instanceId: "dsh", driver: "acpRegistry", displayName: "DeepSeek Harness (dsh)" }),
       makeProvider({ instanceId: "disabled-one", driver: "cursor", enabled: false }),
     ]);
 
@@ -370,7 +379,7 @@ describe("workspaceQuickLaunch.logic", () => {
       "Claude Code",
       "Codex",
       "Antigravity",
-      "oh-my-pi",
+      "DeepSeek Harness",
     ]);
     expect(agents[0]?.recentThreads.map((t) => t.title)).toEqual(["优化液态玻璃模糊度"]);
     expect(agents[1]?.recentThreads.map((t) => t.title)).toEqual(["实现 PTY 环形缓冲"]);
@@ -520,8 +529,20 @@ describe("workspaceQuickLaunch.logic", () => {
 });
 
 describe("WorkspaceTabBar markup", () => {
-  it("renders chromeBars glass zone, canonical brand tabs, + trigger, and horizontal/vertical/close split controls", () => {
-    const html = renderToStaticMarkup(
+  it("renders shellFrame glass zone, canonical brand tabs, + trigger, and pane ⋯ menu without standalone outer split buttons", () => {
+    const newTabPopover = {
+      openTabs: [],
+      historyThreads: [],
+      agents: [],
+      onActivateOpenTab: vi.fn(),
+      onOpenHistoryThread: vi.fn(),
+      onLaunchAgent: vi.fn(),
+      onRunQuickTool: vi.fn(),
+      onOpenUrl: vi.fn(),
+      onOpenAgentSettings: vi.fn(),
+    };
+
+    const splitPaneHtml = renderToStaticMarkup(
       <TooltipProvider>
         <WorkspaceTabBar
           pane={{
@@ -553,17 +574,57 @@ describe("WorkspaceTabBar markup", () => {
           touchesTopEdge
           touchesLeftEdge
           touchesRightEdge={false}
-          newTabPopover={{
-            openTabs: [],
-            historyThreads: [],
-            agents: [],
-            onActivateOpenTab: vi.fn(),
-            onOpenHistoryThread: vi.fn(),
-            onLaunchAgent: vi.fn(),
-            onRunQuickTool: vi.fn(),
-            onOpenUrl: vi.fn(),
-            onOpenAgentSettings: vi.fn(),
+          newTabPopover={newTabPopover}
+          onActivateTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onSplitPane={vi.fn()}
+          onResetSplitRatio={vi.fn()}
+          onClosePane={vi.fn()}
+          onMoveTabToPane={vi.fn()}
+          onReorderTab={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(splitPaneHtml).toContain('data-pmx-glass-zone="shellFrame"');
+    expect(splitPaneHtml).not.toContain("border-b border-border/60");
+    expect(splitPaneHtml).toContain('data-workspace-tab="tab-1"');
+    expect(splitPaneHtml).toContain('data-agent-brand="codex"');
+    expect(splitPaneHtml).toContain("Terminal 1");
+    expect(splitPaneHtml).toContain('data-workspace-new-tab-trigger="pane-left"');
+    expect(splitPaneHtml).toContain('data-workspace-pane-menu="pane-left"');
+    expect(splitPaneHtml).toContain('data-workspace-close-pane="pane-left"');
+    // Standalone outer 左右分屏 / 上下分屏 buttons must not clutter split pane tab bars
+    expect(splitPaneHtml).not.toContain('data-workspace-split-horizontal=');
+    expect(splitPaneHtml).not.toContain('data-workspace-split-vertical=');
+    expect(splitPaneHtml).not.toContain('aria-label="左右分屏"');
+    expect(splitPaneHtml).not.toContain('aria-label="上下分屏"');
+
+    const singlePaneHtml = renderToStaticMarkup(
+      <TooltipProvider>
+        <WorkspaceTabBar
+          pane={{
+            id: "pane-main",
+            tabIds: ["tab-1"],
+            activeTabId: "tab-1",
           }}
+          tabs={[
+            {
+              id: "tab-1",
+              kind: "thread",
+              title: "Codex",
+              providerId: "codex",
+              createdAt: 1,
+              lastActiveAt: 2,
+            },
+          ]}
+          isFocused
+          paneCount={1}
+          otherPaneIds={[]}
+          touchesTopEdge
+          touchesLeftEdge
+          touchesRightEdge
+          newTabPopover={newTabPopover}
           onActivateTab={vi.fn()}
           onCloseTab={vi.fn()}
           onSplitPane={vi.fn()}
@@ -574,15 +635,38 @@ describe("WorkspaceTabBar markup", () => {
       </TooltipProvider>,
     );
 
-    expect(html).toContain('data-pmx-glass-zone="shellFrame"');
-    expect(html).not.toContain("border-b border-border/60");
-    expect(html).toContain('data-workspace-tab="tab-1"');
-    expect(html).toContain('data-agent-brand="codex"');
-    expect(html).toContain("Terminal 1");
-    expect(html).toContain('data-workspace-new-tab-trigger="pane-left"');
-    expect(html).toContain('data-workspace-split-horizontal="pane-left"');
-    expect(html).toContain('data-workspace-split-vertical="pane-left"');
-    expect(html).toContain('data-workspace-close-pane="pane-left"');
+    expect(singlePaneHtml).toContain('data-workspace-pane-menu="pane-main"');
+    expect(singlePaneHtml).not.toContain('data-workspace-split-horizontal=');
+    expect(singlePaneHtml).not.toContain('data-workspace-split-vertical=');
+    expect(singlePaneHtml).not.toContain('data-workspace-close-pane=');
+    expect(singlePaneHtml).not.toContain('aria-label="左右分屏"');
+    expect(singlePaneHtml).not.toContain('aria-label="上下分屏"');
+
+    // Verify split actions live exclusively inside the ⋯ MenuPopup and Reset Split Ratio is wired.
+    const workspaceDir = path.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const tabBarSource = fs.readFileSync(path.join(workspaceDir, "WorkspaceTabBar.tsx"), "utf8");
+    expect(tabBarSource).not.toContain("data-workspace-split-horizontal");
+    expect(tabBarSource).not.toContain("data-workspace-split-vertical");
+    const menuPopupStart = tabBarSource.indexOf("<MenuPopup");
+    expect(menuPopupStart).toBeGreaterThan(-1);
+    const menuPopupSlice = tabBarSource.slice(menuPopupStart);
+    expect(menuPopupSlice).toContain("data-workspace-menu-split-horizontal");
+    expect(menuPopupSlice).toContain("data-workspace-menu-split-vertical");
+    expect(menuPopupSlice).toContain("data-workspace-menu-reset-split-ratio");
+    expect(menuPopupSlice).toContain("data-workspace-menu-close-pane");
+    expect(menuPopupSlice).toContain("左右分屏");
+    expect(menuPopupSlice).toContain("上下分屏");
+    expect(menuPopupSlice).toContain("重置分屏比例");
+    expect(menuPopupSlice).toContain("关闭当前分屏");
+
+    const splitContainerSource = fs.readFileSync(
+      path.join(workspaceDir, "WorkspaceSplitContainer.tsx"),
+      "utf8",
+    );
+    expect(splitContainerSource).toContain("onResetSplitRatio={");
+    expect(splitContainerSource).toContain("resetSplitRatio(parentSplitId)");
   });
 
   it("renders seamless concave stage frame with 4 inverted corners, 7px right shellFrame edge when closed, and right-open handoff", () => {
@@ -1427,5 +1511,395 @@ describe("single unused draft tab invariant", () => {
       model: "claudeAgent-default",
       title: "Claude Code",
     });
+  });
+
+  it("syncs scratch/no-project draft tab icon and display title from real selected/default provider instead of stale-defaulting to Codex", () => {
+    const SCRATCH_PROJECT_ID = ProjectId.make("proj-scratch");
+    const SCRATCH_DRAFT_ID = "draft-scratch-agy" as DraftId;
+    const CODEX_ID = ProviderInstanceId.make("codex");
+    const CLAUDE_ID = ProviderInstanceId.make("claudeAgent");
+    const AGY_ID = ProviderInstanceId.make("antigravity");
+
+    const serverProviders: ReadonlyArray<ServerProvider> = [
+      makeProvider({ instanceId: "codex", driver: "codex" }),
+      makeProvider({ instanceId: "claudeAgent", driver: "claudeAgent" }),
+      makeProvider({
+        instanceId: "antigravity",
+        driver: "antigravity",
+        displayName: "区区",
+        models: [
+          {
+            slug: "4-neon",
+            name: "4 Neon",
+            isDefault: true,
+            isCustom: false,
+            capabilities: {},
+          },
+        ],
+      }),
+    ];
+
+    const settingsWithAgyDefault: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      defaultModelSelection: { instanceId: AGY_ID, model: "4-neon" },
+      providerInstances: {
+        ...DEFAULT_SERVER_SETTINGS.providerInstances,
+        [AGY_ID]: {
+          driver: ProviderDriverKind.make("antigravity"),
+          displayName: "区区",
+          enabled: true,
+        },
+      },
+    };
+    const entries = providerInstanceEntriesFor(
+      serverProviders,
+      settingsWithAgyDefault,
+      SCRATCH_PROJECT_ID,
+    );
+
+    // 1. Fresh scratch (`无项目 ~`) draft with empty composerDraft must resolve Antigravity (defaultModelSelection), NEVER Codex!
+    const scratchDefaultMeta = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+      routeThreadShell: null,
+      routeComposerDraft: null,
+      stickyActiveProvider: null,
+      stickyModelSelectionByProvider: {},
+      providers: serverProviders,
+      settings: settingsWithAgyDefault,
+      instanceEntries: entries,
+      activeProject: null,
+      activeProjectId: SCRATCH_PROJECT_ID,
+      now: Date.parse("2026-11-25T08:00:00Z"),
+    });
+    expect(scratchDefaultMeta).toMatchObject({
+      instanceId: AGY_ID,
+      providerId: "antigravity",
+      model: "4-neon",
+      title: "区区",
+    });
+
+    // Reusing a stale Codex unused draft tab for this scratch draft must immediately overwrite both logo (providerId) and title.
+    const store = useWorkspaceTabsStore.getState();
+    const staleCodexTabId = store.openTab({
+      kind: "draft",
+      title: "Codex",
+      providerId: "codex",
+      instanceId: CODEX_ID,
+      draftId: DRAFT_A,
+    });
+    const syncedTabId = store.syncRouteTarget({
+      target: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      title: scratchDefaultMeta.title,
+      providerId: scratchDefaultMeta.providerId,
+      instanceId: scratchDefaultMeta.instanceId,
+      model: scratchDefaultMeta.model,
+      reuseUnusedDraftTabId: staleCodexTabId,
+    });
+    expect(syncedTabId).toBe(staleCodexTabId);
+    const tabAfterScratch = useWorkspaceTabsStore.getState().tabs[staleCodexTabId]!;
+    expect(tabAfterScratch).toMatchObject({
+      kind: "draft",
+      draftId: SCRATCH_DRAFT_ID,
+      providerId: "antigravity",
+      instanceId: AGY_ID,
+      model: "4-neon",
+      title: "区区",
+    });
+
+    const tabBarHtml = renderToStaticMarkup(
+      <TooltipProvider>
+        <WorkspaceTabBar
+          pane={{
+            id: DEFAULT_PRIMARY_PANE_ID,
+            tabIds: [staleCodexTabId],
+            activeTabId: staleCodexTabId,
+          }}
+          tabs={[tabAfterScratch]}
+          isFocused
+          paneCount={1}
+          otherPaneIds={[]}
+          touchesTopEdge
+          touchesLeftEdge
+          touchesRightEdge
+          newTabPopover={{
+            openTabs: [],
+            historyThreads: [],
+            agents: [],
+            onActivateOpenTab: vi.fn(),
+            onOpenHistoryThread: vi.fn(),
+            onLaunchAgent: vi.fn(),
+            onRunQuickTool: vi.fn(),
+            onOpenUrl: vi.fn(),
+            onOpenAgentSettings: vi.fn(),
+          }}
+          onActivateTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onSplitPane={vi.fn()}
+          onClosePane={vi.fn()}
+          onMoveTabToPane={vi.fn()}
+          onReorderTab={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+    expect(tabBarHtml).toContain('data-agent-brand="antigravity"');
+    expect(tabBarHtml).toContain("区区");
+    expect(tabBarHtml).not.toContain('data-agent-brand="codex"');
+    expect(tabBarHtml).not.toContain(">Codex<");
+
+    // 2. Switching provider in composer on the untitled scratch draft immediately updates tab icon & label.
+    const switchedToClaudeMeta = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+      routeThreadShell: null,
+      routeComposerDraft: {
+        activeProvider: CLAUDE_ID,
+        modelSelectionByProvider: {
+          [CLAUDE_ID]: { instanceId: CLAUDE_ID, model: "claude-sonnet-4-6" },
+        },
+        modelSelectionExplicit: true,
+      },
+      stickyActiveProvider: AGY_ID,
+      stickyModelSelectionByProvider: {
+        [AGY_ID]: { instanceId: AGY_ID, model: "4-neon" },
+      },
+      providers: serverProviders,
+      settings: settingsWithAgyDefault,
+      instanceEntries: entries,
+      activeProject: null,
+      activeProjectId: SCRATCH_PROJECT_ID,
+      now: Date.parse("2026-11-25T08:00:00Z"),
+    });
+    expect(switchedToClaudeMeta).toMatchObject({
+      instanceId: CLAUDE_ID,
+      providerId: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      title: "Claude Code",
+    });
+
+    store.syncRouteTarget({
+      target: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      title: switchedToClaudeMeta.title,
+      providerId: switchedToClaudeMeta.providerId,
+      instanceId: switchedToClaudeMeta.instanceId,
+      model: switchedToClaudeMeta.model,
+      activate: false,
+    });
+    expect(useWorkspaceTabsStore.getState().tabs[staleCodexTabId]).toMatchObject({
+      providerId: "claudeAgent",
+      instanceId: CLAUDE_ID,
+      model: "claude-sonnet-4-6",
+      title: "Claude Code",
+    });
+
+    // 3. When defaultModelSelection is unset and Codex is unhealthy/unavailable while Antigravity is ready,
+    //    scratch draft resolves healthy Antigravity rather than blindly falling back to entries[0] (Codex).
+    const settingsWithAgyEnabledNoDefault: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      defaultModelSelection: null,
+      providerInstances: {
+        ...DEFAULT_SERVER_SETTINGS.providerInstances,
+        [AGY_ID]: {
+          driver: ProviderDriverKind.make("antigravity"),
+          enabled: true,
+        },
+      },
+    };
+    const unhealthyCodexProviders: ReadonlyArray<ServerProvider> = [
+      makeProvider({
+        instanceId: "codex",
+        driver: "codex",
+        installed: false,
+        status: "error",
+        authStatus: "unauthenticated",
+      }),
+      makeProvider({ instanceId: "antigravity", driver: "antigravity" }),
+    ];
+    const unhealthyCodexEntries = providerInstanceEntriesFor(
+      unhealthyCodexProviders,
+      settingsWithAgyEnabledNoDefault,
+      SCRATCH_PROJECT_ID,
+    );
+    const healthyFallbackMeta = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+      routeThreadShell: null,
+      routeComposerDraft: null,
+      stickyActiveProvider: null,
+      stickyModelSelectionByProvider: {},
+      providers: unhealthyCodexProviders,
+      settings: settingsWithAgyEnabledNoDefault,
+      instanceEntries: unhealthyCodexEntries,
+      activeProject: null,
+      activeProjectId: SCRATCH_PROJECT_ID,
+      now: Date.parse("2026-11-25T08:00:00Z"),
+    });
+    expect(healthyFallbackMeta).toMatchObject({
+      instanceId: AGY_ID,
+      providerId: "antigravity",
+      title: "Antigravity",
+    });
+
+    // 4. Sticky provider & matching live ChatView snapshot apply immediately, while stale-route snapshots are ignored
+    //    and real server thread titles are never overwritten.
+    const stickyMeta = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+      routeThreadShell: null,
+      routeComposerDraft: null,
+      stickyActiveProvider: AGY_ID,
+      stickyModelSelectionByProvider: {
+        [AGY_ID]: { instanceId: AGY_ID, model: "4-neon" },
+      },
+      providers: serverProviders,
+      settings: settingsWithAgyEnabledNoDefault,
+      instanceEntries: providerInstanceEntriesFor(
+        serverProviders,
+        settingsWithAgyEnabledNoDefault,
+        SCRATCH_PROJECT_ID,
+      ),
+      activeProject: null,
+      activeProjectId: SCRATCH_PROJECT_ID,
+      activeChatProvider: {
+        routeKey: "draft:some-other-draft",
+        instanceId: CODEX_ID,
+        providerId: "codex",
+        model: "codex-default",
+        displayName: "Codex",
+      },
+      now: Date.parse("2026-11-25T08:00:00Z"),
+    });
+    expect(stickyMeta).toMatchObject({
+      instanceId: AGY_ID,
+      providerId: "antigravity",
+      model: "4-neon",
+      title: "Antigravity",
+    });
+
+    const serverMeta = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "server", threadRef: { environmentId: ENV_LOCAL, threadId: THREAD_A } },
+      routeKey: `server:${ENV_LOCAL}:${THREAD_A}`,
+      routeThreadShell: {
+        title: "排查顶栏标签同步",
+        modelSelection: { instanceId: AGY_ID, model: "4-neon" },
+      },
+      routeComposerDraft: null,
+      stickyActiveProvider: CODEX_ID,
+      stickyModelSelectionByProvider: {},
+      providers: serverProviders,
+      settings: settingsWithAgyDefault,
+      instanceEntries: entries,
+      activeProject: null,
+      activeProjectId: SCRATCH_PROJECT_ID,
+      activeChatProvider: {
+        routeKey: `server:${ENV_LOCAL}:${THREAD_A}`,
+        instanceId: AGY_ID,
+        providerId: "antigravity",
+        model: "4-neon",
+        displayName: "区区",
+      },
+      now: Date.parse("2026-11-25T08:00:00Z"),
+    });
+    expect(serverMeta).toMatchObject({
+      instanceId: AGY_ID,
+      providerId: "antigravity",
+      model: "4-neon",
+      title: "排查顶栏标签同步",
+    });
+
+    // 5. Non-explicit stale Codex on a scratch draft yields to matching live ChatView Antigravity snapshot,
+    //    while an explicit composer switch (modelSelectionExplicit: true) immediately overrides even before ChatView commits.
+    const liveScratchOverride = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+      routeThreadShell: null,
+      routeComposerDraft: {
+        activeProvider: CODEX_ID,
+        modelSelectionByProvider: {
+          [CODEX_ID]: { instanceId: CODEX_ID, model: "codex-default" },
+        },
+        modelSelectionExplicit: false,
+      },
+      stickyActiveProvider: CODEX_ID,
+      stickyModelSelectionByProvider: {},
+      providers: serverProviders,
+      settings: settingsWithAgyDefault,
+      instanceEntries: entries,
+      activeProject: null,
+      activeProjectId: SCRATCH_PROJECT_ID,
+      activeChatProvider: {
+        routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+        instanceId: AGY_ID,
+        providerId: "antigravity",
+        model: "4-neon",
+        displayName: "区区",
+      },
+      now: Date.parse("2026-11-25T08:00:00Z"),
+    });
+    expect(liveScratchOverride).toMatchObject({
+      instanceId: AGY_ID,
+      providerId: "antigravity",
+      model: "4-neon",
+      title: "区区",
+    });
+
+    const explicitSwitchBeforeSnapshot = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "draft", draftId: SCRATCH_DRAFT_ID },
+      routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+      routeThreadShell: null,
+      routeComposerDraft: {
+        activeProvider: CLAUDE_ID,
+        modelSelectionByProvider: {
+          [CLAUDE_ID]: { instanceId: CLAUDE_ID, model: "claude-sonnet-4-6" },
+        },
+        modelSelectionExplicit: true,
+      },
+      stickyActiveProvider: AGY_ID,
+      stickyModelSelectionByProvider: {},
+      providers: serverProviders,
+      settings: settingsWithAgyDefault,
+      instanceEntries: entries,
+      activeProject: null,
+      activeProjectId: SCRATCH_PROJECT_ID,
+      activeChatProvider: {
+        routeKey: `draft:${SCRATCH_DRAFT_ID}`,
+        instanceId: AGY_ID,
+        providerId: "antigravity",
+        model: "4-neon",
+        displayName: "区区",
+      },
+      now: Date.parse("2026-11-25T08:00:00Z"),
+    });
+    expect(explicitSwitchBeforeSnapshot).toMatchObject({
+      instanceId: CLAUDE_ID,
+      providerId: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      title: "Claude Code",
+    });
+  });
+
+  it("removes topbar handoff button in ChatView and leaves zero omp/oh-my-pi references in workspace modules", () => {
+    const workspaceDir = path.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const chatViewSource = fs.readFileSync(path.resolve(workspaceDir, "../ChatView.tsx"), "utf8");
+    const quickLaunchSource = fs.readFileSync(
+      path.join(workspaceDir, "workspaceQuickLaunch.logic.ts"),
+      "utf8",
+    );
+    const tabsStoreSource = fs.readFileSync(
+      path.join(workspaceDir, "workspaceTabsStore.ts"),
+      "utf8",
+    );
+
+    // Topbar "交接给智能体" button must stay removed while underlying handoff/continuation remains intact.
+    expect(chatViewSource).not.toContain("交接给智能体");
+    expect(chatViewSource).not.toContain('data-action="hand-off-to-agent"');
+    expect(chatViewSource).toContain("supportsProviderSwitchingViaHandoff");
+    expect(chatViewSource).toContain("AgentSessionContinuationDialog");
+
+    // Zero omp / oh-my-pi references in workspace quick launch & tab store.
+    expect(quickLaunchSource).not.toMatch(/\bomp\b|oh-my-pi/i);
+    expect(tabsStoreSource).not.toMatch(/\bomp\b|oh-my-pi/i);
   });
 });

@@ -10,7 +10,6 @@ export type AgentBrandId =
   | "codex"
   | "claude-code"
   | "antigravity"
-  | "omp"
   | "gemini"
   | "opencode"
   | "cursor"
@@ -47,13 +46,6 @@ const CANONICAL_BRAND_META: Readonly<Record<Exclude<AgentBrandId, "custom">, Age
     canonicalProviderId: "antigravity",
     accentColor: "#4285F4",
     glowColor: "rgba(66, 133, 244, 0.58)",
-  },
-  omp: {
-    id: "omp",
-    displayName: "oh-my-pi",
-    canonicalProviderId: "omp",
-    accentColor: "#10b981",
-    glowColor: "rgba(16, 185, 129, 0.58)",
   },
   gemini: {
     id: "gemini",
@@ -113,13 +105,6 @@ const KNOWN_ALIASES: Readonly<Record<string, Exclude<AgentBrandId, "custom">>> =
   "antigravity cli": "antigravity",
   antigravitycli: "antigravity",
   agy: "antigravity",
-  omp: "omp",
-  "oh-my-pi": "omp",
-  oh_my_pi: "omp",
-  "oh my pi": "omp",
-  ohmypi: "omp",
-  pi: "omp",
-  "pi-coding-agent": "omp",
   gemini: "gemini",
   "gemini-cli": "gemini",
   gemini_cli: "gemini",
@@ -244,18 +229,6 @@ export function resolveAgentBrandId(providerIdOrName: string | null | undefined)
   }
   if (key.startsWith("antigravity") || key === "agy" || key.startsWith("agy-") || key.startsWith("agy_")) {
     return "antigravity";
-  }
-  if (
-    key === "omp" ||
-    key.startsWith("omp-") ||
-    key.startsWith("omp_") ||
-    key.includes("oh-my-pi") ||
-    key.includes("oh_my_pi") ||
-    key === "pi" ||
-    key.startsWith("pi-") ||
-    key.startsWith("pi_")
-  ) {
-    return "omp";
   }
   if (key.startsWith("gemini")) {
     return "gemini";
@@ -623,7 +596,7 @@ export function renderAntigravitySvgContent(
 }
 
 export interface AgentBrandLogoProps {
-  /** Provider ID, driver kind, or display name (e.g. "codex", "claudeAgent", "antigravity", "omp"). */
+  /** Provider ID, driver kind, or display name (e.g. "codex", "claudeAgent", "antigravity", "dsh"). */
   readonly provider: string | null | undefined;
   /** Online status: false renders calm low-saturation resting state (default true). */
   readonly online?: boolean;
@@ -687,33 +660,6 @@ function renderBrandSvg(
         ...renderAntigravitySvgContent(gradientPrefix, monochrome),
       );
     }
-
-    case "omp":
-      return createElement(
-        "svg",
-        { ...baseProps, viewBox: "0 0 24 24", fill: "none" },
-        createElement("path", {
-          d: "M4.5 7.4C5.4 6.2 6.8 5.8 9.2 5.8H19.5",
-          stroke: monochrome ? "currentColor" : "#10b981",
-          strokeWidth: 2.3,
-          strokeLinecap: "round",
-          strokeLinejoin: "round",
-        }),
-        createElement("path", {
-          d: "M9.4 6.2L8.1 16.4C7.9 17.8 7.1 18.6 6.1 18.6",
-          stroke: monochrome ? "currentColor" : "#10b981",
-          strokeWidth: 2.3,
-          strokeLinecap: "round",
-          strokeLinejoin: "round",
-        }),
-        createElement("path", {
-          d: "M15.1 6.2L14.4 15.7C14.3 17.4 15.1 18.6 16.6 18.6C17.6 18.6 18.4 18.1 18.9 17.2",
-          stroke: monochrome ? "currentColor" : "#10b981",
-          strokeWidth: 2.3,
-          strokeLinecap: "round",
-          strokeLinejoin: "round",
-        }),
-      );
 
     case "gemini": {
       const gradId = `${gradientPrefix}-gemini`;

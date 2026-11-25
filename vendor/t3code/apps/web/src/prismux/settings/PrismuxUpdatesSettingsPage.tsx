@@ -3,6 +3,7 @@ import {
   ActivityIcon,
   AlertTriangleIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   DownloadCloudIcon,
   DownloadIcon,
   ExternalLinkIcon,
@@ -13,11 +14,17 @@ import {
   RotateCwIcon,
   SaveIcon,
   ShieldCheckIcon,
+  SparklesIcon,
 } from "lucide-react";
 
 import { APP_VERSION } from "../../branding";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import {
+  Collapsible,
+  CollapsiblePanel,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible";
 import { Input } from "../../components/ui/input";
 import {
   Select,
@@ -29,6 +36,7 @@ import {
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
 import {
+  SETTINGS_CONTROL_LG,
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
@@ -65,7 +73,6 @@ import {
   resolveProgressBarPercent,
   resolveRuntimeVersion,
   selectRecommendedUpdateAsset,
-  type PluginRegistryOverride,
   type ProbeReportView,
   type RoutePreference,
   type UpdateAssetView,
@@ -78,15 +85,9 @@ const GITHUB_FEED_URL = "https://github.com/Fish-under-sea/Prismux/releases/late
 const GITEE_FEED_URL = "https://gitee.com/Fish-under-sea/Prismux/releases/latest";
 
 const ROUTE_PREFERENCE_LABELS: Readonly<Record<RoutePreference, string>> = {
-  auto: "智能测速自动选优（推荐）",
-  domestic: "国内优先（Gitee Releases + npmmirror）",
-  global: "国际优先（GitHub Releases + npmjs）",
-};
-
-const REGISTRY_LABELS: Readonly<Record<PluginRegistryOverride, string>> = {
-  auto: "跟随线路测速自动选择",
-  npmmirror: "强制使用 npmmirror（国内镜像）",
-  npmjs: "强制使用 registry.npmjs.org（国际官方）",
+  auto: "智能测速（推荐）",
+  domestic: "国内优先（Gitee）",
+  global: "国际优先（GitHub）",
 };
 
 const CHANNEL_LABELS: Readonly<Record<DaemonUpdateChannel, string>> = {
@@ -137,9 +138,9 @@ export function PrismuxUpdatesSettingsPage({
   );
 
   const [routePreference, setRoutePreference] = useState<RoutePreference>("auto");
-  const [registryOverride, setRegistryOverride] = useState<PluginRegistryOverride>("auto");
   const [updateChannel, setUpdateChannel] = useState<DaemonUpdateChannel>("prerelease");
   const [customGhProxyPrefix, setCustomGhProxyPrefix] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState<boolean>(
     () => notifierState.autoCheckEnabled,
   );
@@ -203,9 +204,11 @@ export function PrismuxUpdatesSettingsPage({
       if (parsed) {
         setStatus(parsed);
         setRoutePreference(parsed.policy.routePreference);
-        setRegistryOverride(parsed.policy.pluginRegistryOverride);
         setUpdateChannel(parsed.policy.channel);
         setCustomGhProxyPrefix(parsed.policy.customGhProxyPrefix);
+        if (parsed.policy.customGhProxyPrefix.trim().length > 0) {
+          setAdvancedOpen(true);
+        }
         setDownloading(parsed.downloading);
         prismuxUpdateNotifierStore.hydrateFromDaemonStatus(parsed, { syncAutoCheck: true });
         setAutoCheckEnabled(prismuxUpdateNotifierStore.getState().autoCheckEnabled);
@@ -350,7 +353,7 @@ export function PrismuxUpdatesSettingsPage({
             channel: updateChannel,
             includePrerelease: updateChannel === "prerelease",
             customGhProxyPrefix: customGhProxyPrefix.trim(),
-            pluginRegistryOverride: registryOverride,
+            pluginRegistryOverride: prevStatus?.policy.pluginRegistryOverride ?? "auto",
             timeoutMs: 15_000,
             autoCheckEnabled,
           },
@@ -396,7 +399,6 @@ export function PrismuxUpdatesSettingsPage({
       customGhProxyPrefix,
       daemon,
       probe,
-      registryOverride,
       routePreference,
       status,
       updateChannel,
@@ -475,12 +477,11 @@ export function PrismuxUpdatesSettingsPage({
         channel: updateChannel,
         includePrerelease: updateChannel === "prerelease",
         customGhProxyPrefix: customGhProxyPrefix.trim(),
-        pluginRegistryOverride: registryOverride,
         autoCheckEnabled,
       });
       prismuxUpdateNotifierStore.clearLocalAutoCheckDirty();
       await applyElectronFeedUrl(routePreference, probe?.recommendedSource);
-      setStatusMsg("双源更新策略已保存，并已同步更新通道配置。");
+      setStatusMsg("更新通道与网络策略已保存。");
       await loadStatus();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -494,7 +495,6 @@ export function PrismuxUpdatesSettingsPage({
     daemon,
     loadStatus,
     probe?.recommendedSource,
-    registryOverride,
     routePreference,
     updateChannel,
   ]);
@@ -552,36 +552,128 @@ export function PrismuxUpdatesSettingsPage({
     });
   }, [daemon, isTransferActive]);
 
+  const heroSubtitle = isTransferActive
+    ? describeUpdaterProgressStage(progress)
+    : hasVerifiedPackage
+      ? "新版本安装包已校验就绪，可立即升级。"
+      : checkResult?.hasUpdate && checkResult.latestVersion
+        ? `发现新版本 v${checkResult.latestVersion}（来源：${checkResult.sourceUsed === "gitee" ? "Gitee" : "GitHub"}）。`
+        : checkResult
+          ? "当前已是最新版本。"
+          : "支持软件内自动校验下载与一键重启升级。";
+
   const content = (
     <>
-      {/* Version & Quick Check Header */}
+      {/* Unified Version & Update Hero Card (replaces duplicate AboutVersionSection; <= 2 badges) */}
       <SettingsSection
         id="prismux-updates"
-        title="Prismux 双源内更新中心"
+        title="版本与更新"
         headerAction={
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="info" className="font-mono tabular-nums">
-              {runtimeVersion ? `v${runtimeVersion}` : "版本探测中"}
-            </Badge>
-            <Badge variant="outline">
+            <Badge variant="info" size="sm">
               {updateChannel === "stable" ? "稳定正式版" : "Preview"}
             </Badge>
-            <Badge variant="outline">
-              {portableMode ? "便携模式 (Portable)" : "标准安装版"}
-            </Badge>
-            <Badge variant={daemonInfo.ready ? "success" : "warning"}>
-              {daemonInfo.ready ? "Daemon 在线" : "Daemon 未连接"}
+            <Badge
+              variant={portableMode ? "outline" : daemonInfo.ready ? "success" : "warning"}
+              size="sm"
+            >
+              {portableMode ? "便携模式" : daemonInfo.ready ? "服务在线" : "服务未连接"}
             </Badge>
           </div>
         }
       >
-        <p className="px-4 py-2.5 text-xs text-muted-foreground">
-          支持 GitHub Releases 与 Gitee Releases（含 3 分卷无损重组）软件内直连下载、整包 SHA-256 强制校验与一键重启升级，同时协同国内 npmmirror / 国际 npmjs 插件源。
-        </p>
+        <div
+          id="app-version"
+          data-pmx-updates-hero=""
+          className="flex flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-5"
+        >
+          <div className="flex min-w-0 items-center gap-3.5">
+            <span
+              aria-hidden="true"
+              className="inline-flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary"
+            >
+              <SparklesIcon className="size-5" />
+            </span>
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="text-base font-semibold tracking-tight text-foreground">
+                  Prismux
+                </span>
+                <span className="font-mono text-xs font-medium tabular-nums text-muted-foreground">
+                  {runtimeVersion ? `v${runtimeVersion}` : "版本探测中"}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">{heroSubtitle}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={probing || checking || loading || isTransferActive}
+              onClick={() => {
+                void handleProbeOnly();
+              }}
+            >
+              <ActivityIcon className={probing ? "size-3.5 animate-spin" : "size-3.5"} />
+              {probing ? "测速中…" : "线路测速"}
+            </Button>
+            {hasVerifiedPackage && !isTransferActive ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={installing}
+                data-action={portableMode ? "open-portable-update-dir" : "install-and-restart"}
+                onClick={() => {
+                  void handleInstallDownloaded();
+                }}
+              >
+                {portableMode ? (
+                  <FolderOpenIcon className="size-3.5" />
+                ) : (
+                  <RotateCwIcon className={installing ? "size-3.5 animate-spin" : "size-3.5"} />
+                )}
+                {installing
+                  ? "正在执行…"
+                  : portableMode
+                    ? "打开安装包目录"
+                    : "一键安装并重启"}
+              </Button>
+            ) : checkResult?.hasUpdate && recommendedAsset ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={isTransferActive}
+                data-action="download-update-in-app"
+                onClick={() => {
+                  void handleStartDownload(recommendedAsset);
+                }}
+              >
+                <DownloadIcon className="size-3.5" />
+                {isTransferActive ? "下载中…" : "下载更新"}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={checking || probing || loading || isTransferActive}
+                onClick={() => {
+                  void handleProbeAndCheck();
+                }}
+              >
+                <DownloadCloudIcon className="size-3.5" />
+                {checking ? "检查中…" : "检查更新"}
+              </Button>
+            )}
+          </div>
+        </div>
+
         <SettingsRow
           id="auto-check-updates"
           title="自动检查更新"
-          description="开启后将在启动与后台定时检测 GitHub / Gitee 双源新版本，发现更新时在右下角温和提醒"
+          description="启动与后台定时检测新版本，并在发现更新时温和提醒。"
           control={
             <div className="flex items-center gap-2.5">
               <span className="text-xs text-muted-foreground">
@@ -599,40 +691,11 @@ export function PrismuxUpdatesSettingsPage({
             </div>
           }
         />
-        <SettingsRow
-          title="测速并检查最新版本"
-          description="并行探测 GitHub 与 Gitee Releases 延迟，按所选通道（稳定正式版 / Preview）拉取最新发行版与校验摘要。"
-          control={
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={probing || checking || loading || isTransferActive}
-                onClick={() => {
-                  void handleProbeOnly();
-                }}
-              >
-                <ActivityIcon className={probing ? "size-3.5 animate-spin" : "size-3.5"} />
-                {probing ? "测速中…" : "仅测速线路"}
-              </Button>
-              <Button
-                size="sm"
-                disabled={checking || probing || loading || isTransferActive}
-                onClick={() => {
-                  void handleProbeAndCheck();
-                }}
-              >
-                <DownloadCloudIcon className="size-3.5" />
-                {checking ? "检查更新中…" : "测速并检查更新"}
-              </Button>
-            </div>
-          }
-        />
 
         {errorMsg ? (
           <div
             role="alert"
-            className="mx-4 my-2 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            className="mx-4 my-2 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-5"
           >
             <AlertTriangleIcon className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 break-all">{errorMsg}</span>
@@ -643,7 +706,7 @@ export function PrismuxUpdatesSettingsPage({
           <div
             role="status"
             aria-live="polite"
-            className="mx-4 my-2 flex items-center gap-2 rounded-lg border border-success/35 bg-success/10 px-3 py-2 text-xs text-success-foreground"
+            className="mx-4 my-2 flex items-center gap-2 rounded-lg border border-success/35 bg-success/10 px-3 py-2 text-xs text-success-foreground sm:mx-5"
           >
             <CheckCircle2Icon className="size-4 shrink-0" />
             <span className="min-w-0 flex-1">{statusMsg}</span>
@@ -654,7 +717,7 @@ export function PrismuxUpdatesSettingsPage({
         {isTransferActive || hasVerifiedPackage ? (
           <div
             data-updater-transfer-card
-            className="mx-4 my-3 space-y-3 rounded-xl border border-primary/30 bg-primary/[0.06] p-3.5 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-primary/[0.09] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+            className="mx-4 my-3 space-y-3 rounded-xl border border-primary/30 bg-primary/[0.06] p-3.5 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] sm:mx-5 dark:bg-primary/[0.09] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2 font-medium text-foreground">
@@ -666,7 +729,7 @@ export function PrismuxUpdatesSettingsPage({
                 <span className="truncate">
                   {isTransferActive
                     ? describeUpdaterProgressStage(progress)
-                    : "安装包 SHA-256 校验通过，已就绪"}
+                    : "安装包完整性校验通过，已就绪"}
                 </span>
               </div>
               <span
@@ -693,12 +756,12 @@ export function PrismuxUpdatesSettingsPage({
                   data-stage-step={step.id}
                   data-stage-state={step.state}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10.5px] transition-colors motion-reduce:transition-none",
+                    "flex items-center gap-1.5 rounded-lg px-2 py-1 text-[10.5px] transition-colors motion-reduce:transition-none",
                     step.state === "completed"
-                      ? "border-emerald-500/35 bg-emerald-500/[0.09] text-emerald-800 dark:text-emerald-200"
+                      ? "bg-emerald-500/[0.11] text-emerald-800 dark:text-emerald-200"
                       : step.state === "active"
-                        ? "border-primary/45 bg-primary/[0.14] font-semibold text-foreground"
-                        : "border-border/50 bg-foreground/[0.025] text-muted-foreground dark:bg-white/[0.03]",
+                        ? "bg-primary/[0.16] font-semibold text-foreground"
+                        : "bg-foreground/[0.03] text-muted-foreground dark:bg-white/[0.04]",
                   )}
                 >
                   <span
@@ -751,9 +814,9 @@ export function PrismuxUpdatesSettingsPage({
                           ? `已下载 ${formatUpdateByteSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatUpdateByteSize(progress.totalBytes)}` : ""}`
                           : "已连接下载源，准备接收数据…"
                       : progress?.stage === "extracting"
-                        ? `正在通过内置 7za.exe 无损合并分卷…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
+                        ? `正在合并安装包分卷…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
                         : progress?.stage === "verifying"
-                          ? `正在逐字节比对 SHA-256 摘要…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
+                          ? `正在校验安装包完整性…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
                           : progress?.message ?? "正在连接下载源…"}
                   </span>
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -784,25 +847,21 @@ export function PrismuxUpdatesSettingsPage({
 
             {hasVerifiedPackage && !isTransferActive ? (
               <div className="space-y-2.5">
-                <div className="rounded-lg border border-border/60 bg-foreground/[0.035] px-3 py-2 font-mono text-[11px] text-muted-foreground dark:bg-white/[0.045]">
+                <div className="rounded-lg bg-foreground/[0.04] px-3 py-2 font-mono text-[11px] text-muted-foreground dark:bg-white/[0.05]">
                   <div
                     className="truncate text-foreground"
                     title={effectiveStatus?.downloadedFilePath ?? ""}
                   >
                     文件：{effectiveStatus?.downloadedFilePath}
                   </div>
-                  <div className="mt-0.5 truncate">
-                    SHA-256：{effectiveStatus?.downloadedSha256}
-                  </div>
                 </div>
 
                 {portableMode ? (
-                  <div className="space-y-2 rounded-lg border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-foreground">
-                    <div className="font-medium">便携模式覆盖升级指引</div>
+                  <div className="space-y-1.5 rounded-lg bg-warning/10 px-3 py-2 text-xs text-foreground">
+                    <div className="font-medium">便携模式升级指引</div>
                     <ol className="list-decimal space-y-0.5 pl-4 text-[11px] text-muted-foreground">
-                      <li>点击下方按钮打开已校验安装包所在目录；</li>
-                      <li>完全关闭正在运行的 Prismux，解压或覆盖主程序文件；</li>
-                      <li>保留原目录中的 <code className="font-mono text-foreground">data/</code> 文件夹，所有记忆与配置零丢失。</li>
+                      <li>打开已校验安装包所在目录；</li>
+                      <li>关闭 Prismux 后覆盖主程序文件并保留原 data 文件夹。</li>
                     </ol>
                   </div>
                 ) : null}
@@ -843,13 +902,13 @@ export function PrismuxUpdatesSettingsPage({
           </div>
         ) : null}
 
-        {/* Probe Latency Cards */}
+        {/* Compact Probe Latency Strip */}
         {probe ? (
-          <div className="space-y-2 px-4 py-3">
+          <div className="space-y-2 border-t border-border/50 px-4 py-3 sm:px-5">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">实时双源延迟探测结果</span>
+              <span className="font-medium text-foreground">线路测速结果</span>
               <span>
-                推荐路线：
+                推荐：
                 <strong className="text-foreground">
                   {probe.recommendedSource === "gitee" ? "Gitee（国内）" : "GitHub（国际）"}
                 </strong>
@@ -859,123 +918,92 @@ export function PrismuxUpdatesSettingsPage({
               {probe.sources.map((src) => (
                 <div
                   key={src.source}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-foreground/[0.035] px-3 py-2.5 text-xs dark:bg-white/[0.045]"
+                  className="flex items-center justify-between gap-2 rounded-lg bg-foreground/[0.03] px-3 py-2 text-xs dark:bg-white/[0.04]"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 font-medium text-foreground">
                       <GlobeIcon className="size-3.5 text-muted-foreground" />
-                      <span>{src.source === "gitee" ? "Gitee Releases" : "GitHub Releases"}</span>
+                      <span>{src.source === "gitee" ? "Gitee" : "GitHub"}</span>
                       {probe.recommendedSource === src.source ? (
-                        <Badge variant="info">推荐</Badge>
+                        <Badge variant="info" size="sm">
+                          推荐
+                        </Badge>
                       ) : null}
                     </div>
-                    <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                      {src.error ?? src.url}
-                    </div>
                   </div>
-                  <div className="shrink-0 text-right">
-                    <Badge
-                      variant={src.reachable ? "success" : "destructive"}
-                      className="tabular-nums"
-                    >
-                      {src.reachable
-                        ? src.latencyMs !== null
-                          ? `${Math.round(src.latencyMs)} ms`
-                          : "可达"
-                        : "不可达"}
-                    </Badge>
-                  </div>
+                  <Badge
+                    variant={src.reachable ? "success" : "destructive"}
+                    size="sm"
+                    className="shrink-0 tabular-nums"
+                  >
+                    {src.reachable
+                      ? src.latencyMs !== null
+                        ? `${Math.round(src.latencyMs)} ms`
+                        : "可达"
+                      : "不可达"}
+                  </Badge>
                 </div>
               ))}
             </div>
           </div>
         ) : null}
 
-        {/* Latest Check Result */}
+        {/* Latest Check Result & Release Notes */}
         {checkResult ? (
-          <div className="space-y-2.5 px-4 py-3">
+          <div className="space-y-2.5 border-t border-border/50 px-4 py-3.5 sm:px-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <ShieldCheckIcon className="size-4 text-primary" />
                 <span className="text-sm font-medium text-foreground">
                   {checkResult.hasUpdate && checkResult.latestVersion
-                    ? `发现新版本：v${checkResult.latestVersion}`
+                    ? `新版本 v${checkResult.latestVersion}`
                     : `已是最新版本${checkResult.currentVersion ? `（v${checkResult.currentVersion}）` : ""}`}
                 </span>
-                <Badge variant="outline">来源：{checkResult.sourceUsed}</Badge>
                 {checkResult.usedFallbackSource ? (
-                  <Badge variant="warning">已自动切换备用源</Badge>
+                  <Badge variant="warning" size="sm">
+                    已切换备用源
+                  </Badge>
                 ) : null}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {checkResult.hasUpdate && recommendedAsset && !hasVerifiedPackage ? (
-                  <Button
-                    size="xs"
-                    disabled={isTransferActive}
-                    data-action="download-update-in-app"
-                    onClick={() => {
-                      void handleStartDownload(recommendedAsset);
-                    }}
-                  >
-                    <DownloadIcon className="size-3" />
-                    {isTransferActive ? "下载中…" : "软件内下载更新"}
-                  </Button>
-                ) : null}
-                {safeReleaseHtmlUrl ? (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => openExternal(safeReleaseHtmlUrl)}
-                  >
-                    去浏览器打开下载
-                    <ExternalLinkIcon className="size-3" />
-                  </Button>
-                ) : null}
-              </div>
+              {safeReleaseHtmlUrl ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => openExternal(safeReleaseHtmlUrl)}
+                >
+                  发行说明页
+                  <ExternalLinkIcon className="size-3" />
+                </Button>
+              ) : null}
             </div>
 
             {displayReleaseNotes ? (
-              <div className="space-y-1.5">
-                <div className="text-[11px] font-semibold tracking-wide text-muted-foreground">
-                  更新公告
-                  {checkResult.releaseName &&
-                  checkResult.releaseName.trim() !== checkResult.tagName &&
-                  checkResult.releaseName.trim() !==
-                    (checkResult.latestVersion ? `v${checkResult.latestVersion}` : "")
-                    ? ` · ${checkResult.releaseName.trim()}`
-                    : ""}
-                </div>
-                <div
-                  data-testid="prismux-updates-settings-release-notes"
-                  className="max-h-[min(56dvh,480px)] overflow-y-auto overscroll-contain rounded-xl border border-border/70 bg-foreground/[0.03] px-4 py-3.5 dark:bg-white/[0.035]"
-                >
-                  <PrismuxReleaseNotesMarkdown markdown={displayReleaseNotes} />
-                </div>
+              <div
+                data-testid="prismux-updates-settings-release-notes"
+                className="max-h-[min(56dvh,480px)] overflow-y-auto overscroll-contain rounded-lg bg-foreground/[0.03] px-4 py-3.5 dark:bg-white/[0.035]"
+              >
+                <PrismuxReleaseNotesMarkdown markdown={displayReleaseNotes} />
               </div>
             ) : null}
 
             {checkResult.assets.length > 0 ? (
-              <div className="space-y-1.5">
-                <div className="text-[11px] font-medium text-muted-foreground">
-                  可用安装包资产（下载后强制整包校验 SHA-256）
-                </div>
+              <div className="divide-y divide-border/50 rounded-lg bg-foreground/[0.025] dark:bg-white/[0.03]">
                 {checkResult.assets.map((asset) => (
                   <div
                     key={asset.name}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-foreground/[0.03] px-3 py-2 text-xs dark:bg-white/[0.035]"
+                    className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-xs"
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="truncate font-mono text-foreground">{asset.name}</span>
                         {asset.kind === "split-7z-exe" ? (
                           <Badge variant="secondary" size="sm">
-                            Gitee {asset.parts.length || 3} 分卷自动重组
+                            分卷自动合并
                           </Badge>
                         ) : null}
                       </div>
                       <div className="text-[11px] text-muted-foreground tabular-nums">
                         {formatSize(asset.sizeBytes)}
-                        {asset.sha256 ? ` · SHA-256: ${asset.sha256.slice(0, 16)}…` : ""}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
@@ -988,7 +1016,7 @@ export function PrismuxUpdatesSettingsPage({
                         }}
                       >
                         <DownloadIcon className="size-3" />
-                        软件内下载
+                        下载
                       </Button>
                       {asset.effectiveUrl ? (
                         <Button
@@ -996,7 +1024,7 @@ export function PrismuxUpdatesSettingsPage({
                           variant="outline"
                           onClick={() => openExternal(asset.effectiveUrl!)}
                         >
-                          浏览器下载
+                          浏览器
                           <ExternalLinkIcon className="size-3" />
                         </Button>
                       ) : null}
@@ -1009,18 +1037,14 @@ export function PrismuxUpdatesSettingsPage({
         ) : null}
       </SettingsSection>
 
-      {/* Routing & Registry Policy */}
-      <SettingsSection id="prismux-updates-policy" title="更新通道、双源路由与插件镜像策略">
-        <p className="px-4 py-2.5 text-xs text-muted-foreground">
-          收敛为「稳定正式版」与「Preview」双通道；调整更新主线路与社区插件 npm 镜像源后将立即持久化至 Daemon。
-        </p>
-
+      {/* Update Channel & Network Policy (app updates ONLY; plugin npm registry lives solely in /settings/plugins) */}
+      <SettingsSection id="prismux-updates-policy" title="更新通道与网络">
         <SettingsRow
           id="update-track"
           title="软件更新通道"
-          description="选择接收稳定正式版（Stable）或包含 Alpha / Beta 早期特性的 Preview 通道。"
+          description="选择接收正式稳定版或包含抢先特性的 Preview 通道。"
           control={
-            <div className="w-full sm:w-72">
+            <div className={`${SETTINGS_CONTROL_LG} max-w-full`}>
               <Select
                 value={updateChannel}
                 onValueChange={(val) => {
@@ -1042,10 +1066,10 @@ export function PrismuxUpdatesSettingsPage({
         />
 
         <SettingsRow
-          title="软件更新路线偏好"
-          description="国内网络环境推荐「自动切换」或「国内优先（Gitee Releases + npmmirror）」。"
+          title="更新下载线路"
+          description="根据网络环境选择软件更新下载源，国内推荐使用智能测速。"
           control={
-            <div className="w-full sm:w-72">
+            <div className={`${SETTINGS_CONTROL_LG} max-w-full`}>
               <Select
                 value={routePreference}
                 onValueChange={(val) => {
@@ -1067,48 +1091,37 @@ export function PrismuxUpdatesSettingsPage({
           }
         />
 
-        <SettingsRow
-          title="社区插件 npm Registry 源"
-          description="控制插件中心流式拉取社区插件 Tarball 时使用的 Registry 地址。"
-          control={
-            <div className="w-full sm:w-72">
-              <Select
-                value={registryOverride}
-                onValueChange={(val) => {
-                  if (val === "auto" || val === "npmmirror" || val === "npmjs") {
-                    setRegistryOverride(val);
-                  }
-                }}
-              >
-                <SelectTrigger size="sm">
-                  <SelectValue>{REGISTRY_LABELS[registryOverride]}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  <SelectItem value="auto">{REGISTRY_LABELS.auto}</SelectItem>
-                  <SelectItem value="npmmirror">{REGISTRY_LABELS.npmmirror}</SelectItem>
-                  <SelectItem value="npmjs">{REGISTRY_LABELS.npmjs}</SelectItem>
-                </SelectPopup>
-              </Select>
-            </div>
-          }
-        />
-
-        <SettingsRow
-          title="自定义 GitHub 加速前缀（可选）"
-          description="仅当选择 GitHub 线路且需要中转加速时填写（例如 https://gh-proxy.com/），留空则直连。"
-          control={
-            <Input
-              nativeInput
-              size="sm"
-              className="w-full font-mono sm:w-72"
-              placeholder="留空默认直连"
-              value={customGhProxyPrefix}
-              onChange={(event) => setCustomGhProxyPrefix(event.target.value)}
+        {/* Advanced proxy prefix folded by default */}
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <div className="px-4 py-2.5 sm:px-5">
+            <CollapsibleTrigger
+              data-testid="prismux-updates-advanced-toggle"
+              className="group flex w-full cursor-pointer items-center justify-between text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span>高级网络设置</span>
+              <ChevronDownIcon className="size-3.5 transition-transform duration-150 group-data-panel-open:rotate-180 motion-reduce:transition-none" />
+            </CollapsibleTrigger>
+          </div>
+          <CollapsiblePanel>
+            <SettingsRow
+              title="自定义 GitHub 加速前缀"
+              description="仅在使用 GitHub 线路且需要中转加速时填写，留空则直连。"
+              control={
+                <Input
+                  nativeInput
+                  size="sm"
+                  data-testid="prismux-updates-gh-proxy-input"
+                  className={`${SETTINGS_CONTROL_LG} max-w-full font-mono`}
+                  placeholder="留空默认直连"
+                  value={customGhProxyPrefix}
+                  onChange={(event) => setCustomGhProxyPrefix(event.target.value)}
+                />
+              }
             />
-          }
-        />
+          </CollapsiblePanel>
+        </Collapsible>
 
-        <div className="flex items-center justify-between gap-2 px-4 py-3">
+        <div className="flex items-center justify-between gap-2 px-4 py-3 sm:px-5">
           <Button
             size="xs"
             variant="ghost"
@@ -1118,7 +1131,7 @@ export function PrismuxUpdatesSettingsPage({
             }}
           >
             <RefreshCwIcon className={loading ? "size-3.5 animate-spin" : "size-3.5"} />
-            重新读取策略
+            重新读取
           </Button>
           <Button
             size="sm"
@@ -1128,7 +1141,7 @@ export function PrismuxUpdatesSettingsPage({
             }}
           >
             <SaveIcon className="size-3.5" />
-            {savingPolicy ? "保存中…" : "保存双源更新策略"}
+            {savingPolicy ? "保存中…" : "保存更新策略"}
           </Button>
         </div>
       </SettingsSection>
@@ -1139,5 +1152,5 @@ export function PrismuxUpdatesSettingsPage({
     return content;
   }
 
-  return <SettingsPageContainer width="wide">{content}</SettingsPageContainer>;
+  return <SettingsPageContainer width="readable">{content}</SettingsPageContainer>;
 }

@@ -5,17 +5,26 @@ import type { ChatMessage } from "../../types";
 import { deriveMessagesTimelineRows } from "./MessagesTimeline.logic";
 import {
   classifyWorkEntryActivity,
+  extractReadLineRangeLabel,
   extractReasoningSummaryLine,
+  extractWorkEntryLiveDetail,
   formatDshDurationCompact,
   formatDshLiveActivityLabel,
   formatDshStepGroupSummary,
   formatDshTurnFoldLabel,
+  formatFileChangeAction,
+  formatThinkingHeaderLabel,
+  formatWorkStepElapsedMs,
+  parseCompactDiffPreview,
   resolveTurnFoldExpanded,
   resolveWorkStepsPolicy,
   shouldGroupWorkStepsForTurn,
   shouldKeepIntermediateAssistantRepliesVisible,
   shouldTurnFoldDefaultOpen,
+  splitDisplayFilePath,
+  stripShellCommandWrapper,
 } from "./dshWorkSteps.logic";
+import { workEntryDisplayLabel, workEntryIsVisibleInGroup } from "./MessagesTimeline.logic";
 
 type TimelineEntry = Parameters<typeof deriveMessagesTimelineRows>[0]["timelineEntries"][number];
 
@@ -520,5 +529,109 @@ describe("dshWorkSteps.logic", () => {
         (r) => r.kind === "work" && r.groupedEntries.some((entry) => entry.id === "live-read"),
       ),
     ).toBe(true);
+  });
+
+  it("strips noisy Windows/POSIX shell wrappers while keeping raw command inspectable", () => {
+    const doubleEscapedPwsh = stripShellCommandWrapper(
+      '"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe" -Command \'pwd; ls -Name\'',
+    );
+    expect(doubleEscapedPwsh.displayCommand).toBe("pwd; ls -Name");
+    expect(doubleEscapedPwsh.wasWrapped).toBe(true);
+    expect(doubleEscapedPwsh.shellLabel).toBe("pwsh");
+    expect(doubleEscapedPwsh.rawCommand).toContain("pwsh.exe");
+
+    const flaggedPwsh = stripShellCommandWrapper(
+      'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "git status --short"',
+    );
+    expect(flaggedPwsh.displayCommand).toBe("git status --short");
+    expect(flaggedPwsh.wasWrapped).toBe(true);
+
+    const cmdWrapped = stripShellCommandWrapper('cmd.exe /c "echo hello world"');
+    expect(cmdWrapped.displayCommand).toBe("echo hello world");
+    expect(cmdWrapped.wasWrapped).toBe(true);
+    expect(cmdWrapped.shellLabel).toBe("cmd");
+
+    const bashWrapped = stripShellCommandWrapper("/bin/bash -lc 'rg workStepsDisplay src/'");
+    expect(bashWrapped.displayCommand).toBe("rg workStepsDisplay src/");
+    expect(bashWrapped.wasWrapped).toBe(true);
+
+    const plain = stripShellCommandWrapper("vp test run");
+    expect(plain.displayCommand).toBe("vp test run");
+    expect(plain.wasWrapped).toBe(false);
+
+    const cmdEntry = makeWorkEntry({
+      id: "w-pwsh",
+      label: "Ran command",
+      itemType: "command_execution",
+      command: '"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe" -Command \'pwd; ls -Name\'',
+    });
+    expect(extractWorkEntryLiveDetail(cmdEntry)).toBe("pwd; ls -Name");
+    expect(workEntryDisplayLabel(cmdEntry, undefined)).toBe("pwd; ls -Name");
+  });
+
+  it("formats step durations, thinking labels, file-change actions, diff previews, and read line ranges", () => {
+    expect(formatWorkStepElapsedMs(142)).toBe("142ms");
+    expect(formatWorkStepElapsedMs(2_400)).toBe("2.4s");
+    expect(formatWorkStepElapsedMs(12_300)).toBe("12s");
+    expect(formatWorkStepElapsedMs(75_000)).toBe("1m 15s");
+
+    expect(formatThinkingHeaderLabel({ live: true, locale: "zh-CN" })).toBe("正在思考");
+    expect(formatThinkingHeaderLabel({ live: false, elapsedMs: 2_400, locale: "zh-CN" })).toBe(
+      "思考了 2.4s",
+    );
+    expect(formatThinkingHeaderLabel({ live: false, elapsedMs: null, locale: "zh-CN" })).toBe(
+      "思考",
+    );
+    expect(formatThinkingHeaderLabel({ live: false, elapsedMs: 2_400, locale: "en-US" })).toBe(
+      "Thought for 2.4s",
+    );
+
+    expect(formatFileChangeAction("add", "zh-CN")).toEqual({ kind: "add", label: "新增" });
+    expect(formatFileChangeAction("update", "zh-CN")).toEqual({ kind: "edit", label: "修改" });
+    expect(formatFileChangeAction("delete", "zh-CN")).toEqual({ kind: "delete", label: "删除" });
+    expect(formatFileChangeAction("rename", "zh-CN")).toEqual({ kind: "rename", label: "重命名" });
+    expect(splitDisplayFilePath("Prismux/pelican.html")).toEqual({
+      basename: "pelican.html",
+      dirPath: "Prismux",
+    });
+
+    const unified = parseCompactDiffPreview({
+      diffStr: [
+        "diff --git a/pelican.html b/pelican.html",
+        "--- a/pelican.html",
+        "+++ b/pelican.html",
+        "@@ -1,2 +1,3 @@",
+        " <html>",
+        "-<title>Old</title>",
+        "+<title>New</title>",
+        "+<body>Pelican</body>",
+      ].join("\n"),
+    });
+    expect(unified).not.toBeNull();
+    expect(unified?.additions).toBe(2);
+    expect(unified?.deletions).toBe(1);
+    expect(unified?.lines.map((line) => line.kind)).toEqual(["hunk", "context", "del", "add", "add"]);
+
+    const oldNew = parseCompactDiffPreview({ oldStr: "a\nb", newStr: "a\nc\nd" });
+    expect(oldNew?.deletions).toBe(2);
+    expect(oldNew?.additions).toBe(3);
+
+    const readWithRange = makeWorkEntry({
+      id: "w-read-range",
+      label: "Read",
+      toolData: { input: { file_path: "src/app.ts", startLine: 10, endLine: 85 } },
+    });
+    expect(extractReadLineRangeLabel(readWithRange)).toBe("L10-L85");
+
+    const thinkToneOnly = makeWorkEntry({
+      id: "w-think-tone",
+      label: "Thinking",
+      tone: "thinking",
+      detail: "**Inspecting reasoning chain**\nVerifying output.",
+    });
+    expect(workEntryIsVisibleInGroup(thinkToneOnly, false)).toBe(true);
+    expect(extractReasoningSummaryLine(thinkToneOnly.detail, { live: false, settledReasoningPreview: true })).toBe(
+      "Inspecting reasoning chain",
+    );
   });
 });

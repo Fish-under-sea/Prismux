@@ -224,11 +224,13 @@ export interface LiquidGlassCardProps {
   alwaysShow?: boolean;
   /** Compact sidebar mode collapses detailed per-surface controls behind a disclosure. */
   compact?: boolean;
+  /** Whether to render the global accent color row inside the glass card (defaults to true). */
+  showAccentRow?: boolean;
   className?: string;
 }
 
 /**
- * Liquid Glass card: 5 global presets + accent & glass tint + fidelity & dim +
+ * Liquid Glass card: 5 global presets + accent & glass tint + fidelity, Fresnel & dim +
  * unified 8-zone fine-grained glass configurator (shellFrame / rightSidebar / mainCanvas /
  * workPanels / composer / overlays / userBubble / overviewPanel) + optional collapsed global inherit baseline & thinking mode.
  */
@@ -240,6 +242,7 @@ export function LiquidGlassCard({
   onOpenColorPicker,
   alwaysShow = false,
   compact = false,
+  showAccentRow = true,
   className,
 }: LiquidGlassCardProps) {
   const [globalBaselineOpen, setGlobalBaselineOpen] = useState(false);
@@ -276,7 +279,7 @@ export function LiquidGlassCard({
       <div className="ilook-box-head">
         <span className="ilook-box-title">液态玻璃</span>
         <span className="ilook-box-note">
-          全局预设一键统调，8 大工作台分区精细控制（窗口外框连体统一，右侧功能边栏、主画布、工作面板、输入框、弹窗层、用户消息气泡与概览面板独立可控）；禁 GPU 时自动回落实底。
+          全局预设一键统调，并支持 8 大工作台分区独立控制。
         </span>
       </div>
 
@@ -298,54 +301,56 @@ export function LiquidGlassCard({
 
       {/* Accent & Glass Tint Zone */}
       <div className="glass-accent-zone">
-        <div className="ilook-accent-row">
-          <div className="grow">
-            <div className="glass-reg-t">玻璃色调与强调色</div>
-            <div className="glass-reg-d">调节工作台强调色与液态玻璃染色，可跟随系统或自由调色。</div>
+        {showAccentRow ? (
+          <div className="ilook-accent-row">
+            <div className="grow">
+              <div className="glass-reg-t">玻璃色调与强调色</div>
+              <div className="glass-reg-d">调节工作台强调色，可跟随系统或自由调色。</div>
+            </div>
+            <div className="winaccent-mode">
+              <button
+                type="button"
+                className={`pbtn sm${config.accentMode === 'system' ? ' al' : ''}`}
+                aria-pressed={config.accentMode === 'system'}
+                onClick={() => onChange({ ...config, accentMode: 'system' })}
+              >
+                跟随系统
+              </button>
+              <button
+                type="button"
+                className={`pbtn sm typo-clear-btn${accentCleared ? ' is-ghost' : ''}`}
+                disabled={accentCleared}
+                onClick={() => onChange({ ...config, accentMode: 'custom', accent: '' })}
+              >
+                清除
+              </button>
+              <button
+                type="button"
+                className={`typo-pill-btn${accentOpen ? ' on' : ''}`}
+                aria-expanded={accentOpen}
+                title="打开浮窗调色盘自定义强调色"
+                onClick={(e) =>
+                  onOpenColorPicker({
+                    slot: { kind: 'accent' },
+                    title: '强调色',
+                    value: accentCleared ? '' : effectiveAccent,
+                    fallbackColor: effectiveAccent,
+                    anchorEl: e.currentTarget,
+                  })
+                }
+              >
+                <i className="typo-dot" style={{ background: effectiveAccent }} />
+                <span className="typo-hex mono">{accentLabel}</span>
+              </button>
+            </div>
           </div>
-          <div className="winaccent-mode">
-            <button
-              type="button"
-              className={`pbtn sm${config.accentMode === 'system' ? ' al' : ''}`}
-              aria-pressed={config.accentMode === 'system'}
-              onClick={() => onChange({ ...config, accentMode: 'system' })}
-            >
-              跟随系统
-            </button>
-            <button
-              type="button"
-              className={`pbtn sm typo-clear-btn${accentCleared ? ' is-ghost' : ''}`}
-              disabled={accentCleared}
-              onClick={() => onChange({ ...config, accentMode: 'custom', accent: '' })}
-            >
-              清除
-            </button>
-            <button
-              type="button"
-              className={`typo-pill-btn${accentOpen ? ' on' : ''}`}
-              aria-expanded={accentOpen}
-              title="打开浮窗调色盘自定义强调色"
-              onClick={(e) =>
-                onOpenColorPicker({
-                  slot: { kind: 'accent' },
-                  title: '强调色',
-                  value: accentCleared ? '' : effectiveAccent,
-                  fallbackColor: effectiveAccent,
-                  anchorEl: e.currentTarget,
-                })
-              }
-            >
-              <i className="typo-dot" style={{ background: effectiveAccent }} />
-              <span className="typo-hex mono">{accentLabel}</span>
-            </button>
-          </div>
-        </div>
+        ) : null}
 
         {/* Independent Glass Base Color & Dark Separate Toggle */}
         <div className="ilook-accent-row">
           <div className="grow">
             <div className="glass-reg-t">玻璃底色</div>
-            <div className="glass-reg-d">与强调色解耦，高保真度下自动亮度钳制保持 ≥ 4.5:1 对比度。</div>
+            <div className="glass-reg-d">与强调色独立设置，自动保障文字对比度清晰可读。</div>
           </div>
           <div className="winaccent-mode">
             <button
@@ -399,7 +404,7 @@ export function LiquidGlassCard({
           </div>
         </div>
 
-        {/* Readability Fidelity & Wallpaper Dim Sliders */}
+        {/* Readability Fidelity, Fresnel Rim & Wallpaper Dim Sliders */}
         <div className="ilook-slider-row">
           <span className="ilook-slider-lbl">保真度</span>
           <span className="ilook-rng">
@@ -416,6 +421,25 @@ export function LiquidGlassCard({
               }
             />
             <span className="rv">{config.glassFidelity}%</span>
+          </span>
+        </div>
+
+        <div className="ilook-slider-row">
+          <span className="ilook-slider-lbl">边缘折射</span>
+          <span className="ilook-rng">
+            <input
+              type="range"
+              className="rng"
+              min={0}
+              max={100}
+              step={5}
+              aria-label="液态玻璃边缘高光强度"
+              value={config.fresnelStrength}
+              onChange={(e) =>
+                onChange({ ...config, fresnelStrength: Number(e.target.value) })
+              }
+            />
+            <span className="rv">{config.fresnelStrength}%</span>
           </span>
         </div>
 
@@ -732,6 +756,240 @@ export function SidebarCornersCard({
   );
 }
 
+export interface ThemePaletteCardProps {
+  config: AppearanceConfig;
+  onChange: (next: AppearanceConfig) => void;
+  systemAccent?: string;
+  activeSlot?: ActiveColorPickerSlot | null;
+  onOpenColorPicker: (req: ColorPickerOpenRequest) => void;
+  className?: string;
+}
+
+/**
+ * Unified Theme Palette card for Tab 1 (主题与配色):
+ * Glass base polarity + Global accent color + Input caret color + Folded 5-item UI custom colors.
+ */
+export function ThemePaletteCard({
+  config,
+  onChange,
+  systemAccent = '#0078d4',
+  activeSlot = null,
+  onOpenColorPicker,
+  className,
+}: ThemePaletteCardProps) {
+  const polarity = resolveBasePolarity(config);
+  const accentCleared = config.accentMode === 'custom' && !normalizeHex(config.accent, true);
+  const fallbackAccent = polarity === 'light' ? '#005fb8' : '#5e9bff';
+  const effectiveAccent = accentCleared
+    ? fallbackAccent
+    : normalizeHex(
+        config.accentMode === 'custom' ? config.accent : systemAccent,
+        true,
+      ) || fallbackAccent;
+  const accentLabel = accentCleared ? '默认' : effectiveAccent;
+  const accentOpen = isSameSlot(activeSlot, { kind: 'accent' });
+
+  const cleanCaret = normalizeHex(config.caretColor, true);
+  const caretFallback = polarity === 'light' ? '#005fb8' : '#5e9bff';
+  const caretOpen = isSameSlot(activeSlot, { kind: 'caretColor' });
+
+  return (
+    <section
+      data-pmx-theme-palette-card
+      className={['pmx-appearance', 'ilook-sec-card', className ?? ''].filter(Boolean).join(' ')}
+    >
+      <div className="ilook-box-head">
+        <span className="ilook-box-title">极性、强调色与界面配色</span>
+        <span className="ilook-box-note">调整玻璃明暗基底、全局强调色、光标颜色及细项覆写。</span>
+      </div>
+
+      {/* Glass Base Polarity */}
+      <div className="ilook-typo-item">
+        <div className="ilook-typo-row">
+          <div className="grow">
+            <div className="ilook-typo-lbl">液态玻璃基底极性</div>
+            <div className="glass-reg-d">切换玻璃模式下的深色或浅色文字与底板基调。</div>
+          </div>
+          <div className="seg" role="group" aria-label="液态玻璃基底极性">
+            <button
+              type="button"
+              className={config.glassBasePolarity === 'dark' ? 'on' : ''}
+              aria-pressed={config.glassBasePolarity === 'dark'}
+              onClick={() => onChange({ ...config, glassBasePolarity: 'dark' })}
+            >
+              深色基底
+            </button>
+            <button
+              type="button"
+              className={config.glassBasePolarity === 'light' ? 'on' : ''}
+              aria-pressed={config.glassBasePolarity === 'light'}
+              onClick={() => onChange({ ...config, glassBasePolarity: 'light' })}
+            >
+              浅色基底
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Global Accent Color */}
+      <div className="ilook-typo-item">
+        <div className="ilook-typo-row">
+          <div className="grow">
+            <div className="ilook-typo-lbl">全局强调色</div>
+            <div className="glass-reg-d">默认跟随系统主题色，也可打开浮窗调色盘自定义。</div>
+          </div>
+          <div className="winaccent-mode">
+            <button
+              type="button"
+              className={`pbtn sm${config.accentMode === 'system' ? ' al' : ''}`}
+              aria-pressed={config.accentMode === 'system'}
+              onClick={() => onChange({ ...config, accentMode: 'system' })}
+            >
+              跟随系统
+            </button>
+            <button
+              type="button"
+              className={`pbtn sm typo-clear-btn${accentCleared ? ' is-ghost' : ''}`}
+              disabled={accentCleared}
+              onClick={() => onChange({ ...config, accentMode: 'custom', accent: '' })}
+            >
+              清除
+            </button>
+            <button
+              type="button"
+              className={`typo-pill-btn${accentOpen ? ' on' : ''}`}
+              aria-expanded={accentOpen}
+              title="打开浮窗调色盘自定义强调色"
+              onClick={(e) =>
+                onOpenColorPicker({
+                  slot: { kind: 'accent' },
+                  title: '强调色',
+                  value: accentCleared ? '' : effectiveAccent,
+                  fallbackColor: effectiveAccent,
+                  anchorEl: e.currentTarget,
+                })
+              }
+            >
+              <i className="typo-dot" style={{ background: effectiveAccent }} />
+              <span className="typo-hex mono">{accentLabel}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Input Caret Color */}
+      <div className="ilook-typo-item">
+        <div className="ilook-typo-row">
+          <span className="ilook-typo-lbl">输入光标颜色</span>
+          <div className="ilook-typo-actions">
+            <button
+              type="button"
+              className={`typo-pill-btn${caretOpen ? ' on' : ''}`}
+              aria-expanded={caretOpen}
+              onClick={(e) =>
+                onOpenColorPicker({
+                  slot: { kind: 'caretColor' },
+                  title: '输入光标颜色',
+                  value: cleanCaret,
+                  fallbackColor: caretFallback,
+                  anchorEl: e.currentTarget,
+                })
+              }
+            >
+              <i className="typo-dot" style={{ background: cleanCaret || caretFallback }} />
+              <span className="typo-hex mono">{cleanCaret || '默认'}</span>
+            </button>
+            <button
+              type="button"
+              className={`pbtn sm typo-clear-btn${cleanCaret ? '' : ' is-ghost'}`}
+              disabled={!cleanCaret}
+              onClick={() => onChange({ ...config, caretColor: '' })}
+            >
+              清除
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Folded 5-item UI Custom Colors */}
+      <div className="ilook-typo-item">
+        <div className="ilook-typo-row">
+          <div className="grow">
+            <div className="ilook-typo-lbl">细项 UI 配色覆写</div>
+            <div className="glass-reg-d">分别定制发送按钮、链接、文件图标、激活页签与思考高亮。</div>
+          </div>
+          <button
+            type="button"
+            className={`pbtn sm${config.uiColorCustom.enabled ? ' al' : ''}`}
+            aria-pressed={config.uiColorCustom.enabled}
+            onClick={() =>
+              onChange({
+                ...config,
+                uiColorCustom: {
+                  ...config.uiColorCustom,
+                  enabled: !config.uiColorCustom.enabled,
+                },
+              })
+            }
+          >
+            {config.uiColorCustom.enabled ? '已启用 5 项覆写' : '跟随强调色'}
+          </button>
+        </div>
+
+        {config.uiColorCustom.enabled ? (
+          <div className="pmx-uicolor-list">
+            {UI_COLOR_ROWS.map((row) => {
+              const val = normalizeHex(config.uiColorCustom[row.key], true);
+              const fallback =
+                row.key === 'deepDiving' && polarity === 'dark'
+                  ? '#6cb6ff'
+                  : normalizeHex(config.accent, true) || '#5e9bff';
+              const open = isSameSlot(activeSlot, { kind: 'uiColor', key: row.key });
+              return (
+                <div key={row.key} className="ilook-typo-row">
+                  <span className="ilook-typo-lbl">{row.label}</span>
+                  <div className="ilook-typo-actions">
+                    <button
+                      type="button"
+                      className={`typo-pill-btn${open ? ' on' : ''}`}
+                      aria-expanded={open}
+                      onClick={(e) =>
+                        onOpenColorPicker({
+                          slot: { kind: 'uiColor', key: row.key },
+                          title: row.label,
+                          value: val,
+                          fallbackColor: fallback,
+                          anchorEl: e.currentTarget,
+                        })
+                      }
+                    >
+                      <i className="typo-dot" style={{ background: val || fallback }} />
+                      <span className="typo-hex mono">{val || '跟随'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`pbtn sm typo-clear-btn${val ? '' : ' is-ghost'}`}
+                      disabled={!val}
+                      onClick={() =>
+                        onChange({
+                          ...config,
+                          uiColorCustom: { ...config.uiColorCustom, [row.key]: '' },
+                        })
+                      }
+                    >
+                      清除
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 export interface UiColorsCardProps {
   config: AppearanceConfig;
   onChange: (next: AppearanceConfig) => void;
@@ -884,13 +1142,15 @@ export interface TypographyCardProps {
   systemFonts?: readonly string[];
   systemFontsLoading?: boolean;
   onRefreshSystemFonts?: () => void;
+  /** Whether to render font-family selectors (false when unified with host TypographySection). */
+  showFontFamilySelectors?: boolean;
   /** Backward-compatible flag: standalone callers show caret & UI colors unless split into UiColorsCard. */
   showUiColorsAndCaret?: boolean;
   className?: string;
 }
 
 /**
- * Independent Light/Dark typography card (heading / text / muted), system & preset font family selectors,
+ * Independent Light/Dark typography card (heading / text / muted), optional system & preset font family selectors,
  * and optional caret + 5-item UI custom accent color overrides.
  */
 export function TypographyCard({
@@ -901,6 +1161,7 @@ export function TypographyCard({
   systemFonts = [],
   systemFontsLoading = false,
   onRefreshSystemFonts,
+  showFontFamilySelectors = true,
   showUiColorsAndCaret = true,
   className,
 }: TypographyCardProps) {
@@ -977,9 +1238,13 @@ export function TypographyCard({
     >
       <div className="ilook-hero-head">
         <div className="ilook-box-head">
-          <span className="ilook-box-title">全局字体与排版配色</span>
+          <span className="ilook-box-title">
+            {showFontFamilySelectors ? '全局字体与排版配色' : '明暗文字配色'}
+          </span>
           <span className="ilook-box-note">
-            支持本机系统字体选择；浅色与深色文字颜色完全独立存储，留空即跟随原生主题。
+            {showFontFamilySelectors
+              ? '支持本机系统字体选择；浅色与深色文字颜色独立存储。'
+              : '浅色与深色文字颜色独立存储，留空即跟随主题默认色。'}
           </span>
         </div>
         <div className="seg" role="group" aria-label="编辑浅色或深色文字配色">
@@ -1002,103 +1267,105 @@ export function TypographyCard({
         </div>
       </div>
 
-      {/* Global & Code Font Families (Curated Presets + Local System Fonts) */}
-      <div className="ilook-typo-item">
-        <div className="ilook-typo-row">
-          <div className="grow">
-            <span className="ilook-typo-lbl">本机系统字体</span>
-            <span className="glass-reg-d" style={{ marginLeft: 8 }}>
-              {uniqueSystemFonts.length > 0
-                ? `已载入 ${uniqueSystemFonts.length} 款本机字体`
-                : '可刷新读取本机已安装字体'}
-            </span>
+      {/* Global & Code Font Families (omitted when unified with host TypographySection) */}
+      {showFontFamilySelectors ? (
+        <div className="ilook-typo-item">
+          <div className="ilook-typo-row">
+            <div className="grow">
+              <span className="ilook-typo-lbl">本机系统字体</span>
+              <span className="glass-reg-d" style={{ marginLeft: 8 }}>
+                {uniqueSystemFonts.length > 0
+                  ? `已载入 ${uniqueSystemFonts.length} 款本机字体`
+                  : '可刷新读取本机已安装字体'}
+              </span>
+            </div>
+            {onRefreshSystemFonts ? (
+              <button
+                type="button"
+                className="pbtn sm"
+                disabled={systemFontsLoading}
+                onClick={onRefreshSystemFonts}
+              >
+                {systemFontsLoading ? '刷新中…' : '刷新系统字体'}
+              </button>
+            ) : null}
           </div>
-          {onRefreshSystemFonts ? (
-            <button
-              type="button"
-              className="pbtn sm"
-              disabled={systemFontsLoading}
-              onClick={onRefreshSystemFonts}
+
+          <div className="ilook-typo-row">
+            <span className="ilook-typo-lbl">界面字体族</span>
+            <select
+              className="pmx-select"
+              aria-label="界面字体族"
+              value={fontFamilyKnown ? config.typography.fontFamily : '__custom__'}
+              onChange={(e) => {
+                if (e.target.value !== '__custom__') {
+                  onChange({
+                    ...config,
+                    typography: { ...config.typography, fontFamily: e.target.value },
+                  });
+                }
+              }}
             >
-              {systemFontsLoading ? '刷新中…' : '刷新系统字体'}
-            </button>
-          ) : null}
-        </div>
-
-        <div className="ilook-typo-row">
-          <span className="ilook-typo-lbl">界面字体族</span>
-          <select
-            className="pmx-select"
-            aria-label="界面字体族"
-            value={fontFamilyKnown ? config.typography.fontFamily : '__custom__'}
-            onChange={(e) => {
-              if (e.target.value !== '__custom__') {
-                onChange({
-                  ...config,
-                  typography: { ...config.typography, fontFamily: e.target.value },
-                });
-              }
-            }}
-          >
-            <optgroup label="推荐预设">
-              {FONT_FAMILY_PRESETS.map((p) => (
-                <option key={p.label} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </optgroup>
-            {sansSystemOptions.length > 0 ? (
-              <optgroup label={`本机系统字体 (${sansSystemOptions.length})`}>
-                {sansSystemOptions.map((font) => (
-                  <option key={font.name} value={font.value}>
-                    {font.name}
+              <optgroup label="推荐预设">
+                {FONT_FAMILY_PRESETS.map((p) => (
+                  <option key={p.label} value={p.value}>
+                    {p.label}
                   </option>
                 ))}
               </optgroup>
-            ) : null}
-            {!fontFamilyKnown ? (
-              <option value="__custom__">自定义：{config.typography.fontFamily}</option>
-            ) : null}
-          </select>
-        </div>
+              {sansSystemOptions.length > 0 ? (
+                <optgroup label={`本机系统字体 (${sansSystemOptions.length})`}>
+                  {sansSystemOptions.map((font) => (
+                    <option key={font.name} value={font.value}>
+                      {font.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+              {!fontFamilyKnown ? (
+                <option value="__custom__">自定义：{config.typography.fontFamily}</option>
+              ) : null}
+            </select>
+          </div>
 
-        <div className="ilook-typo-row">
-          <span className="ilook-typo-lbl">代码字体族</span>
-          <select
-            className="pmx-select"
-            aria-label="代码字体族"
-            value={codeFontKnown ? config.typography.codeFontFamily : '__custom__'}
-            onChange={(e) => {
-              if (e.target.value !== '__custom__') {
-                onChange({
-                  ...config,
-                  typography: { ...config.typography, codeFontFamily: e.target.value },
-                });
-              }
-            }}
-          >
-            <optgroup label="推荐代码字体">
-              {CODE_FONT_PRESETS.map((p) => (
-                <option key={p.label} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </optgroup>
-            {monoSystemOptions.length > 0 ? (
-              <optgroup label={`本机系统字体 (${monoSystemOptions.length})`}>
-                {monoSystemOptions.map((font) => (
-                  <option key={font.name} value={font.value}>
-                    {font.name}
+          <div className="ilook-typo-row">
+            <span className="ilook-typo-lbl">代码字体族</span>
+            <select
+              className="pmx-select"
+              aria-label="代码字体族"
+              value={codeFontKnown ? config.typography.codeFontFamily : '__custom__'}
+              onChange={(e) => {
+                if (e.target.value !== '__custom__') {
+                  onChange({
+                    ...config,
+                    typography: { ...config.typography, codeFontFamily: e.target.value },
+                  });
+                }
+              }}
+            >
+              <optgroup label="推荐代码字体">
+                {CODE_FONT_PRESETS.map((p) => (
+                  <option key={p.label} value={p.value}>
+                    {p.label}
                   </option>
                 ))}
               </optgroup>
-            ) : null}
-            {!codeFontKnown ? (
-              <option value="__custom__">自定义：{config.typography.codeFontFamily}</option>
-            ) : null}
-          </select>
+              {monoSystemOptions.length > 0 ? (
+                <optgroup label={`本机系统字体 (${monoSystemOptions.length})`}>
+                  {monoSystemOptions.map((font) => (
+                    <option key={font.name} value={font.value}>
+                      {font.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+              {!codeFontKnown ? (
+                <option value="__custom__">自定义：{config.typography.codeFontFamily}</option>
+              ) : null}
+            </select>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* 3 independent light/dark typography colors */}
       {rows.map(({ role, label, fallback }) => {
@@ -1258,6 +1525,145 @@ export function TypographyCard({
         </>
       ) : null}
     </section>
+  );
+}
+
+export interface ThemeSnapshotActionsProps {
+  config: AppearanceConfig;
+  onChange: (next: AppearanceConfig) => void;
+  themeName?: string;
+  onExportSnapshot?: (snapshot: WbThemeSnapshot, json: string) => void;
+  onFeedback?: (feedback: { readonly tone: 'ok' | 'error'; readonly message: string }) => void;
+  showReset?: boolean;
+  className?: string;
+}
+
+function createFactoryDefaultAppearance(): AppearanceConfig {
+  return {
+    ...DEFAULT_APPEARANCE_CONFIG,
+    glassRegions: {
+      surface: { ...DEFAULT_APPEARANCE_CONFIG.glassRegions.surface },
+      card: { ...DEFAULT_APPEARANCE_CONFIG.glassRegions.card },
+      overlay: { ...DEFAULT_APPEARANCE_CONFIG.glassRegions.overlay },
+      control: { ...DEFAULT_APPEARANCE_CONFIG.glassRegions.control },
+    },
+    perSurfaceOverrides: {},
+    glassZones: {
+      shellFrame: { ...DEFAULT_GLASS_ZONES.shellFrame },
+      rightSidebar: { ...DEFAULT_GLASS_ZONES.rightSidebar },
+      mainCanvas: { ...DEFAULT_GLASS_ZONES.mainCanvas },
+      workPanels: { ...DEFAULT_GLASS_ZONES.workPanels },
+      composer: { ...DEFAULT_GLASS_ZONES.composer },
+      overlays: { ...DEFAULT_GLASS_ZONES.overlays },
+      userBubble: { ...DEFAULT_GLASS_ZONES.userBubble },
+      overviewPanel: { ...DEFAULT_GLASS_ZONES.overviewPanel },
+    },
+    sidebarSquareCorners: { ...DEFAULT_APPEARANCE_CONFIG.sidebarSquareCorners },
+    uiColorCustom: { ...DEFAULT_APPEARANCE_CONFIG.uiColorCustom },
+    typography: {
+      ...DEFAULT_APPEARANCE_CONFIG.typography,
+      light: { ...DEFAULT_APPEARANCE_CONFIG.typography.light },
+      dark: { ...DEFAULT_APPEARANCE_CONFIG.typography.dark },
+    },
+  };
+}
+
+/**
+ * Lightweight top-right `.wb-theme` export / import / reset toolbar buttons
+ * for placement in `SettingsSegmentedTabs`'s `trailingAction` slot.
+ */
+export function ThemeSnapshotActions({
+  config,
+  onChange,
+  themeName = 'Prismux Theme',
+  onExportSnapshot,
+  onFeedback,
+  showReset = true,
+  className,
+}: ThemeSnapshotActionsProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleExport = () => {
+    const snapshot = exportWbThemeSnapshot(config, { name: themeName });
+    const json = serializeWbThemeSnapshot(config, { name: themeName });
+
+    if (onExportSnapshot) {
+      onExportSnapshot(snapshot, json);
+      onFeedback?.({ tone: 'ok', message: '已导出 .wb-theme 预设。' });
+      return;
+    }
+
+    if (typeof document !== 'undefined' && typeof URL !== 'undefined') {
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safeSlug =
+        themeName
+          .toLowerCase()
+          .replace(/[^a-z0-9\u4e00-\u9fa5_-]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'prismux-theme';
+      a.href = url;
+      a.download = `${safeSlug}.wb-theme`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      onFeedback?.({ tone: 'ok', message: `已导出 ${safeSlug}.wb-theme。` });
+    }
+  };
+
+  const handleFileImport = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const result = importWbThemeSnapshot(text);
+      if (!result.ok) {
+        onFeedback?.({ tone: 'error', message: result.error });
+        return;
+      }
+      onChange(result.snapshot.appearance);
+      onFeedback?.({ tone: 'ok', message: `已导入主题「${result.snapshot.name}」。` });
+    } catch {
+      onFeedback?.({ tone: 'error', message: '读取主题文件失败，请选择有效的 .wb-theme 文件。' });
+    }
+  };
+
+  const handleReset = () => {
+    onChange(createFactoryDefaultAppearance());
+    onFeedback?.({ tone: 'ok', message: '已恢复出厂外观默认配置。' });
+  };
+
+  return (
+    <div
+      data-pmx-snapshot-actions="1"
+      className={['pmx-appearance', 'pmx-snapshot-toolbar', className ?? ''].filter(Boolean).join(' ')}
+    >
+      <button type="button" className="pbtn sm" onClick={handleExport}>
+        导出 .wb-theme
+      </button>
+      <button
+        type="button"
+        className="pbtn sm"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        导入
+      </button>
+      {showReset ? (
+        <button type="button" className="pbtn sm" onClick={handleReset}>
+          恢复默认
+        </button>
+      ) : null}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".wb-theme,.json,application/json"
+        hidden
+        onChange={handleFileImport}
+      />
+    </div>
   );
 }
 

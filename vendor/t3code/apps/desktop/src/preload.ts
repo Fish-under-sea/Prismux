@@ -7,6 +7,7 @@ import type {
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
+  PrismuxDispatchEnvelope,
   PrismuxTrayActionPayload,
   PrismuxWindowOcclusion,
 } from "@t3tools/contracts";
@@ -32,6 +33,59 @@ function isSnapShotEvent(value: unknown): value is DesktopSnapShotEvent {
     (id === undefined || typeof id === "string")
   );
 }
+
+const PRISMUX_DISPATCH_THREAD_CHANNEL = "prismux:dispatch-thread";
+const PRISMUX_DISPATCH_CONFIRM_CHANNEL = "prismux:dispatch:confirm";
+const PRISMUX_DISPATCH_CANCEL_CHANNEL = "prismux:dispatch:cancel";
+const MAX_BUFFERED_PRISMUX_DISPATCH_ENVELOPES = 50;
+
+function isPrismuxDispatchEnvelope(value: unknown): value is PrismuxDispatchEnvelope {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.taskId === "string" &&
+    record.taskId.trim().length > 0 &&
+    (record.mode === "send" || record.mode === "draft_only") &&
+    typeof record.workspacePath === "string" &&
+    typeof record.prompt === "string" &&
+    typeof record.provider === "string" &&
+    typeof record.modelId === "string" &&
+    typeof record.reasoningEffort === "string" &&
+    typeof record.callerKind === "string" &&
+    typeof record.requiresHumanConfirmation === "boolean"
+  );
+}
+
+const prismuxDispatchListeners = new Set<(envelope: PrismuxDispatchEnvelope) => void>();
+const bufferedPrismuxDispatchEnvelopes: PrismuxDispatchEnvelope[] = [];
+
+ipcRenderer.on(
+  PRISMUX_DISPATCH_THREAD_CHANNEL,
+  (_event: Electron.IpcRendererEvent, payload: unknown) => {
+    if (!isPrismuxDispatchEnvelope(payload)) return;
+    if (prismuxDispatchListeners.size === 0) {
+      const existingIndex = bufferedPrismuxDispatchEnvelopes.findIndex(
+        (entry) => entry.taskId === payload.taskId,
+      );
+      if (existingIndex >= 0) {
+        bufferedPrismuxDispatchEnvelopes[existingIndex] = payload;
+      } else {
+        if (bufferedPrismuxDispatchEnvelopes.length >= MAX_BUFFERED_PRISMUX_DISPATCH_ENVELOPES) {
+          bufferedPrismuxDispatchEnvelopes.shift();
+        }
+        bufferedPrismuxDispatchEnvelopes.push(payload);
+      }
+      return;
+    }
+    for (const listener of prismuxDispatchListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Isolate listener failures so every subscriber receives the envelope.
+      }
+    }
+  },
+);
 
 exposeClerkBridge({ passkeys: true });
 
@@ -637,4 +691,33 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     forceReloadWindow: () => ipcRenderer.invoke(IpcChannels.PRISMUX_FORCE_RELOAD_WINDOW_CHANNEL),
     toggleDevTools: () => ipcRenderer.invoke(IpcChannels.PRISMUX_TOGGLE_DEVTOOLS_CHANNEL),
   },
+  onPrismuxDispatchThread: (listener) => {
+    prismuxDispatchListeners.add(listener);
+    if (bufferedPrismuxDispatchEnvelopes.length > 0) {
+      const queued = bufferedPrismuxDispatchEnvelopes.splice(
+        0,
+        bufferedPrismuxDispatchEnvelopes.length,
+      );
+      queueMicrotask(() => {
+        if (!prismuxDispatchListeners.has(listener)) {
+          bufferedPrismuxDispatchEnvelopes.unshift(...queued);
+          return;
+        }
+        for (const envelope of queued) {
+          try {
+            listener(envelope);
+          } catch {
+            // Continue flushing remaining queued envelopes.
+          }
+        }
+      });
+    }
+    return () => {
+      prismuxDispatchListeners.delete(listener);
+    };
+  },
+  confirmPrismuxDispatch: (taskId) =>
+    ipcRenderer.invoke(PRISMUX_DISPATCH_CONFIRM_CHANNEL, taskId),
+  cancelPrismuxDispatch: (taskId) =>
+    ipcRenderer.invoke(PRISMUX_DISPATCH_CANCEL_CHANNEL, taskId),
 } satisfies DesktopBridge);

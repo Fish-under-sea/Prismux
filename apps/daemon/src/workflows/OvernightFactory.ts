@@ -21,10 +21,24 @@ import {
 } from "@prismux/memory-core";
 import {
   BRAND,
+  type DispatchCallerKind,
+  type DispatchReasoningEffort,
+  type DispatchTaskArtifact,
   type IslandHookEvent,
   type MemoryNamespace,
-  type MemoryQueryHit
+  type MemoryQueryHit,
+  type PrismuxDispatchEnvelope
 } from "@prismux/protocol";
+import { ArtifactResultBackdoor } from "../dispatch/ArtifactResultBackdoor.js";
+import type { DesktopIpcDispatchHub } from "../dispatch/DesktopIpcDispatchHub.js";
+import {
+  TaskDispatchRouter,
+  detectExplicitAntigravityPrompt
+} from "../dispatch/TaskDispatchRouter.js";
+import {
+  AntigravityGuardDeniedError,
+  AntigravityPolicyGuard
+} from "../security/AntigravityPolicyGuard.js";
 import {
   HandoffEngine,
   isToolAllowedInDialMode,
@@ -139,6 +153,8 @@ export interface FactoryCommandResult {
   combinedOutput: string;
 }
 
+export type OvernightSecretaryBrain = "gemini-api" | "codex" | "claude-code";
+
 export interface FactoryMorningReport {
   jobId: string;
   threadId: string;
@@ -156,6 +172,8 @@ export interface FactoryMorningReport {
   testOutput?: string;
   testPassed?: boolean;
   tokenStats?: MorningReportTokenStats;
+  artifact?: DispatchTaskArtifact;
+  oracleReviewSkipped?: boolean;
   completedAt?: number;
   durationMs?: number;
 }
@@ -251,6 +269,16 @@ export interface OvernightFactoryOptions extends Partial<FactoryInboundConfig> {
   handoffEngine?: HandoffEngine;
   hookBus?: LifecycleHookBus;
   sandbox?: WorktreeSandbox;
+  policyGuard?: AntigravityPolicyGuard;
+  dispatchRouter?: TaskDispatchRouter;
+  artifactBackdoor?: ArtifactResultBackdoor;
+  dispatchHub?: DesktopIpcDispatchHub;
+  callerKind?: DispatchCallerKind;
+  agentProvider?: string;
+  agentModel?: string;
+  reasoningEffort?: DispatchReasoningEffort;
+  secretaryBrain?: OvernightSecretaryBrain;
+  enableOracleReview?: boolean;
   outboundMailer?: OutboundMailer;
   codingExecutor?: CodingAgentExecutor;
   oracleReviewer?: OracleReviewer;
@@ -279,6 +307,12 @@ export interface FactoryRunOptions {
   maxSelfHealAttempts?: number;
   cleanupWorktree?: boolean;
   testTimeoutMs?: number;
+  callerKind?: DispatchCallerKind;
+  agentProvider?: string;
+  agentModel?: string;
+  reasoningEffort?: DispatchReasoningEffort;
+  secretaryBrain?: OvernightSecretaryBrain;
+  enableOracleReview?: boolean;
   codingExecutor?: CodingAgentExecutor;
   oracleReviewer?: OracleReviewer;
   outboundMailer?: OutboundMailer;
@@ -290,7 +324,11 @@ export interface FactoryRunOptions {
 }
 
 export interface FactoryPipelineResult {
-  status: "completed" | "skipped_unmatched" | "skipped_duplicate";
+  status:
+    | "completed"
+    | "awaiting_human_confirmation"
+    | "skipped_unmatched"
+    | "skipped_duplicate";
   jobId: string;
   messageId: string;
   threadId: string;
@@ -319,6 +357,14 @@ export interface FactoryPipelineResult {
   mailReceipt?: OutboundMailReceipt;
   notification?: FactoryPluginNotification;
   deepLink?: string;
+  requiresHumanConfirmation?: boolean;
+  dispatchEnvelope?: PrismuxDispatchEnvelope;
+  artifact?: DispatchTaskArtifact;
+  oracleReviewSkipped?: boolean;
+  routedProvider?: string;
+  routedModelId?: string;
+  routedReasoningEffort?: DispatchReasoningEffort;
+  secretaryBrain?: OvernightSecretaryBrain;
 }
 
 export function buildReviewDeepLink(threadId: string): string {
@@ -1379,6 +1425,16 @@ export class OvernightFactory {
   private readonly handoffEngine: HandoffEngine;
   private readonly hookBus: LifecycleHookBus;
   private readonly sandbox: WorktreeSandbox;
+  private readonly policyGuard: AntigravityPolicyGuard;
+  private readonly dispatchRouter: TaskDispatchRouter;
+  private readonly artifactBackdoor: ArtifactResultBackdoor;
+  private readonly dispatchHub: DesktopIpcDispatchHub | undefined;
+  private readonly callerKind: DispatchCallerKind;
+  private readonly agentProvider: string | undefined;
+  private readonly agentModel: string | undefined;
+  private readonly reasoningEffort: DispatchReasoningEffort | undefined;
+  private readonly secretaryBrain: OvernightSecretaryBrain;
+  private readonly enableOracleReview: boolean | undefined;
   private readonly identityGuard = new ForwardIdentityGuard();
   private readonly collector = new DocumentCollector();
   private readonly outboundMailer: OutboundMailer | undefined;
@@ -1413,6 +1469,21 @@ export class OvernightFactory {
     this.hookBus =
       opts.hookBus ?? new LifecycleHookBus({ defaultPermissionMode: "auto" });
     this.sandbox = opts.sandbox ?? new WorktreeSandbox();
+    this.policyGuard = opts.policyGuard ?? new AntigravityPolicyGuard();
+    this.dispatchRouter = opts.dispatchRouter ?? new TaskDispatchRouter();
+    this.artifactBackdoor =
+      opts.artifactBackdoor ??
+      new ArtifactResultBackdoor({
+        policyGuard: this.policyGuard,
+        now: opts.now
+      });
+    this.dispatchHub = opts.dispatchHub;
+    this.callerKind = opts.callerKind ?? "overnight_factory";
+    this.agentProvider = opts.agentProvider;
+    this.agentModel = opts.agentModel;
+    this.reasoningEffort = opts.reasoningEffort;
+    this.secretaryBrain = opts.secretaryBrain ?? "codex";
+    this.enableOracleReview = opts.enableOracleReview;
     this.outboundMailer = opts.outboundMailer;
     this.codingExecutor = opts.codingExecutor;
     this.oracleReviewer = opts.oracleReviewer;
@@ -1538,12 +1609,191 @@ export class OvernightFactory {
 
     try {
       // =====================================================================
+      // Pre-flight: Parameter Backdoor Routing & AGY Hard-Lock Role Guard
+      // =====================================================================
+      const preClean = this.collectCleanEmailBody(email);
+      const effectiveCallerKind = runOptions?.callerKind ?? this.callerKind;
+      const effectiveSecretaryBrain =
+        runOptions?.secretaryBrain ?? this.secretaryBrain;
+      const emailProviderDirective =
+        extractDirective(preClean.cleanedEmailText, "provider") ??
+        extractDirective(preClean.cleanedEmailText, "agent") ??
+        extractDirective(email.subject, "provider");
+      const explicitProvider =
+        runOptions?.agentProvider?.trim() ||
+        emailProviderDirective?.trim() ||
+        this.agentProvider?.trim() ||
+        undefined;
+      const combinedEmailPrompt = `${email.subject}\n${preClean.cleanedEmailText}`;
+      const explicitAgyMention =
+        detectExplicitAntigravityPrompt(combinedEmailPrompt);
+
+      const routedTarget = this.dispatchRouter.route({
+        prompt: combinedEmailPrompt,
+        callerKind: effectiveCallerKind,
+        ...(explicitProvider !== undefined ? { provider: explicitProvider } : {}),
+        ...(runOptions?.agentModel ?? this.agentModel
+          ? { modelId: (runOptions?.agentModel ?? this.agentModel)!.trim() }
+          : {}),
+        ...(runOptions?.reasoningEffort ?? this.reasoningEffort
+          ? { reasoningEffort: runOptions?.reasoningEffort ?? this.reasoningEffort }
+          : {}),
+        ...(explicitAgyMention ? { explicitAntigravityRequested: true } : {})
+      });
+
+      const guardDecision = this.policyGuard.evaluateDispatch({
+        callerKind: effectiveCallerKind,
+        targetProvider: routedTarget.provider,
+        targetModelId: routedTarget.modelId,
+        explicitAntigravityRequested: routedTarget.explicitAntigravityRequested
+      });
+
+      if (!guardDecision.allowed) {
+        throw new AntigravityGuardDeniedError(
+          guardDecision.code ?? "AGY_UNATTENDED_FORBIDDEN",
+          guardDecision.reason,
+          guardDecision
+        );
+      }
+
+      // =====================================================================
       // Stage A: DocumentCollector -> owner_chief MemoryStore -> HandoffEngine
       // =====================================================================
       const stageA = await this.runStageA(jobId, email, startedAt, runOptions);
 
       targetRepoPathForCleanup = stageA.repoTarget.repoPath;
       worktreePathForCleanup = stageA.worktreePath;
+
+      // Interactive remote secretary (e.g. Gmail `#factory` via `secretary_gmail`) requesting
+      // personal Antigravity: NEVER auto-send! Create isolated worktree + stage Draft-Only
+      // awaiting explicit human desktop confirmation and reply clearly via email.
+      if (guardDecision.decision === "stage_draft_only") {
+        const repoPath = stageA.repoTarget.repoPath;
+        const baseBranch = this.runGit(repoPath, [
+          "rev-parse",
+          "--abbrev-ref",
+          "HEAD"
+        ]).trim();
+        const baseCommitSha = this.runGit(repoPath, ["rev-parse", "HEAD"]).trim();
+        mkdirSync(dirname(stageA.worktreePath), { recursive: true });
+        this.runGit(repoPath, [
+          "worktree",
+          "add",
+          "-b",
+          stageA.branchName,
+          stageA.worktreePath,
+          "HEAD"
+        ]);
+        worktreeCreated = true;
+
+        const memoryContextSummary =
+          stageA.memoryHits.length > 0
+            ? stageA.memoryHits
+                .slice(0, 4)
+                .map((h) => `[${h.entry.namespace}] ${h.entry.title}`)
+                .join("；")
+            : undefined;
+        const recipient =
+          runOptions?.reportRecipient ?? extractEmailAddressOnly(email.from);
+
+        const stagedBase = {
+          taskId: jobId,
+          workspacePath: stageA.repoTarget.repoPath,
+          worktreePath: stageA.worktreePath,
+          branchName: stageA.branchName,
+          prompt: stageA.handoff.continuationPrompt,
+          provider: routedTarget.provider,
+          modelId: routedTarget.modelId,
+          reasoningEffort: routedTarget.reasoningEffort,
+          callerKind: effectiveCallerKind,
+          taskCategory: routedTarget.taskCategory,
+          confirmationReason: guardDecision.reason,
+          ...(memoryContextSummary !== undefined ? { memoryContextSummary } : {}),
+          replyChannel: {
+            kind: "gmail" as const,
+            recipient,
+            inReplyTo: email.messageId,
+            threadId: stageA.handoff.newThreadId
+          },
+          threadId: stageA.handoff.newThreadId
+        };
+
+        const dispatchEnvelope: PrismuxDispatchEnvelope =
+          this.dispatchHub !== undefined
+            ? this.dispatchHub.stageDraftTask(stagedBase)
+            : {
+                ...stagedBase,
+                status: "awaiting_human_confirmation",
+                mode: "draft_only",
+                requiresHumanConfirmation: true,
+                createdAt: new Date(this.now()).toISOString(),
+                updatedAt: new Date(this.now()).toISOString()
+              };
+
+        const deepLink = buildReviewDeepLink(stageA.handoff.newThreadId);
+        const draftHtml = this.renderDraftConfirmationHtml({
+          jobId,
+          subject: email.subject,
+          branchName: stageA.branchName,
+          worktreePath: stageA.worktreePath,
+          memoryContextSummary,
+          deepLink,
+          reason: guardDecision.reason
+        });
+
+        const mailer = runOptions?.outboundMailer ?? this.outboundMailer;
+        let mailReceipt: OutboundMailReceipt | undefined;
+        if (mailer !== undefined && recipient.length > 0) {
+          mailReceipt = await mailer.send({
+            to: [recipient],
+            subject: `[${BRAND.appName} 个人版 AGY 待确认草稿] ${email.subject}`,
+            html: draftHtml,
+            text: [
+              `您的邮件明确指定调用个人版 Antigravity（AGY）。为遵守账号安全硬锁定策略，系统绝不会在无人值守/远程链路中自动触发个人版 AGY。`,
+              `已完成以下前置准备（Draft-Only）：`,
+              `- 任务 ID：${jobId}`,
+              `- 隔离分支：${stageA.branchName}`,
+              `- Worktree 路径：${stageA.worktreePath}`,
+              ...(memoryContextSummary
+                ? [`- 已召回记忆上下文：${memoryContextSummary}`]
+                : []),
+              `请打开桌面端 Prismux 点击「确认放行并发送」后正式执行：${deepLink}`
+            ].join("\n"),
+            inReplyTo: email.messageId,
+            references: [email.messageId],
+            threadId: stageA.handoff.newThreadId
+          });
+        }
+
+        this.processedMessageIds.add(normMsgId);
+        return {
+          status: "awaiting_human_confirmation",
+          jobId,
+          messageId: email.messageId,
+          threadId: stageA.handoff.newThreadId,
+          codingThreadId: stageA.handoff.newThreadId,
+          branchName: stageA.branchName,
+          baseBranch,
+          baseCommitSha,
+          worktreePath: stageA.worktreePath,
+          worktreeCleaned: false,
+          cleanedEmailText: stageA.cleanedEmailText,
+          memoryContext: stageA.memoryHits,
+          handoff: stageA.handoff,
+          changedFiles: [],
+          reviewComments: [guardDecision.reason],
+          reportHtml: draftHtml,
+          ...(mailReceipt !== undefined ? { mailReceipt } : {}),
+          deepLink,
+          requiresHumanConfirmation: true,
+          dispatchEnvelope,
+          oracleReviewSkipped: true,
+          routedProvider: routedTarget.provider,
+          routedModelId: routedTarget.modelId,
+          routedReasoningEffort: routedTarget.reasoningEffort,
+          secretaryBrain: effectiveSecretaryBrain
+        };
+      }
 
       // =====================================================================
       // Stage B: Isolated git worktree + WorktreeSandbox + Self-heal + Commit
@@ -1558,15 +1808,60 @@ export class OvernightFactory {
         }
       );
 
-      // =====================================================================
-      // Stage C: Amp Oracle / Review read-only dial independent inspection
-      // =====================================================================
-      const stageC = await this.runStageC(
-        jobId,
-        stageA,
-        stageB,
-        runOptions
+      // Extract structured deliverables directly via ArtifactResultBackdoor
+      // (default v3 straight-to-email pipeline, skipping heavy Oracle second-review!).
+      const totalInsertions = stageB.changedFiles.reduce(
+        (sum, f) => sum + f.additions,
+        0
       );
+      const totalDeletions = stageB.changedFiles.reduce(
+        (sum, f) => sum + f.deletions,
+        0
+      );
+      const artifact = this.artifactBackdoor.extractArtifact({
+        taskId: jobId,
+        threadId: stageA.handoff.newThreadId,
+        workspacePath: stageA.worktreePath,
+        finalAssistantText:
+          stageB.codingSummary ?? stageA.handoff.summary.goal,
+        modifiedFiles: stageB.changedFiles.map((f) => f.path),
+        diffStats: {
+          filesChanged: stageB.changedFiles.length,
+          insertions: totalInsertions,
+          deletions: totalDeletions
+        },
+        provider: stageB.tokenStats?.provider ?? routedTarget.provider,
+        modelId: stageB.tokenStats?.model ?? routedTarget.modelId,
+        branchName: stageA.branchName,
+        commitSha: stageB.commitSha,
+        testPassed: stageB.testPassed,
+        skipGitInspection: true
+      });
+
+      // =====================================================================
+      // Optional Legacy Stage C: Only when caller explicitly enables Oracle review
+      // =====================================================================
+      const explicitReviewer = runOptions?.oracleReviewer ?? this.oracleReviewer;
+      const shouldRunOracleReview =
+        runOptions?.enableOracleReview === true ||
+        (runOptions?.enableOracleReview !== false &&
+          this.enableOracleReview !== false &&
+          explicitReviewer !== undefined);
+
+      const stageC = shouldRunOracleReview
+        ? await this.runStageC(jobId, stageA, stageB, runOptions)
+        : {
+            reviewThreadId: stageA.handoff.newThreadId,
+            reviewComments: [
+              `[ArtifactResultBackdoor 直出] 已跳过重型 Oracle 二次审查，直接基于 Diff 与单测输出生成完工早报。`,
+              ...analyzeDiffStaticRisks(
+                stageB.diff,
+                stageB.changedFiles,
+                stageB.testPassed
+              )
+            ]
+          };
+      const oracleReviewSkipped = !shouldRunOracleReview;
 
       // =====================================================================
       // Stage D: Stop Hook + Rich HTML Morning Report + Mailer + Plugin Push
@@ -1578,7 +1873,11 @@ export class OvernightFactory {
         stageA,
         stageB,
         stageC,
-        runOptions
+        runOptions,
+        {
+          artifact,
+          oracleReviewSkipped
+        }
       );
 
       if (shouldCleanupWorktree && worktreeCreated) {
@@ -1617,7 +1916,13 @@ export class OvernightFactory {
         reportHtml: stageD.reportHtml,
         mailReceipt: stageD.mailReceipt,
         notification: stageD.notification,
-        deepLink: stageD.report.deepLink
+        deepLink: stageD.report.deepLink,
+        artifact,
+        oracleReviewSkipped,
+        routedProvider: routedTarget.provider,
+        routedModelId: routedTarget.modelId,
+        routedReasoningEffort: routedTarget.reasoningEffort,
+        secretaryBrain: effectiveSecretaryBrain
       };
     } catch (error) {
       if (
@@ -2329,7 +2634,11 @@ export class OvernightFactory {
       reviewComments: string[];
       reviewTokenStats?: Partial<MorningReportTokenStats>;
     },
-    runOptions?: FactoryRunOptions
+    runOptions?: FactoryRunOptions,
+    backdoorMeta?: {
+      artifact?: DispatchTaskArtifact;
+      oracleReviewSkipped?: boolean;
+    }
   ): Promise<{
     stopHookResult: HookDispatchResult;
     tokenStats: MorningReportTokenStats;
@@ -2397,6 +2706,12 @@ export class OvernightFactory {
       testOutput: stageB.testOutput,
       testPassed: stageB.testPassed,
       tokenStats,
+      ...(backdoorMeta?.artifact !== undefined
+        ? { artifact: backdoorMeta.artifact }
+        : {}),
+      ...(backdoorMeta?.oracleReviewSkipped !== undefined
+        ? { oracleReviewSkipped: backdoorMeta.oracleReviewSkipped }
+        : {}),
       completedAt,
       durationMs: Math.max(0, completedAt - startedAt)
     };
@@ -2803,6 +3118,56 @@ export class OvernightFactory {
     }
 
     return `<div style="border:1px solid #d0d7de;border-radius:8px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;">${renderedLines.join("")}</div>`;
+  }
+
+  private renderDraftConfirmationHtml(input: {
+    jobId: string;
+    subject: string;
+    branchName: string;
+    worktreePath: string;
+    memoryContextSummary?: string;
+    deepLink: string;
+    reason: string;
+  }): string {
+    const safeAppName = escapeHtml(BRAND.appName);
+    const safeSubject = escapeHtml(input.subject);
+    const safeJobId = escapeHtml(input.jobId);
+    const safeBranch = escapeHtml(input.branchName);
+    const safeWorktree = escapeHtml(input.worktreePath);
+    const safeReason = escapeHtml(input.reason);
+    const safeDeepLink = escapeHtml(input.deepLink);
+    const safeMemory = input.memoryContextSummary
+      ? escapeHtml(input.memoryContextSummary)
+      : "（未命中额外记忆条目）";
+
+    return [
+      `<!doctype html>`,
+      `<html lang="zh-CN">`,
+      `<head><meta charset="utf-8"><title>${safeAppName} 个人版 AGY 草稿待确认</title></head>`,
+      `<body style="margin:0;padding:24px 12px;background:#f4f6fb;color:#0f172a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;">`,
+      `<div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #f59e0b;border-radius:14px;overflow:hidden;">`,
+      `<div style="padding:20px 24px;background:#fffbeb;border-bottom:1px solid #fde68a;">`,
+      `<div style="font-size:12px;font-weight:700;color:#b45309;">${safeAppName} · 个人版 Antigravity（AGY）硬锁定安全拦截</div>`,
+      `<h1 style="margin:6px 0 0 0;font-size:18px;color:#78350f;">任务已就位至 Draft-Only 草稿，等待本人桌面端确认放行</h1>`,
+      `</div>`,
+      `<div style="padding:20px 24px;font-size:14px;line-height:1.65;color:#1e293b;">`,
+      `<p style="margin:0 0 12px 0;">${safeReason}</p>`,
+      `<ul style="margin:0 0 16px 0;padding-left:20px;">`,
+      `<li><strong>原始主题：</strong>${safeSubject}</li>`,
+      `<li><strong>任务 ID：</strong><code>${safeJobId}</code></li>`,
+      `<li><strong>隔离分支：</strong><code>${safeBranch}</code></li>`,
+      `<li><strong>Worktree 目录：</strong><code>${safeWorktree}</code></li>`,
+      `<li><strong>已召回记忆：</strong>${safeMemory}</li>`,
+      `</ul>`,
+      `<div style="padding:14px 16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;text-align:center;">`,
+      `<div style="margin-bottom:8px;font-size:13px;color:#334155;">请回到桌面端确认草稿内容后手动点击「确认放行并发送」</div>`,
+      `<a href="${safeDeepLink}" style="display:inline-block;padding:10px 18px;background:#d97706;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">在 ${safeAppName} 桌面端确认放行</a>`,
+      `</div>`,
+      `</div>`,
+      `</div>`,
+      `</body>`,
+      `</html>`
+    ].join("\n");
   }
 
   /**

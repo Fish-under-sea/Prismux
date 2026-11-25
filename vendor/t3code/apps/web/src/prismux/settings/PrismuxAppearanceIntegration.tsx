@@ -1,32 +1,77 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRightIcon, ImageIcon, PaletteIcon } from "lucide-react";
-import { AppearanceHeroAndCards, type AppearanceConfig } from "@prismux/appearance";
+import { T, useGT } from "gt-react";
+import { ChevronRightIcon, ImageIcon } from "lucide-react";
+import {
+  FloatingColorPopover,
+  LiquidGlassCard,
+  SidebarCornersCard,
+  ThemeHeroCard,
+  ThemePaletteCard,
+  ThemeSnapshotActions,
+  TypographyCard,
+  type ActiveColorPickerSlot,
+  type AppearanceConfig,
+  type ColorPickerOpenRequest,
+} from "@prismux/appearance";
 import { useWallpaperStore } from "@prismux/wallpaper";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { SettingsSection } from "../../components/settings/settingsLayout";
+import { toastManager } from "../../components/ui/toast";
+import {
+  SettingsSegmentedTabs,
+  type SettingsSegmentedTabItem,
+} from "../../components/settings/SettingsSegmentedTabs";
+import { TypographySection } from "../../components/settings/TypographySettings";
 import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
 
-/**
- * MP-04 / Issue #3: Unified Prismux Appearance settings hub inside /settings/appearance.
- * Consolidates Theme Hero (Celestial 3-state capsule), Liquid Glass + decoupled 6-zone
- * configurator, Global UI & Caret Colors, System Fonts & Typography Colors, and .wb-theme
- * Snapshot while syncing live with the right-sidebar InlineAppearanceStudio.
- */
-export function PrismuxAppearanceIntegration() {
+function isSamePickerSlot(a: ActiveColorPickerSlot | null, b: ActiveColorPickerSlot): boolean {
+  if (!a || a.kind !== b.kind) return false;
+  if (a.kind === "typography" && b.kind === "typography") {
+    return a.polarity === b.polarity && a.role === b.role;
+  }
+  if (a.kind === "uiColor" && b.kind === "uiColor") {
+    return a.key === b.key;
+  }
+  if (a.kind === "surfaceColor" && b.kind === "surfaceColor") {
+    return a.surfaceId === b.surfaceId;
+  }
+  return true;
+}
+
+export const APPEARANCE_TAB_IDS = {
+  theme: "theme",
+  glass: "glass",
+  typography: "typography",
+} as const;
+
+export const APPEARANCE_TAB_HASH_ANCHORS = {
+  theme: ["prismux-appearance", "color-scheme", "theme", "panel-animations"] as const,
+  glass: ["liquid-glass", "glass-zones", "sidebar-corners"] as const,
+  typography: [
+    "typography",
+    "interface-font",
+    "prompt-font",
+    "code-font",
+    "terminal-font",
+    "separate-fonts",
+    "font-smoothing",
+    "word-wrap",
+  ] as const,
+} as const;
+
+/** 3-tab Prismux appearance settings hub (`theme`, `glass`, `typography`). */
+export function PrismuxAppearanceIntegration({
+  themeAdvancedSlot,
+}: {
+  readonly themeAdvancedSlot?: ReactNode;
+} = {}) {
+  const gt = useGT();
   const navigate = useNavigate();
-  const {
-    appearance,
-    setAppearance,
-    wallpaperStore,
-    daemonInfo,
-    systemFonts,
-    refreshSystemFonts,
-  } = usePrismuxRuntime();
+  const { appearance, setAppearance, wallpaperStore } = usePrismuxRuntime();
   const wallpaperSnap = useWallpaperStore(wallpaperStore);
-  const [fontsLoading, setFontsLoading] = useState(false);
+  const [pickerReq, setPickerReq] = useState<ColorPickerOpenRequest | null>(null);
 
   const selectedId = wallpaperSnap.settings.selectedId;
   const activeWallpaper = selectedId
@@ -37,72 +82,224 @@ export function PrismuxAppearanceIntegration() {
     setAppearance(next);
   };
 
-  const handleOpenWallpaperSettings = () => {
-    void navigate({ to: "/settings/wallpaper" });
+  const handleOpenColorPicker = (req: ColorPickerOpenRequest) => {
+    setPickerReq((prev) => (prev && isSamePickerSlot(prev.slot, req.slot) ? null : req));
   };
 
-  const handleRefreshSystemFonts = () => {
-    if (fontsLoading) return;
-    setFontsLoading(true);
-    void refreshSystemFonts(true).finally(() => {
-      setFontsLoading(false);
+  const applySlotColor = (slot: ActiveColorPickerSlot, hex: string) => {
+    setAppearance((prev) => {
+      switch (slot.kind) {
+        case "accent":
+          return { ...prev, accentMode: "custom", accent: hex };
+        case "glassColor":
+          return { ...prev, glassColor: hex || "#ffffff" };
+        case "glassDarkColor":
+          return { ...prev, glassDarkColor: hex || "#000000" };
+        case "surfaceColor": {
+          const prevSurface = prev.perSurfaceOverrides[slot.surfaceId];
+          return {
+            ...prev,
+            perSurfaceOverrides: {
+              ...prev.perSurfaceOverrides,
+              [slot.surfaceId]: {
+                ...prevSurface,
+                mode: "custom",
+                color: hex,
+              },
+            },
+          };
+        }
+        case "caretColor":
+          return { ...prev, caretColor: hex };
+        case "typography":
+          return {
+            ...prev,
+            typography: {
+              ...prev.typography,
+              [slot.polarity]: {
+                ...prev.typography[slot.polarity],
+                [slot.role]: hex,
+              },
+            },
+          };
+        case "uiColor":
+          return {
+            ...prev,
+            uiColorCustom: {
+              ...prev.uiColorCustom,
+              enabled: true,
+              [slot.key]: hex,
+            },
+          };
+      }
+    });
+  };
+
+  const activeColorValue = (() => {
+    if (!pickerReq) return "";
+    const slot = pickerReq.slot;
+    switch (slot.kind) {
+      case "accent":
+        return appearance.accentMode === "custom" ? appearance.accent : "#0078d4";
+      case "glassColor":
+        return appearance.glassColor;
+      case "glassDarkColor":
+        return appearance.glassDarkColor;
+      case "surfaceColor":
+        return appearance.perSurfaceOverrides[slot.surfaceId]?.color ?? "";
+      case "caretColor":
+        return appearance.caretColor;
+      case "typography":
+        return appearance.typography[slot.polarity][slot.role];
+      case "uiColor":
+        return appearance.uiColorCustom[slot.key];
+    }
+  })();
+
+  const handleClearAppearanceFontOverride = (kind: "sans" | "code") => {
+    setAppearance((prev) => {
+      if (kind === "sans" && prev.typography.fontFamily === "") return prev;
+      if (kind === "code" && prev.typography.codeFontFamily === "") return prev;
+      return {
+        ...prev,
+        typography: {
+          ...prev.typography,
+          ...(kind === "sans" ? { fontFamily: "" } : { codeFontFamily: "" }),
+        },
+      };
+    });
+  };
+
+  const handleSnapshotFeedback = (feedback: {
+    readonly tone: "ok" | "error";
+    readonly message: string;
+  }) => {
+    toastManager.add({
+      type: feedback.tone === "error" ? "error" : "success",
+      title: feedback.message,
     });
   };
 
   const wallpaperSlot = (
-    <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/45 px-3 py-2 text-xs">
+    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/35 px-3 py-2 text-xs">
       <div className="flex min-w-0 items-center gap-2">
         <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate text-foreground">
-          {activeWallpaper ? `当前壁纸：${activeWallpaper.title}` : "未启用壁纸（纯色 / 默认舞台）"}
+          {activeWallpaper
+            ? gt("Current wallpaper: {title}", { title: activeWallpaper.title })
+            : gt("No wallpaper active (default stage)")}
         </span>
         {activeWallpaper ? (
           <Badge variant={wallpaperSnap.settings.playing ? "success" : "secondary"}>
-            {wallpaperSnap.settings.playing ? "渲染中" : "已暂停"}
+            {wallpaperSnap.settings.playing ? gt("Rendering") : gt("Paused")}
           </Badge>
         ) : null}
       </div>
-      <Button size="xs" variant="outline" onClick={handleOpenWallpaperSettings}>
-        前往壁纸引擎
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => void navigate({ to: "/settings/wallpaper" })}
+      >
+        <T>Wallpaper engine</T>
         <ChevronRightIcon className="size-3.5" />
       </Button>
     </div>
   );
 
-  return (
-    <div className="pt-3">
-      <SettingsSection
-        id="prismux-appearance"
-        title="Prismux 液态玻璃与光学主题"
-        headerAction={
-          <Badge variant={daemonInfo.ready ? "info" : "outline"}>
-            <PaletteIcon className="size-3" />
-            {daemonInfo.ready ? "Daemon 实时持久化" : "本地预览模式"}
-          </Badge>
-        }
-      >
-        <p className="px-4 pt-3 text-xs leading-relaxed text-muted-foreground">
-          统一管理光学天体三态胶囊、360° Fresnel 液态玻璃与 6 大工作台分区独立调节（窗口外框
-          ［含左侧边栏、顶栏、底栏与右细边］/ 右侧功能边栏 / 主内容画布 / 工作面板
-          ［任务面板、工作区板与定时任务］/ 输入框与卡片 / 弹窗与设置）、全局 UI
-          配色、本机系统字体与主题快照，与右侧壁纸边栏实时双向同步。纯宿主视觉层，对模型 0 Token
-          开销。
-        </p>
-        <div className="p-3 sm:p-4">
-          <AppearanceHeroAndCards
+  const tabs: ReadonlyArray<SettingsSegmentedTabItem> = [
+    {
+      id: APPEARANCE_TAB_IDS.theme,
+      label: gt("Theme & colors"),
+      hashAnchors: APPEARANCE_TAB_HASH_ANCHORS.theme,
+      content: (
+        <div id="prismux-appearance" className="flex flex-col gap-5">
+          <ThemeHeroCard config={appearance} onChange={handleAppearanceChange}>
+            {wallpaperSlot}
+          </ThemeHeroCard>
+
+          <ThemePaletteCard
             config={appearance}
             onChange={handleAppearanceChange}
-            alwaysShowGlassCard
-            showUiColorsCard
-            showSnapshotCard
-            systemFonts={systemFonts}
-            systemFontsLoading={fontsLoading}
-            onRefreshSystemFonts={handleRefreshSystemFonts}
-            themeName="Prismux Liquid Glass"
-            wallpaperSlot={wallpaperSlot}
+            activeSlot={pickerReq?.slot ?? null}
+            onOpenColorPicker={handleOpenColorPicker}
+          />
+
+          {themeAdvancedSlot}
+        </div>
+      ),
+    },
+    {
+      id: APPEARANCE_TAB_IDS.glass,
+      label: gt("Liquid glass & corners"),
+      hashAnchors: APPEARANCE_TAB_HASH_ANCHORS.glass,
+      content: (
+        <div id="liquid-glass" className="flex flex-col gap-5">
+          <LiquidGlassCard
+            config={appearance}
+            onChange={handleAppearanceChange}
+            activeSlot={pickerReq?.slot ?? null}
+            onOpenColorPicker={handleOpenColorPicker}
+            alwaysShow
+            showAccentRow={false}
+          />
+
+          <div id="sidebar-corners">
+            <SidebarCornersCard config={appearance} onChange={handleAppearanceChange} />
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: APPEARANCE_TAB_IDS.typography,
+      label: gt("Fonts & typography"),
+      hashAnchors: APPEARANCE_TAB_HASH_ANCHORS.typography,
+      content: (
+        <div className="flex flex-col gap-5">
+          <TypographySection onClearAppearanceFontOverride={handleClearAppearanceFontOverride} />
+
+          <TypographyCard
+            config={appearance}
+            onChange={handleAppearanceChange}
+            activeSlot={pickerReq?.slot ?? null}
+            onOpenColorPicker={handleOpenColorPicker}
+            showFontFamilySelectors={false}
+            showUiColorsAndCaret={false}
           />
         </div>
-      </SettingsSection>
-    </div>
+      ),
+    },
+  ];
+
+  return (
+    <>
+      <SettingsSegmentedTabs
+        tabs={tabs}
+        defaultTabId={APPEARANCE_TAB_IDS.theme}
+        ariaLabel={gt("Appearance settings sections")}
+        trailingAction={
+          <ThemeSnapshotActions
+            config={appearance}
+            onChange={handleAppearanceChange}
+            themeName="Prismux Liquid Glass"
+            onFeedback={handleSnapshotFeedback}
+          />
+        }
+      />
+
+      <FloatingColorPopover
+        open={pickerReq !== null}
+        value={activeColorValue}
+        fallbackColor={pickerReq?.fallbackColor ?? "#5e9bff"}
+        anchorEl={pickerReq?.anchorEl ?? null}
+        title={pickerReq?.title ?? gt("Pick color")}
+        onChange={(hex) => {
+          if (pickerReq) applySlotColor(pickerReq.slot, hex);
+        }}
+        onClear={() => {
+          if (pickerReq) applySlotColor(pickerReq.slot, "");
+        }}
+        onClose={() => setPickerReq(null)}
+      />
+    </>
   );
 }

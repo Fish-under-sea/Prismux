@@ -34,6 +34,7 @@ export interface QuotaStatusPopoverProps {
   readonly onPrefsChange: (next: QuotaPreferences) => void;
   readonly now: number;
   readonly loading?: boolean;
+  readonly creditsLoading?: boolean;
   readonly onRefresh?: (force: boolean) => Promise<void>;
   /** Optional controlled/initial agent drill-down ID (useful for deterministic SSR/UI testing). */
   readonly initialSelectedAgentId?: string | null;
@@ -88,6 +89,7 @@ export function QuotaStatusPopover({
   onPrefsChange,
   now,
   loading = false,
+  creditsLoading = false,
   onRefresh,
   initialSelectedAgentId = null,
   embeddedInPopover = false,
@@ -253,8 +255,22 @@ export function QuotaStatusPopover({
           })}
         </div>
 
-        {selectedAgent.remainingCredits !== null && selectedAgent.remainingCredits > 0 ? (
-          <div className="flex items-center justify-between border-t border-border/60 pt-2 text-[11px] text-muted-foreground tabular-nums">
+        {selectedAgent.id === "antigravity" &&
+        creditsLoading &&
+        selectedAgent.remainingCredits === null ? (
+          <div
+            data-testid="quota-detail-credits-loading"
+            className="flex items-center justify-between border-t border-border/60 pt-2 text-2xs text-muted-foreground tabular-nums"
+          >
+            <span>剩余 Credits</span>
+            <span>查询中…</span>
+          </div>
+        ) : selectedAgent.remainingCredits !== null &&
+          (selectedAgent.remainingCredits > 0 || selectedAgent.id === "antigravity") ? (
+          <div
+            data-testid="quota-detail-credits"
+            className="flex items-center justify-between border-t border-border/60 pt-2 text-2xs text-muted-foreground tabular-nums"
+          >
             <span>剩余 Credits</span>
             <span className="font-semibold text-foreground">{selectedAgent.remainingCredits}</span>
           </div>
@@ -351,17 +367,12 @@ export function QuotaStatusPopover({
         <div data-testid="quota-agent-list" className="flex max-h-72 flex-col gap-1 overflow-y-auto">
           {summary.availableAgents.map((agent) => {
             if (prefs.viewMode === "compact") {
-              const primary = agent.primaryWindow;
-              const compactReset = primary
-                ? formatQuotaResetDuration(primary.resetAtMs, now)
-                : null;
-              const primaryPercent = primary
-                ? getQuotaDisplayPercent(primary, prefs.percentMode)
-                : 0;
-              const primaryBarWidth = primary
-                ? getQuotaBarWidthPercent(primary, prefs.percentMode)
-                : 0;
-              const primaryTone: QuotaTone = primary?.tone ?? "normal";
+              const primary = agent.primaryWindow ?? agent.windows[0] ?? null;
+              if (!primary) return null;
+              const compactReset = formatQuotaResetDuration(primary.resetAtMs, now);
+              const primaryPercent = getQuotaDisplayPercent(primary, prefs.percentMode);
+              const primaryBarWidth = getQuotaBarWidthPercent(primary, prefs.percentMode);
+              const primaryTone: QuotaTone = primary.tone;
 
               return (
                 <button

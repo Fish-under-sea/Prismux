@@ -173,7 +173,8 @@ function ProviderAccount({
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState({ id: "", values: {} as Record<string, string> });
   const state = auth.data;
-  const interaction = state?.interaction;
+  const isAntigravity = provider.driver === "antigravity";
+  const interaction = isAntigravity ? null : state?.interaction;
   const draftId = `${state?.flowId ?? ""}:${interaction?.id ?? ""}`;
   const values = draft.id === draftId ? draft.values : {};
   const active =
@@ -192,8 +193,9 @@ function ProviderAccount({
     !signedIn &&
     (provider.setup?.canAuthenticate === false ||
       (provider.driver === "acpRegistry" && state?.methods?.length === 0));
-  const url =
-    interaction?.type === "browser" || interaction?.type === "deviceCode"
+  const url = isAntigravity
+    ? null
+    : interaction?.type === "browser" || interaction?.type === "deviceCode"
       ? interaction.url
       : state?.authorizationUrl;
   const disabled = pending || auth.error !== null || isDiscovering;
@@ -254,27 +256,29 @@ function ProviderAccount({
     provider.installed;
   const signInDisabled = disabled || state === null;
   const canSignOut =
-    !active && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate);
+    !active && !isAntigravity && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate);
   const showCallback =
-    Boolean(url) && (interaction?.type === "browser" ? interaction.acceptsCallback : !interaction);
-  const usesCredentials =
-    provider.driver === "antigravity" &&
-    (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
+    !isAntigravity &&
+    Boolean(url) &&
+    (interaction?.type === "browser" ? interaction.acceptsCallback : !interaction);
+  const usesLocalCli = isAntigravity;
   const status =
     active || state?.phase === "failed" || state?.phase === "cancelled"
       ? state.message
       : !provider.enabled
         ? gt("Turned off")
         : signedIn
-          ? gt("Signed in")
+          ? usesLocalCli
+            ? gt("Connected via local agy CLI")
+            : gt("Signed in")
           : isDiscovering
             ? gt("Discovering sign-in methods…")
             : needsExternalSetup
               ? gt("No in-app sign-in advertised. Follow the provider's docs to finish setup.")
               : !provider.installed
                 ? gt("Not installed")
-                : usesCredentials
-                  ? gt("Connect to load models")
+                : usesLocalCli
+                  ? gt("Sign in with 'agy' or 'agy acp --login' in a terminal, then connect")
                   : gt("Not signed in");
   // A provider with several sign-in methods picks one from a menu on the same control.
   const methodActions: MenuAction[] = methods.map((method) => ({
@@ -336,10 +340,10 @@ function ProviderAccount({
       ? [
           {
             id: "change",
-            title: gt("Change account"),
+            title: usesLocalCli ? gt("Sync models") : gt("Change account"),
             image: "person.crop.circle",
             attributes: { disabled: signInDisabled },
-            ...(methodActions.length > 1
+            ...(!usesLocalCli && methodActions.length > 1
               ? {
                   subactions: methodActions.map((action) => ({
                     ...action,
@@ -399,7 +403,7 @@ function ProviderAccount({
         accessibilityLabel={gt("{provider} account options", { provider: name })}
       />
     </Menu>
-  ) : canSignIn && !signedIn && methodActions.length > 1 && !signInDisabled ? (
+  ) : canSignIn && !signedIn && !usesLocalCli && methodActions.length > 1 && !signInDisabled ? (
     <Menu
       accessible
       accessibilityRole="button"
@@ -417,10 +421,10 @@ function ProviderAccount({
   ) : canSignIn && !signedIn ? (
     <ControlPill
       variant="primary"
-      label={usesCredentials ? gt("Connect") : gt("Sign in")}
+      label={usesLocalCli ? gt("Connect local CLI") : gt("Sign in")}
       accessibilityLabel={
-        usesCredentials
-          ? gt("Connect to {provider}", { provider: name })
+        usesLocalCli
+          ? gt("Connect local CLI for {provider}", { provider: name })
           : gt("Sign in to {provider}", { provider: name })
       }
       disabled={signInDisabled}

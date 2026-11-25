@@ -83,6 +83,12 @@ import {
 import type { OvernightRouteService } from "./OvernightRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
 import { handleQuotaRoute } from "./QuotaRoutes.js";
+import type { DesktopIpcDispatchHub } from "../dispatch/DesktopIpcDispatchHub.js";
+import type { AntigravityPolicyStore } from "../security/AntigravityPolicyStore.js";
+import {
+  handleDispatchRoute,
+  isDispatchOrSecurityRoute
+} from "./DispatchRoutes.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_IMPORT_JSON_BODY_BYTES = 34 * 1024 * 1024;
@@ -119,6 +125,8 @@ export interface DaemonRpcServerOptions {
   portScannerService?: PortScannerService;
   resourceMonitorService?: ResourceMonitorService;
   agentAuxService?: AgentAuxService;
+  antigravityPolicyStore?: AntigravityPolicyStore;
+  dispatchHub?: DesktopIpcDispatchHub;
   startedAt?: number;
   onRequestShutdown?: (reason?: string) => void | Promise<void>;
 }
@@ -441,6 +449,8 @@ export class DaemonRpcServer {
   private readonly portScannerService: PortScannerService | undefined;
   private readonly resourceMonitorService: ResourceMonitorService | undefined;
   private readonly agentAuxService: AgentAuxService;
+  private readonly antigravityPolicyStore: AntigravityPolicyStore | undefined;
+  private readonly dispatchHub: DesktopIpcDispatchHub | undefined;
   private readonly startedAt: number;
   private readonly onRequestShutdown:
     | ((reason?: string) => void | Promise<void>)
@@ -487,6 +497,8 @@ export class DaemonRpcServer {
     this.portScannerService = options.portScannerService;
     this.resourceMonitorService = options.resourceMonitorService;
     this.agentAuxService = options.agentAuxService ?? new AgentAuxService();
+    this.antigravityPolicyStore = options.antigravityPolicyStore;
+    this.dispatchHub = options.dispatchHub;
     this.startedAt = options.startedAt ?? Date.now();
     this.onRequestShutdown = options.onRequestShutdown;
   }
@@ -2050,6 +2062,42 @@ export class DaemonRpcServer {
         throw err;
       }
       return true;
+    }
+
+    if (isDispatchOrSecurityRoute(pathname)) {
+      const allowQueryToken =
+        method === "GET" && pathname === "/v1/dispatch/events";
+      const trustedCallerScope = this.authenticateHttpRequest(
+        req,
+        res,
+        requestUrl,
+        allowQueryToken
+      );
+      if (trustedCallerScope === null) return true;
+      const handled = await handleDispatchRoute(
+        {
+          req,
+          res,
+          method,
+          pathname,
+          searchParams: requestUrl.searchParams,
+          callerScope: trustedCallerScope,
+          readJsonBody: () => readJsonBody(req),
+          registerSseCleanup: (cleanup) => {
+            this.activeSseCleanups.add(cleanup);
+          },
+          unregisterSseCleanup: (cleanup) => {
+            this.activeSseCleanups.delete(cleanup);
+          }
+        },
+        {
+          policyStore: this.antigravityPolicyStore,
+          dispatchHub: this.dispatchHub
+        }
+      );
+      if (handled) {
+        return true;
+      }
     }
 
     return false;

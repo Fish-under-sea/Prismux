@@ -5,9 +5,9 @@ import { cn } from "../lib/utils";
 export type WorkspacePageWidth = "readable" | "wide" | "expanded";
 
 const WIDTH_CLASS: Record<WorkspacePageWidth, string> = {
-  readable: "max-w-4xl",
-  wide: "max-w-5xl",
-  expanded: "max-w-6xl",
+  readable: "max-w-[820px]",
+  wide: "max-w-[1040px]",
+  expanded: "max-w-[1040px]",
 };
 
 export function WorkspacePageContainer({
@@ -18,7 +18,7 @@ export function WorkspacePageContainer({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full flex-col gap-6 px-5 pt-6 pb-12 sm:px-6",
+        "mx-auto flex w-full flex-col gap-7 px-6 pt-7 pb-14",
         WIDTH_CLASS[width],
         className,
       )}

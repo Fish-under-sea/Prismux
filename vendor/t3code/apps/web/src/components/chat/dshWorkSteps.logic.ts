@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import type { RunId } from "@t3tools/contracts";
 import {
   DEFAULT_COLLAPSED_ASSISTANT_REPLY_MODE,
@@ -7,6 +8,7 @@ import {
   type WorkStepsCollapseTiming,
   type WorkStepsDisplay,
 } from "@t3tools/contracts/settings";
+import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
 import {
   liveThoughtLine,
   toolGroupAction,
@@ -422,7 +424,7 @@ export function extractWorkEntryLiveDetail(
   if (fromToolData) return fromToolData;
 
   if (entry.command?.trim()) {
-    return truncateGraphemes(sanitizeInlineLine(entry.command));
+    return truncateGraphemes(sanitizeInlineLine(stripShellCommandWrapper(entry.command).displayCommand));
   }
   const paths = [
     ...(entry.changedFiles ?? []),
@@ -662,3 +664,551 @@ export const DEFAULT_WORK_STEPS_SETTINGS = {
   workStepsCollapseTiming: DEFAULT_WORK_STEPS_COLLAPSE_TIMING,
   collapsedAssistantReplyMode: DEFAULT_COLLAPSED_ASSISTANT_REPLY_MODE,
 } as const;
+
+export interface StrippedShellCommand {
+  readonly displayCommand: string;
+  readonly rawCommand: string;
+  readonly wasWrapped: boolean;
+  readonly shellLabel: string | null;
+}
+
+const POWERSHELL_WRAPPER_FLAGS = new Set([
+  "-noprofile",
+  "-nologo",
+  "-noninteractive",
+  "-mta",
+  "-sta",
+  "-nop",
+  "-noni",
+]);
+const POWERSHELL_WRAPPER_OPTIONS = new Set([
+  "-executionpolicy",
+  "-ep",
+  "-windowstyle",
+  "-w",
+  "-workingdirectory",
+  "-version",
+  "-inputformat",
+  "-outputformat",
+  "-configurationname",
+]);
+
+function unwrapBalancedShellQuote(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length < 2) return trimmed;
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replaceAll("''", "'").trim();
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed
+      .slice(1, -1)
+      .replace(/\\(["\\$`])/gu, "$1")
+      .trim();
+  }
+  return trimmed;
+}
+
+function detectShellWrapperName(rawCommand: string): string | null {
+  const match = rawCommand
+    .trim()
+    .match(
+      /^(?:"([^"]+)"|'([^']+)'|([^\s]+))/u,
+    );
+  const exe = (match?.[1] ?? match?.[2] ?? match?.[3] ?? "")
+    .replaceAll("\\\\", "\\")
+    .split(/[\\/]/u)
+    .at(-1)
+    ?.toLowerCase()
+    .replace(/\.exe$/u, "");
+  if (
+    exe === "pwsh" ||
+    exe === "powershell" ||
+    exe === "cmd" ||
+    exe === "bash" ||
+    exe === "zsh" ||
+    exe === "sh" ||
+    exe === "dash" ||
+    exe === "fish"
+  ) {
+    return exe;
+  }
+  return null;
+}
+
+/**
+ * Strips noisy Windows / POSIX shell invocation wrappers (including double-escaped
+ * `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '...'` and `cmd.exe /c ...`)
+ * so command headers & `$ <cmd>` bars stay ultra-clean while keeping `rawCommand` inspectable.
+ */
+export function stripShellCommandWrapper(rawCommand: string): StrippedShellCommand {
+  const raw = rawCommand.trim();
+  if (!raw) {
+    return { displayCommand: "", rawCommand: raw, wasWrapped: false, shellLabel: null };
+  }
+  const shellLabel = detectShellWrapperName(raw);
+  // First normalize double-escaped Windows executable paths inside the leading quoted executable.
+  const normalizedLeading = raw.replace(
+    /^"([A-Za-z]:\\\\[^"]+)"/u,
+    (_whole, inner: string) => `"${inner.replaceAll("\\\\", "\\")}"`,
+  );
+  const standardDisplay = commandDisplayText(normalizedLeading).trim();
+  if (standardDisplay && standardDisplay !== normalizedLeading && standardDisplay !== raw) {
+    return {
+      displayCommand: standardDisplay,
+      rawCommand: raw,
+      wasWrapped: true,
+      shellLabel,
+    };
+  }
+
+  // Regex fallback for wrappers with flags/escaping that strict tokenizer kept intact.
+  const leadingMatch = normalizedLeading.match(/^(?:"([^"]+)"|'([^']+)'|([^\s]+))\s+([\s\S]+)$/u);
+  if (leadingMatch && shellLabel !== null) {
+    let rest = leadingMatch[4]!.trim();
+    if (shellLabel === "pwsh" || shellLabel === "powershell") {
+      // Consume leading PowerShell flags/options until -Command / -c
+      while (rest.length > 0) {
+        const flagMatch = rest.match(/^(-[A-Za-z]+)(?:\s+([\s\S]*))?$/u);
+        if (!flagMatch) break;
+        const flag = flagMatch[1]!.toLowerCase();
+        const afterFlag = (flagMatch[2] ?? "").trim();
+        if (flag === "-command" || flag === "-c") {
+          const inner = unwrapBalancedShellQuote(afterFlag);
+          if (inner) {
+            return {
+              displayCommand: commandDisplayText(inner).trim() || inner,
+              rawCommand: raw,
+              wasWrapped: true,
+              shellLabel,
+            };
+          }
+          break;
+        }
+        if (POWERSHELL_WRAPPER_FLAGS.has(flag)) {
+          rest = afterFlag;
+          continue;
+        }
+        if (POWERSHELL_WRAPPER_OPTIONS.has(flag)) {
+          const optVal = afterFlag.match(/^(?:"[^"]*"|'[^']*'|\S+)\s*([\s\S]*)$/u);
+          if (!optVal) break;
+          rest = (optVal[1] ?? "").trim();
+          continue;
+        }
+        break;
+      }
+    } else if (shellLabel === "cmd") {
+      const cmdMatch = rest.match(/^(?:\/[a-zA-Z](?::\S+)?\s+)*\/[cCkK]\s+([\s\S]+)$/u);
+      if (cmdMatch?.[1]) {
+        const inner = unwrapBalancedShellQuote(cmdMatch[1]);
+        if (inner) {
+          return {
+            displayCommand: commandDisplayText(inner).trim() || inner,
+            rawCommand: raw,
+            wasWrapped: true,
+            shellLabel,
+          };
+        }
+      }
+    } else {
+      const posixMatch = rest.match(/^(?:-[a-zA-Z]*c[a-zA-Z]*|--command)\s+([\s\S]+)$/u);
+      if (posixMatch?.[1]) {
+        const inner = unwrapBalancedShellQuote(posixMatch[1]);
+        if (inner) {
+          return {
+            displayCommand: commandDisplayText(inner).trim() || inner,
+            rawCommand: raw,
+            wasWrapped: true,
+            shellLabel,
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    displayCommand: standardDisplay || raw,
+    rawCommand: raw,
+    wasWrapped: false,
+    shellLabel: null,
+  };
+}
+
+function toEpochMs(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (DateTime.isDateTime(value)) {
+    return DateTime.toEpochMillis(value);
+  }
+  return null;
+}
+
+export function resolveWorkEntryElapsedMs(entry: WorkLogEntry): number | null {
+  const toolData =
+    entry.toolData !== null && typeof entry.toolData === "object" && !Array.isArray(entry.toolData)
+      ? (entry.toolData as Record<string, unknown>)
+      : undefined;
+  if (
+    typeof toolData?.durationMs === "number" &&
+    Number.isFinite(toolData.durationMs) &&
+    toolData.durationMs >= 0
+  ) {
+    return toolData.durationMs;
+  }
+  const item = entry.projectedItem?.item ?? entry.structuredPayload;
+  if (!item) return null;
+  const startMs = toEpochMs(item.startedAt);
+  const endMs = toEpochMs(item.completedAt);
+  if (startMs === null || endMs === null || endMs < startMs) return null;
+  return endMs - startMs;
+}
+
+export function formatWorkStepElapsedMs(elapsedMs: number): string {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return "";
+  if (elapsedMs < 1_000) {
+    return `${Math.max(1, Math.round(elapsedMs))}ms`;
+  }
+  const seconds = elapsedMs / 1_000;
+  if (seconds < 10) {
+    return `${seconds.toFixed(1).replace(/\.0$/u, "")}s`;
+  }
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+  return formatDshDurationCompact(elapsedMs);
+}
+
+const THINKING_HEADER_COPY = {
+  zh: {
+    live: "正在思考",
+    settled: "思考",
+    settledPrefix: "思考了 ",
+  },
+  en: {
+    live: "Thinking",
+    settled: "Thought",
+    settledPrefix: "Thought for ",
+  },
+} as const;
+
+export function formatThinkingHeaderLabel(input: {
+  readonly live: boolean;
+  readonly elapsedMs?: number | null | undefined;
+  readonly locale?: string | undefined;
+}): string {
+  const copy = THINKING_HEADER_COPY[isZhLocale(input.locale) ? "zh" : "en"];
+  if (input.live) {
+    return copy.live;
+  }
+  if (
+    input.elapsedMs !== null &&
+    input.elapsedMs !== undefined &&
+    Number.isFinite(input.elapsedMs) &&
+    input.elapsedMs >= 100
+  ) {
+    return `${copy.settledPrefix}${formatWorkStepElapsedMs(input.elapsedMs)}`;
+  }
+  return copy.settled;
+}
+
+export type FileChangeActionKind = "add" | "edit" | "delete" | "rename";
+
+const FILE_CHANGE_ACTION_COPY: Readonly<
+  Record<"zh" | "en", Readonly<Record<FileChangeActionKind, string>>>
+> = {
+  zh: {
+    add: "新增",
+    edit: "修改",
+    delete: "删除",
+    rename: "重命名",
+  },
+  en: {
+    add: "Add",
+    edit: "Edit",
+    delete: "Delete",
+    rename: "Rename",
+  },
+};
+
+export function formatFileChangeAction(
+  operation: string | null | undefined,
+  locale?: string,
+): { readonly kind: FileChangeActionKind; readonly label: string } {
+  const normalized = (operation ?? "").trim().toLowerCase();
+  const table = FILE_CHANGE_ACTION_COPY[isZhLocale(locale) ? "zh" : "en"];
+  let kind: FileChangeActionKind = "edit";
+  if (
+    normalized === "add" ||
+    normalized === "added" ||
+    normalized === "create" ||
+    normalized === "created"
+  ) {
+    kind = "add";
+  } else if (
+    normalized === "delete" ||
+    normalized === "deleted" ||
+    normalized === "remove" ||
+    normalized === "removed"
+  ) {
+    kind = "delete";
+  } else if (
+    normalized === "rename" ||
+    normalized === "renamed" ||
+    normalized === "move" ||
+    normalized === "moved"
+  ) {
+    kind = "rename";
+  }
+  return { kind, label: table[kind] };
+}
+
+const WORK_STEP_CARD_COPY = {
+  zh: {
+    copied: "已复制",
+    copyCommand: "复制命令",
+    copyOutput: "复制输出",
+    copyResult: "复制结果",
+    copyPath: "复制路径",
+    copyContent: "复制内容",
+    rawCommand: "原始命令",
+    hideRawCommand: "隐藏原始命令",
+    rawInvocation: "原始 Shell 调用",
+    running: "运行中",
+    executing: "执行中",
+    failed: "执行失败",
+    exitPrefix: "退出码 ",
+    outputHeaderPrefix: "输出 · ",
+    outputLinesSuffix: " 行",
+    outputLineSingularSuffix: " 行",
+    loadingOutput: "正在加载输出…",
+    loadingContent: "正在加载内容…",
+    loadOutputFailedPrefix: "加载输出失败：",
+    loadFailedPrefix: "加载失败：",
+    noOutput: "无输出",
+    showLessOutput: "收起输出",
+    showLessPreview: "收起预览",
+    showLessMatches: "收起匹配",
+    showAllPrefix: "展开全部 ",
+    linesSuffix: " 行",
+    diffLinesSuffix: " 行变更",
+    matchesSuffix: " 处匹配",
+    resultsSuffix: " 条结果",
+    searchPattern: "搜索模式",
+    arguments: "调用参数",
+    returnValue: "返回结果",
+    contentPreview: "文件内容预览",
+    openDiffNote: " · 点击右上角「打开差异」查看完整内容",
+  },
+  en: {
+    copied: "Copied",
+    copyCommand: "Copy",
+    copyOutput: "Copy output",
+    copyResult: "Copy output",
+    copyPath: "Copy path",
+    copyContent: "Copy output",
+    rawCommand: "Raw",
+    hideRawCommand: "Hide raw",
+    rawInvocation: "Raw shell invocation",
+    running: "Running",
+    executing: "Running",
+    failed: "Failed",
+    exitPrefix: "exit ",
+    outputHeaderPrefix: "Output · ",
+    outputLinesSuffix: " lines",
+    outputLineSingularSuffix: " line",
+    loadingOutput: "Loading output…",
+    loadingContent: "Loading output…",
+    loadOutputFailedPrefix: "Couldn't load output: ",
+    loadFailedPrefix: "Couldn't load output: ",
+    noOutput: "No output.",
+    showLessOutput: "Show less",
+    showLessPreview: "Show less",
+    showLessMatches: "Show fewer",
+    showAllPrefix: "Show all ",
+    linesSuffix: " lines",
+    diffLinesSuffix: " diff lines",
+    matchesSuffix: " matches",
+    resultsSuffix: " results",
+    searchPattern: "Pattern",
+    arguments: "Arguments",
+    returnValue: "Output",
+    contentPreview: "Content preview",
+    openDiffNote: "",
+  },
+} as const;
+
+export type WorkStepCardCopy = (typeof WORK_STEP_CARD_COPY)[keyof typeof WORK_STEP_CARD_COPY];
+
+export function getWorkStepCardCopy(locale?: string): WorkStepCardCopy {
+  return WORK_STEP_CARD_COPY[isZhLocale(locale) ? "zh" : "en"];
+}
+
+export function formatStepOutputHeader(lineCount: number, locale?: string): string {
+  const copy = getWorkStepCardCopy(locale);
+  const suffix = lineCount === 1 ? copy.outputLineSingularSuffix : copy.outputLinesSuffix;
+  return `${copy.outputHeaderPrefix}${lineCount}${suffix}`;
+}
+
+export function splitDisplayFilePath(relativePath: string): {
+  readonly basename: string;
+  readonly dirPath: string | null;
+} {
+  const normalized = relativePath.trim().replaceAll("\\", "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  if (lastSlash <= 0) {
+    return { basename: normalized, dirPath: null };
+  }
+  return {
+    basename: normalized.slice(lastSlash + 1),
+    dirPath: normalized.slice(0, lastSlash),
+  };
+}
+
+export interface CompactDiffLine {
+  readonly kind: "add" | "del" | "hunk" | "meta" | "context";
+  readonly prefix: string;
+  readonly text: string;
+  readonly oldLine?: number;
+  readonly newLine?: number;
+}
+
+export interface CompactDiffPreview {
+  readonly lines: ReadonlyArray<CompactDiffLine>;
+  readonly totalLines: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+export function parseCompactDiffPreview(input: {
+  readonly diffStr?: string | null | undefined;
+  readonly oldStr?: string | null | undefined;
+  readonly newStr?: string | null | undefined;
+}): CompactDiffPreview | null {
+  const diffText = input.diffStr?.replace(/\r\n/gu, "\n").trimEnd();
+  const lines: CompactDiffLine[] = [];
+  let additions = 0;
+  let deletions = 0;
+
+  if (diffText) {
+    let oldLine = 1;
+    let newLine = 1;
+    let hasHunk = false;
+    for (const rawLine of diffText.split("\n")) {
+      if (
+        rawLine.startsWith("diff --git ") ||
+        rawLine.startsWith("index ") ||
+        rawLine.startsWith("--- ") ||
+        rawLine.startsWith("+++ ") ||
+        rawLine.startsWith("*** ")
+      ) {
+        continue;
+      }
+      const hunkMatch = rawLine.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/u);
+      if (hunkMatch) {
+        hasHunk = true;
+        oldLine = Number(hunkMatch[1]);
+        newLine = Number(hunkMatch[2]);
+        lines.push({
+          kind: "hunk",
+          prefix: "@@",
+          text: rawLine,
+        });
+        continue;
+      }
+      if (rawLine.startsWith("+")) {
+        additions += 1;
+        lines.push({
+          kind: "add",
+          prefix: "+",
+          text: rawLine.slice(1),
+          ...(hasHunk ? { newLine } : {}),
+        });
+        newLine += 1;
+        continue;
+      }
+      if (rawLine.startsWith("-")) {
+        deletions += 1;
+        lines.push({
+          kind: "del",
+          prefix: "-",
+          text: rawLine.slice(1),
+          ...(hasHunk ? { oldLine } : {}),
+        });
+        oldLine += 1;
+        continue;
+      }
+      if (rawLine.startsWith("\\ No newline")) {
+        lines.push({ kind: "meta", prefix: "", text: rawLine });
+        continue;
+      }
+      lines.push({
+        kind: "context",
+        prefix: rawLine.startsWith(" ") ? " " : "",
+        text: rawLine.startsWith(" ") ? rawLine.slice(1) : rawLine,
+        ...(hasHunk ? { oldLine, newLine } : {}),
+      });
+      oldLine += 1;
+      newLine += 1;
+    }
+    if (lines.length > 0) {
+      return { lines, totalLines: lines.length, additions, deletions };
+    }
+  }
+
+  const oldText = input.oldStr?.replace(/\r\n/gu, "\n");
+  const newText = input.newStr?.replace(/\r\n/gu, "\n");
+  if ((oldText !== undefined && oldText.length > 0) || (newText !== undefined && newText.length > 0)) {
+    if (oldText) {
+      for (const [idx, line] of oldText.split("\n").entries()) {
+        deletions += 1;
+        lines.push({ kind: "del", prefix: "-", text: line, oldLine: idx + 1 });
+      }
+    }
+    if (newText) {
+      for (const [idx, line] of newText.split("\n").entries()) {
+        additions += 1;
+        lines.push({ kind: "add", prefix: "+", text: line, newLine: idx + 1 });
+      }
+    }
+    if (lines.length > 0) {
+      return { lines, totalLines: lines.length, additions, deletions };
+    }
+  }
+  return null;
+}
+
+export function extractReadLineRangeLabel(entry: WorkLogEntry): string | null {
+  const input =
+    entry.structuredPayload?.type === "dynamic_tool" &&
+    entry.structuredPayload.input !== null &&
+    typeof entry.structuredPayload.input === "object" &&
+    !Array.isArray(entry.structuredPayload.input)
+      ? (entry.structuredPayload.input as Record<string, unknown>)
+      : entry.toolData !== null &&
+          typeof entry.toolData === "object" &&
+          !Array.isArray(entry.toolData) &&
+          typeof (entry.toolData as Record<string, unknown>).input === "object" &&
+          (entry.toolData as Record<string, unknown>).input !== null
+        ? ((entry.toolData as Record<string, unknown>).input as Record<string, unknown>)
+        : undefined;
+  if (!input) return null;
+  const startRaw = input.startLine ?? input.StartLine ?? input.start_line ?? input.offset;
+  const endRaw = input.endLine ?? input.EndLine ?? input.end_line;
+  const limitRaw = input.limit ?? input.numLines ?? input.lines;
+  const start = typeof startRaw === "number" && Number.isFinite(startRaw) && startRaw > 0 ? Math.floor(startRaw) : null;
+  const end = typeof endRaw === "number" && Number.isFinite(endRaw) && endRaw > 0 ? Math.floor(endRaw) : null;
+  const limit = typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : null;
+  if (start !== null && end !== null && end >= start) {
+    return `L${start}-L${end}`;
+  }
+  if (start !== null && limit !== null) {
+    return `L${start}-L${start + limit - 1}`;
+  }
+  if (start !== null) {
+    return `L${start}+`;
+  }
+  return null;
+}

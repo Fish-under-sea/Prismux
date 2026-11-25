@@ -1,7 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import fs from "node:fs";
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import path from "node:path";
+import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -75,8 +75,8 @@ describe("continueInTerminal.logic", () => {
   });
 
   it("wires Continue in terminal into ThreadDetailsPanel (Overview) inside ChatView without killing or interrupting the Chat thread", () => {
-    const chatViewPath = path.resolve(import.meta.dirname, "../ChatView.tsx");
-    const source = fs.readFileSync(chatViewPath, "utf8");
+    const chatViewPath = NodePath.resolve(import.meta.dirname, "../ChatView.tsx");
+    const source = NodeFS.readFileSync(chatViewPath, "utf8");
     expect(source).toContain("handleContinueInTerminalStable");
     expect(source).toContain("buildContinueInTerminalPlan");
     expect(source).toContain("onContinueInTerminal:");
@@ -92,15 +92,16 @@ describe("continueInTerminal.logic", () => {
     expect(handlerSlice).not.toContain("deleteThread");
     expect(handlerSlice).not.toContain("archiveThread");
     expect(source).toContain("AgentSessionContinuationDialog");
-    expect(source).toContain('data-action="hand-off-to-agent"');
+    expect(source).not.toContain('data-action="hand-off-to-agent"');
+    expect(source).not.toContain('gt("Hand off to agent")');
     expect(source).toContain("data-cli-launch-banner");
     expect(source).toContain("data-cli-launch-primary");
     expect(source).toContain("data-cli-launch-secondary");
     expect(source).toContain("backdrop-blur-md");
 
     // Regression guard: ThreadTerminalDrawer must initialize sendTerminalInput before replaying output or focusing.
-    const drawerPath = path.resolve(import.meta.dirname, "../ThreadTerminalDrawer.tsx");
-    const drawerSource = fs.readFileSync(drawerPath, "utf8");
+    const drawerPath = NodePath.resolve(import.meta.dirname, "../ThreadTerminalDrawer.tsx");
+    const drawerSource = NodeFS.readFileSync(drawerPath, "utf8");
     const sendInputIdx = drawerSource.indexOf("const sendTerminalInput =");
     const initialReplayIdx = drawerSource.indexOf("writeTerminalOutputUpdate(terminal, initialOutput)");
     const initialFocusIdx = drawerSource.indexOf("terminal.focus();\n      }");
@@ -143,12 +144,12 @@ describe("continueInTerminal.logic", () => {
       { instanceId: "claude-work", driver: "claudeAgent", label: "Claude Work", installed: true },
       { instanceId: "claude-personal", driver: "claude", label: "Claude Personal", installed: true },
       { instanceId: "codex-main", driver: "codex", label: "Codex", installed: true },
-      { instanceId: "omp-local", driver: "acpRegistry", label: "OMP", installed: false, config: { source: "local", commandPath: "omp" } },
+      { instanceId: "dsh-local", driver: "acpRegistry", label: "DeepSeek Harness", installed: false, config: { source: "local", commandPath: "dsh" } },
     ];
     const source = candidates[0]!;
 
     const filtered = candidates.filter((c) => isContinuationAgentAllowed(c, source, true));
-    expect(filtered.map((c) => c.instanceId)).toEqual(["codex-main", "omp-local"]);
+    expect(filtered.map((c) => c.instanceId)).toEqual(["codex-main", "dsh-local"]);
 
     const initial = chooseInitialContinuationAgent({
       availableAgents: filtered,

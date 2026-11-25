@@ -44,7 +44,7 @@ const initializeResult = {
     promptCapabilities: { image: true, audio: true, embeddedContext: true },
     sessionCapabilities: { list: {}, resume: {} },
   },
-  authMethods: [{ id: "oauth-personal", name: "Log in with Google" }],
+  authMethods: [],
   agentInfo: {
     name: "antigravity-acp",
     title: "Google Antigravity",
@@ -325,18 +325,12 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
 
   it.effect("treats initialize as installation proof, not account or model discovery", () =>
     Effect.gen(function* () {
-      for (const auth of [
-        undefined,
-        { type: "oauth-personal", label: "Google account" },
-        { type: "oauth-business", label: "Gemini Enterprise" },
-        { type: "gemini-api-key", label: "Gemini API key" },
-        { type: "agent-platform", label: "Agent Platform" },
-      ]) {
+      for (const auth of [undefined, { type: "local-cli", label: "Local agy CLI" }]) {
         const harness = yield* makeHarness(auth ? { auth } : {});
         expect(yield* harness.provider.snapshot.getSnapshot).toMatchObject({
           installed: false,
           status: "warning",
-          auth: { status: "unknown" },
+          auth: { status: "unknown", type: "local-cli" },
           models: [],
         });
         yield* harness.initialize;
@@ -345,11 +339,8 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           installed: true,
           status: "warning",
           version: "1.5.12",
-          auth: { status: "unknown", ...(auth ? { type: auth.type } : {}) },
-          message:
-            auth?.type === "gemini-api-key" || auth?.type === "agent-platform"
-              ? `Antigravity is installed. Connect with ${auth.label} to load models.`
-              : "Antigravity is installed. Google account access is not checked yet.",
+          auth: { status: "unknown", type: "local-cli" },
+          message: "Antigravity is installed. Connect with Local agy CLI to load models.",
           models: [],
         });
         expect(yield* Ref.get(harness.probeCalls)).toBe(1);
@@ -430,7 +421,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       const [snapshot] = yield* nextReady;
       expect(snapshot).toMatchObject({
         status: "ready",
-        auth: { status: "authenticated", type: "oauth-personal" },
+        auth: { status: "authenticated", type: "local-cli", label: "Local agy CLI", canLogout: false },
         supportsTextGeneration: true,
       });
       expect(snapshot.models).toEqual(buildAntigravityModelsFromSession(sessionSetupResult));
@@ -461,7 +452,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
 
   it.effect("clears all account metadata on sign-out and authentication failure", () =>
     Effect.gen(function* () {
-      const auth = { type: "gemini-api-key", label: "Gemini API key" };
+      const auth = { type: "local-cli", label: "Local agy CLI" };
       const harness = yield* makeHarness({ auth });
       yield* harness.initialize;
       for (const clear of [harness.provider.onSignedOut, harness.provider.onAuthRequired]) {
@@ -471,8 +462,9 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         expect(yield* harness.provider.snapshot.getSnapshot).toMatchObject({
           installed: true,
           status: "warning",
-          auth: { status: "unauthenticated", type: auth.type, label: auth.label },
-          message: "Connect with Gemini API key to use Antigravity and load models.",
+          auth: { status: "unauthenticated", type: "local-cli", label: "Local agy CLI", canLogout: false },
+          message:
+            "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then sync models.",
           models: [],
           slashCommands: [],
           skills: [],
@@ -487,11 +479,12 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       const refreshed = yield* harness.provider.snapshot.refresh;
       expect(refreshed.auth).toEqual({
         status: "unauthenticated",
-        type: auth.type,
-        label: auth.label,
+        type: "local-cli",
+        label: "Local agy CLI",
+        canLogout: false,
       });
       expect(refreshed.message).toBe(
-        "Connect with Gemini API key to use Antigravity and load models.",
+        "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then sync models.",
       );
       expect(refreshed.supportsTextGeneration).toBe(false);
     }),

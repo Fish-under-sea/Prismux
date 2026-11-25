@@ -127,7 +127,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/archived": msg("Archive"),
   "/settings/wallpaper": msg("Wallpaper"),
   "/settings/plugins": msg("Plugins"),
-  "/settings/memory": msg("Memory", { $context: "settings navigation item" }),
+  "/settings/memory": msg("Chief & memory", { $context: "settings navigation item" }),
   "/settings/sync": msg("Sync", { $context: "settings navigation item" }),
   "/settings/overnight-factory": msg("Overnight Factory & Mail"),
   "/settings/memory-sync": msg("Memory & Sync"),
@@ -413,7 +413,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "thread-details-items",
     title: msg("Thread details"),
-    to: "/settings/appearance",
+    to: "/settings/chat",
     searchTerms: [
       msg(
         "customize show hide panel card environment editor scripts branch pull request git changes servers automations lineage usage limits 5 hour weekly quota tokens context window",
@@ -423,31 +423,31 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "effort-display",
     title: msg("Effort display"),
-    to: "/settings/appearance",
+    to: "/settings/chat",
     searchTerms: [msg("reasoning effort thinking bars graph word label level composer")],
   },
   {
     id: "math-rendering",
     title: msg("Render math"),
-    to: "/settings/appearance",
+    to: "/settings/chat",
     searchTerms: [msg("latex tex katex equations formulas markdown")],
   },
   {
     id: "work-steps-display",
     title: msg("Work steps display"),
-    to: "/settings/appearance",
+    to: "/settings/chat",
     searchTerms: [msg("work steps concise standard detailed expanded tool calls commands edits activity")],
   },
   {
     id: "work-steps-collapse-timing",
     title: msg("Work steps collapse timing"),
-    to: "/settings/appearance",
+    to: "/settings/chat",
     searchTerms: [msg("work steps collapse fold timing after response ends next new message")],
   },
   {
     id: "collapsed-assistant-reply-mode",
     title: msg("Replies shown when collapsed"),
-    to: "/settings/appearance",
+    to: "/settings/chat",
     searchTerms: [msg("collapsed assistant reply mode all replies final answer only folded steps")],
   },
   {
@@ -501,7 +501,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "composer-context",
     title: msg("Composer context"),
-    to: "/settings/appearance",
+    to: "/settings/chat",
   },
   {
     id: "project-grouping",
@@ -538,7 +538,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "working-shelf",
     title: msg("Working section"),
-    to: "/settings/general",
+    to: "/settings/chat",
     searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
   },
 
@@ -791,7 +791,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "proactive-panels",
     title: msg("Open pull requests and changes panels proactively"),
-    to: "/settings/source-control",
+    to: "/settings/chat",
     searchTerms: [
       msg("proactive automatically open diff pull request pr right panel agent completion"),
     ],
@@ -892,14 +892,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "add-project-starts-in",
     title: msg("Add project starts in"),
-    to: "/settings/chat",
+    to: "/settings/projects",
     scope: "environment-defaults",
     searchTerms: [msg("base directory folder browser path home")],
   },
   {
     id: "ghq-clone-layout",
     title: msg("Clone into host folders"),
-    to: "/settings/chat",
+    to: "/settings/projects",
     scope: "environment-defaults",
     searchTerms: [msg("ghq clone destination host owner repository root layout")],
   },
@@ -967,12 +967,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/about",
     searchTerms: [msg("prismux t3 cli terminal shell path install command line")],
     desktopOnly: true,
-  },
-  {
-    id: "mobile-app",
-    title: msg("Mobile web access"),
-    to: "/settings/about",
-    searchTerms: [msg("phone tablet iPhone iPad iOS Android QR LAN Tailscale web mobile access")],
   },
   {
     id: "welcome-page",
@@ -1092,13 +1086,26 @@ export const SETTINGS_SEARCH_ITEMS = [
     textGeneratorsOnly: true,
   },
   {
+    id: "antigravity-controlled-lock",
+    title: msg("Antigravity controlled-agent lock"),
+    to: "/settings/providers",
+    targetId: "antigravity-controlled-lock",
+    searchTerms: [
+      msg(
+        "antigravity agy controlled agent lock commander disclaimer cross-agent compliance 403",
+      ),
+    ],
+  },
+  {
     id: "provider-health-check-interval",
     title: msg("Health check interval"),
-    to: "/settings/providers",
+    to: "/settings/maintenance",
+    targetId: "background-activity",
     searchTerms: [
       msg("refresh availability versions auth state models background probes seconds off"),
     ],
-    providerSettingsOnly: true,
+    environmentOnly: true,
+    scope: "environment-defaults",
   },
   {
     id: "agent-browser-access",
@@ -1522,7 +1529,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "diagnostics",
     searchTerms: [
       msg(
-        "diagnostics health check services sqlite-vec fts5 7za adb steam agy claude codex omp overnight factory hooks sandbox",
+        "diagnostics health check services sqlite-vec fts5 7za adb steam agy claude codex dsh overnight factory hooks sandbox",
       ),
     ],
   },
@@ -1576,14 +1583,19 @@ const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
 const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/settings/general",
   "/settings/appearance",
+  "/settings/chat",
+  "/settings/providers",
   "/settings/source-control",
   "/settings/connections",
+  "/settings/about",
   ...Object.keys(RENAMED_SETTINGS_PATHS),
 ]);
 // Section anchors that moved but are not search results themselves.
 const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
   "authorized-clients": "/settings/connections",
+  "mobile-app": "/settings/connections",
   "remote-access": "/settings/connections",
+  "reopen-onboarding": "/settings/about",
   "text-generation": "/settings/chat",
   threads: "/settings/chat",
   worktrees: "/settings/source-control",
@@ -1714,18 +1726,27 @@ export function isSettingsSearchScopeAvailable(
   }
 }
 
-function searchableSetting(id: SettingsSearchItemId): {
+const LEGACY_SEARCHABLE_SETTINGS = {
+  "mobile-app": { id: "mobile-app", title: msg("Mobile web access") },
+} as const;
+
+type LegacySearchableSettingId = keyof typeof LEGACY_SEARCHABLE_SETTINGS;
+
+function searchableSetting(id: SettingsSearchItemId | LegacySearchableSettingId): {
   readonly id: string;
   readonly title: string;
 } {
-  const { id: anchorId, title } = SEARCH_ITEMS_BY_ID.get(id)!;
-  return { id: anchorId, title };
+  const item = SEARCH_ITEMS_BY_ID.get(id as SettingsSearchItemId);
+  if (item) {
+    return { id: item.id, title: item.title };
+  }
+  return LEGACY_SEARCHABLE_SETTINGS[id as LegacySearchableSettingId];
 }
 
 /** `searchableSetting` with its title in the active language, for spreading onto a row. */
 export function useSearchableSetting() {
   const m = useMessages();
-  return (id: SettingsSearchItemId) => {
+  return (id: SettingsSearchItemId | LegacySearchableSettingId) => {
     const setting = searchableSetting(id);
     return { ...setting, title: m(setting.title) };
   };

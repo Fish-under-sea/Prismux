@@ -1,7 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
-import type { PrismuxKeepAwakeState, ServerProvider } from "@t3tools/contracts";
+import {
+  isListedThreadLineage,
+  type PrismuxKeepAwakeState,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { makeWindow } from "@t3tools/shared/usageFormat";
 import { useRouterState } from "@tanstack/react-router";
 import {
@@ -26,7 +30,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { getClientSettings, subscribeClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { ensureLocalApi } from "~/localApi";
-import { useProject, useQuietThreadProjection } from "~/state/entities";
+import { useProject, useQuietThreadProjection, useQuietThreadShells } from "~/state/entities";
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
 import { runningThreadKeepAliveAtom } from "~/state/threads";
@@ -44,8 +48,18 @@ import { PortsStatusPopover } from "./statusBar/PortsStatusPopover";
 import {
   aggregateQuotaSummary,
   buildQuotaStatusBarDisplay,
+  detectCompletedAntigravityTurns,
+  isAntigravityEnabledAndAuthenticated,
+  isAntigravityQuotaAuthAllowed,
+  isUpstreamProviderQuotaEligible,
   loadQuotaPreferences,
   saveQuotaPreferences,
+  shouldFetchAntigravityCreditsOnPopoverOpen,
+  shouldRefreshAntigravityOnManualClick,
+  shouldShowStatusBarQuota,
+  shouldTriggerAntigravityColdStartFetch,
+  type AgyTurnTrackerMemory,
+  type DaemonOfficialQuotaCreditsResponse,
   type QuotaPreferences,
   type QuotaTone,
 } from "./statusBar/quotaStatus.logic";
@@ -111,7 +125,6 @@ interface NavigatorWithWakeLock {
 const RESOURCES_OPEN_POLL_MS = 2_000;
 const RESOURCES_IDLE_POLL_MS = 5_000;
 const RESOURCES_EARLY_WARMUP_MS = 1_200;
-const QUOTA_POLL_INTERVAL_MS = 3 * 60 * 1_000;
 
 const STATUS_POPOVER_POPUP_CLASS =
   "overflow-hidden rounded-xl border border-border bg-popover bg-clip-padding p-0 shadow-xl before:hidden";
@@ -167,9 +180,16 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   const [daemonQuota, setDaemonQuota] = useState<DaemonOfficialQuotaSummaryResponse | null>(
     initialDaemonQuota,
   );
+  const [agyCredits, setAgyCredits] = useState<DaemonOfficialQuotaCreditsResponse | null>(null);
+  const [agyCreditsLoading, setAgyCreditsLoading] = useState(false);
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [quotaMinuteTick, setQuotaMinuteTick] = useState<number>(() => Date.now());
-  const quotaInflightRef = useRef<Promise<void> | null>(null);
+  const agyQuotaInflightRef = useRef<Promise<void> | null>(null);
+  const agyCreditsInflightRef = useRef<Promise<void> | null>(null);
+  const agyColdStartFetchedRef = useRef<boolean>(false);
+  const agyTurnMemoryRef = useRef<AgyTurnTrackerMemory | null>(null);
+  const prevAgyAuthAllowedRef = useRef<boolean | null>(null);
+  const prevNonAgyProviderAuthSignatureRef = useRef<string | null>(null);
 
   // Resolve current route thread & workspace root without touching ChatView.
   const routeParams = useRouterState({
@@ -200,6 +220,9 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     activeProject?.workspaceRoot ??
     null;
 
+  // Quiet thread shells across environments (held through streaming ticks) to detect interactive AGY turn completion.
+  const threadShells = useQuietThreadShells();
+
   // Collect providers across connected environments (read-only from existing client atoms).
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const allProviders = useMemo<readonly ServerProvider[]>(() => {
@@ -223,7 +246,12 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
 
   const quotaResetTimes = useMemo(() => {
     const times: number[] = [];
-    const agyWindows = daemonQuota?.antigravity?.windows;
+    const agyAllowed = isAntigravityQuotaAuthAllowed(allProviders);
+    const agySnapshot = daemonQuota?.antigravity;
+    const agyWindows =
+      agyAllowed && agySnapshot?.status === "ok" && agySnapshot.available
+        ? agySnapshot.windows
+        : undefined;
     if (Array.isArray(agyWindows)) {
       for (const win of agyWindows) {
         if (typeof win.resetAtMs === "number" && Number.isFinite(win.resetAtMs)) {
@@ -237,7 +265,9 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       }
     }
     for (const provider of allProviders) {
-      if (!provider.enabled || provider.driver === "antigravity") continue;
+      if (provider.driver === "antigravity" || !isUpstreamProviderQuotaEligible(provider)) {
+        continue;
+      }
       const rawWindows = provider.usageLimits?.windows;
       if (!Array.isArray(rawWindows)) continue;
       for (const win of rawWindows) {
@@ -272,13 +302,19 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     [allProviders, mergedUsage, quotaNow, usageWindow.untilDay],
   );
   const quotaSummary = useMemo(
-    () => aggregateQuotaSummary(daemonQuota, allProviders, quotaNow),
-    [allProviders, daemonQuota, quotaNow],
+    () => aggregateQuotaSummary(daemonQuota, allProviders, quotaNow, agyCredits),
+    [agyCredits, allProviders, daemonQuota, quotaNow],
   );
   const quotaDisplay = useMemo(
     () => buildQuotaStatusBarDisplay(quotaSummary, quotaPrefs),
     [quotaPrefs, quotaSummary],
   );
+  const showQuotaCapsule = shouldShowStatusBarQuota(quotaSummary, visibility.quota) && quotaDisplay !== null;
+
+  // Close the quota popover cleanly if all authenticated providers log out or lose live quota.
+  if (!showQuotaCapsule && quotaOpen) {
+    setQuotaOpen(false);
+  }
 
   // Prefer whichever resources snapshot is newer between runtime context and live status-bar sampling.
   const effectiveResources = useMemo(() => {
@@ -576,79 +612,229 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     saveQuotaPreferences(next);
   }, []);
 
-  const handleRefreshQuota = useCallback(
-    async (force = false) => {
-      if (!runtime?.daemonInfo.ready) return;
-      if (quotaInflightRef.current && !force) {
-        await quotaInflightRef.current;
-        return;
-      }
-      setQuotaRefreshing(true);
-      const run = (async () => {
-        try {
-          const tasks: Array<Promise<unknown>> = [];
-          if (typeof runtime.daemon?.fetchQuotaSummary === "function") {
-            tasks.push(
-              runtime.daemon.fetchQuotaSummary(force).then((snapshot) => {
-                setDaemonQuota(snapshot);
-                setQuotaMinuteTick(Date.now());
-              }),
-            );
-          }
-          if (force) {
-            for (const [environmentId, presentation] of presentations) {
-              if (
-                presentation.connection.phase !== "connected" ||
-                presentation.serverConfig === null
-              ) {
-                continue;
-              }
-              tasks.push(
-                refreshUsageLimits(
-                  environmentId,
-                  () => refreshProviders({ environmentId, input: {} }),
-                  false,
-                ),
-              );
-            }
-          }
-          await Promise.allSettled(tasks);
-        } finally {
-          setQuotaRefreshing(false);
-        }
-      })();
-      quotaInflightRef.current = run;
-      try {
-        await run;
-      } finally {
-        if (quotaInflightRef.current === run) {
-          quotaInflightRef.current = null;
-        }
-      }
-    },
-    [presentations, refreshProviders, runtime],
-  );
+  const agyEnabledAndAuthenticated = isAntigravityEnabledAndAuthenticated(allProviders);
+  const agyAuthAllowed = isAntigravityQuotaAuthAllowed(allProviders);
 
-  // Fetch official CLI quota on daemon ready and refresh every 3 minutes while visible.
-  useEffect(() => {
-    if (!runtime?.daemonInfo.ready || runtime.occluded) return;
-    let cancelled = false;
-    const poll = () => {
-      if (
-        cancelled ||
-        (typeof document !== "undefined" && document.visibilityState === "hidden")
-      ) {
-        return;
+  // AGY-ONLY lazy `/v1/quota/summary` fetcher (never spawns `/credits`, never touches Codex/Claude).
+  const fetchAntigravityQuotaSummary = async (force = false) => {
+    if (!runtime?.daemonInfo.ready) return;
+    if (typeof runtime.daemon?.fetchQuotaSummary !== "function") return;
+    if (agyQuotaInflightRef.current && !force) {
+      await agyQuotaInflightRef.current;
+      return;
+    }
+    const run = runtime.daemon.fetchQuotaSummary(force).then(
+      (snapshot) => {
+        setDaemonQuota(snapshot);
+        setQuotaMinuteTick(Date.now());
+        if (!snapshot.antigravity.available || snapshot.antigravity.status !== "ok") {
+          setAgyCredits(null);
+        }
+      },
+      () => {
+        if (force) {
+          setDaemonQuota(null);
+          setAgyCredits(null);
+        }
+      },
+    );
+    agyQuotaInflightRef.current = run;
+    try {
+      await run;
+    } finally {
+      if (agyQuotaInflightRef.current === run) {
+        agyQuotaInflightRef.current = null;
       }
-      void handleRefreshQuota(false);
-    };
-    poll();
-    const timer = setInterval(poll, QUOTA_POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [handleRefreshQuota, runtime?.daemonInfo.ready, runtime?.occluded]);
+    }
+  };
+
+  // AGY-ONLY on-demand `/v1/quota/credits` fetcher (invoked ONLY when user opens QuotaStatusPopover).
+  const fetchAntigravityCredits = async (force = false) => {
+    if (!runtime?.daemonInfo.ready) return;
+    if (typeof runtime.daemon?.requestJson !== "function") return;
+    if (agyCreditsInflightRef.current && !force) {
+      await agyCreditsInflightRef.current;
+      return;
+    }
+    setAgyCreditsLoading(true);
+    const suffix = force ? "?force=1" : "";
+    const run = runtime.daemon
+      .requestJson<DaemonOfficialQuotaCreditsResponse>(`/v1/quota/credits${suffix}`)
+      .then(
+        (credits) => {
+          if (credits.status === "unauthenticated" || credits.status === "not_installed") {
+            setDaemonQuota(null);
+            setAgyCredits(null);
+            agyColdStartFetchedRef.current = false;
+            return;
+          }
+          setAgyCredits(credits);
+        },
+        () => {
+          // Credits hydration is best-effort; never disrupt `/usage` display.
+        },
+      )
+      .finally(() => {
+        setAgyCreditsLoading(false);
+      });
+    agyCreditsInflightRef.current = run;
+    try {
+      await run;
+    } finally {
+      if (agyCreditsInflightRef.current === run) {
+        agyCreditsInflightRef.current = null;
+      }
+    }
+  };
+
+  // Upstream non-AGY providers (Claude Code / Codex / OpenCode / DSH): 100% unchanged real-time refresh.
+  const refreshUpstreamProvidersQuota = async () => {
+    const tasks: Array<Promise<unknown>> = [];
+    for (const [environmentId, presentation] of presentations) {
+      if (
+        presentation.connection.phase !== "connected" ||
+        presentation.serverConfig === null
+      ) {
+        continue;
+      }
+      tasks.push(
+        refreshUsageLimits(
+          environmentId,
+          () => refreshProviders({ environmentId, input: {} }),
+          false,
+        ),
+      );
+    }
+    if (tasks.length > 0) {
+      await Promise.allSettled(tasks);
+    }
+  };
+
+  // Trigger 3 (Manual user refresh click): refreshes upstream providers + AGY `/v1/quota/summary?force=1`
+  // ONLY if AGY is enabled & authenticated. Never invokes `/v1/quota/credits` concurrently.
+  const handleRefreshQuota = async (_force = true) => {
+    setQuotaRefreshing(true);
+    try {
+      const tasks: Array<Promise<unknown>> = [refreshUpstreamProvidersQuota()];
+      if (runtime?.daemonInfo.ready && shouldRefreshAntigravityOnManualClick(allProviders)) {
+        tasks.push(fetchAntigravityQuotaSummary(true));
+      }
+      await Promise.allSettled(tasks);
+    } finally {
+      setQuotaRefreshing(false);
+    }
+  };
+
+  // Immediate AGY logout/disable cache clearing + Trigger 1 (Cold Start Once when AGY is enabled & authenticated).
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronizes local Daemon AGY quota cache with live auth state and performs one-shot cold start fetch.
+  useEffect(() => {
+    const prevAllowed = prevAgyAuthAllowedRef.current;
+    prevAgyAuthAllowedRef.current = agyAuthAllowed;
+
+    if (!agyAuthAllowed) {
+      agyColdStartFetchedRef.current = false;
+      const clearFrontendAgyCache = () => {
+        setDaemonQuota(null);
+        setAgyCredits(null);
+      };
+      if (
+        prevAllowed === true &&
+        runtime?.daemonInfo.ready &&
+        typeof runtime.daemon?.requestJson === "function"
+      ) {
+        void runtime.daemon
+          .requestJson("/v1/quota/invalidate", { method: "POST" })
+          .catch(() => {})
+          .finally(clearFrontendAgyCache);
+      } else {
+        queueMicrotask(clearFrontendAgyCache);
+      }
+      return;
+    }
+
+    if (!agyEnabledAndAuthenticated) {
+      agyColdStartFetchedRef.current = false;
+      return;
+    }
+
+    if (
+      shouldTriggerAntigravityColdStartFetch({
+        daemonReady: Boolean(runtime?.daemonInfo.ready),
+        hasTriggeredColdStart: agyColdStartFetchedRef.current,
+        upstreamProviders: allProviders,
+      })
+    ) {
+      agyColdStartFetchedRef.current = true;
+      void fetchAntigravityQuotaSummary(false);
+    }
+  }, [
+    agyAuthAllowed,
+    agyEnabledAndAuthenticated,
+    allProviders,
+    fetchAntigravityQuotaSummary,
+    runtime?.daemon,
+    runtime?.daemonInfo.ready,
+  ]);
+
+  // Trigger 2 (After Human AGY Turn Ends): detect interactive desktop AGY thread finishing a turn
+  // (running/streaming -> completed/idle) and trigger a single lazy `/v1/quota/summary?force=1`.
+  // Strictly ignores Codex, Claude Code, OpenCode, DSH, and non-interactive subagent threads.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Triggers external Daemon AGY quota refresh strictly when an interactive AGY thread completes a turn.
+  useEffect(() => {
+    const result = detectCompletedAntigravityTurns(
+      agyTurnMemoryRef.current,
+      threadShells.map((shell) => ({
+        key: `${shell.environmentId}:${shell.id}`,
+        providerInstanceId: shell.providerInstanceId,
+        runtimeProviderInstanceId: shell.runtime?.providerInstanceId ?? null,
+        modelInstanceId: shell.modelSelection?.instanceId ?? null,
+        status: shell.runtime?.status ?? shell.source.status,
+        latestRunStatus: shell.latestRun?.status ?? null,
+        isInteractive:
+          isListedThreadLineage(shell.lineage) &&
+          shell.archivedAt === null &&
+          shell.deletedAt === null,
+      })),
+      allProviders,
+    );
+    agyTurnMemoryRef.current = result.memory;
+
+    if (
+      result.shouldRefreshAntigravityQuota &&
+      agyEnabledAndAuthenticated &&
+      runtime?.daemonInfo.ready
+    ) {
+      void fetchAntigravityQuotaSummary(true);
+    }
+  }, [
+    agyEnabledAndAuthenticated,
+    allProviders,
+    fetchAntigravityQuotaSummary,
+    runtime?.daemonInfo.ready,
+    threadShells,
+  ]);
+
+  // Preserve real-time upstream refresh when non-AGY providers (Claude Code / Codex / etc.) change auth/enabled state.
+  const nonAgyProviderAuthSignature = allProviders
+    .filter((provider) => provider.driver !== "antigravity")
+    .map(
+      (provider) =>
+        `${provider.instanceId}:${provider.driver}:${provider.enabled ? 1 : 0}:${provider.installed === false ? 0 : 1}:${provider.status}:${provider.auth?.status ?? "none"}`,
+    )
+    .sort()
+    .join("|");
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refreshes external upstream Codex/Claude usage limits when non-AGY provider auth state changes.
+  useEffect(() => {
+    const prevSignature = prevNonAgyProviderAuthSignatureRef.current;
+    prevNonAgyProviderAuthSignatureRef.current = nonAgyProviderAuthSignature;
+    if (prevSignature === null || prevSignature === nonAgyProviderAuthSignature) {
+      return;
+    }
+    if (!runtime?.occluded) {
+      void refreshUpstreamProvidersQuota();
+    }
+  }, [nonAgyProviderAuthSignature, refreshUpstreamProvidersQuota, runtime?.occluded]);
 
   const handleRefreshUsage = useCallback(async () => {
     setUsageRefreshing(true);
@@ -711,23 +897,25 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
   }, []);
 
-  const handleQuotaOpenChange = useCallback(
-    (open: boolean) => {
-      setQuotaOpen(open);
-      if (open) {
-        setQuotaPopoverSession((seq) => seq + 1);
-        setUsageOpen(false);
-        setKeepAwakeOpen(false);
-        setPortsOpen(false);
-        setResourcesOpen(false);
-        setQuotaMinuteTick(Date.now());
-        if (runtime?.daemonInfo.ready) {
-          void handleRefreshQuota(false);
-        }
+  const handleQuotaOpenChange = (open: boolean) => {
+    setQuotaOpen(open);
+    if (open) {
+      setQuotaPopoverSession((seq) => seq + 1);
+      setUsageOpen(false);
+      setKeepAwakeOpen(false);
+      setPortsOpen(false);
+      setResourcesOpen(false);
+      setQuotaMinuteTick(Date.now());
+      // On-demand `/v1/quota/credits`: hydrate credit balance ONLY when user opens
+      // QuotaStatusPopover and AGY is authenticated (never concurrently with `/usage`).
+      if (
+        runtime?.daemonInfo.ready &&
+        shouldFetchAntigravityCreditsOnPopoverOpen(allProviders, daemonQuota)
+      ) {
+        void fetchAntigravityCredits(false);
       }
-    },
-    [handleRefreshQuota, runtime?.daemonInfo.ready],
-  );
+    }
+  };
 
   const handlePortsOpenChange = useCallback(
     (open: boolean) => {
@@ -853,7 +1041,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
             </Popover>
           ) : null}
 
-          {visibility.quota ? (
+          {showQuotaCapsule && quotaDisplay ? (
             <div
               data-testid="status-bar-quota-capsule"
               className="inline-flex h-4 min-w-0 max-w-full items-center overflow-hidden rounded-sm transition-colors hover:bg-accent/70"
@@ -866,101 +1054,83 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                       data-testid="status-bar-quota-trigger"
                       data-quota-bar-mode={quotaPrefs.viewMode}
                       data-quota-percent-mode={quotaPrefs.percentMode}
-                      title={quotaDisplay ? quotaDisplay.fullText : undefined}
-                      aria-label={
-                        quotaDisplay
-                          ? `打开实时额度详情：${quotaDisplay.fullText}`
-                          : "打开实时额度详情"
-                      }
+                      title={quotaDisplay.fullText}
+                      aria-label={`打开实时额度详情：${quotaDisplay.fullText}`}
                       className={cn(
                         "inline-flex h-4 min-w-0 max-w-full cursor-pointer items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-l-sm pl-1.5 pr-1 font-medium tabular-nums active:translate-y-px focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                        quotaDisplay?.tone === "critical"
+                        quotaDisplay.tone === "critical"
                           ? "text-red-700 dark:text-red-300"
-                          : quotaDisplay?.tone === "warning"
+                          : quotaDisplay.tone === "warning"
                             ? "text-amber-700 dark:text-amber-300"
                             : "text-foreground",
                       )}
                     />
                   }
                 >
-                  {quotaDisplay ? (
-                    <>
-                      <span className="shrink-0 text-muted-foreground">
-                        {quotaDisplay.modePrefix}
-                      </span>
-                      <span className="inline-flex min-w-0 items-center gap-1.5 overflow-hidden">
-                        {quotaDisplay.segments.map((segment, segIndex) => (
+                  <span className="shrink-0 text-muted-foreground">
+                    {quotaDisplay.modePrefix}
+                  </span>
+                  <span className="inline-flex min-w-0 items-center gap-1.5 overflow-hidden">
+                    {quotaDisplay.segments.map((segment, segIndex) => (
+                      <span
+                        key={segment.agentId}
+                        data-testid={`status-bar-quota-segment-${segment.agentId}`}
+                        className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap"
+                      >
+                        {segIndex > 0 ? (
                           <span
-                            key={segment.agentId}
-                            data-testid={`status-bar-quota-segment-${segment.agentId}`}
-                            className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap"
+                            aria-hidden
+                            className="shrink-0 text-muted-foreground/50"
                           >
-                            {segIndex > 0 ? (
-                              <span
-                                aria-hidden
-                                className="shrink-0 text-muted-foreground/50"
-                              >
-                                |
-                              </span>
-                            ) : null}
-                            <AgentBrandLogo provider={segment.brandProvider} size={11} />
-                            {quotaDisplay.viewMode === "detailed" ? (
-                              <span
-                                aria-hidden
-                                data-testid={`status-bar-quota-minibar-${segment.agentId}`}
-                                className="inline-flex h-[5px] w-9 shrink-0 overflow-hidden rounded-full bg-black/[0.14] dark:bg-white/[0.16] [[data-pmx-glass='1']_&]:bg-white/20 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/15"
-                              >
-                                <span
-                                  data-testid={`status-bar-quota-minibar-fill-${segment.agentId}`}
-                                  className={cn(
-                                    "block h-full rounded-full transition-[width] duration-200 motion-reduce:transition-none",
-                                    quotaMiniBarColorClass(segment.tone),
-                                  )}
-                                  style={{ width: `${segment.barWidthPercent}%` }}
-                                />
-                              </span>
-                            ) : null}
-                            <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden">
-                              {segment.windows.map((win, winIndex) => (
-                                <span
-                                  key={win.id}
-                                  data-testid={`status-bar-quota-window-${win.id}`}
-                                  className="inline-flex shrink-0 items-center gap-1"
-                                >
-                                  {winIndex > 0 ? (
-                                    <span aria-hidden className="text-muted-foreground/60">
-                                      ·
-                                    </span>
-                                  ) : null}
-                                  <span
-                                    className={cn(
-                                      win.tone === "critical"
-                                        ? "text-red-700 dark:text-red-300"
-                                        : win.tone === "warning"
-                                          ? "text-amber-700 dark:text-amber-300"
-                                          : undefined,
-                                    )}
-                                  >
-                                    {win.text}
-                                  </span>
-                                </span>
-                              ))}
-                            </span>
+                            |
                           </span>
-                        ))}
+                        ) : null}
+                        <AgentBrandLogo provider={segment.brandProvider} size={11} />
+                        {quotaDisplay.viewMode === "detailed" ? (
+                          <span
+                            aria-hidden
+                            data-testid={`status-bar-quota-minibar-${segment.agentId}`}
+                            className="inline-flex h-[5px] w-9 shrink-0 overflow-hidden rounded-full bg-black/[0.14] dark:bg-white/[0.16] [[data-pmx-glass='1']_&]:bg-white/20 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/15"
+                          >
+                            <span
+                              data-testid={`status-bar-quota-minibar-fill-${segment.agentId}`}
+                              className={cn(
+                                "block h-full rounded-full transition-[width] duration-200 motion-reduce:transition-none",
+                                quotaMiniBarColorClass(segment.tone),
+                              )}
+                              style={{ width: `${segment.barWidthPercent}%` }}
+                            />
+                          </span>
+                        ) : null}
+                        <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden">
+                          {segment.windows.map((win, winIndex) => (
+                            <span
+                              key={win.id}
+                              data-testid={`status-bar-quota-window-${win.id}`}
+                              className="inline-flex shrink-0 items-center gap-1"
+                            >
+                              {winIndex > 0 ? (
+                                <span aria-hidden className="text-muted-foreground/60">
+                                  ·
+                                </span>
+                              ) : null}
+                              <span
+                                className={cn(
+                                  win.tone === "critical"
+                                    ? "text-red-700 dark:text-red-300"
+                                    : win.tone === "warning"
+                                      ? "text-amber-700 dark:text-amber-300"
+                                      : undefined,
+                                )}
+                              >
+                                {win.text}
+                              </span>
+                            </span>
+                          ))}
+                        </span>
                       </span>
-                    </>
-                  ) : quotaRefreshing ? (
-                    <>
-                      <AgentBrandLogo provider="antigravity" size={11} />
-                      <span className="text-muted-foreground">额度查询中…</span>
-                    </>
-                  ) : (
-                    <>
-                      <AgentBrandLogo provider="antigravity" size={11} online={false} />
-                      <span className="text-muted-foreground">额度 —</span>
-                    </>
-                  )}
+                    ))}
+                  </span>
                 </PopoverTrigger>
                 <PopoverPopup
                   {...STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS}
@@ -979,6 +1149,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                     onPrefsChange={handleQuotaPrefsChange}
                     now={quotaNow}
                     loading={quotaRefreshing}
+                    creditsLoading={agyCreditsLoading}
                     onRefresh={handleRefreshQuota}
                     embeddedInPopover
                   />

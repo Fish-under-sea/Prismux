@@ -44,6 +44,7 @@ import {
   newEasDeviceHost,
   updateEasDeviceHosts,
 } from "./easDeviceHostsSettings.logic";
+import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsSection } from "./settingsLayout";
 import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
@@ -389,9 +390,10 @@ export function DeviceSourcesSettings(props: {
     </>
   );
 
-  const rows: SourceRow[] = [];
+  const primaryRows: SourceRow[] = [];
+  const experimentalRows: SourceRow[] = [];
 
-  rows.push({
+  primaryRows.push({
     key: "local",
     shared: false,
     title: gt("Local simulators"),
@@ -443,7 +445,7 @@ export function DeviceSourcesSettings(props: {
     const host = group.host;
     const holders = new Set(group.members.map((member) => member.environmentId));
     const testing = group.members.some((member) => testingHosts.has(member.host.id));
-    rows.push({
+    primaryRows.push({
       key: `ssh:${host.id}:${group.members.map((member) => member.environmentId).join(",")}`,
       shared: true,
       title: host.label,
@@ -487,11 +489,11 @@ export function DeviceSourcesSettings(props: {
     });
   }
 
-  if (props.supportsEas) {
-    const easHosts = new Map<string, EasDeviceHostConfig>();
-    for (const member of members)
-      for (const host of member.settings?.easDeviceHosts ?? [])
-        if (!easHosts.has(host.id)) easHosts.set(host.id, host);
+  const easHosts = new Map<string, EasDeviceHostConfig>();
+  for (const member of members)
+    for (const host of member.settings?.easDeviceHosts ?? [])
+      if (!easHosts.has(host.id)) easHosts.set(host.id, host);
+  if (props.supportsEas || easHosts.size > 0) {
     for (const host of easHosts.values()) {
       const holders = members.filter((member) =>
         (member.settings?.easDeviceHosts ?? []).some((candidate) => candidate.id === host.id),
@@ -501,7 +503,7 @@ export function DeviceSourcesSettings(props: {
       const checkOn = (
         holders.find((member) => member.environmentId === primary?.environmentId) ?? firstHolder
       ).environmentId;
-      rows.push({
+      experimentalRows.push({
         key: `eas:${host.id}`,
         shared: true,
         title: host.label,
@@ -531,14 +533,14 @@ export function DeviceSourcesSettings(props: {
     }
   }
 
-  if (props.supportsSimlock && simlockEnabled) {
-    const simlockHosts = new Map<string, SimlockDeviceHostConfig>();
-    for (const environment of simlockEnvironments)
-      for (const host of environment.hosts)
-        if (!simlockHosts.has(host.id)) simlockHosts.set(host.id, host);
+  const simlockHosts = new Map<string, SimlockDeviceHostConfig>();
+  for (const environment of simlockEnvironments)
+    for (const host of environment.hosts)
+      if (!simlockHosts.has(host.id)) simlockHosts.set(host.id, host);
+  if ((props.supportsSimlock && simlockEnabled) || simlockHosts.size > 0) {
     for (const host of simlockHosts.values()) {
       const edit = () => setEditing({ kind: "simlock", host, isNew: false });
-      rows.push({
+      experimentalRows.push({
         key: `simlock:${host.id}`,
         shared: true,
         title: host.label,
@@ -564,91 +566,129 @@ export function DeviceSourcesSettings(props: {
     }
   }
 
-  const addMenu = (
-    <Menu>
-      <MenuTrigger
-        render={<Button size="sm" variant="outline" disabled={disabled || editing !== null} />}
-      >
-        <PlusIcon className="size-3.5" /> <T>Add source</T>
-        <ChevronDownIcon className="size-3.5" />
-      </MenuTrigger>
-      <MenuPopup align="end">
-        <MenuItem
-          onClick={() =>
-            setEditing({
-              kind: "ssh",
-              host: { kind: "ssh", id: randomUUID(), label: "", target: "" },
-              original: null,
-            })
-          }
-        >
-          <T>Machine over SSH</T>
-        </MenuItem>
-        {props.supportsEas ? (
-          <MenuItem
-            onClick={() =>
-              primary &&
-              setEditing({
-                kind: "eas",
-                host: newEasDeviceHost(randomUUID()),
-                isNew: true,
-                environmentId: primary.environmentId,
-              })
-            }
-          >
-            <T>Expo Simulators</T>
-          </MenuItem>
-        ) : null}
-        {props.supportsSimlock && simlockEnabled ? (
-          <MenuItem
-            onClick={() =>
-              setEditing({ kind: "simlock", host: newSimlockDeviceHost(randomUUID()), isNew: true })
-            }
-          >
-            <T>Simlock pool (alpha)</T>
-          </MenuItem>
-        ) : null}
-      </MenuPopup>
-    </Menu>
+  const addSshButton = (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={disabled || editing !== null}
+      onClick={() =>
+        setEditing({
+          kind: "ssh",
+          host: { kind: "ssh", id: randomUUID(), label: "", target: "" },
+          original: null,
+        })
+      }
+    >
+      <PlusIcon className="size-3.5" />
+      <T>Machine over SSH</T>
+    </Button>
   );
 
+  const canAddExperimental = props.supportsEas || (props.supportsSimlock && simlockEnabled);
+  const experimentalTitle = gt("Experimental device sources");
+  const experimentalEmptyNote = gt(
+    "Expo (EAS) and Simlock pools are optional experimental sources for cloud simulators.",
+  );
+  const experimentalSummary =
+    experimentalRows.length > 0 ? `EAS · Simlock (${experimentalRows.length})` : "EAS · Simlock";
+
   return (
-    <SettingsSection id="device-sources" title={gt("Device sources")} headerAction={addMenu}>
-      {rows.map((row) => (
-        <DeviceSourceRow key={row.key} row={row} />
-      ))}
-      {editing?.kind === "ssh" ? (
-        <DeviceHostEditor
-          key={editing.host.id}
-          host={editing.host}
-          isNew={editing.original === null}
-          targets={targets}
-          busy={busy}
-          onSave={(host) => void saveSsh(host, false, editing.original ?? host, editing.only)}
-          onClose={() => setEditing(null)}
-        />
-      ) : editing?.kind === "eas" ? (
-        <EasDeviceHostEditor
-          key={editing.host.id}
-          environmentId={editing.environmentId}
-          host={editing.host}
-          isNew={editing.isNew}
-          busy={busy}
-          onSave={(host) => void saveEas(host, false, editing.isNew ? undefined : editing.host)}
-          onClose={() => setEditing(null)}
-        />
-      ) : editing?.kind === "simlock" ? (
-        <SimlockDeviceHostEditor
-          key={editing.host.id}
-          host={editing.host}
-          isNew={editing.isNew}
-          environments={simlockEnvironments}
-          busy={busy}
-          onSave={(host, tokens) => void saveSimlock(host, tokens)}
-          onClose={() => setEditing(null)}
-        />
-      ) : null}
-    </SettingsSection>
+    <>
+      <SettingsSection id="device-sources" title={gt("Device sources")} headerAction={addSshButton}>
+        {primaryRows.map((row) => (
+          <DeviceSourceRow key={row.key} row={row} />
+        ))}
+        {editing?.kind === "ssh" ? (
+          <DeviceHostEditor
+            key={editing.host.id}
+            host={editing.host}
+            isNew={editing.original === null}
+            targets={targets}
+            busy={busy}
+            onSave={(host) => void saveSsh(host, false, editing.original ?? host, editing.only)}
+            onClose={() => setEditing(null)}
+          />
+        ) : null}
+      </SettingsSection>
+
+      <FoldedSettingsSection
+        id="experimental-device-sources"
+        title={experimentalTitle}
+        summary={experimentalSummary}
+      >
+        {canAddExperimental ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+            <span className="text-xs text-muted-foreground">{experimentalEmptyNote}</span>
+            <Menu>
+              <MenuTrigger
+                render={<Button size="sm" variant="outline" disabled={disabled || editing !== null} />}
+              >
+                <PlusIcon className="size-3.5" /> <T>Add source</T>
+                <ChevronDownIcon className="size-3.5" />
+              </MenuTrigger>
+              <MenuPopup align="end">
+                {props.supportsEas ? (
+                  <MenuItem
+                    onClick={() =>
+                      primary &&
+                      setEditing({
+                        kind: "eas",
+                        host: newEasDeviceHost(randomUUID()),
+                        isNew: true,
+                        environmentId: primary.environmentId,
+                      })
+                    }
+                  >
+                    <T>Expo Simulators</T>
+                  </MenuItem>
+                ) : null}
+                {props.supportsSimlock && simlockEnabled ? (
+                  <MenuItem
+                    onClick={() =>
+                      setEditing({
+                        kind: "simlock",
+                        host: newSimlockDeviceHost(randomUUID()),
+                        isNew: true,
+                      })
+                    }
+                  >
+                    <T>Simlock pool (alpha)</T>
+                  </MenuItem>
+                ) : null}
+              </MenuPopup>
+            </Menu>
+          </div>
+        ) : null}
+        {experimentalRows.length > 0 ? (
+          experimentalRows.map((row) => <DeviceSourceRow key={row.key} row={row} />)
+        ) : !canAddExperimental && editing?.kind !== "eas" && editing?.kind !== "simlock" ? (
+          <p className="px-4 py-3.5 text-xs text-muted-foreground sm:px-5">
+            {experimentalEmptyNote}
+          </p>
+        ) : null}
+        {editing?.kind === "eas" ? (
+          <EasDeviceHostEditor
+            key={editing.host.id}
+            environmentId={editing.environmentId}
+            host={editing.host}
+            isNew={editing.isNew}
+            busy={busy}
+            onSave={(host) => void saveEas(host, false, editing.isNew ? undefined : editing.host)}
+            onClose={() => setEditing(null)}
+          />
+        ) : editing?.kind === "simlock" ? (
+          <SimlockDeviceHostEditor
+            key={editing.host.id}
+            host={editing.host}
+            isNew={editing.isNew}
+            environments={simlockEnvironments}
+            busy={busy}
+            onSave={(host, tokens) => void saveSimlock(host, tokens)}
+            onClose={() => setEditing(null)}
+          />
+        ) : null}
+      </FoldedSettingsSection>
+    </>
   );
 }
 
@@ -819,7 +859,7 @@ function DeviceSourceRow(props: { row: SourceRow }) {
   const problems = issues.filter((environment) => environment.status.tone !== "pending");
   const pending = issues.find((environment) => environment.status.tone === "pending");
   return (
-    <div className="flex items-center gap-3 border-t border-border/60 px-3 py-3 first:border-t-0 sm:px-4">
+    <div className="flex items-center gap-3 border-t border-border/60 px-4 py-3.5 first:border-t-0 sm:px-5">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           <p className="truncate text-sm font-medium">{row.title}</p>

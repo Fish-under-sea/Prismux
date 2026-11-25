@@ -54,6 +54,8 @@ export type PersistedGlassZonesConfig = {
   workPanels: PersistedGlassZoneConfig;
   composer: PersistedGlassZoneConfig;
   overlays: PersistedGlassZoneConfig;
+  userBubble: PersistedGlassZoneConfig;
+  overviewPanel: PersistedGlassZoneConfig;
 };
 
 export interface SidebarSquareCorners {
@@ -272,7 +274,7 @@ function normalizeWallpaperScrim(value: unknown, fallback: number): number {
   const safeFallback =
     typeof fallback === "number" && Number.isFinite(fallback)
       ? Math.max(0, Math.min(0.9, fallback > 1 ? fallback / 100 : fallback))
-      : 0.15;
+      : 0.4;
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return safeFallback;
   }
@@ -284,20 +286,20 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
   return {
     schemaVersion: 1,
     updatedAt: Date.now(),
-    themeMode: "dark",
+    themeMode: "glass",
     glassBasePolarity: "dark",
     accentMode: "system",
     accent: "#0078d4",
-    glassPreset: "balanced",
+    glassPreset: "clear",
     glassRegions: {
-      surface: { op: 38, blur: 18 },
-      card: { op: 22, blur: 12 },
-      overlay: { op: 45, blur: 16 },
-      control: { op: 28, blur: 8 }
+      surface: { op: 18, blur: 24 },
+      card: { op: 12, blur: 16 },
+      overlay: { op: 25, blur: 20 },
+      control: { op: 16, blur: 10 }
     },
     glassColor: "#ffffff",
-    glassDarkSeparate: false,
-    glassDarkColor: "#0d1524",
+    glassDarkSeparate: true,
+    glassDarkColor: "#000000",
     glassFidelity: 100,
     fresnelStrength: 100,
     wallpaperDim: 58,
@@ -313,7 +315,9 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
       mainCanvas: { mode: "inherit" },
       workPanels: { mode: "inherit" },
       composer: { mode: "inherit" },
-      overlays: { mode: "inherit" }
+      overlays: { mode: "inherit" },
+      userBubble: { mode: "inherit" },
+      overviewPanel: { mode: "inherit" }
     },
     sidebarCornerRadius: "native",
     sidebarSquareCorners: {
@@ -357,7 +361,7 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
       flipY: false,
       wallpaperBlur: 0,
       wallpaperOpacity: 0,
-      scrim: 0.15,
+      scrim: 0.4,
       sceneLive: true,
       sceneLiveFps: 30,
       pauseOnHidden: true,
@@ -497,7 +501,9 @@ function normalizeGlassZones(
       mainCanvas: { ...fallback.mainCanvas },
       workPanels: { ...fallback.workPanels },
       composer: { ...fallback.composer },
-      overlays: { ...fallback.overlays }
+      overlays: { ...fallback.overlays },
+      userBubble: { ...fallback.userBubble },
+      overviewPanel: { ...fallback.overviewPanel }
     };
   }
   const legacyShell = isPlainRecord(raw["leftSidebar"])
@@ -511,7 +517,9 @@ function normalizeGlassZones(
     mainCanvas: normalizeGlassZoneEntry(raw["mainCanvas"], fallback.mainCanvas, 0),
     workPanels: normalizeGlassZoneEntry(raw["workPanels"], fallback.workPanels, 0),
     composer: normalizeGlassZoneEntry(raw["composer"], fallback.composer, 0),
-    overlays: normalizeGlassZoneEntry(raw["overlays"], fallback.overlays, 68)
+    overlays: normalizeGlassZoneEntry(raw["overlays"], fallback.overlays, 68),
+    userBubble: normalizeGlassZoneEntry(raw["userBubble"], fallback.userBubble, 0),
+    overviewPanel: normalizeGlassZoneEntry(raw["overviewPanel"], fallback.overviewPanel, 0)
   };
 }
 

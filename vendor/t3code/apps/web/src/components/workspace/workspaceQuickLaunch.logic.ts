@@ -167,7 +167,6 @@ const DEFAULT_FALLBACK_AGENTS: ReadonlyArray<{
   { driverKind: "claudeAgent", providerId: "claude-code" },
   { driverKind: "codex", providerId: "codex" },
   { driverKind: "antigravity", providerId: "antigravity" },
-  { driverKind: "omp", providerId: "omp" },
 ];
 
 /**

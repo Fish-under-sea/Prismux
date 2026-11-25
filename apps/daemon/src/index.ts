@@ -22,10 +22,15 @@ import {
 import { SyncVaultEngine } from "@prismux/sync-vault";
 import { AppearanceConfigStore } from "./appearance/AppearanceConfigStore.js";
 import { ChiefThreadManager } from "./chief/ChiefThreadManager.js";
+import { ArtifactResultBackdoor } from "./dispatch/ArtifactResultBackdoor.js";
+import { DesktopIpcDispatchHub } from "./dispatch/DesktopIpcDispatchHub.js";
+import { TaskDispatchRouter } from "./dispatch/TaskDispatchRouter.js";
 import { HandoffEngine } from "./handoff/HandoffEngine.js";
 import { LifecycleHookBus } from "./hooks/LifecycleHookBus.js";
 import { PersistentPtyPool } from "./pty/PersistentPtyPool.js";
 import { WorktreeSandbox } from "./sandbox/WorktreeSandbox.js";
+import { AntigravityPolicyGuard } from "./security/AntigravityPolicyGuard.js";
+import { AntigravityPolicyStore } from "./security/AntigravityPolicyStore.js";
 import { DaemonBusinessService } from "./server/DaemonBusinessRoutes.js";
 import { DaemonRpcServer } from "./server/DaemonRpcServer.js";
 import type { OfficialPluginSourceConfig } from "./server/OfficialPluginDownloader.js";
@@ -47,10 +52,15 @@ import { WallpaperMediaService } from "./wallpapers/WallpaperMediaService.js";
 import { OvernightFactory } from "./workflows/OvernightFactory.js";
 
 export * from "./appearance/AppearanceConfigStore.js";
+export * from "./dispatch/ArtifactResultBackdoor.js";
+export * from "./dispatch/DesktopIpcDispatchHub.js";
+export * from "./dispatch/TaskDispatchRouter.js";
 export * from "./pty/PersistentPtyPool.js";
 export * from "./handoff/HandoffEngine.js";
 export * from "./hooks/LifecycleHookBus.js";
 export * from "./sandbox/WorktreeSandbox.js";
+export * from "./security/AntigravityPolicyGuard.js";
+export * from "./security/AntigravityPolicyStore.js";
 export * from "./workflows/OvernightFactory.js";
 export * from "./t3/T3ServerSupervisor.js";
 export * from "./t3/T3RpcClient.js";
@@ -59,6 +69,7 @@ export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
 export * from "./server/CliUpdateRoutes.js";
 export * from "./server/DaemonBusinessRoutes.js";
+export * from "./server/DispatchRoutes.js";
 export * from "./server/OvernightRoutes.js";
 export * from "./server/QuotaRoutes.js";
 export * from "./server/OfficialPluginDownloader.js";
@@ -190,6 +201,11 @@ export class PrismuxDaemon {
   readonly handoffEngine: HandoffEngine;
   readonly hookBus: LifecycleHookBus;
   readonly sandbox: WorktreeSandbox;
+  readonly antigravityPolicyStore: AntigravityPolicyStore;
+  readonly antigravityPolicyGuard: AntigravityPolicyGuard;
+  readonly taskDispatchRouter: TaskDispatchRouter;
+  readonly artifactBackdoor: ArtifactResultBackdoor;
+  readonly dispatchHub: DesktopIpcDispatchHub;
   readonly overnightFactory: OvernightFactory;
   readonly pluginHost: CordisPluginHost;
   readonly pluginCredentialStore: EncryptedPluginCredentialStore;
@@ -233,7 +249,28 @@ export class PrismuxDaemon {
     this.ptyPool = new PersistentPtyPool();
     this.hookBus = new LifecycleHookBus();
     this.sandbox = new WorktreeSandbox();
-    this.overnightFactory = new OvernightFactory();
+    this.antigravityPolicyStore = new AntigravityPolicyStore({
+      dataDir: options.dataDir
+    });
+    this.antigravityPolicyGuard = new AntigravityPolicyGuard(
+      this.antigravityPolicyStore
+    );
+    this.taskDispatchRouter = new TaskDispatchRouter();
+    this.artifactBackdoor = new ArtifactResultBackdoor({
+      policyGuard: this.antigravityPolicyGuard
+    });
+    this.dispatchHub = new DesktopIpcDispatchHub({
+      dataDir: options.dataDir,
+      router: this.taskDispatchRouter,
+      policyGuard: this.antigravityPolicyGuard,
+      artifactBackdoor: this.artifactBackdoor
+    });
+    this.overnightFactory = new OvernightFactory({
+      policyGuard: this.antigravityPolicyGuard,
+      dispatchRouter: this.taskDispatchRouter,
+      artifactBackdoor: this.artifactBackdoor,
+      dispatchHub: this.dispatchHub
+    });
 
     // Official plugins (qq, fishdock-hook) are NEVER preinstalled by default.
     this.pluginHost = new CordisPluginHost("daemon");
@@ -411,6 +448,8 @@ export class PrismuxDaemon {
       overnightFactory: this.overnightFactory,
       credentialStore: this.pluginCredentialStore,
       memoryStore: this.memoryStore,
+      policyGuard: this.antigravityPolicyGuard,
+      dispatchHub: this.dispatchHub,
       onConfigChanged: () => this.diagnosticsService.clearCache()
     });
 
@@ -442,6 +481,8 @@ export class PrismuxDaemon {
       quotaService: this.quotaService,
       portScannerService: this.portScannerService,
       resourceMonitorService: this.resourceMonitorService,
+      antigravityPolicyStore: this.antigravityPolicyStore,
+      dispatchHub: this.dispatchHub,
       startedAt: daemonStartedAt,
       onRequestShutdown: options.onShutdownRequested
     });

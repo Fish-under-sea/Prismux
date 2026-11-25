@@ -49,7 +49,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(SETTINGS_SECTION_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_SECTION_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_SECTION_LABELS["/settings/plugins"])).toBe("插件中心");
-    expect(m(SETTINGS_SECTION_LABELS["/settings/memory"])).toBe("记忆");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/memory"])).toBe("主秘书与记忆");
     expect(m(SETTINGS_SECTION_LABELS["/settings/sync"])).toBe("同步");
     expect(m(SETTINGS_SECTION_LABELS["/settings/overnight-factory"])).toBe("夜间工场与邮箱");
     expect(m(SETTINGS_SECTION_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
@@ -58,7 +58,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_NAV_LABELS["/settings/plugins"])).toBe("插件中心");
-    expect(m(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("记忆");
+    expect(m(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("主秘书与记忆");
     expect(m(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("同步");
     expect(m(SETTINGS_NAV_LABELS["/settings/overnight-factory"])).toBe("夜间工场与邮箱");
     expect(m(SETTINGS_NAV_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
@@ -80,7 +80,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       },
       {
         heading: "扩展、记忆与连接",
-        labels: ["环境与扫码远控", "记忆", "同步", "插件中心"],
+        labels: ["环境与扫码远控", "主秘书与记忆", "同步", "插件中心"],
       },
       {
         heading: "系统与关于",
@@ -125,6 +125,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["Prismux Updates", "prismux-updates"],
       ["入门引导", "welcome-page"],
       ["欢迎页", "welcome-page"],
+      ["被控代理", "antigravity-controlled-lock"],
     ];
 
     for (const [query, expectedId] of cases) {
@@ -240,8 +241,8 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(
       m(msg("Install the {provider} CLI to open it in a terminal."), { provider: "Codex" }),
     ).toBe("请先安装 Codex CLI，才能在终端中打开它。");
-    expect(m(msg("{agent} isn't installed on this machine."), { agent: "OMP" })).toBe(
-      "本机尚未安装 OMP。",
+    expect(m(msg("{agent} isn't installed on this machine."), { agent: "DSH" })).toBe(
+      "本机尚未安装 DSH。",
     );
     expect(m(msg("Run Prismux's CLI as `prismux` (with `t3` alias) from any terminal."))).toBe(
       "在任意终端中以 `prismux`（兼容 `t3` 别名）运行 Prismux 命令行工具。",
@@ -257,17 +258,42 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"))).toBe(
       "零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。",
     );
-    // JSX `<T>` entries in zh.json
+    // JSX `<T>` entries in zh.json + retired omp keys removed
     expect(zhCatalog["d9de785e4e7e3489"]).toBe("前往软件更新");
     expect(zhCatalog["62efb97188343665"]).toBe("开启局域网访问");
-    expect(zhCatalog["d18fbf732abd8379"]).toBe("使用 omp 一键预设");
+    expect(enCatalog).not.toHaveProperty("0a3d168145e42282");
+    expect(zhCatalog).not.toHaveProperty("0a3d168145e42282");
+    expect(enCatalog).not.toHaveProperty("d18fbf732abd8379");
+    expect(zhCatalog).not.toHaveProperty("d18fbf732abd8379");
     expect(searchSettings("服务体检", SETTINGS_SEARCH_ITEMS, m)[0]?.id).toBe(
       "prismux-diagnostics",
     );
+
+    // RC.2 segmented settings tab & Antigravity compliance labels
+    expect(m(msg("Theme & colors"))).toBe("主题与配色");
+    expect(m(msg("Liquid glass & corners"))).toBe("液态玻璃与圆角");
+    expect(m(msg("Fonts & typography"))).toBe("字体与排版");
+    expect(m(msg("Composer & sending"))).toBe("输入与发送");
+    expect(m(msg("Reading & display"))).toBe("阅读与展示");
+    expect(m(msg("Threads & defaults"))).toBe("线程与默认配置");
+    expect(m(msg("Background & cleanup"))).toBe("后台运行与清理");
+    expect(m(msg("Service diagnostics"))).toBe("服务健康诊断");
+    expect(m(msg("Telemetry & tracing"))).toBe("性能遥测与追踪");
+    expect(m(msg("Tools & help"))).toBe("工具与帮助");
+    expect(m(msg("Dictation & transcription"))).toBe("听写与转写");
+    expect(m(msg("Local models & dictionary"))).toBe("本地模型与词典");
+    expect(m(msg("Hosts & repositories"))).toBe("托管平台与仓库");
+    expect(m(msg("AI commits & review"))).toBe("AI 提交与审查");
+    expect(m(msg("Worktrees & branches"))).toBe("工作树与分支");
+    expect(m(msg("Diffs & PRs"))).toBe("差异与 PR");
+    expect(m(msg("Built-in browser"))).toBe("内置浏览器");
+    expect(m(msg("Mobile devices & remote hosts"))).toBe("移动设备与远端主机");
+    expect(m(msg("QR remote control & LAN access"))).toBe("扫码远控与局域网访问");
+    expect(m(msg("Antigravity controlled-agent lock"))).toBe("Antigravity 被控代理安全锁");
   });
 
   it("translates Orca composer (#313), sidebar + icon rail (#315/Spec 2), settings nav (Spec 1), live telemetry (Spec 3), and usage call logs (Spec 4A)", () => {
-    // #313 Orca composer & 4-tier permission shield
+    // Orca composer & 4-tier permission shield
     expect(m(msg("Ask anything, @ to mention files, / for commands"))).toBe(
       "随心输入，@ 引用文件，/ 使用命令",
     );
@@ -278,7 +304,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("More models ({count})"), { count: 4 })).toBe("更多模型 (4)");
     expect(m(msg("Show fewer models"))).toBe("收起更多模型");
 
-    // #315 & Spec 2 Orca left sidebar + icon rail
+    // Orca left sidebar + icon rail
     expect(m(msg("Service diagnostics", { $context: "sidebar quick navigation" }))).toBe("服务体检");
     expect(m(msg("Automations", { $context: "sidebar quick navigation" }))).toBe("自动化");
     expect(m(msg("Prismux Mobile", { $context: "sidebar quick navigation" }))).toBe("Prismux 手机端");

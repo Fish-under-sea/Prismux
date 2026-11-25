@@ -46,10 +46,11 @@ describe("PrismuxStatusBar (browser)", () => {
     expect(Math.round(barEl.getBoundingClientRect().height)).toBe(20);
     expect(barEl.getAttribute("data-pmx-glass-zone")).toBe("shellFrame");
 
-    // Streamlined 5 capsules: Usage + Standalone Quota + Keep Awake + Ports + CPU/RAM.
+    // Streamlined capsules: Usage + Keep Awake + Ports + CPU/RAM; Quota hides completely when 0 authenticated providers have live quota.
     expect(screen.getByTestId("status-bar-usage-trigger").element()).toBeTruthy();
-    expect(screen.getByTestId("status-bar-quota-trigger").element()).toBeTruthy();
-    expect(screen.getByTestId("status-bar-quota-refresh").element()).toBeTruthy();
+    expect(screen.getByTestId("status-bar-quota-capsule").query()).toBeNull();
+    expect(screen.getByTestId("status-bar-quota-trigger").query()).toBeNull();
+    expect(screen.getByTestId("status-bar-quota-refresh").query()).toBeNull();
     expect(screen.getByTestId("status-bar-keep-awake-trigger").element()).toBeTruthy();
     expect(screen.getByTestId("status-bar-ports-trigger").element()).toBeTruthy();
     expect(screen.getByTestId("status-bar-resources-trigger").element()).toBeTruthy();
@@ -399,5 +400,41 @@ describe("PrismuxStatusBar (browser)", () => {
     expect(screen.getByTestId("status-bar-quota-minibar-antigravity").element()).toBeTruthy();
 
     window.localStorage.removeItem(QUOTA_PREFS_STORAGE_KEY);
+  });
+
+  it("hides bottom-bar quota completely when daemon snapshot reports unauthenticated (zero static placeholder)", async () => {
+    window.localStorage.removeItem(STATUS_BAR_VISIBILITY_STORAGE_KEY);
+    const now = Date.parse("2026-11-25T08:00:00Z");
+    const unauthSnapshot: DaemonOfficialQuotaSummaryResponse = {
+      ok: true,
+      cached: false,
+      cacheTtlMs: 180_000,
+      fetchedAt: now,
+      fetchedAtIso: new Date(now).toISOString(),
+      providers: [],
+      antigravity: {
+        id: "antigravity",
+        providerId: "antigravity",
+        displayName: "Antigravity",
+        source: "official-cli",
+        command: 'agy -p "/usage"',
+        status: "unauthenticated",
+        available: false,
+        executablePath: null,
+        remainingCredits: null,
+        fetchedAt: now,
+        fetchedAtIso: new Date(now).toISOString(),
+        error: "未检测到官方 agy CLI 登录态",
+        windows: [],
+      },
+    };
+
+    await using screen = await renderStatusBarInRouter(unauthSnapshot);
+    const barEl = screen.getByRole("contentinfo", { name: "Prismux 状态栏" }).element() as HTMLElement;
+    expect(Math.round(barEl.getBoundingClientRect().height)).toBe(20);
+    expect(screen.getByTestId("status-bar-quota-capsule").query()).toBeNull();
+    expect(screen.getByTestId("status-bar-quota-trigger").query()).toBeNull();
+    expect(barEl.textContent).not.toContain("未登录");
+    expect(barEl.textContent).not.toContain("额度 —");
   });
 });

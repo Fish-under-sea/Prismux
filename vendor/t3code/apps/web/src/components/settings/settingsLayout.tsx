@@ -185,6 +185,30 @@ export function SettingsSearchTarget({
   );
 }
 
+// Standardized right-aligned Settings control width tiers (low-density alignment across pages).
+export const SETTINGS_CONTROL_SM = "w-36";
+export const SETTINGS_CONTROL_MD = "w-48";
+export const SETTINGS_CONTROL_LG = "w-60";
+
+export const SETTINGS_REVEAL_TARGET_EVENT = "prismux:settings-reveal-target";
+
+export interface SettingsRevealTargetEventDetail {
+  readonly targetId: string;
+  readonly highlight: boolean;
+}
+
+export function dispatchSettingsRevealTarget(
+  targetId: string,
+  options: { readonly highlight?: boolean } = {},
+): void {
+  if (typeof window === "undefined" || !targetId) return;
+  window.dispatchEvent(
+    new CustomEvent<SettingsRevealTargetEventDetail>(SETTINGS_REVEAL_TARGET_EVENT, {
+      detail: { targetId, highlight: options.highlight ?? true },
+    }),
+  );
+}
+
 // Settings pickers reuse composer controls but match the bordered selects beside them.
 export const SETTINGS_PICKER_TRIGGER_CLASSNAME =
   "min-w-0 max-w-none shrink-0 border-input bg-background font-normal text-foreground shadow-xs/5 hover:bg-accent/50 dark:bg-input/32 [&_svg[data-composer-control-chevron]]:stroke-[1.75] [&_svg[data-composer-control-chevron]]:opacity-70";
@@ -236,24 +260,24 @@ export function SettingsSection({
       {...sectionProps}
       ref={targetRef}
       tabIndex={sectionProps.id ? -1 : sectionProps.tabIndex}
-      className={cn(!hideTitle && "space-y-2.5", className)}
+      className={className}
     >
       {hideTitle ? (
         <h2 className="sr-only">{title}</h2>
       ) : (
         <div
           data-settings-scroll-target
-          className="flex min-h-7 flex-wrap items-start justify-between gap-x-4 gap-y-1 px-3 sm:px-4"
+          className="mb-3 flex min-h-6 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1"
         >
-          <div className="flex min-w-0 items-center gap-1">
-            <h2 className="flex min-h-7 items-center gap-2 text-base font-semibold text-foreground">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h2 className="flex min-h-6 items-center gap-2 text-[13px] font-semibold tracking-tight text-foreground/90">
               {icon}
               {title}
             </h2>
             {titleAction}
           </div>
           {headerAction ? (
-            <div className="flex min-h-7 min-w-7 items-center justify-end">{headerAction}</div>
+            <div className="flex min-h-6 min-w-6 items-center justify-end">{headerAction}</div>
           ) : null}
         </div>
       )}
@@ -530,12 +554,12 @@ export function SettingsRow({
       tabIndex={rowProps.tabIndex ?? -1}
       data-slot="settings-row"
       className={cn(
-        "group/settings-row @container/settings-row rounded-xl px-3 sm:px-4 aria-disabled:opacity-64 aria-disabled:[&_*]:text-muted-foreground",
-        children ? "pt-3 pb-1" : "py-3",
+        "group/settings-row @container/settings-row rounded-xl px-4 sm:px-5 aria-disabled:opacity-64 aria-disabled:[&_*]:text-muted-foreground",
+        children ? "pt-3.5 pb-1.5" : "py-3.5",
         className,
       )}
     >
-      <div className="flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_auto] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-8">
+      <div className="flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_auto] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-6">
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
             <h3 className="text-sm font-medium text-foreground">{title}</h3>
@@ -659,7 +683,7 @@ export function SettingsPageContainer({
         className="topbar-scroll-fade scrollbar-gutter-both flex-1 overflow-y-auto"
         data-settings-page-scroll
       >
-        <WorkspacePageContainer width={width} className={cn("gap-8", className)}>
+        <WorkspacePageContainer width={width} className={cn("gap-7", className)}>
           <SettingsScopeSentence />
           {children}
         </WorkspacePageContainer>
@@ -673,7 +697,10 @@ export function scrollToSettingsTarget(
   { highlight = true }: { readonly highlight?: boolean } = {},
 ): boolean {
   const target = document.getElementById(targetId);
-  if (!target) return false;
-  scrollAndFocusSettingsTarget(target, highlight);
-  return true;
+  if (target) {
+    scrollAndFocusSettingsTarget(target, highlight);
+    return true;
+  }
+  dispatchSettingsRevealTarget(targetId, { highlight });
+  return false;
 }

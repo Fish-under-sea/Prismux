@@ -1,5 +1,6 @@
 import type { CallerScope } from "@prismux/protocol";
 import type {
+  OfficialQuotaCreditsResponse,
   OfficialQuotaService,
   OfficialQuotaSummaryResponse
 } from "../system/OfficialQuotaService.js";
@@ -12,9 +13,18 @@ export interface QuotaRouteRequest {
   callerScope: CallerScope;
 }
 
+export interface QuotaInvalidateResponse {
+  ok: true;
+  cleared: true;
+  cacheGeneration: number;
+}
+
 export interface QuotaRouteResponse {
   statusCode: number;
-  payload: OfficialQuotaSummaryResponse;
+  payload:
+    | OfficialQuotaSummaryResponse
+    | OfficialQuotaCreditsResponse
+    | QuotaInvalidateResponse;
 }
 
 function isForceFlag(searchParams: URLSearchParams): boolean {
@@ -28,8 +38,24 @@ function isForceFlag(searchParams: URLSearchParams): boolean {
   );
 }
 
+function isExplicitlyDisabledFlag(searchParams: URLSearchParams): boolean {
+  const disabled = searchParams.get("disabled")?.trim().toLowerCase();
+  const enabled = searchParams.get("enabled")?.trim().toLowerCase();
+  return (
+    disabled === "1" ||
+    disabled === "true" ||
+    enabled === "0" ||
+    enabled === "false"
+  );
+}
+
 /**
- * Matches `/v1/quota/summary` (GET, supports `?force=1`) and `/v1/quota/refresh` (POST).
+ * Matches:
+ * - `GET /v1/quota/summary` (supports `?force=1`; runs ONLY `agy -p "/usage"`)
+ * - `POST /v1/quota/refresh` (forced summary refresh; runs ONLY `agy -p "/usage"`)
+ * - `GET /v1/quota/credits` (on-demand popover credits; supports `?force=1`; runs ONLY `agy -p "/credits"`)
+ * - `POST /v1/quota/invalidate` (immediately clears both `/usage` and `/credits` caches)
+ *
  * Returns `null` when the request path does not belong to QuotaRoutes.
  */
 export async function handleQuotaRoute(
@@ -40,8 +66,12 @@ export async function handleQuotaRoute(
     request.method === "GET" && request.pathname === "/v1/quota/summary";
   const isRefreshPost =
     request.method === "POST" && request.pathname === "/v1/quota/refresh";
+  const isCreditsGet =
+    request.method === "GET" && request.pathname === "/v1/quota/credits";
+  const isInvalidatePost =
+    request.method === "POST" && request.pathname === "/v1/quota/invalidate";
 
-  if (!isSummaryGet && !isRefreshPost) {
+  if (!isSummaryGet && !isRefreshPost && !isCreditsGet && !isInvalidatePost) {
     return null;
   }
 
@@ -61,8 +91,44 @@ export async function handleQuotaRoute(
     );
   }
 
+  if (isInvalidatePost) {
+    quotaService.clearCache();
+    return {
+      statusCode: 200,
+      payload: {
+        ok: true,
+        cleared: true,
+        cacheGeneration: quotaService.getCacheGeneration()
+      }
+    };
+  }
+
+  const explicitlyDisabled = isExplicitlyDisabledFlag(request.searchParams);
+
+  if (isCreditsGet) {
+    if (explicitlyDisabled) {
+      return {
+        statusCode: 200,
+        payload: quotaService.buildDisabledCreditsResponse()
+      };
+    }
+    const force = isForceFlag(request.searchParams);
+    const credits = await quotaService.getCredits(force);
+    return {
+      statusCode: 200,
+      payload: credits
+    };
+  }
+
+  if (explicitlyDisabled) {
+    return {
+      statusCode: 200,
+      payload: quotaService.buildDisabledSummaryResponse()
+    };
+  }
+
   const force = isRefreshPost || isForceFlag(request.searchParams);
-  const summary = await quotaService.getQuotaSummary(force);
+  const summary = await quotaService.getSummary(force);
   return {
     statusCode: 200,
     payload: summary

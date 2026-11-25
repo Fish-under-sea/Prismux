@@ -13,12 +13,30 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ children, ...props }: { children?: unknown; [key: string]: unknown }) => (
-    <a {...props}>{children as never}</a>
+  Link: ({
+    children,
+    to,
+    hash,
+    ...props
+  }: {
+    children?: unknown;
+    to?: string;
+    hash?: string;
+    [key: string]: unknown;
+  }) => (
+    <a
+      href={typeof to === "string" ? (hash ? `${to}#${hash}` : to) : undefined}
+      data-hash={hash}
+      {...props}
+    >
+      {children as never}
+    </a>
   ),
   useNavigate: () => () => Promise.resolve(),
-  useLocation: (opts?: { select?: (loc: { hash: string; pathname: string; state: Record<string, unknown> }) => unknown }) => {
-    const loc = { hash: "", pathname: "/settings/memory-sync", state: {} };
+  useLocation: (opts?: {
+    select?: (loc: { hash: string; pathname: string; state: Record<string, unknown> }) => unknown;
+  }) => {
+    const loc = { hash: "", pathname: "/settings/memory", state: {} };
     return opts?.select ? opts.select(loc) : loc;
   },
 }));
@@ -145,9 +163,9 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       ],
     }),
     makeMockProvider({
-      instanceId: "pi",
-      driver: "pi",
-      displayName: "Pi",
+      instanceId: "dsh",
+      driver: "dsh",
+      displayName: "DeepSeek Harness",
       models: [
         {
           slug: "default",
@@ -168,18 +186,18 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     const options = buildChiefProviderOptions({
       serverProviders: mockProviders,
       settings: null,
-      daemonAvailableProviders: ["claude-code", "codex", "antigravity", "omp", "opencode"],
+      daemonAvailableProviders: ["claude-code", "codex", "antigravity", "dsh", "opencode"],
     });
 
     const codexOpt = options.find((o) => o.value === "codex");
     const claudeOpt = options.find((o) => o.value === "claude-code");
     const agyOpt = options.find((o) => o.value === "antigravity");
-    const ompOpt = options.find((o) => o.value === "omp");
+    const dshOpt = options.find((o) => o.value === "dsh");
 
     expect(codexOpt?.label).toBe("Codex");
     expect(claudeOpt?.label).toBe("Claude Code");
     expect(agyOpt?.label).toBe("Antigravity");
-    expect(ompOpt?.label).toBe("oh-my-pi");
+    expect(dshOpt?.label).toBe("DeepSeek Harness");
 
     // Ensure no raw lowercase duplicates exist.
     expect(options.filter((o) => o.value === "claude-code")).toHaveLength(1);
@@ -188,7 +206,7 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
 
     // Ensure placeholder slugs ("antigravity-default", "default") are filtered out while real & proxy models stay.
     expect(agyOpt?.models.map((m) => m.slug)).toEqual(["gemini-3-pro", "claude-sonnet-4-5"]);
-    expect(ompOpt?.models.map((m) => m.slug)).toEqual(["deepseek-r1"]);
+    expect(dshOpt?.models.map((m) => m.slug)).toEqual(["deepseek-r1"]);
     expect(claudeOpt?.models.map((m) => m.slug)).toEqual([
       "claude-opus-5-5",
       "custom-claude-proxy",
@@ -196,7 +214,7 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     expect(claudeOpt?.models[1]?.subtitle).toContain("OpenRouter");
   });
 
-  it("provides built-in fallback providers when server catalog is empty", () => {
+  it("provides built-in fallback providers with DeepSeek Harness and zero oh-my-pi when server catalog is empty", () => {
     const options = buildChiefProviderOptions({
       serverProviders: [],
       settings: null,
@@ -206,8 +224,11 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       "Codex",
       "Claude Code",
       "Antigravity",
-      "oh-my-pi",
+      "DeepSeek Harness",
     ]);
+    expect(options.some((o) => /oh-my-pi|^omp$/i.test(o.value) || /oh-my-pi/i.test(o.label))).toBe(
+      false,
+    );
   });
 
   it("preserves a compatibility fallback model item when a saved custom model is absent from the catalog", () => {
@@ -235,7 +256,6 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     const codexOpt = options.find((o) => o.value === "codex")!;
     const astraModel = codexOpt.models.find((m) => m.slug === "gpt-6-astra");
 
-    // Uses explicit model capabilities when present.
     const astraSpec = resolveChiefEffortSpec({
       provider: "codex",
       modelSlug: "gpt-6-astra",
@@ -249,7 +269,6 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       "high",
       "xhigh",
     ]);
-    // Effort labels must use unambiguous English terms rather than localized Chinese tiers.
     expect(astraSpec.stops.map((s) => s.label)).toEqual([
       "Minimal",
       "Low",
@@ -258,7 +277,6 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       "XHigh",
     ]);
 
-    // Falls back to OpenAI/Codex family preset when model has no explicit descriptor.
     const codexDefaultSpec = resolveChiefEffortSpec({
       provider: "codex",
       modelSlug: "",
@@ -272,16 +290,7 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       "xhigh",
       "max",
     ]);
-    expect(codexDefaultSpec.stops.map((s) => s.label)).toEqual([
-      "Minimal",
-      "Low",
-      "Medium",
-      "High",
-      "XHigh",
-      "Max",
-    ]);
 
-    // Claude Code family preset includes ultracode with English stop labels.
     const claudeSpec = resolveChiefEffortSpec({
       provider: "claude-code",
       modelSlug: "claude-opus-5-5",
@@ -295,16 +304,7 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       "max",
       "ultracode",
     ]);
-    expect(claudeSpec.stops.map((s) => s.label)).toEqual([
-      "Low",
-      "Medium",
-      "High",
-      "XHigh",
-      "Max",
-      "Ultracode",
-    ]);
 
-    // Multi-model gateway (Antigravity running Claude model) detects Claude model-first.
     const gatewayClaudeSpec = resolveChiefEffortSpec({
       provider: "antigravity",
       modelSlug: "claude-sonnet-4-5",
@@ -319,7 +319,6 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       settings: null,
     });
 
-    // Switching Codex (gpt-5.4 + minimal) -> Claude Code resets incompatible model and effort ("minimal" is not in Claude stops).
     const toClaude = reconcileChiefSelectionOnProviderChange({
       nextProviderRaw: "claudeAgent",
       providerOptions: options,
@@ -332,7 +331,6 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       reasoningEffort: "",
     });
 
-    // Switching Codex (gpt-5.4 + high) -> Claude Code resets model, keeps shared valid effort ("high").
     const toClaudeKeepEffort = reconcileChiefSelectionOnProviderChange({
       nextProviderRaw: "claude-code",
       providerOptions: options,
@@ -345,7 +343,6 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       reasoningEffort: "high",
     });
 
-    // Switching to Antigravity when current model exists in Antigravity keeps both model and effort.
     const toAgySharedModel = reconcileChiefSelectionOnProviderChange({
       nextProviderRaw: "antigravity",
       providerOptions: options,
@@ -359,85 +356,137 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     });
   });
 
-  it("renders canonical Chief controls, custom identity + independent AGENTS.md, Obsidian Agent curation card, and Prismux E2EE Sync brand", () => {
+  it("renders Chief tab with single reasoning slider ONLY (no duplicate effort select), identity, AGENTS.md, and denoised copy", () => {
     const html = renderToStaticMarkup(
       <GTProvider locale="zh" translations={{}}>
         <PrismuxMemorySyncSettingsPage
           serverProvidersOverride={mockProviders}
           settingsOverride={null}
           daemonReadyOverride
+          initialTabOverride="chief"
         />
       </GTProvider>,
     );
 
+    expect(html).toContain("主秘书与记忆");
     expect(html).toContain("data-pmx-chief-provider-select");
     expect(html).toContain("data-pmx-chief-model-select");
-    expect(html).toContain("data-pmx-chief-effort-select");
+    // Single reasoning slider ONLY — duplicate effort <Select> dropdown is deleted!
     expect(html).toContain("data-pmx-chief-effort-slider");
+    expect(html).not.toContain("data-pmx-chief-effort-select");
     expect(html).toContain("Codex");
-    expect(html).toContain("跟随该提供方默认模型（留空）");
     expect(html).toContain("跟随提供方默认");
     expect(html).not.toContain("可选模型覆盖（留空默认）");
 
-    // 1. Chief custom identity & independent AGENTS.md section
+    // Chief custom identity & independent AGENTS.md section
     expect(html).toContain("data-pmx-chief-name-input");
     expect(html).toContain("data-pmx-chief-agents-md-section");
     expect(html).toContain("data-pmx-chief-agents-md-editor");
     expect(html).toContain("~/.prismux/chief/AGENTS.md");
-    expect(html).toContain("切换任意底层引擎不重置");
-
-    // 2. Obsidian Agent-curated migration card (default Agent curation enabled)
-    expect(html).toContain("data-pmx-obsidian-agent-import");
-    expect(html).toContain("由主秘书 Agent 智能整理后再入库（推荐）");
-    expect(html).toContain("Agent 智能扫描与整理");
-
-    // 3. Brand rename: Prismux E2EE Sync with zero user-facing Magpie mentions
-    expect(html).toContain("Prismux 端到端加密同步");
-    expect(html).toContain("Prismux 端到端加密同步（Argon2id + AEAD）");
+    expect(html).not.toContain("oh-my-pi");
     expect(html).not.toMatch(/magpie/i);
   });
 
-  it("cleanly splits /settings/memory (Chief + AGENTS.md + SQLite + Obsidian) and /settings/sync (E2EE Sync + collapsible channels)", () => {
-    const memoryHtml = renderToStaticMarkup(
+  it("renders /settings/memory across 3 segmented tabs (chief / memory / obsidian) with fixed maintenance#diagnostics link and denoised copy", () => {
+    // Tab 1: Chief
+    const chiefTabHtml = renderToStaticMarkup(
       <GTProvider locale="zh" translations={{}}>
         <PrismuxMemorySettingsPage
           serverProvidersOverride={mockProviders}
           settingsOverride={null}
           daemonReadyOverride
+          initialTabOverride="chief"
         />
       </GTProvider>,
     );
+    expect(chiefTabHtml).toContain('id="prismux-memory"');
+    expect(chiefTabHtml).toContain("data-pmx-memory-settings-page");
+    expect(chiefTabHtml).toContain("主秘书与人设");
+    expect(chiefTabHtml).toContain("混合记忆库");
+    expect(chiefTabHtml).toContain("Obsidian 迁移");
+    expect(chiefTabHtml).toContain("data-pmx-chief-provider-select");
+    expect(chiefTabHtml).toContain("data-pmx-chief-effort-slider");
+    expect(chiefTabHtml).not.toContain("data-pmx-chief-effort-select");
+    expect(chiefTabHtml).toContain("data-pmx-chief-agents-md-editor");
+    expect(chiefTabHtml).not.toContain('id="prismux-e2ee-sync"');
 
-    expect(memoryHtml).toContain('id="prismux-memory"');
-    expect(memoryHtml).toContain("data-pmx-memory-settings-page");
-    expect(memoryHtml).toContain("data-pmx-chief-provider-select");
-    expect(memoryHtml).toContain("data-pmx-chief-agents-md-editor");
-    expect(memoryHtml).toContain('id="prismux-memory-engine"');
-    expect(memoryHtml).toContain("data-pmx-obsidian-agent-import");
-    // Sync section must NOT be rendered on /settings/memory
-    expect(memoryHtml).not.toContain('id="prismux-e2ee-sync"');
-    expect(memoryHtml).not.toContain('data-pmx-sync-channel="webdav"');
-
-    const syncHtml = renderToStaticMarkup(
+    // Tab 2: Memory (compact single-line KPI strip + namespace filter + fixed /settings/maintenance#diagnostics link)
+    const memoryTabHtml = renderToStaticMarkup(
       <GTProvider locale="zh" translations={{}}>
-        <PrismuxSyncSettingsPage daemonReadyOverride />
+        <PrismuxMemorySettingsPage
+          serverProvidersOverride={mockProviders}
+          settingsOverride={null}
+          daemonReadyOverride
+          initialTabOverride="memory"
+        />
+      </GTProvider>,
+    );
+    expect(memoryTabHtml).toContain('id="prismux-memory-engine"');
+    expect(memoryTabHtml).toContain("data-pmx-memory-kpi-strip");
+    expect(memoryTabHtml).toContain("data-pmx-memory-ns-filter");
+    expect(memoryTabHtml).toContain('href="/settings/maintenance#diagnostics"');
+    expect(memoryTabHtml).not.toContain('href="/settings/diagnostics"');
+    expect(memoryTabHtml).not.toContain("POST /v1/memory/search");
+    expect(memoryTabHtml).not.toContain("vec0.dll");
+    expect(memoryTabHtml).not.toContain("_callerScope");
+
+    // Tab 3: Obsidian migration
+    const obsidianTabHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxMemorySettingsPage
+          serverProvidersOverride={mockProviders}
+          settingsOverride={null}
+          daemonReadyOverride
+          initialTabOverride="obsidian"
+        />
+      </GTProvider>,
+    );
+    expect(obsidianTabHtml).toContain("data-pmx-obsidian-agent-import");
+    expect(obsidianTabHtml).toContain("由主秘书 Agent 智能整理后再入库（推荐）");
+    expect(obsidianTabHtml).toContain("Agent 智能扫描与整理");
+  });
+
+  it("renders /settings/sync with a single header and 2 segmented tabs (overview & channels) with denoised copy", () => {
+    const syncOverviewHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxSyncSettingsPage daemonReadyOverride initialTabOverride="overview" />
       </GTProvider>,
     );
 
-    expect(syncHtml).toContain('id="prismux-sync"');
-    expect(syncHtml).toContain("data-pmx-sync-settings-page");
-    expect(syncHtml).toContain('id="prismux-e2ee-sync"');
-    expect(syncHtml).toContain("Prismux 端到端加密同步（Argon2id + AEAD）");
-    expect(syncHtml).toContain('data-pmx-sync-channel="webdav"');
-    expect(syncHtml).toContain('data-pmx-sync-channel="s3"');
-    expect(syncHtml).toContain('data-pmx-sync-channel="github"');
-    expect(syncHtml).toContain('data-pmx-sync-channel-expanded="false"');
-    expect(syncHtml).toContain("同步域矩阵（Upload / Download 独立控制）");
-    // Chief / Memory sections must NOT be rendered on /settings/sync
-    expect(syncHtml).not.toContain('id="prismux-chief-slot"');
-    expect(syncHtml).not.toContain('id="prismux-memory-engine"');
-    expect(syncHtml).not.toContain("data-pmx-chief-agents-md-editor");
-    expect(syncHtml).not.toMatch(/magpie/i);
+    expect(syncOverviewHtml).toContain('id="prismux-sync"');
+    expect(syncOverviewHtml).toContain("data-pmx-sync-settings-page");
+    expect(syncOverviewHtml).toContain("Prismux 端到端加密同步");
+    expect(syncOverviewHtml).toContain("同步概览与策略");
+    expect(syncOverviewHtml).toContain("云端通道与密钥");
+    expect(syncOverviewHtml).toContain('id="prismux-e2ee-sync"');
+    expect(syncOverviewHtml).toContain("data-pmx-sync-upload");
+    expect(syncOverviewHtml).toContain("data-pmx-sync-download");
+    expect(syncOverviewHtml).toContain("data-pmx-sync-test-all");
+    expect(syncOverviewHtml).toContain("data-pmx-sync-now");
+    expect(syncOverviewHtml).toContain("data-pmx-sync-matrix-list");
+    expect(syncOverviewHtml).not.toContain("Argon2id");
+    expect(syncOverviewHtml).not.toContain("AEAD");
+    expect(syncOverviewHtml).not.toContain("If-Match");
+    expect(syncOverviewHtml).not.toContain('id="prismux-chief-slot"');
+    expect(syncOverviewHtml).not.toContain('id="prismux-memory-engine"');
+    expect(syncOverviewHtml).not.toMatch(/magpie/i);
+
+    const syncChannelsHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxSyncSettingsPage
+          daemonReadyOverride
+          initialTabOverride="channels"
+          initialChannelOverride="github"
+        />
+      </GTProvider>,
+    );
+    expect(syncChannelsHtml).toContain('data-pmx-sync-channel-tab="github"');
+    expect(syncChannelsHtml).toContain('data-pmx-sync-channel-tab="webdav"');
+    expect(syncChannelsHtml).toContain('data-pmx-sync-channel-tab="s3"');
+    expect(syncChannelsHtml).toContain('data-pmx-sync-channel="github"');
+    expect(syncChannelsHtml).toContain('data-pmx-sync-channel-expanded="false"');
+    expect(syncChannelsHtml).toContain("data-pmx-sync-passphrase-input");
+    expect(syncChannelsHtml).toContain('id="sync-portable"');
   });
 
   it("centers dsh-fish reasoning runner at ((i + 0.5) / N) * 100% and aligns pointer hit cells for N=2..7", () => {

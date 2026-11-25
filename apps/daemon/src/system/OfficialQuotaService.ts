@@ -13,7 +13,15 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export const OFFICIAL_QUOTA_CACHE_TTL_MS = 3 * 60 * 1_000;
+/** Base cache TTL: 15 minutes (900,000 ms). */
+export const OFFICIAL_QUOTA_CACHE_TTL_MS = 15 * 60 * 1_000;
+/** Random cache TTL jitter half-window: ±90 seconds (90,000 ms) => [810_000, 990_000] ms. */
+export const OFFICIAL_QUOTA_CACHE_JITTER_MS = 90 * 1_000;
+export const OFFICIAL_QUOTA_CACHE_TTL_MIN_MS =
+  OFFICIAL_QUOTA_CACHE_TTL_MS - OFFICIAL_QUOTA_CACHE_JITTER_MS;
+export const OFFICIAL_QUOTA_CACHE_TTL_MAX_MS =
+  OFFICIAL_QUOTA_CACHE_TTL_MS + OFFICIAL_QUOTA_CACHE_JITTER_MS;
+
 const NEGATIVE_CACHE_TTL_MS = 15_000;
 const DEFAULT_USAGE_PRINT_TIMEOUT_SEC = 15;
 const DEFAULT_USAGE_EXEC_TIMEOUT_MS = 18_000;
@@ -72,6 +80,34 @@ export interface OfficialQuotaSummaryResponse {
   antigravity: OfficialQuotaProviderSnapshot;
 }
 
+export interface OfficialQuotaCreditsSnapshot {
+  id: "antigravity";
+  providerId: "antigravity";
+  displayName: "Antigravity";
+  source: "official-cli";
+  command: 'agy -p "/credits"';
+  status: OfficialQuotaProviderStatus;
+  available: boolean;
+  executablePath: string | null;
+  remainingCredits: number | null;
+  fetchedAt: number;
+  fetchedAtIso: string;
+  error: string | null;
+}
+
+export interface OfficialQuotaCreditsResponse {
+  ok: true;
+  cached: boolean;
+  cacheTtlMs: number;
+  fetchedAt: number;
+  fetchedAtIso: string;
+  remainingCredits: number | null;
+  status: OfficialQuotaProviderStatus;
+  available: boolean;
+  error: string | null;
+  antigravity: OfficialQuotaCreditsSnapshot;
+}
+
 export interface OfficialCliExecResult {
   stdout: string;
   stderr: string;
@@ -81,16 +117,20 @@ export interface OfficialCliExecResult {
 }
 
 export interface OfficialQuotaServiceOptions {
-  /** Cache TTL for successful quota snapshots (default 3 minutes). */
+  /** Base cache TTL for successful quota/credits snapshots (default 15 minutes). */
   cacheTtlMs?: number;
-  /** Short TTL for negative results so unavailable states do not hammer CLI (default 15s). */
+  /** Random jitter half-window applied to TTL (default ±90s => [810_000, 990_000] ms). */
+  cacheJitterMs?: number;
+  /** Injectable PRNG returning [0, 1] for deterministic jitter unit testing. */
+  random?: () => number;
+  /** Short TTL retained for option compatibility (failures invalidate cache immediately). */
   negativeCacheTtlMs?: number;
   /** Subprocess timeout for `agy -p "/usage"` (default 18s; CLI `--print-timeout` is 15s). */
   usageTimeoutMs?: number;
   /** Subprocess timeout for `agy -p "/credits"` (default 12s; CLI `--print-timeout` is 10s). */
   creditsTimeoutMs?: number;
-  /** Whether to also fetch best-effort `/credits` in parallel (default true). */
-  includeCredits?: boolean;
+  /** Optional predicate indicating whether Antigravity is currently enabled (default true). */
+  isAntigravityEnabled?: () => boolean;
   /** Injectable clock for deterministic unit tests. */
   now?: () => number;
   /** Injectable platform for deterministic unit tests. */
@@ -120,6 +160,28 @@ const CANONICAL_WINDOW_ORDER = new Map<string, number>([
   ["claude-gpt:weekly", 2],
   ["claude-gpt:5h", 3]
 ]);
+
+/**
+ * Computes a jittered cache TTL in `[baseTtlMs - jitterMs, baseTtlMs + jitterMs]`.
+ * With defaults (15m ± 90s), always returns an integer in `[810_000, 990_000]` ms.
+ */
+export function computeJitteredQuotaCacheTtlMs(
+  baseTtlMs: number = OFFICIAL_QUOTA_CACHE_TTL_MS,
+  jitterMs: number = OFFICIAL_QUOTA_CACHE_JITTER_MS,
+  random: () => number = Math.random
+): number {
+  const safeBase = Math.max(1_000, Math.round(baseTtlMs));
+  const safeJitter = Math.max(0, Math.round(jitterMs));
+  if (safeJitter === 0) {
+    return safeBase;
+  }
+  const rawRandom = random();
+  const clamped = Number.isFinite(rawRandom)
+    ? Math.max(0, Math.min(1, rawRandom))
+    : 0.5;
+  const offset = Math.round((clamped * 2 - 1) * safeJitter);
+  return Math.max(1_000, safeBase + offset);
+}
 
 function clampPercent(raw: number): number {
   if (!Number.isFinite(raw)) {
@@ -451,7 +513,7 @@ function classifyFailureStatus(
   }
 
   if (
-    /not logged in|please log in|sign in|unauthenticated|unauthorized|no active account|login required|authenticate|credentials? not found/i.test(
+    /not logged in|logged out|please log in|please sign in|sign in|unauthenticated|unauthorized|no active account|login required|need to log in|re-?authenticate|authenticate|session expired|token expired|invalid_grant|credentials? not found/i.test(
       lower
     )
   ) {
@@ -482,18 +544,22 @@ function classifyFailureStatus(
 }
 
 /**
- * 100% compliant real-time quota reader powered exclusively by the user's
- * locally installed official CLI (`agy -p "/usage"` and optional `agy -p "/credits"`).
- *
- * Strictly zero OAuth token file reads, zero keyring reads, and zero private
- * `cloudcode-pa` / `v1internal` HTTP requests.
+ * 100% compliant lazy Antigravity quota reader powered exclusively by the user's
+ * locally installed official CLI:
+ * - `getSummary()` / `getQuotaSummary()` runs ONLY a single `agy -p "/usage"` command (NEVER `/credits`).
+ * - `getCredits()` runs ONLY a single `agy -p "/credits"` command on demand (popover open).
+ * - Both caches use 15m ± 90s random jitter TTL (`[810_000, 990_000]` ms) + singleflight deduplication.
+ * - Strictly zero OAuth token file reads, zero keyring reads, and zero private
+ *   `cloudcode-pa` / `v1internal` HTTP requests.
  */
 export class OfficialQuotaService {
   private readonly cacheTtlMs: number;
+  private readonly cacheJitterMs: number;
+  private readonly random: () => number;
   private readonly negativeCacheTtlMs: number;
   private readonly usageTimeoutMs: number;
   private readonly creditsTimeoutMs: number;
-  private readonly includeCredits: boolean;
+  private readonly isAntigravityEnabled: () => boolean;
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
   private readonly env: Record<string, string | undefined>;
@@ -510,16 +576,34 @@ export class OfficialQuotaService {
     platform: NodeJS.Platform
   ) => Promise<OfficialCliExecResult>;
 
+  private cacheGeneration = 0;
+  private usageGeneration = 0;
+  private creditsGeneration = 0;
+
   private cachedSnapshot: OfficialQuotaProviderSnapshot | null = null;
   private cacheExpiresAt = 0;
+  private lastUsageCacheTtlMs: number;
   private inflightNormal: Promise<OfficialQuotaProviderSnapshot> | null = null;
   private inflightForce: Promise<OfficialQuotaProviderSnapshot> | null = null;
+
+  private cachedCreditsSnapshot: OfficialQuotaCreditsSnapshot | null = null;
+  private creditsCacheExpiresAt = 0;
+  private lastCreditsCacheTtlMs: number;
+  private inflightCreditsNormal: Promise<OfficialQuotaCreditsSnapshot> | null = null;
+  private inflightCreditsForce: Promise<OfficialQuotaCreditsSnapshot> | null = null;
 
   constructor(options: OfficialQuotaServiceOptions = {}) {
     this.cacheTtlMs = Math.max(
       1_000,
       options.cacheTtlMs ?? OFFICIAL_QUOTA_CACHE_TTL_MS
     );
+    this.cacheJitterMs =
+      options.cacheJitterMs !== undefined
+        ? Math.max(0, options.cacheJitterMs)
+        : options.cacheTtlMs === undefined
+          ? OFFICIAL_QUOTA_CACHE_JITTER_MS
+          : Math.min(OFFICIAL_QUOTA_CACHE_JITTER_MS, Math.floor(this.cacheTtlMs * 0.1));
+    this.random = options.random ?? Math.random;
     this.negativeCacheTtlMs = Math.max(
       1_000,
       options.negativeCacheTtlMs ?? NEGATIVE_CACHE_TTL_MS
@@ -532,7 +616,7 @@ export class OfficialQuotaService {
       1_000,
       options.creditsTimeoutMs ?? DEFAULT_CREDITS_EXEC_TIMEOUT_MS
     );
-    this.includeCredits = options.includeCredits ?? true;
+    this.isAntigravityEnabled = options.isAntigravityEnabled ?? (() => true);
     this.now = options.now ?? (() => Date.now());
     this.platform = options.platform ?? process.platform;
     this.env = options.env ?? process.env;
@@ -546,61 +630,226 @@ export class OfficialQuotaService {
     this.locateExecutable =
       options.locateExecutable ?? locateOfficialAgyExecutable;
     this.cliRunner = options.cliRunner ?? defaultRunOfficialCli;
+    this.lastUsageCacheTtlMs = this.cacheTtlMs;
+    this.lastCreditsCacheTtlMs = this.cacheTtlMs;
   }
 
+  /** Monotonic invalidation generation counter (increments on every clearCache / logout / disable). */
+  getCacheGeneration(): number {
+    return this.cacheGeneration;
+  }
+
+  /**
+   * Immediately clears BOTH `/usage` and `/credits` caches and increments the
+   * monotonic `cacheGeneration` counter so in-flight pre-logout fetches can never
+   * repopulate stale data.
+   */
   clearCache(): void {
+    this.cacheGeneration += 1;
+    this.usageGeneration += 1;
+    this.creditsGeneration += 1;
     this.cachedSnapshot = null;
     this.cacheExpiresAt = 0;
+    this.cachedCreditsSnapshot = null;
+    this.creditsCacheExpiresAt = 0;
   }
 
+  /**
+   * Alias invoked when Antigravity is disabled or reported logged out.
+   */
+  invalidateAuthCache(): void {
+    this.clearCache();
+  }
+
+  /**
+   * Convenience alias for `getQuotaSummary(force)` — runs ONLY `agy -p "/usage"`.
+   */
+  async getSummary(force = false): Promise<OfficialQuotaSummaryResponse> {
+    return this.getQuotaSummary(force);
+  }
+
+  /**
+   * Returns Antigravity quota windows from `agy -p "/usage"` ONLY.
+   * NEVER spawns `/credits` concurrently during summary refresh.
+   */
   async getQuotaSummary(force = false): Promise<OfficialQuotaSummaryResponse> {
-    const currentNow = this.now();
-    if (!force && this.cachedSnapshot !== null && currentNow < this.cacheExpiresAt) {
-      return this.wrapResponse(this.cachedSnapshot, true);
+    if (!this.isAntigravityEnabled()) {
+      return this.buildDisabledSummaryResponse();
     }
 
     if (force) {
       if (this.inflightForce !== null) {
         const snapshot = await this.inflightForce;
-        return this.wrapResponse(snapshot, false);
+        return this.wrapSummaryResponse(snapshot, false);
       }
-      const run = this.fetchFreshSnapshot().finally(() => {
+      // Invalidate stale usage snapshot immediately on forced refresh so concurrent
+      // non-forced callers never observe outdated percentages during logout/account switches.
+      this.cachedSnapshot = null;
+      this.cacheExpiresAt = 0;
+      const cacheGen = this.cacheGeneration;
+      const usageGen = ++this.usageGeneration;
+      const run = this.fetchFreshUsageSnapshot(cacheGen, usageGen).finally(() => {
         if (this.inflightForce === run) {
           this.inflightForce = null;
         }
       });
       this.inflightForce = run;
       const snapshot = await run;
-      return this.wrapResponse(snapshot, false);
+      return this.wrapSummaryResponse(snapshot, false);
     }
 
     if (this.inflightForce !== null) {
       const snapshot = await this.inflightForce;
-      return this.wrapResponse(snapshot, false);
-    }
-    if (this.inflightNormal !== null) {
-      const snapshot = await this.inflightNormal;
-      return this.wrapResponse(snapshot, false);
+      return this.wrapSummaryResponse(snapshot, false);
     }
 
-    const run = this.fetchFreshSnapshot().finally(() => {
+    const currentNow = this.now();
+    if (this.cachedSnapshot !== null && currentNow < this.cacheExpiresAt) {
+      return this.wrapSummaryResponse(this.cachedSnapshot, true);
+    }
+
+    if (this.inflightNormal !== null) {
+      const snapshot = await this.inflightNormal;
+      return this.wrapSummaryResponse(snapshot, false);
+    }
+
+    const cacheGen = this.cacheGeneration;
+    const usageGen = ++this.usageGeneration;
+    const run = this.fetchFreshUsageSnapshot(cacheGen, usageGen).finally(() => {
       if (this.inflightNormal === run) {
         this.inflightNormal = null;
       }
     });
     this.inflightNormal = run;
     const snapshot = await run;
-    return this.wrapResponse(snapshot, false);
+    return this.wrapSummaryResponse(snapshot, false);
   }
 
-  private wrapResponse(
+  /**
+   * On-demand Antigravity credit balance reader powered by ONLY a single `agy -p "/credits"`
+   * command, with its own 15m ± 90s jitter TTL and singleflight in-flight deduplication.
+   */
+  async getCredits(force = false): Promise<OfficialQuotaCreditsResponse> {
+    if (!this.isAntigravityEnabled()) {
+      return this.buildDisabledCreditsResponse();
+    }
+
+    if (force) {
+      if (this.inflightCreditsForce !== null) {
+        const snapshot = await this.inflightCreditsForce;
+        return this.wrapCreditsResponse(snapshot, false);
+      }
+      this.cachedCreditsSnapshot = null;
+      this.creditsCacheExpiresAt = 0;
+      const cacheGen = this.cacheGeneration;
+      const creditsGen = ++this.creditsGeneration;
+      const run = this.fetchFreshCreditsSnapshot(cacheGen, creditsGen).finally(() => {
+        if (this.inflightCreditsForce === run) {
+          this.inflightCreditsForce = null;
+        }
+      });
+      this.inflightCreditsForce = run;
+      const snapshot = await run;
+      return this.wrapCreditsResponse(snapshot, false);
+    }
+
+    if (this.inflightCreditsForce !== null) {
+      const snapshot = await this.inflightCreditsForce;
+      return this.wrapCreditsResponse(snapshot, false);
+    }
+
+    const currentNow = this.now();
+    if (this.cachedCreditsSnapshot !== null && currentNow < this.creditsCacheExpiresAt) {
+      return this.wrapCreditsResponse(this.cachedCreditsSnapshot, true);
+    }
+
+    if (this.inflightCreditsNormal !== null) {
+      const snapshot = await this.inflightCreditsNormal;
+      return this.wrapCreditsResponse(snapshot, false);
+    }
+
+    const cacheGen = this.cacheGeneration;
+    const creditsGen = ++this.creditsGeneration;
+    const run = this.fetchFreshCreditsSnapshot(cacheGen, creditsGen).finally(() => {
+      if (this.inflightCreditsNormal === run) {
+        this.inflightCreditsNormal = null;
+      }
+    });
+    this.inflightCreditsNormal = run;
+    const snapshot = await run;
+    return this.wrapCreditsResponse(snapshot, false);
+  }
+
+  /** Alias for `getCredits(force)`. */
+  async getQuotaCredits(force = false): Promise<OfficialQuotaCreditsResponse> {
+    return this.getCredits(force);
+  }
+
+  /**
+   * Immediately clears both caches and returns an unauthenticated summary response
+   * without spawning `agy` CLI (used when Antigravity is disabled).
+   */
+  buildDisabledSummaryResponse(): OfficialQuotaSummaryResponse {
+    this.clearCache();
+    const ts = this.now();
+    const snapshot: OfficialQuotaProviderSnapshot = {
+      id: "antigravity",
+      providerId: "antigravity",
+      displayName: "Antigravity",
+      source: "official-cli",
+      command: 'agy -p "/usage"',
+      status: "unauthenticated",
+      available: false,
+      executablePath: null,
+      windows: [],
+      remainingCredits: null,
+      fetchedAt: ts,
+      fetchedAtIso: new Date(ts).toISOString(),
+      error: "Antigravity 已禁用或未登录"
+    };
+    return this.wrapSummaryResponse(snapshot, false);
+  }
+
+  /**
+   * Immediately clears both caches and returns an unauthenticated credits response
+   * without spawning `agy` CLI (used when Antigravity is disabled).
+   */
+  buildDisabledCreditsResponse(): OfficialQuotaCreditsResponse {
+    this.clearCache();
+    const ts = this.now();
+    const snapshot: OfficialQuotaCreditsSnapshot = {
+      id: "antigravity",
+      providerId: "antigravity",
+      displayName: "Antigravity",
+      source: "official-cli",
+      command: 'agy -p "/credits"',
+      status: "unauthenticated",
+      available: false,
+      executablePath: null,
+      remainingCredits: null,
+      fetchedAt: ts,
+      fetchedAtIso: new Date(ts).toISOString(),
+      error: "Antigravity 已禁用或未登录"
+    };
+    return this.wrapCreditsResponse(snapshot, false);
+  }
+
+  private nextJitteredTtlMs(): number {
+    return computeJitteredQuotaCacheTtlMs(
+      this.cacheTtlMs,
+      this.cacheJitterMs,
+      this.random
+    );
+  }
+
+  private wrapSummaryResponse(
     snapshot: OfficialQuotaProviderSnapshot,
     cached: boolean
   ): OfficialQuotaSummaryResponse {
     return {
       ok: true,
       cached,
-      cacheTtlMs: this.cacheTtlMs,
+      cacheTtlMs: this.lastUsageCacheTtlMs,
       fetchedAt: snapshot.fetchedAt,
       fetchedAtIso: snapshot.fetchedAtIso,
       providers: [snapshot],
@@ -608,13 +857,62 @@ export class OfficialQuotaService {
     };
   }
 
-  private storeCache(snapshot: OfficialQuotaProviderSnapshot): void {
+  private wrapCreditsResponse(
+    snapshot: OfficialQuotaCreditsSnapshot,
+    cached: boolean
+  ): OfficialQuotaCreditsResponse {
+    return {
+      ok: true,
+      cached,
+      cacheTtlMs: this.lastCreditsCacheTtlMs,
+      fetchedAt: snapshot.fetchedAt,
+      fetchedAtIso: snapshot.fetchedAtIso,
+      remainingCredits: snapshot.remainingCredits,
+      status: snapshot.status,
+      available: snapshot.available,
+      error: snapshot.error,
+      antigravity: snapshot
+    };
+  }
+
+  private storeUsageCache(
+    snapshot: OfficialQuotaProviderSnapshot,
+    cacheGen: number,
+    usageGen: number
+  ): void {
+    if (cacheGen !== this.cacheGeneration || usageGen !== this.usageGeneration) {
+      return;
+    }
+    const ttl = snapshot.available ? this.nextJitteredTtlMs() : this.negativeCacheTtlMs;
+    this.lastUsageCacheTtlMs = ttl;
     this.cachedSnapshot = snapshot;
-    const ttl = snapshot.available ? this.cacheTtlMs : this.negativeCacheTtlMs;
     this.cacheExpiresAt = this.now() + ttl;
   }
 
-  private async fetchFreshSnapshot(): Promise<OfficialQuotaProviderSnapshot> {
+  private storeCreditsCache(
+    snapshot: OfficialQuotaCreditsSnapshot,
+    cacheGen: number,
+    creditsGen: number
+  ): void {
+    if (cacheGen !== this.cacheGeneration || creditsGen !== this.creditsGeneration) {
+      return;
+    }
+    const ttl = snapshot.available ? this.nextJitteredTtlMs() : this.negativeCacheTtlMs;
+    this.lastCreditsCacheTtlMs = ttl;
+    this.cachedCreditsSnapshot = snapshot;
+    this.creditsCacheExpiresAt = this.now() + ttl;
+  }
+
+  private invalidateAllCachesForFailure(cacheGen: number): void {
+    if (cacheGen === this.cacheGeneration) {
+      this.clearCache();
+    }
+  }
+
+  private async fetchFreshUsageSnapshot(
+    cacheGen: number,
+    usageGen: number
+  ): Promise<OfficialQuotaProviderSnapshot> {
     try {
       await this.refreshEnv();
     } catch {
@@ -623,8 +921,9 @@ export class OfficialQuotaService {
 
     const executablePath = this.locateExecutable(this.env, this.platform);
     if (!executablePath) {
+      this.invalidateAllCachesForFailure(cacheGen);
       const ts = this.now();
-      const notFound: OfficialQuotaProviderSnapshot = {
+      return {
         id: "antigravity",
         providerId: "antigravity",
         displayName: "Antigravity",
@@ -639,8 +938,6 @@ export class OfficialQuotaService {
         fetchedAtIso: new Date(ts).toISOString(),
         error: "未检测到官方 agy CLI 登录态"
       };
-      this.storeCache(notFound);
-      return notFound;
     }
 
     const usagePrintTimeoutSec = Math.max(
@@ -650,50 +947,27 @@ export class OfficialQuotaService {
         Math.ceil(this.usageTimeoutMs / 1000)
       )
     );
-    const creditsPrintTimeoutSec = Math.max(
-      1,
-      Math.min(
-        DEFAULT_CREDITS_PRINT_TIMEOUT_SEC,
-        Math.ceil(this.creditsTimeoutMs / 1000)
-      )
-    );
 
-    const usagePromise = this.cliRunner(
-      executablePath,
-      ["-p", "/usage", "--print-timeout", `${usagePrintTimeoutSec}s`],
-      this.usageTimeoutMs,
-      this.env,
-      this.platform
-    );
-
-    const creditsPromise = this.includeCredits
-      ? this.cliRunner(
-          executablePath,
-          ["-p", "/credits", "--print-timeout", `${creditsPrintTimeoutSec}s`],
-          this.creditsTimeoutMs,
-          this.env,
-          this.platform
-        ).catch(() => null)
-      : Promise.resolve(null);
-
-    const [usageResult, creditsResult] = await Promise.all([
-      usagePromise.catch(
-        (err): OfficialCliExecResult => ({
-          stdout: "",
-          stderr: "",
-          exitCode: null,
-          errorMessage: err instanceof Error ? err.message : String(err)
-        })
-      ),
-      creditsPromise
-    ]);
+    let usageResult: OfficialCliExecResult;
+    try {
+      usageResult = await this.cliRunner(
+        executablePath,
+        ["-p", "/usage", "--print-timeout", `${usagePrintTimeoutSec}s`],
+        this.usageTimeoutMs,
+        this.env,
+        this.platform
+      );
+    } catch (err) {
+      usageResult = {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        errorMessage: err instanceof Error ? err.message : String(err)
+      };
+    }
 
     const ts = this.now();
     const windows = parseAgyUsageTsv(usageResult.stdout);
-    const remainingCredits =
-      creditsResult && creditsResult.exitCode === 0
-        ? parseAgyCreditsTsv(creditsResult.stdout)
-        : null;
 
     if (windows.length > 0) {
       const okSnapshot: OfficialQuotaProviderSnapshot = {
@@ -706,17 +980,20 @@ export class OfficialQuotaService {
         available: true,
         executablePath,
         windows,
-        remainingCredits,
+        remainingCredits: null,
         fetchedAt: ts,
         fetchedAtIso: new Date(ts).toISOString(),
         error: null
       };
-      this.storeCache(okSnapshot);
+      this.storeUsageCache(okSnapshot, cacheGen, usageGen);
       return okSnapshot;
     }
 
     const failure = classifyFailureStatus(usageResult);
-    const failedSnapshot: OfficialQuotaProviderSnapshot = {
+    // Immediately invalidate BOTH `/usage` and `/credits` caches so logout /
+    // uninstall / CLI error can never leave stale percentages or credits in memory.
+    this.invalidateAllCachesForFailure(cacheGen);
+    return {
       id: "antigravity",
       providerId: "antigravity",
       displayName: "Antigravity",
@@ -726,12 +1003,113 @@ export class OfficialQuotaService {
       available: false,
       executablePath,
       windows: [],
-      remainingCredits,
+      remainingCredits: null,
       fetchedAt: ts,
       fetchedAtIso: new Date(ts).toISOString(),
       error: failure.message
     };
-    this.storeCache(failedSnapshot);
-    return failedSnapshot;
+  }
+
+  private async fetchFreshCreditsSnapshot(
+    cacheGen: number,
+    creditsGen: number
+  ): Promise<OfficialQuotaCreditsSnapshot> {
+    try {
+      await this.refreshEnv();
+    } catch {
+      // Registry refresh failure is strictly non-fatal.
+    }
+
+    const executablePath = this.locateExecutable(this.env, this.platform);
+    if (!executablePath) {
+      this.invalidateAllCachesForFailure(cacheGen);
+      const ts = this.now();
+      return {
+        id: "antigravity",
+        providerId: "antigravity",
+        displayName: "Antigravity",
+        source: "official-cli",
+        command: 'agy -p "/credits"',
+        status: "not_installed",
+        available: false,
+        executablePath: null,
+        remainingCredits: null,
+        fetchedAt: ts,
+        fetchedAtIso: new Date(ts).toISOString(),
+        error: "未检测到官方 agy CLI 登录态"
+      };
+    }
+
+    const creditsPrintTimeoutSec = Math.max(
+      1,
+      Math.min(
+        DEFAULT_CREDITS_PRINT_TIMEOUT_SEC,
+        Math.ceil(this.creditsTimeoutMs / 1000)
+      )
+    );
+
+    let creditsResult: OfficialCliExecResult;
+    try {
+      creditsResult = await this.cliRunner(
+        executablePath,
+        ["-p", "/credits", "--print-timeout", `${creditsPrintTimeoutSec}s`],
+        this.creditsTimeoutMs,
+        this.env,
+        this.platform
+      );
+    } catch (err) {
+      creditsResult = {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        errorMessage: err instanceof Error ? err.message : String(err)
+      };
+    }
+
+    const ts = this.now();
+    const remainingCredits =
+      creditsResult.exitCode === 0 ? parseAgyCreditsTsv(creditsResult.stdout) : null;
+
+    if (remainingCredits !== null) {
+      const okSnapshot: OfficialQuotaCreditsSnapshot = {
+        id: "antigravity",
+        providerId: "antigravity",
+        displayName: "Antigravity",
+        source: "official-cli",
+        command: 'agy -p "/credits"',
+        status: "ok",
+        available: true,
+        executablePath,
+        remainingCredits,
+        fetchedAt: ts,
+        fetchedAtIso: new Date(ts).toISOString(),
+        error: null
+      };
+      this.storeCreditsCache(okSnapshot, cacheGen, creditsGen);
+      return okSnapshot;
+    }
+
+    const failure = classifyFailureStatus(creditsResult);
+    if (failure.status === "unauthenticated" || failure.status === "not_installed") {
+      // Logout / unauthenticated immediately wipes BOTH `/usage` and `/credits` caches.
+      this.invalidateAllCachesForFailure(cacheGen);
+    } else if (cacheGen === this.cacheGeneration && creditsGen === this.creditsGeneration) {
+      this.cachedCreditsSnapshot = null;
+      this.creditsCacheExpiresAt = 0;
+    }
+    return {
+      id: "antigravity",
+      providerId: "antigravity",
+      displayName: "Antigravity",
+      source: "official-cli",
+      command: 'agy -p "/credits"',
+      status: failure.status,
+      available: false,
+      executablePath,
+      remainingCredits: null,
+      fetchedAt: ts,
+      fetchedAtIso: new Date(ts).toISOString(),
+      error: failure.message
+    };
   }
 }

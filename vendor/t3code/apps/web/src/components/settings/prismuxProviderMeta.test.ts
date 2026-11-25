@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   buildContinueInTerminalCommand,
   DSH_LOCAL_ACP_PRESET,
-  OMP_LOCAL_ACP_PRESET,
   openSafeExternalHttpsFromAnchor,
   PRISMUX_AGENT_CLI_CATALOG,
   resolveAgentCliMeta,
@@ -16,7 +15,7 @@ import {
 
 describe("validateSafeHttpsUrl", () => {
   it("accepts valid https URLs and preserves canonical form", () => {
-    expect(validateSafeHttpsUrl("https://omp.sh")).toBe("https://omp.sh/");
+    expect(validateSafeHttpsUrl("https://opencode.ai")).toBe("https://opencode.ai/");
     expect(validateSafeHttpsUrl("  https://docs.anthropic.com/en/docs/claude-code/overview  ")).toBe(
       "https://docs.anthropic.com/en/docs/claude-code/overview",
     );
@@ -31,15 +30,15 @@ describe("validateSafeHttpsUrl", () => {
       undefined,
       "",
       "   ",
-      "http://omp.sh",
+      "http://opencode.ai",
       "javascript:alert(1)",
       "data:text/html,<script>alert(1)</script>",
       "file:///C:/Windows/System32/cmd.exe",
       "vbscript:msgbox(1)",
-      "https://omp.sh/\nmalicious",
-      "https://omp.sh/\u0000null",
+      "https://opencode.ai/\nmalicious",
+      "https://opencode.ai/\u0000null",
       "not a url",
-      "omp.sh",
+      "opencode.ai",
     ];
     for (const candidate of rejected) {
       expect(validateSafeHttpsUrl(candidate), String(candidate)).toBeNull();
@@ -47,7 +46,7 @@ describe("validateSafeHttpsUrl", () => {
   });
 });
 
-describe("OMP local ACP preset & official Agent catalog", () => {
+describe("DSH local ACP preset & official Agent catalog", () => {
   it("defines the one-click dsh local ACP preset with validated https homepage", () => {
     expect(DSH_LOCAL_ACP_PRESET).toMatchObject({
       id: "dsh",
@@ -67,17 +66,17 @@ describe("OMP local ACP preset & official Agent catalog", () => {
     expect(meta?.cliCommand).toBe("dsh");
   });
 
-  it("defines the one-click omp local ACP preset with validated https homepage", () => {
-    expect(OMP_LOCAL_ACP_PRESET).toMatchObject({
-      id: "omp",
-      command: "omp",
-      args: ["acp"],
-      homepageUrl: "https://omp.sh",
+  it("keeps every built-in agent homepageUrl strictly valid https and excludes removed omp preset", () => {
+    expect("omp" in PRISMUX_AGENT_CLI_CATALOG).toBe(false);
+    const fallbackOmp = resolveAgentCliMeta({
+      driver: "acpRegistry",
+      instanceId: "omp",
+      config: { source: "local", commandPath: "omp", commandArgs: ["acp"] },
     });
-    expect(validateSafeHttpsUrl(OMP_LOCAL_ACP_PRESET.homepageUrl)).toBe("https://omp.sh/");
-  });
-
-  it("keeps every built-in agent homepageUrl strictly valid https", () => {
+    expect(fallbackOmp).not.toBeNull();
+    expect(fallbackOmp?.homepageUrl).toBe("");
+    expect(fallbackOmp?.updateCommandHint).toBe("");
+    expect(fallbackOmp?.supportsResume).toBe(false);
     for (const [key, meta] of Object.entries(PRISMUX_AGENT_CLI_CATALOG)) {
       expect(validateSafeHttpsUrl(meta.homepageUrl), key).not.toBeNull();
       expect(meta.updateCommandHint.trim().length, key).toBeGreaterThan(0);
@@ -92,22 +91,22 @@ describe("OMP local ACP preset & official Agent catalog", () => {
     expect(agy?.homepageUrl).toBe("https://antigravity.google/");
   });
 
-  it("resolves omp metadata when configured as a local acpRegistry instance", () => {
+  it("resolves dsh metadata when configured as a local acpRegistry instance", () => {
     const meta = resolveAgentCliMeta({
       driver: "acpRegistry",
-      instanceId: "omp",
-      config: { source: "local", commandPath: "C:\\Users\\Fish\\bin\\omp.exe", args: ["acp"] },
+      instanceId: "dsh",
+      config: { source: "local", commandPath: "C:\\Users\\Fish\\bin\\dsh.exe", args: ["acp"] },
     });
-    expect(meta?.id).toBe("omp");
-    expect(meta?.homepageUrl).toBe("https://omp.sh");
+    expect(meta?.id).toBe("dsh");
+    expect(meta?.homepageUrl).toBe("https://github.com/deepseek-ai/deepseek-harness");
     expect(
       resolveSafeAgentHomepageUrl({
         driver: "acpRegistry",
-        instanceId: "omp",
+        instanceId: "dsh",
         websiteUrl: "javascript:alert(1)",
-        config: { source: "local", commandPath: "omp" },
+        config: { source: "local", commandPath: "dsh" },
       }),
-    ).toBe("https://omp.sh/");
+    ).toBe("https://github.com/deepseek-ai/deepseek-harness");
   });
 
   it("distinguishes dual-mode capable providers from unsupported ones", () => {
@@ -117,7 +116,7 @@ describe("OMP local ACP preset & official Agent catalog", () => {
     expect(
       supportsDualLaunchMode({
         driver: "acpRegistry",
-        config: { source: "local", commandPath: "omp" },
+        config: { source: "local", commandPath: "dsh" },
       }),
     ).toBe(true);
     expect(supportsDualLaunchMode({ driver: "acpRegistry", config: { source: "registry" } })).toBe(
@@ -152,12 +151,12 @@ describe("buildContinueInTerminalCommand", () => {
     expect(
       buildContinueInTerminalCommand({
         driver: "acpRegistry",
-        instanceId: "omp",
-        config: { source: "local", commandPath: "omp" },
-        sessionId: "omp-session-42",
+        instanceId: "opencode",
+        config: { source: "local", commandPath: "opencode" },
+        sessionId: "oc-session-42",
       }),
     ).toMatchObject({
-      command: "omp --resume omp-session-42",
+      command: "opencode --session oc-session-42",
       supportsResume: true,
     });
   });
@@ -207,12 +206,12 @@ describe("openSafeExternalHttpsFromAnchor & process-family resolution (Orca alig
           ctrlKey: false,
           shiftKey: false,
           altKey: false,
-          currentTarget: { href: "https://omp.sh/", protocol: "https:" },
+          currentTarget: { href: "https://opencode.ai/", protocol: "https:" },
           preventDefault: preventDefaultPlain,
         }),
       ).toBe(true);
       expect(preventDefaultPlain).toHaveBeenCalledTimes(1);
-      expect(openExternal).toHaveBeenCalledWith("https://omp.sh/");
+      expect(openExternal).toHaveBeenCalledWith("https://opencode.ai/");
 
       // Modifier clicks (Cmd/Ctrl/Shift) and middle-clicks must preserve native behavior.
       const preventDefaultCtrl = vi.fn();
@@ -223,7 +222,7 @@ describe("openSafeExternalHttpsFromAnchor & process-family resolution (Orca alig
           ctrlKey: true,
           shiftKey: false,
           altKey: false,
-          currentTarget: { href: "https://omp.sh/", protocol: "https:" },
+          currentTarget: { href: "https://opencode.ai/", protocol: "https:" },
           preventDefault: preventDefaultCtrl,
         }),
       ).toBe(false);
@@ -238,7 +237,7 @@ describe("openSafeExternalHttpsFromAnchor & process-family resolution (Orca alig
           ctrlKey: false,
           shiftKey: false,
           altKey: false,
-          currentTarget: { href: "http://omp.sh/", protocol: "http:" },
+          currentTarget: { href: "http://opencode.ai/", protocol: "http:" },
           preventDefault: preventDefaultUnsafe,
         }),
       ).toBe(false);
@@ -261,9 +260,9 @@ describe("openSafeExternalHttpsFromAnchor & process-family resolution (Orca alig
     expect(
       resolveAgentCliProcessFamily({
         driver: "acpRegistry",
-        instanceId: "omp",
-        config: { source: "local", commandPath: "omp" },
+        instanceId: "dsh",
+        config: { source: "local", commandPath: "dsh" },
       }),
-    ).toBe("omp");
+    ).toBe("dsh");
   });
 });

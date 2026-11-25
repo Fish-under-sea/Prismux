@@ -33,8 +33,11 @@ import {
   formatQuotaResetDuration,
   formatQuotaResetLabel,
   formatQuotaUpdatedAgo,
+  isAntigravityQuotaAuthAllowed,
+  isUpstreamProviderQuotaEligible,
   loadQuotaPreferences,
   saveQuotaPreferences,
+  shouldShowStatusBarQuota,
 } from "./quotaStatus.logic";
 import { ResourcesStatusPopover } from "./ResourcesStatusPopover";
 import { UsageStatusPopover } from "./UsageStatusPopover";
@@ -668,6 +671,8 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
         displayName: "Codex",
         enabled: true,
         installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
         usageLimits: {
           checkedAt: new Date(now - 60_000).toISOString(),
           windows: [
@@ -842,6 +847,222 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
     );
     expect(fallbackHtml).toContain("未检测到官方 agy CLI 登录态");
     expect(fallbackHtml).toContain("重试");
+  });
+
+  it("enforces strict real-time per-provider auth gating and hides bottom-bar quota completely when 0 authenticated providers have live quota", () => {
+    const now = Date.parse("2026-11-25T08:00:00Z");
+    const okDaemonQuota = {
+      ok: true as const,
+      cached: false,
+      cacheTtlMs: 180_000,
+      fetchedAt: now - 3_000,
+      fetchedAtIso: new Date(now - 3_000).toISOString(),
+      providers: [],
+      antigravity: {
+        id: "antigravity" as const,
+        providerId: "antigravity",
+        displayName: "Antigravity",
+        source: "official-cli" as const,
+        command: 'agy -p "/usage"',
+        status: "ok" as const,
+        available: true,
+        executablePath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+        remainingCredits: 0,
+        fetchedAt: now - 3_000,
+        fetchedAtIso: new Date(now - 3_000).toISOString(),
+        error: null,
+        windows: [
+          {
+            id: "gemini:weekly",
+            group: "Gemini",
+            groupId: "gemini",
+            window: "weekly" as const,
+            shortLabel: "Gemini 周",
+            detailLabel: "Gemini · 每周",
+            remainingPercent: 78,
+            usedPercent: 22,
+            resetAtIso: "2026-12-01T08:00:00.000Z",
+            resetAtMs: Date.parse("2026-12-01T08:00:00.000Z"),
+          },
+        ],
+      },
+    };
+
+    const unauthDaemonQuota = {
+      ...okDaemonQuota,
+      antigravity: {
+        ...okDaemonQuota.antigravity,
+        status: "unauthenticated" as const,
+        available: false,
+        windows: [],
+        error: "未检测到官方 agy CLI 登录态",
+      },
+    };
+
+    const unauthCodex = {
+      instanceId: "codex-unauth",
+      driver: "codex",
+      displayName: "Codex",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "unauthenticated" },
+      usageLimits: {
+        checkedAt: new Date(now - 10_000).toISOString(),
+        windows: [{ id: "weekly", kind: "weekly", label: "7d", usedPercent: 0 }],
+      },
+    } as unknown as ServerProvider;
+
+    const unknownClaude = {
+      instanceId: "claude-unknown",
+      driver: "claudeAgent",
+      displayName: "Claude Code",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "unknown" },
+      usageLimits: {
+        checkedAt: new Date(now - 10_000).toISOString(),
+        windows: [{ id: "session", kind: "session", label: "5h", usedPercent: 35 }],
+      },
+    } as unknown as ServerProvider;
+
+    const disabledCodex = {
+      instanceId: "codex-disabled",
+      driver: "codex",
+      displayName: "Codex Disabled",
+      enabled: false,
+      installed: true,
+      status: "disabled",
+      auth: { status: "authenticated" },
+      usageLimits: {
+        checkedAt: new Date(now - 10_000).toISOString(),
+        windows: [{ id: "weekly", kind: "weekly", label: "7d", usedPercent: 40 }],
+      },
+    } as unknown as ServerProvider;
+
+    const authedNoWindowsClaude = {
+      instanceId: "claude-no-windows",
+      driver: "claudeAgent",
+      displayName: "Claude API Key",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      usageLimits: { checkedAt: new Date(now - 10_000).toISOString(), windows: [] },
+    } as unknown as ServerProvider;
+
+    const authedCodex = {
+      instanceId: "codex-live",
+      driver: "codex",
+      displayName: "Codex",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      usageLimits: {
+        checkedAt: new Date(now - 10_000).toISOString(),
+        windows: [{ id: "weekly", kind: "weekly", label: "7d", usedPercent: 25, resetsAt: "2026-12-01T08:00:00Z" }],
+      },
+    } as unknown as ServerProvider;
+
+    const unauthAgy = {
+      instanceId: "antigravity",
+      driver: "antigravity",
+      displayName: "Antigravity",
+      enabled: true,
+      installed: true,
+      status: "warning",
+      auth: { status: "unauthenticated" },
+    } as unknown as ServerProvider;
+
+    const disabledAgy = {
+      instanceId: "antigravity",
+      driver: "antigravity",
+      displayName: "Antigravity",
+      enabled: false,
+      installed: true,
+      status: "disabled",
+      auth: { status: "authenticated" },
+    } as unknown as ServerProvider;
+
+    const authedAgy = {
+      instanceId: "antigravity",
+      driver: "antigravity",
+      displayName: "Antigravity",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+    } as unknown as ServerProvider;
+
+    // Eligibility predicates
+    expect(isUpstreamProviderQuotaEligible(unauthCodex)).toBe(false);
+    expect(isUpstreamProviderQuotaEligible(unknownClaude)).toBe(false);
+    expect(isUpstreamProviderQuotaEligible(disabledCodex)).toBe(false);
+    expect(isUpstreamProviderQuotaEligible(authedCodex)).toBe(true);
+    expect(isAntigravityQuotaAuthAllowed([unauthAgy])).toBe(false);
+    expect(isAntigravityQuotaAuthAllowed([disabledAgy])).toBe(false);
+    expect(isAntigravityQuotaAuthAllowed([authedAgy])).toBe(true);
+    expect(isAntigravityQuotaAuthAllowed([])).toBe(true);
+
+    // 1. Zero authenticated providers with live quota -> completely hidden (no 0% / "未登录" / static placeholder!)
+    const zeroSummary = aggregateQuotaSummary(
+      unauthDaemonQuota,
+      [unauthCodex, unknownClaude, disabledCodex, authedNoWindowsClaude],
+      now,
+    );
+    expect(zeroSummary.availableAgents).toEqual([]);
+    expect(shouldShowStatusBarQuota(zeroSummary, true)).toBe(false);
+    expect(buildQuotaStatusBarDisplay(zeroSummary, { viewMode: "detailed", percentMode: "remaining" })).toBeNull();
+    expect(buildQuotaStatusBarPill(zeroSummary, "remaining")).toBeNull();
+
+    // 2. Even if daemon still holds a cached ok snapshot, explicit unauthenticated or disabled Antigravity hides it immediately!
+    const staleDaemonUnauthAgy = aggregateQuotaSummary(okDaemonQuota, [unauthAgy, unauthCodex], now);
+    expect(staleDaemonUnauthAgy.availableAgents).toEqual([]);
+    expect(staleDaemonUnauthAgy.antigravityStatus).toBe("unauthenticated");
+    expect(shouldShowStatusBarQuota(staleDaemonUnauthAgy, true)).toBe(false);
+
+    const staleDaemonDisabledAgy = aggregateQuotaSummary(okDaemonQuota, [disabledAgy], now);
+    expect(staleDaemonDisabledAgy.availableAgents).toEqual([]);
+    expect(shouldShowStatusBarQuota(staleDaemonDisabledAgy, true)).toBe(false);
+
+    // 3. Mixed providers: ONLY authenticated providers with live windows appear; unauthenticated/disabled ones are excluded.
+    const mixedSummary = aggregateQuotaSummary(
+      unauthDaemonQuota,
+      [unauthCodex, unknownClaude, disabledCodex, authedNoWindowsClaude, authedCodex],
+      now,
+    );
+    expect(mixedSummary.availableAgents.map((a) => a.id)).toEqual(["codex-live"]);
+    expect(shouldShowStatusBarQuota(mixedSummary, true)).toBe(true);
+    expect(shouldShowStatusBarQuota(mixedSummary, false)).toBe(false);
+    const mixedDisplay = buildQuotaStatusBarDisplay(mixedSummary, {
+      viewMode: "compact",
+      percentMode: "remaining",
+    });
+    expect(mixedDisplay?.segments.map((s) => s.agentId)).toEqual(["codex-live"]);
+    expect(mixedDisplay?.fullText).toBe("剩余 周 75%");
+    expect(mixedDisplay?.fullText).not.toContain("未登录");
+
+    // 4. Antigravity logs in -> appears cleanly alongside authenticated Codex.
+    const bothSummary = aggregateQuotaSummary(okDaemonQuota, [authedAgy, authedCodex, unauthCodex], now);
+    expect(bothSummary.availableAgents.map((a) => a.id)).toEqual(["antigravity", "codex-live"]);
+    const bothDisplay = buildQuotaStatusBarDisplay(bothSummary, {
+      viewMode: "compact",
+      percentMode: "remaining",
+    });
+    expect(bothDisplay?.segments.map((s) => s.agentId)).toEqual(["antigravity", "codex-live"]);
+    expect(bothDisplay?.fullText).toBe("剩余 Antigravity Gemini 周 78% | Codex 周 75%");
+
+    // 5. Static guard: PrismuxStatusBar must not render permanent "额度 —" or "额度查询中…" placeholders when hidden.
+    const webSrc = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
+      "../..",
+    );
+    const statusBarSource = fs.readFileSync(path.join(webSrc, "prismux/PrismuxStatusBar.tsx"), "utf8");
+    expect(statusBarSource).not.toContain("额度 —");
+    expect(statusBarSource).not.toContain("额度查询中…");
+    expect(statusBarSource).toContain("shouldShowStatusBarQuota");
   });
 });
 

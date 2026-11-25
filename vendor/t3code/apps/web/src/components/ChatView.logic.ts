@@ -561,7 +561,9 @@ export function getAntigravitySendBlockReason(
     return resolve(msg("Install Antigravity in provider settings before sending."));
   }
   if (provider.auth.status === "unauthenticated") {
-    return resolve(msg("Sign in to Antigravity in provider settings before sending."));
+    return resolve(
+      msg("Sign in with local 'agy' CLI in a terminal, then reconnect Antigravity in provider settings before sending."),
+    );
   }
   const slug = model.trim();
   if (slug.length === 0) return resolve(msg("Choose an Antigravity model before sending."));

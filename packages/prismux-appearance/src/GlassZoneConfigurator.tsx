@@ -39,15 +39,15 @@ const ZONE_META_BY_ID: Readonly<Record<GlassZoneId, GlassZoneDescriptor>> = Obje
 ) as Record<GlassZoneId, GlassZoneDescriptor>;
 
 const MODE_OPTIONS: ReadonlyArray<{ id: GlassZoneMode; label: string; compactLabel: string }> = [
-  { id: 'inherit', label: '跟随全局', compactLabel: '跟随' },
+  { id: 'inherit', label: '跟随', compactLabel: '跟随' },
   { id: 'custom', label: '自定义', compactLabel: '自定义' },
-  { id: 'solid', label: '实底', compactLabel: '实底' },
+  { id: 'solid', label: '不透明', compactLabel: '不透明' },
 ];
 
 const MODE_STATUS_LABELS: Record<GlassZoneMode, string> = {
   inherit: '跟随',
   custom: '自定义',
-  solid: '实底',
+  solid: '不透明',
 };
 
 interface ZoneCardProps {
@@ -80,8 +80,10 @@ function GlassZoneCard({
   const isSolid = activeMode === 'solid';
   const canReset = resolved.mode !== 'inherit' || activeMode !== 'inherit';
 
-  const displayTitle = compact ? (meta.compactTitle ?? meta.title) : meta.title;
-  const displayNote = compact ? meta.compactNote : meta.note;
+  const displayTitle = meta.compactTitle ?? meta.title;
+  const compactSummary = isSolid
+    ? '不透明实底'
+    : `跟随全局 · ${resolved.opacity}% / ${resolved.blurPx}px`;
 
   return (
     <div
@@ -115,7 +117,11 @@ function GlassZoneCard({
               </button>
             ) : null}
           </div>
-          {displayNote ? <div className="pmx-gz-note">{displayNote}</div> : null}
+          {!isCustom ? (
+            <div className="pmx-gz-summary">{compactSummary}</div>
+          ) : (
+            <div className="pmx-gz-note">{compact ? (meta.compactNote ?? meta.note) : meta.note}</div>
+          )}
         </div>
 
         <div
@@ -142,12 +148,8 @@ function GlassZoneCard({
         </div>
       </div>
 
-      {isSolid ? (
-        <div className="pmx-gz-solid-note">
-          已关闭本区毛玻璃并恢复实底；切回「跟随」或「自定义」可立即恢复透视。
-        </div>
-      ) : (
-        <div className="pmx-gz-sliders">
+      {isCustom ? (
+        <div className="pmx-gz-sliders pmx-gz-sliders-expand" data-pmx-zone-sliders={meta.id}>
           <label className="pmx-gz-slider-row">
             <span className="pmx-gz-slider-lbl">不透明度</span>
             <input
@@ -182,7 +184,7 @@ function GlassZoneCard({
             <output className="rv">{resolved.blurPx}px</output>
           </label>
 
-          {showSaturation && isCustom ? (
+          {showSaturation ? (
             <label className="pmx-gz-slider-row">
               <span className="pmx-gz-slider-lbl">色彩饱和</span>
               <input
@@ -207,7 +209,7 @@ function GlassZoneCard({
             </div>
           ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -332,7 +334,7 @@ export function GlassZoneConfigurator({
           </span>
           {!compact ? (
             <span className="glass-reg-d">
-              窗口外框（左侧边栏、顶栏、底栏与右细边）统一连体调节，右侧功能边栏、主画布、工作面板、输入框、弹窗层、用户消息气泡与概览面板独立可控；拖动任意滑块立即实时生效。
+              按区选择跟随、自定义或不透明；仅选择「自定义」时展开精细滑块。
             </span>
           ) : null}
         </div>

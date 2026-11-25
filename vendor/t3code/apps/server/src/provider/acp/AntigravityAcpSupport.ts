@@ -1,6 +1,5 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
-  type AntigravityAuthMethod,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ProviderSendTurnInput,
@@ -18,10 +17,6 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
-import {
-  makeAntigravityStderrHandler,
-  makeAntigravityStdoutTransform,
-} from "../antigravityAuthSupport.ts";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
   acpPermissionDisposition,
@@ -41,6 +36,7 @@ export interface AntigravityAcpRuntimeInput extends Omit<
   AcpSessionRuntime.AcpSessionRuntimeOptions,
   | "authMethodId"
   | "authenticateEagerly"
+  | "authenticateOnAuthRequired"
   | "cancelBehavior"
   | "clientCapabilities"
   | "clientInfo"
@@ -51,7 +47,6 @@ export interface AntigravityAcpRuntimeInput extends Omit<
   | "transformStdout"
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
-  readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Serve `fs/read_text_file` from T3 instead of the agent's native reader. */
   readonly clientFileReads?: boolean;
   readonly clientCapabilities?: AcpSessionRuntime.AcpSessionRuntimeOptions["clientCapabilities"];
@@ -59,7 +54,6 @@ export interface AntigravityAcpRuntimeInput extends Omit<
   readonly runtimeVersion?: string | null;
   /** Conversational sessions only; helpers and probes leave the system prompt untouched. */
   readonly sessionSystemPromptAppend?: string;
-  readonly authMethod?: AntigravityAuthMethod;
 }
 
 function parseAntigravityVersion(version: string | null | undefined) {
@@ -131,19 +125,12 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
   EffectAcpErrors.AcpError,
   SecureRandom.SecureRandom | Scope.Scope
 > {
-  const usesLocalCli = input.authMethod === "local-cli";
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...input,
-      ...(usesLocalCli
-        ? {
-            authenticateEagerly: false,
-            authenticateOnAuthRequired: false,
-          }
-        : {
-            authMethodId: input.authMethod ?? "oauth-personal",
-            authenticateEagerly: true,
-          }),
+      // Strictly reuse the user's official local `agy` CLI session without invoking in-app OAuth.
+      authenticateEagerly: false,
+      authenticateOnAuthRequired: false,
       resumeMethod: "resume",
       cancelBehavior: "wait-for-prompt",
       clientInfo: antigravityClientInfo(input.runtimeVersion),
@@ -158,12 +145,6 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
         },
         terminal: false,
       },
-      transformStdout: makeAntigravityStdoutTransform(
-        input.onAuthorizationUrl ? { onAuthorizationUrl: input.onAuthorizationUrl } : {},
-      ),
-      onStderr: makeAntigravityStderrHandler(
-        input.onAuthorizationUrl ? { onAuthorizationUrl: input.onAuthorizationUrl } : {},
-      ),
       transformSessionUpdate: normalizeAntigravitySessionUpdate,
     }).pipe(
       Layer.provide(
@@ -347,7 +328,7 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
       return yield* Effect.fail(
         input.mapError(
           EffectAcpErrors.AcpRequestError.invalidParams(
-            `Antigravity model '${resolved}' is unavailable for this Google account. Select an available model.`,
+            `Antigravity model '${resolved}' is unavailable for this Antigravity account. Select an available model.`,
           ),
         ),
       );

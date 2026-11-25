@@ -1,6 +1,6 @@
 /**
- * Issue #6 + Issue #7: Official Agent/CLI homepage metadata, strict `https:` URL validation,
- * official CLI update guidance (no silent closed-source binary downloads), and one-click `omp` preset.
+ * Official Agent/CLI homepage metadata, strict `https:` URL validation,
+ * official CLI update guidance (no silent closed-source binary downloads), and one-click `dsh` preset.
  */
 
 export interface PrismuxAgentCliMeta {
@@ -26,15 +26,6 @@ export const DSH_LOCAL_ACP_PRESET = {
   args: ["acp"] as readonly string[],
   homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
   accentColor: "#4176E6",
-} as const;
-
-export const OMP_LOCAL_ACP_PRESET = {
-  id: "omp",
-  label: "OMP (oh-my-pi)",
-  instanceId: "omp",
-  command: "omp",
-  args: ["acp"] as readonly string[],
-  homepageUrl: "https://omp.sh",
 } as const;
 
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._:@/-]{1,128}$/;
@@ -221,20 +212,6 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
     supportsResume: false,
     buildResumeCommand: ({ command }) => quoteShellExecutable(command || "dsh"),
   },
-  omp: {
-    id: "omp",
-    displayName: "OMP (oh-my-pi)",
-    cliCommand: "omp",
-    homepageUrl: "https://omp.sh",
-    updateCommandHint: "omp update",
-    supportsCliMode: true,
-    supportsResume: true,
-    buildResumeCommand: ({ command, sessionId }) => {
-      const exe = quoteShellExecutable(command || "omp");
-      const safeId = sanitizeResumeSessionId(sessionId);
-      return safeId ? `${exe} --resume ${quoteShellToken(safeId)}` : exe;
-    },
-  },
   opencode: {
     id: "opencode",
     displayName: "OpenCode",
@@ -342,9 +319,6 @@ export function resolveAgentCliMeta(input: {
       input.instanceId?.toLowerCase().startsWith("dsh")
     ) {
       return PRISMUX_AGENT_CLI_CATALOG.dsh ?? null;
-    }
-    if (exeName === "omp" || agentId === "omp" || input.instanceId?.toLowerCase().startsWith("omp")) {
-      return PRISMUX_AGENT_CLI_CATALOG.omp ?? null;
     }
     if (exeName === "agy" || agentId === "antigravity" || agentId === "agy") {
       return PRISMUX_AGENT_CLI_CATALOG.antigravity ?? null;

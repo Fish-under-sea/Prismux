@@ -31,6 +31,27 @@ describe("prefersHttpMcpTransport", () => {
     expect(prefersHttpMcpTransport(local("/usr/local/bin/cmdc"))).toBe(true);
   });
 
+  it("uses HTTP for DeepSeek Harness (dsh) local ACP launchers", () => {
+    expect(prefersHttpMcpTransport(local("dsh", ["acp"]))).toBe(true);
+    expect(
+      prefersHttpMcpTransport(
+        local("C:\\Users\\Fish\\AppData\\Local\\Programs\\DSH NEXT\\DSH NEXT.exe", [
+          "--expose-internals",
+          "C:\\Users\\Fish\\AppData\\Local\\Programs\\DSH NEXT\\resources\\app.asar\\lib\\desktop-cli.js",
+          "acp",
+        ]),
+      ),
+    ).toBe(true);
+    expect(
+      prefersHttpMcpTransport(
+        local("C:\\Program Files\\nodejs\\node.exe", [
+          "C:\\Users\\Fish\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
+          "acp",
+        ]),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps the stdio bridge for a batch shim T3 refuses to launch", () => {
     expect(prefersHttpMcpTransport(local("C:\\tools\\cmdc.cmd", ["acp"]))).toBe(false);
   });

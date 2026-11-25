@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type {
+  DispatchTaskArtifact,
   HookInvocationContext,
   PluginContext,
   PluginManifest
@@ -20,9 +21,12 @@ import {
 } from "./onebot.js";
 import { GroupPacingEngine, type GroupPacingConfig } from "./pacing.js";
 import {
+  createHttpDaemonDispatcher,
+  formatQqArtifactCompletionReply,
   OneBotLoopbackHarness,
   QqMessageRouter,
   type QqChiefHandler,
+  type QqDaemonDispatcher,
   type QqGroupResponder,
   type QqInboundMessage,
   type QqMemoryQueryRunner,
@@ -77,6 +81,10 @@ export interface QqPluginRuntimeOptions {
   memoryQuery?: QqMemoryQueryRunner;
   chiefHandler?: QqChiefHandler;
   groupResponder?: QqGroupResponder;
+  daemonUrl?: string;
+  daemonToken?: string;
+  daemonDispatcher?: QqDaemonDispatcher;
+  defaultWorkspacePath?: string;
   onOwnerNotification?: (record: QqOwnerNotificationRecord) => Promise<void> | void;
 }
 
@@ -130,13 +138,23 @@ export class QqPluginRuntime {
     };
     this.onOwnerNotification = options?.onOwnerNotification;
     this.pacingEngine = new GroupPacingEngine(options?.pacingConfig);
+    const resolvedDaemonDispatcher =
+      options?.daemonDispatcher ??
+      (options?.daemonUrl && options?.daemonToken
+        ? createHttpDaemonDispatcher({
+            daemonUrl: options.daemonUrl,
+            authToken: options.daemonToken
+          })
+        : undefined);
     this.router = new QqMessageRouter({
       config: this.config,
       pacingEngine: this.pacingEngine,
       botAliases: options?.botAliases,
       memoryQuery: options?.memoryQuery,
       chiefHandler: options?.chiefHandler,
-      groupResponder: options?.groupResponder
+      groupResponder: options?.groupResponder,
+      daemonDispatcher: resolvedDaemonDispatcher,
+      defaultWorkspacePath: options?.defaultWorkspacePath
     });
     this.loopback = new OneBotLoopbackHarness(this.router);
   }
@@ -245,8 +263,47 @@ export class QqPluginRuntime {
     return this.router.routeMessage(message);
   }
 
+  async handleArtifactCompletion(
+    artifact: DispatchTaskArtifact
+  ): Promise<QqOwnerNotificationRecord> {
+    this.assertActive();
+    const record: QqOwnerNotificationRecord = {
+      event: "Stop",
+      title: "Prismux 任务完工直达回执",
+      body: formatQqArtifactCompletionReply(artifact),
+      timestamp: Date.now()
+    };
+    this.notifications.push(record);
+    if (this.notifications.length > 50) {
+      this.notifications.shift();
+    }
+    if (this.onOwnerNotification) {
+      await this.onOwnerNotification(record);
+    }
+    if (this.wsBridge?.isConnected() && this.config.ownerQqId) {
+      this.wsBridge.sendAction(
+        buildOneBotSendPrivateMsgAction(this.config.ownerQqId, record.body)
+      );
+    }
+    return record;
+  }
+
   async handleHookNotification(hookCtx: HookInvocationContext): Promise<void> {
     if (this.disposed) {
+      return;
+    }
+    const maybeArtifact = hookCtx.toolOutput as
+      | Partial<DispatchTaskArtifact>
+      | undefined;
+    if (
+      hookCtx.event === "Stop" &&
+      maybeArtifact !== undefined &&
+      typeof maybeArtifact === "object" &&
+      typeof maybeArtifact.plainLanguageSummary === "string" &&
+      typeof maybeArtifact.taskId === "string" &&
+      maybeArtifact.diffStats !== undefined
+    ) {
+      await this.handleArtifactCompletion(maybeArtifact as DispatchTaskArtifact);
       return;
     }
     const summaryRaw =

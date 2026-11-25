@@ -1195,6 +1195,96 @@ export const PrismuxSetTrayRunningAgentsResultSchema = Schema.Struct({
 export type PrismuxSetTrayRunningAgentsResult =
   typeof PrismuxSetTrayRunningAgentsResultSchema.Type;
 
+export const PrismuxDispatchModeSchema = Schema.Literals(["send", "draft_only"]);
+export type PrismuxDispatchMode = typeof PrismuxDispatchModeSchema.Type;
+
+export type PrismuxDispatchCallerKind =
+  | "human_desktop"
+  | "antigravity_commander"
+  | "secretary_qq"
+  | "secretary_gmail"
+  | "overnight_factory"
+  | "cron"
+  | "agent_subtask"
+  | "internal_script"
+  | "post_stop_loop"
+  | (string & {});
+
+export interface PrismuxDispatchReplyChannelObject {
+  readonly kind: string;
+  readonly targetId?: string | undefined;
+  readonly recipient?: string | undefined;
+  readonly inReplyTo?: string | undefined;
+  readonly threadId?: string | undefined;
+  readonly label?: string | undefined;
+}
+
+export type PrismuxDispatchReplyChannel = string | PrismuxDispatchReplyChannelObject;
+
+export interface PrismuxDispatchEnvelope {
+  readonly taskId: string;
+  readonly status: string;
+  readonly mode: PrismuxDispatchMode;
+  readonly workspacePath: string;
+  readonly worktreePath?: string | null | undefined;
+  readonly branchName?: string | null | undefined;
+  readonly prompt: string;
+  readonly provider: string;
+  readonly modelId: string;
+  readonly reasoningEffort: string;
+  readonly callerKind: PrismuxDispatchCallerKind;
+  readonly taskCategory?: string | undefined;
+  readonly createdAt: string;
+  readonly requiresHumanConfirmation: boolean;
+  readonly confirmationReason?: string | null | undefined;
+  readonly memoryContextSummary?: string | null | undefined;
+  readonly replyChannel?: PrismuxDispatchReplyChannel | null | undefined;
+  readonly threadId?: string | null | undefined;
+}
+
+export const PrismuxDispatchReplyChannelObjectSchema = Schema.Struct({
+  kind: Schema.String,
+  targetId: Schema.optionalKey(Schema.String),
+  recipient: Schema.optionalKey(Schema.String),
+  inReplyTo: Schema.optionalKey(Schema.String),
+  threadId: Schema.optionalKey(Schema.String),
+  label: Schema.optionalKey(Schema.String),
+});
+
+export const PrismuxDispatchEnvelopeSchema: Schema.Codec<PrismuxDispatchEnvelope> = Schema.Struct({
+  taskId: Schema.String,
+  status: Schema.String,
+  mode: PrismuxDispatchModeSchema,
+  workspacePath: Schema.String,
+  worktreePath: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  branchName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  prompt: Schema.String,
+  provider: Schema.String,
+  modelId: Schema.String,
+  reasoningEffort: Schema.String,
+  callerKind: Schema.String,
+  taskCategory: Schema.optionalKey(Schema.String),
+  createdAt: Schema.String,
+  requiresHumanConfirmation: Schema.Boolean,
+  confirmationReason: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  memoryContextSummary: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  replyChannel: Schema.optionalKey(
+    Schema.NullOr(Schema.Union([Schema.String, PrismuxDispatchReplyChannelObjectSchema])),
+  ),
+  threadId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+
+export interface PrismuxDispatchActionResult {
+  readonly ok: boolean;
+  readonly error?: string | undefined;
+}
+
+export const PrismuxDispatchActionResultSchema: Schema.Codec<PrismuxDispatchActionResult> =
+  Schema.Struct({
+    ok: Schema.Boolean,
+    error: Schema.optionalKey(Schema.String),
+  });
+
 export interface PrismuxDesktopBridge {
   getDaemonInfo: () => Promise<PrismuxDaemonInfo>;
   getWindowOcclusion: () => Promise<PrismuxWindowOcclusion>;
@@ -1365,6 +1455,12 @@ export interface DesktopBridge {
   };
   /** Prismux host bridge (daemon endpoint, window occlusion 0-FPS signal, wallpaper pickers, updater feed). */
   prismux?: PrismuxDesktopBridge;
+  /** Real-UI IPC task dispatch stream from Prismux Daemon (`GET /v1/dispatch/events`). */
+  onPrismuxDispatchThread?: (listener: (envelope: PrismuxDispatchEnvelope) => void) => () => void;
+  /** Human desktop confirmation unlocking a staged Draft-Only dispatch task. */
+  confirmPrismuxDispatch?: (taskId: string) => Promise<PrismuxDispatchActionResult>;
+  /** Human desktop cancellation discarding a staged Draft-Only dispatch task. */
+  cancelPrismuxDispatch?: (taskId: string) => Promise<PrismuxDispatchActionResult>;
 }
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */

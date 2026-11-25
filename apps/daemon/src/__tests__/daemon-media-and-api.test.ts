@@ -650,6 +650,10 @@ test("Appearance atomic persistence, restart recovery, corrupt JSON fallback, an
       glassBasePolarity: "dark",
       glassPreset: "clear",
       fresnelStrength: 88,
+      glassZones: {
+        userBubble: { mode: "custom", opacity: 24, blurPx: 18, saturation: 125, tint: "#1a2438" },
+        overviewPanel: { mode: "custom", opacity: 38, blurPx: 22, saturation: 118, tint: "#101826" }
+      },
       wallpaper: {
         selectedId: "builtin-midnight-tide",
         hiddenIds: ["builtin-cyber-dusk"],
@@ -687,6 +691,10 @@ test("Appearance atomic persistence, restart recovery, corrupt JSON fallback, an
     themeMode: string;
     glassPreset: string;
     fresnelStrength: number;
+    glassZones: {
+      userBubble: { mode: string; opacity?: number; blurPx?: number; saturation?: number; tint?: string };
+      overviewPanel: { mode: string; opacity?: number; blurPx?: number; saturation?: number; tint?: string };
+    };
     wallpaper: {
       selectedId: string;
       hiddenIds: string[];
@@ -697,6 +705,20 @@ test("Appearance atomic persistence, restart recovery, corrupt JSON fallback, an
   assert.equal(loaded.themeMode, "glass");
   assert.equal(loaded.glassPreset, "clear");
   assert.equal(loaded.fresnelStrength, 88);
+  assert.deepEqual(loaded.glassZones.userBubble, {
+    mode: "custom",
+    opacity: 24,
+    blurPx: 18,
+    saturation: 125,
+    tint: "#1a2438"
+  });
+  assert.deepEqual(loaded.glassZones.overviewPanel, {
+    mode: "custom",
+    opacity: 38,
+    blurPx: 22,
+    saturation: 118,
+    tint: "#101826"
+  });
   assert.equal(loaded.wallpaper.selectedId, "builtin-midnight-tide");
   assert.deepEqual(loaded.wallpaper.hiddenIds, ["builtin-cyber-dusk"]);
   assert.equal(loaded.wallpaper.rotationEnabled, true);
@@ -724,27 +746,97 @@ test("Appearance atomic persistence, restart recovery, corrupt JSON fallback, an
   const recovered = (await recoveredRes.json()) as {
     recoveredFromCorruption: boolean;
     themeMode: string;
+    glassPreset: string;
+    glassDarkSeparate: boolean;
+    glassDarkColor: string;
+    accentMode: string;
   };
   assert.equal(recovered.recoveredFromCorruption, true);
-  assert.equal(recovered.themeMode, "dark");
+  assert.equal(recovered.themeMode, "glass");
+  assert.equal(recovered.glassPreset, "clear");
+  assert.equal(recovered.glassDarkSeparate, true);
+  assert.equal(recovered.glassDarkColor, "#000000");
+  assert.equal(recovered.accentMode, "system");
 });
 
-test("AppearanceConfigStore aligns wallpaper defaults and auto-normalizes legacy opacity/scrim without blackout", async () => {
+test("AppearanceConfigStore aligns v0.2.0-rc.2 defaults, persists all 8 glass zones (including userBubble & overviewPanel), and auto-normalizes legacy opacity/scrim", async () => {
   const freshDefaults = createDefaultAppearanceConfig();
+  assert.equal(freshDefaults.themeMode, "glass");
+  assert.equal(freshDefaults.glassBasePolarity, "dark");
+  assert.equal(freshDefaults.accentMode, "system");
+  assert.equal(freshDefaults.glassPreset, "clear");
+  assert.deepEqual(freshDefaults.glassRegions, {
+    surface: { op: 18, blur: 24 },
+    card: { op: 12, blur: 16 },
+    overlay: { op: 25, blur: 20 },
+    control: { op: 16, blur: 10 }
+  });
+  assert.equal(freshDefaults.glassColor, "#ffffff");
+  assert.equal(freshDefaults.glassDarkSeparate, true);
+  assert.equal(freshDefaults.glassDarkColor, "#000000");
+  assert.deepEqual(Object.keys(freshDefaults.glassZones).sort(), [
+    "composer",
+    "mainCanvas",
+    "overlays",
+    "overviewPanel",
+    "rightSidebar",
+    "shellFrame",
+    "userBubble",
+    "workPanels"
+  ]);
   assert.equal(freshDefaults.wallpaper.wallpaperOpacity, 0);
-  assert.equal(freshDefaults.wallpaper.scrim, 0.15);
+  assert.equal(freshDefaults.wallpaper.scrim, 0.4);
+  assert.equal(freshDefaults.wallpaper.fpsCap, 60);
+  assert.equal(freshDefaults.wallpaper.videoVolume, 0.35);
+  assert.equal(freshDefaults.wallpaper.pauseOnBattery, true);
+  assert.equal(freshDefaults.wallpaper.rotationGroupId, "default");
 
   const dataDir = mkdtempSync(join(tmpdir(), "prismux-appearance-norm-"));
   tempDirs.push(dataDir);
 
-  // 1. Fresh store with no existing file must not emit legacy 100 / 35 values
+  // 1. Fresh store with no existing file emits locked RC.2 defaults
   const freshStore = new AppearanceConfigStore({ dataDir });
   const freshLoaded = freshStore.get();
   assert.equal(freshLoaded.recoveredFromCorruption, false);
   assert.equal(freshLoaded.config.wallpaper.wallpaperOpacity, 0);
-  assert.equal(freshLoaded.config.wallpaper.scrim, 0.15);
+  assert.equal(freshLoaded.config.wallpaper.scrim, 0.4);
+  assert.deepEqual(freshLoaded.config.glassZones.userBubble, { mode: "inherit" });
+  assert.deepEqual(freshLoaded.config.glassZones.overviewPanel, { mode: "inherit" });
 
-  // 2. Legacy appearance.json on disk (wallpaperOpacity: 100, scrim: 35) auto-normalizes on load
+  // 1b. All 8 glass zones (including userBubble & overviewPanel) survive save -> disk reload losslessly
+  freshStore.update({
+    glassZones: {
+      shellFrame: { mode: "custom", opacity: 22, blurPx: 20, saturation: 112 },
+      rightSidebar: { mode: "solid" },
+      mainCanvas: { mode: "custom", opacity: 10, blurPx: 4 },
+      workPanels: { mode: "custom", opacity: 64, blurPx: 18 },
+      composer: { mode: "custom", opacity: 42, blurPx: 14 },
+      overlays: { mode: "custom", opacity: 50, blurPx: 26 },
+      userBubble: { mode: "custom", opacity: 19, blurPx: 16, saturation: 130, tint: "#1e293b" },
+      overviewPanel: { mode: "solid", tint: "#0f172a" }
+    }
+  });
+  const reloadedZones = new AppearanceConfigStore({ dataDir }).get().config.glassZones;
+  assert.deepEqual(reloadedZones.shellFrame, { mode: "custom", opacity: 22, blurPx: 20, saturation: 112 });
+  assert.deepEqual(reloadedZones.rightSidebar, { mode: "solid" });
+  assert.deepEqual(reloadedZones.mainCanvas, { mode: "custom", opacity: 10, blurPx: 4 });
+  assert.deepEqual(reloadedZones.workPanels, { mode: "custom", opacity: 64, blurPx: 18 });
+  assert.deepEqual(reloadedZones.composer, { mode: "custom", opacity: 42, blurPx: 14 });
+  // overlays enforces 68% readability floor
+  assert.deepEqual(reloadedZones.overlays, { mode: "custom", opacity: 68, blurPx: 26 });
+  assert.deepEqual(reloadedZones.userBubble, {
+    mode: "custom",
+    opacity: 19,
+    blurPx: 16,
+    saturation: 130,
+    tint: "#1e293b"
+  });
+  assert.deepEqual(reloadedZones.overviewPanel, {
+    mode: "solid",
+    tint: "#0f172a"
+  });
+
+  // 2. Legacy 6-zone appearance.json on disk (wallpaperOpacity: 100, scrim: 35) auto-normalizes & fills userBubble/overviewPanel
   const legacyDir = mkdtempSync(join(tmpdir(), "prismux-appearance-legacy-"));
   tempDirs.push(legacyDir);
   writeFileSync(
@@ -752,6 +844,14 @@ test("AppearanceConfigStore aligns wallpaper defaults and auto-normalizes legacy
     JSON.stringify(
       {
         schemaVersion: 1,
+        glassZones: {
+          shellFrame: { mode: "custom", opacity: 30, blurPx: 16 },
+          rightSidebar: { mode: "inherit" },
+          mainCanvas: { mode: "inherit" },
+          workPanels: { mode: "inherit" },
+          composer: { mode: "inherit" },
+          overlays: { mode: "inherit" }
+        },
         wallpaper: {
           selectedId: "builtin-aurora-prism",
           wallpaperOpacity: 100,
@@ -768,6 +868,9 @@ test("AppearanceConfigStore aligns wallpaper defaults and auto-normalizes legacy
   assert.equal(legacyLoaded.recoveredFromCorruption, false);
   assert.equal(legacyLoaded.config.wallpaper.wallpaperOpacity, 0);
   assert.equal(legacyLoaded.config.wallpaper.scrim, 0.35);
+  assert.deepEqual(legacyLoaded.config.glassZones.shellFrame, { mode: "custom", opacity: 30, blurPx: 16 });
+  assert.deepEqual(legacyLoaded.config.glassZones.userBubble, { mode: "inherit" });
+  assert.deepEqual(legacyLoaded.config.glassZones.overviewPanel, { mode: "inherit" });
 
   // 3. Out-of-range patch (>90 opacity, >1 scrim) is clamped & persisted cleanly without 99% blackout
   const clamped = legacyStore.update({
@@ -890,7 +993,7 @@ test("Real business HTTP APIs: chief, memory stats/search with qq_group isolatio
       Authorization: `Bearer ${ownerToken}`
     },
     body: JSON.stringify({
-      provider: "oh-my-pi",
+      provider: "gemini-cli",
       defaultEffort: "high"
     })
   });
@@ -898,8 +1001,18 @@ test("Real business HTTP APIs: chief, memory stats/search with qq_group isolatio
   const aliasSwitched = (await aliasSwitchRes.json()) as {
     slot: { activeProvider: string; reasoningEffort?: string };
   };
-  assert.equal(aliasSwitched.slot.activeProvider, "omp");
+  assert.equal(aliasSwitched.slot.activeProvider, "gemini");
   assert.equal(aliasSwitched.slot.reasoningEffort, "high");
+
+  const retiredOmpSwitchRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${ownerToken}`
+    },
+    body: JSON.stringify({ provider: "oh-my-pi" })
+  });
+  assert.equal(retiredOmpSwitchRes.status, 400);
 
   const invalidSwitchRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
     method: "POST",

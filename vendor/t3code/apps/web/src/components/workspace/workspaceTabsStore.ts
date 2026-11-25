@@ -65,7 +65,7 @@ export interface WorkspaceTab {
   readonly id: string;
   readonly kind: WorkspaceTabKind;
   readonly title: string;
-  /** Canonical provider/agent identifier (e.g. "codex", "claudeAgent", "antigravity", "omp"). */
+  /** Canonical provider/agent identifier (e.g. "codex", "claudeAgent", "antigravity"). */
   readonly providerId?: string | null | undefined;
   /** Bound T3 Code provider instance ID when applicable. */
   readonly instanceId?: ProviderInstanceId | null | undefined;
@@ -1441,24 +1441,42 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
                 lastActiveAt: now,
               };
             })()
-          : {
-              id: newTabId,
-              kind: "agent",
-              title: "Codex",
-              providerId: "codex",
-              instanceId: null,
-              model: null,
-              environmentId: null,
-              threadId: null,
-              draftId: null,
-              url: null,
-              shell: null,
-              hostThreadRef: null,
-              resourceId: null,
-              pinned: false,
-              createdAt: now,
-              lastActiveAt: now,
-            };
+          : (() => {
+              const sourcePane = state.panes[paneId];
+              const sourceTab = sourcePane?.activeTabId ? state.tabs[sourcePane.activeTabId] : null;
+              const inheritedProviderId =
+                sourceTab &&
+                (sourceTab.kind === "thread" ||
+                  sourceTab.kind === "draft" ||
+                  sourceTab.kind === "agent")
+                  ? (sourceTab.providerId ?? null)
+                  : null;
+              const inheritedInstanceId =
+                sourceTab &&
+                (sourceTab.kind === "thread" ||
+                  sourceTab.kind === "draft" ||
+                  sourceTab.kind === "agent")
+                  ? (sourceTab.instanceId ?? null)
+                  : null;
+              return {
+                id: newTabId,
+                kind: "agent" as const,
+                title: inheritedProviderId ? formatAgentBrandName(inheritedProviderId) : "新会话",
+                providerId: inheritedProviderId,
+                instanceId: inheritedInstanceId,
+                model: null,
+                environmentId: null,
+                threadId: null,
+                draftId: null,
+                url: null,
+                shell: null,
+                hostThreadRef: null,
+                resourceId: null,
+                pinned: false,
+                createdAt: now,
+                lastActiveAt: now,
+              };
+            })();
 
         set((current) => ({
           ...current,

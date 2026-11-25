@@ -114,7 +114,7 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     }
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("Appearance");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("Wallpaper");
-    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("Memory");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("Chief & memory");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("Sync");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/chat"])).toBe("Chat & threads");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/browser"])).toBe("Browser & devices");
@@ -130,7 +130,7 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/about"])).toBe("About & Updates");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/appearance") ?? "")).toBe("Appearance");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/wallpaper") ?? "")).toBe("Wallpaper");
-    expect(decodeMsg(settingsBreadcrumbLabel("/settings/memory") ?? "")).toBe("Memory");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/memory") ?? "")).toBe("Chief & memory");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/sync") ?? "")).toBe("Sync");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/about") ?? "")).toBe("About & Updates");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/maintenance") ?? "")).toBe(

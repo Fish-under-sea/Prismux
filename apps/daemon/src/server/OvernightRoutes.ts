@@ -12,7 +12,17 @@ import { basename, dirname, join } from "node:path";
 import tls from "node:tls";
 import type { EncryptedPluginCredentialStore } from "@prismux/cordis-kernel";
 import type { SqliteMemoryStore } from "@prismux/memory-core";
-import { BRAND, type CallerScope } from "@prismux/protocol";
+import {
+  BRAND,
+  isAntigravityProvider,
+  type CallerScope,
+  type DispatchCallerKind
+} from "@prismux/protocol";
+import type { DesktopIpcDispatchHub } from "../dispatch/DesktopIpcDispatchHub.js";
+import {
+  AntigravityGuardDeniedError,
+  type AntigravityPolicyGuard
+} from "../security/AntigravityPolicyGuard.js";
 import {
   GmailOAuth2InboundAdapter,
   ImapIdleInboundAdapter,
@@ -26,7 +36,8 @@ import {
   type MailInboundAdapter,
   type OutboundMailPayload,
   type OutboundMailReceipt,
-  type OutboundMailer
+  type OutboundMailer,
+  type OvernightSecretaryBrain
 } from "../workflows/OvernightFactory.js";
 import { BusinessRouteError } from "./DaemonBusinessRoutes.js";
 
@@ -42,6 +53,8 @@ export type OvernightRunStatus =
   | "completed"
   | "failed"
   | "blocked_whitelist"
+  | "blocked_policy"
+  | "awaiting_human_confirmation"
   | "skipped";
 
 export interface OvernightMailPresetSpec {
@@ -134,6 +147,7 @@ export interface OvernightStrategyConfig {
   targetWorkspaceDir: string;
   agentProvider: string;
   agentModel: string;
+  secretaryBrain?: OvernightSecretaryBrain;
   oracleReviewEnabled: boolean;
   localWorktreeOnlyNoPush: boolean;
 }
@@ -300,6 +314,8 @@ export interface OvernightRouteServiceOptions {
   overnightFactory?: OvernightFactory;
   credentialStore?: EncryptedPluginCredentialStore;
   memoryStore?: SqliteMemoryStore;
+  policyGuard?: AntigravityPolicyGuard;
+  dispatchHub?: DesktopIpcDispatchHub;
   onConfigChanged?: () => void;
   networkHooks?: OvernightNetworkHooks;
 }
@@ -493,8 +509,9 @@ export function createDefaultOvernightConfig(): OvernightFactoryPersistedConfig 
       pollIntervalMinutes: 5,
       targetWorkspaceDir: "",
       agentProvider: "codex",
-      agentModel: "",
-      oracleReviewEnabled: true,
+      agentModel: "gpt-6.2-sol",
+      secretaryBrain: "codex",
+      oracleReviewEnabled: false,
       localWorktreeOnlyNoPush: true
     }
   };
@@ -626,10 +643,16 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
       typeof stratRaw["agentModel"] === "string"
         ? stratRaw["agentModel"].trim()
         : "",
+    secretaryBrain:
+      stratRaw["secretaryBrain"] === "gemini-api" ||
+      stratRaw["secretaryBrain"] === "codex" ||
+      stratRaw["secretaryBrain"] === "claude-code"
+        ? stratRaw["secretaryBrain"]
+        : base.strategy.secretaryBrain,
     oracleReviewEnabled:
       typeof stratRaw["oracleReviewEnabled"] === "boolean"
         ? stratRaw["oracleReviewEnabled"]
-        : true,
+        : false,
     localWorktreeOnlyNoPush:
       typeof stratRaw["localWorktreeOnlyNoPush"] === "boolean"
         ? stratRaw["localWorktreeOnlyNoPush"]
@@ -1182,6 +1205,12 @@ export class OvernightRouteService {
       new OvernightFactory({
         ...(options.memoryStore !== undefined
           ? { memoryStore: options.memoryStore }
+          : {}),
+        ...(options.policyGuard !== undefined
+          ? { policyGuard: options.policyGuard }
+          : {}),
+        ...(options.dispatchHub !== undefined
+          ? { dispatchHub: options.dispatchHub }
           : {})
       });
     this.credentialStore = options.credentialStore;
@@ -1464,10 +1493,25 @@ export class OvernightRouteService {
         next.strategy.targetWorkspaceDir = st["targetWorkspaceDir"].trim();
       }
       if (typeof st["agentProvider"] === "string" && st["agentProvider"].trim().length > 0) {
-        next.strategy.agentProvider = st["agentProvider"].trim();
+        const candidateProvider = st["agentProvider"].trim();
+        if (isAntigravityProvider(candidateProvider)) {
+          throw new BusinessRouteError(
+            403,
+            "AGY_UNATTENDED_FORBIDDEN",
+            "24h 无人值守夜间工场禁止将执行节点配置为个人版 Antigravity（AGY），请使用 codex / claudeAgent / opencode。"
+          );
+        }
+        next.strategy.agentProvider = candidateProvider;
       }
       if (typeof st["agentModel"] === "string") {
         next.strategy.agentModel = st["agentModel"].trim();
+      }
+      if (
+        st["secretaryBrain"] === "gemini-api" ||
+        st["secretaryBrain"] === "codex" ||
+        st["secretaryBrain"] === "claude-code"
+      ) {
+        next.strategy.secretaryBrain = st["secretaryBrain"];
       }
       if (typeof st["oracleReviewEnabled"] === "boolean") {
         next.strategy.oracleReviewEnabled = st["oracleReviewEnabled"];
@@ -2501,21 +2545,24 @@ export class OvernightRouteService {
     }
 
     try {
+      const callerKind: DispatchCallerKind = "overnight_factory";
       const result = await this.overnightFactory.runEmailPipeline(email, {
         repoTarget: {
           repoPath: workspaceDir,
           repoSlug: basename(workspaceDir),
           testCommand: "node -e \"process.exit(0)\""
         },
+        callerKind,
+        agentProvider: config.strategy.agentProvider,
+        ...(config.strategy.agentModel
+          ? { agentModel: config.strategy.agentModel }
+          : {}),
+        ...(config.strategy.secretaryBrain
+          ? { secretaryBrain: config.strategy.secretaryBrain }
+          : {}),
+        enableOracleReview: config.strategy.oracleReviewEnabled,
         outboundMailer,
-        ignoreTriggerCheck: true,
-        ...(config.strategy.oracleReviewEnabled
-          ? {}
-          : {
-              oracleReviewer: async () => ({
-                comments: ["[Oracle 审校已关闭] 按策略跳过只读审校步骤。"]
-              })
-            })
+        ignoreTriggerCheck: true
       });
 
       const completedAt = this.now();
@@ -2526,11 +2573,17 @@ export class OvernightRouteService {
         threadId: result.threadId,
         subject: email.subject || "(无主题)",
         sender,
-        status: result.status === "completed" ? "completed" : "skipped",
+        status:
+          result.status === "completed"
+            ? "completed"
+            : result.status === "awaiting_human_confirmation"
+              ? "awaiting_human_confirmation"
+              : "skipped",
         branchName: result.branchName ?? null,
         changedFilesCount: result.changedFiles.length,
         testPassed: result.testPassed ?? null,
         oracleSummary:
+          result.artifact?.plainLanguageSummary ??
           result.reviewComments[0] ??
           (config.strategy.localWorktreeOnlyNoPush
             ? "已完成隔离 Worktree 分支提交（仅本地分支，未自动 push）。"
@@ -2544,18 +2597,21 @@ export class OvernightRouteService {
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const isPolicyBlocked = err instanceof AntigravityGuardDeniedError;
       return {
         id: `run-${startedAt}-${randomUUID().slice(0, 6)}`,
-        jobId: `fac-err-${randomUUID().slice(0, 6)}`,
+        jobId: isPolicyBlocked
+          ? `fac-policy-${randomUUID().slice(0, 6)}`
+          : `fac-err-${randomUUID().slice(0, 6)}`,
         messageId: email.messageId,
         threadId: "",
         subject: email.subject || "(无主题)",
         sender,
-        status: "failed",
+        status: isPolicyBlocked ? "blocked_policy" : "failed",
         branchName: null,
         changedFilesCount: 0,
-        testPassed: false,
-        oracleSummary: `执行失败：${msg}`,
+        testPassed: isPolicyBlocked ? null : false,
+        oracleSummary: isPolicyBlocked ? `安全策略拦截：${msg}` : `执行失败：${msg}`,
         reviewComments: [],
         deepLink: null,
         reportSent: false,

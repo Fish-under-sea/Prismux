@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useMemo, useState, type RefObject } from "react";
 
-import { SettingsRow } from "../../components/settings/settingsLayout";
+import { SETTINGS_CONTROL_SM, SettingsRow } from "../../components/settings/settingsLayout";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -189,13 +189,14 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
 
   return (
     <SettingsRow
+      id="obsidian-import"
       title={
         <span className="inline-flex flex-wrap items-center gap-1.5">
           <SparklesIcon className="size-3.5 text-primary" />
-          <span>Obsidian Vault 智能迁移（Agent 整理后审校入库）</span>
+          <span>Obsidian 笔记迁移</span>
         </span>
       }
-      description="先由主秘书按「一条一事实」原则筛选、去重、脱敏并分类提炼结构化记忆，再由你勾选审核确认后写入单文件 SQLite 记忆库，避免整库散乱 Markdown 污染长期记忆。"
+      description="扫描本地 Obsidian 笔记库，经主秘书筛选去重并脱敏后由你勾选入库。"
     >
       <div data-pmx-obsidian-agent-import="" className="mt-2.5 space-y-3 pb-2">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -221,7 +222,7 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
           </Button>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border/70 bg-background/50 px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg bg-foreground/[0.03] px-3 py-2 dark:bg-white/[0.04]">
           <div className="flex flex-wrap items-center gap-3">
             <label
               data-pmx-obsidian-agent-toggle=""
@@ -235,15 +236,15 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
               <span>由主秘书 Agent 智能整理后再入库（推荐）</span>
             </label>
             <Badge variant="outline" className="text-[10.5px]">
-              当前整理员：{effectiveSecretaryName} · {activeProviderLabel}
+              整理员：{effectiveSecretaryName} · {activeProviderLabel}
             </Badge>
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>目标命名空间</span>
+            <span>目标空间</span>
             <Input
               nativeInput
               size="compact"
-              className="w-36 font-mono"
+              className={`${SETTINGS_CONTROL_SM} font-mono`}
               value={namespace}
               onChange={(event) => setNamespace(event.target.value)}
             />
@@ -252,7 +253,7 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[11px] text-muted-foreground">
-            自动跳过 .obsidian / .trash 与空白模板，并提前脱敏 Token / API Key；运行时不依赖本地 Obsidian 客户端。
+            自动跳过空白模板与隐藏目录，并提前脱敏敏感凭据。
           </span>
           <Button
             type="button"
@@ -276,7 +277,7 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
         {plan ? (
           <div
             data-pmx-obsidian-plan-review=""
-            className="space-y-2.5 rounded-xl border border-border/80 bg-card/60 p-3"
+            className="space-y-2.5 border-t border-border/50 pt-3"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -285,29 +286,16 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
                   className="text-[10.5px]"
                 >
                   {plan.curationSource === "agent"
-                    ? `Agent 智能提炼 · ${plan.curatorLabel ?? effectiveSecretaryName}`
-                    : "本地结构化提炼（安全回退）"}
+                    ? `智能提炼 · ${plan.curatorLabel ?? effectiveSecretaryName}`
+                    : "本地结构化提炼"}
                 </Badge>
                 <Badge variant="outline" className="font-mono text-[10.5px] tabular-nums">
-                  扫描 {plan.stats.scannedFiles} 篇
+                  扫描 {plan.stats.scannedFiles} 篇 · 提炼 {items.length} 条
                 </Badge>
-                <Badge variant="outline" className="font-mono text-[10.5px] tabular-nums">
-                  提炼 {items.length} 条
-                </Badge>
-                {plan.stats.dedupedCount > 0 ? (
-                  <Badge variant="outline" className="font-mono text-[10.5px] tabular-nums">
-                    去重 {plan.stats.dedupedCount}
-                  </Badge>
-                ) : null}
-                {plan.stats.filteredNoiseCount > 0 ? (
-                  <Badge variant="outline" className="font-mono text-[10.5px] tabular-nums">
-                    过滤空模板 {plan.stats.filteredNoiseCount}
-                  </Badge>
-                ) : null}
                 {plan.stats.redactedSecretCount > 0 ? (
                   <Badge variant="warning" className="gap-1 font-mono text-[10.5px] tabular-nums">
                     <ShieldAlertIcon className="size-3" />
-                    已脱敏凭据 {plan.stats.redactedSecretCount}
+                    已脱敏 {plan.stats.redactedSecretCount}
                   </Badge>
                 ) : null}
               </div>
@@ -347,17 +335,17 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
             </div>
 
             {plan.curationSource === "structured-fallback" && plan.fallbackReason ? (
-              <div className="rounded-md border border-border/60 bg-background/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+              <div className="rounded-md bg-foreground/[0.03] px-2.5 py-1.5 text-[11px] text-muted-foreground dark:bg-white/[0.04]">
                 说明：{plan.fallbackReason}
               </div>
             ) : null}
 
             {items.length === 0 ? (
-              <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-3 text-center text-xs text-muted-foreground">
-                未发现可入库的有效记忆条目（所有文件均为空白模板或已被去重过滤）。
+              <div className="rounded-lg bg-foreground/[0.025] px-3 py-3 text-center text-xs text-muted-foreground dark:bg-white/[0.03]">
+                未发现可入库的有效记忆条目。
               </div>
             ) : (
-              <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+              <div className="max-h-72 divide-y divide-border/50 overflow-y-auto rounded-lg bg-foreground/[0.025] pr-1 dark:bg-white/[0.03]">
                 {items.map((item) => {
                   const kindMeta = CURATED_KIND_META[item.kind] ?? CURATED_KIND_META.knowledge;
                   return (
@@ -367,8 +355,8 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
                       onClick={() => handleToggleItem(item.id)}
                       className={
                         item.selected
-                          ? "flex w-full items-start gap-2.5 rounded-lg border border-primary/45 bg-primary/5 px-3 py-2 text-left transition-colors hover:bg-primary/8"
-                          : "flex w-full items-start gap-2.5 rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-left opacity-70 transition-colors hover:opacity-100"
+                          ? "flex w-full items-start gap-2.5 bg-primary/[0.06] px-3 py-2.5 text-left transition-colors hover:bg-primary/[0.09]"
+                          : "flex w-full items-start gap-2.5 px-3 py-2.5 text-left opacity-70 transition-colors hover:opacity-100"
                       }
                     >
                       <span className="mt-0.5 shrink-0 text-primary">
@@ -413,10 +401,10 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
               </div>
             )}
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-2">
               <span className="text-[11px] text-muted-foreground">
                 已勾选 <strong className="text-foreground">{selectedCount}</strong> / {items.length}{" "}
-                条候选记忆；仅勾选条目会被写入单文件 SQLite 记忆库。
+                条候选记忆，确认后批量写入记忆库。
               </span>
               <Button
                 type="button"
@@ -437,7 +425,7 @@ export const ObsidianAgentImportCard = memo(function ObsidianAgentImportCard({
         ) : null}
 
         {commitReport ? (
-          <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-300">
+          <div className="flex items-center gap-2 rounded-md bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-300">
             <CheckCircle2Icon className="size-3.5 shrink-0" />
             <span>{commitReport}</span>
           </div>

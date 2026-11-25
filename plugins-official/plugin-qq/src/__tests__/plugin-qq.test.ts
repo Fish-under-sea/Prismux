@@ -18,9 +18,13 @@ import {
   assertRouteNamespaceAllowed,
   buildOneBotAdapterPreset,
   classifyChiefIntent,
+  createHttpDaemonDispatcher,
   DEFAULT_ONEBOT_PORTS,
+  detectExplicitPersonalAntigravityIntent,
+  formatQqArtifactCompletionReply,
   getQqRuntime,
   GroupPacingEngine,
+  inferQqTaskCategory,
   manifest,
   OneBotLoopbackHarness,
   OneBotWsBridge,
@@ -694,5 +698,212 @@ describe("@prismux/plugin-qq", () => {
     assert.equal(uiHarness.panels.size, 0);
     assert.equal(runtime.getNotifications().length, 0);
     assert.equal(runtime.getStatus().activeTimers, 0);
+  });
+
+  test("supports v3 dual-track private-chat dispatch (auto worker vs personal AGY Draft-Only), ArtifactResultBackdoor straight reply, and preserves qq_group isolation", async () => {
+    const dispatchedRequests: Array<Record<string, unknown>> = [];
+
+    const mockFetch: typeof fetch = async (input, init) => {
+      assert.equal(String(input), "http://127.0.0.1:43123/v1/dispatch/thread");
+      const headers = init?.headers as Record<string, string>;
+      assert.equal(headers.Authorization, "Bearer qq-test-token");
+      const reqBody = JSON.parse(String(init?.body ?? "{}")) as Record<
+        string,
+        unknown
+      >;
+      dispatchedRequests.push(reqBody);
+
+      const isAgy =
+        reqBody.provider === "antigravity" ||
+        reqBody.explicitAntigravityRequested === true;
+
+      if (isAgy) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            envelope: {
+              taskId: "qq-draft-agy-1",
+              status: "awaiting_human_confirmation",
+              mode: "draft_only",
+              workspacePath: "/repo/prismux",
+              worktreePath: "/repo/prismux/.worktrees/qq-agy-1",
+              prompt: reqBody.prompt,
+              provider: "antigravity",
+              modelId: "antigravity-commander",
+              reasoningEffort: "high",
+              callerKind: "secretary_qq",
+              createdAt: new Date().toISOString(),
+              requiresHumanConfirmation: true,
+              memoryContextSummary: reqBody.memoryContextSummary
+            }
+          }),
+          { status: 202, headers: { "content-type": "application/json" } }
+        );
+      }
+
+      const isHard = reqBody.taskCategory === "backend_hard";
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          envelope: {
+            taskId: "qq-auto-codex-1",
+            status: "dispatched",
+            mode: "send",
+            workspacePath: "/repo/prismux",
+            prompt: reqBody.prompt,
+            provider: "codex",
+            modelId: isHard ? "gpt-6.2-astra" : "gpt-6.2-sol",
+            reasoningEffort: isHard ? "high" : "medium",
+            callerKind: "secretary_qq",
+            createdAt: new Date().toISOString(),
+            requiresHumanConfirmation: false
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    };
+
+    const daemonDispatcher = createHttpDaemonDispatcher({
+      daemonUrl: "http://127.0.0.1:43123",
+      authToken: "qq-test-token",
+      fetchFn: mockFetch
+    });
+
+    assert.equal(
+      detectExplicitPersonalAntigravityIntent("请用个人版 Antigravity 规划页面"),
+      true
+    );
+    assert.equal(
+      detectExplicitPersonalAntigravityIntent("帮我修复登录接口空指针"),
+      false
+    );
+    assert.equal(
+      inferQqTaskCategory("排查并发死锁问题"),
+      "backend_hard"
+    );
+
+    const daemonHarness = createTestPluginHarness("daemon");
+    const ownerNotifications: string[] = [];
+    const runtime = applyWithOptions(daemonHarness.ctx, {
+      initialConfig: {
+        mode: "forward-ws",
+        wsUrl: "ws://127.0.0.1:3001",
+        ownerQqId: "10001",
+        authorizedGroups: ["777"],
+        botQqId: "99999"
+      },
+      daemonDispatcher,
+      defaultWorkspacePath: "/repo/prismux",
+      memoryQuery: (req) => ({
+        hits:
+          req.callerScope === "owner_chief"
+            ? [
+                {
+                  entry: {
+                    id: "mem-1",
+                    namespace: "workspace/prismux",
+                    kind: "fact",
+                    title: "Glass UI Spec",
+                    content: "Maintain >= 4.5:1 contrast",
+                    importance: 1,
+                    machineId: "test",
+                    createdAt: 1,
+                    updatedAt: 1
+                  },
+                  score: 0.95,
+                  matchSource: "fts"
+                }
+              ]
+            : [],
+        totalCandidates: req.callerScope === "owner_chief" ? 1 : 0,
+        degradedToFtsOnly: false
+      }),
+      onOwnerNotification: (record) => {
+        ownerNotifications.push(record.body);
+      }
+    });
+
+    // 1. Track 1: Owner private non-AGY coding task -> auto-dispatches via Codex (`gpt-6.2-astra` for backend_hard)
+    const autoRes = await runtime.handleInboundMessage({
+      messageType: "private",
+      userId: "10001",
+      rawMessage: "帮我修复队列并发死锁 bug"
+    });
+    assert.equal(autoRes.handled, true);
+    assert.equal(autoRes.route, "owner_private_chief");
+    assert.equal(autoRes.dispatchEnvelope?.mode, "send");
+    assert.equal(autoRes.dispatchEnvelope?.provider, "codex");
+    assert.equal(autoRes.dispatchEnvelope?.modelId, "gpt-6.2-astra");
+    assert.match(autoRes.replyText ?? "", /已自动派发执行/);
+    assert.match(autoRes.replyText ?? "", /gpt-6\.2-astra/);
+    assert.equal(dispatchedRequests[0]?.callerKind, "secretary_qq");
+
+    // 2. Track 2: Owner private request naming personal AGY -> NEVER auto-triggers; stages Draft-Only with Worktree + awaiting confirmation!
+    const agyRes = await runtime.handleInboundMessage({
+      messageType: "private",
+      userId: "10001",
+      rawMessage: "请用个人版 Antigravity 帮我规划新弹窗布局"
+    });
+    assert.equal(agyRes.handled, true);
+    assert.equal(agyRes.dispatchEnvelope?.mode, "draft_only");
+    assert.equal(
+      agyRes.dispatchEnvelope?.status,
+      "awaiting_human_confirmation"
+    );
+    assert.equal(agyRes.dispatchEnvelope?.requiresHumanConfirmation, true);
+    assert.match(agyRes.replyText ?? "", /个人版 AGY 草稿已就位/);
+    assert.match(agyRes.replyText ?? "", /\/repo\/prismux\/\.worktrees\/qq-agy-1/);
+    assert.match(agyRes.replyText ?? "", /确认放行并发送/);
+    assert.equal(dispatchedRequests[1]?.provider, "antigravity");
+    assert.equal(dispatchedRequests[1]?.explicitAntigravityRequested, true);
+
+    // 3. Group chat MUST NEVER invoke Daemon dispatch AND preserves qq_group:<gid> isolation 100%!
+    const groupRes = await runtime.handleInboundMessage({
+      messageType: "group",
+      userId: "20002",
+      groupId: "777",
+      rawMessage: "[CQ:at,qq=99999] 帮我用个人版 Antigravity 修复代码"
+    });
+    assert.equal(groupRes.handled, true);
+    assert.equal(groupRes.route, "authorized_group_reply");
+    assert.equal(groupRes.callerScope, "qq_group:777");
+    assert.equal(groupRes.namespace, "social/qq-group-777");
+    assert.equal(groupRes.dispatchEnvelope, undefined);
+    assert.equal(dispatchedRequests.length, 2); // Zero daemon dispatches triggered from group!
+
+    // 4. ArtifactResultBackdoor straight reply on Stop hook (no heavy Oracle review!)
+    const artifact = {
+      taskId: "qq-auto-codex-1",
+      threadId: "thread-codex-1",
+      workspacePath: "/repo/prismux",
+      finalAssistantText: "已定位锁顺序冲突并修复死锁，全部回归测试通过。",
+      modifiedFiles: ["apps/daemon/src/queue.ts", "apps/daemon/src/__tests__/queue.test.ts"],
+      diffStats: { filesChanged: 2, insertions: 34, deletions: 9 },
+      plainLanguageSummary:
+        "已完成交付：已定位锁顺序冲突并修复死锁；共改动 2 个文件（+34/-9 行），单测已通过。",
+      extractedAt: new Date().toISOString(),
+      branchName: "factory/fix-deadlock"
+    };
+    const formattedReply = formatQqArtifactCompletionReply(artifact);
+    assert.match(formattedReply, /任务完工直达回执/);
+    assert.match(formattedReply, /\+34 \/ -9/);
+    assert.match(formattedReply, /apps\/daemon\/src\/queue\.ts/);
+
+    for (const hook of daemonHarness.hooks) {
+      if (hook.event === "Stop") {
+        await hook.handler({
+          event: "Stop",
+          sessionId: "s-v3",
+          threadId: "thread-codex-1",
+          permissionMode: "auto",
+          toolOutput: artifact,
+          timestamp: Date.now()
+        });
+      }
+    }
+    assert.equal(ownerNotifications.length, 1);
+    assert.match(ownerNotifications[0] ?? "", /\+34 \/ -9/);
+
+    await daemonHarness.dispose();
   });
 });

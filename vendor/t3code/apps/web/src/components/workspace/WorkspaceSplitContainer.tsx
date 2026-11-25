@@ -1,14 +1,21 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
+  type ModelSelection,
+  type ProjectId,
   type ProviderInstanceId,
   type ScopedThreadRef,
+  type ServerProvider,
+  type ServerSettings,
   type ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 import { useNavigate } from "@tanstack/react-router";
 import {
   memo,
@@ -27,6 +34,7 @@ import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useClientSettings } from "../../hooks/useSettings";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   formatAgentBrandName,
   resolveProviderEntryDisplayName,
@@ -37,17 +45,19 @@ import {
 } from "../../prismux/PrismuxWallpaperBridge";
 import {
   providerInstanceEntriesFor,
+  resolveProjectDefaultProviderModelSelection,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { useRightPanelStore, type AgentSessionSurface } from "../../rightPanelStore";
 import { useProjects, useQuietThreadShell, useVisibleThreadShells } from "../../state/entities";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentServerConfigsAtom } from "../../state/server";
 import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
   type ThreadRouteTarget,
 } from "../../threadRoutes";
+import { resolveComposerProviderSelection } from "../ChatView.logic";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { RightPanelAgentSessionPane } from "./RightPanelAgentSessionPane";
 import { WorkspacePaneContent } from "./WorkspacePaneContent";
@@ -82,6 +92,7 @@ import {
   PrismuxStageFrame,
   WorkspaceSplitPaneContext,
   WorkspaceTopbarPortalContext,
+  type WorkspaceActiveChatProviderSnapshot,
   type WorkspaceTopbarPortalContextValue,
 } from "./WorkspaceTopbarPortalContext";
 import {
@@ -105,6 +116,190 @@ export interface PendingDraftTabBinding {
   readonly providerId: string | null;
   readonly instanceId: ProviderInstanceId | null;
   readonly model: string | null;
+}
+
+export interface WorkspaceRouteProviderMetadata {
+  readonly entry: ProviderInstanceEntry | null;
+  readonly instanceId: ProviderInstanceId | null;
+  readonly providerId: string | null;
+  readonly model: string | null;
+  readonly title: string;
+}
+
+export function resolveProviderBrandIdForEntry(entry: ProviderInstanceEntry): string {
+  if (entry.driverKind === "acpRegistry") {
+    return entry.acpRegistryAgentId || entry.displayName || entry.instanceId;
+  }
+  return entry.driverKind;
+}
+
+/**
+ * Resolves the workspace tab's live provider, instance, model, and fallback display title
+ * using the exact same priority chain as `ChatView` (composer draft selection -> live ChatView
+ * snapshot -> sticky provider -> project/server default & fallback selection -> healthy selectable
+ * provider), so scratch (`无项目 ~`) and untitled draft tabs never stale-default to Codex.
+ */
+export function resolveWorkspaceRouteProviderMetadata(input: {
+  readonly shownTarget: ThreadRouteTarget | null;
+  readonly routeKey: string | null;
+  readonly routeThreadShell: {
+    readonly title?: string | null | undefined;
+    readonly modelSelection?: ModelSelection | null | undefined;
+  } | null;
+  readonly routeComposerDraft: {
+    readonly activeProvider: ProviderInstanceId | null;
+    readonly modelSelectionByProvider: Readonly<Partial<Record<ProviderInstanceId, ModelSelection>>>;
+    readonly modelSelectionExplicit?: boolean | undefined;
+  } | null;
+  readonly stickyActiveProvider: ProviderInstanceId | null;
+  readonly stickyModelSelectionByProvider: Readonly<
+    Partial<Record<ProviderInstanceId, ModelSelection>>
+  >;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly settings: ServerSettings;
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly activeProject: EnvironmentProject | null;
+  readonly activeProjectId: ProjectId | null;
+  readonly activeChatProvider?: WorkspaceActiveChatProviderSnapshot | null | undefined;
+  readonly now?: number | undefined;
+}): WorkspaceRouteProviderMetadata {
+  const {
+    shownTarget,
+    routeKey,
+    routeThreadShell,
+    routeComposerDraft,
+    stickyActiveProvider,
+    stickyModelSelectionByProvider,
+    providers,
+    settings,
+    instanceEntries,
+    activeProject,
+    activeProjectId,
+    activeChatProvider,
+    now,
+  } = input;
+
+  const isDraft = shownTarget?.kind === "draft";
+  const liveChatSnapshot =
+    activeChatProvider && routeKey && activeChatProvider.routeKey === routeKey
+      ? activeChatProvider
+      : null;
+
+  const projectDefaultModelSelection = resolveProjectSettings(
+    settings,
+    activeProject?.id ?? activeProjectId ?? null,
+    activeProject ?? undefined,
+  ).settings.defaultModelSelection;
+
+  const draftModelResolution = isDraft
+    ? resolveNewThreadModelSelection({
+        defaultSelection:
+          projectDefaultModelSelection ??
+          resolveProjectDefaultProviderModelSelection(providers, settings, activeProjectId),
+        fallbackSelection: settings.fallbackModelSelection,
+        providers,
+        settings,
+        projectId: activeProjectId,
+        now: now ?? Date.now(),
+      })
+    : null;
+
+  const effectiveDefaultSelection = draftModelResolution?.fallback
+    ? draftModelResolution.selection
+    : (projectDefaultModelSelection ?? draftModelResolution?.selection ?? null);
+
+  const candidateInstanceIds: Array<ProviderInstanceId | null | undefined> = isDraft
+    ? [
+        routeComposerDraft?.modelSelectionExplicit ? routeComposerDraft.activeProvider : null,
+        liveChatSnapshot?.instanceId,
+        routeComposerDraft?.activeProvider,
+        stickyActiveProvider,
+        effectiveDefaultSelection?.instanceId,
+      ]
+    : [
+        routeComposerDraft?.modelSelectionExplicit ? routeComposerDraft.activeProvider : null,
+        liveChatSnapshot?.instanceId,
+        routeThreadShell?.modelSelection?.instanceId,
+        routeComposerDraft?.activeProvider,
+        effectiveDefaultSelection?.instanceId,
+      ];
+
+  const { selectedProviderEntry, requestedInstanceId } = resolveComposerProviderSelection({
+    entries: instanceEntries,
+    candidateInstanceIds,
+    lockedProvider: null,
+    lockedInstanceId: null,
+  });
+
+  const resolvedEntry =
+    selectedProviderEntry ??
+    (requestedInstanceId
+      ? (instanceEntries.find((candidate) => candidate.instanceId === requestedInstanceId) ?? null)
+      : null);
+
+  const instanceId: ProviderInstanceId | null =
+    resolvedEntry?.instanceId ?? requestedInstanceId ?? liveChatSnapshot?.instanceId ?? null;
+
+  const providerId: string | null = resolvedEntry
+    ? resolveProviderBrandIdForEntry(resolvedEntry)
+    : (liveChatSnapshot?.providerId ?? instanceId ?? null);
+
+  const draftSelectedModel =
+    instanceId !== null
+      ? (routeComposerDraft?.modelSelectionByProvider[instanceId]?.model ?? null)
+      : null;
+  const stickySelectedModel =
+    isDraft && instanceId !== null
+      ? (stickyModelSelectionByProvider[instanceId]?.model ?? null)
+      : null;
+  const shellSelectedModel =
+    routeThreadShell?.modelSelection &&
+    (instanceId === null || routeThreadShell.modelSelection.instanceId === instanceId)
+      ? routeThreadShell.modelSelection.model
+      : null;
+  const defaultSelectedModel =
+    effectiveDefaultSelection &&
+    (instanceId === null || effectiveDefaultSelection.instanceId === instanceId)
+      ? effectiveDefaultSelection.model
+      : null;
+  const liveSnapshotModel =
+    liveChatSnapshot &&
+    (instanceId === null || liveChatSnapshot.instanceId === instanceId)
+      ? liveChatSnapshot.model
+      : null;
+
+  const model =
+    draftSelectedModel ??
+    liveSnapshotModel ??
+    stickySelectedModel ??
+    shellSelectedModel ??
+    defaultSelectedModel ??
+    null;
+
+  let title: string;
+  if (routeThreadShell?.title?.trim()) {
+    title = routeThreadShell.title.trim();
+  } else if (isDraft) {
+    if (resolvedEntry) {
+      title = resolveProviderEntryDisplayName(resolvedEntry);
+    } else if (liveChatSnapshot?.displayName?.trim()) {
+      title = liveChatSnapshot.displayName.trim();
+    } else if (providerId) {
+      title = formatAgentBrandName(providerId);
+    } else {
+      title = "新会话";
+    }
+  } else {
+    title = "会话";
+  }
+
+  return {
+    entry: resolvedEntry,
+    instanceId,
+    providerId,
+    model,
+    title,
+  };
 }
 
 /**
@@ -475,11 +670,33 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const tabBarRef = useRef<HTMLDivElement | null>(null);
   const [topbarSlotElement, setTopbarSlotElement] = useState<HTMLDivElement | null>(null);
   const [hasActiveChatControls, setHasActiveChatControls] = useState(false);
+  const [activeChatProvider, setActiveChatProvider] =
+    useState<WorkspaceActiveChatProviderSnapshot | null>(null);
   const [standaloneRightPanel, setStandaloneRightPanel] = useState<
     | { readonly kind: "agent-session"; readonly session: AgentSessionSurface }
     | { readonly kind: "wallpaper" }
     | null
   >(null);
+
+  const handleSetActiveChatProvider = useStableCallback(
+    (next: WorkspaceActiveChatProviderSnapshot | null) => {
+      setActiveChatProvider((current) => {
+        if (current === next) return current;
+        if (
+          current &&
+          next &&
+          current.routeKey === next.routeKey &&
+          current.instanceId === next.instanceId &&
+          current.providerId === next.providerId &&
+          current.model === next.model &&
+          current.displayName === next.displayName
+        ) {
+          return current;
+        }
+        return next;
+      });
+    },
+  );
 
   // Resolve current route thread metadata for seamless Tab Bar sync
   const routeServerRef = shownTarget?.kind === "server" ? shownTarget.threadRef : null;
@@ -498,6 +715,10 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         )
       : null,
   );
+  const stickyActiveProvider = useComposerDraftStore((store) => store.stickyActiveProvider);
+  const stickyModelSelectionByProvider = useComposerDraftStore(
+    (store) => store.stickyModelSelectionByProvider,
+  );
 
   const activeEnvironmentId: EnvironmentId | null =
     routeServerRef?.environmentId ??
@@ -511,6 +732,14 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     routeDraftSession?.projectId ??
     defaultProjectRef?.projectId ??
     null;
+
+  const activeProject =
+    activeEnvironmentId && activeProjectId
+      ? (projects.find(
+          (project) =>
+            project.environmentId === activeEnvironmentId && project.id === activeProjectId,
+        ) ?? null)
+      : null;
 
   const activeHostThreadRef: ScopedThreadRef | null =
     routeServerRef ??
@@ -537,9 +766,10 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       slotElement: topbarSlotElement,
       tabBarRef,
       setHasActiveChatControls,
+      setActiveChatProvider: handleSetActiveChatProvider,
       standaloneRightPanelOpen: Boolean(standaloneRightPanel && !activeHostThreadRef),
     }),
-    [activeHostThreadRef, standaloneRightPanel, topbarSlotElement],
+    [activeHostThreadRef, handleSetActiveChatProvider, standaloneRightPanel, topbarSlotElement],
   );
 
   const openChiefSettings = useCallback(() => {
@@ -547,23 +777,34 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   }, [navigate]);
 
   // Dynamic Provider instance entries + model options for Quick Launcher & Agent Blank Stage
-  const { instanceEntries, modelOptionsByInstance } = useMemo(() => {
-    const serverConfig = activeEnvironmentId
-      ? environmentServerConfigs.get(activeEnvironmentId)
-      : [...environmentServerConfigs.values()][0];
-    const providers = serverConfig?.providers ?? [];
-    const settings = serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
-    const entries: ReadonlyArray<ProviderInstanceEntry> = providerInstanceEntriesFor(
-      providers,
-      settings,
-      activeProjectId,
-    );
-    const optionsMap = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>();
-    for (const entry of entries) {
-      optionsMap.set(entry.instanceId, entry.models);
-    }
-    return { instanceEntries: entries, modelOptionsByInstance: optionsMap };
-  }, [activeEnvironmentId, activeProjectId, environmentServerConfigs]);
+  const providersByEnvironment = useEnvironmentProviders();
+  const { activeProviders, activeServerSettings, instanceEntries, modelOptionsByInstance } =
+    useMemo(() => {
+      const serverConfig = activeEnvironmentId
+        ? environmentServerConfigs.get(activeEnvironmentId)
+        : [...environmentServerConfigs.values()][0];
+      const liveProviders = activeEnvironmentId
+        ? providersByEnvironment.get(activeEnvironmentId)
+        : undefined;
+      const providers =
+        liveProviders && liveProviders.length > 0 ? liveProviders : (serverConfig?.providers ?? []);
+      const settings = serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
+      const entries: ReadonlyArray<ProviderInstanceEntry> = providerInstanceEntriesFor(
+        providers,
+        settings,
+        activeProjectId,
+      );
+      const optionsMap = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>();
+      for (const entry of entries) {
+        optionsMap.set(entry.instanceId, entry.models);
+      }
+      return {
+        activeProviders: providers,
+        activeServerSettings: settings,
+        instanceEntries: entries,
+        modelOptionsByInstance: optionsMap,
+      };
+    }, [activeEnvironmentId, activeProjectId, environmentServerConfigs, providersByEnvironment]);
 
   const projectNameByKey = useMemo(() => {
     const map = new Map<string, string>();
@@ -615,58 +856,27 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     });
   }, []);
 
-  const routeActiveSelection = useMemo(() => {
-    const draftProvider = routeComposerDraft?.activeProvider ?? null;
-    const draftSelection = draftProvider
-      ? routeComposerDraft?.modelSelectionByProvider[draftProvider]
-      : null;
-    return draftSelection ?? routeThreadShell?.modelSelection ?? null;
-  }, [routeComposerDraft, routeThreadShell]);
-
-  const routeActiveProviderId = useMemo(() => {
-    const draftProvider = routeComposerDraft?.activeProvider ?? null;
-    const instanceId = routeActiveSelection?.instanceId ?? null;
-    if (instanceId) {
-      const entry = instanceEntries.find((candidate) => candidate.instanceId === instanceId);
-      if (entry) return entry.driverKind;
-      return instanceId;
-    }
-    return draftProvider;
-  }, [instanceEntries, routeActiveSelection?.instanceId, routeComposerDraft?.activeProvider]);
-
-  const routeActiveInstanceId = routeActiveSelection?.instanceId ?? null;
-  const routeActiveModel = routeActiveSelection?.model ?? null;
-
-  const routeActiveEntry = useMemo(() => {
-    if (!routeActiveInstanceId) return null;
-    return instanceEntries.find((candidate) => candidate.instanceId === routeActiveInstanceId) ?? null;
-  }, [instanceEntries, routeActiveInstanceId]);
-
-  const routeDisplayTitle = useMemo(() => {
-    if (routeThreadShell?.title?.trim()) return routeThreadShell.title.trim();
-    if (shownTarget?.kind === "draft") {
-      if (routeActiveEntry) {
-        return resolveProviderEntryDisplayName(routeActiveEntry);
-      }
-      if (routeActiveProviderId) {
-        return formatAgentBrandName(routeActiveProviderId);
-      }
-      const fallbackEntry = instanceEntries.find((entry) => entry.enabled) ?? instanceEntries[0];
-      if (fallbackEntry) {
-        return resolveProviderEntryDisplayName(fallbackEntry);
-      }
-      return "新会话";
-    }
-    return "会话";
-  }, [
+  const routeProviderMetadata = resolveWorkspaceRouteProviderMetadata({
+    shownTarget,
+    routeKey,
+    routeThreadShell,
+    routeComposerDraft,
+    stickyActiveProvider,
+    stickyModelSelectionByProvider,
+    providers: activeProviders,
+    settings: activeServerSettings,
     instanceEntries,
-    routeActiveEntry,
-    routeActiveProviderId,
-    routeThreadShell?.title,
-    shownTarget?.kind,
-  ]);
+    activeProject,
+    activeProjectId,
+    activeChatProvider,
+  });
 
-  // Keep open draft & blank agent tab titles synchronized immediately when a provider is renamed in Settings.
+  const routeActiveProviderId = routeProviderMetadata.providerId;
+  const routeActiveInstanceId = routeProviderMetadata.instanceId;
+  const routeActiveModel = routeProviderMetadata.model;
+  const routeDisplayTitle = routeProviderMetadata.title;
+
+  // Keep open draft & blank agent tab titles & brand icons synchronized immediately when a provider changes in Settings.
   useEffect(() => {
     if (instanceEntries.length === 0) return;
     const entryById = new Map(instanceEntries.map((entry) => [entry.instanceId, entry] as const));
@@ -676,8 +886,14 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       const entry = entryById.get(tab.instanceId);
       if (!entry) continue;
       const nextTitle = resolveProviderEntryDisplayName(entry);
-      if (nextTitle && tab.title !== nextTitle) {
-        store.updateTab(tab.id, { title: nextTitle });
+      const nextProviderId = resolveProviderBrandIdForEntry(entry);
+      const titleChanged = Boolean(nextTitle && tab.title !== nextTitle);
+      const providerChanged = Boolean(nextProviderId && tab.providerId !== nextProviderId);
+      if (titleChanged || providerChanged) {
+        store.updateTab(tab.id, {
+          ...(titleChanged ? { title: nextTitle } : {}),
+          ...(providerChanged ? { providerId: nextProviderId } : {}),
+        });
       }
     }
   }, [instanceEntries]);
@@ -825,6 +1041,13 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
                       formatAgentBrandName(tab.providerId).toLowerCase()),
               )
             : undefined) ??
+          routeProviderMetadata.entry ??
+          resolveComposerProviderSelection({
+            entries: instanceEntries,
+            candidateInstanceIds: [stickyActiveProvider],
+            lockedProvider: null,
+            lockedInstanceId: null,
+          }).selectedProviderEntry ??
           instanceEntries.find((entry) => entry.enabled) ??
           instanceEntries[0] ??
           null;
@@ -839,7 +1062,9 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           matchedEntry && resolvedModel
             ? createModelSelection(matchedEntry.instanceId, resolvedModel)
             : null;
-        const resolvedProviderId = matchedEntry?.driverKind ?? tab.providerId ?? null;
+        const resolvedProviderId = matchedEntry
+          ? resolveProviderBrandIdForEntry(matchedEntry)
+          : (tab.providerId ?? null);
         const resolvedInstanceId = matchedEntry?.instanceId ?? tab.instanceId ?? null;
         const resolvedTitle = matchedEntry
           ? resolveProviderEntryDisplayName(matchedEntry)
@@ -950,7 +1175,14 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         materializingTabIdsRef.current.delete(tab.id);
       }
     },
-    [handleNewThread, instanceEntries, navigate, resolveProjectRefForMainLaunch],
+    [
+      handleNewThread,
+      instanceEntries,
+      navigate,
+      resolveProjectRefForMainLaunch,
+      routeProviderMetadata.entry,
+      stickyActiveProvider,
+    ],
   );
 
   // Auto-upgrade any legacy/orphaned "agent" tab active in the primary pane into a full ChatView draft.
@@ -1574,6 +1806,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const renderNode = (
     node: WorkspaceSplitLayoutNode,
     edges: SplitPaneEdges,
+    parentSplitId: string | null = null,
   ): ReactNode => {
     if (node.type === "split") {
       const isHorizontal = node.direction === "horizontal";
@@ -1590,7 +1823,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             className="flex min-h-0 min-w-0 overflow-hidden rounded-none"
             style={{ flex: `${node.ratio} 1 0%` }}
           >
-            {renderNode(node.first, childEdges.first)}
+            {renderNode(node.first, childEdges.first, node.id)}
           </div>
           <SplitResizeHandle
             splitId={node.id}
@@ -1610,7 +1843,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             className="flex min-h-0 min-w-0 overflow-hidden rounded-none"
             style={{ flex: `${1 - node.ratio} 1 0%` }}
           >
-            {renderNode(node.second, childEdges.second)}
+            {renderNode(node.second, childEdges.second, node.id)}
           </div>
         </div>
       );
@@ -1684,6 +1917,11 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             onActivateTab={handleActivateTab}
             onCloseTab={handleCloseTab}
             onSplitPane={handleSplitPane}
+            onResetSplitRatio={
+              parentSplitId
+                ? () => useWorkspaceTabsStore.getState().resetSplitRatio(parentSplitId)
+                : undefined
+            }
             onClosePane={(id) => useWorkspaceTabsStore.getState().closePane(id, { mergeTabs: true })}
             onMoveTabToPane={(tabId, fromPaneId, toPaneId, insertIndex) =>
               useWorkspaceTabsStore

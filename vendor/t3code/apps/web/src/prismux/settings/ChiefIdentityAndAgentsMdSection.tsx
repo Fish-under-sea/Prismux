@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useState, type RefObject } from "react";
 
-import { SettingsRow } from "../../components/settings/settingsLayout";
+import { SETTINGS_CONTROL_MD, SettingsRow } from "../../components/settings/settingsLayout";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -151,7 +151,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
           secretaryName: finalName,
           agentsMdPath: finalPath,
         });
-        const msg = `主秘书称呼已更新为「${finalName}」，已同步写入独立 AGENTS.md 身份头（切换底层引擎时保持不变）。`;
+        const msg = `主秘书称呼已更新为「${finalName}」，切换底层引擎时保持不变。`;
         setLocalNotice(msg);
         onStatus?.(msg);
         await loadAgentsMd();
@@ -191,7 +191,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
       if (typeof res?.path === "string" && res.path.trim().length > 0) {
         setResolvedPath(res.path.trim());
       }
-      const msg = `已保存独立主秘书指令文件（${res?.path ?? resolvedPath}），切换任意底层引擎均不会重置。`;
+      const msg = "主秘书指令已保存，切换底层引擎时自动沿用。";
       setLocalNotice(msg);
       onStatus?.(msg);
     } catch (err) {
@@ -212,7 +212,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
       const restored = typeof res?.content === "string" ? res.content : "";
       setMdContent(restored);
       setSavedMdContent(restored);
-      const msg = `已将独立 AGENTS.md 恢复为默认模板（保留当前称呼「${effectiveName}」）。`;
+      const msg = `已恢复默认指令模板并保留称呼「${effectiveName}」。`;
       setLocalNotice(msg);
       onStatus?.(msg);
     } catch (err) {
@@ -228,10 +228,11 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
   return (
     <>
       <SettingsRow
+        id="chief-identity"
         title={
           <span className="inline-flex items-center gap-1.5">
             <UserCheckIcon className="size-3.5 text-primary" />
-            <span>主秘书称呼（自定义名称）</span>
+            <span>主秘书称呼</span>
             {isCustomChiefDisplayName(effectiveName) ? (
               <Badge variant="info" className="text-[10px]">
                 {effectiveName}
@@ -239,7 +240,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
             ) : null}
           </span>
         }
-        description={`支持中英文昵称（如「猫猫」「小棱」「Aria」）；在对话中喊「${previewName}」或 @${previewName} 即可直接唤起主秘书，切换底层引擎（当前：${activeProviderLabel}）后身份不变。`}
+        description={`对话中提及「${previewName}」或 @${previewName} 即可唤起，切换底层引擎（当前：${activeProviderLabel}）后保持不变。`}
         control={
           <div
             data-pmx-chief-identity-controls=""
@@ -249,7 +250,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
               nativeInput
               size="sm"
               data-pmx-chief-name-input=""
-              className="w-full sm:w-44"
+              className={`${SETTINGS_CONTROL_MD} max-w-full`}
               maxLength={32}
               placeholder="主秘书 / 猫猫 / 小棱 / Aria"
               value={nameInput}
@@ -293,28 +294,29 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
       />
 
       <SettingsRow
+        id="chief-agents-md"
         title={
           <span className="inline-flex flex-wrap items-center gap-1.5">
             <FileTextIcon className="size-3.5 text-primary" />
-            <span>独立主秘书指令（AGENTS.md）</span>
+            <span>主秘书人设与指令（AGENTS.md）</span>
             <Badge variant="success" className="gap-1 text-[10px]">
               <SparklesIcon className="size-2.5" />
               切换任意底层引擎不重置
             </Badge>
           </span>
         }
-        description="主秘书拥有完全独立于底层 CLI 引擎的专属人格、称呼与工作纪律指令文件；无论把底层引擎切换为 Codex、Claude Code、Antigravity 还是 oh-my-pi，都会自动继承同一份规则。"
+        description="独立于底层引擎的专属人设与工作纪律，切换为 Codex、Claude Code、Antigravity 或 DeepSeek Harness 均自动沿用。"
       >
         <div
           data-pmx-chief-agents-md-section=""
           className="mt-2.5 space-y-2.5 pb-2"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-background/50 px-3 py-1.5 text-[11px]">
-            <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-              <span className="shrink-0">文件路径：</span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0">文件：</span>
               <code
                 data-pmx-chief-agents-md-path=""
-                className="truncate font-mono text-foreground/90"
+                className="truncate font-mono text-foreground/85"
                 title={resolvedPath}
               >
                 {resolvedPath}
@@ -348,13 +350,13 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
             spellCheck={false}
             value={mdContent}
             onChange={(event) => setMdContent(event.target.value)}
-            placeholder="在此编写主秘书的专属人格、语气、汇报格式与长期工作纪律……（修改称呼时仅自动更新顶部受控身份块，不会覆盖正文）"
+            placeholder="在此编写主秘书的人设、语气、汇报格式与长期工作纪律……"
             className="w-full resize-y rounded-lg border border-border/80 bg-background/70 px-3 py-2 font-mono text-[11.5px] leading-relaxed text-foreground shadow-xs outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-primary/70 focus:ring-2 focus:ring-ring/40"
           />
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-[11px] text-muted-foreground">
-              提示：顶部受控身份块会在改名时自动刷新，正文内容始终保留；支持随时热切引擎零丢失。
+              修改称呼时仅自动更新顶部身份块，正文内容始终保留。
             </span>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -384,7 +386,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
           </div>
 
           {localNotice ? (
-            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/8 px-3 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
+            <div className="rounded-md bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
               {localNotice}
             </div>
           ) : null}

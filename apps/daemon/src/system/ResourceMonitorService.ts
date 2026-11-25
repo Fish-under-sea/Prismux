@@ -558,7 +558,6 @@ const AGENT_PATTERNS: ReadonlyArray<{
 }> = [
   { regex: /(?:^|[\\/.\s-])(claude(?:-code)?|@anthropic-ai[\\/]claude-code)(?:$|[\\/.\s-])/i, label: "Claude Code" },
   { regex: /(?:^|[\\/.\s-])(codex|@openai[\\/]codex)(?:$|[\\/.\s-])/i, label: "Codex Agent" },
-  { regex: /(?:^|[\\/.\s-])(omp|oh-my-pi)(?:$|[\\/.\s-])/i, label: "OMP Agent" },
   { regex: /(?:^|[\\/.\s-])(agy|antigravity)(?:$|[\\/.\s-])/i, label: "Antigravity ACP" },
   { regex: /(?:^|[\\/.\s-])(gemini(?:-cli)?)(?:$|[\\/.\s-])/i, label: "Gemini CLI" },
   { regex: /(?:^|[\\/.\s-])(opencode|cursor-agent|aider)(?:$|[\\/.\s-])/i, label: "Coding Agent" }

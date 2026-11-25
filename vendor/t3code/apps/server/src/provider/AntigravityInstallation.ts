@@ -821,8 +821,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
           (initialized.protocolVersion !== 1 && initialized.protocolVersion !== 2) ||
           initialized.agentCapabilities?.loadSession !== true ||
           !initialized.agentCapabilities.sessionCapabilities?.resume ||
-          !initialized.agentCapabilities.auth?.logout ||
-          !initialized.authMethods?.some((method) => method.id === "oauth-personal")
+          !initialized.agentCapabilities.auth?.logout
         ) {
           return yield* installationError(
             "verify",

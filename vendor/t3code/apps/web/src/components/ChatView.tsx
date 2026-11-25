@@ -36,6 +36,10 @@ import { useThreadLifecycle } from "./chat/useThreadLifecycle";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { PrismuxTopbarControls } from "../prismux/PrismuxWallpaperBridge";
 import {
+  formatAgentBrandName,
+  resolveProviderEntryDisplayName,
+} from "../prismux/agentBrand";
+import {
   AgyWelcomeGreeting,
   AgyWelcomeSuggestions,
   resolveCurrentUserDisplayName,
@@ -54,7 +58,7 @@ import {
   resolveEffectiveLaunchMode,
   useProviderLaunchModePreferences,
 } from "./settings/prismuxProviderMode";
-import { MessageSquareIcon, MessageSquarePlusIcon, TerminalIcon } from "lucide-react";
+import { MessageSquareIcon, TerminalIcon } from "lucide-react";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
@@ -3678,6 +3682,23 @@ export default function ChatView(props: ChatViewProps) {
   const topbarPortal = useWorkspaceTopbarPortal();
   const topbarManaged = topbarPortal.managed && !embedded;
   const hasActiveThreadForTopbar = activeThread !== null;
+  const { setActiveChatProvider } = topbarPortal;
+  const chatRouteKey =
+    routeKind === "server" ? `server:${environmentId}:${threadId}` : `draft:${props.draftId}`;
+  const activeChatProviderId = selectedProviderEntry
+    ? selectedProviderEntry.driverKind === "acpRegistry"
+      ? selectedProviderEntry.acpRegistryAgentId ||
+        selectedProviderEntry.displayName ||
+        selectedProviderEntry.instanceId
+      : selectedProviderEntry.driverKind
+    : selectedProvider && selectedProvider !== "unconfigured"
+      ? selectedProvider
+      : null;
+  const activeChatDisplayName = selectedProviderEntry
+    ? resolveProviderEntryDisplayName(selectedProviderEntry)
+    : activeChatProviderId
+      ? formatAgentBrandName(activeChatProviderId)
+      : null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- notifies the parent WorkspaceSplitContainer when ChatView portals its live controls into the single topbar slot
   useEffect(() => {
     if (!topbarManaged || !hasActiveThreadForTopbar) return;
@@ -3686,6 +3707,37 @@ export default function ChatView(props: ChatViewProps) {
       topbarPortal.setHasActiveChatControls(false);
     };
   }, [hasActiveThreadForTopbar, topbarManaged, topbarPortal]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors ChatView's authoritative resolved provider/model to the parent WorkspaceSplitContainer tab bar
+  useEffect(() => {
+    if (!topbarManaged || !setActiveChatProvider) return;
+    if (!hasActiveThreadForTopbar) {
+      setActiveChatProvider(null);
+      return;
+    }
+    setActiveChatProvider({
+      routeKey: chatRouteKey,
+      instanceId: activeProviderInstanceId,
+      providerId: activeChatProviderId,
+      model: activeUsageModel,
+      displayName: activeChatDisplayName,
+    });
+  }, [
+    activeChatDisplayName,
+    activeChatProviderId,
+    activeProviderInstanceId,
+    activeUsageModel,
+    chatRouteKey,
+    hasActiveThreadForTopbar,
+    setActiveChatProvider,
+    topbarManaged,
+  ]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears ChatView provider snapshot when unmounted from managed topbar
+  useEffect(() => {
+    if (!topbarManaged || !setActiveChatProvider) return;
+    return () => {
+      setActiveChatProvider(null);
+    };
+  }, [setActiveChatProvider, topbarManaged]);
 
   if (!activeThread) {
     return embedded ? null : <NoActiveThreadState />;
@@ -3821,51 +3873,26 @@ export default function ChatView(props: ChatViewProps) {
   });
 
   const continuationHeaderControls =
-    (continueInTerminalPlan && isTerminalHosted) || continuationSource ? (
+    continueInTerminalPlan && isTerminalHosted ? (
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        {continueInTerminalPlan && isTerminalHosted ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="secondary"
-                  data-action="return-to-chat-view"
-                  onClick={handleReturnToChatViewStable}
-                  className="h-6.5 gap-1.5 px-2 text-xs"
-                >
-                  <MessageSquareIcon className="size-3.5" />
-                  <span className="hidden lg:inline">{gt("Return to chat")}</span>
-                </Button>
-              }
-            />
-            <TooltipPopup side="bottom">{gt("Switch back to structured Chat view")}</TooltipPopup>
-          </Tooltip>
-        ) : null}
-        {continuationSource ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  data-action="hand-off-to-agent"
-                  onClick={() => setContinuationDialogOpen(true)}
-                  className="h-6.5 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
-                  aria-label={gt("Hand off to agent")}
-                >
-                  <MessageSquarePlusIcon className="size-3.5" />
-                  <span className="hidden xl:inline">{gt("Hand off to agent")}</span>
-                </Button>
-              }
-            />
-            <TooltipPopup side="bottom">
-              {gt("Hand off this session to another agent without modifying the original thread.")}
-            </TooltipPopup>
-          </Tooltip>
-        ) : null}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="xs"
+                variant="secondary"
+                data-action="return-to-chat-view"
+                onClick={handleReturnToChatViewStable}
+                className="h-6.5 gap-1.5 px-2 text-xs"
+              >
+                <MessageSquareIcon className="size-3.5" />
+                <span className="hidden lg:inline">{gt("Return to chat")}</span>
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">{gt("Switch back to structured Chat view")}</TooltipPopup>
+        </Tooltip>
       </div>
     ) : null;
 

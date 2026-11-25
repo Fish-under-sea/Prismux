@@ -230,7 +230,8 @@ describe('Color utilities & contrast luminance clamping', () => {
   it('keeps already-readable stock colors untouched and interpolates monotonically with fidelity', () => {
     assert.equal(clampSurfaceColorForContrast('#ffffff', false, 100), '#ffffff');
     assert.equal(clampSurfaceColorForContrast('#0d1524', true, 100), '#0d1524');
-    assert.equal(clampSurfaceColorForContrast('invalid', true, 100), '#0d1524');
+    assert.equal(clampSurfaceColorForContrast('#000000', true, 100), '#000000');
+    assert.equal(clampSurfaceColorForContrast('invalid', true, 100), '#000000');
     assert.equal(clampSurfaceColorForContrast('invalid', false, 100), '#ffffff');
 
     // Bright yellow in dark mode must clamp darker at fidelity=100, stay raw at fidelity=0, and stay strictly between at 50.
@@ -443,6 +444,43 @@ describe('.wb-theme export, import & sanitization roundtrip', () => {
 });
 
 describe('Default/custom merge boundaries & document application', () => {
+  it('locks v0.2.0-rc.2 glass-dark-clear appearance defaults and low-density card spacing without Layer-3 nested boxes', () => {
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.themeMode, 'glass');
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.glassBasePolarity, 'dark');
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.accentMode, 'system');
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.glassPreset, 'clear');
+    assert.deepEqual(DEFAULT_APPEARANCE_CONFIG.glassRegions, {
+      surface: { op: 18, blur: 24 },
+      card: { op: 12, blur: 16 },
+      overlay: { op: 25, blur: 20 },
+      control: { op: 16, blur: 10 },
+    });
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.glassColor, '#ffffff');
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.glassDarkSeparate, true);
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.glassDarkColor, '#000000');
+
+    const normalized = normalizeAppearanceConfig({});
+    assert.deepEqual(normalized, DEFAULT_APPEARANCE_CONFIG);
+
+    const rt = resolveAppearanceRuntime(normalized);
+    assert.equal(rt.glassActive, true);
+    assert.equal(rt.polarity, 'dark');
+    assert.equal(rt.activeGlassTint, '#000000');
+
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
+    assert.match(cardsCss, /\.pmx-appearance\.ilook-cards-stack\s*\{[^}]*gap:\s*16px;/s);
+    assert.match(cardsCss, /\.pmx-appearance\s+\.ilook-sec-card\s*\{[^}]*padding:\s*16px 18px;/s);
+    assert.match(
+      cardsCss,
+      /\.pmx-appearance\s+\.pmx-sub-box\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/s,
+    );
+    assert.match(
+      cardsCss,
+      /\.pmx-appearance\s+\.ilook-sec-card\s+\.ilook-sec-card\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/s,
+    );
+  });
+
   it('clamps out-of-range numeric fields, handles preset transitions, and auto-wakes glass off -> balanced', () => {
     const merged = normalizeAppearanceConfig({
       themeMode: 'invalid' as unknown as AppearanceConfig['themeMode'],
@@ -3090,6 +3128,71 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
         ) ?? []
       ).length >= 4,
       'all 3 solid fallback blocks + forced-colors must disable userBubble Fresnel ::before rim',
+    );
+  });
+
+  it('RC.2 low-density 8-zone cards gate sliders on custom mode, use 2-col grid, and export ThemePaletteCard & ThemeSnapshotActions', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const configuratorSrc = fs.readFileSync(
+      new URL('../../src/GlassZoneConfigurator.tsx', import.meta.url),
+      'utf8',
+    );
+    const heroSrc = fs.readFileSync(
+      new URL('../../src/AppearanceHeroAndCards.tsx', import.meta.url),
+      'utf8',
+    );
+    const indexSrc = fs.readFileSync(path.resolve(here, '../index.js'), 'utf8');
+    const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
+
+    // 3-state compact mode labels + sliders strictly gated on isCustom
+    assert.ok(configuratorSrc.includes("label: '跟随'"));
+    assert.ok(configuratorSrc.includes("label: '自定义'"));
+    assert.ok(configuratorSrc.includes("label: '不透明'"));
+    assert.ok(configuratorSrc.includes('{isCustom ? ('));
+    assert.ok(configuratorSrc.includes('data-pmx-zone-sliders={meta.id}'));
+
+    // 2-column grid with align-items: start & reduced-motion guard
+    assert.match(cardsCss, /\.pmx-appearance\s+\.pmx-gz-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);[^}]*align-items:\s*start;/s);
+    assert.match(cardsCss, /\.pmx-appearance\s+\.pmx-gz-sliders-expand/);
+
+    // Composable RC.2 Tab components & unified typography font-selector toggle + Fresnel slider
+    assert.ok(heroSrc.includes('export function ThemePaletteCard'));
+    assert.ok(heroSrc.includes('export function ThemeSnapshotActions'));
+    assert.ok(heroSrc.includes('showFontFamilySelectors'));
+    assert.ok(heroSrc.includes('config.fresnelStrength'));
+    assert.match(indexSrc, /ThemePaletteCard/);
+    assert.match(indexSrc, /ThemeSnapshotActions/);
+  });
+
+  it('RC.2 #705 binds inline markdown file links and mention/file/citation context chips to --pmx-accent while preserving custom UI colors and bubble ink', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+
+    // Global Prismux theme accent binding for context chips & info-foreground
+    assert.match(
+      bridgeCss,
+      /html\[data-pmx-theme\],\s*html\.dark\[data-pmx-theme\],\s*html:not\(\.dark\)\[data-pmx-theme\],\s*html\[data-pmx-theme\]\[data-theme-id\]:not\(\[data-theme-id=''\]\)\s*\{[^}]*--context-chip-mention:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--context-chip-file:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--context-chip-citation:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--info-foreground:\s*var\(--pmx-accent,\s*#5e9bff\);/s,
+    );
+
+    // .chat-markdown-file-link & [data-slot="context-chip"].chat-markdown-file-link follow --pmx-accent and preserve --context-chip-message-ink
+    assert.match(
+      bridgeCss,
+      /html\[data-pmx-theme\] \.chat-markdown-file-link,\s*html\[data-pmx-theme\] \[data-slot="context-chip"\]\.chat-markdown-file-link\s*\{[^}]*--context-chip-accent:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--context-chip-ink:\s*var\(--context-chip-message-ink,\s*var\(--pmx-accent,\s*#5e9bff\)\);[^}]*color:\s*var\(--context-chip-ink\);/s,
+    );
+
+    // Explicit UI custom colors (data-pmx-ui-colors='1') override afterward while preserving --context-chip-message-ink
+    const baseIdx = bridgeCss.indexOf('html[data-pmx-theme] .chat-markdown-file-link');
+    const customIdx = bridgeCss.indexOf(
+      'html[data-pmx-theme][data-pmx-ui-colors=\'1\'] .chat-markdown-file-link',
+    );
+    assert.ok(baseIdx > 0 && customIdx > baseIdx, 'custom UI color override must appear after base accent binding');
+    assert.match(
+      bridgeCss.slice(customIdx),
+      /--context-chip-accent:\s*var\(--pmx-ui-file-icon,\s*var\(--pmx-accent,\s*#5e9bff\)\);/,
+    );
+    assert.match(
+      bridgeCss.slice(customIdx),
+      /--context-chip-ink:\s*var\(\s*--context-chip-message-ink,\s*var\(--pmx-ui-file-icon,\s*var\(--pmx-accent,\s*#5e9bff\)\)\s*\);/,
     );
   });
 });

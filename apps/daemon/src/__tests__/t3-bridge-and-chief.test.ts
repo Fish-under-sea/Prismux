@@ -848,7 +848,7 @@ describe("ChiefThreadManager", () => {
     }
   });
 
-  it("persists reasoningEffort across daemon restarts, normalizes aliases, and clears back to provider default", async () => {
+  it("defaults reasoningEffort to high when unconfigured, persists across daemon restarts, normalizes aliases, and clears back to provider default", async () => {
     const dataDir = createTempDir("prismux-chief-effort-");
     const manager = new ChiefThreadManager({
       dataDir,
@@ -856,7 +856,16 @@ describe("ChiefThreadManager", () => {
     });
     const initSlot = await manager.init();
     assert.equal(initSlot.activeProvider, "codex");
-    assert.equal(initSlot.reasoningEffort, undefined);
+    assert.equal(initSlot.reasoningEffort, "high");
+
+    // Explicit empty defaultReasoningEffort opts out to provider default (undefined).
+    const clearedDefaultDir = createTempDir("prismux-chief-effort-clear-");
+    const clearedManager = new ChiefThreadManager({
+      dataDir: clearedDefaultDir,
+      defaultProvider: "codex",
+      defaultReasoningEffort: ""
+    });
+    assert.equal((await clearedManager.init()).reasoningEffort, undefined);
 
     // Switch via T3 alias ("claudeAgent") with explicit model + reasoningEffort.
     const switchedClaude = await manager.switchProvider(
@@ -876,15 +885,21 @@ describe("ChiefThreadManager", () => {
     assert.equal(recovered.model, "claude-opus-4-6");
     assert.equal(recovered.reasoningEffort, "ultracode");
 
-    // Switch via oh-my-pi alias ("pi") and clear reasoningEffort back to provider default.
-    const switchedOmp = await restarted.switchProvider(
-      "pi" as unknown as "omp",
+    // Switch via Antigravity alias ("agy") and clear reasoningEffort back to provider default.
+    const switchedAgy = await restarted.switchProvider(
+      "agy" as unknown as "antigravity",
       undefined,
       ""
     );
-    assert.equal(switchedOmp.activeProvider, "omp");
-    assert.equal(switchedOmp.model, undefined);
-    assert.equal(switchedOmp.reasoningEffort, undefined);
+    assert.equal(switchedAgy.activeProvider, "antigravity");
+    assert.equal(switchedAgy.model, undefined);
+    assert.equal(switchedAgy.reasoningEffort, undefined);
+
+    // Retired omp / oh-my-pi / pi aliases are rejected cleanly.
+    await assert.rejects(
+      () => restarted.switchProvider("omp" as unknown as "codex"),
+      /Invalid Chief provider/
+    );
 
     // Legacy disk file using `defaultEffort` is recovered seamlessly into `reasoningEffort`.
     const slotPath = join(dataDir, CHIEF_SLOT_FILENAME);

@@ -564,13 +564,15 @@ describe("Prismux privacy-safe default server settings", () => {
     expect(decodeServerSettings({}).guestSharingEnabled).toBe(false);
   });
 
-  it("applies v0.2.0-rc.1 out-of-box defaults, DSH work-step settings, and providerOrder", () => {
+  it("applies v0.2.0-rc.2 locked out-of-box defaults, DSH work-step settings, and providerOrder", () => {
     const client = decodeClientSettings({});
     expect(client.effortDisplay).toBe("bars");
     expect(client.mathRenderingEnabled).toBe(true);
     expect(client.inAppNotificationsEnabled).toBe(true);
     expect(client.notificationMode).toBe("notifications");
-    expect(client.diffFilesCollapsed).toBe(false);
+    expect(client.language).toBe("system");
+    expect(client.environmentIdentificationMode).toBe("artwork");
+    expect(client.diffFilesCollapsed).toBe(true);
     expect(client.workStepsDisplay).toBe("standard");
     expect(client.workStepsCollapseTiming).toBe("after-turn");
     expect(client.collapsedAssistantReplyMode).toBe("all");
@@ -590,9 +592,14 @@ describe("Prismux privacy-safe default server settings", () => {
     const server = decodeServerSettings({});
     expect(server.branchNamePrefix).toBe("prismux");
     expect(server.promptSuggestionsEnabled).toBe(true);
+    expect(server.enableDeviceSupport).toBe(true);
+    expect(server.enableAgentDeviceAccess).toBe(true);
+    expect(server.enableProviderUpdateChecks).toBe(false);
+    expect(globalIdleCompaction(server)).toBe("onReturn");
+    expect(globalIdleCompaction(DEFAULT_SERVER_SETTINGS)).toBe("onReturn");
     expect(server.storageCleanup.worktreeOnDelete).toBe(true);
     expect(server.storageCleanup.worktreeUnchanged).toBe(true);
-    expect(server.providerOrder).toEqual([]);
+    expect(server.providerOrder).toEqual(["antigravity", "codex", "claudeAgent"]);
 
     const orderPatch = decodeServerSettingsPatch({
       providerOrder: ["dsh", "claudeAgent", "codex"],

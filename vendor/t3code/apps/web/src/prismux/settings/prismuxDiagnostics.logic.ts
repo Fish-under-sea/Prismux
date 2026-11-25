@@ -4,6 +4,7 @@ import type {
   DaemonDiagnosticsServicesResponse,
   DaemonDiagnosticsStatus,
 } from "../daemonClient";
+import type { DiagnosticsBadgeTone } from "../../components/sidebar/prismuxSidebarQuickNav.logic";
 
 export type DiagnosticCategoryKey =
   | "host_core"
@@ -181,6 +182,88 @@ export function detectMemoryRetrievalState(
   };
 }
 
+const UNINSTALLED_AI_PROVIDER_RE =
+  /not_installed|not[- ]installed|uninstalled|未检测到本机\s*cli|未检测到.*cli|path\s*中未找到|未在\s*path\s*中找到|not found (?:on|in) path|command not found|cli not found|executable not found|未安装/i;
+const INSTALLED_BROKEN_AI_PROVIDER_RE =
+  /已发现|启动.*异常|探测异常|版本探测|version check|exit code|timed?\s*out|auth(?:entication)?\s+(?:error|failed)|登录失效/i;
+const RETIRED_OMP_RE = /(?:^|[._\-\s])(?:omp|oh-my-pi)(?:$|[._\-\s])/i;
+
+/**
+ * Defensive UI parity with Daemon: omits retired `omp` and uninstalled optional AI Provider CLIs
+ * so they never render yellow degraded cards or trigger the sidebar dot; keeps broken installed CLIs.
+ */
+export function isOmittedAiProviderDiagnosticItem(
+  raw: Pick<DaemonDiagnosticsItemDto, "id" | "category" | "name" | "status" | "summary"> & {
+    readonly detail?: string | null;
+    readonly installed?: unknown;
+    readonly state?: unknown;
+    readonly code?: unknown;
+  },
+): boolean {
+  const id = typeof raw.id === "string" ? raw.id.trim().toLowerCase() : "";
+  const category = typeof raw.category === "string" ? raw.category.trim().toLowerCase() : "";
+  const name = typeof raw.name === "string" ? raw.name.trim().toLowerCase() : "";
+  const isAiProvider = category === "ai_providers" || id.startsWith("provider.");
+
+  if (
+    id === "provider.omp" ||
+    id === "omp" ||
+    (isAiProvider && RETIRED_OMP_RE.test(`${id} ${name}`))
+  ) {
+    return true;
+  }
+
+  if (!isAiProvider) {
+    return false;
+  }
+
+  if (raw.installed === false) {
+    return true;
+  }
+
+  const rawStatus = typeof raw.status === "string" ? raw.status.trim().toLowerCase() : "";
+  const rawState = typeof raw.state === "string" ? raw.state.trim().toLowerCase() : "";
+  const rawCode = typeof raw.code === "string" ? raw.code.trim().toLowerCase() : "";
+  if (
+    rawStatus === "not_installed" ||
+    rawStatus === "not-installed" ||
+    rawStatus === "uninstalled" ||
+    rawState === "not_installed" ||
+    rawState === "not-installed" ||
+    rawState === "uninstalled" ||
+    rawCode === "not_installed" ||
+    rawCode === "not-installed" ||
+    rawCode === "uninstalled"
+  ) {
+    return true;
+  }
+
+  if (rawStatus === "ok") {
+    return false;
+  }
+
+  const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
+  const detail = typeof raw.detail === "string" ? raw.detail.trim() : "";
+  if (INSTALLED_BROKEN_AI_PROVIDER_RE.test(summary)) {
+    return false;
+  }
+  if (/^missing(?:\s+cli|\s+binary|\s+executable)?$/i.test(summary)) {
+    return true;
+  }
+  if (UNINSTALLED_AI_PROVIDER_RE.test(summary)) {
+    return true;
+  }
+  if (
+    detail.length > 0 &&
+    !INSTALLED_BROKEN_AI_PROVIDER_RE.test(detail) &&
+    UNINSTALLED_AI_PROVIDER_RE.test(detail)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function normalizeDiagnosticsResponse(
   response: DaemonDiagnosticsServicesResponse,
 ): NormalizedDiagnosticsReport {
@@ -190,7 +273,16 @@ export function normalizeDiagnosticsResponse(
       ? response.groups.flatMap((group) => (Array.isArray(group.items) ? group.items : []))
       : [];
 
-  const items = rawItems.map(normalizeItem);
+  let omittedCount = 0;
+  const items = rawItems
+    .filter((item) => {
+      if (isOmittedAiProviderDiagnosticItem(item)) {
+        omittedCount += 1;
+        return false;
+      }
+      return true;
+    })
+    .map(normalizeItem);
 
   const rawGroupsById = new Map<string, DaemonDiagnosticsGroupDto>();
   if (Array.isArray(response.groups)) {
@@ -226,10 +318,13 @@ export function normalizeDiagnosticsResponse(
   const groups: NormalizedDiagnosticGroup[] = [];
   for (const categoryId of orderedCategoryIds) {
     const rawGroup = rawGroupsById.get(categoryId);
-    const groupItems =
-      itemsByCategory.get(categoryId) ??
-      (Array.isArray(rawGroup?.items) ? rawGroup.items.map(normalizeItem) : []);
-    if (groupItems.length === 0 && !rawGroup) {
+    const fallbackGroupItems = Array.isArray(rawGroup?.items)
+      ? rawGroup.items
+          .filter((item) => !isOmittedAiProviderDiagnosticItem(item))
+          .map(normalizeItem)
+      : [];
+    const groupItems = itemsByCategory.get(categoryId) ?? fallbackGroupItems;
+    if (groupItems.length === 0) {
       continue;
     }
     const okCount = groupItems.filter((item) => item.status === "ok").length;
@@ -245,7 +340,7 @@ export function normalizeDiagnosticsResponse(
     groups.push({
       id: categoryId,
       fallbackLabel,
-      status: rawGroup?.status ? normalizeStatus(rawGroup.status) : computeGroupStatus(groupItems),
+      status: computeGroupStatus(groupItems),
       okCount,
       degradedCount,
       errorCount,
@@ -253,22 +348,31 @@ export function normalizeDiagnosticsResponse(
     });
   }
 
-  const okTotal =
-    typeof response.summary?.ok === "number" && Number.isFinite(response.summary.ok)
+  const computedOk = items.filter((item) => item.status === "ok").length;
+  const computedDegraded = items.filter((item) => item.status === "degraded").length;
+  const computedError = items.filter((item) => item.status === "error").length;
+  const useComputedSummary = omittedCount > 0 || items.length > 0;
+
+  const okTotal = useComputedSummary
+    ? computedOk
+    : typeof response.summary?.ok === "number" && Number.isFinite(response.summary.ok)
       ? response.summary.ok
-      : items.filter((item) => item.status === "ok").length;
-  const degradedTotal =
-    typeof response.summary?.degraded === "number" && Number.isFinite(response.summary.degraded)
+      : 0;
+  const degradedTotal = useComputedSummary
+    ? computedDegraded
+    : typeof response.summary?.degraded === "number" && Number.isFinite(response.summary.degraded)
       ? response.summary.degraded
-      : items.filter((item) => item.status === "degraded").length;
-  const errorTotal =
-    typeof response.summary?.error === "number" && Number.isFinite(response.summary.error)
+      : 0;
+  const errorTotal = useComputedSummary
+    ? computedError
+    : typeof response.summary?.error === "number" && Number.isFinite(response.summary.error)
       ? response.summary.error
-      : items.filter((item) => item.status === "error").length;
-  const total =
-    typeof response.summary?.total === "number" && Number.isFinite(response.summary.total)
+      : 0;
+  const total = useComputedSummary
+    ? items.length
+    : typeof response.summary?.total === "number" && Number.isFinite(response.summary.total)
       ? response.summary.total
-      : items.length;
+      : 0;
 
   const memory = detectMemoryRetrievalState(items);
   const dormantEngines = items.filter(
@@ -301,6 +405,32 @@ export function normalizeDiagnosticsResponse(
     memoryRetrievalDetail: memory.detail,
     dormantEngines,
   };
+}
+
+/**
+ * Computes the sidebar health dot tone strictly from the normalized report so
+ * uninstalled optional AI Provider CLIs omitted during normalization can never
+ * trigger a false-positive amber warning dot.
+ */
+export function resolveNormalizedDiagnosticsBadgeTone(
+  report: NormalizedDiagnosticsReport | null | undefined,
+): DiagnosticsBadgeTone {
+  if (!report) return null;
+  if (report.summary.error > 0 || report.items.some((item) => item.status === "error")) {
+    return "error";
+  }
+  if (report.summary.degraded > 0 || report.items.some((item) => item.status === "degraded")) {
+    return "degraded";
+  }
+  if (report.items.length > 0 || report.summary.ok > 0) {
+    return "ok";
+  }
+  return null;
+}
+
+export function isDiagnosticsViewPathname(pathname: string): boolean {
+  const normalized = pathname.trim().replace(/\/+$/, "");
+  return normalized === "/settings/diagnostics" || normalized === "/settings/maintenance";
 }
 
 export const DORMANT_ENGINES_GROUP_ID = "dormant_engines" as const;
@@ -454,6 +584,7 @@ const DIAGNOSTICS_MUTATION_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/overnight-factory",
   "/settings/memory-sync",
   "/settings/updates",
+  "/settings/about",
   "/settings/wallpaper",
 ]);
 

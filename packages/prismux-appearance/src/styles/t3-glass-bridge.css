@@ -2012,16 +2012,58 @@ html[data-pmx-caret='1'] :is(textarea, input, [contenteditable='true'], [content
   caret-color: var(--pmx-caret-color) !important;
 }
 
-html.dark[data-pmx-ui-colors='1'],
-html:not(.dark)[data-pmx-ui-colors='1'],
-html[data-pmx-ui-colors='1'][data-theme-id]:not([data-theme-id='']) {
-  --message-action: var(--pmx-ui-send, var(--pmx-accent, #5e9bff));
-  --info-foreground: var(--pmx-ui-link, var(--pmx-accent, #5e9bff));
+/* Accent-following inline file links, context chips & link foreground */
+html[data-pmx-theme],
+html.dark[data-pmx-theme],
+html:not(.dark)[data-pmx-theme],
+html[data-pmx-theme][data-theme-id]:not([data-theme-id='']) {
+  --context-chip-mention: var(--pmx-accent, #5e9bff);
+  --context-chip-file: var(--pmx-accent, #5e9bff);
+  --context-chip-citation: var(--pmx-accent, #5e9bff);
+  --info-foreground: var(--pmx-accent, #5e9bff);
 }
 
-html[data-pmx-ui-colors='1'] [data-pmx-file-icon],
-html[data-pmx-ui-colors='1'] .chat-markdown-file-link {
+html[data-pmx-theme] .chat-markdown-file-link,
+html[data-pmx-theme] [data-slot="context-chip"].chat-markdown-file-link {
+  --context-chip-accent: var(--pmx-accent, #5e9bff);
+  --context-chip-ink: var(--context-chip-message-ink, var(--pmx-accent, #5e9bff));
+  color: var(--context-chip-ink);
+}
+
+html.dark[data-pmx-ui-colors='1'],
+html:not(.dark)[data-pmx-ui-colors='1'],
+html[data-pmx-ui-colors='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-theme][data-pmx-ui-colors='1'][data-theme-id]:not([data-theme-id='']) {
+  --message-action: var(--pmx-ui-send, var(--pmx-accent, #5e9bff));
+  --info-foreground: var(--pmx-ui-link, var(--pmx-accent, #5e9bff));
+  --context-chip-mention: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+  --context-chip-file: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+  --context-chip-citation: var(--pmx-ui-link, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] [data-pmx-file-icon] {
   color: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] .chat-markdown-file-link,
+html[data-pmx-theme][data-pmx-ui-colors='1'] .chat-markdown-file-link,
+html[data-pmx-theme][data-pmx-ui-colors='1'] [data-slot="context-chip"].chat-markdown-file-link {
+  --context-chip-accent: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+  --context-chip-ink: var(
+    --context-chip-message-ink,
+    var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff))
+  );
+  color: var(--context-chip-ink);
+}
+
+html[data-pmx-theme] [data-slot="context-chip"].chat-markdown-file-link[data-state='unresolved'] {
+  --context-chip-accent: currentColor;
+  --context-chip-ink: var(--context-chip-message-ink, currentColor);
+}
+
+html[data-pmx-theme] [data-slot="context-chip"].chat-markdown-file-link[data-state='invalid'] {
+  --context-chip-accent: var(--context-chip-invalid, var(--destructive-foreground));
+  --context-chip-ink: var(--context-chip-message-ink, var(--context-chip-accent));
 }
 
 html[data-pmx-ui-colors='1'] [data-pmx-active-tab],

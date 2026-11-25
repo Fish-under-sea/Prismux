@@ -182,7 +182,13 @@ it.each([{ cpu: null, accelerated: 2.1 }, { cpu: 5, accelerated: null }, { accel
           </SettingsScopeProvider>
         );
         await using screen = await render(panel());
+        const openModelsTab = () =>
+          userEvent.click(screen.getByRole("tab", { name: "Local models & dictionary" }));
+        const openDictationTab = () =>
+          userEvent.click(screen.getByRole("tab", { name: "Dictation & transcription" }));
+        await openModelsTab();
         await expect.element(screen.getByText(cpuBenchmark)).toBeVisible();
+        await openDictationTab();
         await userEvent.click(screen.getByRole("button", { name: "Advanced", exact: true }));
         const streaming = screen.getByRole("switch", { name: "Streaming transcription" });
         await expect.element(streaming).toBeEnabled();
@@ -193,6 +199,7 @@ it.each([{ cpu: null, accelerated: 2.1 }, { cpu: 5, accelerated: null }, { accel
         prepared = remote;
         await screen.rerender(panel());
         await remoteRequested.promise;
+        await openModelsTab();
         await expect.element(screen.getByText(cpuBenchmark)).not.toBeInTheDocument();
         remoteStatus.resolve(
           Response.json({
@@ -203,6 +210,7 @@ it.each([{ cpu: null, accelerated: 2.1 }, { cpu: 5, accelerated: null }, { accel
           }),
         );
         await expect.element(screen.getByText(gpuBenchmark)).toBeVisible();
+        await openDictationTab();
         await userEvent.click(screen.getByRole("button", { name: "Advanced", exact: true }));
         await expect.element(streaming).toBeDisabled();
         await expect.element(streaming).not.toBeChecked();
@@ -211,9 +219,11 @@ it.each([{ cpu: null, accelerated: 2.1 }, { cpu: 5, accelerated: null }, { accel
           .toBeVisible();
         prepared = local;
         await screen.rerender(panel());
+        await openModelsTab();
         await expect.element(screen.getByText(cpuBenchmark)).toBeVisible();
-        await userEvent.click(screen.getByRole("button", { name: "Advanced", exact: true }));
         await expect.element(screen.getByText(gpuBenchmark)).not.toBeInTheDocument();
+        await openDictationTab();
+        await userEvent.click(screen.getByRole("button", { name: "Advanced", exact: true }));
         await expect.element(streaming).toBeEnabled();
         await expect.element(streaming).not.toBeChecked();
         streaming.element().focus();
@@ -346,6 +356,7 @@ it("tests the selected model after download and preserves its transcript across 
               <VoiceSettingsPanel />
             </SettingsScopeProvider>,
           );
+          await userEvent.click(screen.getByRole("tab", { name: "Local models & dictionary" }));
           const testModel = screen.getByRole("button", { name: "Test model", exact: true });
           const download = screen.getByRole("button", { name: "Download", exact: true });
           await expect.element(download).toBeVisible();
@@ -492,6 +503,7 @@ it.each([
         <VoiceSettingsPanel />
       </SettingsScopeProvider>,
     );
+    await userEvent.click(screen.getByRole("tab", { name: "Local models & dictionary" }));
     await vi.waitFor(() => expect(authorizations.length + notify.mock.calls.length).not.toBe(0));
     expect(notify).not.toHaveBeenCalled();
     expect(authorizations).toEqual(["DPoP relay-access-token"]);
@@ -570,6 +582,7 @@ it("recovers from a failed download progress poll without notifying, but reports
         </SettingsScopeProvider>
       );
       await using screen = await render(panel("first"));
+      await userEvent.click(screen.getByRole("tab", { name: "Local models & dictionary" }));
       await expect.element(screen.getByRole("button", { name: "Use model" })).toBeVisible();
       expect(readModels.mock.calls.map(([withBenchmarks]) => withBenchmarks)).toEqual([
         true,
@@ -658,6 +671,7 @@ it("keeps punctuation in a saved dictionary term and its alias", async () => {
       <VoiceSettingsPanel />
     </SettingsScopeProvider>,
   );
+  await userEvent.click(screen.getByRole("tab", { name: "Local models & dictionary" }));
   await userEvent.type(
     screen.getByRole("textbox", { name: "Add a word or phrase to the dictionary" }),
     "O'Reilly{Enter}",
@@ -686,6 +700,7 @@ it("keeps a dictionary term and alias draft on the Enter that confirms an IME ca
       <VoiceSettingsPanel />
     </SettingsScopeProvider>,
   );
+  await userEvent.click(screen.getByRole("tab", { name: "Local models & dictionary" }));
   const composingEnter = () =>
     new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
   const term = screen.getByRole("textbox", { name: "Add a word or phrase to the dictionary" });

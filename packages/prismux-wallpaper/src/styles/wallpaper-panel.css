@@ -1461,6 +1461,14 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
   flex-wrap: wrap;
 }
 
+.pmx-wp-card-head__main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .pmx-wp-card-head__action {
   margin-left: auto;
 }
@@ -1477,9 +1485,28 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
 }
 
 .pmx-wp-card-desc {
-  margin-left: auto;
+  flex: 1 0 100%;
   font-size: 12px;
   color: var(--pmx-wp-ink-3);
+}
+
+.pmx-wp-tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pmx-wp-tabs-row .pmx-wp-tabs {
+  flex: 1 1 300px;
+}
+
+.pmx-wp-tabs-trailing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .pmx-wp-current-card {

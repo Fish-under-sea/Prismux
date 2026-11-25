@@ -4,7 +4,9 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { GTProvider, initializeGT } from "gt-react";
+// oxlint-disable-next-line t3code/require-disposable-render -- Headless Node unit test renders into an in-memory MiniDocument instead of Playwright browser runner.
 import { act, type ReactNode } from "react";
+// oxlint-disable-next-line t3code/require-disposable-render -- Headless Node unit test explicitly unmounts its React root.
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -21,9 +23,29 @@ vi.mock("@tanstack/react-router", () => ({
   },
 }));
 
-// Expose direct select & switch change handlers for deterministic headless React 19 fiber commit testing.
+// Expose direct select, slider, and switch change handlers for deterministic headless React 19 fiber commit testing.
 const selectHandlers = new Map<string, (value: string | null) => void>();
 const syncSwitchHandlers = new Map<string, (checked: boolean) => void>();
+let effortSliderHandler: ((value: string) => void) | null = null;
+
+vi.mock("@prismux/appearance", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@prismux/appearance")>();
+  return {
+    ...actual,
+    PrismuxReasoningEffortSlider: (props: {
+      readonly value?: string;
+      readonly label?: string;
+      readonly onChange?: (value: string) => void;
+    }) => {
+      effortSliderHandler = props.onChange ?? null;
+      return (
+        <div data-pmx-mock-effort-slider="" data-value={props.value ?? ""}>
+          {props.label ?? ""}
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("../../components/ui/select", () => ({
   Select: ({
@@ -42,13 +64,11 @@ vi.mock("../../components/ui/select", () => ({
         data-mock-select-value={value ?? ""}
         ref={(el) => {
           if (!el || !onValueChange) return;
-          const trigger = el.querySelector("[data-pmx-chief-provider-select],[data-pmx-chief-model-select],[data-pmx-chief-effort-select]");
+          const trigger = el.querySelector("[data-pmx-chief-provider-select],[data-pmx-chief-model-select]");
           if (trigger?.hasAttribute("data-pmx-chief-provider-select")) {
             selectHandlers.set("provider", onValueChange);
           } else if (trigger?.hasAttribute("data-pmx-chief-model-select")) {
             selectHandlers.set("model", onValueChange);
-          } else if (trigger?.hasAttribute("data-pmx-chief-effort-select")) {
-            selectHandlers.set("effort", onValueChange);
           }
         }}
       >
@@ -303,7 +323,7 @@ function installMinimalDom() {
   }
 
   const doc = new MiniDocument();
-  class MiniIFrameElement {}
+  const MiniIFrameElement = function MiniIFrameElement() {};
   const storageMap = new Map<string, string>();
   const storage = {
     getItem: (key: string) => storageMap.get(key) ?? null,
@@ -319,6 +339,13 @@ function installMinimalDom() {
   };
   const win = {
     document: doc,
+    location: {
+      href: "http://localhost/settings/memory-sync",
+      origin: "http://localhost",
+      hash: "",
+      pathname: "/settings/memory-sync",
+      search: "",
+    },
     localStorage: storage,
     HTMLIFrameElement: MiniIFrameElement,
     HTMLElement: MiniNode,
@@ -354,6 +381,7 @@ function installMinimalDom() {
   (globalThis as Record<string, unknown>).Element = MiniNode;
   (globalThis as Record<string, unknown>).HTMLElement = MiniNode;
   (globalThis as Record<string, unknown>).SVGElement = MiniNode;
+  // oxlint-disable-next-line t3code/require-disposable-render -- Headless Node unit test enables act environment and restores it in cleanup().
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
   return {
@@ -415,6 +443,7 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
   beforeEach(() => {
     selectHandlers.clear();
     syncSwitchHandlers.clear();
+    effortSliderHandler = null;
     dom = installMinimalDom();
   });
 
@@ -473,7 +502,7 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
             agentsMdPath: "~/.prismux/chief/AGENTS.md",
           },
           dialMode: "agent",
-          availableProviders: ["codex", "antigravity", "claude-code", "omp"],
+          availableProviders: ["codex", "antigravity", "claude-code", "dsh"],
           t3Connected: true,
         };
       }
@@ -559,7 +588,10 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     const baselineRequests = requestJson.mock.calls.length;
     expect(selectHandlers.has("provider")).toBe(true);
     expect(selectHandlers.has("model")).toBe(true);
-    expect(selectHandlers.has("effort")).toBe(true);
+    // Duplicate effort <Select> dropdown is removed in favor of the single reasoning slider.
+    expect(container.querySelector("[data-pmx-chief-effort-select]")).toBeNull();
+    expect(container.querySelector("[data-pmx-chief-effort-slider]")).not.toBeNull();
+    expect(typeof effortSliderHandler).toBe("function");
 
     // 1. Switch Provider: Codex -> Antigravity
     await act(async () => {
@@ -592,10 +624,10 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
       "Gemini 4 Hydrogen",
     );
 
-    // 3. Switch Effort: high -> max
+    // 3. Switch Effort via single reasoning slider: high -> max
     const afterModelChiefRenders = renderCounts.chiefSlot;
     await act(async () => {
-      selectHandlers.get("effort")?.("max");
+      effortSliderHandler?.("max");
     });
 
     expect(renderCounts.chiefSlot).toBeGreaterThan(afterModelChiefRenders);
@@ -604,6 +636,9 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     expect(renderCounts.obsidian).toBe(baseline.obsidian);
     expect(renderCounts.sync).toBe(baseline.sync);
     expect(requestJson.mock.calls.length).toBe(baselineRequests);
+    expect(
+      container.querySelector("[data-pmx-mock-effort-slider]")?.getAttribute("data-value"),
+    ).toBe("max");
 
     // 4. Outer re-render with unchanged primitive runtime props (simulating PrismuxRuntimeProvider
     //    periodic resources/ports polling) triggers 0 re-renders across every section.
@@ -646,7 +681,24 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     });
   });
 
-  it("collapses disabled WebDAV/S3/GitHub sync channel forms by default, expands/collapses smoothly on Switch toggle, and keeps persisted enabled channels expanded", async () => {
+  it("organizes sync into 2 segmented tabs and expands/collapses GitHub, WebDAV, and S3 channel editors cleanly", async () => {
+    const clickNode = (node: unknown) => {
+      if (!node || typeof node !== "object") {
+        throw new Error("Expected clickable MiniNode");
+      }
+      const propsKey = Object.keys(node as Record<string, unknown>).find((key) =>
+        key.startsWith("__reactProps$"),
+      );
+      const onClick = propsKey
+        ? ((node as Record<string, unknown>)[propsKey] as { onClick?: () => void } | undefined)
+            ?.onClick
+        : undefined;
+      if (typeof onClick !== "function") {
+        throw new Error("Expected React onClick handler on MiniNode");
+      }
+      onClick();
+    };
+
     const mockDaemonDefaultOff = {
       requestJson: vi.fn(async () => ({
         ok: true,
@@ -678,42 +730,67 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
       await Promise.resolve();
     });
 
+    // Default tab is `overview` with the flattened 7-domain sync switch list.
+    expect(container.querySelector('[data-active-tab="overview"]')).not.toBeNull();
+    expect(container.querySelector("[data-pmx-sync-matrix-list]")).not.toBeNull();
+    expect(container.querySelector("[data-pmx-sync-channel]")).toBeNull();
+
+    // Switch to Tab 2 (`channels`) to manage GitHub / WebDAV / S3 channels.
+    await act(async () => {
+      clickNode(container.querySelector('[data-tab-id="channels"]'));
+    });
+    expect(container.querySelector('[data-active-tab="channels"]')).not.toBeNull();
+
     const getPanel = (ch: "webdav" | "s3" | "github") =>
       container.querySelector(`[data-pmx-sync-channel="${ch}"]`);
+    const selectChannel = async (ch: "webdav" | "s3" | "github") => {
+      await act(async () => {
+        clickNode(container.querySelector(`[data-pmx-sync-channel-tab="${ch}"]`));
+      });
+    };
 
     // 1. All 3 channels start collapsed when disabled
-    for (const ch of ["webdav", "s3", "github"] as const) {
+    for (const ch of ["github", "webdav", "s3"] as const) {
+      await selectChannel(ch);
       const panel = getPanel(ch);
       expect(panel?.getAttribute("data-pmx-sync-channel-expanded")).toBe("false");
-      expect(panel?.getAttribute("aria-hidden")).toBe("true");
-      expect(panel?.getAttribute("class")).toContain("grid-rows-[0fr]");
     }
 
-    // 2. Toggle WebDAV ON -> expands only WebDAV, leaves S3 & GitHub collapsed
+    // 2. Toggle WebDAV ON -> expands WebDAV form cleanly; S3 & GitHub stay collapsed
+    await selectChannel("webdav");
     await act(async () => {
       syncSwitchHandlers.get("webdav")?.(true);
     });
     expect(getPanel("webdav")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("true");
-    expect(getPanel("webdav")?.getAttribute("aria-hidden")).toBe("false");
-    expect(getPanel("webdav")?.getAttribute("class")).toContain("grid-rows-[1fr]");
+    expect(container.querySelector('[data-pmx-sync-input="webdav.endpointUrl"]')).not.toBeNull();
+
+    await selectChannel("s3");
     expect(getPanel("s3")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("false");
+    await selectChannel("github");
     expect(getPanel("github")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("false");
 
     // 3. Toggle S3 & GitHub ON -> expand cleanly; toggle WebDAV OFF -> collapses back
     await act(async () => {
-      syncSwitchHandlers.get("s3")?.(true);
       syncSwitchHandlers.get("github")?.(true);
+    });
+    expect(getPanel("github")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("true");
+    await selectChannel("s3");
+    await act(async () => {
+      syncSwitchHandlers.get("s3")?.(true);
+    });
+    expect(getPanel("s3")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("true");
+    await selectChannel("webdav");
+    await act(async () => {
       syncSwitchHandlers.get("webdav")?.(false);
     });
     expect(getPanel("webdav")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("false");
-    expect(getPanel("s3")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("true");
-    expect(getPanel("github")?.getAttribute("data-pmx-sync-channel-expanded")).toBe("true");
+    expect(container.querySelector('[data-pmx-sync-input="webdav.endpointUrl"]')).toBeNull();
 
     await act(async () => {
       root.unmount();
     });
 
-    // 4. Persisted enabled channels naturally render expanded on initial hydration
+    // 4. Persisted enabled channels hydrate expanded on initial render inside the Channels tab
     const mockDaemonPersisted = {
       requestJson: vi.fn(async () => ({
         ok: true,
@@ -738,28 +815,40 @@ describe("PrismuxMemorySyncSettingsPage React.memo render isolation", () => {
     await act(async () => {
       root2.render(
         <GTProvider locale="zh" translations={{}}>
-          <PrismuxSyncEngineSection daemon={mockDaemonPersisted as never} refreshTick={0} />
+          <PrismuxSyncEngineSection
+            daemon={mockDaemonPersisted as never}
+            refreshTick={0}
+            initialTabOverride="channels"
+          />
         </GTProvider>,
       );
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(
-      container2
-        .querySelector('[data-pmx-sync-channel="webdav"]')
-        ?.getAttribute("data-pmx-sync-channel-expanded"),
-    ).toBe("true");
-    expect(
-      container2
-        .querySelector('[data-pmx-sync-channel="s3"]')
-        ?.getAttribute("data-pmx-sync-channel-expanded"),
-    ).toBe("false");
+    const selectChannel2 = async (ch: "webdav" | "s3" | "github") => {
+      await act(async () => {
+        clickNode(container2.querySelector(`[data-pmx-sync-channel-tab="${ch}"]`));
+      });
+    };
+
     expect(
       container2
         .querySelector('[data-pmx-sync-channel="github"]')
         ?.getAttribute("data-pmx-sync-channel-expanded"),
     ).toBe("true");
+    await selectChannel2("webdav");
+    expect(
+      container2
+        .querySelector('[data-pmx-sync-channel="webdav"]')
+        ?.getAttribute("data-pmx-sync-channel-expanded"),
+    ).toBe("true");
+    await selectChannel2("s3");
+    expect(
+      container2
+        .querySelector('[data-pmx-sync-channel="s3"]')
+        ?.getAttribute("data-pmx-sync-channel-expanded"),
+    ).toBe("false");
 
     await act(async () => {
       root2.unmount();

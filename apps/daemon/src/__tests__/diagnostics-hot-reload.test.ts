@@ -318,14 +318,19 @@ describe("Diagnostics hot-reload routes, cache invalidation & real-machine smoke
     });
 
     try {
-      // 1. Cold run populates cache and calls refreshEnv once
+      // 1. Cold run populates cache and calls refreshEnv once; uninstalled codex is omitted (NOT degraded)
       const first = await service.runDiagnostics(false);
       assert.equal(first.cached, false);
       assert.equal(refreshEnvCalls, 1);
       assert.equal(
-        first.items.find((i) => i.id === "provider.codex")?.status,
-        "degraded"
+        first.items.find((i) => i.id === "provider.codex"),
+        undefined
       );
+      const aiGroupInitial = first.groups.find((g) => g.id === "ai_providers");
+      assert.ok(aiGroupInitial);
+      assert.equal(aiGroupInitial.items.length, 0);
+      assert.equal(aiGroupInitial.degradedCount, 0);
+      assert.equal(aiGroupInitial.status, "ok");
 
       // Verify split settings routes (/settings/memory & /settings/sync)
       assert.equal(
@@ -502,6 +507,132 @@ describe("Diagnostics hot-reload routes, cache invalidation & real-machine smoke
           `expected adb version string, got: ${android.version}`
         );
       }
+
+      const dshExe = join(localAppData, "Programs", "DSH NEXT", "DSH NEXT.exe");
+      if (existsSync(dshExe)) {
+        const dsh = report.items.find((i) => i.id === "provider.dsh");
+        assert.ok(dsh, "provider.dsh item must exist when DSH NEXT is installed");
+        assert.equal(dsh.status, "ok", `expected dsh ok, got: ${JSON.stringify(dsh)}`);
+        assert.ok(dsh.version && dsh.version.length > 0, "dsh version must be populated");
+      }
+      assert.equal(
+        report.items.find((i) => i.id === "provider.omp"),
+        undefined,
+        "provider.omp must be permanently removed"
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits uninstalled optional AI Provider CLIs, removes omp, probes dsh, and marks installed-but-broken CLIs as degraded", async () => {
+    const dataDir = createTempDir("prismux-diag-ai-providers-");
+    const probedCommands: string[] = [];
+    const service = new ServiceDiagnosticsService({
+      dataDir,
+      version: "0.2.0-rc.2",
+      headless: true,
+      startedAt: Date.now() - 1_000,
+      refreshEnv: async () => undefined,
+      detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
+      resolve7za: () => null,
+      networkProbe: async () => ({
+        reachable: true,
+        statusCode: 200,
+        latencyMs: 5
+      }),
+      cliProbe: async (cmd) => {
+        probedCommands.push(cmd);
+        if (cmd === "agy") {
+          return {
+            found: true,
+            path: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+            version: "1.5.17",
+            latencyMs: 4
+          };
+        }
+        if (cmd === "dsh") {
+          return {
+            found: true,
+            path: "C:\\Users\\Fish\\AppData\\Local\\Programs\\DSH NEXT\\DSH NEXT.exe",
+            version: "0.2.2-rc.4",
+            latencyMs: 12
+          };
+        }
+        if (cmd === "codex") {
+          // Installed binary exists, but fails to launch / crashes during --version
+          return {
+            found: true,
+            path: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\codex.cmd",
+            version: null,
+            latencyMs: 15,
+            error: "Command failed with exit code 1"
+          };
+        }
+        // claude, gemini, opencode are not installed on this machine
+        return { found: false, path: null, version: null, latencyMs: 1 };
+      }
+    });
+
+    try {
+      const report = await service.runDiagnostics(true);
+      assert.ok(!probedCommands.includes("omp"), "omp must never be probed");
+      assert.ok(probedCommands.includes("dsh"), "dsh must be probed");
+
+      const aiGroup = report.groups.find((g) => g.id === "ai_providers");
+      assert.ok(aiGroup);
+      assert.deepEqual(
+        aiGroup.items.map((item) => item.id).sort(),
+        ["provider.agy", "provider.codex", "provider.dsh"]
+      );
+      assert.equal(aiGroup.okCount, 2);
+      assert.equal(aiGroup.degradedCount, 1);
+      assert.equal(aiGroup.errorCount, 0);
+      assert.equal(aiGroup.status, "degraded");
+
+      const agyItem = aiGroup.items.find((i) => i.id === "provider.agy");
+      assert.equal(agyItem?.status, "ok");
+      assert.equal(agyItem?.version, "1.5.17");
+
+      const dshItem = aiGroup.items.find((i) => i.id === "provider.dsh");
+      assert.equal(dshItem?.status, "ok");
+      assert.equal(dshItem?.version, "0.2.2-rc.4");
+
+      const brokenCodex = aiGroup.items.find((i) => i.id === "provider.codex");
+      assert.equal(brokenCodex?.status, "degraded");
+      assert.ok(brokenCodex?.detail?.includes("exit code 1"));
+
+      // Uninstalled CLIs must NOT appear anywhere in items or degrade totals
+      assert.equal(report.items.find((i) => i.id === "provider.gemini"), undefined);
+      assert.equal(report.items.find((i) => i.id === "provider.opencode"), undefined);
+      assert.equal(report.items.find((i) => i.id === "provider.claude"), undefined);
+      assert.equal(report.items.find((i) => i.id === "provider.omp"), undefined);
+
+      // When ALL installed CLIs are healthy and uninstalled ones are missing, group is completely ok!
+      const healthyOnlyService = new ServiceDiagnosticsService({
+        dataDir,
+        version: "0.2.0-rc.2",
+        headless: true,
+        startedAt: Date.now() - 1_000,
+        refreshEnv: async () => undefined,
+        detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
+        resolve7za: () => null,
+        networkProbe: async () => ({ reachable: true, statusCode: 200, latencyMs: 5 }),
+        cliProbe: async (cmd) =>
+          cmd === "agy"
+            ? { found: true, path: "/usr/bin/agy", version: "1.5.17", latencyMs: 3 }
+            : { found: false, path: null, version: null, latencyMs: 1 }
+      });
+      const healthyReport = await healthyOnlyService.runDiagnostics(true);
+      const healthyAiGroup = healthyReport.groups.find((g) => g.id === "ai_providers");
+      assert.ok(healthyAiGroup);
+      assert.deepEqual(
+        healthyAiGroup.items.map((i) => i.id),
+        ["provider.agy"]
+      );
+      assert.equal(healthyAiGroup.status, "ok");
+      assert.equal(healthyAiGroup.okCount, 1);
+      assert.equal(healthyAiGroup.degradedCount, 0);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

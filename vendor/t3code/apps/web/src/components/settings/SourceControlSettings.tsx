@@ -51,6 +51,7 @@ import {
   SettingsSection,
   useSettingsSearchTargetId,
 } from "./settingsLayout";
+import { SettingsSegmentedTabs, type SettingsSegmentedTabItem } from "./SettingsSegmentedTabs";
 import { useSearchableSetting, sourceControlHostSettingsSearchId } from "./settingsSearch";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { sourceControlInstallHintText } from "@t3tools/client-runtime/contract-labels";
@@ -69,6 +70,57 @@ const VCS_ICONS: Partial<Record<VcsDriverKind, Icon>> = {
 };
 
 const SOURCE_CONTROL_SKELETON_ROWS = ["primary", "secondary"] as const;
+
+const SOURCE_CONTROL_HOST_ANCHORS = sourceControlClients.definitions
+  .filter((definition) => Boolean(definition.settings))
+  .map((definition) => sourceControlHostSettingsSearchId(definition.kind));
+
+export const SOURCE_CONTROL_TAB_ANCHORS = {
+  hosts: [
+    "source-control",
+    "source-control-defaults",
+    "source-control-providers",
+    "automatic-pull",
+    "remove-agent-credits-on-merge",
+    "pull-request-merge-method",
+    "issue-trackers",
+    "issue-tracker",
+    ...SOURCE_CONTROL_HOST_ANCHORS,
+  ],
+  "ai-writing": [
+    "source-control-text-generation",
+    "source-control-writing-style",
+    "follow-change-request-templates",
+    "source-control-writer-model",
+    "review-guides",
+    "review-guide-model",
+    "review-guide-instructions",
+  ],
+  worktrees: [
+    "worktrees",
+    "worktree-creation",
+    "worktree-branches",
+    "branch-naming",
+    "worktree-branch-naming",
+    "worktree-submodules",
+    "worktree-fast-checkout",
+    "start-from-origin",
+    "storage-worktrees",
+    "storage-worktrees-location",
+    "storage-worktree-keep-when",
+  ],
+  diffs: [
+    "diffs",
+    "diffs-display",
+    "pull-requests",
+    "diff-layout",
+    "hide-whitespace-changes",
+    "default-diff-file-state",
+    "diff-color-scheme",
+    "proactive-panels",
+    "pull-request-links-open-in-app",
+  ],
+} as const;
 function optionLabel(value: Option.Option<string>): string | null {
   return Option.getOrNull(value);
 }
@@ -304,7 +356,7 @@ function DiscoveryItemRow({
         isVcsNotReady(item) && "opacity-80",
       )}
     >
-      <div className="px-3 py-3 sm:px-4">
+      <div className="px-4 py-3.5 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -372,7 +424,7 @@ function DiscoveryItemRow({
       {hasDetails ? (
         <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
           <CollapsibleContent>
-            <div className="px-3 pb-4 pt-1 sm:px-4">{children}</div>
+            <div className="px-4 pb-4 pt-1 sm:px-5">{children}</div>
           </CollapsibleContent>
         </Collapsible>
       ) : null}
@@ -390,7 +442,7 @@ function SourceControlSectionSkeleton({
   return (
     <SettingsSection title={title} headerAction={headerAction}>
       {SOURCE_CONTROL_SKELETON_ROWS.map((row) => (
-        <div key={row} className="first:rounded-t-xl last:rounded-b-xl px-3 py-3 sm:px-4">
+        <div key={row} className="first:rounded-t-xl last:rounded-b-xl px-4 py-3.5 sm:px-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex items-center gap-2">
@@ -582,15 +634,15 @@ export function SourceControlSettingsPanel() {
     </Tooltip>
   );
 
-  return (
-    <SettingsPageContainer>
+  const hostsContent = (
+    <>
       <ProjectDefaultsSettings category="source-control" />
       {environmentId === null ? (
         <SettingsSection
           id={searchableSetting("source-control").id}
           title={gt("Server environment")}
         >
-          <p className="px-4 py-3 text-sm text-muted-foreground">
+          <p className="px-4 py-3.5 text-sm text-muted-foreground sm:px-5">
             <T>
               Connect an environment to inspect its version control tools and hosting integrations.
             </T>
@@ -620,7 +672,11 @@ export function SourceControlSettingsPanel() {
 
           {result.sourceControlProviders.length > 0 ? (
             <SettingsSection
-              id={hasVersionControlSystems ? undefined : searchableSetting("source-control").id}
+              id={
+                hasVersionControlSystems
+                  ? "source-control-providers"
+                  : searchableSetting("source-control").id
+              }
               title={
                 hasVersionControlSystems
                   ? gt("Source control providers")
@@ -660,14 +716,51 @@ export function SourceControlSettingsPanel() {
       {environmentId === null ? null : (
         <IssueTrackerSettings key={environmentId} environmentId={environmentId} />
       )}
+    </>
+  );
 
-      <SourceControlWritingSettingsSection />
-      <div id="worktrees" className="space-y-8">
-        <WorktreesSettingsSections />
-      </div>
-      <div id="diffs" className="space-y-8">
-        <DiffsSettingsSections />
-      </div>
+  const tabs: ReadonlyArray<SettingsSegmentedTabItem> = [
+    {
+      id: "hosts",
+      label: gt("Hosts & repositories"),
+      hashAnchors: SOURCE_CONTROL_TAB_ANCHORS.hosts,
+      content: hostsContent,
+    },
+    {
+      id: "ai-writing",
+      label: gt("AI commits & review"),
+      hashAnchors: SOURCE_CONTROL_TAB_ANCHORS["ai-writing"],
+      content: <SourceControlWritingSettingsSection />,
+    },
+    {
+      id: "worktrees",
+      label: gt("Worktrees & branches"),
+      hashAnchors: SOURCE_CONTROL_TAB_ANCHORS.worktrees,
+      content: (
+        <div id="worktrees" className="flex flex-col gap-7">
+          <WorktreesSettingsSections />
+        </div>
+      ),
+    },
+    {
+      id: "diffs",
+      label: gt("Diffs & PRs"),
+      hashAnchors: SOURCE_CONTROL_TAB_ANCHORS.diffs,
+      content: (
+        <div id="diffs" className="flex flex-col gap-7">
+          <DiffsSettingsSections />
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <SettingsPageContainer width="readable">
+      <SettingsSegmentedTabs
+        tabs={tabs}
+        defaultTabId="hosts"
+        ariaLabel={gt("Source control settings sections")}
+      />
     </SettingsPageContainer>
   );
 }

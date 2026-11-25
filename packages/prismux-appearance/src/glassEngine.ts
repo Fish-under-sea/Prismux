@@ -48,7 +48,7 @@ import {
 export const READABILITY_FLOOR_LIGHT = 0.5;
 export const READABILITY_FLOOR_DARK = 0.59;
 export const DEFAULT_LIGHT_GLASS_TINT = '#ffffff';
-export const DEFAULT_DARK_GLASS_TINT = '#0d1524';
+export const DEFAULT_DARK_GLASS_TINT = '#000000';
 /** Default inner workspace stage corner radius token (`--pmx-inner-stage-radius`). */
 export const DEFAULT_INNER_STAGE_RADIUS_PX = 14;
 const CLAMP_CONTRAST_TARGET = 4.6; // +0.1 rounding margin for 8-bit hex quantization
@@ -1725,11 +1725,11 @@ export function applyPrismuxAppearanceToDocument(
   s.setProperty('--pmx-glass-tint-light', runtime.clampedLightTint);
   s.setProperty('--pmx-glass-tint-light-rgb', toRgbTriple(runtime.clampedLightTint, '255, 255, 255'));
   s.setProperty('--pmx-glass-tint-dark', runtime.clampedDarkTint);
-  s.setProperty('--pmx-glass-tint-dark-rgb', toRgbTriple(runtime.clampedDarkTint, '13, 21, 36'));
+  s.setProperty('--pmx-glass-tint-dark-rgb', toRgbTriple(runtime.clampedDarkTint, '0, 0, 0'));
   s.setProperty('--pmx-glass-tint', runtime.activeGlassTint);
   s.setProperty(
     '--pmx-glass-tint-rgb',
-    toRgbTriple(runtime.activeGlassTint, runtime.isDark ? '13, 21, 36' : '255, 255, 255'),
+    toRgbTriple(runtime.activeGlassTint, runtime.isDark ? '0, 0, 0' : '255, 255, 255'),
   );
   s.setProperty('--prismux-glass-tint', runtime.activeGlassTint);
 

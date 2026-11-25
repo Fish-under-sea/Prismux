@@ -1,15 +1,20 @@
 import { Link } from "@tanstack/react-router";
-import { ActivityIcon, ArrowRightIcon, SearchIcon, ShieldCheckIcon } from "lucide-react";
+import { ActivityIcon, ArrowRightIcon, DatabaseIcon, SearchIcon, ShieldCheckIcon } from "lucide-react";
 import {
   memo,
   startTransition,
   useCallback,
   useEffect,
+  useMemo,
   useState,
   type RefObject,
 } from "react";
 
-import { SettingsRow, SettingsSection } from "../../components/settings/settingsLayout";
+import {
+  SETTINGS_CONTROL_SM,
+  SettingsRow,
+  SettingsSection,
+} from "../../components/settings/settingsLayout";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -20,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
+import { cn } from "../../lib/utils";
 import type { PrismuxDaemonClient } from "../daemonClient";
 import type { ActiveChiefSlotSnapshot } from "./ChiefIdentityAndAgentsMdSection";
 import { ObsidianAgentImportCard } from "./ObsidianAgentImportCard";
@@ -36,6 +42,7 @@ export interface MemoryStatsView {
   readonly byKind: Readonly<Record<string, number>>;
   readonly latestUpdatedAt: number | null;
   readonly dbPath: string;
+  readonly dbSizeBytes: number | null;
 }
 
 interface MemoryHitView {
@@ -56,6 +63,8 @@ export interface PrismuxMemoryEngineSectionProps {
   readonly activeProviderLabel: string;
   readonly activeModel: string;
   readonly activeSlotRef?: RefObject<ActiveChiefSlotSnapshot> | undefined;
+  /** Whether to embed the Obsidian import card inside this section (false in 3-tab RC.2 layout). */
+  readonly includeObsidian?: boolean;
   readonly onRender?: (() => void) | undefined;
   readonly onObsidianRender?: (() => void) | undefined;
   readonly onError?: (message: string) => void;
@@ -82,6 +91,10 @@ function asNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function asNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function asNumberRecord(value: unknown): Record<string, number> {
   const rec = asRecord(value);
   if (!rec) return {};
@@ -92,6 +105,13 @@ function asNumberRecord(value: unknown): Record<string, number> {
     }
   }
   return out;
+}
+
+function formatDbSize(bytes: number | null): string {
+  if (bytes === null) return "本地单文件";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function parseMemoryStatsResponse(raw: unknown): MemoryStatsView {
@@ -114,12 +134,13 @@ function parseMemoryStatsResponse(raw: unknown): MemoryStatsView {
     byKind: asNumberRecord(root?.byKind),
     latestUpdatedAt: typeof root?.latestUpdatedAt === "number" ? root.latestUpdatedAt : null,
     dbPath: asString(root?.dbPath, "~/.prismux/data/memory.db"),
+    dbSizeBytes: asNullableNumber(root?.dbSizeBytes ?? root?.sizeBytes),
   };
 }
 
 /**
- * Isolated memoized Memory Engine section (SQLite WAL + FTS5 + sqlite-vec stats,
- * real-time hybrid search, and Agent-curated Obsidian Vault migration).
+ * Isolated memoized Memory Engine section (compact single-line KPI strip,
+ * namespace filter + hybrid search, flattened <= 2 card layers).
  * Never re-renders when switching Chief Provider / Model / Reasoning Effort.
  */
 export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSection({
@@ -130,6 +151,7 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
   activeProviderLabel,
   activeModel,
   activeSlotRef,
+  includeObsidian = false,
   onRender,
   onObsidianRender,
   onError,
@@ -141,6 +163,7 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
     () => memoryStatsCache.get(daemon as object) ?? null,
   );
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedNamespace, setSelectedNamespace] = useState("all");
   const [searchLimit, setSearchLimit] = useState("10");
   const [searchingMemory, setSearchingMemory] = useState(false);
   const [memoryHits, setMemoryHits] = useState<MemoryHitView[]>([]);
@@ -166,146 +189,172 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
     void loadMemoryStats();
   }, [loadMemoryStats, refreshTick]);
 
-  const handleSearchMemory = useCallback(async () => {
-    const q = searchQuery.trim();
-    if (!q) {
-      setMemoryHits([]);
-      setSearchMeta(null);
-      return;
-    }
-    setSearchingMemory(true);
-    try {
-      const limitNum = Math.min(50, Math.max(1, Number.parseInt(searchLimit, 10) || 10));
-      const res = await daemon.requestJson<unknown>("/v1/memory/search", {
-        method: "POST",
-        body: JSON.stringify({ query: q, limit: limitNum }),
-      });
-      const root = asRecord(res);
-      const rawHits = Array.isArray(root?.hits) ? root.hits : [];
-      const parsed: MemoryHitView[] = [];
-      for (const item of rawHits) {
-        const hit = asRecord(item);
-        const entry = asRecord(hit?.entry);
-        if (!hit || !entry) continue;
-        parsed.push({
-          id: asString(entry.id),
-          namespace: asString(entry.namespace, "private/chief"),
-          kind: asString(entry.kind, "note"),
-          title: asString(entry.title, "(无标题)"),
-          content: asString(entry.content),
-          score: asNumber(hit.score, 0),
-          matchSource: asString(hit.matchSource, "fts"),
-        });
+  const namespaceOptions = useMemo(() => {
+    const names = new Set<string>(["private/chief"]);
+    if (memoryStats) {
+      for (const ns of Object.keys(memoryStats.byNamespace)) {
+        if (ns.trim().length > 0) names.add(ns);
       }
-      setMemoryHits(parsed);
-      setSearchMeta({
-        totalCandidates: asNumber(root?.totalCandidates, parsed.length),
-        degradedToFtsOnly: asBoolean(root?.degradedToFtsOnly, false),
-      });
-    } catch (err) {
-      onError?.(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSearchingMemory(false);
     }
-  }, [daemon, onError, searchLimit, searchQuery]);
+    return [...names];
+  }, [memoryStats]);
+
+  const handleSearchMemory = useCallback(
+    async (overrideNamespace?: string) => {
+      const q = searchQuery.trim();
+      const targetNs = overrideNamespace ?? selectedNamespace;
+      if (!q) {
+        setMemoryHits([]);
+        setSearchMeta(null);
+        return;
+      }
+      setSearchingMemory(true);
+      try {
+        const limitNum = Math.min(50, Math.max(1, Number.parseInt(searchLimit, 10) || 10));
+        const res = await daemon.requestJson<unknown>("/v1/memory/search", {
+          method: "POST",
+          body: JSON.stringify({
+            query: q,
+            limit: limitNum,
+            ...(targetNs !== "all" ? { namespaces: [targetNs] } : {}),
+          }),
+        });
+        const root = asRecord(res);
+        const rawHits = Array.isArray(root?.hits) ? root.hits : [];
+        const parsed: MemoryHitView[] = [];
+        for (const item of rawHits) {
+          const hit = asRecord(item);
+          const entry = asRecord(hit?.entry);
+          if (!hit || !entry) continue;
+          parsed.push({
+            id: asString(entry.id),
+            namespace: asString(entry.namespace, "private/chief"),
+            kind: asString(entry.kind, "note"),
+            title: asString(entry.title, "(无标题)"),
+            content: asString(entry.content),
+            score: asNumber(hit.score, 0),
+            matchSource: asString(hit.matchSource, "fts"),
+          });
+        }
+        setMemoryHits(parsed);
+        setSearchMeta({
+          totalCandidates: asNumber(root?.totalCandidates, parsed.length),
+          degradedToFtsOnly: asBoolean(root?.degradedToFtsOnly, false),
+        });
+      } catch (err) {
+        onError?.(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSearchingMemory(false);
+      }
+    },
+    [daemon, onError, searchLimit, searchQuery, selectedNamespace],
+  );
+
+  const isHybridReady = memoryStats?.retrievalMode === "fts5+sqlite-vec";
 
   return (
     <SettingsSection
       id="prismux-memory-engine"
-      title="单文件 SQLite 混合记忆库（WAL + FTS5 + sqlite-vec）"
+      title="本地混合记忆库"
       headerAction={
-        <Badge
-          variant={memoryStats?.retrievalMode === "fts5+sqlite-vec" ? "success" : "warning"}
-        >
-          {memoryStats?.retrievalMode === "fts5+sqlite-vec"
-            ? "FTS5 + sqlite-vec 混合态"
-            : "FTS5 降级态"}
+        <Badge variant={isHybridReady ? "success" : "warning"} size="sm">
+          {isHybridReady ? "语义 + 全文混合检索" : "全文检索模式"}
         </Badge>
       }
     >
-      <p className="px-4 py-2.5 text-xs text-muted-foreground">
-        零 PostgreSQL / Qdrant / MinIO 外部依赖；传输层强制注入 _callerScope，qq_group:&lt;gid&gt; 物理绑定 social/qq-group-&lt;gid&gt; 隔离域。
-      </p>
-      <div className="space-y-3 px-4 py-3.5">
-        <div className="grid gap-2 sm:grid-cols-4">
-          <div className="rounded-lg border border-border/70 bg-background/50 px-3 py-2">
-            <div className="text-[11px] text-muted-foreground">记忆总条目</div>
-            <div className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">
-              {memoryStats ? memoryStats.totalEntries : "—"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-border/70 bg-background/50 px-3 py-2">
-            <div className="text-[11px] text-muted-foreground">当前调用者域</div>
-            <div className="mt-0.5 font-mono text-xs font-medium text-foreground">
-              {memoryStats?.callerScope ?? "owner_chief"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-border/70 bg-background/50 px-3 py-2 sm:col-span-2">
-            <div className="text-[11px] text-muted-foreground">单文件存储路径</div>
-            <div className="mt-0.5 truncate font-mono text-xs text-foreground" title={memoryStats?.dbPath}>
-              {memoryStats?.dbPath ?? "~/.prismux/data/memory.db"}
-            </div>
-          </div>
-        </div>
-
+      {/* Compact single-line KPI & vector status strip (Layer 2 borderless tint, zero nested bordered cards) */}
+      <div className="space-y-3 px-4 py-3.5 sm:px-5">
         <div
           data-memory-retrieval-mode={memoryStats?.retrievalMode ?? "unknown"}
-          className={
-            memoryStats?.retrievalMode === "fts5+sqlite-vec"
-              ? "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs"
-              : "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs"
-          }
+          data-pmx-memory-kpi-strip=""
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-foreground/[0.03] px-3.5 py-2.5 text-xs dark:bg-white/[0.04]"
         >
-          <div className="flex min-w-0 items-start gap-2">
-            <ActivityIcon
-              className={
-                memoryStats?.retrievalMode === "fts5+sqlite-vec"
-                  ? "mt-0.5 size-3.5 shrink-0 text-emerald-500"
-                  : "mt-0.5 size-3.5 shrink-0 text-amber-500"
-              }
-            />
-            <div className="min-w-0 space-y-0.5">
-              <div className="font-medium text-foreground">
-                {memoryStats?.retrievalMode === "fts5+sqlite-vec"
-                  ? "当前检索态：FTS5 + sqlite-vec 混合检索已就绪"
-                  : "当前检索态：FTS5 降级态（未加载 sqlite-vec 扩展）"}
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {memoryStats?.retrievalMode === "fts5+sqlite-vec"
-                  ? "sqlite-vec 原生扩展已加载，支持词法 + 向量混合语义召回。"
-                  : "当前环境未加载 sqlite-vec（如缺失 vec0.dll），系统已自动平滑回退为纯 FTS5 全文词法检索，所有记忆读写均正常且无数据兼容风险。"}
-              </div>
-            </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <DatabaseIcon className="size-3.5 text-primary" />
+              <span>条目</span>
+              <strong className="font-mono text-sm font-semibold tabular-nums text-foreground">
+                {memoryStats ? memoryStats.totalEntries : "—"}
+              </strong>
+            </span>
+            <span className="text-border" aria-hidden="true">
+              ·
+            </span>
+            <span
+              className="inline-flex items-center gap-1.5 text-muted-foreground"
+              title={memoryStats?.dbPath ?? "~/.prismux/data/memory.db"}
+            >
+              <span>存储</span>
+              <span className="font-mono text-xs text-foreground">
+                {formatDbSize(memoryStats?.dbSizeBytes ?? null)}
+              </span>
+            </span>
+            <span className="text-border" aria-hidden="true">
+              ·
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <ActivityIcon
+                className={cn(
+                  "size-3.5 shrink-0",
+                  isHybridReady ? "text-emerald-500" : "text-amber-500",
+                )}
+              />
+              <span className="font-medium text-foreground">
+                {isHybridReady ? "向量扩展已就绪" : "全文模式运行中"}
+              </span>
+            </span>
           </div>
+
           <Button
             size="xs"
-            variant="outline"
-            render={<Link to="/settings/diagnostics" />}
+            variant="ghost"
+            render={<Link to="/settings/maintenance" hash="diagnostics" />}
           >
-            <span>服务体检</span>
+            <span>服务诊断</span>
             <ArrowRightIcon className="size-3" />
           </Button>
         </div>
 
+        {/* Clickable namespace distribution filter pills */}
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
           <ShieldCheckIcon className="size-3.5 text-emerald-500" />
-          <span>三域分布：</span>
+          <span>空间分布：</span>
           {memoryStats && Object.keys(memoryStats.byNamespace).length > 0 ? (
-            Object.entries(memoryStats.byNamespace).map(([ns, count]) => (
-              <Badge key={ns} variant="outline" className="font-mono text-[11px] tabular-nums">
-                {ns}: {count}
-              </Badge>
-            ))
+            Object.entries(memoryStats.byNamespace).map(([ns, count]) => {
+              const active = selectedNamespace === ns;
+              return (
+                <button
+                  key={ns}
+                  type="button"
+                  onClick={() => {
+                    const nextNs = active ? "all" : ns;
+                    setSelectedNamespace(nextNs);
+                    if (searchQuery.trim().length > 0) {
+                      void handleSearchMemory(nextNs);
+                    }
+                  }}
+                  className={cn(
+                    "inline-flex cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] tabular-nums transition-colors",
+                    active
+                      ? "border-primary/60 bg-primary/15 text-foreground"
+                      : "border-border/60 bg-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                >
+                  {ns}: {count}
+                </button>
+              );
+            })
           ) : (
             <span>暂无写入记录</span>
           )}
         </div>
       </div>
 
-      {/* Real-time hybrid search */}
+      {/* Real-time hybrid search with namespace filter */}
       <SettingsRow
-        title="实时混合记忆检索"
-        description="直接调用 POST /v1/memory/search 执行 FTS5 + 向量混合召回测试。"
+        id="memory-search"
+        title="记忆检索"
+        description="按关键词或语义查询已保存的长期记忆，并可按命名空间筛选。"
       >
         <div className="mt-2.5 space-y-3 pb-2">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -322,7 +371,30 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
                 }
               }}
             />
-            <div className="w-28">
+            <div className={`${SETTINGS_CONTROL_SM} max-w-full shrink-0`}>
+              <Select
+                modal={false}
+                value={selectedNamespace}
+                onValueChange={(val) => {
+                  if (val) setSelectedNamespace(val);
+                }}
+              >
+                <SelectTrigger size="sm" aria-label="按命名空间筛选" data-pmx-memory-ns-filter="">
+                  <SelectValue>
+                    {selectedNamespace === "all" ? "全部空间" : selectedNamespace}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup alignItemWithTrigger={false}>
+                  <SelectItem value="all">全部空间</SelectItem>
+                  {namespaceOptions.map((ns) => (
+                    <SelectItem key={ns} value={ns}>
+                      {ns}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+            <div className="w-full sm:w-28">
               <Select modal={false} value={searchLimit} onValueChange={(v) => v && setSearchLimit(v)}>
                 <SelectTrigger size="sm">
                   <SelectValue>前 {searchLimit} 条</SelectValue>
@@ -342,7 +414,7 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
               }}
             >
               <SearchIcon className="size-3.5" />
-              {searchingMemory ? "检索中…" : "检索记忆"}
+              {searchingMemory ? "检索中…" : "检索"}
             </Button>
           </div>
 
@@ -353,19 +425,21 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
                   命中 {memoryHits.length} 条（候选 {searchMeta.totalCandidates}）
                 </span>
                 {searchMeta.degradedToFtsOnly ? (
-                  <Badge variant="secondary">已降级为 FTS5 词法检索</Badge>
+                  <Badge variant="secondary" size="sm">
+                    当前使用全文检索
+                  </Badge>
                 ) : null}
               </div>
               {memoryHits.length === 0 ? (
-                <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                <div className="rounded-lg bg-foreground/[0.025] px-3 py-2.5 text-xs text-muted-foreground dark:bg-white/[0.03]">
                   未检索到匹配记忆条目。
                 </div>
               ) : (
-                <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                <div className="max-h-64 divide-y divide-border/50 overflow-y-auto rounded-lg bg-foreground/[0.025] pr-1 dark:bg-white/[0.03]">
                   {memoryHits.map((hit) => (
                     <div
                       key={hit.id || `${hit.namespace}-${hit.title}`}
-                      className="rounded-lg border border-border/70 bg-background/60 px-3 py-2 text-xs"
+                      className="px-3 py-2.5 text-xs"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="font-medium text-foreground">{hit.title}</span>
@@ -374,7 +448,7 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
                             {hit.namespace}
                           </Badge>
                           <Badge variant="secondary" className="font-mono text-[10px]">
-                            {hit.matchSource} · {hit.score.toFixed(3)}
+                            {hit.score.toFixed(2)}
                           </Badge>
                         </div>
                       </div>
@@ -390,19 +464,20 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
         </div>
       </SettingsRow>
 
-      {/* Obsidian Vault Smart Agent Migration */}
-      <ObsidianAgentImportCard
-        daemon={daemon}
-        secretaryName={secretaryName}
-        activeProvider={activeProvider}
-        activeProviderLabel={activeProviderLabel}
-        activeModel={activeModel}
-        activeSlotRef={activeSlotRef}
-        onRender={onObsidianRender}
-        onCommitted={loadMemoryStats}
-        onError={onError}
-        onStatus={onStatus}
-      />
+      {includeObsidian ? (
+        <ObsidianAgentImportCard
+          daemon={daemon}
+          secretaryName={secretaryName}
+          activeProvider={activeProvider}
+          activeProviderLabel={activeProviderLabel}
+          activeModel={activeModel}
+          activeSlotRef={activeSlotRef}
+          onRender={onObsidianRender}
+          onCommitted={loadMemoryStats}
+          onError={onError}
+          onStatus={onStatus}
+        />
+      ) : null}
     </SettingsSection>
   );
 });

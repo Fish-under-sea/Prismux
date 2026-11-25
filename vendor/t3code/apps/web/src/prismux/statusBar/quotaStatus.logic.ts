@@ -324,8 +324,288 @@ function normalizeUpstreamWindowKind(win: ServerProviderUsageWindow): {
   };
 }
 
+export interface DaemonOfficialQuotaCreditsResponse {
+  readonly ok: true;
+  readonly cached: boolean;
+  readonly cacheTtlMs: number;
+  readonly fetchedAt: number;
+  readonly fetchedAtIso: string;
+  readonly remainingCredits: number | null;
+  readonly status: DaemonOfficialQuotaProviderStatus;
+  readonly available: boolean;
+  readonly error: string | null;
+  readonly antigravity?: {
+    readonly id: "antigravity" | string;
+    readonly status: DaemonOfficialQuotaProviderStatus;
+    readonly available: boolean;
+    readonly remainingCredits: number | null;
+    readonly fetchedAt: number;
+    readonly fetchedAtIso: string;
+    readonly error: string | null;
+  };
+}
+
+export interface AgyTurnTrackerThreadInput {
+  readonly key: string;
+  readonly providerInstanceId: string;
+  readonly runtimeProviderInstanceId?: string | null;
+  readonly modelInstanceId?: string | null;
+  readonly status: string | null | undefined;
+  readonly latestRunStatus?: string | null;
+  readonly isInteractive?: boolean;
+}
+
+export interface AgyTurnTrackerMemoryEntry {
+  readonly wasRunning: boolean;
+  readonly isAntigravity: boolean;
+}
+
+export type AgyTurnTrackerMemory = ReadonlyMap<string, AgyTurnTrackerMemoryEntry>;
+
+export interface AgyTurnCompletionResult {
+  readonly memory: AgyTurnTrackerMemory;
+  readonly completedAntigravityThreadKeys: readonly string[];
+  readonly shouldRefreshAntigravityQuota: boolean;
+}
+
+const ACTIVE_TURN_STATUSES = new Set<string>([
+  "preparing",
+  "queued",
+  "starting",
+  "running",
+  "waiting",
+]);
+
 /**
- * Aggregates 100% compliant quota data from:
+ * Strict check for whether Antigravity is explicitly enabled, installed, active,
+ * AND authenticated in upstream provider snapshots. Used to gate cold-start and
+ * event-driven AGY quota requests so unauthenticated/unconfigured users NEVER spawn `agy`.
+ */
+export function isAntigravityEnabledAndAuthenticated(
+  upstreamProviders: readonly ServerProvider[],
+): boolean {
+  return upstreamProviders.some(
+    (provider) =>
+      provider.driver === "antigravity" &&
+      provider.enabled &&
+      provider.installed !== false &&
+      provider.status !== "disabled" &&
+      provider.auth?.status === "authenticated",
+  );
+}
+
+/**
+ * Trigger 1 (Cold Start Once): fire a single initial `/v1/quota/summary` request on
+ * desktop mount ONLY when Daemon is ready, cold start hasn't fired yet, and Antigravity
+ * is explicitly enabled AND authenticated.
+ */
+export function shouldTriggerAntigravityColdStartFetch(input: {
+  readonly daemonReady: boolean;
+  readonly hasTriggeredColdStart: boolean;
+  readonly upstreamProviders: readonly ServerProvider[];
+}): boolean {
+  return (
+    input.daemonReady &&
+    !input.hasTriggeredColdStart &&
+    isAntigravityEnabledAndAuthenticated(input.upstreamProviders)
+  );
+}
+
+/**
+ * Trigger 3 (Manual Refresh): allow refreshing AGY `/v1/quota/summary?force=1` on manual
+ * user click ONLY if Antigravity is enabled & authenticated (or in a standalone harness
+ * with no upstream provider list). NEVER invokes `agy` when only Codex/Claude are configured
+ * or when AGY is disabled/unauthenticated.
+ */
+export function shouldRefreshAntigravityOnManualClick(
+  upstreamProviders: readonly ServerProvider[],
+): boolean {
+  const agyProviders = upstreamProviders.filter((provider) => provider.driver === "antigravity");
+  if (agyProviders.length === 0) {
+    return upstreamProviders.length === 0;
+  }
+  return isAntigravityEnabledAndAuthenticated(upstreamProviders);
+}
+
+/**
+ * On-demand `/v1/quota/credits` gate when the user opens `QuotaStatusPopover`:
+ * strictly requires AGY to be authenticated (never fires for unauthenticated or non-AGY setups).
+ */
+export function shouldFetchAntigravityCreditsOnPopoverOpen(
+  upstreamProviders: readonly ServerProvider[],
+  daemonQuota: DaemonOfficialQuotaSummaryResponse | null | undefined,
+): boolean {
+  if (!isAntigravityQuotaAuthAllowed(upstreamProviders)) {
+    return false;
+  }
+  if (isAntigravityEnabledAndAuthenticated(upstreamProviders)) {
+    return true;
+  }
+  const hasAgyEntry = upstreamProviders.some((provider) => provider.driver === "antigravity");
+  if (hasAgyEntry) {
+    return false;
+  }
+  return Boolean(
+    daemonQuota?.antigravity?.available && daemonQuota.antigravity.status === "ok",
+  );
+}
+
+export function buildProviderDriverMap(
+  upstreamProviders: readonly ServerProvider[],
+): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  for (const provider of upstreamProviders) {
+    if (provider.instanceId && provider.driver) {
+      map.set(provider.instanceId, provider.driver);
+    }
+  }
+  return map;
+}
+
+function inferDriverFromInstanceId(rawId: string | null | undefined): string | null {
+  if (!rawId) return null;
+  const trimmed = rawId.trim().toLowerCase();
+  if (!trimmed) return null;
+  if (trimmed === "antigravity" || /^antigravity(?:[:_-]|$)/.test(trimmed)) {
+    return "antigravity";
+  }
+  if (trimmed === "codex" || /^codex(?:[:_-]|$)/.test(trimmed)) {
+    return "codex";
+  }
+  if (trimmed === "claudeagent" || trimmed === "claude" || /^claude(?:[:_-]|$)/.test(trimmed)) {
+    return "claudeAgent";
+  }
+  if (trimmed === "opencode" || /^opencode(?:[:_-]|$)/.test(trimmed)) {
+    return "opencode";
+  }
+  if (trimmed === "dsh" || /^dsh(?:[:_-]|$)/.test(trimmed)) {
+    return "dsh";
+  }
+  return null;
+}
+
+export function resolveThreadProviderDriver(
+  thread: Pick<
+    AgyTurnTrackerThreadInput,
+    "providerInstanceId" | "runtimeProviderInstanceId" | "modelInstanceId"
+  >,
+  providerDriverByInstanceId: ReadonlyMap<string, string>,
+): string | null {
+  const candidates = [
+    thread.runtimeProviderInstanceId,
+    thread.providerInstanceId,
+    thread.modelInstanceId,
+  ];
+  for (const id of candidates) {
+    if (!id) continue;
+    const mapped = providerDriverByInstanceId.get(id);
+    if (mapped) {
+      return mapped;
+    }
+  }
+  for (const id of candidates) {
+    const inferred = inferDriverFromInstanceId(id);
+    if (inferred) {
+      return inferred;
+    }
+  }
+  return null;
+}
+
+export function isThreadStatusRunning(status: string | null | undefined): boolean {
+  return typeof status === "string" && ACTIVE_TURN_STATUSES.has(status);
+}
+
+/**
+ * Trigger 2 (AGY turn end): detects running -> completed/idle on interactive AGY threads only.
+ * Silent on initial baseline (`previous === null`) and ignores Codex/Claude/OpenCode/DSH/subagents.
+ */
+export function detectCompletedAntigravityTurns(
+  previous: AgyTurnTrackerMemory | null,
+  threads: readonly AgyTurnTrackerThreadInput[],
+  upstreamProviders: readonly ServerProvider[] = [],
+): AgyTurnCompletionResult {
+  const driverMap = buildProviderDriverMap(upstreamProviders);
+  const memory = new Map<string, AgyTurnTrackerMemoryEntry>();
+  const completedAntigravityThreadKeys: string[] = [];
+
+  for (const thread of threads) {
+    if (thread.isInteractive === false) {
+      continue;
+    }
+    const driver = resolveThreadProviderDriver(thread, driverMap);
+    const isAntigravity = driver === "antigravity";
+    const effectiveStatus = thread.status ?? thread.latestRunStatus ?? null;
+    const isRunning = isThreadStatusRunning(effectiveStatus);
+
+    memory.set(thread.key, {
+      wasRunning: isRunning,
+      isAntigravity,
+    });
+
+    if (previous === null) {
+      continue;
+    }
+
+    const before = previous.get(thread.key);
+    if (before && before.wasRunning && !isRunning && (before.isAntigravity || isAntigravity)) {
+      completedAntigravityThreadKeys.push(thread.key);
+    }
+  }
+
+  return {
+    memory,
+    completedAntigravityThreadKeys,
+    shouldRefreshAntigravityQuota: completedAntigravityThreadKeys.length > 0,
+  };
+}
+
+/**
+ * Strict real-time auth gate for non-Antigravity upstream providers (Codex / Claude Code / etc.):
+ * a provider may appear in the bottom status bar ONLY when enabled, installed, active,
+ * and currently authenticated (`auth.status === "authenticated"`).
+ */
+export function isUpstreamProviderQuotaEligible(provider: ServerProvider): boolean {
+  if (!provider.enabled) return false;
+  if (provider.installed === false) return false;
+  if (provider.status === "disabled") return false;
+  if (provider.auth?.status !== "authenticated") return false;
+  return true;
+}
+
+/**
+ * Strict real-time auth gate for Antigravity official CLI quota against T3 provider snapshots:
+ * blocks immediately if configured Antigravity instances are disabled, uninstalled, or unauthenticated.
+ */
+export function isAntigravityQuotaAuthAllowed(
+  upstreamProviders: readonly ServerProvider[],
+): boolean {
+  const agyProviders = upstreamProviders.filter((provider) => provider.driver === "antigravity");
+  if (agyProviders.length === 0) {
+    return true;
+  }
+  return agyProviders.some(
+    (provider) =>
+      provider.enabled &&
+      provider.installed !== false &&
+      provider.status !== "disabled" &&
+      provider.auth?.status !== "unauthenticated",
+  );
+}
+
+/**
+ * Returns true iff the bottom status bar quota capsule should be rendered at all.
+ * Hides completely when 0 authenticated providers have live quota windows (no static placeholder).
+ */
+export function shouldShowStatusBarQuota(
+  summary: QuotaStatusSummary,
+  visibilityQuota: boolean,
+): boolean {
+  return visibilityQuota && summary.availableAgents.length > 0;
+}
+
+/**
+ * Aggregates 100% compliant, strictly auth-gated quota data from:
  * 1. Prismux Daemon's official `agy -p "/usage"` CLI snapshot (Antigravity)
  * 2. T3 Code upstream compliant provider snapshots (Codex / Claude Code / etc., strictly excluding Antigravity)
  */
@@ -333,13 +613,28 @@ export function aggregateQuotaSummary(
   daemonQuota: DaemonOfficialQuotaSummaryResponse | null | undefined,
   upstreamProviders: readonly ServerProvider[] = [],
   now = Date.now(),
+  agyCredits?: DaemonOfficialQuotaCreditsResponse | number | null,
 ): QuotaStatusSummary {
   const agents: QuotaAgentEntry[] = [];
   const resetTimes: number[] = [];
 
-  // 1. Official Antigravity quota from Prismux Daemon (`agy -p "/usage"`).
+  // 1. Official Antigravity quota from Prismux Daemon (`agy -p "/usage"`), strictly auth-gated.
   const agy = daemonQuota?.antigravity ?? null;
-  if (agy && agy.available && Array.isArray(agy.windows) && agy.windows.length > 0) {
+  const agyCreditsUnauth =
+    agyCredits !== null &&
+    agyCredits !== undefined &&
+    typeof agyCredits === "object" &&
+    (agyCredits.status === "unauthenticated" || agyCredits.status === "not_installed");
+  const agyAuthAllowed = isAntigravityQuotaAuthAllowed(upstreamProviders) && !agyCreditsUnauth;
+  const agyLiveOk =
+    agy !== null &&
+    agy.status === "ok" &&
+    agy.available &&
+    agyAuthAllowed &&
+    Array.isArray(agy.windows) &&
+    agy.windows.length > 0;
+
+  if (agyLiveOk) {
     const windows: QuotaWindowItem[] = agy.windows.map((win) => {
       const parsedMs =
         typeof win.resetAtMs === "number" && Number.isFinite(win.resetAtMs)
@@ -369,6 +664,27 @@ export function aggregateQuotaSummary(
       };
     });
 
+    const hydratedCredits =
+      typeof agyCredits === "number" && Number.isFinite(agyCredits)
+        ? agyCredits
+        : agyCredits !== null &&
+            agyCredits !== undefined &&
+            typeof agyCredits === "object" &&
+            agyCredits.available &&
+            typeof agyCredits.remainingCredits === "number" &&
+            Number.isFinite(agyCredits.remainingCredits)
+          ? agyCredits.remainingCredits
+          : agyCredits !== null &&
+              agyCredits !== undefined &&
+              typeof agyCredits === "object" &&
+              agyCredits.antigravity?.available &&
+              typeof agyCredits.antigravity.remainingCredits === "number" &&
+              Number.isFinite(agyCredits.antigravity.remainingCredits)
+            ? agyCredits.antigravity.remainingCredits
+            : typeof agy.remainingCredits === "number"
+              ? agy.remainingCredits
+              : null;
+
     agents.push({
       id: "antigravity",
       brandProvider: "antigravity",
@@ -378,17 +694,17 @@ export function aggregateQuotaSummary(
       status: agy.status,
       error: null,
       fetchedAt: typeof agy.fetchedAt === "number" ? agy.fetchedAt : daemonQuota?.fetchedAt ?? null,
-      remainingCredits:
-        typeof agy.remainingCredits === "number" ? agy.remainingCredits : null,
+      remainingCredits: hydratedCredits,
       windows,
       primaryWindow: selectPrimaryAgentWindow(windows),
       soonestResetAtMs: findSoonestFutureResetMs(windows, now),
     });
   }
 
-  // 2. Upstream compliant providers from T3 Code (Codex / Claude Code / etc., never Antigravity).
+  // 2. Upstream compliant providers from T3 Code (Codex / Claude Code / etc., never Antigravity),
+  //    strictly gated on enabled + installed + live authenticated status + actual windows.
   for (const provider of upstreamProviders) {
-    if (!provider.enabled || provider.driver === "antigravity") continue;
+    if (provider.driver === "antigravity" || !isUpstreamProviderQuotaEligible(provider)) continue;
     const rawWindows = provider.usageLimits?.windows;
     if (!Array.isArray(rawWindows) || rawWindows.length === 0) continue;
 
@@ -447,19 +763,38 @@ export function aggregateQuotaSummary(
   const availableAgents = agents.filter((a) => a.available && a.windows.length > 0);
   const primaryAgent = availableAgents[0] ?? null;
   const primaryWindow = primaryAgent?.primaryWindow ?? null;
+  const hasExplicitUnauthAgy = upstreamProviders.some(
+    (provider) =>
+      provider.driver === "antigravity" &&
+      provider.enabled &&
+      provider.auth?.status === "unauthenticated",
+  );
+  const effectiveAntigravityStatus: DaemonOfficialQuotaProviderStatus | "idle" = !agyAuthAllowed
+    ? hasExplicitUnauthAgy
+      ? "unauthenticated"
+      : "idle"
+    : agy
+      ? agy.status
+      : "idle";
+  const effectiveAntigravityError = !agyAuthAllowed
+    ? hasExplicitUnauthAgy
+      ? "未检测到官方 agy CLI 登录态"
+      : null
+    : agy && (!agy.available || agy.status !== "ok")
+      ? agy.error ?? "未检测到官方 agy CLI 登录态"
+      : null;
 
   return {
     agents,
     availableAgents,
     primaryAgent,
     primaryWindow,
-    antigravityStatus: agy ? agy.status : "idle",
-    antigravityError: agy && !agy.available ? agy.error ?? "未检测到官方 agy CLI 登录态" : null,
+    antigravityStatus: effectiveAntigravityStatus,
+    antigravityError: effectiveAntigravityError,
     fetchedAt:
-      agy?.fetchedAt ??
-      daemonQuota?.fetchedAt ??
+      (agyLiveOk ? agy.fetchedAt : null) ??
       primaryAgent?.fetchedAt ??
-      null,
+      (agyAuthAllowed ? daemonQuota?.fetchedAt ?? null : null),
     resetTimes,
   };
 }

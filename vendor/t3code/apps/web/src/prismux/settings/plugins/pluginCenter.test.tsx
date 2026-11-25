@@ -13,7 +13,11 @@ import {
 import { PluginDetailDrawer } from "./PluginDetailDrawer";
 import { PluginRollbackDialog } from "./PluginRollbackDialog";
 import { PluginTrustAuditModal } from "./PluginTrustAuditModal";
-import { PrismuxPluginCenterView } from "./PrismuxPluginCenterView";
+import {
+  PrismuxPluginCenterView,
+  parsePluginRegistryOverrideFromUpdaterStatus,
+  pluginRegistryOverrideToNetworkPreference,
+} from "./PrismuxPluginCenterView";
 import {
   DEFAULT_GROUP_DISPLAY_LIMIT,
   DEFAULT_RETIRED_OFFICIAL_PLUGINS,
@@ -458,14 +462,38 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
     expect(mixedHtml).not.toContain('data-testid="plugin-category-pet"');
     expect(mixedHtml).not.toContain('data-testid="plugin-category-ops"');
 
-    // Scriptless npm import, local .wb-plugin import & Creator Guide button
+    // Scriptless npm import, local .wb-plugin import, single-source registry selector & Creator Guide button
     expect(mixedHtml).toContain("社区 npm 插件流式导入");
+    expect(mixedHtml).toContain('data-testid="plugin-registry-select"');
     expect(mixedHtml).toContain('data-testid="plugin-creator-guide-btn"');
     expect(mixedHtml).toContain("创作指引");
     expect(mixedHtml).toContain('data-testid="plugin-local-archive-btn"');
     expect(mixedHtml).toContain("导入本地 .wb-plugin");
     expect(mixedHtml).toContain("免 Git 依赖");
     expect(mixedHtml).toContain("禁用安装脚本");
+
+    // Denoised user-facing copy (zero raw internal jargon on the main Plugin Center page)
+    expect(mixedHtml).not.toContain("ctx.effect()");
+    expect(mixedHtml).not.toContain("0600");
+    expect(mixedHtml).not.toContain("distribution: managed");
+    expect(mixedHtml).not.toContain("0 Token");
+
+    // Single-source Daemon pluginRegistryOverride helpers
+    expect(pluginRegistryOverrideToNetworkPreference("auto")).toBe("auto");
+    expect(pluginRegistryOverrideToNetworkPreference("npmmirror")).toBe("domestic");
+    expect(pluginRegistryOverrideToNetworkPreference("npmjs")).toBe("global");
+    expect(
+      parsePluginRegistryOverrideFromUpdaterStatus({
+        policy: { pluginRegistryOverride: "npmmirror" },
+      }),
+    ).toBe("npmmirror");
+    expect(
+      parsePluginRegistryOverrideFromUpdaterStatus({
+        policy: { pluginRegistryOverride: "npmjs" },
+      }),
+    ).toBe("npmjs");
+    expect(parsePluginRegistryOverrideFromUpdaterStatus({ policy: {} })).toBe("auto");
+    expect(parsePluginRegistryOverrideFromUpdaterStatus(null)).toBe("auto");
 
     // Case 2: Official catalog only (all plugins in communication; <= 1 non-zero category)
     // Secondary category strip is completely hidden — zero empty "桌宠 0 / 运维 0 / 主题 0 / 工具 0" labels!

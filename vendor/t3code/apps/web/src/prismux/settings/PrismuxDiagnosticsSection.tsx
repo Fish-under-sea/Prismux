@@ -478,7 +478,7 @@ function kpiTileSurfaceClasses(
 
 /**
  * Prismux Service Diagnostics Center (`GET /v1/diagnostics/services`).
- * `full` mounts on `/settings/diagnostics`; `compact` mounts on `/welcome` and hides if Daemon is unreachable.
+ * `full` mounts on `/settings/maintenance#diagnostics`; `compact` mounts on `/welcome` and hides if Daemon is unreachable.
  */
 export function PrismuxDiagnosticsSection({
   variant = "full",
@@ -563,7 +563,7 @@ export function PrismuxDiagnosticsSection({
     refreshControllerRef.current = controller;
   }, [loadDiagnostics]);
 
-  // Initial mount: opening `/settings/diagnostics` always runs a fresh `force=1` hot-probe
+  // Initial mount: opening the diagnostics panel always runs a fresh `force=1` hot-probe
   // (refreshing Windows registry env & bypassing TTL cache), while keeping any prior report visible.
   useEffect(() => {
     if (initialReportOverride !== undefined) return;
@@ -750,16 +750,10 @@ export function PrismuxDiagnosticsSection({
   const memoryState = report?.memoryRetrievalState ?? "unknown";
   const memoryBannerSurface =
     memoryState === "fts5+sqlite-vec"
-      ? "border-emerald-500/30 bg-emerald-500/[0.045] dark:border-emerald-400/25 dark:bg-emerald-400/[0.055]"
+      ? "border-emerald-500/25 bg-emerald-500/[0.04] dark:border-emerald-400/20 dark:bg-emerald-400/[0.05]"
       : memoryState === "fts5-only"
-        ? "border-amber-500/35 bg-amber-500/[0.055] dark:border-amber-400/30 dark:bg-amber-400/[0.065]"
-        : "border-border/60 bg-foreground/[0.025] dark:bg-white/[0.035]";
-  const memoryIconTray =
-    memoryState === "fts5+sqlite-vec"
-      ? "border-emerald-500/30 bg-emerald-500/12 text-success-foreground dark:border-emerald-400/30 dark:bg-emerald-400/14"
-      : memoryState === "fts5-only"
-        ? "border-amber-500/35 bg-amber-500/14 text-warning-foreground dark:border-amber-400/35 dark:bg-amber-400/16"
-        : "border-border/60 bg-foreground/[0.045] text-muted-foreground dark:bg-white/[0.06]";
+        ? "border-amber-500/30 bg-amber-500/[0.045] dark:border-amber-400/25 dark:bg-amber-400/[0.055]"
+        : "border-border/55 bg-foreground/[0.02] dark:bg-white/[0.03]";
 
   const kpiTiles: ReadonlyArray<{
     readonly key: DiagnosticStatusFilter;
@@ -917,54 +911,55 @@ export function PrismuxDiagnosticsSection({
             </div>
           ) : null}
 
-          {/* Layer 1b: Memory Retrieval Engine Glass Status Banner */}
+          {/* Single-line Memory Retrieval Status Strip */}
           {report ? (
             <div
               data-diagnostic-memory-banner="true"
               className={cn(
-                "flex flex-wrap items-center justify-between gap-3 px-4 py-3",
-                GLASS_SURFACE_RIM,
+                "flex flex-wrap items-center justify-between gap-2.5 rounded-xl border px-3.5 py-2 text-xs",
                 memoryBannerSurface,
               )}
             >
-              <div className="flex min-w-0 flex-1 items-start gap-3">
-                <span
-                  aria-hidden="true"
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <DatabaseIcon
                   className={cn(
-                    "inline-flex size-9 shrink-0 items-center justify-center rounded-xl border",
-                    memoryIconTray,
+                    "size-3.5 shrink-0",
+                    memoryState === "fts5+sqlite-vec"
+                      ? "text-success-foreground"
+                      : memoryState === "fts5-only"
+                        ? "text-warning-foreground"
+                        : "text-muted-foreground",
                   )}
-                >
-                  <DatabaseIcon className="size-4" />
+                  aria-hidden="true"
+                />
+                <span className="shrink-0 font-medium text-foreground">
+                  <T>Memory retrieval engine</T>
                 </span>
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[13px] font-semibold tracking-tight text-foreground">
-                      <T>Memory retrieval engine</T>
-                    </span>
-                    <Badge
-                      size="sm"
-                      variant={
-                        memoryState === "fts5+sqlite-vec"
-                          ? "success"
-                          : memoryState === "fts5-only"
-                            ? "warning"
-                            : "secondary"
-                      }
-                    >
-                      {memoryState === "fts5+sqlite-vec"
-                        ? gt("FTS5 + sqlite-vec hybrid")
-                        : memoryState === "fts5-only"
-                          ? gt("FTS5 degraded mode")
-                          : gt("Unknown")}
-                    </Badge>
-                  </div>
-                  {report.memoryRetrievalDetail ? (
-                    <p className="break-words text-xs leading-relaxed text-muted-foreground">
-                      {report.memoryRetrievalDetail}
-                    </p>
-                  ) : null}
-                </div>
+                <Badge
+                  size="sm"
+                  className="shrink-0"
+                  variant={
+                    memoryState === "fts5+sqlite-vec"
+                      ? "success"
+                      : memoryState === "fts5-only"
+                        ? "warning"
+                        : "secondary"
+                  }
+                >
+                  {memoryState === "fts5+sqlite-vec"
+                    ? gt("FTS5 + sqlite-vec hybrid")
+                    : memoryState === "fts5-only"
+                      ? gt("FTS5 degraded mode")
+                      : gt("Unknown")}
+                </Badge>
+                {report.memoryRetrievalDetail ? (
+                  <span
+                    className="min-w-0 truncate text-muted-foreground"
+                    title={report.memoryRetrievalDetail}
+                  >
+                    {report.memoryRetrievalDetail}
+                  </span>
+                ) : null}
               </div>
               <Button
                 size="xs"
@@ -1107,18 +1102,15 @@ export function PrismuxDiagnosticsSection({
                   );
                 })}
 
-                {/* Single deduplicated Dormant Engines Read-Only Summary container */}
+                {/* Single deduplicated Dormant Engines Read-Only Summary (flattened <= 2 card layers) */}
                 {filteredView.dormantGroup ? (
                   <section
                     data-diagnostic-group={filteredView.dormantGroup.id}
                     data-diagnostic-dormant-summary="true"
                     aria-label={categoryHeadingLabel(filteredView.dormantGroup, gt)}
-                    className={cn(
-                      "space-y-3 border-border/60 bg-foreground/[0.02] p-4 dark:bg-white/[0.025]",
-                      GLASS_SURFACE_RIM,
-                    )}
+                    className="space-y-3 border-t border-border/50 pt-5"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
                       <div className="flex min-w-0 items-center gap-2.5">
                         <span
                           aria-hidden="true"

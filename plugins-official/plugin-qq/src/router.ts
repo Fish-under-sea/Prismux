@@ -1,8 +1,13 @@
+import process from "node:process";
 import type {
   CallerScope,
+  DispatchTaskArtifact,
+  DispatchTaskCategory,
+  DispatchThreadRequest,
   MemoryNamespace,
   MemoryQueryRequest,
-  MemoryQueryResponse
+  MemoryQueryResponse,
+  PrismuxDispatchEnvelope
 } from "@prismux/protocol";
 
 function isScopeAllowedForNamespace(
@@ -38,8 +43,172 @@ import {
 export type ChiefIntentKind =
   | "check_email"
   | "dispatch_factory"
+  | "dispatch_coding"
   | "query_progress"
   | "chief_chat";
+
+export interface QqDaemonDispatchResult {
+  ok: boolean;
+  httpStatus: number;
+  envelope?: PrismuxDispatchEnvelope;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export type QqDaemonDispatcher = (
+  request: DispatchThreadRequest
+) => Promise<QqDaemonDispatchResult>;
+
+export interface QqHttpDaemonDispatchOptions {
+  daemonUrl: string;
+  authToken: string;
+  fetchFn?: typeof fetch;
+}
+
+const EXPLICIT_PERSONAL_AGY_RE =
+  /(?:用|使用|调用|唤醒|交给|让|派给|指定)\s*(?:个人版\s*)?(?:antigravity|agy)\b|\b(?:use|call|invoke|ask|assign\s+to|dispatch\s+to)\s+(?:personal\s+)?(?:antigravity|agy)\b|\bprovider\s*[:=]\s*(?:antigravity|agy)\b|#(antigravity|agy)\b/i;
+
+const QQ_BACKEND_HARD_RE =
+  /(?:并发|死锁|竞态|架构重构|底层重构|性能优化|内存泄漏|安全审计|数据库迁移|复杂后端|疑难|deadlock|race\s+condition|architecture\s+refactor|security\s+audit)/i;
+
+const QQ_PLANNING_RE =
+  /(?:规划|方案设计|架构设计|拆解任务|技术方案|roadmap|rfc|spec)/i;
+
+const QQ_FRONTEND_RE =
+  /(?:前端|界面|页面|样式|动画|布局|组件|液态玻璃|壁纸|弹窗|css|tailwind|react|ui\/ux|frontend)/i;
+
+const QQ_CODING_DISPATCH_RE =
+  /(?:帮我|请)?(?:写代码|修复|实现|重构|开发|改一下|排查|补单测|加个功能|做个|用\s*(?:codex|claude|opencode|dsh|agy|antigravity)|\/dispatch|\/code)/i;
+
+/**
+ * Detects whether an owner QQ private message explicitly names personal Antigravity (AGY).
+ */
+export function detectExplicitPersonalAntigravityIntent(text: string): boolean {
+  return EXPLICIT_PERSONAL_AGY_RE.test(text.trim());
+}
+
+/**
+ * Infers structured task category from owner QQ private prompt so Daemon's Parameter Backdoor
+ * routes smoothly without GUI dropdown clicks.
+ */
+export function inferQqTaskCategory(text: string): DispatchTaskCategory {
+  if (QQ_BACKEND_HARD_RE.test(text)) {
+    return "backend_hard";
+  }
+  if (QQ_PLANNING_RE.test(text)) {
+    return "planning";
+  }
+  if (QQ_FRONTEND_RE.test(text)) {
+    return "frontend";
+  }
+  return "backend_standard";
+}
+
+/**
+ * Formats a concise plain-Chinese QQ reply for dual-track Daemon dispatch responses:
+ * - Track 1 (automated workers): confirms auto-dispatch & ArtifactResultBackdoor straight reply.
+ * - Track 2 (personal AGY): confirms Draft-Only staging, Worktree path, and awaiting desktop confirmation.
+ */
+export function formatQqDispatchReply(result: QqDaemonDispatchResult): string {
+  if (!result.ok || result.envelope === undefined) {
+    const code = result.errorCode ? `[${result.errorCode}] ` : "";
+    return `派发未放行：${code}${result.errorMessage ?? `Daemon 返回 HTTP ${result.httpStatus}`}`;
+  }
+
+  const env = result.envelope;
+  const targetPath = env.worktreePath ?? env.workspacePath;
+
+  if (
+    env.mode === "draft_only" ||
+    env.requiresHumanConfirmation ||
+    env.status === "awaiting_human_confirmation"
+  ) {
+    return [
+      `【个人版 AGY 草稿已就位 · 待桌面确认】`,
+      `按安全硬锁定规则，QQ 远程绝不会自动触发个人版 Antigravity（AGY）。`,
+      `任务 ID：${env.taskId}`,
+      `Worktree / 工作区：${targetPath}`,
+      ...(env.memoryContextSummary
+        ? [`已召回记忆：${env.memoryContextSummary}`]
+        : []),
+      `请回到桌面端 Prismux 点击「确认放行并发送」后正式执行。`
+    ].join("\n");
+  }
+
+  return [
+    `【已自动派发执行】`,
+    `执行节点：${env.provider} / ${env.modelId}（思考强度：${env.reasoningEffort}）`,
+    `任务 ID：${env.taskId}`,
+    `工作区：${targetPath}`,
+    `完工后将通过产物直出通道直接汇报中文摘要与 Diff 统计。`
+  ].join("\n");
+}
+
+/**
+ * Formats a straight plain-Chinese QQ reply from `ArtifactResultBackdoor` completion payload,
+ * skipping any heavy Oracle second-review step.
+ */
+export function formatQqArtifactCompletionReply(
+  artifact: DispatchTaskArtifact
+): string {
+  const filesPreview =
+    artifact.modifiedFiles.length > 0
+      ? artifact.modifiedFiles.slice(0, 6).join("、") +
+        (artifact.modifiedFiles.length > 6
+          ? ` 等共 ${artifact.modifiedFiles.length} 个文件`
+          : "")
+      : "无文件变更";
+  return [
+    `【任务完工直达回执】${artifact.plainLanguageSummary}`,
+    `Diff 统计：${artifact.diffStats.filesChanged} 个文件（+${artifact.diffStats.insertions} / -${artifact.diffStats.deletions}）`,
+    `改动文件：${filesPreview}`,
+    ...(artifact.branchName ? [`分支：${artifact.branchName}`] : [])
+  ].join("\n");
+}
+
+/**
+ * Creates a real HTTP client targeting Daemon `POST /v1/dispatch/thread` with Bearer authentication.
+ */
+export function createHttpDaemonDispatcher(
+  options: QqHttpDaemonDispatchOptions
+): QqDaemonDispatcher {
+  const baseUrl = options.daemonUrl.replace(/\/+$/, "");
+  const fetchImpl = options.fetchFn ?? fetch;
+
+  return async (
+    request: DispatchThreadRequest
+  ): Promise<QqDaemonDispatchResult> => {
+    const res = await fetchImpl(`${baseUrl}/v1/dispatch/thread`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.authToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(request)
+    });
+
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      envelope?: PrismuxDispatchEnvelope;
+      error?: { code?: string; message?: string };
+    };
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        httpStatus: res.status,
+        errorCode: body.error?.code,
+        errorMessage: body.error?.message
+      };
+    }
+
+    return {
+      ok: true,
+      httpStatus: res.status,
+      envelope: body.envelope
+    };
+  };
+}
 
 export interface QqInboundMessage {
   messageId?: string;
@@ -81,6 +250,9 @@ export interface QqChiefDispatchContext {
     query: string,
     options?: Omit<MemoryQueryRequest, "callerScope" | "query">
   ) => Promise<QqScopedMemoryQueryResult>;
+  dispatchToDaemon?: (
+    overrides?: Partial<Omit<DispatchThreadRequest, "callerKind">>
+  ) => Promise<QqDaemonDispatchResult>;
 }
 
 export interface QqGroupDispatchContext {
@@ -129,6 +301,8 @@ export interface QqRouteResult {
   segments: HumanReplySegment[];
   pacingDecision?: GroupPacingDecision;
   memoryPolicy?: QqRouteMemoryPolicy;
+  dispatchEnvelope?: PrismuxDispatchEnvelope;
+  dispatchResult?: QqDaemonDispatchResult;
   outboundActions: OneBotActionPayload[];
   reason?: string;
 }
@@ -140,6 +314,8 @@ export interface QqRouterOptions {
   memoryQuery?: QqMemoryQueryRunner;
   chiefHandler?: QqChiefHandler;
   groupResponder?: QqGroupResponder;
+  daemonDispatcher?: QqDaemonDispatcher;
+  defaultWorkspacePath?: string;
   randomFn?: () => number;
 }
 
@@ -214,6 +390,12 @@ export function classifyChiefIntent(text: string): ChiefIntentKind {
   ) {
     return "query_progress";
   }
+  if (
+    detectExplicitPersonalAntigravityIntent(text) ||
+    QQ_CODING_DISPATCH_RE.test(text)
+  ) {
+    return "dispatch_coding";
+  }
   return "chief_chat";
 }
 
@@ -223,6 +405,8 @@ function defaultChiefReply(ctx: QqChiefDispatchContext): string {
       return `已连接主秘书线程（scope: ${ctx.callerScope}），正在为您检索近期重要邮件与 #factory 触发信件。`;
     case "dispatch_factory":
       return `主秘书已接收夜间工场任务指令：「${ctx.text}」，将通过 Handoff 与沙箱分支排期执行。`;
+    case "dispatch_coding":
+      return `主秘书已接收开发任务指令：「${ctx.text}」，请配置 Daemon 派发通道以自动路由至工作节点。`;
     case "query_progress":
       return `当前主秘书线程在线（scope: ${ctx.callerScope}），后台任务队列运行正常，暂未发现阻塞项。`;
     case "chief_chat":
@@ -278,6 +462,8 @@ export class QqMessageRouter {
   private memoryQuery?: QqMemoryQueryRunner;
   private chiefHandler?: QqChiefHandler;
   private groupResponder?: QqGroupResponder;
+  private daemonDispatcher?: QqDaemonDispatcher;
+  private defaultWorkspacePath: string;
   private randomFn?: () => number;
 
   constructor(options: QqRouterOptions) {
@@ -290,6 +476,8 @@ export class QqMessageRouter {
     this.memoryQuery = options.memoryQuery;
     this.chiefHandler = options.chiefHandler;
     this.groupResponder = options.groupResponder;
+    this.daemonDispatcher = options.daemonDispatcher;
+    this.defaultWorkspacePath = options.defaultWorkspacePath ?? process.cwd();
     this.randomFn = options.randomFn;
   }
 
@@ -321,6 +509,16 @@ export class QqMessageRouter {
 
   setGroupResponder(responder: QqGroupResponder | undefined): void {
     this.groupResponder = responder;
+  }
+
+  setDaemonDispatcher(dispatcher: QqDaemonDispatcher | undefined): void {
+    this.daemonDispatcher = dispatcher;
+  }
+
+  setDefaultWorkspacePath(workspacePath: string): void {
+    if (workspacePath.trim().length > 0) {
+      this.defaultWorkspacePath = workspacePath.trim();
+    }
   }
 
   /**
@@ -455,6 +653,67 @@ export class QqMessageRouter {
       const callerScope: "owner_chief" = "owner_chief";
       const memoryPolicy = buildMemoryPolicyForScope(callerScope);
       const intent = classifyChiefIntent(plainText);
+
+      const dispatchToDaemon = this.daemonDispatcher
+        ? async (
+            overrides?: Partial<Omit<DispatchThreadRequest, "callerKind">>
+          ): Promise<QqDaemonDispatchResult> => {
+            const explicitAgy =
+              overrides?.explicitAntigravityRequested ??
+              detectExplicitPersonalAntigravityIntent(plainText);
+            let memoryContextSummary = overrides?.memoryContextSummary;
+            if (memoryContextSummary === undefined && this.memoryQuery) {
+              try {
+                const mem = await this.queryScopedMemory(callerScope, plainText, {
+                  limit: 3
+                });
+                if (mem.hits.length > 0) {
+                  memoryContextSummary = mem.hits
+                    .map((h) => `[${h.entry.namespace}] ${h.entry.title}`)
+                    .join("；");
+                }
+              } catch {
+                // Memory enrichment is best-effort.
+              }
+            }
+            const reqPayload: DispatchThreadRequest = {
+              prompt: overrides?.prompt ?? plainText,
+              workspacePath:
+                overrides?.workspacePath ?? this.defaultWorkspacePath,
+              ...(overrides?.worktreePath !== undefined
+                ? { worktreePath: overrides.worktreePath }
+                : {}),
+              ...(overrides?.branchName !== undefined
+                ? { branchName: overrides.branchName }
+                : {}),
+              callerKind: "secretary_qq",
+              taskCategory:
+                overrides?.taskCategory ?? inferQqTaskCategory(plainText),
+              ...(overrides?.provider !== undefined
+                ? { provider: overrides.provider }
+                : explicitAgy
+                  ? { provider: "antigravity" }
+                  : {}),
+              ...(overrides?.modelId !== undefined
+                ? { modelId: overrides.modelId }
+                : {}),
+              ...(overrides?.reasoningEffort !== undefined
+                ? { reasoningEffort: overrides.reasoningEffort }
+                : {}),
+              ...(explicitAgy ? { explicitAntigravityRequested: true } : {}),
+              ...(memoryContextSummary !== undefined
+                ? { memoryContextSummary }
+                : {}),
+              replyChannel: overrides?.replyChannel ?? {
+                kind: "qq",
+                targetId: message.userId,
+                label: "QQ 私聊主秘书"
+              }
+            };
+            return this.daemonDispatcher!(reqPayload);
+          }
+        : undefined;
+
       const dispatchCtx: QqChiefDispatchContext = {
         callerScope,
         intent,
@@ -463,12 +722,23 @@ export class QqMessageRouter {
         message,
         memoryPolicy,
         queryMemory: (query, opts) =>
-          this.queryScopedMemory(callerScope, query, opts)
+          this.queryScopedMemory(callerScope, query, opts),
+        ...(dispatchToDaemon !== undefined ? { dispatchToDaemon } : {})
       };
 
-      const replyText = this.chiefHandler
-        ? await this.chiefHandler(dispatchCtx)
-        : defaultChiefReply(dispatchCtx);
+      let replyText: string;
+      let dispatchResult: QqDaemonDispatchResult | undefined;
+      if (this.chiefHandler) {
+        replyText = await this.chiefHandler(dispatchCtx);
+      } else if (
+        dispatchToDaemon !== undefined &&
+        (intent === "dispatch_factory" || intent === "dispatch_coding")
+      ) {
+        dispatchResult = await dispatchToDaemon();
+        replyText = formatQqDispatchReply(dispatchResult);
+      } else {
+        replyText = defaultChiefReply(dispatchCtx);
+      }
 
       const plannedSegments = this.pacingEngine.planSegments(replyText);
       const outboundActions: OneBotActionPayload[] =
@@ -485,6 +755,10 @@ export class QqMessageRouter {
         replyText,
         segments: plannedSegments,
         memoryPolicy,
+        ...(dispatchResult?.envelope !== undefined
+          ? { dispatchEnvelope: dispatchResult.envelope }
+          : {}),
+        ...(dispatchResult !== undefined ? { dispatchResult } : {}),
         outboundActions
       };
     }

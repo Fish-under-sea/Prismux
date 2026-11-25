@@ -491,7 +491,7 @@ export const ClientSettingsSchema = Schema.Struct({
   confirmTerminalClose: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadUnpin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
@@ -800,6 +800,7 @@ export const IDLE_COMPACTION_MODES = [
 ] as const;
 export const IdleCompactionMode = Schema.Literals(IDLE_COMPACTION_MODES.map((mode) => mode.value));
 export type IdleCompactionMode = typeof IdleCompactionMode.Type;
+export const DEFAULT_IDLE_COMPACTION_MODE: IdleCompactionMode = "onReturn";
 
 // Shipped clients reject the whole server config unless `compactIdleThreads` is boolean.
 // Keep the mode in `idleCompaction`, but accept strings from older servers.
@@ -886,15 +887,30 @@ export type ClaudeSettings = typeof ClaudeSettings.Type;
 
 export const ANTIGRAVITY_AUTH_METHODS = [
   { value: "local-cli", label: "Local agy CLI" },
-  { value: "oauth-personal", label: "Google account" },
-  { value: "oauth-business", label: "Gemini Enterprise" },
-  { value: "gemini-api-key", label: "Gemini API key" },
-  { value: "agent-platform", label: "Agent Platform (Vertex AI)" },
 ] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
 export const AntigravityAuthMethod = Schema.Literals(
   ANTIGRAVITY_AUTH_METHODS.map((method) => method.value),
 );
 export type AntigravityAuthMethod = typeof AntigravityAuthMethod.Type;
+
+const LEGACY_ANTIGRAVITY_AUTH_METHODS = [
+  "local-cli",
+  "oauth-personal",
+  "oauth-business",
+  "gemini-api-key",
+  "agent-platform",
+] as const;
+type LegacyAntigravityAuthMethod = (typeof LEGACY_ANTIGRAVITY_AUTH_METHODS)[number];
+
+const AntigravityAuthMethodSetting = Schema.Literals(LEGACY_ANTIGRAVITY_AUTH_METHODS).pipe(
+  Schema.decodeTo(
+    AntigravityAuthMethod,
+    SchemaTransformation.transform({
+      decode: (_value: LegacyAntigravityAuthMethod): AntigravityAuthMethod => "local-cli",
+      encode: (value: AntigravityAuthMethod): LegacyAntigravityAuthMethod => value,
+    }),
+  ),
+);
 
 export const AntigravitySettings = makeProviderSettingsSchema(
   {
@@ -902,54 +918,22 @@ export const AntigravitySettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    authMethod: AntigravityAuthMethod.pipe(
-      Schema.withDecodingDefault(Effect.succeed("oauth-personal" as const)),
+    authMethod: AntigravityAuthMethodSetting.pipe(
+      Schema.withDecodingDefault(Effect.succeed("local-cli" as const)),
       Schema.annotateKey({
         title: "Sign-in method",
         description:
-          "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
+          "Antigravity uses your official local agy CLI session (~/.gemini/antigravity-cli) via ACP.",
         providerSettingsForm: {
-          control: "select",
-          options: ANTIGRAVITY_AUTH_METHODS,
-          clearWhenEmpty: "omit",
+          hidden: true,
         },
-      }),
-    ),
-    apiKey: SettingsSecretValue.pipe(
-      secretSetting,
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "API key",
-        description: "Gemini or Vertex AI express key. Stored separately on the host.",
-        providerSettingsForm: {
-          control: "password",
-          placeholder: "Optional",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-    gcpProject: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "GCP project",
-        description:
-          "Required for Gemini Enterprise. Agent Platform uses it when no API key is set.",
-        providerSettingsForm: { placeholder: "my-project-id", clearWhenEmpty: "omit" },
-      }),
-    ),
-    gcpLocation: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "GCP location",
-        description: "Region for Gemini Enterprise or Agent Platform.",
-        providerSettingsForm: { placeholder: "us-central1", clearWhenEmpty: "omit" },
       }),
     ),
     binaryPath: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Binary path",
-        description: "Custom ACP executable. Leave empty to select automatically.",
+        description: "Custom agy CLI executable. Leave empty to detect automatically.",
         providerSettingsForm: { placeholder: "Automatic", clearWhenEmpty: "persist" },
       }),
     ),
@@ -958,7 +942,7 @@ export const AntigravitySettings = makeProviderSettingsSchema(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
-  { order: ["authMethod", "apiKey", "gcpProject", "gcpLocation", "binaryPath"] },
+  { order: ["binaryPath"] },
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
@@ -1477,9 +1461,9 @@ export const ServerSettings = Schema.Struct({
   /** Fold once so restarts cannot undo later UI resets. */
   projectSettingsFolded: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 
-  enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /** Enabling the Device panel must not grant providers device control. */
-  enableDeviceSupport: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  enableDeviceSupport: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   deviceOnboardingCompleted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   deviceHosts: SshDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   easDeviceHosts: EasDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
@@ -1607,7 +1591,13 @@ export const ServerSettings = Schema.Struct({
   ),
   /** User-chosen display order for provider instances across Settings and model pickers. */
   providerOrder: Schema.Array(ProviderInstanceId).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
+    Schema.withDecodingDefault(
+      Effect.succeed([
+        ProviderInstanceId.make("antigravity"),
+        ProviderInstanceId.make("codex"),
+        ProviderInstanceId.make("claudeAgent"),
+      ]),
+    ),
   ),
   /** Default-enabled built-in provider slots (such as codex or claudeAgent) explicitly removed by the user. */
   hiddenDefaultProviderInstances: Schema.Array(ProviderInstanceId).pipe(
@@ -1742,7 +1732,7 @@ export const globalIdleCompaction = (settings: IdleCompactionSettings): IdleComp
     ? settings.compactIdleThreads
     : settings.compactIdleThreads
       ? "beforeCacheExpires"
-      : "onReturn");
+      : DEFAULT_IDLE_COMPACTION_MODE);
 
 /** Sets the mode, and the legacy switch shipped clients still read alongside it. */
 export const withIdleCompaction = <S extends IdleCompactionSettings>(

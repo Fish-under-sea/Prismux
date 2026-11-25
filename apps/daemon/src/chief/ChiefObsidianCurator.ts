@@ -28,8 +28,6 @@ function formatProviderDisplay(provider: ChiefProviderKind): string {
       return "Codex";
     case "antigravity":
       return "Antigravity";
-    case "omp":
-      return "oh-my-pi";
     case "gemini":
       return "Gemini CLI";
     case "opencode":

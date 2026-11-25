@@ -67,7 +67,11 @@ export function BranchNamingSettings() {
               }
             }}
           >
-            <SelectTrigger size="sm" aria-label={gt("Worktree branch naming")}>
+            <SelectTrigger
+              size="sm"
+              className="w-full sm:w-48"
+              aria-label={gt("Worktree branch naming")}
+            >
               <SelectValue>
                 {(value: BranchNamingMode | null) =>
                   value === null
@@ -108,6 +112,7 @@ export function BranchNamingSettings() {
           control={
             <Input
               key={`${scopeKey}:${prefixMixed}:${settings.branchNamePrefix}`}
+              className="w-full sm:w-48"
               aria-label={gt("Branch prefix")}
               autoCapitalize="none"
               spellCheck={false}

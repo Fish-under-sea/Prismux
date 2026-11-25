@@ -15,10 +15,7 @@ import {
 } from "@t3tools/client-runtime/user-message";
 import type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 import { renderCodexDirectivesForCopy } from "~/markdown/markdownText";
-import {
-  commandDisplayText,
-  commandProgramName,
-} from "@t3tools/client-runtime/work-log/command-label";
+import { commandProgramName } from "@t3tools/client-runtime/work-log/command-label";
 import {
   commandlessCommandLabel,
   genericCommandStatusLabel,
@@ -84,6 +81,7 @@ import {
   resolveWorkStepsPolicy,
   shouldGroupWorkStepsForTurn,
   shouldKeepIntermediateAssistantRepliesVisible,
+  stripShellCommandWrapper,
   type WorkStepsPresentationPolicy,
 } from "./dshWorkSteps.logic";
 import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
@@ -176,7 +174,7 @@ export function workEntryDisplayLabel(
   }
   const toolPresentation = resolveWorkEntryToolPresentation(entry, undefined, resolve);
   if (toolPresentation) return toolPresentation.displayName;
-  if (entry.command?.trim()) return commandDisplayText(entry.command);
+  if (entry.command?.trim()) return stripShellCommandWrapper(entry.command).displayCommand;
   const commandless = commandlessCommandLabel(
     entry,
     liveActivityToolStatus(entry.toolLifecycleStatus, false),
@@ -321,7 +319,16 @@ export function workEntryIsVisibleInGroup(
   entry: WorkLogEntry,
   expandedToolGroupEntry = false,
 ): boolean {
-  if (entry.itemType === "reasoning") return Boolean(entry.detail?.trim());
+  if (entry.itemType === "reasoning") {
+    return Boolean(entry.detail?.trim());
+  }
+  if (
+    entry.tone === "thinking" &&
+    entry.sourceActivityKind !== "task.progress" &&
+    Boolean(entry.detail?.trim())
+  ) {
+    return true;
+  }
   return (
     (expandedToolGroupEntry &&
       (entry.toolLifecycleStatus === "inProgress" ||

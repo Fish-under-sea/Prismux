@@ -96,7 +96,7 @@ export function classifyUsageUrgency(usedPercent: number): UsageWindowUrgency {
 export function canonicalProviderDisplayName(rawName: string | undefined, driver?: string): string {
   const trimmed = (rawName ?? "").trim();
   const key = (driver ?? trimmed).toLowerCase();
-  if (trimmed.length > 0 && !/^(codex|claudeagent|claude|antigravity|omp|pi|opencode|cursor|grok)$/i.test(trimmed)) {
+  if (trimmed.length > 0 && !/^(codex|claudeagent|claude|antigravity|opencode|cursor|grok)$/i.test(trimmed)) {
     return trimmed;
   }
   switch (key) {
@@ -107,9 +107,6 @@ export function canonicalProviderDisplayName(rawName: string | undefined, driver
       return "Claude Code";
     case "antigravity":
       return "Antigravity";
-    case "omp":
-    case "pi":
-      return "oh-my-pi";
     case "cursor":
       return "Cursor";
     case "opencode":
@@ -133,9 +130,6 @@ function driverToUsageKind(driver: string): UsageProviderKind | string {
       return "opencode";
     case "antigravity":
       return "antigravity";
-    case "omp":
-    case "pi":
-      return "pi";
     default:
       return driver;
   }
@@ -198,7 +192,7 @@ export function extractAntigravityAcpTierLabel(provider: ServerProvider): string
     const parts = trimmed.split("·").map((segment) => segment.trim()).filter(Boolean);
     const tierPart = parts.find((part) => /google|ultra|pro|free|plus|enterprise|tier/i.test(part));
     if (tierPart) return tierPart;
-    if (!/^local-cli$|^oauth-personal$|^authenticated$/i.test(trimmed)) {
+    if (!/^local-cli$|^authenticated$/i.test(trimmed)) {
       return trimmed;
     }
   }
@@ -385,6 +379,14 @@ export function collectStatusBarUsageSummary(
     }
 
     enabledProviderCount += 1;
+
+    if (
+      provider.installed === false ||
+      provider.status === "disabled" ||
+      provider.auth?.status !== "authenticated"
+    ) {
+      continue;
+    }
 
     const rawWindows = provider.usageLimits?.windows;
     if (!Array.isArray(rawWindows) || rawWindows.length === 0) continue;

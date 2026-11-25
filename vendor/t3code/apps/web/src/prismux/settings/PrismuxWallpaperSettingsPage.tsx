@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { ImageIcon, RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 import {
   WallpaperSettingsView,
   useWallpaperStore,
@@ -36,7 +36,8 @@ function resolveTabFromLocation(hash: string, searchStr: string): WallpaperSetti
 
 /**
  * MP-04: /settings/wallpaper mounts @prismux/wallpaper's deduplicated 4-tab settings view
- * (壁纸库 / 画面与播放 / 轮播与隐藏 / 系统与目录), linking appearance/glass controls to /settings/appearance.
+ * (壁纸库 / 画面与播放 / 轮播与隐藏 / 系统与目录) directly with a single header (<= 2 badges)
+ * and one consolidated rescan action in the Tab bar trailing slot.
  */
 export function PrismuxWallpaperSettingsPage() {
   const { wallpaperStore, wallpaperHost, daemonInfo, occluded } = usePrismuxRuntime();
@@ -70,39 +71,21 @@ export function PrismuxWallpaperSettingsPage() {
     }
   };
 
+  const isScanning = refreshing || snap.loading;
+  const headerStatusBadge = occluded ? (
+    <Badge variant="secondary" size="sm">
+      已挂起
+    </Badge>
+  ) : (
+    <Badge variant={daemonInfo.ready ? "success" : "warning"} size="sm">
+      {daemonInfo.ready ? "服务在线" : "离线模式"}
+    </Badge>
+  );
+
   return (
     <SettingsPageContainer width="wide">
-      <div
-        id="prismux-wallpaper"
-        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/80 bg-card/70 px-4 py-3"
-      >
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <ImageIcon className="size-4 shrink-0 text-primary" />
-          <span className="text-sm font-medium text-foreground">
-            Prismux 多源壁纸引擎（Z-0 舞台 · 0 Token 纯视觉层）
-          </span>
-          <Badge variant={daemonInfo.ready ? "success" : "warning"}>
-            {daemonInfo.ready ? "Daemon 已连接" : "Daemon 离线（内置 WebWallGL 兜底）"}
-          </Badge>
-          <Badge variant="outline">共 {snap.wallpapers.length} 项壁纸</Badge>
-          {occluded ? <Badge variant="secondary">窗口遮挡 · 0 FPS 挂起</Badge> : null}
-        </div>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={refreshing || snap.loading}
-          onClick={() => {
-            void handleRefreshInventory();
-          }}
-        >
-          <RefreshCwIcon
-            className={refreshing || snap.loading ? "size-3.5 animate-spin" : "size-3.5"}
-          />
-          {refreshing || snap.loading ? "扫描中…" : "重新扫描 Steam / 本地目录"}
-        </Button>
-      </div>
-
       <WallpaperSettingsView
+        id="prismux-wallpaper"
         store={wallpaperStore}
         adapter={wallpaperHost}
         activeTab={activeTab}
@@ -110,6 +93,21 @@ export function PrismuxWallpaperSettingsPage() {
         onOpenAppearanceSettings={() => {
           void navigate({ to: "/settings/appearance" });
         }}
+        headerStatusBadge={headerStatusBadge}
+        trailingAction={
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={isScanning}
+            onClick={() => {
+              void handleRefreshInventory();
+            }}
+          >
+            <RefreshCwIcon className={isScanning ? "size-3.5 animate-spin" : "size-3.5"} />
+            {isScanning ? "扫描中…" : "重新扫描"}
+          </Button>
+        }
       />
     </SettingsPageContainer>
   );

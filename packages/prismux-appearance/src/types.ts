@@ -450,20 +450,20 @@ export const DEFAULT_QUICK_SWATCHES: readonly string[] = [
 ] as const;
 
 export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
-  themeMode: 'dark',
+  themeMode: 'glass',
   glassBasePolarity: 'dark',
   accentMode: 'system',
   accent: '#0078d4',
-  glassPreset: 'balanced',
+  glassPreset: 'clear',
   glassRegions: {
-    surface: { ...GLASS_PRESETS.balanced.surface },
-    card: { ...GLASS_PRESETS.balanced.card },
-    overlay: { ...GLASS_PRESETS.balanced.overlay },
-    control: { ...GLASS_PRESETS.balanced.control },
+    surface: { ...GLASS_PRESETS.clear.surface },
+    card: { ...GLASS_PRESETS.clear.card },
+    overlay: { ...GLASS_PRESETS.clear.overlay },
+    control: { ...GLASS_PRESETS.clear.control },
   },
   glassColor: '#ffffff',
-  glassDarkSeparate: false,
-  glassDarkColor: '#0d1524',
+  glassDarkSeparate: true,
+  glassDarkColor: '#000000',
   glassFidelity: 100,
   fresnelStrength: 100,
   wallpaperDim: 58,

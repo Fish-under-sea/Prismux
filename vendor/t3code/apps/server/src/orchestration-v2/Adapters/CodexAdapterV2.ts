@@ -831,6 +831,27 @@ function codexCyberAccess(
   return descriptor?.type === "select" ? { defaultProgram: descriptor.currentValue } : undefined;
 }
 
+/**
+ * Resolves `turn/start` reasoning `summary`: defaults to `"detailed"` (since Codex 0.172+ maps
+ * `"auto"` to `"none"` on flagship GPT models), keeps `"auto"` on Bedrock, and honors explicit config.
+ */
+export function resolveCodexReasoningSummary(input: {
+  readonly configuredReasoningSummary?: CodexSchema.V2TurnStartParams__ReasoningSummary | undefined;
+  readonly modelProvider?: string | null | undefined;
+}): CodexSchema.V2TurnStartParams__ReasoningSummary {
+  if (
+    input.configuredReasoningSummary !== undefined &&
+    input.configuredReasoningSummary !== "auto"
+  ) {
+    return input.configuredReasoningSummary;
+  }
+  const provider = input.modelProvider?.trim();
+  if (provider && /bedrock/i.test(provider)) {
+    return "auto";
+  }
+  return "detailed";
+}
+
 export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTurnStartParams")(
   function* (input: {
     readonly nativeThreadId: string;
@@ -847,6 +868,8 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly cyberAccess?: { readonly defaultProgram: string | undefined } | undefined;
     /** The user's `model_reasoning_summary` from the Codex config, when set. */
     readonly configuredReasoningSummary?: CodexSchema.V2TurnStartParams__ReasoningSummary;
+    /** Active Codex `model_provider` id from `config/read` (used to avoid sending `detailed` to Bedrock). */
+    readonly modelProvider?: string;
   }) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
     const approvalPolicy =
@@ -919,9 +942,12 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       ...(additionalContext ? { additionalContext } : {}),
       cwd: input.runtimePolicy.cwd,
       model: input.modelSelection.model,
-      // Catalogues can default summaries to "none", and turn/start overrides the user's config,
-      // so pass theirs through or `auto`: some providers (Amazon Bedrock) reject `detailed`.
-      summary: input.configuredReasoningSummary ?? "auto",
+      // Flagship GPT-5.5/5.6/6.* catalogues default summaries to "none", so `auto` suppresses
+      // reasoning chains unless we explicitly request `detailed` (except on Amazon Bedrock).
+      summary: resolveCodexReasoningSummary({
+        configuredReasoningSummary: input.configuredReasoningSummary,
+        modelProvider: input.modelProvider,
+      }),
       // Omitting the reviewer on resume preserves the previous Auto reviewer.
       approvalsReviewer: runtimeModeDefaults.approvalsReviewer,
       ...(approvalPolicy === undefined ? {} : { approvalPolicy }),
@@ -1386,6 +1412,7 @@ interface ActiveCodexTurnContext {
     string,
     { readonly ordinal: number; readonly startedAt: DateTime.Utc }
   >;
+  reasoningStartedAtByItem?: Map<string, DateTime.Utc>;
 }
 
 interface ActiveCodexProviderRetry {
@@ -3872,6 +3899,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           context: ActiveCodexTurnContext,
           item: { readonly id: string; readonly text: string },
           completed: boolean,
+          startedAtOverride?: DateTime.Utc,
         ) {
           const updatedAt = yield* DateTime.now;
           const completedAt = completed ? updatedAt : null;
@@ -3879,7 +3907,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             driver: CODEX_PROVIDER,
             nativeItemId: item.id,
           });
-          const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id);
+          const { ordinal, startedAt } = yield* resolveItemPosition(
+            context,
+            item.id,
+            startedAtOverride,
+          );
           const messageId = idAllocator.derive.messageFromProviderItem({
             driver: CODEX_PROVIDER,
             nativeItemId: item.id,
@@ -3957,12 +3989,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             Effect.fnUntraced(function* (update) {
               const part = reasoningParts.get(update.itemId);
               if (part === undefined) return;
-              const context = yield* awaitActiveTurn(update.turnId);
+              const context =
+                (yield* awaitActiveTurn(update.turnId)) ??
+                (yield* Ref.get(settledTurns)).get(update.turnId);
               if (context === undefined) return;
               const artifacts = yield* buildAgentMessageArtifacts(
                 context,
                 { id: update.itemId, text: update.text },
                 update.completed,
+                context.reasoningStartedAtByItem?.get(part.nativeItemId),
               );
               const interrupted = (yield* Ref.get(terminalizedNonCompletedNativeTurns)).has(
                 update.turnId,
@@ -4006,12 +4041,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           stream: "summary" | "content",
           index: number,
         ) {
-          const context = yield* awaitActiveTurn(payload.turnId);
+          const context =
+            (yield* awaitActiveTurn(payload.turnId)) ??
+            (yield* Ref.get(settledTurns)).get(payload.turnId);
           if (context === undefined || payload.delta.length === 0) return;
           yield* completeProviderRetry(context, yield* DateTime.now);
           const itemId = reasoningPartKey(payload.turnId, payload.itemId, stream, index);
           // Reserve positions before delayed flushes so later tools stay after them.
-          yield* resolveItemOrdinal(context, itemId);
+          yield* resolveItemPosition(
+            context,
+            itemId,
+            context.reasoningStartedAtByItem?.get(payload.itemId),
+          );
           yield* reasoningDeltas.append({ turnId: payload.turnId, itemId, delta: payload.delta });
         });
         const completeReasoning = Effect.fn("CodexAdapterV2.completeReasoning")(function* (
@@ -5549,7 +5590,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             yield* completeProviderRetry(context, yield* DateTime.now);
-            if (payload.item.type !== "reasoning") {
+            if (payload.item.type === "reasoning") {
+              (context.reasoningStartedAtByItem ??= new Map()).set(
+                payload.item.id,
+                DateTime.makeUnsafe(payload.startedAtMs),
+              );
+            } else {
               yield* resolveItemPosition(
                 context,
                 payload.item.id,
@@ -7711,10 +7757,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
             const models = adapterOptions.models === undefined ? [] : yield* adapterOptions.models;
-            const configuredReasoningSummary = yield* client
+            const codexTurnConfig = yield* client
               .request("config/read", { cwd: turnInput.runtimePolicy.cwd, includeLayers: false })
               .pipe(
-                Effect.map((response) => response.config.model_reasoning_summary ?? undefined),
+                Effect.map((response) => ({
+                  configuredReasoningSummary: response.config.model_reasoning_summary ?? undefined,
+                  modelProvider: response.config.model_provider ?? undefined,
+                })),
                 Effect.catch(() =>
                   Effect.logDebug("Codex config read failed.").pipe(Effect.as(undefined)),
                 ),
@@ -7731,7 +7780,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
-              ...(configuredReasoningSummary === undefined ? {} : { configuredReasoningSummary }),
+              ...(codexTurnConfig?.configuredReasoningSummary === undefined
+                ? {}
+                : { configuredReasoningSummary: codexTurnConfig.configuredReasoningSummary }),
+              ...(codexTurnConfig?.modelProvider === undefined
+                ? {}
+                : { modelProvider: codexTurnConfig.modelProvider }),
             });
             yield* Ref.update(pendingRootTurns, (current) => {
               const updated = new Map(current);

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 import { homedir } from "node:os";
@@ -182,6 +182,138 @@ async function execSafeCli(
   };
 }
 
+const DSH_ASAR_BOOTSTRAP_ENTRIES = [
+  "lib/desktop-cli.js",
+  "node_modules/@deepseek-ai/dsh/lib/bin.js"
+] as const;
+
+const WINDOWS_DSH_DESKTOP_CANDIDATES = [
+  { folder: "DSH NEXT", executable: "DSH NEXT.exe" },
+  { folder: "DSH", executable: "DSH.exe" },
+  { folder: "DeepSeek Harness", executable: "DeepSeek Harness.exe" }
+] as const;
+
+const MACOS_DSH_DESKTOP_CANDIDATES = [
+  { bundle: "DSH NEXT.app", executable: "DSH NEXT" },
+  { bundle: "DSH.app", executable: "DSH" },
+  { bundle: "DeepSeek Harness.app", executable: "DeepSeek Harness" }
+] as const;
+
+function hasAsarEntrySync(asarPath: string, relativeEntry: string): boolean {
+  const directPath = join(asarPath, ...relativeEntry.split("/"));
+  if (isExistingFile(directPath)) {
+    return true;
+  }
+  if (!isExistingFile(asarPath)) {
+    return false;
+  }
+  let fd: number | undefined;
+  try {
+    fd = openSync(asarPath, "r");
+    const prefix = Buffer.alloc(16);
+    if (readSync(fd, prefix, 0, 16, 0) < 16) return false;
+    const jsonSize = prefix.readUInt32LE(12);
+    if (jsonSize === 0 || jsonSize > 64 * 1024 * 1024) return false;
+    const jsonBuffer = Buffer.alloc(jsonSize);
+    if (readSync(fd, jsonBuffer, 0, jsonSize, 16) < jsonSize) return false;
+    const parsed = JSON.parse(jsonBuffer.toString("utf8")) as {
+      files?: Record<string, unknown>;
+    };
+    let cursor: unknown = parsed;
+    for (const segment of relativeEntry.split("/")) {
+      if (cursor === null || typeof cursor !== "object" || !("files" in cursor)) {
+        return false;
+      }
+      const files = (cursor as { files?: Record<string, unknown> }).files;
+      if (!files || !Object.hasOwn(files, segment)) {
+        return false;
+      }
+      cursor = files[segment];
+    }
+    return cursor !== null && typeof cursor === "object" && !("files" in cursor);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore close failure
+      }
+    }
+  }
+}
+
+export function findPackagedDshDesktopCli(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir()
+): { executablePath: string; bootstrapPath: string } | null {
+  const readEnv = (key: string): string | undefined => {
+    if (platform !== "win32") {
+      const val = env[key]?.trim();
+      return val && val.length > 0 ? val : undefined;
+    }
+    const upper = key.toUpperCase();
+    for (const [k, v] of Object.entries(env)) {
+      if (k.toUpperCase() === upper && v?.trim()) {
+        return v.trim();
+      }
+    }
+    return undefined;
+  };
+
+  const explicitApp = readEnv("DSH_DESKTOP_APP_EXECUTABLE");
+  const explicitBootstrap = readEnv("DSH_DESKTOP_DSH_BOOTSTRAP");
+  if (explicitApp && explicitBootstrap && isExistingFile(explicitApp)) {
+    return { executablePath: explicitApp, bootstrapPath: explicitBootstrap };
+  }
+
+  const candidateExes: string[] = [];
+  if (platform === "win32") {
+    const userProfile = readEnv("USERPROFILE") || homeDir;
+    const localAppData = readEnv("LOCALAPPDATA") || join(userProfile, "AppData", "Local");
+    const programFiles = readEnv("ProgramFiles");
+    const roots = [
+      join(localAppData, "Programs"),
+      ...(programFiles ? [programFiles] : [])
+    ];
+    for (const root of roots) {
+      for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
+        candidateExes.push(join(root, candidate.folder, candidate.executable));
+      }
+    }
+  } else if (platform === "darwin") {
+    const home = readEnv("HOME") || homeDir;
+    for (const root of ["/Applications", join(home, "Applications")]) {
+      for (const candidate of MACOS_DSH_DESKTOP_CANDIDATES) {
+        candidateExes.push(
+          join(root, candidate.bundle, "Contents", "MacOS", candidate.executable)
+        );
+      }
+    }
+  }
+
+  for (const executablePath of candidateExes) {
+    if (!isExistingFile(executablePath)) continue;
+    const appDir = dirname(executablePath);
+    const asarPath =
+      platform === "darwin"
+        ? resolve(appDir, "..", "Resources", "app.asar")
+        : join(appDir, "resources", "app.asar");
+    for (const entry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
+      if (hasAsarEntrySync(asarPath, entry)) {
+        return {
+          executablePath,
+          bootstrapPath: join(asarPath, ...entry.split("/"))
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function defaultCliProbe(
   command: string,
   args: string[],
@@ -205,6 +337,47 @@ export async function defaultCliProbe(
     extraDirs
   });
   if (!located) {
+    if (command.trim().toLowerCase() === "dsh" && options.includeFallbackDirs !== false) {
+      const packagedDsh = findPackagedDshDesktopCli(env, platform);
+      if (packagedDsh) {
+        const dshEnv: Record<string, string | undefined> = {};
+        for (const [key, value] of Object.entries(env)) {
+          const upper = key.toUpperCase();
+          if (upper === "ELECTRON_RUN_AS_NODE" || upper === "DSH_DESKTOP_DEFAULT_PROFILE") {
+            continue;
+          }
+          dshEnv[key] = value;
+        }
+        dshEnv["ELECTRON_RUN_AS_NODE"] = "1";
+        try {
+          const result = await execFileAsync(
+            packagedDsh.executablePath,
+            ["--expose-internals", packagedDsh.bootstrapPath, ...args],
+            {
+              timeout: timeoutMs,
+              windowsHide: true,
+              maxBuffer: 512 * 1024,
+              env: dshEnv
+            }
+          );
+          const combined = `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`;
+          return {
+            found: true,
+            path: packagedDsh.executablePath,
+            version: extractFirstVersionLine(combined),
+            latencyMs: Math.max(0, Math.round(performance.now() - started))
+          };
+        } catch (err) {
+          return {
+            found: true,
+            path: packagedDsh.executablePath,
+            version: null,
+            latencyMs: Math.max(0, Math.round(performance.now() - started)),
+            error: err instanceof Error ? err.message : String(err)
+          };
+        }
+      }
+    }
     return {
       found: false,
       path: null,
@@ -724,7 +897,7 @@ export class ServiceDiagnosticsService {
       category: DiagnosticCategoryId;
       name: string;
       settingsRoute?: string;
-      run: () => Promise<DiagnosticCheckItem>;
+      run: () => Promise<DiagnosticCheckItem | null>;
     }> = [
       // a. 宿主核心 (4)
       {
@@ -825,18 +998,18 @@ export class ServiceDiagnosticsService {
           })
       },
       {
-        id: "provider.omp",
+        id: "provider.dsh",
         category: "ai_providers",
-        name: "Oh My Pi CLI (omp · ACP)",
+        name: "DeepSeek Harness CLI (dsh · ACP)",
         settingsRoute: "/settings/providers",
         run: () =>
           this.checkProviderCli({
-            id: "provider.omp",
-            name: "Oh My Pi CLI (omp · ACP)",
-            command: "omp",
+            id: "provider.dsh",
+            name: "DeepSeek Harness CLI (dsh · ACP)",
+            command: "dsh",
             args: ["--version"],
-            fixAction: "安装 OMP CLI（支持 ACP 转向与用量）",
-            fixCommand: "npm install -g @oh-my-pi/pi-coding-agent",
+            fixAction: "检查本机 DeepSeek Harness (DSH NEXT) 或 dsh CLI 安装",
+            fixCommand: "dsh --version",
             timeoutMs: perCheckTimeout
           })
       },
@@ -1042,9 +1215,9 @@ export class ServiceDiagnosticsService {
       }
     ];
 
-    const settledItems = await Promise.all(
+    const settledRaw = await Promise.all(
       checkSpecs.map((spec) =>
-        withTimeoutFallback(
+        withTimeoutFallback<DiagnosticCheckItem | null>(
           spec.run(),
           Math.min(perCheckTimeout + 150, remainingBudget),
           (): DiagnosticCheckItem => ({
@@ -1059,6 +1232,9 @@ export class ServiceDiagnosticsService {
           })
         )
       )
+    );
+    const settledItems = settledRaw.filter(
+      (item): item is DiagnosticCheckItem => item !== null
     );
 
     const groups: DiagnosticGroupSummary[] = DIAGNOSTIC_CATEGORIES.map((catId) => {
@@ -1404,13 +1580,18 @@ export class ServiceDiagnosticsService {
     fixAction: string;
     fixCommand: string;
     timeoutMs: number;
-  }): Promise<DiagnosticCheckItem> {
+  }): Promise<DiagnosticCheckItem | null> {
     const probed = await this.cliProbeFn(
       params.command,
       params.args,
       params.timeoutMs
     );
-    if (probed.found && probed.version) {
+    if (!probed.found) {
+      // Optional AI Provider CLIs that are not installed on this machine are omitted
+      // completely so uninstalled tools never surface as degraded warning cards.
+      return null;
+    }
+    if (probed.version && !probed.error) {
       return {
         id: params.id,
         category: "ai_providers",
@@ -1423,27 +1604,16 @@ export class ServiceDiagnosticsService {
         settingsRoute: "/settings/providers"
       };
     }
-    if (probed.found) {
-      return {
-        id: params.id,
-        category: "ai_providers",
-        name: params.name,
-        status: "degraded",
-        latencyMs: probed.latencyMs,
-        summary: "已发现可执行文件，但版本探测未返回",
-        detail: probed.error ?? probed.path ?? undefined,
-        fixAction: params.fixAction,
-        fixCommand: params.fixCommand,
-        settingsRoute: "/settings/providers"
-      };
-    }
     return {
       id: params.id,
       category: "ai_providers",
       name: params.name,
       status: "degraded",
       latencyMs: probed.latencyMs,
-      summary: "未检测到本机 CLI（按需安装）",
+      summary: probed.error
+        ? "本机 CLI 启动或探测异常（需修复）"
+        : "已发现可执行文件，但版本探测未返回",
+      detail: probed.error ?? probed.path ?? undefined,
       fixAction: params.fixAction,
       fixCommand: params.fixCommand,
       settingsRoute: "/settings/providers"

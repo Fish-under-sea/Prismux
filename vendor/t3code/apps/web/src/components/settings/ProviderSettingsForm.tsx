@@ -111,9 +111,6 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   ["Auto-compact after", msg("Auto-compact after")],
   ["Compact idle threads", msg("Compact idle threads")],
   ["Sign-in method", msg("Sign-in method")],
-  ["API key", msg("API key")],
-  ["GCP project", msg("GCP project")],
-  ["GCP location", msg("GCP location")],
   ["ACP source", msg("ACP source")],
   ["Registry agent ID", msg("Registry agent ID")],
   ["Executable override", msg("Executable override")],
@@ -162,30 +159,12 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
     ),
   ],
   [
-    "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
-    msg(
-      "Local agy CLI reuses your ~/.gemini/antigravity-cli login; Google accounts use your subscription; API keys and Agent Platform bill usage.",
-    ),
+    "Antigravity uses your official local agy CLI session (~/.gemini/antigravity-cli) via ACP.",
+    msg("Antigravity uses your official local agy CLI session (~/.gemini/antigravity-cli) via ACP."),
   ],
   [
-    "Google accounts use your subscription; API keys and Agent Platform bill usage.",
-    msg("Google accounts use your subscription; API keys and Agent Platform bill usage."),
-  ],
-  [
-    "Gemini or Vertex AI express key. Stored separately on the host.",
-    msg("Gemini or Vertex AI express key. Stored separately on the host."),
-  ],
-  [
-    "Required for Gemini Enterprise. Agent Platform uses it when no API key is set.",
-    msg("Required for Gemini Enterprise. Agent Platform uses it when no API key is set."),
-  ],
-  [
-    "Region for Gemini Enterprise or Agent Platform.",
-    msg("Region for Gemini Enterprise or Agent Platform."),
-  ],
-  [
-    "Custom ACP executable. Leave empty to select automatically.",
-    msg("Custom ACP executable. Leave empty to select automatically."),
+    "Custom agy CLI executable. Leave empty to detect automatically.",
+    msg("Custom agy CLI executable. Leave empty to detect automatically."),
   ],
   [
     "Agent identifier from the official ACP Registry, for example 'devin'.",
@@ -256,8 +235,6 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   ["Never", msg("Never", { $context: "option, never compact idle threads" })],
   ["Use default", msg("Use default")],
   ["Local agy CLI", msg("Local agy CLI")],
-  ["Google account", msg("Google account")],
-  ["Gemini API key", msg("Gemini API key")],
   ["Local command", msg("Local command")],
 ]);
 
@@ -312,7 +289,7 @@ export function deriveProviderSettingsFields(
               ? { description: packageFieldText(annotatedDescription, resolve) }
               : {}),
           ...(isLocalAcp && key === "commandPath"
-            ? { placeholder: resolve(msg("e.g. omp")) }
+            ? { placeholder: resolve(msg("e.g. dsh")) }
             : formAnnotation.placeholder !== undefined
               ? { placeholder: packageFieldText(formAnnotation.placeholder, resolve) }
               : {}),

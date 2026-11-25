@@ -393,7 +393,8 @@ describe("AgyWelcomeHero — 6 time bands, bilingual pools, easter egg, dynamic 
     expect(resolveWelcomeWatermarkBrand(["codex"])).toBe("codex");
     expect(resolveWelcomeWatermarkBrand(["claudeAgent"])).toBe("claude-code");
     expect(resolveWelcomeWatermarkBrand(["antigravity"])).toBe("antigravity");
-    expect(resolveWelcomeWatermarkBrand(["acpRegistry", "oh-my-pi"])).toBe("omp");
+    expect(resolveWelcomeWatermarkBrand(["acpRegistry", "oh-my-pi"])).toBe("acp");
+    expect(resolveWelcomeWatermarkBrand(["oh-my-pi"])).toBe("prismux");
     expect(resolveWelcomeWatermarkBrand(["acpRegistry", "gemini-cli"])).toBe("gemini");
     expect(resolveWelcomeWatermarkBrand(["opencode"])).toBe("opencode");
     expect(resolveWelcomeWatermarkBrand(["cursor"])).toBe("cursor");

@@ -36,17 +36,13 @@ export function providerAuthLabel(
   return auth.label ?? auth.type;
 }
 
-// Antigravity's local health check verifies installation, not Google sign-in.
-// API-key and Agent Platform warnings still need attention.
+// Antigravity's local health check verifies installation, not local CLI session state.
 function isAntigravitySignInUnchecked(provider: ServerProvider): boolean {
   return (
     provider.driver === "antigravity" &&
     provider.installed &&
     provider.status === "warning" &&
-    provider.auth.status === "unknown" &&
-    (provider.auth.type === undefined ||
-      provider.auth.type === "oauth-personal" ||
-      provider.auth.type === "oauth-business")
+    provider.auth.status === "unknown"
   );
 }
 

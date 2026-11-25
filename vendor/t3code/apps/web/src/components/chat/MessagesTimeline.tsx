@@ -1999,6 +1999,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
           </span>
           <ChevronDownIcon
             aria-hidden="true"
+            data-disclosure-chevron="true"
             className={cn(
               "size-3.5 shrink-0 transition-transform duration-200",
               row.expanded && "rotate-180",
@@ -2034,11 +2035,14 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
         aria-busy={loading}
         className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
-        {row.expanded ? (
-          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
+        <ChevronRightIcon
+          aria-hidden="true"
+          data-disclosure-chevron="true"
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
+            row.expanded && "rotate-90",
+          )}
+        />
         <span className="text-xs font-medium text-foreground/80">
           {row.label}
           {error ? ` · ${error}` : ""}

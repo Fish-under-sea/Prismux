@@ -117,11 +117,42 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
+import { SettingsSegmentedTabs, type SettingsSegmentedTabItem } from "./SettingsSegmentedTabs";
 import { useSearchableSetting } from "./settingsSearch";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
 import type { ImportOutcome } from "./browserImportWizard.logic";
+
+export const BROWSER_SETTINGS_TAB_ANCHORS = {
+  browser: [
+    "browser",
+    "browser-agent-access",
+    "agent-browser-access",
+    "browser-profiles",
+    "browser-default-profile",
+    "browser-link-target",
+    "browser-auto-show-floating-preview",
+    "browser-search-engine",
+    "browser-default-viewport",
+    "browser-default-zoom",
+    "browser-default-appearance",
+    "browser-recordings",
+    "browser-recording-frame-rate",
+    "browser-recording-key-presses",
+    "browser-recording-mouse-presses",
+  ],
+  devices: [
+    "devices",
+    "device-hub",
+    "agent-device-access",
+    "device-sources",
+    "device-platform-support",
+    "experimental-device-sources",
+    "eas-device-hosts",
+    "simlock-device-hosts",
+  ],
+} as const;
 
 const FILL_VALUE = "fill";
 const RESPONSIVE_VALUE = "responsive";
@@ -403,7 +434,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
           >
             <SelectTrigger
               size="sm"
-              className="w-full min-w-0 sm:w-44"
+              className="w-full min-w-0 sm:w-48"
               aria-label={gt("Default browser viewport")}
             >
               <SelectValue>{viewportSelectLabel(viewport, m)}</SelectValue>
@@ -528,7 +559,7 @@ function BrowserZoomSetting({ disabled }: { readonly disabled: boolean }) {
         >
           <SelectTrigger
             size="sm"
-            className="w-full sm:w-40"
+            className="w-full sm:w-48"
             aria-label={gt("Default browser zoom")}
           >
             <SelectValue>{zoomLabel(zoomFactor)}</SelectValue>
@@ -578,7 +609,7 @@ function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) 
         >
           <SelectTrigger
             size="sm"
-            className="w-full sm:w-40"
+            className="w-full sm:w-48"
             aria-label={gt("Default browser appearance")}
           >
             <SelectValue>{m(APPEARANCE_LABELS[appearance])}</SelectValue>
@@ -674,7 +705,7 @@ function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boo
         >
           <SelectTrigger
             size="sm"
-            className="w-full sm:w-40"
+            className="w-full sm:w-48"
             aria-label={gt("Browser recording frame rate")}
           >
             <SelectValue>{frameRate} fps</SelectValue>
@@ -729,7 +760,7 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
             }
           }}
         >
-          <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Open links in")}>
+          <SelectTrigger size="sm" className="w-full sm:w-48" aria-label={gt("Open links in")}>
             <SelectValue>{m(LINK_TARGET_LABELS[linkTarget])}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -792,7 +823,7 @@ function BrowserSearchEngineSetting() {
               }
             }}
           >
-            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Search engine")}>
+            <SelectTrigger size="sm" className="w-full sm:w-48" aria-label={gt("Search engine")}>
               <SelectValue>{m(SEARCH_ENGINE_LABELS[engine])}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -819,7 +850,7 @@ function BrowserSearchEngineSetting() {
             <DraftInput
               nativeInput
               size="sm"
-              className="w-full sm:w-64"
+              className="w-full sm:w-60"
               aria-label={gt("Custom search URL")}
               placeholder="https://example.com/search?q=%s"
               autoCapitalize="none"
@@ -1702,47 +1733,69 @@ export function BrowserSettingsPanel() {
   const desktopOnly = !isElectron;
   const desktopOnlyMessage = desktopOnly ? gt("Only available in the desktop app.") : undefined;
 
+  const tabs: ReadonlyArray<SettingsSegmentedTabItem> = [
+    {
+      id: "browser",
+      label: gt("Built-in browser"),
+      hashAnchors: BROWSER_SETTINGS_TAB_ANCHORS.browser,
+      content: (
+        <>
+          <SettingsSection id="browser-agent-access" title={gt("Agent access")}>
+            <AgentBrowserAccessSetting />
+          </SettingsSection>
+          <SettingsSection id="browser" title={gt("Browsing")}>
+            <SettingsUnavailableGroup message={desktopOnlyMessage}>
+              <BrowserProfilesSetting disabled={desktopOnly} />
+              <BrowserLinkTargetSetting disabled={desktopOnly} />
+              <BrowserAutoShowFloatingPreviewSetting disabled={desktopOnly} />
+            </SettingsUnavailableGroup>
+            {/* Not desktop-only: web clients search from server-run browser tabs too. */}
+            <BrowserSearchEngineSetting />
+            <AdvancedSettings
+              targetIds={[
+                searchableSetting("browser-default-viewport").id,
+                searchableSetting("browser-default-zoom").id,
+                searchableSetting("browser-default-appearance").id,
+              ]}
+            >
+              <SettingsUnavailableGroup message={desktopOnlyMessage}>
+                <BrowserViewportSetting disabled={desktopOnly} />
+                <BrowserZoomSetting disabled={desktopOnly} />
+                <BrowserAppearanceSetting disabled={desktopOnly} />
+              </SettingsUnavailableGroup>
+            </AdvancedSettings>
+          </SettingsSection>
+          <SettingsSection id="browser-recordings" title={gt("Recordings")}>
+            <SettingsUnavailableGroup message={desktopOnlyMessage}>
+              <BrowserRecordingFrameRateSetting disabled={desktopOnly} />
+              <BrowserRecordingInputSettings disabled={desktopOnly} />
+            </SettingsUnavailableGroup>
+          </SettingsSection>
+        </>
+      ),
+    },
+    {
+      id: "devices",
+      label: gt("Mobile devices & remote hosts"),
+      hashAnchors: BROWSER_SETTINGS_TAB_ANCHORS.devices,
+      content: <DeviceIntegrationSettings />,
+    },
+  ];
+
   return (
-    <SettingsPageContainer>
-      <SettingsSection id="browser-agent-access" title={gt("Agent access")}>
-        <AgentBrowserAccessSetting />
-      </SettingsSection>
-      <SettingsSection id="browser" title={gt("Browsing")}>
-        <SettingsUnavailableGroup message={desktopOnlyMessage}>
-          <BrowserProfilesSetting disabled={desktopOnly} />
-          <BrowserLinkTargetSetting disabled={desktopOnly} />
-          <BrowserAutoShowFloatingPreviewSetting disabled={desktopOnly} />
-        </SettingsUnavailableGroup>
-        {/* Not desktop-only: web clients search from server-run browser tabs too. */}
-        <BrowserSearchEngineSetting />
-        <AdvancedSettings
-          targetIds={[
-            searchableSetting("browser-default-viewport").id,
-            searchableSetting("browser-default-zoom").id,
-            searchableSetting("browser-default-appearance").id,
-          ]}
-        >
-          <SettingsUnavailableGroup message={desktopOnlyMessage}>
-            <BrowserViewportSetting disabled={desktopOnly} />
-            <BrowserZoomSetting disabled={desktopOnly} />
-            <BrowserAppearanceSetting disabled={desktopOnly} />
-          </SettingsUnavailableGroup>
-        </AdvancedSettings>
-      </SettingsSection>
-      <SettingsSection id="browser-recordings" title={gt("Recordings")}>
-        <SettingsUnavailableGroup message={desktopOnlyMessage}>
-          <BrowserRecordingFrameRateSetting disabled={desktopOnly} />
-          <BrowserRecordingInputSettings disabled={desktopOnly} />
-        </SettingsUnavailableGroup>
-      </SettingsSection>
-      <DeviceIntegrationSettings />
+    <SettingsPageContainer width="readable">
+      <SettingsSegmentedTabs
+        tabs={tabs}
+        defaultTabId="browser"
+        ariaLabel={gt("Browser and device settings sections")}
+      />
     </SettingsPageContainer>
   );
 }
 
 export function DevicesSettingsPanel() {
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer width="readable">
       <DeviceIntegrationSettings />
     </SettingsPageContainer>
   );

@@ -834,6 +834,11 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
 
   it("preserves 1:1 native wallpaper color fidelity by default (filter: none, achromatic scrim, no oversaturated fallback)", async () => {
     const defaults = createDefaultSettings();
+    assert.equal(defaults.scrim, 0.4);
+    assert.equal(defaults.fpsCap, 60);
+    assert.equal(defaults.videoVolume, 0.35);
+    assert.equal(defaults.pauseOnBattery, true);
+    assert.equal(defaults.rotationGroupId, "default");
     assert.equal(defaults.backgroundBrightness, 100);
     assert.equal(defaults.backgroundContrast, 100);
     assert.equal(defaults.backgroundSaturate, 100);
@@ -886,5 +891,21 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.match(panelCss, /\.pmx-wp-btn\.is-on\s*\{[\s\S]*?color:\s*#ffffff;[\s\S]*?font-weight:\s*600;/);
     assert.match(panelCss, /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-btn\.is-on[\s\S]*?color:\s*#0f172a;/);
     assert.match(panelCss, /\.pmx-wp-btn:not\(\.pmx-wp-btn--primary\):not\(\.pmx-wp-rate--active\):not\(\.is-on\)/);
+  });
+
+  it("consolidates WallpaperSettingsView refresh action into Tab bar trailingAction slot and denoises jargon (RC.2)", async () => {
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const viewSrc = await readFile(join(pkgRoot, "src", "WallpaperSettingsView.tsx"), "utf8");
+    const panelCss = await readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8");
+
+    assert.match(viewSrc, /trailingAction\?:\s*ReactNode/);
+    assert.match(viewSrc, /headerStatusBadge\?:\s*ReactNode/);
+    assert.match(viewSrc, /data-pmx-wp-tabs-trailing="1"/);
+    assert.doesNotMatch(viewSrc, /刷新库/, "duplicate 刷新库 button in vinyl hero card must be removed");
+    assert.doesNotMatch(viewSrc, /应用并刷新/, "redundant 应用并刷新 label must be simplified to 保存");
+    assert.doesNotMatch(viewSrc, /0 Token/, "raw 0 Token jargon must not appear in user-facing copy");
+    assert.match(panelCss, /\.pmx-wp-tabs-row\s*\{/);
+    assert.match(panelCss, /\.pmx-wp-tabs-trailing\s*\{/);
   });
 });

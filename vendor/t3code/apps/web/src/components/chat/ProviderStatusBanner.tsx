@@ -124,7 +124,7 @@ export function getProviderStatusMessage(
   if (status.auth.status === "unauthenticated") {
     if (hasProviderSetup(status)) {
       return status.driver === "antigravity"
-        ? resolve(msg("Open provider setup to sign in with Google."))
+        ? resolve(msg("Sign in with local 'agy' CLI in a terminal, then sync models in provider setup."))
         : resolve(msg("Open provider setup to sign in."));
     }
     return resolve(msg("Sign in via the CLI to authenticate again."));

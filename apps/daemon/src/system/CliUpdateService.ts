@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { UPDATE_ENDPOINTS } from "@prismux/protocol";
@@ -31,7 +31,6 @@ export type ManagedCliProviderId =
   | "claude"
   | "gemini"
   | "opencode"
-  | "omp"
   | "antigravity";
 
 export type CliInstallMethod = "npm-global" | "native-self-update" | "unsupported";
@@ -139,7 +138,7 @@ export interface CliUpdateServiceOptions {
   findExecutable?: (commandNames: readonly string[]) => string | null;
   /** Injectable file reader for shim inspection. */
   readTextFile?: (filePath: string) => string | null;
-  /** Injectable path existence check for omp package detection. */
+  /** Injectable path existence check. */
   pathExists?: (filePath: string) => boolean;
   /** Injectable Windows environment refresher. */
   refreshEnv?: () => Promise<WindowsEnvRefreshResult | void> | void;
@@ -182,13 +181,6 @@ export const MANAGED_CLI_SPECS: Readonly<Record<ManagedCliProviderId, ManagedCli
     defaultNpmPackage: "opencode-ai",
     updateSupported: true
   },
-  omp: {
-    id: "omp",
-    command: "omp",
-    versionArgs: ["--version"],
-    defaultNpmPackage: "@oh-my-pi/pi-coding-agent",
-    updateSupported: true
-  },
   antigravity: {
     id: "antigravity",
     command: "agy",
@@ -203,7 +195,6 @@ export const ALL_MANAGED_CLI_PROVIDERS: readonly ManagedCliProviderId[] = [
   "claude",
   "gemini",
   "opencode",
-  "omp",
   "antigravity"
 ];
 
@@ -226,12 +217,6 @@ const PROVIDER_ALIASES: Readonly<Record<string, ManagedCliProviderId>> = {
   opencode: "opencode",
   "open-code": "opencode",
   open_code: "opencode",
-  omp: "omp",
-  "oh-my-pi": "omp",
-  oh_my_pi: "omp",
-  ohmypi: "omp",
-  pi: "omp",
-  "pi-coding-agent": "omp",
   antigravity: "antigravity",
   agy: "antigravity",
   "antigravity-cli": "antigravity",
@@ -240,7 +225,7 @@ const PROVIDER_ALIASES: Readonly<Record<string, ManagedCliProviderId>> = {
 
 /**
  * Normalizes any provider driver kind, alias, or UUID-suffixed instance ID
- * (e.g. `codex_048c43c3-...`, `claudeAgent`, `agy`, `oh-my-pi`) to a canonical
+ * (e.g. `codex_048c43c3-...`, `claudeAgent`, `agy`) to a canonical
  * managed CLI provider ID.
  */
 export function normalizeCliProviderId(
@@ -273,18 +258,6 @@ export function normalizeCliProviderId(
   }
   if (key.startsWith("opencode") || key.startsWith("open-code")) {
     return "opencode";
-  }
-  if (
-    key === "omp" ||
-    key.startsWith("omp-") ||
-    key.startsWith("omp_") ||
-    key.includes("oh-my-pi") ||
-    key.includes("oh_my_pi") ||
-    key === "pi" ||
-    key.startsWith("pi-") ||
-    key.startsWith("pi_")
-  ) {
-    return "omp";
   }
   if (
     key.startsWith("antigravity") ||
@@ -483,53 +456,6 @@ export function detectClaudeInstallMethod(
   }
 
   return "native-self-update";
-}
-
-/**
- * Detects which npm package backs the user's installed `omp` binary, defaulting
- * to `@oh-my-pi/pi-coding-agent`.
- */
-export function detectOmpNpmPackage(
-  installedPath: string | null | undefined,
-  options: {
-    readTextFile?: (filePath: string) => string | null;
-    pathExists?: (filePath: string) => boolean;
-  } = {}
-): string {
-  const fallback = "@oh-my-pi/pi-coding-agent";
-  if (!installedPath || installedPath.trim().length === 0) {
-    return fallback;
-  }
-  const readText = options.readTextFile ?? safeReadTextFile;
-  const checkExists = options.pathExists ?? existsSync;
-
-  const content = readText(installedPath);
-  if (content) {
-    const normalizedContent = content.replace(/\\/g, "/");
-    const scopedMatch = /(@[a-z0-9._-]+\/[a-z0-9._-]*pi[a-z0-9._-]*)/i.exec(
-      normalizedContent
-    );
-    if (scopedMatch?.[1]) {
-      return scopedMatch[1];
-    }
-  }
-
-  const binDir = dirname(installedPath);
-  const candidates = [
-    "@oh-my-pi/pi-coding-agent",
-    "@mariozechner/pi-coding-agent"
-  ];
-  for (const pkg of candidates) {
-    const parts = pkg.split("/");
-    if (
-      checkExists(join(binDir, "node_modules", ...parts, "package.json")) ||
-      checkExists(join(binDir, "..", "lib", "node_modules", ...parts, "package.json"))
-    ) {
-      return pkg;
-    }
-  }
-
-  return fallback;
 }
 
 function safeReadTextFile(filePath: string): string | null {
@@ -802,7 +728,6 @@ export class CliUpdateService {
   ) => Promise<CliCommandExecResult>;
   private readonly findExecutableFn: (commandNames: readonly string[]) => string | null;
   private readonly readTextFileFn: (filePath: string) => string | null;
-  private readonly pathExistsFn: (filePath: string) => boolean;
   private readonly refreshEnvFn: () => Promise<WindowsEnvRefreshResult | void> | void;
 
   private readonly cache = new Map<ManagedCliProviderId, CliUpdateCheckItem>();
@@ -855,7 +780,6 @@ export class CliUpdateService {
           extraDirs: getDefaultCliExtraDirs(this.env, this.platform)
         }));
     this.readTextFileFn = options.readTextFile ?? safeReadTextFile;
-    this.pathExistsFn = options.pathExists ?? existsSync;
     this.refreshEnvFn =
       options.refreshEnv ??
       (() =>
@@ -1039,13 +963,7 @@ export class CliUpdateService {
     const rawVersion = probe.version ?? null;
     const currentVersion = extractSemverFromOutput(rawVersion);
 
-    const packageName =
-      providerId === "omp"
-        ? detectOmpNpmPackage(installedPath, {
-            readTextFile: this.readTextFileFn,
-            pathExists: this.pathExistsFn
-          })
-        : spec.defaultNpmPackage;
+    const packageName = spec.defaultNpmPackage;
 
     const installMethod: CliInstallMethod = !spec.updateSupported
       ? "unsupported"
@@ -1163,13 +1081,7 @@ export class CliUpdateService {
     const previousVersion = extractSemverFromOutput(beforeProbe.version ?? null);
     const installedPath = beforeProbe.path ?? null;
 
-    const packageName =
-      providerId === "omp"
-        ? detectOmpNpmPackage(installedPath, {
-            readTextFile: this.readTextFileFn,
-            pathExists: this.pathExistsFn
-          })
-        : spec.defaultNpmPackage;
+    const packageName = spec.defaultNpmPackage;
 
     const method: Exclude<CliInstallMethod, "unsupported"> =
       providerId === "claude"

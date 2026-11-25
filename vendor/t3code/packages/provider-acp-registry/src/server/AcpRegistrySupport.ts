@@ -49,6 +49,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import { resolveLocalAcpSpawn } from "./dshLocal.ts";
 
 const ACP_REGISTRY_URL = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 
@@ -1826,15 +1827,22 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       if (settings.source === "local") {
         const command = settings.commandPath.trim();
         if (!command) return { status: "unconfigured" } as const;
-        const executable = resolveExecutable(command, platform, environment ?? hostEnvironment);
-        if (executable !== undefined) yield* validateLocalExecutable(executable);
-        return executable === undefined
-          ? ({
-              status: "missing_runner",
-              version: null,
-              distribution: "local",
-            } as const)
-          : ({ status: "ready", agentId: command, version: null, distribution: "local" } as const);
+        const resolvedLocal = resolveLocalAcpSpawn({
+          commandPath: command,
+          commandArgs: settings.commandArgs,
+          platform,
+          env: environment ?? hostEnvironment,
+          resolveExecutable,
+        });
+        if (resolvedLocal === undefined) {
+          return {
+            status: "missing_runner",
+            version: null,
+            distribution: "local",
+          } as const;
+        }
+        yield* validateLocalExecutable(resolvedLocal.command);
+        return { status: "ready", agentId: command, version: null, distribution: "local" } as const;
       }
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) return { status: "unconfigured" } as const;
@@ -2028,17 +2036,29 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           });
         }
         const env = environment ?? hostEnvironment;
-        const command = resolveExecutable(executable, platform, env);
-        if (command === undefined) {
+        const resolvedLocal = resolveLocalAcpSpawn({
+          commandPath: executable,
+          commandArgs: settings.commandArgs,
+          platform,
+          env,
+          resolveExecutable,
+        });
+        if (resolvedLocal === undefined) {
           return yield* new AcpRegistryError({
             reason: "runner_unavailable",
             detail: "Local ACP executable is not available on this environment's PATH.",
           });
         }
-        yield* validateLocalExecutable(command);
+        yield* validateLocalExecutable(resolvedLocal.command);
         return {
           distribution: "local",
-          spawn: { command, args: settings.commandArgs, cwd, env, shell: false },
+          spawn: {
+            command: resolvedLocal.command,
+            args: resolvedLocal.args,
+            cwd,
+            env: resolvedLocal.env,
+            shell: false,
+          },
         } satisfies ResolvedAcpRegistryAgent;
       }
       const registry = yield* loadRegistry();

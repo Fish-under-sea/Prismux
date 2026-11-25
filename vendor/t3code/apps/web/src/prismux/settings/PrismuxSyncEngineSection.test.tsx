@@ -1,5 +1,5 @@
 import { GTProvider, initializeGT } from "gt-react";
-import { act, type ChangeEvent, type MouseEvent, type ReactNode } from "react";
+import { act, useState, type ChangeEvent, type MouseEvent, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -20,6 +20,44 @@ vi.mock("@tanstack/react-router", () => ({
 const switchHandlers = new Map<string, (checked: boolean) => void>();
 const inputHandlers = new Map<string, (value: string) => void>();
 const buttonHandlers = new Map<string, { onClick: () => void; disabled: boolean }>();
+const tabHandlers = new Map<string, () => void>();
+
+vi.mock("../../components/settings/SettingsSegmentedTabs", () => ({
+  SettingsSegmentedTabs: ({
+    tabs,
+    defaultTabId,
+    trailingAction,
+  }: {
+    tabs: ReadonlyArray<{ id: string; label: ReactNode; content: ReactNode }>;
+    defaultTabId?: string;
+    trailingAction?: ReactNode;
+  }) => {
+    const [activeId, setActiveId] = useState(defaultTabId ?? tabs[0]?.id ?? "");
+    for (const tab of tabs) {
+      tabHandlers.set(tab.id, () => setActiveId(tab.id));
+    }
+    const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+    return (
+      <div data-mock-segmented-tabs={activeId}>
+        <div role="tablist">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={tab.id === activeId}
+              data-pmx-tab-id={tab.id}
+            >
+              {tab.label}
+            </button>
+          ))}
+          {trailingAction}
+        </div>
+        <div role="tabpanel">{activeTab?.content}</div>
+      </div>
+    );
+  },
+}));
 
 vi.mock("../../components/ui/switch", () => ({
   Switch: ({
@@ -95,17 +133,21 @@ vi.mock("../../components/ui/button", () => ({
           ? "test-all"
           : props["data-pmx-sync-now"] !== undefined
             ? "sync-now"
-            : props["data-pmx-sync-save-passphrase"] !== undefined
-              ? "save-passphrase"
-              : props["data-pmx-sync-save-matrix"] !== undefined
-                ? "save-matrix"
-                : typeof props["data-pmx-sync-save-channel"] === "string"
-                  ? `save-channel:${props["data-pmx-sync-save-channel"]}`
-                  : typeof props["data-pmx-sync-test-channel"] === "string"
-                    ? `test-channel:${props["data-pmx-sync-test-channel"]}`
-                    : typeof props["data-pmx-sync-save-channel-collapsed"] === "string"
-                      ? `save-channel-collapsed:${props["data-pmx-sync-save-channel-collapsed"]}`
-                      : null;
+            : props["data-pmx-sync-upload"] !== undefined
+              ? "sync-upload"
+              : props["data-pmx-sync-download"] !== undefined
+                ? "sync-download"
+                : props["data-pmx-sync-save-passphrase"] !== undefined
+                  ? "save-passphrase"
+                  : props["data-pmx-sync-save-matrix"] !== undefined
+                    ? "save-matrix"
+                    : typeof props["data-pmx-sync-save-channel"] === "string"
+                      ? `save-channel:${props["data-pmx-sync-save-channel"]}`
+                      : typeof props["data-pmx-sync-test-channel"] === "string"
+                        ? `test-channel:${props["data-pmx-sync-test-channel"]}`
+                        : typeof props["data-pmx-sync-save-channel-collapsed"] === "string"
+                          ? `save-channel-collapsed:${props["data-pmx-sync-save-channel-collapsed"]}`
+                          : null;
     if (key && onClick) {
       buttonHandlers.set(key, {
         disabled: Boolean(disabled),
@@ -322,10 +364,9 @@ function installMinimalDom() {
   }
 
   const doc = new MiniDocument();
-  class MiniIFrameElement {}
   const win = {
     document: doc,
-    HTMLIFrameElement: MiniIFrameElement,
+    HTMLIFrameElement: MiniNode,
     HTMLElement: MiniNode,
     Element: MiniNode,
     Node: MiniNode,
@@ -380,9 +421,7 @@ function installMinimalDom() {
   };
 }
 
-function createStatefulMockDaemon(options?: {
-  failConfigPutWith?: string;
-}) {
+function createStatefulMockDaemon(options?: { failConfigPutWith?: string }) {
   const callLog: Array<{ op: string; method?: string; path?: string; payload?: unknown }> = [];
   const state = {
     ok: true,
@@ -505,7 +544,7 @@ function createStatefulMockDaemon(options?: {
   return { daemon, callLog, state };
 }
 
-describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save before test/sync", () => {
+describe("PrismuxSyncEngineSection 2-tab layout, contextual saves, validation, and auto-save before test/sync", () => {
   let dom: ReturnType<typeof installMinimalDom> | null = null;
 
   beforeAll(async () => {
@@ -521,6 +560,7 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     switchHandlers.clear();
     inputHandlers.clear();
     buttonHandlers.clear();
+    tabHandlers.clear();
     dom = installMinimalDom();
   });
 
@@ -607,7 +647,7 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     ).toBeNull();
   });
 
-  it("renders contextual inline save buttons (passphrase, channel card footer, matrix header), sends PUT /v1/sync/config, and clears isDirty", async () => {
+  it("renders contextual inline save buttons across overview & channels tabs, sends PUT /v1/sync/config, and clears isDirty", async () => {
     const { daemon, callLog } = createStatefulMockDaemon();
     const container = dom!.document.createElement("div");
     dom!.document.body.appendChild(container);
@@ -616,15 +656,20 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     await act(async () => {
       root.render(
         <GTProvider locale="zh" translations={{}}>
-          <PrismuxSyncEngineSection daemon={daemon as never} refreshTick={0} />
+          <PrismuxSyncEngineSection
+            daemon={daemon as never}
+            refreshTick={0}
+            initialTabOverride="channels"
+            initialChannelOverride="github"
+          />
         </GTProvider>,
       );
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    // No orphan bottom save button; top save-all pill is hidden while clean.
-    expect(container.textContent).not.toContain("保存加密同步配置");
+    // No jargon; clean state hides top save-all button; passphrase button starts disabled.
+    expect(container.textContent).not.toContain("Argon2id");
     expect(container.querySelector("[data-pmx-sync-save-all]")).toBeNull();
     expect(buttonHandlers.get("save-passphrase")?.disabled).toBe(true);
 
@@ -648,9 +693,11 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     expect(container.querySelector('[data-pmx-sync-passphrase-feedback="success"]')).not.toBeNull();
     expect(container.textContent).toContain("主口令已密封");
 
-    // 2. Enable GitHub, fill fields -> labels & contextual footer visible -> save via PUT
+    // 2. Enable GitHub (mounts form inputs), then fill fields -> labels & contextual footer visible -> save via PUT
     await act(async () => {
       switchHandlers.get("channel:github")?.(true);
+    });
+    await act(async () => {
       inputHandlers.get("github.owner")?.("Fish-under-sea");
       inputHandlers.get("github.repo")?.("prismux-vault");
       inputHandlers.get("github.token")?.("ghp_demo_token_123");
@@ -692,7 +739,12 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
         ?.getAttribute("data-pmx-sync-feedback-state"),
     ).toBe("success");
 
-    // 3. Toggle matrix switch -> compact inline Save appears in matrix header -> PUT /v1/sync/config
+    // 3. Switch to overview tab -> toggle flattened matrix switch -> inline Save -> PUT /v1/sync/config
+    await act(async () => {
+      tabHandlers.get("overview")?.();
+    });
+    expect(container.querySelector("[data-pmx-sync-matrix-list]")).not.toBeNull();
+
     await act(async () => {
       switchHandlers.get("matrix:socialMemory.upload")?.(true);
     });
@@ -705,7 +757,10 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     });
     const matrixPut = [...callLog].reverse().find((c) => c.path === "/v1/sync/config");
     expect(matrixPut?.method).toBe("PUT");
-    expect((matrixPut?.payload as { syncMatrix?: { socialMemory?: { upload: boolean } } })?.syncMatrix?.socialMemory?.upload).toBe(true);
+    expect(
+      (matrixPut?.payload as { syncMatrix?: { socialMemory?: { upload: boolean } } })?.syncMatrix
+        ?.socialMemory?.upload,
+    ).toBe(true);
     expect(container.querySelector("[data-pmx-sync-save-matrix]")).toBeNull();
 
     await act(async () => {
@@ -713,7 +768,7 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     });
   });
 
-  it("auto-saves unsaved GitHub edits via PUT /v1/sync/config BEFORE calling testSyncConnection and triggerSyncNow", async () => {
+  it("auto-saves unsaved GitHub edits via PUT /v1/sync/config BEFORE calling testSyncConnection and triggerSyncNow (both/upload/download)", async () => {
     const { daemon, callLog } = createStatefulMockDaemon();
     const container = dom!.document.createElement("div");
     dom!.document.body.appendChild(container);
@@ -722,19 +777,30 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     await act(async () => {
       root.render(
         <GTProvider locale="zh" translations={{}}>
-          <PrismuxSyncEngineSection daemon={daemon as never} refreshTick={0} />
+          <PrismuxSyncEngineSection
+            daemon={daemon as never}
+            refreshTick={0}
+            initialTabOverride="channels"
+            initialChannelOverride="github"
+          />
         </GTProvider>,
       );
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    // Type GitHub config WITHOUT clicking Save, then click top「测试通道连通性」
+    // Type GitHub config WITHOUT clicking Save, switch to overview, then click「测试连通」
     await act(async () => {
       switchHandlers.get("channel:github")?.(true);
+    });
+    await act(async () => {
       inputHandlers.get("github.owner")?.("Fish-under-sea");
       inputHandlers.get("github.repo")?.("prismux-vault");
       inputHandlers.get("github.token")?.("ghp_auto_save_test");
+    });
+
+    await act(async () => {
+      tabHandlers.get("overview")?.();
     });
 
     const logStart = callLog.length;
@@ -755,10 +821,16 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
       "连通性测试通过",
     );
 
-    // Edit branch + passphrase WITHOUT clicking Save, then click top「立即加密同步」
+    // Edit branch + passphrase on channels tab WITHOUT saving, switch to overview, then click「立即同步」
+    await act(async () => {
+      tabHandlers.get("channels")?.();
+    });
     await act(async () => {
       inputHandlers.get("github.branch")?.("vault-main");
       inputHandlers.get("passphrase")?.("SyncAutoSavePass!2026");
+    });
+    await act(async () => {
+      tabHandlers.get("overview")?.();
     });
 
     const syncLogStart = callLog.length;
@@ -774,11 +846,36 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     expect(afterSyncOps[0]?.method).toBe("PUT");
     expect(afterSyncOps[0]?.path).toBe("/v1/sync/config");
     expect(afterSyncOps[1]?.op).toBe("triggerSyncNow");
+    expect(afterSyncOps[1]?.payload).toEqual(expect.objectContaining({ direction: "both" }));
     expect(container.querySelector('[data-sync-operation-kind="sync"]')?.textContent).toContain(
       "同步完成",
     );
 
-    // Edit GitHub repo and click per-channel「测试此通道」-> auto-saves GitHub only, then tests channels:["github"]
+    // Dedicated Upload & Download buttons pass explicit directions
+    const uploadStart = callLog.length;
+    await act(async () => {
+      buttonHandlers.get("sync-upload")?.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(callLog.slice(uploadStart).find((c) => c.op === "triggerSyncNow")?.payload).toEqual(
+      expect.objectContaining({ direction: "upload" }),
+    );
+
+    const downloadStart = callLog.length;
+    await act(async () => {
+      buttonHandlers.get("sync-download")?.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(callLog.slice(downloadStart).find((c) => c.op === "triggerSyncNow")?.payload).toEqual(
+      expect.objectContaining({ direction: "download" }),
+    );
+
+    // Switch back to channels tab, edit repo, click per-channel「测试此通道」-> auto-saves GitHub only, then tests channels:["github"]
+    await act(async () => {
+      tabHandlers.get("channels")?.();
+    });
     await act(async () => {
       inputHandlers.get("github.repo")?.("prismux-vault-v2");
     });
@@ -816,16 +913,25 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     await act(async () => {
       root.render(
         <GTProvider locale="zh" translations={{}}>
-          <PrismuxSyncEngineSection daemon={daemon as never} refreshTick={0} onError={onError} />
+          <PrismuxSyncEngineSection
+            daemon={daemon as never}
+            refreshTick={0}
+            initialTabOverride="channels"
+            initialChannelOverride="github"
+            onError={onError}
+          />
         </GTProvider>,
       );
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    // Enable GitHub with empty Owner & Repo, then click「测试通道连通性」
+    // Enable GitHub with empty Owner & Repo, switch to overview, then click「测试连通」
     await act(async () => {
       switchHandlers.get("channel:github")?.(true);
+    });
+    await act(async () => {
+      tabHandlers.get("overview")?.();
     });
 
     const callsBefore = callLog.length;
@@ -857,7 +963,12 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
     await act(async () => {
       root2.render(
         <GTProvider locale="zh" translations={{}}>
-          <PrismuxSyncEngineSection daemon={failing.daemon as never} refreshTick={0} />
+          <PrismuxSyncEngineSection
+            daemon={failing.daemon as never}
+            refreshTick={0}
+            initialTabOverride="channels"
+            initialChannelOverride="github"
+          />
         </GTProvider>,
       );
       await Promise.resolve();
@@ -866,8 +977,13 @@ describe("PrismuxSyncEngineSection contextual saves, validation, and auto-save b
 
     await act(async () => {
       switchHandlers.get("channel:github")?.(true);
+    });
+    await act(async () => {
       inputHandlers.get("github.owner")?.("Fish-under-sea");
       inputHandlers.get("github.repo")?.("prismux-vault");
+    });
+    await act(async () => {
+      tabHandlers.get("overview")?.();
     });
 
     await act(async () => {

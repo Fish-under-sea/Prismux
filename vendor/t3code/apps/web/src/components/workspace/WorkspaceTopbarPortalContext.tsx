@@ -1,3 +1,4 @@
+import type { ProviderInstanceId } from "@t3tools/contracts";
 import {
   createContext,
   useContext,
@@ -9,6 +10,14 @@ import {
 
 import { cn } from "~/lib/utils";
 import { ROOT_SPLIT_PANE_EDGES, type SplitPaneEdges } from "./splitAnything.logic";
+
+export interface WorkspaceActiveChatProviderSnapshot {
+  readonly routeKey: string;
+  readonly instanceId: ProviderInstanceId | null;
+  readonly providerId: string | null;
+  readonly model: string | null;
+  readonly displayName: string | null;
+}
 
 export interface WorkspaceSplitPaneContextValue {
   /** True whenever the workspace contains > 1 split pane; disables nested interior rounding. */
@@ -39,6 +48,10 @@ export interface WorkspaceTopbarPortalContextValue {
   readonly tabBarRef: RefObject<HTMLDivElement | null>;
   /** Tracks whether an active `ChatView` has claimed the topbar controls slot. */
   readonly setHasActiveChatControls: (active: boolean) => void;
+  /** Syncs the mounted `ChatView`'s live resolved provider/model into the workspace tab bar. */
+  readonly setActiveChatProvider?:
+    | ((snapshot: WorkspaceActiveChatProviderSnapshot | null) => void)
+    | undefined;
   /** True when the fallback standalone right sidebar drawer is open (empty workspace). */
   readonly standaloneRightPanelOpen: boolean;
 }
@@ -50,6 +63,7 @@ const DEFAULT_WORKSPACE_TOPBAR_PORTAL_VALUE: WorkspaceTopbarPortalContextValue =
   slotElement: null,
   tabBarRef: FALLBACK_TAB_BAR_REF,
   setHasActiveChatControls: () => {},
+  setActiveChatProvider: undefined,
   standaloneRightPanelOpen: false,
 };
 

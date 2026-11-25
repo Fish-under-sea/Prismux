@@ -14,7 +14,6 @@ import {
   PersistentPtyPool,
   compareSemver,
   detectClaudeInstallMethod,
-  detectOmpNpmPackage,
   extractSemverFromOutput,
   isNewerVersion,
   normalizeCliProviderId,
@@ -132,14 +131,15 @@ describe("CliUpdateService — SemVer extraction, strict comparison & provider d
     assert.equal(normalizeCliProviderId("claude-code"), "claude");
     assert.equal(normalizeCliProviderId("gemini-cli"), "gemini");
     assert.equal(normalizeCliProviderId("opencode"), "opencode");
-    assert.equal(normalizeCliProviderId("oh-my-pi"), "omp");
-    assert.equal(normalizeCliProviderId("pi"), "omp");
+    assert.equal(normalizeCliProviderId("omp"), null);
+    assert.equal(normalizeCliProviderId("oh-my-pi"), null);
+    assert.equal(normalizeCliProviderId("pi"), null);
     assert.equal(normalizeCliProviderId("agy"), "antigravity");
     assert.equal(normalizeCliProviderId("antigravity"), "antigravity");
     assert.equal(normalizeCliProviderId("unknown-acp-agent"), null);
   });
 
-  it("intelligently detects Claude native vs npm/pnpm global installs and OMP package names", () => {
+  it("intelligently detects Claude native vs npm/pnpm global installs", () => {
     assert.equal(
       detectClaudeInstallMethod("C:\\Users\\Fish\\.local\\bin\\claude.exe", {
         platform: "win32"
@@ -164,21 +164,6 @@ describe("CliUpdateService — SemVer extraction, strict comparison & provider d
       }),
       "npm-global"
     );
-
-    assert.equal(
-      detectOmpNpmPackage("C:\\Users\\Fish\\AppData\\Roaming\\npm\\omp.cmd", {
-        readTextFile: () =>
-          '"%dp0%\\node_modules\\@mariozechner\\pi-coding-agent\\dist\\cli.js" %*'
-      }),
-      "@mariozechner/pi-coding-agent"
-    );
-    assert.equal(
-      detectOmpNpmPackage("C:\\Users\\Fish\\AppData\\Roaming\\npm\\omp.cmd", {
-        readTextFile: () => null,
-        pathExists: () => false
-      }),
-      "@oh-my-pi/pi-coding-agent"
-    );
   });
 
   it("sanitizes secrets and noisy traces out of update errors", () => {
@@ -200,8 +185,7 @@ describe("CliUpdateService & DaemonRpcServer — Mock npm Registry E2E check & a
       "@openai/codex": "0.173.0",
       "@anthropic-ai/claude-code": "2.1.335",
       "@google/gemini-cli": "0.5.0",
-      "opencode-ai": "0.2.0",
-      "@oh-my-pi/pi-coding-agent": "0.9.1"
+      "opencode-ai": "0.2.0"
     });
     const mirrorMock = await startMockNpmRegistry({
       "@openai/codex": "0.173.0",
