@@ -155,7 +155,7 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   [
     "When to compact an idle thread over 200,000 tokens: after you return, just before its prompt cache expires, or never. Overrides the default in Providers > Advanced.",
     msg(
-      "When to compact an idle thread over 200,000 tokens: after you return, just before its prompt cache expires, or never. Overrides the default in Providers > Advanced.",
+      "When to compact an idle thread over 200,000 tokens: after you return, just before its prompt cache expires, or never. Overrides the default in Agent configurator > Defaults & policies.",
     ),
   ],
   [
@@ -181,10 +181,6 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
     msg(
       "Optional ACP authentication method ID. By default, the first agent-managed method is selected.",
     ),
-  ],
-  [
-    "Path to the fx binary. All fx instances on this machine share its fx login.",
-    msg("Path to the fx binary. All fx instances on this machine share its fx login."),
   ],
   ["Path to the Grok CLI binary.", msg("Path to the Grok CLI binary.")],
   ["Path to the Kiro CLI binary.", msg("Path to the Kiro CLI binary.")],
@@ -366,6 +362,9 @@ function configuredCommandArgs(value: ProviderSettingsFormProps["value"]) {
     : [];
 }
 
+const COMPACT_SETTINGS_ROW_CLASSNAME =
+  "px-4 py-3 [&>div:first-child]:gap-2.5 [&>div:first-child]:@min-[22rem]/settings-row:grid [&>div:first-child]:@min-[22rem]/settings-row:grid-cols-[minmax(0,1fr)_auto] [&>div:first-child]:@min-[22rem]/settings-row:items-center [&>div:first-child]:@min-[22rem]/settings-row:gap-4";
+
 function ProviderCommandArguments({
   value,
   onChange,
@@ -390,6 +389,7 @@ function ProviderCommandArguments({
 
   return (
     <SettingsRow
+      className={COMPACT_SETTINGS_ROW_CLASSNAME}
       title={gt("Arguments")}
       description={gt("One literal argument per row, in launch order.")}
       managed={managedReason}
@@ -528,7 +528,7 @@ function SecretSettingsControl({
   const reference = isSecretReference(saved) ? saved : undefined;
   const configured = reference !== undefined || (typeof saved === "string" && saved.length > 0);
   return (
-    <div className="flex w-full min-w-0 items-start gap-2 @min-[32rem]/settings-row:w-80">
+    <div className="flex w-full min-w-0 items-start gap-2 @min-[22rem]/settings-row:w-64">
       <SecretSourceInput
         id={inputId}
         aria-describedby={descriptionId}
@@ -615,7 +615,7 @@ function ProviderSettingsTextInput({
 }) {
   const [rejected, setRejected] = useState<string | null>(null);
   return (
-    <div className="flex w-full min-w-0 flex-col gap-1 @min-[32rem]/settings-row:w-56">
+    <div className="flex w-full min-w-0 flex-col gap-1 @min-[22rem]/settings-row:w-56">
       <DraftInput
         id={inputId}
         aria-describedby={descriptionId}
@@ -706,14 +706,14 @@ function ProviderSettingsFieldRow({
           value={value}
           inputId={inputId}
           size="sm"
-          className="w-full max-w-full @min-[32rem]/settings-row:w-56"
+          className="w-full max-w-full @min-[22rem]/settings-row:w-56"
           onChange={onChange}
         />
       ) : field.control === "textarea" ? (
         <Textarea
           id={inputId}
           aria-describedby={descriptionId}
-          className="w-full max-w-full @min-[32rem]/settings-row:w-[min(24rem,50cqw)]"
+          className="w-full max-w-full @min-[22rem]/settings-row:w-[min(22rem,52cqw)]"
           value={readProviderConfigString(value, field.key)}
           onChange={(event) =>
             onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
@@ -731,7 +731,7 @@ function ProviderSettingsFieldRow({
           onChange={onChange}
         />
       ) : field.secret ? (
-        <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
+        <div className="flex w-full min-w-0 items-center gap-2 @min-[22rem]/settings-row:w-56">
           <SecretInput
             id={inputId}
             aria-describedby={descriptionId}
@@ -765,6 +765,7 @@ function ProviderSettingsFieldRow({
 
     return (
       <SettingsRow
+        className={COMPACT_SETTINGS_ROW_CLASSNAME}
         title={
           field.control === "switch" ? field.label : <label htmlFor={inputId}>{field.label}</label>
         }

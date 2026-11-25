@@ -65,7 +65,7 @@ describe("searchSettings", () => {
     for (const query of ["fallback", "fallback agent", "fallback model"]) {
       expect(searchSettings(query)[0]).toMatchObject({
         id: "fallback-model",
-        to: "/settings/chat",
+        to: "/settings/providers",
         scope: "environment-defaults",
       });
     }
@@ -171,10 +171,25 @@ describe("searchSettings", () => {
     ]) {
       expect(byId.get(id)?.to, id).toBe("/settings/chat");
     }
-    // Moved from /settings/chat -> /settings/projects
-    for (const id of ["add-project-starts-in", "ghq-clone-layout"]) {
+    // Moved from /settings/chat -> /settings/providers (Agent configurator Tab 2: Defaults & policies)
+    for (const id of [
+      "default-model",
+      "fallback-model",
+      "text-generation-model",
+      "thread-title-instructions",
+      "default-launch-mode",
+      "compact-idle-threads",
+    ]) {
+      expect(byId.get(id)?.to, id).toBe("/settings/providers");
+    }
+    // Moved from /settings/chat and /settings/archived -> /settings/projects
+    for (const id of ["add-project-starts-in", "ghq-clone-layout", "archive"]) {
       expect(byId.get(id)?.to, id).toBe("/settings/projects");
     }
+    expect(byId.get("archive")?.scope).toBe("project-defaults");
+    expect(settingsNavGroups(true, true).flatMap((group) => group.paths)).not.toContain(
+      "/settings/archived",
+    );
     // Retargeted from /settings/providers -> /settings/maintenance#background-activity
     expect(byId.get("provider-health-check-interval")).toMatchObject({
       to: "/settings/maintenance",
@@ -339,10 +354,12 @@ describe("searchSettings", () => {
       Appearance: "外观",
       Wallpaper: "壁纸",
       "Wallpaper Engine": "壁纸引擎",
-      Plugins: "插件中心",
+      "Plugin center": "插件中心",
       "Plugin Center": "插件中心",
       Memory: "记忆",
-      Sync: "同步",
+      "Remote sync": "远程同步",
+      "Projects & archive": "项目与归档",
+      "Archived threads": "已归档线程",
       "Chief Thread Slot": "主秘书槽位",
       "Prismux Updates": "软件更新",
     };
@@ -363,6 +380,14 @@ describe("searchSettings", () => {
     expect(searchSettings("同步", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
       id: "prismux-sync",
       to: "/settings/sync",
+    });
+    expect(searchSettings("远程同步", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "prismux-sync",
+      to: "/settings/sync",
+    });
+    expect(searchSettings("已归档线程", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "archive",
+      to: "/settings/projects",
     });
     expect(searchSettings("软件更新", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
       "prismux-updates",
@@ -516,8 +541,15 @@ describe("source control host search items", () => {
 describe("movedSettingsPath", () => {
   it("sends old links to the page their row moved to", () => {
     expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(
-      "/settings/chat",
+      "/settings/providers",
     );
+    expect(movedSettingsPath("/settings/chat", "default-model")).toBe("/settings/providers");
+    expect(movedSettingsPath("/settings/chat", "fallback-model")).toBe("/settings/providers");
+    expect(movedSettingsPath("/settings/chat", "text-generation-model")).toBe("/settings/providers");
+    expect(movedSettingsPath("/settings/chat", "thread-title-instructions")).toBe(
+      "/settings/providers",
+    );
+    expect(movedSettingsPath("/settings/chat", "text-generation")).toBe("/settings/providers");
     expect(movedSettingsPath("/settings/connections", "authorized-clients")).toBeNull();
     expect(movedSettingsPath("/settings/source-control", "worktree-branch-naming")).toBeNull();
     expect(movedSettingsPath("/settings/appearance", "diff-color-scheme")).toBe(
@@ -546,6 +578,9 @@ describe("movedSettingsPath", () => {
       "/settings/maintenance",
     );
     expect(movedSettingsPath("/settings/about", "mobile-app")).toBe("/settings/connections");
+    expect(movedSettingsPath("/settings/archived", "archive")).toBe("/settings/projects");
+    expect(movedSettingsPath("/settings/archived", "archived")).toBe("/settings/projects");
+    expect(movedSettingsPath("/settings/archived", "archived-threads")).toBe("/settings/projects");
   });
 
   it("leaves current pages alone", () => {

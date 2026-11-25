@@ -10,6 +10,16 @@ import {
   devinAnswerablePermissionOptions,
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
+import {
+  extractDshProposedPlanMarkdown,
+  extractDshSubagentUpdate,
+  isDeepSeekHarnessAgentInfo,
+  isDeepSeekHarnessSettings,
+  normalizeDshSessionUpdate,
+  normalizeDshToolCall,
+  rewriteDshUserText,
+} from "./dshAcp.ts";
+import { augmentDshAvailableCommands, discoverDshLocalSkills } from "./dshSkills.ts";
 import { makeKimiPromptOutcomeWatch } from "./kimiAcp.ts";
 import { extractOpenCodeElicitationForm } from "./opencodeAcp.ts";
 import {
@@ -138,6 +148,9 @@ export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
 function makeAcpRegistryRuntime(
   options: AcpRegistryAdapterV2Options,
   catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"],
+  hooks?: {
+    readonly onInitialized?: (initializeResult: EffectAcpSchema.InitializeResponse) => void;
+  },
 ) {
   return (
     input: AcpAdapterV2RuntimeInput,
@@ -162,6 +175,12 @@ function makeAcpRegistryRuntime(
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
+          ...(hooks?.onInitialized === undefined
+            ? {}
+            : {
+                onInitialized: (initializeResult) =>
+                  Effect.sync(() => hooks.onInitialized?.(initializeResult)),
+              }),
           spawn:
             processEnvironment === undefined
               ? resolved.spawn
@@ -239,6 +258,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       /^(?:mistral-)?vibe(?:-acp)?(\.exe|\.cmd)?$/i.test(
         options.settings.commandPath.split(/[\\/]/).pop() ?? "",
       ));
+  let isDshRuntime = isDeepSeekHarnessSettings(options.settings);
+  let activeWorkspaceCwd: string | undefined;
+  const hostPlatform = yield* HostProcess.Platform;
   const runtimeOptions = isClaude
     ? {
         ...options,
@@ -258,6 +280,19 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   // the unquoted "Prismux (Beta).exe" path). Both take T3's MCP endpoint over ACP HTTP.
   const useHttpMcpServers =
     copilotRouting !== undefined || prefersHttpMcpTransport(options.settings);
+  const baseMakeRuntime =
+    options.makeRuntime ??
+    makeAcpRegistryRuntime(runtimeOptions, catalog, {
+      onInitialized: (initializeResult) => {
+        if (isDeepSeekHarnessAgentInfo(initializeResult)) {
+          isDshRuntime = true;
+        }
+      },
+    });
+  const trackedMakeRuntime: AcpAdapterV2Flavor["makeRuntime"] = (input) => {
+    activeWorkspaceCwd = input.cwd;
+    return baseMakeRuntime(input);
+  };
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,
     // Cancelling a Copilot prompt also kills the background agents it started.
@@ -269,6 +304,37 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       : AcpProviderCapabilitiesV2,
     customModels: readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
     compactViaAdvertisedCommand: true,
+    rewriteUserText: (text, turnInput) => {
+      if (!isDshRuntime) return Effect.succeed(text);
+      return Effect.gen(function* () {
+        const localSkills = discoverDshLocalSkills({
+          ...(activeWorkspaceCwd === undefined ? {} : { cwd: activeWorkspaceCwd }),
+          env: options.environment,
+          platform: hostPlatform,
+        });
+        const advertised =
+          runtimeCoordinator === undefined
+            ? Option.none()
+            : yield* runtimeCoordinator.getAvailableCommands(options.instanceId);
+        const knownSkillNames = new Map<string, string>();
+        for (const skill of localSkills) {
+          if (skill.enabled && skill.userInvocable !== false) {
+            knownSkillNames.set(skill.name.toLowerCase(), skill.name);
+          }
+        }
+        if (Option.isSome(advertised)) {
+          for (const skill of advertised.value.skills) {
+            if (skill.enabled && skill.userInvocable !== false) {
+              const key = skill.name.toLowerCase();
+              if (!knownSkillNames.has(key)) {
+                knownSkillNames.set(key, skill.name);
+              }
+            }
+          }
+        }
+        return rewriteDshUserText(text, knownSkillNames, turnInput.inlineContextLength ?? 0);
+      });
+    },
     ...(isAntigravityCli ? { wakeOnDetachedRequest: true, replyEndsWithUsageUpdate: true } : {}),
     promptFailure: (cause) =>
       acpRegistryPromptFailure(isVibe ? "mistral-vibe" : registryAgentId, cause),
@@ -321,7 +387,22 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           extractSubagentUpdate: extractDevinSubagentUpdate,
           answerablePermissionOptions: devinAnswerablePermissionOptions,
         }
-      : {}),
+      : copilotRouting !== undefined
+        ? {}
+        : {
+            normalizeSessionUpdate: (notification) =>
+              isDshRuntime ? normalizeDshSessionUpdate(notification) : notification,
+            normalizeToolCall: (toolCall) =>
+              isDshRuntime ? normalizeDshToolCall(toolCall) : toolCall,
+            extractProposedPlanMarkdown: (toolCall) =>
+              isDshRuntime ? extractDshProposedPlanMarkdown(toolCall) : undefined,
+            ...(!isClaude
+              ? {
+                  extractSubagentUpdate: (toolCall) =>
+                    isDshRuntime ? extractDshSubagentUpdate(toolCall) : undefined,
+                }
+              : {}),
+          }),
     ...(copilotRouting === undefined
       ? {}
       : {
@@ -337,15 +418,21 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           alwaysSetModel: true,
         }),
     mcpOverHttp: useHttpMcpServers,
-    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(runtimeOptions, catalog),
+    makeRuntime: trackedMakeRuntime,
     ...(runtimeCoordinator === undefined
       ? {}
       : {
-          onAvailableCommandsUpdate: (commands) =>
-            runtimeCoordinator.publishAvailableCommands(
-              options.instanceId,
-              normalizeAcpRegistryCommands(commands),
-            ),
+          onAvailableCommandsUpdate: (commands) => {
+            const normalized = normalizeAcpRegistryCommands(commands);
+            const published = isDshRuntime
+              ? augmentDshAvailableCommands(normalized, {
+                  ...(activeWorkspaceCwd === undefined ? {} : { cwd: activeWorkspaceCwd }),
+                  env: options.environment,
+                  platform: hostPlatform,
+                })
+              : normalized;
+            return runtimeCoordinator.publishAvailableCommands(options.instanceId, published);
+          },
           // A new Copilot session starts at its own effort, not the one the composer shows.
           ...(isCopilot
             ? {

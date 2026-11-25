@@ -34,7 +34,7 @@ const BUILT_IN_DRIVER_ORDER: ReadonlyArray<string> = [
   "grok",
   "opencode",
   "antigravity",
-  "fx",
+  "pi",
   "kiro",
 ];
 

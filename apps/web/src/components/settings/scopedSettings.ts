@@ -55,6 +55,37 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Deep structural comparison for settings values (primitives, arrays, Effect values, and plain objects ignoring undefined keys). */
+export function areSettingValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    return left.every((item, index) => areSettingValuesEqual(item, right[index]));
+  }
+  if (Equal.equals(left, right)) return true;
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const leftKeys = Object.keys(left).filter((key) => left[key] !== undefined);
+    const rightKeys = Object.keys(right).filter((key) => right[key] !== undefined);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every(
+      (key) => Object.hasOwn(right, key) && areSettingValuesEqual(left[key], right[key]),
+    );
+  }
+  return false;
+}
+
+export function isScopedSettingOverridden(
+  currentValue: unknown,
+  defaultValue: unknown,
+): boolean {
+  return !areSettingValuesEqual(currentValue, defaultValue);
+}
+
 export function isConnectedWithConfig(
   environment: Pick<ScopedSettingsEnvironment, "connection" | "serverConfig">,
 ) {
@@ -70,6 +101,7 @@ export interface PendingScopedWrite {
   readonly environmentId: EnvironmentId;
   readonly patch: ServerSettingsPatch;
   readonly settledOver?: ServerSettings;
+  readonly settledValue?: ServerSettings;
 }
 
 export const pendingScopedWritesAtom = Atom.make<readonly PendingScopedWrite[]>([]).pipe(
@@ -92,8 +124,10 @@ export function settlePendingScopedWrites(
     if (write.save !== target.save || write.environmentId !== target.environmentId) {
       return pendingWriteApplies(write, current) ? [write] : [];
     }
-    if (saved === undefined || current === undefined || Equal.equals(current, saved)) return [];
-    return [{ ...write, settledOver: current }];
+    if (saved === undefined || current === undefined || areSettingValuesEqual(current, saved)) {
+      return [];
+    }
+    return [{ ...write, settledOver: current, settledValue: saved }];
   });
 }
 
@@ -109,7 +143,7 @@ export function applyPendingScopedWrites<T extends ScopedSettingsEnvironment>(
       (current, write) =>
         write.environmentId === environment.environmentId &&
         pendingWriteApplies(write, config.settings)
-          ? applyServerSettingsPatch(current, write.patch)
+          ? (write.settledValue ?? applyServerSettingsPatch(current, write.patch))
           : current,
       config.settings,
     );
@@ -168,13 +202,30 @@ export function resolveScopedSettingsTargets(
         projectFile === undefined
           ? resolveProjectSettings(environment.serverConfig.settings, member.id)
           : resolveProjectSettings(environment.serverConfig.settings, member.id, null, projectFile);
+      const inherited =
+        projectFile === undefined
+          ? resolveProjectSettings(environment.serverConfig.settings, null)
+          : resolveProjectSettings(environment.serverConfig.settings, null, null, projectFile);
+      let sources = resolved.sources;
+      for (const key of PROJECT_SCOPED_SERVER_SETTING_KEYS) {
+        if (
+          sources[key] === "project" &&
+          areSettingValuesEqual(resolved.settings[key], inherited.settings[key])
+        ) {
+          if (sources === resolved.sources) {
+            sources = { ...resolved.sources };
+          }
+          (sources as Record<ProjectScopedServerSettingKey, ProjectSettingSource>)[key] =
+            inherited.sources[key];
+        }
+      }
       return [
         {
           environmentId: member.environmentId,
           label: environment.label,
           projectId: member.id,
           settings: resolved.settings,
-          sources: resolved.sources,
+          sources,
         },
       ];
     });
@@ -202,7 +253,7 @@ export function scopedSettingsAreMixed(
   return (
     first !== undefined &&
     targets.some((candidate) =>
-      keys.some((key) => !Equal.equals(first.settings[key], candidate.settings[key])),
+      keys.some((key) => !areSettingValuesEqual(first.settings[key], candidate.settings[key])),
     )
   );
 }
@@ -456,10 +507,16 @@ export function listProjectOverrides(
   const scoped = keys.filter(isProjectScopedSettingKey);
   if (scoped.length === 0) return [];
   return environments.flatMap((environment) => {
-    const overrides = environment.serverConfig?.settings.projectSettingsOverrides;
-    if (!overrides) return [];
+    const settings = environment.serverConfig?.settings;
+    const overrides = settings?.projectSettingsOverrides;
+    if (!settings || !overrides) return [];
     return Object.entries(overrides).flatMap(([projectId, entry]) =>
-      scoped.some((key) => Object.hasOwn(entry, key))
+      scoped.some(
+        (key) =>
+          Object.hasOwn(entry, key) &&
+          entry[key] !== undefined &&
+          !areSettingValuesEqual(entry[key], settings[key]),
+      )
         ? [{ environmentId: environment.environmentId, projectId: projectId as ProjectId }]
         : [],
     );
@@ -501,7 +558,7 @@ export function planProjectOverridesClear(
 }
 
 function writeWasDropped(value: unknown, before: unknown, saved: unknown): boolean {
-  if (value === null) return before != null && Equal.equals(saved, before);
+  if (value === null) return before != null && areSettingValuesEqual(saved, before);
   if (isPlainObject(value) && !Array.isArray(before) && !Array.isArray(saved)) {
     const field = (source: unknown, key: string) =>
       isPlainObject(source) ? source[key] : undefined;
@@ -512,22 +569,43 @@ function writeWasDropped(value: unknown, before: unknown, saved: unknown): boole
   const unchanged =
     typeof value === "string" && typeof before === "string"
       ? value.trim() === before
-      : Equal.equals(value, before);
-  return !unchanged && Equal.equals(saved, before);
+      : areSettingValuesEqual(value, before);
+  return !unchanged && areSettingValuesEqual(saved, before);
+}
+
+function projectOverrideClearWasDropped(
+  patchOverrides: unknown,
+  beforeOverrides: unknown,
+  savedOverrides: unknown,
+): boolean {
+  if (!isPlainObject(patchOverrides) || !isPlainObject(beforeOverrides)) return false;
+  for (const [projectId, nextEntry] of Object.entries(patchOverrides)) {
+    if (!isPlainObject(nextEntry)) continue;
+    const beforeEntry = beforeOverrides[projectId];
+    if (!isPlainObject(beforeEntry)) continue;
+    const savedEntry = isPlainObject(savedOverrides) ? savedOverrides[projectId] : undefined;
+    if (!isPlainObject(savedEntry)) continue;
+    for (const [key, beforeValue] of Object.entries(beforeEntry)) {
+      if (key === "providerInstances" || beforeValue === undefined) continue;
+      if (!Object.hasOwn(nextEntry, key) && savedEntry[key] !== undefined) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Older servers silently drop unknown keys; report them so rows cannot stay mixed forever. */
 function droppedSettingKeys(write: ScopedServerWrite, saved: ServerSettings | undefined) {
   if (saved === undefined) return [];
-  return Object.entries(write.patch).flatMap(([key, value]) =>
-    writeWasDropped(
-      value,
-      write.previous[key as keyof ServerSettings],
-      saved[key as keyof ServerSettings],
-    )
+  return Object.entries(write.patch).flatMap(([key, value]) => {
+    const before = write.previous[key as keyof ServerSettings];
+    const next = saved[key as keyof ServerSettings];
+    return writeWasDropped(value, before, next) ||
+      (key === "projectSettingsOverrides" && projectOverrideClearWasDropped(value, before, next))
       ? [key]
-      : [],
-  );
+      : [];
+  });
 }
 
 type ScopedSettingsPlan = ReturnType<typeof planScopedSettingsPatch>;

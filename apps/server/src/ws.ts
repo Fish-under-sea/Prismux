@@ -1701,7 +1701,7 @@ export const layerWsRpc = (
             if (importedThread !== null) {
               return yield* new AcpRegistryOperationError({
                 reason: "session_delete_failed",
-                message: "Delete the imported T3 thread before deleting its native ACP session.",
+                message: "Delete the imported Prismux thread before deleting its native ACP session.",
               });
             }
             yield* manager.deleteSession({

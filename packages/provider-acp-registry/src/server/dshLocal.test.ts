@@ -412,10 +412,12 @@ rl.on("line", (line) => {
             name: "Reasoning effort",
             category: "thought_level",
             type: "select",
-            currentValue: "high",
+            currentValue: "",
             options: [
-              { value: "off", name: "Off" },
+              { value: "", name: "Provider default" },
+              { value: "low", name: "Low" },
               { value: "high", name: "High" },
+              { value: "max", name: "Max" },
             ],
           },
         ],
@@ -443,21 +445,55 @@ rl.on("line", (line) => {
           toolsDir: NodePath.join(tempDir, "tools"),
         });
 
+        const fakeDshHome = NodePath.join(tempDir, "fake-dsh-home");
+        const fakeSkillDir = NodePath.join(fakeDshHome, "skills", "custom-audit");
+        NodeFS.mkdirSync(fakeSkillDir, { recursive: true });
+        NodeFS.writeFileSync(
+          NodePath.join(fakeSkillDir, "SKILL.md"),
+          "---\nname: custom-audit\ndescription: Audit local DSH repository\n---\n# Audit\n",
+          "utf8",
+        );
+
         const probed = yield* probeAcpRegistryConfiguration({
           instanceId: ProviderInstanceId.make("dsh"),
           settings,
           cwd: tempDir,
-          environment: process.env,
+          environment: {
+            ...process.env,
+            DSH_HOME: fakeDshHome,
+            AGENTS_HOME: NodePath.join(tempDir, "empty-agents-home"),
+          },
         }).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
 
         expect(probed.probe.ready).toBe(true);
+        expect(probed.slashCommands.map((cmd) => cmd.name)).toEqual([
+          "plan",
+          "goal",
+          "permission",
+          "feedback",
+        ]);
+        expect(probed.skills).toEqual([
+          expect.objectContaining({
+            name: "custom-audit",
+            description: "Audit local DSH repository",
+            scope: "user",
+            enabled: true,
+          }),
+        ]);
         expect(probed.probe.models.map((m) => m.name)).toEqual([
           "deepseek-v4-flash",
           "deepseek-v4-pro",
         ]);
-        expect(
-          probed.probe.configOptions.some((opt) => opt.type === "select" && opt.role === "reasoning"),
-        ).toBe(true);
+        const reasoningOpt = probed.probe.configOptions.find(
+          (opt) => opt.type === "select" && opt.role === "reasoning",
+        );
+        expect(reasoningOpt).toBeDefined();
+        expect(reasoningOpt?.type === "select" ? reasoningOpt.options.map((o) => o.id) : []).toEqual([
+          "low",
+          "high",
+          "max",
+        ]);
+        expect(reasoningOpt?.type === "select" ? reasoningOpt.currentValue : undefined).toBe("high");
 
         const observedArgv = JSON.parse(yield* fs.readFileString(argvLogPath)) as string[];
         expect(observedArgv).toContain("--patch");
@@ -546,15 +582,37 @@ rl.on("line", (line) => {
             modelCount: probed.probe.models.length,
             currentModelId: probed.probe.currentModelId,
             models: probed.probe.models.map((model) => ({ id: model.id, name: model.name })),
+            slashCommandCount: probed.slashCommands.length,
+            slashCommands: probed.slashCommands.map((command) => command.name),
+            skillCount: probed.skills.length,
+            skills: probed.skills.map((skill) => ({ name: skill.name, scope: skill.scope })),
             sessionManagement: probed.probe.sessionManagement,
           })}`,
         );
         expect(probed.probe.ready).toBe(true);
         expect(probed.probe.models.length).toBeGreaterThan(0);
         expect(probed.probe.currentModelId).toBeTruthy();
-        expect(
-          probed.probe.configOptions.some((opt) => opt.type === "select" && opt.role === "reasoning"),
-        ).toBe(true);
+        expect(probed.slashCommands.length).toBeGreaterThan(0);
+        expect(probed.slashCommands.map((command) => command.name)).toEqual(
+          expect.arrayContaining(["plan", "goal", "permission", "feedback"]),
+        );
+        expect(probed.skills.length).toBeGreaterThan(0);
+        expect(probed.skills.every((skill) => skill.enabled && skill.path.length > 0)).toBe(true);
+        const liveReasoningOpt = probed.probe.configOptions.find(
+          (opt) => opt.type === "select" && opt.role === "reasoning",
+        );
+        expect(liveReasoningOpt).toBeDefined();
+        if (liveReasoningOpt?.type === "select") {
+          expect(liveReasoningOpt.options.length).toBeGreaterThan(0);
+          expect(
+            liveReasoningOpt.options.some(
+              (o) =>
+                o.id === "_t3/empty" ||
+                o.id.toLowerCase().includes("provider_default") ||
+                o.label.toLowerCase().includes("provider default"),
+            ),
+          ).toBe(false);
+        }
         expect(probed.probe.sessionManagement.canList).toBe(true);
         expect(probed.probe.sessionManagement.canResume).toBe(true);
       }).pipe(

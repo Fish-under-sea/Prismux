@@ -199,6 +199,7 @@ export function ProviderAuthenticationSection({
 
   return (
     <SettingsRow
+      className="px-4 py-3 [&>div:first-child]:gap-2.5 [&>div:first-child]:@min-[22rem]/settings-row:grid [&>div:first-child]:@min-[22rem]/settings-row:grid-cols-[minmax(0,1fr)_auto] [&>div:first-child]:@min-[22rem]/settings-row:items-center [&>div:first-child]:@min-[22rem]/settings-row:gap-4"
       title={gt("Account")}
       description={
         signedIn && !active && provider.auth.email?.trim() ? (

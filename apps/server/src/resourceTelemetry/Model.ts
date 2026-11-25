@@ -1,3 +1,5 @@
+import * as NodeOS from "node:os";
+
 import type {
   DesktopElectronProcessMetric,
   DesktopHostTelemetrySnapshot,
@@ -53,6 +55,8 @@ export interface MergeProcessesInput {
   readonly counters: TelemetryCounters;
   readonly updatePrevious: boolean;
   readonly accumulateCounters?: boolean;
+  /** Logical CPU count used to normalize cumulative CPU deltas to total-system `[0, 100]%`. */
+  readonly logicalCpuCount?: number;
 }
 
 export interface MergeProcessesResult {
@@ -137,13 +141,18 @@ function syntheticNativeSample(
   metric: DesktopElectronProcessMetric,
   sampledAtMs: number,
   previous: ProcessState | undefined,
+  logicalCpuCount: number,
 ): ResourceMonitorProcessSample {
+  const normalizedCpuPercent = Math.min(100, finiteNonNegative(metric.cpuPercent));
   const cpuTimeMs =
     metric.cumulativeCpuSeconds !== undefined
       ? Math.max(0, Math.round(metric.cumulativeCpuSeconds * 1_000))
       : previous
         ? previous.process.cpuTimeMs +
-          Math.max(0, ((sampledAtMs - previous.sampledAtMs) * metric.cpuPercent) / 100)
+          Math.max(
+            0,
+            Math.round(((sampledAtMs - previous.sampledAtMs) * normalizedCpuPercent * logicalCpuCount) / 100),
+          )
         : 0;
   return {
     pid: metric.pid,
@@ -153,7 +162,7 @@ function syntheticNativeSample(
     name: metric.name ?? metric.serviceName ?? metric.type,
     command: metric.name ?? metric.serviceName ?? metric.type,
     status: "Running",
-    cpuPercent: metric.cpuPercent,
+    cpuPercent: normalizedCpuPercent,
     cpuTimeMs,
     residentBytes: metric.workingSetBytes,
     virtualBytes: 0,
@@ -356,7 +365,10 @@ function aggregate(
 ): ResourceTelemetryAggregate {
   return {
     processCount: processes.length,
-    currentCpuPercent: processes.reduce((total, process) => total + process.cpuPercent, 0),
+    currentCpuPercent: Math.min(
+      100,
+      processes.reduce((total, process) => total + process.cpuPercent, 0),
+    ),
     cpuTimeMs: counters.cpuTimeMs,
     currentRssBytes: processes.reduce((total, process) => total + process.residentBytes, 0),
     peakRssBytes: processes.reduce((total, process) => total + process.peakResidentBytes, 0),
@@ -376,6 +388,9 @@ function aggregate(
 }
 
 export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult {
+  const rawCpuCount = input.logicalCpuCount ?? NodeOS.cpus().length;
+  const logicalCpuCount =
+    Number.isFinite(rawCpuCount) && rawCpuCount >= 1 ? Math.floor(rawCpuCount) : 1;
   const nativeProcesses = Option.match(input.nativeSnapshot, {
     onNone: () => [] as ReadonlyArray<ResourceMonitorProcessSample>,
     onSome: (snapshot) => snapshot.processes,
@@ -416,6 +431,7 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
           metric,
           Option.getOrElse(desktopSampledAtMs, () => sampledAtMs),
           input.previous.get(processIdentityKey(metric.pid, metric.creationTimeMs)),
+          logicalCpuCount,
         ),
       );
       metricsByPid.set(metric.pid, metric);
@@ -518,8 +534,8 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
     const cpuPercent = preservePreviousRates
       ? previous.process.cpuPercent
       : previous && elapsedMs > 0 && elapsedMs <= MAX_DELTA_INTERVAL_MS
-        ? (cpuTimeDelta / elapsedMs) * 100
-        : finiteNonNegative(process.cpuPercent);
+        ? Math.min(100, (cpuTimeDelta / (elapsedMs * logicalCpuCount)) * 100)
+        : Math.min(100, finiteNonNegative(process.cpuPercent));
     const normalizedProcess: ResourceTelemetryProcess = {
       identity: {
         pid: process.pid,
@@ -539,9 +555,11 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
       cpuPercent: finiteNonNegative(cpuPercent),
       cpuTimeMs: process.cpuTimeMs,
       residentBytes: process.residentBytes,
+      // When native telemetry supplies Private Working Set, do not inflate peak with Electron's
+      // shared-page peakWorkingSetBytes.
       peakResidentBytes: Math.max(
         process.residentBytes,
-        electronMetric?.peakWorkingSetBytes ?? 0,
+        nativeProcessPids.has(process.pid) ? 0 : (electronMetric?.peakWorkingSetBytes ?? 0),
         previous?.process.peakResidentBytes ?? 0,
       ),
       virtualBytes: process.virtualBytes,

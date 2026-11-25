@@ -1240,7 +1240,11 @@ html[data-pmx-reduced-transparency='1'] .pmx-plugin-overlay-surface {
  * Syncs with Prismux Light / Dark / 360° Liquid Glass without media color-scheme queries.
  * ========================================================================== */
 .pmx-re-root {
+  --pmx-progress: 0.5;
+  --pmx-thumb-inset: 14px;
   --pmx-re-progress: 50%;
+  --pmx-re-anchor: calc(var(--pmx-thumb-inset) + (100% - 2 * var(--pmx-thumb-inset)) * var(--pmx-progress));
+  --pmx-re-fill: var(--pmx-re-anchor);
   --pmx-re-accent: var(--pmx-re-accent-light, #2855c9);
   display: flex;
   flex-direction: column;
@@ -1249,6 +1253,15 @@ html[data-pmx-reduced-transparency='1'] .pmx-plugin-overlay-surface {
   min-width: 0;
   user-select: none;
   box-sizing: border-box;
+}
+.pmx-re-root.is-compact {
+  --pmx-thumb-inset: 12px;
+}
+.pmx-re-root.is-runner {
+  --pmx-thumb-inset: 18px;
+}
+.pmx-re-root.is-runner.is-compact {
+  --pmx-thumb-inset: 16px;
 }
 html.dark .pmx-re-root,
 html[data-pmx-theme='dark'] .pmx-re-root {
@@ -1321,12 +1334,13 @@ html[data-pmx-theme='dark'] .pmx-re-root {
   position: absolute;
   z-index: 0;
   inset: 0 auto 0 0;
-  width: var(--pmx-re-progress);
+  width: var(--pmx-re-fill);
   border-radius: inherit;
   background: linear-gradient(90deg, #1a4d7c 0%, #2f7fbf 34%, #63acf0 68%, #a8d0fb 100%);
   transition: width 190ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .pmx-re-slider[data-top] .pmx-re-track::before {
+  width: 100%;
   background: linear-gradient(90deg, #163f66 0%, #2a6da8 30%, #4f9fe0 62%, #7ab8ef 100%);
 }
 .pmx-re-root.is-dragging .pmx-re-track::before {
@@ -1366,7 +1380,7 @@ html[data-pmx-theme='dark'] .pmx-re-root {
   position: absolute;
   z-index: 3;
   top: 50%;
-  left: var(--pmx-re-progress);
+  left: var(--pmx-re-anchor);
   width: 72px;
   height: 44px;
   border-radius: 50%;
@@ -1417,7 +1431,7 @@ html[data-pmx-theme='dark'] .pmx-re-root {
   position: absolute;
   z-index: 4;
   top: 50%;
-  left: var(--pmx-re-progress);
+  left: calc(var(--pmx-thumb-inset) + (100% - 2 * var(--pmx-thumb-inset)) * var(--pmx-progress));
   width: 24px;
   height: 24px;
   border: 1px solid rgba(255, 255, 255, 0.92);
@@ -1434,7 +1448,7 @@ html[data-pmx-theme='dark'] .pmx-re-root {
 
 /* Chibi running sprite knob */
 .pmx-re-root.is-runner .pmx-re-knob {
-  left: var(--pmx-re-progress);
+  left: calc(var(--pmx-thumb-inset) + (100% - 2 * var(--pmx-thumb-inset)) * var(--pmx-progress));
   width: 36px;
   height: 49px;
   border: 0;
@@ -1452,7 +1466,7 @@ html[data-pmx-theme='dark'] .pmx-re-root {
   transform-origin: 50% 68%;
 }
 .pmx-re-root.is-runner.is-compact .pmx-re-knob {
-  left: var(--pmx-re-progress);
+  left: calc(var(--pmx-thumb-inset) + (100% - 2 * var(--pmx-thumb-inset)) * var(--pmx-progress));
   width: 32px;
   height: 44px;
 }
@@ -1686,9 +1700,8 @@ html[data-pmx-glass='1'] .pmx-re-track {
 }
 
 /* Discrete Clickable Stop Pills (WCAG >= 4.5:1)
- * Equal-width N-column grid with gap: 0 and symmetric margin-inline guarantees that
- * the i-th label pill center sits at EXACTLY ((i + 0.5) / N) * 100% (0.00px delta with
- * the running chibi center and radiation flare focus). */
+ * Equal-width N-column grid with symmetric inline margins keeps all stop pills evenly
+ * distributed and crisp with zero truncation across 2..7 discrete effort levels. */
 .pmx-re-stops {
   display: grid;
   grid-template-columns: repeat(var(--pmx-re-count, 4), minmax(0, 1fr));
@@ -1718,6 +1731,7 @@ html[data-pmx-glass='1'] .pmx-re-track {
 }
 .pmx-re-root.is-compact .pmx-re-stop {
   margin-inline: 1px;
+  padding: 3px 2px;
 }
 .pmx-re-stop:hover:not(:disabled) {
   color: var(--foreground, #0f172a);

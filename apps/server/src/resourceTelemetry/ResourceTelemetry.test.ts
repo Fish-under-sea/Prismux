@@ -330,6 +330,21 @@ describe("ResourceTelemetry", () => {
     }),
   );
 
+  it("suppresses bogus speedLimitPercent when thermalState is unknown while preserving genuine thermal limits", () => {
+    const knownThermal = desktopSnapshot(1_000);
+    const unknownThermal: DesktopHostTelemetrySnapshot = {
+      ...knownThermal,
+      power: { ...knownThermal.power, thermalState: "unknown" },
+      speedLimitPercent: Option.some(23),
+    };
+    expect(
+      Option.isNone(ResourceTelemetry.resolveEffectiveSpeedLimitPercent(unknownThermal)),
+    ).toBe(true);
+    expect(
+      Option.getOrNull(ResourceTelemetry.resolveEffectiveSpeedLimitPercent(knownThermal)),
+    ).toBe(90);
+  });
+
   it.effect("atomically subscribes while a desktop update is being rebuilt", () =>
     Effect.gen(function* () {
       const startedAt = DateTime.toEpochMillis(yield* DateTime.now);

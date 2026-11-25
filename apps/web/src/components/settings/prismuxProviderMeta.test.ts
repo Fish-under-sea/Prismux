@@ -54,6 +54,7 @@ describe("DSH local ACP preset & official Agent catalog", () => {
       args: ["acp"],
       homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
     });
+    expect("accentColor" in DSH_LOCAL_ACP_PRESET).toBe(false);
     expect(validateSafeHttpsUrl(DSH_LOCAL_ACP_PRESET.homepageUrl)).toBe(
       "https://github.com/deepseek-ai/deepseek-harness",
     );
@@ -66,8 +67,12 @@ describe("DSH local ACP preset & official Agent catalog", () => {
     expect(meta?.cliCommand).toBe("dsh");
   });
 
-  it("keeps every built-in agent homepageUrl strictly valid https and excludes removed omp preset", () => {
+  it("keeps every built-in agent homepageUrl strictly valid https, excludes removed omp/fx presets, and supports pi", () => {
     expect("omp" in PRISMUX_AGENT_CLI_CATALOG).toBe(false);
+    expect("fx" in PRISMUX_AGENT_CLI_CATALOG).toBe(false);
+    expect("pi" in PRISMUX_AGENT_CLI_CATALOG).toBe(true);
+    expect(supportsDualLaunchMode({ driver: "pi" })).toBe(true);
+    expect(resolveAgentCliMeta({ driver: "pi" })?.cliCommand).toBe("pi");
     const fallbackOmp = resolveAgentCliMeta({
       driver: "acpRegistry",
       instanceId: "omp",

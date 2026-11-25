@@ -1,24 +1,37 @@
 import { PrismuxReasoningEffortSlider } from "@prismux/appearance";
-import { ProviderDriverKind, ProviderInstanceId } from "@prismux/core-contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProviderModel,
+} from "@prismux/core-contracts";
+import { createModelCapabilities } from "@prismux/core-shared/model";
 import { GTProvider, initializeGT } from "gt-react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { Combobox } from "../ui/combobox";
 import { TooltipProvider } from "../ui/tooltip";
+import {
+  ComposerUnifiedOptionsFooter,
+  describeComposerEffort,
+} from "./ComposerModelEffort";
 import { ModelListRow } from "./ModelListRow";
 import {
   COMPOSER_PICKER_ANCHOR_CARD_SELECTORS,
+  DockedPickerContext,
   computeComposerPickerAlignOffset,
   findComposerPickerAnchorCard,
   resolveModelPickerPopupAlign,
 } from "./ProviderModelPicker";
 import {
   DEFAULT_AGENT_SCOPED_VISIBLE_MODELS,
+  filterConcreteReasoningChoices,
   formatModelSourceSubtitle,
+  isPhantomReasoningEffortChoice,
   orderModelOptionsByPreference,
   orderProviderInstanceEntries,
   partitionAgentScopedModels,
+  resolveConcreteReasoningValue,
   retainedModelWhileProviderLocked,
   shouldScopeModelPickerToActiveAgent,
 } from "./ProviderModelPicker.logic";
@@ -370,5 +383,140 @@ describe("ProviderModelPicker.logic (Orca agent-scoped picker)", () => {
     expect(
       orderModelOptionsByPreference(models, ["gpt-6-astra", "o3"]).map((m) => m.slug),
     ).toEqual(["gpt-6-astra", "o3", "gpt-5.4", "gpt-6.2-astra"]);
+  });
+
+  it("filters phantom Provider default reasoning effort sentinels on DeepSeek/ACP while preserving real levels and Claude/Codex/AGY accuracy", () => {
+    expect(isPhantomReasoningEffortChoice({ id: "_t3/empty", label: "Provider default" })).toBe(true);
+    expect(isPhantomReasoningEffortChoice({ id: "provider_default", label: "Provider default" })).toBe(true);
+    expect(isPhantomReasoningEffortChoice({ id: "default", label: "Default" })).toBe(true);
+    expect(isPhantomReasoningEffortChoice({ id: "low", label: "Low" })).toBe(false);
+    expect(isPhantomReasoningEffortChoice({ id: "off", label: "Off" })).toBe(false);
+    expect(isPhantomReasoningEffortChoice({ id: "high", label: "High" })).toBe(false);
+    expect(isPhantomReasoningEffortChoice({ id: "max", label: "Max" })).toBe(false);
+
+    const rawDshChoices = [
+      { id: "_t3/empty", label: "Provider default" },
+      { id: "low", label: "Low" },
+      { id: "high", label: "High" },
+      { id: "max", label: "Max" },
+    ];
+    const concreteDshChoices = filterConcreteReasoningChoices(rawDshChoices);
+    expect(concreteDshChoices.map((choice) => choice.id)).toEqual(["low", "high", "max"]);
+    expect(resolveConcreteReasoningValue(concreteDshChoices, "_t3/empty", true)).toBe("high");
+    expect(resolveConcreteReasoningValue(concreteDshChoices, "max", true)).toBe("max");
+
+    const dshModel: ServerProviderModel = {
+      slug: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      isCustom: false,
+      capabilities: createModelCapabilities({
+        optionDescriptors: [
+          {
+            id: "reasoning_effort",
+            label: "Reasoning effort",
+            type: "select",
+            role: "reasoning",
+            currentValue: "_t3/empty",
+            options: rawDshChoices,
+          },
+        ],
+      }),
+    };
+
+    const dshDefaultHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <TooltipProvider>
+          <DockedPickerContext.Provider value={{ modelLabel: dshModel.name }}>
+            <ComposerUnifiedOptionsFooter
+              traits={{
+                provider: ProviderDriverKind.make("acpRegistry"),
+                instanceId: ProviderInstanceId.make("dsh"),
+                models: [dshModel],
+                model: dshModel.slug,
+                modelOptions: [{ id: "reasoning_effort", value: "_t3/empty" }],
+                onModelOptionsChange: vi.fn(),
+              }}
+            />
+          </DockedPickerContext.Provider>
+        </TooltipProvider>
+      </GTProvider>,
+    );
+
+    expect(dshDefaultHtml).not.toContain("Provider def");
+    expect(dshDefaultHtml).not.toContain("Provider default");
+    expect(dshDefaultHtml).not.toContain("_t3/empty");
+    expect(dshDefaultHtml).toContain('data-pmx-re-stop="low"');
+    expect(dshDefaultHtml).toContain('data-pmx-re-stop="high"');
+    expect(dshDefaultHtml).toContain('data-pmx-re-stop="max"');
+    expect(dshDefaultHtml).toContain('data-pmx-re-value="high"');
+    expect(dshDefaultHtml).toContain("--pmx-re-count:3");
+
+    // Selecting Max hits full 100% progress & 100% full-bleed fill with zero leftover dark stub
+    const dshMaxHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <TooltipProvider>
+          <DockedPickerContext.Provider value={{ modelLabel: dshModel.name }}>
+            <ComposerUnifiedOptionsFooter
+              traits={{
+                provider: ProviderDriverKind.make("acpRegistry"),
+                instanceId: ProviderInstanceId.make("dsh"),
+                models: [dshModel],
+                model: dshModel.slug,
+                modelOptions: [{ id: "reasoning_effort", value: "max" }],
+                onModelOptionsChange: vi.fn(),
+              }}
+            />
+          </DockedPickerContext.Provider>
+        </TooltipProvider>
+      </GTProvider>,
+    );
+    expect(dshMaxHtml).toContain('data-pmx-re-value="max"');
+    expect(dshMaxHtml).toContain('data-pmx-re-top="1"');
+    expect(dshMaxHtml).toContain("--pmx-progress:1");
+    expect(dshMaxHtml).toContain("--pmx-re-fill:100%");
+
+    // Composer trigger pill resolves cleanly to High (never "Provider default" or "_t3/empty")
+    const describedDsh = describeComposerEffort(
+      {
+        provider: ProviderDriverKind.make("acpRegistry"),
+        instanceId: ProviderInstanceId.make("dsh"),
+        models: [dshModel],
+        model: dshModel.slug,
+        modelOptions: [{ id: "reasoning_effort", value: "_t3/empty" }],
+        onModelOptionsChange: vi.fn(),
+      },
+      "label",
+      "sm",
+    );
+    const describedHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>{describedDsh.suffix}</GTProvider>,
+    );
+    expect(describedHtml).toContain("High");
+    expect(describedHtml).not.toContain("Provider");
+
+    // Claude / Codex / AGY real levels remain 100% preserved
+    const claudeLevels = [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "xhigh", label: "Extra High" },
+      { id: "max", label: "Max" },
+    ];
+    expect(filterConcreteReasoningChoices(claudeLevels)).toEqual(claudeLevels);
+    const codexLevels = [
+      { id: "minimal", label: "Minimal" },
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "xhigh", label: "Extra High" },
+    ];
+    expect(filterConcreteReasoningChoices(codexLevels)).toEqual(codexLevels);
+    const agyLevels = [
+      { id: "off", label: "Off" },
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+    ];
+    expect(filterConcreteReasoningChoices(agyLevels)).toEqual(agyLevels);
   });
 });

@@ -26,6 +26,7 @@ import {
 } from 'react';
 import {
   computeReasoningEffortStopProgress,
+  getReasoningEffortThumbInsetPx,
   normalizeReasoningEffortOptions,
   resolveEffortStopIndex,
   resolveReasoningEffortStopIndexFromPointer,
@@ -159,9 +160,15 @@ export function PrismuxReasoningEffortSlider({
   const onPreviewChangeRef = useRef(onPreviewChange);
   onPreviewChangeRef.current = onPreviewChange;
 
+  const thumbInsetPx = getReasoningEffortThumbInsetPx({ showRunner, compact });
+  const thumbInsetPxRef = useRef(thumbInsetPx);
+  thumbInsetPxRef.current = thumbInsetPx;
+
   const radiationRef = useRef<ReasoningRadiationState>({
     progress: computeReasoningEffortStopProgress(committedIndex, stops.length),
     dragging: false,
+    thumbInsetPx,
+    isMax: stops.length >= 2 && committedIndex === stops.length - 1,
   });
   const redrawRef = useRef<(() => void) | null>(null);
 
@@ -177,14 +184,17 @@ export function PrismuxReasoningEffortSlider({
   const stopCount = stops.length;
   const progressRatio = computeReasoningEffortStopProgress(effectiveIndex, stopCount);
   const progressPercent = progressRatio * 100;
+  const isMin = stopCount >= 1 && effectiveIndex === 0;
   const isTop = stopCount >= 2 && effectiveIndex === stopCount - 1;
   const interactive = !disabled && stopCount >= 2;
 
   useEffect(() => {
     radiationRef.current.progress = progressRatio;
     radiationRef.current.dragging = dragging;
+    radiationRef.current.thumbInsetPx = thumbInsetPx;
+    radiationRef.current.isMax = isTop;
     redrawRef.current?.();
-  }, [dragging, progressRatio, theme.id]);
+  }, [dragging, isTop, progressRatio, theme.id, thumbInsetPx]);
 
   // Pixel-matrix radiation canvas lifecycle with strict reduced-motion & no-GPU static fallback
   useEffect(() => {
@@ -351,7 +361,12 @@ export function PrismuxReasoningEffortSlider({
     const list = stopsRef.current;
     const bounds = input.getBoundingClientRect();
     if (bounds.width <= 0 || list.length < 2) return previewIndexRef.current;
-    return resolveReasoningEffortStopIndexFromPointer(clientX, bounds, list.length);
+    return resolveReasoningEffortStopIndexFromPointer(
+      clientX,
+      bounds,
+      list.length,
+      thumbInsetPxRef.current,
+    );
   }, []);
 
   const updatePreview = useCallback((rawIndex: number) => {
@@ -480,7 +495,10 @@ export function PrismuxReasoningEffortSlider({
         : `推理强度 (${theme.displayName})`);
 
   const rootStyle = {
+    '--pmx-progress': String(progressRatio),
+    '--pmx-thumb-inset': `${thumbInsetPx}px`,
     '--pmx-re-progress': `${progressPercent}%`,
+    '--pmx-re-fill': isTop ? '100%' : 'var(--pmx-re-anchor)',
     '--pmx-re-count': String(Math.max(1, stopCount)),
     '--pmx-re-sprite': `url("${theme.spriteUrl}")`,
     '--pmx-re-accent-light': theme.accentLight,
@@ -504,6 +522,7 @@ export function PrismuxReasoningEffortSlider({
       data-pmx-reasoning-slider="1"
       data-pmx-re-theme={theme.id}
       data-pmx-re-value={activeStop?.value ?? ''}
+      data-pmx-re-min={isMin ? '1' : undefined}
       data-pmx-re-top={isTop ? '1' : undefined}
       data-pmx-re-runner={showRunner ? '1' : '0'}
       data-pmx-re-compact={compact ? '1' : undefined}

@@ -361,7 +361,7 @@ export type ToolCallVisibility = typeof ToolCallVisibility.Type;
 
 export const WorkStepsDisplay = Schema.Literals(["concise", "standard", "detailed", "expanded"]);
 export type WorkStepsDisplay = typeof WorkStepsDisplay.Type;
-export const DEFAULT_WORK_STEPS_DISPLAY: WorkStepsDisplay = "standard";
+export const DEFAULT_WORK_STEPS_DISPLAY: WorkStepsDisplay = "detailed";
 
 export const WorkStepsCollapseTiming = Schema.Literals(["after-turn", "next-message"]);
 export type WorkStepsCollapseTiming = typeof WorkStepsCollapseTiming.Type;
@@ -547,7 +547,7 @@ export const ClientSettingsSchema = Schema.Struct({
   sideThreadOpenTarget: SideThreadOpenTarget.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDE_THREAD_OPEN_TARGET)),
   ),
-  proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   boringSidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   boringSidebarMultilineRows: Schema.Boolean.pipe(
@@ -1651,7 +1651,7 @@ export const providerInstanceConfigEnabledFlag = (config: unknown): boolean | un
 
 // Must match each driver's enabled decoding default.
 const DEFAULT_DISABLED_PROVIDER_DRIVERS: ReadonlySet<ProviderDriverKind> = new Set(
-  ["cursor", "grok", "fx", "kiro", "muse", "pi", "opencode", "antigravity"].map((driver) =>
+  ["cursor", "grok", "kiro", "muse", "pi", "opencode", "antigravity"].map((driver) =>
     ProviderDriverKind.make(driver),
   ),
 );

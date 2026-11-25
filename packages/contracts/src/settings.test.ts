@@ -573,7 +573,8 @@ describe("Prismux privacy-safe default server settings", () => {
     expect(client.language).toBe("system");
     expect(client.environmentIdentificationMode).toBe("artwork");
     expect(client.diffFilesCollapsed).toBe(true);
-    expect(client.workStepsDisplay).toBe("standard");
+    expect(client.proactivePanelsEnabled).toBe(true);
+    expect(client.workStepsDisplay).toBe("detailed");
     expect(client.workStepsCollapseTiming).toBe("after-turn");
     expect(client.collapsedAssistantReplyMode).toBe("all");
 

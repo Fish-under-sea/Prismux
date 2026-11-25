@@ -450,6 +450,10 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   const m = useMessages();
   const isBundledSkillCommand =
     props.item.type === "provider-slash-command" && props.item.skillCategory !== undefined;
+  const slashInputHint =
+    props.item.type === "provider-slash-command" && !isBundledSkillCommand
+      ? props.item.command.input?.hint?.trim() || null
+      : null;
   const slashPresentation =
     props.item.type === "slash-command"
       ? resolveSlashCommandPresentation(
@@ -561,6 +565,14 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
               <span className="truncate font-mono text-2xs text-secondary-label/85">
                 {slashPresentation.nativeName}
               </span>
+              {slashInputHint ? (
+                <span
+                  data-slash-input-hint="1"
+                  className="truncate font-mono text-2xs text-secondary-label/65"
+                >
+                  {slashInputHint}
+                </span>
+              ) : null}
               {slashPresentation.description ? (
                 <span aria-hidden="true" className="-ms-1 shrink-0 text-secondary-label text-xs">
                   ：
@@ -568,12 +580,20 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
               ) : null}
             </span>
           ) : (
-            <span className="inline-flex max-w-[45%] shrink-0 items-baseline truncate">
+            <span className="inline-flex max-w-[45%] shrink-0 items-baseline gap-1.5 truncate">
               <span className="truncate font-mono text-xs font-medium text-foreground">
                 {slashPresentation.nativeName}
               </span>
+              {slashInputHint ? (
+                <span
+                  data-slash-input-hint="1"
+                  className="truncate font-mono text-2xs text-secondary-label/65"
+                >
+                  {slashInputHint}
+                </span>
+              ) : null}
               {slashPresentation.description ? (
-                <span aria-hidden="true" className="shrink-0 text-secondary-label text-xs">
+                <span aria-hidden="true" className="-ms-1 shrink-0 text-secondary-label text-xs">
                   ：
                 </span>
               ) : null}

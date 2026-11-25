@@ -1364,8 +1364,8 @@ it.layer(
         capabilities: null,
       });
       const previousProvider = {
-        instanceId: ProviderInstanceId.make("fx"),
-        driver: ProviderDriverKind.make("fx"),
+        instanceId: ProviderInstanceId.make("opencode"),
+        driver: ProviderDriverKind.make("opencode"),
         status: "ready",
         enabled: true,
         installed: true,
@@ -1448,7 +1448,6 @@ it.layer(
       ["grok", "warning"],
       ["cursor", "error"],
       ["muse", "error"],
-      ["fx", "warning"],
     ] as const)("drops %s models a completed listing no longer returns", (driver, failedStatus) => {
       const previousProvider = {
         instanceId: ProviderInstanceId.make(driver),

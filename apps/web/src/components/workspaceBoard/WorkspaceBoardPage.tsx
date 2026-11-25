@@ -46,6 +46,7 @@ import {
   pinWorkspaceCard,
   readWorkspaceBoardState,
   resetWorkspaceLaneOverrides,
+  resolveWorkspaceBoardLaneDisplay,
   togglePinWorkspaceCard,
   unpinWorkspaceCard,
   useWorkspaceBoardCopy,
@@ -596,12 +597,13 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                 const cards = projection.lanes[lane.id];
                 const totalInLane = projection.laneTotals[lane.id];
                 const isDragTarget = dragOverLane === lane.id;
-                const createTooltip = copy.createWorkspaceTooltip(lane.label);
+                const laneDisplay = resolveWorkspaceBoardLaneDisplay(lane, copy.isZh);
+                const createTooltip = copy.createWorkspaceTooltip(laneDisplay.primary);
 
                 return (
                   <section
                     key={lane.id}
-                    aria-label={lane.label}
+                    aria-label={laneDisplay.accessibleLabel}
                     data-testid={`workspace-board-lane-${lane.id}`}
                     data-lane-id={lane.id}
                     data-pmx-work-panel-card="1"
@@ -620,16 +622,23 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                       isDragTarget && "border-primary/75 ring-1 ring-primary/40",
                     )}
                   >
-                    {/* Lane Header */}
+                    {/* Lane Header: Chinese primary + smaller muted English secondary + count pill */}
                     <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/65 py-0 pr-2 pl-3.5">
                       <div className="flex min-w-0 flex-1 items-center gap-1.5">
                         <LaneStatusIcon
                           laneId={lane.id}
                           className={cn("size-3.5 shrink-0", lane.iconToneClass)}
                         />
-                        <span className="min-w-0 truncate text-xs font-semibold text-foreground">
-                          {lane.label}
-                        </span>
+                        <div className="flex min-w-0 items-baseline gap-1.5 overflow-hidden">
+                          <span className="shrink-0 text-[13px] font-semibold text-foreground">
+                            {laneDisplay.primary}
+                          </span>
+                          {laneDisplay.secondary ? (
+                            <span className="min-w-0 truncate text-[11px] font-normal text-muted-foreground/55">
+                              {laneDisplay.secondary}
+                            </span>
+                          ) : null}
+                        </div>
                         <span className="shrink-0 rounded-full border border-border/65 bg-muted/85 px-1.5 py-0.5 text-[10px] leading-none font-semibold text-foreground/85 tabular-nums">
                           {projection.isFiltering
                             ? `${cards.length} / ${totalInLane}`

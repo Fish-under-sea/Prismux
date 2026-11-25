@@ -96,7 +96,7 @@ export const ServerProviderModel = Schema.Struct({
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
 
-/** A backend a provider's models run on, such as one of fx's. */
+/** A backend a provider's models run on. */
 export const ServerProviderSubProvider = Schema.Struct({
   name: TrimmedNonEmptyString,
   /** Why none of its models can run now, such as a signed-out backend. */

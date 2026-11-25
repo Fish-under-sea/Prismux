@@ -4,8 +4,6 @@ import { T, useGT } from "gt-react";
 import {
   ActivityIcon,
   CalendarClockIcon,
-  Columns3Icon,
-  ListTodoIcon,
   MoonStarIcon,
   SearchIcon,
 } from "lucide-react";
@@ -45,10 +43,10 @@ const DIAGNOSTICS_DOT_CLASS: Record<Exclude<DiagnosticsBadgeTone, null>, string>
 };
 
 /**
- * Orca-aligned top sidebar search bar & primary 5-item quick-navigation block
- * (`diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `overnight-factory`),
+ * Orca-aligned top sidebar search bar & lean 3-item quick-navigation block
+ * (`diagnostics` -> `automations` -> `overnight-factory`),
  * with persistent 54px icon-rail collapse, two-stage text fade choreography, and
- * bidirectional toggle-close across all 4 work panels.
+ * bidirectional toggle-close. (`tasks` & `workspace-board` live in the bottom footer toolbar.)
  */
 export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
   routeThreadRef,
@@ -79,11 +77,6 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     (typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
 
   const diagnosticsActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.diagnostics;
-  const tasksActive = isSidebarPanelPathActive(pathname, PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks);
-  const workspaceBoardActive = isSidebarPanelPathActive(
-    pathname,
-    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.workspaceBoard,
-  );
   const automationsActive = isSidebarPanelPathActive(
     pathname,
     PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.automations,
@@ -115,20 +108,6 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
       lastMainAppHref: getMainAppReturnHref(fallbackReturnHref),
     });
     void navigate({ href: decision.href });
-  };
-
-  const handleToggleTasks = () => {
-    handleToggleWorkPanel(
-      PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks,
-      PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.tasks,
-    );
-  };
-
-  const handleToggleWorkspaceBoard = () => {
-    handleToggleWorkPanel(
-      PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.workspaceBoard,
-      PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.workspaceBoard,
-    );
   };
 
   const handleToggleAutomations = () => {
@@ -188,8 +167,6 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     diagnosticsTone === "error" || diagnosticsTone === "degraded"
       ? (diagnosticsDotLabel ?? gt("Service diagnostics", { $context: "sidebar quick navigation" }))
       : gt("Service diagnostics", { $context: "sidebar quick navigation" });
-  const tasksRailTooltip = quickNavCopy.tasks;
-  const workspaceBoardRailTooltip = quickNavCopy.workspaceBoard;
   const automationsRailTooltip = quickNavCopy.scheduledTasks;
   const overnightFactoryRailTooltip = quickNavCopy.overnightFactory;
 
@@ -255,51 +232,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </TooltipPopup>
         </Tooltip>
 
-        {/* 2. Tasks */}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                data-testid="prismux-nav-tasks"
-                aria-label={tasksRailTooltip}
-                aria-current={tasksActive ? "page" : undefined}
-                aria-pressed={tasksActive}
-                onClick={handleToggleTasks}
-                className={railButtonClassName(tasksActive)}
-              />
-            }
-          >
-            <ListTodoIcon aria-hidden className={navIconClassName(tasksActive)} />
-          </TooltipTrigger>
-          <TooltipPopup side="right" sideOffset={8}>
-            {tasksRailTooltip}
-          </TooltipPopup>
-        </Tooltip>
-
-        {/* 3. Workspace board */}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                data-testid="prismux-nav-workspace-board"
-                aria-label={workspaceBoardRailTooltip}
-                aria-current={workspaceBoardActive ? "page" : undefined}
-                aria-pressed={workspaceBoardActive}
-                onClick={handleToggleWorkspaceBoard}
-                className={railButtonClassName(workspaceBoardActive)}
-              />
-            }
-          >
-            <Columns3Icon aria-hidden className={navIconClassName(workspaceBoardActive)} />
-          </TooltipTrigger>
-          <TooltipPopup side="right" sideOffset={8}>
-            {workspaceBoardRailTooltip}
-          </TooltipPopup>
-        </Tooltip>
-
-        {/* 4. Scheduled Tasks */}
+        {/* 2. Scheduled Tasks */}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -321,7 +254,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </TooltipPopup>
         </Tooltip>
 
-        {/* 5. Overnight Factory & Mail */}
+        {/* 3. Overnight Factory & Mail */}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -411,37 +344,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         ) : null}
       </button>
 
-      {/* 2. Tasks (Orca-aligned GitHub Issues / PR / Projects aggregator) */}
-      <button
-        type="button"
-        data-testid="prismux-nav-tasks"
-        aria-current={tasksActive ? "page" : undefined}
-        aria-pressed={tasksActive}
-        onClick={handleToggleTasks}
-        className={navRowClassName(tasksActive)}
-      >
-        <ListTodoIcon aria-hidden className={navIconClassName(tasksActive)} />
-        <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
-          {quickNavCopy.tasks}
-        </span>
-      </button>
-
-      {/* 3. Workspace board (Orca-aligned 4-column Todo / In progress / In review / Done board) */}
-      <button
-        type="button"
-        data-testid="prismux-nav-workspace-board"
-        aria-current={workspaceBoardActive ? "page" : undefined}
-        aria-pressed={workspaceBoardActive}
-        onClick={handleToggleWorkspaceBoard}
-        className={navRowClassName(workspaceBoardActive)}
-      >
-        <Columns3Icon aria-hidden className={navIconClassName(workspaceBoardActive)} />
-        <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
-          {quickNavCopy.workspaceBoard}
-        </span>
-      </button>
-
-      {/* 4. Scheduled Tasks (standalone main panel) */}
+      {/* 2. Scheduled Tasks (standalone main panel) */}
       <button
         type="button"
         data-testid="prismux-nav-automations"
@@ -456,7 +359,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         </span>
       </button>
 
-      {/* 5. Overnight Factory & Mail (standalone main work panel) */}
+      {/* 3. Overnight Factory & Mail (standalone main work panel) */}
       <button
         type="button"
         data-testid="prismux-nav-overnight-factory"

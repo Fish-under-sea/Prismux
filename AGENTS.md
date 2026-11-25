@@ -69,7 +69,7 @@ prismux/
 │   ├── provider-acp/                  # @prismux/provider-acp：通用 ACP 协议会话适配器
 │   ├── provider-acp-registry/         # @prismux/provider-acp-registry：ACP Registry 与原生 DeepSeek Harness（dsh）本地探测桥接
 │   ├── provider-opencode/             # @prismux/provider-opencode：OpenCode Provider 集成
-│   ├── provider-fx/                   # @prismux/provider-fx：FX Provider 集成
+│   ├── provider-pi/                   # @prismux/provider-pi：Pi Coding Agent Provider 集成
 │   ├── provider-testing/              # @prismux/provider-testing：Provider 回放测试套件
 │   ├── effect-acp/                    # @prismux/effect-acp：Effect 封装的 ACP 传输层
 │   ├── effect-codex-app-server/       # @prismux/effect-codex-app-server：Effect 封装的 Codex App Server 协议层

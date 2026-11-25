@@ -66,6 +66,7 @@ import { cn } from "../lib/utils";
 import { PrismuxIpcDispatchBridge } from "../prismux/PrismuxIpcDispatchBridge";
 import { PrismuxWallpaperBackdrop } from "../prismux/PrismuxWallpaperBridge";
 import { PrismuxStatusBar } from "../prismux/PrismuxStatusBar";
+import { ThreadUndoToast } from "../prismux/ThreadUndoToast";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -209,6 +210,7 @@ function RootRouteBranch() {
       <CustomSnoozeDialogHost />
       <GuestShareDialogHost />
       <ProjectCloneToastCoordinator />
+      <ThreadUndoToast />
       <ConnectDeviceApprovalCoordinator />
       <AddProjectToMachineDialogHost />
       <UseInAnotherAppDialogHost />

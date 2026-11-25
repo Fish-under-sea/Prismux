@@ -1690,6 +1690,15 @@ html[data-pmx-glass='1'][data-theme-id]
   backdrop-filter: none !important;
 }
 
+html[data-pmx-glass='1']
+  :is(
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *)
+  )
+  [data-overview-scroll-body='1'] {
+  scrollbar-gutter: stable;
+}
+
 /* Dark Glass polarity on overviewPanel: airy frosted glass + crisp high-contrast white ink */
 html.dark[data-pmx-glass='1']
   :is(
@@ -1704,6 +1713,16 @@ html[data-pmx-theme='dark'][data-pmx-glass='1']
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, calc(0.2 * var(--pmx-fresnel-strength, 1))),
     0 12px 32px -10px rgba(0, 0, 0, 0.36);
+}
+
+/* Floating top-right overview overlay in Dark Glass: crisp elevation & Fresnel rim over chat text */
+html.dark[data-pmx-glass='1'] [data-pmx-glass-zone='overviewPanel'][data-overview-floating='true'],
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  [data-pmx-glass-zone='overviewPanel'][data-overview-floating='true'] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.24 * var(--pmx-fresnel-strength, 1))),
+    0 18px 42px -12px rgba(0, 0, 0, 0.52),
+    0 4px 14px -4px rgba(0, 0, 0, 0.28);
 }
 
 html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
@@ -1738,6 +1757,28 @@ html[data-pmx-theme='light'][data-pmx-glass='1']
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.88),
     0 10px 28px -10px rgba(15, 23, 42, 0.16);
+}
+
+/* Floating top-right overview overlay in Light Glass: luminous Fresnel rim & soft depth over chat text */
+html:not(.dark)[data-pmx-glass='1']
+  [data-pmx-glass-zone='overviewPanel'][data-overview-floating='true'],
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  [data-pmx-glass-zone='overviewPanel'][data-overview-floating='true'] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 16px 38px -12px rgba(15, 23, 42, 0.22),
+    0 4px 12px -4px rgba(15, 23, 42, 0.1);
+}
+
+/* Non-glass wallpaper reveal mode: keep floating overview opaque enough for >= 4.5:1 readability over chat text */
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  [data-pmx-glass-zone='overviewPanel'][data-overview-floating='true'] {
+  background-color: var(--pmx-wallpaper-card-veil);
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
@@ -3702,6 +3743,7 @@ html[data-pmx-glass='1']:is(
   [data-sidebar-card='1'],
   [data-user-message-bubble][data-user-message-bubble-surface='1'],
   [data-pmx-glass-zone='userBubble'],
+  [data-pmx-glass-zone='overviewPanel'],
   [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
   [data-pmx-composer-layout='agy'],
   [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],

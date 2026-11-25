@@ -16,8 +16,8 @@ import {
   type ServerSettings,
 } from "@prismux/core-contracts";
 import { acpRegistryClient } from "@prismux/provider-acp-registry/client";
-import { fxClient } from "@prismux/provider-fx/client";
 import { openCodeClient } from "@prismux/provider-opencode/client";
+import { piClient } from "@prismux/provider-pi/client";
 import type { ProviderClientDefinition } from "@prismux/provider-core/client";
 
 interface KnownDriver {
@@ -38,8 +38,8 @@ const known = (
   ] as const;
 
 const PACKAGED_CLIENTS: ReadonlyArray<ProviderClientDefinition> = [
-  fxClient,
   openCodeClient,
+  piClient,
   acpRegistryClient,
 ];
 

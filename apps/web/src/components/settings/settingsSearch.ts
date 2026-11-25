@@ -103,21 +103,21 @@ export interface SettingsSearchAvailability {
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": msg("Service Diagnostics"),
-  "/settings/projects": msg("Projects"),
+  "/settings/projects": msg("Projects & archive"),
   "/settings/general": msg("General"),
   "/settings/appearance": msg("Appearance"),
-  "/settings/chat": msg("Chat & threads"),
+  "/settings/chat": msg("Chat", { $context: "settings navigation item" }),
   "/settings/diffs": msg("Diffs & pull requests"),
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
-  "/settings/providers": msg("Providers"),
+  "/settings/providers": msg("Agent configurator"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser & devices"),
   "/settings/devices": msg("Devices"),
   "/settings/scheduled-tasks": msg("Scheduled tasks"),
   "/settings/source-control": msg("Source control & worktrees"),
   "/settings/worktrees": msg("Worktrees"),
-  "/settings/connections": msg("Environments & remote access"),
+  "/settings/connections": msg("Environments & remote"),
   "/settings/access": msg("Sharing & access"),
   "/settings/secrets": msg("Secrets"),
   "/settings/maintenance": msg("Maintenance & diagnostics"),
@@ -126,9 +126,9 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/voice": msg("Voice"),
   "/settings/archived": msg("Archive"),
   "/settings/wallpaper": msg("Wallpaper"),
-  "/settings/plugins": msg("Plugins"),
+  "/settings/plugins": msg("Plugin center"),
   "/settings/memory": msg("Chief & memory", { $context: "settings navigation item" }),
-  "/settings/sync": msg("Sync", { $context: "settings navigation item" }),
+  "/settings/sync": msg("Remote sync", { $context: "settings navigation item" }),
   "/settings/overnight-factory": msg("Overnight Factory & Mail"),
   "/settings/memory-sync": msg("Memory & Sync"),
   "/settings/updates": msg("Prismux Updates"),
@@ -141,7 +141,7 @@ export const SETTINGS_NAV_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": msg("Source control & worktrees", {
     $context: "settings navigation item",
   }),
-  "/settings/connections": msg("Environments & remote access", {
+  "/settings/connections": msg("Environments & remote", {
     $context: "settings navigation item",
   }),
   "/settings/access": msg("Sharing & access", { $context: "settings navigation item" }),
@@ -184,20 +184,19 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     heading: msg("Agents & workspace"),
     paths: [
       "/settings/providers",
+      "/settings/memory",
       "/settings/projects",
-      "/settings/archived",
       "/settings/browser",
       "/settings/source-control",
     ],
   },
   {
     id: "extensions-data",
-    heading: msg("Extensions, memory & connections"),
+    heading: msg("Extensions & connections"),
     paths: [
-      "/settings/connections",
-      "/settings/memory",
-      "/settings/sync",
       "/settings/plugins",
+      "/settings/sync",
+      "/settings/connections",
       "/settings/secrets",
     ],
   },
@@ -367,14 +366,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "default-model",
     title: msg("Default model"),
-    to: "/settings/chat",
+    to: "/settings/providers",
     scope: "project-defaults",
     searchTerms: [msg("new thread project provider reasoning effort")],
   },
   {
     id: "fallback-model",
     title: msg("Fallback model"),
-    to: "/settings/chat",
+    to: "/settings/providers",
     scope: "environment-defaults",
     searchTerms: [msg("fallback agent provider out of usage new threads")],
     environmentOnly: true,
@@ -831,11 +830,17 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "default-launch-mode",
+    title: msg("Default launch mode"),
+    to: "/settings/providers",
+    searchTerms: [msg("chat cli terminal session default launch mode provider agent configurator")],
+  },
+  {
     id: "provider-update-checks",
     title: msg("Provider update checks"),
     to: "/settings/providers",
     searchTerms: [
-      msg("installed cli versions newer available codex claude cursor grok fx kiro opencode"),
+      msg("installed cli versions newer available codex claude cursor grok kiro opencode antigravity pi dsh"),
     ],
     scope: "environment-defaults",
   },
@@ -880,7 +885,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Submodules"),
     to: "/settings/source-control",
     scope: "project-defaults",
-    searchTerms: [msg("git submodule init recursive top-level none worktree t3.json")],
+    searchTerms: [msg("git submodule init recursive top-level none worktree prismux.json t3.json")],
   },
   {
     id: "start-from-origin",
@@ -937,14 +942,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "text-generation-model",
     title: msg("Text generation model"),
-    to: "/settings/chat",
+    to: "/settings/providers",
     scope: "project-defaults",
     searchTerms: [msg("generated thread titles source control content default provider")],
   },
   {
     id: "thread-title-instructions",
     title: msg("Thread title instructions"),
-    to: "/settings/chat",
+    to: "/settings/providers",
     scope: "project-defaults",
     searchTerms: [msg("generated thread titles prompt custom style naming rename regenerate")],
   },
@@ -1054,11 +1059,11 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "providers",
-    title: msg("Providers"),
+    title: msg("Agent configurator"),
     to: "/settings/providers",
     searchTerms: [
       msg(
-        "agents cli codex claude cursor grok fx kiro opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
+        "providers agents cli codex claude cursor grok kiro opencode antigravity pi dsh deepseek google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
       ),
     ],
   },
@@ -1333,7 +1338,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "project-actions",
     title: msg("Actions"),
     to: "/settings/projects",
-    searchTerms: [msg("commands scripts setup run dev server checkout worktree t3.json import")],
+    searchTerms: [msg("commands scripts setup run dev server checkout worktree prismux.json t3.json import")],
   },
   {
     id: "project-repositories",
@@ -1462,7 +1467,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "archive",
     title: msg("Archived threads"),
-    to: "/settings/archived",
+    to: "/settings/projects",
+    scope: "project-defaults",
     searchTerms: [msg("restore reopen deleted history projects")],
   },
   {
@@ -1505,7 +1511,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "prismux-sync",
-    title: msg("Sync", { $context: "settings navigation item" }),
+    title: msg("Remote sync", { $context: "settings navigation item" }),
     to: "/settings/sync",
     targetId: "prismux-e2ee-sync",
     searchTerms: [
@@ -1588,16 +1594,23 @@ const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/settings/source-control",
   "/settings/connections",
   "/settings/about",
+  "/settings/archived",
   ...Object.keys(RENAMED_SETTINGS_PATHS),
 ]);
 // Section anchors that moved but are not search results themselves.
 const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
   "antigravity-controlled-lock": "/settings/providers",
+  archive: "/settings/projects",
+  archived: "/settings/projects",
+  "archived-threads": "/settings/projects",
   "authorized-clients": "/settings/connections",
   "mobile-app": "/settings/connections",
   "remote-access": "/settings/connections",
   "reopen-onboarding": "/settings/about",
-  "text-generation": "/settings/chat",
+  "text-generation": "/settings/providers",
+  "provider-updates": "/settings/providers",
+  "provider-defaults": "/settings/providers",
+  "default-chat-models": "/settings/providers",
   threads: "/settings/chat",
   worktrees: "/settings/source-control",
   diffs: "/settings/source-control",

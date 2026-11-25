@@ -19,9 +19,14 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_OVERVIEW_DISPLAY_PREFS,
   DEFAULT_OVERVIEW_SECTION_LIMIT,
+  OVERVIEW_COMPOSER_MIN_BREATHING_GAP_PX,
+  OVERVIEW_DEFAULT_COMPOSER_HEIGHT_PX,
+  OVERVIEW_FLOATING_RIGHT_GAP_PX,
+  OVERVIEW_FLOATING_TOP_GAP_PX,
   buildSideQuestionContextSummary,
   buildSideQuestionPrompt,
   computeDynamicOverviewSectionLimit,
+  computeFloatingOverviewClearance,
   createSideQuestionRecord,
   deriveSideQuestionTitle,
   extractOverviewArtifacts,
@@ -37,6 +42,7 @@ import {
   loadPersistedSideQuestions,
   removeSideQuestionRecord,
   resolveFileTypeBadge,
+  resolveFloatingOverviewComposerHeight,
   resolveOverviewDiffStats,
   saveOverviewDisplayPrefs,
   savePersistedSideQuestions,
@@ -800,5 +806,67 @@ describe("sessionOverview.logic", () => {
 
     storage.setItem("prismux.overview.displayPrefs.v1", "not-json");
     expect(loadOverviewDisplayPrefs(storage)).toEqual(DEFAULT_OVERVIEW_DISPLAY_PREFS);
+  });
+
+  it("computes floating overview composer clearance with >=16px bottom breathing gap and draft-hero guard", () => {
+    // Active chat uses larger of composer overlay and inner stack height
+    expect(
+      resolveFloatingOverviewComposerHeight({
+        isDraftHeroState: false,
+        composerStackHeightPx: 140.2,
+        composerOverlayHeightPx: 148.1,
+      }),
+    ).toBe(149);
+
+    // Multi-line text & attachments grow live clearance; clearing input shrinks it back down
+    expect(
+      resolveFloatingOverviewComposerHeight({
+        isDraftHeroState: false,
+        composerStackHeightPx: 312.4,
+        composerOverlayHeightPx: 320.2,
+      }),
+    ).toBe(321);
+
+    // Draft hero mode ignores full-pane inset-0 overlay (820px) and tracks only the bottom composer stack
+    expect(
+      resolveFloatingOverviewComposerHeight({
+        isDraftHeroState: true,
+        composerStackHeightPx: 176.3,
+        composerOverlayHeightPx: 820,
+      }),
+    ).toBe(177);
+
+    // Default unmeasured clearance uses 12px top, 12px right, 16px bottom breathing gap (28px reserve)
+    const fallback = computeFloatingOverviewClearance({});
+    expect(fallback).toEqual({
+      topPx: OVERVIEW_FLOATING_TOP_GAP_PX,
+      rightPx: OVERVIEW_FLOATING_RIGHT_GAP_PX,
+      bottomGapPx: OVERVIEW_COMPOSER_MIN_BREATHING_GAP_PX,
+      verticalReservePx: 28,
+      composerHeightPx: null,
+      maxHeightCss: `calc(100% - var(--pmx-composer-height, ${OVERVIEW_DEFAULT_COMPOSER_HEIGHT_PX}px) - 28px)`,
+      availableHeightPx: 0,
+    });
+
+    // Live tall composer (260px) inside 760px canvas keeps exact 16px safety gap above composer
+    const tall = computeFloatingOverviewClearance({
+      composerHeightPx: 260,
+      containerHeightPx: 760,
+    });
+    expect(tall.availableHeightPx).toBe(472);
+    // Top offset + card max height leaves >= 16px clear above composer top edge (760 - 260 = 500)
+    expect(tall.topPx + tall.availableHeightPx).toBe(484);
+    expect(760 - 260 - (tall.topPx + tall.availableHeightPx)).toBe(16);
+
+    // Active Find bar top inset adds cleanly to top offset and vertical reserve
+    const withFindBar = computeFloatingOverviewClearance({
+      composerHeightPx: 180,
+      topInsetPx: 44,
+      containerHeightPx: 760,
+    });
+    expect(withFindBar.topPx).toBe(56);
+    expect(withFindBar.verticalReservePx).toBe(72);
+    expect(withFindBar.maxHeightCss).toBe("calc(100% - var(--pmx-composer-height, 148px) - 72px)");
+    expect(760 - 180 - (withFindBar.topPx + withFindBar.availableHeightPx)).toBe(16);
   });
 });

@@ -129,7 +129,15 @@ describe("Orca-aligned Tasks view pure logic", () => {
     const enCopy = getTasksViewCopy("en");
     expect(zhCopy.pageTitle).toBe("任务面板");
     expect(zhCopy.closeLabel).toBe("关闭任务面板");
+    expect(zhCopy.tabIssues).toBe("Issue");
+    expect(zhCopy.tabPrs).toBe("PR");
+    expect(zhCopy.searchIssuesPlaceholder).toContain("Issue");
+    expect(zhCopy.searchIssuesPlaceholder).not.toContain("议题");
+    expect(zhCopy.projectsOpenIssues).toBe("查看 Issue");
+    expect(zhCopy.noProjectsConfiguredDescription).not.toContain("议题");
     expect(enCopy.pageTitle).toBe("Tasks");
+    expect(enCopy.tabIssues).toBe("Issue");
+    expect(enCopy.tabPrs).toBe("PR");
     expect(
       resolveTasksEmptyState({
         selectedProjectCount: 0,

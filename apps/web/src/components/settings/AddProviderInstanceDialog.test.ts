@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  filterSelectableProviderDrivers,
   getProviderIdentityDraft,
   resolveAcpRegistryWizardNavigation,
   resolveWizardNavigation,
@@ -69,5 +70,24 @@ describe("ACP Registry wizard", () => {
       label: "Gemini CLI",
       instanceIdOverride: "acpRegistry_gemini_cli",
     });
+  });
+
+  it("excludes retired fx and acpRegistry while keeping restored pi in selectable providers", () => {
+    const filtered = filterSelectableProviderDrivers([
+      { driverKind: "codex" },
+      { driverKind: "claudeAgent" },
+      { driverKind: "antigravity" },
+      { driverKind: "opencode" },
+      { driverKind: "pi" },
+      { driverKind: "fx" },
+      { driverKind: "acpRegistry" },
+    ]);
+    expect(filtered.map((item) => item.driverKind)).toEqual([
+      "codex",
+      "claudeAgent",
+      "antigravity",
+      "opencode",
+      "pi",
+    ]);
   });
 });

@@ -14,12 +14,17 @@ export {
 
 export {
   CANONICAL_EFFORT_LABELS,
+  REASONING_EFFORT_THUMB_INSET_PX,
+  computeReasoningEffortFillWidth,
   computeReasoningEffortStopPercent,
   computeReasoningEffortStopProgress,
+  computeReasoningEffortThumbAnchorX,
   formatEffortLabel,
   formatReasoningEffortLabel,
   formatReasoningEffortShortLabel,
   getEffortPresetForFamily,
+  getReasoningEffortThumbInsetPx,
+  isPhantomReasoningEffortOption,
   normalizeReasoningEffortOptions,
   resolveEffortStopIndex,
   resolveReasoningEffortStopIndexFromPointer,

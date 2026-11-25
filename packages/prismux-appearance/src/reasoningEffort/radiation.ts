@@ -7,11 +7,19 @@
  * (`html.dark` / `data-pmx-theme="dark"`), never `@media (prefers-color-scheme)`.
  */
 
+import {
+  computeReasoningEffortFillWidth,
+  computeReasoningEffortThumbAnchorX,
+} from './effortLevels.js';
 import type { ReasoningModelFamily } from './modelTheme.js';
 
 export interface ReasoningRadiationState {
   progress: number;
   dragging: boolean;
+  /** Edge-clamped mascot center inset in px (0 for legacy full-span callers). */
+  thumbInsetPx?: number;
+  /** When true (rightmost/max stop), pixel fill bleeds 100% to the right cap with zero dark stub. */
+  isMax?: boolean;
 }
 
 /** Detect Prismux dark polarity from the document root without querying OS prefers-color-scheme. */
@@ -35,19 +43,27 @@ export function drawReasoningRadiation(
   family: ReasoningModelFamily = 'deepseek',
   isDark: boolean = detectReasoningSliderDarkPolarity(),
 ): void {
-  const origin = state.progress * width;
+  const thumbInsetPx = state.thumbInsetPx ?? 0;
+  const anchorX = computeReasoningEffortThumbAnchorX(state.progress, width, thumbInsetPx);
+  const fillWidth = computeReasoningEffortFillWidth(
+    state.progress,
+    width,
+    thumbInsetPx,
+    state.isMax ?? false,
+  );
+  const origin = anchorX;
   const cell = 4;
   const speed = state.dragging ? 2.8 : 1;
 
   context.clearRect(0, 0, width, height);
-  if (origin <= 0) return;
+  if (fillWidth <= 0) return;
 
   context.save();
   context.beginPath();
-  context.rect(0, 0, origin, height);
+  context.rect(0, 0, fillWidth, height);
   context.clip();
 
-  for (let x = 0; x < origin; x += cell) {
+  for (let x = 0; x < fillWidth; x += cell) {
     const delta = x + cell * 0.5 - origin;
     const distance = Math.abs(delta);
     const phaseA = distance / 10 - time * 0.0074 * speed;
@@ -71,7 +87,7 @@ export function drawReasoningRadiation(
       let green: number;
       let blue: number;
       if (family === 'gemini') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.25) {
           const t = posRatio / 0.25;
           red = isDark
@@ -126,7 +142,7 @@ export function drawReasoningRadiation(
           ? Math.round(15 + 35 * nearness + 10 * wave)
           : Math.round(25 + 40 * nearness);
       } else if (family === 'kimi') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.75) {
           const t = posRatio / 0.75;
           red = isDark
@@ -151,7 +167,7 @@ export function drawReasoningRadiation(
             : Math.round(225 * (1 - t) + 100 * t);
         }
       } else if (family === 'glm') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.7) {
           const t = posRatio / 0.7;
           red = isDark
@@ -176,7 +192,7 @@ export function drawReasoningRadiation(
             : Math.round(175 * (1 - t) + 240 * t);
         }
       } else if (family === 'qwen') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.75) {
           const t = posRatio / 0.75;
           red = isDark
@@ -199,7 +215,7 @@ export function drawReasoningRadiation(
           blue = isDark ? Math.round(248 * (1 - t) + 36 * t) : Math.round(240 * (1 - t) + 69 * t);
         }
       } else if (family === 'minimax') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.65) {
           const t = posRatio / 0.65;
           red = isDark
@@ -266,7 +282,7 @@ export function drawReasoningRadiation(
       let green: number;
       let blue: number;
       if (family === 'gemini') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.5) {
           red = isDark
             ? Math.round(80 + 110 * hot + 40 * wave)
@@ -293,7 +309,7 @@ export function drawReasoningRadiation(
           : Math.round(105 + 85 * hot + 25 * crest);
         blue = isDark ? Math.round(20 + 40 * hot) : Math.round(30 + 35 * hot);
       } else if (family === 'kimi') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.65) {
           red = isDark
             ? Math.round(40 + 80 * hot + 25 * wave)
@@ -312,7 +328,7 @@ export function drawReasoningRadiation(
           blue = isDark ? Math.round(160 + 50 * hot) : Math.round(170 + 40 * hot);
         }
       } else if (family === 'glm') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.65) {
           red = isDark
             ? Math.round(25 + 50 * hot + 20 * wave)
@@ -331,7 +347,7 @@ export function drawReasoningRadiation(
           blue = isDark ? Math.round(195 + 55 * hot) : Math.round(190 + 50 * hot);
         }
       } else if (family === 'qwen') {
-        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, origin)));
+        const posRatio = Math.min(1, Math.max(0, x / Math.max(1, fillWidth)));
         if (posRatio < 0.65) {
           red = isDark
             ? Math.round(35 + 75 * hot + 20 * wave)
@@ -380,8 +396,8 @@ export function drawReasoningRadiation(
   for (let i = 0; i < 14; i += 1) {
     const travel =
       (time * (state.dragging ? 0.16 : 0.065) * (0.78 + (i % 5) * 0.09) + i * 23) %
-      Math.max(30, origin + 64);
-    const particleX = origin - travel;
+      Math.max(30, fillWidth + 64);
+    const particleX = fillWidth - travel;
     if (particleX < -24 || particleX > width + 16) continue;
     const particleY = 3 + ((i * 13 + Math.sin(time * 0.003 + i) * 5) % Math.max(7, height - 6));
     const length = 4 + (i % 4) * 4 + (state.dragging ? 6 : 0);

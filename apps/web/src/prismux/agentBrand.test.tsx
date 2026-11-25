@@ -3,13 +3,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ProviderInstanceIcon, providerLogoColor } from "../components/chat/ProviderInstanceIcon";
-import { AntigravityIcon } from "../components/Icons";
+import { AntigravityIcon, DshIcon, PiIcon } from "../components/Icons";
 import { TooltipProvider } from "../components/ui/tooltip";
 import {
   AGENT_BRAND_BREATHE_CSS,
   AgentBrandLogo,
   DSH_BRAND_COLOR,
   DSH_FISH_LOGO_VIEWBOX,
+  PI_LOGO_DOT_PATH,
+  PI_LOGO_FRAME_PATH,
+  PI_LOGO_VIEWBOX,
   containsUuidNoise,
   formatAgentBrandName,
   getAgentBrandMeta,
@@ -258,5 +261,33 @@ describe("agentBrand canonical naming & official logos", () => {
     );
     expect(providerIconHtml).toContain('data-dsh-brand-icon="true"');
     expect(providerIconHtml).toContain(`fill="${DSH_BRAND_COLOR}"`);
+    expect(providerIconHtml).not.toContain(">DH<");
+
+    const pureDshHtml = renderToStaticMarkup(<DshIcon className="size-5" />);
+    expect(pureDshHtml).toContain(`viewBox="${DSH_FISH_LOGO_VIEWBOX}"`);
+    expect(pureDshHtml).toContain(`fill="${DSH_BRAND_COLOR}"`);
+    expect(pureDshHtml).not.toContain("DH");
+  });
+
+  it("supports Pi Coding Agent brand metadata and official geometric icon without matching omp", () => {
+    expect(resolveAgentBrandId("pi")).toBe("pi");
+    expect(resolveAgentBrandId("pi-acp")).toBe("pi");
+    expect(resolveAgentBrandId("pi-coding-agent")).toBe("pi");
+    expect(resolveAgentBrandId("pixel")).toBe("custom");
+    expect(resolveAgentBrandId("omp")).toBe("custom");
+    expect(formatAgentBrandName("pi")).toBe("Pi");
+    expect(toCanonicalChiefProviderId("pi")).toBe("pi");
+    expect(getAgentBrandMeta("pi").displayName).toBe("Pi");
+
+    const piBrandHtml = renderToStaticMarkup(<AgentBrandLogo provider="pi" size={16} />);
+    expect(piBrandHtml).toContain('data-agent-brand="pi"');
+    expect(piBrandHtml).toContain(`viewBox="${PI_LOGO_VIEWBOX}"`);
+    expect(piBrandHtml).toContain(PI_LOGO_FRAME_PATH);
+    expect(piBrandHtml).toContain(PI_LOGO_DOT_PATH);
+
+    const piIconHtml = renderToStaticMarkup(<PiIcon className="size-4" />);
+    expect(piIconHtml).toContain(`viewBox="${PI_LOGO_VIEWBOX}"`);
+    expect(piIconHtml).toContain(PI_LOGO_FRAME_PATH);
+    expect(piIconHtml).toContain(PI_LOGO_DOT_PATH);
   });
 });

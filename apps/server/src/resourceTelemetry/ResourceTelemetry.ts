@@ -100,6 +100,20 @@ function unknownPower(updatedAt: DateTime.Utc): HostPowerSnapshot {
   };
 }
 
+/**
+ * Electron `powerMonitor` reports `thermalState: "unknown"` on hosts without OS thermal sensors
+ * (notably Windows, where `speed-limit-change` emits idle P-state frequency scaling such as 23%
+ * rather than thermal throttling). Only expose `speedLimitPercent` when thermal state is known.
+ */
+export function resolveEffectiveSpeedLimitPercent(
+  desktop: DesktopHostTelemetrySnapshot,
+): Option.Option<number> {
+  if (desktop.power.thermalState === "unknown") {
+    return Option.none();
+  }
+  return desktop.speedLimitPercent;
+}
+
 function buildHealth(input: {
   readonly native: NativeTelemetryClient.NativeTelemetryClientHealth;
   readonly desktop: DesktopTelemetryReceiver.DesktopTelemetryReceiverHealth;
@@ -186,7 +200,9 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
       onNone: () => unknownPower(initialReadAt),
       onSome: (desktop) => desktop.power,
     }),
-    speedLimitPercent: Option.flatMap(initialDesktop, (desktop) => desktop.speedLimitPercent),
+    speedLimitPercent: Option.flatMap(initialDesktop, (desktop) =>
+      resolveEffectiveSpeedLimitPercent(desktop),
+    ),
     attribution: initialAttribution,
     health: buildHealth({
       native: initialNativeHealth,
@@ -301,7 +317,7 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
           }),
           speedLimitPercent: Option.match(desktopSnapshot, {
             onNone: () => Option.none(),
-            onSome: (desktop) => desktop.speedLimitPercent,
+            onSome: (desktop) => resolveEffectiveSpeedLimitPercent(desktop),
           }),
           attribution: attributionSnapshot,
           health: buildHealth({

@@ -352,6 +352,92 @@ const OVERVIEW_ITEM_ROW_HEIGHT_PX = 30;
 const MIN_DYNAMIC_SECTION_LIMIT = 1;
 const MAX_DYNAMIC_SECTION_LIMIT = 8;
 
+export const OVERVIEW_FLOATING_TOP_GAP_PX = 12;
+export const OVERVIEW_FLOATING_RIGHT_GAP_PX = 12;
+export const OVERVIEW_COMPOSER_MIN_BREATHING_GAP_PX = 16;
+export const OVERVIEW_DEFAULT_COMPOSER_HEIGHT_PX = 148;
+export const OVERVIEW_FLOATING_Z_INDEX = 25;
+export const OVERVIEW_FLOATING_WIDTH_PX = 280;
+
+export interface FloatingOverviewClearance {
+  readonly topPx: number;
+  readonly rightPx: number;
+  readonly bottomGapPx: number;
+  readonly verticalReservePx: number;
+  readonly composerHeightPx: number | null;
+  readonly maxHeightCss: string;
+  readonly availableHeightPx: number;
+}
+
+/**
+ * Resolves the live height (px) occupied by the bottom composer from the chat canvas bottom edge.
+ * In draft-hero mode the outer composer overlay spans `inset-0`, so only the inner composer stack
+ * height is measured; in active chat the larger of overlay and stack heights is used so multi-line
+ * input, attachments, approvals, and banners are never covered.
+ */
+export function resolveFloatingOverviewComposerHeight(input: {
+  readonly isDraftHeroState: boolean;
+  readonly composerStackHeightPx: number;
+  readonly composerOverlayHeightPx: number;
+}): number {
+  const safeStack =
+    Number.isFinite(input.composerStackHeightPx) && input.composerStackHeightPx > 0
+      ? Math.ceil(input.composerStackHeightPx)
+      : 0;
+  if (input.isDraftHeroState) {
+    return safeStack;
+  }
+  const safeOverlay =
+    Number.isFinite(input.composerOverlayHeightPx) && input.composerOverlayHeightPx > 0
+      ? Math.ceil(input.composerOverlayHeightPx)
+      : 0;
+  return Math.max(safeStack, safeOverlay);
+}
+
+/**
+ * Computes floating top-right overview overlay geometry and bottom clearance above the composer.
+ * Guarantees `top: 12px` (+ optional top inset), `right: 12px`, and at least `16px` visible
+ * breathing gap above the composer's top edge via:
+ * `calc(100% - var(--pmx-composer-height, 148px) - 28px)` (plus any extra `topInsetPx`).
+ */
+export function computeFloatingOverviewClearance(input: {
+  readonly composerHeightPx?: number | null | undefined;
+  readonly topInsetPx?: number | undefined;
+  readonly containerHeightPx?: number | null | undefined;
+}): FloatingOverviewClearance {
+  const safeTopInset =
+    typeof input.topInsetPx === "number" && Number.isFinite(input.topInsetPx) && input.topInsetPx > 0
+      ? Math.ceil(input.topInsetPx)
+      : 0;
+  const topPx = OVERVIEW_FLOATING_TOP_GAP_PX + safeTopInset;
+  const bottomGapPx = OVERVIEW_COMPOSER_MIN_BREATHING_GAP_PX;
+  const verticalReservePx = topPx + bottomGapPx;
+  const composerHeightPx =
+    typeof input.composerHeightPx === "number" &&
+    Number.isFinite(input.composerHeightPx) &&
+    input.composerHeightPx > 0
+      ? Math.ceil(input.composerHeightPx)
+      : null;
+  const maxHeightCss = `calc(100% - var(--pmx-composer-height, ${OVERVIEW_DEFAULT_COMPOSER_HEIGHT_PX}px) - ${verticalReservePx}px)`;
+  const effectiveComposerHeightPx = composerHeightPx ?? OVERVIEW_DEFAULT_COMPOSER_HEIGHT_PX;
+  const availableHeightPx =
+    typeof input.containerHeightPx === "number" &&
+    Number.isFinite(input.containerHeightPx) &&
+    input.containerHeightPx > 0
+      ? Math.max(0, Math.floor(input.containerHeightPx - effectiveComposerHeightPx - verticalReservePx))
+      : 0;
+
+  return {
+    topPx,
+    rightPx: OVERVIEW_FLOATING_RIGHT_GAP_PX,
+    bottomGapPx,
+    verticalReservePx,
+    composerHeightPx,
+    maxHeightCss,
+    availableHeightPx,
+  };
+}
+
 /**
  * Computes the per-section maximum visible item count based on the overview card's
  * live available height (windowed vs. fullscreen) and active section count.

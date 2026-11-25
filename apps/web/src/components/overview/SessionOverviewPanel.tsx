@@ -28,7 +28,7 @@ import {
   SlidersHorizontalIcon,
   TerminalIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import type { ComposerThreadTarget, DraftId } from "~/composerDraftStore";
@@ -37,6 +37,7 @@ import { useClientSettings } from "~/hooks/useSettings";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { openSideThread } from "~/lib/sideChatPane";
 import { cn } from "~/lib/utils";
+import { workspaceAreaProps } from "~/lib/workspaceFocus";
 import { useThreadDiscoveredPorts } from "~/portDiscoveryState";
 import { prismuxDaemonClient } from "~/prismux/daemonClient";
 import {
@@ -97,8 +98,12 @@ import {
   type SideQuestionAskExecutor,
 } from "./SideQuestionWidget";
 import {
+  OVERVIEW_DEFAULT_COMPOSER_HEIGHT_PX,
+  OVERVIEW_FLOATING_TOP_GAP_PX,
+  OVERVIEW_FLOATING_Z_INDEX,
   OVERVIEW_SECTION_LIMIT_OPTIONS,
   computeDynamicOverviewSectionLimit,
+  computeFloatingOverviewClearance,
   extractOverviewArtifacts,
   extractOverviewBackgroundTasks,
   extractOverviewGoals,
@@ -129,6 +134,14 @@ const DAEMON_PTY_POLL_INTERVAL_MS = 15_000;
 
 export interface SessionOverviewPanelProps {
   readonly density?: "full" | "compact" | "essential";
+  /** Mount as a true top-right floating overlay (`position: absolute; top: 12px; right: 12px; z-index: 25`) without displacing chat layout. */
+  readonly floating?: boolean;
+  /** Optional extra top inset (px), e.g. when the in-thread Find bar is visible at top-right. */
+  readonly topInsetPx?: number;
+  /** Live bottom composer height (px) for dynamic bottom clearance (`--pmx-composer-height`); falls back to CSS var / 148px. */
+  readonly bottomClearancePx?: number;
+  /** Live chat canvas container height (px) used with `bottomClearancePx` to compute section limits when `availableHeightPx` is omitted. */
+  readonly containerHeightPx?: number;
   /** Live available height (px) inside the overview card, used to dynamically scale per-section limits. */
   readonly availableHeightPx?: number;
   readonly forceNewWorktree?: boolean;
@@ -877,43 +890,52 @@ function SessionOverviewPanelContent(
   ].filter(Boolean).length;
   const hasAnyOverviewSection = activeSectionCount > 0;
 
-  const dynamicAutoLimit = useMemo(
-    () =>
-      computeDynamicOverviewSectionLimit({
-        availableHeightPx: props.availableHeightPx ?? 0,
-        activeSectionCount,
-        limitMode: "auto",
-        hasLinkedPrs: hasLinkedPullRequests,
-      }),
-    [activeSectionCount, hasLinkedPullRequests, props.availableHeightPx],
-  );
+  const floatingClearance = computeFloatingOverviewClearance({
+    composerHeightPx: props.bottomClearancePx,
+    topInsetPx: props.topInsetPx,
+    containerHeightPx: props.containerHeightPx,
+  });
 
-  const dynamicSectionLimit = useMemo(
-    () =>
-      computeDynamicOverviewSectionLimit({
-        availableHeightPx: props.availableHeightPx ?? 0,
-        activeSectionCount,
-        limitMode: effectiveDisplayPrefs.limitMode,
-        hasLinkedPrs: hasLinkedPullRequests,
-      }),
-    [
-      activeSectionCount,
-      effectiveDisplayPrefs.limitMode,
-      hasLinkedPullRequests,
-      props.availableHeightPx,
-    ],
-  );
+  const effectiveAvailableHeightPx =
+    props.availableHeightPx !== undefined
+      ? props.availableHeightPx
+      : props.floating
+        ? floatingClearance.availableHeightPx
+        : 0;
 
-  return (
+  const dynamicAutoLimit = computeDynamicOverviewSectionLimit({
+    availableHeightPx: effectiveAvailableHeightPx,
+    activeSectionCount,
+    limitMode: "auto",
+    hasLinkedPrs: hasLinkedPullRequests,
+  });
+
+  const dynamicSectionLimit = computeDynamicOverviewSectionLimit({
+    availableHeightPx: effectiveAvailableHeightPx,
+    activeSectionCount,
+    limitMode: effectiveDisplayPrefs.limitMode,
+    hasLinkedPrs: hasLinkedPullRequests,
+  });
+
+  const panelCard = (
     <div
       data-pmx-glass-zone="overviewPanel"
       data-session-overview-panel="1"
+      data-overview-floating={props.floating ? "true" : undefined}
+      data-overview-composer-clearance={
+        props.floating
+          ? String(floatingClearance.composerHeightPx ?? OVERVIEW_DEFAULT_COMPOSER_HEIGHT_PX)
+          : undefined
+      }
       data-overview-section-limit={dynamicSectionLimit}
       data-overview-show-completed={effectiveDisplayPrefs.showCompleted ? "1" : "0"}
-      className="flex min-w-0 flex-col overflow-hidden rounded-2xl bg-clip-padding text-foreground"
+      className={cn(
+        "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl bg-clip-padding text-foreground",
+        props.floating && "dropdown-glass pointer-events-auto w-full flex-initial shadow-lg",
+      )}
     >
       {/* Top Header Bar: 概览 + ⋮ More Menu (losslessly housing workspace/host, open-in, scripts, git & usage) */}
-      <header className="flex min-h-10 items-center justify-between gap-2 border-b border-border/50 px-3 py-1.5">
+      <header className="flex min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3 py-1.5">
         <h2 className="truncate text-[13px] font-semibold tracking-tight text-foreground select-none">
           概览
         </h2>
@@ -1100,12 +1122,17 @@ function SessionOverviewPanelContent(
         </Popover>
       </header>
 
-      {/* Top 3 Quick Action Rows (Review with live +/- stats, File List, Continue in Terminal — NO Plugins row!) */}
-      <nav
-        aria-label="快捷入口"
-        data-overview-quick-actions="1"
-        className="flex flex-col gap-0.5 px-1.5 py-1.5"
+      {/* Scrollable Overview Body: scrolls smoothly within floating max-height without touching composer */}
+      <div
+        data-overview-scroll-body="1"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
       >
+        {/* Top 3 Quick Action Rows (Review with live +/- stats, File List, Continue in Terminal — NO Plugins row!) */}
+        <nav
+          aria-label="快捷入口"
+          data-overview-quick-actions="1"
+          className="flex flex-col gap-0.5 px-1.5 py-1.5"
+        >
         <button
           type="button"
           data-overview-action="review"
@@ -1287,6 +1314,7 @@ function SessionOverviewPanelContent(
           ) : null}
         </div>
       ) : null}
+      </div>
 
       {/* Inner Overlay Dialogs (all strictly tagged with data-pmx-glass-zone="overlays") */}
       <SideQuestionDetailDialog
@@ -1318,5 +1346,37 @@ function SessionOverviewPanelContent(
         }}
       />
     </div>
+  );
+
+  if (!props.floating) {
+    return panelCard;
+  }
+
+  const floatingShellStyle: CSSProperties = {
+    position: "absolute",
+    top: `${floatingClearance.topPx}px`,
+    right: `${floatingClearance.rightPx}px`,
+    zIndex: OVERVIEW_FLOATING_Z_INDEX,
+    maxHeight: floatingClearance.maxHeightCss,
+    ...(floatingClearance.composerHeightPx !== null
+      ? ({ "--pmx-composer-height": `${floatingClearance.composerHeightPx}px` } as CSSProperties)
+      : {}),
+  };
+
+  return (
+    <aside
+      {...workspaceAreaProps("details", 3, gt("Thread details"))}
+      data-workspace-focus-key={`details:${props.environmentId}:${props.threadId}`}
+      data-overview-floating-shell="true"
+      data-overview-max-height-css={floatingClearance.maxHeightCss}
+      className={cn(
+        "pointer-events-none absolute flex w-[var(--thread-details-panel-width,280px)] max-w-[calc(100%-24px)] flex-col",
+        floatingClearance.topPx > OVERVIEW_FLOATING_TOP_GAP_PX &&
+          "transition-[top,max-height] duration-150 ease-out motion-reduce:transition-none",
+      )}
+      style={floatingShellStyle}
+    >
+      {panelCard}
+    </aside>
   );
 }

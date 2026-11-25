@@ -299,3 +299,83 @@ test("ResourceMonitorService live calibration captures ~1-core CPU usage from a 
     await pool.dispose();
   }
 });
+
+test("ResourceMonitorService prefers Windows OS Private Working Set over inflated Electron total workingSetBytes", async () => {
+  const pool = new PersistentPtyPool();
+  const monitor = new ResourceMonitorService({
+    ptyPool: pool,
+    mainPid: 5000,
+    treeCacheTtlMs: 0,
+    sampleProcessTree: async () =>
+      new Map<number, OsProcessSnapshotEntry>([
+        [
+          5000,
+          {
+            pid: 5000,
+            parentPid: 1,
+            processName: "Prismux.exe",
+            commandLine: "Prismux.exe",
+            memoryBytes: 60_000_000, // Private Working Set (Task Manager)
+            privateWorkingSetBytes: 60_000_000,
+            privateMemoryBytes: 85_000_000,
+            cpuSeconds: 2.0,
+            cpuPercent: null
+          }
+        ],
+        [
+          5001,
+          {
+            pid: 5001,
+            parentPid: 5000,
+            processName: "Prismux.exe",
+            commandLine: "Prismux.exe --type=renderer",
+            memoryBytes: 140_000_000, // Private Working Set (Task Manager)
+            privateWorkingSetBytes: 140_000_000,
+            privateMemoryBytes: 180_000_000,
+            cpuSeconds: 4.0,
+            cpuPercent: null
+          }
+        ],
+        [
+          5002,
+          {
+            pid: 5002,
+            parentPid: 5000,
+            processName: "Prismux.exe",
+            commandLine: "Prismux.exe --type=gpu-process",
+            memoryBytes: 45_000_000, // Private Working Set (Task Manager)
+            privateWorkingSetBytes: 45_000_000,
+            privateMemoryBytes: 70_000_000,
+            cpuSeconds: 1.5,
+            cpuPercent: null
+          }
+        ]
+      ])
+  });
+
+  try {
+    monitor.ingestHostMetrics({
+      collectedAt: Date.now(),
+      mainPid: 5000,
+      cpuCores: 32,
+      cpuScale: "system-total",
+      electronProcesses: [
+        // Total workingSetBytes includes shared DLL/Chromium/GPU pages (4.5x inflated sum = 1.1 GB)
+        { pid: 5000, type: "Browser", cpuPercent: 0.4, workingSetBytes: 250_000_000 },
+        { pid: 5001, type: "Tab", name: "Workbench", cpuPercent: 1.2, workingSetBytes: 550_000_000 },
+        { pid: 5002, type: "GPU", cpuPercent: 0.8, workingSetBytes: 300_000_000 }
+      ]
+    });
+
+    const snap = await monitor.getResources({ forceRefresh: true });
+    if (process.platform === "win32") {
+      // Must report real summed Private Working Set (60 + 140 + 45 = 245 MB), not 1,100 MB!
+      assert.equal(snap.desktop?.memoryBytes, 245_000_000);
+    } else {
+      assert.equal(snap.desktop?.memoryBytes, 1_100_000_000);
+    }
+  } finally {
+    monitor.stop();
+    await pool.dispose();
+  }
+});

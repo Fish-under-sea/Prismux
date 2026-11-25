@@ -167,8 +167,6 @@ export const CHAT_TAB_HASH_ANCHORS = {
     "threads",
     "working-shelf",
     "project-defaults",
-    "default-model",
-    "fallback-model",
     "default-permissions",
     "new-threads",
     "auto-settle",
@@ -181,10 +179,6 @@ export const CHAT_TAB_HASH_ANCHORS = {
     "usage-limits",
     "auto-resume-limited-threads",
     "snooze-limited-threads",
-    "compact-idle-threads",
-    "text-generation",
-    "text-generation-model",
-    "thread-title-instructions",
   ] as const,
 } as const;
 
@@ -1574,7 +1568,7 @@ export function ChatSettingsPanel() {
     },
     {
       id: CHAT_TAB_IDS.threads,
-      label: gt("Threads & defaults"),
+      label: gt("Threads & default behavior"),
       hashAnchors: CHAT_TAB_HASH_ANCHORS.threads,
       content: (
         <div id="threads" className="flex flex-col gap-7">
@@ -1585,7 +1579,12 @@ export function ChatSettingsPanel() {
   ];
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer
+      searchTargetFallbacks={{
+        snooze: "snooze-options",
+        "usage-limits": "auto-resume-limited-threads",
+      }}
+    >
       <SettingsSegmentedTabs
         tabs={tabs}
         defaultTabId={CHAT_TAB_IDS.composer}
@@ -2014,14 +2013,18 @@ function ScopedCompactIdleThreadsRow() {
   );
 }
 
-export function ThreadsSettingsSections() {
+/** The Agent configurator panel can render without a settings scope, as its tests do; this section needs one. */
+export function TextGenerationSettingsSection() {
+  return useOptionalSettingsScope() === null ? null : <ScopedTextGenerationSettingsSection />;
+}
+
+function ScopedTextGenerationSettingsSection() {
   const setting = useSearchableSetting();
   const gt = useGT();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const navigate = useNavigate();
-  const { environment, connectedEnvironments, target, scope } = useSettingsScope();
-  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
+  const { environment, connectedEnvironments, target } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const hasServerTargets = connectedEnvironments.length > 0;
   const providersByEnvironment = useEnvironmentProviders();
@@ -2029,9 +2032,6 @@ export function ThreadsSettingsSections() {
     (environment?.serverConfig
       ? providersByEnvironment.get(environment.environmentId)
       : undefined) ?? EMPTY_SERVER_PROVIDERS;
-  const supportsAutoSettlementScope = connectedEnvironments.every(
-    (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
-  );
 
   const textGenerationTargets = useTextGenerationTargets({
     environmentId,
@@ -2075,42 +2075,171 @@ export function ThreadsSettingsSections() {
   const mixedTextGenerationModel = useScopedSettingsMixed(["textGenerationModelSelection"]);
 
   return (
-    <>
-      <ProjectDefaultsSettings category="general" />
-
-      <SettingsSection id="auto-settle" title={gt("Auto-settle")}>
-        <SettingsRow
-          {...setting("working-shelf")}
-          description={
-            <T>
-              Fold working and monitoring threads into a Working section. They return to the top of
-              the inbox when they need you.
-            </T>
-          }
-          resetAction={
-            settings.sidebarWorkingShelfEnabled !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset working section to default")}
-                onClick={() =>
-                  updateSettings({
-                    sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sidebarWorkingShelfEnabled}
-              onCheckedChange={(checked) =>
-                updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
+    <SettingsSection id="text-generation" title={gt("Text generation")}>
+      <SettingsRow
+        serverScoped
+        settingKeys={["textGenerationModelSelection"]}
+        {...setting("text-generation-model")}
+        description={gt(
+          "For thread titles and other generated text. Source control has its own setting. Text generators from Agent configurator also appear here.",
+        )}
+        resetAction={
+          hasServerTargets && isTextGenerationModelDirty ? (
+            <SettingResetButton
+              ariaLabel={gt("Reset text generation model to default")}
+              onClick={() =>
+                updateSettings({
+                  textGenerationModelSelection:
+                    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+                })
               }
-              aria-label={gt("Working section")}
             />
-          }
-        />
+          ) : null
+        }
+        control={
+          !hasServerTargets ? (
+            <span className="text-sm text-muted-foreground">
+              <T>Connect an environment to choose its text generation model.</T>
+            </span>
+          ) : !hasTextGenerationProvider ? (
+            <span className="text-sm text-muted-foreground">
+              <T>No text generation providers available.</T>
+            </span>
+          ) : (
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <ProviderModelPicker
+                environmentId={environmentId}
+                activeInstanceId={textGenInstanceId}
+                model={textGenModel}
+                lockedProvider={null}
+                instanceEntries={textGenerationModelInstanceEntries}
+                modelOptionsByInstance={textGenerationModelOptionsByInstance}
+                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                {...(mixedTextGenerationModel ? { triggerLabel: gt("Mixed") } : {})}
+                getModelDisabledReason={textGenerationModelDisabledReason}
+                {...(environmentId
+                  ? {
+                      onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
+                        void navigate({
+                          to: "/settings/providers",
+                          search: { environmentId, instanceId },
+                        });
+                      },
+                    }
+                  : {})}
+                onInstanceModelChange={(instanceId, model) => {
+                  const reason = textGenerationModelDisabledReason(instanceId, model);
+                  if (reason) {
+                    toastManager.add({
+                      type: "error",
+                      title: gt("Text generation model not saved"),
+                      description: reason,
+                    });
+                    return;
+                  }
+                  updateSettings({
+                    textGenerationModelSelection: resolveAppModelSelectionState(
+                      {
+                        ...settings,
+                        textGenerationModelSelection: pickModelSelection(
+                          textGenerationModelSelection,
+                          instanceId,
+                          model,
+                        ),
+                      },
+                      textGenerationProviders,
+                    ),
+                  });
+                }}
+              />
+              {textGenInstanceEntry ? (
+                <TraitsPicker
+                  provider={textGenProvider}
+                  models={textGenInstanceEntry?.models ?? []}
+                  model={textGenModel}
+                  modelOptions={textGenModelOptions}
+                  allowPromptInjectedEffort={false}
+                  includePlanAgent={selectsPlanAgent(textGenModelOptions)}
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  onModelOptionsChange={(nextOptions) => {
+                    updateSettings({
+                      textGenerationModelSelection: resolveAppModelSelectionState(
+                        {
+                          ...settings,
+                          textGenerationModelSelection: createModelSelection(
+                            textGenInstanceId,
+                            textGenModel,
+                            nextOptions,
+                          ),
+                        },
+                        textGenerationProviders,
+                      ),
+                    });
+                  }}
+                />
+              ) : null}
+            </div>
+          )
+        }
+      />
+      <AdvancedSettings targetIds={[setting("thread-title-instructions").id]}>
+        <ThreadTitleInstructionsSettings />
+      </AdvancedSettings>
+    </SettingsSection>
+  );
+}
 
+export function ThreadsSettingsSections() {
+  const setting = useSearchableSetting();
+  const gt = useGT();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const { connectedEnvironments, scope } = useSettingsScope();
+  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
+  const hasServerTargets = connectedEnvironments.length > 0;
+  const supportsAutoSettlementScope = connectedEnvironments.every(
+    (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
+  );
+
+  const workingShelfRow = (
+    <SettingsRow
+      {...setting("working-shelf")}
+      description={
+        <T>
+          Fold working and monitoring threads into a Working section. They return to the top of the
+          inbox when they need you.
+        </T>
+      }
+      resetAction={
+        settings.sidebarWorkingShelfEnabled !==
+        DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled ? (
+          <SettingResetButton
+            ariaLabel={gt("Reset working section to default")}
+            onClick={() =>
+              updateSettings({
+                sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          checked={settings.sidebarWorkingShelfEnabled}
+          onCheckedChange={(checked) =>
+            updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
+          }
+          aria-label={gt("Working section")}
+        />
+      }
+    />
+  );
+
+  return (
+    <>
+      <ProjectDefaultsSettings category="general" extraRows={workingShelfRow} />
+
+      <SettingsSection id="auto-settle" title={gt("Auto-settle, snooze & rate limits")}>
         {hasServerTargets ? (
           <>
             <SettingsRow
@@ -2215,15 +2344,9 @@ export function ThreadsSettingsSections() {
             ) : null}
           </>
         ) : null}
-      </SettingsSection>
 
-      {!isProjectScope ? (
-        <SettingsSection id="snooze" title={gt("Snooze")}>
-          <SnoozePresetsRow />
-        </SettingsSection>
-      ) : null}
+        {!isProjectScope ? <SnoozePresetsRow /> : null}
 
-      <SettingsSection id="usage-limits" title={gt("Usage limits")}>
         <SettingsRow
           serverScoped
           {...setting("auto-resume-limited-threads")}
@@ -2260,119 +2383,6 @@ export function ThreadsSettingsSections() {
             />
           }
         />
-        <CompactIdleThreadsRow />
-      </SettingsSection>
-
-      <SettingsSection id="text-generation" title={gt("Text generation")}>
-        <SettingsRow
-          serverScoped
-          settingKeys={["textGenerationModelSelection"]}
-          {...setting("text-generation-model")}
-          description={gt(
-            "For thread titles and other generated text. Source control has its own setting. Text generators from Providers also appear here.",
-          )}
-          resetAction={
-            hasServerTargets && isTextGenerationModelDirty ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset text generation model to default")}
-                onClick={() =>
-                  updateSettings({
-                    textGenerationModelSelection:
-                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            !hasServerTargets ? (
-              <span className="text-sm text-muted-foreground">
-                <T>Connect an environment to choose its text generation model.</T>
-              </span>
-            ) : !hasTextGenerationProvider ? (
-              <span className="text-sm text-muted-foreground">
-                <T>No text generation providers available.</T>
-              </span>
-            ) : (
-              <div className="flex flex-wrap items-center justify-end gap-1.5">
-                <ProviderModelPicker
-                  environmentId={environmentId}
-                  activeInstanceId={textGenInstanceId}
-                  model={textGenModel}
-                  lockedProvider={null}
-                  instanceEntries={textGenerationModelInstanceEntries}
-                  modelOptionsByInstance={textGenerationModelOptionsByInstance}
-                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  {...(mixedTextGenerationModel ? { triggerLabel: gt("Mixed") } : {})}
-                  getModelDisabledReason={textGenerationModelDisabledReason}
-                  {...(environmentId
-                    ? {
-                        onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
-                          void navigate({
-                            to: "/settings/providers",
-                            search: { environmentId, instanceId },
-                          });
-                        },
-                      }
-                    : {})}
-                  onInstanceModelChange={(instanceId, model) => {
-                    const reason = textGenerationModelDisabledReason(instanceId, model);
-                    if (reason) {
-                      toastManager.add({
-                        type: "error",
-                        title: gt("Text generation model not saved"),
-                        description: reason,
-                      });
-                      return;
-                    }
-                    updateSettings({
-                      textGenerationModelSelection: resolveAppModelSelectionState(
-                        {
-                          ...settings,
-                          textGenerationModelSelection: pickModelSelection(
-                            textGenerationModelSelection,
-                            instanceId,
-                            model,
-                          ),
-                        },
-                        textGenerationProviders,
-                      ),
-                    });
-                  }}
-                />
-                {textGenInstanceEntry ? (
-                  <TraitsPicker
-                    provider={textGenProvider}
-                    models={textGenInstanceEntry?.models ?? []}
-                    model={textGenModel}
-                    modelOptions={textGenModelOptions}
-                    allowPromptInjectedEffort={false}
-                    includePlanAgent={selectsPlanAgent(textGenModelOptions)}
-                    triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    onModelOptionsChange={(nextOptions) => {
-                      updateSettings({
-                        textGenerationModelSelection: resolveAppModelSelectionState(
-                          {
-                            ...settings,
-                            textGenerationModelSelection: createModelSelection(
-                              textGenInstanceId,
-                              textGenModel,
-                              nextOptions,
-                            ),
-                          },
-                          textGenerationProviders,
-                        ),
-                      });
-                    }}
-                  />
-                ) : null}
-              </div>
-            )
-          }
-        />
-        <AdvancedSettings targetIds={[setting("thread-title-instructions").id]}>
-          <ThreadTitleInstructionsSettings />
-        </AdvancedSettings>
       </SettingsSection>
     </>
   );

@@ -1,4 +1,8 @@
-import type { ResourceTelemetryProcess, ResourceTelemetrySourceStatus } from "@prismux/core-contracts";
+import type {
+  HostPowerSnapshot,
+  ResourceTelemetryProcess,
+  ResourceTelemetrySourceStatus,
+} from "@prismux/core-contracts";
 import { msg } from "gt-react";
 
 import { m, type MessageResolver } from "../../i18n/messages";
@@ -99,4 +103,93 @@ export function formatSamplingStatus(intervalMs: number, resolve: MessageResolve
       },
     ),
   );
+}
+
+export function localizeSourceStatus(
+  status: ResourceTelemetrySourceStatus,
+  resolve: MessageResolver = m,
+): string {
+  switch (status) {
+    case "healthy":
+      return resolve(msg("Healthy"));
+    case "starting":
+      return resolve(msg("Starting"));
+    case "degraded":
+      return resolve(msg("Degraded"));
+    case "unavailable":
+      return resolve(msg("Unavailable"));
+    case "stopped":
+      return resolve(msg("Stopped"));
+  }
+}
+
+export function localizeNativeStatusBadge(
+  status: ResourceTelemetrySourceStatus,
+  resolve: MessageResolver = m,
+): string {
+  if (status === "healthy") {
+    return resolve(msg("Running natively"));
+  }
+  return `${resolve(msg("Native"))} ${localizeSourceStatus(status, resolve)}`;
+}
+
+export function localizeThermalState(
+  thermalState: HostPowerSnapshot["thermalState"],
+  resolve: MessageResolver = m,
+): string {
+  switch (thermalState) {
+    case "nominal":
+      return resolve(msg("Nominal", { $context: "host thermal state" }));
+    case "fair":
+      return resolve(msg("Fair", { $context: "host thermal state" }));
+    case "serious":
+      return resolve(msg("Serious", { $context: "host thermal state" }));
+    case "critical":
+      return resolve(msg("Critical", { $context: "host thermal state" }));
+    case "unknown":
+      return resolve(msg("No sensor data", { $context: "host thermal state" }));
+  }
+}
+
+export function resolveCpuSpeedLimitDisplay(
+  input: {
+    readonly speedLimitPercent: number | null;
+    readonly thermalState: HostPowerSnapshot["thermalState"];
+  },
+  resolve: MessageResolver = m,
+): {
+  readonly value: string;
+  readonly tone: "default" | "warning" | "danger";
+} {
+  // Windows laptops dynamically scale idle P-states (e.g. 23%) while thermalState is "unknown".
+  // Do not raise an alarming throttling warning without genuine OS thermal telemetry.
+  if (input.thermalState === "unknown") {
+    return {
+      value: resolve(msg("Normal (unthrottled)")),
+      tone: "default",
+    };
+  }
+  if (input.speedLimitPercent === null) {
+    if (input.thermalState === "nominal") {
+      return { value: "100%", tone: "default" };
+    }
+    if (input.thermalState === "fair") {
+      return { value: resolve(msg("Normal (unthrottled)")), tone: "default" };
+    }
+    return {
+      value: resolve(msg("Throttled")),
+      tone: input.thermalState === "critical" ? "danger" : "warning",
+    };
+  }
+  const clamped = Math.max(0, Math.min(100, input.speedLimitPercent));
+  const tone: "default" | "warning" | "danger" =
+    input.thermalState === "critical" || clamped < 50
+      ? "danger"
+      : clamped < 80 || input.thermalState === "serious"
+        ? "warning"
+        : "default";
+  return {
+    value: `${clamped.toFixed(0)}%`,
+    tone,
+  };
 }

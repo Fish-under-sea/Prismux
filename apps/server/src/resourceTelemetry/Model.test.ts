@@ -97,6 +97,7 @@ function merge(input: {
   readonly desktop?: DesktopHostTelemetrySnapshot;
   readonly previous?: MergeProcessesResult;
   readonly sidecarPid?: number;
+  readonly logicalCpuCount?: number;
 }): MergeProcessesResult {
   return mergeProcesses({
     serverPid: SERVER_PID,
@@ -107,6 +108,7 @@ function merge(input: {
     previous: input.previous?.previous ?? new Map(),
     counters: input.previous?.counters ?? emptyTelemetryCounters(),
     updatePrevious: true,
+    logicalCpuCount: input.logicalCpuCount ?? 1,
   });
 }
 
@@ -188,11 +190,13 @@ describe("resource telemetry process model", () => {
     ]);
     const first = merge({
       sidecarPid: 900,
+      logicalCpuCount: 8,
       native: nativeSnapshot(BASE_TIME_MS, samples),
       desktop,
     });
     const result = merge({
       sidecarPid: 900,
+      logicalCpuCount: 8,
       previous: first,
       native: nativeSnapshot(
         BASE_TIME_MS + 1_000,
@@ -215,7 +219,7 @@ describe("resource telemetry process model", () => {
     );
     expect(result.groups.backend).toMatchObject({
       processCount: 3,
-      currentCpuPercent: 505,
+      currentCpuPercent: 63.125,
       cpuTimeMs: 5_050,
       currentRssBytes: 3_072,
       ioReadBytes: 50_500,
@@ -224,7 +228,7 @@ describe("resource telemetry process model", () => {
     });
     expect(result.groups.electron).toMatchObject({
       processCount: 2,
-      currentCpuPercent: 5,
+      currentCpuPercent: 0.625,
       cpuTimeMs: 50,
       currentRssBytes: 2_048,
       ioReadBytes: 500,
@@ -232,7 +236,7 @@ describe("resource telemetry process model", () => {
       processStarts: 2,
     });
     expect(result.groups.monitor.processCount).toBe(1);
-    expect(result.groups.allT3.currentCpuPercent).toBe(511);
+    expect(result.groups.allT3.currentCpuPercent).toBe(63.875);
     expect(result.groups.allT3.currentRssBytes).toBe(6_144);
   });
 
@@ -501,6 +505,7 @@ describe("resource telemetry process model", () => {
       previous: second.previous,
       counters: second.counters,
       updatePrevious: false,
+      logicalCpuCount: 1,
     });
 
     expect(desktopOnly.processes[0]?.cpuPercent).toBe(25);
@@ -600,5 +605,81 @@ describe("resource telemetry process model", () => {
     expect(reused.ioReadBytesPerSecond).toBe(0);
     expect(second.groups.backend.processStarts).toBe(3);
     expect(second.groups.backend.processExits).toBe(1);
+  });
+
+  it("normalizes multi-core cumulative CPU deltas to Task Manager 0-100% scale and keeps native Private Working Set peaks unpolluted", () => {
+    const first = merge({
+      logicalCpuCount: 32,
+      native: nativeSnapshot(BASE_TIME_MS, [
+        processSample({
+          pid: SERVER_PID,
+          ppid: 1,
+          startTimeMs: 1_000,
+          cpuTimeMs: 100,
+          residentBytes: 40_000_000,
+        }),
+        processSample({
+          pid: 300,
+          ppid: 1,
+          startTimeMs: 2_000,
+          cpuTimeMs: 1_000,
+          residentBytes: 120_000_000,
+        }),
+      ]),
+      desktop: desktopSnapshot(BASE_TIME_MS, [
+        electronMetric({
+          pid: 300,
+          creationTimeMs: 2_000,
+          type: "Browser",
+          workingSetBytes: 480_000_000,
+          peakWorkingSetBytes: 640_000_000,
+        }),
+      ]),
+    });
+
+    // Electron burns 1,304 ms of CPU across threads during a 1,000 ms interval on a 32-core CPU.
+    // On single-core scale that was 130.4%; normalized to total system CPU it is 1304 / 32000 * 100 = 4.075%.
+    const second = merge({
+      logicalCpuCount: 32,
+      previous: first,
+      native: nativeSnapshot(
+        BASE_TIME_MS + 1_000,
+        [
+          processSample({
+            pid: SERVER_PID,
+            ppid: 1,
+            startTimeMs: 1_000,
+            cpuTimeMs: 132,
+            residentBytes: 42_000_000,
+          }),
+          processSample({
+            pid: 300,
+            ppid: 1,
+            startTimeMs: 2_000,
+            cpuTimeMs: 2_304,
+            residentBytes: 130_000_000,
+          }),
+        ],
+        2,
+      ),
+      desktop: desktopSnapshot(BASE_TIME_MS + 1_000, [
+        electronMetric({
+          pid: 300,
+          creationTimeMs: 2_000,
+          type: "Browser",
+          workingSetBytes: 490_000_000,
+          peakWorkingSetBytes: 640_000_000,
+        }),
+      ]),
+    });
+
+    const electron = second.processes.find((process) => process.identity.pid === 300)!;
+    expect(electron.cpuPercent).toBeCloseTo(4.075, 4);
+    expect(second.groups.electron.currentCpuPercent).toBeCloseTo(4.075, 4);
+    expect(second.groups.allT3.currentCpuPercent).toBeCloseTo(4.175, 4);
+    expect(second.groups.allT3.currentCpuPercent).toBeLessThanOrEqual(100);
+    // Peak memory must track native Private Working Set (130 MB), NOT Electron's inflated 640 MB shared peak.
+    expect(electron.peakResidentBytes).toBe(130_000_000);
+    expect(second.groups.allT3.peakRssBytes).toBe(172_000_000);
   });
 });

@@ -24,6 +24,8 @@ import {
   resolveRemoteOperateAccess,
 } from "./ProviderSettingsPanel.logic";
 import { reorderModelsWithinGroup } from "./ProviderModelsSection";
+import { PROVIDERS_TAB_HASH_ANCHORS, PROVIDERS_TAB_IDS } from "./ProviderSettingsPanel";
+import { CHAT_TAB_HASH_ANCHORS } from "./SettingsPanels";
 
 describe("buildProviderInstanceOverridePatch", () => {
   const projectId = ProjectId.make("project-a");
@@ -364,6 +366,32 @@ describe("provider configuration deletion logic", () => {
     // Cross-group and hidden drags are rejected cleanly.
     expect(reorderModelsWithinGroup(models, groupOf, "vis-a", "fav-a")).toBeNull();
     expect(reorderModelsWithinGroup(models, groupOf, "hid-a", "vis-c")).toBeNull();
+  });
+  it("defines 3 segmented Agent configurator tabs and relocates default/fallback/text-gen/compact-idle anchors out of /settings/chat", () => {
+    expect(Object.values(PROVIDERS_TAB_IDS)).toEqual(["providers", "defaults", "compliance"]);
+    expect(PROVIDERS_TAB_HASH_ANCHORS.providers).toEqual([
+      "providers",
+      "usage-providers",
+      "text-generators",
+    ]);
+    for (const anchor of [
+      "default-model",
+      "fallback-model",
+      "text-generation",
+      "text-generation-model",
+      "thread-title-instructions",
+      "default-launch-mode",
+      "provider-updates",
+      "provider-update-checks",
+      "compact-idle-threads",
+    ]) {
+      expect(PROVIDERS_TAB_HASH_ANCHORS.defaults).toContain(anchor);
+      expect(CHAT_TAB_HASH_ANCHORS.threads).not.toContain(anchor);
+    }
+    expect(PROVIDERS_TAB_HASH_ANCHORS.compliance).toEqual([
+      "subscription-risk-waiver",
+      "antigravity-controlled-lock",
+    ]);
   });
 });
 

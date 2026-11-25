@@ -57,12 +57,12 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
       ],
       [
         "/settings/providers",
+        "/settings/memory",
         "/settings/projects",
-        "/settings/archived",
         "/settings/browser",
         "/settings/source-control",
       ],
-      ["/settings/connections", "/settings/memory", "/settings/sync", "/settings/plugins"],
+      ["/settings/plugins", "/settings/sync", "/settings/connections"],
       ["/settings/maintenance", "/settings/about"],
     ]);
 
@@ -74,12 +74,25 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(flatWindows.indexOf("/settings/wallpaper")).toBe(
       flatWindows.indexOf("/settings/appearance") + 1,
     );
-    // Memory & Sync are independent sibling entries in Group 3 (legacy /settings/memory-sync removed from nav)
+    // Chief & memory lives in Group 2 right before Projects & archive; Sync lives in Group 3 after Plugins
     expect(flatWindows).toContain("/settings/memory");
+    expect(flatWindows).toContain("/settings/projects");
     expect(flatWindows).toContain("/settings/sync");
-    expect(flatWindows.indexOf("/settings/sync")).toBe(flatWindows.indexOf("/settings/memory") + 1);
+    expect(flatWindows.indexOf("/settings/memory")).toBe(
+      flatWindows.indexOf("/settings/providers") + 1,
+    );
+    expect(flatWindows.indexOf("/settings/projects")).toBe(
+      flatWindows.indexOf("/settings/memory") + 1,
+    );
+    expect(flatWindows.indexOf("/settings/sync")).toBe(
+      flatWindows.indexOf("/settings/plugins") + 1,
+    );
+    expect(flatWindows.indexOf("/settings/connections")).toBe(
+      flatWindows.indexOf("/settings/sync") + 1,
+    );
     expect(flatWindows).not.toContain("/settings/memory-sync");
     // Merged / removed / promoted top-level entries
+    expect(flatWindows).not.toContain("/settings/archived");
     expect(flatWindows).not.toContain("/settings/overnight-factory");
     expect(flatWindows).not.toContain("/settings/access");
     expect(flatWindows).not.toContain("/settings/worktrees");
@@ -92,8 +105,6 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(flatWindows).not.toContain("/settings/labs");
     expect(flatWindows).not.toContain("/settings/snap-shot");
     expect(flatWindows).not.toContain("/settings/secrets");
-    // Archived threads intentionally preserved in Group 2
-    expect(flatWindows).toContain("/settings/archived");
 
     // macOS shows SnapShots in Group 1; Secret providers shows Secrets in Group 3.
     const groupsMacWithSecrets = settingsNavGroups(true, true);
@@ -112,26 +123,44 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
         expect(decodeMsg(SETTINGS_SECTION_LABELS[path]).trim().length).toBeGreaterThan(0);
       }
     }
+    expect(groups.map((group) => decodeMsg(group.heading))).toEqual([
+      "General & appearance",
+      "Agents & workspace",
+      "Extensions & connections",
+      "System & about",
+    ]);
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/providers"])).toBe("Agent configurator");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("Appearance");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("Wallpaper");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("Chief & memory");
-    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("Sync");
-    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/chat"])).toBe("Chat & threads");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/projects"])).toBe("Projects & archive");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/plugins"])).toBe("Plugin center");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("Remote sync");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/chat"])).toBe("Chat");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/browser"])).toBe("Browser & devices");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/source-control"])).toBe(
       "Source control & worktrees",
     );
-    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/connections"])).toBe(
-      "Environments & remote access",
-    );
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/connections"])).toBe("Environments & remote");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/maintenance"])).toBe(
       "Maintenance & diagnostics",
     );
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/about"])).toBe("About & Updates");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/providers") ?? "")).toBe(
+      "Agent configurator",
+    );
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/appearance") ?? "")).toBe("Appearance");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/wallpaper") ?? "")).toBe("Wallpaper");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/memory") ?? "")).toBe("Chief & memory");
-    expect(decodeMsg(settingsBreadcrumbLabel("/settings/sync") ?? "")).toBe("Sync");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/projects") ?? "")).toBe(
+      "Projects & archive",
+    );
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/plugins") ?? "")).toBe("Plugin center");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/sync") ?? "")).toBe("Remote sync");
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/connections") ?? "")).toBe(
+      "Environments & remote",
+    );
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/chat") ?? "")).toBe("Chat");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/about") ?? "")).toBe("About & Updates");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/maintenance") ?? "")).toBe(
       "Maintenance & diagnostics",
@@ -204,15 +233,22 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     );
     expect(movedSettingsPath("/settings/wallpaper", "")).toBeNull();
 
-    // Split /settings/memory and /settings/sync targets + legacy /settings/memory-sync redirect resolution
+    // Split /settings/memory (Group 2) and /settings/sync (Group 3) + legacy redirect resolution
     expect(findSettingsNavTarget(groups, "/settings/memory")).toEqual({
-      groupId: "extensions-data",
+      groupId: "agents-workspace",
       path: "/settings/memory",
+    });
+    expect(findSettingsNavTarget(groups, "/settings/projects")).toEqual({
+      groupId: "agents-workspace",
+      path: "/settings/projects",
     });
     expect(findSettingsNavTarget(groups, "/settings/sync")).toEqual({
       groupId: "extensions-data",
       path: "/settings/sync",
     });
+    expect(movedSettingsPath("/settings/archived", "archive")).toBe("/settings/projects");
+    expect(movedSettingsPath("/settings/archived", "archived")).toBe("/settings/projects");
+    expect(movedSettingsPath("/settings/archived", "archived-threads")).toBe("/settings/projects");
     expect(resolveSettingsNavActivePath("/settings/memory-sync")).toBe("/settings/memory");
     expect(movedSettingsPath("/settings/memory-sync", "")).toBe("/settings/memory");
     expect(movedSettingsPath("/settings/memory-sync", "sync")).toBe("/settings/sync");
@@ -367,27 +403,27 @@ describe("settings sidebar indicator motion state machine", () => {
 
     const slid = transitionIndicatorState(
       entered,
-      { groupId: "extensions-data", path: "/settings/memory" },
+      { groupId: "extensions-data", path: "/settings/sync" },
       { groups, reducedMotion: false, initialMode: "enter" },
     );
     expect(slid.mode).toBe("slide");
 
-    const slidToSync = transitionIndicatorState(
+    const slidToConnections = transitionIndicatorState(
       slid,
-      { groupId: "extensions-data", path: "/settings/sync" },
+      { groupId: "extensions-data", path: "/settings/connections" },
       { groups, reducedMotion: false, initialMode: "enter" },
     );
-    expect(slidToSync.mode).toBe("slide");
+    expect(slidToConnections.mode).toBe("slide");
 
     const crossed = transitionIndicatorState(
-      slidToSync,
+      slidToConnections,
       { groupId: "system-about", path: "/settings/about" },
       { groups, reducedMotion: false, initialMode: "enter" },
     );
     expect(crossed.mode).toBe("crossfade");
     expect(crossed.groupStates["extensions-data"]).toEqual({
       visible: false,
-      path: "/settings/sync",
+      path: "/settings/connections",
       mode: "crossfade",
     });
     expect(crossed.groupStates["system-about"]).toEqual({
@@ -535,10 +571,27 @@ describe("settings sidebar indicator motion state machine", () => {
       /data-settings-section="\/settings\/appearance"[^>]*aria-current="page"|aria-current="page"[^>]*data-settings-section="\/settings\/appearance"/,
     );
 
-    // /settings/memory and /settings/sync each highlight independently in Group 3
+    // /settings/memory (Group 2) and /settings/sync (Group 3) each highlight independently;
+    // legacy /settings/archived highlights the unified /settings/projects entry.
     expect(html).toContain('data-settings-section="/settings/memory"');
+    expect(html).toContain('data-settings-section="/settings/projects"');
     expect(html).toContain('data-settings-section="/settings/sync"');
+    expect(html).not.toContain('data-settings-section="/settings/archived"');
     expect(html).not.toContain('data-settings-section="/settings/memory-sync"');
+    const archivedActiveHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        null,
+        createElement(
+          SidebarProvider,
+          { defaultOpen: true },
+          createElement(SettingsSidebarNav, { pathname: "/settings/archived" }),
+        ),
+      ),
+    );
+    expect(archivedActiveHtml).toMatch(
+      /data-settings-section="\/settings\/projects"[^>]*aria-current="page"|aria-current="page"[^>]*data-settings-section="\/settings\/projects"/,
+    );
     const syncActiveHtml = renderToStaticMarkup(
       createElement(
         GTProvider,

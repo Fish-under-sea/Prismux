@@ -4,16 +4,21 @@ import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@prismux/client-runtime/connection";
 import { AsyncResult } from "effect/reactivity";
 import {
+  CheckIcon,
   ChevronDownIcon,
   Clock3Icon,
   CopyIcon,
+  CpuIcon,
+  FolderGit2Icon,
   InboxIcon,
   MessageSquareIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlayIcon,
   PlusIcon,
+  ShieldCheckIcon,
   Trash2Icon,
+  WebhookIcon,
 } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import type {
@@ -146,6 +151,12 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  formatScheduledTaskExpression,
+  formatScheduledTaskWorkspaceStrategy,
+  useScheduledTasksPageCopy,
+  type ScheduledTaskQuickPreset,
+} from "../scheduledTasks/scheduledTasksPage.logic";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -800,6 +811,15 @@ export function ScheduledTaskRow({
   const messages = useMessages();
   const locale = useLocale();
   const gt = useGT();
+  const panelCopy = useScheduledTasksPageCopy();
+  const httpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
+  const { copyToClipboard: copyWebhookUrl, isCopied: webhookUrlCopied } = useCopyToClipboard({
+    target: {
+      target: "webhook URL",
+      unavailableMessage: msg("Clipboard API is unavailable while copying webhook URL."),
+      failureMessage: msg("Failed to copy webhook URL to the clipboard."),
+    },
+  });
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -867,12 +887,41 @@ export function ScheduledTaskRow({
     );
 
   if (variant === "panel") {
+    const scheduleExpr = formatScheduledTaskExpression(task.schedule, panelCopy.isZh);
+    const workspaceStrategyText = formatScheduledTaskWorkspaceStrategy(
+      task.workspaceStrategy,
+      panelCopy.isZh,
+    );
+    const webhookInfo =
+      isWebhook && task.webhook ? webhookAddress(task.webhook, httpBaseUrl, messages) : null;
+    const webhookSignatureEnabled =
+      task.schedule.type === "webhook" && task.schedule.signature !== null;
+    const panelStatusLabel =
+      task.blockedByPolicy !== undefined
+        ? panelCopy.statusBlocked
+        : !task.enabled
+          ? panelCopy.statusPaused
+          : isWebhook
+            ? panelCopy.statusListening
+            : panelCopy.statusEnabled;
+    const panelRunStatusLabel =
+      task.lastRunStatus === "running"
+        ? panelCopy.runStatusRunning
+        : task.lastRunStatus === "succeeded"
+          ? panelCopy.runStatusSucceeded
+          : task.lastRunStatus === "failed"
+            ? panelCopy.runStatusFailed
+            : null;
+    const panelScheduleDisplay =
+      isWebhook && panelCopy.isZh ? panelCopy.filterWebhook : scheduleText;
+
     return (
       <article
         data-testid={`scheduled-task-card-${task.id}`}
-        data-pmx-work-panel-card="1"
-        className="group flex flex-col gap-3 rounded-lg border border-border/75 bg-card px-4 py-3.5 shadow-xs transition-colors hover:border-border"
+        data-pmx-work-panel-control="1"
+        className="group flex w-full flex-col gap-3 rounded-xl border border-border/75 bg-card px-4 py-3.5 shadow-xs transition-colors hover:border-primary/45"
       >
+        {/* Top Header Row: Title, Status Badges, and Quick Controls */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -889,18 +938,24 @@ export function ScheduledTaskRow({
               <h3 className="min-w-0 truncate text-sm font-semibold text-foreground">
                 {task.title}
               </h3>
-              <Badge variant={task.enabled ? "success" : "secondary"}>
-                {task.enabled ? (isWebhook ? gt("Listening") : gt("Enabled")) : gt("Paused")}
+              <Badge
+                variant={
+                  task.blockedByPolicy !== undefined
+                    ? "warning"
+                    : task.enabled
+                      ? "success"
+                      : "secondary"
+                }
+              >
+                {panelStatusLabel}
               </Badge>
-              {task.lastRunStatus !== "never" ? (
-                <Badge variant={statusVariant(task.lastRunStatus)}>
-                  {messages(RUN_STATUS_LABELS[task.lastRunStatus])}
-                </Badge>
+              {panelRunStatusLabel !== null ? (
+                <Badge variant={statusVariant(task.lastRunStatus)}>{panelRunStatusLabel}</Badge>
               ) : null}
-              {projectTitle ? (
-                <Badge variant="outline" className="max-w-44 truncate">
-                  {projectTitle}
-                </Badge>
+              {task.runCount > 0 ? (
+                <span className="inline-flex items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-3xs font-medium text-muted-foreground tabular-nums">
+                  {panelCopy.metaRunCount(task.runCount)}
+                </span>
               ) : null}
             </div>
             <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
@@ -923,10 +978,9 @@ export function ScheduledTaskRow({
                 disabled={busy || !canOperate}
                 onClick={() => setDeliveriesOpen(true)}
                 data-pmx-work-panel-control="1"
-                className="h-7 gap-1 px-2 text-xs"
               >
                 <InboxIcon className="size-3.5" />
-                <T>Deliveries</T>
+                <span>{panelCopy.actionDeliveries}</span>
               </Button>
             ) : (
               <Button
@@ -936,10 +990,9 @@ export function ScheduledTaskRow({
                 disabled={busy || !canOperate}
                 onClick={() => void act("run")}
                 data-pmx-work-panel-control="1"
-                className="h-7 gap-1 px-2 text-xs"
               >
                 <PlayIcon className="size-3.5" />
-                <T>Run now</T>
+                <span>{panelCopy.actionRunNow}</span>
               </Button>
             )}
             <Button
@@ -949,20 +1002,18 @@ export function ScheduledTaskRow({
               disabled={busy || !canOperate}
               onClick={onEdit}
               data-pmx-work-panel-control="1"
-              className="h-7 gap-1 px-2 text-xs"
             >
               <PencilIcon className="size-3.5" />
-              <T>Edit</T>
+              <span>{panelCopy.actionEdit}</span>
             </Button>
             <Menu>
               <MenuTrigger
                 render={
                   <Button
                     size="icon-sm"
-                    variant="ghost"
+                    variant="ghost-muted"
                     disabled={busy || !canOperate}
                     aria-label={gt("Actions for {title}", { title: task.title })}
-                    className="size-7 text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                   />
                 }
               >
@@ -971,23 +1022,23 @@ export function ScheduledTaskRow({
               <MenuPopup align="end">
                 <MenuItem onClick={onEdit}>
                   <PencilIcon />
-                  <T>Edit</T>
+                  <span>{panelCopy.actionEdit}</span>
                 </MenuItem>
                 {isWebhook ? (
                   <MenuItem onClick={() => setDeliveriesOpen(true)}>
                     <InboxIcon />
-                    <T>Deliveries</T>
+                    <span>{panelCopy.actionDeliveries}</span>
                   </MenuItem>
                 ) : (
                   <MenuItem onClick={() => void act("run")}>
                     <PlayIcon />
-                    <T>Run now</T>
+                    <span>{panelCopy.actionRunNow}</span>
                   </MenuItem>
                 )}
                 <MenuSeparator />
                 <MenuItem onClick={() => void act("delete")}>
                   <Trash2Icon />
-                  <T>Delete</T>
+                  <span>{panelCopy.actionDelete}</span>
                 </MenuItem>
               </MenuPopup>
             </Menu>
@@ -1001,27 +1052,136 @@ export function ScheduledTaskRow({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/55 pt-2.5 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5 font-medium text-foreground/85">
-            <Clock3Icon className="size-3.5 shrink-0 text-primary" />
-            <span>{scheduleText}</span>
-          </span>
-          <span aria-hidden="true" className="opacity-45">
-            ·
-          </span>
-          <span>{stateLabel}</span>
-          {task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread" ? (
-            <>
-              <span aria-hidden="true" className="opacity-45">
-                ·
+        {/* Full-Width Structured Functional Info Grid */}
+        <div className="grid grid-cols-1 gap-2.5 border-t border-border/55 pt-2.5 text-xs sm:grid-cols-2 xl:grid-cols-4">
+          {/* 1. Trigger Schedule & Expression */}
+          <div className="min-w-0 space-y-1">
+            <div className="text-3xs font-medium tracking-wide text-muted-foreground/80">
+              {panelCopy.metaScheduleLabel}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 font-medium text-foreground">
+              {isWebhook ? (
+                <WebhookIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+              ) : (
+                <Clock3Icon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+              )}
+              <span className="truncate">{panelScheduleDisplay}</span>
+              <code className="rounded bg-muted/85 px-1.5 py-px font-mono text-3xs text-foreground/80">
+                {scheduleExpr}
+              </code>
+            </div>
+          </div>
+
+          {/* 2. Next Run / Webhook Endpoint & Signature Status */}
+          <div className="min-w-0 space-y-1">
+            <div className="text-3xs font-medium tracking-wide text-muted-foreground/80">
+              {isWebhook ? panelCopy.metaWebhookEndpointLabel : panelCopy.metaNextRunLabel}
+            </div>
+            {isWebhook ? (
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground">
+                {webhookInfo ? (
+                  <>
+                    <code className="max-w-44 truncate rounded bg-muted/80 px-1.5 py-px font-mono text-3xs text-foreground/85">
+                      {webhookInfo.address}
+                    </code>
+                    {webhookInfo.copyable ? (
+                      <button
+                        type="button"
+                        aria-label={panelCopy.metaCopyEndpoint}
+                        title={
+                          webhookUrlCopied
+                            ? panelCopy.metaCopiedEndpoint
+                            : panelCopy.metaCopyEndpoint
+                        }
+                        onClick={() => copyWebhookUrl(webhookInfo.address, undefined)}
+                        className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        {webhookUrlCopied ? (
+                          <CheckIcon className="size-3 text-emerald-500" />
+                        ) : (
+                          <CopyIcon className="size-3" />
+                        )}
+                      </button>
+                    ) : null}
+                  </>
+                ) : (
+                  <span className="truncate">{panelCopy.metaWebhookListening}</span>
+                )}
+                <span className="inline-flex items-center gap-1 text-2xs text-muted-foreground">
+                  {webhookSignatureEnabled ? (
+                    <ShieldCheckIcon className="size-3 text-emerald-500" aria-hidden="true" />
+                  ) : null}
+                  <span>
+                    {webhookSignatureEnabled
+                      ? panelCopy.metaWebhookSigned
+                      : panelCopy.metaWebhookUnsigned}
+                  </span>
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1.5 text-foreground/90">
+                <span className="truncate font-medium">
+                  {task.enabled && task.nextRunAt ? (
+                    <ScheduledRelativeLabel value={task.nextRunAt} />
+                  ) : (
+                    panelCopy.metaNotScheduled
+                  )}
+                </span>
+                {task.lastRunAt ? (
+                  <span className="truncate text-2xs text-muted-foreground">
+                    · {panelCopy.metaLastRunLabel}{" "}
+                    <ScheduledRelativeLabel value={task.lastRunAt} />
+                  </span>
+                ) : (
+                  <span className="truncate text-2xs text-muted-foreground">
+                    · {panelCopy.metaNeverRun}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 3. Target Project & Workspace Strategy */}
+          <div className="min-w-0 space-y-1">
+            <div className="text-3xs font-medium tracking-wide text-muted-foreground/80">
+              {panelCopy.metaWorkspaceLabel}
+            </div>
+            <div className="flex min-w-0 items-center gap-1.5 text-foreground/90">
+              <FolderGit2Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="truncate font-medium">{projectTitle ?? task.projectId}</span>
+              <span className="shrink-0 truncate text-2xs text-muted-foreground">
+                · {workspaceStrategyText}
               </span>
-              <ScheduledTaskThreadLink environmentId={environmentId} threadId={task.threadId} />
-            </>
-          ) : null}
-          {task.lastRunError ? (
-            <span className="text-destructive">{task.lastRunError}</span>
-          ) : null}
+            </div>
+          </div>
+
+          {/* 4. Model / Provider & Execution Log Link */}
+          <div className="min-w-0 space-y-1">
+            <div className="text-3xs font-medium tracking-wide text-muted-foreground/80">
+              {panelCopy.metaModelLabel}
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-foreground/90">
+              <CpuIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="truncate font-mono text-2xs">
+                {task.modelSelection.model || task.modelSelection.instanceId}
+              </span>
+              {task.threadId !== null ? (
+                <>
+                  <span aria-hidden="true" className="opacity-45">
+                    ·
+                  </span>
+                  <ScheduledTaskThreadLink environmentId={environmentId} threadId={task.threadId} />
+                </>
+              ) : null}
+            </div>
+          </div>
         </div>
+
+        {task.blockedByPolicy || task.lastRunError ? (
+          <div className="rounded-lg border border-destructive/35 bg-destructive/8 px-3 py-1.5 text-xs text-destructive">
+            {task.blockedByPolicy ?? task.lastRunError}
+          </div>
+        ) : null}
       </article>
     );
   }
@@ -1430,10 +1590,12 @@ function WebhookDeliveryMode({ environmentId }: { readonly environmentId: Enviro
 export function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
+  initialPreset = null,
   onClose,
 }: {
   readonly initialEnvironmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
+  readonly initialPreset?: ScheduledTaskQuickPreset | null | undefined;
   readonly onClose: () => void;
 }) {
   const [saving, setSaving] = useState(false);
@@ -1451,6 +1613,7 @@ export function ScheduledTaskEditorDialog({
         <ScheduledTaskEditorForm
           initialEnvironmentId={initialEnvironmentId}
           task={task}
+          initialPreset={initialPreset}
           saving={saving}
           onSavingChange={setSaving}
           onClose={onClose}
@@ -1637,12 +1800,14 @@ function ScheduledTaskDestination({
 function ScheduledTaskEditorForm({
   initialEnvironmentId,
   task,
+  initialPreset = null,
   saving,
   onSavingChange: setSaving,
   onClose,
 }: {
   readonly initialEnvironmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
+  readonly initialPreset?: ScheduledTaskQuickPreset | null | undefined;
   readonly saving: boolean;
   readonly onSavingChange: (saving: boolean) => void;
   readonly onClose: () => void;
@@ -1690,6 +1855,18 @@ function ScheduledTaskEditorForm({
       ? taskToDraft(task)
       : {
           ...EMPTY_DRAFT,
+          ...(initialPreset
+            ? {
+                title: initialPreset.title,
+                prompt: initialPreset.prompt,
+                scheduleMode: initialPreset.scheduleMode,
+                ...(initialPreset.timeOfDay ? { timeOfDay: initialPreset.timeOfDay } : {}),
+                ...(initialPreset.weekdays ? { weekdays: new Set(initialPreset.weekdays) } : {}),
+                ...(initialPreset.intervalMinutes
+                  ? { intervalMinutes: initialPreset.intervalMinutes }
+                  : {}),
+              }
+            : {}),
           projectId: defaultScheduledTaskProjectId(scopedProjects, scope),
         },
   );

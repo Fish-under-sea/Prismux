@@ -9,8 +9,8 @@ import { acpRegistryClient } from "@prismux/provider-acp-registry/client";
 import { makeProviderClientRegistry, type ProviderIcon } from "@prismux/provider-core/client";
 import { formatModelSlugName } from "@prismux/core-shared/model";
 import { modelShortName } from "@prismux/provider-core/modelShortName";
-import { fxClient } from "@prismux/provider-fx/client";
 import { openCodeClient } from "@prismux/provider-opencode/client";
+import { piClient } from "@prismux/provider-pi/client";
 
 // OpenRouter's Ink and Cloud glyphs from https://openrouter.ai/brand.
 export const openRouterIcon: ProviderIcon = {
@@ -46,7 +46,7 @@ export const providerClients = makeProviderClientRegistry([
     settingsSchema: AntigravitySettings,
   },
   openCodeClient,
-  fxClient,
+  piClient,
   acpRegistryClient,
 ]);
 

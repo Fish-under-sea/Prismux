@@ -1,3 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { SidebarStorageLike } from "../sidebar/prismuxSidebarQuickNav.logic";
@@ -11,6 +15,7 @@ import {
   pinWorkspaceCard,
   readWorkspaceBoardState,
   resetWorkspaceLaneOverrides,
+  resolveWorkspaceBoardLaneDisplay,
   togglePinWorkspaceCard,
   unpinWorkspaceCard,
   WORKSPACE_BOARD_LANE_ORDER,
@@ -57,7 +62,7 @@ function makeCard(overrides: Partial<WorkspaceBoardCardInput> & { readonly key: 
 }
 
 describe("Orca-aligned Workspace Board 4-column logic", () => {
-  it("defines the exact 4 Orca lanes in order: Todo -> In progress -> In review -> Done", () => {
+  it("defines the exact 4 Orca lanes in order with Chinese primary + English secondary bilingual headers", () => {
     expect([...WORKSPACE_BOARD_LANE_ORDER]).toEqual([
       "todo",
       "in-progress",
@@ -70,6 +75,36 @@ describe("Orca-aligned Workspace Board 4-column logic", () => {
       "In review",
       "Done",
     ]);
+    expect(WORKSPACE_BOARD_LANES.map((lane) => lane.zhLabel)).toEqual([
+      "待办",
+      "进行中",
+      "评审中",
+      "已完成",
+    ]);
+    expect(
+      WORKSPACE_BOARD_LANES.map((lane) => resolveWorkspaceBoardLaneDisplay(lane, true)),
+    ).toEqual([
+      { primary: "待办", secondary: "Todo", accessibleLabel: "待办 Todo" },
+      { primary: "进行中", secondary: "In progress", accessibleLabel: "进行中 In progress" },
+      { primary: "评审中", secondary: "In review", accessibleLabel: "评审中 In review" },
+      { primary: "已完成", secondary: "Done", accessibleLabel: "已完成 Done" },
+    ]);
+    expect(
+      WORKSPACE_BOARD_LANES.map((lane) => resolveWorkspaceBoardLaneDisplay(lane, false)),
+    ).toEqual([
+      { primary: "Todo", secondary: null, accessibleLabel: "Todo" },
+      { primary: "In progress", secondary: null, accessibleLabel: "In progress" },
+      { primary: "In review", secondary: null, accessibleLabel: "In review" },
+      { primary: "Done", secondary: null, accessibleLabel: "Done" },
+    ]);
+
+    const boardDir = NodePath.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const pageSrc = NodeFS.readFileSync(NodePath.join(boardDir, "WorkspaceBoardPage.tsx"), "utf8");
+    expect(pageSrc).toContain("text-[13px] font-semibold text-foreground");
+    expect(pageSrc).toContain("text-[11px] font-normal text-muted-foreground/55");
+
     expect(getWorkspaceBoardCopy("zh").pinnedDropHint).toBe(
       "拖放到此处即可固定，无需更改状态。",
     );

@@ -25,7 +25,6 @@ export const DSH_LOCAL_ACP_PRESET = {
   command: "dsh",
   args: ["acp"] as readonly string[],
   homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
-  accentColor: "#4176E6",
 } as const;
 
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._:@/-]{1,128}$/;

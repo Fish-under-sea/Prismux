@@ -17,10 +17,17 @@ export const WORKSPACE_BOARD_STORAGE_KEY = "prismux.workspaceBoard.state.v1" as 
 export interface WorkspaceBoardLaneMeta {
   readonly id: WorkspaceBoardLaneId;
   readonly label: string;
+  readonly zhLabel: string;
   readonly borderTopClass: string;
   readonly laneTintClass: string;
   readonly iconToneClass: string;
   readonly swatchClass: string;
+}
+
+export interface WorkspaceBoardLaneDisplay {
+  readonly primary: string;
+  readonly secondary: string | null;
+  readonly accessibleLabel: string;
 }
 
 /**
@@ -32,6 +39,7 @@ export const WORKSPACE_BOARD_LANES: readonly WorkspaceBoardLaneMeta[] = [
   {
     id: "todo",
     label: "Todo",
+    zhLabel: "待办",
     borderTopClass: "border-t-muted-foreground/55",
     laneTintClass: "",
     iconToneClass: "text-muted-foreground",
@@ -40,6 +48,7 @@ export const WORKSPACE_BOARD_LANES: readonly WorkspaceBoardLaneMeta[] = [
   {
     id: "in-progress",
     label: "In progress",
+    zhLabel: "进行中",
     borderTopClass: "border-t-[#d4a300]/85",
     laneTintClass: "bg-gradient-to-b from-[#d4a300]/[0.08] via-transparent to-transparent",
     iconToneClass: "text-[#d4a300]",
@@ -48,6 +57,7 @@ export const WORKSPACE_BOARD_LANES: readonly WorkspaceBoardLaneMeta[] = [
   {
     id: "in-review",
     label: "In review",
+    zhLabel: "评审中",
     borderTopClass: "border-t-[#16a34a]/85",
     laneTintClass: "bg-gradient-to-b from-[#16a34a]/[0.08] via-transparent to-transparent",
     iconToneClass: "text-[#16a34a]",
@@ -56,12 +66,31 @@ export const WORKSPACE_BOARD_LANES: readonly WorkspaceBoardLaneMeta[] = [
   {
     id: "done",
     label: "Done",
+    zhLabel: "已完成",
     borderTopClass: "border-t-[#c7a594]/85",
     laneTintClass: "bg-gradient-to-b from-[#c7a594]/[0.08] via-transparent to-transparent",
     iconToneClass: "text-[#c7a594]",
     swatchClass: "bg-[#c7a594]",
   },
 ] as const;
+
+export function resolveWorkspaceBoardLaneDisplay(
+  lane: Pick<WorkspaceBoardLaneMeta, "label" | "zhLabel">,
+  isZh: boolean,
+): WorkspaceBoardLaneDisplay {
+  if (isZh) {
+    return {
+      primary: lane.zhLabel,
+      secondary: lane.label,
+      accessibleLabel: `${lane.zhLabel} ${lane.label}`,
+    };
+  }
+  return {
+    primary: lane.label,
+    secondary: null,
+    accessibleLabel: lane.label,
+  };
+}
 
 export interface WorkspaceBoardPersistedState {
   readonly laneOverrides: Readonly<Record<string, WorkspaceBoardLaneId>>;

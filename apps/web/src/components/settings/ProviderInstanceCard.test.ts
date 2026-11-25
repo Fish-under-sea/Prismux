@@ -13,9 +13,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import {
   ProviderInstanceCard,
   deriveProviderModelsForDisplay,
+  formatCompactProviderListStatus,
   nextProviderEnvironmentWithFieldSecret,
   nextProviderEnvironmentWithFieldValue,
 } from "./ProviderInstanceCard";
@@ -163,11 +165,12 @@ describe("ProviderInstanceCard dual-entry deletion controls", () => {
       ),
     );
 
-  it("renders aligned list delete button alongside Chat/CLI toggle and enable switch", () => {
+  it("keeps list rows uncluttered with only the enable switch (launch mode and delete live in detail pane)", () => {
     const html = renderCard({ mode: "list" });
-    expect(html).toContain('data-provider-mode-toggle="antigravity"');
-    expect(html).toContain('data-provider-delete-list="antigravity"');
-    expect(html).toContain('aria-label="Delete Antigravity CLI configuration"');
+    expect(html).toContain('data-provider-list-row="antigravity"');
+    expect(html).toContain('aria-label="Enable Antigravity CLI"');
+    expect(html).not.toContain('data-provider-mode-toggle="antigravity"');
+    expect(html).not.toContain('data-provider-delete-list="antigravity"');
   });
 
   it("renders Danger zone delete button in editor mode and hides it when readOnly", () => {
@@ -180,34 +183,32 @@ describe("ProviderInstanceCard dual-entry deletion controls", () => {
     expect(readOnlyHtml).not.toContain('data-provider-delete-detail="antigravity"');
   });
 
-  it("renders high-contrast active highlight for Chat and CLI modes in both list and editor views", () => {
-    for (const mode of ["list", "editor"] as const) {
-      const chatHtml = renderCard({ mode, launchMode: "chat" });
-      const chatActiveButton = chatHtml.match(/<button[^>]*data-launch-mode="chat"[^>]*>/)?.[0] ?? "";
-      const cliInactiveButton = chatHtml.match(/<button[^>]*data-launch-mode="cli"[^>]*>/)?.[0] ?? "";
-      expect(chatActiveButton).toContain('data-active="true"');
-      expect(chatActiveButton).toContain('aria-checked="true"');
-      expect(chatActiveButton).toContain("bg-primary");
-      expect(chatActiveButton).toContain("text-primary-foreground");
-      expect(chatActiveButton).toContain("font-semibold");
-      expect(chatActiveButton).not.toContain("bg-background");
-      expect(cliInactiveButton).toContain('data-active="false"');
-      expect(cliInactiveButton).toContain("bg-transparent");
-      expect(cliInactiveButton).not.toContain("bg-primary");
+  it("renders high-contrast active highlight for Chat and CLI modes in the editor detail panel", () => {
+    const chatHtml = renderCard({ mode: "editor", launchMode: "chat" });
+    const chatActiveButton = chatHtml.match(/<button[^>]*data-launch-mode="chat"[^>]*>/)?.[0] ?? "";
+    const cliInactiveButton = chatHtml.match(/<button[^>]*data-launch-mode="cli"[^>]*>/)?.[0] ?? "";
+    expect(chatActiveButton).toContain('data-active="true"');
+    expect(chatActiveButton).toContain('aria-checked="true"');
+    expect(chatActiveButton).toContain("bg-primary");
+    expect(chatActiveButton).toContain("text-primary-foreground");
+    expect(chatActiveButton).toContain("font-semibold");
+    expect(chatActiveButton).not.toContain("bg-background");
+    expect(cliInactiveButton).toContain('data-active="false"');
+    expect(cliInactiveButton).toContain("bg-transparent");
+    expect(cliInactiveButton).not.toContain("bg-primary");
 
-      const cliHtml = renderCard({ mode, launchMode: "cli" });
-      const chatInactiveButton = cliHtml.match(/<button[^>]*data-launch-mode="chat"[^>]*>/)?.[0] ?? "";
-      const cliActiveButton = cliHtml.match(/<button[^>]*data-launch-mode="cli"[^>]*>/)?.[0] ?? "";
-      expect(cliActiveButton).toContain('data-active="true"');
-      expect(cliActiveButton).toContain('aria-checked="true"');
-      expect(cliActiveButton).toContain("bg-primary");
-      expect(cliActiveButton).toContain("text-primary-foreground");
-      expect(cliActiveButton).toContain("font-semibold");
-      expect(cliActiveButton).not.toContain("bg-background");
-      expect(chatInactiveButton).toContain('data-active="false"');
-      expect(chatInactiveButton).toContain("bg-transparent");
-      expect(chatInactiveButton).not.toContain("bg-primary");
-    }
+    const cliHtml = renderCard({ mode: "editor", launchMode: "cli" });
+    const chatInactiveButton = cliHtml.match(/<button[^>]*data-launch-mode="chat"[^>]*>/)?.[0] ?? "";
+    const cliActiveButton = cliHtml.match(/<button[^>]*data-launch-mode="cli"[^>]*>/)?.[0] ?? "";
+    expect(cliActiveButton).toContain('data-active="true"');
+    expect(cliActiveButton).toContain('aria-checked="true"');
+    expect(cliActiveButton).toContain("bg-primary");
+    expect(cliActiveButton).toContain("text-primary-foreground");
+    expect(cliActiveButton).toContain("font-semibold");
+    expect(cliActiveButton).not.toContain("bg-background");
+    expect(chatInactiveButton).toContain('data-active="false"');
+    expect(chatInactiveButton).toContain("bg-transparent");
+    expect(chatInactiveButton).not.toContain("bg-primary");
   });
 
   it("mounts ProviderCliVersionBadge in the editor header for live CLI versions", () => {
@@ -249,5 +250,104 @@ describe("ProviderInstanceCard dual-entry deletion controls", () => {
     expect(readOnlyHtml).toContain('data-cli-version-badge="codex"');
     expect(readOnlyHtml).toContain('data-cli-version-state="readonly"');
     expect(readOnlyHtml).toContain("v0.172.0");
+  });
+
+  it("renders pure DeepSeek whale icon without DH initials badge even when legacy accentColor is stored", () => {
+    const dshId = ProviderInstanceId.make("dsh");
+    const acpDriver = ProviderDriverKind.make("acpRegistry");
+    for (const mode of ["list", "editor"] as const) {
+      const html = renderCard({
+        mode,
+        instanceId: dshId,
+        instance: {
+          driver: acpDriver,
+          displayName: "DeepSeek Harness (dsh)",
+          accentColor: "#4176E6",
+          enabled: true,
+          config: { source: "local", commandPath: "dsh", commandArgs: ["acp"] },
+        },
+      });
+      expect(html).toContain('data-dsh-brand-icon="true"');
+      expect(html).not.toContain(">DH<");
+    }
+
+    // Direct ProviderInstanceIcon check (Sidebar / Model Picker path)
+    const iconHtml = renderToStaticMarkup(
+      createElement(ProviderInstanceIcon, {
+        driverKind: acpDriver,
+        instanceId: dshId,
+        displayName: "DeepSeek Harness (dsh)",
+        accentColor: "#4176E6",
+        showBadge: true,
+      }),
+    );
+    expect(iconHtml).toContain('data-dsh-brand-icon="true"');
+    expect(iconHtml).not.toContain(">DH<");
+  });
+
+  it("aligns provider list rows on horizontal midline with subtle single-line compact status", () => {
+    expect(formatCompactProviderListStatus("已认证 · Local agy CLI · Google AI Ultra")).toBe(
+      "已认证 · agy CLI · Ultra",
+    );
+    expect(formatCompactProviderListStatus("Authenticated · Local agy CLI · Google AI Pro")).toBe(
+      "Authenticated · agy CLI · Pro",
+    );
+    expect(formatCompactProviderListStatus("可用")).toBe("可用");
+
+    const listHtml = renderCard({
+      mode: "list",
+      liveProvider: {
+        instanceId: antigravityId,
+        driver: antigravityDriver,
+        displayName: "Antigravity",
+        enabled: true,
+        installed: true,
+        version: "1.5.17",
+        status: "ready",
+        auth: { status: "authenticated", label: "Local agy CLI · Google AI Ultra" },
+        checkedAt: IsoDateTime.make("2026-11-24T00:00:00.000Z"),
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+    });
+    expect(listHtml).toContain('data-provider-icon-slot="list"');
+    expect(listHtml).toContain("items-center gap-2.5");
+    expect(listHtml).not.toContain("items-start gap-3");
+    expect(listHtml).toContain('data-provider-list-status="true"');
+    expect(listHtml).toContain("text-2xs font-normal leading-snug text-muted-foreground/65");
+    expect(listHtml).toContain("truncate whitespace-nowrap");
+    expect(listHtml).not.toContain("line-clamp-2");
+    expect(listHtml).toContain("agy CLI · Ultra");
+  });
+
+  it("renders redesigned detail header, swatch color picker, basic/connection cards, and collapsible Advanced", () => {
+    const editorHtml = renderCard({
+      mode: "editor",
+      onRefresh: () => {},
+      liveProvider: {
+        instanceId: antigravityId,
+        driver: antigravityDriver,
+        displayName: "Antigravity",
+        enabled: true,
+        installed: true,
+        version: "1.5.17",
+        status: "ready",
+        auth: { status: "authenticated", label: "Local agy CLI · Google AI Ultra" },
+        checkedAt: IsoDateTime.make("2026-11-24T00:00:00.000Z"),
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+    });
+    expect(editorHtml).toContain('data-provider-detail-header="antigravity"');
+    expect(editorHtml).toContain('data-provider-icon-slot="editor"');
+    expect(editorHtml).toContain('aria-label="Refresh provider status"');
+    expect(editorHtml).toContain('data-accent-color-swatch="true"');
+    expect(editorHtml).toContain("Basic configuration");
+    expect(editorHtml).toContain("Connection &amp; runtime");
+    expect(editorHtml).toContain('data-provider-advanced-toggle="antigravity"');
+    expect(editorHtml).not.toContain(">Status</h3>");
+    expect(editorHtml).toContain("Choose whether new sessions open in Chat or CLI mode.");
   });
 });

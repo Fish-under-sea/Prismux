@@ -5,8 +5,157 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{
-    MINIMUM_CPU_UPDATE_INTERVAL, Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind,
+    CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, Pid, ProcessRefreshKind, ProcessesToUpdate,
+    System, UpdateKind,
 };
+
+#[cfg(target_os = "windows")]
+mod win_mem {
+    use std::ffi::c_void;
+    use std::mem::{size_of, zeroed};
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const PROCESS_VM_COUNTERS: u32 = 3;
+
+    #[repr(C)]
+    struct ProcessMemoryCountersEx2 {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+        private_usage: usize,
+        private_working_set_size: usize,
+        shared_commit_usage: u64,
+    }
+
+    #[repr(C)]
+    struct VmCountersEx {
+        peak_virtual_size: usize,
+        virtual_size: usize,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+        private_usage: usize,
+    }
+
+    #[repr(C)]
+    struct VmCountersEx2 {
+        counters_ex: VmCountersEx,
+        private_working_set_size: usize,
+        shared_commit_usage: usize,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(
+            desired_access: u32,
+            inherit_handle: i32,
+            process_id: u32,
+        ) -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn K32GetProcessMemoryInfo(
+            process: *mut c_void,
+            ppsmemcounters: *mut ProcessMemoryCountersEx2,
+            cb: u32,
+        ) -> i32;
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtQueryInformationProcess(
+            process_handle: *mut c_void,
+            process_information_class: u32,
+            process_information: *mut c_void,
+            process_information_length: u32,
+            return_length: *mut u32,
+        ) -> i32;
+    }
+
+    struct HandleGuard(*mut c_void);
+
+    impl Drop for HandleGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    /// Queries Windows Task Manager's "Memory (Private Working Set)" in bytes for `pid`,
+    /// avoiding multi-process Chromium/Electron shared-page double counting.
+    pub fn private_working_set_bytes(pid: u32) -> Option<u64> {
+        if pid == 0 {
+            return None;
+        }
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return None;
+        }
+        let _guard = HandleGuard(handle);
+
+        // Primary: Win32 PROCESS_MEMORY_COUNTERS_EX2.PrivateWorkingSetSize (Win10 20348+ / Win11).
+        let mut ex2: ProcessMemoryCountersEx2 = unsafe { zeroed() };
+        ex2.cb = size_of::<ProcessMemoryCountersEx2>() as u32;
+        let ok = unsafe { K32GetProcessMemoryInfo(handle, &mut ex2, ex2.cb) };
+        if ok != 0 && (ex2.private_working_set_size > 0 || ex2.working_set_size == 0) {
+            return Some(ex2.private_working_set_size as u64);
+        }
+
+        // Universal fallback (Windows Vista+): NtQueryInformationProcess(ProcessVmCounters, VM_COUNTERS_EX2).
+        let mut vm_ex2: VmCountersEx2 = unsafe { zeroed() };
+        let mut return_length: u32 = 0;
+        let status = unsafe {
+            NtQueryInformationProcess(
+                handle,
+                PROCESS_VM_COUNTERS,
+                (&mut vm_ex2 as *mut VmCountersEx2).cast::<c_void>(),
+                size_of::<VmCountersEx2>() as u32,
+                &mut return_length,
+            )
+        };
+        if status >= 0
+            && (vm_ex2.private_working_set_size > 0 || vm_ex2.counters_ex.working_set_size == 0)
+        {
+            return Some(vm_ex2.private_working_set_size as u64);
+        }
+
+        None
+    }
+}
+
+/// Normalizes sysinfo's per-core CPU% (where 1 full logical core = 100%) to Windows Task
+/// Manager's total-system CPU% scale `[0.0, 100.0]`.
+fn normalize_cpu_percent(raw_per_core_percent: f32, logical_cpus: usize) -> f32 {
+    if !raw_per_core_percent.is_finite() || raw_per_core_percent <= 0.0 {
+        return 0.0;
+    }
+    let cores = logical_cpus.max(1) as f32;
+    (raw_per_core_percent / cores).clamp(0.0, 100.0)
+}
+
+#[cfg(target_os = "windows")]
+fn process_resident_bytes(pid: u32, fallback_working_set_bytes: u64) -> u64 {
+    win_mem::private_working_set_bytes(pid).unwrap_or(fallback_working_set_bytes)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn process_resident_bytes(_pid: u32, fallback_working_set_bytes: u64) -> u64 {
+    fallback_working_set_bytes
+}
 
 const PROTOCOL_VERSION: u32 = 3;
 const MIN_SAMPLE_INTERVAL_MS: u64 = 250;
@@ -359,11 +508,24 @@ struct Collector {
 
 impl Collector {
     fn new() -> Self {
+        let mut system = System::new();
+        system.refresh_cpu_list(CpuRefreshKind::nothing());
         Self {
-            system: System::new(),
+            system,
             sequence: 0,
             cpu_baseline_refreshed_at: None,
         }
+    }
+
+    fn logical_cpu_count(&self) -> usize {
+        let from_sysinfo = self.system.cpus().len();
+        if from_sysinfo > 0 {
+            return from_sysinfo;
+        }
+        std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1)
+            .max(1)
     }
 
     fn prime_cpu_usage(&mut self) {
@@ -514,6 +676,7 @@ impl Collector {
         let start_time_offset = process_details
             .as_ref()
             .map_or(Some(0), |(_, offset)| *offset);
+        let logical_cpus = self.logical_cpu_count();
         let mut processes = tracked
             .into_iter()
             .filter_map(|pid| {
@@ -552,9 +715,9 @@ impl Collector {
                         format!("{:?}", process.status()),
                         MAX_PROCESS_STATUS_BYTES,
                     ),
-                    cpu_percent: process.cpu_usage(),
+                    cpu_percent: normalize_cpu_percent(process.cpu_usage(), logical_cpus),
                     cpu_time_ms: process.accumulated_cpu_time(),
-                    resident_bytes: details.memory(),
+                    resident_bytes: process_resident_bytes(pid, details.memory()),
                     virtual_bytes: details.virtual_memory(),
                     io_read_bytes: disk_usage.total_read_bytes,
                     io_write_bytes: disk_usage.total_written_bytes,
@@ -1480,6 +1643,40 @@ mod tests {
                 now + Duration::from_millis(100)
             ),
             Some(deadline)
+        );
+    }
+
+    #[test]
+    fn normalizes_cpu_percent_to_total_system_scale() {
+        assert!((normalize_cpu_percent(100.0, 32) - 3.125).abs() < 1e-4);
+        assert!((normalize_cpu_percent(130.4, 32) - 4.075).abs() < 1e-4);
+        assert_eq!(normalize_cpu_percent(3_200.0, 32), 100.0);
+        assert_eq!(normalize_cpu_percent(9_999.0, 16), 100.0);
+        assert_eq!(normalize_cpu_percent(-5.0, 8), 0.0);
+        assert_eq!(normalize_cpu_percent(f32::NAN, 8), 0.0);
+        assert_eq!(normalize_cpu_percent(f32::INFINITY, 8), 0.0);
+        assert_eq!(normalize_cpu_percent(50.0, 0), 50.0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_private_working_set_is_positive_and_within_working_set() {
+        let pid = std::process::id();
+        let pws = win_mem::private_working_set_bytes(pid).expect("private working set");
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            true,
+            ProcessRefreshKind::nothing().with_memory(),
+        );
+        let ws = system
+            .process(Pid::from_u32(pid))
+            .expect("self process")
+            .memory();
+        assert!(pws > 0, "expected positive private working set, got {pws}");
+        assert!(
+            pws <= ws,
+            "expected private working set ({pws}) <= total working set ({ws})"
         );
     }
 }

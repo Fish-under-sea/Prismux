@@ -11,6 +11,8 @@ const KEPT_ENV = new Set([
   "PRISMUX_TRANSFER_BUDGET_SCENARIOS_PATH",
   // Opt-in: points the HtmlRender tests at a headless browser, which they skip without.
   "PRISMUX_TEST_HEADLESS_SHELL",
+  // Opt-in: enables the live local DeepSeek Harness ACP probe test in dshLocal.test.ts.
+  "PRISMUX_LIVE_DSH_PROBE",
 ]);
 
 if (process.env.PRISMUX_TEST_KEEP_PROVIDER_ENV !== "1") {

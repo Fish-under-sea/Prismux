@@ -25,6 +25,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeContext";
 import {
+  applyPendingScopedWrites,
   createScopedSettingsWriter,
   pendingScopedWritesAtom,
   planProjectOverridesClear,
@@ -65,7 +66,11 @@ function useRunScopedPlan() {
     planner: Parameters<typeof writeScopedSettings>[1],
     onFailed?: () => void,
   ) => {
-    const plan = planner(environments);
+    const optimisticEnvironments = applyPendingScopedWrites(
+      environments,
+      appAtomRegistry.get(pendingScopedWritesAtom),
+    );
+    const plan = planner(optimisticEnvironments);
     if (plan.unavailableReason) {
       toastManager.add({
         type: "warning",
@@ -85,10 +90,12 @@ function useRunScopedPlan() {
           saved,
         ),
       );
-    appAtomRegistry.update(pendingScopedWritesAtom, (writes) => [
-      ...writes,
-      ...plan.serverWrites.map(({ environmentId, patch }) => ({ save, environmentId, patch })),
-    ]);
+    if (plan.serverWrites.length > 0) {
+      appAtomRegistry.update(pendingScopedWritesAtom, (writes) => [
+        ...writes,
+        ...plan.serverWrites.map(({ environmentId, patch }) => ({ save, environmentId, patch })),
+      ]);
+    }
     void writeScopedSettings(
       environments,
       planner,

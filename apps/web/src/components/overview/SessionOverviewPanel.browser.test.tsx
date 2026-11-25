@@ -420,4 +420,66 @@ describe("SessionOverviewPanel", () => {
       document.querySelector('[data-overview-more-popover="1"]')?.getAttribute("data-pmx-glass-zone"),
     ).toBe("overlays");
   });
+
+  it("floats top-right above chat content with 0px timeline shift and strict >=16px clearance above bottom composer", async () => {
+    await using screen = await render(
+      <div
+        data-test-chat-pane
+        style={{
+          position: "relative",
+          width: "960px",
+          height: "640px",
+          ["--pmx-composer-height" as string]: "180px",
+        }}
+      >
+        <div
+          data-test-chat-timeline
+          style={{ width: "100%", height: "100%", padding: "16px" }}
+        >
+          Symmetric Chat Timeline Content
+        </div>
+        <div
+          data-test-bottom-composer
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: "180px",
+          }}
+        >
+          Bottom Composer
+        </div>
+        <SessionOverviewPanel
+          {...makeBaseProps({
+            floating: true,
+            bottomClearancePx: 180,
+            containerHeightPx: 640,
+          })}
+        />
+      </div>,
+    );
+
+    const pane = screen.container.querySelector<HTMLElement>("[data-test-chat-pane]")!;
+    const timeline = screen.container.querySelector<HTMLElement>("[data-test-chat-timeline]")!;
+    const composer = screen.container.querySelector<HTMLElement>("[data-test-bottom-composer]")!;
+    const shell = screen.container.querySelector<HTMLElement>('[data-overview-floating-shell="true"]')!;
+    const card = screen.container.querySelector<HTMLElement>('[data-overview-floating="true"]')!;
+
+    const paneRect = pane.getBoundingClientRect();
+    const timelineRect = timeline.getBoundingClientRect();
+    const composerRect = composer.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+
+    // 0px timeline horizontal shift: timeline fills full pane width cleanly
+    expect(Math.round(timelineRect.width)).toBe(Math.round(paneRect.width));
+    // True floating top-right anchor (12px top, 12px right)
+    expect(getComputedStyle(shell).position).toBe("absolute");
+    expect(getComputedStyle(shell).pointerEvents).toBe("none");
+    expect(getComputedStyle(card).pointerEvents).toBe("auto");
+    expect(Math.round(cardRect.top - paneRect.top)).toBe(12);
+    expect(Math.round(paneRect.right - cardRect.right)).toBe(12);
+    // Strict >= 16px breathing clearance above the bottom composer
+    expect(composerRect.top - cardRect.bottom).toBeGreaterThanOrEqual(16);
+  });
 });

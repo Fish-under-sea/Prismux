@@ -56,7 +56,7 @@ export interface PrismuxRemoteConnectCopy {
 const ZH_COPY: PrismuxRemoteConnectCopy = {
   dialogTitle: "扫码远控",
   dialogDescription:
-    "在同一局域网或 Tailscale 网络下，使用手机浏览器或 T3 手机端 App 扫描二维码直连本机工作台，无需登录云端账号。",
+    "在同一局域网或 Tailscale 网络下，使用手机浏览器或 Prismux 手机端 App 扫描二维码直连本机工作台，无需登录云端账号。",
   mobileWebTitle: "局域网 / Tailscale 二维码直连",
   mobileWebDesc:
     "扫描下方二维码打开工作台，或生成带一次性配对令牌的安全二维码供手机端直接配对。",
@@ -75,7 +75,7 @@ const ZH_COPY: PrismuxRemoteConnectCopy = {
 const EN_COPY: PrismuxRemoteConnectCopy = {
   dialogTitle: "QR Remote Access",
   dialogDescription:
-    "Scan with your phone browser or T3 mobile app over your local network or Tailscale, with no cloud account required.",
+    "Scan with your phone browser or Prismux mobile app over your local network or Tailscale, with no cloud account required.",
   mobileWebTitle: "LAN / Tailscale QR Pairing",
   mobileWebDesc:
     "Scan the QR code below to open this workbench on your phone, or mint a one-time pairing QR code for direct device pairing.",

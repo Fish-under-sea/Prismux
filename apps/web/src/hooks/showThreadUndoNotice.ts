@@ -15,21 +15,35 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import * as ThreadUndo from "@prismux/client-runtime/state/thread-undo";
 
+export const THREAD_UNDO_NOTICE_TTL_MS = 5_000;
+
+export type ThreadUndoNoticeAction =
+  | "Settled"
+  | "Snoozed"
+  | "Unpinned"
+  | "Archived"
+  | "Discarded";
+
 type UndoOptions = {
-  action: "Settled" | "Snoozed" | "Unpinned" | "Archived" | "Discarded";
+  action: ThreadUndoNoticeAction;
   undo: () => Promise<AtomCommandResult<unknown, unknown>>;
   failureTitle: string;
   claim: ReturnType<typeof ThreadUndo.begin>;
   commit?: () => void;
 };
 
-type UndoNotice = {
-  action: UndoOptions["action"];
+export type ThreadUndoNotice = {
+  action: ThreadUndoNoticeAction;
   count: number;
+  revision: number;
+  createdAt: number;
+  expiresAt: number;
   undo: () => Promise<void>;
 };
 
-export const useThreadUndoNotice = create<{ notice: UndoNotice | null }>(() => ({ notice: null }));
+export const useThreadUndoNotice = create<{ notice: ThreadUndoNotice | null }>(() => ({
+  notice: null,
+}));
 
 const SUMMARY = {
   Settled: msg("Settled {count, plural, one {{count} thread} other {{count} threads}}"),
@@ -37,7 +51,7 @@ const SUMMARY = {
   Unpinned: msg("Unpinned {count, plural, one {{count} thread} other {{count} threads}}"),
   Archived: msg("Archived {count, plural, one {{count} thread} other {{count} threads}}"),
   Discarded: msg("Discarded {count, plural, one {{count} draft} other {{count} drafts}}"),
-} satisfies Record<UndoOptions["action"], string>;
+} satisfies Record<ThreadUndoNoticeAction, string>;
 
 const UNDONE = {
   Settled: msg("Undid settle of {count, plural, one {{count} thread} other {{count} threads}}"),
@@ -45,10 +59,13 @@ const UNDONE = {
   Unpinned: msg("Undid unpin of {count, plural, one {{count} thread} other {{count} threads}}"),
   Archived: msg("Undid archive of {count, plural, one {{count} thread} other {{count} threads}}"),
   Discarded: msg("Undid discard of {count, plural, one {{count} draft} other {{count} drafts}}"),
-} satisfies Record<UndoOptions["action"], string>;
+} satisfies Record<ThreadUndoNoticeAction, string>;
 
-function threadUndoNoticeSummary(notice: Pick<UndoNotice, "action" | "count">): string {
-  return m(SUMMARY[notice.action], { count: notice.count });
+export function threadUndoNoticeSummary(
+  notice: Pick<ThreadUndoNotice, "action" | "count">,
+  resolve: MessageResolver = m,
+): string {
+  return resolve(SUMMARY[notice.action], { count: notice.count });
 }
 
 /** Components pass `useMessages()` so the label follows a language switch. */
@@ -65,7 +82,7 @@ let announcedSummary: string | null = null;
 // A live region that mounts already filled is skipped by screen readers, and settling
 // usually moves focus to the next thread at the same moment, so the notice is announced
 // separately from the alert that shows it.
-function setNotice(notice: UndoNotice | null) {
+function setNotice(notice: ThreadUndoNotice | null) {
   useThreadUndoNotice.setState({ notice });
   const summary = notice ? threadUndoNoticeSummary(notice) : null;
   if (summary === announcedSummary) return;
@@ -80,6 +97,9 @@ function setNotice(notice: UndoNotice | null) {
 
 let liveUndos: UndoOptions[] = [];
 let expiry: ReturnType<typeof setTimeout> | undefined;
+let noticeRevision = 0;
+let noticeCreatedAt = 0;
+let noticeExpiresAt = 0;
 // A new notice owns mod+z even inside a text field, until the user presses
 // another key or edits text. After that, mod+z is the field's own undo again.
 let shortcutClaimed = false;
@@ -91,6 +111,8 @@ function refreshNotice() {
   const latest = liveUndos.at(-1);
   if (!latest) {
     clearTimeout(expiry);
+    expiry = undefined;
+    shortcutClaimed = false;
     setNotice(null);
     return;
   }
@@ -103,6 +125,9 @@ function refreshNotice() {
   setNotice({
     action: latest.action,
     count: group.length,
+    revision: noticeRevision,
+    createdAt: noticeCreatedAt,
+    expiresAt: noticeExpiresAt,
     undo: async () => {
       const current = group.filter((entry) => liveUndos.includes(entry) && entry.claim.isCurrent());
       liveUndos = liveUndos.filter((entry) => !group.includes(entry));
@@ -149,6 +174,20 @@ export function undoLatestThreadAction(): boolean {
   return true;
 }
 
+/** Dismisses the floating undo toast early and commits pending deferred cleanup cleanly. */
+export function dismissThreadUndoNotice(): void {
+  clearTimeout(expiry);
+  expiry = undefined;
+  shortcutClaimed = false;
+  const dismissed = liveUndos;
+  liveUndos = [];
+  for (const { claim, commit } of dismissed) {
+    claim.finish();
+    commit?.();
+  }
+  refreshNotice();
+}
+
 /** Whether mod+z should undo the notice's actions even while a text field is focused. */
 export function threadUndoClaimsShortcut(): boolean {
   return shortcutClaimed && useThreadUndoNotice.getState().notice !== null;
@@ -163,6 +202,9 @@ export function releaseThreadUndoShortcut() {
 export function showThreadUndoNotice(options: UndoOptions) {
   if (!options.claim.isCurrent()) return;
   liveUndos.push(options);
+  noticeRevision += 1;
+  noticeCreatedAt = Date.now();
+  noticeExpiresAt = noticeCreatedAt + THREAD_UNDO_NOTICE_TTL_MS;
   shortcutClaimed = true;
   refreshNotice();
   clearTimeout(expiry);
@@ -174,5 +216,5 @@ export function showThreadUndoNotice(options: UndoOptions) {
       commit?.();
     }
     refreshNotice();
-  }, 5_000);
+  }, THREAD_UNDO_NOTICE_TTL_MS);
 }

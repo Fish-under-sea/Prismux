@@ -496,6 +496,145 @@ describe("acpRegistrySnapshotReadiness", () => {
     ]);
   });
 
+  it("strips phantom Provider default / empty / default reasoning effort sentinels while preserving concrete effort levels", () => {
+    const provider = buildCheckedAcpRegistrySnapshot({
+      ...identity,
+      settings: decodeSettings({ source: "local", commandPath: "dsh" }),
+      checkedAt: "2026-11-25T10:00:00.000Z",
+      inspection: {
+        status: "ready",
+        agentId: "dsh",
+        version: "0.1.0",
+        distribution: "local",
+      },
+    });
+
+    // DeepSeek Harness / ACP advertising "" ("Provider default"), "provider_default", "low", "high", "max"
+    const normalizedDsh = normalizeAcpRegistryLiveConfiguration([
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "deepseek-v4-pro",
+        options: [{ value: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+      },
+      {
+        id: "reasoning_effort",
+        name: "Reasoning effort",
+        category: "thought_level",
+        type: "select",
+        currentValue: "",
+        options: [
+          { value: "", name: "Provider default" },
+          { value: "provider_default", name: "Provider default" },
+          { value: "default", name: "Default" },
+          { value: "low", name: "Low" },
+          { value: "high", name: "High" },
+          { value: "max", name: "Max" },
+        ],
+      },
+      // Non-reasoning select option with a "default" mode must NOT be altered
+      {
+        id: "mode",
+        name: "Session mode",
+        category: "mode",
+        type: "select",
+        currentValue: "default",
+        options: [
+          { value: "default", name: "Default" },
+          { value: "plan", name: "Plan" },
+        ],
+      },
+    ]);
+
+    const effort = normalizedDsh.configOptions.find((d) => d.id === "reasoning_effort");
+    expect(effort).toEqual({
+      id: "reasoning_effort",
+      label: "Reasoning effort",
+      type: "select",
+      role: "reasoning",
+      currentValue: "high",
+      options: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+        { id: "max", label: "Max" },
+      ],
+    });
+    const mode = normalizedDsh.configOptions.find((d) => d.id === "mode");
+    expect(mode?.type === "select" ? mode.options.map((o) => o.id) : []).toEqual([
+      "default",
+      "plan",
+    ]);
+
+    // When a model advertises medium, phantom default cleanly falls back to medium
+    const withMedium = normalizeAcpRegistryLiveConfiguration([
+      {
+        id: "reasoning_effort",
+        name: "Reasoning effort",
+        category: "thought_level",
+        type: "select",
+        currentValue: "provider_default",
+        options: [
+          { value: "provider_default", name: "Provider default" },
+          { value: "low", name: "Low" },
+          { value: "medium", name: "Medium" },
+          { value: "high", name: "High" },
+        ],
+      },
+    ]);
+    expect(withMedium.configOptions[0]).toMatchObject({
+      currentValue: "medium",
+      options: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
+    });
+
+    // Driver snapshot also sanitizes cached/direct live configurations carrying phantom sentinels
+    const applied = applyAcpRegistryLiveConfiguration(
+      provider,
+      {
+        models: [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", description: null }],
+        currentModelId: "deepseek-v4-pro",
+        configOptions: [
+          {
+            id: "reasoning_effort",
+            label: "Reasoning effort",
+            type: "select",
+            role: "reasoning",
+            currentValue: "provider_default",
+            options: [
+              { id: "provider_default", label: "Provider default" },
+              { id: "low", label: "Low" },
+              { id: "high", label: "High" },
+              { id: "max", label: "Max" },
+            ],
+          },
+        ],
+        modelOptionIds: ["reasoning_effort"],
+        modelsFromModelSelect: true,
+      },
+      [],
+    );
+    const modelEffort = applied.models[0]?.capabilities?.optionDescriptors?.find(
+      (d) => d.id === "reasoning_effort",
+    );
+    expect(modelEffort).toEqual({
+      id: "reasoning_effort",
+      label: "Reasoning effort",
+      type: "select",
+      role: "reasoning",
+      currentValue: "high",
+      options: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+        { id: "max", label: "Max" },
+      ],
+    });
+  });
+
   it("projects discovery without claiming authentication when no login methods are advertised", () => {
     const snapshot = buildCheckedAcpRegistrySnapshot({
       ...identity,
@@ -1358,6 +1497,237 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           currentValue: undefined,
           levels: [],
         });
+      }),
+  );
+
+  it.effect(
+    "discovers per-workspace DSH skills via snapshotForCwd without leaking across workspaces and preserves DSH skills on live command updates",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-dsh-workspace-" });
+        const dshHome = path.join(root, "dsh-home");
+        const agentsHome = path.join(root, "agents-home");
+        const repoA = path.join(root, "repo-a");
+        const repoB = path.join(root, "repo-b");
+
+        yield* fileSystem.makeDirectory(path.join(dshHome, "skills", "tdd"), { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(dshHome, "skills", "tdd", "SKILL.md"),
+          "---\nname: tdd\ndescription: User TDD skill\n---\n",
+        );
+        yield* fileSystem.makeDirectory(path.join(repoA, ".dsh", "skills", "alpha-skill"), {
+          recursive: true,
+        });
+        yield* fileSystem.writeFileString(
+          path.join(repoA, ".dsh", "skills", "alpha-skill", "SKILL.md"),
+          "---\nname: alpha-skill\ndescription: Repo A only skill\n---\n",
+        );
+        yield* fileSystem.makeDirectory(path.join(repoB, ".agents", "skills", "beta-skill"), {
+          recursive: true,
+        });
+        yield* fileSystem.writeFileString(
+          path.join(repoB, ".agents", "skills", "beta-skill", "SKILL.md"),
+          "---\nname: beta-skill\ndescription: Repo B only skill\n---\n",
+        );
+        const fakeDshPath = path.join(root, "fake-dsh-acp.mjs");
+        yield* fileSystem.writeFileString(
+          fakeDshPath,
+          `import { createInterface } from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const { id, method } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") {
+    send({
+      id,
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { close: {} } },
+        authMethods: [],
+        agentInfo: { name: "deepseek-harness-acp", version: "0.0.1" },
+      },
+    });
+  } else if (method === "session/new") {
+    send({
+      id,
+      result: {
+        sessionId: "dsh-probe-1",
+        models: {
+          currentModelId: "deepseek-v4-pro",
+          availableModels: [{ modelId: "deepseek-v4-pro", name: "deepseek-v4-pro" }],
+        },
+      },
+    });
+  } else {
+    send({ id, result: {} });
+  }
+});
+`,
+        );
+
+        const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId: ProviderInstanceId.make("dsh-ws-test"),
+          displayName: "DeepSeek Harness",
+          enabled: true,
+          environment: [
+            { name: "DSH_HOME", value: dshHome, sensitive: false },
+            { name: "AGENTS_HOME", value: agentsHome, sensitive: false },
+          ],
+          config: decodeSettings({
+            source: "local",
+            commandPath: "dsh",
+            commandArgs: ["acp"],
+          }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "dsh",
+              version: "0.2.2",
+              distribution: "local",
+            }),
+            resolve: (_settings, _cwd, env) =>
+              Effect.succeed({
+                distribution: "local" as const,
+                spawn: {
+                  command: process.execPath,
+                  args: [fakeDshPath],
+                  ...(env === undefined ? {} : { env }),
+                },
+              }),
+          }),
+        );
+
+        yield* instance.snapshot.refresh;
+        const initial = yield* instance.snapshot.getSnapshot;
+        expect(initial.slashCommands.map((cmd) => cmd.name)).toEqual(
+          expect.arrayContaining(["plan", "goal", "permission", "feedback"]),
+        );
+        expect(initial.skills.map((skill) => skill.name)).toContain("tdd");
+
+        expect(instance.snapshotForCwd).toBeDefined();
+        const snapA = yield* instance.snapshotForCwd!(repoA);
+        expect(snapA.skills.map((skill) => skill.name)).toEqual(["alpha-skill", "tdd"]);
+        expect(snapA.skills[0]?.scope).toBe("project");
+
+        const snapB = yield* instance.snapshotForCwd!(repoB);
+        expect(snapB.skills.map((skill) => skill.name)).toEqual(["beta-skill", "tdd"]);
+        expect(snapB.skills.some((skill) => skill.name === "alpha-skill")).toBe(false);
+
+        // Publishing an empty live available_commands_update must never wipe DSH built-ins or disk skills
+        yield* coordinator.publishAvailableCommands(instance.instanceId, {
+          slashCommands: [{ name: "compact", description: "Native compact" }],
+          skills: [],
+        });
+        const afterLive = yield* instance.snapshotForCwd!(repoB);
+        expect(afterLive.slashCommands.map((cmd) => cmd.name)).toEqual(
+          expect.arrayContaining(["compact", "plan", "goal", "permission", "feedback"]),
+        );
+        expect(afterLive.skills.map((skill) => skill.name)).toEqual(["beta-skill", "tdd"]);
+      }),
+  );
+
+  it.effect(
+    "waits through an initial empty available_commands_update to capture a delayed non-empty command list during probe",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "acp-delayed-commands-",
+        });
+        const agentPath = path.join(directory, "delayed-commands-acp.mjs");
+        yield* fileSystem.writeFileString(
+          agentPath,
+          `import * as readline from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const { id, method } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") {
+    send({ id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: {} } }, authMethods: [] } });
+  } else if (method === "session/new") {
+    send({
+      id,
+      result: {
+        sessionId: "delayed-1",
+        configOptions: [{ id: "model", name: "Model", category: "model", type: "select", currentValue: "m1", options: [{ value: "m1", name: "M1" }, { value: "m2", name: "M2" }] }],
+      },
+    });
+    // Emit cold-start empty list first, then real commands 80ms later
+    send({
+      method: "session/update",
+      params: { sessionId: "delayed-1", update: { sessionUpdate: "available_commands_update", availableCommands: [] } },
+    });
+    setTimeout(() => {
+      send({
+        method: "session/update",
+        params: {
+          sessionId: "delayed-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "/review", description: "Review patch", input: { hint: "[ref]" } },
+              { name: "skill:tdd", description: "Run TDD workflow" },
+            ],
+          },
+        },
+      });
+    }, 80);
+  } else {
+    send({ id, result: {} });
+  }
+});
+`,
+        );
+
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId: ProviderInstanceId.make("delayed-acp-test"),
+          displayName: "Delayed ACP",
+          enabled: true,
+          environment: [],
+          config: decodeSettings({ source: "local", commandPath: "delayed-acp" }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "delayed-acp",
+              version: null,
+              distribution: "local",
+            }),
+            resolve: () =>
+              Effect.succeed({
+                distribution: "local" as const,
+                spawn: { command: process.execPath, args: [agentPath] },
+              }),
+          }),
+        );
+
+        const probed = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) => snapshot.slashCommands.length > 0),
+          Stream.runHead,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* instance.snapshot.refresh;
+        const snapshot = Option.getOrThrow(yield* Fiber.join(probed));
+        expect(snapshot.slashCommands).toEqual([
+          { name: "review", description: "Review patch", input: { hint: "[ref]" } },
+        ]);
+        expect(snapshot.skills).toEqual([
+          {
+            name: "tdd",
+            description: "Run TDD workflow",
+            path: "acp://skill/tdd",
+            scope: "agent",
+            enabled: true,
+          },
+        ]);
       }),
   );
 });

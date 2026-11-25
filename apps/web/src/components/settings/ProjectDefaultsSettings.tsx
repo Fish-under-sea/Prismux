@@ -8,6 +8,7 @@ import { DEFAULT_UNIFIED_SETTINGS } from "@prismux/core-contracts/settings";
 import { createModelSelection, pickModelSelection } from "@prismux/core-shared/model";
 import { resolvePastedPath } from "@prismux/core-shared/path";
 import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
+import { type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
 
@@ -34,7 +35,7 @@ import { resolveDefaultModelSettingsPresentation } from "./ProjectDefaultsSettin
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { useSearchableSetting } from "./settingsSearch";
-import { useSettingsScope } from "./SettingsScopeContext";
+import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeContext";
 import {
   SETTINGS_PICKER_TRIGGER_CLASSNAME,
   SettingResetButton,
@@ -54,7 +55,19 @@ function isWorktreeSubmodules(value: string | null): value is WorktreeSubmodules
   return value !== null && (WORKTREE_SUBMODULES_OPTIONS as readonly string[]).includes(value);
 }
 
-export function ProjectDefaultsSettings({ category }: { category: ProjectSettingsCategory }) {
+export type ProjectDefaultsSettingsCategory = ProjectSettingsCategory | "models";
+
+export function DefaultChatModelsSection() {
+  return useOptionalSettingsScope() === null ? null : <ProjectDefaultsSettings category="models" />;
+}
+
+export function ProjectDefaultsSettings({
+  category,
+  extraRows,
+}: {
+  readonly category: ProjectDefaultsSettingsCategory;
+  readonly extraRows?: ReactNode;
+}) {
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
   const m = useMessages();
@@ -236,7 +249,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       description={
         isProjectScope
           ? gt("Where new threads in this project start.")
-          : gt("Where new threads start. Projects and their t3.json can override it.")
+          : gt("Where new threads start. Projects and their prismux.json can override it.")
       }
       resetAction={
         !isProjectScope && settings.defaultThreadEnvMode !== null ? (
@@ -357,10 +370,29 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
 
   return (
     <SettingsSection
-      id={category === "source-control" ? "source-control-defaults" : "project-defaults"}
-      title={category === "source-control" ? gt("Repositories") : gt("New threads")}
+      id={
+        category === "source-control"
+          ? "source-control-defaults"
+          : category === "models"
+            ? "default-chat-models"
+            : "project-defaults"
+      }
+      title={
+        category === "source-control"
+          ? gt("Repositories")
+          : category === "models"
+            ? gt("Default chat models")
+            : category === "general"
+              ? gt("New thread defaults")
+              : gt("New threads")
+      }
     >
-      {category === "project" ? (
+      {category === "models" ? (
+        <>
+          {modelRow}
+          {fallbackRow}
+        </>
+      ) : category === "project" ? (
         <>
           {modelRow}
           {fallbackRow}
@@ -368,8 +400,6 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         </>
       ) : category === "general" ? (
         <>
-          {modelRow}
-          {fallbackRow}
           <SettingsRow
             serverScoped
             settingKeys={["defaultRuntimeMode"]}
@@ -443,6 +473,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             }
           />
           {workspaceRow}
+          {extraRows}
         </>
       ) : (
         <>
@@ -597,7 +628,7 @@ export function WorktreeSubmodulesRow() {
         isProjectScope
           ? gt("How new worktrees in this project populate git submodules.")
           : gt(
-              "How new worktrees populate git submodules. Projects and their t3.json can override it.",
+              "How new worktrees populate git submodules. Projects and their prismux.json can override it.",
             )
       }
       resetAction={

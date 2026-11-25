@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentAuthorizationError,
   EnvironmentId,
@@ -15,7 +16,10 @@ import { resolveWorktreeCleanup } from "@prismux/core-shared/projectSettings";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import {
   applyPendingScopedWrites,
+  areSettingValuesEqual,
   createScopedSettingsWriter,
+  isScopedSettingOverridden,
+  listProjectOverrides,
   persistScopedSettingsPatch,
   planProjectOverridesClear,
   planScopedSettingsClear,
@@ -988,5 +992,173 @@ describe("model selection patches at project scope", () => {
       optionsPlan.serverWrites[0]?.patch.projectSettingsOverrides?.[projectId]
         ?.textGenerationModelSelection,
     ).toEqual({ ...saved, options });
+  });
+});
+
+describe("reset button override detection and refresh semantics", () => {
+  it("compares primitives, arrays, and plain objects deeply without false positives on omitted undefined keys", () => {
+    expect(areSettingValuesEqual(true, true)).toBe(true);
+    expect(areSettingValuesEqual(true, false)).toBe(false);
+    expect(
+      areSettingValuesEqual(
+        ["antigravity", "codex", "claudeAgent"],
+        ["antigravity", "codex", "claudeAgent"],
+      ),
+    ).toBe(true);
+    expect(
+      areSettingValuesEqual(
+        ["codex", "antigravity", "claudeAgent"],
+        ["antigravity", "codex", "claudeAgent"],
+      ),
+    ).toBe(false);
+    expect(
+      isScopedSettingOverridden(
+        { branch: true, diff: undefined },
+        { branch: true },
+      ),
+    ).toBe(false);
+    expect(
+      isScopedSettingOverridden(
+        { ...DEFAULT_SERVER_SETTINGS.sourceControlWritingStyle },
+        DEFAULT_SERVER_SETTINGS.sourceControlWritingStyle,
+      ),
+    ).toBe(false);
+    expect(
+      isScopedSettingOverridden(
+        { ...DEFAULT_SERVER_SETTINGS.sourceControlWritingStyle, mode: "custom" },
+        DEFAULT_SERVER_SETTINGS.sourceControlWritingStyle,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not mark a stored project override as overridden when its value already equals the inherited default", () => {
+    const redundantOverride = environment("Server", {
+      settings: {
+        defaultAutoPull: DEFAULT_SERVER_SETTINGS.defaultAutoPull,
+        sourceControlWritingStyle: { ...DEFAULT_SERVER_SETTINGS.sourceControlWritingStyle },
+        projectSettingsOverrides: {
+          [projectId]: {
+            defaultAutoPull: DEFAULT_SERVER_SETTINGS.defaultAutoPull,
+            sourceControlWritingStyle: { ...DEFAULT_SERVER_SETTINGS.sourceControlWritingStyle },
+            // Forward-compatible decoding can leave a present undefined key.
+            enableAgentBrowserAccess: undefined as unknown as boolean,
+          },
+        },
+      },
+    });
+    const targets = resolveScopedSettingsTargets(checkout, [laptop, redundantOverride]);
+    expect(scopedSettingsSource(targets, ["defaultAutoPull"])).toBe("environment");
+    expect(scopedSettingsSource(targets, ["sourceControlWritingStyle"])).toBe("environment");
+    expect(listProjectOverrides([redundantOverride], ["defaultAutoPull"])).toEqual([]);
+    expect(listProjectOverrides([redundantOverride], ["sourceControlWritingStyle"])).toEqual([]);
+    expect(listProjectOverrides([redundantOverride], ["enableAgentBrowserAccess"])).toEqual([]);
+  });
+
+  it("resets a client setting such as proactivePanelsEnabled back to built-in default synchronously", async () => {
+    const persistServer = vi.fn();
+    let clientState = { ...DEFAULT_CLIENT_SETTINGS, proactivePanelsEnabled: false };
+    expect(
+      isScopedSettingOverridden(
+        clientState.proactivePanelsEnabled,
+        DEFAULT_CLIENT_SETTINGS.proactivePanelsEnabled,
+      ),
+    ).toBe(true);
+
+    const plan = planScopedSettingsPatch(all, environments, {
+      proactivePanelsEnabled: DEFAULT_CLIENT_SETTINGS.proactivePanelsEnabled,
+    });
+    expect(plan.unavailableReason).toBeNull();
+    expect(plan.hasClientWrite).toBe(true);
+    expect(plan.serverWrites).toEqual([]);
+
+    await persistScopedSettingsPatch(plan, persistServer, (patch) => {
+      clientState = { ...clientState, ...patch };
+    });
+
+    expect(persistServer).not.toHaveBeenCalled();
+    expect(clientState.proactivePanelsEnabled).toBe(true);
+    expect(
+      isScopedSettingOverridden(
+        clientState.proactivePanelsEnabled,
+        DEFAULT_CLIENT_SETTINGS.proactivePanelsEnabled,
+      ),
+    ).toBe(false);
+  });
+
+  it("clears a project override, preserves back-to-back resets optimistically, and refreshes from authoritative settled settings", async () => {
+    const customized = environment("Server", {
+      settings: {
+        defaultAutoPull: false,
+        removeAgentCreditsOnMerge: false,
+        projectSettingsOverrides: {
+          [projectId]: { defaultAutoPull: true, removeAgentCreditsOnMerge: true },
+        },
+      },
+    });
+
+    // Click reset #1 on defaultAutoPull
+    const save1 = {};
+    const plan1 = planScopedSettingsClear(checkout, [customized], ["defaultAutoPull"]);
+    let writes: readonly PendingScopedWrite[] = plan1.serverWrites.map(
+      ({ environmentId, patch }) => ({ save: save1, environmentId, patch }),
+    );
+    const afterReset1 = resolveScopedSettingsTargets(
+      checkout,
+      applyPendingScopedWrites([customized], writes),
+    );
+    expect(afterReset1[0]?.settings.defaultAutoPull).toBe(false);
+    expect(scopedSettingsSource(afterReset1, ["defaultAutoPull"])).toBe("environment");
+    expect(scopedSettingsSource(afterReset1, ["removeAgentCreditsOnMerge"])).toBe("project");
+
+    // Click reset #2 on removeAgentCreditsOnMerge before server push arrives (planned over pending writes)
+    const save2 = {};
+    const optimisticEnvs = applyPendingScopedWrites([customized], writes);
+    const plan2 = planScopedSettingsClear(checkout, optimisticEnvs, ["removeAgentCreditsOnMerge"]);
+    writes = [
+      ...writes,
+      ...plan2.serverWrites.map(({ environmentId, patch }) => ({
+        save: save2,
+        environmentId,
+        patch,
+      })),
+    ];
+    const afterReset2 = resolveScopedSettingsTargets(
+      checkout,
+      applyPendingScopedWrites([customized], writes),
+    );
+    expect(afterReset2[0]?.settings.defaultAutoPull).toBe(false);
+    expect(afterReset2[0]?.settings.removeAgentCreditsOnMerge).toBe(false);
+    expect(scopedSettingsSource(afterReset2, ["defaultAutoPull"])).toBe("environment");
+    expect(scopedSettingsSource(afterReset2, ["removeAgentCreditsOnMerge"])).toBe("environment");
+
+    // Server settles save2 with authoritative cleared settings before config stream push arrives
+    const authoritativeSaved: ServerSettings = {
+      ...customized.serverConfig!.settings,
+      projectSettingsOverrides: {},
+    };
+    writes = settlePendingScopedWrites(
+      writes,
+      { save: save2, environmentId: customized.environmentId },
+      () => customized.serverConfig!.settings,
+      authoritativeSaved,
+    );
+    const settledTargets = resolveScopedSettingsTargets(
+      checkout,
+      applyPendingScopedWrites([customized], writes),
+    );
+    expect(settledTargets[0]?.settings.projectSettingsOverrides).toEqual({});
+    expect(scopedSettingsSource(settledTargets, ["defaultAutoPull"])).toBe("environment");
+    expect(scopedSettingsSource(settledTargets, ["removeAgentCreditsOnMerge"])).toBe("environment");
+
+    // Server silently dropping a cleared override key is reported as a failed save
+    const droppedClearResult = await persistScopedSettingsPatch(
+      plan1,
+      vi.fn().mockResolvedValue({
+        _tag: "Success" as const,
+        value: customized.serverConfig!.settings,
+      }),
+      vi.fn(),
+    );
+    expect(droppedClearResult.failedEnvironments.map(({ label }) => label)).toEqual([server.label]);
   });
 });

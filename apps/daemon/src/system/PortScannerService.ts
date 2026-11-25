@@ -657,7 +657,7 @@ export class PortScannerService {
     if (hostPids.t3ServerPid !== null && pid === hostPids.t3ServerPid) {
       return {
         protected: true,
-        reason: `禁止终止 Prismux 托管的 T3 Server 核心进程（PID ${pid}）。`
+        reason: `禁止终止 Prismux 托管的核心服务进程（PID ${pid}）。`
       };
     }
     if (hostPids.prismuxMainPid !== null && pid === hostPids.prismuxMainPid) {

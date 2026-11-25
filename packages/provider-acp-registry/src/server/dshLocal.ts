@@ -209,10 +209,10 @@ export function findDeepSeekCliArgStart(args: ReadonlyArray<string>): number {
   return 0;
 }
 
-function resolveDshDesktopHome(
+export function resolveDshDesktopHome(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
-  fs: LocalAcpResolutionFs,
+  fs: Pick<LocalAcpResolutionFs, "isDirectory" | "readTextFile"> = DEFAULT_FS,
 ): string | undefined {
   if (readEnvValue(env, "DSH_HOME", platform) !== undefined) {
     return undefined;

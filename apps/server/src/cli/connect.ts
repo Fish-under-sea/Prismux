@@ -212,8 +212,8 @@ function formatCloudStatus(
           : !status.desired
             ? `Run \`${commands.link}\` to enable Prismux Connect.`
             : publishOnly
-              ? "Start T3 to provision the environment link."
-              : "Start T3 to provision the environment link and launch its managed tunnel.";
+              ? "Start Prismux to provision the environment link."
+              : "Start Prismux to provision the environment link and launch its managed tunnel.";
 
   return [
     "Prismux Connect",
@@ -250,7 +250,7 @@ const CLOUD_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(5);
 const confirmRelayClientInstall = (version: string) =>
   Prompt.run(
     Prompt.Confirm({
-      message: `The T3 relay client is required for Prismux Connect. Download and install version ${version}?`,
+      message: `The Prismux relay client is required for Prismux Connect. Download and install version ${version}?`,
       initial: false,
     }),
   );
@@ -652,7 +652,7 @@ const connectLinkCommand = Command.make("link", {
           const serveCommand = yield* resolveHostCliHint("serve", flags.baseDir);
           yield* Console.log(
             flags.publishOnly
-              ? `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start T3 to publish agent activity (no managed tunnel).`
+              ? `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start Prismux to publish agent activity (no managed tunnel).`
               : `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
           );
         }
@@ -785,13 +785,13 @@ const connectPublishCommand = Command.make("publish", {
         // A desired managed link already covers publishing and must not be downgraded.
         if (yield* CliState.readCliDesiredCloudLink) {
           yield* Console.log(
-            "A Prismux Connect link is already pending. Start T3 to finish provisioning it; publishing starts once it links.",
+            "A Prismux Connect link is already pending. Start Prismux to finish provisioning it; publishing starts once it links.",
           );
           return;
         }
         yield* CliState.setCliDesiredCloudLink(true, "publish_only");
         yield* Console.log(
-          "Restart T3 to finish authorizing this environment to publish (no managed tunnel is created).",
+          "Restart Prismux to finish authorizing this environment to publish (no managed tunnel is created).",
         );
       }),
     ),

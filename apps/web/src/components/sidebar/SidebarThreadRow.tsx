@@ -26,6 +26,7 @@ import { type EnvironmentThreadSearchMatch } from "@prismux/client-runtime/state
 import {
   formatWorkingDurationLabel,
   resolveThreadProviderStack,
+  threadRuntimeCanArchive,
 } from "@prismux/client-runtime/state/models";
 import { scopeThreadRef, scopedThreadKey } from "@prismux/client-runtime/environment";
 import { toServerClock } from "@prismux/client-runtime/clock";
@@ -42,6 +43,7 @@ import type { TimestampFormat } from "@prismux/core-contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
+  ArchiveIcon,
   ArrowRightLeftIcon,
   CheckIcon,
   CircleAlertIcon,
@@ -58,6 +60,7 @@ import {
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
+  Trash2Icon,
   Undo2Icon,
   UserRoundIcon,
   XIcon,
@@ -782,6 +785,8 @@ export type SidebarThreadRowProps = {
     source: ContextMenuSource,
   ) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
+  onArchive?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  onDelete?: ((threadRef: ScopedThreadRef) => void) | undefined;
   onActionSweepStart: (
     threadRef: ScopedThreadRef,
     action: SidebarSweepAction,
@@ -842,9 +847,11 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const messages = useMessages();
   const {
     isRenaming,
+    onArchive,
     onCancelRename,
     onCommitRename,
     onContextMenu,
+    onDelete,
     onAcknowledgeWoke,
     onFileDropThreads,
     onRenameTitleChange,
@@ -1148,11 +1155,74 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     event.stopPropagation();
     onSettle(threadRef);
   };
+  const handleArchiveClick = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onArchive?.(threadRef);
+  };
+  const handleDeleteClick = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onDelete?.(threadRef);
+  };
+  const handleQuickActionPointerDown = (event: ReactPointerEvent) => {
+    event.stopPropagation();
+  };
   const handleActionPointerDown = (event: ReactPointerEvent) => {
     if (!event.isPrimary || event.button !== 0) return;
     event.stopPropagation();
     onActionSweepStart(threadRef, variantAction, event.nativeEvent);
   };
+  const canArchiveAction =
+    canOperateThread && onArchive !== undefined && threadRuntimeCanArchive(thread.runtime);
+  const canDeleteAction = canOperateThread && onDelete !== undefined;
+  const quickActionButtonClassName =
+    "inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md bg-transparent text-xs text-muted-foreground transition-colors hover:bg-sidebar-foreground/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  const archiveQuickButton = canArchiveAction ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-testid="sidebar-row-archive-action"
+            aria-label={gt("Archive thread")}
+            onClick={handleArchiveClick}
+            onPointerDown={handleQuickActionPointerDown}
+            className={quickActionButtonClassName}
+          />
+        }
+      >
+        <ArchiveIcon className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        <T>Archive thread</T>
+      </TooltipPopup>
+    </Tooltip>
+  ) : null;
+  const deleteQuickButton = canDeleteAction ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-testid="sidebar-row-delete-action"
+            aria-label={gt("Delete", { $context: "verb, delete the thread" })}
+            onClick={handleDeleteClick}
+            onPointerDown={handleQuickActionPointerDown}
+            className={cn(
+              quickActionButtonClassName,
+              "hover:bg-destructive/12 hover:text-destructive",
+            )}
+          />
+        }
+      >
+        <Trash2Icon className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        <T context="verb, delete the thread">Delete</T>
+      </TooltipPopup>
+    </Tooltip>
+  ) : null;
   const handleUnsettleClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1572,7 +1642,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   if (variant === "orca-compact") {
     const hasHoverRowAction =
       (variantAction === "unsnooze" && props.snoozeSupported) ||
-      (variantAction !== "unsnooze" && props.settlementSupported);
+      (variantAction !== "unsnooze" && props.settlementSupported) ||
+      canArchiveAction ||
+      canDeleteAction;
     return (
       <li
         data-thread-item={threadKey}
@@ -1683,7 +1755,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             ) : (
               <span
                 className={cn(
-                  "relative ml-auto flex h-5 shrink-0 items-center justify-end gap-1.5",
+                  "group/sidebar-status-slot relative ml-auto flex h-5 shrink-0 items-center justify-end gap-1.5",
                   props.sweepAction !== null && "hidden",
                   jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                 )}
@@ -1691,7 +1763,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 <span
                   className={cn(
                     "inline-flex items-center justify-end gap-1.5 transition-opacity",
-                    hasHoverRowAction && "group-any-hover/sidebar-row:opacity-0",
+                    hasHoverRowAction &&
+                      "group-has-[:focus-visible]/sidebar-status-slot:pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:pointer-events-none group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0",
                   )}
                 >
                   {modelLabel ? (
@@ -1715,57 +1788,66 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     />
                   </span>
                 </span>
-                {variantAction === "unsnooze" ? (
-                  !props.snoozeSupported ? null : (
-                    <button
-                      type="button"
-                      aria-label={gt("Wake thread now")}
-                      onClick={handleUnsnoozeClick}
-                      onPointerDown={handleActionPointerDown}
-                      className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
-                    >
-                      <AlarmClockOffIcon className="size-3" />
-                    </button>
-                  )
-                ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
+                {hasHoverRowAction ? (
+                  <span
+                    data-testid="sidebar-row-hover-actions"
+                    className="pointer-events-none absolute inset-y-0 right-0 inline-flex items-center gap-0.5 opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100"
+                  >
+                    {variantAction === "unsnooze" ? (
+                      !props.snoozeSupported ? null : (
                         <button
                           type="button"
-                          aria-label={gt("Un-settle thread")}
-                          onClick={handleUnsettleClick}
+                          aria-label={gt("Wake thread now")}
+                          onClick={handleUnsnoozeClick}
                           onPointerDown={handleActionPointerDown}
-                          className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
-                        />
-                      }
-                    >
-                      <Undo2Icon className="size-3" />
-                    </TooltipTrigger>
-                    <TooltipPopup side="top">
-                      <T>Un-settle thread</T>
-                    </TooltipPopup>
-                  </Tooltip>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          aria-label={gt("Settle thread")}
-                          onClick={handleSettleClick}
-                          onPointerDown={handleActionPointerDown}
-                          className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
-                        />
-                      }
-                    >
-                      <CheckIcon className="size-3" />
-                    </TooltipTrigger>
-                    <TooltipPopup side="top">
-                      <T>Settle thread</T>
-                    </TooltipPopup>
-                  </Tooltip>
-                )}
+                          className={quickActionButtonClassName}
+                        >
+                          <AlarmClockOffIcon className="size-3.5" />
+                        </button>
+                      )
+                    ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={gt("Un-settle thread")}
+                              onClick={handleUnsettleClick}
+                              onPointerDown={handleActionPointerDown}
+                              className={quickActionButtonClassName}
+                            />
+                          }
+                        >
+                          <Undo2Icon className="size-3.5" />
+                        </TooltipTrigger>
+                        <TooltipPopup side="top">
+                          <T>Un-settle thread</T>
+                        </TooltipPopup>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={gt("Settle thread")}
+                              onClick={handleSettleClick}
+                              onPointerDown={handleActionPointerDown}
+                              className={quickActionButtonClassName}
+                            />
+                          }
+                        >
+                          <CheckIcon className="size-3.5" />
+                        </TooltipTrigger>
+                        <TooltipPopup side="top">
+                          <T>Settle thread</T>
+                        </TooltipPopup>
+                      </Tooltip>
+                    )}
+                    {archiveQuickButton}
+                    {deleteQuickButton}
+                  </span>
+                ) : null}
                 {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}
               </span>
             )}
@@ -1856,7 +1938,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               ) : (
                 <span
                   className={cn(
-                    "relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
+                    "group/sidebar-status-slot relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
                     props.sweepAction !== null && "hidden",
                     jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                   )}
@@ -1864,7 +1946,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                   <span
                     className={cn(
                       "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
-                      !isWoke && "group-any-hover/sidebar-row:opacity-0",
+                      !isWoke &&
+                        "group-has-[:focus-visible]/sidebar-status-slot:pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:pointer-events-none group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0",
                     )}
                   >
                     {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
@@ -1917,66 +2000,72 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                       </span>
                     )}
                   </span>
-                  {variantAction === "unsnooze" ? (
-                    !props.snoozeSupported ? null : (
-                      <button
-                        type="button"
-                        aria-label={gt("Wake thread now")}
-                        onClick={handleUnsnoozeClick}
-                        onPointerDown={handleActionPointerDown}
-                        className={cn(
-                          "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                          isWoke && "group-any-hover/sidebar-row:static",
-                        )}
-                      >
-                        <AlarmClockOffIcon className="mb-px size-3" />
-                      </button>
-                    )
-                  ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
+                  {(variantAction === "unsnooze" && props.snoozeSupported) ||
+                  (variantAction !== "unsnooze" && props.settlementSupported) ||
+                  canArchiveAction ||
+                  canDeleteAction ? (
+                    <span
+                      data-testid="sidebar-row-hover-actions"
+                      className={cn(
+                        "pointer-events-none absolute inset-y-0 right-0 inline-flex items-center gap-0.5 opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
+                        isWoke && "ml-1",
+                      )}
+                    >
+                      {variantAction === "unsnooze" ? (
+                        !props.snoozeSupported ? null : (
                           <button
                             type="button"
-                            aria-label={gt("Un-settle thread")}
-                            onClick={handleUnsettleClick}
+                            aria-label={gt("Wake thread now")}
+                            onClick={handleUnsnoozeClick}
                             onPointerDown={handleActionPointerDown}
-                            className={cn(
-                              "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                              isWoke && "group-any-hover/sidebar-row:static",
-                            )}
-                          />
-                        }
-                      >
-                        <Undo2Icon className="mb-px size-3.5" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">
-                        <T>Un-settle thread</T>
-                      </TooltipPopup>
-                    </Tooltip>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            aria-label={gt("Settle thread")}
-                            onClick={handleSettleClick}
-                            onPointerDown={handleActionPointerDown}
-                            className={cn(
-                              "pointer-events-none absolute inset-y-0 right-0 -mr-2 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                              isWoke && "group-any-hover/sidebar-row:static",
-                            )}
-                          />
-                        }
-                      >
-                        <CheckIcon className="size-3" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">
-                        <T>Settle thread</T>
-                      </TooltipPopup>
-                    </Tooltip>
-                  )}
+                            className={quickActionButtonClassName}
+                          >
+                            <AlarmClockOffIcon className="size-3.5" />
+                          </button>
+                        )
+                      ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                aria-label={gt("Un-settle thread")}
+                                onClick={handleUnsettleClick}
+                                onPointerDown={handleActionPointerDown}
+                                className={quickActionButtonClassName}
+                              />
+                            }
+                          >
+                            <Undo2Icon className="size-3.5" />
+                          </TooltipTrigger>
+                          <TooltipPopup side="top">
+                            <T>Un-settle thread</T>
+                          </TooltipPopup>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                aria-label={gt("Settle thread")}
+                                onClick={handleSettleClick}
+                                onPointerDown={handleActionPointerDown}
+                                className={quickActionButtonClassName}
+                              />
+                            }
+                          >
+                            <CheckIcon className="size-3.5" />
+                          </TooltipTrigger>
+                          <TooltipPopup side="top">
+                            <T>Settle thread</T>
+                          </TooltipPopup>
+                        </Tooltip>
+                      )}
+                      {archiveQuickButton}
+                      {deleteQuickButton}
+                    </span>
+                  ) : null}
                   {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}
                 </span>
               )}
@@ -2126,12 +2215,17 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                       <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
                     )}
                   </span>
-                  {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (
+                  {props.settlementSupported ||
+                  showSnoozeButton ||
+                  hasUnsentDraft ||
+                  canArchiveAction ||
+                  canDeleteAction ? (
                     <span
+                      data-testid="sidebar-row-hover-actions"
                       className={cn(
                         // Mouse clicks leave Settle focused; focus-within would pin controls over
                         // the status label after the pointer leaves. Use focus-visible instead.
-                        "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
+                        "pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
                         snoozeMenuOpen && "pointer-events-auto static opacity-100",
                       )}
                     >
@@ -2143,7 +2237,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                                 type="button"
                                 aria-label={gt("Discard draft")}
                                 onClick={handleDiscardDraftClick}
-                                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                className={quickActionButtonClassName}
                               />
                             }
                           >
@@ -2172,18 +2266,19 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                                 aria-label={gt("Settle thread")}
                                 onClick={handleSettleClick}
                                 onPointerDown={handleActionPointerDown}
-                                className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                className={quickActionButtonClassName}
                               />
                             }
                           >
                             <CheckIcon className="size-3.5" />
-                            <T>Settle</T>
                           </TooltipTrigger>
-                          <TooltipPopup>
+                          <TooltipPopup side="top">
                             <T>Settle thread</T>
                           </TooltipPopup>
                         </Tooltip>
                       ) : null}
+                      {archiveQuickButton}
+                      {deleteQuickButton}
                     </span>
                   ) : null}
                   {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}

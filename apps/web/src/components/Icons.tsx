@@ -1,6 +1,14 @@
 import React, { type SVGProps, useId } from "react";
 import { cn } from "~/lib/utils";
-import { renderAntigravitySvgContent } from "~/prismux/agentBrand";
+import {
+  DSH_BRAND_COLOR,
+  DSH_FISH_LOGO_PATH,
+  DSH_FISH_LOGO_VIEWBOX,
+  PI_LOGO_DOT_PATH,
+  PI_LOGO_FRAME_PATH,
+  PI_LOGO_VIEWBOX,
+  renderAntigravitySvgContent,
+} from "~/prismux/agentBrand";
 export type Icon = React.FC<SVGProps<SVGSVGElement>>;
 
 export const UltrafastIcon: Icon = (props) => (
@@ -466,6 +474,31 @@ export const AntigravityIcon: Icon = (props) => {
     </svg>
   );
 };
+
+export const DshIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox={DSH_FISH_LOGO_VIEWBOX}
+    fill={DSH_BRAND_COLOR}
+    className={className}
+    aria-hidden="true"
+  >
+    <path d={DSH_FISH_LOGO_PATH} />
+  </svg>
+);
+
+export const PiIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox={PI_LOGO_VIEWBOX}
+    fill="currentColor"
+    className={cn("fill-current", className)}
+    aria-hidden="true"
+  >
+    <path d={PI_LOGO_FRAME_PATH} fillRule="evenodd" />
+    <path d={PI_LOGO_DOT_PATH} />
+  </svg>
+);
 
 export const ACPRegistryIcon: Icon = ({ className, ...props }) => (
   <svg

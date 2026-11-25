@@ -1772,7 +1772,7 @@ function OpenCommandPaletteDialog(props: {
         "grouping",
         "checkout",
         "remove",
-        "t3.json",
+        "prismux.json",
       ],
       title: gt("Project settings"),
       description: contextualProjectGroup.displayName,

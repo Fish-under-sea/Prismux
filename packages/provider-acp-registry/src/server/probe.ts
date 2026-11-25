@@ -8,6 +8,8 @@ import {
   type AcpRegistryProbeModel,
   type AcpRegistryUrlAuthAction,
   type ProviderInstanceId,
+  type ProviderOptionChoice,
+  type ProviderOptionDescriptor,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@prismux/core-contracts";
@@ -27,6 +29,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "@prismux/effect-acp/errors";
 import type * as EffectAcpSchema from "@prismux/effect-acp/compat";
 
+import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as PtyAdapter from "@prismux/core-shared/PtyAdapter";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import {
@@ -34,6 +37,7 @@ import {
   parseSessionModeState,
 } from "@prismux/provider-acp/server/runtimeModel";
 import {
+  ACP_EMPTY_OPTION_VALUE,
   acpProviderOptionDescriptors,
   flattenSelectChoices,
   isAcpThoughtLevelOption,
@@ -41,6 +45,8 @@ import {
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
 import { findDeepSeekCliArgStart, isDeepSeekHarnessSpawn } from "./dshLocal.ts";
+import { isDeepSeekHarnessAgentInfo } from "./dshAcp.ts";
+import { augmentDshAvailableCommands } from "./dshSkills.ts";
 
 const MAX_AUTH_METHODS = 32;
 const MAX_MODELS = 256;
@@ -50,7 +56,7 @@ const MAX_NAME_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 1_024;
 const MAX_COMMAND_LINE_LENGTH = 2_048;
 const PROBE_TIMEOUT_MS = 60_000;
-const COMMAND_ADVERTISEMENT_GRACE = "500 millis";
+const COMMAND_ADVERTISEMENT_GRACE = "1200 millis";
 // Agents that fetch their catalog after session setup (Qoder CLI, OpenCode)
 // settle it in seconds, not milliseconds; commands arrive much sooner.
 const MODEL_ADVERTISEMENT_GRACE = "5 seconds";
@@ -65,14 +71,152 @@ const boundedText = (value: string, maximumLength: number): string =>
 const boundedOpaqueValue = (value: string, maximumLength: number): string | undefined =>
   value.length > 0 && value === value.trim() && value.length <= maximumLength ? value : undefined;
 
+const REASONING_OPTION_DESCRIPTOR_IDS = new Set([
+  "effort",
+  "reasoningEffort",
+  "reasoning_effort",
+  "thought_level",
+  "thinking_level",
+  "thinking",
+  "variant",
+]);
+
+const PHANTOM_REASONING_CHOICE_IDS = new Set([
+  "",
+  ACP_EMPTY_OPTION_VALUE.toLowerCase(),
+  "default",
+  "t3:default",
+  "provider_default",
+  "provider-default",
+  "providerdefault",
+  "provider default",
+  "model_default",
+  "model-default",
+  "modeldefault",
+  "model default",
+  "system_default",
+  "system-default",
+  "systemdefault",
+  "system default",
+  "agent_default",
+  "agent-default",
+  "agentdefault",
+  "agent default",
+  "unset",
+  "inherit",
+]);
+
+const PHANTOM_REASONING_CHOICE_LABELS = new Set([
+  "",
+  "default",
+  "provider default",
+  "model default",
+  "system default",
+  "agent default",
+  "use default",
+  "use provider default",
+  "默认",
+  "提供商默认",
+  "模型默认",
+  "系统默认",
+]);
+
+/**
+ * Identifies phantom/sentinel placeholder choices (such as DeepSeek Harness / ACP
+ * `"Provider default"`, `"provider_default"`, `"default"`, or empty `""` / `_t3/empty`)
+ * that should not appear alongside concrete reasoning effort levels.
+ */
+export function isPhantomReasoningEffortChoice(choice: {
+  readonly id: string;
+  readonly label?: string | null | undefined;
+}): boolean {
+  const normalizedId = choice.id.trim().toLowerCase();
+  if (PHANTOM_REASONING_CHOICE_IDS.has(normalizedId)) {
+    return true;
+  }
+  const normalizedLabel = (choice.label ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/gu, " ");
+  if (
+    PHANTOM_REASONING_CHOICE_LABELS.has(normalizedLabel) ||
+    /^provider default(?:\s*\(|$)/u.test(normalizedLabel)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function resolveConcreteReasoningFallbackId(
+  concreteOptions: ReadonlyArray<ProviderOptionChoice>,
+): string | undefined {
+  if (concreteOptions.length === 0) return undefined;
+  const markedDefault = concreteOptions.find((choice) => choice.isDefault);
+  if (markedDefault) return markedDefault.id;
+  const medium = concreteOptions.find((choice) => choice.id.trim().toLowerCase() === "medium");
+  if (medium) return medium.id;
+  const high = concreteOptions.find((choice) => choice.id.trim().toLowerCase() === "high");
+  if (high) return high.id;
+  return concreteOptions[Math.floor((concreteOptions.length - 1) / 2)]?.id;
+}
+
+/**
+ * Strips phantom `"Provider default"` / `"default"` / empty sentinel choices from a reasoning
+ * effort select descriptor whenever concrete effort levels exist, and cleanly re-homes
+ * `currentValue` onto a real concrete level if it pointed at a stripped sentinel.
+ */
+export function sanitizeAcpReasoningDescriptor<T extends ProviderOptionDescriptor>(
+  descriptor: T,
+): T {
+  if (descriptor.type !== "select") {
+    return descriptor;
+  }
+  const isReasoning =
+    descriptor.role === "reasoning" ||
+    REASONING_OPTION_DESCRIPTOR_IDS.has(descriptor.id.trim());
+  if (!isReasoning || descriptor.options.length === 0) {
+    return descriptor;
+  }
+  const concreteOptions = descriptor.options.filter(
+    (choice) => !isPhantomReasoningEffortChoice(choice),
+  );
+  if (concreteOptions.length === 0) {
+    return descriptor;
+  }
+  const removedPhantom = concreteOptions.length !== descriptor.options.length;
+  const currentValueIsPhantom =
+    descriptor.currentValue !== undefined &&
+    isPhantomReasoningEffortChoice({ id: descriptor.currentValue, label: "" });
+  if (!removedPhantom && !currentValueIsPhantom) {
+    return descriptor;
+  }
+  const currentMatchesConcrete =
+    descriptor.currentValue !== undefined &&
+    concreteOptions.some((choice) => choice.id === descriptor.currentValue);
+  const nextCurrentValue = currentMatchesConcrete
+    ? descriptor.currentValue
+    : resolveConcreteReasoningFallbackId(concreteOptions);
+  return {
+    ...descriptor,
+    options: concreteOptions,
+    ...(nextCurrentValue !== undefined ? { currentValue: nextCurrentValue } : {}),
+  } as T;
+}
+
+export function sanitizeAcpOptionDescriptors(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  return descriptors.map((descriptor) => sanitizeAcpReasoningDescriptor(descriptor));
+}
+
 function extractReasoningDescriptor(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
 ): NonNullable<AcpRegistryProbeModel["reasoningEffort"]> | null {
-  return (
+  const found =
     acpProviderOptionDescriptors({ configOptions, modeState: undefined }).find(
       (descriptor) => descriptor.type === "select" && descriptor.role === "reasoning",
-    ) ?? null
-  );
+    ) ?? null;
+  return found ? sanitizeAcpReasoningDescriptor(found) : null;
 }
 
 /**
@@ -100,12 +244,12 @@ function advertisedReasoningEffort(
       : [],
   );
   const currentValue = typeof meta.reasoningEffort === "string" ? meta.reasoningEffort : "";
-  return (
+  const descriptor =
     acpProviderOptionDescriptors({
       configOptions: [{ ...option, options, currentValue }],
       modeState: undefined,
-    })[0] ?? null
-  );
+    })[0] ?? null;
+  return descriptor ? sanitizeAcpReasoningDescriptor(descriptor) : null;
 }
 
 export function normalizeAcpRegistryWebUrl(value: string): string | undefined {
@@ -263,7 +407,9 @@ export function normalizeAcpRegistryLiveConfiguration(
     );
     return reasoningEffort === undefined ? model : { ...model, reasoningEffort };
   });
-  const descriptors = acpProviderOptionDescriptors({ configOptions, modeState });
+  const descriptors = sanitizeAcpOptionDescriptors(
+    acpProviderOptionDescriptors({ configOptions, modeState }),
+  );
   const modelOptionIds = new Set(
     configOptions
       .filter((option) => isAcpThoughtLevelOption(option) || option.category === "model_config")
@@ -298,23 +444,46 @@ export function acpRegistryAdvertisesModelCatalog(
   );
 }
 
+function isAdvertisedSkillMeta(meta: unknown): boolean {
+  if (meta === null || typeof meta !== "object" || Array.isArray(meta)) return false;
+  const record = meta as Record<string, unknown>;
+  return (
+    record.isSkill === true ||
+    record.kind === "skill" ||
+    record.type === "skill" ||
+    record.category === "skill"
+  );
+}
+
 export function normalizeAcpRegistryCommands(
   commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
 ): AcpRegistryAvailableCommands {
-  const seen = new Set<string>();
+  const seenSlash = new Set<string>();
+  const seenSkills = new Set<string>();
   const slashCommands: Array<ServerProviderSlashCommand> = [];
   const skills: Array<ServerProviderSkill> = [];
   for (const command of commands) {
-    const name = boundedOpaqueValue(command.name, MAX_ID_LENGTH);
-    if (name === undefined) continue;
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const description = boundedText(command.description, MAX_DESCRIPTION_LENGTH);
-    const hint = command.input ? boundedText(command.input.hint, MAX_DESCRIPTION_LENGTH) : "";
-    if (name.startsWith("$")) {
-      const skillName = boundedOpaqueValue(name.slice(1), MAX_ID_LENGTH);
+    const trimmedRaw = command.name.trim();
+    if (trimmedRaw.length === 0) continue;
+    const withoutLeadingSlash = trimmedRaw.replace(/^\/+/u, "");
+    if (withoutLeadingSlash.length === 0) continue;
+    const description = boundedText(command.description ?? "", MAX_DESCRIPTION_LENGTH);
+    const hint = command.input ? boundedText(command.input.hint ?? "", MAX_DESCRIPTION_LENGTH) : "";
+    const metaSkill = isAdvertisedSkillMeta("_meta" in command ? command._meta : undefined);
+    const isDollarSkill = withoutLeadingSlash.startsWith("$");
+    const isPrefixedSkill = /^skill:/iu.test(withoutLeadingSlash);
+
+    if (isDollarSkill || isPrefixedSkill || metaSkill) {
+      const rawSkillName = isDollarSkill
+        ? withoutLeadingSlash.slice(1)
+        : isPrefixedSkill
+          ? withoutLeadingSlash.slice("skill:".length)
+          : withoutLeadingSlash;
+      const skillName = boundedOpaqueValue(rawSkillName.trim(), MAX_ID_LENGTH);
       if (skillName === undefined) continue;
+      const key = skillName.toLowerCase();
+      if (seenSkills.has(key)) continue;
+      seenSkills.add(key);
       skills.push({
         name: skillName,
         ...(description ? { description } : {}),
@@ -323,6 +492,11 @@ export function normalizeAcpRegistryCommands(
         enabled: true,
       });
     } else {
+      const name = boundedOpaqueValue(withoutLeadingSlash, MAX_ID_LENGTH);
+      if (name === undefined) continue;
+      const key = name.toLowerCase();
+      if (seenSlash.has(key)) continue;
+      seenSlash.add(key);
       slashCommands.push({
         name,
         ...(description ? { description } : {}),
@@ -555,9 +729,15 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       yield* runtime.handleSessionUpdate((notification) => {
         const update = notification.update;
         if (update.sessionUpdate === "available_commands_update") {
-          return Ref.set(commandsRef, normalizeAcpRegistryCommands(update.availableCommands)).pipe(
-            Effect.andThen(Deferred.succeed(commandsAdvertised, undefined)),
-            Effect.asVoid,
+          const normalized = normalizeAcpRegistryCommands(update.availableCommands);
+          const hasEntries =
+            normalized.slashCommands.length > 0 || normalized.skills.length > 0;
+          return Ref.set(commandsRef, normalized).pipe(
+            Effect.andThen(
+              hasEntries
+                ? Deferred.succeed(commandsAdvertised, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            ),
           );
         }
         if (update.sessionUpdate === "config_option_update") {
@@ -582,12 +762,18 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       }
       const started = startResult.success;
       // Agents that persist sessions (OpenCode) would otherwise keep one empty session per probe.
-      // The runtime only sends session/delete when the agent advertises it.
-      yield* Effect.addFinalizer(() =>
-        runtime
-          .deleteSession(started.sessionId)
-          .pipe(Effect.timeoutOption(PROBE_SESSION_DELETE_TIMEOUT), Effect.ignore),
-      );
+      // Prefer session/delete when advertised; fall back to session/close (e.g. DeepSeek Harness)
+      // for clean quiescent session teardown.
+      yield* Effect.addFinalizer(() => {
+        const caps = started.initializeResult.agentCapabilities?.sessionCapabilities;
+        const cleanup =
+          caps?.delete != null
+            ? runtime.deleteSession(started.sessionId)
+            : caps?.close != null
+              ? runtime.closeSession(started.sessionId)
+              : Effect.void;
+        return cleanup.pipe(Effect.timeoutOption(PROBE_SESSION_DELETE_TIMEOUT), Effect.ignore);
+      });
       const hasInitialModels = acpRegistryAdvertisesModelCatalog(
         started.sessionSetupResult.configOptions,
         started.sessionSetupResult.models,
@@ -675,10 +861,23 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
         };
       }
 
+      const rawCommands = yield* Ref.get(commandsRef);
+      const platform = yield* HostProcess.Platform;
+      const isDsh =
+        isDeepSeekHarnessSpawn(input.settings.commandPath || resolved.spawn.command, resolved.spawn.args) ||
+        isDeepSeekHarnessAgentInfo(started.initializeResult);
+      const commands = isDsh
+        ? augmentDshAvailableCommands(rawCommands, {
+            cwd: input.cwd,
+            env: resolved.spawn.env ?? input.environment,
+            platform,
+          })
+        : rawCommands;
+
       return {
         resolved,
         started,
-        commands: yield* Ref.get(commandsRef),
+        commands,
         liveConfiguration,
       };
     }).pipe(

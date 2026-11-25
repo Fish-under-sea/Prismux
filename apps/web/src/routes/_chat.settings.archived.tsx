@@ -1,7 +1,14 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { ArchivedThreadsPanel } from "../components/settings/ArchivedThreadsPanel";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_chat/settings/archived")({
-  component: ArchivedThreadsPanel,
+  beforeLoad: ({ location }) => {
+    const cleanHash = location.hash.replace(/^#/, "").trim();
+    throw redirect({
+      to: "/settings/projects",
+      search: true,
+      hash: cleanHash || "archived",
+      replace: true,
+    });
+  },
+  component: () => null,
 });

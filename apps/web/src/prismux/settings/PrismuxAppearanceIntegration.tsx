@@ -271,7 +271,7 @@ export function PrismuxAppearanceIntegration({
   ];
 
   const colorPopoverPortalContainer =
-    pickerReq?.anchorEl?.closest<HTMLElement>('[data-slot="dialog-popup"]') ?? undefined;
+    pickerReq?.anchorEl?.closest<HTMLElement>('[data-slot="dialog-popup"]') ?? null;
 
   return (
     <>

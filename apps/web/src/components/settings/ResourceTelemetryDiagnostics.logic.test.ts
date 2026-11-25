@@ -6,6 +6,10 @@ import * as DateTime from "effect/DateTime";
 import {
   formatCpuTime,
   formatSamplingStatus,
+  localizeNativeStatusBadge,
+  localizeSourceStatus,
+  localizeThermalState,
+  resolveCpuSpeedLimitDisplay,
   visibleResourceTelemetryProcesses,
 } from "./ResourceTelemetryDiagnostics.logic";
 
@@ -79,5 +83,49 @@ describe("formatSamplingStatus", () => {
       "Sampling every 500 ms",
       "Sampling every 2 seconds",
     ]);
+  });
+});
+
+describe("resource telemetry localization and speed-limit display", () => {
+  it("maps native and source statuses to user-facing labels without raw enum tokens", () => {
+    expect(localizeNativeStatusBadge("healthy")).toBe("Running natively");
+    expect(localizeNativeStatusBadge("degraded")).toBe("Native Degraded");
+    expect(localizeSourceStatus("healthy")).toBe("Healthy");
+    expect(localizeSourceStatus("unavailable")).toBe("Unavailable");
+  });
+
+  it("maps thermal states cleanly without leaking raw unknown enum strings", () => {
+    expect(localizeThermalState("nominal")).toBe("Nominal");
+    expect(localizeThermalState("fair")).toBe("Fair");
+    expect(localizeThermalState("serious")).toBe("Serious");
+    expect(localizeThermalState("critical")).toBe("Critical");
+    expect(localizeThermalState("unknown")).toBe("No sensor data");
+  });
+
+  it("does not display alarming idle P-state throttling when thermalState is unknown", () => {
+    expect(
+      resolveCpuSpeedLimitDisplay({ speedLimitPercent: 23, thermalState: "unknown" }),
+    ).toEqual({
+      value: "Normal (unthrottled)",
+      tone: "default",
+    });
+    expect(
+      resolveCpuSpeedLimitDisplay({ speedLimitPercent: null, thermalState: "unknown" }),
+    ).toEqual({
+      value: "Normal (unthrottled)",
+      tone: "default",
+    });
+    expect(
+      resolveCpuSpeedLimitDisplay({ speedLimitPercent: 70, thermalState: "serious" }),
+    ).toEqual({
+      value: "70%",
+      tone: "warning",
+    });
+    expect(
+      resolveCpuSpeedLimitDisplay({ speedLimitPercent: 45, thermalState: "critical" }),
+    ).toEqual({
+      value: "45%",
+      tone: "danger",
+    });
   });
 });

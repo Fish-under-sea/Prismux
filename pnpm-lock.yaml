@@ -414,12 +414,12 @@ importers:
       '@prismux/provider-core':
         specifier: workspace:*
         version: link:../../packages/provider-core
-      '@prismux/provider-fx':
-        specifier: workspace:*
-        version: link:../../packages/provider-fx
       '@prismux/provider-opencode':
         specifier: workspace:*
         version: link:../../packages/provider-opencode
+      '@prismux/provider-pi':
+        specifier: workspace:*
+        version: link:../../packages/provider-pi
       '@prismux/source-control-azure-devops':
         specifier: workspace:*
         version: link:../../packages/source-control-azure-devops
@@ -876,12 +876,12 @@ importers:
       '@prismux/provider-core':
         specifier: workspace:*
         version: link:../provider-core
-      '@prismux/provider-fx':
-        specifier: workspace:*
-        version: link:../provider-fx
       '@prismux/provider-opencode':
         specifier: workspace:*
         version: link:../provider-opencode
+      '@prismux/provider-pi':
+        specifier: workspace:*
+        version: link:../provider-pi
       '@prismux/secret-provider-definitions':
         specifier: workspace:*
         version: link:../secret-provider-definitions
@@ -1151,43 +1151,6 @@ importers:
         specifier: 1.4.0
         version: 1.4.0(@opentelemetry/api@1.10.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.3(@noble/hashes@1.8.0))(playwright@1.64.1)(typescript@5.9.3)(yaml@2.9.1)
 
-  packages/provider-fx:
-    dependencies:
-      '@prismux/core-contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@prismux/core-shared':
-        specifier: workspace:*
-        version: link:../shared
-      '@prismux/provider-acp':
-        specifier: workspace:*
-        version: link:../provider-acp
-      '@prismux/provider-core':
-        specifier: workspace:*
-        version: link:../provider-core
-      effect:
-        specifier: 4.1.5
-        version: 4.1.5
-    devDependencies:
-      '@effect/platform-node':
-        specifier: 4.1.5
-        version: 4.1.5(effect@4.1.5)(redis@6.4.0(@opentelemetry/api@1.10.0))
-      '@effect/vitest':
-        specifier: 4.1.5
-        version: 4.1.5(patch_hash=dd0bf2b1ae0f63aff0d620ebc67b82d19759b3fa69a608ef85e2a5b40b4d46c5)(@opentelemetry/api@1.10.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(effect@4.1.5)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.3(@noble/hashes@1.8.0))(playwright@1.64.1)(typescript@5.9.3)(yaml@2.9.1)
-      '@prismux/effect-acp':
-        specifier: workspace:*
-        version: link:../effect-acp
-      '@prismux/provider-testing':
-        specifier: workspace:*
-        version: link:../provider-testing
-      '@types/node':
-        specifier: 24.12.4
-        version: 24.12.4
-      vite-plus:
-        specifier: 1.4.0
-        version: 1.4.0(@opentelemetry/api@1.10.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.3(@noble/hashes@1.8.0))(playwright@1.64.1)(typescript@5.9.3)(yaml@2.9.1)
-
   packages/provider-opencode:
     dependencies:
       '@opencode-ai/sdk':
@@ -1202,6 +1165,37 @@ importers:
       '@opencode/schema':
         specifier: 2.0.28
         version: 2.0.28
+      '@prismux/core-contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@prismux/core-shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@prismux/provider-core':
+        specifier: workspace:*
+        version: link:../provider-core
+      effect:
+        specifier: 4.1.5
+        version: 4.1.5
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 4.1.5
+        version: 4.1.5(effect@4.1.5)(redis@6.4.0(@opentelemetry/api@1.10.0))
+      '@effect/vitest':
+        specifier: 4.1.5
+        version: 4.1.5(patch_hash=dd0bf2b1ae0f63aff0d620ebc67b82d19759b3fa69a608ef85e2a5b40b4d46c5)(@opentelemetry/api@1.10.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(effect@4.1.5)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.3(@noble/hashes@1.8.0))(playwright@1.64.1)(typescript@5.9.3)(yaml@2.9.1)
+      '@prismux/provider-testing':
+        specifier: workspace:*
+        version: link:../provider-testing
+      '@types/node':
+        specifier: 24.12.4
+        version: 24.12.4
+      vite-plus:
+        specifier: 1.4.0
+        version: 1.4.0(@opentelemetry/api@1.10.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.3(@noble/hashes@1.8.0))(playwright@1.64.1)(typescript@5.9.3)(yaml@2.9.1)
+
+  packages/provider-pi:
+    dependencies:
       '@prismux/core-contracts':
         specifier: workspace:*
         version: link:../contracts

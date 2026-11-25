@@ -108,6 +108,21 @@ export function resolveWizardNavigation(
   return { kind: "navigate", step: targetStep };
 }
 
+export const RETIRED_ADD_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["fx"]);
+
+/**
+ * Excludes ACP Registry (handled separately via search/local preset) and retired drivers
+ * such as `fx` from the selectable provider cards in the Add Provider dialog.
+ */
+export function filterSelectableProviderDrivers<T extends { readonly driverKind: string }>(
+  definitions: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  return definitions.filter(
+    (option) =>
+      option.driverKind !== "acpRegistry" && !RETIRED_ADD_PROVIDER_DRIVERS.has(option.driverKind),
+  );
+}
+
 export function resolveAcpRegistryWizardNavigation(
   currentStep: number,
   requestedStep: number,

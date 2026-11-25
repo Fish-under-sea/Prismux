@@ -1,8 +1,10 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 
 import {
   AlertTriangleIcon,
   CheckIcon,
+  ChevronRightIcon,
   ArrowUpCircleIcon,
   CopyIcon,
   DownloadIcon,
@@ -44,6 +46,7 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DraftInput } from "../ui/draft-input";
 import { SecretSourceInput, type SecretSource } from "./SecretSourceInput";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -64,12 +67,11 @@ import {
   seedRowsDraft,
 } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
-import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { isDshProviderInstance, ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
-import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingResetButton, SettingsRow } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
-import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import {
   type CustomModelSave,
@@ -99,6 +101,64 @@ import { formatAgentBrandName } from "../../prismux/agentBrand";
 import { ProviderCliVersionBadge } from "../../prismux/providers/ProviderCliVersionBadge";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+const COMPACT_DETAIL_SETTINGS_ROW_CLASSNAME =
+  "px-4 py-3 [&>div:first-child]:gap-2.5 [&>div:first-child]:@min-[22rem]/settings-row:grid [&>div:first-child]:@min-[22rem]/settings-row:grid-cols-[minmax(0,1fr)_auto] [&>div:first-child]:@min-[22rem]/settings-row:items-center [&>div:first-child]:@min-[22rem]/settings-row:gap-4";
+
+/**
+ * Tightens verbose provider status strings for the single-line sidebar list subtitle so typical
+ * statuses remain crisp and legible on one line (full text stays in the detail header & tooltip).
+ */
+export function formatCompactProviderListStatus(headline: string): string {
+  return headline
+    .replace(/\bLocal agy CLI\b/g, "agy CLI")
+    .replace(/\bGoogle AI Ultra\b/g, "Ultra")
+    .replace(/\bGoogle AI Pro\b/g, "Pro")
+    .replace(/\bGoogle AI Standard\b/g, "Standard")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function isDshExecutablePath(commandPath: string | null): boolean {
+  if (!commandPath) return false;
+  const last = commandPath.split(/[\\/]/).filter(Boolean).at(-1) ?? commandPath;
+  return last.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase() === "dsh";
+}
+
+function countAdvancedOverrides(
+  config: unknown,
+  genericEnvironmentCount: number,
+  driverKind: ProviderDriverKind | null,
+): number {
+  let count = genericEnvironmentCount;
+  if (config !== null && typeof config === "object") {
+    for (const [key, val] of Object.entries(config as Record<string, unknown>)) {
+      if (
+        key === "customModels" ||
+        key === "enabled" ||
+        key === "setupMode" ||
+        key === "registryIconUrl" ||
+        key === "homepageUrl"
+      ) {
+        continue;
+      }
+      if (
+        driverKind === "acpRegistry" &&
+        (key === "source" || key === "agentId" || key === "distribution")
+      ) {
+        continue;
+      }
+      if (Array.isArray(val)) {
+        if (val.length > 0) count += 1;
+      } else if (typeof val === "string") {
+        if (val.trim().length > 0) count += 1;
+      } else if (val !== undefined && val !== null && val !== false) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
 
 function ProviderStatusDiagnostic({
   detail,
@@ -315,11 +375,12 @@ function ProviderEnvironmentFieldRow(props: {
 
   return (
     <SettingsRow
+      className={COMPACT_DETAIL_SETTINGS_ROW_CLASSNAME}
       title={<label htmlFor={inputId}>{props.field.label}</label>}
       description={props.field.description}
       managed={props.managedReason}
       control={
-        <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
+        <div className="flex w-full min-w-0 items-center gap-2 @min-[22rem]/settings-row:w-56">
           {props.field.sensitive === false ? (
             <DraftInput
               id={inputId}
@@ -465,6 +526,7 @@ export function ProviderEnvironmentSection(props: {
 
   return (
     <SettingsRow
+      className={COMPACT_DETAIL_SETTINGS_ROW_CLASSNAME}
       title={gt("Variables")}
       description={gt("API keys, base URLs, and other per-instance CLI settings.")}
       control={
@@ -726,6 +788,8 @@ interface ProviderInstanceCardProps {
   readonly canWriteSettings?: boolean;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => Promise<boolean>;
   readonly onDelete?: (() => void) | undefined;
+  readonly onRefresh?: (() => void) | undefined;
+  readonly isRefreshing?: boolean | undefined;
   readonly removalKind?: ProviderRemovalKind | undefined;
   readonly showDeleteSlot?: boolean | undefined;
   readonly headerAction?: ReactNode | undefined;
@@ -807,8 +871,9 @@ export function ProviderInstanceCard({
   canWriteSettings = true,
   onUpdate,
   onDelete,
+  onRefresh,
+  isRefreshing = false,
   removalKind = "delete-custom",
-  showDeleteSlot = false,
   headerAction,
   setup,
   runtime,
@@ -1035,26 +1100,79 @@ export function ProviderInstanceCard({
     updateEnvironment(providerEnvironmentWithoutNames(instance.environment, new Set([field.name])));
   };
 
-  const titleIconNode = (
-    <ProviderInstanceIcon
-      driverKind={driverKind ?? instance.driver}
-      displayName={displayName}
-      accentColor={accentColor}
-      acpRegistryAgentId={
-        readConfigString(instance.config, "source") === "local"
-          ? undefined
-          : (readConfigString(instance.config, "agentId") ?? undefined)
-      }
-      acpRegistryIconUrl={
-        readConfigString(instance.config, "source") === "local"
-          ? undefined
-          : (readConfigString(instance.config, "registryIconUrl") ?? undefined)
-      }
-      showBadge={Boolean(accentColor)}
-      className="size-5"
-      iconClassName="size-4 text-foreground/80"
-      badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs"
-    />
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  const acpRegistryAgentId =
+    readConfigString(instance.config, "source") === "local"
+      ? undefined
+      : (readConfigString(instance.config, "agentId") ?? undefined);
+  const acpRegistryIconUrl =
+    readConfigString(instance.config, "source") === "local"
+      ? undefined
+      : (readConfigString(instance.config, "registryIconUrl") ?? undefined);
+  const localCommandPath =
+    readConfigString(instance.config, "source") === "local"
+      ? readConfigString(instance.config, "commandPath")
+      : null;
+  const localCommandArgs =
+    readConfigString(instance.config, "source") === "local" &&
+    instance.config !== null &&
+    typeof instance.config === "object" &&
+    Array.isArray((instance.config as Record<string, unknown>).commandArgs)
+      ? ((instance.config as Record<string, unknown>).commandArgs as unknown[]).filter(
+          (arg): arg is string => typeof arg === "string" && arg.trim().length > 0,
+        )
+      : [];
+  const localCommandSummary = localCommandPath
+    ? [localCommandPath, ...localCommandArgs].join(" ")
+    : null;
+  // DeepSeek Harness always renders its pure blue whale mark without an overlapping initials badge.
+  const isDshInstance =
+    isDshProviderInstance({
+      driverKind: driverKind ?? instance.driver,
+      displayName,
+      instanceId,
+      acpRegistryAgentId: readConfigString(instance.config, "agentId") ?? undefined,
+    }) || isDshExecutablePath(localCommandPath);
+
+  const listIconNode = (
+    <span
+      data-provider-icon-slot="list"
+      className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.04] ring-1 ring-border/35 dark:bg-white/[0.045] dark:ring-white/[0.08]"
+    >
+      <ProviderInstanceIcon
+        driverKind={driverKind ?? instance.driver}
+        displayName={displayName}
+        instanceId={instanceId}
+        accentColor={isDshInstance ? undefined : accentColor}
+        acpRegistryAgentId={acpRegistryAgentId}
+        acpRegistryIconUrl={acpRegistryIconUrl}
+        showBadge={!isDshInstance && Boolean(accentColor)}
+        className="size-5"
+        iconClassName="size-5 text-foreground/85"
+        badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs"
+      />
+    </span>
+  );
+
+  const editorIconNode = (
+    <span
+      data-provider-icon-slot="editor"
+      className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.045] ring-1 ring-border/45 dark:bg-white/[0.05] dark:ring-white/[0.09]"
+    >
+      <ProviderInstanceIcon
+        driverKind={driverKind ?? instance.driver}
+        displayName={displayName}
+        instanceId={instanceId}
+        accentColor={isDshInstance ? undefined : accentColor}
+        acpRegistryAgentId={acpRegistryAgentId}
+        acpRegistryIconUrl={acpRegistryIconUrl}
+        showBadge={!isDshInstance && Boolean(accentColor)}
+        className="size-6"
+        iconClassName="size-6 text-foreground/90"
+        badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3.5 min-w-3.5 px-0.5 text-5xs"
+      />
+    </span>
   );
 
   const titleTailNode = headerAction ? (
@@ -1313,7 +1431,10 @@ export function ProviderInstanceCard({
           aria-label={gt("{provider} default launch mode", { provider: displayName })}
           data-provider-mode-toggle={instanceId}
           data-cli-missing={cliMissingForLaunchMode ? "true" : "false"}
-          className="inline-grid h-6 w-[5.25rem] shrink-0 grid-cols-2 items-center gap-0.5 rounded-md border border-black/14 bg-black/[0.06] p-0.5 text-2xs shadow-inner dark:border-white/16 dark:bg-black/45 [[data-pmx-glass='1']_&]:border-white/22 [[data-pmx-glass='1']_&]:bg-black/38 [html:not(.dark)[data-pmx-glass='1']_&]:border-black/14 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/[0.08]"
+          className={cn(
+            "inline-grid h-6 shrink-0 grid-cols-2 items-center gap-0.5 rounded-md border border-black/14 bg-black/[0.06] p-0.5 text-2xs shadow-inner dark:border-white/16 dark:bg-black/45 [[data-pmx-glass='1']_&]:border-white/22 [[data-pmx-glass='1']_&]:bg-black/38 [html:not(.dark)[data-pmx-glass='1']_&]:border-black/14 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/[0.08]",
+            mode === "list" ? "w-[4.75rem]" : "w-[5.25rem]",
+          )}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => {
             if (event.key === "ArrowLeft" || event.key === "Home") {
@@ -1375,7 +1496,10 @@ export function ProviderInstanceCard({
         <span
           aria-hidden="true"
           data-provider-mode-placeholder={instanceId}
-          className="inline-flex h-6 w-[5.25rem] shrink-0 items-center justify-center rounded-md border border-transparent text-2xs text-muted-foreground/40 select-none max-sm:hidden"
+          className={cn(
+            "inline-flex h-6 shrink-0 items-center justify-center rounded-md border border-transparent text-2xs text-muted-foreground/40 select-none max-sm:hidden",
+            mode === "list" ? "w-[4.75rem]" : "w-[5.25rem]",
+          )}
         >
           —
         </span>
@@ -1383,17 +1507,27 @@ export function ProviderInstanceCard({
     ) : null;
 
   if (mode === "list") {
+    const rawListStatus = updateProgress
+      ? gt("Updating · {progress}", { progress: updateProgress })
+      : `${summary.headline}${needsAttention && inlineStatusDetail ? ` · ${inlineStatusDetail}` : ""}`;
+    const compactListStatus = updateProgress
+      ? rawListStatus
+      : formatCompactProviderListStatus(rawListStatus);
+    const listStatusTooltip =
+      statusDiagnostic ?? (compactListStatus !== rawListStatus ? rawListStatus : null);
+
     return (
       <div
         data-slot="settings-row"
+        data-provider-list-row={instanceId}
         className={cn(
-          "group relative flex min-h-18 items-center gap-2.5 px-3 py-3 transition-colors sm:px-4",
+          "group relative flex min-h-[3.75rem] items-center gap-2 px-3 py-2.5 transition-colors",
           selected ? "bg-foreground/[0.06]" : "hover:bg-muted/25",
         )}
       >
         {dragHandle ? (
           <span
-            className="pointer-events-auto relative z-10 -ms-1.5 flex shrink-0 items-center"
+            className="pointer-events-auto relative z-10 -ms-1 flex shrink-0 items-center"
             onClick={(event) => event.stopPropagation()}
           >
             {dragHandle}
@@ -1401,7 +1535,7 @@ export function ProviderInstanceCard({
         ) : null}
         <div
           className={cn(
-            "pointer-events-none flex min-w-0 flex-1 items-start gap-3 rounded-md text-left transition-opacity",
+            "pointer-events-none flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left transition-opacity",
             !enabled && !selected && "opacity-60 group-hover:opacity-100",
           )}
         >
@@ -1412,39 +1546,35 @@ export function ProviderInstanceCard({
             aria-label={gt("Select {provider}", { provider: displayName })}
             aria-pressed={selected}
           />
-          {titleIconNode}
+          {listIconNode}
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1.5">
-              <span className="max-w-36 shrink-0 truncate text-sm font-medium text-foreground">
+              <span className="min-w-0 truncate text-sm font-semibold tracking-tight text-foreground">
                 {displayName}
               </span>
               {versionLabel ? (
-                <code className="min-w-0 max-w-24 shrink truncate text-xs text-muted-foreground">
+                <code className="shrink-0 font-mono text-2xs text-muted-foreground/65 tabular-nums">
                   {versionLabel}
                 </code>
               ) : null}
               {versionAdvisoryNode ? (
-                <span onPointerDown={(event) => event.stopPropagation()}>{versionAdvisoryNode}</span>
+                <span className="shrink-0" onPointerDown={(event) => event.stopPropagation()}>
+                  {versionAdvisoryNode}
+                </span>
               ) : null}
             </span>
-            <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs leading-normal text-muted-foreground/80">
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-2xs font-normal leading-snug text-muted-foreground/65">
               {statusDotNode && !updateProgress ? (
-                <span className="flex h-[1.45em] shrink-0 items-center">{statusDotNode}</span>
+                <span className="flex shrink-0 items-center">{statusDotNode}</span>
               ) : null}
-              <ProviderStatusDiagnostic detail={statusDiagnostic}>
+              <ProviderStatusDiagnostic detail={listStatusTooltip}>
                 <span
-                  tabIndex={statusDiagnostic ? 0 : undefined}
+                  data-provider-list-status="true"
+                  tabIndex={listStatusTooltip ? 0 : undefined}
                   aria-live="polite"
-                  className="pointer-events-auto line-clamp-2 [overflow-wrap:anywhere]"
+                  className="pointer-events-auto min-w-0 truncate whitespace-nowrap"
                 >
-                  {updateProgress ? (
-                    gt("Updating · {progress}", { progress: updateProgress })
-                  ) : (
-                    <>
-                      {summary.headline}
-                      {needsAttention && inlineStatusDetail ? ` · ${inlineStatusDetail}` : null}
-                    </>
-                  )}
+                  {compactListStatus}
                 </span>
               </ProviderStatusDiagnostic>
               {isMissingCli && safeHomepageUrl ? (
@@ -1457,7 +1587,7 @@ export function ProviderInstanceCard({
                     event.stopPropagation();
                     openSafeExternalHttpsFromAnchor(event);
                   }}
-                  className="pointer-events-auto relative inline-flex items-center gap-0.5 rounded-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="pointer-events-auto relative inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span>{gt("Install guide")}</span>
                   <ExternalLinkIcon className="size-3 shrink-0" />
@@ -1467,10 +1597,9 @@ export function ProviderInstanceCard({
           </span>
         </div>
         <span
-          className="pointer-events-none relative flex h-6 shrink-0 items-center gap-1.5 *:pointer-events-auto"
+          className="pointer-events-none relative flex shrink-0 items-center gap-1.5 *:pointer-events-auto"
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {launchModeControlSlot}
           {projectOverride?.value !== undefined ? (
             <span className="flex items-center">
               <ProjectOverrideInheritance
@@ -1494,133 +1623,28 @@ export function ProviderInstanceCard({
               aria-label={gt("Enable {provider}", { provider: displayName })}
             />
           </ManagedControl>
-          {showDeleteSlot ? (
-            <span className="inline-flex size-6 shrink-0 items-center justify-center">
-              {onDelete ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        size="icon-xs"
-                        variant="ghost-destructive"
-                        disabled={readOnly}
-                        data-provider-delete-list={instanceId}
-                        className={cn(
-                          "size-6 transition-opacity",
-                          selected
-                            ? "opacity-75 hover:opacity-100 focus-visible:opacity-100"
-                            : "opacity-0 group-hover:opacity-80 group-focus-within:opacity-100 hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-70",
-                        )}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDelete();
-                        }}
-                        aria-label={gt("Delete {provider} configuration", { provider: displayName })}
-                      >
-                        <Trash2Icon className="size-3.5" />
-                      </Button>
-                    }
-                  />
-                  <TooltipPopup side="top">{gt("Delete provider configuration")}</TooltipPopup>
-                </Tooltip>
-              ) : null}
-            </span>
-          ) : null}
         </span>
       </div>
     );
   }
 
-  const editorHeaderAction = (
-    <div className="flex shrink-0 items-center gap-1.5">
-      {driverOption?.badgeLabel ? (
-        <Badge variant="warning" size="sm" className="shrink-0">
-          {driverOption.badgeLabel}
-        </Badge>
-      ) : null}
-      {versionCodeNode}
-      {versionAdvisoryNode}
-      <span
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
-        // Empty, it would still add a flex gap and pull the version off the column edge.
-        className={cn("inline-flex items-center gap-1 empty:hidden", readOnly && "opacity-50")}
+  const headerStatusDot = (
+    <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} aria-hidden="true" />
+  );
+  const editorHeaderStatus = (
+    <ProviderStatusDiagnostic detail={statusDiagnostic}>
+      <div
+        tabIndex={statusDiagnostic ? 0 : undefined}
+        className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground/80"
       >
-        {titleTailNode}
-        {onDelete ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost-destructive"
-                  disabled={readOnly}
-                  onClick={onDelete}
-                  aria-label={gt("Delete instance {instanceId}", { instanceId })}
-                >
-                  <Trash2Icon />
-                </Button>
-              }
-            />
-            <TooltipPopup side="top">{gt("Delete provider configuration")}</TooltipPopup>
-          </Tooltip>
-        ) : null}
-      </span>
-    </div>
+        {!needsAttention ? headerStatusDot : null}
+        <span className="flex min-w-0 items-center gap-1.5 truncate">{editorStatusNode}</span>
+      </div>
+    </ProviderStatusDiagnostic>
   );
 
-  // Provider status gets its own row instead of hanging under the name field.
-  const statusContent = (
-    <>
-      <ProviderStatusDiagnostic detail={statusDiagnostic}>
-        <div
-          tabIndex={statusDiagnostic ? 0 : undefined}
-          className="flex min-w-0 flex-wrap items-baseline gap-x-1.5"
-        >
-          {editorStatusNode}
-        </div>
-      </ProviderStatusDiagnostic>
-      {restartNotice ? (
-        <p aria-live="polite" className="text-xs leading-snug [overflow-wrap:anywhere]">
-          {restartNotice}
-        </p>
-      ) : null}
-      {isMissingCli ? (
-        <div className="pt-1.5">
-          <AgentInstallPrompt
-            compact
-            label={displayName}
-            homepageUrl={safeHomepageUrl}
-            loginHint={cliMeta?.loginHint ?? null}
-          />
-        </div>
-      ) : null}
-      {urlAuthAction && onAcceptUrlAuth ? (
-        <div className="grid max-w-xl gap-1.5 pt-1 text-xs">
-          <p>{urlAuthAction.message}</p>
-          <code className="break-all text-2xs">{urlAuthAction.url}</code>
-          <Button
-            render={
-              <a
-                href={urlAuthAction.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => onAcceptUrlAuth(urlAuthAction)}
-              />
-            }
-            size="xs"
-            variant="outline"
-            className="w-fit"
-            disabled={readOnly}
-          >
-            <ExternalLinkIcon />
-            <T>Continue authentication</T>
-          </Button>
-        </div>
-      ) : null}
-    </>
+  const hasHeaderAlerts = Boolean(
+    restartNotice || isMissingCli || (urlAuthAction && onAcceptUrlAuth),
   );
 
   const runtimeFields = driverOption ? (
@@ -1635,6 +1659,7 @@ export function ProviderInstanceCard({
     />
   ) : (
     <SettingsRow
+      className={COMPACT_DETAIL_SETTINGS_ROW_CLASSNAME}
       title={gt("Driver")}
       description={
         <span>
@@ -1650,68 +1675,229 @@ export function ProviderInstanceCard({
     />
   );
 
+  const isManagedCodex =
+    instance.driver === "codex" && readCodexSetupMode(instance.config) === "managed";
+  const hasRuntimeFields =
+    isManagedCodex ||
+    !driverOption ||
+    deriveProviderSettingsFields(driverOption, instance.config, m).length > 0;
+  const hasAcpSessions = environmentId !== undefined && liveProvider?.driver === "acpRegistry";
+  const configuredOverrideCount = countAdvancedOverrides(
+    instance.config,
+    genericEnvironment.length,
+    driverKind,
+  );
+  const displayNameInputId = `provider-instance-${instanceId}-display-name`;
+
   return (
-    <>
-      <SettingsSection title={displayName} icon={titleIconNode} headerAction={editorHeaderAction}>
-        <SettingsRow title={gt("Status")} status={statusContent} />
-        <SettingsRow
-          title={gt("Display name")}
-          control={
+    <div data-provider-detail-panel={instanceId} className="@container/detail-card space-y-5">
+      {/* Unified Compact Header */}
+      <header
+        data-provider-detail-header={instanceId}
+        className="space-y-3 rounded-xl border border-border/55 bg-card/35 px-4 py-3.5 shadow-xs/5"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3.5">
+            {editorIconNode}
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="min-w-0 truncate text-base font-semibold tracking-tight text-foreground">
+                  {displayName}
+                </h2>
+                {driverOption?.badgeLabel ? (
+                  <Badge variant="warning" size="sm" className="shrink-0">
+                    {driverOption.badgeLabel}
+                  </Badge>
+                ) : null}
+                {versionCodeNode}
+                {versionAdvisoryNode}
+              </div>
+              {editorHeaderStatus}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1">
+            {onRefresh ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost-muted"
+                      disabled={isRefreshing}
+                      aria-busy={isRefreshing}
+                      onClick={onRefresh}
+                      aria-label={gt("Refresh provider status")}
+                    >
+                      <RefreshIcon refreshing={isRefreshing} />
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="top">
+                  <T>Refresh provider status</T>
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            <span
+              inert={readOnly}
+              aria-disabled={readOnly || undefined}
+              className={cn(
+                "inline-flex items-center gap-1 empty:hidden",
+                readOnly && "opacity-50",
+              )}
+            >
+              {titleTailNode}
+              {onDelete ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost-destructive"
+                        disabled={readOnly}
+                        onClick={onDelete}
+                        aria-label={gt("Delete instance {instanceId}", { instanceId })}
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup side="top">{gt("Delete provider configuration")}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+            </span>
+          </div>
+        </div>
+
+        {hasHeaderAlerts ? (
+          <div className="space-y-2 border-t border-border/45 pt-2.5">
+            {restartNotice ? (
+              <p
+                aria-live="polite"
+                className="text-xs leading-snug text-muted-foreground [overflow-wrap:anywhere]"
+              >
+                {restartNotice}
+              </p>
+            ) : null}
+            {isMissingCli ? (
+              <AgentInstallPrompt
+                compact
+                label={displayName}
+                homepageUrl={safeHomepageUrl}
+                loginHint={cliMeta?.loginHint ?? null}
+              />
+            ) : null}
+            {urlAuthAction && onAcceptUrlAuth ? (
+              <div className="grid max-w-xl gap-1.5 text-xs">
+                <p>{urlAuthAction.message}</p>
+                <code className="break-all text-2xs text-muted-foreground">
+                  {urlAuthAction.url}
+                </code>
+                <Button
+                  render={
+                    <a
+                      href={urlAuthAction.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => onAcceptUrlAuth(urlAuthAction)}
+                    />
+                  }
+                  size="xs"
+                  variant="outline"
+                  className="w-fit"
+                  disabled={readOnly}
+                >
+                  <ExternalLinkIcon />
+                  <T>Continue authentication</T>
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </header>
+
+      {/* Card 1 — Basic configuration (Identity & Launch) */}
+      <section aria-label={gt("Basic configuration")} className="space-y-2">
+        <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+          {gt("Basic configuration")}
+        </h3>
+        <div className="divide-y divide-border/45 rounded-xl border border-border/60 bg-card/40 shadow-xs/5">
+          <div className="flex flex-col gap-2.5 px-4 py-3 @min-[22rem]/detail-card:flex-row @min-[22rem]/detail-card:items-center @min-[22rem]/detail-card:justify-between @min-[22rem]/detail-card:gap-4">
+            <label
+              htmlFor={displayNameInputId}
+              className="shrink-0 text-sm font-medium text-foreground"
+            >
+              {gt("Display name")}
+            </label>
             <div
               inert={readOnly}
               aria-disabled={readOnly || undefined}
               className={cn(
-                "flex w-full min-w-0 items-center justify-end gap-2 @min-[32rem]/settings-row:w-auto",
+                "flex w-full min-w-0 items-center justify-end gap-2 @min-[22rem]/detail-card:w-60",
                 readOnly && "opacity-50 select-none",
               )}
             >
+              <DraftInput
+                id={displayNameInputId}
+                size="sm"
+                className="min-w-0 flex-1"
+                value={instance.displayName ?? ""}
+                onCommit={updateDisplayName}
+                placeholder={driverOption?.label ?? gt("Instance label")}
+                spellCheck={false}
+              />
               <ProviderAccentColorPicker
                 layout="inline"
                 displayName={displayName}
                 value={accentColor}
                 onCommit={updateAccentColor}
               />
-              <DraftInput
-                id={`provider-instance-${instanceId}-display-name`}
-                size="sm"
-                className="min-w-0 flex-1 @min-[32rem]/settings-row:w-56"
-                value={instance.displayName ?? ""}
-                onCommit={updateDisplayName}
-                placeholder={driverOption?.label ?? gt("Instance label")}
-                spellCheck={false}
-              />
             </div>
-          }
-        />
-        {dualModeSupported && onLaunchModeChange ? (
-          <SettingsRow
-            title={gt("Default launch mode")}
-            description={gt(
-              "Choose whether new sessions for this provider open in structured Chat view or interactive CLI terminal mode. Applies to new sessions only; existing sessions keep their original view.",
-            )}
-            resetAction={
-              isLaunchModeOverridden && onLaunchModeReset ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset {provider} launch mode to global default", {
-                    provider: displayName,
-                  })}
-                  onClick={onLaunchModeReset}
-                />
-              ) : null
-            }
-            control={launchModeControlSlot}
-          />
-        ) : null}
-      </SettingsSection>
+          </div>
 
-      {setup || environmentFields.length > 0 ? (
-        <SettingsSection title={gt("Setup")}>
+          {dualModeSupported && onLaunchModeChange ? (
+            <div className="flex flex-col gap-2.5 px-4 py-3 @min-[22rem]/detail-card:flex-row @min-[22rem]/detail-card:items-center @min-[22rem]/detail-card:justify-between @min-[22rem]/detail-card:gap-4">
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-medium text-foreground">
+                    {gt("Default launch mode")}
+                  </span>
+                  {isLaunchModeOverridden && onLaunchModeReset ? (
+                    <SettingResetButton
+                      ariaLabel={gt("Reset {provider} launch mode to global default", {
+                        provider: displayName,
+                      })}
+                      onClick={onLaunchModeReset}
+                    />
+                  ) : null}
+                </div>
+                <p className="text-xs leading-snug text-muted-foreground">
+                  {gt("Choose whether new sessions open in Chat or CLI mode.")}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center justify-end">{launchModeControlSlot}</div>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {/* Card 2 — Connection & runtime + Collapsible Advanced */}
+      <section aria-label={gt("Connection & runtime")} className="space-y-2">
+        <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+          {gt("Connection & runtime")}
+        </h3>
+        <div className="divide-y divide-border/45 overflow-hidden rounded-xl border border-border/60 bg-card/40 shadow-xs/5">
           {setup}
           {environmentFields.length > 0 ? (
             <div
               inert={readOnly}
               aria-disabled={readOnly || undefined}
-              className={readOnly ? "opacity-50 select-none" : undefined}
+              className={cn(
+                "divide-y divide-border/45",
+                readOnly && "opacity-50 select-none",
+              )}
             >
               {environmentFields.map((field) => (
                 <ProviderEnvironmentFieldRow
@@ -1734,78 +1920,98 @@ export function ProviderInstanceCard({
               ))}
             </div>
           ) : null}
-        </SettingsSection>
-      ) : null}
 
-      {instance.driver === "codex" && readCodexSetupMode(instance.config) === "managed" ? (
-        <div
-          inert={readOnly}
-          aria-disabled={readOnly || undefined}
-          className={readOnly ? "opacity-50 select-none" : undefined}
-        >
-          <FoldedSettingsSection
-            key={instanceId}
-            id={`provider-instance-${instanceId}-runtime`}
-            title={gt("Runtime")}
-            headerPlacement="outside"
-          >
-            {runtime ?? runtimeFields}
-          </FoldedSettingsSection>
+          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+            <CollapsibleTrigger
+              data-provider-advanced-toggle={instanceId}
+              className="flex w-full cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors outline-none hover:bg-foreground/[0.025] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <ChevronRightIcon
+                  aria-hidden="true"
+                  className={cn(
+                    "size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
+                    advancedOpen && "rotate-90",
+                  )}
+                />
+                <span className="text-sm font-medium text-foreground">{gt("Advanced")}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {localCommandSummary ? (
+                  <code className="max-w-44 truncate rounded-md bg-muted/60 px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">
+                    {localCommandSummary}
+                  </code>
+                ) : null}
+                {configuredOverrideCount > 0 ? (
+                  <Badge variant="secondary" size="sm">
+                    <span className="font-mono tabular-nums">{configuredOverrideCount}</span>
+                  </Badge>
+                ) : null}
+              </span>
+            </CollapsibleTrigger>
+            <CollapsiblePanel>
+              <div className="divide-y divide-border/45 border-t border-border/45 bg-background/25">
+                {hasRuntimeFields ? (
+                  <div
+                    inert={readOnly}
+                    aria-disabled={readOnly || undefined}
+                    className={cn(
+                      "divide-y divide-border/45",
+                      readOnly && "opacity-50 select-none",
+                    )}
+                  >
+                    {isManagedCodex ? (runtime ?? runtimeFields) : runtimeFields}
+                  </div>
+                ) : null}
+
+                <div
+                  inert={readOnly || instanceLocks?.wholeEnvironment}
+                  aria-disabled={readOnly || instanceLocks?.wholeEnvironment || undefined}
+                  className={cn(readOnly && "opacity-50 select-none")}
+                >
+                  {instanceLocks?.wholeEnvironment ? (
+                    <ManagedNotice>{instanceLocks.reason}</ManagedNotice>
+                  ) : null}
+                  <div className={instanceLocks?.wholeEnvironment ? "opacity-50" : undefined}>
+                    <ProviderEnvironmentSection
+                      environment={genericEnvironment}
+                      onChange={updateGenericEnvironment}
+                      secretSources={secretSources}
+                      environmentId={environmentId}
+                      managed={
+                        instanceLocks && {
+                          names: instanceLocks.environmentNames,
+                          reason: instanceLocks.reason,
+                        }
+                      }
+                    />
+                  </div>
+                </div>
+
+                {hasAcpSessions ? (
+                  <div className="px-4 py-3">
+                    <AcpSessionManagementSection
+                      environmentId={environmentId}
+                      instanceId={instanceId}
+                      provider={liveProvider}
+                      projects={acpProjects}
+                      readOnly={readOnly}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </CollapsiblePanel>
+          </Collapsible>
         </div>
-      ) : !driverOption || deriveProviderSettingsFields(driverOption, undefined, m).length > 0 ? (
-        <SettingsSection
-          title={gt("Runtime")}
-          inert={readOnly}
-          aria-disabled={readOnly || undefined}
-          className={readOnly ? "opacity-50 select-none" : undefined}
-        >
-          {runtimeFields}
-        </SettingsSection>
-      ) : null}
+      </section>
 
-      <SettingsSection
-        title={gt("Environment")}
-        inert={readOnly || instanceLocks?.wholeEnvironment}
-        aria-disabled={readOnly || instanceLocks?.wholeEnvironment || undefined}
-        className={readOnly ? "opacity-50 select-none" : undefined}
-      >
-        {instanceLocks?.wholeEnvironment ? (
-          <ManagedNotice>{instanceLocks.reason}</ManagedNotice>
-        ) : null}
-        <div className={instanceLocks?.wholeEnvironment ? "opacity-50" : undefined}>
-          <ProviderEnvironmentSection
-            environment={genericEnvironment}
-            onChange={updateGenericEnvironment}
-            secretSources={secretSources}
-            environmentId={environmentId}
-            managed={
-              instanceLocks && {
-                names: instanceLocks.environmentNames,
-                reason: instanceLocks.reason,
-              }
-            }
-          />
-        </div>
-      </SettingsSection>
-      {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
-        <AcpSessionManagementSection
-          environmentId={environmentId}
-          instanceId={instanceId}
-          provider={liveProvider}
-          projects={acpProjects}
-          readOnly={readOnly}
-        />
-      ) : null}
-
+      {/* Card 3 — Models */}
       {driverOption !== undefined ? (
-        <SettingsSection title={gt("Models")}>
-          <div className="px-3 py-3 sm:px-4">
-            <p className="mb-3 text-xs text-muted-foreground">
-              <T>
-                Model preferences and custom models are saved on the selected environment and shared
-                across connected devices.
-              </T>
-            </p>
+        <section aria-label={gt("Models")} className="space-y-2">
+          <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+            {gt("Models")}
+          </h3>
+          <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3.5 shadow-xs/5 sm:px-5 sm:py-4">
             <ProviderModelsSection
               canManageCustomModels={!readOnly}
               canWritePreferences={canWriteSettings}
@@ -1823,27 +2029,36 @@ export function ProviderInstanceCard({
               onModelOrderChange={onModelOrderChange}
             />
           </div>
-        </SettingsSection>
+        </section>
       ) : null}
 
+      {/* Compact Danger Zone */}
       {onDelete && !readOnly ? (
-        <SettingsSection title={gt("Danger zone")}>
-          <SettingsRow
-            title={gt("Delete provider configuration")}
-            description={
-              removalKind === "remove-builtin"
-                ? gt(
-                    "Remove this built-in provider from your configured list and clear its custom settings. Existing conversation history is kept, and you can restore it anytime from Add provider.",
-                  )
-                : gt(
-                    "Remove this provider's connection, environment variables, and model settings. Existing conversation history is kept, and you can add it again anytime from Add provider.",
-                  )
-            }
-            control={
+        <section aria-label={gt("Danger zone")} className="space-y-2">
+          <h3 className="px-1 text-xs font-semibold tracking-tight text-muted-foreground/85">
+            {gt("Danger zone")}
+          </h3>
+          <div className="rounded-xl border border-destructive/25 bg-destructive/[0.03] px-4 py-3 shadow-xs/5">
+            <div className="flex flex-col gap-2.5 @min-[22rem]/detail-card:flex-row @min-[22rem]/detail-card:items-center @min-[22rem]/detail-card:justify-between @min-[22rem]/detail-card:gap-4">
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <h4 className="text-sm font-medium text-foreground">
+                  {gt("Delete provider configuration")}
+                </h4>
+                <p className="text-xs leading-snug text-muted-foreground">
+                  {removalKind === "remove-builtin"
+                    ? gt(
+                        "Remove this built-in provider from your configured list and clear its custom settings. Existing conversation history is kept, and you can restore it anytime from Add provider.",
+                      )
+                    : gt(
+                        "Remove this provider's connection, environment variables, and model settings. Existing conversation history is kept, and you can add it again anytime from Add provider.",
+                      )}
+                </p>
+              </div>
               <Button
                 type="button"
                 size="sm"
                 variant="destructive"
+                className="shrink-0"
                 disabled={readOnly}
                 data-provider-delete-detail={instanceId}
                 onClick={onDelete}
@@ -1851,10 +2066,10 @@ export function ProviderInstanceCard({
                 <Trash2Icon className="size-3.5" />
                 <span>{gt("Delete provider configuration")}</span>
               </Button>
-            }
-          />
-        </SettingsSection>
+            </div>
+          </div>
+        </section>
       ) : null}
-    </>
+    </div>
   );
 }

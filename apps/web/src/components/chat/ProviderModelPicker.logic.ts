@@ -191,3 +191,118 @@ export function partitionAgentScopedModels<
     overflowModels: [...overflowRegular, ...legacy],
   };
 }
+
+const PHANTOM_REASONING_CHOICE_IDS = new Set([
+  "",
+  "_t3/empty",
+  "default",
+  "t3:default",
+  "provider_default",
+  "provider-default",
+  "providerdefault",
+  "provider default",
+  "model_default",
+  "model-default",
+  "modeldefault",
+  "model default",
+  "system_default",
+  "system-default",
+  "systemdefault",
+  "system default",
+  "agent_default",
+  "agent-default",
+  "agentdefault",
+  "agent default",
+  "unset",
+  "inherit",
+]);
+
+const PHANTOM_REASONING_CHOICE_LABELS = new Set([
+  "",
+  "default",
+  "provider default",
+  "model default",
+  "system default",
+  "agent default",
+  "use default",
+  "use provider default",
+  "默认",
+  "提供商默认",
+  "模型默认",
+  "系统默认",
+]);
+
+/**
+ * Detects phantom/sentinel reasoning-effort choices (e.g. DeepSeek Harness / ACP
+ * `"Provider default"`, `"provider_default"`, `"default"`, or `_t3/empty`).
+ */
+export function isPhantomReasoningEffortChoice(choice: {
+  readonly id: string;
+  readonly label?: string | null | undefined;
+}): boolean {
+  const normalizedId = choice.id.trim().toLowerCase();
+  if (PHANTOM_REASONING_CHOICE_IDS.has(normalizedId)) {
+    return true;
+  }
+  const normalizedLabel = (choice.label ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/gu, " ");
+  return (
+    PHANTOM_REASONING_CHOICE_LABELS.has(normalizedLabel) ||
+    /^provider default(?:\s*\(|$)/u.test(normalizedLabel)
+  );
+}
+
+/**
+ * Filters out phantom `"Provider default"` / sentinel options from a reasoning-effort choice list
+ * whenever at least one concrete effort level exists (preserving all real levels like Low/Medium/High/Max).
+ */
+export function filterConcreteReasoningChoices<
+  T extends { readonly id: string; readonly label: string },
+>(choices: ReadonlyArray<T>): ReadonlyArray<T> {
+  if (choices.length === 0) return choices;
+  const concrete = choices.filter((choice) => !isPhantomReasoningEffortChoice(choice));
+  return concrete.length > 0 ? concrete : choices;
+}
+
+/**
+ * Resolves the effective concrete reasoning-effort value for display/selection.
+ * When `currentValue` matches a concrete option, preserves it; when it pointed at a
+ * stripped phantom sentinel (e.g. `"provider_default"` / `"_t3/empty"` / `"default"`),
+ * falls back cleanly to the model's concrete default or `medium` / `high` / middle stop.
+ */
+export function resolveConcreteReasoningValue<
+  T extends { readonly id: string; readonly label: string; readonly isDefault?: boolean | undefined },
+>(
+  concreteChoices: ReadonlyArray<T>,
+  currentValue: string | null | undefined,
+  hadPhantomChoices = false,
+): string | null {
+  if (concreteChoices.length === 0) {
+    return currentValue ?? null;
+  }
+  const trimmed = currentValue?.trim();
+  if (trimmed) {
+    const exact = concreteChoices.find((choice) => choice.id === trimmed);
+    if (exact) return exact.id;
+    const lowered = trimmed.toLowerCase();
+    const ci = concreteChoices.find((choice) => choice.id.trim().toLowerCase() === lowered);
+    if (ci) return ci.id;
+  }
+  const shouldFallback =
+    hadPhantomChoices ||
+    (trimmed !== undefined &&
+      trimmed.length > 0 &&
+      isPhantomReasoningEffortChoice({ id: trimmed, label: "" }));
+  if (!shouldFallback) {
+    return currentValue ?? null;
+  }
+  const markedDefault = concreteChoices.find((choice) => choice.isDefault);
+  if (markedDefault) return markedDefault.id;
+  const medium = concreteChoices.find((choice) => choice.id.trim().toLowerCase() === "medium");
+  if (medium) return medium.id;
+  const high = concreteChoices.find((choice) => choice.id.trim().toLowerCase() === "high");
+  if (high) return high.id;
+  return concreteChoices[Math.floor((concreteChoices.length - 1) / 2)]?.id ?? null;
+}

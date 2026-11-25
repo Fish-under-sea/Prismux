@@ -59,12 +59,16 @@ import {
   listAcpRegistryProviders,
   logoutAcpRegistry,
   probeAcpRegistryConfiguration,
+  sanitizeAcpOptionDescriptors,
+  sanitizeAcpReasoningDescriptor,
   setAcpRegistryProvider,
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
+import { isDeepSeekHarnessSettings } from "./dshAcp.ts";
+import { augmentDshAvailableCommands } from "./dshSkills.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -164,30 +168,35 @@ function modelsFromDiscovery(
   previousModels: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
   const discovered = discovery?.models ?? [];
+  const sanitizedConfigOptions = sanitizeAcpOptionDescriptors(discovery?.configOptions ?? []);
   const capabilities =
-    discovery === undefined || discovery.configOptions.length === 0
+    discovery === undefined || sanitizedConfigOptions.length === 0
       ? EMPTY_CAPABILITIES
-      : createModelCapabilities({ optionDescriptors: discovery.configOptions });
+      : createModelCapabilities({ optionDescriptors: sanitizedConfigOptions });
   // Model-specific options describe only the session's current model; other
   // models keep the shared ones plus what an earlier session reported for them.
   const modelOptionIds = new Set(discovery?.modelOptionIds ?? []);
-  const shared = (discovery?.configOptions ?? []).filter(
-    (descriptor) => !modelOptionIds.has(descriptor.id),
-  );
+  const shared = sanitizedConfigOptions.filter((descriptor) => !modelOptionIds.has(descriptor.id));
   const sharedIds = new Set(shared.map((descriptor) => descriptor.id));
   const capabilitiesFor = ({ id: slug, reasoningEffort }: AcpRegistryProbeModel) => {
     if (slug === discovery?.currentModelId) return capabilities;
+    const sanitizedReasoningEffort =
+      reasoningEffort != null ? sanitizeAcpReasoningDescriptor(reasoningEffort) : reasoningEffort;
     // The levels a model advertises replace the ones an earlier session reported.
-    const own = (
-      previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ?? []
+    const own = sanitizeAcpOptionDescriptors(
+      previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ?? [],
     ).filter(
       (descriptor) =>
         !sharedIds.has(descriptor.id) &&
-        (reasoningEffort === undefined ||
+        (sanitizedReasoningEffort === undefined ||
           descriptor.type !== "select" ||
           descriptor.role !== "reasoning"),
     );
-    const optionDescriptors = [...shared, ...own, ...(reasoningEffort ? [reasoningEffort] : [])];
+    const optionDescriptors = [
+      ...shared,
+      ...own,
+      ...(sanitizedReasoningEffort ? [sanitizedReasoningEffort] : []),
+    ];
     return optionDescriptors.length === 0
       ? EMPTY_CAPABILITIES
       : createModelCapabilities({ optionDescriptors });
@@ -640,6 +649,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const hostEnvironment = yield* HostProcess.Environment;
+    const hostPlatform = yield* HostProcess.Platform;
     const host = yield* ProviderHost.ProviderHost;
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
@@ -652,6 +662,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       continuationKey: continuationIdentity.continuationKey,
     };
     const effectiveConfig = { ...config, enabled } satisfies AcpRegistrySettings;
+    const isDsh = isDeepSeekHarnessSettings(effectiveConfig);
     const processEnvironment = yield* mergeProviderInstanceEnvironment(
       environment,
       hostEnvironment,
@@ -704,6 +715,32 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         return [next, next.models === provider.models ? learned : next.models];
       });
     const clearLearnedModels = Ref.set(learnedModels, []);
+    const overlayDshCommandsForCwd = (
+      provider: ServerProvider,
+      cwd: string,
+      replaceProjectSkills = false,
+    ): ServerProvider => {
+      if (!isDsh || !provider.installed) return provider;
+      const baseSkills = replaceProjectSkills
+        ? provider.skills.filter((skill) => skill.path.startsWith("acp://skill/"))
+        : provider.skills;
+      const augmented = augmentDshAvailableCommands(
+        {
+          slashCommands: provider.slashCommands,
+          skills: baseSkills,
+        },
+        {
+          cwd,
+          env: processEnvironment,
+          platform: hostPlatform,
+        },
+      );
+      return {
+        ...provider,
+        slashCommands: augmented.slashCommands,
+        skills: augmented.skills,
+      };
+    };
     const withLiveRuntimeState = Effect.fn("AcpRegistryDriver.withLiveRuntimeState")(function* (
       input: ServerProvider,
     ) {
@@ -715,7 +752,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         (yield* confirmedAuthentication.get)
           ? { ...input, auth: { ...input.auth, status: "authenticated" as const } }
           : input;
-      return yield* Option.isNone(runtimeCoordinator)
+      const merged = yield* Option.isNone(runtimeCoordinator)
         ? Effect.succeed(provider)
         : Effect.all({
             commands: runtimeCoordinator.value.getAvailableCommands(instanceId),
@@ -735,6 +772,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               );
             }),
           );
+      return overlayDshCommandsForCwd(merged, host.paths.cwd);
     });
     // A local executable's version comes only from probing it, so readiness checks reuse the last report.
     const reportedLocalVersion = yield* Ref.make<string | null>(null);
@@ -863,13 +901,34 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           ({ slashCommands, skills }) =>
             liveSnapshotSemaphore.withPermit(
               getSnapshot.pipe(
-                Effect.flatMap((current) =>
-                  publishSnapshot({
-                    ...current,
-                    slashCommands,
-                    skills,
-                  }),
+                Effect.map((current) =>
+                  overlayDshCommandsForCwd(
+                    {
+                      ...current,
+                      slashCommands,
+                      skills,
+                    },
+                    host.paths.cwd,
+                  ),
                 ),
+                Effect.tap((next) =>
+                  Ref.update(enrichmentCache, (cache) =>
+                    cache.entry === null
+                      ? cache
+                      : {
+                          ...cache,
+                          entry: {
+                            ...cache.entry,
+                            provider: {
+                              ...cache.entry.provider,
+                              slashCommands: next.slashCommands,
+                              skills: next.skills,
+                            },
+                          },
+                        },
+                  ),
+                ),
+                Effect.flatMap(publishSnapshot),
               ),
             ),
         );
@@ -1003,6 +1062,17 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         ...snapshot,
         refresh: snapshot.refresh.pipe(Effect.tap(() => controller.refreshMethods ?? Effect.void)),
       },
+      snapshotForCwd: (cwd) =>
+        snapshot.getSnapshot.pipe(
+          Effect.map((current) =>
+            isDsh && current.installed
+              ? {
+                  ...overlayDshCommandsForCwd(current, cwd, true),
+                  slashCommandsPending: false,
+                }
+              : current,
+          ),
+        ),
       invalidateCaches: (Option.isSome(runtimeCoordinator)
         ? runtimeCoordinator.value.clearLiveConfiguration(instanceId)
         : Effect.void

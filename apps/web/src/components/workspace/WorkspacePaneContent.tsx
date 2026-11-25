@@ -204,7 +204,7 @@ function EmbeddedTerminalTabView(props: {
             {tab.title || "PowerShell"}
           </h3>
           <p className={cn("max-w-sm text-xs", STAGE_SUBTITLE_GLASS_CLASS)}>
-            打开任意工作区会话后即可直连 T3 Server 持久化终端（支持多窗口与无损重连）。
+            打开任意工作区会话后即可直连 Prismux Server 持久化终端（支持多窗口与无损重连）。
           </p>
         </div>
         {fallbackEnvId ? (

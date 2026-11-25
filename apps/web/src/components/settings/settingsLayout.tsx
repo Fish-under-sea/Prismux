@@ -23,7 +23,6 @@ import { WorkspacePageContainer, type WorkspacePageWidth } from "../WorkspacePag
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
-import { SettingsScopeSentence } from "./SettingsScopeSentence";
 import {
   isProjectScopedSettingKey,
   listProjectOverrides,
@@ -516,7 +515,7 @@ export function SettingsRow({
     : source === "project"
       ? { state: "overridden", summary: gt("Overridden for this project") }
       : source === "t3.json"
-        ? { state: "inherited", summary: gt("Inherited from the repository's t3.json") }
+        ? { state: "inherited", summary: gt("Inherited from the repository's prismux.json") }
         : source === "environment" && scopedKeys.length > 0
           ? {
               state: "inherited",
@@ -684,7 +683,6 @@ export function SettingsPageContainer({
         data-settings-page-scroll
       >
         <WorkspacePageContainer width={width} className={cn("gap-7", className)}>
-          <SettingsScopeSentence />
           {children}
         </WorkspacePageContainer>
       </div>

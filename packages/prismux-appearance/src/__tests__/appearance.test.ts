@@ -109,17 +109,22 @@ import {
 import {
   CANONICAL_EFFORT_LABELS,
   PrismuxReasoningEffortSlider,
+  REASONING_EFFORT_THUMB_INSET_PX,
   REASONING_MODEL_THEMES,
   REASONING_RUNNER_FRAME_COUNT,
   REASONING_RUNNER_SPRITES,
+  computeReasoningEffortFillWidth,
   computeReasoningEffortStopPercent,
   computeReasoningEffortStopProgress,
+  computeReasoningEffortThumbAnchorX,
   detectReasoningModelFamily,
   drawReasoningRadiation,
   formatEffortLabel,
   formatReasoningEffortLabel,
   formatReasoningEffortShortLabel,
   getEffortPresetForFamily,
+  getReasoningEffortThumbInsetPx,
+  isPhantomReasoningEffortOption,
   normalizeReasoningEffortOptions,
   resolveEffortStopIndex,
   resolveReasoningEffortStopIndexFromPointer,
@@ -1133,56 +1138,157 @@ describe('PrismuxReasoningEffortSlider (dsh-fish model-aware running slider)', (
       );
     }
     assert.match(css, /\.pmx-re-stops\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(var\(--pmx-re-count,\s*4\),\s*minmax\(0,\s*1fr\)\);[^}]*gap:\s*0;/s);
-    assert.match(css, /\.pmx-re-root\.is-runner \.pmx-re-knob\s*\{[^}]*left:\s*var\(--pmx-re-progress\);/s);
+    assert.match(
+      css,
+      /\.pmx-re-root\.is-runner \.pmx-re-knob\s*\{[^}]*left:\s*calc\(var\(--pmx-thumb-inset\)\s*\+\s*\(100%\s*-\s*2\s*\*\s*var\(--pmx-thumb-inset\)\)\s*\*\s*var\(--pmx-progress\)\);/s,
+    );
+    assert.match(css, /\.pmx-re-track::before\s*\{[^}]*width:\s*var\(--pmx-re-fill\);/s);
+    assert.match(css, /\.pmx-re-slider\[data-top\] \.pmx-re-track::before\s*\{[^}]*width:\s*100%;/s);
   });
 
-  it('mathematically centers the runner knob at ((i + 0.5) / N) * 100% with 0.00px error and aligns pointer hit cells across N=2..7', () => {
+  it('delivers 100% full-bleed track fill at Max, zero-gap edge-clamped mascot geometry & aligned pointer drag math across all stop counts (N=2..7)', () => {
+    assert.equal(getReasoningEffortThumbInsetPx({ showRunner: true, compact: false }), REASONING_EFFORT_THUMB_INSET_PX.runnerRegular);
+    assert.equal(getReasoningEffortThumbInsetPx({ showRunner: true, compact: true }), REASONING_EFFORT_THUMB_INSET_PX.runnerCompact);
+    assert.equal(getReasoningEffortThumbInsetPx({ showRunner: false, compact: false }), REASONING_EFFORT_THUMB_INSET_PX.orbRegular);
+    assert.equal(getReasoningEffortThumbInsetPx({ showRunner: false, compact: true }), REASONING_EFFORT_THUMB_INSET_PX.orbCompact);
+
     const widths = [240, 320, 480, 720, 960];
+    const insets = [
+      REASONING_EFFORT_THUMB_INSET_PX.runnerRegular,
+      REASONING_EFFORT_THUMB_INSET_PX.runnerCompact,
+      REASONING_EFFORT_THUMB_INSET_PX.orbRegular,
+      REASONING_EFFORT_THUMB_INSET_PX.orbCompact,
+    ];
     const rectLeft = 40;
+
     for (const count of [2, 3, 4, 5, 6, 7]) {
+      // Extreme stops hit exact 0% and 100% universally for every stop count
+      assert.equal(computeReasoningEffortStopProgress(0, count), 0);
+      assert.equal(computeReasoningEffortStopPercent(0, count), 0);
+      assert.equal(computeReasoningEffortStopProgress(count - 1, count), 1);
+      assert.equal(computeReasoningEffortStopPercent(count - 1, count), 100);
+
       for (let i = 0; i < count; i += 1) {
-        const expectedRatio = (i + 0.5) / count;
+        const expectedRatio = i / (count - 1);
         const actualRatio = computeReasoningEffortStopProgress(i, count);
         const actualPercent = computeReasoningEffortStopPercent(i, count);
         assert.ok(Math.abs(actualRatio - expectedRatio) < 1e-12);
         assert.ok(Math.abs(actualPercent - expectedRatio * 100) < 1e-12);
 
         for (const width of widths) {
-          const cellWidth = width / count;
-          const labelCenterX = rectLeft + (i + 0.5) * cellWidth;
-          const runnerCenterX = rectLeft + actualRatio * width;
-          assert.ok(
-            Math.abs(runnerCenterX - labelCenterX) < 1e-9,
-            `Expected 0.00px delta for N=${count}, i=${i}, W=${width}`,
-          );
-          assert.equal(
-            resolveReasoningEffortStopIndexFromPointer(labelCenterX, { left: rectLeft, width }, count),
-            i,
-          );
-          // Near left and right interior edges of cell i still map cleanly to i
-          assert.equal(
-            resolveReasoningEffortStopIndexFromPointer(
-              rectLeft + i * cellWidth + 0.01,
-              { left: rectLeft, width },
-              count,
-            ),
-            i,
-          );
-          assert.equal(
-            resolveReasoningEffortStopIndexFromPointer(
-              rectLeft + (i + 1) * cellWidth - 0.01,
-              { left: rectLeft, width },
-              count,
-            ),
-            i,
-          );
+          for (const inset of insets) {
+            const anchorX = computeReasoningEffortThumbAnchorX(actualRatio, width, inset);
+            const fillWidth = computeReasoningEffortFillWidth(
+              actualRatio,
+              width,
+              inset,
+              i === count - 1,
+            );
+
+            // Mascot silhouette strictly stays inside [0, width] with zero clipping
+            assert.ok(
+              anchorX - inset >= -1e-9 && anchorX + inset <= width + 1e-9,
+              `Mascot silhouette must stay inside [0, ${width}] for N=${count}, i=${i}, inset=${inset}`,
+            );
+
+            if (i === 0) {
+              assert.ok(Math.abs(anchorX - inset) < 1e-9, 'Min stop anchor sits at left inset');
+              assert.ok(Math.abs(fillWidth - inset) < 1e-9, 'Min stop fill aligns cleanly under mascot with zero dead left gap');
+            } else if (i === count - 1) {
+              assert.ok(Math.abs(anchorX - (width - inset)) < 1e-9, 'Max stop anchor sits cleanly inside right pill cap');
+              assert.equal(fillWidth, width, `Max stop MUST fill 100% (${width}px) with ZERO dark right stub (N=${count})`);
+            } else {
+              assert.ok(
+                Math.abs(fillWidth - anchorX) < 1e-9,
+                `Intermediate stop fill must terminate cleanly under mascot center (N=${count}, i=${i})`,
+              );
+            }
+
+            // Clicking directly on the mascot's anchor X round-trips to stop index `i`
+            assert.equal(
+              resolveReasoningEffortStopIndexFromPointer(
+                rectLeft + anchorX,
+                { left: rectLeft, width },
+                count,
+                inset,
+              ),
+              i,
+            );
+          }
         }
       }
-      // Out-of-bounds drags clamp cleanly to [0, count - 1]
-      assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft - 50, { left: rectLeft, width: 400 }, count), 0);
-      assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + 400, { left: rectLeft, width: 400 }, count), count - 1);
-      assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + 500, { left: rectLeft, width: 400 }, count), count - 1);
+
+      // Extreme left/right pointer drags snap instantaneously to 0 / count - 1 across all insets
+      for (const inset of insets) {
+        assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft - 50, { left: rectLeft, width: 400 }, count, inset), 0);
+        assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft, { left: rectLeft, width: 400 }, count, inset), 0);
+        assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + inset, { left: rectLeft, width: 400 }, count, inset), 0);
+        assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + 400 - inset, { left: rectLeft, width: 400 }, count, inset), count - 1);
+        assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + 400, { left: rectLeft, width: 400 }, count, inset), count - 1);
+        assert.equal(resolveReasoningEffortStopIndexFromPointer(rectLeft + 500, { left: rectLeft, width: 400 }, count, inset), count - 1);
+      }
     }
+
+    // Canvas pixel radiation clips to 100% full width at Max (zero un-filled right stub) across all 8 model families
+    for (const family of Object.keys(REASONING_MODEL_THEMES) as ReasoningModelFamily[]) {
+      let clippedWidth = 0;
+      let maxPaintedX = 0;
+      const fakeGradient = { addColorStop: () => undefined };
+      const fakeCtx = {
+        fillStyle: '',
+        clearRect: () => undefined,
+        save: () => undefined,
+        restore: () => undefined,
+        beginPath: () => undefined,
+        rect: (_x: number, _y: number, w: number) => {
+          clippedWidth = w;
+        },
+        clip: () => undefined,
+        fillRect: (x: number, _y: number, w: number) => {
+          if (x + w > maxPaintedX) maxPaintedX = x + w;
+        },
+        createLinearGradient: () => fakeGradient,
+        createRadialGradient: () => fakeGradient,
+      } as unknown as CanvasRenderingContext2D;
+
+      drawReasoningRadiation(
+        fakeCtx,
+        320,
+        24,
+        1200,
+        { progress: 1, dragging: false, thumbInsetPx: 16, isMax: true },
+        family,
+        true,
+      );
+      assert.equal(clippedWidth, 320, `${family} max stop canvas clip must reach full 320px (100%)`);
+      assert.ok(maxPaintedX >= 316, `${family} max stop pixel matrix must illuminate right up to the right cap`);
+    }
+
+    // Filters phantom "Provider default" / sentinel options while keeping all real levels intact
+    assert.equal(isPhantomReasoningEffortOption('_t3/empty', 'Provider default'), true);
+    assert.equal(isPhantomReasoningEffortOption('provider_default', 'Provider default'), true);
+    assert.equal(isPhantomReasoningEffortOption('default', 'Default'), true);
+    assert.equal(isPhantomReasoningEffortOption('low', 'Low'), false);
+    assert.equal(isPhantomReasoningEffortOption('off', 'Off'), false);
+    assert.equal(isPhantomReasoningEffortOption('high', 'High'), false);
+    assert.equal(isPhantomReasoningEffortOption('max', 'Max'), false);
+
+    const cleanedDsh = normalizeReasoningEffortOptions(
+      [
+        { value: '_t3/empty', label: 'Provider default' },
+        { value: 'provider_default', label: 'Provider default' },
+        { value: 'low', label: 'Low' },
+        { value: 'high', label: 'High' },
+        { value: 'max', label: 'Max' },
+      ],
+      'deepseek',
+      'zh',
+    );
+    assert.deepEqual(
+      cleanedDsh.map((s) => s.value),
+      ['low', 'high', 'max'],
+    );
+    assert.equal(resolveEffortStopIndex(cleanedDsh, 'provider_default'), 1); // cleanly defaults to 'high'
   });
 });
 

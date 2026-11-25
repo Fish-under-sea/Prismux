@@ -36,6 +36,8 @@ export interface ProcessUsageReading {
   cpuPercent: number | null;
   memoryBytes: number | null;
   privateMemoryBytes?: number | null;
+  /** Windows Task Manager "Memory (Private Working Set)" in bytes, excluding shared pages. */
+  privateWorkingSetBytes?: number | null;
   /** Raw cumulative CPU seconds (used internally on Windows to derive CPU% deltas). */
   cpuSeconds?: number | null;
 }
@@ -47,8 +49,12 @@ export interface OsProcessSnapshotEntry {
   commandLine: string | null;
   memoryBytes: number | null;
   privateMemoryBytes: number | null;
+  /** Windows Task Manager "Memory (Private Working Set)" in bytes when queried from PerfProc. */
+  privateWorkingSetBytes?: number | null;
   cpuSeconds: number | null;
   cpuPercent: number | null;
+  /** Exact wall-clock epoch ms when OS process CPU counters were captured (immune to post-query overhead). */
+  sampledAtMs?: number;
 }
 
 export interface HostElectronProcessMetric {
@@ -200,6 +206,7 @@ interface CachedHostMetrics {
 interface CachedProcessTree {
   entries: Map<number, OsProcessSnapshotEntry>;
   sampledAtMs: number;
+  cpuSampledAtMs: number;
 }
 
 interface ProcessTreeLookupResult {
@@ -406,18 +413,108 @@ export function parseUnixProcessTreeOutput(
   return map;
 }
 
+/**
+ * Parses 9-column tab-separated Windows rows that include `WorkingSetPrivate`
+ * (column 7, from `Win32_PerfRawData_PerfProc_Process`) before `CommandLine`.
+ */
+export function parseWindowsProcessTreeWithPrivateWsTsv(
+  stdout: string
+): Map<number, OsProcessSnapshotEntry> {
+  const map = new Map<number, OsProcessSnapshotEntry>();
+  let sampleTsMs: number | undefined;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    if (!rawLine || rawLine.trim().length === 0) continue;
+    if (rawLine.startsWith("#TS\t")) {
+      const parsedTs = parsePositiveInt(rawLine.slice(4));
+      if (parsedTs !== null) {
+        sampleTsMs = parsedTs;
+      }
+      continue;
+    }
+    const cols = rawLine.split("\t");
+    if (cols.length < 8) continue;
+
+    const pid = parsePositiveInt(cols[0]);
+    if (pid === null) continue;
+
+    const parentPid = parsePositiveInt(cols[1]);
+    const processName = cols[2]?.trim() || `pid-${pid}`;
+    const workingSetBytes = parseNonNegativeNumber(cols[3]);
+    const privateMemoryBytes = parseNonNegativeNumber(cols[4]);
+    const kernelTicks = parseNonNegativeNumber(cols[5]);
+    const userTicks = parseNonNegativeNumber(cols[6]);
+    const privateWorkingSetBytes = parseNonNegativeNumber(cols[7]);
+    const cpuSeconds =
+      kernelTicks !== null || userTicks !== null
+        ? ((kernelTicks ?? 0) + (userTicks ?? 0)) / 10_000_000
+        : null;
+    const commandLine = cols.slice(8).join("\t").trim() || null;
+
+    map.set(pid, {
+      pid,
+      parentPid,
+      processName,
+      commandLine,
+      memoryBytes: privateWorkingSetBytes ?? workingSetBytes,
+      privateMemoryBytes,
+      privateWorkingSetBytes,
+      cpuSeconds,
+      cpuPercent: null,
+      ...(sampleTsMs !== undefined ? { sampledAtMs: sampleTsMs } : {})
+    });
+  }
+  return map;
+}
+
 async function defaultSampleProcessTree(
-  timeoutMs: number
+  timeoutMs: number,
+  familyRootPids: readonly number[] = []
 ): Promise<Map<number, OsProcessSnapshotEntry>> {
   if (process.platform === "win32") {
-    // Fast single-shot CIM table dump (~400ms), strictly hidden (zero console flash).
+    // Fast Win32_Process dump + filtered Win32_PerfRawData_PerfProc_Process.WorkingSetPrivate
+    // ONLY for Prismux family PIDs (exact Task Manager Memory column without Chromium/Electron
+    // shared-page double counting, ~4x faster than scanning all system PerfProc counters).
+    const sanitizedRoots = [
+      ...new Set(familyRootPids.filter((pid) => Number.isInteger(pid) && pid > 0))
+    ];
+    const rootInit =
+      sanitizedRoots.length > 0 ? `@(${sanitizedRoots.join(",")})` : `@(${process.pid})`;
     const psScript = [
       `<# ${SELF_PROBE_MARKER} #>`,
       "$ErrorActionPreference='SilentlyContinue'",
-      "Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,WorkingSetSize,PrivatePageCount,KernelModeTime,UserModeTime,CommandLine | ForEach-Object {",
-      "  $c = if ($_.CommandLine) { ($_.CommandLine -replace '[\\r\\n\\t]+', ' ').Trim() } else { '' }",
+      "$procs = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,WorkingSetSize,PrivatePageCount,KernelModeTime,UserModeTime,CommandLine)",
+      "$sampleTsMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()",
+      "$byParent = @{}",
+      "foreach ($p in $procs) {",
+      "  $ppid = [int]$p.ParentProcessId",
+      "  if (-not $byParent.ContainsKey($ppid)) { $byParent[$ppid] = [System.Collections.Generic.List[int]]::new() }",
+      "  $byParent[$ppid].Add([int]$p.ProcessId)",
+      "}",
+      "$family = [System.Collections.Generic.HashSet[int]]::new()",
+      "$queue = [System.Collections.Generic.Queue[int]]::new()",
+      `foreach ($r in ${rootInit}) { if ($family.Add([int]$r)) { $queue.Enqueue([int]$r) } }`,
+      "while ($queue.Count -gt 0 -and $family.Count -lt 96) {",
+      "  $cur = $queue.Dequeue()",
+      "  if ($byParent.ContainsKey($cur)) {",
+      "    foreach ($ch in $byParent[$cur]) { if ($family.Add($ch)) { $queue.Enqueue($ch) } }",
+      "  }",
+      "}",
+      "$pwsMap = @{}",
+      "if ($family.Count -gt 0) {",
+      "  try {",
+      "    $filter = (@($family) | ForEach-Object { \"IDProcess=$_\" }) -join ' OR '",
+      "    Get-CimInstance Win32_PerfRawData_PerfProc_Process -Filter $filter -Property IDProcess,WorkingSetPrivate | ForEach-Object {",
+      "      if ($_.IDProcess -gt 0 -and $_.WorkingSetPrivate -ge 0) { $pwsMap[[int]$_.IDProcess] = [int64]$_.WorkingSetPrivate }",
+      "    }",
+      "  } catch {}",
+      "}",
+      '"#TS`t$sampleTsMs"',
+      "foreach ($p in $procs) {",
+      "  $c = if ($p.CommandLine) { ($p.CommandLine -replace '[\\r\\n\\t]+', ' ').Trim() } else { '' }",
       "  if ($c.Length -gt 320) { $c = $c.Substring(0, 320) }",
-      '  "$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.Name)`t$($_.WorkingSetSize)`t$($_.PrivatePageCount)`t$($_.KernelModeTime)`t$($_.UserModeTime)`t$c"',
+      "  $pidInt = [int]$p.ProcessId",
+      "  $pws = if ($pwsMap.ContainsKey($pidInt)) { $pwsMap[$pidInt] } else { '' }",
+      '  "$($p.ProcessId)`t$($p.ParentProcessId)`t$($p.Name)`t$($p.WorkingSetSize)`t$($p.PrivatePageCount)`t$($p.KernelModeTime)`t$($p.UserModeTime)`t$pws`t$c"',
       "}"
     ].join("\n");
 
@@ -431,7 +528,7 @@ async function defaultSampleProcessTree(
           maxBuffer: 8 * 1024 * 1024
         }
       );
-      return parseWindowsProcessTreeTsv(stdout);
+      return parseWindowsProcessTreeWithPrivateWsTsv(stdout);
     } catch {
       return new Map();
     }
@@ -464,7 +561,21 @@ async function defaultSampleProcesses(
 
   if (process.platform === "win32") {
     const idList = uniquePids.join(",");
-    const psScript = `<# ${SELF_PROBE_MARKER} #> Get-Process -Id ${idList} -ErrorAction SilentlyContinue | Select-Object Id,WorkingSet64,PrivateMemorySize64,CPU | ConvertTo-Json -Compress`;
+    const filter = uniquePids.map((pid) => `IDProcess=${pid}`).join(" OR ");
+    const psScript = [
+      `<# ${SELF_PROBE_MARKER} #>`,
+      "$ErrorActionPreference='SilentlyContinue'",
+      "$pwsMap = @{}",
+      "try {",
+      `  Get-CimInstance Win32_PerfRawData_PerfProc_Process -Filter '${filter}' -Property IDProcess,WorkingSetPrivate | ForEach-Object {`,
+      "    if ($_.IDProcess -gt 0 -and $_.WorkingSetPrivate -ge 0) { $pwsMap[[int]$_.IDProcess] = [int64]$_.WorkingSetPrivate }",
+      "  }",
+      "} catch {}",
+      `Get-Process -Id ${idList} -ErrorAction SilentlyContinue | ForEach-Object {`,
+      "  $pws = if ($pwsMap.ContainsKey($_.Id)) { $pwsMap[$_.Id] } else { $null }",
+      "  [PSCustomObject]@{ Id = $_.Id; WorkingSet64 = $_.WorkingSet64; PrivateWorkingSet64 = $pws; PrivateMemorySize64 = $_.PrivateMemorySize64; CPU = $_.CPU }",
+      "} | ConvertTo-Json -Compress"
+    ].join("\n");
     try {
       const { stdout } = await execFileAsync(
         "powershell.exe",
@@ -489,6 +600,11 @@ async function defaultSampleProcesses(
             Number.isFinite(rec["WorkingSet64"])
               ? rec["WorkingSet64"]
               : null;
+          const pwsBytes =
+            typeof rec["PrivateWorkingSet64"] === "number" &&
+            Number.isFinite(rec["PrivateWorkingSet64"])
+              ? rec["PrivateWorkingSet64"]
+              : null;
           const privBytes =
             typeof rec["PrivateMemorySize64"] === "number" &&
             Number.isFinite(rec["PrivateMemorySize64"])
@@ -501,8 +617,9 @@ async function defaultSampleProcesses(
           map.set(pid, {
             pid,
             cpuPercent: null,
-            memoryBytes: wsBytes,
+            memoryBytes: pwsBytes ?? wsBytes,
             privateMemoryBytes: privBytes,
+            privateWorkingSetBytes: pwsBytes,
             cpuSeconds: cpuSec
           });
         }
@@ -1224,6 +1341,32 @@ export class ResourceMonitorService {
     return instantPercent;
   }
 
+  private collectKnownRootPids(): number[] {
+    const roots = new Set<number>([process.pid]);
+    const mainPid = this.resolveEffectiveMainPid();
+    if (mainPid !== null) roots.add(mainPid);
+    const t3Status = this.t3Supervisor?.getStatus();
+    const t3Pid =
+      parsePositiveInt(t3Status?.pid) ??
+      parsePositiveInt(this.latestHostMetrics?.report.t3Server?.pid) ??
+      this.configuredT3ServerPid ??
+      parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ??
+      parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ??
+      parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]);
+    if (t3Pid !== null) roots.add(t3Pid);
+    if (this.latestHostMetrics) {
+      for (const proc of this.latestHostMetrics.report.electronProcesses) {
+        if (proc.pid > 0) roots.add(proc.pid);
+      }
+    }
+    for (const info of this.ptyPool.listSessionRuntimeInfos()) {
+      if (info.alive && info.pid !== null && info.pid > 0) {
+        roots.add(info.pid);
+      }
+    }
+    return [...roots];
+  }
+
   private async getProcessTree(forceRefresh: boolean): Promise<ProcessTreeLookupResult> {
     const now = Date.now();
     if (
@@ -1233,7 +1376,7 @@ export class ResourceMonitorService {
     ) {
       return {
         entries: this.cachedProcessTree.entries,
-        sampledAtMs: this.cachedProcessTree.sampledAtMs,
+        sampledAtMs: this.cachedProcessTree.cpuSampledAtMs,
         fromCache: true
       };
     }
@@ -1241,28 +1384,43 @@ export class ResourceMonitorService {
       const snapshot = await this.inflightProcessTree;
       return {
         entries: snapshot.entries,
-        sampledAtMs: snapshot.sampledAtMs,
+        sampledAtMs: snapshot.cpuSampledAtMs,
         fromCache: false
       };
     }
 
     const fetcher = this.sampleProcessTreeFn
       ? () => this.sampleProcessTreeFn!()
-      : () => defaultSampleProcessTree(this.sampleTimeoutMs);
+      : () => defaultSampleProcessTree(this.sampleTimeoutMs, this.collectKnownRootPids());
 
     const run = fetcher()
       .then((entries) => {
-        const snapshot: CachedProcessTree = { entries, sampledAtMs: Date.now() };
+        const completedAtMs = Date.now();
+        let cpuSampledAtMs = completedAtMs;
+        for (const entry of entries.values()) {
+          if (typeof entry.sampledAtMs === "number" && entry.sampledAtMs > 0) {
+            cpuSampledAtMs = entry.sampledAtMs;
+            break;
+          }
+        }
+        const snapshot: CachedProcessTree = {
+          entries,
+          sampledAtMs: completedAtMs,
+          cpuSampledAtMs
+        };
         this.cachedProcessTree = snapshot;
         return snapshot;
       })
-      .catch(
-        () =>
+      .catch(() => {
+        const fallbackAtMs = Date.now();
+        return (
           this.cachedProcessTree ?? {
             entries: new Map<number, OsProcessSnapshotEntry>(),
-            sampledAtMs: Date.now()
+            sampledAtMs: fallbackAtMs,
+            cpuSampledAtMs: fallbackAtMs
           }
-      )
+        );
+      })
       .finally(() => {
         if (this.inflightProcessTree === run) {
           this.inflightProcessTree = null;
@@ -1273,7 +1431,7 @@ export class ResourceMonitorService {
     const snapshot = await run;
     return {
       entries: snapshot.entries,
-      sampledAtMs: snapshot.sampledAtMs,
+      sampledAtMs: snapshot.cpuSampledAtMs,
       fromCache: false
     };
   }
@@ -1690,10 +1848,17 @@ export class ResourceMonitorService {
         privateMemoryBytes = daemonPrivateMemBytes;
         source = "daemon-self";
       } else if (electronMetric && hostReport) {
+        // On Windows, `privateWorkingSetBytes` (from PerfProc WorkingSetPrivate) is exact Task
+        // Manager Memory without Chromium/Electron shared-page double counting. Prefer it over
+        // Electron's inflated total `workingSetBytes`, while preserving fallback when unavailable.
+        const osPrivateWsBytes =
+          osRow?.privateWorkingSetBytes ?? legacyRow?.privateWorkingSetBytes ?? null;
         memoryBytes =
-          electronMetric.workingSetBytes > 0
-            ? electronMetric.workingSetBytes
-            : osRow?.memoryBytes ?? legacyRow?.memoryBytes ?? null;
+          process.platform === "win32" && osPrivateWsBytes !== null && osPrivateWsBytes >= 0
+            ? osPrivateWsBytes
+            : electronMetric.workingSetBytes > 0
+              ? electronMetric.workingSetBytes
+              : osRow?.memoryBytes ?? legacyRow?.memoryBytes ?? null;
         privateMemoryBytes =
           electronMetric.privateMemoryBytes ??
           osRow?.privateMemoryBytes ??

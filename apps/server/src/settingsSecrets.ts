@@ -15,6 +15,7 @@ import {
 } from "@prismux/core-contracts";
 import { acpRegistryClient } from "@prismux/provider-acp-registry/client";
 import { openCodeClient } from "@prismux/provider-opencode/client";
+import { piClient } from "@prismux/provider-pi/client";
 import {
   readSecretFieldValues,
   SOURCE_CONTROL_HOST_SECRET_FIELDS,
@@ -28,7 +29,7 @@ const providerSecretFields = new Map([
   ["codex", secretSettingsFields(CodexSettings)],
   ["claudeAgent", secretSettingsFields(ClaudeSettings)],
   ["antigravity", secretSettingsFields(AntigravitySettings)],
-  ...[openCodeClient, acpRegistryClient].map(
+  ...[openCodeClient, piClient, acpRegistryClient].map(
     (definition) =>
       [definition.driverKind, secretSettingsFields(definition.settingsSchema)] as const,
   ),

@@ -46,20 +46,30 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
   });
 
   it("translates all Prismux settings navigation, breadcrumb, and search labels to Simplified Chinese", () => {
+    expect(m(SETTINGS_SECTION_LABELS["/settings/providers"])).toBe("智能体配置器");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/chat"])).toBe("对话");
     expect(m(SETTINGS_SECTION_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_SECTION_LABELS["/settings/wallpaper"])).toBe("壁纸");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/projects"])).toBe("项目与归档");
     expect(m(SETTINGS_SECTION_LABELS["/settings/plugins"])).toBe("插件中心");
     expect(m(SETTINGS_SECTION_LABELS["/settings/memory"])).toBe("主秘书与记忆");
-    expect(m(SETTINGS_SECTION_LABELS["/settings/sync"])).toBe("同步");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/sync"])).toBe("远程同步");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/connections"])).toBe("环境与远控");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/maintenance"])).toBe("维护与诊断");
     expect(m(SETTINGS_SECTION_LABELS["/settings/overnight-factory"])).toBe("夜间工场与邮箱");
     expect(m(SETTINGS_SECTION_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
     expect(m(SETTINGS_SECTION_LABELS["/settings/updates"])).toBe("软件更新");
 
+    expect(m(SETTINGS_NAV_LABELS["/settings/providers"])).toBe("智能体配置器");
+    expect(m(SETTINGS_NAV_LABELS["/settings/chat"])).toBe("对话");
     expect(m(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("壁纸");
+    expect(m(SETTINGS_NAV_LABELS["/settings/projects"])).toBe("项目与归档");
     expect(m(SETTINGS_NAV_LABELS["/settings/plugins"])).toBe("插件中心");
     expect(m(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("主秘书与记忆");
-    expect(m(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("同步");
+    expect(m(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("远程同步");
+    expect(m(SETTINGS_NAV_LABELS["/settings/connections"])).toBe("环境与远控");
+    expect(m(SETTINGS_NAV_LABELS["/settings/maintenance"])).toBe("维护与诊断");
     expect(m(SETTINGS_NAV_LABELS["/settings/overnight-factory"])).toBe("夜间工场与邮箱");
     expect(m(SETTINGS_NAV_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
     expect(m(SETTINGS_NAV_LABELS["/settings/updates"])).toBe("软件更新");
@@ -72,22 +82,27 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(zhGroups).toEqual([
       {
         heading: "常用与外观",
-        labels: ["通用", "对话与线程", "语音", "外观", "壁纸", "快捷键"],
+        labels: ["通用", "对话", "语音", "外观", "壁纸", "快捷键"],
       },
       {
         heading: "智能体与工作区",
-        labels: ["智能体提供方", "项目", "归档", "浏览器与设备", "源码管理与工作树"],
+        labels: ["智能体配置器", "主秘书与记忆", "项目与归档", "浏览器与设备", "源码管理与工作树"],
       },
       {
-        heading: "扩展、记忆与连接",
-        labels: ["环境与扫码远控", "主秘书与记忆", "同步", "插件中心"],
+        heading: "扩展与连接",
+        labels: ["插件中心", "远程同步", "环境与远控"],
       },
       {
         heading: "系统与关于",
-        labels: ["维护与服务诊断", "关于与更新"],
+        labels: ["维护与诊断", "关于与更新"],
       },
     ]);
 
+    expect(m(msg("Project configuration"))).toBe("项目配置");
+    expect(m(msg("Archived threads"))).toBe("已归档线程");
+    expect(m(msg("Projects and archive settings sections"))).toBe("项目与归档设置分区");
+    expect(m(msg("Remote sync"))).toBe("远程同步");
+    expect(m(msg("Environments & remote"))).toBe("环境与远控");
     expect(m(msg("Prismux"))).toBe("Prismux");
     expect(m(msg("Wallpaper Engine"))).toBe("壁纸引擎");
     expect(m(msg("Plugin Center"))).toBe("插件中心");
@@ -99,6 +114,57 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       "回答结束后",
     );
     expect(m(msg("All replies", { $context: "collapsed assistant replies" }))).toBe("全部回复");
+
+    // Agent configurator 3-tab redesign, unified 柱状 effort wording, prismux.json, and provider detail headings
+    expect(m(msg("Agent configurator"))).toBe("智能体配置器");
+    expect(m(msg("Providers & instances"))).toBe("提供方与实例");
+    expect(m(msg("Defaults & policies"))).toBe("默认模型与策略");
+    expect(m(msg("Compliance & subscription waiver"))).toBe("合规与订阅免责");
+    expect(m(msg("Default chat models"))).toBe("对话默认模型");
+    expect(m(msg("Global launch & update policy"))).toBe("全局启动与检测策略");
+    expect(m(msg("Basic configuration"))).toBe("基本配置");
+    expect(m(msg("Connection & runtime"))).toBe("连接与运行环境");
+    expect(m(msg("Choose whether new sessions open in Chat or CLI mode."))).toBe(
+      "选择新建会话默认进入 Chat 还是 CLI 模式。",
+    );
+    expect(m(msg("Threads & default behavior"))).toBe("线程与默认行为");
+    expect(m(msg("New thread defaults"))).toBe("新会话默认行为");
+    expect(m(msg("Auto-settle, snooze & rate limits"))).toBe("自动沉淀、推迟与限流恢复");
+    expect(m(msg("Bars", { $context: "show effort as bars" }))).toBe("柱状");
+    expect(m(msg("Bars (default)"))).toBe("柱状（默认）");
+    expect(m(msg("Word", { $context: "show effort as a word" }))).toBe("文字");
+    expect(m(msg("Import from prismux.json"))).toBe("从 prismux.json 导入");
+    expect(m(msg("prismux.json is invalid"))).toBe("prismux.json 无效");
+    expect(m(msg("Inherited from the repository's prismux.json"))).toBe("继承自仓库的 prismux.json");
+    expect(m(msg("Prismux system footprint"))).toBe("Prismux 系统资源占用");
+    expect(zhCatalog["84795e1ec8a16024"]).toBe("Prismux 系统资源占用");
+    expect(m(msg("Running natively"))).toBe("原生运行");
+    expect(
+      m(msg("{count, plural, one {{count} process} other {{count} processes}}"), { count: 4 }),
+    ).toBe("4 个进程");
+    expect(m(msg("{bytes} observed"), { bytes: "12 MB" })).toBe("累计观测 12 MB");
+    expect(m(msg("{retained}/{scanned} retained"), { retained: 12, scanned: 120 })).toBe(
+      "已跟踪 12/120",
+    );
+    expect(m(msg("Normal (unthrottled)"))).toBe("正常（未限频）");
+    expect(m(msg("Throttled"))).toBe("已限频");
+    expect(m(msg("Nominal", { $context: "host thermal state" }))).toBe("正常");
+    expect(m(msg("Fair", { $context: "host thermal state" }))).toBe("温热");
+    expect(m(msg("Serious", { $context: "host thermal state" }))).toBe("偏热");
+    expect(m(msg("Critical", { $context: "host thermal state" }))).toBe("过热");
+    expect(m(msg("No sensor data", { $context: "host thermal state" }))).toBe("暂无传感器数据");
+    expect(m(msg("Prismux process"))).toBe("Prismux 进程");
+    expect(zhCatalog["167f72627cd1b9d3"]).toBe(
+      "原生计数器可识别是哪个进程正在读写。这些应用层计数器可识别已知的 Prismux 操作，便于将进程峰值与具体的持久化和日志路径关联起来。",
+    );
+    expect(zhCatalog["6592fb0f2e315bdf"]).toBe("使用 Prismux 桌面版自动返回");
+    expect(
+      m(
+        msg(
+          "For thread titles and other generated text. Source control has its own setting. Text generators from Agent configurator also appear here.",
+        ),
+      ),
+    ).toBe("用于生成会话标题和其他文本。版本控制有单独的设置。“智能体配置器”中添加的文本生成器也会显示在这里。");
   });
 
   it("finds Prismux settings items by both Chinese and English queries", () => {
@@ -111,6 +177,8 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["记忆", "prismux-memory"],
       ["主秘书", "prismux-chief-slot"],
       ["同步", "prismux-sync"],
+      ["远程同步", "prismux-sync"],
+      ["已归档线程", "archive"],
       ["WebDAV", "prismux-sync"],
       ["工作步骤展示", "work-steps-display"],
       ["工作步骤收起时机", "work-steps-collapse-timing"],
@@ -127,6 +195,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["欢迎页", "welcome-page"],
       ["被控代理", "subscription-risk-waiver"],
       ["个人订阅", "subscription-risk-waiver"],
+      ["智能体配置器", "providers"],
     ];
 
     for (const [query, expectedId] of cases) {
@@ -323,7 +392,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("About & Updates"))).toBe("关于与更新");
     expect(m(msg("General & appearance"))).toBe("常用与外观");
     expect(m(msg("Agents & workspace"))).toBe("智能体与工作区");
-    expect(m(msg("Extensions, memory & connections"))).toBe("扩展、记忆与连接");
+    expect(m(msg("Extensions & connections"))).toBe("扩展与连接");
     expect(m(msg("System & about"))).toBe("系统与关于");
     expect(m(msg("Follow-ups & subagents"))).toBe("自动续跑与子线程");
     expect(m(msg("Activity & accessibility"))).toBe("活动与辅助功能");

@@ -182,7 +182,6 @@ import {
   useSideChatCitationReveal,
 } from "../lib/assistantCitationNavigation";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
-import { useStore } from "zustand";
 import { shallow } from "zustand/vanilla/shallow";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -212,7 +211,6 @@ import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { FileMetadataThreadProvider } from "../hooks/FileMetadataThreadProvider";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
-import { PopoverCreateHandle } from "./ui/popover";
 import {
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
@@ -226,7 +224,7 @@ import {
   ThreadPreviewMiniPlayer,
   useThreadPreviewCanvasSource,
 } from "./preview/ThreadPreviewMiniPlayer";
-import { createChatCanvasStore, resolveChatCanvasModel } from "./chat/canvasStore";
+import { createChatCanvasStore } from "./chat/canvasStore";
 import { usePreviewSession } from "./preview/usePreviewSession";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 
@@ -370,7 +368,8 @@ import {
   WorkspaceTitlebarControls,
 } from "./chat/PanelLayoutControls";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
+import { SessionOverviewPanel } from "./overview/SessionOverviewPanel";
+import { resolveFloatingOverviewComposerHeight } from "./overview/sessionOverview.logic";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -799,7 +798,6 @@ export default function ChatView(props: ChatViewProps) {
   // Focusing the composer without a tap raises the on-screen keyboard on touch devices.
   const isCoarsePointer = useMediaQuery({ pointer: "coarse" });
   const [workspaceLayoutElement, setWorkspaceLayoutElement] = useState<HTMLDivElement | null>(null);
-  const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   const [terminalUiLaunchContext, setTerminalUiLaunchContext] =
     useState<TerminalLaunchContext | null>(null);
   // Overrides chosen before a server thread's first turn; they belong to that thread only.
@@ -823,6 +821,10 @@ export default function ChatView(props: ChatViewProps) {
   const [composerReservedHeight, setComposerReservedHeight] = useState(0);
   const composerReservedHeightRef = useRef(0);
   const composerExpandedHeightRef = useRef(0);
+  const [floatingOverviewComposerHeight, setFloatingOverviewComposerHeight] = useState(0);
+  const floatingOverviewComposerHeightRef = useRef(0);
+  const [floatingOverviewCanvasHeight, setFloatingOverviewCanvasHeight] = useState(0);
+  const floatingOverviewCanvasHeightRef = useRef(0);
   const [scrollToEndClearance, setScrollToEndClearance] = useState(0);
   const fanoutSelectionsAtom = draftFanoutSelectionsAtom(routeThreadKey);
   const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
@@ -1217,7 +1219,6 @@ export default function ChatView(props: ChatViewProps) {
   const rightPanelMaximized =
     !embedded && canMaximizeRightPanel && rightPanelState.maximized === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
-  const [threadPanelPopoverHandle] = useState(PopoverCreateHandle);
   const [chatCanvasStore] = useState(createChatCanvasStore);
 
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
@@ -2131,26 +2132,10 @@ export default function ChatView(props: ChatViewProps) {
   const threadPanelInlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, activeThreadRef, "inline"),
   );
-  // Selects only the mode, so canvas resizes rerender the chat view only when the
-  // card switches presentation.
-  const threadPanelPresentation = useStore(
-    chatCanvasStore,
-    (state) =>
-      resolveChatCanvasModel({
-        measurements: state.measurements,
-        detailsCardMeasurement: state.detailsCardMeasurement,
-        threadRef: activeThreadRef,
-        preview: canvasPreview,
-        detailsCardInlineOpen: threadPanelInlineOpen,
-      }).detailsCardMode,
-  );
-  const threadPanelOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(
-      state.threadPanelVisibilityByThreadKey,
-      activeThreadRef,
-      threadPanelPresentation,
-    ),
-  );
+  // SessionOverviewPanel always mounts as a true floating top-right overlay inside the chat pane,
+  // never displacing the timeline or degrading into an anchored popover.
+  const threadPanelPresentation = "inline" as const;
+  const threadPanelOpen = threadPanelInlineOpen;
   const supportsThreadPullRequests = serverConfig !== null;
   const visiblePullRequests = visibleThreadPullRequests(
     (activeThreadShell ?? activeThread)?.pullRequests ?? [],
@@ -2448,6 +2433,27 @@ export default function ChatView(props: ChatViewProps) {
     : null;
   const publishComposerOverlayHeight = (height: number) => {
     const nextHeight = Math.ceil(height);
+    const stack = composerOverlayElement?.querySelector<HTMLElement>(
+      '[data-chat-composer-stack="true"]',
+    );
+    const liveFloatingComposerHeight = resolveFloatingOverviewComposerHeight({
+      isDraftHeroState,
+      composerStackHeightPx: stack ? stack.getBoundingClientRect().height : 0,
+      composerOverlayHeightPx: nextHeight,
+    });
+    if (floatingOverviewComposerHeightRef.current !== liveFloatingComposerHeight) {
+      floatingOverviewComposerHeightRef.current = liveFloatingComposerHeight;
+      setFloatingOverviewComposerHeight(liveFloatingComposerHeight);
+    }
+    const canvasHeight = Math.floor(
+      composerOverlayElement?.parentElement?.clientHeight ??
+        mainCanvasStageRef.current?.clientHeight ??
+        0,
+    );
+    if (canvasHeight > 0 && floatingOverviewCanvasHeightRef.current !== canvasHeight) {
+      floatingOverviewCanvasHeightRef.current = canvasHeight;
+      setFloatingOverviewCanvasHeight(canvasHeight);
+    }
     if (nextHeight <= 0) return;
     if (composerTimelineInsetRef.current !== nextHeight) {
       composerTimelineInsetRef.current = nextHeight;
@@ -2456,9 +2462,6 @@ export default function ChatView(props: ChatViewProps) {
     // Reserve the expanded composer height for the terminal drawer and empty placeholder.
     // Keep it while the mobile strip collapses, but allow growth from approvals or tasks.
     // A hero overlay fills the pane, so reserve only its stack.
-    const stack = composerOverlayElement?.querySelector<HTMLElement>(
-      '[data-chat-composer-stack="true"]',
-    );
     const expandedComposerHeight =
       isDraftHeroState && stack ? Math.ceil(stack.getBoundingClientRect().height) : nextHeight;
     const mobileCollapsed = Boolean(
@@ -2516,17 +2519,18 @@ export default function ChatView(props: ChatViewProps) {
     };
 
     updateHeight();
-    // The hero overlay fills the pane, so the composer's own growth only shows on its stack.
-    const stack = isDraftHeroState
-      ? composerOverlayElement.querySelector<HTMLElement>('[data-chat-composer-stack="true"]')
-      : null;
-    return observeResize(
-      stack ? [composerOverlayElement, stack] : composerOverlayElement,
-      updateHeight,
+    // Always observe the composer stack and chat canvas in addition to the composer overlay so
+    // multi-line input, attachments, approvals, and window resizes keep --pmx-composer-height live.
+    const stack = composerOverlayElement.querySelector<HTMLElement>(
+      '[data-chat-composer-stack="true"]',
     );
+    const canvasElement = composerOverlayElement.parentElement;
+    const observed: Element[] = [composerOverlayElement];
+    if (stack) observed.push(stack);
+    if (canvasElement && canvasElement !== composerOverlayElement) observed.push(canvasElement);
+    return observeResize(observed, updateHeight);
   }, [
     composerOverlayElement,
-    isDraftHeroState,
     publishComposerOverlayHeightStable,
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The scroll-to-bottom button changes the overlay's height without resizing the observed node first.
     showScrollToBottom,
@@ -3839,7 +3843,6 @@ export default function ChatView(props: ChatViewProps) {
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
     threadPanelOpen,
     threadPanelPresentation,
-    threadPanelPopoverHandle,
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
     rightPanelAvailable: activeProject !== null,
     rightPanelOpen,
@@ -3904,7 +3907,6 @@ export default function ChatView(props: ChatViewProps) {
             <PrismuxTopbarControls
               overviewOpen={threadPanelOpen}
               overviewPresentation={threadPanelPresentation}
-              overviewPopoverHandle={threadPanelPopoverHandle}
               overviewShortcutLabel={panelToggleControlProps.threadPanelShortcutLabel}
               onToggleOverview={toggleThreadPanelStable}
               wallpaperOpen={rightPanelOpen && activeRightPanelSurface?.kind === "wallpaper"}
@@ -4514,103 +4516,107 @@ export default function ChatView(props: ChatViewProps) {
                   onConfirm={handleSwitchCheckoutToThreadStable}
                 />
 
-                <ThreadDetailsPanel
-                  anchor={topbarManaged ? topbarPortal.tabBarRef : threadPanelPopoverAnchorRef}
-                  handle={threadPanelPopoverHandle}
-                  forceNewWorktree={multipleModelSelections !== null}
-                  environmentId={activeThread.environmentId}
-                  threadId={activeThread.id}
-                  projectId={activeThread.projectId}
-                  worktreePath={activeThread.worktreePath}
-                  isServerThread={isServerThread}
-                  {...(draftId ? { draftId } : {})}
-                  composerDraftTarget={composerDraftTarget}
-                  activeProjectName={activeProject?.title}
-                  activeProjectScripts={activeProject ? activeProjectScripts : undefined}
-                  preferredScriptId={
-                    activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
-                  }
-                  keybindings={keybindings}
-                  availableEditors={availableEditors}
-                  showOpenInPicker={showOpenInPicker}
-                  openInShortcutEnabled={
-                    !(
-                      rightPanelOpen &&
-                      renderedRightPanelSurface?.kind === "file" &&
-                      renderedRightPanelSurface.attachment === undefined
-                    )
-                  }
-                  gitCwd={gitCwd}
-                  workspaceMutationId={workspaceRevision.revision}
-                  isGitRepo={isGitRepo}
-                  envLocked={envLocked}
-                  availableEnvironments={logicalProjectEnvironments}
-                  autoEnvironmentLabel={autoEnvironmentLabel}
-                  onAutoEnvironment={
-                    draftId &&
-                    !envLocked &&
-                    canAutoBalanceEnvironments &&
-                    loadBalancingSettings.loadBalancingEnabled
-                      ? onAutoEnvironmentStable
-                      : undefined
-                  }
-                  {...(canChangeEnvironment
-                    ? { onEnvironmentChange: onEnvironmentChangeStable }
-                    : {})}
-                  onEnvModeChange={onEnvModeChangeStable}
-                  envMode={envMode}
-                  {...(canOverrideServerThreadEnvMode
-                    ? {
-                        activeThreadBranchOverride: activeThreadBranch,
-                        onActiveThreadBranchOverrideChange: setPendingServerThreadBranch,
-                      }
-                    : {})}
-                  startFromOrigin={startFromOrigin}
-                  onStartFromOriginChange={onStartFromOriginChange}
-                  {...(canCheckoutPullRequestIntoThread
-                    ? { onCheckoutPullRequestRequest: openPullRequestDialogStable }
-                    : {})}
-                  onComposerFocusRequest={scheduleComposerFocusStable}
-                  {...(isServerThread && isGitRepo
-                    ? {
-                        onOpenChanges: openChangesFromThreadPanelStable,
-                        onOpenDiffReview: openChangesFromThreadPanelStable,
-                      }
-                    : {})}
-                  {...(activeProject
-                    ? {
-                        onOpenFiles: addFilesSurfaceStable,
-                        onOpenFile: openFileSurfaceStable,
-                      }
-                    : {})}
-                  {...(continuationSource || continueInTerminalPlan
-                    ? {
-                        onContinueInTerminal: continuationSource
-                          ? () => setContinuationDialogOpen(true)
-                          : handleContinueInTerminalStable,
-                      }
-                    : {})}
-                  {...(continueInTerminalPlan
-                    ? { continueInTerminalLabel: continueInTerminalPlan.command }
-                    : {})}
-                  agentAuxEntry={agentAux.overviewEntry}
-                  onOpenAgentAux={agentAux.openAuxPanel}
-                  {...(sideChat.available ? { onOpenSideChat: sendSideChatStable } : {})}
-                  readModelSelection={readCurrentModelSelectionStable}
-                  sideChatAvailable={sideChat.available}
-                  sideChatDisabledReason={sideChatDisabledReason}
-                  onRunProjectScript={runProjectScriptStable}
-                  onAddProjectScript={saveProjectScriptStable}
-                  onUpdateProjectScript={updateProjectScriptStable}
-                  onDeleteProjectScript={deleteProjectScriptStable}
-                  usage={{
-                    providerInstanceId: activeProviderInstanceId,
-                    model: activeUsageModel,
-                    providers: providerStatuses,
-                    sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
-                    contextWindow: activeContextWindow,
-                  }}
-                />
+                {threadPanelOpen && !rightPanelMaximized ? (
+                  <SessionOverviewPanel
+                    floating
+                    topInsetPx={isThreadFindActive ? THREAD_FIND_BAR_RESERVED_HEIGHT : 0}
+                    bottomClearancePx={floatingOverviewComposerHeight}
+                    containerHeightPx={floatingOverviewCanvasHeight}
+                    forceNewWorktree={multipleModelSelections !== null}
+                    environmentId={activeThread.environmentId}
+                    threadId={activeThread.id}
+                    projectId={activeThread.projectId}
+                    worktreePath={activeThread.worktreePath}
+                    isServerThread={isServerThread}
+                    {...(draftId ? { draftId } : {})}
+                    composerDraftTarget={composerDraftTarget}
+                    activeProjectName={activeProject?.title}
+                    activeProjectScripts={activeProject ? activeProjectScripts : undefined}
+                    preferredScriptId={
+                      activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+                    }
+                    keybindings={keybindings}
+                    availableEditors={availableEditors}
+                    showOpenInPicker={showOpenInPicker}
+                    openInShortcutEnabled={
+                      !(
+                        rightPanelOpen &&
+                        renderedRightPanelSurface?.kind === "file" &&
+                        renderedRightPanelSurface.attachment === undefined
+                      )
+                    }
+                    gitCwd={gitCwd}
+                    workspaceMutationId={workspaceRevision.revision}
+                    isGitRepo={isGitRepo}
+                    envLocked={envLocked}
+                    availableEnvironments={logicalProjectEnvironments}
+                    autoEnvironmentLabel={autoEnvironmentLabel}
+                    onAutoEnvironment={
+                      draftId &&
+                      !envLocked &&
+                      canAutoBalanceEnvironments &&
+                      loadBalancingSettings.loadBalancingEnabled
+                        ? onAutoEnvironmentStable
+                        : undefined
+                    }
+                    {...(canChangeEnvironment
+                      ? { onEnvironmentChange: onEnvironmentChangeStable }
+                      : {})}
+                    onEnvModeChange={onEnvModeChangeStable}
+                    envMode={envMode}
+                    {...(canOverrideServerThreadEnvMode
+                      ? {
+                          activeThreadBranchOverride: activeThreadBranch,
+                          onActiveThreadBranchOverrideChange: setPendingServerThreadBranch,
+                        }
+                      : {})}
+                    startFromOrigin={startFromOrigin}
+                    onStartFromOriginChange={onStartFromOriginChange}
+                    {...(canCheckoutPullRequestIntoThread
+                      ? { onCheckoutPullRequestRequest: openPullRequestDialogStable }
+                      : {})}
+                    onComposerFocusRequest={scheduleComposerFocusStable}
+                    {...(isServerThread && isGitRepo
+                      ? {
+                          onOpenChanges: openChangesFromThreadPanelStable,
+                          onOpenDiffReview: openChangesFromThreadPanelStable,
+                        }
+                      : {})}
+                    {...(activeProject
+                      ? {
+                          onOpenFiles: addFilesSurfaceStable,
+                          onOpenFile: openFileSurfaceStable,
+                        }
+                      : {})}
+                    {...(continuationSource || continueInTerminalPlan
+                      ? {
+                          onContinueInTerminal: continuationSource
+                            ? () => setContinuationDialogOpen(true)
+                            : handleContinueInTerminalStable,
+                        }
+                      : {})}
+                    {...(continueInTerminalPlan
+                      ? { continueInTerminalLabel: continueInTerminalPlan.command }
+                      : {})}
+                    agentAuxEntry={agentAux.overviewEntry}
+                    onOpenAgentAux={agentAux.openAuxPanel}
+                    {...(sideChat.available ? { onOpenSideChat: sendSideChatStable } : {})}
+                    readModelSelection={readCurrentModelSelectionStable}
+                    sideChatAvailable={sideChat.available}
+                    sideChatDisabledReason={sideChatDisabledReason}
+                    onRunProjectScript={runProjectScriptStable}
+                    onAddProjectScript={saveProjectScriptStable}
+                    onUpdateProjectScript={updateProjectScriptStable}
+                    onDeleteProjectScript={deleteProjectScriptStable}
+                    usage={{
+                      providerInstanceId: activeProviderInstanceId,
+                      model: activeUsageModel,
+                      providers: providerStatuses,
+                      sources: serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES,
+                      contextWindow: activeContextWindow,
+                    }}
+                  />
+                ) : null}
 
                 <PullRequestThreadDialogHost
                   threadKey={activeThreadKey}
@@ -4637,6 +4643,9 @@ export default function ChatView(props: ChatViewProps) {
     : ({
         "--pmx-chat-content-max-width": chatWidthController.maxWidthCss,
         "--chat-content-max-width": chatWidthController.maxWidthCss,
+        ...(floatingOverviewComposerHeight > 0
+          ? { "--pmx-composer-height": `${floatingOverviewComposerHeight}px` }
+          : {}),
       } as CSSProperties);
 
   const content = (
@@ -4682,7 +4691,6 @@ export default function ChatView(props: ChatViewProps) {
         {/* Only render standalone fallback header when ChatView is mounted outside WorkspaceSplitContainer (e.g. isolated tests). */}
         {embedded || topbarManaged ? null : (
           <header
-            ref={threadPanelPopoverAnchorRef}
             data-chat-header
             data-pmx-glass-zone="shellFrame"
             className={cn(
@@ -4726,7 +4734,6 @@ export default function ChatView(props: ChatViewProps) {
             <PrismuxTopbarControls
               overviewOpen={threadPanelOpen}
               overviewPresentation={threadPanelPresentation}
-              overviewPopoverHandle={threadPanelPopoverHandle}
               overviewShortcutLabel={panelToggleControlProps.threadPanelShortcutLabel}
               onToggleOverview={toggleThreadPanelStable}
               wallpaperOpen={rightPanelOpen && activeRightPanelSurface?.kind === "wallpaper"}

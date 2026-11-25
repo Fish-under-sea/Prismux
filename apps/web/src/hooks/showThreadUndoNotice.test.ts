@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { toastManager } from "../components/ui/toast";
 import { announce, cancelAnnouncement } from "../lib/announce";
 import {
+  dismissThreadUndoNotice,
   releaseThreadUndoShortcut,
   showThreadUndoNotice,
   threadUndoClaimsShortcut,
+  threadUndoNoticeSummary,
   useThreadUndoNotice,
 } from "./showThreadUndoNotice";
 import * as ThreadUndo from "@prismux/client-runtime/state/thread-undo";
@@ -108,5 +110,19 @@ describe("thread undo notice", () => {
     await notice().undo();
     expect(add).toHaveBeenCalledOnce();
     expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("dismisses early via dismissThreadUndoNotice, commits deferred cleanup, and releases mod+z", () => {
+    const { options } = setup();
+    const commit = vi.fn();
+    showThreadUndoNotice({ ...options, commit });
+    expect(threadUndoNoticeSummary(notice())).toBe("Unpinned 1 thread");
+    expect(threadUndoClaimsShortcut()).toBe(true);
+
+    dismissThreadUndoNotice();
+    expect(useThreadUndoNotice.getState().notice).toBeNull();
+    expect(threadUndoClaimsShortcut()).toBe(false);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(cancelAnnouncement).toHaveBeenCalledWith("thread-undo-notice");
   });
 });

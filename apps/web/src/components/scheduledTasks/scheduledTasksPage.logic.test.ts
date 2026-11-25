@@ -1,14 +1,19 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import fs from "node:fs";
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import path from "node:path";
+import * as NodePath from "node:path";
 
-import type { ScheduledTask } from "@prismux/core-contracts";
+import { EnvironmentId, type ScheduledTask } from "@prismux/core-contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { resolveSettingsScope } from "../settings/settingsScope";
 import {
   filterScheduledTasks,
+  formatScheduledTaskExpression,
+  formatScheduledTaskWorkspaceStrategy,
   getScheduledTasksPageCopy,
+  resolveScheduledTasksEffectiveEnvironments,
+  resolveScheduledTasksScopeSearch,
   summarizeScheduledTasks,
 } from "./scheduledTasksPage.logic";
 
@@ -50,19 +55,100 @@ const SAMPLE_TASKS: readonly SampleTask[] = [
 ];
 
 describe("ScheduledTasksPage standalone panel logic & 3-panel workPanels glass / theme contracts", () => {
-  it("provides localized Chinese & English copy with 「定时任务」 / Scheduled Tasks naming", () => {
+  it("provides localized Chinese & English copy with 「定时任务」 and Chinese Webhook 回调 naming", () => {
     const zh = getScheduledTasksPageCopy("zh-CN");
     const en = getScheduledTasksPageCopy("en-US");
 
     expect(zh.isZh).toBe(true);
     expect(zh.pageTitle).toBe("定时任务");
     expect(zh.newTaskAction).toBe("新建定时任务");
+    expect(zh.createFirstTaskCta).toBe("立即创建定时任务");
+    expect(zh.filterWebhook).toBe("Webhook 回调");
+    expect(zh.searchPlaceholder).toBe("搜索定时任务...");
     expect(zh.summaryBadge(2, 4)).toBe("2 / 4 启用");
+    expect(zh.quickTemplates).toHaveLength(3);
 
     expect(en.isZh).toBe(false);
     expect(en.pageTitle).toBe("Scheduled Tasks");
     expect(en.newTaskAction).toBe("New task");
+    expect(en.filterWebhook).toBe("Webhook");
     expect(en.summaryBadge(2, 4)).toBe("2 / 4 active");
+    expect(en.quickTemplates).toHaveLength(3);
+  });
+
+  it("resolves scope search cleanly so local connected environments are never falsely hidden as unavailable", () => {
+    const localId = EnvironmentId.make("local-desktop");
+    const remoteId = EnvironmentId.make("remote-linux");
+    const available = [
+      {
+        environmentId: localId,
+        label: "Local Desktop",
+        connection: { phase: "connected" },
+        serverConfig: { environment: { capabilities: {} } },
+      },
+      {
+        environmentId: remoteId,
+        label: "Remote Linux",
+        connection: { phase: "disconnected" },
+        serverConfig: null,
+      },
+    ];
+
+    // Default / "all" produces `{}` so resolveSettingsScope returns kind="all" (never kind="unavailable").
+    const defaultSearch = resolveScheduledTasksScopeSearch(undefined);
+    expect(defaultSearch).toEqual({});
+    expect(resolveScheduledTasksScopeSearch("all")).toEqual({});
+    expect(resolveScheduledTasksScopeSearch(localId)).toEqual({ machine: localId });
+
+    const resolvedAll = resolveSettingsScope(defaultSearch, [], available);
+    expect(resolvedAll.kind).toBe("all");
+    expect(resolvedAll.environmentIds).toEqual([localId, remoteId]);
+
+    // Defensive fallback recovers connected local environments if scoped list is ever empty.
+    const fallback = resolveScheduledTasksEffectiveEnvironments({
+      scopedEnvironments: [],
+      scopedConnectedEnvironments: [],
+      availableEnvironments: available,
+      primaryEnvironmentId: localId,
+    });
+    expect(fallback.environments).toHaveLength(2);
+    expect(fallback.connectedEnvironments.map((e) => e.environmentId)).toEqual([localId]);
+    expect(fallback.defaultEnvironment?.environmentId).toBe(localId);
+  });
+
+  it("formats schedule expressions and workspace strategies concisely for full-width task cards", () => {
+    expect(
+      formatScheduledTaskExpression(
+        { type: "fixed_time", timeOfDay: "09:00", weekdays: [1, 2, 3, 4, 5] },
+        true,
+      ),
+    ).toBe("0 9 * * 1-5");
+    expect(formatScheduledTaskExpression({ type: "fixed_time", timeOfDay: "08:30" }, true)).toBe(
+      "30 8 * * *",
+    );
+    expect(formatScheduledTaskExpression({ type: "interval", everyMs: 15 * 60_000 }, true)).toBe(
+      "*/15 * * * *",
+    );
+    expect(formatScheduledTaskExpression({ type: "interval", everyMs: 2 * 3_600_000 }, true)).toBe(
+      "0 */2 * * *",
+    );
+    expect(formatScheduledTaskExpression({ type: "webhook", signature: null }, true)).toBe(
+      "POST · Webhook 回调",
+    );
+    expect(formatScheduledTaskExpression({ type: "once", runAt: "2026-12-01T09:00:00Z" }, true)).toBe(
+      "单次计划",
+    );
+
+    expect(formatScheduledTaskWorkspaceStrategy({ type: "root" }, true)).toBe("项目主目录");
+    expect(
+      formatScheduledTaskWorkspaceStrategy({ type: "worktree", baseRef: "main" }, true),
+    ).toBe("独立 Worktree (main)");
+    expect(
+      formatScheduledTaskWorkspaceStrategy(
+        { type: "existing_worktree", worktreePath: "/tmp/wt" },
+        true,
+      ),
+    ).toBe("指定检出目录");
   });
 
   it("summarizes and filters scheduled tasks accurately by status and query", () => {
@@ -99,27 +185,30 @@ describe("ScheduledTasksPage standalone panel logic & 3-panel workPanels glass /
     ).toEqual(["Nightly dependency audit"]);
   });
 
-  it("mounts Tasks, Workspace Board, and Scheduled Tasks onto unified workPanels glass zone with zero whiteout pills", () => {
-    const srcRoot = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
+  it("mounts Tasks, Workspace Board, and Scheduled Tasks onto unified full-width workPanels glass zone with zero whiteout pills", () => {
+    const srcRoot = NodePath.resolve(
+      NodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
       "../..",
     );
 
-    const tasksSrc = fs.readFileSync(path.join(srcRoot, "components/tasks/TasksPage.tsx"), "utf8");
-    const boardSrc = fs.readFileSync(
-      path.join(srcRoot, "components/workspaceBoard/WorkspaceBoardPage.tsx"),
+    const tasksSrc = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "components/tasks/TasksPage.tsx"),
       "utf8",
     );
-    const boardLogicSrc = fs.readFileSync(
-      path.join(srcRoot, "components/workspaceBoard/workspaceBoard.logic.ts"),
+    const boardSrc = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "components/workspaceBoard/WorkspaceBoardPage.tsx"),
       "utf8",
     );
-    const scheduledSrc = fs.readFileSync(
-      path.join(srcRoot, "components/scheduledTasks/ScheduledTasksPage.tsx"),
+    const boardLogicSrc = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "components/workspaceBoard/workspaceBoard.logic.ts"),
       "utf8",
     );
-    const diagnosticsSrc = fs.readFileSync(
-      path.join(srcRoot, "prismux/settings/PrismuxDiagnosticsSection.tsx"),
+    const scheduledSrc = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "components/scheduledTasks/ScheduledTasksPage.tsx"),
+      "utf8",
+    );
+    const diagnosticsSrc = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "prismux/settings/PrismuxDiagnosticsSection.tsx"),
       "utf8",
     );
 
@@ -142,14 +231,22 @@ describe("ScheduledTasksPage standalone panel logic & 3-panel workPanels glass /
       ).not.toMatch(/backdrop-blur-(?:sm|md|lg)/);
     }
 
+    // 1b. ScheduledTasksPage uses full-width layout matching TasksPage & WorkspaceBoardPage (NO narrow centered max-w-5xl dead-space box!)
+    expect(scheduledSrc).not.toContain("max-w-5xl");
+    expect(scheduledSrc).not.toContain('{ machine: "all" }');
+    expect(scheduledSrc).toContain('data-testid="scheduled-tasks-filter-chrome"');
+
     // 2. TasksPage & ScheduledTasksPage active chips use crisp theme-accent bg-primary + font-semibold + text-primary-foreground
     expect(tasksSrc).toContain("border-primary bg-primary font-semibold text-primary-foreground");
     expect(scheduledSrc).toContain("border-primary bg-primary font-semibold text-primary-foreground");
 
     // 2b. Shared ToggleGroup & Toggle segmented controls enforce crisp 3-state (Light/Dark/Glass) active highlighting
-    const toggleSrc = fs.readFileSync(path.join(srcRoot, "components/ui/toggle.tsx"), "utf8");
-    const toggleGroupSrc = fs.readFileSync(
-      path.join(srcRoot, "components/ui/toggle-group.tsx"),
+    const toggleSrc = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "components/ui/toggle.tsx"),
+      "utf8",
+    );
+    const toggleGroupSrc = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "components/ui/toggle-group.tsx"),
       "utf8",
     );
     expect(toggleGroupSrc).toContain("border-border/75 bg-muted/80 p-0.5 dark:border-white/12 dark:bg-black/30");
@@ -177,20 +274,20 @@ describe("ScheduledTasksPage standalone panel logic & 3-panel workPanels glass /
     }
 
     // 4. Legacy /settings/scheduled-tasks and /settings/automations routes redirect cleanly to /scheduled-tasks
-    const legacyScheduledRoute = fs.readFileSync(
-      path.join(srcRoot, "routes/_chat.settings.scheduled-tasks.tsx"),
+    const legacyScheduledRoute = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "routes/_chat.settings.scheduled-tasks.tsx"),
       "utf8",
     );
-    const legacyAutomationsRoute = fs.readFileSync(
-      path.join(srcRoot, "routes/_chat.settings.automations.tsx"),
+    const legacyAutomationsRoute = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "routes/_chat.settings.automations.tsx"),
       "utf8",
     );
-    const standaloneRoute = fs.readFileSync(
-      path.join(srcRoot, "routes/_chat.scheduled-tasks.tsx"),
+    const standaloneRoute = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "routes/_chat.scheduled-tasks.tsx"),
       "utf8",
     );
-    const settingsLayoutRoute = fs.readFileSync(
-      path.join(srcRoot, "routes/_chat.settings.tsx"),
+    const settingsLayoutRoute = NodeFS.readFileSync(
+      NodePath.join(srcRoot, "routes/_chat.settings.tsx"),
       "utf8",
     );
 

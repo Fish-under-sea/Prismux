@@ -137,6 +137,7 @@ import {
   extractOverviewModifiedFiles,
   extractOverviewSideQuestions,
 } from "./sessionOverview.logic";
+import { resolveChatCanvasModel } from "../chat/canvasStore";
 
 function createRichProjection(): OrchestrationV2ThreadProjection {
   const img: ChatAttachment = {
@@ -765,5 +766,88 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     expect(activeHtml).toContain("蜂群侧边栏");
     expect(activeHtml).toContain("3 活跃");
     expect(activeHtml).not.toContain("插件");
+  });
+
+  it("mounts as a true top-right floating liquid-glass overlay with dynamic composer clearance and scrollable body", () => {
+    const defaultFloatingHtml = renderToStaticMarkup(
+      <SessionOverviewPanel {...makeBaseProps({ floating: true })} />,
+    );
+
+    // Outer positioning shell: absolute top-right z-25, pointer-events-none pass-through, composer-safe max-height
+    expect(defaultFloatingHtml).toContain('data-overview-floating-shell="true"');
+    expect(defaultFloatingHtml).toContain('data-overview-floating="true"');
+    expect(defaultFloatingHtml).toContain('data-pmx-glass-zone="overviewPanel"');
+    expect(defaultFloatingHtml).toContain("pointer-events-none");
+    expect(defaultFloatingHtml).toContain("pointer-events-auto");
+    expect(defaultFloatingHtml).toContain("position:absolute");
+    expect(defaultFloatingHtml).toContain("top:12px");
+    expect(defaultFloatingHtml).toContain("right:12px");
+    expect(defaultFloatingHtml).toContain("z-index:25");
+    expect(defaultFloatingHtml).toContain(
+      "max-height:calc(100% - var(--pmx-composer-height, 148px) - 28px)",
+    );
+    expect(defaultFloatingHtml).toContain('data-overview-composer-clearance="148"');
+    expect(defaultFloatingHtml).toContain('data-overview-scroll-body="1"');
+    expect(defaultFloatingHtml).toContain("overflow-y-auto");
+
+    // Dynamic tall composer clearance (e.g., multi-line prompt + attachments = 240px) inside 600px canvas
+    const tallComposerHtml = renderToStaticMarkup(
+      <SessionOverviewPanel
+        {...makeBaseProps({
+          floating: true,
+          bottomClearancePx: 240,
+          containerHeightPx: 600,
+          topInsetPx: 44,
+        })}
+      />,
+    );
+    expect(tallComposerHtml).toContain("--pmx-composer-height:240px");
+    expect(tallComposerHtml).toContain('data-overview-composer-clearance="240"');
+    expect(tallComposerHtml).toContain("top:56px");
+    expect(tallComposerHtml).toContain(
+      "max-height:calc(100% - var(--pmx-composer-height, 148px) - 72px)",
+    );
+  });
+
+  it("causes 0px horizontal shift or squeezing of the chat timeline when floating overview toggles open/closed", () => {
+    const sharedMeasurements = {
+      width: 1120,
+      narrowestWidth: 1120,
+      height: 760,
+      padding: 48,
+      maxChatWidth: 768,
+      minChatWidth: 640,
+      composerHeight: 156,
+      composerReservedBottom: 156,
+      timelineGutter: 0,
+      findBar: null,
+    };
+    const threadRef = {
+      environmentId: EnvironmentId.make("env-1"),
+      threadId: ThreadId.make("thread-1"),
+    };
+
+    // Because floating SessionOverviewPanel never registers an in-flow detailsCardMeasurement obstacle
+    // with ChatCanvas, chat timeline and composer retain identical symmetric widths whether open or closed.
+    const closedCanvas = resolveChatCanvasModel({
+      measurements: sharedMeasurements,
+      detailsCardMeasurement: null,
+      threadRef,
+      preview: null,
+      detailsCardInlineOpen: false,
+    });
+    const openCanvas = resolveChatCanvasModel({
+      measurements: sharedMeasurements,
+      detailsCardMeasurement: null,
+      threadRef,
+      preview: null,
+      detailsCardInlineOpen: true,
+    });
+
+    expect(openCanvas.layout.chat).toEqual(closedCanvas.layout.chat);
+    expect(openCanvas.layout.chat.insetStart).toBe(0);
+    expect(openCanvas.layout.chat.insetEnd).toBe(0);
+    expect(openCanvas.layout.chat.width).toBe(openCanvas.layout.composer.width);
+    expect(openCanvas.layout.chat.left).toBe(openCanvas.layout.composer.left);
   });
 });

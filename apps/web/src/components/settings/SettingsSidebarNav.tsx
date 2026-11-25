@@ -161,7 +161,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentHash = useLocation({ select: (location) => location.hash });
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const isCompactRail = useMediaQuery("max-md");
-  const activePath = resolveSettingsNavActivePath(pathname);
+  const canonicalPathname =
+    pathname === "/settings/archived" || pathname.startsWith("/settings/archived/")
+      ? "/settings/projects"
+      : pathname;
+  const activePath = resolveSettingsNavActivePath(canonicalPathname);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const groupsContainerRef = useRef<HTMLDivElement>(null);
   const menuRefs = useRef<Map<string, HTMLUListElement>>(new Map());
@@ -174,7 +178,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const searchableItems = useAvailableSettingsSearchItems();
   const hasSecretProviders = useHasSecretProvidersEnvironment();
   const navGroups = settingsNavGroups(hasSecretProviders);
-  const activeTarget = findSettingsNavTarget(navGroups, pathname);
+  const activeTarget = findSettingsNavTarget(navGroups, canonicalPathname);
   const results = searchSettings(query, searchableItems, m);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;

@@ -145,9 +145,7 @@ export function ProjectActionsSettings() {
                 </MenuTrigger>
                 <MenuPopup align="end">
                   <MenuGroup>
-                    <MenuGroupLabel>
-                      <T>Import from t3.json</T>
-                    </MenuGroupLabel>
+                    <MenuGroupLabel>{gt("Import from prismux.json")}</MenuGroupLabel>
                     <p className="px-2 pb-2 text-pretty text-sm text-muted-foreground">
                       <T>Add actions declared by this checkout without editing them first.</T>
                     </p>
@@ -199,9 +197,9 @@ export function ProjectActionsSettings() {
       )}
       {t3File.status === "invalid" ? (
         <SettingsRow
-          title={gt("t3.json is invalid")}
+          title={gt("prismux.json is invalid")}
           description={gt(
-            "A t3.json exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values.",
+            "A prismux.json exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values.",
           )}
           className="text-warning"
         />

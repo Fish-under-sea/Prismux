@@ -2508,6 +2508,78 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
+  const attemptArchive = useStableCallback((threadRef: ScopedThreadRef) => {
+    void (async () => {
+      const api = readLocalApi();
+      const threadKey = scopedThreadKey(threadRef);
+      const thread =
+        threadByKeyRef.current.get(threadKey) ??
+        searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
+      if (!thread) return;
+      if (!checkThreadOperations([thread])) return;
+      if (!threadRuntimeCanArchive(thread.runtime)) return;
+      if (confirmThreadArchive && api) {
+        const confirmed = await settlePromise(() =>
+          api.dialogs.confirm(gt('Archive thread "{title}"?', { title: thread.title })),
+        );
+        if (confirmed._tag === "Failure" || !confirmed.value) return;
+      }
+      let didArchive = false;
+      const result = await archiveThread(threadRef, {
+        onArchived: () => {
+          didArchive = true;
+        },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: didArchive
+              ? gt("Thread archived, but navigation failed")
+              : gt("Failed to archive thread"),
+            description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+          }),
+        );
+      }
+    })();
+  });
+
+  const attemptDelete = useStableCallback((threadRef: ScopedThreadRef) => {
+    void (async () => {
+      const api = readLocalApi();
+      const threadKey = scopedThreadKey(threadRef);
+      const thread =
+        threadByKeyRef.current.get(threadKey) ??
+        searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
+      if (!thread) return;
+      if (!checkThreadOperations([thread])) return;
+      if (confirmThreadDelete && api) {
+        const confirmed = await settlePromise(() =>
+          api.dialogs.confirm(
+            [
+              gt('Delete thread "{title}"?', { title: thread.title }),
+              gt("This permanently clears conversation history for this thread."),
+            ].join("\n"),
+            { variant: "destructive" },
+          ),
+        );
+        if (confirmed._tag === "Failure" || !confirmed.value) return;
+      }
+      const result = await deleteThread(threadRef);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: gt("Failed to delete thread"),
+            description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+          }),
+        );
+      }
+    })();
+  });
+
   const handleThreadContextMenu = useStableCallback(
     (
       threadRef: ScopedThreadRef,
@@ -3921,6 +3993,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
                             onContextMenu={handleThreadContextMenu}
                             onSettle={attemptSettle}
+                            onArchive={attemptArchive}
+                            onDelete={attemptDelete}
                             onActionSweepStart={startActionSweep}
                             onUnsettle={attemptUnsettle}
                             onSnooze={attemptSnooze}

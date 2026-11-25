@@ -77,7 +77,7 @@ function roleBadgeMeta(proc: NormalizedProcessResource): {
       };
     case "t3-server":
       return {
-        label: "T3",
+        label: "核心",
         tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
       };
     case "daemon":

@@ -489,12 +489,13 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     expect(syncChannelsHtml).toContain('id="sync-portable"');
   });
 
-  it("centers dsh-fish reasoning runner at ((i + 0.5) / N) * 100% and aligns pointer hit cells for N=2..7", () => {
+  it("aligns reasoning runner linearly across [0%, 100%] with edge-clamped full-bleed geometry for N=2..7", () => {
     const allLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     for (const count of [2, 3, 4, 5, 6, 7]) {
       const options = allLevels.slice(0, count);
       for (let i = 0; i < count; i += 1) {
-        const expectedPercent = ((i + 0.5) / count) * 100;
+        const expectedProgress = i / (count - 1);
+        const expectedPercent = expectedProgress * 100;
         expect(computeReasoningEffortStopPercent(i, count)).toBeCloseTo(expectedPercent, 9);
 
         const html = renderToStaticMarkup(
@@ -508,12 +509,13 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
             compact
           />,
         );
+        expect(html).toContain(`--pmx-progress:${expectedProgress}`);
         expect(html).toContain(`--pmx-re-progress:${expectedPercent}%`);
         expect(html).toContain(`--pmx-re-count:${count}`);
 
-        const cellCenterX = 100 + ((i + 0.5) / count) * 600;
+        const pointerX = 100 + expectedProgress * 600;
         expect(
-          resolveReasoningEffortStopIndexFromPointer(cellCenterX, { left: 100, width: 600 }, count),
+          resolveReasoningEffortStopIndexFromPointer(pointerX, { left: 100, width: 600 }, count),
         ).toBe(i);
       }
     }

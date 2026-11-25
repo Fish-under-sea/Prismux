@@ -3,9 +3,11 @@ import {
   ArrowRightIcon,
   ChartNoAxesColumnIcon,
   Code2Icon,
+  Columns3Icon,
   CrosshairIcon,
   FolderPlusIcon,
   KeyboardIcon,
+  ListTodoIcon,
   MoreHorizontalIcon,
   PanelLeftCloseIcon,
   PanelLeftIcon,
@@ -55,11 +57,7 @@ import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider"
 import { PrismuxAutoUpdateHost } from "../../prismux/updates/PrismuxAutoUpdateHost";
 import { PrismuxSidebarUpdateCapsule } from "../../prismux/updates/PrismuxSidebarUpdateCapsule";
 import { useUpdateNotifierState } from "../../prismux/updates/updateNotifierStore";
-import {
-  useIssuesSupported,
-  usePrimaryEnvironmentId,
-  usePullRequestsSupported,
-} from "../../state/environments";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { resolveDesktopUpdateButtonAction } from "../desktopUpdate.logic";
 import {
   resolveSidebarStageBackdropVariant,
@@ -75,16 +73,17 @@ import {
 } from "../ui/sidebar";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
-import { readIssueListPreferences } from "../issue/issueListPreferences";
-import { IssueGlyph } from "../issue/issuePresentation";
 import {
+  getMainAppReturnHref,
   isSidebarPanelPathActive,
   isSidebarToggleablePanelPage,
   isSidebarUtilityPage,
+  resolveSidebarPanelToggleNavigation,
   useNavigateToMainApp,
 } from "./mainAppLocation";
+import { usePrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
 import {
+  PRISMUX_SIDEBAR_QUICK_NAV_ROUTES,
   PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS,
   requestLocateActiveSidebarThread,
 } from "./prismuxSidebarQuickNav.logic";
@@ -94,11 +93,9 @@ import {
   resolveToolbarItemOwningFocus,
   SIDEBAR_UTILITY_ITEM_ATTR,
 } from "./sidebarMicroIndicators";
-import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { useUpdateEverythingRun } from "./updateEverythingRun";
-import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 
 export const SIDEBAR_HEADER_CONTROL_ORDER = ["brand-menu", "sidebar-toggle", "history-nav"] as const;
@@ -786,7 +783,7 @@ export function SidebarUtilityItem({
               className={cn(
                 SIDEBAR_UTILITY_BUTTON_CLASS,
                 active &&
-                  "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70",
+                  "bg-primary/15 text-primary ring-1 ring-inset ring-primary/35 hover:bg-primary/20 hover:text-primary dark:bg-primary/22 dark:text-primary dark:ring-primary/45",
               )}
             >
               {icon}
@@ -805,27 +802,23 @@ export type SidebarUtilityNavId =
   | "settings"
   | "usage"
   | "locate"
-  | "issues"
-  | "pull-requests";
+  | "tasks"
+  | "workspace-board";
 type SidebarUtilityFocusId = SidebarUtilityNavId | "more";
 
 /**
  * Resolves the canonical Orca-style bottom sidebar utility item ids for both the expanded footer bar
  * and the 54px collapsed vertical icon rail:
  * - Expanded left group (left -> right): `settings`, `usage`
- * - Expanded right group (left -> right, rightmost is PR): `locate`, `issues`, `pull-requests`
- * Redundant entries that already live elsewhere (Help, Wallpaper, Collapse/Expand sidebar)
+ * - Expanded right group (left -> right): `locate`, `tasks`, `workspace-board`
+ * Legacy Issue/PR icons and redundant entries (Help, Wallpaper, Collapse/Expand sidebar)
  * are intentionally excluded from both modes.
  */
 export function resolveSidebarUtilityNavIds(options: {
-  readonly pullRequestsSupported: boolean;
-  readonly issuesSupported: boolean;
   readonly railCompact: boolean;
 }): readonly SidebarUtilityNavId[] {
   const left: readonly SidebarUtilityNavId[] = ["settings", "usage"];
-  const right: SidebarUtilityNavId[] = ["locate"];
-  if (options.issuesSupported) right.push("issues");
-  if (options.pullRequestsSupported) right.push("pull-requests");
+  const right: readonly SidebarUtilityNavId[] = ["locate", "tasks", "workspace-board"];
   return options.railCompact ? [...right, ...left] : [...left, ...right];
 }
 
@@ -833,22 +826,21 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const gt = useGT();
+  const quickNavCopy = usePrismuxSidebarQuickNavCopy();
   const { isMobile, setOpenMobile, isIconRail } = useSidebar();
   const railCompact = !isMobile && isIconRail;
   const pathname = useLocation({
     select: (location) => location.pathname,
   });
-  // Keep bottom utility icons (including Issues & PR) visible on toggleable panel pages so
-  // clicking an active Issue/PR button closes it and navigates back to the prior session.
+  // Keep bottom utility icons (including Tasks & Workspace Board) visible on toggleable panel pages
+  // so clicking an active Tasks / Workspace Board icon closes it and returns to the prior session.
   const isOnUtilityPage =
     isSidebarUtilityPage(pathname) && !isSidebarToggleablePanelPage(pathname);
-  const issuesActive = isSidebarPanelPathActive(pathname, PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.issues);
-  const pullRequestsActive = isSidebarPanelPathActive(
+  const tasksActive = isSidebarPanelPathActive(pathname, PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks);
+  const workspaceBoardActive = isSidebarPanelPathActive(
     pathname,
-    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.pullRequests,
+    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.workspaceBoard,
   );
-  const pullRequestsSupported = usePullRequestsSupported();
-  const issuesSupported = useIssuesSupported();
   const [viewportHeight, setViewportHeight] = useState<number>(() =>
     typeof window !== "undefined" ? window.innerHeight : 900,
   );
@@ -883,24 +875,25 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       setOpenMobile(false);
     }
   };
-  const handlePullRequestsClick = () => {
+  const handleToggleTasksClick = () => {
     closeMobileSidebar();
-    if (pullRequestsActive) {
-      void navigateToMainApp();
-      return;
-    }
-    void navigate({
-      to: "/pull-requests",
-      search: readPullRequestListPreferences(),
+    const decision = resolveSidebarPanelToggleNavigation({
+      currentPathname: pathname,
+      panelPathnames: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks,
+      targetHref: PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.tasks,
+      lastMainAppHref: getMainAppReturnHref("/"),
     });
+    void navigate({ href: decision.href });
   };
-  const handleIssuesClick = () => {
+  const handleToggleWorkspaceBoardClick = () => {
     closeMobileSidebar();
-    if (issuesActive) {
-      void navigateToMainApp();
-      return;
-    }
-    void navigate({ to: "/issues", search: readIssueListPreferences() });
+    const decision = resolveSidebarPanelToggleNavigation({
+      currentPathname: pathname,
+      panelPathnames: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.workspaceBoard,
+      targetHref: PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.workspaceBoard,
+      lastMainAppHref: getMainAppReturnHref("/"),
+    });
+    void navigate({ href: decision.href });
   };
   const handleSettingsClick = () => {
     closeMobileSidebar();
@@ -948,30 +941,22 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       label: gt("Locate current thread"),
       onClick: handleLocateCurrentThreadClick,
     },
-    ...(issuesSupported
-      ? [
-          {
-            id: "issues" as const,
-            group: "right" as const,
-            icon: <IssueGlyph.issue />,
-            label: gt("Issues", { $context: "sidebar link to the list of issues" }),
-            active: issuesActive,
-            onClick: handleIssuesClick,
-          },
-        ]
-      : []),
-    ...(pullRequestsSupported
-      ? [
-          {
-            id: "pull-requests" as const,
-            group: "right" as const,
-            icon: <PullRequestGlyph.pullRequest />,
-            label: gt("Pull requests"),
-            active: pullRequestsActive,
-            onClick: handlePullRequestsClick,
-          },
-        ]
-      : []),
+    {
+      id: "tasks",
+      group: "right",
+      icon: <ListTodoIcon />,
+      label: quickNavCopy.tasks,
+      active: tasksActive,
+      onClick: handleToggleTasksClick,
+    },
+    {
+      id: "workspace-board",
+      group: "right",
+      icon: <Columns3Icon />,
+      label: quickNavCopy.workspaceBoard,
+      active: workspaceBoardActive,
+      onClick: handleToggleWorkspaceBoardClick,
+    },
   ];
 
   // In collapsed vertical icon rail, width is fixed 54px so capacity depends on viewport height only.
@@ -1179,7 +1164,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                     onClick={item.onClick}
                   />
                 ))}
-                <SidebarThreadUndoNotice />
                 {rightUtilityItems.map((item) => (
                   <SidebarUtilityItem
                     key={item.id}

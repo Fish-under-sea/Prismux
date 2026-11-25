@@ -18,15 +18,14 @@ export const PRISMUX_SIDEBAR_PROJECTS_OPEN_KEY =
   "prismux.sidebar.projects-section-open" as const;
 
 /**
- * Canonical Prismux sidebar quick-nav entries (aligned with Orca `SidebarNav.tsx`).
- * Strict 5-item order across expanded sidebar and 54px collapsed icon rail:
- * `diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `overnight-factory`.
+ * Canonical Prismux top sidebar quick-nav entries.
+ * Strict 3-item order across expanded sidebar and 54px collapsed icon rail:
+ * `diagnostics` -> `automations` -> `overnight-factory`.
+ * `tasks` and `workspace-board` live in the bottom sidebar footer utility toolbar (`SidebarChrome.tsx`).
  * Remote QR pairing and Plugin Center live inside Settings.
  */
 export const PRISMUX_SIDEBAR_QUICK_NAV_IDS = [
   "diagnostics",
-  "tasks",
-  "workspace-board",
   "automations",
   "overnight-factory",
 ] as const;

@@ -219,6 +219,13 @@ const UNDO_ENTRY: SlashCommandCatalogEntry = {
   aliases: ["undo", "rewind", "回滚", "还原"],
 };
 
+const PERMISSIONS_ENTRY: SlashCommandCatalogEntry = {
+  icon: lucide(ShieldCheckIcon),
+  zhTitle: "权限策略",
+  description: "查看或调整命令执行与文件写入授权策略",
+  aliases: ["permission", "permissions", "权限", "审批", "安全", "预设"],
+};
+
 export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogEntry>> = {
   model: {
     icon: lucide(SparklesIcon),
@@ -422,12 +429,8 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
     description: "检索、查看或维护长期记忆与项目上下文",
     aliases: ["记忆", "上下文"],
   },
-  permissions: {
-    icon: lucide(ShieldCheckIcon),
-    zhTitle: "权限策略",
-    description: "查看或调整命令执行与文件写入授权策略",
-    aliases: ["权限", "审批", "安全"],
-  },
+  permission: PERMISSIONS_ENTRY,
+  permissions: PERMISSIONS_ENTRY,
   diff: {
     icon: lucide(FileDiffIcon),
     zhTitle: "查看差异",

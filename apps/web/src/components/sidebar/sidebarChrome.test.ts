@@ -57,15 +57,11 @@ import {
 } from "./sidebarPeek.logic";
 
 describe("SidebarChrome Orca header order & footer utility cleanup", () => {
-  it("excludes help, wallpaper, and toggle-sidebar and enforces Orca left/right footer partition ([settings, usage] ... [locate, issues, pull-requests])", () => {
+  it("excludes help, wallpaper, toggle-sidebar, issues, and pull-requests and enforces footer partition ([settings, usage] ... [locate, tasks, workspace-board])", () => {
     const expanded = resolveSidebarUtilityNavIds({
-      pullRequestsSupported: true,
-      issuesSupported: true,
       railCompact: false,
     });
     const collapsedRail = resolveSidebarUtilityNavIds({
-      pullRequestsSupported: true,
-      issuesSupported: true,
       railCompact: true,
     });
 
@@ -73,27 +69,22 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(list).not.toContain("help");
       expect(list).not.toContain("wallpaper");
       expect(list).not.toContain("toggle-sidebar");
+      expect(list).not.toContain("issues");
+      expect(list).not.toContain("pull-requests");
       expect(list).toContain("settings");
       expect(list).toContain("usage");
       expect(list).toContain("locate");
+      expect(list).toContain("tasks");
+      expect(list).toContain("workspace-board");
     }
 
-    // Expanded Orca partition: left [settings, usage], right [locate, issues, pull-requests] (PR strictly rightmost).
-    expect(expanded).toEqual(["settings", "usage", "locate", "issues", "pull-requests"]);
+    // Expanded Orca partition: left [settings, usage], right [locate, tasks, workspace-board].
+    expect(expanded).toEqual(["settings", "usage", "locate", "tasks", "workspace-board"]);
 
     // 54px vertical rail stacks right utility actions above [settings, usage] at the bottom.
-    expect(collapsedRail).toEqual(["locate", "issues", "pull-requests", "settings", "usage"]);
+    expect(collapsedRail).toEqual(["locate", "tasks", "workspace-board", "settings", "usage"]);
 
-    // Without PR/Issue support, the list stays cleanly partitioned [settings, usage] ... [locate].
-    expect(
-      resolveSidebarUtilityNavIds({
-        pullRequestsSupported: false,
-        issuesSupported: false,
-        railCompact: false,
-      }),
-    ).toEqual(["settings", "usage", "locate"]);
-
-    // At standard desktop sidebar widths (220px, 256px, 280px), all 5 compact 26x26 icons stay visible (never swallowed by More).
+    // At standard desktop sidebar widths (200px, 256px, 280px), all 5 compact 26x26 icons stay visible (never swallowed by More).
     for (const width of [200, 256, 280]) {
       const overflow = resolveSidebarUtilityOverflow(expanded, {
         viewportHeight: 900,
@@ -129,12 +120,19 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     );
     const source = fs.readFileSync(path.join(sidebarDir, "SidebarChrome.tsx"), "utf8");
 
-    // Confirm the 3 removed footer buttons are completely gone from SidebarChrome.tsx.
+    // Confirm the removed footer buttons (help, wallpaper, toggle-sidebar, issues, pull-requests) are completely gone from SidebarChrome.tsx
+    // and tasks + workspace-board live in the footer utility toolbar instead.
     expect(source).not.toContain('id: "help"');
     expect(source).not.toContain('id: "wallpaper"');
     expect(source).not.toContain('id: "toggle-sidebar"');
+    expect(source).not.toContain('id: "issues"');
+    expect(source).not.toContain('id: "pull-requests"');
+    expect(source).not.toContain("IssueGlyph");
+    expect(source).not.toContain("PullRequestGlyph");
     expect(source).not.toContain("sidebar-utility-help-trigger");
     expect(source).not.toContain("Wallpaper & appearance");
+    expect(source).toContain('id: "tasks"');
+    expect(source).toContain('id: "workspace-board"');
 
     // Confirm header renders brand menu trigger -> header toggle -> ml-auto history nav in order.
     const brandMenuIdx = source.indexOf(
@@ -590,8 +588,8 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(railHtml).toContain('data-rail-mode="true"');
     expect(railHtml).toContain('data-testid="prismux-sidebar-search-button"');
     expect(railHtml).toContain('data-testid="prismux-nav-diagnostics"');
-    expect(railHtml).toContain('data-testid="prismux-nav-tasks"');
-    expect(railHtml).toContain('data-testid="prismux-nav-workspace-board"');
+    expect(railHtml).not.toContain('data-testid="prismux-nav-tasks"');
+    expect(railHtml).not.toContain('data-testid="prismux-nav-workspace-board"');
     expect(railHtml).toContain('data-testid="prismux-nav-automations"');
     expect(railHtml).toContain('data-testid="prismux-nav-overnight-factory"');
     expect(railHtml).not.toContain('data-testid="prismux-nav-mobile"');
@@ -758,8 +756,6 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(fullRailHtml).toContain('aria-label="展开侧边栏"');
     expect(fullRailHtml).toContain('aria-label="搜索"');
     expect(fullRailHtml).toContain('aria-label="服务体检"');
-    expect(fullRailHtml).toContain('aria-label="任务面板"');
-    expect(fullRailHtml).toContain('aria-label="工作区板"');
     expect(fullRailHtml).toContain('aria-label="定时任务"');
     expect(fullRailHtml).toContain('aria-label="夜间工场与邮箱"');
     expect(fullRailHtml).not.toContain('aria-label="Prismux 手机端"');
@@ -768,6 +764,12 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(fullRailHtml).toContain('aria-label="Prismux"');
     expect(fullRailHtml).toContain('data-sidebar-utility-item="locate"');
     expect(fullRailHtml).toContain('aria-label="定位当前会话"');
+    expect(fullRailHtml).toContain('data-sidebar-utility-item="tasks"');
+    expect(fullRailHtml).toContain('aria-label="任务面板"');
+    expect(fullRailHtml).toContain('data-sidebar-utility-item="workspace-board"');
+    expect(fullRailHtml).toContain('aria-label="工作区板"');
+    expect(fullRailHtml).not.toContain('data-sidebar-utility-item="issues"');
+    expect(fullRailHtml).not.toContain('data-sidebar-utility-item="pull-requests"');
     expect(fullRailHtml).toContain('data-sidebar-utility-item="settings"');
     expect(fullRailHtml).toContain('aria-label="设置"');
     expect(fullRailHtml).toContain('data-sidebar-utility-item="usage"');
@@ -817,14 +819,6 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     });
     vi.doMock("../ui/tooltip", createTooltipMock);
     vi.doMock("~/components/ui/tooltip", createTooltipMock);
-    vi.doMock("../../state/environments", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../../state/environments")>();
-      return {
-        ...actual,
-        useIssuesSupported: () => true,
-        usePullRequestsSupported: () => true,
-      };
-    });
 
     try {
       // Ensure mocked tooltip module settles before loading consumer components.
@@ -935,7 +929,7 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(zhHtml).not.toMatch(/\stitle="/);
 
       const zhPopups = extractPopups(zhHtml);
-      expect(zhPopups.length).toBeGreaterThanOrEqual(16);
+      expect(zhPopups.length).toBeGreaterThanOrEqual(14);
       // Every single collapsed-rail tooltip popup MUST open on the right side!
       for (const popup of zhPopups) {
         expect(popup.side, `Tooltip "${popup.text}" must appear on side="right"`).toBe("right");
@@ -945,8 +939,6 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(zhTexts).toContain("展开侧边栏");
       expect(zhTexts).toContain("搜索");
       expect(zhTexts).toContain("服务体检");
-      expect(zhTexts).toContain("任务面板");
-      expect(zhTexts).toContain("工作区板");
       expect(zhTexts).toContain("定时任务");
       expect(zhTexts).toContain("夜间工场与邮箱");
       expect(zhTexts).not.toContain("Prismux 手机端");
@@ -955,17 +947,23 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(zhTexts).toContain("Prismux");
       expect(zhTexts).toContain("修复侧边栏 Prismux");
       expect(zhTexts).toContain("定位当前会话");
-      expect(zhTexts).toContain("issue");
-      expect(zhTexts).toContain("PR");
+      expect(zhTexts).toContain("任务面板");
+      expect(zhTexts).toContain("工作区板");
+      expect(zhTexts).not.toContain("issue");
+      expect(zhTexts).not.toContain("PR");
       expect(zhTexts).toContain("设置");
       expect(zhTexts).toContain("用量");
       expect(zhTexts).toContain("更多导航项");
 
-      // Active toggleable panel (/issues, /tasks, /overnight-factory) keeps Issue/PR toggle buttons visible & highlighted
-      const zhIssuesHtml = renderCollapsedRail("zh", "/issues", false);
-      expect(zhIssuesHtml).toContain('data-sidebar-utility-item="issues"');
-      expect(zhIssuesHtml).toContain('aria-current="page"');
-      expect(zhIssuesHtml).toContain('data-sidebar-utility-item="pull-requests"');
+      // Active toggleable panel (/tasks, /workspace-board, /overnight-factory) keeps footer Tasks/Workspace Board buttons visible & highlighted
+      const zhTasksHtml = renderCollapsedRail("zh", "/tasks", false);
+      expect(zhTasksHtml).toContain('data-sidebar-utility-item="tasks"');
+      expect(zhTasksHtml).toContain('aria-current="page"');
+      expect(zhTasksHtml).toContain('data-sidebar-utility-item="workspace-board"');
+
+      const zhBoardHtml = renderCollapsedRail("zh", "/workspace-board", false);
+      expect(zhBoardHtml).toContain('data-sidebar-utility-item="workspace-board"');
+      expect(zhBoardHtml).toContain('aria-current="page"');
 
       const zhFactoryHtml = renderCollapsedRail("zh", "/overnight-factory", false);
       expect(zhFactoryHtml).toContain('data-testid="prismux-nav-overnight-factory"');
@@ -987,8 +985,6 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(enTexts).toContain("Expand sidebar");
       expect(enTexts).toContain("Search");
       expect(enTexts).toContain("Service diagnostics");
-      expect(enTexts).toContain("Tasks");
-      expect(enTexts).toContain("Workspace board");
       expect(enTexts).toContain("Scheduled Tasks");
       expect(enTexts).toContain("Overnight Factory");
       expect(enTexts).not.toContain("Prismux Mobile");
@@ -996,16 +992,35 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(enTexts).toContain("New workspace");
       expect(enTexts).toContain("Prismux");
       expect(enTexts).toContain("Locate current thread");
-      expect(enTexts).toContain("Issues");
-      expect(enTexts).toContain("Pull requests");
+      expect(enTexts).toContain("Tasks");
+      expect(enTexts).toContain("Workspace board");
+      expect(enTexts).not.toContain("Issues");
+      expect(enTexts).not.toContain("Pull requests");
       expect(enTexts).toContain("Settings");
       expect(enTexts).toContain("Usage");
       expect(enTexts).toContain("More navigation items");
     } finally {
       vi.doUnmock("../ui/tooltip");
       vi.doUnmock("~/components/ui/tooltip");
-      vi.doUnmock("../../state/environments");
       vi.resetModules();
     }
+  });
+
+  it("renders Settle, Archive, and Delete hover quick-actions on SidebarThreadRow across all 3 row variants", () => {
+    const sidebarDir = path.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const threadRowSrc = fs.readFileSync(path.join(sidebarDir, "SidebarThreadRow.tsx"), "utf8");
+    const sidebarSrc = fs.readFileSync(path.join(sidebarDir, "..", "Sidebar.tsx"), "utf8");
+
+    expect(threadRowSrc).toContain("ArchiveIcon");
+    expect(threadRowSrc).toContain("Trash2Icon");
+    expect(threadRowSrc).toContain('data-testid="sidebar-row-archive-action"');
+    expect(threadRowSrc).toContain('data-testid="sidebar-row-delete-action"');
+    expect(threadRowSrc).toContain("hover:text-destructive");
+    expect(threadRowSrc).toContain('gt("Archive thread")');
+    expect(threadRowSrc).toContain('gt("Delete", { $context: "verb, delete the thread" })');
+    expect(sidebarSrc).toContain("onArchive={attemptArchive}");
+    expect(sidebarSrc).toContain("onDelete={attemptDelete}");
   });
 });

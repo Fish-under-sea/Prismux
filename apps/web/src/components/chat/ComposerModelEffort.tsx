@@ -42,6 +42,10 @@ import { composerFloatingLayerProps, focusCheckedPermission } from "./composerEv
 import { EffortGlyph, FastBolt, resolveEffortGlyph } from "./EffortGlyph";
 import { DockedPickerContext } from "./ProviderModelPicker";
 import {
+  filterConcreteReasoningChoices,
+  resolveConcreteReasoningValue,
+} from "./ProviderModelPicker.logic";
+import {
   getTraitsSectionVisibility,
   type TraitsSelectionInput,
   ULTRATHINK_IN_BODY_NOTE,
@@ -122,24 +126,39 @@ export function describeComposerEffort(
     resolve,
   );
   // The same reasoning control the column lists, wherever the agent put it among its options.
-  const reasoning =
+  const rawReasoning =
     columnControls(visibility.selectDescriptors, visibility.booleanDescriptors).effort
       ?.descriptor ?? null;
-  const ultrathink = visibility.ultrathinkPromptControlled && reasoning === primary;
-  const currentReasoningValue =
+  const rawReasoningChoices =
+    rawReasoning?.type === "select" ? selectableProviderOptionChoices(rawReasoning) : [];
+  const concreteReasoningChoices = filterConcreteReasoningChoices(rawReasoningChoices);
+  const hadPhantomReasoningChoices = concreteReasoningChoices.length !== rawReasoningChoices.length;
+  const reasoning =
+    rawReasoning?.type === "select" && hadPhantomReasoningChoices
+      ? { ...rawReasoning, options: concreteReasoningChoices }
+      : rawReasoning;
+  const ultrathink = visibility.ultrathinkPromptControlled && rawReasoning === primary;
+  const rawCurrentReasoningValue =
     reasoning?.type === "select"
       ? ultrathink
         ? "ultrathink"
-        : getDescriptorStringValue(reasoning, modelSelection, traits.reportedModelSelection)
+        : getDescriptorStringValue(rawReasoning as SelectDescriptor, modelSelection, traits.reportedModelSelection)
       : null;
+  const currentReasoningValue =
+    reasoning?.type === "select" && !ultrathink
+      ? resolveConcreteReasoningValue(
+          concreteReasoningChoices,
+          rawCurrentReasoningValue,
+          hadPhantomReasoningChoices,
+        )
+      : rawCurrentReasoningValue;
   const glyph =
     reasoning?.type === "select" ? resolveEffortGlyph(reasoning, currentReasoningValue) : null;
   const fallbackUnobservedGlyph =
     !glyph && reasoning?.type === "select" && currentReasoningValue === null
       ? (() => {
-          const choices = selectableProviderOptionChoices(reasoning);
-          if (choices.length < 2) return null;
-          const firstChoice = choices[0]!;
+          if (concreteReasoningChoices.length < 2) return null;
+          const firstChoice = concreteReasoningChoices[0]!;
           const sample = resolveEffortGlyph(reasoning, firstChoice.id);
           return sample
             ? { count: sample.count, filled: 0, special: null, label: reasoning.label }
@@ -402,8 +421,13 @@ function EffortRows(props: { control: ColumnControl; traits: TraitsSelection; lo
     );
   }
   const { locked } = props;
-  const value = traits.selectValue(control.descriptor);
-  const choices = selectableProviderOptionChoices(control.descriptor);
+  const rawChoices = selectableProviderOptionChoices(control.descriptor);
+  const choices = filterConcreteReasoningChoices(rawChoices);
+  const value = resolveConcreteReasoningValue(
+    choices,
+    traits.selectValue(control.descriptor),
+    choices.length !== rawChoices.length,
+  );
   // An "Ultrathink:" prefix selects a level the column does not offer.
   const shown = choices.some((option) => option.id === value);
   return (
@@ -1126,7 +1150,9 @@ function ComposerUnifiedOptionsFooterBody(props: {
 }) {
   const { traitsInput, modelLabel, locale, gt, messages } = props;
   const traits = useTraitsSelection(traitsInput);
-  const sliderLocale: ReasoningEffortLocale = locale.toLowerCase().startsWith("zh") ? "zh" : "en";
+  const sliderLocale: ReasoningEffortLocale = (locale ?? "en").toLowerCase().startsWith("zh")
+    ? "zh"
+    : "en";
   const { effort } = columnControls(traits.selectDescriptors, traits.booleanDescriptors);
   const { speedSelect, fastToggle, ultracodeToggle } = splitSpeed(
     traits.selectDescriptors,
@@ -1173,10 +1199,15 @@ function ComposerUnifiedOptionsFooterBody(props: {
   let handleSliderChange: ((nextValue: string) => void) | undefined;
 
   if (effort?.kind === "select") {
-    const choices = selectableProviderOptionChoices(effort.descriptor);
+    const rawChoices = selectableProviderOptionChoices(effort.descriptor);
+    const choices = filterConcreteReasoningChoices(rawChoices);
     if (choices.length > 0) {
       sliderOptions = choices.map((choice) => formatChoiceForSlider(choice));
-      sliderValue = traits.selectValue(effort.descriptor);
+      sliderValue = resolveConcreteReasoningValue(
+        choices,
+        traits.selectValue(effort.descriptor),
+        choices.length !== rawChoices.length,
+      );
       handleSliderChange = (nextValue: string) => traits.changeSelect(effort.descriptor, nextValue);
     }
   } else if (effort?.kind === "boolean") {

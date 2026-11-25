@@ -45,14 +45,14 @@ function createMemoryStorage(): SidebarStorageLike & { readonly data: Map<string
 }
 
 describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
-  it("maps quick-nav entries strictly to the 5-item order replacing Mobile with Overnight Factory and supports toggle-close", () => {
+  it("maps top quick-nav entries strictly to the lean 3-item order while tasks and workspace-board live in the footer", () => {
     expect([...PRISMUX_SIDEBAR_QUICK_NAV_IDS]).toEqual([
       "diagnostics",
-      "tasks",
-      "workspace-board",
       "automations",
       "overnight-factory",
     ]);
+    expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("tasks");
+    expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("workspace-board");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("mobile");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("bots");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("plugins");

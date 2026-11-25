@@ -127,7 +127,13 @@ import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSectio
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import { providerClients } from "./providerDriverMeta";
 import { useSearchableSetting } from "./settingsSearch";
-import { CompactIdleThreadsRow, ProviderUpdateChecksRow } from "./SettingsPanels";
+import { DefaultChatModelsSection } from "./ProjectDefaultsSettings";
+import {
+  CompactIdleThreadsRow,
+  ProviderUpdateChecksRow,
+  TextGenerationSettingsSection,
+} from "./SettingsPanels";
+import { SettingsSegmentedTabs, type SettingsSegmentedTabItem } from "./SettingsSegmentedTabs";
 import { buildProviderInstanceUpdatePatch } from "./SettingsPanels.logic";
 import {
   SettingResetButton,
@@ -193,10 +199,12 @@ function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<st
     .map((model) => ({ model, selected: nextSet.has(model) }));
 }
 
-const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
-  provider: definition.driverKind,
-  hasDefaultInstance: definition.hasDefaultInstance !== false,
-}));
+const PROVIDER_SETTINGS = providerClients.definitions
+  .filter((definition) => definition.driverKind !== "fx")
+  .map((definition) => ({
+    provider: definition.driverKind,
+    hasDefaultInstance: definition.hasDefaultInstance !== false,
+  }));
 
 function configuredBinaryPath(config: unknown): string {
   if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
@@ -344,6 +352,30 @@ function EnvironmentUnavailablePlaceholder({
   );
 }
 
+export const PROVIDERS_TAB_IDS = {
+  providers: "providers",
+  defaults: "defaults",
+  compliance: "compliance",
+} as const;
+
+export const PROVIDERS_TAB_HASH_ANCHORS = {
+  providers: ["providers", "usage-providers", "text-generators"] as const,
+  defaults: [
+    "default-chat-models",
+    "default-model",
+    "fallback-model",
+    "text-generation",
+    "text-generation-model",
+    "thread-title-instructions",
+    "default-launch-mode",
+    "provider-updates",
+    "provider-update-checks",
+    "provider-defaults",
+    "compact-idle-threads",
+  ] as const,
+  compliance: [SUBSCRIPTION_WAIVER_ANCHOR_ID, LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID] as const,
+} as const;
+
 interface ProviderSettingsTarget {
   readonly environmentId?: EnvironmentId;
   readonly instanceId?: ProviderInstanceId;
@@ -354,7 +386,7 @@ interface ProviderSettingsTarget {
 
 export function ProviderSettingsPanel(target: ProviderSettingsTarget) {
   return (
-    <SettingsPageContainer className="@container/providers gap-8">
+    <SettingsPageContainer width="wide" className="@container/providers gap-7">
       <ProviderSettingsPanelContent
         key={`${target.environmentId ?? ""}:${target.instanceId ?? ""}`}
         {...target}
@@ -1023,6 +1055,7 @@ export function EnvironmentProviderSettings({
       setInstanceMode(instanceId, mode);
     },
   );
+  const stableRefreshProviders = useStableCallback(refreshProviders);
   const actions: ProviderInstanceRowActions = {
     acceptUrlAuthentication,
     runProviderUpdate,
@@ -1035,6 +1068,7 @@ export function EnvironmentProviderSettings({
     toggleModelFavorite: stableToggleModelFavorite,
     selectInstance: setSelectedInstanceId,
     setInstanceLaunchMode: stableSetInstanceLaunchMode,
+    refreshProviders: stableRefreshProviders,
   };
   // resolveModelPreferences falls back to a fresh `[]`; keep it stable for the rows.
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
@@ -1069,6 +1103,8 @@ export function EnvironmentProviderSettings({
         selected={mode === "list" && selectedRow?.instanceId === row.instanceId}
         readOnly={readOnly}
         canWriteSettings={canWriteSettings}
+        canRefreshProviders={canRefreshProviders}
+        isRefreshingProviders={isRefreshingProviders}
         liveProvider={serverProviders.find((candidate) => candidate.instanceId === row.instanceId)}
         isUpdateDispatching={updatingProviderInstanceIds.has(row.instanceId)}
         showProjectOverride={showProjectOverride}
@@ -1107,268 +1143,293 @@ export function EnvironmentProviderSettings({
   const allProvidersProbed =
     rows.length > 0 && rows.every((row) => liveProvidersByInstanceId.has(row.instanceId));
 
-  return (
-    <>
-      <SettingsSection id="provider-defaults" title={gt("Defaults & CLI updates")}>
-        <SettingsRow
-          title={gt("Default launch mode")}
-          description={gt(
-            "Choose whether newly started provider sessions default to integrated Chat or terminal CLI mode.",
-          )}
-          control={
-            <ToggleGroup
-              aria-label={gt("Global default launch mode")}
-              data-global-launch-mode-toggle
-              variant="segmented"
-              value={[launchModeState.globalDefaultMode]}
-              onValueChange={(next) => {
-                const picked = next[0];
-                if (picked === "chat" || picked === "cli") {
-                  setGlobalDefaultMode(picked);
-                }
-              }}
-            >
-              <Toggle value="chat">Chat</Toggle>
-              <Toggle value="cli">CLI</Toggle>
-            </ToggleGroup>
-          }
-        />
-        <ProviderUpdateChecksRow />
-      </SettingsSection>
-
-      <SettingsSection
-        {...searchableSetting("providers")}
-        variant="plain"
-        titleAction={
-          <div className="flex items-center gap-1.5">
-            {allProvidersProbed ? (
-              <Badge
-                variant={installedProviderCount > 0 ? "info" : "outline"}
-                size="sm"
-                className="font-mono text-2xs tabular-nums"
-              >
-                {gt("{count} detected", { count: installedProviderCount })}
-              </Badge>
-            ) : null}
-            {canAddProvider ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant="ghost-muted"
-                      onClick={() => setIsAddInstanceDialogOpen(true)}
-                      aria-label={gt("Add provider")}
-                    >
-                      <PlusIcon />
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="top">
-                  <T>Add provider</T>
-                </TooltipPopup>
-              </Tooltip>
-            ) : null}
-          </div>
-        }
-        headerAction={
-          // The ghost button's padding would inset its label, so pull the text to the card edge.
-          <div className="-me-2 flex min-w-0 flex-wrap items-center gap-2">
-            <ProviderUpdatesAction />
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="xs"
-                    variant="ghost-muted"
-                    disabled={isRefreshingProviders || !canRefreshProviders}
-                    aria-busy={isRefreshingProviders}
-                    onClick={() => void refreshProviders()}
-                  >
-                    <RefreshIcon refreshing={isRefreshingProviders} />
-                    <span className="sr-only">
-                      <T>Refresh provider status</T>
-                    </span>
-                    <span className="hidden min-w-0 truncate sm:inline">
-                      {isRefreshingProviders ? (
-                        gt("Refreshing providers")
-                      ) : (
-                        <ProviderLastChecked environmentId={environmentId} />
-                      )}
-                    </span>
-                  </Button>
-                }
-              />
-              <TooltipPopup side="top">
-                <T>Refresh provider status</T>
-              </TooltipPopup>
-            </Tooltip>
-          </div>
-        }
-      >
-        {deviceTabs ? (
-          <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">{deviceTabs}</div>
-        ) : null}
-        {readOnly ? (
-          <SettingsGroup divided={false} className="overflow-hidden">
-            <SettingsRow
-              title={gt("Limited permissions")}
-              description={gt(
-                "This session can view {environment}''s providers but can't change their settings.",
-                { environment: environmentLabel },
-              )}
-            />
-          </SettingsGroup>
-        ) : null}
-        <SettingsGroup
-          divided={false}
-          className={cn(
-            providerCardHeightClassName,
-            "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[23.5rem_minmax(0,1fr)]",
-          )}
-        >
-          <div className="border-b border-border/60 bg-muted/10 @min-[48rem]/providers:flex @min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-col @min-[48rem]/providers:border-r @min-[48rem]/providers:border-b-0">
-            <ScrollArea
-              scrollFade
-              chainVerticalScroll
-              className="@min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-1"
-            >
-              <div className="divide-y divide-border/50">
-                {allProvidersProbed && installedProviderCount === 0 && !isRefreshingProviders ? (
-                  <div
-                    data-slot="empty-agent-detection-banner"
-                    className="flex items-center justify-between gap-2 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground sm:px-4"
-                  >
-                    <span className="min-w-0 leading-snug">
-                      {gt(
-                        "No agents detected. If one is installed, the probe may have timed out.",
-                      )}
-                    </span>
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      disabled={!canRefreshProviders}
-                      onClick={() => void refreshProviders()}
-                    >
-                      <RefreshIcon refreshing={isRefreshingProviders} />
-                      <span>{gt("Refresh")}</span>
-                    </Button>
-                  </div>
-                ) : null}
-                <DndContext
-                  sensors={providerSensors}
-                  collisionDetection={closestCenter}
-                  modifiers={[restrictToVerticalAxis, restrictToParentElement]}
-                  onDragStart={handleProviderDragStart}
-                  onDragEnd={handleProviderDragEnd}
-                  onDragCancel={handleProviderDragCancel}
-                >
-                  <SortableContext
-                    items={rows.map((row) => row.instanceId)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    {rows.map((row, index) => (
-                      <SortableProviderListItem
-                        key={row.instanceId}
-                        instanceId={row.instanceId}
-                        providerName={providerInstanceName(
-                          row.explicitInstance ?? { driver: row.driver },
-                        )}
-                        index={index}
-                        activeDragIndex={activeDragIndex}
-                        disabled={!canReorderProviders}
+  const tabs: ReadonlyArray<SettingsSegmentedTabItem> = [
+    {
+      id: PROVIDERS_TAB_IDS.providers,
+      label: gt("Providers & instances"),
+      hashAnchors: PROVIDERS_TAB_HASH_ANCHORS.providers,
+      content: (
+        <>
+          <SettingsSection
+            id={searchableSetting("providers").id}
+            title={gt("Providers & instances")}
+            variant="plain"
+            titleAction={
+              allProvidersProbed ? (
+                <Badge variant={installedProviderCount > 0 ? "info" : "outline"} size="sm">
+                  <span className="font-mono tabular-nums">
+                    {gt("{count} detected", { count: installedProviderCount })}
+                  </span>
+                </Badge>
+              ) : null
+            }
+            headerAction={
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <ProviderUpdatesAction />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant="ghost-muted"
+                        disabled={isRefreshingProviders || !canRefreshProviders}
+                        aria-busy={isRefreshingProviders}
+                        onClick={() => void refreshProviders()}
                       >
-                        {(dragHandle) => renderProviderInstance(row, "list", dragHandle)}
-                      </SortableProviderListItem>
-                    ))}
-                  </SortableContext>
-                </DndContext>
+                        <RefreshIcon refreshing={isRefreshingProviders} />
+                        <span className="sr-only">
+                          <T>Refresh provider status</T>
+                        </span>
+                        <span className="hidden min-w-0 truncate sm:inline">
+                          {isRefreshingProviders ? (
+                            gt("Refreshing providers")
+                          ) : (
+                            <ProviderLastChecked environmentId={environmentId} />
+                          )}
+                        </span>
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup side="top">
+                    <T>Refresh provider status</T>
+                  </TooltipPopup>
+                </Tooltip>
                 {canAddProvider ? (
-                  <button
+                  <Button
                     type="button"
-                    className="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-muted/25 hover:text-foreground focus-visible:bg-muted/25 focus-visible:text-foreground sm:px-4"
+                    size="xs"
+                    variant="outline"
                     onClick={() => setIsAddInstanceDialogOpen(true)}
                   >
-                    <PlusIcon className="size-4 shrink-0" />
+                    <PlusIcon className="size-3.5" />
                     <T>Add provider</T>
-                  </button>
+                  </Button>
                 ) : null}
               </div>
-            </ScrollArea>
-          </div>
-
-          <div data-provider-detail className="min-w-0 @min-[48rem]/providers:min-h-0">
-            {selectedRow ? (
-              <ScrollArea scrollFade chainVerticalScroll className="@min-[48rem]/providers:h-full">
-                {/* Flat sections run dividers edge to edge and inset text like the list beside them. */}
-                <div className="space-y-6 py-4">
-                  {renderProviderInstance(selectedRow, "editor")}
-                </div>
-              </ScrollArea>
-            ) : targetInstanceMissing ? (
-              <div className="p-6 text-sm text-muted-foreground">
-                {gt("This provider instance is no longer available on this device.")}
+            }
+          >
+            {deviceTabs ? (
+              <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">
+                {deviceTabs}
               </div>
-            ) : (
-              <div
-                data-slot="providers-empty-state"
-                className="flex h-full items-center justify-center p-6"
-              >
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyTitle>{gt("No providers configured.")}</EmptyTitle>
-                    <EmptyDescription>
-                      {gt("Add a provider to start chatting with your coding agents.")}
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  {canAddProvider ? (
-                    <EmptyContent>
-                      <Button
+            ) : null}
+            {readOnly ? (
+              <SettingsGroup divided={false} className="overflow-hidden">
+                <SettingsRow
+                  title={gt("Limited permissions")}
+                  description={gt(
+                    "This session can view {environment}''s providers but can't change their settings.",
+                    { environment: environmentLabel },
+                  )}
+                />
+              </SettingsGroup>
+            ) : null}
+            <SettingsGroup
+              divided={false}
+              className={cn(
+                providerCardHeightClassName,
+                "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[17.5rem_minmax(0,1fr)] @min-[60rem]/providers:grid-cols-[18.125rem_minmax(0,1fr)]",
+              )}
+            >
+              <div className="border-b border-border/60 bg-muted/10 @min-[48rem]/providers:flex @min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-col @min-[48rem]/providers:border-r @min-[48rem]/providers:border-b-0">
+                <ScrollArea
+                  scrollFade
+                  chainVerticalScroll
+                  className="@min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-1"
+                >
+                  <div className="divide-y divide-border/50">
+                    {allProvidersProbed && installedProviderCount === 0 && !isRefreshingProviders ? (
+                      <div
+                        data-slot="empty-agent-detection-banner"
+                        className="flex items-center justify-between gap-2 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground sm:px-4"
+                      >
+                        <span className="min-w-0 leading-snug">
+                          {gt(
+                            "No agents detected. If one is installed, the probe may have timed out.",
+                          )}
+                        </span>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={!canRefreshProviders}
+                          onClick={() => void refreshProviders()}
+                        >
+                          <RefreshIcon refreshing={isRefreshingProviders} />
+                          <span>{gt("Refresh")}</span>
+                        </Button>
+                      </div>
+                    ) : null}
+                    <DndContext
+                      sensors={providerSensors}
+                      collisionDetection={closestCenter}
+                      modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                      onDragStart={handleProviderDragStart}
+                      onDragEnd={handleProviderDragEnd}
+                      onDragCancel={handleProviderDragCancel}
+                    >
+                      <SortableContext
+                        items={rows.map((row) => row.instanceId)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {rows.map((row, index) => (
+                          <SortableProviderListItem
+                            key={row.instanceId}
+                            instanceId={row.instanceId}
+                            providerName={providerInstanceName(
+                              row.explicitInstance ?? { driver: row.driver },
+                            )}
+                            index={index}
+                            activeDragIndex={activeDragIndex}
+                            disabled={!canReorderProviders}
+                          >
+                            {(dragHandle) => renderProviderInstance(row, "list", dragHandle)}
+                          </SortableProviderListItem>
+                        ))}
+                      </SortableContext>
+                    </DndContext>
+                    {canAddProvider ? (
+                      <button
                         type="button"
-                        size="sm"
-                        variant="outline"
+                        className="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-muted/25 hover:text-foreground focus-visible:bg-muted/25 focus-visible:text-foreground sm:px-4"
                         onClick={() => setIsAddInstanceDialogOpen(true)}
                       >
-                        <PlusIcon className="size-3.5" />
+                        <PlusIcon className="size-4 shrink-0" />
                         <T>Add provider</T>
-                      </Button>
-                    </EmptyContent>
-                  ) : null}
-                </Empty>
+                      </button>
+                    ) : null}
+                  </div>
+                </ScrollArea>
               </div>
-            )}
-          </div>
-        </SettingsGroup>
-      </SettingsSection>
 
-      <UsageProviderSettings
-        key={environmentId}
-        environmentId={environmentId}
-        environmentLabel={environmentLabel}
-        sources={settings.usageLimitSources}
-        readOnly={readOnly}
-      />
+              <div data-provider-detail className="min-w-0 flex-1 @min-[48rem]/providers:min-h-0">
+                {selectedRow ? (
+                  <ScrollArea
+                    scrollFade
+                    chainVerticalScroll
+                    className="@min-[48rem]/providers:h-full"
+                  >
+                    <div className="px-4 py-4 sm:px-6">
+                      {renderProviderInstance(selectedRow, "editor")}
+                    </div>
+                  </ScrollArea>
+                ) : targetInstanceMissing ? (
+                  <div className="p-6 text-sm text-muted-foreground">
+                    {gt("This provider instance is no longer available on this device.")}
+                  </div>
+                ) : (
+                  <div
+                    data-slot="providers-empty-state"
+                    className="flex h-full items-center justify-center p-6"
+                  >
+                    <Empty>
+                      <EmptyHeader>
+                        <EmptyTitle>{gt("No providers configured.")}</EmptyTitle>
+                        <EmptyDescription>
+                          {gt("Add a provider to start chatting with your coding agents.")}
+                        </EmptyDescription>
+                      </EmptyHeader>
+                      {canAddProvider ? (
+                        <EmptyContent>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setIsAddInstanceDialogOpen(true)}
+                          >
+                            <PlusIcon className="size-3.5" />
+                            <T>Add provider</T>
+                          </Button>
+                        </EmptyContent>
+                      ) : null}
+                    </Empty>
+                  </div>
+                )}
+              </div>
+            </SettingsGroup>
+          </SettingsSection>
 
-      {/* The server drops text generators under a provider allow-list. */}
-      {managedPolicy?.limits?.providers?.allowedDrivers === undefined ? (
-        <TextGeneratorsSettings
-          key={`text-generators:${environmentId}`}
-          environmentId={environmentId}
-          environmentLabel={environmentLabel}
-          providers={serverProviders}
+          <UsageProviderSettings
+            key={environmentId}
+            environmentId={environmentId}
+            environmentLabel={environmentLabel}
+            sources={settings.usageLimitSources}
+            readOnly={readOnly}
+          />
+
+          {/* The server drops text generators under a provider allow-list. */}
+          {managedPolicy?.limits?.providers?.allowedDrivers === undefined ? (
+            <TextGeneratorsSettings
+              key={`text-generators:${environmentId}`}
+              environmentId={environmentId}
+              environmentLabel={environmentLabel}
+              providers={serverProviders}
+              readOnly={readOnly}
+            />
+          ) : null}
+        </>
+      ),
+    },
+    {
+      id: PROVIDERS_TAB_IDS.defaults,
+      label: gt("Defaults & policies"),
+      hashAnchors: PROVIDERS_TAB_HASH_ANCHORS.defaults,
+      content: (
+        <>
+          <DefaultChatModelsSection />
+
+          <TextGenerationSettingsSection />
+
+          <SettingsSection id="provider-updates" title={gt("Global launch & update policy")}>
+            <SettingsRow
+              {...searchableSetting("default-launch-mode")}
+              description={gt(
+                "Choose whether newly started provider sessions default to integrated Chat or terminal CLI mode.",
+              )}
+              control={
+                <ToggleGroup
+                  aria-label={gt("Global default launch mode")}
+                  data-global-launch-mode-toggle
+                  variant="segmented"
+                  value={[launchModeState.globalDefaultMode]}
+                  onValueChange={(next) => {
+                    const picked = next[0];
+                    if (picked === "chat" || picked === "cli") {
+                      setGlobalDefaultMode(picked);
+                    }
+                  }}
+                >
+                  <Toggle value="chat">Chat</Toggle>
+                  <Toggle value="cli">CLI</Toggle>
+                </ToggleGroup>
+              }
+            />
+            <ProviderUpdateChecksRow />
+            <CompactIdleThreadsRow />
+          </SettingsSection>
+        </>
+      ),
+    },
+    {
+      id: PROVIDERS_TAB_IDS.compliance,
+      label: gt("Compliance & subscription waiver"),
+      hashAnchors: PROVIDERS_TAB_HASH_ANCHORS.compliance,
+      content: (
+        <SubscriptionRiskWaiverSection
+          key={`subscription-waiver:${SUBSCRIPTION_WAIVER_ANCHOR_ID}`}
           readOnly={readOnly}
         />
-      ) : null}
+      ),
+    },
+  ];
 
-      <SubscriptionRiskWaiverSection
-        key={`subscription-waiver:${SUBSCRIPTION_WAIVER_ANCHOR_ID}`}
-        readOnly={readOnly}
+  return (
+    <>
+      <SettingsSegmentedTabs
+        tabs={tabs}
+        defaultTabId={PROVIDERS_TAB_IDS.providers}
+        ariaLabel={gt("Agent configurator sections")}
       />
-
-      <SettingsSection title={gt("Advanced")}>
-        <CompactIdleThreadsRow />
-      </SettingsSection>
 
       {isAddInstanceDialogOpen && !readOnly ? (
         <AddProviderInstanceDialog
@@ -1432,6 +1493,7 @@ interface ProviderInstanceRowActions {
     instanceId: ProviderInstanceId,
     mode: ProviderLaunchMode | null,
   ) => void;
+  readonly refreshProviders: () => void;
 }
 
 const NO_MODELS: ReadonlyArray<string> = [];
@@ -1524,6 +1586,8 @@ function ProviderInstanceRow({
   selected,
   readOnly,
   canWriteSettings,
+  canRefreshProviders,
+  isRefreshingProviders,
   liveProvider,
   isUpdateDispatching,
   showProjectOverride,
@@ -1543,6 +1607,8 @@ function ProviderInstanceRow({
   readonly selected: boolean;
   readonly readOnly: boolean;
   readonly canWriteSettings: boolean;
+  readonly canRefreshProviders: boolean;
+  readonly isRefreshingProviders: boolean;
   readonly liveProvider: ServerProvider | undefined;
   readonly isUpdateDispatching: boolean;
   readonly showProjectOverride: boolean;
@@ -1688,8 +1754,9 @@ function ProviderInstanceRow({
         ) : null
       }
       onUpdate={(next) => actions.updateInstance(instanceId, instance, next)}
+      onRefresh={mode === "editor" && canRefreshProviders ? actions.refreshProviders : undefined}
+      isRefreshing={isRefreshingProviders}
       removalKind={removalKind}
-      showDeleteSlot={mode === "list" && !readOnly}
       onDelete={
         canDeleteProviderRow({ explicitInstance, isCoreDefault, readOnly })
           ? () => actions.requestDeleteInstance(row, instance)

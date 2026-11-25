@@ -58,7 +58,11 @@ import { toastManager } from "../ui/toast";
 import {
   formatCpuTime,
   formatSamplingStatus,
+  localizeNativeStatusBadge,
+  localizeSourceStatus,
+  localizeThermalState,
   processIdentityKey,
+  resolveCpuSpeedLimitDisplay,
   resourceHistoryBarHeight,
   resourceHistoryCpuScaleMax,
   shouldShowResourceMonitorRetry,
@@ -114,7 +118,7 @@ function categoryLabel(
     case "resource-monitor":
       return resolve(msg("Monitor"));
     case "unknown-t3":
-      return resolve(msg("T3 process"));
+      return resolve(msg("Prismux process"));
   }
 }
 
@@ -167,15 +171,17 @@ function SourceStatusBadge({
   presentation?:
     | {
         readonly label: string;
-        readonly tone: "neutral";
+        readonly tone?: "neutral" | "default" | "warning" | "danger";
       }
     | undefined;
 }) {
+  const messages = useMessages();
   const tone = presentation?.tone ?? sourceStatusTone(status);
+  const statusText = presentation?.label ?? localizeSourceStatus(status, messages);
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-3xs font-semibold uppercase tracking-widest",
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-3xs font-semibold tracking-wider",
         tone === "neutral" && "border-border/70 bg-muted/45 text-muted-foreground",
         tone === "default" && "border-success/25 bg-success/10 text-success-foreground",
         tone === "warning" && "border-warning/30 bg-warning/10 text-warning-foreground",
@@ -191,7 +197,7 @@ function SourceStatusBadge({
           tone === "danger" && "bg-destructive",
         )}
       />
-      {label} {presentation?.label ?? status}
+      {label ? `${label} ${statusText}` : statusText}
     </span>
   );
 }
@@ -282,7 +288,9 @@ function AggregateCard({
           {label}
         </div>
         <div className="rounded-md bg-muted/55 px-1.5 py-0.5 font-mono text-3xs tabular-nums text-muted-foreground/70">
-          {aggregate.processCount} {aggregate.processCount === 1 ? "process" : "processes"}
+          {gt("{count, plural, one {{count} process} other {{count} processes}}", {
+            count: aggregate.processCount,
+          })}
         </div>
       </div>
       <div className="mt-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
@@ -920,7 +928,7 @@ function ResourceTelemetryDiagnosticsBody({
   const signalingKeysRef = useRef<ReadonlySet<string>>(new Set());
   const [isRetrying, setIsRetrying] = useState(false);
   const snapshot = telemetry.data;
-  const allT3 = snapshot?.groups.allT3;
+  const allPrismux = snapshot?.groups.allT3;
 
   const signalProcess = async (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => {
     const targetEnvironmentId = environmentId;
@@ -1047,6 +1055,18 @@ function ResourceTelemetryDiagnosticsBody({
   };
 
   const speedLimit = snapshot ? Option.getOrNull(snapshot.speedLimitPercent) : null;
+  const speedLimitDisplay = snapshot
+    ? resolveCpuSpeedLimitDisplay(
+        {
+          speedLimitPercent: speedLimit,
+          thermalState: snapshot.power.thermalState,
+        },
+        messages,
+      )
+    : null;
+  const thermalStateText = snapshot
+    ? localizeThermalState(snapshot.power.thermalState, messages)
+    : null;
   const collectorNeedsRetry = shouldShowResourceMonitorRetry({
     nativeStatus: snapshot?.health.native.status ?? null,
     error: telemetry.error,
@@ -1067,7 +1087,13 @@ function ResourceTelemetryDiagnosticsBody({
         headerAction={
           <div className="flex items-center gap-2">
             {snapshot ? (
-              <SourceStatusBadge label={gt("Native")} status={snapshot.health.native.status} />
+              <SourceStatusBadge
+                label=""
+                status={snapshot.health.native.status}
+                presentation={{
+                  label: localizeNativeStatusBadge(snapshot.health.native.status, messages),
+                }}
+              />
             ) : null}
             <LastSampleLabel sampledAt={snapshot?.readAt ?? null} />
             <Tooltip>
@@ -1095,7 +1121,7 @@ function ResourceTelemetryDiagnosticsBody({
           <div className="flex flex-col gap-3 border-b border-border/60 bg-linear-to-r from-muted/45 via-muted/20 to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div>
               <div className="text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
-                <T>T3 system footprint</T>
+                <T>Prismux system footprint</T>
               </div>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
                 <T>
@@ -1122,11 +1148,11 @@ function ResourceTelemetryDiagnosticsBody({
             <IconStat
               icon={<CpuIcon className="size-3.5" />}
               label={gt("Current CPU")}
-              value={allT3 ? `${allT3.currentCpuPercent.toFixed(1)}%` : "..."}
+              value={allPrismux ? `${allPrismux.currentCpuPercent.toFixed(1)}%` : "..."}
               detail={
-                allT3
+                allPrismux
                   ? gt("{time} observed CPU time", {
-                      time: formatCpuTime(allT3.cpuTimeMs / 1_000, messages),
+                      time: formatCpuTime(allPrismux.cpuTimeMs / 1_000, messages),
                     })
                   : undefined
               }
@@ -1134,22 +1160,24 @@ function ResourceTelemetryDiagnosticsBody({
             <IconStat
               icon={<MemoryStickIcon className="size-3.5" />}
               label={gt("Resident memory")}
-              value={allT3 ? formatBytes(allT3.currentRssBytes) : "..."}
+              value={allPrismux ? formatBytes(allPrismux.currentRssBytes) : "..."}
               detail={
-                allT3
-                  ? gt("{bytes} combined process peaks", { bytes: formatBytes(allT3.peakRssBytes) })
+                allPrismux
+                  ? gt("{bytes} combined process peaks", {
+                      bytes: formatBytes(allPrismux.peakRssBytes),
+                    })
                   : undefined
               }
             />
             <IconStat
               icon={<ActivityIcon className="size-3.5" />}
               label={gt("Process count")}
-              value={allT3 ? String(allT3.processCount) : "..."}
+              value={allPrismux ? String(allPrismux.processCount) : "..."}
               detail={
-                allT3
+                allPrismux
                   ? gt("{processStarts} starts · {processExits} exits", {
-                      processStarts: allT3.processStarts,
-                      processExits: allT3.processExits,
+                      processStarts: allPrismux.processStarts,
+                      processExits: allPrismux.processExits,
                     })
                   : undefined
               }
@@ -1157,18 +1185,26 @@ function ResourceTelemetryDiagnosticsBody({
             <IconStat
               icon={<HardDriveIcon className="size-3.5" />}
               label={gt("Read throughput")}
-              value={allT3 ? formatRate(allT3.ioReadBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioReadBytes)} observed` : undefined}
+              value={allPrismux ? formatRate(allPrismux.ioReadBytesPerSecond) : "..."}
+              detail={
+                allPrismux
+                  ? gt("{bytes} observed", { bytes: formatBytes(allPrismux.ioReadBytes) })
+                  : undefined
+              }
             />
             <IconStat
               icon={<DatabaseIcon className="size-3.5" />}
               label={gt("Write throughput")}
-              value={allT3 ? formatRate(allT3.ioWriteBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioWriteBytes)} observed` : undefined}
+              value={allPrismux ? formatRate(allPrismux.ioWriteBytesPerSecond) : "..."}
+              detail={
+                allPrismux
+                  ? gt("{bytes} observed", { bytes: formatBytes(allPrismux.ioWriteBytes) })
+                  : undefined
+              }
               tone={
-                allT3 && allT3.ioWriteBytesPerSecond >= 10 * 1_024 * 1_024
+                allPrismux && allPrismux.ioWriteBytesPerSecond >= 10 * 1_024 * 1_024
                   ? "danger"
-                  : allT3 && allT3.ioWriteBytesPerSecond >= 1_024 * 1_024
+                  : allPrismux && allPrismux.ioWriteBytesPerSecond >= 1_024 * 1_024
                     ? "warning"
                     : "default"
               }
@@ -1176,21 +1212,15 @@ function ResourceTelemetryDiagnosticsBody({
             <IconStat
               icon={<GaugeIcon className="size-3.5" />}
               label={gt("CPU speed limit")}
-              value={
-                snapshot
-                  ? speedLimit === null
-                    ? gt("Unknown")
-                    : `${speedLimit.toFixed(0)}%`
-                  : "..."
-              }
+              value={speedLimitDisplay ? speedLimitDisplay.value : "..."}
               detail={
-                snapshot
+                thermalStateText
                   ? gt("{thermalState} thermal state", {
-                      thermalState: snapshot.power.thermalState,
+                      thermalState: thermalStateText,
                     })
                   : undefined
               }
-              tone={speedLimit !== null && speedLimit < 80 ? "warning" : "default"}
+              tone={speedLimitDisplay?.tone ?? "default"}
             />
           </div>
           {telemetry.error ? (
@@ -1288,7 +1318,7 @@ function ResourceTelemetryDiagnosticsBody({
                 />
                 <DetailRow
                   label={gt("Thermal")}
-                  value={snapshot.power.thermalState}
+                  value={thermalStateText ?? localizeThermalState(snapshot.power.thermalState, messages)}
                   valueClassName={
                     snapshot.power.thermalState === "serious" ||
                     snapshot.power.thermalState === "critical"
@@ -1334,7 +1364,10 @@ function ResourceTelemetryDiagnosticsBody({
                 />
                 <DetailRow
                   label={gt("Process scan")}
-                  value={`${snapshot.health.retainedProcessCount}/${snapshot.health.scannedProcessCount} retained`}
+                  value={gt("{retained}/{scanned} retained", {
+                    retained: snapshot.health.retainedProcessCount,
+                    scanned: snapshot.health.scannedProcessCount,
+                  })}
                 />
                 <DetailRow
                   label={gt("Inaccessible")}
@@ -1433,7 +1466,7 @@ function ResourceTelemetryDiagnosticsBody({
           <div className="bg-muted/15 px-4 py-3 text-2xs leading-relaxed text-muted-foreground sm:px-5">
             <T>
               Native counters identify which process is reading or writing. These application-level
-              counters identify known T3 operations so process spikes can be correlated with
+              counters identify known Prismux operations so process spikes can be correlated with
               specific persistence and logging paths.
             </T>
           </div>

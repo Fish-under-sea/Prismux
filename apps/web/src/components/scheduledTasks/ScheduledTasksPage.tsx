@@ -11,10 +11,13 @@ import { AsyncResult } from "effect/reactivity";
 import { useMessages } from "gt-react";
 import {
   AlertCircleIcon,
+  ArrowRightIcon,
   CalendarClockIcon,
   Clock3Icon,
+  LayoutTemplateIcon,
   PlusIcon,
   SearchIcon,
+  WebhookIcon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -22,6 +25,7 @@ import { useEffect, useState } from "react";
 import { cn } from "~/lib/utils";
 import { useProjects } from "../../state/entities";
 import { environmentIdsKey } from "../../state/environmentAtomList";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionStatusDot";
@@ -46,8 +50,11 @@ import { PrismuxStageFrame, useWorkspaceTopbarPortal } from "../workspace/Worksp
 import {
   filterScheduledTasks,
   isScheduledTasksEscapeTarget,
+  resolveScheduledTasksEffectiveEnvironments,
+  resolveScheduledTasksScopeSearch,
   summarizeScheduledTasks,
   useScheduledTasksPageCopy,
+  type ScheduledTaskQuickPreset,
   type ScheduledTasksStatusFilter,
 } from "./scheduledTasksPage.logic";
 
@@ -62,15 +69,30 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const topbarPortal = useWorkspaceTopbarPortal();
-  const { scope, environments, connectedEnvironments, environment, selectScope } =
-    useSettingsScope();
+  const {
+    scope,
+    environments: scopedEnvironments,
+    connectedEnvironments: scopedConnectedEnvironments,
+    selectScope,
+  } = useSettingsScope();
+  const { environments: availableEnvironments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const allProjects = useProjects();
+
+  const { environments, connectedEnvironments, defaultEnvironment } =
+    resolveScheduledTasksEffectiveEnvironments({
+      scopedEnvironments,
+      scopedConnectedEnvironments,
+      availableEnvironments,
+      primaryEnvironmentId,
+    });
 
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ScheduledTasksStatusFilter>("all");
   const [editor, setEditor] = useState<{
     environmentId: EnvironmentId;
     task: ScheduledTask | null;
+    preset?: ScheduledTaskQuickPreset | null;
   } | null>(null);
 
   const projectTitleByKey = new Map<string, string>();
@@ -78,7 +100,6 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
     projectTitleByKey.set(`${project.environmentId}:${project.id}`, project.title);
   }
 
-  const defaultEnvironment = environment ?? connectedEnvironments[0];
   const linkedEnvironmentId = target.environmentId ?? defaultEnvironment?.environmentId;
   const linkedEnvironmentConnected = environments.some(
     (entry) =>
@@ -95,7 +116,8 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
     (task) =>
       task.id === target.taskId &&
       linkedEnvironmentId !== undefined &&
-      matchesScheduledTaskScope(scope, linkedEnvironmentId, task.projectId),
+      (scope.kind === "unavailable" ||
+        matchesScheduledTaskScope(scope, linkedEnvironmentId, task.projectId)),
   );
 
   const [openedLinkTaskId, setOpenedLinkTaskId] = useState<ScheduledTaskId | undefined>();
@@ -158,7 +180,9 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
     const queryResult = idx < 0 ? null : queries[idx]!;
     const data = queryResult === null ? null : AsyncResult.getOrElse(queryResult, () => null);
     const scopedTasks = data?.tasks.filter((task) =>
-      matchesScheduledTaskScope(scope, envEntry.environmentId, task.projectId),
+      scope.kind === "unavailable"
+        ? true
+        : matchesScheduledTaskScope(scope, envEntry.environmentId, task.projectId),
     );
     const filteredTasks = scopedTasks
       ? filterScheduledTasks(scopedTasks, { query, statusFilter })
@@ -195,6 +219,20 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
   const selectedMachineValue =
     scope.kind === "environment" ? scope.environmentId : "all";
 
+  const createDisabledTooltip =
+    connectedEnvironments.length === 0
+      ? copy.noEnvironmentsTitle
+      : copy.noCreatePermissionTooltip;
+
+  const openNewTaskEditor = (preset?: ScheduledTaskQuickPreset | null) => {
+    if (!creationEnvironment) return;
+    setEditor({
+      environmentId: creationEnvironment.environmentId,
+      task: null,
+      preset: preset ?? null,
+    });
+  };
+
   const statusChips: ReadonlyArray<{
     readonly id: ScheduledTasksStatusFilter;
     readonly label: string;
@@ -214,40 +252,61 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
       >
         <div
           data-testid="prismux-scheduled-tasks-page"
-          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
         >
-          {/* Header Bar — aligned 1:1 with Workspace Board & Tasks standalone work panels */}
+          {/* Unified Full-Bleed Header Bar — aligned 1:1 with TasksPage & WorkspaceBoardPage */}
           <header className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5">
-            <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5">
               <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
                 <CalendarClockIcon className="size-4" aria-hidden="true" />
               </span>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
-                    {copy.pageTitle}
-                  </h1>
-                  <span
-                    data-testid="scheduled-tasks-summary-badge"
-                    className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-2xs font-medium text-foreground/85 tabular-nums"
-                  >
-                    {copy.summaryBadge(summary.enabled, summary.total)}
+
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                  {copy.pageTitle}
+                </h1>
+                <span
+                  data-testid="scheduled-tasks-summary-badge"
+                  className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-2xs font-medium text-foreground/85 tabular-nums"
+                >
+                  {copy.summaryBadge(summary.enabled, summary.total)}
+                </span>
+                {summary.failed > 0 ? (
+                  <span className="inline-flex shrink-0 items-center rounded-full border border-destructive/35 bg-destructive/12 px-2 py-0.5 text-2xs font-medium text-destructive tabular-nums">
+                    {copy.failedCountBadge(summary.failed)}
+                  </span>
+                ) : null}
+              </div>
+
+              {defaultEnvironment ? (
+                <div
+                  data-testid="scheduled-tasks-active-env-pill"
+                  data-pmx-work-panel-control="1"
+                  className="hidden h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border/75 bg-card px-2.5 text-xs text-muted-foreground shadow-xs sm:inline-flex"
+                >
+                  <ConnectionStatusDot
+                    dotClassName={connectionPhaseDotClassName(defaultEnvironment.connection.phase)}
+                    tooltipText={connectionStatusTitle(defaultEnvironment.connection, messages)}
+                  />
+                  <EnvironmentMachineIcon
+                    kind={resolveEnvironmentMachineKind(defaultEnvironment.serverConfig)}
+                    className="size-3.5 shrink-0 text-foreground/75"
+                  />
+                  <span className="truncate font-medium text-foreground">
+                    {availableEnvironments.length > 1 && selectedMachineValue === "all"
+                      ? copy.allEnvironmentsLabel
+                      : defaultEnvironment.label}
                   </span>
                 </div>
-                <p className="hidden truncate text-2xs text-muted-foreground md:block">
-                  {copy.pageSubtitle}
-                </p>
-              </div>
+              ) : null}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {environments.length > 1 ? (
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {availableEnvironments.length > 1 ? (
                 <Select
                   value={selectedMachineValue}
                   onValueChange={(value) => {
-                    selectScope({
-                      machine: value === "all" || !value ? "all" : (value as EnvironmentId),
-                    });
+                    selectScope(resolveScheduledTasksScopeSearch(value));
                   }}
                 >
                   <SelectTrigger
@@ -259,13 +318,14 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                     <SelectValue>
                       {selectedMachineValue === "all"
                         ? copy.allEnvironmentsLabel
-                        : (environments.find((e) => e.environmentId === selectedMachineValue)
-                            ?.label ?? copy.allEnvironmentsLabel)}
+                        : (availableEnvironments.find(
+                            (e) => e.environmentId === selectedMachineValue,
+                          )?.label ?? copy.allEnvironmentsLabel)}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     <SelectItem value="all">{copy.allEnvironmentsLabel}</SelectItem>
-                    {environments.map((entry) => (
+                    {availableEnvironments.map((entry) => (
                       <SelectItem key={entry.environmentId} value={entry.environmentId}>
                         {entry.label}
                       </SelectItem>
@@ -283,10 +343,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                         size="xs"
                         data-testid="scheduled-tasks-new-button"
                         disabled={!creationEnvironment}
-                        onClick={() =>
-                          creationEnvironment &&
-                          setEditor({ environmentId: creationEnvironment.environmentId, task: null })
-                        }
+                        onClick={() => openNewTaskEditor()}
                       >
                         <PlusIcon className="size-3.5" />
                         <span>{copy.newTaskAction}</span>
@@ -296,7 +353,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                 />
                 {!creationEnvironment ? (
                   <TooltipPopup side="bottom" sideOffset={6}>
-                    {copy.noEnvironmentsTitle}
+                    {createDisabledTooltip}
                   </TooltipPopup>
                 ) : null}
               </Tooltip>
@@ -323,260 +380,331 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
             </div>
           </header>
 
-          {/* Filter & Search Toolbar */}
-          <div className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border/55 px-4 py-2.5">
+          {/* Full-Width Work-Panel Content Area (zero wasted centered side margins, matches TasksPage) */}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4">
+            {/* Joined Filter & Search Chrome */}
             <div
-              role="group"
-              aria-label={copy.pageTitle}
-              className="flex flex-wrap items-center gap-1.5"
+              data-testid="scheduled-tasks-filter-chrome"
+              data-pmx-work-panel-card="1"
+              className="flex flex-none flex-wrap items-center justify-between gap-2.5 rounded-t-xl border border-border/75 bg-card px-3.5 py-2.5"
             >
-              {statusChips.map((chip) => {
-                const active = statusFilter === chip.id;
-                return (
-                  <button
-                    key={chip.id}
-                    type="button"
-                    aria-pressed={active}
-                    data-testid={`scheduled-tasks-filter-${chip.id}`}
-                    data-pmx-work-panel-control={active ? undefined : "1"}
-                    onClick={() => setStatusFilter(chip.id)}
-                    className={cn(
-                      "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                      active
-                        ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-                        : "border-border/75 text-foreground/90 shadow-xs hover:bg-accent hover:text-foreground",
-                    )}
-                  >
-                    <span>{chip.label}</span>
-                    <span
+              <div
+                role="group"
+                aria-label={copy.pageTitle}
+                className="flex min-w-0 flex-wrap items-center gap-1.5"
+              >
+                {statusChips.map((chip) => {
+                  const active = statusFilter === chip.id;
+                  return (
+                    <button
+                      key={chip.id}
+                      type="button"
+                      aria-pressed={active}
+                      data-testid={`scheduled-tasks-filter-${chip.id}`}
+                      data-pmx-work-panel-control={active ? undefined : "1"}
+                      onClick={() => setStatusFilter(chip.id)}
                       className={cn(
-                        "rounded-full px-1.5 py-px text-3xs leading-none font-semibold tabular-nums",
+                        "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                         active
-                          ? "bg-primary-foreground/20 text-primary-foreground"
-                          : "bg-muted/85 text-foreground/75",
+                          ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
+                          : "border-border/75 bg-card text-foreground/90 shadow-xs hover:bg-accent hover:text-foreground",
                       )}
                     >
-                      {chip.count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="relative flex w-full max-w-xs items-center sm:w-64">
-              <SearchIcon className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
-              <input
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={copy.searchPlaceholder}
-                aria-label={copy.searchPlaceholder}
-                data-testid="scheduled-tasks-search-input"
-                data-pmx-work-panel-control="1"
-                className="h-8 w-full rounded-lg border border-input bg-background pr-7 pl-8 text-xs text-foreground shadow-xs outline-none placeholder:text-muted-foreground/75 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              />
-              {query.trim().length > 0 ? (
-                <button
-                  type="button"
-                  aria-label={copy.clearSearchLabel}
-                  onClick={() => setQuery("")}
-                  className="absolute right-1.5 inline-flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <XIcon className="size-3" />
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          {/* Main Scrollable Content */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 scrollbar-gutter-both">
-            <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-              {linkedTaskMissing ? (
-                <div
-                  role="status"
-                  data-pmx-work-panel-card="1"
-                  className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-card px-4 py-3 text-xs"
-                >
-                  <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
-                  <div className="space-y-0.5">
-                    <p className="font-semibold text-foreground">{copy.taskUnavailableTitle}</p>
-                    <p className="text-muted-foreground">{copy.taskUnavailableDescription}</p>
-                  </div>
-                </div>
-              ) : null}
-
-              {environments.length === 0 ? (
-                <div
-                  data-testid="scheduled-tasks-empty-no-env"
-                  data-pmx-work-panel-card="1"
-                  className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border/75 bg-card px-6 py-14 text-center"
-                >
-                  <span className="grid size-11 place-items-center rounded-full bg-muted/70 text-muted-foreground">
-                    <Clock3Icon className="size-5" />
-                  </span>
-                  <div className="max-w-md space-y-1">
-                    <h2 className="text-sm font-semibold text-foreground">
-                      {copy.noEnvironmentsTitle}
-                    </h2>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {copy.noEnvironmentsDescription}
-                    </p>
-                  </div>
-                </div>
-              ) : anyLoading && allScopedTasks.length === 0 ? (
-                <div
-                  role="status"
-                  data-pmx-work-panel-card="1"
-                  className="flex items-center justify-center gap-2 rounded-xl border border-border/75 bg-card px-6 py-12 text-xs text-muted-foreground"
-                >
-                  <Clock3Icon className="size-4 animate-pulse" />
-                  <span>{copy.loadingLabel}</span>
-                </div>
-              ) : allScopedTasks.length === 0 ? (
-                <div
-                  data-testid="scheduled-tasks-empty-list"
-                  data-pmx-work-panel-card="1"
-                  className="flex flex-col items-center justify-center gap-3.5 rounded-xl border border-border/75 bg-card px-6 py-14 text-center"
-                >
-                  <span className="grid size-11 place-items-center rounded-full bg-primary/14 text-primary">
-                    <CalendarClockIcon className="size-5" />
-                  </span>
-                  <div className="max-w-md space-y-1">
-                    <h2 className="text-sm font-semibold text-foreground">{copy.emptyTitle}</h2>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {copy.emptyDescription}
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!creationEnvironment}
-                    onClick={() =>
-                      creationEnvironment &&
-                      setEditor({ environmentId: creationEnvironment.environmentId, task: null })
-                    }
-                  >
-                    <PlusIcon className="size-3.5" />
-                    <span>{copy.newTaskAction}</span>
-                  </Button>
-                </div>
-              ) : allFilteredTasks.length === 0 && isFiltering ? (
-                <div
-                  data-testid="scheduled-tasks-empty-filtered"
-                  data-pmx-work-panel-card="1"
-                  className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border/75 bg-card px-6 py-12 text-center"
-                >
-                  <div className="max-w-md space-y-1">
-                    <h2 className="text-sm font-semibold text-foreground">{copy.noMatchesTitle}</h2>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {copy.noMatchesDescription}
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    data-pmx-work-panel-control="1"
-                    onClick={() => {
-                      setQuery("");
-                      setStatusFilter("all");
-                    }}
-                  >
-                    {copy.clearFiltersAction}
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-5">
-                  {envStates.map(({ environment: envEntry, connected, timeZone, filteredTasks, error }) => {
-                    const showEnvHeader = environments.length > 1 || !connected || error !== null;
-                    const { primary, secondary } = settingsScopeEnvironmentLabels(
-                      envEntry,
-                      environments,
-                    );
-                    const tasksToShow = filteredTasks ?? [];
-                    if (connected && error === null && tasksToShow.length === 0) {
-                      return null;
-                    }
-                    return (
-                      <section
-                        key={envEntry.environmentId}
-                        className="flex flex-col gap-2.5"
-                        aria-label={primary}
-                      >
-                        {showEnvHeader ? (
-                          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <EnvironmentMachineIcon
-                                kind={resolveEnvironmentMachineKind(envEntry.serverConfig)}
-                                className="size-4 shrink-0 text-muted-foreground"
-                              />
-                              <span className="truncate text-xs font-semibold text-foreground">
-                                {primary}
-                              </span>
-                              <span className="hidden truncate text-2xs text-muted-foreground sm:inline">
-                                <ScheduledTaskEnvironmentSubtitle
-                                  environment={envEntry}
-                                  secondary={secondary}
-                                />
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <ConnectionStatusDot
-                                dotClassName={connectionPhaseDotClassName(envEntry.connection.phase)}
-                                tooltipText={connectionStatusTitle(envEntry.connection, messages)}
-                              />
-                              <span>{connectionStatusTitle(envEntry.connection, messages)}</span>
-                            </div>
-                          </div>
-                        ) : null}
-
-                        {!connected ? (
-                          <div
-                            data-pmx-work-panel-card="1"
-                            className="rounded-lg border border-border/70 bg-card px-4 py-3 text-xs text-muted-foreground"
-                          >
-                            {copy.disconnectedPrefix} · {primary}
-                          </div>
-                        ) : error !== null ? (
-                          <div
-                            role="alert"
-                            data-pmx-work-panel-card="1"
-                            className="rounded-xl border border-destructive/45 bg-card px-4 py-3 text-xs text-destructive"
-                          >
-                            {copy.errorPrefix}: {error}
-                          </div>
-                        ) : (
-                          <div className="flex flex-col gap-2.5">
-                            {tasksToShow.map((task) => (
-                              <ScheduledTaskRow
-                                key={task.id}
-                                variant="panel"
-                                environmentId={envEntry.environmentId}
-                                task={task}
-                                timeZone={timeZone}
-                                projectTitle={projectTitleByKey.get(
-                                  `${envEntry.environmentId}:${task.projectId}`,
-                                )}
-                                onEdit={() =>
-                                  setEditor({ environmentId: envEntry.environmentId, task })
-                                }
-                              />
-                            ))}
-                          </div>
+                      {chip.id === "webhook" ? (
+                        <WebhookIcon className="size-3.5 shrink-0 opacity-85" aria-hidden="true" />
+                      ) : null}
+                      <span>{chip.label}</span>
+                      <span
+                        className={cn(
+                          "rounded-full px-1.5 py-px text-3xs leading-none font-semibold tabular-nums",
+                          active
+                            ? "bg-primary-foreground/20 text-primary-foreground"
+                            : "bg-muted/85 text-foreground/75",
                         )}
-                      </section>
-                    );
-                  })}
+                      >
+                        {chip.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="relative flex min-w-0 flex-1 basis-52 items-center sm:max-w-xs md:max-w-sm">
+                <SearchIcon className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={copy.searchPlaceholder}
+                  aria-label={copy.searchPlaceholder}
+                  data-testid="scheduled-tasks-search-input"
+                  data-pmx-work-panel-control="1"
+                  className="h-8 w-full rounded-lg border border-input bg-card pr-7 pl-8 text-xs text-foreground shadow-xs outline-none placeholder:text-muted-foreground/75 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                />
+                {query.trim().length > 0 ? (
+                  <button
+                    type="button"
+                    aria-label={copy.clearSearchLabel}
+                    onClick={() => setQuery("")}
+                    className="absolute right-1.5 inline-flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Joined Full-Width Functional Body Shell */}
+            <div
+              data-pmx-work-panel-card="1"
+              className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-xl border border-t-0 border-border/75 bg-card shadow-xs"
+            >
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <div className="flex w-full flex-col gap-4">
+                  {linkedTaskMissing ? (
+                    <div
+                      role="status"
+                      data-pmx-work-panel-control="1"
+                      className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-card px-4 py-3 text-xs"
+                    >
+                      <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
+                      <div className="space-y-0.5">
+                        <p className="font-semibold text-foreground">{copy.taskUnavailableTitle}</p>
+                        <p className="text-muted-foreground">{copy.taskUnavailableDescription}</p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {environments.length === 0 ? (
+                    <div
+                      data-testid="scheduled-tasks-empty-no-env"
+                      className="flex min-h-70 flex-col items-center justify-center gap-3 px-6 py-12 text-center"
+                    >
+                      <span className="grid size-11 place-items-center rounded-full bg-muted/70 text-muted-foreground">
+                        <Clock3Icon className="size-5" />
+                      </span>
+                      <div className="max-w-md space-y-1">
+                        <h2 className="text-sm font-semibold text-foreground">
+                          {copy.noEnvironmentsTitle}
+                        </h2>
+                        <p className="text-xs leading-relaxed text-muted-foreground">
+                          {copy.noEnvironmentsDescription}
+                        </p>
+                      </div>
+                    </div>
+                  ) : anyLoading && allScopedTasks.length === 0 ? (
+                    <div
+                      role="status"
+                      className="flex min-h-56 items-center justify-center gap-2 px-6 py-12 text-xs text-muted-foreground"
+                    >
+                      <Clock3Icon className="size-4 animate-pulse" />
+                      <span>{copy.loadingLabel}</span>
+                    </div>
+                  ) : allScopedTasks.length === 0 ? (
+                    <div
+                      data-testid="scheduled-tasks-empty-list"
+                      className="flex w-full flex-col gap-6 py-4"
+                    >
+                      <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/75 px-6 py-8 text-center">
+                        <span className="grid size-11 place-items-center rounded-full bg-primary/14 text-primary">
+                          <CalendarClockIcon className="size-5" />
+                        </span>
+                        <div className="max-w-xl space-y-1.5">
+                          <h2 className="text-sm font-semibold text-foreground">
+                            {copy.emptyTitle}
+                          </h2>
+                          <p className="text-xs leading-relaxed text-muted-foreground">
+                            {copy.emptyDescription}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          data-testid="scheduled-tasks-empty-create-cta"
+                          disabled={!creationEnvironment}
+                          onClick={() => openNewTaskEditor()}
+                          className="mt-1"
+                        >
+                          <PlusIcon className="size-3.5" />
+                          <span>{copy.createFirstTaskCta}</span>
+                        </Button>
+                      </div>
+
+                      {/* Full-width Quick Templates Grid */}
+                      <div className="space-y-2.5">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground/85">
+                          <LayoutTemplateIcon className="size-3.5 text-primary" aria-hidden="true" />
+                          <span>{copy.quickTemplatesHeading}</span>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                          {copy.quickTemplates.map((preset) => (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              disabled={!creationEnvironment}
+                              data-testid={`scheduled-tasks-template-${preset.id}`}
+                              data-pmx-work-panel-control="1"
+                              onClick={() => openNewTaskEditor(preset)}
+                              className="group flex cursor-pointer flex-col justify-between gap-3 rounded-xl border border-border/75 bg-card p-4 text-left shadow-xs transition-all hover:border-primary/50 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/80 px-2 py-0.5 text-3xs font-medium text-foreground/85">
+                                    {preset.scheduleMode === "webhook" ? (
+                                      <WebhookIcon className="size-3 text-primary" />
+                                    ) : (
+                                      <Clock3Icon className="size-3 text-primary" />
+                                    )}
+                                    <span>{preset.scheduleBadge}</span>
+                                  </span>
+                                  <ArrowRightIcon className="size-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+                                </div>
+                                <h3 className="text-xs font-semibold text-foreground">
+                                  {preset.title}
+                                </h3>
+                                <p className="text-2xs leading-relaxed text-muted-foreground">
+                                  {preset.description}
+                                </p>
+                              </div>
+                              <span className="text-2xs font-medium text-primary">
+                                {copy.useTemplateAction}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : allFilteredTasks.length === 0 && isFiltering ? (
+                    <div
+                      data-testid="scheduled-tasks-empty-filtered"
+                      className="flex min-h-60 flex-col items-center justify-center gap-3 px-6 py-12 text-center"
+                    >
+                      <div className="max-w-md space-y-1">
+                        <h2 className="text-sm font-semibold text-foreground">
+                          {copy.noMatchesTitle}
+                        </h2>
+                        <p className="text-xs leading-relaxed text-muted-foreground">
+                          {copy.noMatchesDescription}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        data-pmx-work-panel-control="1"
+                        onClick={() => {
+                          setQuery("");
+                          setStatusFilter("all");
+                        }}
+                      >
+                        {copy.clearFiltersAction}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex w-full flex-col gap-5">
+                      {envStates.map(
+                        ({ environment: envEntry, connected, timeZone, filteredTasks, error }) => {
+                          const showEnvHeader =
+                            environments.length > 1 || !connected || error !== null;
+                          const { primary, secondary } = settingsScopeEnvironmentLabels(
+                            envEntry,
+                            environments,
+                          );
+                          const tasksToShow = filteredTasks ?? [];
+                          if (connected && error === null && tasksToShow.length === 0) {
+                            return null;
+                          }
+                          return (
+                            <section
+                              key={envEntry.environmentId}
+                              className="flex w-full flex-col gap-2.5"
+                              aria-label={primary}
+                            >
+                              {showEnvHeader ? (
+                                <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <EnvironmentMachineIcon
+                                      kind={resolveEnvironmentMachineKind(envEntry.serverConfig)}
+                                      className="size-4 shrink-0 text-muted-foreground"
+                                    />
+                                    <span className="truncate text-xs font-semibold text-foreground">
+                                      {primary}
+                                    </span>
+                                    <span className="hidden truncate text-2xs text-muted-foreground sm:inline">
+                                      <ScheduledTaskEnvironmentSubtitle
+                                        environment={envEntry}
+                                        secondary={secondary}
+                                      />
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                    <ConnectionStatusDot
+                                      dotClassName={connectionPhaseDotClassName(
+                                        envEntry.connection.phase,
+                                      )}
+                                      tooltipText={connectionStatusTitle(
+                                        envEntry.connection,
+                                        messages,
+                                      )}
+                                    />
+                                    <span>
+                                      {connectionStatusTitle(envEntry.connection, messages)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              {!connected ? (
+                                <div
+                                  data-pmx-work-panel-control="1"
+                                  className="rounded-lg border border-border/70 bg-card px-4 py-3 text-xs text-muted-foreground"
+                                >
+                                  {copy.disconnectedPrefix} · {primary}
+                                </div>
+                              ) : error !== null ? (
+                                <div
+                                  role="alert"
+                                  data-pmx-work-panel-control="1"
+                                  className="rounded-xl border border-destructive/45 bg-card px-4 py-3 text-xs text-destructive"
+                                >
+                                  {copy.errorPrefix}: {error}
+                                </div>
+                              ) : (
+                                <div className="flex w-full flex-col gap-2.5">
+                                  {tasksToShow.map((task) => (
+                                    <ScheduledTaskRow
+                                      key={task.id}
+                                      variant="panel"
+                                      environmentId={envEntry.environmentId}
+                                      task={task}
+                                      timeZone={timeZone}
+                                      projectTitle={projectTitleByKey.get(
+                                        `${envEntry.environmentId}:${task.projectId}`,
+                                      )}
+                                      onEdit={() =>
+                                        setEditor({ environmentId: envEntry.environmentId, task })
+                                      }
+                                    />
+                                  ))}
+                                </div>
+                              )}
+                            </section>
+                          );
+                        },
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
 
           {editor ? (
             <ScheduledTaskEditorDialog
-              key={`${editor.environmentId}:${editor.task?.id ?? "new"}`}
+              key={`${editor.environmentId}:${editor.task?.id ?? editor.preset?.id ?? "new"}`}
               initialEnvironmentId={editor.environmentId}
               task={editor.task}
+              initialPreset={editor.preset}
               onClose={closeEditor}
             />
           ) : null}
@@ -588,7 +716,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
 
 export function ScheduledTasksPage(props: ScheduledTasksPageProps) {
   const [scopeSearch, setScopeSearch] = useState<SettingsScopeSearch>(() =>
-    props.environmentId ? { machine: props.environmentId } : { machine: "all" },
+    resolveScheduledTasksScopeSearch(props.environmentId),
   );
 
   return (

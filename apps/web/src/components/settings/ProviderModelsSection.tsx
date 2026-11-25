@@ -456,14 +456,19 @@ export function ProviderModelsSection({
   };
 
   const groupLabel = (label: string, isFirst: boolean) => (
-    <div className={cn("px-2 pb-1.5 text-2xs text-muted-foreground", isFirst ? "pt-1" : "pt-5")}>
+    <div
+      className={cn(
+        "px-2.5 pb-1.5 text-2xs font-medium tracking-wide text-muted-foreground/70",
+        isFirst ? "pt-1" : "pt-4",
+      )}
+    >
       {label}
     </div>
   );
 
   return (
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
         {showFilter ? (
           <Input
             value={filter}
@@ -492,7 +497,7 @@ export function ProviderModelsSection({
               {allBuiltInModelsHidden ? gt("Enable all") : gt("Disable all")}
             </Button>
           ) : null}
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground/75 tabular-nums">
             {gt("{count, plural, one {{count} model} other {{count} models}}", {
               count: models.length,
             })}
@@ -522,7 +527,7 @@ export function ProviderModelsSection({
       </div>
       <div
         ref={listRef}
-        className="mt-2 -mx-2 max-h-64 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1"
+        className="mt-2.5 -mx-2.5 max-h-64 space-y-0.5 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1"
       >
         {visibleModels.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
@@ -762,7 +767,7 @@ const ProviderModelRow = memo(function ProviderModelRow({
     <div
       data-model-slug={model.slug}
       className={cn(
-        "group/model-row grid h-7 grid-cols-[1rem_1.5rem_minmax(0,1fr)_auto_minmax(5.5rem,auto)_auto] items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-muted/30",
+        "group/model-row grid h-8 grid-cols-[1rem_1.5rem_minmax(0,1fr)_auto_minmax(5.5rem,auto)_auto] items-center gap-2 rounded-lg px-2.5 transition-colors hover:bg-foreground/[0.04]",
         isHidden && "opacity-50",
       )}
     >

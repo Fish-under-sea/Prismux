@@ -5,8 +5,8 @@ import {
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
-import { FxDriver, type FxDriverEnv } from "@prismux/provider-fx/server";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "@prismux/provider-opencode/server";
+import { PiDriver, type PiDriverEnv } from "@prismux/provider-pi/server";
 import type {
   AnyProviderDriver,
   ProviderUsageReaderEnv,
@@ -17,15 +17,15 @@ export type BuiltInDriversEnv =
   | AntigravityDriverEnv
   | ClaudeDriverEnv
   | CodexDriverEnv
-  | FxDriverEnv
-  | OpenCodeDriverEnv;
+  | OpenCodeDriverEnv
+  | PiDriverEnv;
 
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   CodexDriver,
   ClaudeDriver,
-  FxDriver,
   OpenCodeDriver,
   AntigravityDriver,
+  PiDriver,
   AcpRegistryDriver,
 ];
 
@@ -33,7 +33,8 @@ export type BuiltInUsageReadersEnv =
   | ProviderUsageReaderEnv<typeof ClaudeDriver>
   | ProviderUsageReaderEnv<typeof CodexDriver>
   | ProviderUsageReaderEnv<typeof OpenCodeDriver>
-  | ProviderUsageReaderEnv<typeof AntigravityDriver>;
+  | ProviderUsageReaderEnv<typeof AntigravityDriver>
+  | ProviderUsageReaderEnv<typeof PiDriver>;
 
 /** Order matters: aggregation keeps the first duplicate record. */
 export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
@@ -41,6 +42,7 @@ export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
 > = [
   ClaudeDriver,
   CodexDriver,
+  PiDriver,
   OpenCodeDriver,
   AntigravityDriver,
 ];

@@ -370,4 +370,68 @@ describe("ComposerCommandMenu rendering & grouping", () => {
     expect(switcherBlockMatch?.[0]).not.toContain("{brandLabel}</span>");
     expect(switcherBlockMatch?.[0]).toContain("aria-label={brandLabel}");
   });
+
+  it("renders DSH/ACP slash command input hints, localized /permission title, and DSH personal skills", () => {
+    const acpRegistry = ProviderDriverKind.make("acpRegistry");
+    const items: ComposerCommandItem[] = [
+      {
+        id: "provider-slash-command:acpRegistry:plan",
+        type: "provider-slash-command",
+        provider: acpRegistry,
+        command: {
+          name: "plan",
+          description: "Enter or leave plan mode",
+          input: { hint: "[off|message]" },
+        },
+        label: "/plan",
+        description: "Enter or leave plan mode",
+      },
+      {
+        id: "provider-slash-command:acpRegistry:permission",
+        type: "provider-slash-command",
+        provider: acpRegistry,
+        command: {
+          name: "permission",
+          description: "Switch the permission preset",
+          input: { hint: "<preset>" },
+        },
+        label: "/permission",
+        description: "Switch the permission preset",
+      },
+      {
+        id: "slash:skills-folder",
+        type: "skill-group-toggle",
+        expanded: true,
+        personalCount: 1,
+        builtinCount: 0,
+        totalCount: 1,
+        label: "收起技能",
+        description: "个人 1 · 自带 0",
+      },
+      {
+        id: "skill:acpRegistry:tdd",
+        type: "skill",
+        provider: acpRegistry,
+        skill: {
+          name: "tdd",
+          description: "【高频】测试驱动开发",
+          path: "C:/Users/Fish/.dsh/skills/tdd/SKILL.md",
+          scope: "user",
+          enabled: true,
+        },
+        label: "/skill:tdd",
+        description: "【高频】测试驱动开发",
+      },
+    ];
+
+    const html = renderMenu({ items, triggerKind: "slash-command" });
+    expect(html).toContain("制定计划");
+    expect(html).toContain("[off|message]");
+    expect(html).toContain("权限策略");
+    expect(html).toContain("&lt;preset&gt;");
+    expect(html.match(/data-slash-input-hint="1"/g)).toHaveLength(2);
+    expect(html).toContain("个人技能");
+    expect(html).toContain("tdd");
+    expect(html).toContain("【高频】测试驱动开发");
+  });
 });

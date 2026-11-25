@@ -1,12 +1,14 @@
 import { T, useGT } from "gt-react";
-import { PlusIcon, XIcon } from "lucide-react";
+import { XIcon } from "lucide-react";
 import { useRef, useState, type PointerEvent } from "react";
 
 import { hexToHsv, hsvToHex, type HsvColor } from "../../lib/color";
+import { cn } from "../../lib/utils";
 import { ColorHueSlider, ColorSaturationValuePlane } from "../ui/color-picker";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 
 const FALLBACK_ACCENT_COLOR = "#2563eb";
@@ -112,6 +114,7 @@ function ProviderCustomColorPicker(props: {
   readonly onCommit: (value: string) => void;
   readonly onClear: () => void;
   readonly onClose: () => void;
+  readonly className?: string | undefined;
 }) {
   const gt = useGT();
   const normalized = normalizeProviderAccentColor(props.value);
@@ -121,30 +124,53 @@ function ProviderCustomColorPicker(props: {
         if (!open) props.onClose();
       }}
     >
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost-muted"
-            style={normalized ? { backgroundColor: normalized } : undefined}
-            aria-label={
-              normalized
-                ? gt("Change accent color for {provider}", { provider: props.displayName })
-                : gt("Add accent color for {provider}", { provider: props.displayName })
-            }
-          >
-            {normalized ? (
-              <span className="sr-only">
-                <T>Change accent color</T>
-              </span>
-            ) : (
-              <PlusIcon aria-hidden />
-            )}
-          </Button>
-        }
-      />
-      <PopoverPopup side="bottom" align="start" sideOffset={6} padding="none">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <button
+                  type="button"
+                  data-accent-color-swatch="true"
+                  data-accent-color-active={normalized ? "true" : "false"}
+                  className={cn(
+                    "group/swatch relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-all outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                    normalized
+                      ? "border-black/15 shadow-xs hover:scale-105 dark:border-white/25"
+                      : "border-border/75 bg-background/80 p-0.75 shadow-2xs hover:scale-105 hover:border-foreground/30",
+                    props.className,
+                  )}
+                  style={normalized ? { backgroundColor: normalized } : undefined}
+                  aria-label={
+                    normalized
+                      ? gt("Change accent color for {provider}", { provider: props.displayName })
+                      : gt("Add accent color for {provider}", { provider: props.displayName })
+                  }
+                >
+                  {normalized ? (
+                    <span className="sr-only">
+                      <T>Change accent color</T>
+                    </span>
+                  ) : (
+                    <span
+                      aria-hidden="true"
+                      className="flex size-full items-center justify-center rounded-full opacity-80 transition-opacity group-hover/swatch:opacity-100"
+                      style={{
+                        background:
+                          "conic-gradient(from 0deg, #f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #f43f5e)",
+                      }}
+                    >
+                      <span className="size-2 rounded-full bg-background/90 shadow-inner" />
+                    </span>
+                  )}
+                </button>
+              }
+            />
+          }
+        />
+        <TooltipPopup side="top">{gt("Accent color")}</TooltipPopup>
+      </Tooltip>
+      <PopoverPopup side="bottom" align="end" sideOffset={6} padding="none">
         <ProviderCustomColorPanel
           value={normalized ?? FALLBACK_ACCENT_COLOR}
           onPreview={props.onPreview}
@@ -180,8 +206,9 @@ export function ProviderAccentColorPicker(props: {
   readonly onCommit: (value: string) => void;
   readonly description?: string;
   readonly layout?: "stacked" | "inline";
+  readonly className?: string | undefined;
 }) {
-  const { description, displayName, layout = "stacked", onCommit } = props;
+  const { className, description, displayName, layout = "stacked", onCommit } = props;
   const value = props.value ?? "";
   // The draft shows a dragged or just-committed color only while `value` is
   // still the one it was picked against, so the persisted value (or any outside
@@ -206,6 +233,7 @@ export function ProviderAccentColorPicker(props: {
     <ProviderCustomColorPicker
       displayName={displayName}
       value={normalizeProviderAccentColor(shownValue)}
+      className={className}
       onPreview={(color) =>
         setDraft({
           color: normalizeProviderAccentColor(color) ?? "",
