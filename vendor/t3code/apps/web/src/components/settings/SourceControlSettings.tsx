@@ -43,6 +43,8 @@ import { SourceControlAppSignInSettings } from "./SourceControlAppSignInSettings
 import { SourceControlTokenSettings } from "./SourceControlTokenSettings";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
+import { WorktreesSettingsSections } from "./WorktreesSettings";
+import { DiffsSettingsSections } from "./SettingsPanels";
 import {
   SettingsPageContainer,
   SettingsSearchTarget,
@@ -660,6 +662,12 @@ export function SourceControlSettingsPanel() {
       )}
 
       <SourceControlWritingSettingsSection />
+      <div id="worktrees" className="space-y-8">
+        <WorktreesSettingsSections />
+      </div>
+      <div id="diffs" className="space-y-8">
+        <DiffsSettingsSections />
+      </div>
     </SettingsPageContainer>
   );
 }

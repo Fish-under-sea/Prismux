@@ -13,6 +13,7 @@ import {
 import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import {
+  buildCodexSpeedTierSelectionUpdate,
   getFastModeDescriptor,
   getProviderOptionCurrentLabel,
   isFastModeActive,
@@ -177,8 +178,12 @@ export function describeComposerEffort(
   const fast =
     fastModeState !== false ||
     display.speedLabel === "Fast" ||
-    display.speedLabel === "Ultrafast";
-  const ultrafast = fastModeState === "ultrafast" || display.speedLabel === "Ultrafast";
+    display.speedLabel === "Ultrafast" ||
+    display.speedLabel === "Ultra Fast";
+  const ultrafast =
+    fastModeState === "ultrafast" ||
+    display.speedLabel === "Ultrafast" ||
+    display.speedLabel === "Ultra Fast";
   // Agent options such as modes live in the picker; the trigger adds only the context window.
   const contextWindow =
     visibility.contextWindowDescriptor &&
@@ -641,8 +646,8 @@ function SpeedSegment(props: {
   } as const;
   const content = (
     <>
-      {speed === "Fast" || speed === "Ultrafast" ? (
-        <FastBolt ultra={speed === "Ultrafast"} />
+      {speed === "Fast" || speed === "Fast Mode" || speed === "Ultrafast" || speed === "Ultra Fast" ? (
+        <FastBolt ultra={speed === "Ultrafast" || speed === "Ultra Fast"} />
       ) : null}
       {props.label}
     </>
@@ -656,53 +661,105 @@ function SpeedSegment(props: {
   );
 }
 
+const ENGLISH_MODE_LABELS = {
+  fastMode: "Fast Mode",
+  fast: "Fast",
+  ultraFast: "Ultra Fast",
+  ultracode: "Ultracode",
+  off: "Off",
+  on: "On",
+} as const;
+
 function SpeedControl(props: { traits: TraitsSelectionInput }) {
-  const gt = useGT();
   const traits = useTraitsSelection(props.traits);
   const { speedSelect, fastToggle } = splitSpeed(
     traits.selectDescriptors,
     traits.booleanDescriptors,
   );
-  if (traits.modelIsUnavailable || (!speedSelect && !fastToggle)) return null;
-  return (
-    <div
-      role="radiogroup"
-      aria-label={speedSelect?.label ?? fastToggle?.label}
-      className="flex rounded-lg bg-input/40 p-0.5"
-    >
-      {speedSelect
-        ? selectableProviderOptionChoices(speedSelect).map((option) => (
-            <SpeedSegment
-              key={option.id}
-              checked={option.id === traits.selectValue(speedSelect)}
-              label={option.label}
-              description={option.description}
-              onPick={() => traits.changeSelect(speedSelect, option.id)}
-            />
-          ))
-        : fastToggle
-          ? ([false, true] as const).map((value) => (
-              <SpeedSegment
-                key={String(value)}
-                checked={(fastToggle.currentValue === true) === value}
-                speed={value ? "Fast" : "Standard"}
-                label={
-                  value
-                    ? gt("Fast", { $context: "response speed" })
-                    : gt("Standard", { $context: "response speed" })
-                }
-                onPick={() => traits.changeBoolean(fastToggle.id, value)}
-              />
-            ))
-          : null}
-    </div>
-  );
+  if (traits.modelIsUnavailable) return null;
+
+  if (props.traits.provider === "claudeAgent") {
+    if (!fastToggle) return null;
+    const active = fastToggle.currentValue === true;
+    return (
+      <div className="flex rounded-lg bg-input/40 p-0.5">
+        <button
+          type="button"
+          aria-pressed={active}
+          data-checked={active || undefined}
+          className={FOOTER_SEGMENT}
+          onClick={() => traits.changeBoolean(fastToggle.id, !active)}
+        >
+          <FastBolt ultra={false} />
+          {ENGLISH_MODE_LABELS.fastMode}
+        </button>
+      </div>
+    );
+  }
+
+  if (props.traits.provider === "codex" && speedSelect) {
+    const fastModeControl = getFastModeDescriptor(traits.caps, props.traits.modelOptions);
+    if (!fastModeControl || fastModeControl.kind !== "serviceTier") return null;
+    const { fastChoice, ultrafastChoice } = fastModeControl;
+    if (!fastChoice && !ultrafastChoice) return null;
+    const currentValue = traits.selectValue(speedSelect);
+    const fastActive =
+      fastChoice !== null &&
+      (currentValue === fastChoice.id ||
+        isFastServiceTierChoice({ id: currentValue, label: "" }));
+    const ultrafastActive =
+      ultrafastChoice !== null &&
+      (currentValue === ultrafastChoice.id ||
+        isUltrafastServiceTierChoice({ id: currentValue, label: "" }));
+    return (
+      <div
+        role="group"
+        aria-label={speedSelect.label}
+        className="flex rounded-lg bg-input/40 p-0.5"
+      >
+        {fastChoice ? (
+          <SpeedSegment
+            checked={fastActive}
+            speed="Fast"
+            label={ENGLISH_MODE_LABELS.fast}
+            description={fastChoice.description}
+            onPick={() => {
+              const update = buildCodexSpeedTierSelectionUpdate(
+                traits.caps,
+                fastActive ? "default" : "fast",
+              );
+              traits.changeSelect(speedSelect, String(update.value));
+            }}
+          />
+        ) : null}
+        {ultrafastChoice ? (
+          <SpeedSegment
+            checked={ultrafastActive}
+            speed="Ultra Fast"
+            label={ENGLISH_MODE_LABELS.ultraFast}
+            description={ultrafastChoice.description}
+            onPick={() => {
+              const update = buildCodexSpeedTierSelectionUpdate(
+                traits.caps,
+                ultrafastActive ? "default" : "ultrafast",
+              );
+              traits.changeSelect(speedSelect, String(update.value));
+            }}
+          />
+        ) : null}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function UltracodeControl(props: { traits: TraitsSelectionInput }) {
   const traits = useTraitsSelection(props.traits);
   const { ultracodeToggle } = splitSpeed(traits.selectDescriptors, traits.booleanDescriptors);
-  if (traits.modelIsUnavailable || !ultracodeToggle) return null;
+  if (props.traits.provider !== "claudeAgent" || traits.modelIsUnavailable || !ultracodeToggle) {
+    return null;
+  }
   const on = ultracodeToggle.currentValue === true;
   return (
     <div className="flex rounded-lg bg-input/40 p-0.5">
@@ -714,7 +771,7 @@ function UltracodeControl(props: { traits: TraitsSelectionInput }) {
         onClick={() => traits.changeBoolean(ultracodeToggle.id, !on)}
       >
         <WorkflowIcon aria-hidden="true" className="size-3" />
-        {ultracodeToggle.label}
+        {ENGLISH_MODE_LABELS.ultracode}
       </button>
     </div>
   );
@@ -784,6 +841,7 @@ export function ComposerPickerFooter(props: {
 }
 
 const KNOWN_CANONICAL_EFFORT_IDS = new Set([
+  "default",
   "off",
   "none",
   "minimal",
@@ -791,27 +849,101 @@ const KNOWN_CANONICAL_EFFORT_IDS = new Set([
   "medium",
   "high",
   "xhigh",
+  "extra_high",
+  "extra-high",
   "max",
+  "ultra",
   "ultracode",
   "ultrathink",
   "extreme",
   "auto",
 ]);
 
-function formatChoiceForSlider(
-  choice: { readonly id: string; readonly label: string; readonly description?: string | undefined },
-): ReasoningEffortOption {
-  const isCanonical = KNOWN_CANONICAL_EFFORT_IDS.has(choice.id.trim().toLowerCase());
-  const englishLabel = isCanonical
-    ? formatEffortLabel(choice.id)
-    : choice.label || formatEffortLabel(choice.id);
+/**
+ * Compact English tick labels for the discrete reasoning-effort slider stops
+ * so all 7 Codex/GPT levels (`Mini` / `Low` / `Med` / `High` / `XHigh` / `Max` / `Ultra`)
+ * fit on one row with zero ellipsis truncation while full names stay in the tooltip.
+ */
+export const SHORT_EFFORT_TICK_LABELS: Readonly<Record<string, string>> = {
+  default: "Default",
+  off: "Off",
+  none: "None",
+  minimal: "Mini",
+  low: "Low",
+  medium: "Med",
+  high: "High",
+  xhigh: "XHigh",
+  extra_high: "XHigh",
+  "extra-high": "XHigh",
+  "extra high": "XHigh",
+  max: "Max",
+  ultra: "Ultra",
+  ultracode: "Ultracode",
+  ultrathink: "Ultrathink",
+  extreme: "Extreme",
+  auto: "Auto",
+};
+
+const FULL_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  default: "Default",
+  off: "Off",
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  extra_high: "Extra High",
+  "extra-high": "Extra High",
+  "extra high": "Extra High",
+  max: "Max",
+  ultra: "Ultra",
+  ultracode: "Ultracode",
+  ultrathink: "Ultrathink",
+  extreme: "Extreme",
+  auto: "Auto",
+};
+
+export function formatEffortTickLabel(
+  id: string,
+  fallbackLabel?: string,
+): { readonly tickLabel: string; readonly fullLabel: string } {
+  const key = id.trim().toLowerCase();
+  const isCanonical = KNOWN_CANONICAL_EFFORT_IDS.has(key);
+  const fullLabel =
+    FULL_EFFORT_LABELS[key] ??
+    (isCanonical ? formatEffortLabel(id) : fallbackLabel?.trim() || formatEffortLabel(id));
+  const tickLabel = SHORT_EFFORT_TICK_LABELS[key] ?? fullLabel;
+  return { tickLabel, fullLabel };
+}
+
+export function formatChoiceForSlider(choice: {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string | undefined;
+}): ReasoningEffortOption {
+  const { tickLabel, fullLabel } = formatEffortTickLabel(choice.id, choice.label);
+  const tooltipDescription = choice.description?.trim()
+    ? `${fullLabel}: ${choice.description.trim()}`
+    : fullLabel;
   return {
     value: choice.id,
-    label: englishLabel,
-    shortLabel: englishLabel,
-    ...(choice.description !== undefined ? { description: choice.description } : {}),
+    label: tickLabel,
+    shortLabel: tickLabel,
+    description: tooltipDescription,
   };
 }
+
+const SPEED_PILL_BASE =
+  "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+const SPEED_PILL_INACTIVE =
+  "border-border/75 bg-background/60 text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground";
+const SPEED_PILL_FAST_ACTIVE =
+  "border-warning/55 bg-warning/15 text-warning-foreground hover:bg-warning/20";
+const SPEED_PILL_ULTRA_ACTIVE =
+  "border-primary/55 bg-primary/15 text-primary hover:bg-primary/20";
+const SPEED_PILL_MODE_ACTIVE =
+  "border-primary/50 bg-primary/14 text-foreground hover:bg-primary/18";
 
 function UnifiedSpeedRow(props: {
   traitsInput: TraitsSelectionInput;
@@ -819,138 +951,155 @@ function UnifiedSpeedRow(props: {
 }) {
   const gt = useGT();
   const { traitsInput, traits } = props;
-  const { speedSelect, fastToggle } = splitSpeed(
+  const { speedSelect, fastToggle, ultracodeToggle } = splitSpeed(
     traits.selectDescriptors,
     traits.booleanDescriptors,
   );
-  const fastModeControl = getFastModeDescriptor(traits.caps, traitsInput.modelOptions);
-  if (traits.modelIsUnavailable || !fastModeControl) return null;
+  if (traits.modelIsUnavailable) return null;
 
-  const speedLabel = gt("Speed", { $context: "model speed setting" });
-  const fastText = gt("Fast", { $context: "response speed" });
-
-  // Single-click Orca-style "⚡ Fast" pill toggle (Claude fastMode boolean OR 2-tier Codex serviceTier).
-  if (fastModeControl.kind === "boolean" && fastToggle) {
-    const active = fastToggle.currentValue === true;
+  // Claude: ONLY 2 independent English Title-Case toggles when supported (`Fast Mode` + `Ultracode`).
+  if (traitsInput.provider === "claudeAgent") {
+    if (!fastToggle && !ultracodeToggle) return null;
+    const fastActive = fastToggle?.currentValue === true;
+    const ultracodeActive = ultracodeToggle?.currentValue === true;
     return (
       <div
         data-composer-speed-row="true"
-        className="flex min-h-7 items-center justify-between gap-3 pt-2 border-t border-border/55"
-      >
-        <span className="font-medium text-muted-foreground text-xs">{speedLabel}</span>
-        <button
-          type="button"
-          aria-pressed={active}
-          data-composer-fast-mode-toggle="true"
-          data-checked={active || undefined}
-          onClick={() => traits.changeBoolean(fastToggle.id, !active)}
-          className={cn(
-            "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-            active
-              ? "border-amber-500/55 bg-amber-500/15 text-amber-700 hover:bg-amber-500/20 dark:border-amber-400/50 dark:bg-amber-400/18 dark:text-amber-300"
-              : "border-border/75 bg-background/60 text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground",
-          )}
-        >
-          <ZapIcon
-            aria-hidden="true"
-            className={cn("size-3.5 shrink-0", active && "fill-current")}
-          />
-          <span>{fastText}</span>
-        </button>
-      </div>
-    );
-  }
-
-  if (fastModeControl.kind === "serviceTier" && speedSelect) {
-    const currentValue = traits.selectValue(speedSelect);
-    if (fastModeControl.isSingleFastToggle && fastModeControl.fastChoice) {
-      const fastChoiceId = fastModeControl.fastChoice.id;
-      const standardChoiceId = fastModeControl.standardChoice.id;
-      const active = currentValue === fastChoiceId;
-      return (
-        <div
-          data-composer-speed-row="true"
-          className="flex min-h-7 items-center justify-between gap-3 pt-2 border-t border-border/55"
-        >
-          <span className="font-medium text-muted-foreground text-xs">{speedLabel}</span>
-          <button
-            type="button"
-            aria-pressed={active}
-            data-composer-fast-mode-toggle="true"
-            data-checked={active || undefined}
-            onClick={() =>
-              traits.changeSelect(speedSelect, active ? standardChoiceId : fastChoiceId)
-            }
-            className={cn(
-              "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-              active
-                ? "border-amber-500/55 bg-amber-500/15 text-amber-700 hover:bg-amber-500/20 dark:border-amber-400/50 dark:bg-amber-400/18 dark:text-amber-300"
-                : "border-border/75 bg-background/60 text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground",
-            )}
-          >
-            <ZapIcon
-              aria-hidden="true"
-              className={cn("size-3.5 shrink-0", active && "fill-current")}
-            />
-            <span>{fastText}</span>
-          </button>
-        </div>
-      );
-    }
-
-    const choices = [fastModeControl.standardChoice, ...fastModeControl.speedChoices];
-    return (
-      <div
-        data-composer-speed-row="true"
+        data-composer-speed-provider="claudeAgent"
         className="flex min-h-7 flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/55"
       >
-        <span className="font-medium text-muted-foreground text-xs">{speedLabel}</span>
-        <div
-          role="radiogroup"
-          aria-label={speedLabel}
-          className="flex rounded-full border border-border/70 bg-background/50 p-0.5"
-        >
-          {choices.map((choice) => {
-            const checked = currentValue === choice.id;
-            const isUltra = isUltrafastServiceTierChoice(choice);
-            const isFastTier = isFastServiceTierChoice(choice);
-            const displayLabel = isFastTier && !isUltra ? fastText : choice.label;
-            return (
-              <button
-                key={choice.id}
-                type="button"
-                role="radio"
-                aria-checked={checked}
-                data-checked={checked || undefined}
-                onClick={() => traits.changeSelect(speedSelect, choice.id)}
-                className={cn(
-                  "inline-flex h-6 cursor-pointer items-center gap-1 rounded-full px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                  checked
-                    ? isFastTier
-                      ? "bg-amber-500/18 text-amber-700 dark:bg-amber-400/20 dark:text-amber-300"
-                      : "bg-accent text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {isFastTier ? <FastBolt ultra={isUltra} /> : null}
-                <span>{displayLabel}</span>
-              </button>
-            );
-          })}
+        <span className="font-medium text-muted-foreground text-xs">
+          {gt("Speed", { $context: "model speed setting" })}
+        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {fastToggle ? (
+            <button
+              type="button"
+              aria-pressed={fastActive}
+              data-composer-fast-mode-toggle="true"
+              data-checked={fastActive || undefined}
+              onClick={() => traits.changeBoolean(fastToggle.id, !fastActive)}
+              className={cn(
+                SPEED_PILL_BASE,
+                fastActive ? SPEED_PILL_FAST_ACTIVE : SPEED_PILL_INACTIVE,
+              )}
+            >
+              <ZapIcon
+                aria-hidden="true"
+                className={cn("size-3.5 shrink-0", fastActive && "fill-current")}
+              />
+              <span>{ENGLISH_MODE_LABELS.fastMode}</span>
+            </button>
+          ) : null}
+          {ultracodeToggle ? (
+            <button
+              type="button"
+              aria-pressed={ultracodeActive}
+              data-composer-ultracode-toggle="true"
+              data-checked={ultracodeActive || undefined}
+              onClick={() => traits.changeBoolean(ultracodeToggle.id, !ultracodeActive)}
+              className={cn(
+                SPEED_PILL_BASE,
+                ultracodeActive ? SPEED_PILL_MODE_ACTIVE : SPEED_PILL_INACTIVE,
+              )}
+            >
+              <WorkflowIcon aria-hidden="true" className="size-3.5 shrink-0" />
+              <span>{ENGLISH_MODE_LABELS.ultracode}</span>
+            </button>
+          ) : null}
         </div>
       </div>
     );
   }
 
+  // GPT / Codex: ONLY 2 mutually exclusive English Title-Case toggles when supported (`Fast` + `Ultra Fast`).
+  // Resets to `serviceTier = "default"` when toggled off; hides `Flex` / `Priority`.
+  if (traitsInput.provider === "codex") {
+    const fastModeControl = getFastModeDescriptor(traits.caps, traitsInput.modelOptions);
+    if (!speedSelect || !fastModeControl || fastModeControl.kind !== "serviceTier") {
+      return null;
+    }
+    const { fastChoice, ultrafastChoice } = fastModeControl;
+    if (!fastChoice && !ultrafastChoice) return null;
+    const currentValue = traits.selectValue(speedSelect);
+    const fastActive =
+      fastChoice !== null &&
+      (currentValue === fastChoice.id ||
+        isFastServiceTierChoice({ id: currentValue, label: "" }));
+    const ultrafastActive =
+      ultrafastChoice !== null &&
+      (currentValue === ultrafastChoice.id ||
+        isUltrafastServiceTierChoice({ id: currentValue, label: "" }));
+
+    return (
+      <div
+        data-composer-speed-row="true"
+        data-composer-speed-provider="codex"
+        className="flex min-h-7 flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/55"
+      >
+        <span className="font-medium text-muted-foreground text-xs">
+          {gt("Speed", { $context: "model speed setting" })}
+        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {fastChoice ? (
+            <button
+              type="button"
+              aria-pressed={fastActive}
+              data-composer-fast-mode-toggle="true"
+              data-codex-speed-tier="fast"
+              data-checked={fastActive || undefined}
+              onClick={() => {
+                const update = buildCodexSpeedTierSelectionUpdate(
+                  traits.caps,
+                  fastActive ? "default" : "fast",
+                );
+                traits.changeSelect(speedSelect, String(update.value));
+              }}
+              className={cn(
+                SPEED_PILL_BASE,
+                fastActive ? SPEED_PILL_FAST_ACTIVE : SPEED_PILL_INACTIVE,
+              )}
+            >
+              <ZapIcon
+                aria-hidden="true"
+                className={cn("size-3.5 shrink-0", fastActive && "fill-current")}
+              />
+              <span>{ENGLISH_MODE_LABELS.fast}</span>
+            </button>
+          ) : null}
+          {ultrafastChoice ? (
+            <button
+              type="button"
+              aria-pressed={ultrafastActive}
+              data-composer-ultrafast-mode-toggle="true"
+              data-codex-speed-tier="ultrafast"
+              data-checked={ultrafastActive || undefined}
+              onClick={() => {
+                const update = buildCodexSpeedTierSelectionUpdate(
+                  traits.caps,
+                  ultrafastActive ? "default" : "ultrafast",
+                );
+                traits.changeSelect(speedSelect, String(update.value));
+              }}
+              className={cn(
+                SPEED_PILL_BASE,
+                ultrafastActive ? SPEED_PILL_ULTRA_ACTIVE : SPEED_PILL_INACTIVE,
+              )}
+            >
+              <FastBolt ultra />
+              <span>{ENGLISH_MODE_LABELS.ultraFast}</span>
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  // Other agents: render ZERO extra speed/mode toggles.
   return null;
 }
 
-/**
- * Orca-aligned unified bottom section of the Model Picker popover:
- * 1. Model-aware dynamic `<PrismuxReasoningEffortSlider />` (pixel-matrix radiation + 8-family running sprite + discrete clickable stops)
- * 2. Codex & Claude Fast Mode `Speed` (`⚡ Fast`) capsule row (hidden when unsupported)
- * 3. Any extra provider-specific options (Ultracode, Context Window, Agent Mode) preserved below.
- */
+/** Orca-aligned bottom footer: model-aware effort slider and provider-curated speed/mode toggles. */
 export function ComposerUnifiedOptionsFooter(props: { traits: TraitsSelectionInput | null }) {
   const gt = useGT();
   const locale = useLocale();
@@ -978,8 +1127,11 @@ function ComposerUnifiedOptionsFooterBody(props: {
   const { traitsInput, modelLabel, locale, gt, messages } = props;
   const traits = useTraitsSelection(traitsInput);
   const sliderLocale: ReasoningEffortLocale = locale.toLowerCase().startsWith("zh") ? "zh" : "en";
-  const { effort, others } = columnControls(traits.selectDescriptors, traits.booleanDescriptors);
-  const { ultracodeToggle } = splitSpeed(traits.selectDescriptors, traits.booleanDescriptors);
+  const { effort } = columnControls(traits.selectDescriptors, traits.booleanDescriptors);
+  const { speedSelect, fastToggle, ultracodeToggle } = splitSpeed(
+    traits.selectDescriptors,
+    traits.booleanDescriptors,
+  );
   const fastModeControl = getFastModeDescriptor(traits.caps, traitsInput.modelOptions);
 
   if (traits.modelIsUnavailable) {
@@ -1002,10 +1154,14 @@ function ComposerUnifiedOptionsFooterBody(props: {
   }
 
   const hasEffort = effort !== null;
-  const hasFastMode = fastModeControl !== null;
-  const hasUltracode = ultracodeToggle !== null;
-  const hasOthers = others.length > 0;
-  if (!hasEffort && !hasFastMode && !hasUltracode && !hasOthers) {
+  const hasCuratedSpeedRow =
+    (traitsInput.provider === "claudeAgent" &&
+      (fastToggle !== null || ultracodeToggle !== null)) ||
+    (traitsInput.provider === "codex" &&
+      speedSelect !== null &&
+      fastModeControl?.kind === "serviceTier" &&
+      (fastModeControl.fastChoice !== null || fastModeControl.ultrafastChoice !== null));
+  if (!hasEffort && !hasCuratedSpeedRow) {
     return null;
   }
 
@@ -1028,13 +1184,13 @@ function ComposerUnifiedOptionsFooterBody(props: {
     sliderOptions = [
       {
         value: "off",
-        label: "Off",
-        shortLabel: "Off",
+        label: ENGLISH_MODE_LABELS.off,
+        shortLabel: ENGLISH_MODE_LABELS.off,
       },
       {
         value: "on",
-        label: "On",
-        shortLabel: "On",
+        label: ENGLISH_MODE_LABELS.on,
+        shortLabel: ENGLISH_MODE_LABELS.on,
       },
     ];
     sliderValue = on ? "on" : "off";
@@ -1070,55 +1226,6 @@ function ComposerUnifiedOptionsFooterBody(props: {
       ) : null}
 
       <UnifiedSpeedRow traitsInput={traitsInput} traits={traits} />
-
-      {hasUltracode && ultracodeToggle ? (
-        <div className="flex min-h-7 items-center justify-between gap-3 pt-1.5 border-t border-border/55">
-          <span className="font-medium text-muted-foreground text-xs">{ultracodeToggle.label}</span>
-          <button
-            type="button"
-            aria-pressed={ultracodeToggle.currentValue === true}
-            data-checked={ultracodeToggle.currentValue === true || undefined}
-            onClick={() =>
-              traits.changeBoolean(ultracodeToggle.id, !(ultracodeToggle.currentValue === true))
-            }
-            className={cn(
-              "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-              ultracodeToggle.currentValue === true
-                ? "border-primary/50 bg-primary/14 text-foreground"
-                : "border-border/75 bg-background/60 text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <WorkflowIcon aria-hidden="true" className="size-3.5" />
-            <span>
-              {ultracodeToggle.currentValue === true
-                ? gt("On", { $context: "option state" })
-                : gt("Off", { $context: "option state" })}
-            </span>
-          </button>
-        </div>
-      ) : null}
-
-      {hasOthers ? (
-        <div className="flex flex-col gap-0.5 pt-1.5 border-t border-border/55">
-          {others.map((control, index) =>
-            control.kind === "boolean" ? (
-              <OptionSwitchRow
-                key={control.descriptor.id}
-                descriptor={control.descriptor}
-                traits={traits}
-                tabStop={index === 0}
-              />
-            ) : (
-              <OptionMenuRow
-                key={control.descriptor.id}
-                descriptor={control.descriptor}
-                traits={traits}
-                tabStop={index === 0}
-              />
-            ),
-          )}
-        </div>
-      ) : null}
     </div>
   );
 }

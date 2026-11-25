@@ -6,10 +6,12 @@ import {
   type EnvironmentId,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
+  type ServerSettings,
   MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
 import {
   formatProviderUpdateRequiredNotice,
   providerUpdateChannelLags,
@@ -34,10 +36,13 @@ import {
 } from "../../prismux/agentBrand";
 import {
   formatModelSourceSubtitle,
+  orderModelOptionsByPreference,
+  orderProviderInstanceEntries,
   partitionAgentScopedModels,
 } from "./ProviderModelPicker.logic";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
+import { isDshProviderInstance } from "./ProviderInstanceIcon";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
 import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";
 import {
@@ -58,7 +63,7 @@ import {
 import { ModelEsque } from "./providerIconUtils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { registerModelPickerContent } from "../../modelPickerVisibility";
-import { primaryServerKeybindingsAtom } from "../../state/server";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
 import {
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
@@ -181,6 +186,7 @@ function adjacentModelPickerProvider(input: {
 }
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
+const noModelPickerServerSettingsAtom = Atom.make<ServerSettings | null>(null);
 const MODEL_LIST_ESTIMATED_ITEM_SIZE = 32;
 // Rendered heights in `--spacing` units. Chrome is the search box and list padding, plus a 1px border.
 const ROW_UNITS = 8;
@@ -398,23 +404,32 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     searchInputRef,
     keybindings: providedKeybindings,
     modelOptionsByInstance,
-    instanceEntries,
+    instanceEntries: rawInstanceEntries,
     getModelDisabledReason,
     onInstanceModelChange,
     onToggleModel,
     onRequestClose,
     onOpenProviderSetup,
   } = props;
+  const environmentServerSettings = useAtomValue(
+    props.environmentId
+      ? serverEnvironment.settingsValueAtom(props.environmentId)
+      : noModelPickerServerSettingsAtom,
+  );
+  const instanceEntries = orderProviderInstanceEntries(
+    rawInstanceEntries,
+    environmentServerSettings?.providerOrder,
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const modelListRef = useRef<LegendListRef | null>(null);
   const pickerContentRef = useRef<HTMLDivElement>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes this picker's mount to global keydown handlers
   useLayoutEffect(() => registerModelPickerContent(), []);
   const highlightedModelKeyRef = useRef<string | null>(null);
-  const { favorites } = useEnvironmentModelPreferences(props.environmentId);
-  const activeEntry = props.instanceEntries.find(
-    (entry) => entry.instanceId === props.activeInstanceId,
+  const { favorites, providerModelPreferences } = useEnvironmentModelPreferences(
+    props.environmentId,
   );
+  const activeEntry = instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId);
   const activeModel = resolveModelPickerSelectedModel({
     driverKind: activeEntry?.driverKind,
     model: props.model,
@@ -617,11 +632,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const flatModels = (() => {
     const out: ModelPickerItem[] = [];
     const seenKeys = new Set<string>();
-    for (const [instanceId, models] of modelOptionsByInstance) {
-      const entry = entryByInstanceId.get(instanceId);
-      if (!entry) {
+    for (const entry of instanceEntries) {
+      const instanceId = entry.instanceId;
+      const rawModels = modelOptionsByInstance.get(instanceId);
+      if (!rawModels || rawModels.length === 0) {
         continue;
       }
+      const models = orderModelOptionsByPreference(
+        rawModels,
+        providerModelPreferences[instanceId]?.modelOrder,
+      );
       for (const model of models) {
         const key = modelPickerModelKey(instanceId, model.slug);
         if (
@@ -1251,9 +1271,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                         >
                           <AgentBrandLogo
                             provider={
-                              entry.driverKind === "acpRegistry"
-                                ? entry.displayName || entry.instanceId
-                                : entry.driverKind
+                              isDshProviderInstance({
+                                driverKind: entry.driverKind,
+                                displayName: entry.displayName,
+                                acpRegistryAgentId: entry.acpRegistryAgentId,
+                                instanceId: entry.instanceId,
+                              })
+                                ? "dsh"
+                                : entry.driverKind === "acpRegistry"
+                                  ? entry.acpRegistryAgentId || entry.displayName || entry.instanceId
+                                  : entry.driverKind
                             }
                             size={16}
                           />

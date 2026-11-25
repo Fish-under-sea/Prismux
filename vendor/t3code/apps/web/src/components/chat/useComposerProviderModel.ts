@@ -18,6 +18,7 @@ import {
 } from "../../providerInstances";
 import { type UnifiedSettings } from "@t3tools/contracts/settings";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
+import { orderProviderInstanceEntries } from "./ProviderModelPicker.logic";
 import { resolveComposerProviderSelection } from "../ChatView.logic";
 
 const NO_PROVIDER_MODELS: ServerProvider["models"] = [];
@@ -53,11 +54,11 @@ export function useComposerProviderModel(
     threadStarted,
   } = input;
   const draftModelState = useComposerDraftModelState(threadRef);
-  const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> = providerInstanceEntriesFor(
-    providerStatuses,
-    settings,
-    activeProjectId,
-  );
+  const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> =
+    orderProviderInstanceEntries(
+      providerInstanceEntriesFor(providerStatuses, settings, activeProjectId),
+      settings.providerOrder,
+    );
   const selection = resolveComposerProviderSelection({
     entries: providerInstanceEntries,
     candidateInstanceIds: [

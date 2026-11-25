@@ -41,9 +41,11 @@ import { isValidSearchUrlTemplate } from "@t3tools/shared/preview";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
 import { MoreVertical, Plus as PlusIcon } from "lucide-react";
 import * as Schema from "effect/Schema";
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { m as resolveNow, type MessageResolver } from "../../i18n/messages";
+import { getI18nSnapshot, subscribeI18n } from "../../i18n/runtime";
+import { formatBrowserProfileLabel } from "../../lib/browserProfileLabel";
 
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
@@ -873,7 +875,7 @@ function DeviceIntegrationSettings() {
   const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
   const environmentId = connected ? selected.environmentId : null;
 
-  const { state } = useDeviceState(environmentId);
+  useDeviceState(environmentId);
 
   return (
     <>
@@ -1180,6 +1182,7 @@ function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled
 function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
+  const { locale } = useSyncExternalStore(subscribeI18n, getI18nSnapshot, getI18nSnapshot);
   const userProfiles = useClientSettings((settings) => settings.browserProfiles);
   const defaultProfileId = useClientSettings((settings) => settings.browserDefaultProfileId);
   const settingsHydrated = useClientSettingsHydrated();
@@ -1462,6 +1465,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
         {listedProfiles.map((profile, index) => {
           const builtIn = isBuiltInBrowserProfileId(profile.id);
           const isDefault = profile.id === resolvedDefaultId;
+          const profileLabel = formatBrowserProfileLabel(profile, locale);
           return (
             <div
               key={profile.id}
@@ -1478,14 +1482,14 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       profileWritesDisabled && "opacity-64",
                     )}
                   >
-                    {profile.name}
+                    {profileLabel}
                   </span>
                 ) : (
                   <DraftInput
                     nativeInput
                     size="sm"
                     className="w-full max-w-56"
-                    aria-label={gt("Rename {name}", { name: profile.name })}
+                    aria-label={gt("Rename {name}", { name: profileLabel })}
                     disabled={profileWritesDisabled || importInFlight}
                     maxLength={BROWSER_PROFILE_NAME_MAX_LENGTH}
                     value={profile.name}
@@ -1505,7 +1509,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       size="icon-xs"
                       variant="ghost-muted"
                       disabled={profileWritesDisabled || importInFlight}
-                      aria-label={gt("{name} options", { name: profile.name })}
+                      aria-label={gt("{name} options", { name: profileLabel })}
                     />
                   }
                 >
@@ -1527,7 +1531,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                     onClick={() => {
                       if (serverProfileData.environmentIds.length > 0) {
                         setProfilePendingClear(profile);
-                      } else clearProfileData(profile.id, profile.name);
+                      } else clearProfileData(profile.id, profileLabel);
                     }}
                   >
                     <T>Clear cookies and cache</T>
@@ -1623,7 +1627,11 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
           <AlertDialogHeader>
             <AlertDialogTitle>
               <T>
-                Clear “<Var>{profilePendingClear?.name}</Var>”’s cookies and cache?
+                Clear “
+                <Var>
+                  {profilePendingClear ? formatBrowserProfileLabel(profilePendingClear, locale) : ""}
+                </Var>
+                ”’s cookies and cache?
               </T>
             </AlertDialogTitle>
             <AlertDialogDescription>
@@ -1640,7 +1648,10 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
               variant="destructive"
               onClick={() => {
                 if (profilePendingClear)
-                  clearProfileData(profilePendingClear.id, profilePendingClear.name);
+                  clearProfileData(
+                    profilePendingClear.id,
+                    formatBrowserProfileLabel(profilePendingClear, locale),
+                  );
                 setProfilePendingClear(null);
               }}
             >
@@ -1653,7 +1664,10 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
         <BrowserImportWizard
           source={importSession.source}
           destinationEnvironmentName={importSession.environmentName}
-          targetProfiles={listedProfiles.map((profile) => ({ id: profile.id, name: profile.name }))}
+          targetProfiles={listedProfiles.map((profile) => ({
+            id: profile.id,
+            name: formatBrowserProfileLabel(profile, locale),
+          }))}
           canCreateProfile={settingsHydrated && !atProfileLimit}
           onImport={(input) =>
             runWizardImport(importSession.source, importSession.environmentId, input)
@@ -1721,6 +1735,7 @@ export function BrowserSettingsPanel() {
           <BrowserRecordingInputSettings disabled={desktopOnly} />
         </SettingsUnavailableGroup>
       </SettingsSection>
+      <DeviceIntegrationSettings />
     </SettingsPageContainer>
   );
 }

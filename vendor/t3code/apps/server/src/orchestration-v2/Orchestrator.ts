@@ -16562,6 +16562,74 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
   });
+  const MAX_TRACKED_AUTO_TITLE_RUN_IDS = 2_000;
+  const autoTitleRegeneratedRunIds = new Set<RunId>();
+  const trackAutoTitleRegeneratedRunId = (runId: RunId) => {
+    autoTitleRegeneratedRunIds.add(runId);
+    if (autoTitleRegeneratedRunIds.size > MAX_TRACKED_AUTO_TITLE_RUN_IDS) {
+      const oldest = autoTitleRegeneratedRunIds.values().next().value;
+      if (oldest !== undefined) autoTitleRegeneratedRunIds.delete(oldest);
+    }
+  };
+
+  /**
+   * After each normal completed Agent turn (non-subagent, non-maintenance), asynchronously
+   * queue a deduplicated background title regeneration. Strictly skipped whenever the user
+   * manually renamed the thread (`thread.titleRenamed === true`).
+   */
+  const scheduleAutoThreadTitleRegeneration = Effect.fn(
+    "Orchestrator.scheduleAutoThreadTitleRegeneration",
+  )(function* (threadId: ThreadId, run: OrchestrationV2Run) {
+    if (run.status !== "completed" || run.delegatedTaskId !== undefined) return;
+    if (autoTitleRegeneratedRunIds.has(run.id)) return;
+    const projection = yield* projectionStore.getThreadRecords(threadId, ["runs", "messages"], {
+      messageRoles: ["user", "assistant"],
+    });
+    const { thread } = projection;
+    if (thread.deletedAt !== null || thread.archivedAt !== null) return;
+    if (thread.lineage.relationshipToParent === "subagent") return;
+    // User rename lock: never auto-regenerate or overwrite a user-renamed title.
+    if (thread.titleRenamed === true) return;
+    // Deduplicate against an already in-flight title generation request.
+    if (thread.titleRegeneration !== null && thread.titleRegeneration !== undefined) return;
+    const userMessage = projection.messages.find((message) => message.id === run.userMessageId);
+    if (
+      userMessage === undefined ||
+      isNativeMaintenanceCommand(userMessage) ||
+      userMessage.idleCompaction !== undefined ||
+      userMessage.delegatedCompletion !== undefined ||
+      userMessage.notification !== undefined
+    ) {
+      return;
+    }
+    const hasCompletedAssistantReply = projection.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        !message.streaming &&
+        message.runId === run.id &&
+        message.text.trim().length > 0,
+    );
+    if (!hasCompletedAssistantReply) return;
+    // Debounce bursts: if another turn is already queued or running, wait for it to finish.
+    const hasQueuedOrActiveRun = projection.runs.some(
+      (candidate) =>
+        candidate.id !== run.id &&
+        (candidate.status === "queued" ||
+          candidate.status === "preparing" ||
+          candidate.status === "starting" ||
+          candidate.status === "running"),
+    );
+    if (hasQueuedOrActiveRun) return;
+
+    trackAutoTitleRegeneratedRunId(run.id);
+    yield* dispatchWithReceiptEffect({
+      type: "thread.metadata.update",
+      commandId: CommandId.make(`command:auto-title-regenerate:${run.id}`),
+      threadId,
+      regenerateTitle: true,
+    });
+  });
+
   const handleRunUpdate = Effect.fn("Orchestrator.handleRunUpdate")(
     function* (stored: OrchestrationV2StoredEvent) {
       if (stored.event.type !== "run.updated") return;
@@ -16613,6 +16681,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   endedRunId: run.id,
                   ...(run.status === "failed" ? { failedRunId: run.id } : {}),
                 }),
+              ),
+              Effect.andThen(
+                run.status === "completed"
+                  ? scheduleAutoThreadTitleRegeneration(threadId, run).pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("Failed to schedule automatic thread title regeneration", {
+                          threadId,
+                          runId: run.id,
+                          cause,
+                        }),
+                      ),
+                    )
+                  : Effect.void,
               ),
             ),
           )

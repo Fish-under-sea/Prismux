@@ -17,6 +17,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -58,9 +59,28 @@ import {
   type QuickLaunchOpenTabMatch,
   type QuickLaunchToolId,
 } from "./workspaceQuickLaunch.logic";
+import {
+  PRISMUX_SPLIT_DRAG_EVENT,
+  ROOT_SPLIT_PANE_EDGES,
+  computeClampedSplitRatio,
+  deriveChildSplitEdges,
+  dispatchSplitDragEvent,
+  hasSplitDragMime,
+  readSplitDragDataTransfer,
+  resolveDropPreviewOverlayClass,
+  resolveDropZoneLabel,
+  resolvePaneBodyCornerClasses,
+  resolvePaneDropZone,
+  resolvePaneOuterBorderClasses,
+  type SplitDragEventDetail,
+  type SplitDragPayload,
+  type SplitDropZone,
+  type SplitPaneEdges,
+} from "./splitAnything.logic";
 import { WorkspaceTabBar } from "./WorkspaceTabBar";
 import {
   PrismuxStageFrame,
+  WorkspaceSplitPaneContext,
   WorkspaceTopbarPortalContext,
   type WorkspaceTopbarPortalContextValue,
 } from "./WorkspaceTopbarPortalContext";
@@ -71,6 +91,8 @@ import {
   getLiveComposerDraftStateLookup,
   listLeafPaneIds,
   useWorkspaceTabsStore,
+  WORKSPACE_MAX_SPLIT_PANES,
+  type OpenWorkspaceTabInput,
   type SplitDirection,
   type WorkspaceSplitLayoutNode,
   type WorkspaceTab,
@@ -237,8 +259,10 @@ function SplitResizeHandle(props: {
   readonly direction: SplitDirection;
   readonly ratio: number;
   readonly onCommitRatio: (splitId: string, ratio: number) => void;
+  readonly onResetRatio: (splitId: string) => void;
+  readonly onResizingChange: (resizing: boolean) => void;
 }) {
-  const { splitId, direction, ratio, onCommitRatio } = props;
+  const { splitId, direction, ratio, onCommitRatio, onResetRatio, onResizingChange } = props;
   const isHorizontal = direction === "horizontal";
   const handleRef = useRef<HTMLDivElement | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -255,6 +279,7 @@ function SplitResizeHandle(props: {
     event.preventDefault();
     event.stopPropagation();
     setDragging(true);
+    onResizingChange(true);
     try {
       handle.setPointerCapture(event.pointerId);
     } catch {
@@ -265,9 +290,8 @@ function SplitResizeHandle(props: {
     const computeRatio = (clientX: number, clientY: number): number => {
       const rect = parent.getBoundingClientRect();
       const total = isHorizontal ? rect.width : rect.height;
-      if (total <= 1) return ratio;
       const offset = isHorizontal ? clientX - rect.left : clientY - rect.top;
-      return clampSplitRatio(offset / total);
+      return computeClampedSplitRatio(offset, total, { fallbackRatio: ratio });
     };
 
     const onMove = (moveEvent: PointerEvent) => {
@@ -287,6 +311,7 @@ function SplitResizeHandle(props: {
       if (done) return;
       done = true;
       setDragging(false);
+      onResizingChange(false);
       if (latestRatio !== null) {
         onCommitRatio(splitId, latestRatio);
       }
@@ -317,6 +342,17 @@ function SplitResizeHandle(props: {
     window.addEventListener("blur", cleanup);
   };
 
+  const handleDoubleClick = () => {
+    const handle = handleRef.current;
+    const firstPane = handle?.previousElementSibling as HTMLElement | null;
+    const secondPane = handle?.nextElementSibling as HTMLElement | null;
+    if (firstPane && secondPane) {
+      firstPane.style.flex = "0.5 1 0%";
+      secondPane.style.flex = "0.5 1 0%";
+    }
+    onResetRatio(splitId);
+  };
+
   return (
     <div
       ref={handleRef}
@@ -330,7 +366,7 @@ function SplitResizeHandle(props: {
       data-workspace-split-resizer={splitId}
       data-direction={direction}
       onPointerDown={handlePointerDown}
-      onDoubleClick={() => onCommitRatio(splitId, 0.5)}
+      onDoubleClick={handleDoubleClick}
       onKeyDown={(event) => {
         const step = 0.04;
         if (isHorizontal && event.key === "ArrowLeft") {
@@ -348,10 +384,10 @@ function SplitResizeHandle(props: {
         }
       }}
       className={cn(
-        "group relative z-20 shrink-0 select-none bg-border/60 transition-colors hover:bg-primary/65 focus-visible:bg-primary focus-visible:outline-none",
+        "group relative z-20 shrink-0 select-none bg-border/65 transition-colors hover:bg-primary/70 focus-visible:bg-primary focus-visible:outline-none",
         isHorizontal
-          ? "w-px cursor-col-resize before:absolute before:inset-y-0 before:-inset-x-1"
-          : "h-px cursor-row-resize before:absolute before:inset-x-0 before:-inset-y-1",
+          ? "w-px cursor-col-resize before:absolute before:inset-y-0 before:-inset-x-[3px] before:content-['']"
+          : "h-px cursor-row-resize before:absolute before:inset-x-0 before:-inset-y-[3px] before:content-['']",
         dragging && "bg-primary",
       )}
     />
@@ -389,6 +425,42 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   const tabs = useWorkspaceTabsStore((state) => state.tabs);
   const focusedPaneId = useWorkspaceTabsStore((state) => state.focusedPaneId);
   const primaryPaneId = useWorkspaceTabsStore((state) => state.primaryPaneId);
+  const activeDrag = useWorkspaceTabsStore((state) => state.activeDrag);
+  const isResizingSplit = useWorkspaceTabsStore((state) => state.isResizingSplit);
+
+  const [hoveredDrop, setHoveredDrop] = useState<{
+    readonly paneId: string;
+    readonly zone: SplitDropZone;
+  } | null>(null);
+
+  // Subscribe to cross-module `"prismux:split-drag"` events from SidebarThreadRow, RightPanelTabs,
+  // ThreadTerminalDrawer, and WorkspaceTabBar so drop previews and WebView shields stay in sync.
+  useEffect(() => {
+    const onSplitDrag = (event: Event) => {
+      const detail = (event as CustomEvent<SplitDragEventDetail>).detail;
+      if (!detail) return;
+      useWorkspaceTabsStore.getState().setActiveDrag(detail.active ? detail.payload : null);
+      if (!detail.active) {
+        setHoveredDrop(null);
+      }
+    };
+    const clearDrag = () => {
+      if (useWorkspaceTabsStore.getState().activeDrag !== null) {
+        useWorkspaceTabsStore.getState().setActiveDrag(null);
+      }
+      setHoveredDrop(null);
+    };
+    window.addEventListener(PRISMUX_SPLIT_DRAG_EVENT, onSplitDrag);
+    window.addEventListener("dragend", clearDrag);
+    window.addEventListener("drop", clearDrag);
+    return () => {
+      window.removeEventListener(PRISMUX_SPLIT_DRAG_EVENT, onSplitDrag);
+      window.removeEventListener("dragend", clearDrag);
+      window.removeEventListener("drop", clearDrag);
+    };
+  }, []);
+
+  const effectiveHoveredDrop = activeDrag !== null ? hoveredDrop : null;
 
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projects = useProjects();
@@ -1073,17 +1145,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         return;
       }
 
-      if (activeHostThreadRef) {
-        useRightPanelStore.getState().openAgentSession(activeHostThreadRef, {
-          title: thread.title,
-          providerId: thread.providerId ?? "codex",
-          instanceId: thread.instanceId ?? null,
-          environmentId: thread.environmentId,
-          threadId: thread.threadId,
-        });
-        return;
-      }
-
+      // Secondary split panes host the thread live inline via EmbeddedThreadPaneView (ChatView).
       store.openTab(
         {
           kind: "thread",
@@ -1092,11 +1154,13 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
           instanceId: thread.instanceId ?? null,
           environmentId: thread.environmentId,
           threadId: thread.threadId,
+          hostThreadRef: scopeThreadRef(thread.environmentId, thread.threadId),
+          reuseExisting: false,
         },
         targetPaneId,
       );
     },
-    [activeHostThreadRef, navigate],
+    [navigate],
   );
 
   const handleRunQuickTool = useCallback(
@@ -1105,7 +1169,11 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         void navigate({ to: "/settings" });
         return;
       }
-      if (activeHostThreadRef) {
+      const store = useWorkspaceTabsStore.getState();
+      const openInsidePane =
+        targetPaneId !== store.primaryPaneId || countLeafPanes(store.layout) > 1;
+
+      if (activeHostThreadRef && !openInsidePane) {
         const rightPanel = useRightPanelStore.getState();
         switch (toolId) {
           case "terminal":
@@ -1128,7 +1196,6 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         }
       }
 
-      const store = useWorkspaceTabsStore.getState();
       switch (toolId) {
         case "terminal":
           store.openTab(
@@ -1147,9 +1214,10 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             {
               kind: "diff",
               title: "差异",
-              hostThreadRef: null,
-              environmentId: null,
-              threadId: null,
+              hostThreadRef: activeHostThreadRef,
+              environmentId: activeHostThreadRef?.environmentId ?? null,
+              threadId: activeHostThreadRef?.threadId ?? null,
+              reuseExisting: false,
             },
             targetPaneId,
           );
@@ -1171,6 +1239,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
               kind: "simulator",
               title: "手机模拟器",
               hostThreadRef: activeHostThreadRef,
+              reuseExisting: false,
             },
             targetPaneId,
           );
@@ -1203,22 +1272,130 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   );
 
   const handleSplitPane = useCallback(
-    (_paneId: string, _direction: SplitDirection) => {
-      const preferredAgent = quickLaunchAgents[0];
-      if (preferredAgent) {
-        openAgentInRightSidebar(preferredAgent);
-      } else if (activeHostThreadRef) {
-        useRightPanelStore.getState().show(activeHostThreadRef);
+    (paneId: string, direction: SplitDirection) => {
+      const store = useWorkspaceTabsStore.getState();
+      if (countLeafPanes(store.layout) >= WORKSPACE_MAX_SPLIT_PANES) {
+        return;
       }
+      const sourcePane = store.panes[paneId];
+      const sourceActiveTab = sourcePane?.activeTabId ? store.tabs[sourcePane.activeTabId] : null;
+
+      let initialTab: OpenWorkspaceTabInput;
+      if (direction === "vertical") {
+        initialTab = {
+          kind: "terminal",
+          title: "",
+          shell: "PowerShell",
+          hostThreadRef: activeHostThreadRef,
+          reuseExisting: false,
+        };
+      } else {
+        const alternateThread = historyThreads.find(
+          (candidate) =>
+            !(
+              sourceActiveTab?.environmentId === candidate.environmentId &&
+              sourceActiveTab?.threadId === candidate.threadId
+            ),
+        );
+        if (alternateThread) {
+          initialTab = {
+            kind: "thread",
+            title: alternateThread.title,
+            providerId: alternateThread.providerId ?? null,
+            instanceId: alternateThread.instanceId ?? null,
+            environmentId: alternateThread.environmentId,
+            threadId: alternateThread.threadId,
+            hostThreadRef: scopeThreadRef(alternateThread.environmentId, alternateThread.threadId),
+            reuseExisting: false,
+          };
+        } else if (activeHostThreadRef) {
+          initialTab = {
+            kind: "diff",
+            title: "差异",
+            hostThreadRef: activeHostThreadRef,
+            environmentId: activeHostThreadRef.environmentId,
+            threadId: activeHostThreadRef.threadId,
+            reuseExisting: false,
+          };
+        } else {
+          initialTab = {
+            kind: "terminal",
+            title: "",
+            shell: "PowerShell",
+            hostThreadRef: null,
+            reuseExisting: false,
+          };
+        }
+      }
+
+      store.splitPane(paneId, direction, initialTab, "after");
     },
-    [activeHostThreadRef, openAgentInRightSidebar, quickLaunchAgents],
+    [activeHostThreadRef, historyThreads],
   );
 
   const handleLaunchAgentInSplit = useCallback(
-    (agent: QuickLaunchAgentOption, _fromPaneId: string) => {
-      openAgentInRightSidebar(agent);
+    (agent: QuickLaunchAgentOption, fromPaneId: string) => {
+      const store = useWorkspaceTabsStore.getState();
+      const targetPaneId = store.panes[fromPaneId] ? fromPaneId : store.focusedPaneId;
+      if (countLeafPanes(store.layout) >= WORKSPACE_MAX_SPLIT_PANES) {
+        openAgentInRightSidebar(agent);
+        return;
+      }
+      const resolved = resolveQuickLaunchAgentTarget(agent, instanceEntries);
+      const recentThread = agent.recentThreads[0];
+      if (recentThread) {
+        store.splitPane(
+          targetPaneId,
+          "horizontal",
+          {
+            kind: "thread",
+            title: recentThread.title,
+            providerId: recentThread.providerId ?? resolved.providerId,
+            instanceId: recentThread.instanceId ?? resolved.instanceId,
+            environmentId: recentThread.environmentId,
+            threadId: recentThread.threadId,
+            hostThreadRef: scopeThreadRef(recentThread.environmentId, recentThread.threadId),
+            reuseExisting: false,
+          },
+          "after",
+        );
+        return;
+      }
+      store.splitPane(
+        targetPaneId,
+        "horizontal",
+        {
+          kind: "agent",
+          title: agent.displayName,
+          providerId: resolved.providerId,
+          instanceId: resolved.instanceId,
+          model: resolved.model,
+          hostThreadRef: activeHostThreadRef,
+          reuseExisting: false,
+        },
+        "after",
+      );
     },
-    [openAgentInRightSidebar],
+    [activeHostThreadRef, instanceEntries, openAgentInRightSidebar],
+  );
+
+  const handleDropItemIntoPane = useCallback(
+    (payload: SplitDragPayload, targetPaneId: string, zone: SplitDropZone) => {
+      setHoveredDrop(null);
+      const result = useWorkspaceTabsStore
+        .getState()
+        .dropItemIntoPane(payload, targetPaneId, zone, {
+          fallbackHostThreadRef: activeHostThreadRef,
+        });
+      dispatchSplitDragEvent(false, null);
+      if (result) {
+        const after = useWorkspaceTabsStore.getState();
+        if (result.paneId === after.primaryPaneId) {
+          navigateToTabIfPrimaryRoute(result.paneId, after.tabs[result.tabId]);
+        }
+      }
+    },
+    [activeHostThreadRef, navigateToTabIfPrimaryRoute],
   );
 
   const handleLaunchAgentPrompt = useCallback(
@@ -1331,30 +1508,89 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     ],
   );
 
+  const computeDropZoneForEvent = (
+    paneId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+    dragPayload: SplitDragPayload | null,
+  ): SplitDropZone => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const isSingleTabSelfDrag =
+      dragPayload?.kind === "pane-tab" &&
+      dragPayload.fromPaneId === paneId &&
+      (panes[paneId]?.tabIds.length ?? 0) <= 1;
+    return resolvePaneDropZone(rect, event.clientX, event.clientY, {
+      paneCount,
+      maxSplitPanes: WORKSPACE_MAX_SPLIT_PANES,
+      isSingleTabSelfDrag,
+    });
+  };
+
+  const handlePaneBodyDragOver = (
+    paneId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    const dragPayload = useWorkspaceTabsStore.getState().activeDrag;
+    if (!dragPayload && !hasSplitDragMime(event.dataTransfer.types)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const zone = computeDropZoneForEvent(paneId, event, dragPayload);
+    setHoveredDrop((current) =>
+      current && current.paneId === paneId && current.zone === zone
+        ? current
+        : { paneId, zone },
+    );
+  };
+
+  const handlePaneBodyDragLeave = (
+    paneId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    const related = event.relatedTarget as Node | null;
+    if (related && event.currentTarget.contains(related)) {
+      return;
+    }
+    setHoveredDrop((current) => (current?.paneId === paneId ? null : current));
+  };
+
+  const handlePaneBodyDrop = (
+    paneId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    const payload =
+      readSplitDragDataTransfer(event.dataTransfer) ??
+      useWorkspaceTabsStore.getState().activeDrag;
+    if (!payload) {
+      setHoveredDrop(null);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const zone = computeDropZoneForEvent(paneId, event, payload);
+    handleDropItemIntoPane(payload, paneId, zone);
+  };
+
   const renderNode = (
     node: WorkspaceSplitLayoutNode,
-    edges: {
-      readonly top: boolean;
-      readonly left: boolean;
-      readonly right: boolean;
-    },
+    edges: SplitPaneEdges,
   ): ReactNode => {
     if (node.type === "split") {
       const isHorizontal = node.direction === "horizontal";
+      const childEdges = deriveChildSplitEdges(edges, node.direction);
       return (
         <div
           key={node.id}
           data-workspace-split={node.id}
           data-split-direction={node.direction}
-          className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
+          className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-none"
           style={{ flexDirection: isHorizontal ? "row" : "column" }}
         >
-          <div className="flex min-h-0 min-w-0 overflow-hidden" style={{ flex: `${node.ratio} 1 0%` }}>
-            {renderNode(node.first, {
-              top: edges.top,
-              left: edges.left,
-              right: isHorizontal ? false : edges.right,
-            })}
+          <div
+            className="flex min-h-0 min-w-0 overflow-hidden rounded-none"
+            style={{ flex: `${node.ratio} 1 0%` }}
+          >
+            {renderNode(node.first, childEdges.first)}
           </div>
           <SplitResizeHandle
             splitId={node.id}
@@ -1363,16 +1599,18 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             onCommitRatio={(splitId, nextRatio) =>
               useWorkspaceTabsStore.getState().setSplitRatio(splitId, nextRatio)
             }
+            onResetRatio={(splitId) =>
+              useWorkspaceTabsStore.getState().resetSplitRatio(splitId)
+            }
+            onResizingChange={(resizing) =>
+              useWorkspaceTabsStore.getState().setIsResizingSplit(resizing)
+            }
           />
           <div
-            className="flex min-h-0 min-w-0 overflow-hidden"
+            className="flex min-h-0 min-w-0 overflow-hidden rounded-none"
             style={{ flex: `${1 - node.ratio} 1 0%` }}
           >
-            {renderNode(node.second, {
-              top: isHorizontal ? edges.top : false,
-              left: isHorizontal ? false : edges.left,
-              right: edges.right,
-            })}
+            {renderNode(node.second, childEdges.second)}
           </div>
         </div>
       );
@@ -1386,7 +1624,10 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     const activeTab = pane.activeTabId ? (tabs[pane.activeTabId] ?? null) : null;
     const isPrimaryPane = pane.id === primaryPaneId;
     const isFocused = pane.id === focusedPaneId;
+    const isSplit = paneCount > 1;
     const otherPaneIds = allLeafIds.filter((id) => id !== pane.id);
+    const paneDropZone =
+      effectiveHoveredDrop?.paneId === pane.id ? effectiveHoveredDrop.zone : null;
 
     // Primary pane ALWAYS hosts the real full ChatView / route stage for any conversation tab
     // (thread, draft, or legacy agent) — never a stripped blank agent shell.
@@ -1398,192 +1639,236 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         activeTab.kind === "agent");
 
     return (
-      <section
+      <WorkspaceSplitPaneContext.Provider
         key={pane.id}
-        data-workspace-pane={pane.id}
-        data-primary-pane={isPrimaryPane ? "true" : "false"}
-        data-focused-pane={isFocused ? "true" : "false"}
-        onPointerDownCapture={() => {
-          useWorkspaceTabsStore.getState().focusPane(pane.id);
-        }}
-        className={cn(
-          "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-          paneCount > 1 && isFocused && "ring-1 ring-inset ring-primary/40",
-        )}
+        value={{ inSplit: isSplit, edges }}
       >
-        <WorkspaceTabBar
-          pane={pane}
-          tabs={paneTabs}
-          isFocused={isFocused}
-          paneCount={paneCount}
-          otherPaneIds={otherPaneIds}
-          touchesTopEdge={edges.top}
-          touchesLeftEdge={edges.left}
-          touchesRightEdge={edges.right}
-          tabBarRef={edges.top && edges.right ? tabBarRef : undefined}
-          topbarRightSlotRef={edges.top && edges.right ? setTopbarSlotElement : undefined}
-          fallbackRightControls={
-            edges.top && edges.right && !hasActiveChatControls ? (
-              <PrismuxTopbarControls
-                wallpaperOpen={standaloneRightPanel?.kind === "wallpaper"}
-                wallpaperAvailable
-                onToggleWallpaper={toggleStandaloneWallpaper}
-                onOpenChiefSettings={openChiefSettings}
-              />
-            ) : null
-          }
-          showSplitControls={false}
-          newTabPopover={newTabPopoverBase}
-          onActivateTab={handleActivateTab}
-          onCloseTab={handleCloseTab}
-          onSplitPane={handleSplitPane}
-          onClosePane={(id) => useWorkspaceTabsStore.getState().closePane(id, { mergeTabs: true })}
-          onMoveTabToPane={(tabId, fromPaneId, toPaneId) =>
-            useWorkspaceTabsStore.getState().moveTabToPane(tabId, fromPaneId, toPaneId)
-          }
-          onReorderTab={(pId, tabId, targetIndex) =>
-            useWorkspaceTabsStore.getState().reorderTab(pId, tabId, targetIndex)
-          }
-        />
+        <section
+          data-workspace-pane={pane.id}
+          data-primary-pane={isPrimaryPane ? "true" : "false"}
+          data-focused-pane={isFocused ? "true" : "false"}
+          data-edge-top={edges.top ? "1" : "0"}
+          data-edge-right={edges.right ? "1" : "0"}
+          data-edge-bottom={edges.bottom ? "1" : "0"}
+          data-edge-left={edges.left ? "1" : "0"}
+          onPointerDownCapture={() => {
+            useWorkspaceTabsStore.getState().focusPane(pane.id);
+          }}
+          className={cn(
+            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-none",
+          )}
+        >
+          <WorkspaceTabBar
+            pane={pane}
+            tabs={paneTabs}
+            isFocused={isFocused}
+            paneCount={paneCount}
+            otherPaneIds={otherPaneIds}
+            touchesTopEdge={edges.top}
+            touchesLeftEdge={edges.left}
+            touchesRightEdge={edges.right}
+            tabBarRef={edges.top && edges.right ? tabBarRef : undefined}
+            topbarRightSlotRef={edges.top && edges.right ? setTopbarSlotElement : undefined}
+            fallbackRightControls={
+              edges.top && edges.right && !hasActiveChatControls ? (
+                <PrismuxTopbarControls
+                  wallpaperOpen={standaloneRightPanel?.kind === "wallpaper"}
+                  wallpaperAvailable
+                  onToggleWallpaper={toggleStandaloneWallpaper}
+                  onOpenChiefSettings={openChiefSettings}
+                />
+              ) : null
+            }
+            showSplitControls
+            newTabPopover={newTabPopoverBase}
+            onActivateTab={handleActivateTab}
+            onCloseTab={handleCloseTab}
+            onSplitPane={handleSplitPane}
+            onClosePane={(id) => useWorkspaceTabsStore.getState().closePane(id, { mergeTabs: true })}
+            onMoveTabToPane={(tabId, fromPaneId, toPaneId, insertIndex) =>
+              useWorkspaceTabsStore
+                .getState()
+                .moveTabToPane(tabId, fromPaneId, toPaneId, insertIndex)
+            }
+            onReorderTab={(pId, tabId, targetIndex) =>
+              useWorkspaceTabsStore.getState().reorderTab(pId, tabId, targetIndex)
+            }
+            onDropItemIntoPane={handleDropItemIntoPane}
+          />
 
-        <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {isPrimaryPane ? (
-              <PrimaryPaneBody active={primaryShowsRoute}>{primaryContent}</PrimaryPaneBody>
-            ) : null}
+          <div
+            data-workspace-pane-body={pane.id}
+            onDragOver={(event) => handlePaneBodyDragOver(pane.id, event)}
+            onDragLeave={(event) => handlePaneBodyDragLeave(pane.id, event)}
+            onDrop={(event) => handlePaneBodyDrop(pane.id, event)}
+            className={cn(
+              "relative flex min-h-0 min-w-0 flex-1 overflow-hidden",
+              resolvePaneBodyCornerClasses(edges, isSplit),
+              resolvePaneOuterBorderClasses(edges, isSplit),
+            )}
+          >
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              {isPrimaryPane ? (
+                <PrimaryPaneBody active={primaryShowsRoute}>{primaryContent}</PrimaryPaneBody>
+              ) : null}
 
-            {!primaryShowsRoute && activeTab ? (
-              <WorkspacePaneContent
-                paneId={pane.id}
-                tab={activeTab}
-                activeHostThreadRef={activeHostThreadRef}
-                environmentId={activeEnvironmentId}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                historyThreads={historyThreads}
-                onUpdateTab={(tabId, patch) => useWorkspaceTabsStore.getState().updateTab(tabId, patch)}
-                onOpenHistoryThreadInPane={handleOpenHistoryThread}
-                onLaunchAgentPrompt={(payload) => void handleLaunchAgentPrompt(payload)}
-                onOpenQuickTool={(tool, targetPaneId) => handleRunQuickTool(tool, targetPaneId)}
-                onOpenConversationInMainChat={(fromPaneId, sourceTab) => {
-                  const store = useWorkspaceTabsStore.getState();
-                  if (fromPaneId !== store.primaryPaneId) {
-                    store.closeTab(sourceTab.id, fromPaneId);
-                  }
-                  if (sourceTab.kind === "thread" && sourceTab.environmentId && sourceTab.threadId) {
-                    store.openTab(
-                      {
-                        kind: "thread",
-                        title: sourceTab.title,
-                        providerId: sourceTab.providerId ?? null,
-                        instanceId: sourceTab.instanceId ?? null,
-                        environmentId: sourceTab.environmentId,
-                        threadId: sourceTab.threadId,
-                      },
-                      store.primaryPaneId,
-                    );
-                    void navigate({
-                      to: "/$environmentId/$threadId",
-                      params: buildThreadRouteParams(
-                        scopeThreadRef(sourceTab.environmentId, sourceTab.threadId),
-                      ),
-                    });
-                    return;
-                  }
-                  if (sourceTab.kind === "draft" && sourceTab.draftId) {
-                    const draftStore = useComposerDraftStore.getState();
-                    const promoted =
-                      draftStore.getPromotedDraftRedirect(sourceTab.draftId) ??
-                      draftStore.getDraftSession(sourceTab.draftId)?.promotedTo ??
-                      null;
-                    if (promoted) {
+              {!primaryShowsRoute && activeTab ? (
+                <WorkspacePaneContent
+                  paneId={pane.id}
+                  tab={activeTab}
+                  activeHostThreadRef={activeHostThreadRef}
+                  environmentId={activeEnvironmentId}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
+                  historyThreads={historyThreads}
+                  onUpdateTab={(tabId, patch) => useWorkspaceTabsStore.getState().updateTab(tabId, patch)}
+                  onOpenHistoryThreadInPane={handleOpenHistoryThread}
+                  onLaunchAgentPrompt={(payload) => void handleLaunchAgentPrompt(payload)}
+                  onOpenQuickTool={(tool, targetPaneId) => handleRunQuickTool(tool, targetPaneId)}
+                  onOpenConversationInMainChat={(fromPaneId, sourceTab) => {
+                    const store = useWorkspaceTabsStore.getState();
+                    if (fromPaneId !== store.primaryPaneId) {
+                      store.closeTab(sourceTab.id, fromPaneId);
+                    }
+                    if (sourceTab.kind === "thread" && sourceTab.environmentId && sourceTab.threadId) {
                       store.openTab(
                         {
                           kind: "thread",
                           title: sourceTab.title,
                           providerId: sourceTab.providerId ?? null,
                           instanceId: sourceTab.instanceId ?? null,
-                          environmentId: promoted.environmentId,
-                          threadId: promoted.threadId,
+                          environmentId: sourceTab.environmentId,
+                          threadId: sourceTab.threadId,
                         },
                         store.primaryPaneId,
                       );
                       void navigate({
                         to: "/$environmentId/$threadId",
-                        params: buildThreadRouteParams(promoted),
+                        params: buildThreadRouteParams(
+                          scopeThreadRef(sourceTab.environmentId, sourceTab.threadId),
+                        ),
                       });
                       return;
                     }
-                    if (draftStore.getDraftSession(sourceTab.draftId)) {
-                      store.openTab(
-                        {
-                          kind: "draft",
-                          title: sourceTab.title,
-                          providerId: sourceTab.providerId ?? null,
-                          instanceId: sourceTab.instanceId ?? null,
-                          model: sourceTab.model ?? null,
-                          environmentId: sourceTab.environmentId ?? null,
-                          threadId: sourceTab.threadId ?? null,
-                          draftId: sourceTab.draftId,
-                          reuseExisting: true,
-                        },
-                        store.primaryPaneId,
-                      );
-                      void navigate({
-                        to: "/draft/$draftId",
-                        params: buildDraftThreadRouteParams(sourceTab.draftId),
-                      });
-                      return;
+                    if (sourceTab.kind === "draft" && sourceTab.draftId) {
+                      const draftStore = useComposerDraftStore.getState();
+                      const promoted =
+                        draftStore.getPromotedDraftRedirect(sourceTab.draftId) ??
+                        draftStore.getDraftSession(sourceTab.draftId)?.promotedTo ??
+                        null;
+                      if (promoted) {
+                        store.openTab(
+                          {
+                            kind: "thread",
+                            title: sourceTab.title,
+                            providerId: sourceTab.providerId ?? null,
+                            instanceId: sourceTab.instanceId ?? null,
+                            environmentId: promoted.environmentId,
+                            threadId: promoted.threadId,
+                          },
+                          store.primaryPaneId,
+                        );
+                        void navigate({
+                          to: "/$environmentId/$threadId",
+                          params: buildThreadRouteParams(promoted),
+                        });
+                        return;
+                      }
+                      if (draftStore.getDraftSession(sourceTab.draftId)) {
+                        store.openTab(
+                          {
+                            kind: "draft",
+                            title: sourceTab.title,
+                            providerId: sourceTab.providerId ?? null,
+                            instanceId: sourceTab.instanceId ?? null,
+                            model: sourceTab.model ?? null,
+                            environmentId: sourceTab.environmentId ?? null,
+                            threadId: sourceTab.threadId ?? null,
+                            draftId: sourceTab.draftId,
+                            reuseExisting: true,
+                          },
+                          store.primaryPaneId,
+                        );
+                        void navigate({
+                          to: "/draft/$draftId",
+                          params: buildDraftThreadRouteParams(sourceTab.draftId),
+                        });
+                        return;
+                      }
                     }
-                  }
-                  void materializePrimaryConversationTab(sourceTab);
-                }}
+                    void materializePrimaryConversationTab(sourceTab);
+                  }}
+                />
+              ) : !isPrimaryPane ? (
+                <PrismuxStageFrame innerClassName="items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground [[data-pmx-glass='1']_&]:text-foreground/92 dark:[[data-pmx-glass='1']_&]:text-white/92 dark:[[data-pmx-glass='1']_&]:[text-shadow:0_1px_4px_rgba(0,0,0,0.58)]">
+                  <span>拖拽任意会话、终端、浏览器、文件或差异面板至此窗格，或点击「+」打开</span>
+                </PrismuxStageFrame>
+              ) : null}
+            </div>
+
+            {isPrimaryPane && standaloneRightPanel && !activeHostThreadRef ? (
+              <aside
+                data-pmx-glass-zone="rightSidebar"
+                data-preview-panel-mode="inline"
+                data-standalone-agent-sidebar={
+                  standaloneRightPanel.kind === "agent-session" ? "1" : undefined
+                }
+                data-standalone-wallpaper-sidebar={
+                  standaloneRightPanel.kind === "wallpaper" ? "1" : undefined
+                }
+                className="flex h-full min-h-0 w-[min(420px,46vw)] shrink-0 flex-col overflow-hidden bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent"
+              >
+                {standaloneRightPanel.kind === "agent-session" ? (
+                  <RightPanelAgentSessionPane
+                    hostThreadRef={null}
+                    surface={standaloneRightPanel.session}
+                    activeProjectRef={
+                      activeEnvironmentId && activeProjectId
+                        ? scopeProjectRef(activeEnvironmentId, activeProjectId)
+                        : defaultProjectRef
+                    }
+                    sideChatParentPanel={null}
+                    onUpdateSurface={(patch) =>
+                      setStandaloneRightPanel((current) =>
+                        current?.kind === "agent-session"
+                          ? { kind: "agent-session", session: { ...current.session, ...patch } }
+                          : current,
+                      )
+                    }
+                    onClose={() => setStandaloneRightPanel(null)}
+                  />
+                ) : (
+                  <PrismuxWallpaperQuickPanel />
+                )}
+              </aside>
+            ) : null}
+
+            {/* Explicit z-30 drop capture shield mounted while dragging so Electron <webview>,
+                <iframe>, and Ghostty terminal <canvas> never swallow dragover/drop events. */}
+            {activeDrag !== null ? (
+              <div
+                data-workspace-drop-shield={pane.id}
+                onDragOver={(event) => handlePaneBodyDragOver(pane.id, event)}
+                onDragLeave={(event) => handlePaneBodyDragLeave(pane.id, event)}
+                onDrop={(event) => handlePaneBodyDrop(pane.id, event)}
+                className="absolute inset-0 z-30 bg-transparent"
               />
-            ) : !isPrimaryPane ? (
-              <PrismuxStageFrame innerClassName="items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground [[data-pmx-glass='1']_&]:text-foreground/92 dark:[[data-pmx-glass='1']_&]:text-white/92 dark:[[data-pmx-glass='1']_&]:[text-shadow:0_1px_4px_rgba(0,0,0,0.58)]">
-                <span>点击左上角「+」在右侧边栏开启会话或工具面板</span>
-              </PrismuxStageFrame>
+            ) : null}
+
+            {paneDropZone !== null ? (
+              <div
+                data-workspace-drop-preview={pane.id}
+                data-drop-zone={paneDropZone}
+                className={resolveDropPreviewOverlayClass(paneDropZone)}
+              >
+                <span className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-primary/45 bg-background/85 px-2.5 py-1 text-2xs font-medium text-foreground shadow-sm backdrop-blur-sm">
+                  {resolveDropZoneLabel(paneDropZone)}
+                </span>
+              </div>
             ) : null}
           </div>
-
-          {isPrimaryPane && standaloneRightPanel && !activeHostThreadRef ? (
-            <aside
-              data-pmx-glass-zone="rightSidebar"
-              data-preview-panel-mode="inline"
-              data-standalone-agent-sidebar={
-                standaloneRightPanel.kind === "agent-session" ? "1" : undefined
-              }
-              data-standalone-wallpaper-sidebar={
-                standaloneRightPanel.kind === "wallpaper" ? "1" : undefined
-              }
-              className="flex h-full min-h-0 w-[min(420px,46vw)] shrink-0 flex-col overflow-hidden bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent"
-            >
-              {standaloneRightPanel.kind === "agent-session" ? (
-                <RightPanelAgentSessionPane
-                  hostThreadRef={null}
-                  surface={standaloneRightPanel.session}
-                  activeProjectRef={
-                    activeEnvironmentId && activeProjectId
-                      ? scopeProjectRef(activeEnvironmentId, activeProjectId)
-                      : defaultProjectRef
-                  }
-                  sideChatParentPanel={null}
-                  onUpdateSurface={(patch) =>
-                    setStandaloneRightPanel((current) =>
-                      current?.kind === "agent-session"
-                        ? { kind: "agent-session", session: { ...current.session, ...patch } }
-                        : current,
-                    )
-                  }
-                  onClose={() => setStandaloneRightPanel(null)}
-                />
-              ) : (
-                <PrismuxWallpaperQuickPanel />
-              )}
-            </aside>
-          ) : null}
-        </div>
-      </section>
+        </section>
+      </WorkspaceSplitPaneContext.Provider>
     );
   };
 
@@ -1592,10 +1877,12 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       <div
         data-workspace-split-container="true"
         data-pane-count={paneCount}
+        data-workspace-dragging={activeDrag !== null ? "1" : "0"}
+        data-workspace-resizing={isResizingSplit ? "1" : "0"}
         inert={modalOpen}
         className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent [[data-pmx-wallpaper='1']_&]:bg-transparent [[data-pmx-wallpaper-visible='1']_&]:bg-transparent"
       >
-        {renderNode(layout, { top: true, left: true, right: true })}
+        {renderNode(layout, ROOT_SPLIT_PANE_EDGES)}
       </div>
     </WorkspaceTopbarPortalContext.Provider>
   );

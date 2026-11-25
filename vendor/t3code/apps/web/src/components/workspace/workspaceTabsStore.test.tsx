@@ -181,7 +181,7 @@ describe("workspaceTabsStore", () => {
     expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toHaveLength(1);
   });
 
-  it("supports horizontal and vertical splits up to 3 panes, clamps split ratios, and tracks focus", () => {
+  it("supports horizontal and vertical splits up to 8 panes, clamps split ratios, and tracks focus", () => {
     const store = useWorkspaceTabsStore.getState();
     store.openTab({
       kind: "thread",
@@ -213,20 +213,29 @@ describe("workspaceTabsStore", () => {
       store.setSplitRatio(state.layout.id, 0.01);
       const updatedMin = useWorkspaceTabsStore.getState().layout;
       expect(updatedMin.type === "split" ? updatedMin.ratio : 0).toBe(clampSplitRatio(0.01));
+
+      store.resetSplitRatio(state.layout.id);
+      const resetRatio = useWorkspaceTabsStore.getState().layout;
+      expect(resetRatio.type === "split" ? resetRatio.ratio : 0).toBe(0.5);
     }
 
-    // Add a third split vertically
-    const bottomRightPaneId = store.splitPane(rightPaneId!, "vertical", {
-      kind: "terminal",
-      title: "PowerShell",
-      shell: "PowerShell",
-    });
-    expect(bottomRightPaneId).toBeTruthy();
+    // Recursively split up to WORKSPACE_MAX_SPLIT_PANES (8) panes
+    expect(WORKSPACE_MAX_SPLIT_PANES).toBe(8);
+    let lastPaneId = rightPaneId!;
+    for (let count = 3; count <= WORKSPACE_MAX_SPLIT_PANES; count += 1) {
+      const nextPane = store.splitPane(lastPaneId, count % 2 === 0 ? "horizontal" : "vertical", {
+        kind: "terminal",
+        title: `Terminal ${count}`,
+        shell: "PowerShell",
+      });
+      expect(nextPane).toBeTruthy();
+      lastPaneId = nextPane!;
+    }
     expect(countLeafPanes(useWorkspaceTabsStore.getState().layout)).toBe(WORKSPACE_MAX_SPLIT_PANES);
 
-    // 4th split is safely refused at max cap
-    const fourthPane = store.splitPane(bottomRightPaneId!, "horizontal");
-    expect(fourthPane).toBeNull();
+    // 9th split is safely refused at max cap
+    const overflowPane = store.splitPane(lastPaneId, "horizontal");
+    expect(overflowPane).toBeNull();
     expect(countLeafPanes(useWorkspaceTabsStore.getState().layout)).toBe(WORKSPACE_MAX_SPLIT_PANES);
 
     // Focus switching updates focusedPaneId

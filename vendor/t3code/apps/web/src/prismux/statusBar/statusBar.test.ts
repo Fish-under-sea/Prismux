@@ -1492,7 +1492,7 @@ describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
       path.join(webSrc, "components/sidebar/SidebarChrome.tsx"),
       "utf8",
     );
-    expect(sidebarChromeSource).toContain("bottom-[calc(var(--pmx-status-bar-height,20px)+4px)]");
-    expect(sidebarChromeSource).toContain("bottom-[calc(var(--pmx-status-bar-height,20px)+8px)]");
+    // SidebarCollapsedPeekDrawer was removed in v0.1.3+; SidebarChrome no longer pins legacy peek overlays.
+    expect(sidebarChromeSource).not.toContain("SidebarCollapsedPeekDrawer");
   });
 });

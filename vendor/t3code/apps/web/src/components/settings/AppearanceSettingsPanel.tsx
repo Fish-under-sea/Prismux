@@ -1,14 +1,15 @@
 import type { CSSProperties } from "react";
 import { msg, useGT, useMessages } from "gt-react";
 import {
+  CollapsedAssistantReplyMode,
   DEFAULT_UNIFIED_SETTINGS,
-  type ChatWidth,
   type EffortDisplay,
-  MAX_APPEARANCE_CONTRAST,
   MAX_PANEL_ANIMATION_DURATION_MS,
-  MIN_APPEARANCE_CONTRAST,
   MIN_PANEL_ANIMATION_DURATION_MS,
+  WorkStepsCollapseTiming,
+  WorkStepsDisplay,
 } from "@t3tools/contracts/settings";
+import * as Schema from "effect/Schema";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -25,16 +26,31 @@ import { TypographySection } from "./TypographySettings";
 import { ThreadDetailsItemsRow } from "./ThreadDetailsItemsRow";
 import { PrismuxAppearanceIntegration } from "../../prismux/settings/PrismuxAppearanceIntegration";
 
-const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
-  comfortable: msg("Comfortable"),
-  wide: msg("Wide"),
-  full: msg("Full", { $context: "chat width" }),
-};
-
 const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
   label: msg("Word", { $context: "show effort as a word" }),
   bars: msg("Bars", { $context: "show effort as bars" }),
 };
+
+const WORK_STEPS_DISPLAY_LABELS: Record<WorkStepsDisplay, string> = {
+  concise: msg("Concise", { $context: "work steps display level" }),
+  standard: msg("Standard", { $context: "work steps display level" }),
+  detailed: msg("Detailed", { $context: "work steps display level" }),
+  expanded: msg("Fully expanded", { $context: "work steps display level" }),
+};
+
+const WORK_STEPS_COLLAPSE_TIMING_LABELS: Record<WorkStepsCollapseTiming, string> = {
+  "after-turn": msg("After response ends", { $context: "work steps collapse timing" }),
+  "next-message": msg("On next new message", { $context: "work steps collapse timing" }),
+};
+
+const COLLAPSED_ASSISTANT_REPLY_MODE_LABELS: Record<CollapsedAssistantReplyMode, string> = {
+  all: msg("All replies", { $context: "collapsed assistant replies" }),
+  "final-only": msg("Final answer only", { $context: "collapsed assistant replies" }),
+};
+
+const isWorkStepsDisplay = Schema.is(WorkStepsDisplay);
+const isWorkStepsCollapseTiming = Schema.is(WorkStepsCollapseTiming);
+const isCollapsedAssistantReplyMode = Schema.is(CollapsedAssistantReplyMode);
 
 export function AppearanceSettingsPanel() {
   const searchableSetting = useSearchableSetting();
@@ -42,13 +58,6 @@ export function AppearanceSettingsPanel() {
   const m = useMessages();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const appearanceContrastRatio =
-    (settings.appearanceContrast - MIN_APPEARANCE_CONTRAST) /
-    (MAX_APPEARANCE_CONTRAST - MIN_APPEARANCE_CONTRAST);
-  const appearanceContrastSliderStyle = {
-    "--settings-slider-progress": `${appearanceContrastRatio * 100}%`,
-    "--settings-slider-fill-offset": `${0.5 - appearanceContrastRatio}rem`,
-  } as CSSProperties;
   const panelAnimationDurationRatio =
     (settings.panelAnimationDurationMs - MIN_PANEL_ANIMATION_DURATION_MS) /
     (MAX_PANEL_ANIMATION_DURATION_MS - MIN_PANEL_ANIMATION_DURATION_MS);
@@ -64,86 +73,6 @@ export function AppearanceSettingsPanel() {
       <TypographySection />
 
       <SettingsSection id="appearance-interface" title={gt("Interface")}>
-        <SettingsRow
-          {...searchableSetting("setting-appearance-contrast")}
-          description={gt("Adjust the contrast of colors and borders across the interface.")}
-          resetAction={
-            settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset contrast to default")}
-                onClick={() =>
-                  updateSettings({
-                    appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex w-full items-center gap-3 sm:w-52">
-              <output
-                className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
-                htmlFor="appearance-contrast"
-              >
-                {settings.appearanceContrast}%
-              </output>
-              <input
-                aria-label={gt("Contrast")}
-                className="settings-slider min-w-0 flex-1"
-                id="appearance-contrast"
-                max={MAX_APPEARANCE_CONTRAST}
-                min={MIN_APPEARANCE_CONTRAST}
-                onChange={(event) => {
-                  const appearanceContrast = Number(event.currentTarget.value);
-                  if (
-                    Number.isInteger(appearanceContrast) &&
-                    appearanceContrast >= MIN_APPEARANCE_CONTRAST &&
-                    appearanceContrast <= MAX_APPEARANCE_CONTRAST
-                  ) {
-                    updateSettings({ appearanceContrast });
-                  }
-                }}
-                step={5}
-                style={appearanceContrastSliderStyle}
-                type="range"
-                value={settings.appearanceContrast}
-              />
-            </div>
-          }
-        />
-
-        <SettingsRow
-          {...searchableSetting("chat-width")}
-          description={gt("Set how wide messages and the composer can grow on large screens.")}
-          resetAction={
-            settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset chat width to default")}
-                onClick={() => updateSettings({ chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth })}
-              />
-            ) : null
-          }
-          control={
-            <div className="w-full sm:w-40">
-              <Select
-                value={settings.chatWidth}
-                onValueChange={(value) => {
-                  if (value === "comfortable" || value === "wide" || value === "full")
-                    updateSettings({ chatWidth: value });
-                }}
-              >
-                <SelectTrigger size="sm" className="w-full min-w-0" aria-label={gt("Chat width")}>
-                  <SelectValue>{m(CHAT_WIDTH_LABELS[settings.chatWidth])}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="comfortable">{gt("Comfortable (default)")}</SelectItem>
-                  <SelectItem value="wide">{m(CHAT_WIDTH_LABELS.wide)}</SelectItem>
-                  <SelectItem value="full">{m(CHAT_WIDTH_LABELS.full)}</SelectItem>
-                </SelectPopup>
-              </Select>
-            </div>
-          }
-        />
         <ThreadDetailsItemsRow />
         <SettingsRow
           {...searchableSetting("effort-display")}
@@ -161,7 +90,7 @@ export function AppearanceSettingsPanel() {
             ) : null
           }
           control={
-            <div className="w-full sm:w-40">
+            <div className="w-full sm:w-44">
               <Select
                 value={settings.effortDisplay}
                 onValueChange={(value) => {
@@ -177,8 +106,8 @@ export function AppearanceSettingsPanel() {
                   <SelectValue>{m(EFFORT_DISPLAY_LABELS[settings.effortDisplay])}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="label">{gt("Word (default)")}</SelectItem>
-                  <SelectItem value="bars">{m(EFFORT_DISPLAY_LABELS.bars)}</SelectItem>
+                  <SelectItem value="bars">{gt("Bars (default)")}</SelectItem>
+                  <SelectItem value="label">{m(EFFORT_DISPLAY_LABELS.label)}</SelectItem>
                 </SelectPopup>
               </Select>
             </div>
@@ -211,6 +140,149 @@ export function AppearanceSettingsPanel() {
             />
           }
         />
+        <SettingsRow
+          {...searchableSetting("work-steps-display")}
+          description={gt("Choose how much tool call detail to show.")}
+          resetAction={
+            settings.workStepsDisplay !== DEFAULT_UNIFIED_SETTINGS.workStepsDisplay ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset work steps display to default")}
+                onClick={() =>
+                  updateSettings({ workStepsDisplay: DEFAULT_UNIFIED_SETTINGS.workStepsDisplay })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="w-full sm:w-44">
+              <Select
+                value={settings.workStepsDisplay}
+                onValueChange={(value) => {
+                  if (isWorkStepsDisplay(value)) {
+                    updateSettings({ workStepsDisplay: value });
+                  }
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full min-w-0"
+                  aria-label={gt("Work steps display")}
+                >
+                  <SelectValue>
+                    {m(WORK_STEPS_DISPLAY_LABELS[settings.workStepsDisplay])}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {WorkStepsDisplay.literals.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {m(WORK_STEPS_DISPLAY_LABELS[value])}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("work-steps-collapse-timing")}
+          description={gt("Choose when to automatically collapse work steps.")}
+          resetAction={
+            settings.workStepsCollapseTiming !== DEFAULT_UNIFIED_SETTINGS.workStepsCollapseTiming ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset work steps collapse timing to default")}
+                onClick={() =>
+                  updateSettings({
+                    workStepsCollapseTiming: DEFAULT_UNIFIED_SETTINGS.workStepsCollapseTiming,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="w-full sm:w-44">
+              <Select
+                value={settings.workStepsCollapseTiming}
+                onValueChange={(value) => {
+                  if (isWorkStepsCollapseTiming(value)) {
+                    updateSettings({ workStepsCollapseTiming: value });
+                  }
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full min-w-0"
+                  aria-label={gt("Work steps collapse timing")}
+                >
+                  <SelectValue>
+                    {m(WORK_STEPS_COLLAPSE_TIMING_LABELS[settings.workStepsCollapseTiming])}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {WorkStepsCollapseTiming.literals.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {m(WORK_STEPS_COLLAPSE_TIMING_LABELS[value])}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
+        {settings.workStepsDisplay !== "expanded" ? (
+          <SettingsRow
+            {...searchableSetting("collapsed-assistant-reply-mode")}
+            description={gt(
+              "Choose which assistant replies remain visible after work steps collapse.",
+            )}
+            resetAction={
+              settings.collapsedAssistantReplyMode !==
+              DEFAULT_UNIFIED_SETTINGS.collapsedAssistantReplyMode ? (
+                <SettingResetButton
+                  ariaLabel={gt("Reset replies shown when collapsed to default")}
+                  onClick={() =>
+                    updateSettings({
+                      collapsedAssistantReplyMode:
+                        DEFAULT_UNIFIED_SETTINGS.collapsedAssistantReplyMode,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="w-full sm:w-44">
+                <Select
+                  value={settings.collapsedAssistantReplyMode}
+                  onValueChange={(value) => {
+                    if (isCollapsedAssistantReplyMode(value)) {
+                      updateSettings({ collapsedAssistantReplyMode: value });
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full min-w-0"
+                    aria-label={gt("Replies shown when collapsed")}
+                  >
+                    <SelectValue>
+                      {m(
+                        COLLAPSED_ASSISTANT_REPLY_MODE_LABELS[
+                          settings.collapsedAssistantReplyMode
+                        ],
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    {CollapsedAssistantReplyMode.literals.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {m(COLLAPSED_ASSISTANT_REPLY_MODE_LABELS[value])}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+            }
+          />
+        ) : null}
         <AdvancedSettings
           targetIds={[
             searchableSetting("panel-animations").id,

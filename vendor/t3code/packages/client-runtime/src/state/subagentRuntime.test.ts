@@ -119,7 +119,7 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
         model: workflow!.model,
         modelSelection: { model: "claude-opus-5-5" },
       }).modelLabel,
-    ).toBe("Claude Opus 5.5");
+    ).toBe("Opus 5.5");
     expect(resolveSubagentMetadata({ model: workflow!.model }).modelLabel).toBe("Not reported");
   });
 

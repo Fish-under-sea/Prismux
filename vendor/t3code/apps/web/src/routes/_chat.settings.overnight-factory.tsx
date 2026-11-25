@@ -1,11 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { PrismuxOvernightFactorySettingsPage } from "../prismux/settings/PrismuxOvernightFactorySettingsPage";
-
-function SettingsOvernightFactoryRoute() {
-  return <PrismuxOvernightFactorySettingsPage />;
-}
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_chat/settings/overnight-factory")({
-  component: SettingsOvernightFactoryRoute,
+  beforeLoad: () => {
+    throw redirect({
+      to: "/overnight-factory",
+      replace: true,
+    });
+  },
+  component: () => null,
 });

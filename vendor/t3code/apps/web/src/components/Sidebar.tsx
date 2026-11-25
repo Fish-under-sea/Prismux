@@ -306,6 +306,13 @@ import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
+import { SidebarHostGroupCapsule } from "./sidebar/SidebarHostGroupCapsule";
+import { SidebarWorkspaceCard } from "./sidebar/SidebarWorkspaceCard";
+import {
+  groupProjectFoldersByHost,
+  type SidebarHostDescriptor,
+} from "./sidebar/sidebarWorkspaceGrouping";
+import { useRightPanelStore } from "../rightPanelStore";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
@@ -1003,7 +1010,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const boringSidebarEnabled = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const useOrcaCompactTree = !boringSidebarEnabled;
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
+  const [collapsedHostEnvIds, setCollapsedHostEnvIds] = useState<ReadonlySet<EnvironmentId>>(
+    () => new Set(),
+  );
+  const toggleHostGroupCollapsed = (environmentId: EnvironmentId) => {
+    setCollapsedHostEnvIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(environmentId)) {
+        next.delete(environmentId);
+      } else {
+        next.add(environmentId);
+      }
+      return next;
+    });
+  };
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
@@ -1325,14 +1347,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     delegatedUnderParent,
     routeRowThreadKey,
     departingThreadKey,
-    folderGroups: boringSidebarEnabled
-      ? scopedProjectGroups.length === 0
+    folderGroups:
+      scopedProjectGroups.length === 0
         ? // An archived project keeps a folder for its active threads, below the rest.
           [...scopeGroups, ...projectGroups.filter((project) => project.archived)]
-        : scopedProjectGroups
-      : null,
+        : scopedProjectGroups,
     keepEmptyFolders: (group) =>
-      scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+      scopedProjectGroups.length > 0 ||
+      (group.pinned && !group.archived) ||
+      (useOrcaCompactTree && !group.archived && !group.isScratch),
   });
 
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
@@ -2881,6 +2904,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return list;
   }, [environmentPresentationsList, orcaCopy.isZh]);
 
+  const sidebarHostDescriptors = useMemo<readonly SidebarHostDescriptor[]>(
+    () =>
+      orcaEnvironments.map((env) => ({
+        environmentId: env.environmentId,
+        label: env.displayLabel,
+        hostname: serverConfigs.get(env.environmentId)?.hostname ?? null,
+        machine: env.machine,
+        isPrimary: env.isPrimary,
+        isConnected: env.isConnected,
+      })),
+    [orcaEnvironments, serverConfigs],
+  );
+
+  const orcaHostGroups =
+    useOrcaCompactTree && projectFolders !== null
+      ? groupProjectFoldersByHost({
+          folders: projectFolders,
+          hosts: sidebarHostDescriptors,
+          activeThreadKey: routeRowThreadKey,
+          localLastVisitedAtById,
+        })
+      : null;
+
   const effectiveAddProjectEnvId =
     selectedAddProjectEnvId ??
     orcaEnvironments.find((env) => env.isConnected)?.environmentId ??
@@ -3437,8 +3483,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const containsRoute =
           folder.threads.some((t) => threadShellKey(t) === routeRowThreadKey) ||
           folder.hiddenThreads.some((t) => threadShellKey(t) === routeRowThreadKey);
-        if (containsRoute && folder.collapsed) {
-          setProjectExpanded(sidebarFolderExpansionKeys(folder.group), true);
+        if (containsRoute) {
+          if (collapsedHostEnvIds.has(folder.group.environmentId)) {
+            setCollapsedHostEnvIds((prev) => {
+              const next = new Set(prev);
+              next.delete(folder.group.environmentId);
+              return next;
+            });
+          }
+          if (folder.collapsed) {
+            setProjectExpanded(sidebarFolderExpansionKeys(folder.group), true);
+          }
           break;
         }
       }
@@ -3743,13 +3798,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   <ul
                     ref={attachTreeRef}
                     data-orca-compact={orcaPrefs.compactMode ? "true" : undefined}
+                    data-orca-tree={useOrcaCompactTree ? "true" : "false"}
                     // Presentation flattens VoiceOver's list interaction boundary while preserving descendant
                     // controls.
                     role="presentation"
                     className={cn(
                       "relative flex flex-col gap-px",
                       sidebarListItems.length > 0 && "flex-1",
-                      orcaPrefs.compactMode &&
+                      !useOrcaCompactTree &&
+                        orcaPrefs.compactMode &&
                         "[&_[data-sidebar-row]]:min-h-7 [&_[data-sidebar-row]]:py-0.5",
                       actionSweep !== null && "**:pointer-events-none",
                       // Projected rows (two boundary labels, two hints) extend the scroll range; a range that
@@ -3764,31 +3821,36 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
+                        inWorkspaceCard = false,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
-                        const rowVariant = folderRow
-                          ? folderRowsMultiline
-                            ? "folder-multiline"
-                            : "folder"
-                          : isCard
-                            ? "card"
-                            : "slim";
+                        const rowVariant = useOrcaCompactTree
+                          ? "orca-compact"
+                          : folderRow
+                            ? folderRowsMultiline
+                              ? "folder-multiline"
+                              : "folder"
+                            : isCard
+                              ? "card"
+                              : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
                             sortableDisabled={
+                              rowVariant === "orca-compact" ||
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||
                               optimisticDrop !== null
                             }
                             thread={thread}
                             variant={rowVariant}
+                            inWorkspaceCard={inWorkspaceCard}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -3901,6 +3963,82 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
+                          if (useOrcaCompactTree && orcaHostGroups !== null) {
+                            for (const hostGroup of orcaHostGroups) {
+                              const isHostCollapsed = collapsedHostEnvIds.has(
+                                hostGroup.environmentId,
+                              );
+                              items.push(
+                                <SidebarHostGroupCapsule
+                                  key={`host-group:${hostGroup.environmentId}`}
+                                  environmentId={hostGroup.environmentId}
+                                  label={hostGroup.label}
+                                  hostname={hostGroup.hostname}
+                                  machine={hostGroup.machine}
+                                  workspaceCount={hostGroup.workspaceCount}
+                                  collapsed={isHostCollapsed}
+                                  onToggle={() => toggleHostGroupCollapsed(hostGroup.environmentId)}
+                                />,
+                              );
+                              if (isHostCollapsed) continue;
+                              for (const { folder, workspaces } of hostGroup.folders) {
+                                items.push(
+                                  <SidebarProjectFolderHeader
+                                    key={`project-folder:${folder.group.projectKey}`}
+                                    group={folder.group}
+                                    collapsed={folder.collapsed}
+                                    hiddenThreads={folder.hiddenThreads}
+                                    onToggle={toggleProjectFolder}
+                                    onNewThread={startThreadInProjectFolder}
+                                    onContextMenu={handleProjectFolderContextMenu}
+                                  />,
+                                );
+                                for (const workspace of workspaces) {
+                                  const primaryThread = workspace.threads[0];
+                                  items.push(
+                                    <SidebarWorkspaceCard
+                                      key={`workspace:${folder.group.projectKey}:${workspace.workspaceKey}`}
+                                      workspace={workspace}
+                                      onActivateWorkspace={
+                                        primaryThread
+                                          ? () => {
+                                              void navigateToThread(
+                                                scopeThreadRef(
+                                                  primaryThread.environmentId,
+                                                  primaryThread.id,
+                                                ),
+                                              );
+                                            }
+                                          : undefined
+                                      }
+                                      onOpenWorkspaceFiles={
+                                        primaryThread
+                                          ? () => {
+                                              const targetRef = scopeThreadRef(
+                                                primaryThread.environmentId,
+                                                primaryThread.id,
+                                              );
+                                              useRightPanelStore.getState().open(targetRef, "files");
+                                              void navigateToThread(targetRef);
+                                            }
+                                          : undefined
+                                      }
+                                    >
+                                      {workspace.threads.map((thread) =>
+                                        renderThreadRow(
+                                          thread,
+                                          "active",
+                                          sidebarFolderRowId(folder.group.projectKey),
+                                          true,
+                                        ),
+                                      )}
+                                    </SidebarWorkspaceCard>,
+                                  );
+                                }
+                              }
+                            }
+                            continue;
+                          }
                           for (const folder of projectFolders) {
                             items.push(
                               <SidebarProjectFolderHeader

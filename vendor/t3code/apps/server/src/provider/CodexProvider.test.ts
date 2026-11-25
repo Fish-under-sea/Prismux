@@ -191,20 +191,14 @@ it("maps current Codex model capability fields", () => {
       label: "Service Tier",
       type: "select",
       options: [
-        { id: "default", label: "Standard" },
+        { id: "default", label: "Standard", isDefault: true },
         {
-          id: "priority",
+          id: "fast",
           label: "Fast",
           description: "Lower latency responses.",
         },
-        {
-          id: "flex",
-          label: "Flex",
-          description: "Lower-cost asynchronous routing.",
-          isDefault: true,
-        },
       ],
-      currentValue: "flex",
+      currentValue: "default",
     },
     {
       id: "cyberAccessProgram",
@@ -253,13 +247,13 @@ it("uses standard routing when the catalog has no default service tier", () => {
       options: [
         { id: "default", label: "Standard", isDefault: true },
         {
-          id: "priority",
+          id: "fast",
           label: "Fast",
           description: "1.5x speed, increased usage",
         },
         {
           id: "ultrafast",
-          label: "Ultrafast",
+          label: "Ultra Fast",
           description: "Even faster, more expensive",
         },
       ],
@@ -385,9 +379,71 @@ it("normalizes fallback additionalSpeedTiers labels and full Codex reasoning eff
   if (speed?.type === "select") {
     assert.deepStrictEqual(
       speed.options.map((option) => `${option.id}:${option.label}`),
-      ["default:Standard", "priority:Fast", "ultrafast:Ultrafast", "flex:Flex"],
+      ["default:Standard", "fast:Fast", "ultrafast:Ultra Fast"],
     );
   }
+});
+
+it("restores Fast and Ultra Fast speed tiers for flagship GPT models when Codex omits speed metadata", () => {
+  const sevenEfforts = [
+    { reasoningEffort: "minimal", description: "" },
+    { reasoningEffort: "low", description: "" },
+    { reasoningEffort: "medium", description: "" },
+    { reasoningEffort: "high", description: "" },
+    { reasoningEffort: "xhigh", description: "" },
+    { reasoningEffort: "max", description: "" },
+    { reasoningEffort: "ultra", description: "" },
+  ];
+
+  for (const modelId of ["gpt-6-astra", "dragonapi/gpt-promax/gpt-6.2-astra"]) {
+    const capabilities = mapCodexModelCapabilities({
+      additionalSpeedTiers: [],
+      defaultReasoningEffort: "medium",
+      description: "Flagship GPT model",
+      displayName: modelId,
+      hidden: false,
+      id: modelId,
+      isDefault: false,
+      model: modelId,
+      serviceTiers: [],
+      supportedReasoningEfforts: sevenEfforts,
+    });
+
+    const reasoning = capabilities.optionDescriptors?.find((d) => d.id === "reasoningEffort");
+    assert.strictEqual(reasoning?.type, "select");
+    if (reasoning?.type === "select") {
+      assert.deepStrictEqual(
+        reasoning.options.map((option) => option.id),
+        ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+      );
+    }
+
+    const speed = capabilities.optionDescriptors?.find((d) => d.id === "serviceTier");
+    assert.strictEqual(speed?.type, "select");
+    if (speed?.type === "select") {
+      assert.deepStrictEqual(
+        speed.options.map((option) => `${option.id}:${option.label}`),
+        ["default:Standard", "fast:Fast", "ultrafast:Ultra Fast"],
+      );
+    }
+  }
+
+  const nonFlagship = mapCodexModelCapabilities({
+    additionalSpeedTiers: [],
+    defaultReasoningEffort: "medium",
+    description: "Small model",
+    displayName: "gpt-test",
+    hidden: false,
+    id: "gpt-test",
+    isDefault: false,
+    model: "gpt-test",
+    serviceTiers: [],
+    supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "" }],
+  });
+  assert.strictEqual(
+    nonFlagship.optionDescriptors?.some((d) => d.id === "serviceTier"),
+    false,
+  );
 });
 
 it("strips ELECTRON_RUN_AS_NODE from codexAppServerEnvironment while preserving originator and caller env", () => {

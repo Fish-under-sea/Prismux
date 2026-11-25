@@ -359,6 +359,18 @@ export type EffortDisplay = typeof EffortDisplay.Type;
 export const ToolCallVisibility = Schema.Literals(["showAll", "hideSuccessful", "hideAll", "zen"]);
 export type ToolCallVisibility = typeof ToolCallVisibility.Type;
 
+export const WorkStepsDisplay = Schema.Literals(["concise", "standard", "detailed", "expanded"]);
+export type WorkStepsDisplay = typeof WorkStepsDisplay.Type;
+export const DEFAULT_WORK_STEPS_DISPLAY: WorkStepsDisplay = "standard";
+
+export const WorkStepsCollapseTiming = Schema.Literals(["after-turn", "next-message"]);
+export type WorkStepsCollapseTiming = typeof WorkStepsCollapseTiming.Type;
+export const DEFAULT_WORK_STEPS_COLLAPSE_TIMING: WorkStepsCollapseTiming = "after-turn";
+
+export const CollapsedAssistantReplyMode = Schema.Literals(["all", "final-only"]);
+export type CollapsedAssistantReplyMode = typeof CollapsedAssistantReplyMode.Type;
+export const DEFAULT_COLLAPSED_ASSISTANT_REPLY_MODE: CollapsedAssistantReplyMode = "all";
+
 /** What the open thread reads to a screen reader: turn status, the agent's in-between messages too, or every step. */
 export const ScreenReaderAnnouncements = Schema.Literals(["status", "messages", "everything"]);
 export type ScreenReaderAnnouncements = typeof ScreenReaderAnnouncements.Type;
@@ -411,14 +423,14 @@ export type VoiceTranscriptionDestination = typeof VoiceTranscriptionDestination
 
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed("off" as const)),
+    Schema.withDecodingDefault(Effect.succeed("notifications" as const)),
   ),
-  inAppNotificationsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  inAppNotificationsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffColorScheme: DiffColorScheme.pipe(
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
   chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
-  effortDisplay: EffortDisplay.pipe(Schema.withDecodingDefault(Effect.succeed("label" as const))),
+  effortDisplay: EffortDisplay.pipe(Schema.withDecodingDefault(Effect.succeed("bars" as const))),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   appearanceContrast: AppearanceContrast.pipe(
@@ -479,7 +491,7 @@ export const ClientSettingsSchema = Schema.Struct({
   confirmTerminalClose: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadUnpin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
@@ -544,6 +556,15 @@ export const ClientSettingsSchema = Schema.Struct({
   toolCallVisibility: ToolCallVisibility.pipe(
     Schema.withDecodingDefault(Effect.succeed("showAll" as const)),
   ),
+  workStepsDisplay: WorkStepsDisplay.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORK_STEPS_DISPLAY)),
+  ),
+  workStepsCollapseTiming: WorkStepsCollapseTiming.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORK_STEPS_COLLAPSE_TIMING)),
+  ),
+  collapsedAssistantReplyMode: CollapsedAssistantReplyMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COLLAPSED_ASSISTANT_REPLY_MODE)),
+  ),
   screenReaderAnnouncements: ScreenReaderAnnouncements.pipe(
     Schema.withDecodingDefault(Effect.succeed("status" as const)),
   ),
@@ -607,9 +628,8 @@ export const ClientSettingsSchema = Schema.Struct({
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
-  // KaTeX out of the render path entirely.
-  mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // TeX typesetting in rendered Markdown. On by default in Prismux; non-math text pays zero KaTeX cost.
+  mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -1351,8 +1371,8 @@ export const StorageCleanupSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   worktreeOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  worktreeOnDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  worktreeUnchanged: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  worktreeOnDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  worktreeUnchanged: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   browserArtifactsAfterDays: StorageRetentionDays.pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1497,8 +1517,8 @@ export const ServerSettings = Schema.Struct({
    * and tasks on another machine; tasks already running there finish.
    */
   linkedEnvironmentsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /** Beta: Claude and Codex predict the next prompt after completed turns. Codex follows a change at once; open Claude threads after they restart. */
-  promptSuggestionsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Claude and Codex predict the next prompt after completed turns. Codex follows a change at once; open Claude threads after they restart. */
+  promptSuggestionsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1562,7 +1582,7 @@ export const ServerSettings = Schema.Struct({
   branchNamingMode: BranchNamingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("static" as const)),
   ),
-  branchNamePrefix: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("t3"))),
+  branchNamePrefix: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("prismux"))),
   branchNameInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   removeAgentCreditsOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sourceControlWritingStyle: SourceControlWritingStyleSetting.pipe(
@@ -1584,6 +1604,10 @@ export const ServerSettings = Schema.Struct({
   // Schema.Unknown preserves unknown-driver configs across versions; see providerInstance.ts.
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  /** User-chosen display order for provider instances across Settings and model pickers. */
+  providerOrder: Schema.Array(ProviderInstanceId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
   ),
   /** Default-enabled built-in provider slots (such as codex or claudeAgent) explicitly removed by the user. */
   hiddenDefaultProviderInstances: Schema.Array(ProviderInstanceId).pipe(
@@ -1995,6 +2019,7 @@ export const ServerSettingsPatch = Schema.Struct({
   offeredSourceControlProviders: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
   // Replace whole maps to avoid half-merged driver configs.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  providerOrder: Schema.optionalKey(Schema.Array(ProviderInstanceId)),
   hiddenDefaultProviderInstances: Schema.optionalKey(Schema.Array(ProviderInstanceId)),
   // Merge per source to avoid racing other edits; null removes an entry.
   usageLimitSources: Schema.optionalKey(
@@ -2132,6 +2157,9 @@ export const ClientSettingsPatch = Schema.Struct({
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),
   boringSidebarMultilineRows: Schema.optionalKey(Schema.Boolean),
   toolCallVisibility: Schema.optionalKey(ToolCallVisibility),
+  workStepsDisplay: Schema.optionalKey(WorkStepsDisplay),
+  workStepsCollapseTiming: Schema.optionalKey(WorkStepsCollapseTiming),
+  collapsedAssistantReplyMode: Schema.optionalKey(CollapsedAssistantReplyMode),
   screenReaderAnnouncements: Schema.optionalKey(ScreenReaderAnnouncements),
   screenReaderWindowTitle: Schema.optionalKey(Schema.Boolean),
   threadDetailsUsageEnabled: Schema.optionalKey(Schema.Boolean),

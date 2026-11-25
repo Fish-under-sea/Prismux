@@ -5,6 +5,72 @@ import type { ModelEsque } from "./providerIconUtils";
 
 export const DEFAULT_AGENT_SCOPED_VISIBLE_MODELS = 6;
 
+/**
+ * Orders provider instance entries according to the user's persisted `providerOrder`,
+ * preserving original relative order for any unlisted or newly discovered instances.
+ */
+export function orderProviderInstanceEntries<
+  T extends { readonly instanceId: ProviderInstanceId },
+>(
+  entries: ReadonlyArray<T>,
+  providerOrder: ReadonlyArray<ProviderInstanceId> | null | undefined,
+): ReadonlyArray<T> {
+  if (!providerOrder || providerOrder.length === 0 || entries.length <= 1) {
+    return entries;
+  }
+  const rankById = new Map<ProviderInstanceId, number>();
+  for (const [index, instanceId] of providerOrder.entries()) {
+    if (!rankById.has(instanceId)) {
+      rankById.set(instanceId, index);
+    }
+  }
+  if (rankById.size === 0) {
+    return entries;
+  }
+  return entries
+    .map((entry, originalIndex) => ({
+      entry,
+      rank: rankById.get(entry.instanceId) ?? Number.POSITIVE_INFINITY,
+      originalIndex,
+    }))
+    .toSorted((left, right) =>
+      left.rank !== right.rank ? left.rank - right.rank : left.originalIndex - right.originalIndex,
+    )
+    .map((item) => item.entry);
+}
+
+/**
+ * Orders a single provider instance's models according to `providerModelPreferences[instanceId].modelOrder`,
+ * preserving original relative order for models not explicitly listed.
+ */
+export function orderModelOptionsByPreference<T extends { readonly slug: string }>(
+  models: ReadonlyArray<T>,
+  modelOrder: ReadonlyArray<string> | null | undefined,
+): ReadonlyArray<T> {
+  if (!modelOrder || modelOrder.length === 0 || models.length <= 1) {
+    return models;
+  }
+  const rankBySlug = new Map<string, number>();
+  for (const [index, slug] of modelOrder.entries()) {
+    if (!rankBySlug.has(slug)) {
+      rankBySlug.set(slug, index);
+    }
+  }
+  if (rankBySlug.size === 0) {
+    return models;
+  }
+  return models
+    .map((model, originalIndex) => ({
+      model,
+      rank: rankBySlug.get(model.slug) ?? Number.POSITIVE_INFINITY,
+      originalIndex,
+    }))
+    .toSorted((left, right) =>
+      left.rank !== right.rank ? left.rank - right.rank : left.originalIndex - right.originalIndex,
+    )
+    .map((item) => item.model);
+}
+
 /** Keeps a hidden model visible while its provider is locked or turned off. */
 export function retainedModelWhileProviderLocked(
   entry: {

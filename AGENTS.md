@@ -17,7 +17,7 @@
 
 ## 一、项目定位、品牌常量与 Monorepo 边界
 
-Prismux 是一个「极简液态玻璃 AI 超级工作台与 24h 秘书系统」，在 **v0.1.0 架构重构中以真实 T3 Code（含原生 Electron 44 桌面端、`apps/server` 与 `apps/web`）为运行底座**（逐步退役早期原型壳 `apps/workbench-ui`），融合 24 小时常驻无头守护进程（`apps/daemon`）、任意代理接任主秘书槽位（`Chief Thread Slot`）、单文件 SQLite 混合记忆引擎、Cordis 双域可逆插件内核、Magpie 端到端加密同步引擎、夜间全自动工场，以及外置沉淀的 360° Fresnel 液态玻璃（`@prismux/appearance`）与多源壁纸引擎（`@prismux/wallpaper`）。
+Prismux 是一个「极简液态玻璃 AI 超级工作台与 24h 秘书系统」，在 **v0.1.0+ 架构中以真实 T3 Code（含原生 Electron 44 桌面端、`apps/server` 与 `apps/web`）为运行底座**（已彻底退役早期原型壳），融合 24 小时常驻无头守护进程（`apps/daemon`）、任意代理接任主秘书槽位（`Chief Thread Slot`）、单文件 SQLite 混合记忆引擎、Cordis 双域可逆插件内核、Magpie 端到端加密同步引擎、夜间全自动工场，以及外置沉淀的 360° Fresnel 液态玻璃（`@prismux/appearance`）与多源壁纸引擎（`@prismux/wallpaper`）。
 
 ### 品牌命名常量与远端仓库
 
@@ -38,7 +38,7 @@ prismux/
 ├── AGENTS.md                          # 本文件：跨机器统配入口与工程红线
 ├── README.md                          # 项目中文概览与快速开始
 ├── UPSTREAM_LOCK.json                 # 记录上游 pingdotgg/t3code 基线仓库、分支、Commit SHA 与同步时间（便于周期合并）
-├── pnpm-workspace.yaml                # Workspace 边界定义（当前白名单含 packages/*、apps/{daemon,workbench-ui}、plugins-official/plugin-*）
+├── pnpm-workspace.yaml                # Workspace 边界定义（白名单含 packages/*、apps/daemon、plugins-official/plugin-*）
 ├── package.json                       # 根脚本（typecheck / build / test / test:scripts / upstream:* / brand:rename / plugin:pack / release:build）
 ├── tsconfig.base.json                 # 公共 TS 严格基线（ES2024 + NodeNext + verbatimModuleSyntax）
 ├── docs/
@@ -62,9 +62,7 @@ prismux/
 │   ├── prismux-appearance/            # @prismux/appearance：1:1 FISH-Dock 光学天体三态胶囊、浮窗调色盘、对比度钳制与 T3 Glass 桥接
 │   └── prismux-wallpaper/             # @prismux/wallpaper：右侧壁纸边栏、完整设置页、Z-0 多源渲染舞台（Image/Video/Web/WebWallGL）与 Steam 431960 扫描器
 ├── apps/
-│   ├── daemon/                        # @prismux/daemon：24h 无头守护服务（主秘书槽位、五大原语、双源更新器、夜间工场）
-│   ├── workbench-ui/                  # @prismux/workbench-ui：[待退役原型壳] v0.0.1 原型验证界面，正按 v0.1.0 方案退役并替换为真实 T3 Code 融合界面
-│   └── desktop-tauri/                 # prismux-desktop：[历史/阶段原生壳] 原 Tauri v2 壳（v0.1.0 起主桌面端切换为 T3 Code 原生 Electron 44 桌面端，不纳入 pnpm workspace）
+│   └── daemon/                        # @prismux/daemon：24h 无头守护服务（主秘书槽位、五大原语、双源更新器、夜间工场）
 └── plugins-official/                  # 官方认证独立插件源码与索引（活跃 2 款默认全部不预装；pet / ssh 已停用：已被内置功能取代）
     ├── catalog/official.json          # 官方插件权威索引（活跃 qq / fishdock-hook + retiredPlugins 停用说明）
     ├── plugin-qq/                     # @prismux/plugin-qq：OneBot v11 私聊主秘书 + 群聊隔离陪聊插件
@@ -73,10 +71,9 @@ prismux/
 
 ### Workspace 与技术栈边界
 
-- **基础工具链要求**：`Node.js >= 24.12.0`、`pnpm >= 10.0.0`（仓库声明 `pnpm@12.3.4`；`vendor/t3code` 上游另声明 `pnpm@12.14.0` 与 `vite-plus` `vp` 构建体系）、`TypeScript >= 5.8`（`NodeNext` + `verbatimModuleSyntax`，包内相对导入必须显式带 `.js` 后缀，纯类型导入使用 `import type`）、`Electron 44`（T3 Code 原生桌面端）、`Rust >= 1.85`（T3 Code 原生 `resource-monitor` 及历史 `apps/desktop-tauri`）。
-- **`pnpm-workspace.yaml` 白名单**：当前包含 `packages/*`（自动纳入 `packages/prismux-appearance` 与 `packages/prismux-wallpaper`）、`apps/daemon`、`apps/workbench-ui`、`plugins-official/plugin-*`，暂排除 `vendor/t3code` 与 `apps/desktop-tauri`。
+- **基础工具链要求**：`Node.js >= 24.12.0`、`pnpm >= 10.0.0`（仓库声明 `pnpm@12.3.4`；`vendor/t3code` 上游另声明 `pnpm@12.14.0` 与 `vite-plus` `vp` 构建体系）、`TypeScript >= 5.8`（`NodeNext` + `verbatimModuleSyntax`，包内相对导入必须显式带 `.js` 后缀，纯类型导入使用 `import type`）、`Electron 44`（T3 Code 原生桌面端）、`Rust >= 1.85`（T3 Code 原生 `resource-monitor`）。
+- **`pnpm-workspace.yaml` 白名单**：包含 `packages/*`（自动纳入 `packages/prismux-appearance` 与 `packages/prismux-wallpaper`）、`apps/daemon`、`plugins-official/plugin-*`，排除拥有独立 workspace 的 `vendor/t3code`。
 - **`vendor/t3code/` 分层治理**：`vendor/t3code/` 作为真实 T3 Code 运行底座进行可控二次开发（按需可从子模块转为 Prismux 主仓常规托管源码目录），**所有定制必须严格收敛在 [`docs/t3code-patch-manifest.md`](./docs/t3code-patch-manifest.md) 登记的挂载点内**，同时保留 `UPSTREAM_LOCK.json` 记录 `pingdotgg/t3code` 上游基线 SHA（`b23f1e8af9b13af2c4aa1ba8e0d6987550688645`）以便周期性合并上游更新。
-- **`apps/desktop-tauri/` Rust 隔离**：属于独立 Cargo crate，不纳入 `pnpm` workspace。
 
 ## 二、五大绝对工程红线
 
@@ -110,7 +107,7 @@ prismux/
 | **M1：骨架、只读 T3 桥接与守护中枢** | 初始化 pnpm Monorepo 与 `scripts/` 工具链；拉取只读 `vendor/t3code` 并写入 `UPSTREAM_LOCK.json`；实现 `apps/daemon` 进程监督、环境变量清洗、主秘书槽位（`Chief Thread Slot`）与 `PersistentPtyPool`（默认每终端 `2 MB` 环形缓冲） | `pnpm -r typecheck`、`pnpm -r build`、`pnpm test:scripts` 与 `pnpm upstream:check` 全绿；`node apps/daemon/dist/cli.js start --headless` 可无界面连上 T3 Server RPC 并在重连后无损回放 PTY 历史流 |
 | **M2：内生三域记忆库与五大标杆原语** | 实现 `packages/memory-core`（SQLite WAL + FTS5 + `sqlite-vec` + Obsidian 导入）；实现 `forwardIdentity` 作用域硬隔离与 60 s 熔断、`LifecycleHookBus`（6 类事件、退出码 `2` 拦截、安全钩子默认 `onFailure: "block"`、四档权限）、`HandoffEngine`（`/handoff` + 三档拨盘）与 `WorktreeSandbox`（OS 级写隔离 + 域名白名单网关） | 越权单测验证 `qq_group:<gid>` 查询 `private/chief` 与 `workspace/*` **100% 返回空集**；安全 Hook 超时或抛错时必定阻断执行；`/handoff` 可无损提纯 `{ goal, decisions, touchedFiles, openQuestions }` 并续跑新线程 |
 | **M3：Cordis 双轨插件商城与 Magpie 同步** | 实现 `packages/cordis-kernel`（顶层 `engines.prismux` SemVer 校验、`ctx.effect()` 卸载零残留、官方 SHA-256 校验、免 Git 无脚本 `npm` Tarball 安装器 + `distribution: "managed"` 锁）；实现 `packages/sync-vault`（Argon2id + AEAD 密封、WebDAV/S3/Git 独立开关、`If-Match` 乐观锁、60 s 停滞看门狗与 `data/` 便携模式） | 慢速流模拟测试 3 分钟持续低速传输不断连、连续 60 s 零字节准时触发停滞报错；双机并发上传验证 `If-Match`（及降级 `HEAD ETag`）拦截覆盖；`npm` 插件启停与卸载无残留监听、路由或 DOM |
-| **M4：真实 T3 Code 融合底座、液态玻璃、四把手术刀与壁纸引擎** | 完成 `@prismux/appearance`（1:1 FISH-Dock 天体三态胶囊、浮窗调色盘、≥ 4.5:1 对比度钳制、T3 Glass 桥接）与 `@prismux/wallpaper`（右侧壁纸边栏、5 页签设置页、Z-0 多源渲染舞台与 Steam `431960` 扫描器）；通过 `docs/t3code-patch-manifest.md` 6 大最小入侵挂载点融入真实 T3 Code（Electron 44 `apps/desktop` + `apps/server` + `apps/web`），逐步退役旧原型壳 `apps/workbench-ui`，并集成 4 大内置效率增强与 NSIS 安装包 | `@prismux/appearance`、`@prismux/wallpaper` 与 T3 Code（`server / web / desktop`）编译与单测全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成八态、对比度、`prefers-reduced-motion` 与无 GPU 兜底核验；**真实桌面二进制冷启动直达工作台、窗口拖拽区与最小化/最大化/关闭三键 100% 可用，并通过多场景实机截图自审（天体三态胶囊、右侧壁纸边栏、设置页、遮挡 `0 FPS` 挂起、官方插件零预装声明）** |
+| **M4：真实 T3 Code 融合底座、液态玻璃、四把手术刀与壁纸引擎** | 完成 `@prismux/appearance`（1:1 FISH-Dock 天体三态胶囊、浮窗调色盘、≥ 4.5:1 对比度钳制、T3 Glass 桥接）与 `@prismux/wallpaper`（右侧壁纸边栏、5 页签设置页、Z-0 多源渲染舞台与 Steam `431960` 扫描器）；通过 `docs/t3code-patch-manifest.md` 6 大最小入侵挂载点融入真实 T3 Code（Electron 44 `apps/desktop` + `apps/server` + `apps/web`），彻底退役早期原型壳，并集成 4 大内置效率增强与 NSIS 安装包 | `@prismux/appearance`、`@prismux/wallpaper` 与 T3 Code（`server / web / desktop`）编译与单测全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成八态、对比度、`prefers-reduced-motion` 与无 GPU 兜底核验；**真实桌面二进制冷启动直达工作台、窗口拖拽区与最小化/最大化/关闭三键 100% 可用，并通过多场景实机截图自审（天体三态胶囊、右侧壁纸边栏、设置页、遮挡 `0 FPS` 挂起、官方插件零预装声明）** |
 | **M5：夜间全自动工场与官方独立插件** | 完成 `OvernightFactory`（Gmail OAuth2 / IMAP `#factory` 监听 → 记忆补全与 Handoff 立项 → Worktree 沙箱编码与提交 → Oracle 只读 `review` 挑刺 → HTML 完工早报回信与 `prismux://review/<threadId>` 深链）；维护 `plugins-official/` 下活跃官方插件 `plugin-qq` 与 `plugin-fishdock-hook`（原 `plugin-pet` 与 `plugin-ssh` 已停用并移除：已被 Prismux 内置功能取代） | 跑通端到端模拟邮件入站 → 自动拉分支改代码过单测 → 产出带 Diff 与 Oracle 评语的 HTML 邮件全文；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
 
 ## 四、核心工具脚本与插件打包契约
@@ -153,7 +150,7 @@ prismux/
 | :--- | :--- | :--- |
 | `npm pack` / `npm publish` 报 `Z_DATA_ERROR: zlib: incorrect data check` 或产生损坏 gzip | 部分机器 Node 24 处理大 buffer 的 zlib 存在异常 | 插件打包统一走 `scripts/pack-plugin.ts`（内置 `gunzipSync` 回环核对）；发布 npm 大包时切换至本机档案记录的 Node 22 LTS 备用版 |
 | Windows 检出 `vendor/t3code` 或深层依赖报 `Filename too long` | Windows 默认路径长度限制 | 所有子模块拉取与仓库操作显式带 `-c core.longpaths=true`（或在本地 Git 开启 `git config --global core.longpaths true`） |
-| Windows 下 Tauri Rust 链接阶段报 `0xC0000005`（`STATUS_ACCESS_VIOLATION`） | MSVC `link.exe` 高并发链接偶发内存访问冲突 | 在 `apps/desktop-tauri` 执行 `cargo check` / `cargo test` / `cargo build` 时固定传入 `-j 1` 串行链接并重试 |
+| Windows 下 Rust（`resource-monitor`）链接阶段报 `0xC0000005`（`STATUS_ACCESS_VIOLATION`） | MSVC `link.exe` 高并发链接偶发内存访问冲突 | 在 `vendor/t3code/native/resource-monitor` 执行 `cargo check` / `cargo test` / `cargo build` 时固定传入 `-j 1` 串行链接并重试 |
 | 从 Electron 宿主或桌面终端拉起的子 Shell / Provider 行为异常、误入纯 Node 模式 | 宿主进程遗留 `ELECTRON_RUN_AS_NODE=1` 等环境变量 | `apps/daemon` 在创建任何 `vendor/t3code` 子进程、PTY 或 Coding Agent 会话前，强制从子进程 `env` 剔除 `ELECTRON_RUN_AS_NODE` |
 | `node --test` 在受限沙箱报 `spawn EPERM` | 沙箱限制进程隔离管道 | 常规环境优先不加 flag 运行默认进程隔离 `node --test`；仅在沙箱受限被拒时降级为 `node --test --test-isolation=none "<glob>"`，真实子进程用例须申请单次授权重跑再计入通过 |
 | `git` / 网络请求报 `TLS connect error: unexpected eof` 或 `schannel` 凭证异常 | 默认 TLS 后端波动或本机代理变量冲突 | Git 命令追加 `-c http.sslBackend=openssl -c http.version=HTTP/1.1`；若本机同时开启 TUN 代理并残留 `HTTP_PROXY` / `HTTPS_PROXY`，按本机档案清空代理环境变量后直连 |

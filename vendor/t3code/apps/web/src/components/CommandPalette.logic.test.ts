@@ -1,3 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodePath from "node:path";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
@@ -985,5 +989,17 @@ describe("newThreadNoProjectIndex", () => {
   it("keeps a pinned or current scratch project in its own place", () => {
     expect(newThreadNoProjectIndex([entry(false, true, true), entry()])).toBe(0);
     expect(newThreadNoProjectIndex([entry(true), entry(true, false, true), entry()])).toBe(1);
+  });
+});
+
+describe("CommandPalette de-T3 prompt link cleanup", () => {
+  it("omits Copy prompt link commands and unused copyPromptLink imports", () => {
+    const dir = NodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+    const source = NodeFS.readFileSync(NodePath.join(dir, "CommandPalette.tsx"), "utf8");
+    expect(source).not.toContain("Copy prompt link");
+    expect(source).not.toContain("action:copy-prompt-link");
+    expect(source).not.toContain("composerPromptLink");
+    expect(source).not.toContain("copyPromptLink");
+    expect(source).not.toContain("promptLinkRepositoryOf");
   });
 });

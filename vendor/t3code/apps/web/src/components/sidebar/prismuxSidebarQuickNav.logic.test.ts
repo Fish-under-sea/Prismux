@@ -11,6 +11,7 @@ import {
   PRISMUX_SIDEBAR_PROJECTS_OPEN_KEY,
   PRISMUX_SIDEBAR_QUICK_NAV_IDS,
   PRISMUX_SIDEBAR_QUICK_NAV_ROUTES,
+  PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS,
   readMobileSidebarOnboardingDismissed,
   readSidebarProjectsSectionOpen,
   requestLocateActiveSidebarThread,
@@ -26,7 +27,11 @@ import {
   type SidebarStorageLike,
 } from "./prismuxSidebarQuickNav.logic";
 import { getPrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
-import { isSidebarUtilityPage } from "./mainAppLocation";
+import {
+  isSidebarToggleablePanelPage,
+  isSidebarUtilityPage,
+  resolveSidebarPanelToggleNavigation,
+} from "./mainAppLocation";
 
 function createMemoryStorage(): SidebarStorageLike & { readonly data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -40,14 +45,15 @@ function createMemoryStorage(): SidebarStorageLike & { readonly data: Map<string
 }
 
 describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
-  it("maps quick-nav entries strictly to the 5-item Orca order and keeps Plugins inside Settings", () => {
+  it("maps quick-nav entries strictly to the 5-item order replacing Mobile with Overnight Factory and supports toggle-close", () => {
     expect([...PRISMUX_SIDEBAR_QUICK_NAV_IDS]).toEqual([
       "diagnostics",
       "tasks",
       "workspace-board",
       "automations",
-      "mobile",
+      "overnight-factory",
     ]);
+    expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("mobile");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("bots");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("plugins");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_ROUTES).toEqual({
@@ -55,7 +61,7 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
       tasks: "/tasks",
       workspaceBoard: "/workspace-board",
       automations: "/scheduled-tasks",
-      mobileAccess: "/settings/access",
+      overnightFactory: "/overnight-factory",
       plugins: "/settings/plugins",
     });
 
@@ -63,16 +69,100 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
       tasks: "任务面板",
       workspaceBoard: "工作区板",
       scheduledTasks: "定时任务",
+      overnightFactory: "夜间工场与邮箱",
     });
     expect(getPrismuxSidebarQuickNavCopy("en")).toEqual({
       tasks: "Tasks",
       workspaceBoard: "Workspace board",
       scheduledTasks: "Scheduled Tasks",
+      overnightFactory: "Overnight Factory",
     });
 
-    expect(isSidebarUtilityPage("/tasks")).toBe(true);
-    expect(isSidebarUtilityPage("/workspace-board")).toBe(true);
-    expect(isSidebarUtilityPage("/scheduled-tasks")).toBe(true);
+    for (const panelPath of [
+      "/tasks",
+      "/workspace-board",
+      "/scheduled-tasks",
+      "/automations",
+      "/overnight-factory",
+      "/issues",
+      "/pull-requests",
+    ]) {
+      expect(isSidebarUtilityPage(panelPath)).toBe(true);
+      expect(isSidebarToggleablePanelPage(panelPath)).toBe(true);
+    }
+    expect(isSidebarUtilityPage("/projects/demo")).toBe(true);
+    expect(isSidebarToggleablePanelPage("/projects/demo")).toBe(false);
+
+    // Toggle-close logic for all 4 work panels + Issue & PR icons
+    const priorThread = "/env-local/thread-42";
+    const cases = [
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks,
+        targetHref: "/tasks",
+        activePath: "/tasks",
+      },
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.workspaceBoard,
+        targetHref: "/workspace-board",
+        activePath: "/workspace-board",
+      },
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.automations,
+        targetHref: "/scheduled-tasks",
+        activePath: "/scheduled-tasks",
+      },
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.automations,
+        targetHref: "/scheduled-tasks",
+        activePath: "/automations",
+      },
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.overnightFactory,
+        targetHref: "/overnight-factory",
+        activePath: "/overnight-factory",
+      },
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.issues,
+        targetHref: "/issues",
+        activePath: "/issues",
+      },
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.pullRequests,
+        targetHref: "/pull-requests",
+        activePath: "/pull-requests",
+      },
+    ];
+    for (const c of cases) {
+      // Opening from a thread opens the panel
+      expect(
+        resolveSidebarPanelToggleNavigation({
+          currentPathname: priorThread,
+          panelPathnames: c.paths,
+          targetHref: c.targetHref,
+          lastMainAppHref: priorThread,
+        }),
+      ).toEqual({ action: "open", href: c.targetHref });
+
+      // Clicking the active panel button again closes it and returns to prior session
+      expect(
+        resolveSidebarPanelToggleNavigation({
+          currentPathname: c.activePath,
+          panelPathnames: c.paths,
+          targetHref: c.targetHref,
+          lastMainAppHref: priorThread,
+        }),
+      ).toEqual({ action: "close", href: priorThread });
+
+      // Falls back cleanly to "/" if no prior session was recorded
+      expect(
+        resolveSidebarPanelToggleNavigation({
+          currentPathname: c.activePath,
+          panelPathnames: c.paths,
+          targetHref: c.targetHref,
+          lastMainAppHref: null,
+        }),
+      ).toEqual({ action: "close", href: "/" });
+    }
   });
 
   it("persists Prismux Mobile [New] onboarding badge dismissal in localStorage", () => {
@@ -201,6 +291,9 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
       "SidebarChrome.tsx",
       "SidebarThreadHeader.tsx",
       "SidebarProjectFolderHeader.tsx",
+      "SidebarHostGroupCapsule.tsx",
+      "SidebarWorkspaceCard.tsx",
+      "sidebarWorkspaceGrouping.ts",
       "SidebarThreadRow.tsx",
       "sidebarMicroIndicators.ts",
     ];

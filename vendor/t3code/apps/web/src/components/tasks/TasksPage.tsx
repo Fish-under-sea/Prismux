@@ -18,8 +18,6 @@ import {
   FolderGit2Icon,
   FolderPlusIcon,
   GitBranchIcon,
-  GitMergeIcon,
-  GitPullRequestIcon,
   LoaderCircleIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -40,6 +38,7 @@ import { useDebouncedValue } from "~/state/queries";
 import { IssueStateGlyph } from "../issue/issuePresentation";
 import { issueFilterProjects, issueListTargets } from "../issue/issuesSearch.logic";
 import { pullRequestProjectKey } from "../pullRequest/PullRequestListFilters";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import {
   PullRequestActorAvatar,
   PullRequestLabelChip,
@@ -104,10 +103,10 @@ function PresetChip({
       data-pmx-work-panel-control={active ? undefined : "1"}
       onClick={onClick}
       className={cn(
-        "cursor-pointer rounded-md border px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "inline-flex h-7 cursor-pointer items-center rounded-lg border px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-          : "border-border/75 bg-card text-foreground shadow-xs hover:bg-accent",
+          : "border-border/75 bg-card text-foreground/90 shadow-xs hover:bg-accent hover:text-foreground",
       )}
     >
       {label}
@@ -496,6 +495,13 @@ export const TasksPage = memo(function TasksPage() {
     setActiveRawQuery(applyTasksQueryPatch(activeRawQuery, mode, patch));
   };
 
+  const activeResultCount =
+    tabMode === "projects"
+      ? activeProjects.length
+      : tabMode === "prs"
+        ? prRows.length
+        : issueRows.length;
+
   return (
     <SidebarInset className="h-dvh min-w-0 flex-1 overflow-hidden">
       <PrismuxStageFrame
@@ -504,82 +510,63 @@ export const TasksPage = memo(function TasksPage() {
       >
         <div
           data-testid="prismux-tasks-page"
-          className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3.5"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
-          {/* Top Chrome: Source Bar + Mode Controls */}
-          <div className="flex flex-none flex-col gap-2.5">
-            {/* Row 1: Close × | Divider | GitHub Source Button | Host / Selected Projects Pill */}
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        data-testid="tasks-close-button"
-                        onClick={() => void navigateToMainApp()}
-                        aria-label={copy.closeLabel}
-                        className="size-7 rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                      />
-                    }
-                  >
-                    <XIcon className="size-4" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="bottom" sideOffset={6}>
-                    {copy.closeTooltip}
-                  </TooltipPopup>
-                </Tooltip>
-
-                <div className="mx-0.5 h-5 w-px bg-border/60" aria-hidden="true" />
-
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        data-task-source="github"
-                        data-pmx-work-panel-control="1"
-                        aria-label={copy.githubSourceLabel}
-                        aria-pressed="true"
-                        className="flex size-8 cursor-pointer items-center justify-center rounded-md border border-primary/55 bg-card text-foreground shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                      />
-                    }
-                  >
-                    <GitHubMark className="size-4" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="bottom" sideOffset={6}>
-                    {copy.githubSourceLabel}
-                  </TooltipPopup>
-                </Tooltip>
-
-                <button
-                  type="button"
-                  onClick={() => setProjectPickerOpen(true)}
-                  data-testid="tasks-source-summary"
-                  data-pmx-work-panel-control="1"
-                  className="inline-flex h-8 max-w-[min(420px,45vw)] cursor-pointer items-center gap-1.5 rounded-md border border-border/75 bg-card px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          {/* Unified Work-Panel Header Bar */}
+          <header className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      data-task-source="github"
+                      aria-label={copy.githubSourceLabel}
+                      aria-pressed="true"
+                      onClick={() => setProjectPickerOpen(true)}
+                      className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-primary/14 text-primary transition-colors hover:bg-primary/20 active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  }
                 >
-                  <span className="font-medium text-foreground">{copy.sourcePrefixGitHub}</span>
-                  <span aria-hidden="true" className="opacity-50">
-                    ·
+                  <GitHubMark className="size-4" />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom" sideOffset={6}>
+                  {copy.githubSourceLabel}
+                </TooltipPopup>
+              </Tooltip>
+
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                  {copy.pageTitle}
+                </h1>
+                {activeResultCount > 0 ? (
+                  <span className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-foreground/85 tabular-nums">
+                    {activeResultCount}
                   </span>
-                  <span className="truncate">{sourceContextLabel}</span>
-                </button>
+                ) : null}
               </div>
 
-              <span className="hidden text-[11px] font-medium text-muted-foreground sm:inline">
-                {copy.pageTitle}
-              </span>
+              <button
+                type="button"
+                onClick={() => setProjectPickerOpen(true)}
+                data-testid="tasks-source-summary"
+                data-pmx-work-panel-control="1"
+                className="inline-flex h-7 max-w-[min(360px,40vw)] cursor-pointer items-center gap-1.5 rounded-lg border border-border/75 bg-card px-2.5 text-xs text-muted-foreground shadow-xs transition-colors hover:bg-accent hover:text-foreground active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span className="font-medium text-foreground">{copy.sourcePrefixGitHub}</span>
+                <span aria-hidden="true" className="opacity-50">
+                  ·
+                </span>
+                <span className="truncate">{sourceContextLabel}</span>
+              </button>
             </div>
 
-            {/* Row 2: Segmented Tabs (议题 | PR | 项目) + Project Picker + Open External */}
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
               <div
                 role="tablist"
                 aria-label={copy.pageTitle}
-                className="flex items-center gap-1 text-xs"
+                data-pmx-work-panel-control="1"
+                className="inline-flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/60 p-0.5 text-xs"
               >
                 {(
                   [
@@ -596,13 +583,12 @@ export const TasksPage = memo(function TasksPage() {
                       role="tab"
                       aria-selected={active}
                       data-testid={`tasks-tab-${tab.id}`}
-                      data-pmx-work-panel-control={active ? undefined : "1"}
                       onClick={() => setTabMode(tab.id)}
                       className={cn(
-                        "cursor-pointer rounded-md border px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        "h-6 cursor-pointer rounded-md px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring",
                         active
-                          ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-                          : "border-border/75 bg-card text-foreground shadow-xs hover:bg-accent",
+                          ? "bg-primary font-semibold text-primary-foreground shadow-xs"
+                          : "text-foreground/80 hover:bg-accent/70 hover:text-foreground",
                       )}
                     >
                       {tab.label}
@@ -619,7 +605,7 @@ export const TasksPage = memo(function TasksPage() {
                       type="button"
                       data-testid="tasks-project-picker-trigger"
                       data-pmx-work-panel-control="1"
-                      className="inline-flex h-8 max-w-[230px] cursor-pointer items-center gap-1.5 rounded-md border border-border/75 bg-card px-2.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                      className="inline-flex h-7 max-w-[220px] cursor-pointer items-center gap-1.5 rounded-lg border border-border/75 bg-card px-2.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-accent active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring"
                     />
                   }
                 >
@@ -629,7 +615,7 @@ export const TasksPage = memo(function TasksPage() {
                 </PopoverTrigger>
                 <PopoverPopup
                   side="bottom"
-                  align="start"
+                  align="end"
                   sideOffset={6}
                   className="w-72 p-1.5"
                 >
@@ -718,43 +704,75 @@ export const TasksPage = memo(function TasksPage() {
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon-sm"
-                      data-pmx-work-panel-control="1"
-                      disabled={!externalGitHubUrl}
-                      onClick={() => {
-                        if (externalGitHubUrl) {
-                          window.open(externalGitHubUrl, "_blank", "noopener,noreferrer");
+                    <span className="inline-flex">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        data-pmx-work-panel-control="1"
+                        disabled={!externalGitHubUrl}
+                        onClick={() => {
+                          if (externalGitHubUrl) {
+                            window.open(externalGitHubUrl, "_blank", "noopener,noreferrer");
+                          }
+                        }}
+                        aria-label={
+                          externalGitHubUrl
+                            ? copy.openInGitHubTooltip
+                            : copy.openInGitHubDisabledTooltip
                         }
-                      }}
-                      aria-label={copy.openInGitHubTooltip}
-                      className="size-8 rounded-md border-border/75 bg-card text-foreground shadow-xs hover:bg-accent"
-                    />
+                        className="size-7 rounded-lg border-border/75 bg-card text-foreground shadow-xs hover:bg-accent disabled:opacity-50"
+                      >
+                        <ExternalLinkIcon className="size-3.5" />
+                      </Button>
+                    </span>
                   }
-                >
-                  <ExternalLinkIcon className="size-3.5" />
-                </TooltipTrigger>
+                />
                 <TooltipPopup side="bottom" sideOffset={6}>
                   {externalGitHubUrl ? copy.openInGitHubTooltip : copy.openInGitHubDisabledTooltip}
                 </TooltipPopup>
               </Tooltip>
-            </div>
-          </div>
 
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      data-testid="tasks-close-button"
+                      onClick={() => void navigateToMainApp()}
+                      aria-label={copy.closeLabel}
+                      className="size-7 rounded-md text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                    />
+                  }
+                >
+                  <XIcon className="size-4" />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom" sideOffset={6}>
+                  {copy.closeTooltip}
+                </TooltipPopup>
+              </Tooltip>
+            </div>
+          </header>
+
+          {/* Main Content Area (4px grid padding) */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
           {/* Main Content: Projects Grid OR Joined Filter Chrome + Table Shell */}
           {tabMode === "projects" ? (
             <div
               data-pmx-work-panel-card="1"
-              className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border/75 bg-card shadow-xs"
+              className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/75 bg-card shadow-xs"
             >
               {activeProjects.length === 0 ? (
                 <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
-                  <p className="text-base font-medium text-foreground">
+                  <span className="mb-3 grid size-11 place-items-center rounded-full bg-primary/14 text-primary">
+                    <FolderGit2Icon className="size-5" aria-hidden="true" />
+                  </span>
+                  <p className="text-sm font-semibold text-foreground">
                     {copy.noProjectsConfiguredTitle}
                   </p>
-                  <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                  <p className="mt-1.5 max-w-md text-xs leading-relaxed text-muted-foreground">
                     {copy.noProjectsConfiguredDescription}
                   </p>
                   <Button
@@ -770,7 +788,7 @@ export const TasksPage = memo(function TasksPage() {
                   </Button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3 overflow-y-auto p-3.5 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 overflow-y-auto p-4 md:grid-cols-2 xl:grid-cols-3">
                   {activeProjects.map((project) => {
                     const key = pullRequestProjectKey(project);
                     const count = threadCountByProjectKey.get(key) ?? 0;
@@ -779,16 +797,16 @@ export const TasksPage = memo(function TasksPage() {
                       <div
                         key={key}
                         data-pmx-work-panel-control="1"
-                        className="flex flex-col justify-between gap-3 rounded-lg border border-border/75 bg-card p-3.5 shadow-xs transition-colors hover:border-primary/45"
+                        className="flex flex-col justify-between gap-3 rounded-xl border border-border/75 bg-card p-4 shadow-xs transition-colors hover:border-primary/45"
                       >
                         <div className="min-w-0">
                           <div className="flex items-center justify-between gap-2">
                             <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
-                              <FolderGit2Icon className="size-4 shrink-0 text-primary/80" />
+                              <FolderGit2Icon className="size-4 shrink-0 text-primary/85" />
                               <span className="truncate">{project.title}</span>
                             </span>
                             {envName ? (
-                              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              <span className="shrink-0 rounded-full border border-border/60 bg-muted/80 px-2 py-0.5 text-[10px] font-medium text-foreground/80">
                                 {envName}
                               </span>
                             ) : null}
@@ -798,7 +816,7 @@ export const TasksPage = memo(function TasksPage() {
                           </p>
                         </div>
                         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/45 pt-2.5 text-xs">
-                          <span className="text-muted-foreground">
+                          <span className="text-muted-foreground tabular-nums">
                             {copy.projectsLinkedThreads(count)}
                           </span>
                           <div className="flex items-center gap-1.5">
@@ -842,12 +860,12 @@ export const TasksPage = memo(function TasksPage() {
               )}
             </div>
           ) : (
-            <div className="mt-2.5 flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {/* Filter Chrome (joined smoothly to table shell below, unified workPanels surface) */}
               <div
                 data-testid="tasks-filter-chrome"
                 data-pmx-work-panel-card="1"
-                className="flex flex-none flex-col gap-2.5 rounded-t-md border border-border/75 bg-card px-3 py-2.5"
+                className="flex flex-none flex-col gap-2.5 rounded-t-xl border border-border/75 bg-card px-3.5 py-3"
               >
                 {/* Preset Chips Row */}
                 {tabMode === "prs" ? (
@@ -1119,7 +1137,7 @@ export const TasksPage = memo(function TasksPage() {
               {/* Joined Table Shell (rounded-t-none border-t-0, zero doubled seam) */}
               <div
                 data-pmx-work-panel-card="1"
-                className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-md border border-t-0 border-border/75 bg-card shadow-xs"
+                className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-xl border border-t-0 border-border/75 bg-card shadow-xs"
               >
                 <div className="min-h-0 flex-1 overflow-auto">
                   {/* Sticky Table Header */}
@@ -1127,7 +1145,7 @@ export const TasksPage = memo(function TasksPage() {
                     data-testid="tasks-table-header"
                     data-pmx-work-panel-control="1"
                     className={cn(
-                      "sticky top-0 z-10 grid h-8 min-w-[660px] items-center gap-3 border-b border-border/70 bg-muted/85 px-3 text-[11px] font-semibold tracking-wider text-foreground/80",
+                      "sticky top-0 z-10 grid h-8 min-w-[660px] items-center gap-3 border-b border-border/70 bg-muted/85 px-3.5 text-[11px] font-semibold tracking-wider text-foreground/85",
                       tableGridClass,
                     )}
                   >
@@ -1170,10 +1188,17 @@ export const TasksPage = memo(function TasksPage() {
                       data-testid="tasks-empty-state"
                       className="flex min-h-[260px] flex-col items-center justify-center px-6 py-12 text-center"
                     >
-                      <p className="text-base font-semibold text-foreground">
+                      <span className="mb-3 grid size-11 place-items-center rounded-full bg-primary/14 text-primary">
+                        {tabMode === "prs" ? (
+                          <PullRequestGlyph.pullRequest className="size-5" aria-hidden="true" />
+                        ) : (
+                          <GitHubMark className="size-5" />
+                        )}
+                      </span>
+                      <p className="text-sm font-semibold text-foreground">
                         {emptyState.title}
                       </p>
-                      <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                      <p className="mt-1.5 max-w-md text-xs leading-relaxed text-muted-foreground">
                         {emptyState.description}
                       </p>
                       {emptyState.kind === "no-sources" ? (
@@ -1321,9 +1346,9 @@ export const TasksPage = memo(function TasksPage() {
                           >
                             <span className="inline-flex items-center gap-1.5 font-mono text-[11px] font-medium text-muted-foreground">
                               {isMerged ? (
-                                <GitMergeIcon className="size-3.5 shrink-0 text-violet-500" />
+                                <PullRequestGlyph.merged className="size-3.5 shrink-0 text-violet-500" />
                               ) : (
-                                <GitPullRequestIcon
+                                <PullRequestGlyph.pullRequest
                                   className={cn(
                                     "size-3.5 shrink-0",
                                     isOpen ? "text-emerald-500" : "text-rose-500",
@@ -1403,6 +1428,7 @@ export const TasksPage = memo(function TasksPage() {
               </div>
             </div>
           )}
+          </div>
         </div>
       </PrismuxStageFrame>
     </SidebarInset>

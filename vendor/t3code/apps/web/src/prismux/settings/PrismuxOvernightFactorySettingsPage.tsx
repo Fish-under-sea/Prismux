@@ -1,3 +1,4 @@
+import { useLocation } from "@tanstack/react-router";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -20,16 +21,24 @@ import {
   Unlink2Icon,
   WifiIcon,
   XCircleIcon,
+  XIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useState } from "react";
 
 import { SettingsPageContainer, SettingsSection } from "../../components/settings/settingsLayout";
+import { useNavigateToMainApp } from "../../components/sidebar/mainAppLocation";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { SidebarInset } from "../../components/ui/sidebar";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { Toggle, ToggleGroup } from "../../components/ui/toggle-group";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../../components/ui/tooltip";
+import {
+  PrismuxStageFrame,
+  useWorkspaceTopbarPortal,
+} from "../../components/workspace/WorkspaceTopbarPortalContext";
 import { cn } from "../../lib/utils";
 import { useProjects } from "../../state/entities";
 import {
@@ -71,6 +80,8 @@ type OvernightDaemonSubset = Pick<
 >;
 
 export interface PrismuxOvernightFactorySettingsPageProps {
+  /** Render inside a standalone work-panel PrismuxStageFrame (auto-enabled on `/overnight-factory`). */
+  readonly standalone?: boolean;
   /** Optional overrides for isolated unit tests without full runtime context. */
   readonly daemonOverride?: OvernightDaemonSubset;
   readonly daemonReadyOverride?: boolean;
@@ -89,7 +100,60 @@ function defaultOpenExternalUrl(url: string): void {
   }
 }
 
+function isOvernightFactoryEscapeTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName;
+  if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+    return true;
+  }
+  return target.isContentEditable || target.closest("[role='dialog']") !== null;
+}
+
+function OvernightSectionCard({
+  standalone,
+  id,
+  title,
+  icon,
+  headerAction,
+  children,
+}: {
+  readonly standalone: boolean;
+  readonly id: string;
+  readonly title: string;
+  readonly icon: ReactNode;
+  readonly headerAction?: ReactNode;
+  readonly children: ReactNode;
+}) {
+  if (!standalone) {
+    return (
+      <SettingsSection id={id} title={title} icon={icon} headerAction={headerAction}>
+        {children}
+      </SettingsSection>
+    );
+  }
+
+  return (
+    <section
+      id={id}
+      data-pmx-work-panel-card="1"
+      className="overflow-hidden rounded-xl border border-border/75 bg-card/75 shadow-xs/5"
+    >
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2.5 border-b border-border/60 bg-muted/20 px-4 py-2.5">
+        <h2 className="flex min-w-0 items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
+          {icon}
+          <span className="truncate">{title}</span>
+        </h2>
+        {headerAction ? (
+          <div className="flex flex-wrap items-center justify-end gap-2">{headerAction}</div>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 function PrismuxOvernightFactoryShell({
+  standalone,
   daemon,
   daemonReady,
   initialSnapshotOverride,
@@ -97,6 +161,7 @@ function PrismuxOvernightFactoryShell({
   workspaceOptions,
   onOpenExternalUrl,
 }: {
+  readonly standalone: boolean;
   readonly daemon: OvernightDaemonSubset;
   readonly daemonReady: boolean;
   readonly initialSnapshotOverride?: DaemonOvernightConfigSnapshot;
@@ -104,6 +169,8 @@ function PrismuxOvernightFactoryShell({
   readonly workspaceOptions: ReadonlyArray<{ readonly title: string; readonly cwd: string }>;
   readonly onOpenExternalUrl: (url: string) => void;
 }) {
+  const navigateToMainApp = useNavigateToMainApp();
+  const topbarPortal = useWorkspaceTopbarPortal();
   const [draft, setDraft] = useState<OvernightFactoryDraft>(() =>
     initialSnapshotOverride
       ? hydrateOvernightDraftFromSnapshot(initialSnapshotOverride)
@@ -350,49 +417,46 @@ function PrismuxOvernightFactoryShell({
     }
   };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window Escape key listener closes standalone work panel when no input/dialog owns focus
+  useEffect(() => {
+    if (!standalone) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isOvernightFactoryEscapeTarget(event.target)) return;
+      event.preventDefault();
+      void navigateToMainApp();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [navigateToMainApp, standalone]);
+
   const mailConfigured = isMailChannelConfigured(draft);
   const parsedWhitelistCount = parseAllowedSendersInput(draft.allowedSendersText).length;
 
-  return (
-    <SettingsPageContainer width="wide">
-      {/* Top Status Banner */}
-      <div
-        id="prismux-overnight-factory"
-        data-pmx-overnight-settings-page=""
-        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-border/80 bg-card/75 px-4 py-3"
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <MoonStarIcon className="size-4 text-primary" />
-          <span className="text-sm font-semibold text-foreground">
-            夜间全自动工场（Overnight Factory）与邮箱绑定
-          </span>
-          <Badge variant={daemonReady ? "success" : "warning"}>
-            {daemonReady ? "Daemon 在线" : "Daemon 未连接"}
-          </Badge>
-          <Badge variant={draft.enabled ? "success" : "secondary"}>
-            {draft.enabled ? "工场运行中" : "默认关闭 · 待命"}
-          </Badge>
-          <Badge variant="outline" className="gap-1">
-            <LockIcon className="size-3" />
-            凭据 0600 加密密封
-          </Badge>
-        </div>
+  const statusBadges = (
+    <>
+      <Badge variant={daemonReady ? "success" : "warning"}>
+        {daemonReady ? "Daemon 在线" : "Daemon 未连接"}
+      </Badge>
+      <Badge variant={draft.enabled ? "success" : "secondary"}>
+        {draft.enabled ? "工场运行中" : "默认关闭 · 待命"}
+      </Badge>
+      <Badge variant="outline" className="gap-1">
+        <LockIcon className="size-3" />
+        凭据 0600 加密密封
+      </Badge>
+    </>
+  );
 
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={loading}
-          onClick={() => void loadAll(false)}
-        >
-          <RefreshCwIcon className={cn("size-3.5", loading && "animate-spin")} />
-          刷新状态
-        </Button>
-      </div>
-
+  const mainSections = (
+    <>
       {errorMsg ? (
         <div
           role="alert"
-          className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3.5 py-2.5 text-xs text-destructive"
+          data-pmx-work-panel-card="1"
+          className="flex items-center gap-2 rounded-xl border border-destructive/45 bg-destructive/12 px-3.5 py-2.5 text-xs text-destructive"
         >
           <AlertTriangleIcon className="size-4 shrink-0" />
           <span className="min-w-0 flex-1 break-all">{errorMsg}</span>
@@ -403,20 +467,22 @@ function PrismuxOvernightFactoryShell({
         <div
           role="status"
           aria-live="polite"
-          className="flex items-center gap-2 rounded-lg border border-success/35 bg-success/10 px-3.5 py-2.5 text-xs text-success-foreground"
+          data-pmx-work-panel-card="1"
+          className="flex items-center gap-2 rounded-xl border border-emerald-500/35 bg-emerald-500/12 px-3.5 py-2.5 text-xs text-foreground"
         >
-          <CheckCircle2Icon className="size-4 shrink-0" />
+          <CheckCircle2Icon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
           <span className="min-w-0 flex-1">{statusMsg}</span>
         </div>
       ) : null}
 
       {/* 区块 A · 邮箱登录与收发绑定 */}
-      <SettingsSection
+      <OvernightSectionCard
+        standalone={standalone}
         id="overnight-mail-binding"
         title="区块 A · 邮箱登录与收发绑定"
         icon={<MailIcon className="size-4 text-primary" />}
         headerAction={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant={mailConfigured ? "success" : "secondary"}>
               {mailConfigured
                 ? draft.mode === "gmail-oauth2"
@@ -429,8 +495,10 @@ function PrismuxOvernightFactoryShell({
               size="xs"
               variant="outline"
               data-testid="overnight-mail-toggle-btn"
+              data-pmx-work-panel-control="1"
               aria-expanded={mailExpanded}
               onClick={() => setMailExpanded((prev) => !prev)}
+              className="h-7 rounded-lg active:translate-y-px"
             >
               {mailExpanded ? (
                 <>
@@ -448,21 +516,24 @@ function PrismuxOvernightFactoryShell({
         }
       >
         <div data-testid="overnight-mail-section" className="space-y-4 p-4">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             支持 Gmail OAuth2 与通用 IMAP / SMTP（内置 QQ / 163 / Outlook 预设）。所有授权码与密钥仅写加密落盘，界面永不回显明文。
           </p>
           {/* Compact Summary Bar when collapsed */}
           {!mailExpanded ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <MailIcon className="size-4 text-primary/80" />
+            <div
+              data-pmx-work-panel-card="1"
+              className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border/65 bg-muted/20 px-3.5 py-2.5 text-xs text-muted-foreground"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <MailIcon className="size-4 shrink-0 text-primary/80" />
                 <span>
                   当前接入方式：
                   <strong className="font-medium text-foreground">
                     {draft.mode === "gmail-oauth2" ? "Gmail OAuth2" : "IMAP / SMTP 通用邮箱"}
                   </strong>
                   {" · 凭据文件："}
-                  <code className="rounded bg-muted/70 px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+                  <code className="rounded bg-muted/75 px-1.5 py-0.5 font-mono text-[11px] text-foreground">
                     {credentialsFile}
                   </code>
                 </span>
@@ -472,6 +543,7 @@ function PrismuxOvernightFactoryShell({
                 size="xs"
                 variant="default"
                 onClick={() => setMailExpanded(true)}
+                className="h-7 rounded-lg active:translate-y-px"
               >
                 配置收发邮箱
               </Button>
@@ -514,10 +586,11 @@ function PrismuxOvernightFactoryShell({
               {draft.mode === "gmail-oauth2" ? (
                 <div
                   data-testid="overnight-gmail-form"
-                  className="space-y-3 rounded-lg border border-border/75 bg-muted/25 p-3.5"
+                  data-pmx-work-panel-card="1"
+                  className="space-y-3.5 rounded-xl border border-border/75 bg-muted/20 p-3.5"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <MailCheckIcon className="size-4 text-primary" />
                       <span className="text-xs font-semibold text-foreground">
                         Gmail OAuth2 授权状态
@@ -534,8 +607,10 @@ function PrismuxOvernightFactoryShell({
                         type="button"
                         size="xs"
                         variant="outline"
+                        data-pmx-work-panel-control="1"
                         disabled={disconnectingGmail}
                         onClick={() => void handleDisconnectGmail()}
+                        className="h-7 rounded-lg active:translate-y-px"
                       >
                         <Unlink2Icon className="size-3.5" />
                         解除绑定
@@ -544,11 +619,11 @@ function PrismuxOvernightFactoryShell({
                   </div>
 
                   {draft.gmailConnected && draft.gmailBoundEmail ? (
-                    <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-foreground">
+                    <div className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-foreground">
                       已绑定邮箱：
                       <strong className="font-mono font-semibold">{draft.gmailBoundEmail}</strong>
                       {draft.gmailConnectedAt ? (
-                        <span className="ml-2 text-[11px] text-muted-foreground">
+                        <span className="ml-2 text-[11px] text-muted-foreground tabular-nums">
                           （绑定于 {formatOvernightTimestamp(draft.gmailConnectedAt)}）
                         </span>
                       ) : null}
@@ -559,12 +634,13 @@ function PrismuxOvernightFactoryShell({
                     <label className="space-y-1">
                       <span className="text-xs font-medium text-foreground">OAuth Client ID</span>
                       <Input
+                        data-pmx-work-panel-control="1"
                         value={draft.gmailClientId}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, gmailClientId: e.target.value }))
                         }
                         placeholder="xxxx.apps.googleusercontent.com"
-                        className="h-8 text-xs font-mono"
+                        className="h-8 rounded-lg font-mono text-xs"
                       />
                     </label>
 
@@ -576,6 +652,7 @@ function PrismuxOvernightFactoryShell({
                         </Badge>
                       </span>
                       <Input
+                        data-pmx-work-panel-control="1"
                         type="password"
                         autoComplete="new-password"
                         value={draft.gmailClientSecretInput}
@@ -590,7 +667,7 @@ function PrismuxOvernightFactoryShell({
                             ? "已密封保存（留空保留原密钥，输入新值则覆盖）"
                             : "输入 Google OAuth Client Secret"
                         }
-                        className="h-8 text-xs font-mono"
+                        className="h-8 rounded-lg font-mono text-xs"
                       />
                     </label>
 
@@ -599,12 +676,13 @@ function PrismuxOvernightFactoryShell({
                         Redirect URI（本地回调地址，留空自动使用当前 Daemon 地址）
                       </span>
                       <Input
+                        data-pmx-work-panel-control="1"
                         value={draft.gmailRedirectUri}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, gmailRedirectUri: e.target.value }))
                         }
                         placeholder="http://127.0.0.1:<daemonPort>/v1/overnight/oauth/gmail/callback"
-                        className="h-8 text-xs font-mono"
+                        className="h-8 rounded-lg font-mono text-xs"
                       />
                     </label>
                   </div>
@@ -617,6 +695,7 @@ function PrismuxOvernightFactoryShell({
                       data-testid="overnight-gmail-login-btn"
                       disabled={startingOAuth}
                       onClick={() => void handleStartGmailOAuth()}
+                      className="rounded-lg active:translate-y-px"
                     >
                       <ExternalLinkIcon className="size-3.5" />
                       {startingOAuth ? "正在生成授权链接..." : "一键浏览器登录绑定 Gmail"}
@@ -626,7 +705,9 @@ function PrismuxOvernightFactoryShell({
                         type="button"
                         size="sm"
                         variant="outline"
+                        data-pmx-work-panel-control="1"
                         onClick={() => void loadAll(false)}
+                        className="rounded-lg active:translate-y-px"
                       >
                         <RefreshCwIcon className="size-3.5" />
                         已完成授权，同步状态
@@ -638,7 +719,8 @@ function PrismuxOvernightFactoryShell({
                 /* IMAP / SMTP Mode */
                 <div
                   data-testid="overnight-imap-form"
-                  className="space-y-3.5 rounded-lg border border-border/75 bg-muted/25 p-3.5"
+                  data-pmx-work-panel-card="1"
+                  className="space-y-3.5 rounded-xl border border-border/75 bg-muted/20 p-3.5"
                 >
                   {/* One-click Presets */}
                   <div className="space-y-1.5">
@@ -651,15 +733,16 @@ function PrismuxOvernightFactoryShell({
                             key={preset.id}
                             type="button"
                             data-testid={`overnight-preset-${preset.id}`}
+                            data-pmx-work-panel-control={active ? undefined : "1"}
                             aria-pressed={active}
                             onClick={() =>
                               setDraft((prev) => applyOvernightMailPreset(prev, preset.id))
                             }
                             className={cn(
-                              "cursor-pointer rounded-md border px-3 py-1.5 text-left text-xs transition-colors",
+                              "cursor-pointer rounded-lg border px-3 py-1.5 text-left text-xs transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring",
                               active
                                 ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-                                : "border-border/80 bg-card text-foreground/85 hover:border-primary/45 hover:bg-accent/55 hover:text-foreground",
+                                : "border-border/80 bg-card/80 text-foreground/90 hover:border-primary/45 hover:bg-accent/55 hover:text-foreground",
                             )}
                           >
                             <div>{preset.label}</div>
@@ -682,6 +765,7 @@ function PrismuxOvernightFactoryShell({
                     <label className="space-y-1">
                       <span className="text-xs font-medium text-foreground">发件 / 收件邮箱地址</span>
                       <Input
+                        data-pmx-work-panel-control="1"
                         type="email"
                         data-testid="overnight-imap-email-input"
                         value={draft.email}
@@ -694,7 +778,7 @@ function PrismuxOvernightFactoryShell({
                           }))
                         }
                         placeholder="you@qq.com / you@163.com"
-                        className="h-8 text-xs"
+                        className="h-8 rounded-lg text-xs"
                       />
                     </label>
 
@@ -709,6 +793,7 @@ function PrismuxOvernightFactoryShell({
                         </Badge>
                       </span>
                       <Input
+                        data-pmx-work-panel-control="1"
                         type="password"
                         autoComplete="new-password"
                         data-testid="overnight-imap-password-input"
@@ -721,14 +806,17 @@ function PrismuxOvernightFactoryShell({
                             ? "已密封保存（留空保留原授权码，输入新值则覆盖）"
                             : "请输入邮箱客户端专用授权码"
                         }
-                        className="h-8 text-xs font-mono"
+                        className="h-8 rounded-lg font-mono text-xs"
                       />
                     </label>
                   </div>
 
                   {/* IMAP & SMTP Host / Port / TLS */}
                   <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-2 rounded-md border border-border/70 bg-card/60 p-3">
+                    <div
+                      data-pmx-work-panel-card="1"
+                      className="space-y-2 rounded-lg border border-border/70 bg-card/65 p-3"
+                    >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-foreground">IMAP 收信服务器</span>
                         <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -743,27 +831,32 @@ function PrismuxOvernightFactoryShell({
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                         <Input
+                          data-pmx-work-panel-control="1"
                           data-testid="overnight-imap-host-input"
                           value={draft.imapHost}
                           onChange={(e) =>
                             setDraft((prev) => ({ ...prev, imapHost: e.target.value }))
                           }
                           placeholder="imap.qq.com"
-                          className="col-span-2 h-8 text-xs font-mono"
+                          className="col-span-2 h-8 rounded-lg font-mono text-xs"
                         />
                         <Input
+                          data-pmx-work-panel-control="1"
                           data-testid="overnight-imap-port-input"
                           value={draft.imapPort}
                           onChange={(e) =>
                             setDraft((prev) => ({ ...prev, imapPort: e.target.value }))
                           }
                           placeholder="993"
-                          className="h-8 text-xs font-mono"
+                          className="h-8 rounded-lg font-mono text-xs tabular-nums"
                         />
                       </div>
                     </div>
 
-                    <div className="space-y-2 rounded-md border border-border/70 bg-card/60 p-3">
+                    <div
+                      data-pmx-work-panel-card="1"
+                      className="space-y-2 rounded-lg border border-border/70 bg-card/65 p-3"
+                    >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-foreground">SMTP 发信服务器</span>
                         <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -778,22 +871,24 @@ function PrismuxOvernightFactoryShell({
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                         <Input
+                          data-pmx-work-panel-control="1"
                           data-testid="overnight-smtp-host-input"
                           value={draft.smtpHost}
                           onChange={(e) =>
                             setDraft((prev) => ({ ...prev, smtpHost: e.target.value }))
                           }
                           placeholder="smtp.qq.com"
-                          className="col-span-2 h-8 text-xs font-mono"
+                          className="col-span-2 h-8 rounded-lg font-mono text-xs"
                         />
                         <Input
+                          data-pmx-work-panel-control="1"
                           data-testid="overnight-smtp-port-input"
                           value={draft.smtpPort}
                           onChange={(e) =>
                             setDraft((prev) => ({ ...prev, smtpPort: e.target.value }))
                           }
                           placeholder="465"
-                          className="h-8 text-xs font-mono"
+                          className="h-8 rounded-lg font-mono text-xs tabular-nums"
                         />
                       </div>
                     </div>
@@ -812,6 +907,7 @@ function PrismuxOvernightFactoryShell({
                     </label>
                     {draft.useSeparateSmtpPassword ? (
                       <Input
+                        data-pmx-work-panel-control="1"
                         type="password"
                         autoComplete="new-password"
                         value={draft.smtpPasswordInput}
@@ -819,7 +915,7 @@ function PrismuxOvernightFactoryShell({
                           setDraft((prev) => ({ ...prev, smtpPasswordInput: e.target.value }))
                         }
                         placeholder="输入独立 SMTP 授权码（留空默认复用 IMAP 授权码）"
-                        className="h-8 max-w-md text-xs font-mono"
+                        className="h-8 max-w-md rounded-lg font-mono text-xs"
                       />
                     ) : null}
                   </div>
@@ -835,6 +931,7 @@ function PrismuxOvernightFactoryShell({
                   data-testid="overnight-save-mail-btn"
                   disabled={savingMail}
                   onClick={() => void handleSaveMail()}
+                  className="rounded-lg active:translate-y-px"
                 >
                   <SaveIcon className="size-3.5" />
                   {savingMail ? "保存中..." : "保存邮箱配置"}
@@ -844,8 +941,10 @@ function PrismuxOvernightFactoryShell({
                   size="sm"
                   variant="outline"
                   data-testid="overnight-test-mail-btn"
+                  data-pmx-work-panel-control="1"
                   disabled={testingMail}
                   onClick={() => void handleTestMail()}
+                  className="rounded-lg active:translate-y-px"
                 >
                   <WifiIcon className="size-3.5" />
                   {testingMail ? "测试连接中..." : "测试收发连通性"}
@@ -855,8 +954,10 @@ function PrismuxOvernightFactoryShell({
                   size="sm"
                   variant="outline"
                   data-testid="overnight-send-report-btn"
+                  data-pmx-work-panel-control="1"
                   disabled={sendingReport}
                   onClick={() => void handleSendTestReport()}
+                  className="rounded-lg active:translate-y-px"
                 >
                   <SendIcon className="size-3.5" />
                   {sendingReport ? "发送中..." : "发送测试早报"}
@@ -867,40 +968,47 @@ function PrismuxOvernightFactoryShell({
               {testResult ? (
                 <div
                   data-testid="overnight-mail-test-result"
+                  data-pmx-work-panel-card="1"
                   className={cn(
-                    "space-y-2 rounded-lg border px-3.5 py-2.5 text-xs",
+                    "space-y-2 rounded-xl border px-3.5 py-2.5 text-xs",
                     testResult.ok
-                      ? "border-success/35 bg-success/10 text-foreground"
-                      : "border-destructive/35 bg-destructive/10 text-foreground",
+                      ? "border-emerald-500/35 bg-emerald-500/10 text-foreground"
+                      : "border-destructive/40 bg-destructive/10 text-foreground",
                   )}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 font-medium">
                       {testResult.ok ? (
-                        <CheckCircle2Icon className="size-4 text-success" />
+                        <CheckCircle2Icon className="size-4 text-emerald-600 dark:text-emerald-400" />
                       ) : (
                         <XCircleIcon className="size-4 text-destructive" />
                       )}
                       <span>{testResult.message}</span>
                     </div>
-                    <span className="font-mono text-[11px] text-muted-foreground">
+                    <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
                       总耗时 {testResult.durationMs} ms
                     </span>
                   </div>
                   <div className="grid gap-2 text-[11px] sm:grid-cols-2">
-                    <div className="rounded border border-border/60 bg-card/70 px-2.5 py-1.5">
+                    <div
+                      data-pmx-work-panel-card="1"
+                      className="rounded-lg border border-border/65 bg-card/75 px-2.5 py-1.5"
+                    >
                       <div className="flex items-center justify-between font-medium">
                         <span>收信通道（Inbound）</span>
-                        <span className="font-mono text-muted-foreground">
+                        <span className="font-mono text-muted-foreground tabular-nums">
                           {testResult.inbound.latencyMs} ms
                         </span>
                       </div>
                       <div className="mt-0.5 text-muted-foreground">{testResult.inbound.message}</div>
                     </div>
-                    <div className="rounded border border-border/60 bg-card/70 px-2.5 py-1.5">
+                    <div
+                      data-pmx-work-panel-card="1"
+                      className="rounded-lg border border-border/65 bg-card/75 px-2.5 py-1.5"
+                    >
                       <div className="flex items-center justify-between font-medium">
                         <span>发信通道（Outbound）</span>
-                        <span className="font-mono text-muted-foreground">
+                        <span className="font-mono text-muted-foreground tabular-nums">
                           {testResult.outbound.latencyMs} ms
                         </span>
                       </div>
@@ -914,15 +1022,16 @@ function PrismuxOvernightFactoryShell({
             </div>
           )}
         </div>
-      </SettingsSection>
+      </OvernightSectionCard>
 
       {/* 区块 B · 夜间工场执行策略 */}
-      <SettingsSection
+      <OvernightSectionCard
+        standalone={standalone}
         id="overnight-strategy"
         title="区块 B · 夜间工场执行策略"
         icon={<ShieldCheckIcon className="size-4 text-primary" />}
         headerAction={
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground">
               <span>启用工场</span>
               <Switch
@@ -936,8 +1045,10 @@ function PrismuxOvernightFactoryShell({
               size="xs"
               variant="outline"
               data-testid="overnight-strategy-toggle-btn"
+              data-pmx-work-panel-control="1"
               aria-expanded={strategyExpanded}
               onClick={() => setStrategyExpanded((prev) => !prev)}
+              className="h-7 rounded-lg active:translate-y-px"
             >
               {strategyExpanded ? (
                 <>
@@ -955,19 +1066,22 @@ function PrismuxOvernightFactoryShell({
         }
       >
         <div data-testid="overnight-strategy-section" className="space-y-4 p-4">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             默认关闭以保护本地代码仓库；仅允许白名单发件人携带触发标签立项，并在隔离 Worktree 分支提交代码与 Oracle 只读审校。
           </p>
           {!strategyExpanded ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <div
+              data-pmx-work-panel-card="1"
+              className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border/65 bg-muted/20 px-3.5 py-2.5 text-xs text-muted-foreground"
+            >
               <div className="flex flex-wrap items-center gap-2">
                 <span>
                   触发标签：<code className="font-mono text-foreground">{draft.triggerTag}</code>
                 </span>
                 <span>·</span>
-                <span>白名单：{parsedWhitelistCount} 个发件人</span>
+                <span className="tabular-nums">白名单：{parsedWhitelistCount} 个发件人</span>
                 <span>·</span>
-                <span>
+                <span className="tabular-nums">
                   时段：
                   {draft.windowMode === "always"
                     ? "全天运行"
@@ -980,7 +1094,9 @@ function PrismuxOvernightFactoryShell({
                 type="button"
                 size="xs"
                 variant="outline"
+                data-pmx-work-panel-control="1"
                 onClick={() => setStrategyExpanded(true)}
+                className="h-7 rounded-lg active:translate-y-px"
               >
                 编辑执行策略
               </Button>
@@ -991,19 +1107,21 @@ function PrismuxOvernightFactoryShell({
                 <label className="space-y-1">
                   <span className="text-xs font-medium text-foreground">触发主题前缀 / 标签</span>
                   <Input
+                    data-pmx-work-panel-control="1"
                     data-testid="overnight-trigger-tag-input"
                     value={draft.triggerTag}
                     onChange={(e) =>
                       setDraft((prev) => ({ ...prev, triggerTag: e.target.value }))
                     }
                     placeholder="#factory"
-                    className="h-8 text-xs font-mono"
+                    className="h-8 rounded-lg font-mono text-xs"
                   />
                 </label>
 
                 <label className="space-y-1">
                   <span className="text-xs font-medium text-foreground">轮询间隔（分钟）</span>
                   <Input
+                    data-pmx-work-panel-control="1"
                     type="number"
                     min={1}
                     max={1440}
@@ -1011,7 +1129,7 @@ function PrismuxOvernightFactoryShell({
                     onChange={(e) =>
                       setDraft((prev) => ({ ...prev, pollIntervalMinutes: e.target.value }))
                     }
-                    className="h-8 text-xs font-mono"
+                    className="h-8 rounded-lg font-mono text-xs tabular-nums"
                   />
                 </label>
               </div>
@@ -1030,6 +1148,7 @@ function PrismuxOvernightFactoryShell({
                   </Badge>
                 </div>
                 <Textarea
+                  data-pmx-work-panel-control="1"
                   data-testid="overnight-whitelist-textarea"
                   rows={3}
                   value={draft.allowedSendersText}
@@ -1037,12 +1156,15 @@ function PrismuxOvernightFactoryShell({
                     setDraft((prev) => ({ ...prev, allowedSendersText: e.target.value }))
                   }
                   placeholder={"your-email@qq.com\nbackup@gmail.com\n*@your-team.dev"}
-                  className="font-mono text-xs"
+                  className="rounded-lg font-mono text-xs"
                 />
               </div>
 
               {/* Execution Window */}
-              <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg border border-border/75 bg-muted/25 p-3">
+              <div
+                data-pmx-work-panel-card="1"
+                className="flex flex-wrap items-end justify-between gap-3 rounded-xl border border-border/75 bg-muted/20 p-3.5"
+              >
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                     <Clock3Icon className="size-3.5 text-primary" />
@@ -1069,24 +1191,26 @@ function PrismuxOvernightFactoryShell({
                     <label className="space-y-1">
                       <span className="block text-[11px] text-muted-foreground">开始时间</span>
                       <Input
+                        data-pmx-work-panel-control="1"
                         type="time"
                         value={draft.windowStart}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, windowStart: e.target.value }))
                         }
-                        className="h-8 w-28 text-xs font-mono"
+                        className="h-8 w-28 rounded-lg font-mono text-xs tabular-nums"
                       />
                     </label>
                     <span className="pb-1.5 text-xs text-muted-foreground">—</span>
                     <label className="space-y-1">
                       <span className="block text-[11px] text-muted-foreground">结束时间</span>
                       <Input
+                        data-pmx-work-panel-control="1"
                         type="time"
                         value={draft.windowEnd}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, windowEnd: e.target.value }))
                         }
-                        className="h-8 w-28 text-xs font-mono"
+                        className="h-8 w-28 rounded-lg font-mono text-xs tabular-nums"
                       />
                     </label>
                   </div>
@@ -1101,13 +1225,14 @@ function PrismuxOvernightFactoryShell({
                     目标工作区目录（本地 Git 仓库路径）
                   </span>
                   <Input
+                    data-pmx-work-panel-control="1"
                     data-testid="overnight-workspace-input"
                     value={draft.targetWorkspaceDir}
                     onChange={(e) =>
                       setDraft((prev) => ({ ...prev, targetWorkspaceDir: e.target.value }))
                     }
                     placeholder="例如 D:\Projects\Prismux"
-                    className="h-8 text-xs font-mono"
+                    className="h-8 rounded-lg font-mono text-xs"
                   />
                 </label>
                 {workspaceOptions.length > 0 ? (
@@ -1117,10 +1242,11 @@ function PrismuxOvernightFactoryShell({
                       <button
                         key={proj.cwd}
                         type="button"
+                        data-pmx-work-panel-control="1"
                         onClick={() =>
                           setDraft((prev) => ({ ...prev, targetWorkspaceDir: proj.cwd }))
                         }
-                        className="cursor-pointer rounded border border-border/75 bg-card px-2 py-0.5 text-[11px] text-foreground/85 transition-colors hover:border-primary/50 hover:bg-accent/60 hover:text-foreground"
+                        className="cursor-pointer rounded-md border border-border/75 bg-card/80 px-2 py-0.5 text-[11px] text-foreground/90 transition-all outline-none hover:border-primary/50 hover:bg-accent/60 hover:text-foreground active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {proj.title}
                       </button>
@@ -1139,15 +1265,16 @@ function PrismuxOvernightFactoryShell({
                         <button
                           key={prov.id}
                           type="button"
+                          data-pmx-work-panel-control={active ? undefined : "1"}
                           aria-pressed={active}
                           onClick={() =>
                             setDraft((prev) => ({ ...prev, agentProvider: prov.id }))
                           }
                           className={cn(
-                            "cursor-pointer rounded-md border px-2.5 py-1 text-xs transition-colors",
+                            "cursor-pointer rounded-lg border px-2.5 py-1 text-xs transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring",
                             active
                               ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-                              : "border-border/80 bg-card text-foreground/85 hover:border-primary/45 hover:bg-accent/55 hover:text-foreground",
+                              : "border-border/80 bg-card/80 text-foreground/90 hover:border-primary/45 hover:bg-accent/55 hover:text-foreground",
                           )}
                         >
                           {prov.label}
@@ -1162,25 +1289,29 @@ function PrismuxOvernightFactoryShell({
                     指定模型（可选，留空跟随默认模型）
                   </span>
                   <Input
+                    data-pmx-work-panel-control="1"
                     value={draft.agentModel}
                     onChange={(e) =>
                       setDraft((prev) => ({ ...prev, agentModel: e.target.value }))
                     }
                     placeholder="例如 gpt-5.4-codex / claude-sonnet-4"
-                    className="h-8 text-xs font-mono"
+                    className="h-8 rounded-lg font-mono text-xs"
                   />
                 </label>
               </div>
 
               {/* Oracle Review & Local Worktree Safety Switches */}
               <div className="grid gap-2.5 md:grid-cols-2">
-                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/75 bg-card/70 px-3.5 py-2.5">
+                <label
+                  data-pmx-work-panel-card="1"
+                  className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border/75 bg-card/75 px-3.5 py-2.5 transition-colors hover:border-border"
+                >
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                       <SparklesIcon className="size-3.5 text-primary" />
                       Oracle 只读挑刺审校
                     </div>
-                    <div className="text-[11px] text-muted-foreground">
+                    <div className="text-[11px] leading-relaxed text-muted-foreground">
                       编码提交后自动启动只读 Oracle 审阅 Diff、单测与安全风险并写入早报
                     </div>
                   </div>
@@ -1192,13 +1323,16 @@ function PrismuxOvernightFactoryShell({
                   />
                 </label>
 
-                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/75 bg-card/70 px-3.5 py-2.5">
+                <label
+                  data-pmx-work-panel-card="1"
+                  className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border/75 bg-card/75 px-3.5 py-2.5 transition-colors hover:border-border"
+                >
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                       <ShieldCheckIcon className="size-3.5 text-emerald-500" />
                       安全保护：仅提交本地隔离 Worktree 分支
                     </div>
-                    <div className="text-[11px] text-muted-foreground">
+                    <div className="text-[11px] leading-relaxed text-muted-foreground">
                       绝不自动执行 git push，所有改动留在本地独立分支待次日人工审阅合并
                     </div>
                   </div>
@@ -1219,6 +1353,7 @@ function PrismuxOvernightFactoryShell({
                   data-testid="overnight-save-strategy-btn"
                   disabled={savingStrategy}
                   onClick={() => void handleSaveStrategy()}
+                  className="rounded-lg active:translate-y-px"
                 >
                   <SaveIcon className="size-3.5" />
                   {savingStrategy ? "保存中..." : "保存执行策略"}
@@ -1227,16 +1362,17 @@ function PrismuxOvernightFactoryShell({
             </div>
           )}
         </div>
-      </SettingsSection>
+      </OvernightSectionCard>
 
       {/* 区块 C · 运行历史与完工早报 */}
-      <SettingsSection
+      <OvernightSectionCard
+        standalone={standalone}
         id="overnight-runs"
         title="区块 C · 运行历史与完工早报"
         icon={<Clock3Icon className="size-4 text-primary" />}
         headerAction={
-          <div className="flex items-center gap-2">
-            <span className="hidden text-[11px] text-muted-foreground sm:inline">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="hidden text-[11px] text-muted-foreground tabular-nums sm:inline">
               上次拉取：{formatOvernightTimestamp(lastPollAt)}
             </span>
             <Button
@@ -1246,6 +1382,7 @@ function PrismuxOvernightFactoryShell({
               data-testid="overnight-poll-now-btn"
               disabled={pollingNow}
               onClick={() => void handlePollNow()}
+              className="h-7 rounded-lg active:translate-y-px"
             >
               <RefreshCwIcon className={cn("size-3.5", pollingNow && "animate-spin")} />
               {pollingNow ? "拉取中..." : "立即拉取邮件"}
@@ -1253,38 +1390,52 @@ function PrismuxOvernightFactoryShell({
           </div>
         }
       >
-        <div data-testid="overnight-runs-section" className="space-y-2.5 p-4">
-          <p className="text-xs text-muted-foreground">
+        <div data-testid="overnight-runs-section" className="space-y-3 p-4">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             展示近期入站邮件触发的夜间工场任务、Worktree 交付分支、Oracle 审校摘要与桌面端深度审阅链接。
           </p>
           {lastPollError ? (
-            <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              最近一次拉取失败：{lastPollError}
+            <div
+              role="alert"
+              className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/12 px-3 py-2 text-xs text-destructive"
+            >
+              <AlertTriangleIcon className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 break-all">最近一次拉取失败：{lastPollError}</span>
             </div>
           ) : null}
 
           {runs.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 px-4 py-7 text-center">
-              <MoonStarIcon className="mx-auto size-6 text-muted-foreground/70" />
-              <div className="mt-2 text-xs font-medium text-foreground">暂无夜间工场执行记录</div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
+            <div
+              data-pmx-work-panel-card="1"
+              className="flex flex-col items-center rounded-xl border border-dashed border-border/80 bg-muted/20 px-4 py-8 text-center"
+            >
+              <span className="inline-flex size-10 items-center justify-center rounded-xl border border-border/70 bg-card/75 text-muted-foreground">
+                <MoonStarIcon className="size-5" aria-hidden="true" />
+              </span>
+              <div className="mt-2.5 text-xs font-semibold text-foreground">
+                暂无夜间工场执行记录
+              </div>
+              <div className="mt-1 max-w-md text-[11px] leading-relaxed text-muted-foreground">
                 配置邮箱与白名单后，发送带{" "}
-                <code className="font-mono text-foreground">{draft.triggerTag}</code>{" "}
+                <code className="rounded bg-muted/75 px-1 py-0.5 font-mono text-foreground">
+                  {draft.triggerTag}
+                </code>{" "}
                 主题的邮件或点击右上角「立即拉取邮件」即可查看执行历史与完工早报。
               </div>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {runs.map((run) => {
                 const badge = formatOvernightRunStatusBadge(run.status);
                 return (
                   <div
                     key={run.id}
                     data-testid="overnight-run-row"
-                    className="space-y-2 rounded-lg border border-border/75 bg-card/75 px-3.5 py-3"
+                    data-pmx-work-panel-card="1"
+                    className="space-y-2 rounded-xl border border-border/75 bg-card/75 px-3.5 py-3 transition-colors hover:border-border"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="min-w-0 space-y-0.5">
+                      <div className="min-w-0 space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate text-xs font-semibold text-foreground">
                             {run.subject}
@@ -1295,18 +1446,22 @@ function PrismuxOvernightFactoryShell({
                         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                           <span>发件人：{run.sender}</span>
                           <span>·</span>
-                          <span>{formatOvernightTimestamp(run.createdAt)}</span>
+                          <span className="tabular-nums">
+                            {formatOvernightTimestamp(run.createdAt)}
+                          </span>
                           {run.branchName ? (
                             <>
                               <span>·</span>
-                              <span className="inline-flex items-center gap-1 rounded bg-muted/70 px-1.5 py-0.5 font-mono text-[10.5px] text-foreground">
+                              <span className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/70 px-1.5 py-0.5 font-mono text-[10.5px] text-foreground">
                                 <GitBranchIcon className="size-3" />
                                 {run.branchName}
                               </span>
                             </>
                           ) : null}
                           {run.changedFilesCount > 0 ? (
-                            <span>· {run.changedFilesCount} 个文件改动</span>
+                            <span className="tabular-nums">
+                              · {run.changedFilesCount} 个文件改动
+                            </span>
                           ) : null}
                         </div>
                       </div>
@@ -1316,7 +1471,9 @@ function PrismuxOvernightFactoryShell({
                           type="button"
                           size="xs"
                           variant="outline"
+                          data-pmx-work-panel-control="1"
                           onClick={() => onOpenExternalUrl(run.deepLink!)}
+                          className="h-7 rounded-lg active:translate-y-px"
                         >
                           <ExternalLinkIcon className="size-3" />
                           审查分支
@@ -1325,7 +1482,7 @@ function PrismuxOvernightFactoryShell({
                     </div>
 
                     {run.oracleSummary ? (
-                      <div className="rounded-md border border-border/60 bg-muted/35 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-foreground/90">
+                      <div className="rounded-lg border border-border/60 bg-muted/35 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-foreground/90">
                         <span className="mr-1.5 font-medium text-primary">Oracle 摘要：</span>
                         {run.oracleSummary}
                       </div>
@@ -1336,7 +1493,115 @@ function PrismuxOvernightFactoryShell({
             </div>
           )}
         </div>
-      </SettingsSection>
+      </OvernightSectionCard>
+    </>
+  );
+
+  if (standalone) {
+    return (
+      <SidebarInset className="h-dvh min-w-0 flex-1 overflow-hidden">
+        <PrismuxStageFrame
+          glassZone="workPanels"
+          rightPanelOpen={topbarPortal.standaloneRightPanelOpen}
+        >
+          <div
+            id="prismux-overnight-factory"
+            data-pmx-overnight-settings-page=""
+            data-testid="prismux-overnight-factory-page"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          >
+            {/* Standalone Work-Panel Header Bar — aligned 1:1 with Tasks / Board / Scheduled Tasks */}
+            <header className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5">
+              <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+                  <MoonStarIcon className="size-4" aria-hidden="true" />
+                </span>
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                    夜间全自动工场（Overnight Factory）与邮箱绑定
+                  </h1>
+                  {statusBadges}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  data-pmx-work-panel-control="1"
+                  disabled={loading}
+                  onClick={() => void loadAll(false)}
+                  className="h-7 rounded-lg active:translate-y-px"
+                >
+                  <RefreshCwIcon className={cn("size-3.5", loading && "animate-spin")} />
+                  刷新状态
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost-muted"
+                        size="icon-sm"
+                        data-testid="overnight-factory-close-button"
+                        onClick={() => void navigateToMainApp()}
+                        aria-label="关闭夜间全自动工场"
+                      />
+                    }
+                  >
+                    <XIcon className="size-4" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom" sideOffset={6}>
+                    返回主会话 (Esc)
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 scrollbar-gutter-both">
+              <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">{mainSections}</div>
+            </div>
+          </div>
+        </PrismuxStageFrame>
+      </SidebarInset>
+    );
+  }
+
+  return (
+    <SettingsPageContainer width="wide">
+      {/* Top Status Banner */}
+      <div
+        id="prismux-overnight-factory"
+        data-pmx-overnight-settings-page=""
+        data-pmx-work-panel-card="1"
+        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-border/80 bg-card/75 px-4 py-3"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+            <MoonStarIcon className="size-4" aria-hidden="true" />
+          </span>
+          <span className="text-sm font-semibold tracking-tight text-foreground">
+            夜间全自动工场（Overnight Factory）与邮箱绑定
+          </span>
+          {statusBadges}
+        </div>
+
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          data-pmx-work-panel-control="1"
+          disabled={loading}
+          onClick={() => void loadAll(false)}
+          className="h-7 rounded-lg active:translate-y-px"
+        >
+          <RefreshCwIcon className={cn("size-3.5", loading && "animate-spin")} />
+          刷新状态
+        </Button>
+      </div>
+
+      {mainSections}
     </SettingsPageContainer>
   );
 }
@@ -1344,6 +1609,7 @@ function PrismuxOvernightFactoryShell({
 const MemoizedOvernightFactoryShell = memo(PrismuxOvernightFactoryShell);
 
 export function PrismuxOvernightFactorySettingsPage({
+  standalone,
   daemonOverride,
   daemonReadyOverride,
   initialSnapshotOverride,
@@ -1351,6 +1617,8 @@ export function PrismuxOvernightFactorySettingsPage({
   workspaceOptionsOverride,
   onOpenExternalUrl,
 }: PrismuxOvernightFactorySettingsPageProps = {}) {
+  const pathname = useLocation({ select: (loc) => loc.pathname });
+  const isStandaloneWorkPanel = standalone ?? pathname === "/overnight-factory";
   const runtime = useOptionalPrismuxRuntime();
   const projects = useProjects();
   const daemon = daemonOverride ?? runtime?.daemon ?? prismuxDaemonClient;
@@ -1364,6 +1632,7 @@ export function PrismuxOvernightFactorySettingsPage({
 
   return (
     <MemoizedOvernightFactoryShell
+      standalone={isStandaloneWorkPanel}
       daemon={daemon}
       daemonReady={daemonReady}
       {...(initialSnapshotOverride !== undefined ? { initialSnapshotOverride } : {})}

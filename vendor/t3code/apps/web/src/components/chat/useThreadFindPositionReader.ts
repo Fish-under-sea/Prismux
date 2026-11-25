@@ -1,6 +1,10 @@
 import { useLayoutEffect } from "react";
 import type { RunId } from "@t3tools/contracts";
-import type { ToolCallVisibility } from "@t3tools/contracts/settings";
+import type {
+  CollapsedAssistantReplyMode,
+  ToolCallVisibility,
+  WorkStepsDisplay,
+} from "@t3tools/contracts/settings";
 import type { TimelineEntry } from "../../session-logic";
 import {
   timelineTurnFoldRunIdsByEntryId,
@@ -23,6 +27,9 @@ export function useThreadFindPositionReader({
   isWorking,
   runlessWorkActive,
   toolCallVisibility,
+  workStepsDisplay,
+  collapsedAssistantReplyMode,
+  locale,
   rows,
   contentInsetEndAdjustment,
 }: {
@@ -36,6 +43,9 @@ export function useThreadFindPositionReader({
   readonly isWorking: boolean;
   readonly runlessWorkActive: boolean;
   readonly toolCallVisibility: ToolCallVisibility;
+  readonly workStepsDisplay?: WorkStepsDisplay;
+  readonly collapsedAssistantReplyMode?: CollapsedAssistantReplyMode;
+  readonly locale?: string;
   readonly rows: MessagesTimelineRow[];
   readonly contentInsetEndAdjustment: number;
 }) {
@@ -53,6 +63,9 @@ export function useThreadFindPositionReader({
           isWorking,
           runlessWorkActive,
           toolCallVisibility,
+          ...(workStepsDisplay !== undefined ? { workStepsDisplay } : {}),
+          ...(collapsedAssistantReplyMode !== undefined ? { collapsedAssistantReplyMode } : {}),
+          ...(locale !== undefined ? { locale } : {}),
         });
       const entryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
       return readThreadFindPosition(
@@ -104,5 +117,8 @@ export function useThreadFindPositionReader({
     timelineEntries,
     timelineViewportElement,
     toolCallVisibility,
+    workStepsDisplay,
+    collapsedAssistantReplyMode,
+    locale,
   ]);
 }

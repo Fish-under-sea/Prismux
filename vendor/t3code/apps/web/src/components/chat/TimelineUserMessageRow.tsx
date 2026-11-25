@@ -40,7 +40,6 @@ import {
   MessagesSquareIcon,
   Redo2Icon,
   PencilIcon,
-  LinkIcon,
 } from "lucide-react";
 import { Button, InlineButton } from "../ui/button";
 import { FreshSessionRow, ModelSwitchRow } from "./V2LifecycleRow";
@@ -58,7 +57,6 @@ import {
 } from "./SnapShotAttachmentDetails";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { MessageCopyButton } from "./MessageCopyButton";
-import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { formatBytes } from "../../lib/formatBytes";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -309,7 +307,6 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     "";
 
   const revertTurnCount = row.revertTurnCount;
-  const promptLink = promptLinkFor(text);
   // Find reads the DOM, so a folded prompt stays mounted but hidden while find is open.
   const bodyMounted = expanded || ctx.findActive;
 
@@ -324,10 +321,11 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       ) : null}
       <div
         className={cn(
-          "min-w-0 max-w-[80%] rounded-[22px] border border-border/55 bg-message text-message-foreground",
+          "relative min-w-0 max-w-[80%] rounded-[22px] border border-border/55 bg-message text-message-foreground",
           BUBBLE_CHIP_CLASS_NAME,
           expanded && "w-full",
         )}
+        data-pmx-glass-zone="userBubble"
         data-user-message-bubble=""
         data-user-message-bubble-surface="1"
       >
@@ -375,14 +373,6 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                 <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
               )}
               <MessageCopyButton text={text} variant="ghost" />
-              {promptLink !== null && (
-                <MessageCopyButton
-                  text={promptLink}
-                  label={gt("Copy prompt link")}
-                  icon={LinkIcon}
-                  variant="ghost"
-                />
-              )}
             </div>
           </div>
         </div>
@@ -596,7 +586,6 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     resolvedContext.text,
     (reference) => reference.label,
   );
-  const promptLink = promptLinkFor(plainText);
   const foldSummary =
     plainText
       .split(/\r?\n/)
@@ -890,17 +879,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             variant="ghost"
           />
         )}
-        {promptLink !== null && (
-          <MessageCopyButton
-            text={promptLink}
-            label={gt("Copy prompt link")}
-            icon={LinkIcon}
-            variant="ghost"
-          />
-        )}
       </div>
     </div>
   );
+  const hasBubbleSurface =
+    !mediaOnly && !fileCardsOnly && !audioOnly && userMessage.attribution !== "guest";
   return (
     <div
       className="group @container flex flex-col items-end gap-1"
@@ -945,16 +928,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           BUBBLE_CHIP_CLASS_NAME,
           userMessage.attribution === "guest"
             ? guestBubbleClassName(false)
-            : !mediaOnly && !fileCardsOnly && !audioOnly && "border border-border/55 bg-message",
+            : hasBubbleSurface && "border border-border/55 bg-message",
           !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "px-4 py-2",
           folded && expanded && "w-full",
         )}
+        data-pmx-glass-zone={hasBubbleSurface ? "userBubble" : undefined}
         data-user-message-bubble=""
-        data-user-message-bubble-surface={
-          !mediaOnly && !fileCardsOnly && !audioOnly && userMessage.attribution !== "guest"
-            ? "1"
-            : undefined
-        }
+        data-user-message-bubble-surface={hasBubbleSurface ? "1" : undefined}
       >
         {/* Outside the fold so a collapsed message still has a heading to navigate to. */}
         {mediaAboveText ? null : (

@@ -156,7 +156,7 @@ describe('rename-brand', () => {
     writeTextFile(join(root, 'node_modules/pkg/index.js'), 'const a = "prismux";\n');
     writeTextFile(join(root, 'dist/index.js'), 'const b = "prismux";\n');
     writeTextFile(join(root, '.work/scratch.txt'), 'Prismux scratch\n');
-    writeTextFile(join(root, 'apps/desktop-tauri/target/debug/out.txt'), 'Prismux target\n');
+    writeTextFile(join(root, 'native/resource-monitor/target/debug/out.txt'), 'Prismux target\n');
 
     // Binary/media extensions (even with ASCII payload) and NUL-byte binary file
     writeTextFile(join(root, 'assets/logo.png'), 'Prismux png payload');
@@ -187,7 +187,7 @@ describe('rename-brand', () => {
     assert.match(readFileSync(join(root, 'dist/index.js'), 'utf8'), /prismux/);
     assert.match(readFileSync(join(root, '.work/scratch.txt'), 'utf8'), /Prismux/);
     assert.match(
-      readFileSync(join(root, 'apps/desktop-tauri/target/debug/out.txt'), 'utf8'),
+      readFileSync(join(root, 'native/resource-monitor/target/debug/out.txt'), 'utf8'),
       /Prismux/,
     );
     assert.equal(readFileSync(join(root, 'assets/logo.png'), 'utf8'), 'Prismux png payload');
@@ -772,7 +772,7 @@ describe('release-and-npm-packages', () => {
 
     const cleanStage = createTempDir('prismux-clean-stage-');
     writeTextFile(join(cleanStage, 'Prismux.exe'), 'stub');
-    writeTextFile(join(cleanStage, 'workbench-ui', 'index.html'), '<html></html>');
+    writeTextFile(join(cleanStage, 'resources', 'app.asar'), 'stub');
     assert.doesNotThrow(() => assertStageContainsNoOfficialPlugins(cleanStage));
 
     const pollutedStage = createTempDir('prismux-polluted-stage-');

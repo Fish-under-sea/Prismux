@@ -25,13 +25,15 @@ export type GlassSurfaceId =
   | 'sidebarContent';
 
 /**
- * Six unified workbench liquid-glass zones exposed for real-time per-zone customization:
+ * Eight unified workbench liquid-glass zones exposed for real-time per-zone customization:
  * - `shellFrame`: Monolithic closed picture-frame shell (Left Sidebar + Top Bar + Bottom Status Bar + Right Edge)
  * - `rightSidebar`: Expandable right feature sidebar (defaults to following `shellFrame`, independently tunable)
  * - `mainCanvas`: Central rounded inner workspace canvas (defaults crystal-clear with 0px blur & zero tint shift)
  * - `workPanels`: Unified frosted-glass zone for Tasks, Workspace Board & Scheduled Tasks main panels
  * - `composer`: Message composer & cards
  * - `overlays`: Modals, popovers, dropdowns & settings panels
+ * - `userBubble`: Chat timeline user message capsule bubbles with directional Fresnel specular rim
+ * - `overviewPanel`: Floating session overview card decoupled from `rightSidebar`
  */
 export type GlassZoneId =
   | 'shellFrame'
@@ -39,12 +41,14 @@ export type GlassZoneId =
   | 'mainCanvas'
   | 'workPanels'
   | 'composer'
-  | 'overlays';
+  | 'overlays'
+  | 'userBubble'
+  | 'overviewPanel';
 
-/** Legacy 6-zone ids automatically migrated into `shellFrame` for 100% backward compatibility. */
+/** Legacy pre-shellFrame zone ids automatically migrated into `shellFrame` for 100% backward compatibility. */
 export type LegacyGlassZoneId = 'leftSidebar' | 'chromeBars';
 
-/** Zone identifier input accepted by mutators/normalizers (canonical 6-zone or legacy aliases). */
+/** Zone identifier input accepted by mutators/normalizers (canonical 8-zone or legacy aliases). */
 export type GlassZoneIdInput = GlassZoneId | LegacyGlassZoneId;
 
 export type GlassZoneMode = 'inherit' | 'custom' | 'solid';
@@ -174,7 +178,7 @@ export interface AppearanceConfig {
   rightSidebarFullClear: boolean;
   /** Optional per-surface independent overrides. */
   perSurfaceOverrides: Partial<Record<GlassSurfaceId, GlassSurfaceOverride>>;
-  /** Six unified workbench glass zones (shellFrame, rightSidebar, mainCanvas, workPanels, composer, overlays). */
+  /** Eight unified workbench glass zones (shellFrame, rightSidebar, mainCanvas, workPanels, composer, overlays, userBubble, overviewPanel). */
   glassZones: GlassZonesConfig;
   /** Unified sidebar corner radius ('native' | 6 | 12 | 20). */
   sidebarCornerRadius: SidebarCornerRadius;
@@ -268,6 +272,8 @@ export const GLASS_ZONE_IDS: readonly GlassZoneId[] = [
   'workPanels',
   'composer',
   'overlays',
+  'userBubble',
+  'overviewPanel',
 ] as const;
 
 export const GLASS_ZONE_CSS_NAMES: Readonly<Record<GlassZoneId, string>> = {
@@ -277,6 +283,8 @@ export const GLASS_ZONE_CSS_NAMES: Readonly<Record<GlassZoneId, string>> = {
   workPanels: 'work-panels',
   composer: 'composer',
   overlays: 'overlays',
+  userBubble: 'user-bubble',
+  overviewPanel: 'overview-panel',
 };
 
 export const GLASS_ZONE_META: readonly GlassZoneDescriptor[] = [
@@ -348,6 +356,30 @@ export const GLASS_ZONE_META: readonly GlassZoneDescriptor[] = [
     defaultSaturation: 108,
     minOpacity: GLASS_ZONE_LIMITS.overlaysOpacityMin,
   },
+  {
+    id: 'userBubble',
+    cssName: 'user-bubble',
+    title: '用户消息气泡',
+    compactTitle: '用户消息气泡',
+    shortLabel: '消息气泡',
+    note: '对话流用户消息胶囊与左上微光液态玻璃折射边（默认清透磨砂）',
+    compactNote: '对话用户胶囊与微光折射边缘',
+    defaultRegion: 'card',
+    defaultSaturation: 110,
+    minOpacity: GLASS_ZONE_LIMITS.opacityMin,
+  },
+  {
+    id: 'overviewPanel',
+    cssName: 'overview-panel',
+    title: '概览面板',
+    compactTitle: '概览面板',
+    shortLabel: '概览面板',
+    note: '悬浮会话概览卡（与右侧功能边栏解耦，默认轻透单层磨砂）',
+    compactNote: '悬浮会话概览卡独立调节',
+    defaultRegion: 'card',
+    defaultSaturation: 110,
+    minOpacity: GLASS_ZONE_LIMITS.opacityMin,
+  },
 ] as const;
 
 export const DEFAULT_GLASS_ZONES: GlassZonesConfig = {
@@ -357,6 +389,8 @@ export const DEFAULT_GLASS_ZONES: GlassZonesConfig = {
   workPanels: { mode: 'inherit' },
   composer: { mode: 'inherit' },
   overlays: { mode: 'inherit' },
+  userBubble: { mode: 'inherit' },
+  overviewPanel: { mode: 'inherit' },
 };
 
 /**
@@ -446,6 +480,8 @@ export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
     workPanels: { mode: 'inherit' },
     composer: { mode: 'inherit' },
     overlays: { mode: 'inherit' },
+    userBubble: { mode: 'inherit' },
+    overviewPanel: { mode: 'inherit' },
   },
   sidebarCornerRadius: 'native',
   sidebarSquareCorners: {

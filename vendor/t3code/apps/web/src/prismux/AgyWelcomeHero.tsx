@@ -144,12 +144,35 @@ export const WELCOME_CLOSING_PROMPTS: Readonly<Record<WelcomeLanguage, readonly 
 };
 
 export interface WelcomeUserNameSources {
+  readonly osUsername?: string | null | undefined;
   readonly explicitName?: string | null | undefined;
   readonly keybindingsConfigPath?: string | null | undefined;
   readonly scratchWorkspaceRoot?: string | null | undefined;
   readonly newProjectsRoot?: string | null | undefined;
   readonly cwd?: string | null | undefined;
   readonly hostname?: string | null | undefined;
+}
+
+function readDesktopBridgeOsUsername(): string | null {
+  if (typeof window === "undefined") return null;
+  const bridge = window.desktopBridge;
+  if (!bridge) return null;
+  if (typeof bridge.osUsername === "string") {
+    const direct = bridge.osUsername.trim();
+    if (direct) return direct;
+  }
+  if (typeof bridge.getOsUsername === "function") {
+    try {
+      const fromFn = bridge.getOsUsername();
+      if (typeof fromFn === "string") {
+        const trimmed = fromFn.trim();
+        if (trimmed) return trimmed;
+      }
+    } catch {
+      // Ignore preload bridge read errors and fall back cleanly.
+    }
+  }
+  return null;
 }
 
 /**
@@ -178,9 +201,16 @@ export function extractUsernameFromPath(filePath: string | null | undefined): st
 
 /**
  * Resolves a friendly current user display name for the AGY 2.0 welcome hero greeting.
- * Returns `null` when unavailable so callers can apply the canonical `"User"` fallback.
+ * Priority: `sources.osUsername` -> `window.desktopBridge?.osUsername` / `getOsUsername()`
+ * -> `sources.explicitName` -> local user home path extraction -> `null` (`"User"` fallback).
  */
 export function resolveCurrentUserDisplayName(sources: WelcomeUserNameSources): string | null {
+  const osUsername = sources.osUsername?.trim();
+  if (osUsername) return osUsername;
+
+  const bridgeOsUsername = readDesktopBridgeOsUsername();
+  if (bridgeOsUsername) return bridgeOsUsername;
+
   const explicit = sources.explicitName?.trim();
   if (explicit) return explicit;
 

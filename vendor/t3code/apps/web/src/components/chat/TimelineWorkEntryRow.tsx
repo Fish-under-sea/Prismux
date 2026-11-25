@@ -39,7 +39,14 @@ import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { workGroupImageGallery } from "./markdownImageGallery";
 import { McpSignInAction } from "./McpSignInAction";
 import * as DateTime from "effect/DateTime";
-import { ChevronRightIcon, CircleAlertIcon, XIcon, RotateCcwIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  CircleAlertIcon,
+  XIcon,
+  RotateCcwIcon,
+} from "lucide-react";
 import { Button, InlineButton } from "../ui/button";
 import { useAssetUrls } from "../../assets/assetUrls";
 import { observeResize } from "../../lib/observeResize";
@@ -73,9 +80,8 @@ import {
   workEntryRawCommand,
   buildToolCallExpandedBody,
   workEntryIconName,
-  thoughtPreviewMarkdown,
-  THOUGHT_PREVIEW_SOURCE_MAX_LENGTH,
 } from "./TimelineWorkEntryRow.logic";
+import { extractReasoningSummaryLine } from "./dshWorkSteps.logic";
 
 export function useThreadReadTarget(entry: TimelineWorkEntry, environmentId: EnvironmentId) {
   const rawThreadId = threadReadTargetId(entry);
@@ -224,6 +230,7 @@ type WorkEntryRowProps = {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
   displayLabel?: string | undefined;
+  autoExpandReasoning?: boolean | undefined;
   onToggleEntry?: ((collapsed: boolean) => void) | undefined;
   onContentReady?: (() => void) | undefined;
 };
@@ -282,7 +289,7 @@ export function ViewedImagesTimelineRow({
 }
 
 function WorkEntryLogRow(props: WorkEntryRowProps) {
-  const { workEntry, workspaceRoot, displayLabel } = props;
+  const { workEntry, workspaceRoot, displayLabel, autoExpandReasoning = false } = props;
   const ctx = use(TimelineRowCtx);
   const gt = useGT();
   const m = useMessages();
@@ -298,9 +305,25 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       ? notificationChildThreadId(workEntry.projectedItem.item.source)
       : undefined;
   const groupView = use(WorkGroupViewCtx);
-  const [expanded, setExpanded] = useState(
-    () => groupView?.state.expandedEntries.has(workEntry.id) ?? false,
-  );
+  const defaultExpanded =
+    (groupView?.state.expandedEntries.has(workEntry.id) ?? false) ||
+    (autoExpandReasoning && workEntry.itemType === "reasoning");
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [trackedAutoExpand, setTrackedAutoExpand] = useState(autoExpandReasoning);
+  if (trackedAutoExpand !== autoExpandReasoning) {
+    setTrackedAutoExpand(autoExpandReasoning);
+    if (workEntry.itemType === "reasoning") {
+      setExpanded(autoExpandReasoning);
+    }
+  }
+  const resetCount = ctx.turnDisclosureResetCount ?? 0;
+  const [seenResetCount, setSeenResetCount] = useState(resetCount);
+  if (seenResetCount !== resetCount) {
+    setSeenResetCount(resetCount);
+    if (expanded && !autoExpandReasoning) {
+      setExpanded(false);
+    }
+  }
   const noticeMessage =
     workEntry.structuredPayload?.type === "system_notice"
       ? workEntry.structuredPayload.message
@@ -417,14 +440,30 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       ? undefined
       : (workEntry.toolIcon ?? workEntry.toolSource?.icon);
   const isReasoning = workEntry.itemType === "reasoning";
+  const isReasoningLive = isReasoning && workEntry.toolLifecycleStatus === "inProgress";
+  const settledReasoningPreview = ctx.workStepsPolicy?.settledReasoningPreview ?? true;
+  const isZhLocale = (ctx.locale ?? "zh").toLowerCase().startsWith("zh");
+  const reasoningTitleLabel = isZhLocale
+    ? isReasoningLive
+      ? "正在思考"
+      : "思考"
+    : isReasoningLive
+      ? gt("Thinking")
+      : gt("Thought");
+  const reasoningSummaryLine = isReasoning
+    ? extractReasoningSummaryLine(workEntry.detail, {
+        live: isReasoningLive,
+        settledReasoningPreview,
+      })
+    : null;
   const questionHeading = workEntry.questionAnswer
     ? getQuestionTextPreview(workEntry.questionAnswer)
     : "";
   const previewText =
-    isReasoning && expanded
-      ? workEntry.toolLifecycleStatus === "inProgress"
-        ? gt("Thinking")
-        : gt("Thought")
+    isReasoning
+      ? reasoningSummaryLine
+        ? `${reasoningTitleLabel} · ${reasoningSummaryLine}`
+        : reasoningTitleLabel
       : questionHeading || (displayLabel ?? workEntryDisplayLabel(workEntry, workspaceRoot, m));
   const answerPreview =
     workEntry.questionAnswer && hasQuestionAnswer(workEntry.questionAnswer)
@@ -549,63 +588,118 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       }
     : undefined;
 
+  const ToggleChevron = expanded ? ChevronUpIcon : ChevronDownIcon;
+
   return (
     <WorkLogRow
       data-work-entry-id={workEntry.id}
       data-v2-item-type={workEntry.projectedItem?.item.type}
       data-v2-item-visibility={workEntry.projectedItem?.visibility}
+      data-reasoning-row={isReasoning ? "true" : undefined}
+      data-reasoning-expanded={isReasoning ? String(expanded) : undefined}
       onClick={canExpandProjectedItem ? toggleExpanded : undefined}
       toggle={rowToggleProps}
       icon={
         <span
-          className={iconWrapperClass}
+          className={cn("relative", iconWrapperClass)}
           role={showFailedIndicator ? "img" : undefined}
           aria-label={showFailedIndicator ? gt("Tool call failed") : undefined}
         >
-          <ToolActivityIconView
-            icon={entryToolIcon}
-            fallbackName={entryIconName}
-            className="block size-4 shrink-0 stroke-2"
-            muted
-          />
+          {canExpandProjectedItem ? (
+            <>
+              <span
+                className={cn(
+                  "flex size-4 items-center justify-center transition-opacity duration-150",
+                  expanded
+                    ? "opacity-0"
+                    : "opacity-100 group-hover/timeline-row:opacity-0 group-focus-visible/timeline-row:opacity-0",
+                )}
+              >
+                <ToolActivityIconView
+                  icon={entryToolIcon}
+                  fallbackName={entryIconName}
+                  className="block size-4 shrink-0 stroke-2"
+                  muted
+                />
+              </span>
+              <ToggleChevron
+                aria-hidden="true"
+                className={cn(
+                  "pointer-events-none absolute inset-0 m-auto size-3.5 text-icon-muted transition-opacity duration-150",
+                  expanded
+                    ? "opacity-100"
+                    : "opacity-0 group-hover/timeline-row:opacity-100 group-focus-visible/timeline-row:opacity-100",
+                )}
+              />
+            </>
+          ) : (
+            <ToolActivityIconView
+              icon={entryToolIcon}
+              fallbackName={entryIconName}
+              className="block size-4 shrink-0 stroke-2"
+              muted
+            />
+          )}
         </span>
       }
       label={
-        <div className="min-w-0 flex-1 overflow-hidden">
+        <div
+          className={cn(
+            "min-w-0 flex-1 overflow-hidden",
+            isReasoning && expanded && "sticky top-0 z-10 bg-background/85 backdrop-blur-xs",
+          )}
+        >
           <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
-            <span
-              ref={labelRef}
-              className={cn(
-                answerPreview || mcpSignIn ? "min-w-0" : "min-w-0 flex-1",
-                "truncate",
-                headingClass,
-              )}
-            >
-              {isReasoning && !expanded ? (
-                <ChatMarkdown
-                  inline
-                  text={(workEntry.detail ?? previewText).slice(
-                    0,
-                    THOUGHT_PREVIEW_SOURCE_MAX_LENGTH,
-                  )}
-                  cwd={ctx.markdownCwd}
-                  parseRawHtml={false}
-                  extensions={
-                    workEntry.toolLifecycleStatus === "inProgress"
-                      ? thoughtPreviewMarkdown(gt("Thinking"))
-                      : thoughtPreviewMarkdown(gt("Thought"))
-                  }
-                />
-              ) : threadLabel ? (
-                <ThreadReadLabel
-                  label={threadLabel}
-                  environmentId={ctx.activeThreadEnvironmentId}
-                  linked
-                />
-              ) : (
-                previewText
-              )}
-            </span>
+            {isReasoning ? (
+              <span
+                ref={labelRef}
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden",
+                  headingClass,
+                )}
+              >
+                <span className="shrink-0 font-medium text-foreground/80">
+                  {reasoningTitleLabel}
+                </span>
+                {!expanded && reasoningSummaryLine ? (
+                  <>
+                    <span
+                      aria-hidden="true"
+                      className="size-0.5 shrink-0 rounded-full bg-current opacity-55"
+                    />
+                    <span
+                      data-reasoning-summary-preview="true"
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-xs text-muted-foreground",
+                        isReasoningLive &&
+                          "live-tool-shine [mask-image:linear-gradient(to_right,black_calc(100%-48px),transparent)]",
+                      )}
+                    >
+                      {reasoningSummaryLine}
+                    </span>
+                  </>
+                ) : null}
+              </span>
+            ) : (
+              <span
+                ref={labelRef}
+                className={cn(
+                  answerPreview || mcpSignIn ? "min-w-0" : "min-w-0 flex-1",
+                  "truncate",
+                  headingClass,
+                )}
+              >
+                {threadLabel ? (
+                  <ThreadReadLabel
+                    label={threadLabel}
+                    environmentId={ctx.activeThreadEnvironmentId}
+                    linked
+                  />
+                ) : (
+                  previewText
+                )}
+              </span>
+            )}
             {answerPreview ? (
               <span
                 className={cn(

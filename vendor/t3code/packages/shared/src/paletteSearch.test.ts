@@ -198,10 +198,22 @@ describe("scoreThreadSearch", () => {
     expect(rankTitles("lakebed", named)).toEqual(["Lakebed", "Lakebed perf audit"]);
   });
 
-  it("finds a branch pasted with the app's worktree prefix", () => {
-    const subject = thread("Cmd+K search", { branch: "t3/cmdk-search-v2" });
-    expect(scoreThreadSearch(foldSearchQuery("t3/cmdk-search-v2"), subject, NOW)).not.toBeNull();
-    expect(scoreThreadSearch(foldSearchQuery("t3/cmdk"), subject, NOW)).not.toBeNull();
+  it("finds a branch pasted with the app's worktree prefix (prismux and legacy t3)", () => {
+    const prismuxSubject = thread("Cmd+K search", { branch: "prismux/cmdk-search-v2" });
+    expect(
+      scoreThreadSearch(foldSearchQuery("prismux/cmdk-search-v2"), prismuxSubject, NOW),
+    ).not.toBeNull();
+    expect(scoreThreadSearch(foldSearchQuery("prismux/cmdk"), prismuxSubject, NOW)).not.toBeNull();
+    const prismuxFlat = thread("Worktree scratch", { branch: "prismux-abcd1234" });
+    expect(scoreThreadSearch(foldSearchQuery("prismux-abcd"), prismuxFlat, NOW)).not.toBeNull();
+
+    const legacySubject = thread("Cmd+K search", { branch: "t3/cmdk-search-v2" });
+    expect(
+      scoreThreadSearch(foldSearchQuery("t3/cmdk-search-v2"), legacySubject, NOW),
+    ).not.toBeNull();
+    expect(scoreThreadSearch(foldSearchQuery("t3/cmdk"), legacySubject, NOW)).not.toBeNull();
+    const legacyFlat = thread("Legacy scratch", { branch: "t3-abcd1234" });
+    expect(scoreThreadSearch(foldSearchQuery("t3-abcd"), legacyFlat, NOW)).not.toBeNull();
   });
 
   it("ranks a title holding the words above the app's own branch prefix and project name", () => {

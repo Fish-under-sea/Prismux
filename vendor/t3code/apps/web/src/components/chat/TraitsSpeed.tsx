@@ -1,11 +1,21 @@
 import type { ProviderDriverKind, ProviderOptionDescriptor } from "@t3tools/contracts";
-import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
+import {
+  getProviderOptionCurrentValue,
+  isFastServiceTierChoice,
+  isUltrafastServiceTierChoice,
+} from "@t3tools/shared/model";
 import { msg, T } from "gt-react";
 import { ZapIcon } from "lucide-react";
 import { m, type MessageResolver } from "~/i18n/messages";
 import { UltrafastIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";
+
+const ENGLISH_SPEED_DISPLAY_LABELS = {
+  fastMode: "Fast Mode",
+  fast: "Fast",
+  ultraFast: "Ultra Fast",
+} as const;
 
 export function getTraitsSpeedDisplay(
   descriptor: ProviderOptionDescriptor,
@@ -15,7 +25,7 @@ export function getTraitsSpeedDisplay(
     return {
       label:
         descriptor.currentValue === true
-          ? resolve(msg("Fast", { $context: "model speed" }))
+          ? ENGLISH_SPEED_DISPLAY_LABELS.fastMode
           : resolve(msg("Normal", { $context: "model speed" })),
       speedIcon: descriptor.currentValue === true ? "fast" : null,
     };
@@ -24,8 +34,8 @@ export function getTraitsSpeedDisplay(
     return null;
   }
   const currentValue = getProviderOptionCurrentValue(descriptor);
-  const fastTier = descriptor.options.find(({ label }) => label === "Fast");
-  const ultrafastTier = descriptor.options.find(({ label }) => label === "Ultrafast");
+  const fastTier = descriptor.options.find(isFastServiceTierChoice);
+  const ultrafastTier = descriptor.options.find(isUltrafastServiceTierChoice);
   if (
     ((fastTier || ultrafastTier) && currentValue === "default") ||
     (fastTier && currentValue === fastTier.id) ||
@@ -33,8 +43,11 @@ export function getTraitsSpeedDisplay(
   ) {
     return {
       label:
-        descriptor.options.find(({ id }) => id === currentValue)?.label ??
-        resolve(msg("Normal", { $context: "model speed" })),
+        ultrafastTier && currentValue === ultrafastTier.id
+          ? ENGLISH_SPEED_DISPLAY_LABELS.ultraFast
+          : fastTier && currentValue === fastTier.id
+            ? ENGLISH_SPEED_DISPLAY_LABELS.fast
+            : resolve(msg("Normal", { $context: "model speed" })),
       speedIcon:
         ultrafastTier && currentValue === ultrafastTier.id
           ? "ultrafast"

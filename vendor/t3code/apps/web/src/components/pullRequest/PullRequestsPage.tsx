@@ -23,8 +23,10 @@ import type {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowDownUpIcon, LayersIcon, Plug2Icon } from "lucide-react";
-import { msg, T, useGT, useMessages } from "gt-react";
+import { ArrowDownUpIcon, LayersIcon, Plug2Icon, XIcon } from "lucide-react";
+import { msg, T, useGT, useLocale, useMessages } from "gt-react";
+
+import { PullRequestGlyph } from "./pullRequestIcons";
 
 import { m } from "~/i18n/messages";
 import { useEffect, useEffectEvent, useRef, useState, type ComponentProps } from "react";
@@ -100,7 +102,16 @@ import { registerCommands } from "~/shortcuts/dispatcher";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "../chat/PanelLayoutControls";
 import { Button } from "../ui/button";
+import { RefreshIcon } from "../ui/refresh-icon";
 import { SidebarInset, useMobileSidebarSheetMounted } from "../ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { WorkspacePageContainer } from "../WorkspacePageContainer";
+import { useNavigateToMainApp } from "../sidebar/mainAppLocation";
+import {
+  PrismuxStageFrame,
+  useWorkspaceTopbarPortal,
+} from "../workspace/WorkspaceTopbarPortalContext";
+import { workspaceAreaProps } from "~/lib/workspaceFocus";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useOpenPanelPullRequestUrl } from "~/hooks/useOpenPanelPullRequestUrl";
@@ -194,7 +205,12 @@ function usePendingListEntries(
 
 export function PullRequestsPage() {
   const gt = useGT();
+  const locale = useLocale();
+  const isZh = (locale ?? "").toLowerCase().startsWith("zh");
   const resolve = useMessages();
+  const topbarPortal = useWorkspaceTopbarPortal();
+  const navigateToMainApp = useNavigateToMainApp();
+  const managedSearchContainerRef = useRef<HTMLDivElement | null>(null);
   const search = useSearch({ from: "/_chat/pull-requests" });
   const sort = search.sort ?? "ready";
   const statsPolicy: PullRequestStatsPolicy =
@@ -1254,63 +1270,107 @@ export function PullRequestsPage() {
   const listBody = (
     <>
       {!capabilityKnown ? (
-        <PullRequestListGhost rows={7} caption={gt("Loading pull requests…")} />
+        <div
+          data-pmx-work-panel-card="1"
+          className="rounded-xl border border-border/75 bg-card p-3 shadow-xs"
+        >
+          <PullRequestListGhost rows={7} caption={gt("Loading pull requests…")} />
+        </div>
       ) : !pullRequestsSupported ? (
-        <PullRequestsUnavailableState
-          title={gt("Pull requests unavailable")}
-          error={gt("Update your Prismux servers to browse pull requests.")}
-        />
+        <div
+          data-pmx-work-panel-card="1"
+          className="rounded-xl border border-border/75 bg-card p-6 shadow-xs"
+        >
+          <PullRequestsUnavailableState
+            title={gt("Pull requests unavailable")}
+            error={gt("Update your Prismux servers to browse pull requests.")}
+          />
+        </div>
       ) : firstLoad ? (
-        <PullRequestListGhost rows={7} caption={gt("Loading pull requests…")} />
+        <div
+          data-pmx-work-panel-card="1"
+          className="rounded-xl border border-border/75 bg-card p-3 shadow-xs"
+        >
+          <PullRequestListGhost rows={7} caption={gt("Loading pull requests…")} />
+        </div>
       ) : listError && shownCount === 0 ? (
-        <PullRequestsUnavailableState
-          error={listError}
-          refreshing={listQuery.isPending}
-          onRetry={listQuery.retry}
-        />
+        <div
+          data-pmx-work-panel-card="1"
+          className="rounded-xl border border-border/75 bg-card p-6 shadow-xs"
+        >
+          <PullRequestsUnavailableState
+            error={listError}
+            refreshing={listQuery.isPending}
+            onRetry={listQuery.retry}
+          />
+        </div>
       ) : carriedToNothing ? (
-        <PullRequestListGhost rows={7} />
+        <div
+          data-pmx-work-panel-card="1"
+          className="rounded-xl border border-border/75 bg-card p-3 shadow-xs"
+        >
+          <PullRequestListGhost rows={7} />
+        </div>
       ) : shownCount === 0 ? (
-        <PullRequestListEmptyState
-          hasProjects={!projectsKnown || projects.length > 0}
-          refreshing={refreshing}
-          onRefresh={() => void refreshFromHost()}
-          query={typedQuery}
-          filtered={
-            menuFiltered ||
-            search.state !== "open" ||
-            search.involvement !== "all" ||
-            scopedProjectId !== undefined ||
-            search.host !== undefined
-          }
-          searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
-          canLoadMore={listData?.truncated === true && (canContinue || pageSize < MAX_PAGE_SIZE)}
-          loadingMore={loadingMore}
-          onClearQuery={() => updateListScope({ q: undefined })}
-          onLoadMore={loadMore}
-        />
+        <div
+          data-pmx-work-panel-card="1"
+          className="rounded-xl border border-border/75 bg-card px-6 py-10 shadow-xs"
+        >
+          <PullRequestListEmptyState
+            hasProjects={!projectsKnown || projects.length > 0}
+            refreshing={refreshing}
+            onRefresh={() => void refreshFromHost()}
+            query={typedQuery}
+            filtered={
+              menuFiltered ||
+              search.state !== "open" ||
+              search.involvement !== "all" ||
+              scopedProjectId !== undefined ||
+              search.host !== undefined
+            }
+            searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
+            canLoadMore={listData?.truncated === true && (canContinue || pageSize < MAX_PAGE_SIZE)}
+            loadingMore={loadingMore}
+            onClearQuery={() => updateListScope({ q: undefined })}
+            onLoadMore={loadMore}
+          />
+        </div>
       ) : (
-        <PullRequestListGroups
-          groups={displayGroups}
-          environmentLabels={capableEnvironments.length > 1 ? environmentLabels : null}
-          query={typedParsed.text}
-          selected={selected}
-          showProvider={showProvider}
-          statsRef={registerStatsRow}
-          onSelect={selectEntry}
-          onIntent={prefetchEntry}
-          hostActionsOf={hostActionsOf}
-          onActed={onSpeedAction}
-          closingKeys={closingKeys}
-          sweepingKeys={closeSweepKeys}
-          onCloseSweepStart={startCloseSweep}
-        />
+        <div
+          data-pmx-work-panel-card="1"
+          className="rounded-xl border border-border/75 bg-card p-3 shadow-xs"
+        >
+          <PullRequestListGroups
+            groups={displayGroups}
+            environmentLabels={capableEnvironments.length > 1 ? environmentLabels : null}
+            query={typedParsed.text}
+            selected={selected}
+            showProvider={showProvider}
+            statsRef={registerStatsRow}
+            onSelect={selectEntry}
+            onIntent={prefetchEntry}
+            hostActionsOf={hostActionsOf}
+            onActed={onSpeedAction}
+            closingKeys={closingKeys}
+            sweepingKeys={closeSweepKeys}
+            onCloseSweepStart={startCloseSweep}
+          />
+        </div>
       )}
 
       {listError && shownCount > 0 ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
+        <div
+          role="alert"
+          data-pmx-work-panel-card="1"
+          className="flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning-surface px-3.5 py-2.5 text-xs"
+        >
           <span>{gt("{error} Showing the last pull requests loaded.", { error: listError })}</span>
-          <Button size="xs" variant="outline" onClick={listQuery.retry}>
+          <Button
+            size="xs"
+            variant="outline"
+            data-pmx-work-panel-control="1"
+            onClick={listQuery.retry}
+          >
             <T>Retry</T>
           </Button>
         </div>
@@ -1326,6 +1386,7 @@ export function PullRequestsPage() {
             <Button
               size="sm"
               variant="outline"
+              data-pmx-work-panel-control="1"
               onClick={loadMore}
               disabled={listQuery.isPending || showingCarried}
             >
@@ -1421,6 +1482,13 @@ export function PullRequestsPage() {
       }
     />
   );
+  const savedViewsMenu = (
+    <SavedViewsMenu
+      kind={PULL_REQUEST_SAVED_VIEWS}
+      preferences={search}
+      onApply={(preferences) => updateListScope(pullRequestSavedViewPatch(preferences))}
+    />
+  );
   const columnProps = {
     refreshing,
     onRefresh: () => void refreshFromHost(),
@@ -1435,13 +1503,7 @@ export function PullRequestsPage() {
     searchInput,
     sortMenu,
     filtersMenu,
-    savedViewsMenu: (
-      <SavedViewsMenu
-        kind={PULL_REQUEST_SAVED_VIEWS}
-        preferences={search}
-        onApply={(preferences) => updateListScope(pullRequestSavedViewPatch(preferences))}
-      />
-    ),
+    savedViewsMenu,
     rightPanelControl: !pullRequestsSupported ? null : (
       <span
         aria-hidden
@@ -1576,11 +1638,137 @@ export function PullRequestsPage() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [keybindings]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the managed PR search input on Cmd/Ctrl+F when the upstream column header is suppressed
+  useEffect(() => {
+    if (!topbarPortal.managed) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
+      if (event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      const input = managedSearchContainerRef.current?.querySelector("input");
+      input?.focus();
+      input?.select();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [topbarPortal.managed]);
+
+  const managedContentArea = workspaceAreaProps("pull-requests", 1, gt("Pull requests"));
+  const pageHeading = isZh ? "拉取请求" : gt("Pull requests");
+
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="relative flex min-h-0 flex-1">
-        {pullRequestsSupported && rightPanelPresent ? openPanelControls : null}
-        <PullRequestsColumn {...columnProps} />
+    <SidebarInset className="h-dvh min-h-0 min-w-0 flex-1 overflow-hidden overscroll-y-none">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {!topbarPortal.managed && pullRequestsSupported && rightPanelPresent
+          ? openPanelControls
+          : null}
+        <PrismuxStageFrame
+          glassZone="workPanels"
+          rightPanelOpen={rightPanelState.isOpen || topbarPortal.standaloneRightPanelOpen}
+          {...(rightPanelMaximized ? { frameClassName: "w-0 flex-none" } : {})}
+        >
+          {topbarPortal.managed ? (
+            <div
+              {...managedContentArea}
+              data-testid="prismux-pull-requests-page"
+              inert={rightPanelMaximized}
+              className="@container/pr-list flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+            >
+              <header
+                data-testid="pull-requests-work-panel-header"
+                className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5"
+              >
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2.5">
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+                      <PullRequestGlyph.pullRequest aria-hidden className="size-4" />
+                    </span>
+                    <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                      {pageHeading}
+                    </h1>
+                    {shownCount > 0 ? (
+                      <span className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-2xs font-medium text-foreground/85 tabular-nums">
+                        {shownCount}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div
+                    ref={managedSearchContainerRef}
+                    className="min-w-0 flex-1 basis-52 max-w-md"
+                  >
+                    {searchInput}
+                  </div>
+                </div>
+
+                <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                  {sortMenu}
+                  {filtersMenu}
+                  {savedViewsMenu}
+                  <PullRequestCompactFilterMenu
+                    label={gt("Filter by provider")}
+                    outlined
+                    iconOnly={search.host !== undefined}
+                    triggerIcon={<Plug2Icon aria-hidden className="size-4" />}
+                    triggerLabel={gt("All", { $context: "all providers" })}
+                    value={search.host ?? ""}
+                    options={hostMenuOptions}
+                    onChange={(next) => updateListScope({ host: next === "" ? undefined : next })}
+                  />
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    data-pmx-work-panel-control="1"
+                    aria-label={gt("Refresh pull requests")}
+                    onClick={() => void refreshFromHost()}
+                    disabled={refreshing}
+                    aria-busy={refreshing || undefined}
+                  >
+                    <RefreshIcon size="md" refreshing={refreshing} />
+                  </Button>
+                  {pullRequestsSupported && rightPanelAvailable ? (
+                    <>
+                      {rightPanelState.isOpen ? (
+                        <RightPanelMaximizeControl
+                          maximized={rightPanelMaximized}
+                          onToggle={toggleRightPanelMaximized}
+                        />
+                      ) : null}
+                      {panelToggleControls}
+                    </>
+                  ) : null}
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost-muted"
+                          size="icon-sm"
+                          data-testid="pull-requests-close-button"
+                          onClick={() => void navigateToMainApp()}
+                          aria-label={gt("Close pull requests")}
+                        />
+                      }
+                    >
+                      <XIcon className="size-4" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom" sideOffset={6}>
+                      {gt("Close and return to workspace")}
+                    </TooltipPopup>
+                  </Tooltip>
+                </div>
+              </header>
+
+              <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                <WorkspacePageContainer width="expanded" className="min-h-full gap-4 px-0! py-0!">
+                  {listBody}
+                </WorkspacePageContainer>
+              </div>
+            </div>
+          ) : (
+            <PullRequestsColumn {...columnProps} />
+          )}
+        </PrismuxStageFrame>
 
         {rightPanelPresent && renderedPullRequestSurface && panelEnvironmentId !== null ? (
           <RightPanelTabs

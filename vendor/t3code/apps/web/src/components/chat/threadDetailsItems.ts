@@ -25,8 +25,8 @@ export const THREAD_DETAILS_ITEMS = [
     defaultVisible: true,
   },
   { id: "sideChats", label: msg("Side chats"), defaultVisible: true },
-  { id: "usage", label: msg("Usage limits"), defaultVisible: false },
-  { id: "context", label: msg("Context window"), defaultVisible: false },
+  { id: "usage", label: msg("Usage limits"), defaultVisible: true },
+  { id: "context", label: msg("Context window"), defaultVisible: true },
 ] as const;
 
 export type ThreadDetailsItemId = (typeof THREAD_DETAILS_ITEMS)[number]["id"];
@@ -38,11 +38,9 @@ type ThreadDetailsItemSettings = Pick<
   "threadDetailsItems" | "threadDetailsUsageEnabled"
 >;
 
-// People who turned on the retired Labs toggle keep Usage and Context until they change them here.
-function defaultVisible(item: ThreadDetailsItem, settings: ThreadDetailsItemSettings) {
-  return item.id === "usage" || item.id === "context"
-    ? settings.threadDetailsUsageEnabled
-    : item.defaultVisible;
+// All 12 thread detail items (including Usage limits and Context window) default to visible.
+function defaultVisible(item: ThreadDetailsItem, _settings: ThreadDetailsItemSettings) {
+  return item.defaultVisible;
 }
 
 export function resolveThreadDetailsVisibility(
@@ -70,7 +68,7 @@ export function isDefaultThreadDetailsVisibility(visibility: ThreadDetailsVisibi
   return THREAD_DETAILS_ITEMS.every((item) => visibility[item.id] === item.defaultVisible);
 }
 
-/** Also clears the retired Labs flag, so Usage and Context return to off. */
+/** Clears per-item overrides so all 12 thread detail items return to their enabled default. */
 export const RESET_THREAD_DETAILS_ITEMS = {
   threadDetailsItems: {},
   threadDetailsUsageEnabled: false,

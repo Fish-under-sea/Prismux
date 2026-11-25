@@ -10,13 +10,23 @@ import type {
 import {
   ArrowRightIcon,
   ExternalLinkIcon,
+  FilesIcon,
   GitCompareArrowsIcon,
   GlobeIcon,
   MessageSquarePlusIcon,
   RefreshCwIcon,
+  TabletSmartphoneIcon,
   TerminalIcon,
 } from "lucide-react";
-import { lazy, memo, Suspense, useCallback, useMemo, useState, type FormEvent } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 
 import { cn } from "~/lib/utils";
 import { ComposerHandleContext } from "../../composerHandleContext";
@@ -31,11 +41,17 @@ import {
 } from "../../prismux/agentBrand";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { useRightPanelStore, type RightPanelSurface } from "../../rightPanelStore";
+import { useProjects, useQuietThreadShell } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { primaryServerKeybindingsAtom } from "../../state/server";
+import {
+  environmentServerConfigsAtom,
+  primaryServerKeybindingsAtom,
+} from "../../state/server";
 import { BackgroundThreadContext } from "../chat/backgroundThread";
+import { LinkedItemsEmptySurface, SideChatEmptySurface } from "../chat/RightPanelEmptySurfaces";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { PersistentThreadTerminalPanel } from "../PersistentThreadTerminals";
+import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
 import { PhoneSimulatorBlankStage } from "../RightPanelTabs";
 import { useThreadTerminalActions } from "../terminal/useThreadTerminalActions";
 import { Button } from "../ui/button";
@@ -47,6 +63,10 @@ const ChatView = lazy(() => import("../ChatView"));
 const DiffPanel = lazy(() => import("../DiffPanel"));
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
+);
+const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
+const DevicePanel = lazy(() =>
+  import("../device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 
 const GENERIC_SESSION_LABELS = new Set([
@@ -321,6 +341,13 @@ function EmbeddedBrowserTabView(props: {
   const [reloadNonce, setReloadNonce] = useState(0);
   const currentUrl = tab.url ?? "";
 
+  const hostedPreviewTabId =
+    tab.resourceId &&
+    tab.resourceId !== "browser:new" &&
+    !tab.resourceId.startsWith("ws-browser-")
+      ? tab.resourceId
+      : null;
+
   const handleNavigate = (event: FormEvent) => {
     event.preventDefault();
     const classified = classifyQuickLaunchUrl(addressInput);
@@ -328,6 +355,23 @@ function EmbeddedBrowserTabView(props: {
     onUpdateUrl(classified.normalizedUrl, classified.displayHost);
     setAddressInput(classified.normalizedUrl);
   };
+
+  // Dragged desktop browser tabs preserve their live Electron <webview> PreviewPanel session.
+  if (hostedPreviewTabId && threadRef) {
+    return (
+      <PrismuxStageFrame innerDataAttributes={{ "data-workspace-browser-pane": "true" }}>
+        <Suspense
+          fallback={
+            <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+              正在加载内置浏览器...
+            </div>
+          }
+        >
+          <PreviewPanel mode="embedded" threadRef={threadRef} tabId={hostedPreviewTabId} visible />
+        </Suspense>
+      </PrismuxStageFrame>
+    );
+  }
 
   return (
     <PrismuxStageFrame innerDataAttributes={{ "data-workspace-browser-pane": "true" }}>
@@ -415,6 +459,183 @@ function EmbeddedSimulatorTabView() {
   );
 }
 
+function EmbeddedFilesTabView(props: {
+  readonly tab: WorkspaceTab;
+  readonly threadRef: ScopedThreadRef | null;
+}) {
+  const { tab, threadRef } = props;
+  const threadShell = useQuietThreadShell(threadRef);
+  const projects = useProjects();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const initialRelativePath =
+    tab.resourceId && tab.resourceId !== "files" && !tab.resourceId.startsWith("files:")
+      ? tab.resourceId
+      : null;
+  const [relativePath, setRelativePath] = useState<string | null>(initialRelativePath);
+  const [folderTrail, setFolderTrail] = useState<string | undefined>(undefined);
+
+  const matchedProject = !threadRef
+    ? null
+    : threadShell?.projectId
+      ? (projects.find(
+          (project) =>
+            project.environmentId === threadRef.environmentId &&
+            project.id === threadShell.projectId,
+        ) ?? null)
+      : (projects.find((project) => project.environmentId === threadRef.environmentId) ?? null);
+
+  const workspaceRoot = threadShell?.worktreePath ?? matchedProject?.workspaceRoot ?? null;
+  const availableEditors =
+    (threadRef ? serverConfigs.get(threadRef.environmentId)?.availableEditors : undefined) ?? [];
+
+  if (!threadRef || !matchedProject || !workspaceRoot) {
+    return (
+      <PrismuxStageFrame
+        innerDataAttributes={{ "data-workspace-files-pane": "true" }}
+        innerClassName="items-center justify-center gap-2 p-6 text-center"
+      >
+        <FilesIcon className="size-6 text-muted-foreground dark:[[data-pmx-glass='1']_&]:text-white/90" />
+        <p className={cn("text-sm font-medium", STAGE_TITLE_GLASS_CLASS)}>
+          {tab.title || "工作区文件"}
+        </p>
+        <p className={cn("max-w-xs text-xs", STAGE_SUBTITLE_GLASS_CLASS)}>
+          请先打开任意项目会话，即可在此分屏窗格浏览并预览工作区文件。
+        </p>
+      </PrismuxStageFrame>
+    );
+  }
+
+  return (
+    <PrismuxStageFrame innerDataAttributes={{ "data-workspace-files-pane": "true" }}>
+      <Suspense
+        fallback={
+          <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+            正在加载文件视图...
+          </div>
+        }
+      >
+        <FilePreviewPanel
+          key={`${threadRef.environmentId}:${workspaceRoot}`}
+          environmentId={threadRef.environmentId}
+          cwd={workspaceRoot}
+          projectName={matchedProject.title}
+          projectId={matchedProject.id}
+          relativePath={relativePath}
+          threadRef={threadRef}
+          composerDraftTarget={threadRef}
+          keybindings={keybindings}
+          availableEditors={availableEditors}
+          openInShortcutEnabled={false}
+          revealLine={null}
+          revealRequestId={0}
+          onOpenFile={(nextPath) => setRelativePath(nextPath)}
+          onNavigateFolder={(nextPath, nextTrail) => {
+            setRelativePath(nextPath || null);
+            setFolderTrail(nextTrail || undefined);
+          }}
+          folderTrail={folderTrail}
+          onPendingChange={() => {}}
+          selectedFilePending={false}
+          workspaceMutationId={null}
+        />
+      </Suspense>
+    </PrismuxStageFrame>
+  );
+}
+
+function EmbeddedRelatedTabView(props: { readonly threadRef: ScopedThreadRef | null }) {
+  const { threadRef } = props;
+  if (!threadRef) {
+    return (
+      <PrismuxStageFrame innerDataAttributes={{ "data-workspace-related-pane": "true" }}>
+        <LinkedItemsEmptySurface />
+      </PrismuxStageFrame>
+    );
+  }
+  return (
+    <PrismuxStageFrame innerDataAttributes={{ "data-workspace-related-pane": "true" }}>
+      <ThreadPullRequestsPanel threadRef={threadRef} />
+    </PrismuxStageFrame>
+  );
+}
+
+function EmbeddedDeviceTabView(props: {
+  readonly tab: WorkspaceTab;
+  readonly threadRef: ScopedThreadRef | null;
+}) {
+  const { tab, threadRef } = props;
+  if (!threadRef) {
+    return (
+      <PrismuxStageFrame
+        innerDataAttributes={{ "data-workspace-device-pane": "true" }}
+        innerClassName="items-center justify-center gap-2 p-6 text-center"
+      >
+        <TabletSmartphoneIcon className="size-6 text-muted-foreground dark:[[data-pmx-glass='1']_&]:text-white/90" />
+        <p className={cn("text-sm font-medium", STAGE_TITLE_GLASS_CLASS)}>
+          {tab.title || "预览设备"}
+        </p>
+        <p className={cn("max-w-xs text-xs", STAGE_SUBTITLE_GLASS_CLASS)}>
+          打开任意工作区会话后即可在此分屏连接并预览移动设备。
+        </p>
+      </PrismuxStageFrame>
+    );
+  }
+  const deviceSurface: Extract<RightPanelSurface, { kind: "device" }> = {
+    id:
+      tab.resourceId && tab.resourceId.startsWith("device:")
+        ? (tab.resourceId as `device:${string}`)
+        : "device",
+    kind: "device",
+    title: tab.title,
+  };
+  return (
+    <PrismuxStageFrame innerDataAttributes={{ "data-workspace-device-pane": "true" }}>
+      <Suspense
+        fallback={
+          <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+            正在加载设备预览...
+          </div>
+        }
+      >
+        <DevicePanel
+          mode="embedded"
+          threadRef={threadRef}
+          surface={deviceSurface}
+          visible
+          onDismissSetup={() => {}}
+        />
+      </Suspense>
+    </PrismuxStageFrame>
+  );
+}
+
+function EmbeddedSideChatTabView(props: {
+  readonly tab: WorkspaceTab;
+  readonly threadRef: ScopedThreadRef | null;
+}) {
+  const { tab, threadRef } = props;
+  if (tab.environmentId && tab.threadId) {
+    const ref = scopeThreadRef(tab.environmentId, tab.threadId);
+    return (
+      <EmbeddedThreadPaneView
+        environmentId={tab.environmentId}
+        threadId={tab.threadId}
+        hostRef={threadRef ?? ref}
+      />
+    );
+  }
+  return (
+    <PrismuxStageFrame innerDataAttributes={{ "data-workspace-side-chat-pane": "true" }}>
+      <SideChatEmptySurface
+        canStart={false}
+        disabledReason="在会话中发起旁路提问后，可直接拖拽至任意分屏窗格并排查看。"
+        threadRef={threadRef ?? undefined}
+      />
+    </PrismuxStageFrame>
+  );
+}
+
 function ConversationMainChatHandoffView(props: {
   readonly paneId: string;
   readonly tab: WorkspaceTab;
@@ -489,12 +710,13 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
         />
       );
     case "terminal":
-      return <EmbeddedTerminalTabView tab={tab} threadRef={resolvedHostRef} />;
+      return <EmbeddedTerminalTabView key={tab.id} tab={tab} threadRef={resolvedHostRef} />;
     case "diff":
       return <EmbeddedDiffTabView threadRef={resolvedHostRef} />;
     case "browser":
       return (
         <EmbeddedBrowserTabView
+          key={`${tab.id}:${tab.url ?? ""}`}
           tab={tab}
           threadRef={resolvedHostRef}
           onUpdateUrl={(url, title) => onUpdateTab(tab.id, { url, title })}
@@ -502,6 +724,14 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
       );
     case "simulator":
       return <EmbeddedSimulatorTabView />;
+    case "files":
+      return <EmbeddedFilesTabView key={tab.id} tab={tab} threadRef={resolvedHostRef} />;
+    case "related":
+      return <EmbeddedRelatedTabView threadRef={resolvedHostRef} />;
+    case "device":
+      return <EmbeddedDeviceTabView tab={tab} threadRef={resolvedHostRef} />;
+    case "side-chat":
+      return <EmbeddedSideChatTabView tab={tab} threadRef={resolvedHostRef} />;
     case "draft":
     case "agent":
     default:

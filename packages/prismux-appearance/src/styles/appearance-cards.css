@@ -1792,7 +1792,7 @@ html[data-prismux-gpu='0'] .pmx-re-slider[data-top] .pmx-re-track {
 }
 
 /* ============================================================================
- * Decoupled 6-Zone Glass Configurator (.pmx-gz-*) &
+ * Decoupled 8-Zone Glass Configurator (.pmx-gz-*) &
  * Inline Right-Sidebar Appearance Studio (.pmx-inline-studio)
  * Strictly 4px grid rhythm, WCAG >= 4.5:1 contrast, zero prefers-color-scheme,
  * zero horizontal scroll at 320px width, and prefers-reduced-motion compliant.
@@ -2048,7 +2048,7 @@ html[data-prismux-gpu='0'] .pmx-re-slider[data-top] .pmx-re-track {
   padding-top: 2px;
 }
 
-/* Compact secondary 4-zone switcher */
+/* Compact secondary 6-zone switcher (balanced 2x3 grid in 320-420px right sidebar) */
 .pmx-appearance .pmx-gz-secondary-wrap {
   display: flex;
   flex-direction: column;
@@ -2098,7 +2098,7 @@ html[data-prismux-gpu='0'] .pmx-re-slider[data-top] .pmx-re-track {
 
 .pmx-appearance .pmx-gz-pill-bar {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   width: 100%;
   min-width: 0;

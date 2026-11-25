@@ -229,8 +229,8 @@ export interface LiquidGlassCardProps {
 
 /**
  * Liquid Glass card: 5 global presets + accent & glass tint + fidelity & dim +
- * unified 6-zone fine-grained glass configurator (shellFrame / rightSidebar / mainCanvas /
- * workPanels / composer / overlays) + optional collapsed global inherit baseline & thinking mode.
+ * unified 8-zone fine-grained glass configurator (shellFrame / rightSidebar / mainCanvas /
+ * workPanels / composer / overlays / userBubble / overviewPanel) + optional collapsed global inherit baseline & thinking mode.
  */
 export function LiquidGlassCard({
   config,
@@ -276,7 +276,7 @@ export function LiquidGlassCard({
       <div className="ilook-box-head">
         <span className="ilook-box-title">液态玻璃</span>
         <span className="ilook-box-note">
-          全局预设一键统调，6 大工作台分区精细控制（窗口外框连体统一，右侧功能边栏、主画布、工作面板、输入框与弹窗独立可控）；禁 GPU 时自动回落实底。
+          全局预设一键统调，8 大工作台分区精细控制（窗口外框连体统一，右侧功能边栏、主画布、工作面板、输入框、弹窗层、用户消息气泡与概览面板独立可控）；禁 GPU 时自动回落实底。
         </span>
       </div>
 
@@ -439,7 +439,7 @@ export function LiquidGlassCard({
         </div>
       </div>
 
-      {/* Decoupled 6-Zone Fine-Grained Glass Control */}
+      {/* Decoupled 8-Zone Fine-Grained Glass Control */}
       <div className="glass-reg">
         <GlassZoneConfigurator
           config={config}
@@ -1356,6 +1356,8 @@ export function ThemeSnapshotCard({
         workPanels: { ...DEFAULT_GLASS_ZONES.workPanels },
         composer: { ...DEFAULT_GLASS_ZONES.composer },
         overlays: { ...DEFAULT_GLASS_ZONES.overlays },
+        userBubble: { ...DEFAULT_GLASS_ZONES.userBubble },
+        overviewPanel: { ...DEFAULT_GLASS_ZONES.overviewPanel },
       },
       sidebarSquareCorners: { ...DEFAULT_APPEARANCE_CONFIG.sidebarSquareCorners },
       uiColorCustom: { ...DEFAULT_APPEARANCE_CONFIG.uiColorCustom },

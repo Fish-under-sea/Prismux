@@ -55,6 +55,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("react", () => ({
+  memo: (component: unknown) => component,
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
   useRef: (current: unknown) => ({ current }),

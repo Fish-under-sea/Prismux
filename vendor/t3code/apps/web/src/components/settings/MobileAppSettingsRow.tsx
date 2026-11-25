@@ -181,7 +181,7 @@ export function MobileAppSettingsRow() {
       description={
         hasLanAccess
           ? gt("Scan the QR code with your phone browser to open this Prismux workspace over LAN or Tailscale.")
-          : gt("LAN access is off. Enable network access or Tailscale HTTPS in Sharing & access to scan and connect from your phone browser.")
+          : gt("LAN access is off. Enable network access or Tailscale HTTPS in Environments & remote access to scan and connect from your phone browser.")
       }
       control={
         <div className="flex flex-wrap items-center gap-2">
@@ -203,7 +203,10 @@ export function MobileAppSettingsRow() {
                     </Badge>
                   </div>
                   <p className="w-full text-xs text-muted-foreground">
-                    <T>Scan with your phone camera on the same network or Tailnet, then pair in Sharing &amp; access if prompted.</T>
+                    <T>
+                      Scan with your phone camera on the same network or Tailnet, then pair in
+                      Environments &amp; remote access if prompted.
+                    </T>
                   </p>
                   {endpoints.length > 1 ? (
                     <div className="flex w-full flex-wrap gap-1">
@@ -247,7 +250,7 @@ export function MobileAppSettingsRow() {
                     size="xs"
                     variant="outline"
                     className="w-full"
-                    render={<Link to="/settings/access" />}
+                    render={<Link to="/settings/connections" hash="remote-access" />}
                   >
                     <T>Manage pairing &amp; access</T>
                     <ArrowUpRightIcon className="size-3" />
@@ -256,7 +259,11 @@ export function MobileAppSettingsRow() {
               </PopoverPopup>
             </Popover>
           ) : (
-            <Button size="sm" variant="outline" render={<Link to="/settings/access" />}>
+            <Button
+              size="sm"
+              variant="outline"
+              render={<Link to="/settings/connections" hash="remote-access" />}
+            >
               <WifiOffIcon className="size-3.5 text-muted-foreground" />
               <T>Enable LAN access</T>
               <ArrowUpRightIcon className="size-3" />

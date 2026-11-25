@@ -15,27 +15,39 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
+vi.mock("../shortcutModifierState", () => ({
+  useShortcutModifierState: () => ({ modPressed: false, altPressed: false, shiftPressed: false }),
+}));
+
 import zhCatalog from "../i18n/translations/zh.json";
 import {
   MINUTES_PER_DAY,
+  SKY_BUTTON_DARK_ARROW_COLOR,
+  SKY_BUTTON_LIGHT_ARROW_COLOR,
   SKY_FRAMES_PER_DAY,
   SKY_KEYFRAMES,
   SKY_STEP_MINUTES,
   SKY_TIME_CHANGE_EVENT,
   SKY_UPDATE_INTERVAL_MS,
+  buildSkyExtensionClipPath,
+  computeEffectiveCompactButtonContrast,
   computeEffectiveTopSkyContrast,
   computeMsUntilNextSkyTick,
+  computeSkyExtensionMetrics,
   computeSkyScene,
   parseHexRgb,
   quantizeMinutesToSkyStep,
+  resolveCompactSkyButtonTheme,
   resolveEffectiveSkyMinutes,
 } from "./sidebarSkyBackdrop.logic";
 import {
+  SidebarSkyTopbarExtension,
   SidebarStageBackdrop,
   StageBackdropButtonArt,
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
 } from "./SidebarStageBackdrop";
+import { ComposerPrimaryActions } from "./chat/ComposerPrimaryActions";
 
 vi.mock("../prismux/settings/PrismuxAppearanceIntegration", () => ({
   PrismuxAppearanceIntegration: () =>
@@ -342,6 +354,133 @@ describe("SidebarStageBackdrop default-on rendering & compact button art", () =>
       expect(html).not.toContain('data-environment-identification="pill"');
       expect(html).not.toContain(">Dev<");
       expect(html).not.toContain(">Nightly<");
+    }
+  });
+
+  it("adapts send button arrow color day vs night with >= 4.5:1 WCAG contrast across all 288 5-minute steps", () => {
+    let whiteFrames = 0;
+    let blackFrames = 0;
+    for (let step = 0; step < SKY_FRAMES_PER_DAY; step += 1) {
+      const scene = computeSkyScene(step * SKY_STEP_MINUTES);
+      const contrast = computeEffectiveCompactButtonContrast(scene);
+      expect(
+        contrast.minButtonContrast,
+        `step ${step} (${scene.minutes}m, phase=${scene.phase}, tone=${contrast.tone})`,
+      ).toBeGreaterThanOrEqual(4.5);
+      if (contrast.tone === "light") {
+        expect(contrast.iconColor).toBe(SKY_BUTTON_LIGHT_ARROW_COLOR);
+        whiteFrames += 1;
+      } else {
+        expect(contrast.iconColor).toBe(SKY_BUTTON_DARK_ARROW_COLOR);
+        blackFrames += 1;
+      }
+    }
+    expect(whiteFrames).toBeGreaterThan(100);
+    expect(blackFrames).toBeGreaterThan(80);
+
+    // Night, blue-hour, dusk, and dawn must strictly pick white arrow.
+    for (const darkMinute of [0, 3 * 60, 5 * 60 + 15, 18 * 60 + 10, 19 * 60 + 30, 22 * 60 + 30]) {
+      const theme = resolveCompactSkyButtonTheme(computeSkyScene(darkMinute));
+      expect(theme.tone).toBe("light");
+      expect(theme.iconColor).toBe(SKY_BUTTON_LIGHT_ARROW_COLOR);
+      expect(theme.minButtonContrast).toBeGreaterThanOrEqual(4.5);
+    }
+
+    // Bright morning, noon, and afternoon frames must pick crisp black arrow.
+    for (const brightMinute of [9 * 60 + 30, 12 * 60 + 30, 15 * 60 + 30]) {
+      const theme = resolveCompactSkyButtonTheme(computeSkyScene(brightMinute));
+      expect(theme.tone).toBe("dark");
+      expect(theme.iconColor).toBe(SKY_BUTTON_DARK_ARROW_COLOR);
+      expect(theme.minButtonContrast).toBeGreaterThanOrEqual(4.5);
+    }
+
+    // ComposerPrimaryActions wires inline arrow color + data-sky-button-tone for both night and noon.
+    initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+    const renderComposerSend = (minutes: number) => {
+      (globalThis as typeof globalThis & { __PRISMUX_SKY_MINUTES__?: number })
+        .__PRISMUX_SKY_MINUTES__ = minutes;
+      return renderToStaticMarkup(
+        createElement(
+          GTProvider,
+          { locale: "zh", translations: {} },
+          createElement(
+            TooltipProvider,
+            null,
+            createElement(ComposerPrimaryActions, {
+              compact: false,
+              canOperateThread: true,
+              pendingAction: null,
+              isRunning: false,
+              canInterrupt: false,
+              isSendBusy: false,
+              sendDisabledReason: null,
+              isEnvironmentUnavailable: false,
+              isPreparingWorktree: false,
+              hasSendableContent: true,
+              onPreviousPendingQuestion: () => {},
+              onInterrupt: () => {},
+            }),
+          ),
+        ),
+      );
+    };
+
+    const nightSendHtml = renderComposerSend(22 * 60 + 30);
+    expect(nightSendHtml).toContain('data-sky-button-tone="light"');
+    expect(nightSendHtml).toContain(`color:${SKY_BUTTON_LIGHT_ARROW_COLOR}`);
+
+    const noonSendHtml = renderComposerSend(12 * 60 + 30);
+    expect(noonSendHtml).toContain('data-sky-button-tone="dark"');
+    expect(noonSendHtml).toContain(`color:${SKY_BUTTON_DARK_ARROW_COLOR}`);
+  });
+
+  it("computes right-edge sky extension geometry up to first session tab left edge and renders cleanly in expanded and 54px rail states", () => {
+    const gapToFirstTab = computeSkyExtensionMetrics({
+      sidebarRight: 280,
+      firstTabLeft: 288,
+      topbarHeight: 38,
+      hasTabBar: true,
+    });
+    expect(gapToFirstTab.extensionWidth).toBe(8);
+    expect(gapToFirstTab.topbarHeight).toBe(38);
+    expect(gapToFirstTab.seamAlpha).toBeGreaterThan(0.3);
+    expect(gapToFirstTab.seamAlpha).toBeLessThan(0.75);
+
+    const widerGap = computeSkyExtensionMetrics({
+      sidebarRight: 54,
+      firstTabLeft: 78,
+      topbarHeight: 40,
+      hasTabBar: true,
+    });
+    expect(widerGap.extensionWidth).toBe(24);
+    expect(buildSkyExtensionClipPath(8, 38, 14)).toContain("A 14 14 0 0 0 0 52");
+    expect(buildSkyExtensionClipPath(24, 40, 14)).toBe(
+      "path('M 0 0 L 24 0 L 24 40 L 14 40 A 14 14 0 0 0 0 54 Z')",
+    );
+    expect(buildSkyExtensionClipPath(0, 38, 14)).toBe("inset(100%)");
+
+    const emptyTabBarFallback = computeSkyExtensionMetrics({
+      sidebarRight: 280,
+      firstTabLeft: null,
+      topbarHeight: 38,
+      hasTabBar: true,
+    });
+    expect(emptyTabBarFallback.extensionWidth).toBeGreaterThan(0);
+
+    for (const defaultOpen of [true, false]) {
+      const extHtml = renderToStaticMarkup(
+        createElement(
+          SidebarProvider,
+          { defaultOpen },
+          createElement(SidebarSkyTopbarExtension, { minutesOverride: 22 * 60 + 30 }),
+        ),
+      );
+      expect(extHtml).toContain('data-stage-backdrop-extension="sky"');
+      expect(extHtml).toContain("pointer-events-none");
+      expect(extHtml).toContain("sidebar-stage-backdrop-extension");
+      expect(extHtml).toContain(
+        defaultOpen ? "left:var(--sidebar-width)" : "left:var(--sidebar-width-icon)",
+      );
     }
   });
 });

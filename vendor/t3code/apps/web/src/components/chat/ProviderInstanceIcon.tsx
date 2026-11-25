@@ -18,6 +18,12 @@ import {
 } from "../Icons";
 
 import { cn } from "~/lib/utils";
+import {
+  DSH_BRAND_COLOR,
+  DSH_FISH_LOGO_PATH,
+  DSH_FISH_LOGO_VIEWBOX,
+  resolveAgentBrandId,
+} from "../../prismux/agentBrand";
 import { providerClients } from "../settings/providerDriverMeta";
 import { ProviderPackageIcon } from "./ProviderPackageIcon";
 import {
@@ -41,6 +47,7 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
   [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
   [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
   [ProviderDriverKind.make("antigravity")]: "text-[#4285F4]",
+  [ProviderDriverKind.make("dsh")]: "text-[#4176E6]",
   [ProviderDriverKind.make("openai")]: "text-black dark:text-white",
   [ProviderDriverKind.make("anthropic")]: "text-black dark:text-white",
   [ProviderDriverKind.make("openrouter")]: "text-black dark:text-white",
@@ -50,7 +57,37 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
 const BUNDLED_LOGO_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("claudeAgent")]: "#d97757",
   [ProviderDriverKind.make("antigravity")]: "#4285F4",
+  [ProviderDriverKind.make("dsh")]: DSH_BRAND_COLOR,
 };
+
+export function isDshProviderInstance(input: {
+  readonly driverKind: string;
+  readonly displayName?: string | null | undefined;
+  readonly acpRegistryAgentId?: string | undefined;
+  readonly instanceId?: string | undefined;
+}): boolean {
+  return (
+    resolveAgentBrandId(input.driverKind) === "dsh" ||
+    resolveAgentBrandId(input.acpRegistryAgentId) === "dsh" ||
+    resolveAgentBrandId(input.instanceId) === "dsh" ||
+    resolveAgentBrandId(input.displayName) === "dsh"
+  );
+}
+
+function DshFishIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox={DSH_FISH_LOGO_VIEWBOX}
+      fill={DSH_BRAND_COLOR}
+      className={className}
+      data-dsh-brand-icon="true"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={DSH_FISH_LOGO_PATH} />
+    </svg>
+  );
+}
 
 /** The logo's own color, or null for logos that swap between black and white per theme. */
 export function providerLogoColor(driverKind: ProviderDriverKind): string | null {
@@ -89,6 +126,7 @@ export function resolveProviderInstanceAcpRegistryIconUrl(input: {
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
   displayName: string;
+  instanceId?: string | undefined;
   accentColor?: string | undefined;
   acpRegistryAgentId?: string | undefined;
   acpRegistryIconUrl?: string | undefined;
@@ -112,6 +150,12 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
     : undefined;
   const badgeContent = props.badgeContent ?? "initials";
   const iconClassName = cn(props.size === "compact" && "size-3.5", props.iconClassName);
+  const isDshInstance = isDshProviderInstance({
+    driverKind: props.driverKind,
+    displayName: props.displayName,
+    acpRegistryAgentId: props.acpRegistryAgentId,
+    instanceId: props.instanceId,
+  });
   const isAcpRegistry = props.driverKind === "acpRegistry";
   const isAntigravityAcpRegistry =
     isAcpRegistry && props.acpRegistryAgentId?.trim().toLowerCase() === "antigravity-acp";
@@ -132,7 +176,9 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       style={accentStyle}
       data-provider-accent-color={accentColor}
     >
-      {isAntigravityAcpRegistry ? (
+      {isDshInstance ? (
+        <DshFishIcon className={cn("size-5 shrink-0", iconClassName)} />
+      ) : isAntigravityAcpRegistry ? (
         <AntigravityIcon className={cn("size-5 shrink-0", iconClassName)} aria-hidden />
       ) : isAcpRegistry ? (
         <AcpRegistryAgentIcon

@@ -169,7 +169,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
     <div
       data-testid="prismux-sidebar-projects-header"
       data-sidebar-section-header="projects"
-      className="group/sidebar-header mt-1 flex h-8 min-w-0 shrink-0 items-center justify-between gap-1 border-t border-sidebar-border/45 pt-1"
+      className="group/sidebar-header mt-1 flex h-7 min-w-0 shrink-0 items-center justify-between gap-1 border-t border-sidebar-border/45 pt-1"
     >
       {/* Left side: `∨ 项目` collapsible button + hover/focus-revealed `↕` collapse/expand-all button */}
       <div className={cn("flex min-w-0 flex-1 items-center gap-0.5", labelFadeClass)}>
@@ -182,7 +182,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
             onToggleProjectsOpen();
             if (event.detail > 0) event.currentTarget.blur();
           }}
-          className="inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-sm px-1.5 py-0.5 text-left text-xs font-semibold tracking-tight text-sidebar-muted-foreground outline-none transition-colors hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          className="inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-sm px-1.5 py-0.5 text-left text-xs font-medium tracking-tight text-sidebar-muted-foreground outline-none transition-colors hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           <ChevronDownIcon
             aria-hidden

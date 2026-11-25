@@ -21,7 +21,6 @@ import {
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
   ScreenReaderAnnouncements,
-  ToolCallVisibility,
 } from "@t3tools/contracts/settings";
 import { createModelSelection, pickModelSelection } from "@t3tools/shared/model";
 import { resolvePastedPath } from "@t3tools/shared/path";
@@ -102,6 +101,7 @@ import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
+import { DiagnosticsSettingsSections } from "./DiagnosticsSettings";
 import {
   prismuxDaemonClient,
   type DaemonUpdaterStatusResponse,
@@ -355,21 +355,27 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(theme !== "system" ? [gt("Theme")] : []),
     ...(!followSystem ? [gt("Follow system")] : []),
     ...(themeHalves !== null ? [gt("Theme mix")] : []),
-    ...(settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast
-      ? [gt("Contrast")]
-      : []),
     ...(settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity
       ? [gt("Glass opacity")]
       : []),
     ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
       ? [gt("Diff colors")]
       : []),
-    ...(settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? [gt("Chat width")] : []),
     ...(settings.effortDisplay !== DEFAULT_UNIFIED_SETTINGS.effortDisplay
       ? [gt("Effort display")]
       : []),
     ...(settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled
       ? [gt("Render math")]
+      : []),
+    ...(settings.workStepsDisplay !== DEFAULT_UNIFIED_SETTINGS.workStepsDisplay
+      ? [gt("Work steps display")]
+      : []),
+    ...(settings.workStepsCollapseTiming !== DEFAULT_UNIFIED_SETTINGS.workStepsCollapseTiming
+      ? [gt("Work steps collapse timing")]
+      : []),
+    ...(settings.collapsedAssistantReplyMode !==
+    DEFAULT_UNIFIED_SETTINGS.collapsedAssistantReplyMode
+      ? [gt("Replies shown when collapsed")]
       : []),
     ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
       ? [gt("Panel animations")]
@@ -446,9 +452,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.sideThreadOpenTarget !== DEFAULT_UNIFIED_SETTINGS.sideThreadOpenTarget
       ? [gt("Open subagents and side chats in")]
-      : []),
-    ...(settings.toolCallVisibility !== DEFAULT_UNIFIED_SETTINGS.toolCallVisibility
-      ? [gt("Tool calls in chat")]
       : []),
     ...(settings.screenReaderAnnouncements !== DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements
       ? [gt("Screen reader announcements")]
@@ -559,11 +562,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       return;
     }
     updateSettings({
-      appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
-      chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
+      workStepsDisplay: DEFAULT_UNIFIED_SETTINGS.workStepsDisplay,
+      workStepsCollapseTiming: DEFAULT_UNIFIED_SETTINGS.workStepsCollapseTiming,
+      collapsedAssistantReplyMode: DEFAULT_UNIFIED_SETTINGS.collapsedAssistantReplyMode,
       language: DEFAULT_UNIFIED_SETTINGS.language,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
@@ -579,7 +583,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       sideThreadOpenTarget: DEFAULT_UNIFIED_SETTINGS.sideThreadOpenTarget,
-      toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility,
       screenReaderAnnouncements: DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
       screenReaderWindowTitle: DEFAULT_UNIFIED_SETTINGS.screenReaderWindowTitle,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
@@ -1352,68 +1355,15 @@ export function ChatSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection id="activity" title={gt("Activity & accessibility")}>
-        <ToolCallVisibilityRow />
+      <SettingsSection id="activity" title={gt("Accessibility")}>
         <ScreenReaderAnnouncementsRow />
         <ScreenReaderWindowTitleRow />
       </SettingsSection>
+
+      <div id="threads" className="space-y-8">
+        <ThreadsSettingsSections />
+      </div>
     </SettingsPageContainer>
-  );
-}
-
-const TOOL_CALL_VISIBILITY_LABELS: Record<ToolCallVisibility, string> = {
-  showAll: msg("Show all"),
-  hideSuccessful: msg("Hide successful"),
-  hideAll: msg("Hide all"),
-  zen: msg("Zen", { $context: "tool call visibility" }),
-};
-
-const isToolCallVisibility = Schema.is(ToolCallVisibility);
-
-function ToolCallVisibilityRow() {
-  const messages = useMessages();
-  const setting = useSearchableSetting();
-  const gt = useGT();
-  const settings = useScopedSettings();
-  const updateSettings = useUpdateScopedSettings();
-  return (
-    <SettingsRow
-      {...setting("tool-call-visibility")}
-      description={gt(
-        "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show.",
-      )}
-      resetAction={
-        settings.toolCallVisibility !== DEFAULT_UNIFIED_SETTINGS.toolCallVisibility ? (
-          <SettingResetButton
-            ariaLabel={gt("Reset tool calls in chat to default")}
-            onClick={() =>
-              updateSettings({ toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility })
-            }
-          />
-        ) : null
-      }
-      control={
-        <Select
-          value={settings.toolCallVisibility}
-          onValueChange={(value) => {
-            if (isToolCallVisibility(value)) updateSettings({ toolCallVisibility: value });
-          }}
-        >
-          <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Tool calls in chat")}>
-            <SelectValue>
-              {messages(TOOL_CALL_VISIBILITY_LABELS[settings.toolCallVisibility])}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectPopup align="end" alignItemWithTrigger={false}>
-            {ToolCallVisibility.literals.map((value) => (
-              <SelectItem key={value} value={value}>
-                {messages(TOOL_CALL_VISIBILITY_LABELS[value])}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-      }
-    />
   );
 }
 
@@ -1576,7 +1526,7 @@ function DiffColorsSettingsRow() {
   );
 }
 
-export function DiffsSettingsPanel() {
+export function DiffsSettingsSections() {
   const messages = useMessages();
   const setting = useSearchableSetting();
   const gt = useGT();
@@ -1584,8 +1534,8 @@ export function DiffsSettingsPanel() {
   const updateSettings = useUpdateScopedSettings();
 
   return (
-    <SettingsPageContainer>
-      <SettingsSection id="diffs" title={gt("Diffs")}>
+    <>
+      <SettingsSection id="diffs-display" title={gt("Diffs")}>
         <SettingsRow
           {...setting("diff-layout")}
           description={gt(
@@ -1726,6 +1676,14 @@ export function DiffsSettingsPanel() {
         />
         <PullRequestLinksOpenInAppSetting />
       </SettingsSection>
+    </>
+  );
+}
+
+export function DiffsSettingsPanel() {
+  return (
+    <SettingsPageContainer>
+      <DiffsSettingsSections />
     </SettingsPageContainer>
   );
 }
@@ -1857,7 +1815,7 @@ function ScopedCompactIdleThreadsRow() {
   );
 }
 
-export function ThreadsSettingsPanel() {
+export function ThreadsSettingsSections() {
   const setting = useSearchableSetting();
   const messages = useMessages();
   const gt = useGT();
@@ -1921,7 +1879,7 @@ export function ThreadsSettingsPanel() {
   const mixedTextGenerationModel = useScopedSettingsMixed(["textGenerationModelSelection"]);
 
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection id="new-projects" title={gt("New projects")}>
         <SettingsRow
           serverScoped
@@ -2297,6 +2255,14 @@ export function ThreadsSettingsPanel() {
           />
         </AdvancedSettings>
       </SettingsSection>
+    </>
+  );
+}
+
+export function ThreadsSettingsPanel() {
+  return (
+    <SettingsPageContainer>
+      <ThreadsSettingsSections />
     </SettingsPageContainer>
   );
 }
@@ -2310,7 +2276,7 @@ export function MaintenanceSettingsPanel() {
   const hasServerTargets = connectedEnvironments.length > 0;
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer width="expanded">
       <SettingsSection id="background" title={gt("Background & recovery")}>
         <BackgroundActivitySettingsRow />
         <SettingsRow
@@ -2386,6 +2352,10 @@ export function MaintenanceSettingsPanel() {
       </SettingsSection>
 
       <StorageCleanupSections />
+
+      <div id="diagnostics" className="space-y-8">
+        <DiagnosticsSettingsSections />
+      </div>
     </SettingsPageContainer>
   );
 }

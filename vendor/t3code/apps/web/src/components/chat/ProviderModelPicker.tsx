@@ -5,6 +5,7 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import { formatModelSlugName } from "@t3tools/shared/model";
 import { RegistryContext } from "@effect/atom-react";
 import { T, useGT } from "gt-react";
 import { ChevronDownIcon } from "lucide-react";
@@ -264,7 +265,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     ? getTriggerDisplayModelName(selectedModel, activeEntry?.driverKind)
     : props.model === ANTIGRAVITY_DEFAULT_MODEL
       ? gt("Choose model")
-      : props.model || gt("Choose model");
+      : formatModelSlugName(props.model) || props.model || gt("Choose model");
   const withUnavailable = (model: string, isUnavailable: boolean | undefined) =>
     isUnavailable ? gt("{model} (Unavailable)", { model }) : model;
   const triggerLabel = selectedModel
@@ -341,10 +342,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       entry,
       label: model
         ? withUnavailable(getTriggerDisplayModelName(model, entry?.driverKind), model.isUnavailable)
-        : selection.model,
+        : formatModelSlugName(selection.model) || selection.model,
       fullLabel: model
         ? withUnavailable(getDisplayModelName(model), model.isUnavailable)
-        : selection.model,
+        : formatModelSlugName(selection.model) || selection.model,
     };
   });
   const multipleLabel = selectedEntries
@@ -491,6 +492,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                       key={`${selection.instanceId}:${selection.model}`}
                       driverKind={selection.entry.driverKind}
                       displayName={selection.entry.displayName}
+                      instanceId={selection.entry.instanceId}
                       accentColor={selection.entry.accentColor}
                       acpRegistryAgentId={selection.entry.acpRegistryAgentId}
                       acpRegistryIconUrl={selection.entry.acpRegistryIconUrl}
@@ -511,6 +513,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               <ProviderInstanceIcon
                 driverKind={activeEntry.driverKind}
                 displayName={activeEntry.displayName}
+                instanceId={activeEntry.instanceId}
                 accentColor={activeEntry.accentColor}
                 acpRegistryAgentId={activeEntry.acpRegistryAgentId}
                 acpRegistryIconUrl={activeEntry.acpRegistryIconUrl}

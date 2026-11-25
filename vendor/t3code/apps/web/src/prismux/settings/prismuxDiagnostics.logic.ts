@@ -75,32 +75,45 @@ const DEFAULT_CATEGORY_LABELS: Readonly<Record<string, string>> = {
 };
 
 const ALLOWED_SETTINGS_ROUTE_PREFIX = "/settings/";
+const ALLOWED_STANDALONE_ROUTES: ReadonlySet<string> = new Set(["/overnight-factory"]);
 
 export function sanitizeDiagnosticsSettingsRoute(raw: string | null | undefined): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
-  if (!trimmed.startsWith(ALLOWED_SETTINGS_ROUTE_PREFIX)) return null;
+  if (
+    !trimmed.startsWith(ALLOWED_SETTINGS_ROUTE_PREFIX) &&
+    !ALLOWED_STANDALONE_ROUTES.has(trimmed)
+  ) {
+    return null;
+  }
   if (/[\s\u0000-\u001F\u007F]/.test(trimmed)) return null;
   if (trimmed.includes("..") || trimmed.includes("://")) return null;
   return trimmed;
 }
 
-/**
- * Maps legacy `/settings/memory-sync` diagnostic routes to the exact split destination:
- * `sync.*` items route to `/settings/sync`, while `memory.*` items route to `/settings/memory`.
- */
+/** Maps legacy diagnostic routes (`memory-sync`, `overnight-factory`, `access`, `diagnostics`) to canonical destinations. */
 export function resolveDiagnosticsSettingsRoute(
   raw: string | null | undefined,
   itemId?: string,
 ): string | null {
   const sanitized = sanitizeDiagnosticsSettingsRoute(raw);
   if (!sanitized) return null;
-  if (sanitized === "/settings/memory-sync" || sanitized === "/settings/memory-sync/") {
+  const normalizedPath = sanitized.replace(/\/+$/, "");
+  if (normalizedPath === "/settings/memory-sync") {
     const normalizedId = (itemId ?? "").trim().toLowerCase();
     if (normalizedId.startsWith("sync.") || normalizedId.includes("sync")) {
       return "/settings/sync";
     }
     return "/settings/memory";
+  }
+  if (normalizedPath === "/settings/overnight-factory") {
+    return "/overnight-factory";
+  }
+  if (normalizedPath === "/settings/access") {
+    return "/settings/connections";
+  }
+  if (normalizedPath === "/settings/diagnostics") {
+    return "/settings/maintenance";
   }
   return sanitized;
 }
@@ -438,7 +451,7 @@ const DIAGNOSTICS_MUTATION_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/settings/plugins",
   "/settings/memory",
   "/settings/sync",
-  "/settings/overnight-factory",
+  "/overnight-factory",
   "/settings/memory-sync",
   "/settings/updates",
   "/settings/wallpaper",

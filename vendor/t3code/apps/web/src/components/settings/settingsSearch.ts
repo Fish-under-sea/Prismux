@@ -106,21 +106,21 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/projects": msg("Projects"),
   "/settings/general": msg("General"),
   "/settings/appearance": msg("Appearance"),
-  "/settings/chat": msg("Chat"),
+  "/settings/chat": msg("Chat & threads"),
   "/settings/diffs": msg("Diffs & pull requests"),
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
   "/settings/threads": msg("Threads"),
-  "/settings/browser": msg("Browser"),
+  "/settings/browser": msg("Browser & devices"),
   "/settings/devices": msg("Devices"),
   "/settings/scheduled-tasks": msg("Scheduled tasks"),
-  "/settings/source-control": msg("Source control & issues"),
+  "/settings/source-control": msg("Source control & worktrees"),
   "/settings/worktrees": msg("Worktrees"),
-  "/settings/connections": msg("Environments"),
+  "/settings/connections": msg("Environments & remote access"),
   "/settings/access": msg("Sharing & access"),
   "/settings/secrets": msg("Secrets"),
-  "/settings/maintenance": msg("Maintenance"),
+  "/settings/maintenance": msg("Maintenance & diagnostics"),
   "/settings/labs": msg("Labs"),
   "/settings/about": msg("About"),
   "/settings/voice": msg("Voice"),
@@ -138,7 +138,10 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
 export const SETTINGS_NAV_LABELS: Readonly<Record<SettingsPath, string>> = {
   ...SETTINGS_SECTION_LABELS,
   "/settings/about": msg("About & Updates"),
-  "/settings/source-control": msg("Source control & issues", {
+  "/settings/source-control": msg("Source control & worktrees", {
+    $context: "settings navigation item",
+  }),
+  "/settings/connections": msg("Environments & remote access", {
     $context: "settings navigation item",
   }),
   "/settings/access": msg("Sharing & access", { $context: "settings navigation item" }),
@@ -158,13 +161,8 @@ export type SettingsNavGroup = {
 };
 
 /**
- * Deduplicated 4-group divider-free sidebar hierarchy:
- * - Group 1 (`General & appearance`): General -> Chat -> Voice -> Appearance -> Wallpaper -> Keybindings (+ macOS SnapShots).
- * - Group 2 (`Agents & workspace`): Providers -> Devices -> Threads -> Projects -> Archive -> Browser -> Worktrees -> Diffs -> Source control.
- * - Group 3 (`Extensions, memory & connections`): Environments -> Memory -> Sync -> Plugins -> Sharing & access (+ Secrets).
- * - Group 4 (`System & about`): Service Diagnostics -> Maintenance -> About & Updates.
- * - `/settings/memory-sync` redirects to `/settings/memory` (or `/settings/sync` for `#sync` / `?tab=sync`).
- * - `/settings/updates` is merged into `/settings/about` (legacy deep link redirects to `#prismux-updates`).
+ * Consolidated 4-group divider-free sidebar hierarchy. Sparse legacy pages redirect
+ * via route `beforeLoad` hooks, and Overnight Factory lives at standalone `/overnight-factory`.
  */
 const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
@@ -186,13 +184,9 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     heading: msg("Agents & workspace"),
     paths: [
       "/settings/providers",
-      "/settings/devices",
-      "/settings/threads",
       "/settings/projects",
       "/settings/archived",
       "/settings/browser",
-      "/settings/worktrees",
-      "/settings/diffs",
       "/settings/source-control",
     ],
   },
@@ -204,15 +198,13 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/memory",
       "/settings/sync",
       "/settings/plugins",
-      "/settings/access",
-      "/settings/overnight-factory",
       "/settings/secrets",
     ],
   },
   {
     id: "system-about",
     heading: msg("System & about"),
-    paths: ["/settings/diagnostics", "/settings/maintenance", "/settings/about"],
+    paths: ["/settings/maintenance", "/settings/about"],
   },
 ];
 
@@ -315,7 +307,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
     title: msg("Keep worktrees with local changes"),
-    to: "/settings/worktrees",
+    to: "/settings/source-control",
     scope: "project-defaults",
     searchTerms: [
       msg(
@@ -333,7 +325,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "storage-worktrees",
     title: msg("Worktree cleanup"),
-    to: "/settings/worktrees",
+    to: "/settings/source-control",
     scope: "project-defaults",
     searchTerms: [
       msg(
@@ -344,7 +336,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "storage-worktrees-location",
     title: msg("Worktree location"),
-    to: "/settings/worktrees",
+    to: "/settings/source-control",
     scope: "environment-defaults",
     searchTerms: [msg("worktree location folder directory path drive external disk")],
   },
@@ -362,7 +354,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "project-defaults",
     title: msg("Project defaults and overrides"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "project-defaults",
     searchTerms: [msg("model workspace environments projects inheritance checkout")],
   },
@@ -375,14 +367,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "default-model",
     title: msg("Default model"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "project-defaults",
     searchTerms: [msg("new thread project provider reasoning effort")],
   },
   {
     id: "fallback-model",
     title: msg("Fallback model"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "environment-defaults",
     searchTerms: [msg("fallback agent provider out of usage new threads")],
     environmentOnly: true,
@@ -390,7 +382,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "default-permissions",
     title: msg("Permissions"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "project-defaults",
     searchTerms: [
       msg("new thread default runtime mode supervised approvals auto accept edits full access"),
@@ -411,25 +403,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "prismux-appearance",
   },
   {
-    // Prefixed because the slider control already owns the `appearance-contrast` id.
-    id: "setting-appearance-contrast",
-    title: msg("Contrast"),
-    to: "/settings/appearance",
-    searchTerms: [msg("colors borders interface")],
-  },
-  {
     id: "diff-color-scheme",
     title: msg("Diff colors"),
-    to: "/settings/diffs",
+    to: "/settings/source-control",
     searchTerms: [
       msg("red green blue orange additions deletions changes counts palette colorblind"),
     ],
-  },
-  {
-    id: "chat-width",
-    title: msg("Chat width"),
-    to: "/settings/appearance",
-    searchTerms: [msg("wide full width column layout messages composer monitor")],
   },
   {
     id: "thread-details-items",
@@ -452,6 +431,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Render math"),
     to: "/settings/appearance",
     searchTerms: [msg("latex tex katex equations formulas markdown")],
+  },
+  {
+    id: "work-steps-display",
+    title: msg("Work steps display"),
+    to: "/settings/appearance",
+    searchTerms: [msg("work steps concise standard detailed expanded tool calls commands edits activity")],
+  },
+  {
+    id: "work-steps-collapse-timing",
+    title: msg("Work steps collapse timing"),
+    to: "/settings/appearance",
+    searchTerms: [msg("work steps collapse fold timing after response ends next new message")],
+  },
+  {
+    id: "collapsed-assistant-reply-mode",
+    title: msg("Replies shown when collapsed"),
+    to: "/settings/appearance",
+    searchTerms: [msg("collapsed assistant reply mode all replies final answer only folded steps")],
   },
   {
     id: "panel-animations",
@@ -521,7 +518,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "snooze-options",
     title: msg("Snooze options"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     searchTerms: [msg("snooze presets times later tonight tomorrow next week remind")],
     environmentOnly: true,
     scope: "environment-defaults",
@@ -529,13 +526,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "snooze-limited-threads",
     title: msg("Snooze until limits reset"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     searchTerms: [msg("usage quota rate limit reset wake recover continue")],
   },
   {
     id: "auto-resume-limited-threads",
     title: msg("Resume after usage limits"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     searchTerms: [msg("usage quota rate limit reset recover continue")],
   },
   {
@@ -545,16 +542,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
   },
 
-  {
-    id: "tool-call-visibility",
-    title: msg("Tool calls in chat"),
-    to: "/settings/chat",
-    searchTerms: [
-      msg(
-        "hide tool calls commands edits searches work log activity quiet chat zen final answers only",
-      ),
-    ],
-  },
   {
     id: "screen-reader-announcements",
     title: msg("Screen reader announcements"),
@@ -592,7 +579,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "worktree-fast-checkout",
     title: msg("Fast worktree checkout"),
-    to: "/settings/worktrees",
+    to: "/settings/source-control",
     scope: "environment",
     fastWorktreeCheckoutOnly: true,
     searchTerms: [msg("beta fast worktree checkout clone apfs copy-on-write cache macos speed")],
@@ -710,7 +697,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "auto-settle-inactive-threads",
     title: msg("Auto-settle inactive threads"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     searchTerms: [msg("sidebar inactivity days no activity automatically")],
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
@@ -725,7 +712,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "auto-settle-merged-threads",
     title: msg("Auto-settle merged threads"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     searchTerms: [msg("pull request merge closed automatically sidebar")],
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
@@ -733,7 +720,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "keep-threads-with-pull-requests",
     title: msg("Keep threads with a PR"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     targetId: "auto-settle-inactive-threads",
     searchTerms: [msg("pull request inactivity auto-settle merge close sidebar")],
     requiresThreadAutoSettlement: true,
@@ -742,7 +729,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "days-before-auto-settle",
     title: msg("Days of inactivity before auto-settle"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     targetId: "auto-settle-inactive-threads",
     searchTerms: [msg("thread timeout activity sidebar")],
     requiresThreadAutoSettlement: true,
@@ -779,32 +766,32 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "response-streaming",
     title: msg("Response streaming"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "project-defaults",
     searchTerms: [msg("output token paragraph buffered wait turn legacy")],
   },
   {
     id: "hide-whitespace-changes",
     title: msg("Hide whitespace changes"),
-    to: "/settings/diffs",
+    to: "/settings/source-control",
     searchTerms: [msg("diff ignore spaces edits default")],
   },
   {
     id: "default-diff-file-state",
     title: msg("Default diff file state"),
-    to: "/settings/diffs",
+    to: "/settings/source-control",
     searchTerms: [msg("collapsed expanded collapse expand files pull request pr code tab")],
   },
   {
     id: "diff-layout",
     title: msg("Diff layout"),
-    to: "/settings/diffs",
+    to: "/settings/source-control",
     searchTerms: [msg("stacked split side by side unified inline view")],
   },
   {
     id: "proactive-panels",
     title: msg("Open pull requests and changes panels proactively"),
-    to: "/settings/diffs",
+    to: "/settings/source-control",
     searchTerms: [
       msg("proactive automatically open diff pull request pr right panel agent completion"),
     ],
@@ -884,35 +871,35 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "new-threads",
     title: msg("New threads"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "project-defaults",
     searchTerms: [msg("default workspace mode draft local worktree")],
   },
   {
     id: "worktree-submodules",
     title: msg("Submodules"),
-    to: "/settings/worktrees",
+    to: "/settings/source-control",
     scope: "project-defaults",
     searchTerms: [msg("git submodule init recursive top-level none worktree t3.json")],
   },
   {
     id: "start-from-origin",
     title: msg("Start from remote"),
-    to: "/settings/worktrees",
+    to: "/settings/source-control",
     scope: "project-defaults",
     searchTerms: [msg("new worktrees start remote origin latest fetched branch local")],
   },
   {
     id: "add-project-starts-in",
     title: msg("Add project starts in"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "environment-defaults",
     searchTerms: [msg("base directory folder browser path home")],
   },
   {
     id: "ghq-clone-layout",
     title: msg("Clone into host folders"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "environment-defaults",
     searchTerms: [msg("ghq clone destination host owner repository root layout")],
   },
@@ -950,14 +937,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "text-generation-model",
     title: msg("Text generation model"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "project-defaults",
     searchTerms: [msg("generated thread titles source control content default provider")],
   },
   {
     id: "thread-title-instructions",
     title: msg("Thread title instructions"),
-    to: "/settings/threads",
+    to: "/settings/chat",
     scope: "project-defaults",
     searchTerms: [msg("generated thread titles prompt custom style naming rename regenerate")],
   },
@@ -1003,7 +990,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "telemetry-export",
     title: msg("OpenTelemetry export"),
-    to: "/settings/diagnostics",
+    to: "/settings/maintenance",
     targetId: "telemetry-export",
     scope: "environment",
     searchTerms: [msg("OTel OTLP telemetry export endpoints logs traces metrics Grafana")],
@@ -1011,7 +998,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "diagnostics",
     title: msg("Diagnostics"),
-    to: "/settings/diagnostics",
+    to: "/settings/maintenance",
     searchTerms: [msg("logs traces processes resource history failures spans cpu memory")],
   },
   {
@@ -1123,27 +1110,27 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "device-sources",
     title: msg("Device sources"),
-    to: "/settings/devices",
+    to: "/settings/browser",
     searchTerms: [msg("device hosts ssh remote mac mini identity key connection local simulators")],
   },
   {
     id: "agent-device-access",
     title: msg("Agents can use devices"),
-    to: "/settings/devices",
+    to: "/settings/browser",
     targetId: "devices",
     searchTerms: [msg("allow simulator emulator ios android drive tools sessions")],
   },
   {
     id: "device-hub",
     title: msg("Use devices"),
-    to: "/settings/devices",
+    to: "/settings/browser",
     targetId: "devices",
     searchTerms: [msg("device hub simulator emulator ios android install start version")],
   },
   {
     id: "device-platform-support",
     title: msg("Local simulators"),
-    to: "/settings/devices",
+    to: "/settings/browser",
     targetId: "device-sources",
     searchTerms: [msg("simulator support xcode android studio sdk avd runtime")],
   },
@@ -1209,7 +1196,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "pull-request-links-open-in-app",
     title: msg("Open pull requests in Prismux"),
-    to: "/settings/diffs",
+    to: "/settings/source-control",
     searchTerms: [
       `pr commit links ${SOURCE_CONTROL_HOST_LABELS} browser external click default pull request view panel`,
     ],
@@ -1273,7 +1260,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "worktree-branch-naming",
     title: msg("Worktree branch naming"),
-    to: "/settings/worktrees",
+    to: "/settings/source-control",
     searchTerms: [msg("static semantic prefix custom prompt instructions feat fix refactor chore")],
     environmentOnly: true,
     scope: "project-defaults",
@@ -1350,7 +1337,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "environment-icon",
     title: msg("Environment icon"),
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: [msg("machine glyph sidebar mac mini studio laptop desktop server cloud vm")],
   },
@@ -1364,7 +1351,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "network-access",
     title: msg("Network access"),
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: [msg("expose backend remote pairing local machine interfaces host restart")],
     localBackendManagementOnly: true,
@@ -1372,7 +1359,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "tailscale-https",
     title: msg("Tailscale HTTPS"),
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: [msg("serve magicdns endpoint remote secure network")],
     desktopOnly: true,
@@ -1381,7 +1368,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "wsl-backend",
     title: msg("WSL backend"),
-    to: "/settings/access",
+    to: "/settings/connections",
     searchTerms: [
       msg(
         "windows subsystem linux distro second server projects stop windows backend restart wsl only",
@@ -1395,7 +1382,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "preview-tunnel",
     title: msg("Preview tunnel"),
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: [
       msg("localhost loopback port forwarding open on this device browser tabs stream security"),
@@ -1404,12 +1391,19 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "connections-environment",
     title: msg("This machine"),
-    to: "/settings/access",
+    to: "/settings/connections",
     searchTerms: [
       msg(
         "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
       ),
     ],
+  },
+  {
+    id: "mobile-qr-pairing",
+    title: msg("QR code pairing"),
+    to: "/settings/connections",
+    targetId: "mobile-qr-pairing",
+    searchTerms: [msg("qr code scan phone mobile lan tailscale pairing remote access")],
   },
   {
     id: "linked-environments",
@@ -1514,17 +1508,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
-    id: "prismux-overnight-factory",
-    title: msg("Overnight Factory & Mail"),
-    to: "/settings/overnight-factory",
-    targetId: "prismux-overnight-factory",
-    searchTerms: [
-      msg(
-        "overnight factory mail gmail oauth2 imap smtp qq 163 outlook whitelist oracle morning report #factory",
-      ),
-    ],
-  },
-  {
     id: "prismux-updates",
     title: msg("Prismux Updates"),
     to: "/settings/about",
@@ -1535,7 +1518,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "prismux-diagnostics",
     title: msg("Service Diagnostics"),
-    to: "/settings/diagnostics",
+    to: "/settings/maintenance",
+    targetId: "diagnostics",
     searchTerms: [
       msg(
         "diagnostics health check services sqlite-vec fts5 7za adb steam agy claude codex omp overnight factory hooks sandbox",
@@ -1598,8 +1582,14 @@ const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
 ]);
 // Section anchors that moved but are not search results themselves.
 const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
-  "authorized-clients": "/settings/access",
-  "text-generation": "/settings/threads",
+  "authorized-clients": "/settings/connections",
+  "remote-access": "/settings/connections",
+  "text-generation": "/settings/chat",
+  threads: "/settings/chat",
+  worktrees: "/settings/source-control",
+  diffs: "/settings/source-control",
+  devices: "/settings/browser",
+  diagnostics: "/settings/maintenance",
   about: "/settings/about",
   sync: "/settings/sync",
   "prismux-sync": "/settings/sync",

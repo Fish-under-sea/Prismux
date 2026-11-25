@@ -45,7 +45,10 @@ import { SIDEBAR_ICON_RAIL_WIDTH_PX } from "./sidebar/sidebarIconRailMotion";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
-import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
+import {
+  SidebarSkyTopbarExtension,
+  useSidebarStageBackdropVariant,
+} from "./SidebarStageBackdrop";
 import {
   clampThreadSidebarWidth,
   resolveInitialThreadSidebarWidth,
@@ -497,6 +500,7 @@ export function AppSidebarLayout({
               <ThreadSidebar routeReveal={sidebarRouteReveal} />
               <SidebarRail onDoubleClick={resetSidebarWidth} />
             </Sidebar>
+            <SidebarSkyTopbarExtension />
           </>
         ) : null}
         {children}

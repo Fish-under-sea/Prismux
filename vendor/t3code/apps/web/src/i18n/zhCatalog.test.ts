@@ -72,35 +72,33 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(zhGroups).toEqual([
       {
         heading: "常用与外观",
-        labels: ["通用", "聊天", "语音", "外观", "壁纸", "快捷键"],
+        labels: ["通用", "对话与线程", "语音", "外观", "壁纸", "快捷键"],
       },
       {
         heading: "智能体与工作区",
-        labels: [
-          "智能体提供方",
-          "设备",
-          "会话",
-          "项目",
-          "归档",
-          "浏览器",
-          "工作树",
-          "差异与 PR",
-          "版本控制与 issue",
-        ],
+        labels: ["智能体提供方", "项目", "归档", "浏览器与设备", "源码管理与工作树"],
       },
       {
         heading: "扩展、记忆与连接",
-        labels: ["环境", "记忆", "同步", "插件中心", "共享与访问", "夜间工场与邮箱"],
+        labels: ["环境与扫码远控", "记忆", "同步", "插件中心"],
       },
       {
         heading: "系统与关于",
-        labels: ["服务体检", "维护", "关于与更新"],
+        labels: ["维护与服务诊断", "关于与更新"],
       },
     ]);
 
     expect(m(msg("Prismux"))).toBe("Prismux");
     expect(m(msg("Wallpaper Engine"))).toBe("壁纸引擎");
     expect(m(msg("Plugin Center"))).toBe("插件中心");
+    expect(m(msg("Work steps display"))).toBe("工作步骤展示");
+    expect(m(msg("Work steps collapse timing"))).toBe("工作步骤收起时机");
+    expect(m(msg("Replies shown when collapsed"))).toBe("收起后显示的回复");
+    expect(m(msg("Standard", { $context: "work steps display level" }))).toBe("标准");
+    expect(m(msg("After response ends", { $context: "work steps collapse timing" }))).toBe(
+      "回答结束后",
+    );
+    expect(m(msg("All replies", { $context: "collapsed assistant replies" }))).toBe("全部回复");
   });
 
   it("finds Prismux settings items by both Chinese and English queries", () => {
@@ -114,10 +112,10 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["主秘书", "prismux-chief-slot"],
       ["同步", "prismux-sync"],
       ["WebDAV", "prismux-sync"],
-      ["夜间工场", "prismux-overnight-factory"],
-      ["夜间工厂", "prismux-overnight-factory"],
-      ["邮箱绑定", "prismux-overnight-factory"],
-      ["Overnight Factory", "prismux-overnight-factory"],
+      ["工作步骤展示", "work-steps-display"],
+      ["工作步骤收起时机", "work-steps-collapse-timing"],
+      ["收起后显示的回复", "collapsed-assistant-reply-mode"],
+      ["二维码扫码配对", "mobile-qr-pairing"],
       ["软件更新", "prismux-updates"],
       ["双源", "prismux-updates"],
       ["Wallpaper Engine", "prismux-wallpaper"],

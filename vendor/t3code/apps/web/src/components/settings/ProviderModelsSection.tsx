@@ -1,6 +1,33 @@
-import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
+import {
+  DndContext,
+  type DragEndEvent,
+  type DragStartEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS as DndCSS } from "@dnd-kit/utilities";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  GripVerticalIcon,
+  PencilIcon,
+  PlusIcon,
+  StarIcon,
+  XIcon,
+} from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -87,6 +114,28 @@ function groupModelsForDisplay<T extends { readonly slug: string; readonly isCus
   ];
 }
 
+export type ModelDisplayGroup = "favorite" | "visible" | "hidden";
+
+export function reorderModelsWithinGroup(
+  displayModels: ReadonlyArray<{ readonly slug: string }>,
+  groupOfSlug: (slug: string) => ModelDisplayGroup,
+  activeSlug: string,
+  overSlug: string,
+): string[] | null {
+  if (activeSlug === overSlug) return null;
+  const fromIndex = displayModels.findIndex((model) => model.slug === activeSlug);
+  const toIndex = displayModels.findIndex((model) => model.slug === overSlug);
+  if (fromIndex < 0 || toIndex < 0) return null;
+  const fromGroup = groupOfSlug(activeSlug);
+  const toGroup = groupOfSlug(overSlug);
+  if (fromGroup === "hidden" || fromGroup !== toGroup) return null;
+  return arrayMove(
+    displayModels.map((model) => model.slug),
+    fromIndex,
+    toIndex,
+  );
+}
+
 function nextHiddenModelsForBulkToggle(
   models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "isCustom">>,
   hiddenModels: ReadonlyArray<string>,
@@ -154,6 +203,24 @@ export function ProviderModelsSection({
   const [heldPlacements, setHeldPlacements] = useState<ReadonlyMap<string, boolean>>(
     () => new Map(),
   );
+  const [optimisticModelOrder, setOptimisticModelOrder] = useState<{
+    readonly baseKey: string;
+    readonly order: ReadonlyArray<string>;
+  } | null>(null);
+  const [activeDragSlug, setActiveDragSlug] = useState<string | null>(null);
+  const modelSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+  const modelOrderKey = modelOrder.join("\0");
+  const effectiveModelOrder =
+    optimisticModelOrder !== null && optimisticModelOrder.baseKey === modelOrderKey
+      ? optimisticModelOrder.order
+      : modelOrder;
   const hiddenModelSet = new Set(hiddenModels);
   const favoriteModelSet = new Set(favoriteModels);
   const reportedSlugs = new Set(models.map((model) => model.slug));
@@ -171,7 +238,7 @@ export function ProviderModelsSection({
   const displayModels = groupModelsForDisplay(listedModels, {
     favoriteModels: favoriteModelSet,
     hiddenModels: placedHiddenSet,
-    modelOrder,
+    modelOrder: effectiveModelOrder,
   });
   const favoriteCount = displayModels.filter((model) => favoriteModelSet.has(model.slug)).length;
   const hiddenCount = displayModels.filter(
@@ -290,12 +357,28 @@ export function ProviderModelsSection({
     onToggleFavorite(slug);
   };
 
-  const groupOf = (model: (typeof displayModels)[number]) =>
+  const groupOf = (model: (typeof displayModels)[number]): ModelDisplayGroup =>
     favoriteModelSet.has(model.slug)
       ? "favorite"
       : !model.isCustom && placedHiddenSet.has(model.slug)
         ? "hidden"
         : "visible";
+  const groupBySlug = new Map(displayModels.map((model) => [model.slug, groupOf(model)] as const));
+  const groupOfSlug = (slug: string): ModelDisplayGroup => groupBySlug.get(slug) ?? "visible";
+  const activeDragIndex =
+    activeDragSlug !== null
+      ? displayModels.findIndex((model) => model.slug === activeDragSlug)
+      : -1;
+  const activeDragGroup = activeDragSlug !== null ? groupOfSlug(activeDragSlug) : null;
+
+  const commitModelOrder = (next: ReadonlyArray<string>) => {
+    setOptimisticModelOrder({
+      baseKey: modelOrderKey,
+      order: next,
+    });
+    onModelOrderChange(next);
+  };
+
   const handleMove = (slug: string, direction: -1 | 1) => {
     if (!canWritePreferences) return;
     const index = displayModels.findIndex((model) => model.slug === slug);
@@ -304,7 +387,28 @@ export function ProviderModelsSection({
     if (groupOf(displayModels[index]!) !== groupOf(displayModels[nextIndex]!)) return;
     const next = displayModels.map((model) => model.slug);
     [next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!];
-    onModelOrderChange(next);
+    commitModelOrder(next);
+  };
+
+  const handleModelDragStart = (event: DragStartEvent) => {
+    setActiveDragSlug(String(event.active.id));
+  };
+
+  const handleModelDragCancel = () => {
+    setActiveDragSlug(null);
+  };
+
+  const handleModelDragEnd = (event: DragEndEvent) => {
+    setActiveDragSlug(null);
+    if (!canWritePreferences || isFiltering || !event.over) return;
+    const next = reorderModelsWithinGroup(
+      displayModels,
+      groupOfSlug,
+      String(event.active.id),
+      String(event.over.id),
+    );
+    if (!next) return;
+    commitModelOrder(next);
   };
 
   const handleToggleEdit = useStableCallback((slug: string) => {
@@ -325,14 +429,23 @@ export function ProviderModelsSection({
     const index = displayModels.indexOf(model);
     const previousModel = displayModels[index - 1];
     const nextModel = displayModels[index + 1];
+    const canMoveUp =
+      !isFiltering && previousModel !== undefined && groupOf(previousModel) === group;
+    const canMoveDown = !isFiltering && nextModel !== undefined && groupOf(nextModel) === group;
+    const canDrag = canWritePreferences && !isFiltering && group !== "hidden" && (canMoveUp || canMoveDown);
     return (
-      <ProviderModelRow
+      <SortableProviderModelRow
         key={`${instanceId}:${model.slug}`}
         model={model}
+        rowIndex={index}
+        rowGroup={group}
+        activeDragIndex={activeDragIndex}
+        activeDragGroup={activeDragGroup}
+        canDrag={canDrag}
         isHidden={!model.isCustom && hiddenModelSet.has(model.slug)}
         isFavorite={group === "favorite"}
-        canMoveUp={!isFiltering && previousModel !== undefined && groupOf(previousModel) === group}
-        canMoveDown={!isFiltering && nextModel !== undefined && groupOf(nextModel) === group}
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
         isFiltering={isFiltering}
         flagMissingReasoning={flagMissingReasoning}
         canWritePreferences={canWritePreferences}
@@ -415,47 +528,65 @@ export function ProviderModelsSection({
           <p className="px-2 py-2 text-xs text-muted-foreground">
             {isFiltering ? gt("No models match.") : gt("No models reported for this provider yet.")}
           </p>
-        ) : null}
-        {visibleModels.map((model, index) => {
-          const group = groupOf(model);
-          const previous = visibleModels[index - 1];
-          const startsGroup = previous === undefined || groupOf(previous) !== group;
-          const editingEntry =
-            canManageCustomModels && model.isCustom && editingSlug === model.slug
-              ? customModels.find((entry) => entry.slug === model.slug)
-              : undefined;
-          return (
-            <div key={`${instanceId}:${model.slug}:group`}>
-              {startsGroup && favoriteCount > 0 && group === "favorite"
-                ? groupLabel(gt("Favorites"), index === 0)
-                : null}
-              {startsGroup && favoriteCount > 0 && group === "visible"
-                ? groupLabel(gt("All", { $context: "group of all visible models" }), index === 0)
-                : null}
-              {startsGroup && group === "hidden"
-                ? groupLabel(gt("Hidden from picker"), index === 0)
-                : null}
-              {renderRow(model)}
-              {editingEntry ? (
-                <CustomModelEditor
-                  key={`${instanceId}:${model.slug}:editor`}
-                  instanceId={instanceId}
-                  driverKind={driverKind}
-                  entry={editingEntry}
-                  builtInModels={builtInModels}
-                  onSave={(next) => void handleSaveEdit(next)}
-                  onDraftChange={() => {
-                    editAttemptRef.current += 1;
-                  }}
-                  onCancel={() => {
-                    editAttemptRef.current += 1;
-                    setEditingSlug(null);
-                  }}
-                />
-              ) : null}
-            </div>
-          );
-        })}
+        ) : (
+          <DndContext
+            sensors={modelSensors}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+            onDragStart={handleModelDragStart}
+            onDragEnd={handleModelDragEnd}
+            onDragCancel={handleModelDragCancel}
+          >
+            <SortableContext
+              items={visibleModels.map((model) => model.slug)}
+              strategy={verticalListSortingStrategy}
+            >
+              {visibleModels.map((model, index) => {
+                const group = groupOf(model);
+                const previous = visibleModels[index - 1];
+                const startsGroup = previous === undefined || groupOf(previous) !== group;
+                const editingEntry =
+                  canManageCustomModels && model.isCustom && editingSlug === model.slug
+                    ? customModels.find((entry) => entry.slug === model.slug)
+                    : undefined;
+                return (
+                  <div key={`${instanceId}:${model.slug}:group`}>
+                    {startsGroup && favoriteCount > 0 && group === "favorite"
+                      ? groupLabel(gt("Favorites"), index === 0)
+                      : null}
+                    {startsGroup && favoriteCount > 0 && group === "visible"
+                      ? groupLabel(
+                          gt("All", { $context: "group of all visible models" }),
+                          index === 0,
+                        )
+                      : null}
+                    {startsGroup && group === "hidden"
+                      ? groupLabel(gt("Hidden from picker"), index === 0)
+                      : null}
+                    {renderRow(model)}
+                    {editingEntry ? (
+                      <CustomModelEditor
+                        key={`${instanceId}:${model.slug}:editor`}
+                        instanceId={instanceId}
+                        driverKind={driverKind}
+                        entry={editingEntry}
+                        builtInModels={builtInModels}
+                        onSave={(next) => void handleSaveEdit(next)}
+                        onDraftChange={() => {
+                          editAttemptRef.current += 1;
+                        }}
+                        onCancel={() => {
+                          editAttemptRef.current += 1;
+                          setEditingSlug(null);
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })}
+            </SortableContext>
+          </DndContext>
+        )}
       </div>
 
       {driverKind === "antigravity" || !canManageCustomModels ? null : isAdding ? (
@@ -501,6 +632,105 @@ export function ProviderModelsSection({
   );
 }
 
+interface ProviderModelRowProps {
+  readonly model: ServerProviderModel;
+  readonly isHidden: boolean;
+  readonly isFavorite: boolean;
+  readonly canMoveUp: boolean;
+  readonly canMoveDown: boolean;
+  readonly isFiltering: boolean;
+  readonly flagMissingReasoning: boolean;
+  readonly canWritePreferences: boolean;
+  readonly canManageCustomModels: boolean;
+  readonly onToggleFavorite: (slug: string) => void;
+  readonly onMove: (slug: string, direction: -1 | 1) => void;
+  readonly onSetHidden: (slug: string, hidden: boolean) => void;
+  readonly onToggleEdit: (slug: string) => void;
+  readonly onRemove: (slug: string) => void;
+}
+
+function SortableProviderModelRow({
+  rowIndex,
+  rowGroup,
+  activeDragIndex,
+  activeDragGroup,
+  canDrag,
+  ...rowProps
+}: ProviderModelRowProps & {
+  readonly rowIndex: number;
+  readonly rowGroup: ModelDisplayGroup;
+  readonly activeDragIndex: number;
+  readonly activeDragGroup: ModelDisplayGroup | null;
+  readonly canDrag: boolean;
+}) {
+  const gt = useGT();
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } =
+    useSortable({
+      id: rowProps.model.slug,
+      disabled: !canDrag,
+    });
+  const canShowDropIndicator =
+    isOver && !isDragging && activeDragIndex !== -1 && activeDragGroup === rowGroup;
+  const showDropIndicatorBefore = canShowDropIndicator && activeDragIndex > rowIndex;
+  const showDropIndicatorAfter = canShowDropIndicator && activeDragIndex < rowIndex;
+
+  return (
+    <div
+      ref={setNodeRef}
+      data-sortable-model={rowProps.model.slug}
+      data-dragging={isDragging ? "true" : undefined}
+      style={{
+        transform: DndCSS.Transform.toString(transform),
+        transition,
+      }}
+      onPointerDown={
+        canDrag
+          ? (event) => {
+              listeners?.onPointerDown?.(event);
+            }
+          : undefined
+      }
+      className={cn(
+        "relative rounded-md",
+        isDragging &&
+          "z-20 scale-[1.005] bg-card/95 shadow-md ring-1 ring-primary/40 backdrop-blur-sm",
+      )}
+    >
+      {showDropIndicatorBefore ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-2 top-0 z-30 h-0.5 rounded-full bg-primary"
+        />
+      ) : null}
+      <ProviderModelRow
+        {...rowProps}
+        dragHandle={
+          canDrag ? (
+            <button
+              type="button"
+              {...attributes}
+              {...listeners}
+              data-model-drag-handle={rowProps.model.slug}
+              aria-label={gt("Drag to reorder {name}", { name: rowProps.model.name })}
+              className="flex size-4 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground/45 opacity-55 transition-opacity hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none active:cursor-grabbing group-hover/model-row:opacity-100"
+            >
+              <GripVerticalIcon className="size-3" />
+            </button>
+          ) : (
+            <span aria-hidden="true" className="size-4 shrink-0" />
+          )
+        }
+      />
+      {showDropIndicatorAfter ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-2 bottom-0 z-30 h-0.5 rounded-full bg-primary"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 const ProviderModelRow = memo(function ProviderModelRow({
   model,
   isHidden,
@@ -516,22 +746,8 @@ const ProviderModelRow = memo(function ProviderModelRow({
   onSetHidden,
   onToggleEdit,
   onRemove,
-}: {
-  readonly model: ServerProviderModel;
-  readonly isHidden: boolean;
-  readonly isFavorite: boolean;
-  readonly canMoveUp: boolean;
-  readonly canMoveDown: boolean;
-  readonly isFiltering: boolean;
-  readonly flagMissingReasoning: boolean;
-  readonly canWritePreferences: boolean;
-  readonly canManageCustomModels: boolean;
-  readonly onToggleFavorite: (slug: string) => void;
-  readonly onMove: (slug: string, direction: -1 | 1) => void;
-  readonly onSetHidden: (slug: string, hidden: boolean) => void;
-  readonly onToggleEdit: (slug: string) => void;
-  readonly onRemove: (slug: string) => void;
-}) {
+  dragHandle,
+}: ProviderModelRowProps & { readonly dragHandle?: ReactNode }) {
   const gt = useGT();
   const m = useMessages();
   const capLabels = describeModelCapabilities(model, flagMissingReasoning, m);
@@ -546,32 +762,38 @@ const ProviderModelRow = memo(function ProviderModelRow({
     <div
       data-model-slug={model.slug}
       className={cn(
-        "grid h-7 grid-cols-[1.5rem_minmax(0,1fr)_auto_minmax(5.5rem,auto)_auto] items-center gap-2 rounded-md px-2 transition-colors hover:bg-muted/30",
+        "group/model-row grid h-7 grid-cols-[1rem_1.5rem_minmax(0,1fr)_auto_minmax(5.5rem,auto)_auto] items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-muted/30",
         isHidden && "opacity-50",
       )}
     >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              size="icon-micro"
-              variant="ghost-muted"
-              disabled={!canWritePreferences}
-              onClick={() => onToggleFavorite(model.slug)}
-              aria-label={
-                isFavorite
-                  ? gt("Remove {name} from favorites", { name: model.name })
-                  : gt("Add {name} to favorites", { name: model.name })
-              }
-            />
-          }
-        >
-          <StarIcon className={cn("size-3", isFavorite && "fill-current text-warning")} />
-        </TooltipTrigger>
-        <TooltipPopup side="top">
-          {isFavorite ? gt("Remove from favorites") : gt("Add to favorites")}
-        </TooltipPopup>
-      </Tooltip>
+      {dragHandle}
+      <span
+        className="flex shrink-0 items-center"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="icon-micro"
+                variant="ghost-muted"
+                disabled={!canWritePreferences}
+                onClick={() => onToggleFavorite(model.slug)}
+                aria-label={
+                  isFavorite
+                    ? gt("Remove {name} from favorites", { name: model.name })
+                    : gt("Add {name} to favorites", { name: model.name })
+                }
+              />
+            }
+          >
+            <StarIcon className={cn("size-3", isFavorite && "fill-current text-warning")} />
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {isFavorite ? gt("Remove from favorites") : gt("Add to favorites")}
+          </TooltipPopup>
+        </Tooltip>
+      </span>
       <span className="flex min-w-0 items-baseline gap-2">
         <Tooltip>
           <TooltipTrigger
@@ -604,7 +826,10 @@ const ProviderModelRow = memo(function ProviderModelRow({
           <span className="hidden sm:inline">{capLabels.join(" · ")}</span>
         ) : null}
       </span>
-      <span className="flex shrink-0 items-center justify-end gap-0.5">
+      <span
+        className="flex shrink-0 items-center justify-end gap-0.5"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
         {!isHidden && !isFiltering ? (
           <>
             <Tooltip>
@@ -687,18 +912,23 @@ const ProviderModelRow = memo(function ProviderModelRow({
         ) : null}
       </span>
       {/* Disabled switches receive no pointer events; wrap the tooltip trigger. */}
-      <Tooltip>
-        <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
-          <Switch
-            size="sm"
-            checked={!isHidden}
-            disabled={!canWritePreferences || model.isCustom}
-            onCheckedChange={(checked) => onSetHidden(model.slug, !checked)}
-            aria-label={gt("Show {name} in the model picker", { name: model.name })}
-          />
-        </TooltipTrigger>
-        <TooltipPopup side="top">{pickerTooltip}</TooltipPopup>
-      </Tooltip>
+      <span
+        className="flex shrink-0 items-center"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
+            <Switch
+              size="sm"
+              checked={!isHidden}
+              disabled={!canWritePreferences || model.isCustom}
+              onCheckedChange={(checked) => onSetHidden(model.slug, !checked)}
+              aria-label={gt("Show {name} in the model picker", { name: model.name })}
+            />
+          </TooltipTrigger>
+          <TooltipPopup side="top">{pickerTooltip}</TooltipPopup>
+        </Tooltip>
+      </span>
     </div>
   );
 });

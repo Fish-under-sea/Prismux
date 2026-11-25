@@ -537,27 +537,49 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 /* 24-hour dynamic sky backdrop softly feathers into Light, Dark, and Liquid Glass
-   sidebars with an ease-out alpha mask and no hard rectangular bottom edge. */
+   sidebars with an ease-out dual-axis alpha mask: smooth vertical fade at the bottom
+   plus a subtle horizontal right-edge feather that bridges into `.sidebar-stage-backdrop-extension`
+   all the way to the left edge of the first workspace session tab. */
 @utility sidebar-stage-backdrop {
   --stage-fade: var(--sidebar-stage-fade, var(--app-chrome-background));
-  mask-image: linear-gradient(
-    to bottom,
-    black 0%,
-    black 44%,
-    rgb(0 0 0 / 82%) 60%,
-    rgb(0 0 0 / 46%) 76%,
-    rgb(0 0 0 / 16%) 89%,
-    transparent 100%
-  );
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    black 0%,
-    black 44%,
-    rgb(0 0 0 / 82%) 60%,
-    rgb(0 0 0 / 46%) 76%,
-    rgb(0 0 0 / 16%) 89%,
-    transparent 100%
-  );
+  --_sky-feather-inset: var(--pmx-sky-right-feather-inset, 12px);
+  --_sky-seam-alpha: var(--pmx-sky-seam-alpha, 0.48);
+  mask-image:
+    linear-gradient(
+      to bottom,
+      black 0%,
+      black 44%,
+      rgb(0 0 0 / 82%) 60%,
+      rgb(0 0 0 / 46%) 76%,
+      rgb(0 0 0 / 16%) 89%,
+      transparent 100%
+    ),
+    linear-gradient(
+      to right,
+      black 0%,
+      black calc(100% - var(--_sky-feather-inset)),
+      rgb(0 0 0 / 82%) calc(100% - var(--_sky-feather-inset) * 0.5),
+      rgb(0 0 0 / var(--_sky-seam-alpha)) 100%
+    );
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      black 0%,
+      black 44%,
+      rgb(0 0 0 / 82%) 60%,
+      rgb(0 0 0 / 46%) 76%,
+      rgb(0 0 0 / 16%) 89%,
+      transparent 100%
+    ),
+    linear-gradient(
+      to right,
+      black 0%,
+      black calc(100% - var(--_sky-feather-inset)),
+      rgb(0 0 0 / 82%) calc(100% - var(--_sky-feather-inset) * 0.5),
+      rgb(0 0 0 / var(--_sky-seam-alpha)) 100%
+    );
+  -webkit-mask-composite: source-in;
 
   &::after {
     content: "";
@@ -574,6 +596,66 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       var(--stage-fade) 100%
     );
   }
+}
+
+/* Right-edge topbar continuation of `.sidebar-stage-backdrop`: picks up at the exact
+   sidebar seam alpha (`--pmx-sky-seam-alpha`) and dissolves smoothly to transparent
+   right at the left edge of the first workspace session tab (`100%`). */
+@utility sidebar-stage-backdrop-extension {
+  opacity: var(--pmx-sky-seam-alpha, 0.48);
+
+  [data-panel-animations="true"] & {
+    transition: left 150ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+
+  mask-image:
+    linear-gradient(
+      to bottom,
+      black 0%,
+      black 44%,
+      rgb(0 0 0 / 82%) 60%,
+      rgb(0 0 0 / 46%) 76%,
+      rgb(0 0 0 / 16%) 89%,
+      transparent 100%
+    ),
+    linear-gradient(
+      to right,
+      black 0%,
+      rgb(0 0 0 / 54%) 38%,
+      rgb(0 0 0 / 18%) 74%,
+      transparent 100%
+    );
+  mask-size:
+    100% 80px,
+    100% 100%;
+  mask-repeat: no-repeat;
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      black 0%,
+      black 44%,
+      rgb(0 0 0 / 82%) 60%,
+      rgb(0 0 0 / 46%) 76%,
+      rgb(0 0 0 / 16%) 89%,
+      transparent 100%
+    ),
+    linear-gradient(
+      to right,
+      black 0%,
+      rgb(0 0 0 / 54%) 38%,
+      rgb(0 0 0 / 18%) 74%,
+      transparent 100%
+    );
+  -webkit-mask-size:
+    100% 80px,
+    100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: source-in;
 }
 
 @keyframes live-tool-shine {
@@ -2700,4 +2782,11 @@ code {
 
 .messages-timeline-scroll:focus-visible {
   outline: none;
+}
+
+/* Split Anything drag & resize pointer-event shield: prevents Electron <webview>, <iframe>,
+   and Ghostty terminal <canvas> surfaces from swallowing dragover/drop/pointermove events. */
+[data-workspace-dragging="1"] :is(webview, iframe, canvas),
+[data-workspace-resizing="1"] :is(webview, iframe, canvas) {
+  pointer-events: none !important;
 }

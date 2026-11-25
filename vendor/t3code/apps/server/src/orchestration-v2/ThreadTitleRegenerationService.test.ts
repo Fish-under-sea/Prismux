@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 
@@ -975,5 +976,238 @@ describe("ThreadTitleRegenerationService", () => {
         });
       }).pipe(Effect.provide(harness.layer));
     }),
+  );
+
+  it.effect(
+    "automatically regenerates thread title after each completed normal turn and strictly blocks when titleRenamed is true",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHarness({
+          generateTitle: ({ previousTitle }) =>
+            Effect.succeed({
+              title: previousTitle === "Seed title" ? "首轮总结标题" : "二轮更新标题",
+            }),
+        });
+        yield* Effect.gen(function* () {
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+
+          const completeTurn = (input: {
+            readonly threadId: ThreadId;
+            readonly runId: RunId;
+            readonly ordinal: number;
+            readonly user: string;
+            readonly assistant: string;
+          }) =>
+            Effect.gen(function* () {
+              const now = yield* DateTime.now;
+              const providerThreadId = ProviderThreadId.make(`${input.threadId}:provider`);
+              const userMessageId = MessageId.make(`${input.runId}:user`);
+              const runPayload = {
+                id: input.runId,
+                threadId: input.threadId,
+                ordinal: input.ordinal,
+                providerInstanceId: modelSelection.instanceId,
+                modelSelection,
+                providerThreadId,
+                userMessageId,
+                rootNodeId: null,
+                activeAttemptId: null,
+                status: "completed" as const,
+                requestedAt: now,
+                startedAt: now,
+                completedAt: now,
+                checkpointId: null,
+                contextHandoffId: null,
+              };
+              yield* eventSink.write({
+                events: [
+                  {
+                    id: EventId.make(`${input.runId}:created`),
+                    type: "run.created",
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    occurredAt: now,
+                    payload: { ...runPayload, status: "running", completedAt: null },
+                  },
+                  {
+                    id: EventId.make(`${input.runId}:user`),
+                    type: "message.updated",
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    occurredAt: now,
+                    payload: {
+                      id: userMessageId,
+                      threadId: input.threadId,
+                      runId: input.runId,
+                      nodeId: null,
+                      role: "user",
+                      text: input.user,
+                      attachments: [],
+                      streaming: false,
+                      createdBy: "user",
+                      creationSource: "web",
+                      createdAt: now,
+                      updatedAt: now,
+                    },
+                  },
+                  {
+                    id: EventId.make(`${input.runId}:assistant`),
+                    type: "message.updated",
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    occurredAt: now,
+                    payload: {
+                      id: MessageId.make(`${input.runId}:assistant`),
+                      threadId: input.threadId,
+                      runId: input.runId,
+                      nodeId: null,
+                      role: "assistant",
+                      text: input.assistant,
+                      attachments: [],
+                      streaming: false,
+                      createdBy: "agent",
+                      creationSource: "server",
+                      createdAt: now,
+                      updatedAt: now,
+                    },
+                  },
+                  {
+                    id: EventId.make(`${input.runId}:completed`),
+                    type: "run.updated",
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    occurredAt: now,
+                    payload: runPayload,
+                  },
+                ],
+              });
+            });
+
+          const waitForRegenEffect = (targetThreadId: ThreadId, commandId: CommandId) =>
+            Effect.gen(function* () {
+              yield* eventSink
+                .stream({
+                  threadId: targetThreadId,
+                  afterSequence: 0,
+                  eventType: "thread.metadata-updated",
+                })
+                .pipe(
+                  Stream.filter(
+                    (stored) =>
+                      stored.commandId === commandId &&
+                      stored.event.type === "thread.metadata-updated" &&
+                      stored.event.payload.titleRegeneration?.requestId === commandId,
+                  ),
+                  Stream.take(1),
+                  Stream.runDrain,
+                );
+              const effects = yield* outbox.listByCommandId(commandId);
+              assert.deepEqual(
+                effects.map((effect) => effect.request),
+                [{ type: "thread-title.generate", kind: { type: "regenerate" } }],
+              );
+            });
+
+          const threadId = yield* createThread({
+            command: "command:auto-title:create",
+            thread: "thread:auto-title",
+          });
+
+          // Turn 1 completes -> auto-regeneration enqueued and executed
+          const run1 = RunId.make("run:auto-title:1");
+          const autoCmd1 = CommandId.make(`command:auto-title-regenerate:${run1}`);
+          yield* completeTurn({
+            threadId,
+            runId: run1,
+            ordinal: 1,
+            user: "Fix OAuth login callback timeout",
+            assistant: "I updated the OAuth callback handler timeout.",
+          });
+          yield* waitForRegenEffect(threadId, autoCmd1);
+          yield* titleRegeneration.execute({
+            threadId,
+            requestId: autoCmd1,
+            kind: { type: "regenerate" },
+          });
+          assert.equal((yield* threads.getThreadProjection(threadId)).thread.title, "首轮总结标题");
+
+          // Maintenance turn (/compact) completes -> skipped (verified once subsequent Turn 2 drains)
+          const compactRun = RunId.make("run:auto-title:compact");
+          const compactCmd = CommandId.make(`command:auto-title-regenerate:${compactRun}`);
+          yield* completeTurn({
+            threadId,
+            runId: compactRun,
+            ordinal: 2,
+            user: "/compact",
+            assistant: "Context compacted.",
+          });
+
+          // Turn 2 completes -> auto-regeneration fires again to keep title fresh
+          const run2 = RunId.make("run:auto-title:2");
+          const autoCmd2 = CommandId.make(`command:auto-title-regenerate:${run2}`);
+          yield* completeTurn({
+            threadId,
+            runId: run2,
+            ordinal: 3,
+            user: "Now add retry logic to the OAuth token refresh",
+            assistant: "Added exponential backoff retries for OAuth token refresh.",
+          });
+          yield* waitForRegenEffect(threadId, autoCmd2);
+          assert.deepEqual(yield* outbox.listByCommandId(compactCmd), []);
+          yield* titleRegeneration.execute({
+            threadId,
+            requestId: autoCmd2,
+            kind: { type: "regenerate" },
+          });
+          assert.equal((yield* threads.getThreadProjection(threadId)).thread.title, "二轮更新标题");
+
+          // User manually renames thread -> sets titleRenamed: true and locks permanently
+          yield* threads.dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("command:auto-title:manual-rename"),
+            threadId,
+            title: "主人自定义的固定标题",
+          });
+          const renamed = yield* threads.getThreadProjection(threadId);
+          assert.equal(renamed.thread.title, "主人自定义的固定标题");
+          assert.equal(renamed.thread.titleRenamed, true);
+
+          // Turn 4 completes after manual rename -> STRICTLY BLOCKED (0 effects, title preserved)
+          const run4 = RunId.make("run:auto-title:4");
+          const autoCmd4 = CommandId.make(`command:auto-title-regenerate:${run4}`);
+          yield* completeTurn({
+            threadId,
+            runId: run4,
+            ordinal: 4,
+            user: "Switch topic to SQLite WAL tuning",
+            assistant: "Updated SQLite WAL checkpoint settings.",
+          });
+
+          // Complete a control turn on a second unlocked thread to guarantee the event stream drained run4
+          const controlThreadId = yield* createThread({
+            command: "command:auto-title:control:create",
+            thread: "thread:auto-title:control",
+          });
+          const controlRun = RunId.make("run:auto-title:control:1");
+          const controlCmd = CommandId.make(`command:auto-title-regenerate:${controlRun}`);
+          yield* completeTurn({
+            threadId: controlThreadId,
+            runId: controlRun,
+            ordinal: 1,
+            user: "Verify SQLite WAL checkpoint metrics",
+            assistant: "Checkpoint metrics look healthy.",
+          });
+          yield* waitForRegenEffect(controlThreadId, controlCmd);
+
+          assert.deepEqual(yield* outbox.listByCommandId(autoCmd4), []);
+          const afterLockedTurn = yield* threads.getThreadProjection(threadId);
+          assert.equal(afterLockedTurn.thread.title, "主人自定义的固定标题");
+          assert.equal(afterLockedTurn.thread.titleRenamed, true);
+          assert.isNotOk(afterLockedTurn.thread.titleRegeneration);
+        }).pipe(Effect.provide(harness.layer));
+      }),
   );
 });

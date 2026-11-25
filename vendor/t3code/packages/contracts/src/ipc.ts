@@ -1223,6 +1223,9 @@ export interface DesktopBridge {
   getRelayTelemetryEnabled: () => boolean | null;
   getPathForFile: (file: File) => string;
   getClientPlatform: () => string;
+  /** Real host OS login username exposed from preload as fallback when ServerConfig omits osUsername. */
+  readonly osUsername?: string | null;
+  getOsUsername?: () => string | null;
   restartAudioService?: () => Promise<boolean>;
   setNotificationBadge: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear: (listener: () => void) => () => void;

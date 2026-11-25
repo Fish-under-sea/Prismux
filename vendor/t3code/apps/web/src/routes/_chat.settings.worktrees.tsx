@@ -1,6 +1,14 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { WorktreesSettingsPanel } from "../components/settings/WorktreesSettings";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_chat/settings/worktrees")({
-  component: WorktreesSettingsPanel,
+  beforeLoad: ({ location }) => {
+    const cleanHash = location.hash.replace(/^#/, "").trim();
+    throw redirect({
+      to: "/settings/source-control",
+      search: true,
+      hash: cleanHash || "worktrees",
+      replace: true,
+    });
+  },
+  component: () => null,
 });

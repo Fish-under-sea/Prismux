@@ -51,7 +51,6 @@ import {
 export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/general",
   "/settings/appearance",
-  "/settings/chat",
   "/settings/diffs",
   "/settings/snap-shot",
   "/settings/connections",
@@ -62,7 +61,6 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/plugins",
   "/settings/memory",
   "/settings/sync",
-  "/settings/overnight-factory",
   "/settings/memory-sync",
   "/settings/updates",
 ]);

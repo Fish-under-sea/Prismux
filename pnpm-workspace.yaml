@@ -1,8 +1,7 @@
-# Explicitly excludes vendor/t3code (read-only upstream) and apps/desktop-tauri (Rust crate).
+# Explicitly excludes vendor/t3code (managed-fork Electron 44 base with its own workspace).
 packages:
   - "packages/*"
   - "apps/daemon"
-  - "apps/workbench-ui"
   - "plugins-official/plugin-*"
 allowBuilds:
   esbuild: true

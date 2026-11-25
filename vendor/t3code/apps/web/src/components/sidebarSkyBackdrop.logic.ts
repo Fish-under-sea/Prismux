@@ -27,6 +27,40 @@ export const SKY_TIME_CHANGE_EVENT = "prismux:sky-time-change";
 export const SKY_VIEWBOX_WIDTH = 288;
 export const SKY_VIEWBOX_HEIGHT = 80;
 
+export const SKY_BUTTON_LIGHT_ARROW_COLOR = "#FFFFFF";
+export const SKY_BUTTON_DARK_ARROW_COLOR = "#0B0F17";
+
+export const SKY_RIGHT_FEATHER_INSET_PX = 12;
+export const SKY_EXTENSION_DEFAULT_GAP_PX = 8;
+export const SKY_EXTENSION_EMPTY_TABBAR_WIDTH_PX = 28;
+export const SKY_EXTENSION_MAX_WIDTH_PX = 72;
+export const SKY_STAGE_CORNER_RADIUS_PX = 14;
+
+export type SkyButtonForegroundTone = "light" | "dark";
+
+export interface CompactSkyButtonTheme {
+  readonly tone: SkyButtonForegroundTone;
+  readonly iconColor: string;
+  readonly isBrightDaytime: boolean;
+  readonly skyTop: string;
+  readonly skyMid: string;
+  readonly skyBottom: string;
+  readonly scrimColor: string;
+  readonly scrimOpacity: number;
+  readonly effectiveLuminance: number;
+  readonly topContrast: number;
+  readonly midContrast: number;
+  readonly bottomContrast: number;
+  readonly minButtonContrast: number;
+}
+
+export interface SkyExtensionMetrics {
+  readonly extensionWidth: number;
+  readonly topbarHeight: number;
+  readonly seamAlpha: number;
+  readonly featherInset: number;
+}
+
 export type SkyPhaseId =
   | "midnight"
   | "dawn"
@@ -722,4 +756,233 @@ export function computeSkyScene(rawMinutes: number): SkyScene {
     moon,
     clouds,
   };
+}
+
+/** Resolves compact send-button sky stops and arrow tone (>= 4.5:1 contrast across all 288 steps). */
+export function resolveCompactSkyButtonTheme(scene: SkyScene): CompactSkyButtonTheme {
+  const { palette, sun } = scene;
+  const midLuminance = computeRelativeLuminance(palette.skyMid);
+  const isBrightDaytime = sun.visible && sun.elevation >= 0.44 && midLuminance >= 0.32;
+
+  const tone: SkyButtonForegroundTone = isBrightDaytime ? "dark" : "light";
+  const iconColor = isBrightDaytime ? SKY_BUTTON_DARK_ARROW_COLOR : SKY_BUTTON_LIGHT_ARROW_COLOR;
+
+  const skyTop = isBrightDaytime
+    ? lerpHexColor(palette.skyUpper, palette.skyMid, 0.58)
+    : palette.skyTop;
+  const skyMid = isBrightDaytime
+    ? lerpHexColor(palette.skyMid, palette.skyHorizon, 0.48)
+    : palette.skyUpper;
+  const skyBottom = isBrightDaytime
+    ? palette.skyHorizon
+    : lerpHexColor(palette.skyUpper, palette.skyMid, 0.45);
+  const scrimColor = isBrightDaytime ? "#FFFFFF" : palette.topScrimColor;
+  const scrimOpacity = isBrightDaytime ? 0.16 : round2(Math.max(palette.topScrimOpacity, 0.18));
+
+  const effectiveTop = compositeHexOver(scrimColor, scrimOpacity, skyTop);
+  const effectiveMid = compositeHexOver(scrimColor, scrimOpacity, skyMid);
+  const effectiveBottom = compositeHexOver(scrimColor, scrimOpacity, skyBottom);
+
+  const topContrast = round2(computeContrastRatio(iconColor, effectiveTop));
+  const midContrast = round2(computeContrastRatio(iconColor, effectiveMid));
+  const bottomContrast = round2(computeContrastRatio(iconColor, effectiveBottom));
+
+  return {
+    tone,
+    iconColor,
+    isBrightDaytime,
+    skyTop,
+    skyMid,
+    skyBottom,
+    scrimColor,
+    scrimOpacity,
+    effectiveLuminance: round2(computeRelativeLuminance(effectiveMid)),
+    topContrast,
+    midContrast,
+    bottomContrast,
+    minButtonContrast: round2(Math.min(topContrast, midContrast, bottomContrast)),
+  };
+}
+
+/**
+ * Evaluates WCAG contrast ratios for the circular send button's day/night adaptive icon
+ * against the effective sky art across top, middle, and bottom bands of the button orb.
+ */
+export function computeEffectiveCompactButtonContrast(scene: SkyScene): {
+  readonly tone: SkyButtonForegroundTone;
+  readonly iconColor: string;
+  readonly topContrast: number;
+  readonly midContrast: number;
+  readonly bottomContrast: number;
+  readonly minButtonContrast: number;
+} {
+  const theme = resolveCompactSkyButtonTheme(scene);
+  return {
+    tone: theme.tone,
+    iconColor: theme.iconColor,
+    topContrast: theme.topContrast,
+    midContrast: theme.midContrast,
+    bottomContrast: theme.bottomContrast,
+    minButtonContrast: theme.minButtonContrast,
+  };
+}
+
+/**
+ * Computes the horizontal right-edge sky extension geometry so the 24h sky softly dissolves
+ * across the topbar gap right up to the left edge of the first workspace session tab, without
+ * dimming sidebar header buttons (`← →`) or overlapping any clickable tab pill.
+ */
+export function computeSkyExtensionMetrics(input: {
+  readonly sidebarRight: number;
+  readonly firstTabLeft: number | null;
+  readonly topbarHeight: number;
+  readonly hasTabBar: boolean;
+  readonly featherInset?: number;
+}): SkyExtensionMetrics {
+  const featherInset = Math.max(4, Math.round(input.featherInset ?? SKY_RIGHT_FEATHER_INSET_PX));
+  const topbarHeight = clamp(Math.round(input.topbarHeight || 38), 32, 72);
+  let extensionWidth = 0;
+  if (input.firstTabLeft !== null && Number.isFinite(input.firstTabLeft)) {
+    extensionWidth = clamp(
+      Math.floor(input.firstTabLeft - input.sidebarRight),
+      0,
+      SKY_EXTENSION_MAX_WIDTH_PX,
+    );
+  } else if (input.hasTabBar) {
+    extensionWidth = SKY_EXTENSION_EMPTY_TABBAR_WIDTH_PX;
+  }
+
+  const seamAlpha =
+    extensionWidth > 0
+      ? round2(clamp(extensionWidth / (featherInset + extensionWidth), 0.34, 0.72))
+      : 0.48;
+
+  return {
+    extensionWidth,
+    topbarHeight,
+    seamAlpha,
+    featherInset,
+  };
+}
+
+/**
+ * Builds an exact CSS `clip-path: path(...)` string for the sky topbar extension so it spans
+ * the full topbar gap `[0..extensionWidth, 0..topbarHeight]` plus the adjacent concave top-left
+ * stage corner fillet, while strictly excluding the rounded inner stage (`[data-pmx-inner-stage="1"]`).
+ */
+export function buildSkyExtensionClipPath(
+  extensionWidth: number,
+  topbarHeight: number,
+  cornerRadius: number = SKY_STAGE_CORNER_RADIUS_PX,
+): string {
+  const w = Math.max(0, Math.round(extensionWidth));
+  const h = Math.max(0, Math.round(topbarHeight));
+  const r = Math.max(0, Math.round(cornerRadius));
+  if (w === 0 || h === 0) return "inset(100%)";
+  if (r === 0) {
+    return `path('M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z')`;
+  }
+  if (w >= r) {
+    return `path('M 0 0 L ${w} 0 L ${w} ${h} L ${r} ${h} A ${r} ${r} 0 0 0 0 ${h + r} Z')`;
+  }
+  const dx = r - w;
+  const dy = Math.sqrt(Math.max(0, r * r - dx * dx));
+  const arcY = round2(h + r - dy);
+  return `path('M 0 0 L ${w} 0 L ${w} ${arcY} A ${r} ${r} 0 0 0 0 ${h + r} Z')`;
+}
+
+const skyClockSubscribers = new Set<() => void>();
+let currentSkyMinutes = resolveEffectiveSkyMinutes();
+let skyTickTimer: ReturnType<typeof setTimeout> | null = null;
+let skyClockListenersAttached = false;
+
+function clearSkyTickTimer(): void {
+  if (skyTickTimer !== null) {
+    clearTimeout(skyTickTimer);
+    skyTickTimer = null;
+  }
+}
+
+function syncSkyClockMinutes(): void {
+  const next = resolveEffectiveSkyMinutes();
+  if (next !== currentSkyMinutes) {
+    currentSkyMinutes = next;
+    for (const listener of skyClockSubscribers) {
+      listener();
+    }
+  }
+}
+
+function isSkyDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function scheduleNextSkyTick(): void {
+  clearSkyTickTimer();
+  if (skyClockSubscribers.size === 0 || isSkyDocumentHidden()) return;
+  const delayMs = computeMsUntilNextSkyTick(new Date());
+  skyTickTimer = setTimeout(() => {
+    skyTickTimer = null;
+    syncSkyClockMinutes();
+    scheduleNextSkyTick();
+  }, delayMs);
+}
+
+function handleSkyVisibilityChange(): void {
+  if (isSkyDocumentHidden()) {
+    clearSkyTickTimer();
+    return;
+  }
+  syncSkyClockMinutes();
+  scheduleNextSkyTick();
+}
+
+function handleSkyTimeOverrideEvent(): void {
+  syncSkyClockMinutes();
+}
+
+function attachSkyClockListeners(): void {
+  if (skyClockListenersAttached) return;
+  skyClockListenersAttached = true;
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleSkyVisibilityChange);
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener(SKY_TIME_CHANGE_EVENT, handleSkyTimeOverrideEvent);
+  }
+}
+
+function detachSkyClockListeners(): void {
+  if (!skyClockListenersAttached) return;
+  skyClockListenersAttached = false;
+  clearSkyTickTimer();
+  if (typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", handleSkyVisibilityChange);
+  }
+  if (typeof window !== "undefined") {
+    window.removeEventListener(SKY_TIME_CHANGE_EVENT, handleSkyTimeOverrideEvent);
+  }
+}
+
+export function subscribeSkyClock(listener: () => void): () => void {
+  skyClockSubscribers.add(listener);
+  if (skyClockSubscribers.size === 1) {
+    currentSkyMinutes = resolveEffectiveSkyMinutes();
+    attachSkyClockListeners();
+    scheduleNextSkyTick();
+  }
+  return () => {
+    skyClockSubscribers.delete(listener);
+    if (skyClockSubscribers.size === 0) {
+      detachSkyClockListeners();
+    }
+  };
+}
+
+export function getSkyClockSnapshot(): number {
+  return currentSkyMinutes;
+}
+
+export function getSkyClockServerSnapshot(): number {
+  return resolveEffectiveSkyMinutes();
 }

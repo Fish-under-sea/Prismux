@@ -56,14 +56,14 @@ it("drops theme defaults from a client's settings patch", () => {
 });
 
 describe("storage cleanup settings", () => {
-  it("keeps cleanup disabled for existing installations", () => {
+  it("enables safe worktree cleanup defaults while keeping destructive policies opt-in", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
     expect(decodeServerSettings({}).storageCleanup).toEqual({
       worktreeAfterDays: null,
       worktreeSettledAfterDays: null,
       worktreeOnMerge: false,
-      worktreeOnDelete: false,
-      worktreeUnchanged: false,
+      worktreeOnDelete: true,
+      worktreeUnchanged: true,
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
@@ -324,9 +324,9 @@ describe("resolveIdleCompaction", () => {
 });
 
 describe("ClientSettings notifications", () => {
-  it("requires opt-in when existing settings omit notification preferences", () => {
-    expect(decodeClientSettings({}).notificationMode).toBe("off");
-    expect(decodeClientSettings({}).inAppNotificationsEnabled).toBe(false);
+  it("enables notifications out of the box when settings omit notification preferences", () => {
+    expect(decodeClientSettings({}).notificationMode).toBe("notifications");
+    expect(decodeClientSettings({}).inAppNotificationsEnabled).toBe(true);
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("inAppNotificationsEnabled");
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("notificationMode");
   });
@@ -562,5 +562,41 @@ describe("Prismux privacy-safe default server settings", () => {
     expect(DEFAULT_SERVER_SETTINGS.guestSharingEnabled).toBe(false);
     expect(decodeServerSettings({}).enableProviderUpdateChecks).toBe(false);
     expect(decodeServerSettings({}).guestSharingEnabled).toBe(false);
+  });
+
+  it("applies v0.2.0-rc.1 out-of-box defaults, DSH work-step settings, and providerOrder", () => {
+    const client = decodeClientSettings({});
+    expect(client.effortDisplay).toBe("bars");
+    expect(client.mathRenderingEnabled).toBe(true);
+    expect(client.inAppNotificationsEnabled).toBe(true);
+    expect(client.notificationMode).toBe("notifications");
+    expect(client.diffFilesCollapsed).toBe(false);
+    expect(client.workStepsDisplay).toBe("standard");
+    expect(client.workStepsCollapseTiming).toBe("after-turn");
+    expect(client.collapsedAssistantReplyMode).toBe("all");
+
+    const clientPatch = decodeClientSettingsPatch({
+      workStepsDisplay: "expanded",
+      workStepsCollapseTiming: "next-message",
+      collapsedAssistantReplyMode: "final-only",
+    });
+    expect(clientPatch).toEqual({
+      workStepsDisplay: "expanded",
+      workStepsCollapseTiming: "next-message",
+      collapsedAssistantReplyMode: "final-only",
+    });
+    expect(() => decodeClientSettingsPatch({ workStepsDisplay: "invalid" })).toThrow();
+
+    const server = decodeServerSettings({});
+    expect(server.branchNamePrefix).toBe("prismux");
+    expect(server.promptSuggestionsEnabled).toBe(true);
+    expect(server.storageCleanup.worktreeOnDelete).toBe(true);
+    expect(server.storageCleanup.worktreeUnchanged).toBe(true);
+    expect(server.providerOrder).toEqual([]);
+
+    const orderPatch = decodeServerSettingsPatch({
+      providerOrder: ["dsh", "claudeAgent", "codex"],
+    });
+    expect(orderPatch.providerOrder).toEqual(["dsh", "claudeAgent", "codex"]);
   });
 });

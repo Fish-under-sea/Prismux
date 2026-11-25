@@ -19,16 +19,16 @@ export const PRISMUX_SIDEBAR_PROJECTS_OPEN_KEY =
 
 /**
  * Canonical Prismux sidebar quick-nav entries (aligned with Orca `SidebarNav.tsx`).
- * Strict 5-item order across expanded sidebar, 54px collapsed icon rail, and hover-peek drawer:
- * `diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `mobile`.
- * Plugin Center remains accessible in `/settings/plugins`.
+ * Strict 5-item order across expanded sidebar and 54px collapsed icon rail:
+ * `diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `overnight-factory`.
+ * Remote QR pairing and Plugin Center live inside Settings.
  */
 export const PRISMUX_SIDEBAR_QUICK_NAV_IDS = [
   "diagnostics",
   "tasks",
   "workspace-board",
   "automations",
-  "mobile",
+  "overnight-factory",
 ] as const;
 
 export type PrismuxSidebarQuickNavId = (typeof PRISMUX_SIDEBAR_QUICK_NAV_IDS)[number];
@@ -38,8 +38,17 @@ export const PRISMUX_SIDEBAR_QUICK_NAV_ROUTES = {
   tasks: "/tasks",
   workspaceBoard: "/workspace-board",
   automations: "/scheduled-tasks",
-  mobileAccess: "/settings/access",
+  overnightFactory: "/overnight-factory",
   plugins: "/settings/plugins",
+} as const;
+
+export const PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS = {
+  tasks: ["/tasks"],
+  workspaceBoard: ["/workspace-board"],
+  automations: ["/scheduled-tasks", "/automations"],
+  overnightFactory: ["/overnight-factory"],
+  issues: ["/issues"],
+  pullRequests: ["/pull-requests"],
 } as const;
 
 /**

@@ -2,6 +2,8 @@
 ; Note: Prismux ships with ZERO preinstalled official plugins.
 ; Active official plugins (qq / fishdock-hook) are installed on demand via the Prismux Plugin Center.
 ; Retired plugins (pet / ssh) have been replaced by Prismux built-in capabilities.
+; SAFETY INVARIANT: This script NEVER modifies or deletes %USERPROFILE%\.prismux
+; (memory.db, credentials, wallpapers, active plugins, threads) or portable data\ folders.
 
 !include "StrFunc.nsh"
 !ifdef BUILD_UNINSTALLER
@@ -58,6 +60,247 @@
 !macroend
 
 !ifndef BUILD_UNINSTALLER
+  ; Define sweep helpers inside customHeader so electron-builder's common.nsh / multiUser.nsh
+  ; defines (${APP_EXECUTABLE_FILENAME}, ${INSTALL_REGISTRY_KEY}, ${UNINSTALL_REGISTRY_KEY})
+  ; and global shortcut vars ($newStartMenuLink, $newDesktopLink) are already declared.
+  !macro customHeader
+  ; Safely removes ONLY known obsolete/renamed Prismux/Electron/Tauri binary and resource
+  ; files inside $INSTDIR immediately before fresh v0.2.0+ payload extraction.
+  ; Preserves portable "$INSTDIR\data" and NEVER touches "$PROFILE\.prismux".
+  Function PrismuxSweepObsoleteInstDirFiles
+    Push $0
+    StrCpy $0 "0"
+
+    ; Guard: never operate on empty paths or the user's ~/.prismux data root.
+    ${If} "$INSTDIR" == ""
+    ${OrIf} "$INSTDIR" == "$PROFILE"
+    ${OrIf} "$INSTDIR" == "$PROFILE\.prismux"
+    ${OrIf} "$INSTDIR" == "$LOCALAPPDATA"
+      Pop $0
+      Return
+    ${EndIf}
+
+    ; Only sweep when $INSTDIR already holds a recognizable prior Prismux artifact.
+    ${If} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+    ${OrIf} ${FileExists} "$INSTDIR\Prismux.exe"
+    ${OrIf} ${FileExists} "$INSTDIR\resources\app.asar"
+    ${OrIf} ${FileExists} "$INSTDIR\resources\server.asar"
+    ${OrIf} ${FileExists} "$INSTDIR\resources\prismux-daemon\cli.js"
+    ${OrIf} ${FileExists} "$INSTDIR\workbench-ui\index.html"
+    ${OrIf} ${FileExists} "$INSTDIR\Uninstall.exe"
+      StrCpy $0 "1"
+    ${EndIf}
+
+    ${If} $0 != "1"
+      Pop $0
+      Return
+    ${EndIf}
+
+    DetailPrint "Cleaning obsolete files from previous Prismux installation in $INSTDIR..."
+
+    ; 1. Legacy Tauri v0.0.1 shell artifacts if upgrading in-place into an old folder.
+    RMDir /r "$INSTDIR\workbench-ui"
+    RMDir /r "$INSTDIR\daemon"
+    Delete "$INSTDIR\Uninstall.exe"
+    Delete "$INSTDIR\WebView2Loader.dll"
+
+    ; 2. Stale / renamed Electron resources & ASAR archives (fresh copies are extracted next).
+    Delete "$INSTDIR\resources\app.asar"
+    RMDir /r "$INSTDIR\resources\app.asar.unpacked"
+    Delete "$INSTDIR\resources\server.asar"
+    RMDir /r "$INSTDIR\resources\server.asar.unpacked"
+    Delete "$INSTDIR\resources\default_app.asar"
+    Delete "$INSTDIR\resources\app-update.yml"
+    Delete "$INSTDIR\resources\elevate.exe"
+    RMDir /r "$INSTDIR\resources\prismux-daemon"
+    RMDir /r "$INSTDIR\resources\native"
+    RMDir /r "$INSTDIR\resources\windows-tools"
+    RMDir /r "$INSTDIR\resources\wsl-runtime"
+    RMDir /r "$INSTDIR\resources\resources"
+    ; Retired/stale plugin directories if an older dev/custom archive ever placed them here.
+    RMDir /r "$INSTDIR\resources\plugins-official"
+    RMDir /r "$INSTDIR\resources\plugins"
+    RMDir /r "$INSTDIR\resources\plugin-pet"
+    RMDir /r "$INSTDIR\resources\plugin-ssh"
+    RMDir "$INSTDIR\resources"
+
+    ; 3. Obsolete / version-specific Electron runtime DLLs, paks, snapshots & renamed executables.
+    RMDir /r "$INSTDIR\swiftshader"
+    RMDir /r "$INSTDIR\locales"
+    Delete "$INSTDIR\d3dcompiler_47.dll"
+    Delete "$INSTDIR\dxcompiler.dll"
+    Delete "$INSTDIR\dxil.dll"
+    Delete "$INSTDIR\ffmpeg.dll"
+    Delete "$INSTDIR\libEGL.dll"
+    Delete "$INSTDIR\libGLESv2.dll"
+    Delete "$INSTDIR\vk_swiftshader.dll"
+    Delete "$INSTDIR\vk_swiftshader_icd.json"
+    Delete "$INSTDIR\vulkan-1.dll"
+    Delete "$INSTDIR\icudtl.dat"
+    Delete "$INSTDIR\snapshot_blob.bin"
+    Delete "$INSTDIR\v8_context_snapshot.bin"
+    Delete "$INSTDIR\chrome_100_percent.pak"
+    Delete "$INSTDIR\chrome_200_percent.pak"
+    Delete "$INSTDIR\resources.pak"
+    Delete "$INSTDIR\LICENSE.electron.txt"
+    Delete "$INSTDIR\LICENSES.chromium.html"
+    Delete "$INSTDIR\Prismux (Alpha).exe"
+
+    ClearErrors
+    Pop $0
+  FunctionEnd
+
+  ; Cleans a separate legacy Tauri-era installation directory (e.g. %LOCALAPPDATA%\Prismux).
+  ; Takes candidate directory path on top of the stack.
+  ; Strictly validates legacy Tauri markers and NEVER deletes portable data\ or ~/.prismux.
+  Function PrismuxSweepLegacyTauriDir
+    Exch $R8
+    Push $0
+    StrCpy $0 "0"
+
+    ${If} "$R8" == ""
+    ${OrIf} "$R8" == "$INSTDIR"
+    ${OrIf} "$R8" == "$PROFILE"
+    ${OrIf} "$R8" == "$PROFILE\.prismux"
+    ${OrIf} "$R8" == "$LOCALAPPDATA"
+    ${OrIf} "$R8" == "$LOCALAPPDATA\Programs"
+      Goto PrismuxSweepLegacyTauriDirDone
+    ${EndIf}
+
+    ; Verify this directory is genuinely a legacy Tauri Prismux installation (NOT an Electron install).
+    ${If} ${FileExists} "$R8\workbench-ui\index.html"
+      StrCpy $0 "1"
+    ${ElseIf} ${FileExists} "$R8\Prismux.exe"
+      ${IfNot} ${FileExists} "$R8\resources\app.asar"
+        ${If} ${FileExists} "$R8\Uninstall.exe"
+        ${OrIf} ${FileExists} "$R8\daemon\dist\cli.js"
+          StrCpy $0 "1"
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+
+    ${If} $0 != "1"
+      Goto PrismuxSweepLegacyTauriDirDone
+    ${EndIf}
+
+    DetailPrint "Removing legacy Tauri-era Prismux files from $R8..."
+    Delete "$R8\Prismux.exe"
+    Delete "$R8\WebView2Loader.dll"
+    Delete "$R8\LICENSE"
+    Delete "$R8\README.md"
+    Delete "$R8\PORTABLE_MODE.txt"
+    Delete "$R8\Uninstall.exe"
+    RMDir /r "$R8\daemon"
+    RMDir /r "$R8\workbench-ui"
+    ; Only removes $R8 if empty; preserves portable "$R8\data\" if present.
+    RMDir "$R8"
+    ClearErrors
+
+  PrismuxSweepLegacyTauriDirDone:
+    Pop $0
+    Pop $R8
+  FunctionEnd
+
+  ; Removes exact legacy Prismux Tauri/Alpha shortcuts and uninstall registry entries so
+  ; Windows "Installed apps" and Start Menu never show duplicate Prismux entries.
+  ; NEVER touches unrelated apps or %USERPROFILE%\.prismux.
+  Function PrismuxCleanupLegacyRegistryAndShortcuts
+    Push $0
+    Push $1
+
+    ; 1. Detect and sweep legacy Tauri installation locations (never touching $INSTDIR here).
+    ReadRegStr $0 HKCU "Software\Prismux" "InstallDir"
+    ${If} "$0" != ""
+      Push "$0"
+      Call PrismuxSweepLegacyTauriDir
+    ${EndIf}
+
+    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Prismux" "InstallLocation"
+    ${If} "$0" != ""
+      Push "$0"
+      Call PrismuxSweepLegacyTauriDir
+    ${EndIf}
+
+    Push "$LOCALAPPDATA\Prismux"
+    Call PrismuxSweepLegacyTauriDir
+
+    ; 2. Remove exact legacy Tauri HKCU Uninstall entry if distinct from electron-builder's GUID key.
+    ${If} "Software\Microsoft\Windows\CurrentVersion\Uninstall\Prismux" != "${UNINSTALL_REGISTRY_KEY}"
+      ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Prismux" "DisplayName"
+      ReadRegStr $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Prismux" "Publisher"
+      ${If} "$0" == "Prismux"
+      ${OrIf} "$1" == "Fish-under-sea / Prismux Contributors"
+      ${OrIf} "$1" == "Prismux Contributors"
+        DetailPrint "Removing legacy Prismux uninstall registry entry..."
+        DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Prismux"
+      ${EndIf}
+    ${EndIf}
+
+    ; 3. Remove exact legacy Tauri HKCU Software\Prismux metadata key if distinct from current key.
+    ${If} "Software\Prismux" != "${INSTALL_REGISTRY_KEY}"
+      ReadRegStr $0 HKCU "Software\Prismux" "InstallDir"
+      ${If} "$0" != ""
+        DeleteRegKey HKCU "Software\Prismux"
+      ${EndIf}
+    ${EndIf}
+
+    ; 4. Remove exact legacy Tauri v2 identifier key if present and distinct from current key.
+    ${If} "Software\io.prismux.desktop" != "${INSTALL_REGISTRY_KEY}"
+      ReadRegStr $0 HKCU "Software\io.prismux.desktop" "InstallDir"
+      ReadRegStr $1 HKCU "Software\io.prismux.desktop" ""
+      ${If} "$0" != ""
+      ${OrIf} "$1" != ""
+        DeleteRegKey HKCU "Software\io.prismux.desktop"
+      ${EndIf}
+    ${EndIf}
+
+    ; 5. Remove legacy Tauri / Alpha duplicate Start Menu and Desktop shortcuts.
+    ${If} ${FileExists} "$SMPROGRAMS\Prismux\Uninstall Prismux.lnk"
+      WinShell::UninstShortcut "$SMPROGRAMS\Prismux\Uninstall Prismux.lnk"
+      Delete "$SMPROGRAMS\Prismux\Uninstall Prismux.lnk"
+    ${EndIf}
+    ${If} "$newStartMenuLink" != "$SMPROGRAMS\Prismux\Prismux.lnk"
+    ${AndIf} ${FileExists} "$SMPROGRAMS\Prismux\Prismux.lnk"
+      WinShell::UninstShortcut "$SMPROGRAMS\Prismux\Prismux.lnk"
+      Delete "$SMPROGRAMS\Prismux\Prismux.lnk"
+    ${EndIf}
+    RMDir "$SMPROGRAMS\Prismux"
+
+    ${If} "$newStartMenuLink" != "$SMPROGRAMS\Prismux (Alpha).lnk"
+    ${AndIf} ${FileExists} "$SMPROGRAMS\Prismux (Alpha).lnk"
+      WinShell::UninstShortcut "$SMPROGRAMS\Prismux (Alpha).lnk"
+      Delete "$SMPROGRAMS\Prismux (Alpha).lnk"
+    ${EndIf}
+    ${If} "$newDesktopLink" != "$DESKTOP\Prismux (Alpha).lnk"
+    ${AndIf} ${FileExists} "$DESKTOP\Prismux (Alpha).lnk"
+      WinShell::UninstShortcut "$DESKTOP\Prismux (Alpha).lnk"
+      Delete "$DESKTOP\Prismux (Alpha).lnk"
+    ${EndIf}
+
+    ClearErrors
+    Pop $1
+    Pop $0
+  FunctionEnd
+  !macroend
+
+  ; Runs right after uninstallOldVersion and right BEFORE installApplicationFiles.
+  ; Preserves electron-builder's exact uninstall error check, then sweeps obsolete
+  ; in-place $INSTDIR files and legacy Tauri-era directories/shortcuts/registry keys.
+  !macro customUnInstallCheck
+    ${If} ${Errors}
+      DetailPrint `Uninstall was not successful. Not able to launch uninstaller!`
+      ClearErrors
+    ${ElseIf} $R0 != 0
+      MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
+      DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+
+    Call PrismuxSweepObsoleteInstDirFiles
+    Call PrismuxCleanupLegacyRegistryAndShortcuts
+  !macroend
+
   !macro customInit
     Push $0
     StrCpy $PrismuxCreateDesktopShortcut "1"
@@ -253,4 +496,6 @@
       ${EndIf}
     ${EndIf}
   !endif
+  ; Refresh Windows Shell icon/shortcut cache after legacy shortcut sweep.
+  System::Call 'Shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
 !macroend

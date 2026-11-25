@@ -97,6 +97,9 @@ export interface OrcaProjectsCopy {
   readonly environmentUnavailable: string;
   readonly unreadBadge: string;
   readonly markReadAction: string;
+  readonly primaryWorkspaceBadge: string;
+  readonly openWorkspaceFilesTooltip: string;
+  readonly toggleHostGroupTooltip: string;
 }
 
 const ZH_COPY: OrcaProjectsCopy = {
@@ -204,6 +207,9 @@ const ZH_COPY: OrcaProjectsCopy = {
   environmentUnavailable: "当前所选运行环境未连接，请先检查环境连接状态。",
   unreadBadge: "未读",
   markReadAction: "标记已读",
+  primaryWorkspaceBadge: "主工作区",
+  openWorkspaceFilesTooltip: "查看工作区文件与变更",
+  toggleHostGroupTooltip: "折叠或展开宿主机分组",
 };
 
 const EN_COPY: OrcaProjectsCopy = {
@@ -315,6 +321,9 @@ const EN_COPY: OrcaProjectsCopy = {
   environmentUnavailable: "The selected environment is not connected.",
   unreadBadge: "Unread",
   markReadAction: "Mark as read",
+  primaryWorkspaceBadge: "primary",
+  openWorkspaceFilesTooltip: "Inspect workspace files",
+  toggleHostGroupTooltip: "Toggle host group",
 };
 
 export function getOrcaProjectsCopy(locale: string | null | undefined): OrcaProjectsCopy {

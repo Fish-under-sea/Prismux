@@ -32,6 +32,7 @@ export function NoActiveThreadState() {
     environments.find((env) => env.environmentId === primaryEnvironmentId) ?? environments[0] ?? null;
   const serverConfig = primaryEnvironment?.serverConfig ?? null;
   const userName = resolveCurrentUserDisplayName({
+    osUsername: serverConfig?.osUsername,
     keybindingsConfigPath: serverConfig?.keybindingsConfigPath,
     scratchWorkspaceRoot: serverConfig?.scratchWorkspaceRoot,
     newProjectsRoot: serverConfig?.newProjectsRoot,

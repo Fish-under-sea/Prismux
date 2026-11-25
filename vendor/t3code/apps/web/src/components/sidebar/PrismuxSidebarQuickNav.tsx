@@ -6,10 +6,10 @@ import {
   CalendarClockIcon,
   Columns3Icon,
   ListTodoIcon,
+  MoonStarIcon,
   SearchIcon,
-  SmartphoneIcon,
 } from "lucide-react";
-import { memo, useState } from "react";
+import { memo } from "react";
 
 import { useAtomValue } from "@effect/atom-react";
 import { openCommandPalette } from "../../commandPaletteBus";
@@ -18,16 +18,18 @@ import { cn, isMacPlatform } from "~/lib/utils";
 import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
 import { useLiveDiagnosticsBadgeTone } from "../../prismux/settings/useLiveDiagnosticsBadgeTone";
 import { primaryServerKeybindingsAtom } from "../../state/server";
-import { openPrismuxRemoteConnectDialog } from "../cloud/prismuxRemoteConnect.logic";
 import { Kbd } from "../ui/kbd";
 import { useSidebar } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  getMainAppReturnHref,
+  isSidebarPanelPathActive,
+  resolveSidebarPanelToggleNavigation,
+} from "./mainAppLocation";
 import { usePrismuxSidebarQuickNavCopy } from "./prismuxSidebarQuickNav.copy";
 import {
-  dismissMobileSidebarOnboardingBadge,
   PRISMUX_SIDEBAR_QUICK_NAV_ROUTES,
-  readMobileSidebarOnboardingDismissed,
-  shouldShowMobileSidebarOnboardingBadge,
+  PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS,
   type DiagnosticsBadgeTone,
 } from "./prismuxSidebarQuickNav.logic";
 
@@ -44,10 +46,12 @@ const DIAGNOSTICS_DOT_CLASS: Record<Exclude<DiagnosticsBadgeTone, null>, string>
 
 /**
  * Orca-aligned top sidebar search bar & primary 5-item quick-navigation block
- * (`diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `mobile`),
- * with Spec 2 persistent 54px icon-rail collapse & two-stage text fade choreography.
+ * (`diagnostics` -> `tasks` -> `workspace-board` -> `automations` -> `overnight-factory`),
+ * with persistent 54px icon-rail collapse, two-stage text fade choreography, and
+ * bidirectional toggle-close across all 4 work panels.
  */
 export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
+  routeThreadRef,
   showSearch = true,
 }: PrismuxSidebarQuickNavProps) {
   const gt = useGT();
@@ -60,25 +64,34 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
   const daemon = prismuxRuntime?.daemon ?? null;
   const daemonReady = prismuxRuntime?.daemonInfo.ready ?? false;
 
-  const [mobileBadgeDismissed, setMobileBadgeDismissed] = useState<boolean>(() =>
-    readMobileSidebarOnboardingDismissed(),
-  );
   const diagnosticsTone = useLiveDiagnosticsBadgeTone(daemon, daemonReady, pathname);
 
   const closeMobileSidebar = () => {
     if (isMobile) setOpenMobile(false);
   };
 
+  const fallbackReturnHref = routeThreadRef
+    ? `/${encodeURIComponent(routeThreadRef.environmentId)}/${encodeURIComponent(routeThreadRef.threadId)}`
+    : "/";
+
   const searchShortcutLabel =
     shortcutLabelForCommand(keybindings, "commandPalette.toggle") ??
     (typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
 
-  const showMobileNewBadge = shouldShowMobileSidebarOnboardingBadge(mobileBadgeDismissed);
   const diagnosticsActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.diagnostics;
-  const tasksActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.tasks;
-  const workspaceBoardActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.workspaceBoard;
-  const automationsActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.automations;
-  const mobileAccessActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.mobileAccess;
+  const tasksActive = isSidebarPanelPathActive(pathname, PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks);
+  const workspaceBoardActive = isSidebarPanelPathActive(
+    pathname,
+    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.workspaceBoard,
+  );
+  const automationsActive = isSidebarPanelPathActive(
+    pathname,
+    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.automations,
+  );
+  const overnightFactoryActive = isSidebarPanelPathActive(
+    pathname,
+    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.overnightFactory,
+  );
 
   const handleOpenGlobalSearch = () => {
     closeMobileSidebar();
@@ -90,28 +103,46 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     void navigate({ to: "/settings/diagnostics" });
   };
 
-  const handleOpenTasks = () => {
+  const handleToggleWorkPanel = (
+    panelPathnames: readonly string[],
+    targetHref: string,
+  ) => {
     closeMobileSidebar();
-    void navigate({ to: "/tasks" });
+    const decision = resolveSidebarPanelToggleNavigation({
+      currentPathname: pathname,
+      panelPathnames,
+      targetHref,
+      lastMainAppHref: getMainAppReturnHref(fallbackReturnHref),
+    });
+    void navigate({ href: decision.href });
   };
 
-  const handleOpenWorkspaceBoard = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/workspace-board" });
+  const handleToggleTasks = () => {
+    handleToggleWorkPanel(
+      PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks,
+      PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.tasks,
+    );
   };
 
-  const handleOpenAutomations = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/scheduled-tasks" });
+  const handleToggleWorkspaceBoard = () => {
+    handleToggleWorkPanel(
+      PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.workspaceBoard,
+      PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.workspaceBoard,
+    );
   };
 
-  const handleOpenRemoteConnect = () => {
-    if (!mobileBadgeDismissed) {
-      dismissMobileSidebarOnboardingBadge();
-      setMobileBadgeDismissed(true);
-    }
-    closeMobileSidebar();
-    openPrismuxRemoteConnectDialog();
+  const handleToggleAutomations = () => {
+    handleToggleWorkPanel(
+      PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.automations,
+      PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.automations,
+    );
+  };
+
+  const handleToggleOvernightFactory = () => {
+    handleToggleWorkPanel(
+      PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.overnightFactory,
+      PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.overnightFactory,
+    );
   };
 
   const labelFadeClass = cn(
@@ -160,7 +191,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
   const tasksRailTooltip = quickNavCopy.tasks;
   const workspaceBoardRailTooltip = quickNavCopy.workspaceBoard;
   const automationsRailTooltip = quickNavCopy.scheduledTasks;
-  const mobileRailTooltip = gt("Prismux Mobile", { $context: "sidebar quick navigation" });
+  const overnightFactoryRailTooltip = quickNavCopy.overnightFactory;
 
   if (!isMobile && isIconRail) {
     return (
@@ -233,7 +264,8 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
                 data-testid="prismux-nav-tasks"
                 aria-label={tasksRailTooltip}
                 aria-current={tasksActive ? "page" : undefined}
-                onClick={handleOpenTasks}
+                aria-pressed={tasksActive}
+                onClick={handleToggleTasks}
                 className={railButtonClassName(tasksActive)}
               />
             }
@@ -254,7 +286,8 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
                 data-testid="prismux-nav-workspace-board"
                 aria-label={workspaceBoardRailTooltip}
                 aria-current={workspaceBoardActive ? "page" : undefined}
-                onClick={handleOpenWorkspaceBoard}
+                aria-pressed={workspaceBoardActive}
+                onClick={handleToggleWorkspaceBoard}
                 className={railButtonClassName(workspaceBoardActive)}
               />
             }
@@ -266,7 +299,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </TooltipPopup>
         </Tooltip>
 
-        {/* 4. Automations */}
+        {/* 4. Scheduled Tasks */}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -275,7 +308,8 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
                 data-testid="prismux-nav-automations"
                 aria-label={automationsRailTooltip}
                 aria-current={automationsActive ? "page" : undefined}
-                onClick={handleOpenAutomations}
+                aria-pressed={automationsActive}
+                onClick={handleToggleAutomations}
                 className={railButtonClassName(automationsActive)}
               />
             }
@@ -287,32 +321,25 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
           </TooltipPopup>
         </Tooltip>
 
-        {/* 5. Prismux Mobile (opens centered Remote Access & T3 Connect modal) */}
+        {/* 5. Overnight Factory & Mail */}
         <Tooltip>
           <TooltipTrigger
             render={
               <button
                 type="button"
-                data-testid="prismux-nav-mobile"
-                aria-label={mobileRailTooltip}
-                aria-current={mobileAccessActive ? "page" : undefined}
-                onClick={handleOpenRemoteConnect}
-                className={railButtonClassName(mobileAccessActive)}
+                data-testid="prismux-nav-overnight-factory"
+                aria-label={overnightFactoryRailTooltip}
+                aria-current={overnightFactoryActive ? "page" : undefined}
+                aria-pressed={overnightFactoryActive}
+                onClick={handleToggleOvernightFactory}
+                className={railButtonClassName(overnightFactoryActive)}
               />
             }
           >
-            <SmartphoneIcon aria-hidden className={navIconClassName(mobileAccessActive)} />
-            {showMobileNewBadge ? (
-              <span
-                aria-hidden
-                data-testid="prismux-nav-mobile-new-dot"
-                data-rail-dot="true"
-                className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary ring-2 ring-sidebar"
-              />
-            ) : null}
+            <MoonStarIcon aria-hidden className={navIconClassName(overnightFactoryActive)} />
           </TooltipTrigger>
           <TooltipPopup side="right" sideOffset={8}>
-            {mobileRailTooltip}
+            {overnightFactoryRailTooltip}
           </TooltipPopup>
         </Tooltip>
       </nav>
@@ -389,7 +416,8 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         type="button"
         data-testid="prismux-nav-tasks"
         aria-current={tasksActive ? "page" : undefined}
-        onClick={handleOpenTasks}
+        aria-pressed={tasksActive}
+        onClick={handleToggleTasks}
         className={navRowClassName(tasksActive)}
       >
         <ListTodoIcon aria-hidden className={navIconClassName(tasksActive)} />
@@ -403,7 +431,8 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         type="button"
         data-testid="prismux-nav-workspace-board"
         aria-current={workspaceBoardActive ? "page" : undefined}
-        onClick={handleOpenWorkspaceBoard}
+        aria-pressed={workspaceBoardActive}
+        onClick={handleToggleWorkspaceBoard}
         className={navRowClassName(workspaceBoardActive)}
       >
         <Columns3Icon aria-hidden className={navIconClassName(workspaceBoardActive)} />
@@ -417,7 +446,8 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         type="button"
         data-testid="prismux-nav-automations"
         aria-current={automationsActive ? "page" : undefined}
-        onClick={handleOpenAutomations}
+        aria-pressed={automationsActive}
+        onClick={handleToggleAutomations}
         className={navRowClassName(automationsActive)}
       >
         <CalendarClockIcon aria-hidden className={navIconClassName(automationsActive)} />
@@ -426,29 +456,19 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         </span>
       </button>
 
-      {/* 5. Prismux Mobile + persistent dismissible [New] badge (opens centered Remote Access & T3 Connect modal) */}
+      {/* 5. Overnight Factory & Mail (standalone main work panel) */}
       <button
         type="button"
-        data-testid="prismux-nav-mobile"
-        aria-current={mobileAccessActive ? "page" : undefined}
-        onClick={handleOpenRemoteConnect}
-        className={navRowClassName(mobileAccessActive)}
+        data-testid="prismux-nav-overnight-factory"
+        aria-current={overnightFactoryActive ? "page" : undefined}
+        aria-pressed={overnightFactoryActive}
+        onClick={handleToggleOvernightFactory}
+        className={navRowClassName(overnightFactoryActive)}
       >
-        <SmartphoneIcon aria-hidden className={navIconClassName(mobileAccessActive)} />
+        <MoonStarIcon aria-hidden className={navIconClassName(overnightFactoryActive)} />
         <span className={cn("min-w-0 flex-1 truncate whitespace-nowrap", labelFadeClass)}>
-          <T context="sidebar quick navigation">Prismux Mobile</T>
+          {quickNavCopy.overnightFactory}
         </span>
-        {showMobileNewBadge ? (
-          <span
-            data-testid="prismux-nav-mobile-new-badge"
-            className={cn(
-              "shrink-0 rounded-full bg-primary px-1.5 py-px text-[10px] leading-tight font-semibold text-primary-foreground",
-              labelFadeClass,
-            )}
-          >
-            <T context="new feature badge">New</T>
-          </span>
-        ) : null}
       </button>
     </nav>
   );

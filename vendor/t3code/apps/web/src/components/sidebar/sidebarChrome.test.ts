@@ -593,7 +593,8 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(railHtml).toContain('data-testid="prismux-nav-tasks"');
     expect(railHtml).toContain('data-testid="prismux-nav-workspace-board"');
     expect(railHtml).toContain('data-testid="prismux-nav-automations"');
-    expect(railHtml).toContain('data-testid="prismux-nav-mobile"');
+    expect(railHtml).toContain('data-testid="prismux-nav-overnight-factory"');
+    expect(railHtml).not.toContain('data-testid="prismux-nav-mobile"');
     expect(railHtml).not.toContain("data-pmx-sidebar-peek");
   });
 
@@ -760,7 +761,8 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(fullRailHtml).toContain('aria-label="任务面板"');
     expect(fullRailHtml).toContain('aria-label="工作区板"');
     expect(fullRailHtml).toContain('aria-label="定时任务"');
-    expect(fullRailHtml).toContain('aria-label="Prismux 手机端"');
+    expect(fullRailHtml).toContain('aria-label="夜间工场与邮箱"');
+    expect(fullRailHtml).not.toContain('aria-label="Prismux 手机端"');
     expect(fullRailHtml).toContain('aria-label="通知"');
     expect(fullRailHtml).toContain('aria-label="新工作区"');
     expect(fullRailHtml).toContain('aria-label="Prismux"');
@@ -946,7 +948,8 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(zhTexts).toContain("任务面板");
       expect(zhTexts).toContain("工作区板");
       expect(zhTexts).toContain("定时任务");
-      expect(zhTexts).toContain("Prismux 手机端");
+      expect(zhTexts).toContain("夜间工场与邮箱");
+      expect(zhTexts).not.toContain("Prismux 手机端");
       expect(zhTexts).toContain("通知");
       expect(zhTexts).toContain("新工作区");
       expect(zhTexts).toContain("Prismux");
@@ -958,8 +961,18 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(zhTexts).toContain("用量");
       expect(zhTexts).toContain("更多导航项");
 
-      // Active bell state + utility-page Back button tooltip on the right
-      const zhUtilityHtml = renderCollapsedRail("zh", "/tasks", true);
+      // Active toggleable panel (/issues, /tasks, /overnight-factory) keeps Issue/PR toggle buttons visible & highlighted
+      const zhIssuesHtml = renderCollapsedRail("zh", "/issues", false);
+      expect(zhIssuesHtml).toContain('data-sidebar-utility-item="issues"');
+      expect(zhIssuesHtml).toContain('aria-current="page"');
+      expect(zhIssuesHtml).toContain('data-sidebar-utility-item="pull-requests"');
+
+      const zhFactoryHtml = renderCollapsedRail("zh", "/overnight-factory", false);
+      expect(zhFactoryHtml).toContain('data-testid="prismux-nav-overnight-factory"');
+      expect(zhFactoryHtml).toContain('aria-current="page"');
+
+      // Project settings utility page still renders Back button tooltip on the right
+      const zhUtilityHtml = renderCollapsedRail("zh", "/projects/demo", true);
       const zhUtilityTexts = extractPopups(zhUtilityHtml).map((popup) => popup.text);
       expect(zhUtilityTexts).toContain("关闭通知");
       expect(zhUtilityTexts).toContain("返回");
@@ -977,7 +990,8 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       expect(enTexts).toContain("Tasks");
       expect(enTexts).toContain("Workspace board");
       expect(enTexts).toContain("Scheduled Tasks");
-      expect(enTexts).toContain("Prismux Mobile");
+      expect(enTexts).toContain("Overnight Factory");
+      expect(enTexts).not.toContain("Prismux Mobile");
       expect(enTexts).toContain("Notifications");
       expect(enTexts).toContain("New workspace");
       expect(enTexts).toContain("Prismux");

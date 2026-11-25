@@ -134,4 +134,44 @@ describe("compileClaudeModelSelection", () => {
       expect(unconfigured.settings).toEqual({});
     },
   );
+
+  it("propagates Fast Mode and Ultracode independently into Claude settings for --settings CLI dispatch", () => {
+    for (const model of ["claude-opus-5-5", "claude-fable-5-2"]) {
+      expect(
+        compileClaudeModelSelection(
+          selection(model, [
+            { id: "fastMode", value: true },
+            { id: "ultracode", value: true },
+          ]),
+        ).settings,
+      ).toEqual({ fastMode: true, ultracode: true });
+
+      expect(
+        compileClaudeModelSelection(
+          selection(model, [
+            { id: "fastMode", value: true },
+            { id: "ultracode", value: false },
+          ]),
+        ).settings,
+      ).toEqual({ fastMode: true, ultracode: false });
+
+      expect(
+        compileClaudeModelSelection(
+          selection(model, [
+            { id: "fastMode", value: false },
+            { id: "ultracode", value: true },
+          ]),
+        ).settings,
+      ).toEqual({ fastMode: false, ultracode: true });
+
+      expect(
+        compileClaudeModelSelection(
+          selection(model, [
+            { id: "fastMode", value: false },
+            { id: "ultracode", value: false },
+          ]),
+        ).settings,
+      ).toEqual({ fastMode: false, ultracode: false });
+    }
+  });
 });

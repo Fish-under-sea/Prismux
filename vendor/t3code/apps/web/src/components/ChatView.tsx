@@ -2028,6 +2028,7 @@ export default function ChatView(props: ChatViewProps) {
   const mainCanvasStageRef = useRef<HTMLDivElement | null>(null);
   const chatWidthController = useChatContentWidth(settings.chatWidth);
   const currentUserName = resolveCurrentUserDisplayName({
+    osUsername: serverConfig?.osUsername,
     keybindingsConfigPath: serverConfig?.keybindingsConfigPath,
     scratchWorkspaceRoot: serverConfig?.scratchWorkspaceRoot,
     newProjectsRoot: serverConfig?.newProjectsRoot,
@@ -3066,7 +3067,7 @@ export default function ChatView(props: ChatViewProps) {
         : serverConfig === null
           ? gt("Side chats are not ready yet. Try again in a moment.")
           : serverConfig.environment.capabilities.sideChats !== true
-            ? gt("Update this environment's T3 Code server to use side chats.")
+            ? gt("Update this environment's Prismux server to use side chats.")
             : sideChatsOffered && !isServerThread
               ? gt("Side chats start after the first message.")
               : sideChat.available &&

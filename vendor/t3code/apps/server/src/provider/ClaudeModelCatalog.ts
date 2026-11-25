@@ -63,6 +63,31 @@ function tryResolveClaudeModelCatalog(
   };
 }
 
+const CLAUDE_CANONICAL_BOOLEAN_LABELS: Readonly<Record<string, string>> = {
+  fastMode: "Fast Mode",
+  ultracode: "Ultracode",
+  thinking: "Thinking",
+};
+
+function normalizeClaudeOptionDescriptors(
+  capabilities: ModelCapabilities | null,
+): ModelCapabilities | null {
+  if (!capabilities?.optionDescriptors) return capabilities;
+  const optionDescriptors: Array<NonNullable<ModelCapabilities["optionDescriptors"]>[number]> = [];
+  for (const descriptor of capabilities.optionDescriptors) {
+    if (descriptor.type !== "boolean") {
+      optionDescriptors.push(descriptor);
+      continue;
+    }
+    const canonicalLabel = CLAUDE_CANONICAL_BOOLEAN_LABELS[descriptor.id];
+    if (canonicalLabel === undefined) continue;
+    optionDescriptors.push(
+      descriptor.label === canonicalLabel ? descriptor : { ...descriptor, label: canonicalLabel },
+    );
+  }
+  return { ...capabilities, optionDescriptors };
+}
+
 // The manifest keeps Ultracode as an effort level because released servers read it from main.
 export function withUltracodeToggle(
   capabilities: ModelCapabilities | null,
@@ -75,7 +100,7 @@ export function withUltracodeToggle(
       descriptor.options.some((option) => option.id === "ultracode"),
   );
   const effort = descriptors[effortIndex];
-  if (effort?.type !== "select") return capabilities;
+  if (effort?.type !== "select") return normalizeClaudeOptionDescriptors(capabilities);
   const ultracodeByDefault =
     (effort.currentValue ?? effort.options.find((option) => option.isDefault)?.id) === "ultracode";
   const hasXhigh = effort.options.some((option) => option.id === "xhigh");
@@ -89,7 +114,7 @@ export function withUltracodeToggle(
     if (ultracodeByDefault && option.id === "xhigh") return [{ ...option, isDefault: true }];
     return [isDefault && !ultracodeByDefault ? { ...option, isDefault } : option];
   });
-  return {
+  return normalizeClaudeOptionDescriptors({
     optionDescriptors: descriptors.toSpliced(
       effortIndex,
       1,
@@ -105,7 +130,7 @@ export function withUltracodeToggle(
         ...(ultracodeByDefault ? { currentValue: true } : {}),
       },
     ),
-  };
+  });
 }
 
 /** Resolve the fallback on each read so its new-model badges can expire. */

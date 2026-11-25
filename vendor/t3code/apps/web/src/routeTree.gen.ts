@@ -24,6 +24,7 @@ import { Route as ChatTasksRouteImport } from './routes/_chat.tasks'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatScheduledTasksRouteImport } from './routes/_chat.scheduled-tasks'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
+import { Route as ChatOvernightFactoryRouteImport } from './routes/_chat.overnight-factory'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatIssuesRouteImport } from './routes/_chat.issues'
 import { Route as ThreadsEnvironmentIdThreadIdRouteImport } from './routes/threads.$environmentId.$threadId'
@@ -138,6 +139,11 @@ const ChatScheduledTasksRoute = ChatScheduledTasksRouteImport.update({
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatOvernightFactoryRoute = ChatOvernightFactoryRouteImport.update({
+  id: '/overnight-factory',
+  path: '/overnight-factory',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatNewRoute = ChatNewRouteImport.update({
@@ -366,6 +372,7 @@ export interface FileRoutesByFullPath {
   '/welcome': typeof WelcomeRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
+  '/overnight-factory': typeof ChatOvernightFactoryRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/scheduled-tasks': typeof ChatScheduledTasksRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -422,6 +429,7 @@ export interface FileRoutesByTo {
   '/welcome': typeof WelcomeRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
+  '/overnight-factory': typeof ChatOvernightFactoryRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/scheduled-tasks': typeof ChatScheduledTasksRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -481,6 +489,7 @@ export interface FileRoutesById {
   '/welcome': typeof WelcomeRoute
   '/_chat/issues': typeof ChatIssuesRoute
   '/_chat/new': typeof ChatNewRoute
+  '/_chat/overnight-factory': typeof ChatOvernightFactoryRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/scheduled-tasks': typeof ChatScheduledTasksRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
@@ -541,6 +550,7 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/issues'
     | '/new'
+    | '/overnight-factory'
     | '/pull-requests'
     | '/scheduled-tasks'
     | '/settings'
@@ -597,6 +607,7 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/issues'
     | '/new'
+    | '/overnight-factory'
     | '/pull-requests'
     | '/scheduled-tasks'
     | '/settings'
@@ -655,6 +666,7 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/_chat/issues'
     | '/_chat/new'
+    | '/_chat/overnight-factory'
     | '/_chat/pull-requests'
     | '/_chat/scheduled-tasks'
     | '/_chat/settings'
@@ -821,6 +833,13 @@ declare module '@tanstack/react-router' {
       path: '/pull-requests'
       fullPath: '/pull-requests'
       preLoaderRoute: typeof ChatPullRequestsRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/overnight-factory': {
+      id: '/_chat/overnight-factory'
+      path: '/overnight-factory'
+      fullPath: '/overnight-factory'
+      preLoaderRoute: typeof ChatOvernightFactoryRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/new': {
@@ -1196,6 +1215,7 @@ const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(
 interface ChatRouteChildren {
   ChatIssuesRoute: typeof ChatIssuesRoute
   ChatNewRoute: typeof ChatNewRoute
+  ChatOvernightFactoryRoute: typeof ChatOvernightFactoryRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatScheduledTasksRoute: typeof ChatScheduledTasksRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
@@ -1211,6 +1231,7 @@ interface ChatRouteChildren {
 const ChatRouteChildren: ChatRouteChildren = {
   ChatIssuesRoute: ChatIssuesRoute,
   ChatNewRoute: ChatNewRoute,
+  ChatOvernightFactoryRoute: ChatOvernightFactoryRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatScheduledTasksRoute: ChatScheduledTasksRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,

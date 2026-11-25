@@ -113,12 +113,24 @@ describe("serverSettings helpers", () => {
       worktreeAfterDays: null,
       worktreeSettledAfterDays: null,
       worktreeOnMerge: true,
-      worktreeOnDelete: false,
-      worktreeUnchanged: false,
+      worktreeOnDelete: true,
+      worktreeUnchanged: true,
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
       logsAfterDays: 30,
     });
+  });
+
+  it("replaces and deduplicates providerOrder via applyServerSettingsPatch", () => {
+    const codex = ProviderInstanceId.make("codex");
+    const claude = ProviderInstanceId.make("claudeAgent");
+    const dsh = ProviderInstanceId.make("dsh");
+    const ordered = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      providerOrder: [dsh, claude, codex, claude],
+    });
+    expect(ordered.providerOrder).toEqual([dsh, claude, codex]);
+    const cleared = applyServerSettingsPatch(ordered, { providerOrder: [] });
+    expect(cleared.providerOrder).toEqual([]);
   });
   it("replaces a source control host's patched field so a cleared account pin does not survive", () => {
     const pinned = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {

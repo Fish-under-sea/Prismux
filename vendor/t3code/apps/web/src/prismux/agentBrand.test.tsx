@@ -8,6 +8,8 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import {
   AGENT_BRAND_BREATHE_CSS,
   AgentBrandLogo,
+  DSH_BRAND_COLOR,
+  DSH_FISH_LOGO_VIEWBOX,
   containsUuidNoise,
   formatAgentBrandName,
   getAgentBrandMeta,
@@ -234,5 +236,30 @@ describe("agentBrand canonical naming & official logos", () => {
     );
     expect(monoHtml).toContain('fill="currentColor"');
     expect(monoHtml).not.toContain("linearGradient");
+  });
+
+  it("registers dsh (DeepSeek Harness, #4176E6) with exact FishLogo SVG across AgentBrandLogo and ProviderInstanceIcon", () => {
+    expect(resolveAgentBrandId("dsh")).toBe("dsh");
+    expect(resolveAgentBrandId("deepseek-harness")).toBe("dsh");
+    expect(resolveAgentBrandId("acpRegistry:dsh")).toBe("dsh");
+    expect(formatAgentBrandName("dsh")).toBe("DeepSeek Harness");
+    expect(toCanonicalChiefProviderId("dsh")).toBe("dsh");
+    expect(getAgentBrandMeta("dsh").accentColor).toBe(DSH_BRAND_COLOR);
+
+    const logoHtml = renderToStaticMarkup(<AgentBrandLogo provider="dsh" size={16} />);
+    expect(logoHtml).toContain('data-agent-brand="dsh"');
+    expect(logoHtml).toContain(`viewBox="${DSH_FISH_LOGO_VIEWBOX}"`);
+    expect(logoHtml).toContain(`fill="${DSH_BRAND_COLOR}"`);
+
+    const providerIconHtml = renderToStaticMarkup(
+      <ProviderInstanceIcon
+        driverKind={ProviderDriverKind.make("acpRegistry")}
+        displayName="DeepSeek Harness"
+        acpRegistryAgentId="dsh"
+        instanceId="acpRegistry:dsh"
+      />,
+    );
+    expect(providerIconHtml).toContain('data-dsh-brand-icon="true"');
+    expect(providerIconHtml).toContain(`fill="${DSH_BRAND_COLOR}"`);
   });
 });

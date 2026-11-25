@@ -57,24 +57,13 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
       ],
       [
         "/settings/providers",
-        "/settings/devices",
-        "/settings/threads",
         "/settings/projects",
         "/settings/archived",
         "/settings/browser",
-        "/settings/worktrees",
-        "/settings/diffs",
         "/settings/source-control",
       ],
-      [
-        "/settings/connections",
-        "/settings/memory",
-        "/settings/sync",
-        "/settings/plugins",
-        "/settings/access",
-        "/settings/overnight-factory",
-      ],
-      ["/settings/diagnostics", "/settings/maintenance", "/settings/about"],
+      ["/settings/connections", "/settings/memory", "/settings/sync", "/settings/plugins"],
+      ["/settings/maintenance", "/settings/about"],
     ]);
 
     const flatWindows = groupsWindows.flatMap((group) => group.paths);
@@ -90,12 +79,14 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(flatWindows).toContain("/settings/sync");
     expect(flatWindows.indexOf("/settings/sync")).toBe(flatWindows.indexOf("/settings/memory") + 1);
     expect(flatWindows).not.toContain("/settings/memory-sync");
-    // Overnight Factory & Mail sits directly below Sharing & access in Group 3
-    expect(flatWindows).toContain("/settings/overnight-factory");
-    expect(flatWindows.indexOf("/settings/overnight-factory")).toBe(
-      flatWindows.indexOf("/settings/access") + 1,
-    );
     // Merged / removed / promoted top-level entries
+    expect(flatWindows).not.toContain("/settings/overnight-factory");
+    expect(flatWindows).not.toContain("/settings/access");
+    expect(flatWindows).not.toContain("/settings/worktrees");
+    expect(flatWindows).not.toContain("/settings/diffs");
+    expect(flatWindows).not.toContain("/settings/devices");
+    expect(flatWindows).not.toContain("/settings/diagnostics");
+    expect(flatWindows).not.toContain("/settings/threads");
     expect(flatWindows).not.toContain("/settings/scheduled-tasks");
     expect(flatWindows).not.toContain("/settings/updates");
     expect(flatWindows).not.toContain("/settings/labs");
@@ -125,18 +116,25 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("Wallpaper");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("Memory");
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("Sync");
-    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/overnight-factory"])).toBe(
-      "Overnight Factory & Mail",
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/chat"])).toBe("Chat & threads");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/browser"])).toBe("Browser & devices");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/source-control"])).toBe(
+      "Source control & worktrees",
     );
-    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/diagnostics"])).toBe("Service Diagnostics");
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/connections"])).toBe(
+      "Environments & remote access",
+    );
+    expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/maintenance"])).toBe(
+      "Maintenance & diagnostics",
+    );
     expect(decodeMsg(SETTINGS_NAV_LABELS["/settings/about"])).toBe("About & Updates");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/appearance") ?? "")).toBe("Appearance");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/wallpaper") ?? "")).toBe("Wallpaper");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/memory") ?? "")).toBe("Memory");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/sync") ?? "")).toBe("Sync");
     expect(decodeMsg(settingsBreadcrumbLabel("/settings/about") ?? "")).toBe("About & Updates");
-    expect(decodeMsg(settingsBreadcrumbLabel("/settings/diagnostics") ?? "")).toBe(
-      "Service Diagnostics",
+    expect(decodeMsg(settingsBreadcrumbLabel("/settings/maintenance") ?? "")).toBe(
+      "Maintenance & diagnostics",
     );
   });
 
@@ -148,7 +146,7 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(byId.has("t3-connect" as never)).toBe(false);
 
     expect(byId.get("prompt-suggestions-beta")?.to).toBe("/settings/chat");
-    expect(byId.get("worktree-fast-checkout")?.to).toBe("/settings/worktrees");
+    expect(byId.get("worktree-fast-checkout")?.to).toBe("/settings/source-control");
     expect(byId.get("linked-environments-beta")?.to).toBe("/settings/connections");
     expect(byId.get("provider-update-checks")?.to).toBe("/settings/providers");
     expect(byId.get("prismux-updates")?.to).toBe("/settings/about");
@@ -181,12 +179,19 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(movedSettingsPath("/settings/labs", "")).toBe("/settings/general");
     expect(movedSettingsPath("/settings/labs", "prompt-suggestions-beta")).toBe("/settings/chat");
     expect(movedSettingsPath("/settings/labs", "worktree-fast-checkout")).toBe(
-      "/settings/worktrees",
+      "/settings/source-control",
     );
     expect(movedSettingsPath("/settings/labs", "linked-environments-beta")).toBe(
       "/settings/connections",
     );
     expect(movedSettingsPath("/settings/beta", "")).toBe("/settings/general");
+    // Merged legacy paths resolve to their consolidated parent sidebar nav entries
+    expect(resolveSettingsNavActivePath("/settings/access")).toBe("/settings/connections");
+    expect(resolveSettingsNavActivePath("/settings/worktrees")).toBe("/settings/source-control");
+    expect(resolveSettingsNavActivePath("/settings/diffs")).toBe("/settings/source-control");
+    expect(resolveSettingsNavActivePath("/settings/devices")).toBe("/settings/browser");
+    expect(resolveSettingsNavActivePath("/settings/diagnostics")).toBe("/settings/maintenance");
+    expect(resolveSettingsNavActivePath("/settings/threads")).toBe("/settings/chat");
 
     expect(resolveSettingsNavActivePath("/settings/open-source-licenses")).toBe("/settings/about");
     expect(findSettingsNavTarget(groups, "/settings/open-source-licenses")).toEqual({

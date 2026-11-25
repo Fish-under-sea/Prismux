@@ -1,13 +1,17 @@
 import {
   ChevronRightIcon,
   Columns2Icon,
+  FilesIcon,
   GitCompareArrowsIcon,
   GlobeIcon,
+  Link2Icon,
   MessageSquareIcon,
+  MessageSquarePlusIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
   SmartphoneIcon,
+  TabletSmartphoneIcon,
   TerminalIcon,
 } from "lucide-react";
 import {
@@ -78,6 +82,14 @@ function tabKindIcon(tab: WorkspaceTab): ReactNode {
       return <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
     case "simulator":
       return <SmartphoneIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "files":
+      return <FilesIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "related":
+      return <Link2Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "device":
+      return <TabletSmartphoneIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "side-chat":
+      return <MessageSquarePlusIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
     case "thread":
     case "draft":
     case "agent":

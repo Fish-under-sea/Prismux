@@ -107,6 +107,11 @@ import {
   resolveTerminalFontSizePreference,
   TYPOGRAPHY_ADVANCED_STORAGE_KEY,
 } from "../appearanceFonts";
+import {
+  dispatchSplitDragEvent,
+  writeSplitDragDataTransfer,
+  type SplitDragPayload,
+} from "./workspace/splitAnything.logic";
 
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
@@ -1388,6 +1393,7 @@ function TerminalSplitPanes({
 }
 
 function TerminalSidebarGroup({
+  threadRef,
   terminalGroup,
   activeTerminalId,
   showHeader,
@@ -1397,6 +1403,7 @@ function TerminalSidebarGroup({
   onActiveTerminalChange,
   onCloseTerminal,
 }: {
+  threadRef: ScopedThreadRef;
   terminalGroup: ThreadTerminalGroup;
   activeTerminalId: string;
   showHeader: boolean;
@@ -1456,6 +1463,21 @@ function TerminalSidebarGroup({
           return (
             <div
               key={terminalId}
+              draggable
+              data-terminal-drag-tab={terminalId}
+              onDragStart={(event) => {
+                const payload: SplitDragPayload = {
+                  kind: "bottom-panel-tab",
+                  terminalId,
+                  title: terminalLabel,
+                  hostThreadRef: threadRef,
+                };
+                writeSplitDragDataTransfer(event.dataTransfer, payload);
+                dispatchSplitDragEvent(true, payload);
+              }}
+              onDragEnd={() => {
+                dispatchSplitDragEvent(false, null);
+              }}
               className={cn(
                 "group/tab flex h-6 w-full items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
                 isActive
@@ -1864,6 +1886,34 @@ export default function ThreadTerminalDrawer({
       {!hasTerminalSidebar && (
         <div className="pointer-events-none absolute right-2 top-2 z-20">
           <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
+            {!isPanel && resolvedActiveTerminalId ? (
+              <>
+                <div
+                  draggable
+                  data-terminal-drag-handle={resolvedActiveTerminalId}
+                  aria-label={gt("Drag terminal to split workspace")}
+                  onDragStart={(event) => {
+                    const label =
+                      terminalLabelById.get(resolvedActiveTerminalId) ?? gt("Terminal");
+                    const payload: SplitDragPayload = {
+                      kind: "bottom-panel-tab",
+                      terminalId: resolvedActiveTerminalId,
+                      title: label,
+                      hostThreadRef: threadRef,
+                    };
+                    writeSplitDragDataTransfer(event.dataTransfer, payload);
+                    dispatchSplitDragEvent(true, payload);
+                  }}
+                  onDragEnd={() => {
+                    dispatchSplitDragEvent(false, null);
+                  }}
+                  className="inline-flex cursor-grab items-center gap-1 px-1.5 py-1 text-2xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing"
+                >
+                  <TerminalSquare className="size-3 shrink-0" />
+                </div>
+                <div className="h-4 w-px bg-border/80" />
+              </>
+            ) : null}
             <TerminalActionButton
               disabled={!canOperateTerminal}
               className={`p-1 text-foreground/90 transition-colors ${
@@ -1988,6 +2038,7 @@ export default function ThreadTerminalDrawer({
                 {resolvedTerminalGroups.map((terminalGroup) => (
                   <TerminalSidebarGroup
                     key={terminalGroup.id}
+                    threadRef={threadRef}
                     terminalGroup={terminalGroup}
                     activeTerminalId={resolvedActiveTerminalId}
                     showHeader={showGroupHeaders}

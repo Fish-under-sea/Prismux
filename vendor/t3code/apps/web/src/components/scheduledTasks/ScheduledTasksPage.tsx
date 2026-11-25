@@ -17,7 +17,7 @@ import {
   SearchIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { useProjects } from "../../state/entities";
@@ -39,7 +39,6 @@ import type { SettingsScopeSearch } from "../settings/settingsScope";
 import { settingsScopeEnvironmentLabels } from "../settings/settingsScopeAxis";
 import { useNavigateToMainApp } from "../sidebar/mainAppLocation";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -74,13 +73,10 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
     task: ScheduledTask | null;
   } | null>(null);
 
-  const projectTitleByKey = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const project of allProjects) {
-      map.set(`${project.environmentId}:${project.id}`, project.title);
-    }
-    return map;
-  }, [allProjects]);
+  const projectTitleByKey = new Map<string, string>();
+  for (const project of allProjects) {
+    projectTitleByKey.set(`${project.environmentId}:${project.id}`, project.title);
+  }
 
   const defaultEnvironment = environment ?? connectedEnvironments[0];
   const linkedEnvironmentId = target.environmentId ?? defaultEnvironment?.environmentId;
@@ -125,7 +121,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
     });
   };
 
-  // Close standalone panel on Escape when no modal/input owns focus.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window Escape key listener closes standalone panel when no modal/input owns focus
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || editor !== null) return;
@@ -223,7 +219,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
           {/* Header Bar — aligned 1:1 with Workspace Board & Tasks standalone work panels */}
           <header className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5">
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
+              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
                 <CalendarClockIcon className="size-4" aria-hidden="true" />
               </span>
               <div className="min-w-0">
@@ -233,12 +229,12 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                   </h1>
                   <span
                     data-testid="scheduled-tasks-summary-badge"
-                    className="inline-flex shrink-0 items-center rounded-full border border-border/70 bg-muted/65 px-2 py-0.5 text-[11px] font-medium text-foreground/85 tabular-nums"
+                    className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-2xs font-medium text-foreground/85 tabular-nums"
                   >
                     {copy.summaryBadge(summary.enabled, summary.total)}
                   </span>
                 </div>
-                <p className="hidden truncate text-[11px] text-muted-foreground md:block">
+                <p className="hidden truncate text-2xs text-muted-foreground md:block">
                   {copy.pageSubtitle}
                 </p>
               </div>
@@ -258,7 +254,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                     size="sm"
                     data-testid="scheduled-tasks-env-filter"
                     data-pmx-work-panel-control="1"
-                    className="h-7 w-40 text-xs"
+                    className="w-40"
                   >
                     <SelectValue>
                       {selectedMachineValue === "all"
@@ -278,32 +274,43 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                 </Select>
               ) : null}
 
-              <Button
-                type="button"
-                size="xs"
-                data-testid="scheduled-tasks-new-button"
-                disabled={!creationEnvironment}
-                onClick={() =>
-                  creationEnvironment &&
-                  setEditor({ environmentId: creationEnvironment.environmentId, task: null })
-                }
-                className="h-7 gap-1.5 px-2.5 text-xs font-medium"
-              >
-                <PlusIcon className="size-3.5" />
-                <span>{copy.newTaskAction}</span>
-              </Button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="inline-flex">
+                      <Button
+                        type="button"
+                        size="xs"
+                        data-testid="scheduled-tasks-new-button"
+                        disabled={!creationEnvironment}
+                        onClick={() =>
+                          creationEnvironment &&
+                          setEditor({ environmentId: creationEnvironment.environmentId, task: null })
+                        }
+                      >
+                        <PlusIcon className="size-3.5" />
+                        <span>{copy.newTaskAction}</span>
+                      </Button>
+                    </span>
+                  }
+                />
+                {!creationEnvironment ? (
+                  <TooltipPopup side="bottom" sideOffset={6}>
+                    {copy.noEnvironmentsTitle}
+                  </TooltipPopup>
+                ) : null}
+              </Tooltip>
 
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <Button
                       type="button"
-                      variant="ghost"
-                      size="icon"
+                      variant="ghost-muted"
+                      size="icon-sm"
                       data-testid="scheduled-tasks-close-button"
                       onClick={() => void navigateToMainApp()}
                       aria-label={copy.closeLabel}
-                      className="size-7 rounded-full text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                     />
                   }
                 >
@@ -317,7 +324,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
           </header>
 
           {/* Filter & Search Toolbar */}
-          <div className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border/50 px-4 py-2">
+          <div className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-border/55 px-4 py-2.5">
             <div
               role="group"
               aria-label={copy.pageTitle}
@@ -334,19 +341,19 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                     data-pmx-work-panel-control={active ? undefined : "1"}
                     onClick={() => setStatusFilter(chip.id)}
                     className={cn(
-                      "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-all outline-none active:translate-y-px focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                       active
                         ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
-                        : "border-border/70 text-foreground/90 hover:bg-accent hover:text-foreground",
+                        : "border-border/75 text-foreground/90 shadow-xs hover:bg-accent hover:text-foreground",
                     )}
                   >
                     <span>{chip.label}</span>
                     <span
                       className={cn(
-                        "rounded-full px-1.5 py-px text-[10px] leading-none tabular-nums",
+                        "rounded-full px-1.5 py-px text-3xs leading-none font-semibold tabular-nums",
                         active
                           ? "bg-primary-foreground/20 text-primary-foreground"
-                          : "bg-muted/80 text-muted-foreground",
+                          : "bg-muted/85 text-foreground/75",
                       )}
                     >
                       {chip.count}
@@ -358,14 +365,15 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
 
             <div className="relative flex w-full max-w-xs items-center sm:w-64">
               <SearchIcon className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
-              <Input
+              <input
+                type="search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={copy.searchPlaceholder}
                 aria-label={copy.searchPlaceholder}
                 data-testid="scheduled-tasks-search-input"
                 data-pmx-work-panel-control="1"
-                className="h-7 w-full pr-7 pl-8 text-xs"
+                className="h-8 w-full rounded-lg border border-input bg-background pr-7 pl-8 text-xs text-foreground shadow-xs outline-none placeholder:text-muted-foreground/75 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               />
               {query.trim().length > 0 ? (
                 <button
@@ -381,15 +389,15 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
           </div>
 
           {/* Main Scrollable Content */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 scrollbar-gutter-both">
             <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
               {linkedTaskMissing ? (
                 <div
                   role="status"
                   data-pmx-work-panel-card="1"
-                  className="flex items-start gap-2.5 rounded-lg border border-amber-500/40 bg-card px-4 py-3 text-xs"
+                  className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-card px-4 py-3 text-xs"
                 >
-                  <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-amber-500" />
+                  <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
                   <div className="space-y-0.5">
                     <p className="font-semibold text-foreground">{copy.taskUnavailableTitle}</p>
                     <p className="text-muted-foreground">{copy.taskUnavailableDescription}</p>
@@ -447,7 +455,6 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                       creationEnvironment &&
                       setEditor({ environmentId: creationEnvironment.environmentId, task: null })
                     }
-                    className="gap-1.5"
                   >
                     <PlusIcon className="size-3.5" />
                     <span>{copy.newTaskAction}</span>
@@ -506,7 +513,7 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                               <span className="truncate text-xs font-semibold text-foreground">
                                 {primary}
                               </span>
-                              <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
+                              <span className="hidden truncate text-2xs text-muted-foreground sm:inline">
                                 <ScheduledTaskEnvironmentSubtitle
                                   environment={envEntry}
                                   secondary={secondary}
@@ -532,9 +539,9 @@ function ScheduledTasksPanelContent(target: ScheduledTasksPageProps) {
                           </div>
                         ) : error !== null ? (
                           <div
-                            role="status"
+                            role="alert"
                             data-pmx-work-panel-card="1"
-                            className="rounded-lg border border-destructive/45 bg-card px-4 py-3 text-xs text-destructive"
+                            className="rounded-xl border border-destructive/45 bg-card px-4 py-3 text-xs text-destructive"
                           >
                             {copy.errorPrefix}: {error}
                           </div>

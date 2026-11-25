@@ -34,6 +34,7 @@ import {
   type ContextMenuSource,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  type ProviderInstanceId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 
@@ -65,6 +66,7 @@ import {
   memo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -121,7 +123,6 @@ import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { InlineButton } from "../ui/button";
@@ -135,6 +136,7 @@ import { useThreadHasUnsentDraft } from "../../composerDraftStore";
 import { ThreadDetailsIssueRows } from "../chat/ThreadDetailsIssueRows";
 import { IssueGlyph, issueStatePresentation } from "../issue/issuePresentation";
 import { ensureLocalApi } from "../../localApi";
+import { AgentBrandLogo } from "../../prismux/agentBrand";
 import type { DaemonSystemPortEntryDto } from "../../prismux/daemonClient";
 import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
 import {
@@ -145,6 +147,12 @@ import {
   stopActivationKeyPropagation,
   type AgentRuntimeLampInfo,
 } from "./sidebarMicroIndicators";
+import {
+  dispatchSidebarSplitDragEvent,
+  PRISMUX_SPLIT_ITEM_MIME,
+  resolveSidebarModelShortName,
+  type SidebarThreadSplitDragPayload,
+} from "./sidebarWorkspaceGrouping";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -632,11 +640,107 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
   return <Icon aria-hidden className={cn("shrink-0", props.className)} />;
 }
 
-type SidebarThreadRowProps = {
+function OrcaCompactStatusIcon(props: {
+  readonly status: ReturnType<typeof resolveSidebarRowStatus>;
+  readonly isUnread: boolean;
+  readonly isWoke: boolean;
+  readonly hasRun: boolean;
+}) {
+  const { status, isUnread, isWoke, hasRun } = props;
+  if (status === "working" || status === "preparing") {
+    return (
+      <svg
+        aria-hidden
+        data-orca-status="working"
+        viewBox="0 0 12 12"
+        fill="none"
+        className="size-3 shrink-0 animate-spin text-warning motion-reduce:animate-none"
+      >
+        <circle
+          cx="6"
+          cy="6"
+          r="4.25"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeOpacity="0.22"
+        />
+        <path
+          d="M6 1.75A4.25 4.25 0 1 1 1.75 6"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (status === "approval") {
+    return (
+      <ShieldQuestionIcon
+        aria-hidden
+        data-orca-status="approval"
+        className="size-3 shrink-0 text-warning"
+      />
+    );
+  }
+  if (status === "input") {
+    return (
+      <MessageCircleQuestionIcon
+        aria-hidden
+        data-orca-status="input"
+        className="size-3 shrink-0 text-info"
+      />
+    );
+  }
+  if (status === "request") {
+    return (
+      <UserRoundIcon
+        aria-hidden
+        data-orca-status="request"
+        className="size-3 shrink-0 text-guest-foreground"
+      />
+    );
+  }
+  if (status === "failed" || status === "limited") {
+    return (
+      <CircleAlertIcon
+        aria-hidden
+        data-orca-status="failed"
+        className="size-3 shrink-0 text-error"
+      />
+    );
+  }
+  if (isWoke) {
+    return (
+      <AlarmClockIcon
+        aria-hidden
+        data-orca-status="woke"
+        className="size-3 shrink-0 text-warning"
+      />
+    );
+  }
+  return (
+    <CircleCheckIcon
+      aria-hidden
+      data-orca-status={isUnread ? "unread" : hasRun ? "done" : "idle"}
+      className={cn(
+        "size-3 shrink-0",
+        isUnread
+          ? "text-success"
+          : hasRun
+            ? "text-success/80"
+            : "text-sidebar-muted-foreground/45",
+      )}
+    />
+  );
+}
+
+export type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
+  // "orca-compact" is the default Orca 25px dense single-line row inside a workspace card;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's environment and PR line under it.
-  variant: "card" | "slim" | "folder" | "folder-multiline";
+  variant: "card" | "slim" | "folder" | "folder-multiline" | "orca-compact";
+  inWorkspaceCard?: boolean | undefined;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -733,7 +837,7 @@ function ThreadRenameInput(props: {
   );
 }
 
-const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
+export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const gt = useGT();
   const messages = useMessages();
   const {
@@ -940,9 +1044,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
-  const modelLabel = selectedModel
-    ? getTriggerDisplayModelName(selectedModel, providerEntry?.driverKind)
-    : thread.modelSelection.model;
+  const modelLabel = resolveSidebarModelShortName({
+    modelSlug: thread.modelSelection.model,
+    selectedModel,
+    driverKind: providerEntry?.driverKind,
+  });
+
+  const splitDragPayload: SidebarThreadSplitDragPayload = {
+    kind: "sidebar-thread",
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+    title: thread.title,
+    providerId: providerEntry?.driverKind ?? null,
+    instanceId: modelInstanceId as ProviderInstanceId,
+  };
+  const canHtml5SplitDrag = !isRenaming && !props.sortable?.listeners;
+  const handleSplitDragStart = (event: ReactDragEvent<HTMLElement>) => {
+    if (!canHtml5SplitDrag) return;
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData(PRISMUX_SPLIT_ITEM_MIME, JSON.stringify(splitDragPayload));
+    event.dataTransfer.setData("text/plain", thread.title);
+    dispatchSidebarSplitDragEvent(true, splitDragPayload);
+  };
+  const handleSplitDragEnd = () => {
+    dispatchSidebarSplitDragEvent(false, null);
+  };
 
   const detailsTooltip = (
     <SidebarThreadTooltip
@@ -1443,6 +1569,214 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   ) : null;
 
+  if (variant === "orca-compact") {
+    const hasHoverRowAction =
+      (variantAction === "unsnooze" && props.snoozeSupported) ||
+      (variantAction !== "unsnooze" && props.settlementSupported);
+    return (
+      <li
+        data-thread-item={threadKey}
+        {...sortableRootProps}
+        {...(fileDropHandlers ?? {})}
+        className={cn(
+          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_25px]",
+          sortable?.isDragging && "relative z-20",
+        )}
+      >
+        <Tooltip disabled={isRenaming || sortable?.isDragging}>
+          <TooltipTrigger
+            render={
+              <div
+                ref={rowRef}
+                role="button"
+                tabIndex={0}
+                draggable={canHtml5SplitDrag || undefined}
+                onDragStart={handleSplitDragStart}
+                onDragEnd={handleSplitDragEnd}
+                data-sidebar-row={threadKey}
+                data-sidebar-parent={props.navigationParent}
+                data-sidebar-agent-active={isAgentActive ? "1" : "0"}
+                data-agent-lamp={agentLamp.state}
+                data-split-draggable={canHtml5SplitDrag ? "true" : "false"}
+                aria-label={accessibility.label}
+                aria-current={accessibility.current}
+                data-testid="sidebar-row-orca-compact"
+                aria-busy={isRegeneratingTitle || undefined}
+                className={cn(
+                  "group/sidebar-row relative flex h-[25px] w-full cursor-pointer items-center gap-1.5 overflow-hidden rounded-md text-left text-xs outline-none select-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  props.inWorkspaceCard ? "pr-1.5 pl-4" : "px-2",
+                  props.isActive
+                    ? "bg-sidebar-row-active/80 text-sidebar-foreground"
+                    : isSelected || props.sweepAction !== null
+                      ? "bg-sidebar-row-selected text-sidebar-foreground"
+                      : hasUnsentDraft
+                        ? cn(draftSurfaceClassName, "text-sidebar-foreground")
+                        : "text-sidebar-foreground/85 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+                  isFileDragOver && "ring-1 ring-inset ring-primary/70",
+                  isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
+                )}
+                onClick={handleClick}
+                onDoubleClick={handleDoubleClick}
+                onKeyDown={handleKeyDown}
+                onContextMenu={handleContextMenu}
+              />
+            }
+          >
+            <OrcaCompactStatusIcon
+              status={status}
+              isUnread={isUnread}
+              isWoke={isWoke}
+              hasRun={thread.latestRun !== null}
+            />
+            <span aria-hidden className="inline-flex size-3.5 shrink-0 items-center justify-center">
+              {providerEntry !== null ? (
+                <SidebarProviderStack
+                  thread={thread}
+                  providerEntryByInstanceId={props.providerEntryByInstanceId}
+                  activeBreathing={isAgentActive}
+                />
+              ) : (
+                <AgentBrandLogo
+                  provider={modelInstanceId}
+                  online={isAgentActive}
+                  breathing={false}
+                  size={14}
+                />
+              )}
+            </span>
+            {draftIndicator}
+            {isRenaming ? (
+              <ThreadRenameInput
+                title={renamingTitle}
+                onTitleChange={onRenameTitleChange}
+                onCommit={() => onCommitRename(threadRef, renamingTitle)}
+                onCancel={onCancelRename}
+              />
+            ) : (
+              <span
+                ref={isRegeneratingTitle ? observeVisibleAnimation : undefined}
+                data-testid="sidebar-row-title"
+                className={cn(
+                  "min-w-0 flex-1 truncate text-xs leading-none",
+                  isRegeneratingTitle
+                    ? "relative text-muted-foreground"
+                    : props.isActive || isUnread
+                      ? "font-medium text-sidebar-foreground"
+                      : "font-normal text-sidebar-foreground/85 group-hover/sidebar-row:text-sidebar-foreground",
+                )}
+                dir={textDirection(thread.title)}
+              >
+                {thread.title}
+                {isRegeneratingTitle ? (
+                  <ActivityShimmerOverlay className="truncate">{thread.title}</ActivityShimmerOverlay>
+                ) : null}
+              </span>
+            )}
+            {pinIndicator}
+            {isRegeneratingTitle ? (
+              <span role="status" className="sr-only">
+                <T>Regenerating title</T>
+              </span>
+            ) : null}
+            {sortable?.isDragging ? (
+              dragDestination
+            ) : (
+              <span
+                className={cn(
+                  "relative ml-auto flex h-5 shrink-0 items-center justify-end gap-1.5",
+                  props.sweepAction !== null && "hidden",
+                  jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-flex items-center justify-end gap-1.5 transition-opacity",
+                    hasHoverRowAction && "group-any-hover/sidebar-row:opacity-0",
+                  )}
+                >
+                  {modelLabel ? (
+                    <span
+                      data-testid="sidebar-row-model-name"
+                      className="max-w-20 truncate font-mono text-3xs leading-none text-sidebar-muted-foreground/75"
+                    >
+                      {modelLabel}
+                    </span>
+                  ) : null}
+                  <span
+                    data-testid="sidebar-row-relative-time"
+                    className="shrink-0 text-3xs leading-none text-sidebar-muted-foreground/65 tabular-nums"
+                  >
+                    <RelativeTimeLabel
+                      timestamp={
+                        variantAction === "unsettle"
+                          ? resolveSettledThreadTimestamp(thread)
+                          : resolveThreadActivityTimestamp(thread)
+                      }
+                    />
+                  </span>
+                </span>
+                {variantAction === "unsnooze" ? (
+                  !props.snoozeSupported ? null : (
+                    <button
+                      type="button"
+                      aria-label={gt("Wake thread now")}
+                      onClick={handleUnsnoozeClick}
+                      onPointerDown={handleActionPointerDown}
+                      className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
+                    >
+                      <AlarmClockOffIcon className="size-3" />
+                    </button>
+                  )
+                ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label={gt("Un-settle thread")}
+                          onClick={handleUnsettleClick}
+                          onPointerDown={handleActionPointerDown}
+                          className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
+                        />
+                      }
+                    >
+                      <Undo2Icon className="size-3" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">
+                      <T>Un-settle thread</T>
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label={gt("Settle thread")}
+                          onClick={handleSettleClick}
+                          onPointerDown={handleActionPointerDown}
+                          className="pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
+                        />
+                      }
+                    >
+                      <CheckIcon className="size-3" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">
+                      <T>Settle thread</T>
+                    </TooltipPopup>
+                  </Tooltip>
+                )}
+                {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}
+              </span>
+            )}
+            {props.sweepAction !== null ? dragDestination : null}
+          </TooltipTrigger>
+          {detailsTooltip}
+        </Tooltip>
+      </li>
+    );
+  }
+
   if (variant !== "card") {
     const multiline = variant === "folder-multiline";
     const inFolder = variant === "folder" || multiline;
@@ -1464,6 +1798,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 ref={rowRef}
                 role="button"
                 tabIndex={0}
+                draggable={canHtml5SplitDrag || undefined}
+                onDragStart={handleSplitDragStart}
+                onDragEnd={handleSplitDragEnd}
                 data-sidebar-row={threadKey}
                 data-sidebar-parent={props.navigationParent}
                 data-sidebar-agent-active={isAgentActive ? "1" : "0"}
@@ -1970,9 +2307,11 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
-  const modelLabel = selectedModel
-    ? getTriggerDisplayModelName(selectedModel, providerEntry?.driverKind)
-    : thread.modelSelection.model;
+  const modelLabel = resolveSidebarModelShortName({
+    modelSlug: thread.modelSelection.model,
+    selectedModel,
+    driverKind: providerEntry?.driverKind,
+  });
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: thread.environmentId,
     threadId: thread.id,

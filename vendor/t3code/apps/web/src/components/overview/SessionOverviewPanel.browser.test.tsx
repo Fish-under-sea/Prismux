@@ -253,7 +253,7 @@ describe("SessionOverviewPanel", () => {
     );
 
     const root = screen.container.querySelector('[data-session-overview-panel="1"]');
-    expect(root?.getAttribute("data-pmx-glass-zone")).toBe("rightSidebar");
+    expect(root?.getAttribute("data-pmx-glass-zone")).toBe("overviewPanel");
 
     await expect.element(screen.getByRole("heading", { name: "概览" })).toBeVisible();
     await expect.element(screen.getByText("+88")).toBeVisible();

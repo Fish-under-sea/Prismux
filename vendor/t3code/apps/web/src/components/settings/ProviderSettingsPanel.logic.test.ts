@@ -18,9 +18,12 @@ import {
   canDeleteProviderRow,
   classifyProviderRemoval,
   extractAcpRegistryManagedAgentId,
+  orderProviderInstanceRows,
+  reorderProviderInstanceIds,
   resolveNextSelectedProviderInstanceId,
   resolveRemoteOperateAccess,
 } from "./ProviderSettingsPanel.logic";
+import { reorderModelsWithinGroup } from "./ProviderModelsSection";
 
 describe("buildProviderInstanceOverridePatch", () => {
   const projectId = ProjectId.make("project-a");
@@ -295,6 +298,72 @@ describe("provider configuration deletion logic", () => {
         config: { authMethod: "local-cli" },
       }),
     ).toBeNull();
+  });
+
+  it("orders provider rows by saved providerOrder and computes drag-reorder permutations", () => {
+    const ordered = buildProviderInstanceRows({
+      visibleProviderSettings,
+      providerInstances: {
+        [antigravityId]: {
+          driver: antigravityDriver,
+          displayName: "Antigravity CLI",
+          enabled: true,
+        },
+        [ompId]: {
+          driver: acpDriver,
+          displayName: "OMP (oh-my-pi)",
+          enabled: true,
+          config: { source: "local", commandPath: "omp", commandArgs: ["acp"] },
+        },
+      },
+      hiddenDefaultProviderInstances: [],
+      providerOrder: [ompId, claudeId],
+    });
+    expect(ordered.map((row) => row.instanceId)).toEqual([ompId, claudeId, codexId, antigravityId]);
+
+    expect(
+      reorderProviderInstanceIds([codexId, claudeId, antigravityId, ompId], ompId, claudeId),
+    ).toEqual([codexId, ompId, claudeId, antigravityId]);
+    expect(reorderProviderInstanceIds([codexId, claudeId], codexId, codexId)).toBeNull();
+    expect(
+      orderProviderInstanceRows(
+        [{ instanceId: codexId }, { instanceId: claudeId }],
+        [claudeId, codexId],
+      ).map((row) => row.instanceId),
+    ).toEqual([claudeId, codexId]);
+  });
+
+  it("reorders models smoothly within the same display group while preventing cross-group drops", () => {
+    const models = [
+      { slug: "fav-a" },
+      { slug: "fav-b" },
+      { slug: "vis-a" },
+      { slug: "vis-b" },
+      { slug: "vis-c" },
+      { slug: "hid-a" },
+    ];
+    const groupOf = (slug: string) =>
+      slug.startsWith("fav-") ? "favorite" : slug.startsWith("hid-") ? "hidden" : "visible";
+
+    expect(reorderModelsWithinGroup(models, groupOf, "vis-c", "vis-a")).toEqual([
+      "fav-a",
+      "fav-b",
+      "vis-c",
+      "vis-a",
+      "vis-b",
+      "hid-a",
+    ]);
+    expect(reorderModelsWithinGroup(models, groupOf, "fav-b", "fav-a")).toEqual([
+      "fav-b",
+      "fav-a",
+      "vis-a",
+      "vis-b",
+      "vis-c",
+      "hid-a",
+    ]);
+    // Cross-group and hidden drags are rejected cleanly.
+    expect(reorderModelsWithinGroup(models, groupOf, "vis-a", "fav-a")).toBeNull();
+    expect(reorderModelsWithinGroup(models, groupOf, "hid-a", "vis-c")).toBeNull();
   });
 });
 

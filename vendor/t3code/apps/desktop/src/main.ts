@@ -64,6 +64,7 @@ import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as PrismuxDaemonService from "./prismux/PrismuxDaemonService.ts";
+import { runPrismuxStartupUpgradeMigration } from "./prismux/PrismuxUpgradeMigration.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopLegacyLocalStorage from "./app/DesktopLegacyLocalStorage.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
@@ -91,6 +92,8 @@ if (process.argv.includes("--version")) {
   }
   Electron.app.exit(0);
 }
+
+runPrismuxStartupUpgradeMigration();
 
 const layerDesktopEnvironment = Layer.unwrap(
   Effect.gen(function* () {

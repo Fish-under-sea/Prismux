@@ -3,7 +3,7 @@ import { m as resolveMessage } from "~/i18n/messages";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { SessionPermissions } from "./SessionPermissions";
 import { useSearch } from "@tanstack/react-router";
-import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
+import { ChevronRightIcon, EllipsisIcon, QrCodeIcon } from "lucide-react";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import { type ReactNode, useState } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
@@ -11,8 +11,6 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
   allowsPreviewTunnel,
   isManagedSettingPath,
   type AuthClientSession,
@@ -34,7 +32,6 @@ import * as Cause from "effect/Cause";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import {
   applyWslEnableSelection,
-  connectDeviceName,
   isWslSettingsRowVisible,
   missingTailscaleEndpointDescription,
   resolveLocalVersionStatusLabel,
@@ -46,7 +43,6 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { ManagedByOrganization } from "../ManagedPolicy";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { useSearchableSetting } from "./settingsSearch";
-import { ConnectDeviceApprovalSettings } from "./ConnectDeviceApprovalSettings";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { EnvironmentsMap } from "./EnvironmentsMap";
@@ -97,8 +93,7 @@ import {
   resolveServerSelfUpdateCapability,
   supportsDesktopAppUpdate,
 } from "~/versionSkew";
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
+import { openPrismuxRemoteConnectDialog } from "../cloud/prismuxRemoteConnect.logic";
 import { authEnvironment } from "~/state/auth";
 import { environmentCatalog } from "~/connection/catalog";
 import {
@@ -148,19 +143,9 @@ import {
   PairingClientsList,
 } from "./AuthorizedClientsSettings";
 import { ITEM_ROW_CLASSNAME } from "./itemRows";
-import {
-  CloudLinkRow,
-  CloudRemoteEnvironmentRows,
-  SavedBackendListRow,
-} from "./SavedEnvironmentRows";
+import { EmptyRemoteEnvironments, SavedBackendListRow } from "./SavedEnvironmentRows";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
-import {
-  type ConnectDeviceRevokeRequest,
-  RevokeConnectDeviceDialog,
-} from "./RevokeConnectDeviceDialog";
 
-// Sessions T3 Connect minted for a device signed in to the linked account.
-const CLOUD_CONNECT_SESSION_SUBJECT = "cloud-connect";
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 
@@ -215,15 +200,23 @@ function ScopedLinkedEnvironmentsToggleSection() {
   );
 }
 
-export function ConnectionsSettings({ view }: { readonly view: "environments" | "access" }) {
-  return view === "access" ? (
-    <AccessSettings />
-  ) : (
+export function ConnectionsSettings({
+  view = "combined",
+}: {
+  readonly view?: "environments" | "access" | "combined";
+} = {}) {
+  return view === "environments" ? (
     <ConnectionsSettingsContent view="environments" accessEnvironmentId={null} />
+  ) : (
+    <AccessWrappedConnectionsSettings view={view} />
   );
 }
 
-function AccessSettings() {
+function AccessWrappedConnectionsSettings({
+  view,
+}: {
+  readonly view: "access" | "combined";
+}) {
   const gt = useGT();
   // A link that names an environment, such as the MCP wizard's, opens the page on it. The
   // settings layout remounts this page when the link changes.
@@ -290,7 +283,7 @@ function AccessSettings() {
   return (
     <ConnectionsSettingsContent
       key={accessEnvironmentId ?? "none"}
-      view="access"
+      view={view}
       accessEnvironmentId={accessEnvironmentId}
       accessEnvironmentPicker={picker}
     />
@@ -302,7 +295,7 @@ function ConnectionsSettingsContent({
   accessEnvironmentId,
   accessEnvironmentPicker = null,
 }: {
-  readonly view: "environments" | "access";
+  readonly view: "environments" | "access" | "combined";
   readonly accessEnvironmentId: EnvironmentId | null;
   readonly accessEnvironmentPicker?: ReactNode;
 }) {
@@ -470,11 +463,10 @@ function ConnectionsSettingsContent({
   );
   const canReadAccess = useEnvironmentScope(accessEnvironmentId, AuthAccessReadScope);
   const canWriteAccess = useEnvironmentScope(accessEnvironmentId, AuthAccessWriteScope);
-  const canReadRelay = useEnvironmentScope(accessEnvironmentId, AuthRelayReadScope);
   const canMaintain = useEnvironmentScope(accessEnvironmentId, AuthEnvironmentMaintainScope);
-  const canManageRelay = useEnvironmentScope(accessEnvironmentId, AuthRelayWriteScope);
   const canManageLocalBackend = isPrimaryAccess && !isLocalEnvironmentDisabled() && canMaintain;
-  const showsAccess = view === "access";
+  const showsAccess = view === "access" || view === "combined";
+  const showsEnvironments = view === "environments" || view === "combined";
   const authAccessChanges = useEnvironmentQuery(
     showsAccess && canReadAccess && accessEnvironmentId !== null
       ? authEnvironment.accessChanges({
@@ -806,15 +798,7 @@ function ConnectionsSettingsContent({
     }
   };
 
-  // Removing a T3 Connect route preserves account registration; use a separate dialog pointing to
-  // deregistration.
-  const [pendingT3ConnectRemoval, setPendingT3ConnectRemoval] =
-    useState<EnvironmentPresentation | null>(null);
   const handleRemoveSavedBackend = async (environment: EnvironmentPresentation) => {
-    if (environment.relayManaged && hasCloudPublicConfig()) {
-      setPendingT3ConnectRemoval(environment);
-      return;
-    }
     const confirmed = await requestConfirmDialog(
       gt(
         "Remove {environment} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.",
@@ -825,57 +809,15 @@ function ConnectionsSettingsContent({
     if (confirmed === true) await removeSavedBackend(environment);
   };
 
-  // T3 Connect devices waiting for approval have their own list.
   const visibleDesktopPairingLinks = desktopPairingLinks.filter(
     (pairingLink) => pairingLink.connectDeviceRequest === undefined,
   );
-  const connectDeviceRequests = desktopPairingLinks.filter(
-    (pairingLink) => pairingLink.connectDeviceRequest !== undefined,
-  );
-  // Older servers omit the list; they cannot hold devices for approval.
-  const connectDevices =
-    authAccessChanges.data?.type === "snapshot"
-      ? (authAccessChanges.data.payload.connectDevices ?? null)
-      : null;
   const updateAccessSettings = useUpdateEnvironmentSettings(accessEnvironmentId);
-  const [pendingConnectRevoke, setPendingConnectRevoke] =
-    useState<ConnectDeviceRevokeRequest | null>(null);
-  // With approval off a revoked T3 Connect device signs straight back in, so offer to turn it
-  // on. Older servers have no such setting, and revoking there goes ahead as before.
-  const connectApprovalOff =
-    accessEnvironment?.serverConfig?.settings.requireConnectDeviceApproval === false;
-  const requestConnectRevoke = (title: string, revoke: () => Promise<void>) => {
-    if (connectApprovalOff && canWriteAccess) setPendingConnectRevoke({ title, revoke });
-    else void revoke();
-  };
-  const requireConnectApproval = () =>
-    new Promise<boolean>((resolve) =>
-      updateAccessSettings(
-        { requireConnectDeviceApproval: true },
-        { onSaved: () => resolve(true), onFailed: () => resolve(false) },
-      ),
-    );
   const requestRevokeClientSession = (sessionId: ServerClientSessionRecord["sessionId"]) => {
-    const session = desktopClientSessions.find((candidate) => candidate.sessionId === sessionId);
-    if (session?.subject === CLOUD_CONNECT_SESSION_SUBJECT) {
-      requestConnectRevoke(gt("Revoke {name}?", { name: connectDeviceName(session, m) }), () =>
-        handleRevokeDesktopClientSession(sessionId),
-      );
-    } else {
-      void handleRevokeDesktopClientSession(sessionId);
-    }
+    void handleRevokeDesktopClientSession(sessionId);
   };
   const requestRevokeOtherClients = () => {
-    const revokesConnectDevices =
-      (connectDevices?.length ?? 0) > 0 ||
-      desktopClientSessions.some(
-        (session) => !session.current && session.subject === CLOUD_CONNECT_SESSION_SUBJECT,
-      );
-    if (revokesConnectDevices) {
-      requestConnectRevoke(gt("Revoke all other clients?"), handleRevokeOtherDesktopClients);
-    } else {
-      void handleRevokeOtherDesktopClients();
-    }
+    void handleRevokeOtherDesktopClients();
   };
   const tailscaleHttpsEndpoint = desktopAdvertisedEndpoints.find(isTailscaleHttpsEndpoint) ?? null;
   const visibleDesktopNetworkAdvertisedEndpoints = isLocalBackendNetworkAccessible
@@ -1434,21 +1376,24 @@ function ConnectionsSettingsContent({
             ) : canManageLocalBackend ? (
               renderDisabledNetworkAccessRow()
             ) : null}
-            {canReadRelay || canManageRelay || !hasCloudPublicConfig() ? (
-              <CloudLinkRow
-                environmentId={accessEnvironmentId}
-                canReadRelay={canReadRelay}
-                canManageRelay={canManageRelay}
-                connectDeviceApproval={
-                  accessServerConfig?.settings.requireConnectDeviceApproval === undefined
-                    ? null
-                    : {
-                        required: accessServerConfig.settings.requireConnectDeviceApproval,
-                        canManage: canWriteAccess,
-                      }
-                }
-              />
-            ) : null}
+            <SettingsRow
+              id="mobile-qr-pairing"
+              title={gt("QR code pairing")}
+              description={gt(
+                "Scan with your phone browser or T3 mobile app over LAN or Tailscale to connect directly without a cloud account.",
+              )}
+              control={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openPrismuxRemoteConnectDialog()}
+                >
+                  <QrCodeIcon className="size-3.5" />
+                  {gt("Show QR code")}
+                </Button>
+              }
+            />
             {accessServerConfig?.environment.capabilities.previewTunnelSetting ? (
               <SettingsRow
                 title={searchableSetting("preview-tunnel").title}
@@ -1536,22 +1481,6 @@ function ConnectionsSettingsContent({
               </ScrollArea>
             </FoldedSettingsSection>
           ) : null}
-          {canReadAccess &&
-          connectDevices !== null &&
-          (connectDeviceRequests.length > 0 || connectDevices.length > 0) ? (
-            <ConnectDeviceApprovalSettings
-              environmentId={accessEnvironmentId}
-              requests={connectDeviceRequests}
-              devices={connectDevices}
-              canWrite={canWriteAccess}
-              requestRevoke={requestConnectRevoke}
-            />
-          ) : null}
-          <RevokeConnectDeviceDialog
-            request={pendingConnectRevoke}
-            onClose={() => setPendingConnectRevoke(null)}
-            requireApproval={requireConnectApproval}
-          />
           <AlertDialog
             open={pendingDesktopServerExposureMode !== null && canManageLocalBackend}
             onOpenChange={(open) => {
@@ -1571,13 +1500,9 @@ function ConnectionsSettingsContent({
                     ? gt(
                         "Let your other devices connect to Prismux over the network. Pair devices to give them access. Prismux will restart.",
                       )
-                    : hasCloudPublicConfig()
-                      ? gt(
-                          "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. Prismux will restart.",
-                        )
-                      : gt(
-                          "Devices connected over your local network will disconnect. Existing Tailscale HTTPS tunnels keep working. Prismux will restart.",
-                        )}
+                    : gt(
+                        "Devices connected over your local network will disconnect. Existing Tailscale HTTPS tunnels keep working. Prismux will restart.",
+                      )}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1864,7 +1789,15 @@ function ConnectionsSettingsContent({
     </>
   );
 
-  if (showsAccess) return <SettingsPageContainer>{primarySettings}</SettingsPageContainer>;
+  if (!showsEnvironments) {
+    return (
+      <SettingsPageContainer>
+        <div id="remote-access" className="space-y-8">
+          {primarySettings}
+        </div>
+      </SettingsPageContainer>
+    );
+  }
 
   return (
     <SettingsPageContainer>
@@ -1934,13 +1867,7 @@ function ConnectionsSettingsContent({
                 />
               ) : null
             }
-            renderConnectMachine={(environmentId) => (
-              <CloudRemoteEnvironmentRows
-                only={environmentId}
-                primaryEnvironmentId={primaryEnvironmentId}
-                savedEnvironments={savedEnvironments}
-              />
-            )}
+            renderConnectMachine={() => null}
           />
         ) : (
           <>
@@ -1954,24 +1881,14 @@ function ConnectionsSettingsContent({
                 onAddRoute={openAddRoute}
               />
             ))}
-            <CloudRemoteEnvironmentRows
-              primaryEnvironmentId={primaryEnvironmentId}
-              savedEnvironments={savedEnvironments}
-            />
+            {listedEnvironments.length === 0 ? <EmptyRemoteEnvironments /> : null}
           </>
         )}
       </SettingsSection>
-      {hasCloudPublicConfig() ? (
-        <RemoveT3ConnectEnvironmentDialog
-          environmentLabel={pendingT3ConnectRemoval?.label ?? null}
-          environmentId={pendingT3ConnectRemoval?.environmentId ?? null}
-          onCancel={() => setPendingT3ConnectRemoval(null)}
-          onConfirm={() => {
-            if (!pendingT3ConnectRemoval) return;
-            setPendingT3ConnectRemoval(null);
-            void removeSavedBackend(pendingT3ConnectRemoval);
-          }}
-        />
+      {showsAccess ? (
+        <div id="remote-access" className="space-y-8">
+          {primarySettings}
+        </div>
       ) : null}
       <LinkedEnvironmentsToggleSection />
       {environmentsView === "list"

@@ -16,8 +16,75 @@ export function isSidebarUtilityPage(pathname: string) {
     pathname === "/issues" ||
     pathname === "/tasks" ||
     pathname === "/workspace-board" ||
-    pathname === "/scheduled-tasks"
+    pathname === "/scheduled-tasks" ||
+    pathname === "/automations" ||
+    pathname === "/overnight-factory"
   );
+}
+
+/**
+ * Sidebar pages that expose a dedicated toggleable sidebar button (4 top QuickNav work panels
+ * plus the bottom-left Issues / Pull Requests icons). Clicking the active button again closes
+ * the panel and returns to the prior thread/chat session.
+ */
+export function isSidebarToggleablePanelPage(pathname: string): boolean {
+  const normalized = normalizeSidebarPathname(pathname);
+  return (
+    normalized === "/tasks" ||
+    normalized === "/workspace-board" ||
+    normalized === "/scheduled-tasks" ||
+    normalized === "/automations" ||
+    normalized === "/overnight-factory" ||
+    normalized === "/issues" ||
+    normalized === "/pull-requests"
+  );
+}
+
+function normalizeSidebarPathname(pathname: string): string {
+  const trimmed = pathname.trim();
+  if (trimmed.length > 1 && trimmed.endsWith("/")) {
+    return trimmed.slice(0, -1);
+  }
+  return trimmed;
+}
+
+export function isSidebarPanelPathActive(
+  currentPathname: string,
+  panelPathnames: readonly string[],
+): boolean {
+  const normalizedCurrent = normalizeSidebarPathname(currentPathname);
+  return panelPathnames.some(
+    (candidate) => normalizeSidebarPathname(candidate) === normalizedCurrent,
+  );
+}
+
+export interface SidebarPanelToggleNavigationDecision {
+  readonly action: "open" | "close";
+  readonly href: string;
+}
+
+/**
+ * Pure toggle-close decision for sidebar work panels and Issue/PR icons:
+ * if already viewing the panel, return to the remembered prior thread/chat route;
+ * otherwise open the target panel route.
+ */
+export function resolveSidebarPanelToggleNavigation(input: {
+  readonly currentPathname: string;
+  readonly panelPathnames: readonly string[];
+  readonly targetHref: string;
+  readonly lastMainAppHref?: string | null | undefined;
+}): SidebarPanelToggleNavigationDecision {
+  if (isSidebarPanelPathActive(input.currentPathname, input.panelPathnames)) {
+    const returnHref = input.lastMainAppHref?.trim();
+    return {
+      action: "close",
+      href: returnHref && returnHref.length > 0 ? returnHref : "/",
+    };
+  }
+  return {
+    action: "open",
+    href: input.targetHref,
+  };
 }
 
 // Pages the root route always renders without the app shell, so they are never
@@ -56,9 +123,14 @@ export function getAppModalReturnThreadTarget() {
   return appModalReturnThreadTarget;
 }
 
-export function useNavigateToMainApp() {
+/** Last recorded non-utility, non-modal main-app href (e.g. active thread or home). */
+export function getMainAppReturnHref(fallbackHref = "/"): string {
+  return mainAppHref ?? fallbackHref;
+}
+
+export function useNavigateToMainApp(fallbackHref = "/") {
   const navigate = useNavigate();
-  return () => navigate({ href: mainAppHref ?? "/" });
+  return () => navigate({ href: mainAppHref ?? fallbackHref });
 }
 
 /** Leaves Settings or Usage for the page that opened it. */

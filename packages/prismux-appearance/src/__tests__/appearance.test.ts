@@ -1208,6 +1208,8 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
       'workPanels',
       'composer',
       'overlays',
+      'userBubble',
+      'overviewPanel',
     ]);
     assert.equal(GLASS_ZONE_META[0]?.id, 'shellFrame');
     assert.match(GLASS_ZONE_META[0]?.title ?? '', /^窗口外框/);
@@ -1216,6 +1218,10 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     assert.equal(GLASS_ZONE_META[3]?.id, 'workPanels');
     assert.equal(GLASS_ZONE_META[3]?.title, '工作面板');
     assert.equal(GLASS_ZONE_META[3]?.note, '任务面板、工作区板与定时任务统一调节');
+    assert.equal(GLASS_ZONE_META[6]?.id, 'userBubble');
+    assert.equal(GLASS_ZONE_META[6]?.title, '用户消息气泡');
+    assert.equal(GLASS_ZONE_META[7]?.id, 'overviewPanel');
+    assert.equal(GLASS_ZONE_META[7]?.title, '概览面板');
     assert.equal(canonicalizeGlassZoneId('leftSidebar'), 'shellFrame');
     assert.equal(canonicalizeGlassZoneId('chromeBars'), 'shellFrame');
 
@@ -1987,7 +1993,7 @@ describe('Global floating non-layout-shifting pointer-aware auto-hide scrollbars
 });
 
 describe('Wallpaper color fidelity & natural frosted glass saturation (#454)', () => {
-  it('calibrates all 6 glass zones to natural 105%-115% default saturation with zero brightness distortion', () => {
+  it('calibrates all 8 glass zones to natural 105%-115% default saturation with zero brightness distortion', () => {
     assert.ok(
       GLASS_ZONE_LIMITS.defaultSaturation >= 105 && GLASS_ZONE_LIMITS.defaultSaturation <= 115,
       `defaultSaturation must stay within 105-115%, got ${GLASS_ZONE_LIMITS.defaultSaturation}`,
@@ -2861,25 +2867,229 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-sidebar-card='1'\]\[data-sidebar-agent-active='1'\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-agent-logo-breathing='1'\][\s\S]*?animation:\s*none\s*!important;/,
     );
 
-    // 4. AGY flat large-radius user message capsule bubbles (Dark/Light Liquid Glass + solid + 3 fallbacks)
-    assert.match(
-      bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\][\s\S]*?\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\][\s\S]*?backdrop-filter:\s*blur\(14px\) saturate\(1\.18\);[\s\S]*?border:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.24\);/,
+    // 4. AGY flat large-radius user message capsule bubbles (8-zone userBubble + directional Fresnel rim + 3 fallbacks)
+    assert.equal(
+      bridgeCss.includes('var(--pmx-conversation-tint, #101624) 38%'),
+      false,
+      'legacy murky ~59% solid color-mix on user bubbles must be removed',
     );
     assert.match(
       bridgeCss,
-      /html:not\(\.dark\)\[data-pmx-glass='1'\][\s\S]*?\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\][\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.56\);[\s\S]*?backdrop-filter:\s*blur\(14px\) saturate\(1\.22\);[\s\S]*?border:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.8\);/,
+      /html\.dark\[data-pmx-glass='1'\][\s\S]*?\[data-pmx-glass-zone='userBubble'\][\s\S]*?background-color:\s*var\(--pmx-glass-zone-user-bubble-bg,[\s\S]*?backdrop-filter:\s*var\(--pmx-glass-zone-user-bubble-backdrop,[\s\S]*?border:\s*1px solid transparent;/,
+    );
+    assert.match(
+      bridgeCss,
+      /html\.dark\[data-pmx-glass='1'\][\s\S]*?\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\][\s\S]*?::before[\s\S]*?border-radius:\s*inherit;[\s\S]*?pointer-events:\s*none;[\s\S]*?linear-gradient\(\s*135deg,[\s\S]*?-webkit-mask-composite:\s*xor;[\s\S]*?mask-composite:\s*exclude;/,
+    );
+    assert.match(
+      bridgeCss,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\][\s\S]*?\[data-pmx-glass-zone='userBubble'\][\s\S]*?background-color:\s*var\(--pmx-glass-zone-user-bubble-bg,[\s\S]*?backdrop-filter:\s*var\(--pmx-glass-zone-user-bubble-backdrop,[\s\S]*?border:\s*1px solid transparent;/,
     );
     const fallbackSection = bridgeCss.slice(
       bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
     );
     assert.ok(
-      (fallbackSection.match(/\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\]/g) ?? []).length >= 7,
-      'all 3 solid fallbacks (dark + light) + forced-colors must cover user message capsule bubbles',
+      (fallbackSection.match(/\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\]/g) ?? []).length >= 10,
+      'all 3 solid fallbacks (dark + light + ::before disable) + forced-colors must cover user message capsule bubbles',
     );
     assert.ok(
       (fallbackSection.match(/\[data-sidebar-card='1'\]/g) ?? []).length >= 13,
       'all 3 solid fallbacks (dark + light, rest + active) + forced-colors must cover sidebar cards',
+    );
+  });
+});
+
+describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy 6-zone lossless migration & Fresnel rim', () => {
+  it('migrates legacy 6-zone persisted configs without losing user customizations while auto-filling userBubble & overviewPanel defaults', () => {
+    const legacySixZoneSnapshot = JSON.stringify({
+      format: WB_THEME_FORMAT,
+      version: WB_THEME_VERSION,
+      name: 'Legacy 6-Zone Custom Theme',
+      appearance: {
+        themeMode: 'glass',
+        glassBasePolarity: 'dark',
+        glassPreset: 'balanced',
+        glassZones: {
+          shellFrame: { mode: 'custom', opacity: 28, blurPx: 16, saturation: 115 },
+          rightSidebar: { mode: 'custom', opacity: 20, blurPx: 10, saturation: 120 },
+          mainCanvas: { mode: 'custom', opacity: 12, blurPx: 4 },
+          workPanels: { mode: 'custom', opacity: 64, blurPx: 18 },
+          composer: { mode: 'solid' },
+          overlays: { mode: 'custom', opacity: 76, blurPx: 22 },
+        },
+      },
+    });
+
+    const imported = importWbThemeSnapshot(legacySixZoneSnapshot);
+    assert.equal(imported.ok, true);
+    if (!imported.ok) return;
+    assert.equal(imported.strippedFields.length, 0);
+
+    const z = imported.snapshot.appearance.glassZones;
+    // Original 6 zone user customizations preserved 100% intact
+    assert.deepEqual(z.shellFrame, { mode: 'custom', opacity: 28, blurPx: 16, saturation: 115 });
+    assert.deepEqual(z.rightSidebar, { mode: 'custom', opacity: 20, blurPx: 10, saturation: 120 });
+    assert.deepEqual(z.mainCanvas, { mode: 'custom', opacity: 12, blurPx: 4 });
+    assert.deepEqual(z.workPanels, { mode: 'custom', opacity: 64, blurPx: 18 });
+    assert.deepEqual(z.composer, { mode: 'solid' });
+    assert.deepEqual(z.overlays, { mode: 'custom', opacity: 76, blurPx: 22 });
+    // New 7th & 8th zones seamlessly auto-filled to inherit defaults
+    assert.deepEqual(z.userBubble, { mode: 'inherit' });
+    assert.deepEqual(z.overviewPanel, { mode: 'inherit' });
+    assert.equal(countCustomizedGlassZones(imported.snapshot.appearance), 6);
+  });
+
+  it('delivers airier translucent defaults for userBubble & overviewPanel in Dark & Light Glass, independent custom/solid controls, and GPU=0 solid fallback', () => {
+    const html = createMockElement();
+    const body = createMockElement();
+    const doc: DocumentLike = { documentElement: html, body };
+
+    // Dark Glass balanced defaults: noticeably airier than legacy ~59% murky bubble / opaque stacked overview
+    const darkCfg = normalizeAppearanceConfig({
+      themeMode: 'glass',
+      glassBasePolarity: 'dark',
+      glassPreset: 'balanced',
+    });
+    const darkRt = applyPrismuxAppearanceToDocument(darkCfg, { document: doc, wallpaperActive: true });
+    assert.equal(darkRt.zones.userBubble.effectiveMode, 'inherit');
+    assert.ok(
+      darkRt.zones.userBubble.opacity >= 18 && darkRt.zones.userBubble.opacity <= 30,
+      `dark balanced userBubble should be airy translucent (18-30%), got ${darkRt.zones.userBubble.opacity}%`,
+    );
+    assert.ok(darkRt.zones.userBubble.blurPx >= 14);
+    assert.match(darkRt.zones.userBubble.sheenCss, /^linear-gradient\(135deg,/);
+    assert.equal(html.attrs.get('data-pmx-zone-user-bubble-mode'), 'inherit');
+    assert.equal(html.styles.get('--pmx-glass-zone-user-bubble-bg'), darkRt.zones.userBubble.bgCss);
+    assert.equal(html.styles.get('--pmx-glass-zone-user-bubble-backdrop'), darkRt.zones.userBubble.backdropCss);
+
+    assert.equal(darkRt.zones.overviewPanel.effectiveMode, 'inherit');
+    assert.ok(
+      darkRt.zones.overviewPanel.opacity >= 28 && darkRt.zones.overviewPanel.opacity <= 42,
+      `dark balanced overviewPanel should be airy frosted (28-42%), got ${darkRt.zones.overviewPanel.opacity}%`,
+    );
+    assert.ok(darkRt.zones.overviewPanel.blurPx >= 16);
+    assert.equal(html.attrs.get('data-pmx-zone-overview-panel-mode'), 'inherit');
+    assert.equal(html.styles.get('--pmx-glass-zone-overview-panel-bg'), darkRt.zones.overviewPanel.bgCss);
+    assert.equal(html.styles.get('--pmx-glass-zone-overview-panel-backdrop'), darkRt.zones.overviewPanel.backdropCss);
+
+    // Light Glass balanced defaults: crisp snow-mist translucency (lighter than legacy 56%)
+    const lightCfg = normalizeAppearanceConfig({
+      themeMode: 'glass',
+      glassBasePolarity: 'light',
+      glassPreset: 'balanced',
+    });
+    const lightRt = resolveAppearanceRuntime(lightCfg);
+    assert.ok(
+      lightRt.zones.userBubble.opacity >= 30 && lightRt.zones.userBubble.opacity <= 45,
+      `light balanced userBubble should be airy pearl glass (30-45%), got ${lightRt.zones.userBubble.opacity}%`,
+    );
+    assert.ok(
+      lightRt.zones.overviewPanel.opacity >= 40 && lightRt.zones.overviewPanel.opacity <= 55,
+      `light balanced overviewPanel should be clean frosted glass (40-55%), got ${lightRt.zones.overviewPanel.opacity}%`,
+    );
+
+    // Customizing rightSidebar or shellFrame does NOT affect overviewPanel (completely decoupled!)
+    let decoupled = updateGlassZone(darkCfg, 'rightSidebar', { mode: 'solid' });
+    decoupled = updateGlassZone(decoupled, 'userBubble', {
+      mode: 'custom',
+      opacity: 18,
+      blurPx: 20,
+      saturation: 145,
+    });
+    decoupled = updateGlassZone(decoupled, 'overviewPanel', {
+      mode: 'custom',
+      opacity: 32,
+      blurPx: 22,
+      saturation: 130,
+    });
+    const decoupledRt = applyPrismuxAppearanceToDocument(decoupled, {
+      document: doc,
+      wallpaperActive: true,
+    });
+    assert.equal(decoupledRt.zones.rightSidebar.effectiveMode, 'solid');
+    assert.equal(decoupledRt.zones.overviewPanel.effectiveMode, 'custom');
+    assert.equal(decoupledRt.zones.overviewPanel.opacity, 32);
+    assert.equal(decoupledRt.zones.overviewPanel.blurPx, 22);
+    assert.equal(decoupledRt.zones.overviewPanel.saturation, 130);
+    assert.equal(decoupledRt.zones.userBubble.effectiveMode, 'custom');
+    assert.equal(decoupledRt.zones.userBubble.opacity, 18);
+    assert.equal(decoupledRt.zones.userBubble.blurPx, 20);
+    assert.equal(decoupledRt.zones.userBubble.saturation, 145);
+    assert.equal(html.attrs.get('data-pmx-zone-user-bubble-mode'), 'custom');
+    assert.equal(html.attrs.get('data-pmx-zone-overview-panel-mode'), 'custom');
+    assert.equal(countCustomizedGlassZones(decoupled), 3);
+
+    // Explicit solid mode for userBubble & overviewPanel
+    let solidBoth = updateGlassZone(decoupled, 'userBubble', { mode: 'solid' });
+    solidBoth = updateGlassZone(solidBoth, 'overviewPanel', { mode: 'solid' });
+    const solidRt = applyPrismuxAppearanceToDocument(solidBoth, { document: doc, wallpaperActive: true });
+    assert.equal(solidRt.zones.userBubble.effectiveMode, 'solid');
+    assert.equal(solidRt.zones.userBubble.blurPx, 0);
+    assert.equal(solidRt.zones.userBubble.backdropCss, 'none');
+    assert.equal(solidRt.zones.overviewPanel.effectiveMode, 'solid');
+    assert.equal(solidRt.zones.overviewPanel.blurPx, 0);
+    assert.equal(solidRt.zones.overviewPanel.backdropCss, 'none');
+
+    // Roundtrip export/import of customized 8-zone .wb-theme snapshot
+    const serialized = serializeWbThemeSnapshot(decoupled, {
+      name: 'Prismux 8-Zone Glass',
+      exportedAt: '2026-11-25T00:00:00.000Z',
+    });
+    const roundtripped = importWbThemeSnapshot(serialized);
+    assert.equal(roundtripped.ok, true);
+    if (!roundtripped.ok) return;
+    assert.deepEqual(roundtripped.snapshot.appearance, decoupled);
+
+    // UI copy & CSS contract checks: 8-zone labels + single-pass overviewPanel stripping overlays/dropdown-glass
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const configuratorSrc = fs.readFileSync(
+      new URL('../../src/GlassZoneConfigurator.tsx', import.meta.url),
+      'utf8',
+    );
+    const heroSrc = fs.readFileSync(
+      new URL('../../src/AppearanceHeroAndCards.tsx', import.meta.url),
+      'utf8',
+    );
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
+
+    assert.ok(configuratorSrc.includes('工作台 8 分区精细玻璃控制'));
+    assert.equal(configuratorSrc.includes('工作台 6 分区'), false);
+    assert.equal(configuratorSrc.includes('展开全部 6 区'), false);
+    assert.ok(heroSrc.includes('8 大工作台分区'));
+    assert.equal(heroSrc.includes('6 大工作台分区'), false);
+    assert.match(cardsCss, /\.pmx-gz-pill-bar\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+
+    // Overview panel single-pass glass + popover-popup overlay stripping + solid fallbacks
+    assert.match(bridgeCss, /\[data-slot='popover-popup'\]:has\(\[data-pmx-glass-zone='overviewPanel'\]\)/);
+    assert.match(bridgeCss, /\[data-thread-details-card\]:has\(\[data-pmx-glass-zone='overviewPanel'\]\)/);
+    assert.match(bridgeCss, /--pmx-glass-zone-overview-panel-bg/);
+    assert.match(bridgeCss, /--pmx-glass-zone-overview-panel-backdrop/);
+    assert.match(bridgeCss, /data-pmx-zone-overview-panel-mode='solid'/);
+    assert.match(bridgeCss, /data-pmx-zone-user-bubble-mode='solid'/);
+    const fallbackSection = bridgeCss.slice(
+      bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
+    );
+    assert.ok(
+      (fallbackSection.match(/--pmx-glass-zone-user-bubble-bg:/g) ?? []).length === 3,
+      'all 3 solid fallback blocks must reset --pmx-glass-zone-user-bubble-bg',
+    );
+    assert.ok(
+      (fallbackSection.match(/--pmx-glass-zone-overview-panel-bg:/g) ?? []).length === 3,
+      'all 3 solid fallback blocks must reset --pmx-glass-zone-overview-panel-bg',
+    );
+    assert.ok(
+      (fallbackSection.match(/\[data-thread-details-card\]:has\(\[data-pmx-glass-zone='overviewPanel'\]\)/g) ?? [])
+        .length >= 4,
+      'all 3 solid fallback blocks + forced-colors must cover overviewPanel card wrapper',
+    );
+    assert.ok(
+      (
+        fallbackSection.match(
+          /\[data-pmx-glass-zone='userBubble'\](?:\s*\))?::before/g,
+        ) ?? []
+      ).length >= 4,
+      'all 3 solid fallback blocks + forced-colors must disable userBubble Fresnel ::before rim',
     );
   });
 });

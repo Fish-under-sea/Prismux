@@ -1,28 +1,45 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentIdentificationMode } from "@t3tools/contracts";
-import { useId, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from "react";
 
 import { APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+import { observeResize } from "../lib/observeResize";
+import { cn } from "../lib/utils";
 import { primaryServerConfigAtom } from "../state/server";
 import {
   SKY_COMPACT_STARS,
+  SKY_EXTENSION_DEFAULT_GAP_PX,
   SKY_MASK_EXCLUDE,
   SKY_MASK_INCLUDE,
+  SKY_RIGHT_FEATHER_INSET_PX,
   SKY_SPARKLE_COLOR,
   SKY_SPARKLES,
+  SKY_STAGE_CORNER_RADIUS_PX,
   SKY_STARS,
   SKY_SUN_SPECULAR,
-  SKY_TIME_CHANGE_EVENT,
   SKY_VIEWBOX_HEIGHT,
   SKY_VIEWBOX_WIDTH,
-  computeMsUntilNextSkyTick,
+  buildSkyExtensionClipPath,
+  computeSkyExtensionMetrics,
   computeSkyScene,
   computeStarStepOpacity,
+  getSkyClockServerSnapshot,
+  getSkyClockSnapshot,
   normalizeMinutesOfDay,
-  resolveEffectiveSkyMinutes,
+  resolveCompactSkyButtonTheme,
+  subscribeSkyClock,
+  type SkyExtensionMetrics,
   type SkyScene,
 } from "./sidebarSkyBackdrop.logic";
+import { useSidebar } from "./ui/sidebar";
 
 export type SidebarStageBackdropVariant = "sky" | "nightly" | "dev";
 export type EnvironmentIdentificationPillLabel = "Dev" | "Nightly";
@@ -69,105 +86,9 @@ export function useSidebarStageBackdropVariant(
   return resolveSidebarStageBackdropVariant(useEnvironmentStageLabel(), mode);
 }
 
-const skyClockSubscribers = new Set<() => void>();
-let currentSkyMinutes = resolveEffectiveSkyMinutes();
-let skyTickTimer: ReturnType<typeof setTimeout> | null = null;
-let skyClockListenersAttached = false;
-
-function clearSkyTickTimer(): void {
-  if (skyTickTimer !== null) {
-    clearTimeout(skyTickTimer);
-    skyTickTimer = null;
-  }
-}
-
-function syncSkyClockMinutes(): void {
-  const next = resolveEffectiveSkyMinutes();
-  if (next !== currentSkyMinutes) {
-    currentSkyMinutes = next;
-    for (const listener of skyClockSubscribers) {
-      listener();
-    }
-  }
-}
-
-function isDocumentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
-
-function scheduleNextSkyTick(): void {
-  clearSkyTickTimer();
-  if (skyClockSubscribers.size === 0 || isDocumentHidden()) return;
-  const delayMs = computeMsUntilNextSkyTick(new Date());
-  skyTickTimer = setTimeout(() => {
-    skyTickTimer = null;
-    syncSkyClockMinutes();
-    scheduleNextSkyTick();
-  }, delayMs);
-}
-
-function handleVisibilityChange(): void {
-  if (isDocumentHidden()) {
-    clearSkyTickTimer();
-    return;
-  }
-  syncSkyClockMinutes();
-  scheduleNextSkyTick();
-}
-
-function handleSkyTimeOverrideEvent(): void {
-  syncSkyClockMinutes();
-}
-
-function attachSkyClockListeners(): void {
-  if (skyClockListenersAttached) return;
-  skyClockListenersAttached = true;
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-  }
-  if (typeof window !== "undefined") {
-    window.addEventListener(SKY_TIME_CHANGE_EVENT, handleSkyTimeOverrideEvent);
-  }
-}
-
-function detachSkyClockListeners(): void {
-  if (!skyClockListenersAttached) return;
-  skyClockListenersAttached = false;
-  clearSkyTickTimer();
-  if (typeof document !== "undefined") {
-    document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }
-  if (typeof window !== "undefined") {
-    window.removeEventListener(SKY_TIME_CHANGE_EVENT, handleSkyTimeOverrideEvent);
-  }
-}
-
-function subscribeToSkyClock(listener: () => void): () => void {
-  skyClockSubscribers.add(listener);
-  if (skyClockSubscribers.size === 1) {
-    currentSkyMinutes = resolveEffectiveSkyMinutes();
-    attachSkyClockListeners();
-    scheduleNextSkyTick();
-  }
-  return () => {
-    skyClockSubscribers.delete(listener);
-    if (skyClockSubscribers.size === 0) {
-      detachSkyClockListeners();
-    }
-  };
-}
-
-function getSkyClockSnapshot(): number {
-  return currentSkyMinutes;
-}
-
-function getSkyClockServerSnapshot(): number {
-  return resolveEffectiveSkyMinutes();
-}
-
 export function useDynamicSkyMinutes(minutesOverride?: number): number {
   const clockMinutes = useSyncExternalStore(
-    subscribeToSkyClock,
+    subscribeSkyClock,
     getSkyClockSnapshot,
     getSkyClockServerSnapshot,
   );
@@ -195,7 +116,168 @@ export function SidebarStageBackdrop({
       data-sky-minutes={String(Math.round(scene.minutes))}
       className="sidebar-stage-backdrop pointer-events-none absolute inset-x-0 top-0 z-0 h-20 select-none overflow-hidden"
     >
-      <DynamicSkyArt scene={scene} />
+      <div className="pointer-events-none absolute top-0 left-0 h-full w-[calc(100%+var(--pmx-sky-ext-width,0px))]">
+        <DynamicSkyArt scene={scene} />
+      </div>
+    </div>
+  );
+}
+
+const DEFAULT_SKY_EXTENSION_METRICS: SkyExtensionMetrics = {
+  extensionWidth: SKY_EXTENSION_DEFAULT_GAP_PX,
+  topbarHeight: 38,
+  seamAlpha: 0.48,
+  featherInset: SKY_RIGHT_FEATHER_INSET_PX,
+};
+
+function clearSkyExtensionCssVars(wrapper: HTMLElement | null): void {
+  if (!wrapper) return;
+  wrapper.style.removeProperty("--pmx-sky-ext-width");
+  wrapper.style.removeProperty("--pmx-sky-seam-alpha");
+  wrapper.style.removeProperty("--pmx-sky-right-feather-inset");
+}
+
+/**
+ * Softly extends the 24h dynamic sky backdrop rightward across the shell topbar gap
+ * until the exact left edge of the first workspace session tab, dissolving smoothly with
+ * zero vertical seam, zero click interception, and strict exclusion of the rounded inner stage.
+ */
+export function SidebarSkyTopbarExtension({
+  variant = "sky",
+  minutesOverride,
+}: {
+  readonly variant?: SidebarStageBackdropVariant;
+  readonly minutesOverride?: number;
+}) {
+  const { isMobile, isWidthNarrow, motionPhase } = useSidebar();
+  const minutes = useDynamicSkyMinutes(minutesOverride);
+  const scene = computeSkyScene(minutes);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const [metrics, setMetrics] = useState<SkyExtensionMetrics>(DEFAULT_SKY_EXTENSION_METRICS);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures live DOM geometry (sidebar right edge -> first session tab left edge) via ResizeObserver and MutationObserver
+  useEffect(() => {
+    const anchor = anchorRef.current;
+    const wrapper = anchor?.closest<HTMLElement>('[data-slot="sidebar-wrapper"]') ?? null;
+    if (!wrapper || isMobile) {
+      clearSkyExtensionCssVars(wrapper);
+      return;
+    }
+
+    let rafId: number | null = null;
+    const measure = () => {
+      rafId = null;
+      const sidebarContainer = wrapper.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+      const tabBar = wrapper.querySelector<HTMLElement>("[data-workspace-tabbar]");
+      const firstTab =
+        tabBar?.querySelector<HTMLElement>("[data-workspace-tab]") ??
+        tabBar?.querySelector<HTMLElement>('[role="tablist"] > *') ??
+        null;
+      const sidebarRect = sidebarContainer?.getBoundingClientRect() ?? null;
+      const tabBarRect = tabBar?.getBoundingClientRect() ?? null;
+      const firstTabRect = firstTab?.getBoundingClientRect() ?? null;
+
+      const sidebarRight = sidebarRect ? sidebarRect.right : isWidthNarrow ? 54 : 280;
+      const next = computeSkyExtensionMetrics({
+        sidebarRight,
+        firstTabLeft: firstTabRect ? firstTabRect.left : null,
+        topbarHeight: tabBarRect ? tabBarRect.height : 38,
+        hasTabBar: tabBar !== null,
+      });
+
+      wrapper.style.setProperty("--pmx-sky-ext-width", `${next.extensionWidth}px`);
+      wrapper.style.setProperty("--pmx-sky-seam-alpha", String(next.seamAlpha));
+      wrapper.style.setProperty("--pmx-sky-right-feather-inset", `${next.featherInset}px`);
+
+      setMetrics((prev) =>
+        prev.extensionWidth === next.extensionWidth &&
+        prev.topbarHeight === next.topbarHeight &&
+        prev.seamAlpha === next.seamAlpha &&
+        prev.featherInset === next.featherInset
+          ? prev
+          : next,
+      );
+    };
+
+    const scheduleMeasure = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(measure);
+    };
+
+    measure();
+    if (motionPhase === "collapsing-text" || motionPhase === "expanding-width") {
+      scheduleMeasure();
+    }
+
+    const resizeTargets: Element[] = [wrapper];
+    const sidebarContainer = wrapper.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+    if (sidebarContainer) resizeTargets.push(sidebarContainer);
+    const tabBar = wrapper.querySelector<HTMLElement>("[data-workspace-tabbar]");
+    if (tabBar) resizeTargets.push(tabBar);
+    const stopObservingResize = observeResize(resizeTargets, scheduleMeasure);
+
+    const mutationObserver =
+      typeof MutationObserver === "function"
+        ? new MutationObserver(scheduleMeasure)
+        : null;
+    mutationObserver?.observe(wrapper, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style", "data-workspace-tab", "data-sidebar-state"],
+    });
+    window.addEventListener("resize", scheduleMeasure);
+
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      stopObservingResize();
+      mutationObserver?.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+      clearSkyExtensionCssVars(wrapper);
+    };
+  }, [isMobile, isWidthNarrow, motionPhase]);
+
+  const sidebarOriginVar = isWidthNarrow ? "var(--sidebar-width-icon)" : "var(--sidebar-width)";
+  const clippedHeight = Math.min(
+    SKY_VIEWBOX_HEIGHT,
+    metrics.topbarHeight + SKY_STAGE_CORNER_RADIUS_PX,
+  );
+  const clipPath = buildSkyExtensionClipPath(
+    metrics.extensionWidth,
+    metrics.topbarHeight,
+    SKY_STAGE_CORNER_RADIUS_PX,
+  );
+
+  return (
+    <div
+      ref={anchorRef}
+      aria-hidden="true"
+      data-stage-backdrop-extension={variant}
+      data-sky-phase={scene.phase}
+      data-sky-extension-width={String(metrics.extensionWidth)}
+      className={cn(
+        "sidebar-stage-backdrop-extension pointer-events-none fixed top-0 z-[9] hidden select-none overflow-hidden md:block",
+        (isMobile || metrics.extensionWidth <= 0) && "hidden!",
+      )}
+      style={
+        {
+          left: sidebarOriginVar,
+          width: `${metrics.extensionWidth}px`,
+          height: `${clippedHeight}px`,
+          clipPath,
+          "--pmx-sky-seam-alpha": String(metrics.seamAlpha),
+        } as CSSProperties
+      }
+    >
+      <div
+        className="pointer-events-none absolute top-0 left-0 h-20"
+        style={{
+          width: `calc(${sidebarOriginVar} + ${metrics.extensionWidth}px)`,
+          transform: `translateX(calc(-1 * ${sidebarOriginVar}))`,
+        }}
+      >
+        <DynamicSkyArt scene={scene} />
+      </div>
     </div>
   );
 }
@@ -529,12 +611,14 @@ function CompactSkyButtonArt({
   const glowId = `${idPrefix}-btn-glow`;
   const moonMaskId = `${idPrefix}-btn-moon-mask`;
   const { palette, sun, moon } = scene;
+  const buttonTheme = resolveCompactSkyButtonTheme(scene);
   const showStars = palette.starVisibility > 0.12;
 
   return (
     <svg
       data-stage-art={variant === "sky" ? "sky-compact" : variant}
       data-sky-phase={scene.phase}
+      data-sky-button-tone={buttonTheme.tone}
       className="h-full w-full"
       fill="none"
       preserveAspectRatio="xMidYMid slice"
@@ -543,15 +627,15 @@ function CompactSkyButtonArt({
     >
       <defs>
         <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="36" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor={palette.skyTop} />
-          <stop offset="56%" stopColor={palette.skyUpper} />
-          <stop offset="100%" stopColor={palette.skyMid} />
+          <stop offset="0%" stopColor={buttonTheme.skyTop} />
+          <stop offset="56%" stopColor={buttonTheme.skyMid} />
+          <stop offset="100%" stopColor={buttonTheme.skyBottom} />
         </linearGradient>
         <radialGradient id={glowId} cx="72%" cy="24%" r="58%">
           <stop
             offset="0%"
             stopColor={palette.atmosphereGlowColor}
-            stopOpacity={Math.round(palette.atmosphereGlowOpacity * 0.72 * 100) / 100}
+            stopOpacity={Math.round(palette.atmosphereGlowOpacity * 0.68 * 100) / 100}
           />
           <stop offset="100%" stopColor={palette.atmosphereGlowColor} stopOpacity="0" />
         </radialGradient>
@@ -581,7 +665,7 @@ function CompactSkyButtonArt({
       ) : null}
 
       {sun.visible ? (
-        <circle cx="26" cy="9.5" r="3.2" fill={sun.coreColor} fillOpacity={sun.opacity * 0.82} />
+        <circle cx="26" cy="9.5" r="3.2" fill={sun.coreColor} fillOpacity={sun.opacity * 0.85} />
       ) : moon.visible ? (
         <circle
           cx="25.5"
@@ -597,15 +681,15 @@ function CompactSkyButtonArt({
       <path
         d="M-2 37 C2 31 8 29 13 31 C17 27 24 27 28 31 C32 30 36 32 38 37 Z"
         fill={palette.cloudHighlight}
-        fillOpacity={Math.round(palette.cloudOpacity * 0.36 * 100) / 100}
+        fillOpacity={Math.round(palette.cloudOpacity * (buttonTheme.isBrightDaytime ? 0.52 : 0.34) * 100) / 100}
       />
 
-      {/* Gentle readability veil so white send icon stays >= 4.5:1 crisp */}
+      {/* Luminance-calibrated readability veil guaranteeing >= 4.5:1 day/night send arrow contrast */}
       <rect
         width="36"
         height="36"
-        fill={palette.topScrimColor}
-        fillOpacity={Math.round(palette.topScrimOpacity * 0.9 * 100) / 100}
+        fill={buttonTheme.scrimColor}
+        fillOpacity={buttonTheme.scrimOpacity}
       />
     </svg>
   );

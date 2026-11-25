@@ -78,8 +78,16 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { readIssueListPreferences } from "../issue/issueListPreferences";
 import { IssueGlyph } from "../issue/issuePresentation";
-import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
-import { requestLocateActiveSidebarThread } from "./prismuxSidebarQuickNav.logic";
+import {
+  isSidebarPanelPathActive,
+  isSidebarToggleablePanelPage,
+  isSidebarUtilityPage,
+  useNavigateToMainApp,
+} from "./mainAppLocation";
+import {
+  PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS,
+  requestLocateActiveSidebarThread,
+} from "./prismuxSidebarQuickNav.logic";
 import {
   nextToolbarFocusIndex,
   resolveSidebarUtilityOverflow,
@@ -739,6 +747,7 @@ export function SidebarUtilityItem({
   label,
   tooltip = label,
   tooltipSide = "top",
+  active = false,
   hidden = false,
   isTabStop = false,
   className,
@@ -750,6 +759,7 @@ export function SidebarUtilityItem({
   label: string;
   tooltip?: string | undefined;
   tooltipSide?: "top" | "right";
+  active?: boolean | undefined;
   hidden?: boolean;
   isTabStop?: boolean;
   className?: string | undefined;
@@ -767,11 +777,17 @@ export function SidebarUtilityItem({
             <SidebarMenuButton
               {...{ [SIDEBAR_UTILITY_ITEM_ATTR]: itemId }}
               aria-label={label}
+              aria-current={active ? "page" : undefined}
+              aria-pressed={active ? true : undefined}
               tabIndex={hidden ? -1 : isTabStop ? 0 : -1}
               onFocus={() => onFocusItem(itemId)}
               onClick={onClick}
               size="icon"
-              className={SIDEBAR_UTILITY_BUTTON_CLASS}
+              className={cn(
+                SIDEBAR_UTILITY_BUTTON_CLASS,
+                active &&
+                  "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70",
+              )}
             >
               {icon}
             </SidebarMenuButton>
@@ -819,9 +835,18 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const gt = useGT();
   const { isMobile, setOpenMobile, isIconRail } = useSidebar();
   const railCompact = !isMobile && isIconRail;
-  const isOnUtilityPage = useLocation({
-    select: (location) => isSidebarUtilityPage(location.pathname),
+  const pathname = useLocation({
+    select: (location) => location.pathname,
   });
+  // Keep bottom utility icons (including Issues & PR) visible on toggleable panel pages so
+  // clicking an active Issue/PR button closes it and navigates back to the prior session.
+  const isOnUtilityPage =
+    isSidebarUtilityPage(pathname) && !isSidebarToggleablePanelPage(pathname);
+  const issuesActive = isSidebarPanelPathActive(pathname, PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.issues);
+  const pullRequestsActive = isSidebarPanelPathActive(
+    pathname,
+    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.pullRequests,
+  );
   const pullRequestsSupported = usePullRequestsSupported();
   const issuesSupported = useIssuesSupported();
   const [viewportHeight, setViewportHeight] = useState<number>(() =>
@@ -860,6 +885,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
   const handlePullRequestsClick = () => {
     closeMobileSidebar();
+    if (pullRequestsActive) {
+      void navigateToMainApp();
+      return;
+    }
     void navigate({
       to: "/pull-requests",
       search: readPullRequestListPreferences(),
@@ -867,6 +896,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
   const handleIssuesClick = () => {
     closeMobileSidebar();
+    if (issuesActive) {
+      void navigateToMainApp();
+      return;
+    }
     void navigate({ to: "/issues", search: readIssueListPreferences() });
   };
   const handleSettingsClick = () => {
@@ -891,6 +924,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     readonly icon: ReactNode;
     readonly label: string;
     readonly tooltip?: string;
+    readonly active?: boolean;
     readonly onClick: () => void;
   }> = [
     {
@@ -921,6 +955,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             group: "right" as const,
             icon: <IssueGlyph.issue />,
             label: gt("Issues", { $context: "sidebar link to the list of issues" }),
+            active: issuesActive,
             onClick: handleIssuesClick,
           },
         ]
@@ -932,6 +967,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             group: "right" as const,
             icon: <PullRequestGlyph.pullRequest />,
             label: gt("Pull requests"),
+            active: pullRequestsActive,
             onClick: handlePullRequestsClick,
           },
         ]
@@ -1113,6 +1149,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                   label={item.label}
                   tooltip={item.tooltip}
                   tooltipSide="right"
+                  active={item.active}
                   hidden={!overflowState.visibleIds.has(item.id)}
                   isTabStop={effectiveTabStopId === item.id}
                   onFocusItem={(id) => {
@@ -1132,6 +1169,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                     label={item.label}
                     tooltip={item.tooltip}
                     tooltipSide="top"
+                    active={item.active}
                     hidden={!overflowState.visibleIds.has(item.id)}
                     isTabStop={effectiveTabStopId === item.id}
                     onFocusItem={(id) => {
@@ -1150,6 +1188,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                     label={item.label}
                     tooltip={item.tooltip}
                     tooltipSide="top"
+                    active={item.active}
                     className={item.id === firstVisibleRightId ? "ml-auto" : undefined}
                     hidden={!overflowState.visibleIds.has(item.id)}
                     isTabStop={effectiveTabStopId === item.id}

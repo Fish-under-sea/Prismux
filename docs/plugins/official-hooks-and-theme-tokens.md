@@ -112,7 +112,7 @@ Prismux 视觉层对大模型保持 **0 Token 开销**。插件的声明式 UI�
 | `html[data-pmx-gpu]`（镜像 `data-prismux-gpu`） | `"0"` \| `"1"` | 硬件 GPU 加速是否可用；`"0"` 时强制退回实底无模糊 |
 | `html[data-pmx-reduced-transparency]` | `"1"`（开启时存在） | 系统或宿主开启「减少透明度」时存在，强制退回实底无模糊 |
 | `html[data-pmx-wallpaper]` / `[data-pmx-wallpaper-visible]` | `"1"`（激活时存在） | 存在 Z-0 静态 / 视频 / WebWallGL 活跃壁纸 |
-| `html[data-pmx-zone-<name>-mode]` | `"inherit"` \| `"custom"` \| `"solid"` | 6 大玻璃分区各自的有效模式（`<name>` 为 `shell-frame`、`right-sidebar`、`main-canvas`、`work-panels`、`composer`、`overlays`） |
+| `html[data-pmx-zone-<name>-mode]` | `"inherit"` \| `"custom"` \| `"solid"` | 8 大玻璃分区各自的有效模式（`<name>` 为 `shell-frame`、`right-sidebar`、`main-canvas`、`work-panels`、`composer`、`overlays`、`user-bubble`、`overview-panel`） |
 | `html[data-pmx-custom-heading="1"]` / `[data-pmx-custom-text="1"]` / `[data-pmx-custom-muted="1"]` | `"1"`（自定义时存在） | 标识用户已在外观设置中指定独立浅色 / 深色文字颜色 |
 | `html[data-pmx-custom-font-sans="1"]` / `[data-pmx-custom-font-mono="1"]` | `"1"`（自定义时存在） | 标识用户已指定全局无衬线 / 代码等宽字体 |
 | `html[data-pmx-ui-colors="1"]` / `[data-pmx-caret="1"]` | `"1"`（启用时存在） | 标识用户已启用 5 项 UI 自定义强调色或自定义光标色 |
@@ -125,9 +125,9 @@ Prismux 视觉层对大模型保持 **0 Token 开销**。插件的声明式 UI�
 > 1. 宿主**不使用** `data-theme` 或 `data-pmx-surface-tone`，请始终使用真实属性 `html[data-pmx-theme="light" | "dark"]`、`html[data-pmx-mode="light" | "dark" | "glass"]`、`html[data-pmx-glass="0" | "1"]` 及 `html.dark`。
 > 2. **禁止依赖 `@media (prefers-color-scheme: dark)`** 切换插件颜色：用户可在浅色系统下选择深色 / 玻璃主题，一切明暗判断以宿主 `html[data-pmx-theme]` 与 `html.dark` 为唯一真相源。
 
-### 2.2 6 大液态玻璃分区 CSS 变量全清单
+### 2.2 8 大液态玻璃分区 CSS 变量全清单
 
-Prismux 将工作台划分为 6 个可独立调节（`inherit` / `custom` / `solid`）的液态玻璃分区（`GLASS_ZONE_IDS` / `GLASS_ZONE_CSS_NAMES`）：
+Prismux 将工作台划分为 8 个可独立调节（`inherit` / `custom` / `solid`）的液态玻璃分区（`GLASS_ZONE_IDS` / `GLASS_ZONE_CSS_NAMES`）：
 
 | 分区 ID（`GlassZoneId`） | CSS 分区名（`<name>`） | DOM 挂载标记 | 职责范围与可读底线 |
 | :--- | :--- | :--- | :--- |
@@ -137,6 +137,8 @@ Prismux 将工作台划分为 6 个可独立调节（`inherit` / `custom` / `sol
 | `workPanels` | `work-panels` | `data-pmx-glass-zone="workPanels"` / `data-pmx-work-panel="1"` | 工作区板、任务面板与定时任务主面板（独立霜透底线） |
 | `composer` | `composer` | `data-pmx-glass-zone="composer"` | 双层消息输入框与卡片 |
 | `overlays` | `overlays` | `data-pmx-glass-zone="overlays"` | 弹窗、抽屉、下拉菜单与设置窗口（**内置 ≥ 68% 不透明度可读底线**） |
+| `userBubble` | `user-bubble` | `data-pmx-glass-zone="userBubble"` / `[data-user-message-bubble][data-user-message-bubble-surface="1"]` | 对话流用户消息气泡（默认清透磨砂 + 左上方向性 Fresnel 微光渐变边缘） |
+| `overviewPanel` | `overview-panel` | `data-pmx-glass-zone="overviewPanel"` | 右侧悬浮会话概览面板（与 `rightSidebar` 解耦，默认轻透单层磨砂） |
 
 每个分区统一暴露 7 个实时计算的 CSS 自定义属性：
 

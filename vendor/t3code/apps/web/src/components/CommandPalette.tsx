@@ -109,11 +109,6 @@ import {
   queueWorkspaceFocusFromPalette,
   restoreWorkspaceFocusFromPalette,
 } from "../lib/workspaceFocus";
-import {
-  composerPromptLink,
-  copyPromptLink,
-  promptLinkRepositoryOf,
-} from "./promptLinks/copyPromptLink";
 import { useClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { readLocalApi } from "../localApi";
@@ -136,7 +131,6 @@ import { useNewProject } from "../hooks/useNewProject";
 import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { reportProjectFailure, useProjectPin } from "../hooks/useProjectGroupUpdate";
 import {
-  useEnvironmentProviders,
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "../state/environments";
@@ -154,7 +148,6 @@ import { isShownUnderParent, visibleLinkedThreads } from "@t3tools/client-runtim
 import {
   resolveThreadActionProjectRef,
   startNewThreadFromContext,
-  threadHasStarted,
 } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -549,7 +542,6 @@ function OpenCommandPaletteDialog(props: {
       ),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
   const portForwardItem = useCommandPalettePortForwardItem({
     activeThread: activeThread ?? null,
@@ -1434,56 +1426,6 @@ function OpenCommandPaletteDialog(props: {
   }
 
   if (portForwardItem) actionItems.push(portForwardItem);
-
-  const promptLinkTarget = paletteRouteTarget
-    ? paletteRouteTarget.kind === "server"
-      ? paletteRouteTarget.threadRef
-      : paletteRouteTarget.draftId
-    : null;
-  const promptLinkProjectRef = activeThread ?? activeDraftThread;
-  const promptLinkInput =
-    promptLinkTarget === null
-      ? null
-      : {
-          target: promptLinkTarget,
-          project: projects.find(
-            (project) =>
-              project.environmentId === promptLinkProjectRef?.environmentId &&
-              project.id === promptLinkProjectRef.projectId,
-          ),
-          providers:
-            (promptLinkProjectRef
-              ? providersByEnvironment.get(promptLinkProjectRef.environmentId)
-              : undefined) ?? [],
-          threadModelSelection: activeThread?.modelSelection ?? null,
-          threadStarted: threadHasStarted(activeThread),
-        };
-  const plainPromptLink = promptLinkInput
-    ? composerPromptLink({ ...promptLinkInput, withContext: false })
-    : null;
-  if (promptLinkInput !== null && plainPromptLink !== null) {
-    actionItems.push({
-      kind: "action",
-      value: "action:copy-prompt-link",
-      searchTerms: ["copy", "share", "prompt", "link"],
-      title: gt("Copy prompt link"),
-      icon: <LinkIcon className={ITEM_ICON_CLASS} />,
-      run: () => copyPromptLink(plainPromptLink),
-    });
-    if (promptLinkRepositoryOf(promptLinkInput.project) !== null) {
-      const contextLink = composerPromptLink({ ...promptLinkInput, withContext: true });
-      if (contextLink !== null) {
-        actionItems.push({
-          kind: "action",
-          value: "action:copy-prompt-link-with-context",
-          searchTerms: ["copy", "share", "prompt", "link", "repository", "model"],
-          title: gt("Copy prompt link with repo and model"),
-          icon: <LinkIcon className={ITEM_ICON_CLASS} />,
-          run: () => copyPromptLink(contextLink),
-        });
-      }
-    }
-  }
 
   if (activeThreadReferenceCopyTarget !== null) {
     actionItems.push({

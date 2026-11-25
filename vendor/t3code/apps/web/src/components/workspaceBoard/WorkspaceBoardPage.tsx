@@ -7,6 +7,7 @@ import {
   CircleAlertIcon,
   CircleCheckBigIcon,
   CircleIcon,
+  Columns3Icon,
   FolderGit2Icon,
   GitBranchIcon,
   PinIcon,
@@ -276,19 +277,24 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
           data-testid="prismux-workspace-board-page"
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
-          {/* Top Header Bar: Title + Search input ... Filter + View Settings + Close × */}
-          <header className="flex flex-none items-center justify-between gap-3 border-b border-border/65 px-4 py-2.5">
+          {/* Top Header Bar: Icon + Title + Search input ... Filter + View Settings + Close × */}
+          <header className="flex flex-none flex-wrap items-center justify-between gap-3 border-b border-border/65 px-4 py-2.5">
             <div className="flex min-w-0 flex-1 items-center gap-3">
-              <h1 className="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
-                <span>{copy.title}</span>
-                {projection.totalCount > 0 ? (
-                  <span className="rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-foreground/80 tabular-nums">
-                    {projection.isFiltering
-                      ? `${projection.matchCount} / ${projection.totalCount}`
-                      : projection.totalCount}
-                  </span>
-                ) : null}
-              </h1>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+                  <Columns3Icon className="size-4" aria-hidden="true" />
+                </span>
+                <h1 className="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
+                  <span>{copy.title}</span>
+                  {projection.totalCount > 0 ? (
+                    <span className="rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-foreground/85 tabular-nums">
+                      {projection.isFiltering
+                        ? `${projection.matchCount} / ${projection.totalCount}`
+                        : projection.totalCount}
+                    </span>
+                  ) : null}
+                </h1>
+              </div>
 
               <div className="relative min-w-0 flex-1 max-w-xs">
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -300,7 +306,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                     setFilters((current) => ({ ...current, query: event.target.value }))
                   }
                   placeholder={copy.searchPlaceholder}
-                  className="h-8 rounded-md border-border/75 bg-card pr-7 pl-8 text-xs text-foreground shadow-xs"
+                  className="h-8 rounded-lg border-border/75 bg-card pr-7 pl-8 text-xs text-foreground shadow-xs"
                 />
                 {filters.query.length > 0 ? (
                   <button
@@ -522,7 +528,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
           </header>
 
           {/* Board Body: Pinned Drag-Drop Slot + 4 Colored Frosted Glass Lanes */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3.5">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
             {/* Pinned Drop Target (1:1 Orca WorkspaceKanbanPinDropTarget) */}
             <div
               data-testid="workspace-board-pin-drop-target"
@@ -533,7 +539,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
               onDragLeave={() => setIsDragOverPinTarget(false)}
               onDrop={handlePinZoneDrop}
               className={cn(
-                "mb-3 flex min-h-9 shrink-0 flex-wrap items-center gap-2 rounded-md border border-dashed border-border/80 bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors",
+                "mb-3 flex min-h-10 shrink-0 flex-wrap items-center gap-2 rounded-xl border border-dashed border-border/80 bg-card px-3.5 py-2 text-xs text-muted-foreground shadow-xs transition-colors",
                 isDragOverPinTarget &&
                   "border-primary bg-primary/15 text-foreground ring-1 ring-primary/35",
               )}
@@ -608,15 +614,14 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                     }}
                     onDrop={(event) => handleLaneDrop(event, lane.id)}
                     className={cn(
-                      "group/lane relative flex min-h-0 min-w-[230px] flex-col overflow-hidden rounded-md border border-t-2 border-border/75 bg-card transition-colors",
+                      "group/lane relative flex min-h-0 min-w-[230px] flex-col overflow-hidden rounded-xl border border-t-2 border-border/75 bg-card shadow-xs transition-colors",
                       lane.borderTopClass,
                       lane.laneTintClass,
-                      isDragTarget &&
-                        "border-primary/75 ring-1 ring-primary/40",
+                      isDragTarget && "border-primary/75 ring-1 ring-primary/40",
                     )}
                   >
                     {/* Lane Header */}
-                    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border/65 py-0 pr-2 pl-3">
+                    <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/65 py-0 pr-2 pl-3.5">
                       <div className="flex min-w-0 flex-1 items-center gap-1.5">
                         <LaneStatusIcon
                           laneId={lane.id}
@@ -625,7 +630,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                         <span className="min-w-0 truncate text-xs font-semibold text-foreground">
                           {lane.label}
                         </span>
-                        <span className="shrink-0 rounded-full border border-border/60 bg-muted/85 px-1.5 py-0.5 text-[10px] leading-none font-medium text-foreground/80 tabular-nums">
+                        <span className="shrink-0 rounded-full border border-border/65 bg-muted/85 px-1.5 py-0.5 text-[10px] leading-none font-semibold text-foreground/85 tabular-nums">
                           {projection.isFiltering
                             ? `${cards.length} / ${totalInLane}`
                             : cards.length}
@@ -680,8 +685,8 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                                   }
                                 }}
                                 className={cn(
-                                  "group/card relative flex cursor-pointer flex-col gap-1.5 rounded-md border border-border/75 bg-card text-left shadow-xs transition-all hover:border-primary/45 hover:bg-accent/55 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                                  boardState.compactMode ? "px-2.5 py-1.5" : "px-2.5 py-2",
+                                  "group/card relative flex cursor-pointer flex-col gap-1.5 rounded-lg border border-border/75 bg-card text-left shadow-xs transition-all hover:border-primary/50 hover:bg-accent/55 active:translate-y-px focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                                  boardState.compactMode ? "px-2.5 py-2" : "px-3 py-2.5",
                                   isDragging && "opacity-45",
                                 )}
                               >
@@ -760,8 +765,14 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                           })}
                         </div>
                       ) : (
-                        <div className="flex h-20 items-center justify-center rounded-md border border-dashed border-border/65 text-[11px] text-muted-foreground">
-                          {projection.isFiltering ? copy.laneNoMatches : copy.laneEmpty}
+                        <div className="flex h-24 flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/65 px-3 text-center text-[11px] text-muted-foreground">
+                          <LaneStatusIcon
+                            laneId={lane.id}
+                            className={cn("size-4 opacity-55", lane.iconToneClass)}
+                          />
+                          <span>
+                            {projection.isFiltering ? copy.laneNoMatches : copy.laneEmpty}
+                          </span>
                         </div>
                       )}
 

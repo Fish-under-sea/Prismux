@@ -26,6 +26,7 @@ import type {
   ProjectId,
   PullRequestState,
   ResolvedKeybindingsConfig,
+  ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -157,7 +158,18 @@ import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import {
+  formatBrowserProfileLabel,
+  resolveBrowserProfileBadgeLabel,
+} from "~/lib/browserProfileLabel";
 import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
+import {
+  dispatchSplitDragEvent,
+  hasSplitDragMime,
+  readSplitDragDataTransfer,
+  writeSplitDragDataTransfer,
+  type SplitDragPayload,
+} from "./workspace/splitAnything.logic";
 import { useWorkspaceTopbarPortal } from "./workspace/WorkspaceTopbarPortalContext";
 
 export interface RightPanelTabsProps {
@@ -260,7 +272,7 @@ export function resolveSideQuestionLabel(
 }
 
 const SURFACE_DISABLED_REASONS = {
-  browser: msg("Browser previews are only available in the T3 Code desktop app."),
+  browser: msg("Browser previews are only available in the Prismux desktop app."),
   terminal: msg("Terminal surfaces are only available from a project thread."),
   files: msg("Files are only available when a project is open."),
   diff: msg("Diff is only available for server threads in Git repositories."),
@@ -556,6 +568,7 @@ function SortableEmptyStateActionRow(props: {
   readonly onClearHighlight: () => void;
 }) {
   const gt = useGT();
+  const locale = useLocale();
   const { action, highlighted, browserProfiles, onAddBrowserInProfile } = props;
   const Icon = action.icon;
   const {
@@ -648,7 +661,9 @@ function SortableEmptyStateActionRow(props: {
               <MenuPopup align="end" side="bottom" sideOffset={6} className="max-w-56">
                 {browserProfiles.map((profile) => (
                   <MenuItem key={profile.id} onClick={() => onAddBrowserInProfile(profile.id)}>
-                    <span className="min-w-0 truncate">{profile.name}</span>
+                    <span className="min-w-0 truncate">
+                      {formatBrowserProfileLabel(profile, locale)}
+                    </span>
                   </MenuItem>
                 ))}
               </MenuPopup>
@@ -1202,10 +1217,92 @@ function preventTabMiddleButtonDefault(event: ReactMouseEvent) {
   event.preventDefault();
 }
 
+function resolveRightPanelHostThreadRef(
+  widthStorageKey: string | undefined,
+): ScopedThreadRef | null {
+  const prefix = "t3code:preview-panel-width:";
+  if (!widthStorageKey || !widthStorageKey.startsWith(prefix)) return null;
+  return parseScopedThreadKey(widthStorageKey.slice(prefix.length));
+}
+
+function buildRightPanelTabSplitPayload(input: {
+  readonly surface: RightPanelSurface;
+  readonly title: string;
+  readonly hostThreadRef: ScopedThreadRef | null;
+  readonly previewUrl: string | null;
+}): SplitDragPayload {
+  const { surface, title, hostThreadRef, previewUrl } = input;
+  switch (surface.kind) {
+    case "preview":
+      return {
+        kind: "right-panel-tab",
+        surfaceId: surface.id,
+        surfaceKind: surface.kind,
+        title,
+        hostThreadRef,
+        resourceId: surface.resourceId,
+        url: previewUrl,
+      };
+    case "terminal":
+      return {
+        kind: "right-panel-tab",
+        surfaceId: surface.id,
+        surfaceKind: surface.kind,
+        title,
+        hostThreadRef,
+        resourceId: surface.activeTerminalId,
+      };
+    case "file":
+      return {
+        kind: "right-panel-tab",
+        surfaceId: surface.id,
+        surfaceKind: surface.kind,
+        title,
+        hostThreadRef,
+        resourceId: surface.relativePath,
+        relativePath: surface.relativePath,
+      };
+    case "thread":
+      return {
+        kind: "right-panel-tab",
+        surfaceId: surface.id,
+        surfaceKind: surface.kind,
+        title,
+        hostThreadRef,
+        resourceId: surface.id,
+        threadId: surface.threadId,
+      };
+    case "agent-session":
+      return {
+        kind: "right-panel-tab",
+        surfaceId: surface.id,
+        surfaceKind: surface.kind,
+        title,
+        hostThreadRef,
+        resourceId: surface.id,
+        providerId: surface.providerId,
+        instanceId: surface.instanceId ?? null,
+        threadId: surface.threadId ?? null,
+      };
+    default:
+      return {
+        kind: "right-panel-tab",
+        surfaceId: surface.id,
+        surfaceKind: surface.kind,
+        title,
+        hostThreadRef,
+        resourceId: surface.id,
+      };
+  }
+}
+
 // Stable handlers and per-tab values let the compiler reuse tabs across parent renders.
 function RightPanelTab(
   props: RightPanelTabHandlers & {
     surface: RightPanelSurface;
+    surfaceIndex: number;
+    hostThreadRef: ScopedThreadRef | null;
+    onMoveSurface?: ((surfaceId: string, toIndex: number) => void) | undefined;
     dragDisabled: boolean;
     active: boolean;
     pending: boolean;
@@ -1214,6 +1311,8 @@ function RightPanelTab(
     audioRuntimeTabId: string | null;
     previewUrl: string | null;
     previewCapturedUrl: string | null;
+    previewProfileId?: string | undefined;
+    previewProfileBadge?: string | null | undefined;
     theme: "light" | "dark";
     environmentId: EnvironmentId | null;
     pullRequestStatusSeed: PullRequestTabStatusSeed | undefined;
@@ -1226,6 +1325,9 @@ function RightPanelTab(
   const messages = useMessages();
   const {
     surface,
+    surfaceIndex,
+    hostThreadRef,
+    onMoveSurface,
     audio,
     audioRuntimeTabId,
     onActivate,
@@ -1235,9 +1337,10 @@ function RightPanelTab(
     onStartRename,
     onFinishRename,
   } = props;
+  const canDragOutToSplit = !props.renaming && surface.kind !== "wallpaper";
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: surface.id,
-    disabled: props.dragDisabled,
+    disabled: props.dragDisabled || canDragOutToSplit,
   });
   const sideChatShell = useQuietThreadShell(
     surface.kind === "thread" && props.environmentId !== null
@@ -1340,6 +1443,14 @@ function RightPanelTab(
                 onClick={() => onActivate(surface)}
               >
                 <span className="truncate">{title}</span>
+                {surface.kind === "preview" && props.previewProfileBadge ? (
+                  <span
+                    data-browser-profile-badge={props.previewProfileId ?? "custom"}
+                    className="ml-1 inline-flex max-w-18 shrink-0 items-center truncate rounded-full border border-border/65 bg-muted/80 px-1.5 py-px text-[10px] leading-none font-medium text-muted-foreground"
+                  >
+                    {props.previewProfileBadge}
+                  </span>
+                ) : null}
                 {surface.kind === "agent-aux" &&
                 typeof surface.activeCount === "number" &&
                 surface.activeCount > 0 ? (
@@ -1360,6 +1471,8 @@ function RightPanelTab(
                 environmentId={props.environmentId}
                 title={title}
               />
+            ) : surface.kind === "preview" && props.previewProfileBadge ? (
+              `${title} (${props.previewProfileBadge})`
             ) : (
               title
             )}
@@ -1371,11 +1484,43 @@ function RightPanelTab(
   return (
     <div
       data-active-tab={props.active}
+      data-right-panel-draggable-tab={canDragOutToSplit ? surface.id : undefined}
+      draggable={canDragOutToSplit}
+      onDragStart={(event) => {
+        if (!canDragOutToSplit) return;
+        const payload = buildRightPanelTabSplitPayload({
+          surface,
+          title,
+          hostThreadRef,
+          previewUrl: props.previewUrl,
+        });
+        writeSplitDragDataTransfer(event.dataTransfer, payload);
+        dispatchSplitDragEvent(true, payload);
+      }}
+      onDragEnd={() => {
+        dispatchSplitDragEvent(false, null);
+      }}
+      onDragOver={(event) => {
+        if (!onMoveSurface || !hasSplitDragMime(event.dataTransfer.types)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(event) => {
+        if (!onMoveSurface) return;
+        const payload = readSplitDragDataTransfer(event.dataTransfer);
+        if (!payload || payload.kind !== "right-panel-tab" || payload.surfaceId === surface.id) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        dispatchSplitDragEvent(false, null);
+        onMoveSurface(payload.surfaceId, surfaceIndex);
+      }}
       onMouseDown={preventTabMiddleButtonDefault}
       onMouseUp={preventTabMiddleButtonDefault}
       onAuxClick={(event) => onAuxClick(event, surface)}
       onContextMenu={(event) => onContextMenu(event, surface)}
-      {...listeners}
+      {...(canDragOutToSplit ? {} : listeners)}
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
@@ -2463,8 +2608,17 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         >
           <div className="flex h-full w-max min-w-full items-center gap-1">
             <SortableTabList surfaces={props.surfaces} onMove={props.onMoveSurface}>
-              {props.surfaces.map((surface) => {
+              {props.surfaces.map((surface, surfaceIndex) => {
+                const hostThreadRef = resolveRightPanelHostThreadRef(props.widthStorageKey);
                 const previewTabId = previewTabIdOf(surface, props.previewSessions);
+                const previewProfileId =
+                  surface.kind === "preview" && surface.resourceId
+                    ? props.previewSessions[surface.resourceId]?.profileId
+                    : undefined;
+                const previewProfileBadge =
+                  surface.kind === "preview"
+                    ? resolveBrowserProfileBadgeLabel(previewProfileId, browserProfiles, locale)
+                    : null;
                 const favicon = previewFaviconOf(
                   surface,
                   props.previewSessions,
@@ -2474,6 +2628,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <RightPanelTab
                     key={surface.id}
                     surface={surface}
+                    surfaceIndex={surfaceIndex}
+                    hostThreadRef={hostThreadRef}
+                    onMoveSurface={props.onMoveSurface}
                     dragDisabled={!props.onMoveSurface || renamingDevice === surface.id}
                     active={surface.id === props.activeSurfaceId}
                     pending={props.pendingSurfaceIds.has(surface.id)}
@@ -2492,6 +2649,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     }
                     previewUrl={favicon.url}
                     previewCapturedUrl={favicon.capturedUrl}
+                    previewProfileId={previewProfileId}
+                    previewProfileBadge={previewProfileBadge}
                     theme={resolvedTheme}
                     environmentId={props.environmentId}
                     pullRequestStatusSeed={props.pullRequestStatusSeeds?.[surface.id]}
@@ -2560,7 +2719,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                                 key={profile.id}
                                 onClick={() => props.onAddBrowserInProfile(profile.id)}
                               >
-                                <span className="min-w-0 truncate">{profile.name}</span>
+                                <span className="min-w-0 truncate">
+                                  {formatBrowserProfileLabel(profile, locale)}
+                                </span>
                               </MenuItem>
                             ))}
                           </MenuSubPopup>

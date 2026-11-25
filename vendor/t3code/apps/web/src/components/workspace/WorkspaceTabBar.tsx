@@ -1,11 +1,16 @@
 import {
   ArrowRightLeftIcon,
   Columns2Icon,
+  FilesIcon,
   GitCompareArrowsIcon,
   GlobeIcon,
+  Link2Icon,
   MessageSquareIcon,
+  MessageSquarePlusIcon,
+  MoreHorizontalIcon,
   Rows2Icon,
   SmartphoneIcon,
+  TabletSmartphoneIcon,
   TerminalIcon,
   XIcon,
 } from "lucide-react";
@@ -14,24 +19,30 @@ import { memo, useState, type DragEvent as ReactDragEvent, type ReactNode, type 
 import { isElectron } from "../../env";
 import { cn } from "~/lib/utils";
 import { AgentBrandLogo } from "../../prismux/agentBrand";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  dispatchSplitDragEvent,
+  hasSplitDragMime,
+  readSplitDragDataTransfer,
+  WORKSPACE_TAB_DRAG_MIME,
+  writeSplitDragDataTransfer,
+  type SplitDragPayload,
+  type SplitDropZone,
+} from "./splitAnything.logic";
 import {
   WorkspaceNewTabPopover,
   type WorkspaceNewTabPopoverProps,
 } from "./WorkspaceNewTabPopover";
 import {
+  useWorkspaceTabsStore,
   WORKSPACE_MAX_SPLIT_PANES,
   type SplitDirection,
   type WorkspacePane,
   type WorkspaceTab,
 } from "./workspaceTabsStore";
 
-export const WORKSPACE_TAB_DRAG_MIME = "application/x-prismux-workspace-tab";
-
-interface DragPayload {
-  readonly tabId: string;
-  readonly fromPaneId: string;
-}
+export { WORKSPACE_TAB_DRAG_MIME };
 
 export interface WorkspaceTabBarProps {
   readonly pane: WorkspacePane;
@@ -51,8 +62,16 @@ export interface WorkspaceTabBarProps {
   readonly onCloseTab: (paneId: string, tabId: string) => void;
   readonly onSplitPane: (paneId: string, direction: SplitDirection) => void;
   readonly onClosePane: (paneId: string) => void;
-  readonly onMoveTabToPane: (tabId: string, fromPaneId: string, toPaneId: string) => void;
+  readonly onMoveTabToPane: (
+    tabId: string,
+    fromPaneId: string,
+    toPaneId: string,
+    insertIndex?: number,
+  ) => void;
   readonly onReorderTab: (paneId: string, tabId: string, targetIndex: number) => void;
+  readonly onDropItemIntoPane?:
+    | ((payload: SplitDragPayload, targetPaneId: string, zone: SplitDropZone) => void)
+    | undefined;
 }
 
 function renderTabLeadingIcon(tab: WorkspaceTab): ReactNode {
@@ -65,6 +84,14 @@ function renderTabLeadingIcon(tab: WorkspaceTab): ReactNode {
       return <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
     case "simulator":
       return <SmartphoneIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "files":
+      return <FilesIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "related":
+      return <Link2Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "device":
+      return <TabletSmartphoneIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    case "side-chat":
+      return <MessageSquarePlusIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
     case "thread":
     case "draft":
     case "agent":
@@ -97,6 +124,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
     onClosePane,
     onMoveTabToPane,
     onReorderTab,
+    onDropItemIntoPane,
   } = props;
 
   const [dropActive, setDropActive] = useState(false);
@@ -104,22 +132,19 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
   const isSplit = paneCount > 1;
   const firstOtherPaneId = otherPaneIds[0] ?? null;
 
-  const readDragPayload = (event: ReactDragEvent): DragPayload | null => {
-    try {
-      const raw = event.dataTransfer.getData(WORKSPACE_TAB_DRAG_MIME);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as Partial<DragPayload>;
-      if (typeof parsed.tabId === "string" && typeof parsed.fromPaneId === "string") {
-        return { tabId: parsed.tabId, fromPaneId: parsed.fromPaneId };
-      }
-      return null;
-    } catch {
-      return null;
-    }
+  const resolveDroppedPayload = (event: ReactDragEvent): SplitDragPayload | null => {
+    return (
+      readSplitDragDataTransfer(event.dataTransfer) ??
+      useWorkspaceTabsStore.getState().activeDrag
+    );
   };
 
+  const canAcceptDrag = (event: ReactDragEvent): boolean =>
+    hasSplitDragMime(event.dataTransfer.types) ||
+    useWorkspaceTabsStore.getState().activeDrag !== null;
+
   const handleStripDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes(WORKSPACE_TAB_DRAG_MIME)) return;
+    if (!canAcceptDrag(event)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
     if (!dropActive) setDropActive(true);
@@ -127,11 +152,22 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
 
   const handleStripDrop = (event: ReactDragEvent<HTMLDivElement>) => {
     setDropActive(false);
-    const payload = readDragPayload(event);
+    const payload = resolveDroppedPayload(event);
     if (!payload) return;
     event.preventDefault();
-    if (payload.fromPaneId !== pane.id) {
-      onMoveTabToPane(payload.tabId, payload.fromPaneId, pane.id);
+    event.stopPropagation();
+    useWorkspaceTabsStore.getState().setActiveDrag(null);
+    dispatchSplitDragEvent(false, null);
+    if (payload.kind === "pane-tab") {
+      if (payload.fromPaneId !== pane.id) {
+        onMoveTabToPane(payload.tabId, payload.fromPaneId, pane.id);
+      }
+      return;
+    }
+    if (onDropItemIntoPane) {
+      onDropItemIntoPane(payload, pane.id, "center");
+    } else {
+      useWorkspaceTabsStore.getState().dropItemIntoPane(payload, pane.id, "center");
     }
   };
 
@@ -147,6 +183,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
       className={cn(
         "relative flex shrink-0 select-none items-center gap-1 bg-sidebar px-2 text-xs transition-colors",
         "[[data-pmx-glass='1']_&]:bg-transparent",
+        isSplit && "rounded-none",
         touchesTopEdge
           ? cn(
               "h-[max(38px,env(titlebar-area-height,38px))] min-h-[38px]",
@@ -154,7 +191,11 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
               touchesLeftEdge && "max-md:pl-[var(--workspace-titlebar-content-left)]",
               isElectron && touchesRightEdge && "wco:pr-(--workspace-native-controls-inset)",
             )
-          : "h-9 min-h-9",
+          : cn(
+              "h-8 min-h-8 border-b border-border/55",
+              isSplit && touchesLeftEdge && "border-l border-l-border/60",
+              isSplit && touchesRightEdge && "border-r border-r-border/60",
+            ),
         dropActive && "ring-1 ring-inset ring-primary/55 bg-primary/8",
       )}
     >
@@ -176,26 +217,45 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
               data-active={isActive ? "true" : "false"}
               draggable
               onDragStart={(event) => {
-                event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData(
-                  WORKSPACE_TAB_DRAG_MIME,
-                  JSON.stringify({ tabId: tab.id, fromPaneId: pane.id } satisfies DragPayload),
-                );
+                const payload: SplitDragPayload = {
+                  kind: "pane-tab",
+                  tabId: tab.id,
+                  fromPaneId: pane.id,
+                };
+                writeSplitDragDataTransfer(event.dataTransfer, payload);
+                useWorkspaceTabsStore.getState().setActiveDrag(payload);
+                dispatchSplitDragEvent(true, payload);
+              }}
+              onDragEnd={() => {
+                setDropActive(false);
+                useWorkspaceTabsStore.getState().setActiveDrag(null);
+                dispatchSplitDragEvent(false, null);
               }}
               onDragOver={(event) => {
-                if (!event.dataTransfer.types.includes(WORKSPACE_TAB_DRAG_MIME)) return;
+                if (!canAcceptDrag(event)) return;
                 event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
               }}
               onDrop={(event) => {
-                const payload = readDragPayload(event);
+                const payload = resolveDroppedPayload(event);
                 if (!payload) return;
                 event.preventDefault();
                 event.stopPropagation();
                 setDropActive(false);
-                if (payload.fromPaneId === pane.id) {
-                  onReorderTab(pane.id, payload.tabId, index);
+                useWorkspaceTabsStore.getState().setActiveDrag(null);
+                dispatchSplitDragEvent(false, null);
+                if (payload.kind === "pane-tab") {
+                  if (payload.fromPaneId === pane.id) {
+                    onReorderTab(pane.id, payload.tabId, index);
+                  } else {
+                    onMoveTabToPane(payload.tabId, payload.fromPaneId, pane.id, index);
+                  }
+                  return;
+                }
+                if (onDropItemIntoPane) {
+                  onDropItemIntoPane(payload, pane.id, "center");
                 } else {
-                  onMoveTabToPane(payload.tabId, payload.fromPaneId, pane.id);
+                  useWorkspaceTabsStore.getState().dropItemIntoPane(payload, pane.id, "center");
                 }
               }}
               onAuxClick={(event) => {
@@ -283,7 +343,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
         />
       </div>
 
-      {/* Right: Unified Topbar Controls (Chief Pill + Overview + Right Panel) + Optional Split Controls */}
+      {/* Right: Unified Topbar Controls (Chief Pill + Overview + Right Panel) + Compact Split Controls */}
       <div
         data-workspace-split-controls={pane.id}
         className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
@@ -308,7 +368,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
                     type="button"
                     data-workspace-split-horizontal={pane.id}
                     disabled={!canSplit}
-                    aria-label="在右侧边栏打开会话"
+                    aria-label="左右分屏"
                     onClick={() => onSplitPane(pane.id, "horizontal")}
                     className="flex size-6.5 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
                   >
@@ -317,7 +377,7 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
                 }
               />
               <TooltipPopup side="bottom">
-                {canSplit ? "在右侧边栏打开并行会话" : `最多支持 ${WORKSPACE_MAX_SPLIT_PANES} 个分屏窗格`}
+                {canSplit ? "左右分屏" : `最多支持 ${WORKSPACE_MAX_SPLIT_PANES} 个分屏窗格`}
               </TooltipPopup>
             </Tooltip>
 
@@ -340,6 +400,37 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
                 {canSplit ? "上下分屏" : `最多支持 ${WORKSPACE_MAX_SPLIT_PANES} 个分屏窗格`}
               </TooltipPopup>
             </Tooltip>
+
+            <Menu>
+              <MenuTrigger
+                render={
+                  <button
+                    type="button"
+                    data-workspace-pane-menu={pane.id}
+                    aria-label="更多窗格操作"
+                    className="flex size-6.5 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  >
+                    <MoreHorizontalIcon className="size-3.5" aria-hidden />
+                  </button>
+                }
+              />
+              <MenuPopup align="end" side="bottom" sideOffset={4}>
+                <MenuItem disabled={!canSplit} onClick={() => onSplitPane(pane.id, "horizontal")}>
+                  <Columns2Icon className="size-3.5" aria-hidden />
+                  <span>左右分屏</span>
+                </MenuItem>
+                <MenuItem disabled={!canSplit} onClick={() => onSplitPane(pane.id, "vertical")}>
+                  <Rows2Icon className="size-3.5" aria-hidden />
+                  <span>上下分屏</span>
+                </MenuItem>
+                {isSplit ? (
+                  <MenuItem onClick={() => onClosePane(pane.id)}>
+                    <XIcon className="size-3.5" aria-hidden />
+                    <span>关闭当前分屏</span>
+                  </MenuItem>
+                ) : null}
+              </MenuPopup>
+            </Menu>
           </>
         ) : null}
 

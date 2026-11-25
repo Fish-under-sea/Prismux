@@ -13,12 +13,12 @@ import { observeResize } from "~/lib/observeResize";
 import { tickTextContent } from "~/lib/tickTextContent";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import { T, useGT, useMessages } from "gt-react";
-import { memo, use, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, use, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { workEntryDisplayIndicatesToolFailure } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { assetMediaActionsSource } from "./ChatMarkdownMedia";
-import { Minimize2Icon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, Minimize2Icon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import {
@@ -62,6 +62,67 @@ import {
   workEntryIconName,
 } from "./TimelineWorkEntryRow.logic";
 import { formatWorkingTimerNow } from "./TimelineWorkGroupRows.logic";
+import {
+  dshActivityCategoryIconName,
+  formatDshLiveActivityLabel,
+  PROCESS_TITLE_MINIMUM_MS,
+} from "./dshWorkSteps.logic";
+
+function useDebouncedLiveTitle(value: string, active: boolean): string {
+  const [displayed, setDisplayed] = useState(value);
+  const lastSwappedAtRef = useRef(0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- debounces live DSH step header updates by 150ms (PROCESS_TITLE_MINIMUM_MS) so rapid tool bursts do not flicker
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const elapsed = Date.now() - lastSwappedAtRef.current;
+    const remaining = Math.max(0, PROCESS_TITLE_MINIMUM_MS - elapsed);
+    const timer = window.setTimeout(() => {
+      lastSwappedAtRef.current = Date.now();
+      setDisplayed(value);
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [active, value]);
+  return active ? displayed : value;
+}
+
+/**
+ * Leading 16px activity icon slot that swaps smoothly on hover/focus/open
+ * to ChevronDown (collapsed) or ChevronUp (expanded), matching DSH ChatGroupSeat.
+ */
+function HoverChevronIconSlot({
+  expanded,
+  children,
+}: {
+  expanded: boolean;
+  children: ReactNode;
+}) {
+  const Chevron = expanded ? ChevronUpIcon : ChevronDownIcon;
+  return (
+    <span className="relative flex size-4 shrink-0 items-center justify-center">
+      <span
+        className={cn(
+          "flex size-4 items-center justify-center transition-opacity duration-150",
+          expanded
+            ? "opacity-0"
+            : "opacity-100 group-hover/timeline-row:opacity-0 group-focus-visible/timeline-row:opacity-0 group-hover/live-work:opacity-0 group-focus-visible/live-work:opacity-0",
+        )}
+      >
+        {children}
+      </span>
+      <Chevron
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none absolute inset-0 m-auto size-3.5 text-icon-muted transition-opacity duration-150",
+          expanded
+            ? "opacity-100"
+            : "opacity-0 group-hover/timeline-row:opacity-100 group-focus-visible/timeline-row:opacity-100 group-hover/live-work:opacity-100 group-focus-visible/live-work:opacity-100",
+        )}
+      />
+    </span>
+  );
+}
 
 export const WorkGroupSection = memo(function WorkGroupSection({
   anchorKey,
@@ -69,12 +130,16 @@ export const WorkGroupSection = memo(function WorkGroupSection({
   groupedEntries,
   isExpandedToolGroup,
   displayLabel,
+  isLive = false,
+  autoExpandReasoning = false,
 }: {
   anchorKey: string;
   disclosureAnchorKey?: string;
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
   isExpandedToolGroup: boolean;
   displayLabel?: string | undefined;
+  isLive?: boolean | undefined;
+  autoExpandReasoning?: boolean | undefined;
 }) {
   const {
     workspaceRoot,
@@ -88,7 +153,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
     const item = entry.projectedItem?.item;
     return (
       (item?.type === "approval_request" && pendingApprovals.has(item.requestId)) ||
-      workEntryIsVisibleInGroup(entry, isExpandedToolGroup)
+      workEntryIsVisibleInGroup(entry, isExpandedToolGroup || isLive)
     );
   });
 
@@ -105,6 +170,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
         entries={nonEmptyEntries}
         groupedEntries={groupedEntries}
         workspaceRoot={workspaceRoot}
+        isLive={isLive}
       />
     );
   }
@@ -117,6 +183,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
           workEntry={workEntry}
           workspaceRoot={workspaceRoot}
           displayLabel={displayLabel}
+          autoExpandReasoning={autoExpandReasoning}
           onToggleEntry={(collapsed) =>
             onToggleWorkEntry(disclosureAnchorKey, collapsed, workEntry.id)
           }
@@ -190,12 +257,14 @@ function ExpandedWorkGroupEntries({
   entries,
   groupedEntries,
   workspaceRoot,
+  isLive = false,
 }: {
   anchorKey: string;
   disclosureAnchorKey: string;
   entries: TimelineWorkEntry[];
   groupedEntries: ReadonlyArray<TimelineWorkEntry>;
   workspaceRoot: string | undefined;
+  isLive?: boolean;
 }) {
   const {
     workGroupViewState: viewState,
@@ -316,9 +385,9 @@ function ExpandedWorkGroupEntries({
           estimatedItemSize={compactWorkEntryHeight}
           drawDistance={240}
           recycleItems
-          {...(initialScrollIndex ? { initialScrollIndex } : {})}
+          {...(initialScrollIndex ? { initialScrollIndex } : { initialScrollAtEnd: isLive })}
           maintainScrollAtEnd={
-            appendState.follow ? { animated: false, on: { dataChange: true } } : false
+            appendState.follow || isLive ? { animated: false, on: { dataChange: true } } : false
           }
           maintainScrollAtEndThreshold={1 / Math.max(1, fades.viewportHeight)}
           // Measure the restored row even when an intra-row offset puts its
@@ -335,7 +404,9 @@ function ExpandedWorkGroupEntries({
           role="region"
           aria-label={gt("Tool calls")}
           data-tool-group-scroll
-          style={{ maxHeight: `calc(min(18rem, 50dvh) + ${expandedContentHeight}px)` }}
+          data-scroll-fade-top={fades.top ? "true" : undefined}
+          data-scroll-fade-bottom={fades.bottom ? "true" : undefined}
+          style={{ maxHeight: `calc(min(25rem, 50dvh) + ${expandedContentHeight}px)` }}
           className={cn(
             "scrollbar-gutter-stable scroll-py-6 overflow-x-hidden rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
             getVirtualizedScrollFadeClassName(fades),
@@ -482,6 +553,8 @@ function LiveActivityRow({
   failed = false,
   active = false,
   shimmer = false,
+  expandable = false,
+  expanded = false,
 }: {
   label: ReactNode;
   iconName?: WorkEntryIconName;
@@ -489,6 +562,8 @@ function LiveActivityRow({
   failed?: boolean;
   active?: boolean;
   shimmer?: boolean;
+  expandable?: boolean;
+  expanded?: boolean;
 }) {
   const animated = active && !failed;
   const showShimmer = animated && shimmer;
@@ -504,10 +579,19 @@ function LiveActivityRow({
         failed={failed}
         announceFailure={failed}
         active={animated && !shimmer}
+        expandable={expandable}
+        expanded={expanded}
       />
       {showShimmer ? (
         <ActivityShimmerOverlay>
-          <LiveActivityContent label={label} iconName={iconName} toolIcon={toolIcon} highlighted />
+          <LiveActivityContent
+            label={label}
+            iconName={iconName}
+            toolIcon={toolIcon}
+            highlighted
+            expandable={expandable}
+            expanded={expanded}
+          />
         </ActivityShimmerOverlay>
       ) : null}
     </div>
@@ -522,6 +606,8 @@ function LiveActivityContent({
   announceFailure = false,
   active = false,
   highlighted = false,
+  expandable = false,
+  expanded = false,
 }: {
   label: ReactNode;
   iconName: WorkEntryIconName | undefined;
@@ -530,34 +616,43 @@ function LiveActivityContent({
   announceFailure?: boolean;
   active?: boolean;
   highlighted?: boolean;
+  expandable?: boolean;
+  expanded?: boolean;
 }) {
   const gt = useGT();
   const showTrailingFailureMark =
     failed && iconName !== undefined && !toolIconAcceptsTint(toolIcon);
+  const iconContent = iconName ? (
+    <span
+      className={cn(
+        "flex size-4 items-center justify-center",
+        failed
+          ? failedToolIconClassName
+          : highlighted
+            ? "text-foreground"
+            : "text-icon-muted",
+      )}
+      role={announceFailure ? "img" : undefined}
+      aria-label={announceFailure ? gt("Tool call failed") : undefined}
+    >
+      <ToolActivityIconView
+        icon={toolIcon}
+        fallbackName={iconName}
+        className="block size-4 shrink-0 stroke-2"
+        muted={!highlighted}
+      />
+    </span>
+  ) : null;
 
   return (
     <WorkLogRow
       icon={
-        iconName ? (
-          <span
-            className={cn(
-              "flex size-4 items-center justify-center",
-              failed
-                ? failedToolIconClassName
-                : highlighted
-                  ? "text-foreground"
-                  : "text-icon-muted",
-            )}
-            role={announceFailure ? "img" : undefined}
-            aria-label={announceFailure ? gt("Tool call failed") : undefined}
-          >
-            <ToolActivityIconView
-              icon={toolIcon}
-              fallbackName={iconName}
-              className="block size-4 shrink-0 stroke-2"
-              muted={!highlighted}
-            />
-          </span>
+        iconContent ? (
+          expandable ? (
+            <HoverChevronIconSlot expanded={expanded}>{iconContent}</HoverChevronIconSlot>
+          ) : (
+            iconContent
+          )
         ) : null
       }
       label={
@@ -589,8 +684,19 @@ export function LiveWorkEntryTimelineRow({
   const gt = useGT();
   const m = useMessages();
   const threadTarget = useThreadReadTarget(row.entry, ctx.activeThreadEnvironmentId);
-  const label = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active, m);
-  const threadLabel = threadReadLabel(label, row.entry, threadTarget, m);
+  const legacyLabel = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active, m);
+  const threadLabel = threadReadLabel(legacyLabel, row.entry, threadTarget, m);
+  const useDshHeader = row.dshMode !== undefined;
+  const liveProcessDetail =
+    row.liveProcessDetail ?? ctx.workStepsPolicy?.liveProcessDetail ?? true;
+  const dshLive = useDshHeader
+    ? formatDshLiveActivityLabel(row.entry, {
+        liveProcessDetail,
+        workspaceRoot: ctx.workspaceRoot,
+        locale: ctx.locale,
+      })
+    : null;
+  const debouncedDshText = useDebouncedLiveTitle(dshLive?.text ?? legacyLabel, row.active);
 
   const item = row.entry.projectedItem?.item;
   const pendingApproval =
@@ -598,15 +704,20 @@ export function LiveWorkEntryTimelineRow({
   if (pendingApproval) return <TimelinePendingApprovalRow approval={pendingApproval} />;
 
   const failed = workEntryDisplayIndicatesToolFailure(row.entry);
-  const thoughtLine =
-    row.thought && !row.expanded
-      ? liveThoughtLine((row.thought.detail ?? "").slice(0, THOUGHT_PREVIEW_SOURCE_MAX_LENGTH))
-      : "";
+  const showThoughtPreview = !useDshHeader && row.thought && !row.expanded && liveProcessDetail;
+  const thoughtLine = showThoughtPreview
+    ? liveThoughtLine((row.thought?.detail ?? "").slice(0, THOUGHT_PREVIEW_SOURCE_MAX_LENGTH))
+    : "";
   const thoughtIsStatus = thoughtLine !== "" && row.entry === row.thought;
+  const iconName = dshLive
+    ? dshActivityCategoryIconName(dshLive.category)
+    : workEntryIconName(row.entry);
 
   return (
     <button
       type="button"
+      data-work-live-header="true"
+      data-work-live-mode={row.dshMode}
       className={cn(
         "group/live-work flex w-full max-w-full cursor-pointer rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
         thoughtLine ? "flex-col items-start" : "min-h-6 items-center",
@@ -614,7 +725,7 @@ export function LiveWorkEntryTimelineRow({
       aria-label={
         failed
           ? gt("{label}, tool call failed", {
-              label: `${thoughtLine ? `${thoughtLine} ` : ""}${threadLabel?.text ?? label}`,
+              label: `${thoughtLine ? `${thoughtLine} ` : ""}${threadLabel?.text ?? debouncedDshText}`,
             })
           : undefined
       }
@@ -649,7 +760,9 @@ export function LiveWorkEntryTimelineRow({
       ) : null}
       <LiveActivityRow
         label={
-          thoughtIsStatus ? (
+          useDshHeader ? (
+            debouncedDshText
+          ) : thoughtIsStatus ? (
             row.active ? (
               gt("Thinking")
             ) : (
@@ -658,7 +771,7 @@ export function LiveWorkEntryTimelineRow({
           ) : row.entry.itemType === "reasoning" ? (
             <ChatMarkdown
               inline
-              text={(row.entry.detail ?? label).slice(0, THOUGHT_PREVIEW_SOURCE_MAX_LENGTH)}
+              text={(row.entry.detail ?? legacyLabel).slice(0, THOUGHT_PREVIEW_SOURCE_MAX_LENGTH)}
               cwd={ctx.markdownCwd}
               parseRawHtml={false}
               extensions={
@@ -674,13 +787,16 @@ export function LiveWorkEntryTimelineRow({
               linked={false}
             />
           ) : (
-            label
+            legacyLabel
           )
         }
-        iconName={workEntryIconName(row.entry)}
+        iconName={iconName}
         toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
         failed={failed}
         active={row.active}
+        shimmer={useDshHeader && row.active}
+        expandable
+        expanded={row.expanded}
       />
     </button>
   );
@@ -719,18 +835,22 @@ function WorkGroupHeader(props: {
   const gt = useGT();
   return (
     <WorkLogButton
+      data-work-group-toggle="true"
+      data-open={props.expanded ? "true" : undefined}
       aria-label={
         props.failed ? gt("{label}, tool call failed", { label: props.label }) : props.label
       }
       aria-expanded={props.expanded}
       onClick={props.onToggle}
       icon={
-        <ToolActivityIconView
-          icon={props.toolIcon}
-          fallbackName={props.iconName}
-          className="size-4 shrink-0 stroke-2 text-icon-muted"
-          muted
-        />
+        <HoverChevronIconSlot expanded={props.expanded}>
+          <ToolActivityIconView
+            icon={props.toolIcon}
+            fallbackName={props.iconName}
+            className="size-4 shrink-0 stroke-2 text-icon-muted"
+            muted
+          />
+        </HoverChevronIconSlot>
       }
       label={<span className="block truncate">{props.label}</span>}
       trailing={

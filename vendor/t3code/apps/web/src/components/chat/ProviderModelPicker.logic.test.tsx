@@ -16,6 +16,8 @@ import {
 import {
   DEFAULT_AGENT_SCOPED_VISIBLE_MODELS,
   formatModelSourceSubtitle,
+  orderModelOptionsByPreference,
+  orderProviderInstanceEntries,
   partitionAgentScopedModels,
   retainedModelWhileProviderLocked,
   shouldScopeModelPickerToActiveAgent,
@@ -331,5 +333,42 @@ describe("ProviderModelPicker.logic (Orca agent-scoped picker)", () => {
 
     expect(findComposerPickerAnchorCard({ closest: () => null } as unknown as Element)).toBeNull();
     expect(findComposerPickerAnchorCard(null)).toBeNull();
+  });
+
+  it("orders provider instances by settings.providerOrder and models by providerModelPreferences[instanceId].modelOrder with stable unlisted fallback", () => {
+    const codex = ProviderInstanceId.make("codex");
+    const claude = ProviderInstanceId.make("claudeAgent");
+    const dsh = ProviderInstanceId.make("acpRegistry_dsh");
+    const agy = ProviderInstanceId.make("antigravity");
+
+    const entries = [
+      { instanceId: codex, name: "Codex" },
+      { instanceId: claude, name: "Claude" },
+      { instanceId: agy, name: "Antigravity" },
+      { instanceId: dsh, name: "DeepSeek Harness" },
+    ];
+
+    expect(orderProviderInstanceEntries(entries, [dsh, claude]).map((e) => e.instanceId)).toEqual([
+      dsh,
+      claude,
+      codex,
+      agy,
+    ]);
+    expect(orderProviderInstanceEntries(entries, []).map((e) => e.instanceId)).toEqual([
+      codex,
+      claude,
+      agy,
+      dsh,
+    ]);
+
+    const models = [
+      { slug: "gpt-5.4" },
+      { slug: "gpt-6.2-astra" },
+      { slug: "gpt-6-astra" },
+      { slug: "o3" },
+    ];
+    expect(
+      orderModelOptionsByPreference(models, ["gpt-6-astra", "o3"]).map((m) => m.slug),
+    ).toEqual(["gpt-6-astra", "o3", "gpt-5.4", "gpt-6.2-astra"]);
   });
 });

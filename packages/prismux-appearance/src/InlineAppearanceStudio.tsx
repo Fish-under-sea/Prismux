@@ -372,7 +372,7 @@ export function InlineAppearanceStudio({
           </div>
         </section>
 
-        {/* Section 3: Unified 6-Zone Configurator (Shell Frame & Right Feature Sidebar pinned first) */}
+        {/* Section 3: Unified 8-Zone Configurator (Shell Frame & Right Feature Sidebar pinned first) */}
         <section className="pmx-inline-section">
           <GlassZoneConfigurator
             config={config}

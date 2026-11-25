@@ -752,6 +752,7 @@ interface ProviderInstanceCardProps {
   readonly isLaunchModeOverridden?: boolean | undefined;
   readonly onLaunchModeChange?: ((mode: ProviderLaunchMode) => void) | undefined;
   readonly onLaunchModeReset?: (() => void) | undefined;
+  readonly dragHandle?: ReactNode | undefined;
   readonly acpProjects?:
     | ReadonlyArray<{
         readonly id: ProjectId;
@@ -830,6 +831,7 @@ export function ProviderInstanceCard({
   isLaunchModeOverridden = false,
   onLaunchModeChange,
   onLaunchModeReset,
+  dragHandle,
 }: ProviderInstanceCardProps) {
   const gt = useGT();
   const m = useMessages();
@@ -1385,10 +1387,18 @@ export function ProviderInstanceCard({
       <div
         data-slot="settings-row"
         className={cn(
-          "group relative flex min-h-18 items-center gap-3 px-3 py-3 transition-colors sm:px-4",
+          "group relative flex min-h-18 items-center gap-2.5 px-3 py-3 transition-colors sm:px-4",
           selected ? "bg-foreground/[0.06]" : "hover:bg-muted/25",
         )}
       >
+        {dragHandle ? (
+          <span
+            className="pointer-events-auto relative z-10 -ms-1.5 flex shrink-0 items-center"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {dragHandle}
+          </span>
+        ) : null}
         <div
           className={cn(
             "pointer-events-none flex min-w-0 flex-1 items-start gap-3 rounded-md text-left transition-opacity",
@@ -1404,14 +1414,18 @@ export function ProviderInstanceCard({
           />
           {titleIconNode}
           <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-medium text-foreground">{displayName}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="max-w-36 shrink-0 truncate text-sm font-medium text-foreground">
+                {displayName}
+              </span>
               {versionLabel ? (
-                <code className="max-w-24 shrink-0 truncate text-xs text-muted-foreground">
+                <code className="min-w-0 max-w-24 shrink truncate text-xs text-muted-foreground">
                   {versionLabel}
                 </code>
               ) : null}
-              {versionAdvisoryNode}
+              {versionAdvisoryNode ? (
+                <span onPointerDown={(event) => event.stopPropagation()}>{versionAdvisoryNode}</span>
+              ) : null}
             </span>
             <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs leading-normal text-muted-foreground/80">
               {statusDotNode && !updateProgress ? (
@@ -1438,6 +1452,7 @@ export function ProviderInstanceCard({
                   href={safeHomepageUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     openSafeExternalHttpsFromAnchor(event);
@@ -1451,7 +1466,10 @@ export function ProviderInstanceCard({
             </span>
           </span>
         </div>
-        <span className="pointer-events-none relative flex h-6 shrink-0 items-center gap-1.5 *:pointer-events-auto">
+        <span
+          className="pointer-events-none relative flex h-6 shrink-0 items-center gap-1.5 *:pointer-events-auto"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           {launchModeControlSlot}
           {projectOverride?.value !== undefined ? (
             <span className="flex items-center">

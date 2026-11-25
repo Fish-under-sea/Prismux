@@ -94,14 +94,14 @@ function FastWorktreeCheckoutRow() {
   );
 }
 
-export function WorktreesSettingsPanel() {
+export function WorktreesSettingsSections() {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
   const { scope } = useSettingsScope();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
 
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection
         id="worktree-creation"
         title={gt("Creation", { $context: "settings section about creating worktrees" })}
@@ -117,6 +117,14 @@ export function WorktreesSettingsPanel() {
         <BranchNamingSettings />
       </SettingsSection>
       <WorktreeCleanupSection />
+    </>
+  );
+}
+
+export function WorktreesSettingsPanel() {
+  return (
+    <SettingsPageContainer>
+      <WorktreesSettingsSections />
     </SettingsPageContainer>
   );
 }

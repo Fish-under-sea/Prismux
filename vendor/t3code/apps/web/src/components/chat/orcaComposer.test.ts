@@ -1,7 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import fs from "node:fs";
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import path from "node:path";
+import * as NodePath from "node:path";
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import {
   ProviderDriverKind,
@@ -218,6 +218,161 @@ describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mo
     expect(geminiHtml).not.toContain('data-composer-fast-mode-toggle="true"');
   });
 
+  it("enforces agent-specific English Title-Case speed/mode toggles and 7-level effort tick abbreviations", () => {
+    initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
+
+    const claudeModelWithExtra: ServerProviderModel = {
+      slug: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      isCustom: false,
+      capabilities: createModelCapabilities({
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Effort",
+            type: "select",
+            role: "reasoning",
+            currentValue: "high",
+            options: [
+              { id: "minimal", label: "Minimal" },
+              { id: "low", label: "Low" },
+              { id: "medium", label: "Medium" },
+              { id: "high", label: "High" },
+              { id: "xhigh", label: "Extra High" },
+              { id: "max", label: "Max" },
+              { id: "ultra", label: "Ultra" },
+            ],
+          },
+          { id: "fastMode", label: "Fast mode", type: "boolean", currentValue: false },
+          { id: "ultracode", label: "Ultracode", type: "boolean", currentValue: true },
+          { id: "noisyToggle", label: "Noisy Beta", type: "boolean", currentValue: true },
+        ],
+      }),
+    };
+
+    const codexModelWithUltraFast: ServerProviderModel = {
+      slug: "gpt-6.2-astra",
+      name: "GPT-6.2 Astra",
+      isCustom: false,
+      capabilities: createModelCapabilities({
+        optionDescriptors: [
+          {
+            id: "reasoningEffort",
+            label: "Reasoning effort",
+            type: "select",
+            role: "reasoning",
+            currentValue: "medium",
+            options: [
+              { id: "minimal", label: "Minimal" },
+              { id: "low", label: "Low" },
+              { id: "medium", label: "Medium" },
+              { id: "high", label: "High" },
+              { id: "xhigh", label: "Extra High" },
+              { id: "max", label: "Max" },
+              { id: "ultra", label: "Ultra" },
+            ],
+          },
+          {
+            id: "serviceTier",
+            label: "Speed",
+            type: "select",
+            currentValue: "default",
+            options: [
+              { id: "default", label: "Standard" },
+              { id: "fast", label: "Fast" },
+              { id: "ultrafast", label: "Ultra Fast" },
+              { id: "flex", label: "Flex" },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const otherAgentWithFast: ServerProviderModel = {
+      slug: "cursor-fast",
+      name: "Cursor Fast",
+      isCustom: false,
+      capabilities: createModelCapabilities({
+        optionDescriptors: [
+          { id: "fastMode", label: "Fast mode", type: "boolean", currentValue: false },
+          {
+            id: "serviceTier",
+            label: "Speed",
+            type: "select",
+            currentValue: "default",
+            options: [
+              { id: "default", label: "Standard" },
+              { id: "fast", label: "Fast" },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const renderFooter = (
+      provider: string,
+      model: ServerProviderModel,
+      modelOptions: TraitsSelectionInput["modelOptions"] = [],
+    ) =>
+      renderToStaticMarkup(
+        createElement(
+          GTProvider,
+          { locale: "zh", translations: {} },
+          createElement(
+            DockedPickerContext.Provider,
+            { value: { modelLabel: model.name } },
+            createElement(ComposerUnifiedOptionsFooter, {
+              traits: {
+                provider: ProviderDriverKind.make(provider),
+                instanceId: ProviderInstanceId.make(provider),
+                models: [model],
+                model: model.slug,
+                modelOptions,
+                onModelOptionsChange: () => undefined,
+              },
+            }),
+          ),
+        ),
+      );
+
+    // 1. Claude: ONLY Fast Mode & Ultracode (English Title-Case, zero Chinese 快速, hides noisy toggles)
+    //    AND 7-level effort slider uses Mini / Low / Med / High / XHigh / Max / Ultra ticks with full names in tooltip
+    const claudeHtml = renderFooter("claudeAgent", claudeModelWithExtra, [
+      { id: "effort", value: "ultra" },
+      { id: "fastMode", value: true },
+      { id: "ultracode", value: true },
+    ]);
+    expect(claudeHtml).toContain(">Fast Mode<");
+    expect(claudeHtml).toContain(">Ultracode<");
+    expect(claudeHtml).not.toContain(">快速<");
+    expect(claudeHtml).not.toContain("Noisy Beta");
+    for (const shortTick of ["Mini", "Low", "Med", "High", "XHigh", "Max", "Ultra"]) {
+      expect(claudeHtml).toContain(`>${shortTick}<`);
+    }
+    expect(claudeHtml).toContain('title="Minimal"');
+    expect(claudeHtml).toContain('title="Medium"');
+    expect(claudeHtml).toContain('title="Extra High"');
+    expect(claudeHtml).toContain('title="Ultra"');
+
+    // 2. Codex: ONLY Fast & Ultra Fast (mutually exclusive, hides Flex / Priority)
+    const codexHtml = renderFooter("codex", codexModelWithUltraFast, [
+      { id: "reasoningEffort", value: "high" },
+      { id: "serviceTier", value: "ultrafast" },
+    ]);
+    expect(codexHtml).toContain(">Fast<");
+    expect(codexHtml).toContain(">Ultra Fast<");
+    expect(codexHtml).not.toContain(">Flex<");
+    expect(codexHtml).not.toContain(">Priority<");
+    expect(codexHtml).not.toContain(">快速<");
+
+    // 3. Other agents: ZERO extra speed/mode toggles
+    const otherHtml = renderFooter("cursor", otherAgentWithFast, []);
+    expect(otherHtml).not.toContain('data-composer-speed-row="true"');
+    expect(otherHtml).not.toContain('data-composer-fast-mode-toggle="true"');
+    expect(otherHtml).not.toContain("Fast Mode");
+    expect(otherHtml).not.toContain("Ultra Fast");
+  });
+
   it("formats canonical English effort label (never localized Chinese tiers) and FastBolt on composer pill trigger", () => {
     initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
     const traits: TraitsSelectionInput = {
@@ -241,10 +396,10 @@ describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mo
   });
 
   it("wires AGY 2.0 slender double-layer liquid-glass layout & footer structure in ChatComposer.tsx", () => {
-    const chatDir = path.dirname(
+    const chatDir = NodePath.dirname(
       new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
     );
-    const source = fs.readFileSync(path.join(chatDir, "ChatComposer.tsx"), "utf8");
+    const source = NodeFS.readFileSync(NodePath.join(chatDir, "ChatComposer.tsx"), "utf8");
 
     // 1. Responds to dual-side drag-resize CSS variable with 960px slender default.
     expect(source).toContain("--pmx-chat-content-max-width");

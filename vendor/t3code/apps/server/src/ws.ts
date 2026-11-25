@@ -1857,11 +1857,21 @@ export const layerWsRpc = (
             : directEndpoints.resolve(),
         });
 
+        const hostUsername = yield* HostProcess.Username;
+        const hostEnvironment = yield* HostProcess.Environment;
+        const osUsername =
+          hostUsername?.trim() ||
+          hostEnvironment.USERNAME?.trim() ||
+          hostEnvironment.USER?.trim() ||
+          hostEnvironment.LOGNAME?.trim() ||
+          undefined;
+
         return {
           environment,
           auth,
           cwd: config.cwd,
           hostname: yield* HostProcess.Hostname,
+          ...(osUsername ? { osUsername } : {}),
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,

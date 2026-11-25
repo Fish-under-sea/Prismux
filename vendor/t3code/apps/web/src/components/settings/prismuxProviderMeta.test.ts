@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   buildContinueInTerminalCommand,
+  DSH_LOCAL_ACP_PRESET,
   OMP_LOCAL_ACP_PRESET,
   openSafeExternalHttpsFromAnchor,
   PRISMUX_AGENT_CLI_CATALOG,
@@ -47,6 +48,25 @@ describe("validateSafeHttpsUrl", () => {
 });
 
 describe("OMP local ACP preset & official Agent catalog", () => {
+  it("defines the one-click dsh local ACP preset with validated https homepage", () => {
+    expect(DSH_LOCAL_ACP_PRESET).toMatchObject({
+      id: "dsh",
+      command: "dsh",
+      args: ["acp"],
+      homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
+    });
+    expect(validateSafeHttpsUrl(DSH_LOCAL_ACP_PRESET.homepageUrl)).toBe(
+      "https://github.com/deepseek-ai/deepseek-harness",
+    );
+    const meta = resolveAgentCliMeta({
+      driver: "acpRegistry",
+      instanceId: "dsh",
+      config: { source: "local", commandPath: "dsh", commandArgs: ["acp"] },
+    });
+    expect(meta?.id).toBe("dsh");
+    expect(meta?.cliCommand).toBe("dsh");
+  });
+
   it("defines the one-click omp local ACP preset with validated https homepage", () => {
     expect(OMP_LOCAL_ACP_PRESET).toMatchObject({
       id: "omp",

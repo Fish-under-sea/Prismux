@@ -393,8 +393,9 @@ function sanitizeGlassZoneEntry(
 }
 
 /**
- * Maps legacy 6-zone ids (`leftSidebar`, `chromeBars`) into the unified `shellFrame` zone
- * while preserving canonical 6-zone ids (`shellFrame`, `rightSidebar`, `mainCanvas`, `workPanels`, `composer`, `overlays`).
+ * Maps legacy pre-shellFrame zone ids (`leftSidebar`, `chromeBars`) into the unified `shellFrame` zone
+ * while preserving canonical 8-zone ids (`shellFrame`, `rightSidebar`, `mainCanvas`, `workPanels`,
+ * `composer`, `overlays`, `userBubble`, `overviewPanel`).
  */
 export function canonicalizeGlassZoneId(id: GlassZoneIdInput): GlassZoneId {
   if (id === 'leftSidebar' || id === 'chromeBars') return 'shellFrame';
@@ -426,6 +427,16 @@ function sanitizeGlassZones(
     ),
     composer: sanitizeGlassZoneEntry('composer', raw?.composer, base.composer),
     overlays: sanitizeGlassZoneEntry('overlays', raw?.overlays, base.overlays),
+    userBubble: sanitizeGlassZoneEntry(
+      'userBubble',
+      raw?.userBubble,
+      base.userBubble ?? DEFAULT_GLASS_ZONES.userBubble,
+    ),
+    overviewPanel: sanitizeGlassZoneEntry(
+      'overviewPanel',
+      raw?.overviewPanel,
+      base.overviewPanel ?? DEFAULT_GLASS_ZONES.overviewPanel,
+    ),
   };
 }
 
@@ -834,7 +845,7 @@ export function resetGlassZone(
   };
 }
 
-/** Resets all 6 glass zones (plus legacy surface gates) back to `'inherit'`. */
+/** Resets all 8 glass zones (plus legacy surface gates) back to `'inherit'`. */
 export function resetAllGlassZones(config: AppearanceConfig): AppearanceConfig {
   const normalized = normalizeAppearanceConfig(config);
   return {
@@ -851,11 +862,13 @@ export function resetAllGlassZones(config: AppearanceConfig): AppearanceConfig {
       workPanels: { mode: 'inherit' },
       composer: { mode: 'inherit' },
       overlays: { mode: 'inherit' },
+      userBubble: { mode: 'inherit' },
+      overviewPanel: { mode: 'inherit' },
     },
   };
 }
 
-/** Counts how many of the 6 workbench zones diverge from `'inherit'` (`'custom'` or `'solid'`). */
+/** Counts how many of the 8 workbench zones diverge from `'inherit'` (`'custom'` or `'solid'`). */
 export function countCustomizedGlassZones(config: AppearanceConfig): number {
   const normalized = normalizeAppearanceConfig(config);
   let count = 0;
@@ -960,14 +973,26 @@ function buildZoneSheenCss(isDark: boolean, fresnelScalar: number, id: GlassZone
     const glaze = (isDark ? 0.028 : 0.09) * fresnelScalar;
     return `linear-gradient(180deg, rgba(255, 255, 255, ${glaze.toFixed(4)}) 0%, rgba(255, 255, 255, ${glaze.toFixed(4)}) 100%)`;
   }
+  if (id === 'userBubble') {
+    if (isDark) {
+      const tl = 0.075 * fresnelScalar;
+      const mid = 0.012 * fresnelScalar;
+      const br = 0.022 * fresnelScalar;
+      return `linear-gradient(135deg, rgba(255, 255, 255, ${tl.toFixed(4)}) 0%, rgba(255, 255, 255, ${mid.toFixed(4)}) 42%, rgba(255, 255, 255, 0) 70%, rgba(255, 255, 255, ${br.toFixed(4)}) 100%)`;
+    }
+    const tl = 0.32 * fresnelScalar;
+    const mid = 0.06 * fresnelScalar;
+    const br = 0.1 * fresnelScalar;
+    return `linear-gradient(135deg, rgba(255, 255, 255, ${tl.toFixed(4)}) 0%, rgba(255, 255, 255, ${mid.toFixed(4)}) 48%, rgba(255, 255, 255, ${br.toFixed(4)}) 100%)`;
+  }
   if (isDark) {
-    const top = (id === 'mainCanvas' ? 0.045 : 0.065) * fresnelScalar;
-    const mid = (id === 'mainCanvas' ? 0.0 : 0.016) * fresnelScalar;
-    const bot = (id === 'mainCanvas' ? 0.02 : 0.032) * fresnelScalar;
+    const top = (id === 'mainCanvas' ? 0.045 : id === 'overviewPanel' ? 0.055 : 0.065) * fresnelScalar;
+    const mid = (id === 'mainCanvas' ? 0.0 : id === 'overviewPanel' ? 0.01 : 0.016) * fresnelScalar;
+    const bot = (id === 'mainCanvas' ? 0.02 : id === 'overviewPanel' ? 0.024 : 0.032) * fresnelScalar;
     return `linear-gradient(180deg, rgba(255, 255, 255, ${top.toFixed(4)}) 0%, rgba(255, 255, 255, ${mid.toFixed(4)}) 46%, rgba(255, 255, 255, ${bot.toFixed(4)}) 100%)`;
   }
-  const top = (id === 'mainCanvas' ? 0.16 : 0.24) * fresnelScalar;
-  const bot = (id === 'mainCanvas' ? 0.04 : 0.08) * fresnelScalar;
+  const top = (id === 'mainCanvas' ? 0.16 : id === 'overviewPanel' ? 0.22 : 0.24) * fresnelScalar;
+  const bot = (id === 'mainCanvas' ? 0.04 : id === 'overviewPanel' ? 0.06 : 0.08) * fresnelScalar;
   return `linear-gradient(180deg, rgba(255, 255, 255, ${top.toFixed(4)}) 0%, rgba(255, 255, 255, 0) 48%, rgba(255, 255, 255, ${bot.toFixed(4)}) 100%)`;
 }
 
@@ -1087,12 +1112,21 @@ function resolveZoneGlassValue(
     } else {
       // Arc / AGY 2.0 crystal-clear framed stage window: default mainCanvas reveals Z-0 wallpaper
       // sharply with 0px blur while the surrounding monolithic frame carries the frosted liquid glass.
-      // Users still retain full freedom to dial custom blur/opacity or solid in 6-zone controls.
+      // Users still retain full freedom to dial custom blur/opacity or solid in 8-zone controls.
       inheritedBlur = 0;
     }
   } else if (id === 'workPanels') {
     // Dedicated frosted-glass readability baseline for Tasks, Workspace Board & Scheduled Tasks.
     inheritedBlur = inheritedBlur > 0 ? Math.max(12, inheritedBlur) : 0;
+  } else if (id === 'userBubble') {
+    // Airy crystal-frosted blur for chat user message pills (14px balanced, 18px clear).
+    inheritedBlur =
+      inheritedBlur > 0 ? clampNumber(Math.max(14, inheritedBlur + 2), 0, GLASS_ZONE_LIMITS.blurMax) : 0;
+  } else if (id === 'overviewPanel') {
+    // Crisp frosted blur for floating Session Overview card (16px balanced, 20px clear)
+    // so wallpaper color glows softly behind sharp >= 4.5:1 foreground typography.
+    inheritedBlur =
+      inheritedBlur > 0 ? clampNumber(Math.max(16, inheritedBlur + 4), 0, GLASS_ZONE_LIMITS.blurMax) : 0;
   }
 
   let inheritedAlpha: number;
@@ -1111,6 +1145,28 @@ function resolveZoneGlassValue(
     const floor = (isDark ? 0.56 : 0.64) * fidelityScalar;
     const minFloor = (isDark ? 0.52 : 0.6) * fidelityScalar;
     inheritedAlpha = clampNumber(floor + (inheritedRawOp / 100) * (1 - floor) * 0.7, minFloor, 0.94);
+  } else if (id === 'userBubble') {
+    // Airy translucent frosted user bubble default:
+    // Dark Glass: clear ~19%, balanced ~24%, light ~34% (eliminating murky ~59% solid mix).
+    // Light Glass: clear ~32%, balanced ~37%, light ~48% (soft snow-mist glass over crisp slate ink).
+    if (isDark) {
+      const floor = 0.14 * fidelityScalar;
+      inheritedAlpha = clampNumber(floor + (inheritedRawOp / 100) * 0.44, 0.12 * fidelityScalar, 0.62);
+    } else {
+      const floor = 0.26 * fidelityScalar;
+      inheritedAlpha = clampNumber(floor + (inheritedRawOp / 100) * 0.48, 0.22 * fidelityScalar, 0.72);
+    }
+  } else if (id === 'overviewPanel') {
+    // Clean translucent single-pass floating overview card default (decoupled from rightSidebar):
+    // Dark Glass: clear ~30%, balanced ~35%, light ~47% (eliminating opaque dark stacking).
+    // Light Glass: clear ~42%, balanced ~47%, light ~59% (airy luminous frost with crisp >= 4.5:1 slate ink).
+    if (isDark) {
+      const floor = 0.24 * fidelityScalar;
+      inheritedAlpha = clampNumber(floor + (inheritedRawOp / 100) * 0.5, 0.2 * fidelityScalar, 0.74);
+    } else {
+      const floor = 0.36 * fidelityScalar;
+      inheritedAlpha = clampNumber(floor + (inheritedRawOp / 100) * 0.5, 0.3 * fidelityScalar, 0.8);
+    }
   } else if (id === 'composer') {
     const floor = 0.34 * fidelityScalar;
     inheritedAlpha = floor + (inheritedRawOp / 100) * (1 - floor);
@@ -1316,6 +1372,22 @@ export function resolveAppearanceRuntime(
     overlays: resolveZoneGlassValue(
       config,
       'overlays',
+      isDark,
+      glassActive,
+      activeGlassTint,
+      surfaces,
+    ),
+    userBubble: resolveZoneGlassValue(
+      config,
+      'userBubble',
+      isDark,
+      glassActive,
+      activeGlassTint,
+      surfaces,
+    ),
+    overviewPanel: resolveZoneGlassValue(
+      config,
+      'overviewPanel',
       isDark,
       glassActive,
       activeGlassTint,
@@ -1743,7 +1815,7 @@ export function applyPrismuxAppearanceToDocument(
   );
   s.setProperty('--pmx-right-sidebar-tint', runtime.zones.rightSidebar.tint);
 
-  // Unified 6-zone liquid glass CSS custom properties (+ mirrored legacy left-sidebar/chrome-bars aliases).
+  // Unified 8-zone liquid glass CSS custom properties (+ mirrored legacy left-sidebar/chrome-bars aliases).
   const solidFallbackBorder = runtime.isDark
     ? 'rgba(255, 255, 255, 0.12)'
     : 'rgba(15, 23, 42, 0.14)';

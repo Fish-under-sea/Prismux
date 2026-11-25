@@ -797,13 +797,30 @@ type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
 
 const SILENT_SELECTION_META = "composerSilentSelection";
 
+/**
+ * Safely returns the mounted ProseMirror view or `null` when Tiptap v3's editor
+ * is unmounted/destroyed (accessing `editor.view.dom` on an unmounted view throws).
+ */
+function getMountedEditorView(editor: TiptapEditor | null | undefined): TiptapEditor["view"] | null {
+  if (!editor || editor.isDestroyed) return null;
+  try {
+    const view = editor.view;
+    if (!view || !view.dom) return null;
+    return view;
+  } catch {
+    return null;
+  }
+}
+
 function replaceSkillChips(
   editor: TiptapEditor,
   replacements: ReturnType<typeof skillChipReplacements>,
 ): void {
+  const view = getMountedEditorView(editor);
+  if (!view) return;
   const transaction = editor.state.tr.setMeta("addToHistory", false);
   for (const { from, to, node } of replacements) transaction.replaceWith(from, to, node);
-  editor.view.dispatch(transaction);
+  view.dispatch(transaction);
 }
 
 export function ComposerPromptEditorTiptap(props: ComposerPromptEditorProps) {
@@ -1573,11 +1590,14 @@ function ComposerPromptEditorTiptapInner(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- preserves native selection focus across temporarily making the editor read-only for dictation
   useEffect(() => {
     if (!editor) return;
-    if (disabled && editor.isEditable) resumeEditingFocusRef.current = editor.view.hasFocus();
+    const view = getMountedEditorView(editor);
+    if (disabled && editor.isEditable) {
+      resumeEditingFocusRef.current = view ? view.hasFocus() : false;
+    }
     editor.setEditable(!disabled);
-    if (!resumeEditingFocusRef.current) return;
+    if (!resumeEditingFocusRef.current || !view) return;
 
-    const editorDom = editor.view.dom;
+    const editorDom = view.dom;
     const ownerDocument = editorDom.ownerDocument;
     if (disabled) {
       const cancelFocusRestore = (event: FocusEvent) => {
@@ -1594,7 +1614,7 @@ function ComposerPromptEditorTiptapInner(
       ownerDocument.activeElement === ownerDocument.body ||
       ownerDocument.activeElement === editorDom
     ) {
-      editor.view.focus();
+      view.focus();
     }
   }, [disabled, editor]);
 
@@ -1602,7 +1622,9 @@ function ComposerPromptEditorTiptapInner(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes DOM attributes into the ProseMirror view before layout measurements read them
   useLayoutEffect(() => {
     if (!editor?.isInitialized) return;
-    editor.view.setProps({ attributes: editorAttributes });
+    const view = getMountedEditorView(editor);
+    if (!view) return;
+    view.setProps({ attributes: editorAttributes });
   }, [editor, editorAttributes]);
 
   const readSnapshot = () => {
@@ -1646,7 +1668,9 @@ function ComposerPromptEditorTiptapInner(
     });
     if (dismissal.kind !== "commit") return;
     const next = withAssistantCitationComment(citation, dismissal.comment);
-    current.view.dispatch(
+    const currentView = getMountedEditorView(current);
+    if (!currentView) return;
+    currentView.dispatch(
       current.state.tr
         .setNodeMarkup(pos, undefined, {
           ...node.attrs,
@@ -1663,7 +1687,8 @@ function ComposerPromptEditorTiptapInner(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- writes the controlled value and cursor into the Tiptap document before paint
   useLayoutEffect(() => {
     latestValueRef.current = value;
-    if (!editor) return;
+    const view = getMountedEditorView(editor);
+    if (!editor || !view) return;
     const initialSelection = !hasAppliedControlledSelectionRef.current;
     hasAppliedControlledSelectionRef.current = true;
     const normalizedCursor = clampEditorCursor(value, cursor);
@@ -1689,7 +1714,7 @@ function ComposerPromptEditorTiptapInner(
       end: normalizedExpandedCursor,
     };
     setIsEmpty(value.length === 0);
-    const rootElement = editor.view.dom;
+    const rootElement = view.dom;
     const isFocused = Boolean(rootElement && document.activeElement === rootElement);
     if (!initialSelection && previousSnapshot.value === value && !isFocused) return;
 
@@ -1764,22 +1789,25 @@ function ComposerPromptEditorTiptapInner(
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- restores ProseMirror focus and caret scroll when the keyed editor remounts, capturing focus on teardown
   useLayoutEffect(() => {
-    if (!editor) return;
+    const view = getMountedEditorView(editor);
+    if (!editor || !view) return;
     if (restoreFocusRef.current) {
       restoreFocusRef.current = false;
-      editor.view.focus();
+      view.focus();
       scrollTiptapCaretIntoView(editor);
     }
     return () => {
       // Capture focus before the keyed editor's DOM is removed.
-      restoreFocusRef.current = editor.view.hasFocus();
+      const teardownView = getMountedEditorView(editor);
+      restoreFocusRef.current = teardownView ? teardownView.hasFocus() : false;
     };
   }, [editor, restoreFocusRef]);
 
   const focusAt = (nextCursor: number, exactExpandedCursor?: number) => {
-    if (!editor) return;
+    const view = getMountedEditorView(editor);
+    if (!editor || !view) return;
     // view.focus() writes selection immediately; bare DOM focus waits 20ms and can misplace fast dictation.
-    editor.view.focus();
+    view.focus();
     if (snapshotRef.current.value !== latestValueRef.current) return;
     const boundedCursor = clampEditorCursor(snapshotRef.current.value, nextCursor);
     const expandedCursor =
@@ -1864,7 +1892,7 @@ function ComposerPromptEditorTiptapInner(
         if (edge === "start" ? beforeCaret.includes("\n") : afterCaret.includes("\n")) {
           return false;
         }
-        const rootElement = editor?.view.dom;
+        const rootElement = getMountedEditorView(editor)?.dom;
         const selection = window.getSelection();
         if (
           !rootElement ||
@@ -2029,13 +2057,17 @@ function selectMarkdownOffset(editor: TiptapEditor, source: string, offset: numb
 
 /** Native scrolling follows only real input; explicitly reveal programmatically placed carets. */
 function scrollTiptapCaretIntoView(editor: TiptapEditor): void {
-  editor.view.dispatch(editor.state.tr.scrollIntoView());
+  const view = getMountedEditorView(editor);
+  if (!view) return;
+  view.dispatch(editor.state.tr.scrollIntoView());
 }
 
 /** Scrolls only the editor's own box: a mounting composer must not move the timeline or page. */
 function revealCaretInEditor(editor: TiptapEditor): void {
-  const scroller = editor.view.dom;
-  const caret = editor.view.coordsAtPos(editor.state.selection.head);
+  const view = getMountedEditorView(editor);
+  if (!view) return;
+  const scroller = view.dom;
+  const caret = view.coordsAtPos(editor.state.selection.head);
   const box = scroller.getBoundingClientRect();
   // Padding can be reserved for controls drawn over the box, such as mobile pending-answer actions.
   const style = getComputedStyle(scroller);

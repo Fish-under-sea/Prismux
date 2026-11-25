@@ -178,6 +178,47 @@ export function canDeleteProviderRow(input: {
   return input.isCoreDefault || input.explicitInstance !== undefined;
 }
 
+export function orderProviderInstanceRows<T extends { readonly instanceId: ProviderInstanceId }>(
+  rows: ReadonlyArray<T>,
+  providerOrder: ReadonlyArray<ProviderInstanceId> | undefined,
+): ReadonlyArray<T> {
+  if (!providerOrder || providerOrder.length === 0 || rows.length <= 1) {
+    return rows;
+  }
+  const rankById = new Map<ProviderInstanceId, number>();
+  for (let index = 0; index < providerOrder.length; index += 1) {
+    const id = providerOrder[index]!;
+    if (!rankById.has(id)) {
+      rankById.set(id, index);
+    }
+  }
+  if (rankById.size === 0) return rows;
+  return rows
+    .map((row, index) => ({
+      row,
+      index,
+      rank: rankById.get(row.instanceId) ?? Number.MAX_SAFE_INTEGER,
+    }))
+    .toSorted((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((entry) => entry.row);
+}
+
+export function reorderProviderInstanceIds(
+  currentIds: ReadonlyArray<ProviderInstanceId>,
+  activeId: ProviderInstanceId,
+  overId: ProviderInstanceId,
+): ReadonlyArray<ProviderInstanceId> | null {
+  if (activeId === overId) return null;
+  const fromIndex = currentIds.indexOf(activeId);
+  const toIndex = currentIds.indexOf(overId);
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return null;
+  const next = [...currentIds];
+  const [moved] = next.splice(fromIndex, 1);
+  if (moved === undefined) return null;
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
 export function buildProviderInstanceRows(input: {
   readonly visibleProviderSettings: ReadonlyArray<{
     readonly provider: ProviderDriverKind;
@@ -185,6 +226,7 @@ export function buildProviderInstanceRows(input: {
   }>;
   readonly providerInstances: Readonly<Record<string, ProviderInstanceConfig>> | undefined;
   readonly hiddenDefaultProviderInstances?: ReadonlyArray<ProviderInstanceId> | undefined;
+  readonly providerOrder?: ReadonlyArray<ProviderInstanceId> | undefined;
   readonly targetInstanceId?: ProviderInstanceId | undefined;
   readonly dismissedInstanceIds?: ReadonlySet<ProviderInstanceId> | undefined;
 }): ReadonlyArray<ProviderSettingsRowDescriptor> {
@@ -271,7 +313,7 @@ export function buildProviderInstanceRows(input: {
     }
   }
 
-  return rows;
+  return orderProviderInstanceRows(rows, input.providerOrder);
 }
 
 export function resolveNextSelectedProviderInstanceId(

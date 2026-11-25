@@ -309,7 +309,7 @@ describe("SessionOverviewPanel SSR & Component Markup", () => {
     const html = renderToStaticMarkup(<SessionOverviewPanel {...makeBaseProps()} />);
 
     // Outer glass zone & header
-    expect(html).toContain('data-pmx-glass-zone="rightSidebar"');
+    expect(html).toContain('data-pmx-glass-zone="overviewPanel"');
     expect(html).toContain('data-session-overview-panel="1"');
     expect(html).toContain(">概览<");
     expect(html).toContain('data-overview-more-trigger="1"');

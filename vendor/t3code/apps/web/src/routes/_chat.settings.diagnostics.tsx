@@ -1,7 +1,14 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { DiagnosticsSettingsPanel } from "../components/settings/DiagnosticsSettings";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_chat/settings/diagnostics")({
-  component: DiagnosticsSettingsPanel,
+  beforeLoad: ({ location }) => {
+    const cleanHash = location.hash.replace(/^#/, "").trim();
+    throw redirect({
+      to: "/settings/maintenance",
+      search: true,
+      hash: cleanHash || "diagnostics",
+      replace: true,
+    });
+  },
+  component: () => null,
 });

@@ -40,7 +40,25 @@ import {
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Result from "effect/Result";
-import { PlusIcon } from "lucide-react";
+import {
+  DndContext,
+  type DragEndEvent,
+  type DragStartEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { GripVerticalIcon, PlusIcon } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { m as resolveNow, type MessageResolver } from "../../i18n/messages";
@@ -142,6 +160,7 @@ import {
   type ProviderEnvironmentAccess,
   type ProviderOperateAccess,
   type ProviderSettingsRowDescriptor,
+  reorderProviderInstanceIds,
   resolveNextSelectedProviderInstanceId,
   resolveRemoteOperateAccess,
   resolveSelectedProviderEnvironmentId,
@@ -234,15 +253,13 @@ function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }
   );
 }
 
-const T3_CONNECT_NAME = "T3 Connect";
-
 function providerEnvironmentDetail(
   environment: EnvironmentPresentation,
   resolve: MessageResolver,
 ): string {
   if (environment.entry.target._tag === "PrimaryConnectionTarget")
     return resolve(msg("Primary device"));
-  if (environment.relayManaged) return T3_CONNECT_NAME;
+  if (environment.relayManaged) return resolve(msg("Remote relay"));
   if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
   if (isDesktopLocalConnectionTarget(environment.entry.target)) return resolve(msg("Local device"));
   return environment.displayUrl ?? resolve(msg("Remote device"));
@@ -637,9 +654,22 @@ export function EnvironmentProviderSettings({
   const [updatingProviderInstanceIds, setUpdatingProviderInstanceIds] = useState<
     ReadonlySet<ProviderInstanceId>
   >(() => new Set());
+  const [optimisticProviderOrder, setOptimisticProviderOrder] = useState<{
+    readonly baseKey: string;
+    readonly order: ReadonlyArray<ProviderInstanceId>;
+  } | null>(null);
+  const [activeDragProviderId, setActiveDragProviderId] = useState<ProviderInstanceId | null>(null);
   const refreshingRef = useRef(false);
   const deletingProviderRef = useRef(false);
   const updatingInstanceIdsRef = useRef<Set<ProviderInstanceId>>(new Set());
+  const providerSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
 
   const acceptUrlAuthentication = useStableCallback(
     (instanceId: ProviderInstanceId, action: AcpRegistryUrlAuthAction) => {
@@ -757,13 +787,52 @@ export function EnvironmentProviderSettings({
     },
   );
 
+  const settingsProviderOrderKey = settings.providerOrder.join("\0");
+  const effectiveProviderOrder =
+    optimisticProviderOrder !== null && optimisticProviderOrder.baseKey === settingsProviderOrderKey
+      ? optimisticProviderOrder.order
+      : settings.providerOrder;
+
   const rows = buildProviderInstanceRows({
     visibleProviderSettings,
     providerInstances: settings.providerInstances,
     hiddenDefaultProviderInstances: settings.hiddenDefaultProviderInstances,
+    providerOrder: effectiveProviderOrder,
     targetInstanceId,
     dismissedInstanceIds,
   });
+
+  const canReorderProviders = !readOnly && canWriteSettings && rows.length > 1;
+  const activeDragIndex =
+    activeDragProviderId !== null
+      ? rows.findIndex((row) => row.instanceId === activeDragProviderId)
+      : -1;
+
+  const handleProviderDragStart = (event: DragStartEvent) => {
+    setActiveDragProviderId(String(event.active.id) as ProviderInstanceId);
+  };
+
+  const handleProviderDragCancel = () => {
+    setActiveDragProviderId(null);
+  };
+
+  const handleProviderDragEnd = (event: DragEndEvent) => {
+    setActiveDragProviderId(null);
+    if (!canReorderProviders || !event.over) return;
+    const activeId = String(event.active.id) as ProviderInstanceId;
+    const overId = String(event.over.id) as ProviderInstanceId;
+    const nextOrder = reorderProviderInstanceIds(
+      rows.map((row) => row.instanceId),
+      activeId,
+      overId,
+    );
+    if (!nextOrder) return;
+    setOptimisticProviderOrder({
+      baseKey: settingsProviderOrderKey,
+      order: nextOrder,
+    });
+    updateSettings({ providerOrder: nextOrder });
+  };
 
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
@@ -985,7 +1054,11 @@ export function EnvironmentProviderSettings({
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
 
   const representativeProjectId = projectIds[0];
-  const renderProviderInstance = (row: ProviderSettingsRowDescriptor, mode: "list" | "editor") => {
+  const renderProviderInstance = (
+    row: ProviderSettingsRowDescriptor,
+    mode: "list" | "editor",
+    dragHandle?: ReactNode,
+  ) => {
     const showProjectOverride =
       representativeProjectId !== undefined && supportsProjectProviderOverrides;
     const dualModeSupported = supportsDualLaunchMode({
@@ -1034,6 +1107,7 @@ export function EnvironmentProviderSettings({
         modelPreferences={settings.providerModelPreferences?.[row.instanceId]}
         favorites={favorites}
         actions={actions}
+        dragHandle={dragHandle}
       />
     );
   };
@@ -1164,7 +1238,7 @@ export function EnvironmentProviderSettings({
           divided={false}
           className={cn(
             providerCardHeightClassName,
-            "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[22rem_minmax(0,1fr)]",
+            "overflow-hidden @min-[48rem]/providers:grid @min-[48rem]/providers:grid-cols-[23.5rem_minmax(0,1fr)]",
           )}
         >
           <div className="border-b border-border/60 bg-muted/10 @min-[48rem]/providers:flex @min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-col @min-[48rem]/providers:border-r @min-[48rem]/providers:border-b-0">
@@ -1196,7 +1270,34 @@ export function EnvironmentProviderSettings({
                     </Button>
                   </div>
                 ) : null}
-                {rows.map((row) => renderProviderInstance(row, "list"))}
+                <DndContext
+                  sensors={providerSensors}
+                  collisionDetection={closestCenter}
+                  modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                  onDragStart={handleProviderDragStart}
+                  onDragEnd={handleProviderDragEnd}
+                  onDragCancel={handleProviderDragCancel}
+                >
+                  <SortableContext
+                    items={rows.map((row) => row.instanceId)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {rows.map((row, index) => (
+                      <SortableProviderListItem
+                        key={row.instanceId}
+                        instanceId={row.instanceId}
+                        providerName={providerInstanceName(
+                          row.explicitInstance ?? { driver: row.driver },
+                        )}
+                        index={index}
+                        activeDragIndex={activeDragIndex}
+                        disabled={!canReorderProviders}
+                      >
+                        {(dragHandle) => renderProviderInstance(row, "list", dragHandle)}
+                      </SortableProviderListItem>
+                    ))}
+                  </SortableContext>
+                </DndContext>
                 {canAddProvider ? (
                   <button
                     type="button"
@@ -1415,6 +1516,85 @@ interface ProviderInstanceRowActions {
 
 const NO_MODELS: ReadonlyArray<string> = [];
 
+function SortableProviderListItem({
+  instanceId,
+  providerName,
+  index,
+  activeDragIndex,
+  disabled,
+  children,
+}: {
+  readonly instanceId: ProviderInstanceId;
+  readonly providerName: string;
+  readonly index: number;
+  readonly activeDragIndex: number;
+  readonly disabled: boolean;
+  readonly children: (dragHandle: ReactNode) => ReactNode;
+}) {
+  const gt = useGT();
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } =
+    useSortable({
+      id: instanceId,
+      disabled,
+    });
+  const showDropIndicatorBefore =
+    isOver && !isDragging && activeDragIndex !== -1 && activeDragIndex > index;
+  const showDropIndicatorAfter =
+    isOver && !isDragging && activeDragIndex !== -1 && activeDragIndex < index;
+
+  const dragHandle = disabled ? null : (
+    <button
+      type="button"
+      {...attributes}
+      {...listeners}
+      data-provider-drag-handle={instanceId}
+      aria-label={gt("Drag to reorder {provider}", { provider: providerName })}
+      className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground/45 opacity-60 transition-opacity hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none active:cursor-grabbing group-hover:opacity-100"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <GripVerticalIcon className="size-3.5" />
+    </button>
+  );
+
+  return (
+    <div
+      ref={setNodeRef}
+      data-sortable-provider={instanceId}
+      data-dragging={isDragging ? "true" : undefined}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+      onPointerDown={
+        disabled
+          ? undefined
+          : (event) => {
+              listeners?.onPointerDown?.(event);
+            }
+      }
+      className={cn(
+        "relative",
+        isDragging &&
+          "z-20 scale-[1.01] rounded-lg bg-card/95 shadow-lg ring-1 ring-primary/45 backdrop-blur-sm",
+      )}
+    >
+      {showDropIndicatorBefore ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-3 top-0 z-30 h-0.5 rounded-full bg-primary"
+        />
+      ) : null}
+      {children(dragHandle)}
+      {showDropIndicatorAfter ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-3 bottom-0 z-30 h-0.5 rounded-full bg-primary"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 /** Stable props let this boundary return cached cards even when settings rebuild parent row elements. */
 function ProviderInstanceRow({
   environmentId,
@@ -1434,6 +1614,7 @@ function ProviderInstanceRow({
   modelPreferences,
   favorites,
   actions,
+  dragHandle,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
@@ -1454,6 +1635,7 @@ function ProviderInstanceRow({
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
+  readonly dragHandle?: ReactNode | undefined;
 }) {
   const { instanceId, driver, explicitInstance, isCoreDefault, isDirty, removalKind } = row;
   const gt = useGT();
@@ -1504,6 +1686,7 @@ function ProviderInstanceRow({
       isLaunchModeOverridden={isLaunchModeOverridden}
       onLaunchModeChange={(nextMode) => actions.setInstanceLaunchMode(instanceId, nextMode)}
       onLaunchModeReset={() => actions.setInstanceLaunchMode(instanceId, null)}
+      dragHandle={dragHandle}
       onAcceptUrlAuth={
         readOnly ? undefined : (action) => actions.acceptUrlAuthentication(instanceId, action)
       }

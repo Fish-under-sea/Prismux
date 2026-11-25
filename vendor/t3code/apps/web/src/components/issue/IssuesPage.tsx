@@ -32,8 +32,9 @@ import {
   Plug2Icon,
   UserCheckIcon,
   UsersIcon,
+  XIcon,
 } from "lucide-react";
-import { msg, T, useGT, useMessages, Var } from "gt-react";
+import { msg, T, useGT, useLocale, useMessages, Var } from "gt-react";
 import { Fragment, useEffect, useEffectEvent, useState, type ReactNode } from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -78,6 +79,12 @@ import {
 } from "~/components/ui/empty";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "~/components/ui/menu";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { useNavigateToMainApp } from "~/components/sidebar/mainAppLocation";
+import {
+  PrismuxStageFrame,
+  useWorkspaceTopbarPortal,
+} from "~/components/workspace/WorkspaceTopbarPortalContext";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
 import { isElectron } from "~/env";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
@@ -191,8 +198,12 @@ function hostOptionsFor(
 
 export function IssuesPage() {
   const gt = useGT();
+  const locale = useLocale();
+  const isZh = (locale ?? "").toLowerCase().startsWith("zh");
   const resolve = useMessages();
   const navigate = useNavigate({ from: "/issues" });
+  const navigateToMainApp = useNavigateToMainApp();
+  const topbarPortal = useWorkspaceTopbarPortal();
   const search = useSearch({ from: "/_chat/issues" });
   const { environments } = useEnvironments();
   const projects = useProjects();
@@ -503,60 +514,100 @@ export function IssuesPage() {
 
   const showTracker = groups.length > 1;
   const noneAnswered = list.answers.length === 0;
+  const totalIssueCount = groups.reduce((acc, group) => acc + group.rows.length, 0);
+  const pageHeading = isZh ? "议题" : gt("Issues", { $context: "page title, list of issues" });
 
   const listBody: ReactNode = !issuesSupported ? (
-    <PullRequestsUnavailableState
-      title={gt("Issues unavailable")}
-      error={gt("Update this environment's Prismux server to browse issues.")}
-    />
+    <div
+      data-pmx-work-panel-card="1"
+      className="rounded-xl border border-border/75 bg-card p-6 shadow-xs"
+    >
+      <PullRequestsUnavailableState
+        title={gt("Issues unavailable")}
+        error={gt("Update this environment's Prismux server to browse issues.")}
+      />
+    </div>
   ) : noneAnswered && list.isPending ? (
-    <PullRequestListGhost />
+    <div
+      data-pmx-work-panel-card="1"
+      className="rounded-xl border border-border/75 bg-card p-3 shadow-xs"
+    >
+      <PullRequestListGhost />
+    </div>
   ) : noneAnswered && list.error ? (
-    <PullRequestsUnavailableState
-      error={list.error}
-      onRetry={list.retry}
-      refreshing={list.isPending}
-    />
+    <div
+      data-pmx-work-panel-card="1"
+      className="rounded-xl border border-border/75 bg-card p-6 shadow-xs"
+    >
+      <PullRequestsUnavailableState
+        error={list.error}
+        onRetry={list.retry}
+        refreshing={list.isPending}
+      />
+    </div>
   ) : everyProjectHidden ? (
-    <Empty>
-      <EmptyMedia variant="icon">
-        <IssueGlyph.issue />
-      </EmptyMedia>
-      <EmptyHeader>
-        <EmptyTitle>
-          <T>Every project is hidden</T>
-        </EmptyTitle>
-      </EmptyHeader>
-      <EmptyContent>
-        <Button variant="outline" onClick={() => updateSearch({ hideProjects: undefined })}>
-          <T>Show all projects</T>
-        </Button>
-      </EmptyContent>
-    </Empty>
+    <div
+      data-pmx-work-panel-card="1"
+      className="rounded-xl border border-border/75 bg-card px-6 py-12 shadow-xs"
+    >
+      <Empty>
+        <EmptyMedia variant="icon">
+          <IssueGlyph.issue />
+        </EmptyMedia>
+        <EmptyHeader>
+          <EmptyTitle>
+            <T>Every project is hidden</T>
+          </EmptyTitle>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button
+            variant="outline"
+            data-pmx-work-panel-control="1"
+            onClick={() => updateSearch({ hideProjects: undefined })}
+          >
+            <T>Show all projects</T>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    </div>
   ) : groups.length === 0 ? (
-    <Empty>
-      <EmptyMedia variant="icon">
-        <IssueGlyph.issue />
-      </EmptyMedia>
-      <EmptyHeader>
-        <EmptyTitle>
-          <T>No trackers to read</T>
-        </EmptyTitle>
-        <EmptyDescription>
-          <T>Add a project whose remote is on a supported tracker.</T>
-        </EmptyDescription>
-      </EmptyHeader>
-    </Empty>
+    <div
+      data-pmx-work-panel-card="1"
+      className="rounded-xl border border-border/75 bg-card px-6 py-12 shadow-xs"
+    >
+      <Empty>
+        <EmptyMedia variant="icon">
+          <IssueGlyph.issue />
+        </EmptyMedia>
+        <EmptyHeader>
+          <EmptyTitle>
+            <T>No trackers to read</T>
+          </EmptyTitle>
+          <EmptyDescription>
+            <T>Add a project whose remote is on a supported tracker.</T>
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    </div>
   ) : (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {list.error ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
+        <div
+          role="alert"
+          data-pmx-work-panel-card="1"
+          className="flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning-surface px-3.5 py-2.5 text-xs"
+        >
           <span>
             <T>
               <Var>{list.error}</Var> Showing the issues that loaded.
             </T>
           </span>
-          <Button size="xs" variant="outline" onClick={list.retry}>
+          <Button
+            size="xs"
+            variant="outline"
+            data-pmx-work-panel-control="1"
+            onClick={list.retry}
+          >
             <T>Retry</T>
           </Button>
         </div>
@@ -565,14 +616,18 @@ export function IssuesPage() {
         const presentation = issueTrackerPresentation(group.tracker.tracker);
         const showScope = new Set(group.rows.map((row) => row.scope.toLowerCase())).size > 1;
         return (
-          <section key={issueTrackerKey(group.tracker)} className="flex flex-col gap-1">
-            <h2 className="flex items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground">
-              <presentation.Icon aria-hidden className="size-3.5" />
-              {presentation.providerName}
+          <section
+            key={issueTrackerKey(group.tracker)}
+            data-pmx-work-panel-card="1"
+            className="flex flex-col gap-1.5 rounded-xl border border-border/75 bg-card p-3 shadow-xs"
+          >
+            <h2 className="flex items-center gap-1.5 px-2 pb-1 text-xs font-semibold text-foreground/85">
+              <presentation.Icon aria-hidden className="size-3.5 text-muted-foreground" />
+              <span>{presentation.providerName}</span>
               {presentation.providerName.toLowerCase() !== group.tracker.host ? (
-                <span className="font-normal">· {group.tracker.host}</span>
+                <span className="font-normal text-muted-foreground">· {group.tracker.host}</span>
               ) : null}
-              <span className="font-normal">
+              <span className="font-normal text-muted-foreground tabular-nums">
                 ·{" "}
                 {gt("{count, plural, one {{count} project} other {{count} projects}}", {
                   count: group.tracker.projectCount,
@@ -580,7 +635,7 @@ export function IssuesPage() {
               </span>
             </h2>
             {!group.tracker.configured ? (
-              <p className="px-3 text-sm text-muted-foreground">
+              <p className="px-2 text-sm text-muted-foreground">
                 {group.tracker.detail === null
                   ? gt("This tracker cannot be read right now.")
                   : issueTrackerDetailText(group.tracker.detail, resolve)}
@@ -589,13 +644,13 @@ export function IssuesPage() {
             {group.errors.map((error) => (
               <p
                 key={`${error.environmentId}:${error.projectTitle}`}
-                className="px-3 text-xs text-destructive"
+                className="px-2 text-xs text-destructive"
               >
                 {error.projectTitle}: {error.message}
               </p>
             ))}
             {group.tracker.configured && group.rows.length === 0 && group.errors.length === 0 ? (
-              <p className="px-3 text-sm text-muted-foreground">
+              <p className="px-2 py-2 text-sm text-muted-foreground">
                 {debouncedQuery ? (
                   <T>Nothing matches that.</T>
                 ) : (
@@ -632,7 +687,7 @@ export function IssuesPage() {
               return (
                 <Fragment key={environmentId}>
                   {moreFailure === null ? null : (
-                    <p className="px-3 text-xs text-destructive">{moreFailure}</p>
+                    <p className="px-2 text-xs text-destructive">{moreFailure}</p>
                   )}
                   <Button
                     size="sm"
@@ -658,129 +713,218 @@ export function IssuesPage() {
     </div>
   );
 
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="relative flex min-h-0 flex-1">
-        <div className="@container/issue-list flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-          <WorkspacePageHeader
-            electron={isElectron}
-            reserveNativeControls={!rightPanelState.isOpen}
-            className="relative bg-background"
-          >
-            <WorkspaceBreadcrumb ariaLabel={gt("Issues breadcrumb")}>
-              <WorkspaceBreadcrumbItem current>
-                <h1 className="truncate">
-                  <T context="page title, list of issues">Issues</T>
-                </h1>
-              </WorkspaceBreadcrumbItem>
-            </WorkspaceBreadcrumb>
-            <div className="min-w-0 flex-1" />
-            <div
-              className="flex items-center gap-1 [-webkit-app-region:no-drag]"
-              data-workspace-titlebar-controls
-            >
-              <PanelLayoutControls
-                showTerminalControl={false}
-                showThreadPanelControl={false}
-                terminalAvailable={false}
-                terminalOpen={false}
-                terminalShortcutLabel={null}
-                threadPanelOpen={false}
-                threadPanelPresentation="inline"
-                threadPanelShortcutLabel={null}
-                onToggleThreadPanel={() => undefined}
-                rightPanelAvailable={panelSurface !== null}
-                rightPanelOpen={rightPanelState.isOpen}
-                rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
-                rightPanelUnavailableLabel={gt("Select an issue first")}
-                onToggleTerminal={() => undefined}
-                onToggleRightPanel={toggleRightPanel}
-              />
-            </div>
-          </WorkspacePageHeader>
+  const searchInputNode = (
+    <PullRequestSearchInput
+      value={search.q ?? ""}
+      label={gt("Search issues")}
+      placeholder={gt("Search issues")}
+      busy={(search.q ?? "") !== debouncedQuery || (debouncedQuery.length > 0 && list.isPending)}
+      onChange={(q) => updateSearch({ q: q || undefined })}
+      onSubmit={(q) => updateSearch({ q: q || undefined })}
+    />
+  );
 
-          <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
-            <WorkspacePageContainer width="expanded" className="min-h-full gap-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="min-w-0 basis-full @lg/issue-list:min-w-48 @lg/issue-list:basis-0 @lg/issue-list:flex-1">
-                  <PullRequestSearchInput
-                    value={search.q ?? ""}
-                    label={gt("Search issues")}
-                    placeholder={gt("Search issues")}
-                    busy={
-                      (search.q ?? "") !== debouncedQuery ||
-                      (debouncedQuery.length > 0 && list.isPending)
-                    }
-                    onChange={(q) => updateSearch({ q: q || undefined })}
-                    onSubmit={(q) => updateSearch({ q: q || undefined })}
+  const toolbarActions = (
+    <>
+      <PullRequestCompactFilterMenu
+        label={gt("Sort issues")}
+        triggerIcon={<ArrowDownUpIcon aria-hidden className="size-4" />}
+        triggerLabel={gt("Sort", { $context: "verb, button that sorts a list" })}
+        outlined
+        value={search.order ?? "updated"}
+        options={resolveFilterOptions(SORT_OPTIONS, resolve)}
+        onChange={(order) =>
+          updateSearch({ order: order === "created" ? "created" : undefined })
+        }
+      />
+      <IssueFiltersMenu
+        state={search.status}
+        stateOptions={resolveFilterOptions(STATE_TABS, resolve)}
+        onState={(status) => updateSearch({ status })}
+        involvement={search.who}
+        involvementOptions={resolveFilterOptions(INVOLVEMENT_TABS, resolve)}
+        onInvolvement={(who) => updateSearch({ who })}
+        scopes={filterScopes}
+        labels={search.label ?? []}
+        onLabels={(label) => updateSearch({ label })}
+        assignee={search.assignee}
+        onAssignee={(assignee) => updateSearch({ assignee })}
+        projects={filterProjects}
+        hiddenProjects={hiddenProjects}
+        onHiddenProjects={(hideProjects) => updateSearch({ hideProjects })}
+      />
+      <SavedViewsMenu
+        kind={ISSUE_SAVED_VIEWS}
+        preferences={search}
+        onApply={(view) =>
+          // Explicit clears replace the old list scope; the selected issue stays open.
+          updateSearch({
+            who: view.who,
+            status: view.status,
+            hideProjects: view.hideProjects,
+            host: view.host,
+            q: view.q,
+            label: view.label,
+            assignee: view.assignee,
+            order: view.order,
+          })
+        }
+      />
+      {hostOptions.length > 1 ? (
+        <FilterMenu
+          label={gt("Filter by tracker")}
+          value={search.host ?? ""}
+          options={hostOptions}
+          onChange={(host) => updateSearch({ host: host || undefined })}
+        />
+      ) : null}
+      <Button
+        size="icon"
+        variant="outline"
+        data-pmx-work-panel-control="1"
+        aria-label={gt("Refresh issues")}
+        onClick={list.refresh}
+        disabled={list.isPending}
+        aria-busy={list.isPending || undefined}
+      >
+        <RefreshIcon size="md" refreshing={list.isPending} />
+      </Button>
+    </>
+  );
+
+  return (
+    <SidebarInset className="h-dvh min-h-0 min-w-0 flex-1 overflow-hidden overscroll-y-none">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <PrismuxStageFrame
+          glassZone="workPanels"
+          rightPanelOpen={rightPanelState.isOpen || topbarPortal.standaloneRightPanelOpen}
+        >
+          <div
+            data-testid="prismux-issues-page"
+            className="@container/issue-list flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          >
+            {topbarPortal.managed ? (
+              <header
+                data-testid="issues-work-panel-header"
+                className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5"
+              >
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2.5">
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+                      <IssueGlyph.issue aria-hidden className="size-4" />
+                    </span>
+                    <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                      {pageHeading}
+                    </h1>
+                    {totalIssueCount > 0 ? (
+                      <span className="inline-flex shrink-0 items-center rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-2xs font-medium text-foreground/85 tabular-nums">
+                        {totalIssueCount}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="min-w-0 flex-1 basis-52 max-w-md">{searchInputNode}</div>
+                </div>
+
+                <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                  {toolbarActions}
+                  {panelSurface !== null ? (
+                    <PanelLayoutControls
+                      showTerminalControl={false}
+                      showThreadPanelControl={false}
+                      terminalAvailable={false}
+                      terminalOpen={false}
+                      terminalShortcutLabel={null}
+                      threadPanelOpen={false}
+                      threadPanelPresentation="inline"
+                      threadPanelShortcutLabel={null}
+                      onToggleThreadPanel={() => undefined}
+                      rightPanelAvailable
+                      rightPanelOpen={rightPanelState.isOpen}
+                      rightPanelShortcutLabel={shortcutLabelForCommand(
+                        keybindings,
+                        "rightPanel.toggle",
+                      )}
+                      rightPanelUnavailableLabel={gt("Select an issue first")}
+                      onToggleTerminal={() => undefined}
+                      onToggleRightPanel={toggleRightPanel}
+                    />
+                  ) : null}
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost-muted"
+                          size="icon-sm"
+                          data-testid="issues-close-button"
+                          onClick={() => void navigateToMainApp()}
+                          aria-label={gt("Close issues")}
+                        />
+                      }
+                    >
+                      <XIcon className="size-4" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom" sideOffset={6}>
+                      {gt("Close and return to workspace")}
+                    </TooltipPopup>
+                  </Tooltip>
+                </div>
+              </header>
+            ) : (
+              <WorkspacePageHeader
+                electron={isElectron}
+                reserveNativeControls={!rightPanelState.isOpen}
+                className="relative bg-background"
+              >
+                <WorkspaceBreadcrumb ariaLabel={gt("Issues breadcrumb")}>
+                  <WorkspaceBreadcrumbItem current>
+                    <h1 className="truncate">{pageHeading}</h1>
+                  </WorkspaceBreadcrumbItem>
+                </WorkspaceBreadcrumb>
+                <div className="min-w-0 flex-1" />
+                <div
+                  className="flex items-center gap-1 [-webkit-app-region:no-drag]"
+                  data-workspace-titlebar-controls
+                >
+                  <PanelLayoutControls
+                    showTerminalControl={false}
+                    showThreadPanelControl={false}
+                    terminalAvailable={false}
+                    terminalOpen={false}
+                    terminalShortcutLabel={null}
+                    threadPanelOpen={false}
+                    threadPanelPresentation="inline"
+                    threadPanelShortcutLabel={null}
+                    onToggleThreadPanel={() => undefined}
+                    rightPanelAvailable={panelSurface !== null}
+                    rightPanelOpen={rightPanelState.isOpen}
+                    rightPanelShortcutLabel={shortcutLabelForCommand(
+                      keybindings,
+                      "rightPanel.toggle",
+                    )}
+                    rightPanelUnavailableLabel={gt("Select an issue first")}
+                    onToggleTerminal={() => undefined}
+                    onToggleRightPanel={toggleRightPanel}
                   />
                 </div>
-                <PullRequestCompactFilterMenu
-                  label={gt("Sort issues")}
-                  triggerIcon={<ArrowDownUpIcon aria-hidden className="size-4" />}
-                  triggerLabel={gt("Sort", { $context: "verb, button that sorts a list" })}
-                  outlined
-                  value={search.order ?? "updated"}
-                  options={resolveFilterOptions(SORT_OPTIONS, resolve)}
-                  onChange={(order) =>
-                    updateSearch({ order: order === "created" ? "created" : undefined })
-                  }
-                />
-                <IssueFiltersMenu
-                  state={search.status}
-                  stateOptions={resolveFilterOptions(STATE_TABS, resolve)}
-                  onState={(status) => updateSearch({ status })}
-                  involvement={search.who}
-                  involvementOptions={resolveFilterOptions(INVOLVEMENT_TABS, resolve)}
-                  onInvolvement={(who) => updateSearch({ who })}
-                  scopes={filterScopes}
-                  labels={search.label ?? []}
-                  onLabels={(label) => updateSearch({ label })}
-                  assignee={search.assignee}
-                  onAssignee={(assignee) => updateSearch({ assignee })}
-                  projects={filterProjects}
-                  hiddenProjects={hiddenProjects}
-                  onHiddenProjects={(hideProjects) => updateSearch({ hideProjects })}
-                />
-                <SavedViewsMenu
-                  kind={ISSUE_SAVED_VIEWS}
-                  preferences={search}
-                  onApply={(view) =>
-                    // Explicit clears replace the old list scope; the selected issue stays open.
-                    updateSearch({
-                      who: view.who,
-                      status: view.status,
-                      hideProjects: view.hideProjects,
-                      host: view.host,
-                      q: view.q,
-                      label: view.label,
-                      assignee: view.assignee,
-                      order: view.order,
-                    })
-                  }
-                />
-                {hostOptions.length > 1 ? (
-                  <FilterMenu
-                    label={gt("Filter by tracker")}
-                    value={search.host ?? ""}
-                    options={hostOptions}
-                    onChange={(host) => updateSearch({ host: host || undefined })}
-                  />
+              </WorkspacePageHeader>
+            )}
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+              <WorkspacePageContainer width="expanded" className="min-h-full gap-4 px-0! py-0!">
+                {!topbarPortal.managed ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="min-w-0 basis-full @lg/issue-list:min-w-48 @lg/issue-list:basis-0 @lg/issue-list:flex-1">
+                      {searchInputNode}
+                    </div>
+                    {toolbarActions}
+                  </div>
                 ) : null}
-                <Button
-                  size="icon"
-                  variant="outline"
-                  aria-label={gt("Refresh issues")}
-                  onClick={list.refresh}
-                  disabled={list.isPending}
-                >
-                  <RefreshIcon size="md" refreshing={list.isPending} />
-                </Button>
-              </div>
-              {listBody}
-            </WorkspacePageContainer>
+                {listBody}
+              </WorkspacePageContainer>
+            </div>
           </div>
-        </div>
+        </PrismuxStageFrame>
 
         {presence.present &&
         renderedSurface &&
@@ -911,7 +1055,10 @@ function FilterMenu<Value extends string>({
   if (!current) return null;
   return (
     <Menu>
-      <MenuTrigger aria-label={`${label}: ${current.label}`} render={<Button variant="outline" />}>
+      <MenuTrigger
+        aria-label={`${label}: ${current.label}`}
+        render={<Button variant="outline" data-pmx-work-panel-control="1" />}
+      >
         <PullRequestFilterOptionIcon option={current} />
         <span className="truncate">{current.label}</span>
       </MenuTrigger>

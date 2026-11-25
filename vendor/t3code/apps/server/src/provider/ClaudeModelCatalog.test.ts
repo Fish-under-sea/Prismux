@@ -623,4 +623,46 @@ describe("Claude model catalog", () => {
       ),
     );
   });
+
+  it("surfaces only English Title-Case Fast Mode and Ultracode speed/mode booleans and strips unknown booleans", () => {
+    const opus55 = getClaudeCatalogModelCapabilities(BUNDLED_CLAUDE_MODEL_CATALOG, "claude-opus-5-5");
+    const opusBooleans = (opus55.optionDescriptors ?? [])
+      .filter((descriptor) => descriptor.type === "boolean")
+      .map((descriptor) => `${descriptor.id}:${descriptor.label}`);
+    assert.deepStrictEqual(opusBooleans.toSorted(), ["fastMode:Fast Mode", "ultracode:Ultracode"]);
+
+    const baseManifest = manifest();
+    const baseClaude = baseManifest.providers!.claudeAgent!;
+    const baseSynthetic = baseClaude.profiles.synthetic!;
+    const customManifest: ModelManifestData = {
+      ...baseManifest,
+      providers: {
+        ...baseManifest.providers,
+        claudeAgent: {
+          ...baseClaude,
+          profiles: {
+            ...baseClaude.profiles,
+            synthetic: {
+              ...baseSynthetic,
+              capabilities: {
+                ...baseSynthetic.capabilities,
+                optionDescriptors: [
+                  ...(baseSynthetic.capabilities?.optionDescriptors ?? []),
+                  { id: "fastMode", label: "fast mode", type: "boolean" },
+                  { id: "ultracode", label: "ultracode", type: "boolean" },
+                  { id: "experimentalTurbo", label: "Experimental Turbo", type: "boolean" },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolved = catalogFromManifest(customManifest);
+    const syntheticCaps = getClaudeCatalogModelCapabilities(resolved, "claude-synthetic-next");
+    const syntheticBooleans = (syntheticCaps.optionDescriptors ?? [])
+      .filter((descriptor) => descriptor.type === "boolean")
+      .map((descriptor) => `${descriptor.id}:${descriptor.label}`);
+    assert.deepStrictEqual(syntheticBooleans, ["fastMode:Fast Mode", "ultracode:Ultracode"]);
+  });
 });

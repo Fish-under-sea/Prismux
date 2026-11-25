@@ -775,13 +775,17 @@ function DiagnosticsRefreshButton({
   );
 }
 
-export function DiagnosticsSettingsPanel() {
+export function DiagnosticsSettingsPanel({ embedded = false }: { readonly embedded?: boolean } = {}) {
   const { environment } = useSettingsScope();
   // Signals and pending UI state belong to one environment, so a scope switch starts fresh.
-  return <DiagnosticsSettingsBody key={environment?.environmentId ?? ""} />;
+  return <DiagnosticsSettingsBody key={environment?.environmentId ?? ""} embedded={embedded} />;
 }
 
-function DiagnosticsSettingsBody() {
+export function DiagnosticsSettingsSections() {
+  return <DiagnosticsSettingsPanel embedded />;
+}
+
+function DiagnosticsSettingsBody({ embedded }: { readonly embedded: boolean }) {
   const gt = useGT();
   const m = useMessages();
   const { environment } = useSettingsScope();
@@ -990,8 +994,8 @@ function DiagnosticsSettingsBody() {
     : false;
 
   if (!canReadDiagnostics) {
-    return (
-      <SettingsPageContainer width="expanded" className="gap-8">
+    const content = (
+      <>
         <PrismuxDiagnosticsSection variant="full" />
         <p className="text-sm text-muted-foreground">
           {environmentId === null
@@ -1000,12 +1004,19 @@ function DiagnosticsSettingsBody() {
               ? gt("Checking diagnostics access…")
               : diagnosticsAccess.error}
         </p>
+      </>
+    );
+    return embedded ? (
+      <div className="space-y-8">{content}</div>
+    ) : (
+      <SettingsPageContainer width="expanded" className="gap-8">
+        {content}
       </SettingsPageContainer>
     );
   }
 
-  return (
-    <SettingsPageContainer width="expanded" className="gap-10">
+  const fullContent = (
+    <>
       <PrismuxDiagnosticsSection variant="full" />
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
@@ -1446,6 +1457,14 @@ function DiagnosticsSettingsBody() {
         )}
       </SettingsSection>
       {exportFormEnvironmentId === environmentId && <TelemetryExportSettings />}
+    </>
+  );
+
+  return embedded ? (
+    <div className="space-y-10">{fullContent}</div>
+  ) : (
+    <SettingsPageContainer width="expanded" className="gap-10">
+      {fullContent}
     </SettingsPageContainer>
   );
 }

@@ -11,6 +11,12 @@ export const SETTINGS_NAV_PARENT_ALIASES: Readonly<Record<string, SettingsPath>>
   "/settings/labs": "/settings/general",
   "/settings/beta": "/settings/general",
   "/settings/memory-sync": "/settings/memory",
+  "/settings/access": "/settings/connections",
+  "/settings/worktrees": "/settings/source-control",
+  "/settings/diffs": "/settings/source-control",
+  "/settings/devices": "/settings/browser",
+  "/settings/diagnostics": "/settings/maintenance",
+  "/settings/threads": "/settings/chat",
 };
 
 export interface SettingsNavItemGeometry {

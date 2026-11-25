@@ -386,27 +386,221 @@ export function isClaudeUltrathinkPrompt(text: string | null | undefined): boole
 }
 
 export function codexModelFamily(slug: string): string {
-  return slug.startsWith("openai.gpt-") ? slug.slice("openai.".length) : slug;
+  const base = slug.slice(slug.lastIndexOf("/") + 1);
+  return base.startsWith("openai.gpt-") ? base.slice("openai.".length) : base;
 }
 
 export function formatCodexModelName(name: string): string {
   return name.replace(/^gpt/i, "GPT").replace(/-([a-z])/g, (_, c) => "-" + c.toUpperCase());
 }
 
+const MODEL_ROUTING_COLON_PREFIX =
+  /^(?:openai|anthropic|google|gemini|xai|x-ai|deepseek|qwen|zhipu|glm|openrouter|bedrock|vertex|azure|antigravity|codex|claude|claudeagent|cursor|pi|opencode|grok|dsh|meta|mistral|moonshot|minimax|kimi):(?=\S)/i;
+const MODEL_VENDOR_LABEL_PREFIX = /^[A-Za-z0-9][A-Za-z0-9.&\- ]{0,24}:\s+(?=\S)/;
+const MODEL_DOTTED_VENDOR_PREFIX =
+  /^(?:(?:us|eu|ap|global|ca|sa|me|af)\.)?(?:anthropic|openai|google|meta|amazon|mistral|cohere|deepseek|xai)\./i;
+const MODEL_DSH_DASH_PREFIX =
+  /^dsh-(?=(?:gpt|claude|opus|sonnet|haiku|fable|gemini|grok|deepseek|qwen|glm|o[134])(?:[-.\s\d]|$))/i;
+const MODEL_PURE_VERSION_TOKEN = /^v?\d+(?:\.\d+)*$/i;
+
+const MODEL_TOKEN_CANONICAL: Readonly<Record<string, string>> = {
+  gpt: "GPT",
+  oss: "OSS",
+  glm: "GLM",
+  deepseek: "DeepSeek",
+  qwen: "Qwen",
+  grok: "Grok",
+  claude: "Claude",
+  gemini: "Gemini",
+  opus: "Opus",
+  sonnet: "Sonnet",
+  haiku: "Haiku",
+  fable: "Fable",
+  codex: "Codex",
+  astra: "Astra",
+  sol: "Sol",
+  luna: "Luna",
+  terra: "Terra",
+  neon: "Neon",
+  carbon: "Carbon",
+  argon: "Argon",
+  flash: "Flash",
+  pro: "Pro",
+  mini: "Mini",
+  nano: "Nano",
+  max: "Max",
+  ultra: "Ultra",
+  plus: "Plus",
+  lite: "Lite",
+  fast: "Fast",
+  turbo: "Turbo",
+  spark: "Spark",
+  coder: "Coder",
+  chat: "Chat",
+  reasoner: "Reasoner",
+  thinking: "Thinking",
+  preview: "Preview",
+  air: "Air",
+  ai: "AI",
+  vl: "VL",
+  r1: "R1",
+  r2: "R2",
+  o1: "o1",
+  o3: "o3",
+  o4: "o4",
+};
+
+function stripModelWireNoise(raw: string): string {
+  let value = raw.trim();
+  if (!value) return "";
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const before = value;
+    value = value.replace(MODEL_VENDOR_LABEL_PREFIX, "").trim();
+    value = value.replace(MODEL_ROUTING_COLON_PREFIX, "").trim();
+    const slashIndex = value.lastIndexOf("/");
+    if (slashIndex >= 0 && slashIndex < value.length - 1) {
+      value = value.slice(slashIndex + 1).trim();
+    }
+    value = value.replace(MODEL_DOTTED_VENDOR_PREFIX, "").trim();
+    value = value.replace(MODEL_DSH_DASH_PREFIX, "").trim();
+    if (value === before) break;
+  }
+
+  return value
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/@[^@\s]*$/, "")
+    .replace(/-v\d+(?::\d+)?$/i, "")
+    .replace(/-(?:\d{4}-\d{2}-\d{2}|\d{8})$/, "")
+    .trim();
+}
+
+function formatModelToken(token: string): string {
+  const parens = /^\((.+)\)$/.exec(token);
+  if (parens?.[1]) {
+    return `(${formatModelTokens(parens[1])})`;
+  }
+  const lower = token.toLowerCase();
+  const canonical = MODEL_TOKEN_CANONICAL[lower];
+  if (canonical !== undefined) return canonical;
+  if (/^v\d+(?:\.\d+)*$/i.test(token)) {
+    return `V${token.slice(1)}`;
+  }
+  if (/^(?:a)?\d+(?:\.\d+)?[bmk]$/i.test(token)) {
+    return token.toUpperCase();
+  }
+  if (/^[a-z]/.test(token)) {
+    return token.charAt(0).toUpperCase() + token.slice(1);
+  }
+  return token;
+}
+
+function formatModelTokens(text: string): string {
+  const tokens = text
+    .trim()
+    .split(/[\s_-]+/)
+    .filter((token) => token.length > 0);
+  return tokens.map(formatModelToken).join(" ");
+}
+
+function hasNonVersionWord(text: string): boolean {
+  return text
+    .replace(/[()]/g, " ")
+    .split(/[\s_-]+/)
+    .some((word) => word.length > 0 && !MODEL_PURE_VERSION_TOKEN.test(word));
+}
+
+function normalizeHyphenMinorVersion(text: string): string {
+  return text.replace(/^(\d+)-(\d{1,2})(?=[-\s]|$)/, "$1.$2");
+}
+
+/**
+ * Normalizes raw model slugs and provider display names into concise, properly cased
+ * short names across OpenAI, Claude, Gemini/Antigravity, Grok, DeepSeek, Qwen, GLM, and dsh.
+ */
 export function formatModelSlugName(slug: string): string {
-  const separator = slug.lastIndexOf("/") + 1;
-  const prefix = slug.slice(0, separator);
-  const name = slug.slice(separator);
-  if (/^gpt-\d/i.test(name)) return prefix + formatCodexModelName(name);
-  if (!/^(claude-(opus|sonnet|haiku|fable)|gemini|grok|composer)-\d/i.test(name)) return slug;
-  return (
-    prefix +
-    name
-      .replace(/^(claude-[a-z]+-\d+)-(\d{1,2})(?=-|\[|$)/i, "$1.$2")
-      .split("-")
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(" ")
-  );
+  const core = stripModelWireNoise(slug);
+  if (!core) return "";
+
+  const gptOss = /^gpt-oss(?:[-\s]+(.+))?$/i.exec(core);
+  if (gptOss) {
+    const rest = gptOss[1]?.trim();
+    return rest ? `GPT-OSS ${formatModelTokens(rest)}` : "GPT-OSS";
+  }
+
+  const gpt = /^gpt[-\s]+(\d+(?:\.\d+)?)(?:[-\s]+(.+))?$/i.exec(core);
+  if (gpt?.[1]) {
+    const version = gpt[1];
+    const rest = gpt[2]?.trim();
+    if (rest && hasNonVersionWord(rest)) {
+      return `${version} ${formatModelTokens(rest)}`;
+    }
+    return `GPT-${version}`;
+  }
+
+  const claude = /^(?:claude[-\s]+)?(opus|sonnet|haiku|fable)(?:[-\s]+(.+))?$/i.exec(core);
+  if (claude?.[1]) {
+    const family = formatModelToken(claude[1]);
+    const rest = claude[2]?.trim();
+    if (!rest) return family;
+    return `${family} ${formatModelTokens(normalizeHyphenMinorVersion(rest))}`;
+  }
+
+  const gemini = /^gemini[-\s]+(\d+(?:[.-]\d{1,2}(?=[-\s]|$))?)(?:[-\s]+(.+))?$/i.exec(core);
+  if (gemini?.[1]) {
+    const version = gemini[1].replace("-", ".");
+    const rest = gemini[2]?.trim();
+    if (rest && hasNonVersionWord(rest)) {
+      return `${version} ${formatModelTokens(rest)}`;
+    }
+    return `Gemini ${version}`;
+  }
+  const geminiNamed = /^gemini[-\s]+(.+)$/i.exec(core);
+  if (geminiNamed?.[1]) {
+    return `Gemini ${formatModelTokens(geminiNamed[1])}`;
+  }
+
+  const grok = /^grok(?:[-\s]+(.+))?$/i.exec(core);
+  if (grok) {
+    const rest = grok[1]?.trim();
+    if (!rest) return "Grok";
+    return `Grok ${formatModelTokens(normalizeHyphenMinorVersion(rest))}`;
+  }
+
+  const deepseek = /^deepseek(?:[-\s]+(.+))?$/i.exec(core);
+  if (deepseek) {
+    const rest = deepseek[1]?.trim();
+    if (!rest) return "DeepSeek";
+    const normalizedRest = rest.replace(/^(v\d+)-(\d{1,2})(?=[-\s]|$)/i, "$1.$2");
+    return `DeepSeek ${formatModelTokens(normalizedRest)}`;
+  }
+
+  const qwen = /^qwen(?:[-\s]*(\d+(?:[.-]\d{1,2}(?=[-\s]|$))?))?(?:[-\s]+(.+))?$/i.exec(core);
+  if (qwen && (qwen[1] || qwen[2] || /^qwen$/i.test(core))) {
+    const version = qwen[1]?.replace("-", ".");
+    const rest = qwen[2]?.trim();
+    return ["Qwen", version, rest ? formatModelTokens(rest) : ""].filter(Boolean).join(" ");
+  }
+
+  const glm = /^glm(?:[-\s]+(.+))?$/i.exec(core);
+  if (glm) {
+    const rest = glm[1]?.trim();
+    if (!rest) return "GLM";
+    return `GLM ${formatModelTokens(normalizeHyphenMinorVersion(rest))}`;
+  }
+
+  const oSeries = /^(o[134])(?:[-\s]+(.+))?$/i.exec(core);
+  if (oSeries?.[1]) {
+    const family = oSeries[1].toLowerCase();
+    const rest = oSeries[2]?.trim();
+    return rest ? `${family} ${formatModelTokens(rest)}` : family;
+  }
+
+  if (/^[a-z0-9]+(?:[-_][a-z0-9.]+)+$/.test(core)) {
+    return formatModelTokens(core);
+  }
+
+  return core;
 }
 
 export function normalizeModelSlug(
@@ -596,15 +790,7 @@ export function applyClaudePromptEffortPrefix(
   return `Ultrathink:\n${trimmed}`;
 }
 
-/**
- * Canonical reasoning-control option IDs across supported providers:
- * - Codex: `reasoningEffort`
- * - Claude: `effort` (plus optional `ultracode` boolean toggle)
- * - OpenCode: `variant`
- * - Cursor: `reasoning_effort`
- * - Antigravity / OMP / ACP: `thought_level` / `thinking_level` (or `role: "reasoning"`)
- * - Pi / Claude Haiku 4.5: `thinking`
- */
+/** Canonical reasoning-control option IDs across Codex, Claude, OpenCode, Cursor, ACP/Antigravity, and Pi. */
 export const MODEL_REASONING_EFFORT_OPTION_IDS = [
   "reasoningEffort",
   "effort",
@@ -692,7 +878,7 @@ export function isUltrafastServiceTierChoice(
 ): boolean {
   const id = choice.id.trim().toLowerCase();
   const label = choice.label.trim().toLowerCase();
-  return id === "ultrafast" || label === "ultrafast";
+  return id === "ultrafast" || label === "ultrafast" || label === "ultra fast";
 }
 
 export type FastModeControlDescriptor =
@@ -831,4 +1017,28 @@ export function buildFastModeSelectionUpdate(
   }
   const target = control.fastChoice ?? control.ultrafastChoice;
   return target ? { id: "serviceTier", value: target.id } : null;
+}
+
+/**
+ * Builds a mutually exclusive Codex speed-tier update (`default` | `fast` | `ultrafast`),
+ * explicitly resetting to `serviceTier = "default"` when both toggles are off or unsupported.
+ */
+export function buildCodexSpeedTierSelectionUpdate(
+  caps: ModelCapabilities | null | undefined,
+  tier: "default" | "fast" | "ultrafast",
+): ProviderOptionSelection {
+  const control = getFastModeDescriptor(caps);
+  if (!control || control.kind !== "serviceTier" || tier === "default") {
+    return { id: "serviceTier", value: DEFAULT_SERVICE_TIER_CHOICE_ID };
+  }
+  if (tier === "ultrafast") {
+    return {
+      id: "serviceTier",
+      value: control.ultrafastChoice ? control.ultrafastChoice.id : DEFAULT_SERVICE_TIER_CHOICE_ID,
+    };
+  }
+  return {
+    id: "serviceTier",
+    value: control.fastChoice ? control.fastChoice.id : DEFAULT_SERVICE_TIER_CHOICE_ID,
+  };
 }

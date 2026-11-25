@@ -181,16 +181,70 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 
 const DEFAULT_SERVICE_TIER_ID = "default";
 
-const CODEX_SPEED_TIER_LABELS: Readonly<Record<string, string>> = {
+const CODEX_SPEED_TIER_LABELS = {
   fast: "Fast",
-  priority: "Fast",
-  ultrafast: "Ultrafast",
-  flex: "Flex",
-};
+  ultrafast: "Ultra Fast",
+} as const;
+
+type ExposedCodexSpeedTierId = keyof typeof CODEX_SPEED_TIER_LABELS;
+
+const CODEX_SPEED_TIER_ORDER: ReadonlyArray<ExposedCodexSpeedTierId> = ["fast", "ultrafast"];
 
 const SERVICE_TIER_DESCRIPTIONS: Readonly<Record<string, string>> = {
   ultrafast: "Even faster, more expensive",
 };
+
+function normalizeExposedCodexSpeedTierId(
+  id: string | null | undefined,
+): ExposedCodexSpeedTierId | undefined {
+  const normalized = id?.trim().toLowerCase();
+  if (normalized === "fast" || normalized === "priority") return "fast";
+  if (normalized === "ultrafast") return "ultrafast";
+  return undefined;
+}
+
+/**
+ * Custom Codex providers/gateways (e.g. `dragonapi/gpt-promax/gpt-6.2-astra`) and offline
+ * caches often report empty `serviceTiers: []` & `additionalSpeedTiers: []` even though
+ * flagship GPT models natively support `service_tier = fast` / `ultrafast`.
+ */
+function fallbackCodexSpeedTiersForModel(
+  modelSlug: string,
+): ReadonlyArray<{
+  readonly id: ExposedCodexSpeedTierId;
+  readonly name: string;
+  readonly description: string;
+}> {
+  const family = codexModelFamily(modelSlug).trim().toLowerCase();
+  if (/^gpt-(?:[6-9]|\d{2,})(?:\.\d+)?(?:-|$)/.test(family)) {
+    return [
+      { id: "fast", name: CODEX_SPEED_TIER_LABELS.fast, description: "" },
+      {
+        id: "ultrafast",
+        name: CODEX_SPEED_TIER_LABELS.ultrafast,
+        description: SERVICE_TIER_DESCRIPTIONS.ultrafast ?? "",
+      },
+    ];
+  }
+  if (
+    /^gpt-5\.(?:[4-9]|\d{2,})(?:-|$)/.test(family) &&
+    !/(?:^|-)mini(?:$|-)|(?:^|-)nano(?:$|-)/.test(family)
+  ) {
+    return [
+      { id: "fast", name: CODEX_SPEED_TIER_LABELS.fast, description: "" },
+      ...(family.includes("-sol")
+        ? [
+            {
+              id: "ultrafast" as const,
+              name: CODEX_SPEED_TIER_LABELS.ultrafast,
+              description: SERVICE_TIER_DESCRIPTIONS.ultrafast ?? "",
+            },
+          ]
+        : []),
+    ];
+  }
+  return [];
+}
 
 const CYBER_ACCESS_PROGRAM_LABELS: Readonly<Record<string, string>> = {
   standard: "Standard",
@@ -277,20 +331,47 @@ export function mapCodexModelCapabilities(
         },
   );
   const defaultReasoning = reasoningOptions.find((option) => option.isDefault)?.id;
-  const serviceTiers =
+  const hasExplicitCatalogTiers =
+    (model.serviceTiers !== undefined && model.serviceTiers.length > 0) ||
+    (model.additionalSpeedTiers !== undefined && model.additionalSpeedTiers.length > 0);
+  const rawServiceTiers =
     model.serviceTiers && model.serviceTiers.length > 0
       ? model.serviceTiers
       : (model.additionalSpeedTiers ?? []).map((id) => ({
           id,
-          name: CODEX_SPEED_TIER_LABELS[id] ?? id,
+          name: id,
           description: "",
         }));
-  const catalogDefaultServiceTier = serviceTiers.some(
-    (tier) => tier.id === model.defaultServiceTier,
-  )
-    ? model.defaultServiceTier
-    : null;
-  const defaultServiceTier = catalogDefaultServiceTier ?? DEFAULT_SERVICE_TIER_ID;
+  // Surface ONLY the 2 mutually exclusive English Title-Case speed tiers: Fast (fast, mapping legacy priority)
+  // and Ultra Fast (ultrafast). Hide Flex / duplicate Priority; fall back for flagship GPT models when empty.
+  const normalizedTierMap = new Map<
+    ExposedCodexSpeedTierId,
+    { readonly id: ExposedCodexSpeedTierId; readonly label: string; readonly description: string }
+  >();
+  for (const tier of hasExplicitCatalogTiers
+    ? rawServiceTiers
+    : fallbackCodexSpeedTiersForModel(model.model)) {
+    const canonicalId = normalizeExposedCodexSpeedTierId(tier.id);
+    if (!canonicalId) continue;
+    const description = SERVICE_TIER_DESCRIPTIONS[canonicalId] ?? tier.description;
+    const existing = normalizedTierMap.get(canonicalId);
+    if (!existing || (!existing.description && description)) {
+      normalizedTierMap.set(canonicalId, {
+        id: canonicalId,
+        label: CODEX_SPEED_TIER_LABELS[canonicalId],
+        description,
+      });
+    }
+  }
+  const serviceTiers = CODEX_SPEED_TIER_ORDER.flatMap((id) => {
+    const entry = normalizedTierMap.get(id);
+    return entry ? [entry] : [];
+  });
+  const normalizedCatalogDefault = normalizeExposedCodexSpeedTierId(model.defaultServiceTier);
+  const defaultServiceTier =
+    normalizedCatalogDefault !== undefined && normalizedTierMap.has(normalizedCatalogDefault)
+      ? normalizedCatalogDefault
+      : DEFAULT_SERVICE_TIER_ID;
   const optionDescriptors: ProviderOptionDescriptor[] = [];
 
   if (reasoningOptions.length > 0) {
@@ -313,15 +394,12 @@ export function mapCodexModelCapabilities(
           label: "Standard",
           ...(defaultServiceTier === DEFAULT_SERVICE_TIER_ID ? { isDefault: true } : {}),
         },
-        ...serviceTiers.map((tier) => {
-          const description = SERVICE_TIER_DESCRIPTIONS[tier.id] ?? tier.description;
-          return {
-            id: tier.id,
-            label: tier.name,
-            ...(description ? { description } : {}),
-            ...(defaultServiceTier === tier.id ? { isDefault: true } : {}),
-          };
-        }),
+        ...serviceTiers.map((tier) => ({
+          id: tier.id,
+          label: tier.label,
+          ...(tier.description ? { description: tier.description } : {}),
+          ...(defaultServiceTier === tier.id ? { isDefault: true } : {}),
+        })),
       ],
       currentValue: defaultServiceTier,
     });
@@ -428,15 +506,12 @@ function applyConfiguredCodexServiceTier(
   models: ReadonlyArray<ServerProviderModel>,
   serviceTier: string | undefined,
 ): ReadonlyArray<ServerProviderModel> {
-  if (!serviceTier) return models;
+  const normalized = normalizeExposedCodexSpeedTierId(serviceTier);
+  if (!normalized) return models;
   return withConfiguredSelectDefault(
     models,
     "serviceTier",
-    (options) =>
-      options.find(
-        (option) =>
-          option.id === serviceTier || (serviceTier === "fast" && option.id === "priority"),
-      )?.id,
+    (options) => options.find((option) => option.id === normalized)?.id,
   );
 }
 

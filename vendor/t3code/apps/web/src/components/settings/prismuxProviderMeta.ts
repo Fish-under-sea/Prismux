@@ -18,6 +18,16 @@ export interface PrismuxAgentCliMeta {
   }) => string;
 }
 
+export const DSH_LOCAL_ACP_PRESET = {
+  id: "dsh",
+  label: "DeepSeek Harness (dsh)",
+  instanceId: "dsh",
+  command: "dsh",
+  args: ["acp"] as readonly string[],
+  homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
+  accentColor: "#4176E6",
+} as const;
+
 export const OMP_LOCAL_ACP_PRESET = {
   id: "omp",
   label: "OMP (oh-my-pi)",
@@ -201,6 +211,16 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
       return safeId ? `${exe} resume ${quoteShellToken(safeId)}` : exe;
     },
   },
+  dsh: {
+    id: "dsh",
+    displayName: "DeepSeek Harness (dsh)",
+    cliCommand: "dsh",
+    homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
+    updateCommandHint: "npm install -g @deepseek-ai/dsh@latest",
+    supportsCliMode: true,
+    supportsResume: false,
+    buildResumeCommand: ({ command }) => quoteShellExecutable(command || "dsh"),
+  },
   omp: {
     id: "omp",
     displayName: "OMP (oh-my-pi)",
@@ -315,6 +335,14 @@ export function resolveAgentCliMeta(input: {
     const commandPath = readConfigField(input.config, "commandPath");
     const agentId = readConfigField(input.config, "agentId")?.toLowerCase() ?? null;
     const exeName = normalizeExecutableBasename(commandPath);
+    if (
+      exeName === "dsh" ||
+      agentId === "dsh" ||
+      agentId === "deepseek-harness-acp" ||
+      input.instanceId?.toLowerCase().startsWith("dsh")
+    ) {
+      return PRISMUX_AGENT_CLI_CATALOG.dsh ?? null;
+    }
     if (exeName === "omp" || agentId === "omp" || input.instanceId?.toLowerCase().startsWith("omp")) {
       return PRISMUX_AGENT_CLI_CATALOG.omp ?? null;
     }

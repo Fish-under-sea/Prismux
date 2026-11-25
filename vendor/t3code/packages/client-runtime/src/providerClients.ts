@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
 import { makeProviderClientRegistry, type ProviderIcon } from "@t3tools/provider-core/client";
+import { formatModelSlugName } from "@t3tools/shared/model";
 import { modelShortName } from "@t3tools/provider-core/modelShortName";
 import { cursorClient } from "@t3tools/provider-cursor/client";
 import { fxClient } from "@t3tools/provider-fx/client";
@@ -42,10 +43,6 @@ export const providerClients = makeProviderClientRegistry([
     acpRegistryAgentIds: ["claude-acp"],
     settingsSchema: ClaudeSettings,
   },
-  cursorClient,
-  grokClient,
-  fxClient,
-  openCodeClient,
   {
     driverKind: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
@@ -53,9 +50,13 @@ export const providerClients = makeProviderClientRegistry([
     acpRegistryAgentIds: ["antigravity-acp"],
     settingsSchema: AntigravitySettings,
   },
-  kiroClient,
+  grokClient,
+  openCodeClient,
   museClient,
   piClient,
+  cursorClient,
+  fxClient,
+  kiroClient,
   acpRegistryClient,
 ]);
 
@@ -64,10 +65,24 @@ export function getProviderClient(driver: string | null | undefined) {
 }
 
 export function resolveModelShortName(
-  model: { readonly name: string; readonly shortName?: string | undefined },
+  model: {
+    readonly name: string;
+    readonly slug?: string | undefined;
+    readonly shortName?: string | undefined;
+  },
   driverKind: ProviderDriverKind | null | undefined,
 ): string | undefined {
-  if (model.shortName) return model.shortName;
+  if (model.shortName) {
+    const normalizedShort = formatModelSlugName(model.shortName);
+    return normalizedShort || model.shortName;
+  }
   const families = driverKind ? providerClients.get(driverKind)?.modelFamilies : undefined;
-  return modelShortName(model.name, families ?? []);
+  const rawName = model.name.trim() || model.slug?.trim() || "";
+  if (!rawName) return undefined;
+  const providerShort = modelShortName(rawName, families ?? []);
+  const normalized = formatModelSlugName(providerShort ?? rawName);
+  if (normalized && normalized !== rawName) {
+    return normalized;
+  }
+  return providerShort ?? (normalized || undefined);
 }

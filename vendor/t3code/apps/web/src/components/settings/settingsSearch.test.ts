@@ -65,7 +65,7 @@ describe("searchSettings", () => {
     for (const query of ["fallback", "fallback agent", "fallback model"]) {
       expect(searchSettings(query)[0]).toMatchObject({
         id: "fallback-model",
-        to: "/settings/threads",
+        to: "/settings/chat",
         scope: "environment-defaults",
       });
     }
@@ -129,12 +129,22 @@ describe("searchSettings", () => {
     expect(searchSettings("xyzzy")).toEqual([]);
   });
 
-  it("omits deduplicated glass-opacity and environment-identification settings and redirects theme anchors to prismux-appearance", () => {
+  it("omits deduplicated glass-opacity, environment-identification, contrast, chat-width, and tool-call-visibility settings, and exposes the 3 DSH work-step controls", () => {
     const allIds = new Set<string>(SETTINGS_SEARCH_ITEMS.map((item) => item.id));
     expect(allIds.has("setting-glass-opacity")).toBe(false);
     expect(allIds.has("environment-identification")).toBe(false);
+    expect(allIds.has("setting-appearance-contrast")).toBe(false);
+    expect(allIds.has("chat-width")).toBe(false);
+    expect(allIds.has("tool-call-visibility")).toBe(false);
+    expect(allIds.has("work-steps-display")).toBe(true);
+    expect(allIds.has("work-steps-collapse-timing")).toBe(true);
+    expect(allIds.has("collapsed-assistant-reply-mode")).toBe(true);
     expect(searchSettings("glass opacity")).toEqual([]);
     expect(searchSettings("environment identification")).toEqual([]);
+    expect(searchSettings("work steps display")[0]).toMatchObject({
+      id: "work-steps-display",
+      to: "/settings/appearance",
+    });
     expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "color-scheme")?.targetId).toBe(
       "prismux-appearance",
     );
@@ -339,7 +349,7 @@ describe("settings search targets", () => {
     for (const scope of ["all", "environment", "project"] as const) {
       expect(isSettingsSearchScopeAvailable("project-defaults", scope)).toBe(true);
     }
-    for (const id of ["tool-call-visibility", "composer-rich-text"]) {
+    for (const id of ["work-steps-display", "composer-rich-text"]) {
       expect(getSettingsSearchTargetScope(id)!.scope).toBeNull();
     }
   });
@@ -442,35 +452,34 @@ describe("source control host search items", () => {
       sourceControlHostSettingsSearchId("github"),
     );
   });
-  it("finds Overnight Factory & Mail via English & email protocol keywords", () => {
-    for (const query of ["Overnight Factory", "gmail", "imap", "smtp", "#factory"]) {
-      expect(searchSettings(query).map((item) => item.id), query).toContain(
-        "prismux-overnight-factory",
-      );
-    }
-    const overnightItem = SETTINGS_SEARCH_ITEMS.find(
-      (item) => item.id === "prismux-overnight-factory",
-    );
-    expect(overnightItem?.to).toBe("/settings/overnight-factory");
+  it("omits Overnight Factory from Settings sidebar and search after promotion to standalone /overnight-factory panel", () => {
+    const navPaths = settingsNavGroups(true, true).flatMap((group) => group.paths);
+    expect(navPaths).not.toContain("/settings/overnight-factory");
+    expect(
+      SETTINGS_SEARCH_ITEMS.some((item) => item.to === "/settings/overnight-factory"),
+    ).toBe(false);
+    expect(
+      searchSettings("Overnight Factory").some((item) => item.to === "/settings/overnight-factory"),
+    ).toBe(false);
   });
 });
 
 describe("movedSettingsPath", () => {
   it("sends old links to the page their row moved to", () => {
     expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(
-      "/settings/threads",
+      "/settings/chat",
     );
-    expect(movedSettingsPath("/settings/connections", "authorized-clients")).toBe(
-      "/settings/access",
+    expect(movedSettingsPath("/settings/connections", "authorized-clients")).toBeNull();
+    expect(movedSettingsPath("/settings/source-control", "worktree-branch-naming")).toBeNull();
+    expect(movedSettingsPath("/settings/appearance", "diff-color-scheme")).toBe(
+      "/settings/source-control",
     );
-    expect(movedSettingsPath("/settings/source-control", "worktree-branch-naming")).toBe(
-      "/settings/worktrees",
+    expect(movedSettingsPath("/settings/connections", "network-access")).toBeNull();
+    expect(movedSettingsPath("/settings/storage", "storage-worktrees")).toBe(
+      "/settings/source-control",
     );
-    expect(movedSettingsPath("/settings/appearance", "diff-color-scheme")).toBe("/settings/diffs");
-    expect(movedSettingsPath("/settings/connections", "network-access")).toBe("/settings/access");
-    expect(movedSettingsPath("/settings/storage", "storage-worktrees")).toBe("/settings/worktrees");
     expect(movedSettingsPath("/settings/storage", "")).toBe("/settings/maintenance");
-    expect(movedSettingsPath("/settings/integrations", "devices")).toBe("/settings/devices");
+    expect(movedSettingsPath("/settings/integrations", "devices")).toBe("/settings/browser");
     expect(movedSettingsPath("/settings/beta", "")).toBe("/settings/general");
     expect(movedSettingsPath("/settings/labs", "")).toBe("/settings/general");
     expect(movedSettingsPath("/settings/updates", "")).toBe("/settings/about");

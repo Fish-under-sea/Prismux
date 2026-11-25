@@ -18,9 +18,18 @@ import {
 import { resolveStorage } from "../../lib/storage";
 import { containsUuidNoise, formatAgentBrandName } from "../../prismux/agentBrand";
 import type { ThreadRouteTarget } from "../../threadRoutes";
+import {
+  buildOpenTabInputFromSplitPayload,
+  resolveSplitPlacementFromZone,
+  type SplitDragPayload,
+  type SplitDropZone,
+  type SplitInsertPosition,
+} from "./splitAnything.logic";
+
+export type { SplitDragPayload, SplitDropZone, SplitInsertPosition };
 
 export const WORKSPACE_TABS_STORAGE_KEY = "prismux.workspaceTabs.v1";
-export const WORKSPACE_MAX_SPLIT_PANES = 3;
+export const WORKSPACE_MAX_SPLIT_PANES = 8;
 export const WORKSPACE_MIN_SPLIT_RATIO = 0.18;
 export const WORKSPACE_MAX_SPLIT_RATIO = 0.82;
 export const DEFAULT_PRIMARY_PANE_ID = "pane-main";
@@ -46,7 +55,11 @@ export type WorkspaceTabKind =
   | "terminal"
   | "diff"
   | "browser"
-  | "simulator";
+  | "simulator"
+  | "files"
+  | "related"
+  | "device"
+  | "side-chat";
 
 export interface WorkspaceTab {
   readonly id: string;
@@ -140,6 +153,12 @@ export interface WorkspaceTabsStateData {
 }
 
 export interface WorkspaceTabsStore extends WorkspaceTabsStateData {
+  /** Transient non-persisted active Split Anything drag payload (excluded from `partialize`). */
+  readonly activeDrag: SplitDragPayload | null;
+  /** Transient non-persisted split-divider resize flag (excluded from `partialize`). */
+  readonly isResizingSplit: boolean;
+  setActiveDrag: (payload: SplitDragPayload | null) => void;
+  setIsResizingSplit: (resizing: boolean) => void;
   syncRouteTarget: (input: SyncRouteTargetInput) => string | null;
   promoteDraftTab: (
     draftId: DraftId,
@@ -154,11 +173,13 @@ export interface WorkspaceTabsStore extends WorkspaceTabsStateData {
     paneId: string,
     direction: SplitDirection,
     initialTab?: OpenWorkspaceTabInput,
+    position?: SplitInsertPosition,
   ) => string | null;
   moveTabToNewSplit: (
     tabId: string,
     fromPaneId: string,
     direction: SplitDirection,
+    position?: SplitInsertPosition,
   ) => string | null;
   moveTabToPane: (
     tabId: string,
@@ -166,9 +187,16 @@ export interface WorkspaceTabsStore extends WorkspaceTabsStateData {
     toPaneId: string,
     insertIndex?: number,
   ) => void;
+  dropItemIntoPane: (
+    payload: SplitDragPayload,
+    targetPaneId: string,
+    zone: SplitDropZone,
+    options?: { readonly fallbackHostThreadRef?: ScopedThreadRef | null | undefined },
+  ) => { readonly paneId: string; readonly tabId: string } | null;
   reorderTab: (paneId: string, tabId: string, targetIndex: number) => void;
   closePane: (paneId: string, options?: { readonly mergeTabs?: boolean }) => void;
   setSplitRatio: (splitId: string, ratio: number) => void;
+  resetSplitRatio: (splitId: string) => void;
   updateTab: (
     tabId: string,
     patch: Partial<
@@ -185,6 +213,7 @@ export interface WorkspaceTabsStore extends WorkspaceTabsStateData {
         | "url"
         | "shell"
         | "hostThreadRef"
+        | "resourceId"
         | "pinned"
       >
     >,
@@ -230,24 +259,34 @@ export function splitLeafNode(
   direction: SplitDirection,
   splitId: string,
   ratio = 0.5,
+  position: SplitInsertPosition = "after",
 ): { readonly node: WorkspaceSplitLayoutNode; readonly replaced: boolean } {
   if (node.type === "leaf") {
     if (node.paneId !== targetPaneId) {
       return { node, replaced: false };
     }
+    const newLeaf: WorkspaceSplitLayoutNode = { type: "leaf", paneId: newPaneId };
     return {
       node: {
         type: "split",
         id: splitId,
         direction,
-        first: node,
-        second: { type: "leaf", paneId: newPaneId },
+        first: position === "before" ? newLeaf : node,
+        second: position === "before" ? node : newLeaf,
         ratio: clampSplitRatio(ratio),
       },
       replaced: true,
     };
   }
-  const firstResult = splitLeafNode(node.first, targetPaneId, newPaneId, direction, splitId, ratio);
+  const firstResult = splitLeafNode(
+    node.first,
+    targetPaneId,
+    newPaneId,
+    direction,
+    splitId,
+    ratio,
+    position,
+  );
   if (firstResult.replaced) {
     return {
       node: { ...node, first: firstResult.node },
@@ -261,6 +300,7 @@ export function splitLeafNode(
     direction,
     splitId,
     ratio,
+    position,
   );
   if (secondResult.replaced) {
     return {
@@ -354,6 +394,21 @@ export function workspaceTabDedupeKey(
   }
   if (tab.kind === "terminal" && tab.resourceId) {
     return `terminal:${tab.resourceId}`;
+  }
+  if (tab.kind === "files") {
+    return tab.resourceId ? `files:${tab.resourceId}` : "files:workspace";
+  }
+  if (tab.kind === "related") {
+    return tab.resourceId ? `related:${tab.resourceId}` : "related:workspace";
+  }
+  if (tab.kind === "device") {
+    return tab.resourceId ? `device:${tab.resourceId}` : "device:workspace";
+  }
+  if (tab.kind === "side-chat") {
+    if (tab.environmentId && tab.threadId) {
+      return `side-chat:${scopedThreadKey({ environmentId: tab.environmentId, threadId: tab.threadId })}`;
+    }
+    return tab.resourceId ? `side-chat:${tab.resourceId}` : "side-chat:workspace";
   }
   return null;
 }
@@ -785,6 +840,18 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
   persist(
     (set, get) => ({
       ...createInitialWorkspaceTabsState(),
+      activeDrag: null,
+      isResizingSplit: false,
+
+      setActiveDrag(payload) {
+        set((current) => (current.activeDrag === payload ? current : { activeDrag: payload }));
+      },
+
+      setIsResizingSplit(resizing) {
+        set((current) =>
+          current.isResizingSplit === resizing ? current : { isResizingSplit: resizing },
+        );
+      },
 
       syncRouteTarget(input) {
         const { target } = input;
@@ -1321,7 +1388,7 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         });
       },
 
-      splitPane(paneId, direction, initialTab) {
+      splitPane(paneId, direction, initialTab, position = "after") {
         const state = get();
         if (!state.panes[paneId]) return null;
         if (countLeafPanes(state.layout) >= WORKSPACE_MAX_SPLIT_PANES) {
@@ -1337,6 +1404,7 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
           direction,
           splitId,
           0.5,
+          position,
         );
         if (!replaced) return null;
 
@@ -1360,7 +1428,8 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
                 providerId: initialTab.providerId ?? null,
                 instanceId: initialTab.instanceId ?? null,
                 model: initialTab.model ?? null,
-                environmentId: initialTab.environmentId ?? initialTab.hostThreadRef?.environmentId ?? null,
+                environmentId:
+                  initialTab.environmentId ?? initialTab.hostThreadRef?.environmentId ?? null,
                 threadId: initialTab.threadId ?? initialTab.hostThreadRef?.threadId ?? null,
                 draftId: initialTab.draftId ?? null,
                 url: initialTab.url ?? null,
@@ -1413,7 +1482,7 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         return newPaneId;
       },
 
-      moveTabToNewSplit(tabId, fromPaneId, direction) {
+      moveTabToNewSplit(tabId, fromPaneId, direction, position = "after") {
         const state = get();
         const fromPane = state.panes[fromPaneId];
         if (!fromPane || !fromPane.tabIds.includes(tabId) || fromPane.tabIds.length < 2) {
@@ -1431,6 +1500,7 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
           direction,
           splitId,
           0.5,
+          position,
         );
         if (!replaced) return null;
 
@@ -1515,6 +1585,156 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         });
       },
 
+      dropItemIntoPane(payload, targetPaneId, zone, options) {
+        const initial = get();
+        if (!initial.panes[targetPaneId]) {
+          if (initial.activeDrag !== null) {
+            set({ activeDrag: null });
+          }
+          return null;
+        }
+
+        if (payload.kind === "pane-tab") {
+          const fromPane = initial.panes[payload.fromPaneId];
+          if (!fromPane || !fromPane.tabIds.includes(payload.tabId)) {
+            if (initial.activeDrag !== null) {
+              set({ activeDrag: null });
+            }
+            return null;
+          }
+
+          if (zone === "center") {
+            if (payload.fromPaneId === targetPaneId) {
+              initial.activateTab(targetPaneId, payload.tabId);
+            } else {
+              initial.moveTabToPane(payload.tabId, payload.fromPaneId, targetPaneId);
+            }
+            set({ activeDrag: null });
+            return { paneId: targetPaneId, tabId: payload.tabId };
+          }
+
+          // Cannot split a pane with its own sole tab.
+          if (payload.fromPaneId === targetPaneId && fromPane.tabIds.length < 2) {
+            initial.activateTab(targetPaneId, payload.tabId);
+            set({ activeDrag: null });
+            return { paneId: targetPaneId, tabId: payload.tabId };
+          }
+
+          const willCollapseSource =
+            payload.fromPaneId !== targetPaneId && fromPane.tabIds.length === 1;
+          if (countLeafPanes(initial.layout) >= WORKSPACE_MAX_SPLIT_PANES && !willCollapseSource) {
+            if (payload.fromPaneId !== targetPaneId) {
+              initial.moveTabToPane(payload.tabId, payload.fromPaneId, targetPaneId);
+            } else {
+              initial.activateTab(targetPaneId, payload.tabId);
+            }
+            set({ activeDrag: null });
+            return { paneId: targetPaneId, tabId: payload.tabId };
+          }
+
+          const { direction, position } = resolveSplitPlacementFromZone(zone);
+          const newPaneId = nextUid("pane");
+          const splitId = nextUid("split");
+          let succeeded = false;
+
+          set((current) => {
+            const currentFromPane = current.panes[payload.fromPaneId];
+            if (
+              !currentFromPane ||
+              !currentFromPane.tabIds.includes(payload.tabId) ||
+              !current.panes[targetPaneId]
+            ) {
+              return { ...current, activeDrag: null };
+            }
+
+            const { node: splitLayout, replaced } = splitLeafNode(
+              current.layout,
+              targetPaneId,
+              newPaneId,
+              direction,
+              splitId,
+              0.5,
+              position,
+            );
+            if (!replaced) {
+              return { ...current, activeDrag: null };
+            }
+
+            const removedIdx = currentFromPane.tabIds.indexOf(payload.tabId);
+            const remainingFromIds = currentFromPane.tabIds.filter((id) => id !== payload.tabId);
+            const nextFromActiveId =
+              currentFromPane.activeTabId === payload.tabId
+                ? (remainingFromIds[Math.min(removedIdx, remainingFromIds.length - 1)] ?? null)
+                : currentFromPane.activeTabId;
+
+            const nextState: WorkspaceTabsStateData = {
+              layout: splitLayout,
+              tabs: current.tabs,
+              focusedPaneId: newPaneId,
+              primaryPaneId: current.primaryPaneId,
+              terminalCounter: current.terminalCounter,
+              panes: {
+                ...current.panes,
+                [payload.fromPaneId]: {
+                  ...currentFromPane,
+                  tabIds: remainingFromIds,
+                  activeTabId: nextFromActiveId,
+                },
+                [newPaneId]: {
+                  id: newPaneId,
+                  tabIds: [payload.tabId],
+                  activeTabId: payload.tabId,
+                },
+              },
+            };
+
+            succeeded = true;
+            const finalData =
+              remainingFromIds.length === 0 && countLeafPanes(nextState.layout) > 1
+                ? collapsePaneInState(nextState, payload.fromPaneId, false)
+                : nextState;
+            return {
+              ...current,
+              ...finalData,
+              activeDrag: null,
+            };
+          });
+
+          return succeeded ? { paneId: newPaneId, tabId: payload.tabId } : null;
+        }
+
+        const openInput = buildOpenTabInputFromSplitPayload(
+          payload,
+          options?.fallbackHostThreadRef,
+        );
+
+        // Center merge or at max split panes -> open/focus inside targetPaneId without stealing another pane.
+        if (zone === "center" || countLeafPanes(initial.layout) >= WORKSPACE_MAX_SPLIT_PANES) {
+          const targetPane = initial.panes[targetPaneId]!;
+          const dedupeKey = workspaceTabDedupeKey(openInput);
+          if (dedupeKey) {
+            for (const existingTabId of targetPane.tabIds) {
+              const candidate = initial.tabs[existingTabId];
+              if (candidate && workspaceTabDedupeKey(candidate) === dedupeKey) {
+                initial.activateTab(targetPaneId, existingTabId);
+                set({ activeDrag: null });
+                return { paneId: targetPaneId, tabId: existingTabId };
+              }
+            }
+          }
+          const createdTabId = initial.openTab({ ...openInput, reuseExisting: false }, targetPaneId);
+          set({ activeDrag: null });
+          return { paneId: targetPaneId, tabId: createdTabId };
+        }
+
+        const { direction, position } = resolveSplitPlacementFromZone(zone);
+        const newPaneId = initial.splitPane(targetPaneId, direction, openInput, position);
+        set({ activeDrag: null });
+        if (!newPaneId) return null;
+        const createdTabId = get().panes[newPaneId]?.activeTabId;
+        return createdTabId ? { paneId: newPaneId, tabId: createdTabId } : null;
+      },
+
       reorderTab(paneId, tabId, targetIndex) {
         set((current) => {
           const pane = current.panes[paneId];
@@ -1551,6 +1771,13 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         });
       },
 
+      resetSplitRatio(splitId) {
+        set((current) => {
+          const nextLayout = updateSplitRatioInTree(current.layout, splitId, 0.5);
+          return nextLayout === current.layout ? current : { ...current, layout: nextLayout };
+        });
+      },
+
       updateTab(tabId, patch) {
         set((current) => {
           const existing = current.tabs[tabId];
@@ -1582,7 +1809,11 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
       },
 
       resetWorkspace() {
-        set(createInitialWorkspaceTabsState());
+        set({
+          ...createInitialWorkspaceTabsState(),
+          activeDrag: null,
+          isResizingSplit: false,
+        });
       },
     }),
     {
@@ -1606,6 +1837,8 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
         return {
           ...current,
           ...sanitized,
+          activeDrag: null,
+          isResizingSplit: false,
         };
       },
     },

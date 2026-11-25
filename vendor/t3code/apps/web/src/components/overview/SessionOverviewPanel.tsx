@@ -906,7 +906,7 @@ function SessionOverviewPanelContent(
 
   return (
     <div
-      data-pmx-glass-zone="rightSidebar"
+      data-pmx-glass-zone="overviewPanel"
       data-session-overview-panel="1"
       data-overview-section-limit={dynamicSectionLimit}
       data-overview-show-completed={effectiveDisplayPrefs.showCompleted ? "1" : "0"}

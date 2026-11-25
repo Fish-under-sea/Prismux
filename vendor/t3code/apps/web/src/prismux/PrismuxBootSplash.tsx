@@ -285,8 +285,10 @@ export function dismissPrismuxBootSplash(options: DismissBootSplashOptions = {})
         resolve();
         return;
       }
-      current.dataset.pmxBootSplashState = "leaving";
-      current.classList.add("pmx-boot-splash-leaving");
+      if (current.dataset) {
+        current.dataset.pmxBootSplashState = "leaving";
+      }
+      current.classList?.add("pmx-boot-splash-leaving");
       activeRemoveTimer = setTimeout(() => {
         activeRemoveTimer = null;
         current.remove();
