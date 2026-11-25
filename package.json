@@ -1,6 +1,6 @@
 {
   "name": "prismux-monorepo",
-  "version": "0.2.0-rc.1",
+  "version": "0.2.0-rc.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.3.4",
