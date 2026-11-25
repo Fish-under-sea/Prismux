@@ -81,6 +81,7 @@ import {
   formatCompactUsageTokens,
   formatResetCountdown,
   formatUsageWindowValue,
+  type PrismuxProviderProbeSnapshot,
 } from "./statusBarUsage";
 import { getResetCountdownNextTickDelay } from "./useResetCountdownClock";
 import {
@@ -546,6 +547,330 @@ describe("statusBarUsage compliance and urgency sorting", () => {
     expect(embeddedHtml).toContain("bg-transparent");
     expect(embeddedHtml).not.toContain("bg-popover");
     expect(embeddedHtml).not.toContain("Antigravity（纯官方 ACP 合规）");
+  });
+
+  it("classifies Antigravity official local CLI login as 本地统计 and CCS/Magpie Codex as 自定义端点 without guessing from missing quota windows", () => {
+    const now = Date.parse("2026-11-25T14:30:00Z");
+
+    const buildMergedUsage = (
+      providerEntries: ReadonlyArray<{
+        readonly provider: string;
+        readonly todayTokens: number;
+        readonly weekTokens: number;
+        readonly weekCostUsd?: number;
+        readonly records?: number;
+      }>,
+    ): MergedUsage => {
+      const totalWeekTokens = providerEntries.reduce((sum, p) => sum + p.weekTokens, 0);
+      const totalWeekCost = providerEntries.reduce((sum, p) => sum + (p.weekCostUsd ?? 0), 0);
+      const totalTodayTokens = providerEntries.reduce((sum, p) => sum + p.todayTokens, 0);
+      const totalTodayCost = providerEntries.reduce((sum, p) => sum + (p.weekCostUsd ?? 0), 0);
+      const totalRecords = providerEntries.reduce((sum, p) => sum + (p.records ?? 10), 0);
+      return {
+        costUsd: totalWeekCost,
+        uncachedInputTokens: totalWeekTokens,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: totalWeekTokens,
+        records: totalRecords,
+        sessions: providerEntries.length,
+        providers: providerEntries.map((entry) => ({
+          provider: entry.provider,
+          costUsd: entry.weekCostUsd ?? 0,
+          totalTokens: entry.weekTokens,
+          records: entry.records ?? 10,
+          sessions: 1,
+          costShare: totalWeekCost > 0 ? (entry.weekCostUsd ?? 0) / totalWeekCost : 0,
+          tokenShare: totalWeekTokens > 0 ? entry.weekTokens / totalWeekTokens : 0,
+        })),
+        models: [],
+        daily: [
+          {
+            day: "2026-11-25",
+            costUsd: totalTodayCost,
+            totalTokens: totalTodayTokens,
+            byProvider: new Map(
+              providerEntries.map((entry) => [
+                entry.provider,
+                { costUsd: entry.weekCostUsd ?? 0, totalTokens: entry.todayTokens },
+              ]),
+            ),
+          },
+        ],
+        hourly: [],
+        costQuality: {
+          providerReportedShare: 0,
+          modelPricedShare: 1,
+          unpricedShare: 0,
+          cacheSavingsUsd: 0,
+        },
+        categoryCost: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, unsplit: 0 },
+        speedCost: { standard: totalWeekCost, fast: 0, ultrafast: 0, premium: 0 },
+        duplicateSources: [],
+        contributingEnvironments: [],
+        contractMismatches: [],
+      } as unknown as MergedUsage;
+    };
+
+    // 1. Live Daemon probeSnapshots: Antigravity official `agy` CLI login (736M tok, no quota window) -> 本地统计;
+    //    Codex configured via CCS/Magpie (`~/.codex/config.toml`) -> 自定义端点;
+    //    Claude Code with custom endpoint -> 自定义端点;
+    //    Unknown historical provider (`cursor`) -> defaults to 本地统计 (never 自定义端点!).
+    const baseProviders = [
+      {
+        instanceId: "antigravity-local",
+        driver: "antigravity",
+        displayName: "Antigravity",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated", label: "Local agy CLI · Google AI Ultra" },
+      },
+      {
+        instanceId: "codex-magpie",
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        // Even before ServerProvider attaches auth.endpoint, Daemon probe detects CCS/Magpie from ~/.codex/config.toml.
+        auth: { status: "authenticated" },
+      },
+      {
+        instanceId: "claude-relay",
+        driver: "claudeAgent",
+        displayName: "Claude Code",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+      },
+    ] as unknown as ServerProvider[];
+
+    const probeSnapshots: readonly PrismuxProviderProbeSnapshot[] = [
+      {
+        providerId: "antigravity",
+        displayName: "Antigravity (agy)",
+        installed: true,
+        version: "1.0.0",
+        binaryPath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+        status: "ready",
+        authMode: "subscription_oauth",
+        authSource: "official_oauth",
+        endpoint: null,
+        authLabel: "官方个人订阅 OAuth（默认锁定）",
+        checkedAt: "2026-11-25T14:29:00.000Z",
+      },
+      {
+        providerId: "codex",
+        displayName: "Codex (codex)",
+        installed: true,
+        version: "0.42.0",
+        binaryPath: "C:\\Program Files\\nodejs\\codex.cmd",
+        status: "ready",
+        authMode: "api_or_custom",
+        authSource: "ccs_or_magpie",
+        endpoint: "http://127.0.0.1:8317/v1",
+        authLabel: "CCS / Magpie API 注入（已放行）",
+        checkedAt: "2026-11-25T14:29:00.000Z",
+      },
+      {
+        providerId: "claudeAgent",
+        displayName: "Claude Code (claude)",
+        installed: true,
+        version: "2.1.0",
+        binaryPath: "C:\\Program Files\\nodejs\\claude.cmd",
+        status: "ready",
+        authMode: "api_or_custom",
+        authSource: "custom_endpoint",
+        endpoint: "https://relay.anthropic.example/v1",
+        authLabel: "API / 自定义端点注入（已放行）",
+        checkedAt: "2026-11-25T14:29:00.000Z",
+      },
+    ];
+
+    const merged = buildMergedUsage([
+      { provider: "antigravity", todayTokens: 120_000_000, weekTokens: 736_000_000, records: 88 },
+      { provider: "codex", todayTokens: 4_200_000, weekTokens: 18_500_000, records: 31 },
+      { provider: "claude", todayTokens: 900_000, weekTokens: 5_000_000, records: 12 },
+      { provider: "cursor", todayTokens: 0, weekTokens: 420_000, records: 4 },
+    ]);
+
+    const probeSummary = collectStatusBarUsageSummary(
+      baseProviders,
+      now,
+      merged,
+      "2026-11-25",
+      probeSnapshots,
+    );
+
+    const agyRow = probeSummary.telemetry.providers.find((p) => p.providerKind === "antigravity");
+    const codexRow = probeSummary.telemetry.providers.find((p) => p.providerKind === "codex");
+    const claudeRow = probeSummary.telemetry.providers.find((p) => p.providerKind === "claude");
+    const cursorRow = probeSummary.telemetry.providers.find((p) => p.providerKind === "cursor");
+
+    expect(agyRow).toBeDefined();
+    expect(agyRow?.hasQuotaWindow).toBe(false);
+    expect(agyRow?.isCustomEndpoint).toBe(false);
+
+    expect(codexRow).toBeDefined();
+    expect(codexRow?.hasQuotaWindow).toBe(false);
+    expect(codexRow?.isCustomEndpoint).toBe(true);
+
+    expect(claudeRow).toBeDefined();
+    expect(claudeRow?.hasQuotaWindow).toBe(false);
+    expect(claudeRow?.isCustomEndpoint).toBe(true);
+
+    expect(cursorRow).toBeDefined();
+    expect(cursorRow?.hasQuotaWindow).toBe(false);
+    expect(cursorRow?.isCustomEndpoint).toBe(false);
+
+    const probeHtml = renderToStaticMarkup(
+      createElement(UsageStatusPopover, {
+        summary: probeSummary,
+        onClose: () => {},
+      }),
+    );
+    expect(probeHtml).toContain("736M tok");
+    expect(probeHtml).toMatch(/data-testid="usage-provider-badge-antigravity"[^>]*>本地统计<\/span>/);
+    expect(probeHtml).not.toMatch(
+      /data-testid="usage-provider-badge-antigravity"[^>]*>自定义端点<\/span>/,
+    );
+    expect(probeHtml).toMatch(/data-testid="usage-provider-badge-codex"[^>]*>自定义端点<\/span>/);
+    expect(probeHtml).not.toMatch(
+      /data-testid="usage-provider-badge-codex"[^>]*>本地统计<\/span>/,
+    );
+    expect(probeHtml).toMatch(/data-testid="usage-provider-badge-claude"[^>]*>自定义端点<\/span>/);
+    expect(probeHtml).toMatch(/data-testid="usage-provider-badge-cursor"[^>]*>本地统计<\/span>/);
+
+    // 2. Fallback when probeSnapshots is absent: Antigravity -> 本地统计, Codex endpoint -> 自定义端点,
+    //    official Claude with quota window -> 官方配额, provider without quota window -> 本地统计.
+    const fallbackProvidersA = [
+      {
+        instanceId: "antigravity-local",
+        driver: "antigravity",
+        displayName: "Antigravity",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated", label: "Local agy CLI · Google AI Ultra" },
+      },
+      {
+        instanceId: "codex-endpoint",
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated", endpoint: "https://magpie.local/v1" },
+      },
+      {
+        instanceId: "claude-official",
+        driver: "claudeAgent",
+        displayName: "Claude Code",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+        usageLimits: {
+          windows: [{ id: "session", label: "5h", usedPercent: 30, resetsAt: "2026-11-25T18:00:00Z" }],
+        },
+      },
+      {
+        instanceId: "opencode-local",
+        driver: "opencode",
+        displayName: "OpenCode",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+      },
+    ] as unknown as ServerProvider[];
+
+    const fallbackSummaryA = collectStatusBarUsageSummary(
+      fallbackProvidersA,
+      now,
+      buildMergedUsage([
+        { provider: "antigravity", todayTokens: 50_000_000, weekTokens: 736_000_000 },
+        { provider: "codex", todayTokens: 1_000_000, weekTokens: 5_000_000 },
+        { provider: "claude", todayTokens: 500_000, weekTokens: 2_000_000 },
+      ]),
+      "2026-11-25",
+    );
+
+    expect(
+      fallbackSummaryA.telemetry.providers.find((p) => p.providerKind === "antigravity")
+        ?.isCustomEndpoint,
+    ).toBe(false);
+    expect(
+      fallbackSummaryA.telemetry.providers.find((p) => p.providerKind === "codex")
+        ?.isCustomEndpoint,
+    ).toBe(true);
+    expect(
+      fallbackSummaryA.telemetry.providers.find((p) => p.providerKind === "claude")
+        ?.hasQuotaWindow,
+    ).toBe(true);
+    expect(
+      fallbackSummaryA.telemetry.providers.find((p) => p.providerKind === "opencode")
+        ?.isCustomEndpoint,
+    ).toBe(false);
+
+    const fallbackHtmlA = renderToStaticMarkup(
+      createElement(UsageStatusPopover, {
+        summary: fallbackSummaryA,
+        onClose: () => {},
+      }),
+    );
+    expect(fallbackHtmlA).toMatch(
+      /data-testid="usage-provider-badge-antigravity"[^>]*>本地统计<\/span>/,
+    );
+    expect(fallbackHtmlA).toMatch(
+      /data-testid="usage-provider-badge-codex"[^>]*>自定义端点<\/span>/,
+    );
+    expect(fallbackHtmlA).toMatch(
+      /data-testid="usage-provider-badge-claude"[^>]*>官方配额<\/span>/,
+    );
+    expect(fallbackHtmlA).toMatch(
+      /data-testid="usage-provider-badge-opencode"[^>]*>本地统计<\/span>/,
+    );
+
+    // 3. Codex configured with requiresOpenaiAuth === false (no endpoint field & no probeSnapshots yet) -> 自定义端点!
+    const codexRequiresAuthFalseProviders = [
+      {
+        instanceId: "codex-proxy",
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "unknown", requiresOpenaiAuth: false },
+      },
+    ] as unknown as ServerProvider[];
+
+    const codexProxySummary = collectStatusBarUsageSummary(
+      codexRequiresAuthFalseProviders,
+      now,
+      buildMergedUsage([{ provider: "codex", todayTokens: 200_000, weekTokens: 1_200_000 }]),
+      "2026-11-25",
+    );
+    expect(
+      codexProxySummary.telemetry.providers.find((p) => p.providerKind === "codex")
+        ?.isCustomEndpoint,
+    ).toBe(true);
+
+    // 4. Static wiring guard: PrismuxStatusBar fetches `/v1/providers/probe` and passes snapshots to collectStatusBarUsageSummary.
+    const webSrc = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
+      "../..",
+    );
+    const statusBarSource = fs.readFileSync(
+      path.join(webSrc, "prismux/PrismuxStatusBar.tsx"),
+      "utf8",
+    );
+    expect(statusBarSource).toContain("/v1/providers/probe");
+    expect(statusBarSource).toContain("providerProbeSnapshots");
   });
 });
 

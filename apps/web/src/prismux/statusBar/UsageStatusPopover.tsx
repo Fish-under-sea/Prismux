@@ -169,6 +169,7 @@ export function UsageStatusPopover({
               {telemetry.providers.map((prov) => (
                 <div
                   key={prov.key}
+                  data-testid={`usage-provider-row-${prov.providerKind}`}
                   className="flex flex-col gap-1 rounded-lg border border-border/70 bg-muted/30 px-2.5 py-2 text-xs tabular-nums"
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -177,7 +178,10 @@ export function UsageStatusPopover({
                       <span className="truncate font-semibold text-foreground">
                         {prov.providerName}
                       </span>
-                      <span className="shrink-0 rounded-sm bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      <span
+                        data-testid={`usage-provider-badge-${prov.providerKind}`}
+                        className="shrink-0 rounded-sm bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground"
+                      >
                         {prov.hasQuotaWindow
                           ? "官方配额"
                           : prov.isCustomEndpoint

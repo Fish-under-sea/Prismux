@@ -85,6 +85,7 @@ import {
 import {
   collectStatusBarUsageSummary,
   formatCompactUsageTokens,
+  type PrismuxProviderProbeSnapshot,
 } from "./statusBar/statusBarUsage";
 import {
   DEFAULT_STATUS_BAR_VISIBILITY,
@@ -140,6 +141,11 @@ function quotaMiniBarColorClass(tone: QuotaTone): string {
   }
 }
 
+interface DaemonProvidersProbeResponse {
+  readonly ok?: boolean;
+  readonly providers?: readonly PrismuxProviderProbeSnapshot[];
+}
+
 export interface PrismuxStatusBarProps {
   /** Optional initial daemon quota snapshot (primarily for deterministic UI tests). */
   readonly initialDaemonQuota?: DaemonOfficialQuotaSummaryResponse | null | undefined;
@@ -177,6 +183,10 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   const [manualResourcesLoading, setManualResourcesLoading] = useState(false);
   const [liveResourcesError, setLiveResourcesError] = useState<string | null>(null);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
+  const [providerProbeSnapshots, setProviderProbeSnapshots] = useState<
+    readonly PrismuxProviderProbeSnapshot[]
+  >([]);
+  const providerProbeInflightRef = useRef<Promise<void> | null>(null);
   const [daemonQuota, setDaemonQuota] = useState<DaemonOfficialQuotaSummaryResponse | null>(
     initialDaemonQuota,
   );
@@ -297,9 +307,54 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     };
   }, [quotaOpen]);
 
+  const fetchProviderProbeSnapshots = useCallback(
+    async (refresh = false) => {
+      if (!runtime?.daemonInfo.ready) return;
+      if (typeof runtime.daemon?.requestJson !== "function") return;
+      if (providerProbeInflightRef.current && !refresh) {
+        await providerProbeInflightRef.current;
+        return;
+      }
+      const endpoint = refresh ? "/v1/providers/probe?refresh=1" : "/v1/providers/probe";
+      const run = runtime.daemon.requestJson<DaemonProvidersProbeResponse>(endpoint).then(
+        (response) => {
+          if (Array.isArray(response?.providers)) {
+            setProviderProbeSnapshots(response.providers);
+          }
+        },
+        () => {
+          // Keep previous snapshots / ServerProvider fallback if daemon probe is temporarily unavailable.
+        },
+      );
+      providerProbeInflightRef.current = run;
+      try {
+        await run;
+      } finally {
+        if (providerProbeInflightRef.current === run) {
+          providerProbeInflightRef.current = null;
+        }
+      }
+    },
+    [runtime?.daemon, runtime?.daemonInfo.ready],
+  );
+
+  // Lightweight single-shot `/v1/providers/probe` read on mount/daemon-ready (zero polling timer).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- Fetches authoritative provider auth probe snapshot once when local daemon becomes ready.
+  useEffect(() => {
+    if (!runtime?.daemonInfo.ready) return;
+    void fetchProviderProbeSnapshots(false);
+  }, [fetchProviderProbeSnapshots, runtime?.daemonInfo.ready]);
+
   const usageSummary = useMemo(
-    () => collectStatusBarUsageSummary(allProviders, quotaNow, mergedUsage, usageWindow.untilDay),
-    [allProviders, mergedUsage, quotaNow, usageWindow.untilDay],
+    () =>
+      collectStatusBarUsageSummary(
+        allProviders,
+        quotaNow,
+        mergedUsage,
+        usageWindow.untilDay,
+        providerProbeSnapshots,
+      ),
+    [allProviders, mergedUsage, providerProbeSnapshots, quotaNow, usageWindow.untilDay],
   );
   const quotaSummary = useMemo(
     () => aggregateQuotaSummary(daemonQuota, allProviders, quotaNow, agyCredits),
@@ -836,16 +891,19 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
   }, [nonAgyProviderAuthSignature, refreshUpstreamProvidersQuota, runtime?.occluded]);
 
-  const handleRefreshUsage = useCallback(async () => {
+  const handleRefreshUsage = async () => {
     setUsageRefreshing(true);
     try {
       const nextWindow = makeWindow(7, undefined, "day");
       setUsageWindow(nextWindow);
-      await Promise.allSettled([usageView.refresh(nextWindow)]);
+      await Promise.allSettled([
+        usageView.refresh(nextWindow),
+        fetchProviderProbeSnapshots(true),
+      ]);
     } finally {
       setUsageRefreshing(false);
     }
-  }, [usageView]);
+  };
 
   // Native non-passive wheel listener (modeled after Orca StatusBarSurface.tsx):
   // Chromium treats React `onWheel` as passive, so `preventDefault()` requires `{ passive: false }`.
@@ -885,7 +943,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     setContextMenu({ x, y });
   }, []);
 
-  const handleUsageOpenChange = useCallback((open: boolean) => {
+  const handleUsageOpenChange = (open: boolean) => {
     setUsageOpen(open);
     if (open) {
       setQuotaOpen(false);
@@ -894,8 +952,9 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       setResourcesOpen(false);
       const nextWindow = makeWindow(7, undefined, "day");
       setUsageWindow(nextWindow);
+      void fetchProviderProbeSnapshots(false);
     }
-  }, []);
+  };
 
   const handleQuotaOpenChange = (open: boolean) => {
     setQuotaOpen(open);

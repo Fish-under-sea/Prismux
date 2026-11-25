@@ -6,6 +6,26 @@ import type {
 import type { MergedUsage } from "@prismux/core-shared/usageMerge";
 import type { UsagePercentMode } from "./statusBarVisibility";
 
+export interface PrismuxProviderProbeSnapshot {
+  readonly providerId: string;
+  readonly displayName?: string | undefined;
+  readonly installed?: boolean | undefined;
+  readonly version?: string | null | undefined;
+  readonly binaryPath?: string | null | undefined;
+  readonly status?: string | undefined;
+  readonly authMode:
+    | "api_or_custom"
+    | "subscription_oauth"
+    | "local"
+    | "unauthenticated"
+    | "unknown"
+    | string;
+  readonly authSource: string;
+  readonly endpoint?: string | null | undefined;
+  readonly authLabel?: string | undefined;
+  readonly checkedAt?: string | undefined;
+}
+
 export type UsageWindowUrgency = "normal" | "warning" | "critical";
 
 export interface StatusBarUsageWindowEntry {
@@ -96,7 +116,10 @@ export function classifyUsageUrgency(usedPercent: number): UsageWindowUrgency {
 export function canonicalProviderDisplayName(rawName: string | undefined, driver?: string): string {
   const trimmed = (rawName ?? "").trim();
   const key = (driver ?? trimmed).toLowerCase();
-  if (trimmed.length > 0 && !/^(codex|claudeagent|claude|antigravity|opencode|cursor|grok)$/i.test(trimmed)) {
+  if (
+    trimmed.length > 0 &&
+    !/^(codex|claudeagent|claude|antigravity|opencode|cursor|grok|dsh|pi)$/i.test(trimmed)
+  ) {
     return trimmed;
   }
   switch (key) {
@@ -113,25 +136,69 @@ export function canonicalProviderDisplayName(rawName: string | undefined, driver
       return "OpenCode";
     case "grok":
       return "Grok";
+    case "dsh":
+      // oxlint-disable-next-line prismux/no-untranslated-copy -- Brand name
+      return "DeepSeek Harness";
+    case "pi":
+      return "Pi";
     default:
       return trimmed || driver || "Provider";
   }
 }
 
-function driverToUsageKind(driver: string): UsageProviderKind | string {
-  switch (driver) {
-    case "claudeAgent":
+export function normalizeUsageProviderKind(raw: string): UsageProviderKind | string {
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  switch (lower) {
+    case "claudeagent":
+    case "claude-agent":
+    case "claude_agent":
+    case "claude":
+    case "claude-code":
+    case "claude_code":
+    case "claudecode":
+    case "cc":
       return "claude";
     case "codex":
+    case "openai-codex":
+    case "openai_codex":
       return "codex";
+    case "antigravity":
+    case "agy":
+    case "antigravity-cli":
+    case "antigravity_cli":
+    case "google-antigravity":
+    case "google_antigravity":
+    case "personal-antigravity":
+    case "personal-agy":
+      return "antigravity";
     case "cursor":
       return "cursor";
     case "opencode":
+    case "open-code":
+    case "open_code":
       return "opencode";
-    case "antigravity":
-      return "antigravity";
+    case "dsh":
+    case "dsh-next":
+    case "dsh_next":
+    case "deepseek-harness":
+      return "dsh";
+    case "pi":
+    case "pi-coding-agent":
+      return "pi";
+    case "grok":
+      return "grok";
+    case "muse":
+      return "muse";
+    case "gemini":
+    case "gemini-cli":
+    case "gemini_cli":
+      return "gemini";
     default:
-      return driver;
+      if (/^(?:antigravity|agy)(?:[-_:\s].*)?$/i.test(lower)) {
+        return "antigravity";
+      }
+      return trimmed;
   }
 }
 
@@ -200,15 +267,72 @@ export function extractAntigravityAcpTierLabel(provider: ServerProvider): string
 }
 
 function detectCustomEndpointProvider(provider: ServerProvider): boolean {
+  if (normalizeUsageProviderKind(provider.driver) === "antigravity") {
+    // Official local `agy` CLI account login is never a custom endpoint.
+    return false;
+  }
   const rec = provider as unknown as Record<string, unknown>;
   if (typeof rec.baseUrl === "string" && rec.baseUrl.trim().length > 0) return true;
   if (typeof rec.endpoint === "string" && rec.endpoint.trim().length > 0) return true;
   const auth = rec.auth as Record<string, unknown> | undefined;
-  const authType = typeof auth?.type === "string" ? auth.type.toLowerCase() : "";
-  if (authType.includes("api") || authType.includes("custom") || authType.includes("key")) {
+  if (typeof auth?.endpoint === "string" && auth.endpoint.trim().length > 0) return true;
+  if (typeof auth?.baseUrl === "string" && auth.baseUrl.trim().length > 0) return true;
+  if (auth?.requiresOpenaiAuth === false) return true;
+  const authType = typeof auth?.type === "string" ? auth.type.trim().toLowerCase() : "";
+  if (authType === "customendpoint" || authType.includes("custom")) {
     return true;
   }
   return false;
+}
+
+/**
+ * Classifies whether a provider uses a custom/proxy endpoint from the authoritative
+ * Daemon `PrismuxProviderProbeService` snapshot.
+ * Returns `null` only when the probe itself is indeterminate (`unauthenticated`/`unknown`
+ * with no auth source) so `ServerProvider` metadata can still provide a safe fallback.
+ */
+function classifyProbeSnapshotCustomEndpoint(
+  snapshot: PrismuxProviderProbeSnapshot,
+): boolean | null {
+  const authMode = snapshot.authMode.trim().toLowerCase();
+  const authSource = snapshot.authSource.trim().toLowerCase();
+  if (authMode === "subscription_oauth" || authSource === "official_oauth") {
+    return false;
+  }
+  if (
+    authSource === "ccs_or_magpie" ||
+    authSource === "custom_endpoint" ||
+    (authMode === "api_or_custom" &&
+      typeof snapshot.endpoint === "string" &&
+      snapshot.endpoint.trim().length > 0)
+  ) {
+    return true;
+  }
+  if (
+    (authMode === "unauthenticated" || authMode === "unknown") &&
+    (authSource === "none" || authSource === "")
+  ) {
+    return null;
+  }
+  return false;
+}
+
+function resolveProviderIsCustomEndpoint(
+  normalizedKind: string,
+  configured: { readonly isCustomEndpoint: boolean } | undefined,
+  probeSnapshot: PrismuxProviderProbeSnapshot | undefined,
+): boolean {
+  if (probeSnapshot) {
+    const fromProbe = classifyProbeSnapshotCustomEndpoint(probeSnapshot);
+    if (fromProbe !== null) {
+      return fromProbe;
+    }
+  }
+  if (normalizedKind === "antigravity") {
+    return false;
+  }
+  // Never guess custom endpoint solely from missing quota windows; unknown defaults to false ("本地统计").
+  return configured?.isCustomEndpoint ?? false;
 }
 
 function computeCacheHitPercent(
@@ -226,6 +350,7 @@ export function buildUsageTelemetrySummary(
   providers: readonly ServerProvider[],
   todayDayKey?: string,
   windowProviderKinds?: ReadonlySet<string>,
+  probeSnapshots?: readonly PrismuxProviderProbeSnapshot[] | null,
 ): StatusBarUsageTelemetrySummary {
   const todayBucket =
     mergedUsage && todayDayKey
@@ -251,33 +376,89 @@ export function buildUsageTelemetrySummary(
     }
   }
 
-  // Track configured enabled providers by usage kind so custom-endpoint providers always show up
+  // Index authoritative Daemon provider probe snapshots by normalized usage provider kind.
+  const probeByKind = new Map<string, PrismuxProviderProbeSnapshot>();
+  if (probeSnapshots) {
+    for (const snapshot of probeSnapshots) {
+      const kind = normalizeUsageProviderKind(snapshot.providerId);
+      if (!kind) continue;
+      const existing = probeByKind.get(kind);
+      if (
+        !existing ||
+        (existing.authMode === "unauthenticated" && snapshot.authMode !== "unauthenticated")
+      ) {
+        probeByKind.set(kind, snapshot);
+      }
+    }
+  }
+
+  // Track configured providers (including Antigravity auth classification) by normalized usage kind.
+  // Antigravity is classified (never custom endpoint) while staying excluded from 0-usage auto-insertion.
   const configuredByKind = new Map<
     string,
-    { displayName: string; isCustomEndpoint: boolean }
+    { displayName: string; isCustomEndpoint: boolean; enabled: boolean; autoInsert: boolean }
   >();
   for (const provider of providers) {
-    if (!provider.enabled || provider.driver === "antigravity") continue;
-    const kind = driverToUsageKind(provider.driver);
+    const kind = normalizeUsageProviderKind(provider.driver);
     const displayName = canonicalProviderDisplayName(provider.displayName, provider.driver);
     const isCustomEndpoint = detectCustomEndpointProvider(provider);
-    if (!configuredByKind.has(kind)) {
-      configuredByKind.set(kind, { displayName, isCustomEndpoint });
+    const isAntigravity = kind === "antigravity";
+    const autoInsert = provider.enabled && !isAntigravity;
+    const existing = configuredByKind.get(kind);
+    if (!existing) {
+      configuredByKind.set(kind, {
+        displayName,
+        isCustomEndpoint,
+        enabled: provider.enabled,
+        autoInsert,
+      });
+    } else if (provider.enabled && !existing.enabled) {
+      configuredByKind.set(kind, {
+        displayName,
+        isCustomEndpoint,
+        enabled: true,
+        autoInsert,
+      });
+    } else if (provider.enabled === existing.enabled) {
+      configuredByKind.set(kind, {
+        displayName: existing.displayName,
+        isCustomEndpoint: existing.isCustomEndpoint || isCustomEndpoint,
+        enabled: existing.enabled,
+        autoInsert: existing.autoInsert || autoInsert,
+      });
+    }
+  }
+
+  const normalizedWindowKinds = new Set<string>();
+  if (windowProviderKinds) {
+    for (const kind of windowProviderKinds) {
+      normalizedWindowKinds.add(normalizeUsageProviderKind(kind));
     }
   }
 
   const ledgerByKind = new Map<string, StatusBarProviderUsageLedgerEntry>();
+  const seenNormalizedKinds = new Set<string>();
 
   if (mergedUsage) {
     for (const provTotals of mergedUsage.providers) {
       const kind = provTotals.provider;
+      const normalizedKind = normalizeUsageProviderKind(kind);
+      seenNormalizedKinds.add(normalizedKind);
       const todayProv = todayBucket?.byProvider.get(kind);
       const cacheAgg = cacheAggByProvider.get(kind);
-      const configured = configuredByKind.get(kind);
+      const configured = configuredByKind.get(normalizedKind);
+      const probeSnapshot = probeByKind.get(normalizedKind);
+      const hasQuotaWindow = normalizedWindowKinds.has(normalizedKind);
+      const isCustomEndpoint = resolveProviderIsCustomEndpoint(
+        normalizedKind,
+        configured,
+        probeSnapshot,
+      );
       ledgerByKind.set(kind, {
         key: `usage:${kind}`,
         providerKind: kind,
-        providerName: configured?.displayName ?? canonicalProviderDisplayName(undefined, kind),
+        providerName:
+          configured?.displayName ?? canonicalProviderDisplayName(undefined, normalizedKind),
         todayTokens: todayProv?.totalTokens ?? 0,
         todayCostUsd: todayProv?.costUsd ?? 0,
         weekTokens: provTotals.totalTokens,
@@ -287,15 +468,21 @@ export function buildUsageTelemetrySummary(
         cacheHitPercent: cacheAgg
           ? computeCacheHitPercent(cacheAgg.uncached, cacheAgg.cached, cacheAgg.creation)
           : null,
-        hasQuotaWindow: windowProviderKinds?.has(kind) ?? false,
-        isCustomEndpoint: configured?.isCustomEndpoint ?? !(windowProviderKinds?.has(kind) ?? false),
+        hasQuotaWindow,
+        isCustomEndpoint,
       });
     }
   }
 
-  // Ensure enabled configured providers (including custom API endpoints with 0 recent calls) appear cleanly
+  // Ensure enabled configured non-Antigravity providers (including custom API endpoints with 0 recent calls) appear cleanly
   for (const [kind, configured] of configuredByKind) {
-    if (ledgerByKind.has(kind)) continue;
+    if (!configured.autoInsert || seenNormalizedKinds.has(kind) || ledgerByKind.has(kind)) continue;
+    const hasQuotaWindow = normalizedWindowKinds.has(kind);
+    const isCustomEndpoint = resolveProviderIsCustomEndpoint(
+      kind,
+      configured,
+      probeByKind.get(kind),
+    );
     ledgerByKind.set(kind, {
       key: `configured:${kind}`,
       providerKind: kind,
@@ -307,8 +494,8 @@ export function buildUsageTelemetrySummary(
       weekRecords: 0,
       weekSessions: 0,
       cacheHitPercent: null,
-      hasQuotaWindow: windowProviderKinds?.has(kind) ?? false,
-      isCustomEndpoint: configured.isCustomEndpoint || !(windowProviderKinds?.has(kind) ?? false),
+      hasQuotaWindow,
+      isCustomEndpoint,
     });
   }
 
@@ -355,6 +542,7 @@ export function collectStatusBarUsageSummary(
   now = Date.now(),
   mergedUsage?: MergedUsage | null,
   todayDayKey?: string,
+  probeSnapshots?: readonly PrismuxProviderProbeSnapshot[] | null,
 ): StatusBarUsageSummary {
   const windows: StatusBarUsageWindowEntry[] = [];
   const antigravityEntries: StatusBarAntigravityAcpEntry[] = [];
@@ -391,7 +579,7 @@ export function collectStatusBarUsageSummary(
     const rawWindows = provider.usageLimits?.windows;
     if (!Array.isArray(rawWindows) || rawWindows.length === 0) continue;
 
-    windowProviderKinds.add(driverToUsageKind(provider.driver));
+    windowProviderKinds.add(normalizeUsageProviderKind(provider.driver));
 
     for (const win of rawWindows) {
       const usedPercent = readWindowUsedPercent(win);
@@ -433,6 +621,7 @@ export function collectStatusBarUsageSummary(
     providers,
     todayDayKey,
     windowProviderKinds,
+    probeSnapshots,
   );
 
   return {
