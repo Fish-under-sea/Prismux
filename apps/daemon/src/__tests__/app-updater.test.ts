@@ -684,7 +684,7 @@ test("AppUpdater supports Range resume, 302 redirects (max 6 hops), and customGh
   }
 });
 
-test("PrismuxDaemon integrates AppUpdater with 0.2.0-rc.2 default and exposes HTTP & RPC updater endpoints", async () => {
+test("PrismuxDaemon integrates AppUpdater with 0.2.0-rc.3 default and exposes HTTP & RPC updater endpoints", async () => {
   const dataDir = makeTempDir("prismux-daemon-updater-");
   const daemon = new PrismuxDaemon({
     headless: true,
@@ -701,7 +701,7 @@ test("PrismuxDaemon integrates AppUpdater with 0.2.0-rc.2 default and exposes HT
     });
     assert.equal(statusRes.status, 200);
     const statusJson = (await statusRes.json()) as UpdaterStatusSnapshot;
-    assert.equal(statusJson.currentVersion, "0.2.0-rc.2");
+    assert.equal(statusJson.currentVersion, "0.2.0-rc.3");
     assert.equal(statusJson.policy.routePreference, "auto");
     assert.equal(statusJson.policy.includePrerelease, true);
     assert.equal(statusJson.policy.customGhProxyPrefix, "");
