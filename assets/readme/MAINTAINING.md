@@ -4,7 +4,7 @@
 
 ## 渲染命令
 
-在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.1.3-preview.3`）：
+在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.2.0-rc.1`）：
 
 ```powershell
 node scripts/render-readme.mjs
@@ -33,4 +33,4 @@ node scripts/render-readme.mjs
 ## 字体与素材许可边界
 
 - 像素字体 [`Jersey20-Regular.ttf`](./Jersey20-Regular.ttf) 遵循 [SIL Open Font License 1.1](./OFL-Jersey20.txt)。
-- 吉祥物 [`logo.png`](./logo.png) 与界面实景截图 [`01-workbench-split-agy-v2.png`](./01-workbench-split-agy-v2.png) / [`02-wallpaper-inline-zoned-glass-v2.png`](./02-wallpaper-inline-zoned-glass-v2.png) / [`03-scoped-model-picker-dsh-fish-v2.png`](./03-scoped-model-picker-dsh-fish-v2.png) / [`04-settings-zoned-glass-capsule-v2.png`](./04-settings-zoned-glass-capsule-v2.png) / [`05-orca-workspace-dialog-v2.png`](./05-orca-workspace-dialog-v2.png) / [`06-statusbar-resources-keepawake-v2.png`](./06-statusbar-resources-keepawake-v2.png) 归属本仓项目资产；排版模板与渲染工具代码遵循仓库根 MIT 许可。
+- 吉祥物 [`logo.png`](./logo.png)、首屏动态实录 [`hero-demo-v02.gif`](./hero-demo-v02.gif) / [`hero-demo-v02.webp`](./hero-demo-v02.webp) 与界面实景截图 [`01-workbench-orca-sidebar-v02.png`](./01-workbench-orca-sidebar-v02.png) / [`02-glass-8zones-bubble-overview-v02.png`](./02-glass-8zones-bubble-overview-v02.png) / [`03-split-anything-2x2-v02.png`](./03-split-anything-2x2-v02.png) / [`04-codex-picker-dsh-effort-v02.png`](./04-codex-picker-dsh-effort-v02.png) / [`05-glass-8zones-drawer-v02.png`](./05-glass-8zones-drawer-v02.png) / [`06-settings-appearance-v02.png`](./06-settings-appearance-v02.png) 归属本仓项目资产；排版模板与渲染工具代码遵循仓库根 MIT 许可。

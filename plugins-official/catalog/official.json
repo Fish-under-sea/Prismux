@@ -5,7 +5,7 @@
     {
       "id": "qq",
       "packageName": "@prismux/plugin-qq",
-      "version": "0.1.3-preview.3",
+      "version": "0.2.0-rc.1",
       "description": "OneBot v11 QQ private Chief Supervisor bridge and isolated group companion plugin.",
       "engines": {
         "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
@@ -21,14 +21,14 @@
         "hooks:subscribe"
       ],
       "modelVisible": false,
-      "sha256": "a48cea705a2f2517f1a74c0e335e7873b338d4930c393bb1394ed4a258e3d141",
-      "bytes": 72960,
+      "sha256": "232de4c8a6cd5659a5679897dec37af6014b8874d531363d4873f97c424ab2f7",
+      "bytes": 72954,
       "status": "verified"
     },
     {
       "id": "fishdock-hook",
       "packageName": "@prismux/plugin-fishdock-hook",
-      "version": "0.1.3-preview.3",
+      "version": "0.2.0-rc.1",
       "description": "Bridge plugin pushing PreToolUse approvals, email alerts, and factory completions to FISH-Dock Dynamic Island.",
       "engines": {
         "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
@@ -42,7 +42,7 @@
         "notifications:push"
       ],
       "modelVisible": false,
-      "sha256": "2c14a5c6d5889a499d71115752aa2c565b8cfbe1afbc14f0af6b9d809176ca6a",
+      "sha256": "1703c564a3c54bcd1660389fb69ce046d183327222025e108b5e5bababff2fca",
       "bytes": 37458,
       "status": "verified"
     }
