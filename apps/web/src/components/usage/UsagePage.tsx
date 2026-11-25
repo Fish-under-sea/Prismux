@@ -12,7 +12,7 @@ import {
 } from "@prismux/core-contracts";
 import { CircleAlertIcon, ChevronDownIcon, InfoIcon, SlidersHorizontalIcon } from "lucide-react";
 import { T, useGT, useLocale, useMessages, Var } from "gt-react";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { settlePromise } from "@prismux/client-runtime/state/runtime";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
@@ -32,6 +32,7 @@ import {
 } from "@prismux/core-shared/usageMerge";
 
 import { cn } from "../../lib/utils";
+import type { ProviderInstanceEntry } from "../../providerInstances";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { resolveHour12 } from "../../timestampFormat";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -97,10 +98,13 @@ import {
   type UsageMetric,
 } from "./usageShortcuts";
 import {
+  formatUsageModelDisplayName,
   PROVIDER_ORDER,
   PROVIDER_PRESENTATION,
   providersWithUsage,
   rankProvidersByMetric,
+  resolveUsageProviderDisplay,
+  useConfiguredUsageProviders,
 } from "./usageProviders";
 import {
   readUsagePagePreferences,
@@ -688,39 +692,29 @@ function UsageOverview({
   const gt = useGT();
   const locale = useLocale();
   const m = useMessages();
+  const {
+    entries: configuredProviderEntries,
+    providerOrder: configuredProviderOrder,
+    getLabel: getConfiguredProviderLabel,
+  } = useConfiguredUsageProviders();
   const [breakdown, setBreakdown] = useState<"model" | "time" | "calls">(() =>
     isCallLogsHashActive() ? "calls" : "model",
   );
   const shownHourly = shownWindow.resolution === "hour";
-  const backendCallLogs = useMemo(
-    () => extractBackendCallLogs(selectedEnvironments, hiddenProviders),
-    [hiddenProviders, selectedEnvironments],
-  );
+  const backendCallLogs = extractBackendCallLogs(selectedEnvironments, hiddenProviders);
   const mergedCallLogs = useUsageCallLogs(backendCallLogs);
-  const windowCallLogs = useMemo(() => {
-    const sinceMs = resolveWindowStartMs(shownWindow);
-    return mergedCallLogs.filter((log) => {
-      if (hiddenProviders.has(log.provider as UsageProviderKind)) return false;
-      if (sinceMs !== null && log.timestamp < sinceMs) return false;
-      return true;
-    });
-  }, [hiddenProviders, mergedCallLogs, shownWindow]);
-  const callSummary = useMemo(
-    () =>
-      computeUsageCallSummaryMetrics(windowCallLogs, {
-        uncachedInputTokens: merged.uncachedInputTokens,
-        cachedInputTokens: merged.cachedInputTokens,
-        cacheCreationTokens: merged.cacheCreationTokens,
-        outputTokens: merged.outputTokens,
-      }),
-    [
-      merged.cacheCreationTokens,
-      merged.cachedInputTokens,
-      merged.outputTokens,
-      merged.uncachedInputTokens,
-      windowCallLogs,
-    ],
-  );
+  const windowSinceMs = resolveWindowStartMs(shownWindow);
+  const windowCallLogs = mergedCallLogs.filter((log) => {
+    if (hiddenProviders.has(log.provider as UsageProviderKind)) return false;
+    if (windowSinceMs !== null && log.timestamp < windowSinceMs) return false;
+    return true;
+  });
+  const callSummary = computeUsageCallSummaryMetrics(windowCallLogs, {
+    uncachedInputTokens: merged.uncachedInputTokens,
+    cachedInputTokens: merged.cachedInputTokens,
+    cacheCreationTokens: merged.cacheCreationTokens,
+    outputTokens: merged.outputTokens,
+  });
   const loading = usageLoading(showingKept, selectedEnvironments, refreshingUsage, hiddenProviders);
   // Copy the primitive; JSX reads of loading.partial would merge all derivations into one compiler cache
   // scope.
@@ -839,9 +833,13 @@ function UsageOverview({
                         backgroundColor: PROVIDER_PRESENTATION[provider].color,
                       }}
                     />
-                    <ProviderMark provider={provider} className="size-4" />
+                    <ProviderMark
+                      provider={provider}
+                      entries={configuredProviderEntries}
+                      className="size-4"
+                    />
                     <span className="flex min-w-0 items-baseline gap-1.5">
-                      <span className="truncate">{PROVIDER_PRESENTATION[provider].label}</span>
+                      <span className="truncate">{getConfiguredProviderLabel(provider)}</span>
                       <span
                         className={cn(
                           "shrink-0 whitespace-nowrap text-2xs text-muted-foreground tabular-nums",
@@ -1027,6 +1025,8 @@ function UsageOverview({
             logs={windowCallLogs}
             timeZone={shownWindow.timeZone}
             hour12={hour12}
+            providerEntries={configuredProviderEntries}
+            providerOrder={configuredProviderOrder}
           />
         ) : breakdown === "model" ? (
           <table className="w-full text-sm">
@@ -1061,6 +1061,11 @@ function UsageOverview({
                   const hasBar = value > 0 && breakdownPeak > 0;
                   const share = modelShare(model, metric === "tokens" ? "tokens" : "cost");
                   const rowFigures = figureClass(loadingProviders.has(model.provider));
+                  const displayModelName = formatUsageModelDisplayName(
+                    model.model,
+                    configuredProviderEntries,
+                    model.provider,
+                  );
                   return (
                     <tr
                       key={key}
@@ -1076,8 +1081,12 @@ function UsageOverview({
                             !hasBar && "py-1",
                           )}
                         >
-                          <ProviderMark provider={model.provider} className="size-3.5" />
-                          {model.model}
+                          <ProviderMark
+                            provider={model.provider}
+                            entries={configuredProviderEntries}
+                            className="size-3.5"
+                          />
+                          {displayModelName}
                         </button>
                         {hasBar ? (
                           <div aria-hidden className={cn("mt-1.5 h-0.5 max-w-48", rowFigures)}>
@@ -1128,7 +1137,7 @@ function UsageOverview({
                   <th className="py-2 pl-2 font-normal">{shownHourly ? gt("Hour") : gt("Day")}</th>
                   {activeProviders.map((provider) => (
                     <th key={provider} className="py-2 pl-4 text-right font-normal">
-                      {PROVIDER_PRESENTATION[provider].label}
+                      {getConfiguredProviderLabel(provider)}
                     </th>
                   ))}
                   <th className="py-2 pl-4 text-right font-normal">
@@ -1201,16 +1210,22 @@ function UsageOverview({
 
 function ProviderMark({
   provider,
+  entries,
   className,
 }: {
   readonly provider: UsageProviderKind;
+  readonly entries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
   readonly className: string;
 }) {
   const presentation = PROVIDER_PRESENTATION[provider];
+  const resolved = resolveUsageProviderDisplay(provider, entries);
   return (
     <ProviderInstanceIcon
-      driverKind={presentation.driverKind}
-      displayName={presentation.label}
+      driverKind={resolved.driverKind ?? presentation.driverKind}
+      acpRegistryAgentId={resolved.acpRegistryAgentId ?? presentation.acpRegistryAgentId}
+      acpRegistryIconUrl={resolved.acpRegistryIconUrl}
+      instanceId={resolved.instanceId}
+      displayName={resolved.label}
       iconClassName={className}
     />
   );
@@ -1440,6 +1455,8 @@ function UsageProviderFilter({
   readonly onChange: (hiddenProviders: readonly UsageProviderKind[]) => void;
 }) {
   const gt = useGT();
+  const { entries: configuredProviderEntries, getLabel: getConfiguredProviderLabel } =
+    useConfiguredUsageProviders();
   const visible = PROVIDER_ORDER.filter((provider) => !hiddenProviders.has(provider));
   const label =
     visible.length === PROVIDER_ORDER.length
@@ -1447,7 +1464,7 @@ function UsageProviderFilter({
       : visible.length === 0
         ? gt("No providers")
         : visible.length === 1
-          ? PROVIDER_PRESENTATION[visible[0]!].label
+          ? getConfiguredProviderLabel(visible[0]!)
           : gt("{count, plural, one {{count} providers} other {{count} providers}}", {
               count: visible.length,
             });
@@ -1484,8 +1501,12 @@ function UsageProviderFilter({
             }
           >
             <span className="flex min-w-0 items-center gap-2">
-              <ProviderMark provider={provider} className="size-3.5" />
-              <span className="truncate">{PROVIDER_PRESENTATION[provider].label}</span>
+              <ProviderMark
+                provider={provider}
+                entries={configuredProviderEntries}
+                className="size-3.5"
+              />
+              <span className="truncate">{getConfiguredProviderLabel(provider)}</span>
             </span>
           </MenuCheckboxItem>
         ))}

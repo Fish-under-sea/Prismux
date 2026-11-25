@@ -6,6 +6,11 @@ import {
 } from "@prismux/core-contracts";
 
 import {
+  formatAgentBrandName,
+  resolveAgentBrandId,
+  resolveProviderEntryDisplayName,
+} from "../../prismux/agentBrand";
+import {
   brandProviderInstanceEntries,
   deriveProviderInstanceEntries,
   disambiguateProviderInstanceDisplayNames,
@@ -15,15 +20,32 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../../state/server";
+import {
+  formatUsageModelDisplayName,
+  unwrapUsageModelSlug,
+} from "./usageCallTelemetryStore";
 import type { UsageMetric } from "./usageShortcuts";
+
+export { formatUsageModelDisplayName, unwrapUsageModelSlug };
 
 type UsageProviderPresentation = {
   readonly label: string;
   readonly color: string;
   readonly driverKind: ProviderDriverKind;
+  readonly acpRegistryAgentId?: string | undefined;
 };
 
-export const PROVIDER_PRESENTATION = {
+export interface UsageProviderDisplayInfo {
+  readonly label: string;
+  readonly driverKind: ProviderDriverKind | null;
+  readonly acpRegistryAgentId?: string | undefined;
+  readonly acpRegistryIconUrl?: string | undefined;
+  readonly instanceId?: ProviderInstanceId | undefined;
+}
+
+export const PROVIDER_PRESENTATION: Readonly<
+  Record<UsageProviderKind, UsageProviderPresentation>
+> = {
   codex: {
     label: "Codex",
     color: "var(--contrast-foreground)",
@@ -60,26 +82,142 @@ export const PROVIDER_PRESENTATION = {
     color: "#0866ff",
     driverKind: ProviderDriverKind.make("muse"),
   },
-} satisfies Record<UsageProviderKind, UsageProviderPresentation>;
+  dsh: {
+    label: "DeepSeek Harness",
+    color: "#4d6bfe",
+    driverKind: ProviderDriverKind.make("acpRegistry"),
+    acpRegistryAgentId: "dsh",
+  },
+};
 
 export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];
+
+function isDshProviderEntry(entry: ProviderInstanceEntry): boolean {
+  return (
+    resolveAgentBrandId(entry.driverKind) === "dsh" ||
+    resolveAgentBrandId(entry.acpRegistryAgentId) === "dsh" ||
+    resolveAgentBrandId(entry.instanceId) === "dsh" ||
+    resolveAgentBrandId(entry.displayName) === "dsh"
+  );
+}
+
+function pickPreferredEntry(
+  matches: ReadonlyArray<ProviderInstanceEntry>,
+): ProviderInstanceEntry | undefined {
+  if (matches.length === 0) return undefined;
+  const enabled = matches.filter((entry) => entry.enabled);
+  const pool = enabled.length > 0 ? enabled : matches;
+  return (
+    pool.find((entry) => entry.hasCustomDisplayName === true) ??
+    pool.find(isDshProviderEntry) ??
+    pool[0]
+  );
+}
+
+function findConfiguredDshEntry(
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+): ProviderInstanceEntry | undefined {
+  if (!entries || entries.length === 0) return undefined;
+  return pickPreferredEntry(entries.filter(isDshProviderEntry));
+}
+
+function findConfiguredAcpRegistryEntry(
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+): ProviderInstanceEntry | undefined {
+  if (!entries || entries.length === 0) return undefined;
+  return pickPreferredEntry(entries.filter((entry) => entry.driverKind === "acpRegistry"));
+}
+
+export function resolveUsageProviderDisplay(
+  provider: UsageProviderKind | string,
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+  fallbackAcpLabel?: string,
+): UsageProviderDisplayInfo {
+  const trimmed = (provider ?? "").trim();
+  const lowered = trimmed.toLowerCase();
+
+  if (lowered === "dsh" || resolveAgentBrandId(trimmed) === "dsh") {
+    const dshEntry = findConfiguredDshEntry(entries);
+    return {
+      label: dshEntry
+        ? resolveProviderEntryDisplayName(dshEntry)
+        : PROVIDER_PRESENTATION.dsh.label,
+      driverKind: dshEntry?.driverKind ?? PROVIDER_PRESENTATION.dsh.driverKind,
+      acpRegistryAgentId: "dsh",
+      ...(dshEntry ? { instanceId: dshEntry.instanceId } : {}),
+    };
+  }
+
+  if (lowered === "acpregistry" || lowered === "acp-registry" || lowered === "acp_registry") {
+    const acpEntry = findConfiguredAcpRegistryEntry(entries);
+    if (acpEntry) {
+      const entryIsDsh = isDshProviderEntry(acpEntry);
+      return {
+        label: resolveProviderEntryDisplayName(acpEntry),
+        driverKind: ProviderDriverKind.make("acpRegistry"),
+        acpRegistryAgentId: acpEntry.acpRegistryAgentId ?? (entryIsDsh ? "dsh" : undefined),
+        ...(acpEntry.acpRegistryIconUrl ? { acpRegistryIconUrl: acpEntry.acpRegistryIconUrl } : {}),
+        instanceId: acpEntry.instanceId,
+      };
+    }
+    return {
+      label: fallbackAcpLabel?.trim() || formatAgentBrandName("acpRegistry"),
+      driverKind: ProviderDriverKind.make("acpRegistry"),
+    };
+  }
+
+  if (trimmed in PROVIDER_PRESENTATION) {
+    const info = PROVIDER_PRESENTATION[trimmed as UsageProviderKind];
+    const lookupKey = info.acpRegistryAgentId ?? info.driverKind;
+    const label =
+      entries && entries.length > 0
+        ? resolveConfiguredProviderLabel(lookupKey, entries, info.label)
+        : info.label;
+    return {
+      label,
+      driverKind: info.driverKind,
+      ...(info.acpRegistryAgentId ? { acpRegistryAgentId: info.acpRegistryAgentId } : {}),
+    };
+  }
+
+  if (entries && entries.length > 0) {
+    const exact = entries.find(
+      (entry) =>
+        entry.instanceId === trimmed ||
+        entry.instanceId.toLowerCase() === lowered ||
+        entry.acpRegistryAgentId?.toLowerCase() === lowered,
+    );
+    if (exact) {
+      return {
+        label: resolveProviderEntryDisplayName(exact),
+        driverKind: exact.driverKind,
+        ...(exact.acpRegistryAgentId
+          ? { acpRegistryAgentId: exact.acpRegistryAgentId }
+          : isDshProviderEntry(exact)
+            ? { acpRegistryAgentId: "dsh" }
+            : {}),
+        ...(exact.acpRegistryIconUrl ? { acpRegistryIconUrl: exact.acpRegistryIconUrl } : {}),
+        instanceId: exact.instanceId,
+      };
+    }
+    return {
+      label: resolveConfiguredProviderLabel(trimmed, entries),
+      driverKind: null,
+    };
+  }
+
+  return {
+    label: trimmed ? formatAgentBrandName(trimmed) : trimmed,
+    driverKind: null,
+  };
+}
 
 export function resolveUsageProviderLabel(
   provider: UsageProviderKind | string,
   entries?: ReadonlyArray<ProviderInstanceEntry>,
+  fallbackAcpLabel?: string,
 ): string {
-  const presentation =
-    provider in PROVIDER_PRESENTATION
-      ? PROVIDER_PRESENTATION[provider as UsageProviderKind]
-      : undefined;
-  if (entries && entries.length > 0) {
-    return resolveConfiguredProviderLabel(
-      presentation?.driverKind ?? provider,
-      entries,
-      presentation?.label,
-    );
-  }
-  return presentation?.label ?? provider;
+  return resolveUsageProviderDisplay(provider, entries, fallbackAcpLabel).label;
 }
 
 export function orderUsageProviders<T extends string>(
@@ -95,10 +233,13 @@ export function orderUsageProviders<T extends string>(
   }
   return orderItemsByConfiguredProviderOrder(
     providers,
-    (provider) =>
-      provider in PROVIDER_PRESENTATION
-        ? PROVIDER_PRESENTATION[provider as UsageProviderKind].driverKind
-        : provider,
+    (provider) => {
+      if (provider in PROVIDER_PRESENTATION) {
+        const presentation = PROVIDER_PRESENTATION[provider as UsageProviderKind];
+        return presentation.acpRegistryAgentId ?? presentation.driverKind;
+      }
+      return provider;
+    },
     entries ?? [],
     providerOrder,
   );

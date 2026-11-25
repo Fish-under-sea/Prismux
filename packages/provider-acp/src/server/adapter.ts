@@ -14,6 +14,7 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ProviderTurn,
+  type OrchestrationV2ProviderTurnTokenUsage,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
@@ -372,6 +373,95 @@ export function acpPerTurnPromptUsage(
   };
 }
 
+export interface AcpTurnLiveTokenUsage {
+  readonly inputTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly cacheCreationTokens?: number;
+  readonly outputTokens?: number;
+  readonly reasoningOutputTokens?: number;
+  readonly ttftMs?: number;
+  readonly decodeMs?: number;
+  readonly durationMs?: number;
+}
+
+export interface AcpTurnUsageSample {
+  readonly usage?: TurnTokenUsage;
+  readonly liveTokenUsage?: AcpTurnLiveTokenUsage;
+  readonly models?: ReadonlyArray<string>;
+}
+
+export interface AcpTurnUsageWatcher {
+  readonly sampleLive: () => Effect.Effect<AcpTurnUsageSample | undefined>;
+  readonly collectFinal: () => Effect.Effect<AcpTurnUsageSample | undefined>;
+}
+
+export function buildAcpProviderTurnTokenUsage(input: {
+  readonly contextUsage: ThreadTokenUsageSnapshot | null | undefined;
+  readonly sample: AcpTurnUsageSample | undefined;
+  readonly updatedAt: string;
+}): OrchestrationV2ProviderTurnTokenUsage | undefined {
+  const live = input.sample?.liveTokenUsage;
+  const ctx = input.contextUsage;
+  if (live === undefined && ctx == null) return undefined;
+  const fallbackUsed =
+    live === undefined
+      ? 0
+      : Math.max(0, Math.trunc((live.inputTokens ?? 0) + (live.outputTokens ?? 0)));
+  const usedTokens =
+    ctx != null && Number.isFinite(ctx.usedTokens) && ctx.usedTokens >= 0
+      ? Math.trunc(ctx.usedTokens)
+      : fallbackUsed;
+  const maxTokens =
+    ctx?.maxTokens !== undefined && Number.isFinite(ctx.maxTokens) && ctx.maxTokens > 0
+      ? Math.trunc(ctx.maxTokens)
+      : undefined;
+  return {
+    usedTokens,
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(live?.inputTokens === undefined
+      ? {}
+      : { inputTokens: Math.max(0, Math.trunc(live.inputTokens)) }),
+    ...(live?.cachedInputTokens === undefined
+      ? {}
+      : { cachedInputTokens: Math.max(0, Math.trunc(live.cachedInputTokens)) }),
+    ...(live?.cacheCreationTokens === undefined
+      ? {}
+      : { cacheCreationTokens: Math.max(0, Math.trunc(live.cacheCreationTokens)) }),
+    ...(live?.outputTokens === undefined
+      ? {}
+      : { outputTokens: Math.max(0, Math.trunc(live.outputTokens)) }),
+    ...(live?.reasoningOutputTokens === undefined
+      ? {}
+      : { reasoningOutputTokens: Math.max(0, Math.trunc(live.reasoningOutputTokens)) }),
+    ...(live?.ttftMs !== undefined && Number.isFinite(live.ttftMs) && live.ttftMs >= 0
+      ? { ttftMs: live.ttftMs }
+      : {}),
+    ...(live?.decodeMs !== undefined && Number.isFinite(live.decodeMs) && live.decodeMs >= 0
+      ? { decodeMs: live.decodeMs }
+      : {}),
+    ...(live?.durationMs !== undefined && Number.isFinite(live.durationMs) && live.durationMs >= 0
+      ? { durationMs: live.durationMs }
+      : {}),
+    updatedAt: input.updatedAt,
+  };
+}
+
+function enrichAcpContextUsage(
+  base: ThreadTokenUsageSnapshot,
+  live: OrchestrationV2ProviderTurnTokenUsage,
+): ThreadTokenUsageSnapshot {
+  return {
+    ...base,
+    ...(live.inputTokens === undefined ? {} : { inputTokens: live.inputTokens }),
+    ...(live.cachedInputTokens === undefined ? {} : { cachedInputTokens: live.cachedInputTokens }),
+    ...(live.outputTokens === undefined ? {} : { outputTokens: live.outputTokens }),
+    ...(live.reasoningOutputTokens === undefined
+      ? {}
+      : { reasoningOutputTokens: live.reasoningOutputTokens }),
+    ...(live.durationMs === undefined ? {} : { durationMs: Math.round(live.durationMs) }),
+  };
+}
+
 interface AcpPromptOutcomeFailure {
   readonly failure: OrchestrationV2ProviderFailure;
   readonly threadDisposition: "reusable" | "broken";
@@ -400,6 +490,15 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<
     (result: EffectAcpSchema.PromptResponse) => Effect.Effect<AcpPromptOutcomeFailure | undefined>
   >;
+  /**
+   * Optional per-turn native usage watcher for agents (such as DeepSeek Harness) whose ACP
+   * protocol omits `PromptResponse.usage` and token breakdown on `usage_update`, while committing
+   * complete per-step usage and timestamps to local session logs.
+   */
+  readonly watchTurnUsage?: (input: {
+    readonly sessionId: string;
+    readonly cwd: string;
+  }) => Effect.Effect<AcpTurnUsageWatcher | undefined>;
   readonly requiresSignIn?: (cause: unknown) => boolean;
   /**
    * Runs before attachment paths, T3 instructions and native slash-command detection,
@@ -547,13 +646,7 @@ export interface AcpAdapterV2Flavor {
   readonly supportsCompaction?: boolean;
   /** Sends `/compact` as a prompt, only to sessions whose advertised commands include `compact`. */
   readonly compactViaAdvertisedCommand?: boolean;
-  /**
-   * Native steering: `send` queues a message into the running turn and returns the
-   * agent's id for it, which `injectedSteerId` reads from the update that delivers it.
-   * No id means the running turn reads the message once the agent accepts it.
-   * Returning `{ injected, promptRequired }` allows dialects like OMP (`_session/steering`)
-   * to signal whether the host must dispatch a follow-up `session/prompt`.
-   */
+  /** Native steering into a running turn; OMP returns `{ injected, promptRequired }`. */
   readonly steering?: {
     readonly supported?: (
       initializeResult: AcpSessionRuntime.AcpSessionRuntimeStartResult["initializeResult"],
@@ -1746,6 +1839,9 @@ interface ActiveAcpTurn {
   /** Completed when an update after dispatch matches `cancelAfterPromptStarts.isStart`. */
   readonly promptStarted: Deferred.Deferred<void, never>;
   promptUsage: EffectAcpSchema.Usage | undefined;
+  turnUsageWatcher: AcpTurnUsageWatcher | undefined;
+  observedTurnUsage: AcpTurnUsageSample | undefined;
+  liveTokenUsage: OrchestrationV2ProviderTurnTokenUsage | undefined;
   backgroundFinalizeGeneration: number;
   /** `replyEndsWithUsageUpdate`: output arrived and its closing `usage_update` has not. */
   replyOpen: boolean;
@@ -5814,11 +5910,70 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             );
             if (stateEvent === undefined) return;
             if (stateEvent._tag === "UsageUpdated") {
+              let effectiveContextUsage = stateEvent.usage;
+              if (
+                context !== null &&
+                context.nativeThreadId === notification.sessionId &&
+                !context.finalized &&
+                context.turnUsageWatcher !== undefined
+              ) {
+                const sample = yield* context.turnUsageWatcher
+                  .sampleLive()
+                  .pipe(Effect.catchCause(() => Effect.undefined));
+                if (sample !== undefined) {
+                  context.observedTurnUsage = sample;
+                }
+                const effectiveSample = sample ?? context.observedTurnUsage;
+                if (effectiveSample !== undefined) {
+                  const updatedAt = DateTime.formatIso(yield* DateTime.now);
+                  const liveTokenUsage = buildAcpProviderTurnTokenUsage({
+                    contextUsage: stateEvent.usage,
+                    sample: effectiveSample,
+                    updatedAt,
+                  });
+                  if (liveTokenUsage !== undefined) {
+                    context.liveTokenUsage = liveTokenUsage;
+                    effectiveContextUsage = enrichAcpContextUsage(
+                      stateEvent.usage,
+                      liveTokenUsage,
+                    );
+                    const reportedModel =
+                      effectiveSample.models?.at(-1) ?? effectiveSample.usage?.models?.at(-1);
+                    const liveTurn: OrchestrationV2ProviderTurn = {
+                      id: context.providerTurnId,
+                      providerThreadId: context.input.providerThread.id,
+                      nodeId: context.input.rootNodeId,
+                      runAttemptId: context.input.attemptId,
+                      nativeTurnRef:
+                        context.nativePromptId === undefined
+                          ? { driver, nativeId: context.nativeTurnId, strength: "weak" }
+                          : { driver, nativeId: context.nativePromptId, strength: "strong" },
+                      ordinal: context.input.providerTurnOrdinal,
+                      status: "running",
+                      startedAt: context.startedAt,
+                      completedAt: null,
+                      tokenUsage: liveTokenUsage,
+                      ...(reportedModel ? { model: reportedModel } : {}),
+                    };
+                    yield* Ref.update(providerTurns, (current) => {
+                      const updated = new Map(current);
+                      updated.set(String(liveTurn.id), liveTurn);
+                      return updated;
+                    });
+                    yield* emitProviderEvent({
+                      type: "provider_turn.updated",
+                      driver,
+                      threadId: context.input.threadId,
+                      providerTurn: liveTurn,
+                    });
+                  }
+                }
+              }
               yield* Ref.update(contextUsageBySessionId, (current) =>
-                new Map(current).set(notification.sessionId, stateEvent.usage),
+                new Map(current).set(notification.sessionId, effectiveContextUsage),
               );
               if (context?.nativeThreadId === notification.sessionId) {
-                context.contextUsage = stateEvent.usage;
+                context.contextUsage = effectiveContextUsage;
               }
             } else {
               const metadata = yield* Ref.modify(nativeMetadataBySessionId, (current) => {
@@ -8480,36 +8635,75 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* pendingLateSessionSetup;
         }
 
+        const resolveTurnTokenUsage = (
+          context: ActiveAcpTurn,
+          status: OrchestrationV2ProviderTurn["status"],
+        ): TurnTokenUsage => {
+          const hasSubagents = context.subagents.size > 0;
+          if (context.promptUsage !== undefined) {
+            return acpPerTurnPromptUsage(
+              context.promptUsage,
+              hasSubagents,
+              status,
+              flavor.geminiPromptUsage,
+            );
+          }
+          const observed = context.observedTurnUsage?.usage;
+          if (observed !== undefined && observed.usageStatus !== "unavailable") {
+            const models =
+              observed.models !== undefined && observed.models.length > 0
+                ? observed.models
+                : context.observedTurnUsage?.models !== undefined &&
+                    context.observedTurnUsage.models.length > 0
+                  ? context.observedTurnUsage.models
+                  : undefined;
+            return {
+              ...observed,
+              usageStatus: status === "completed" ? observed.usageStatus : "partial",
+              hasSubagents: hasSubagents || observed.hasSubagents,
+              ...(models === undefined ? {} : { models }),
+            } as TurnTokenUsage;
+          }
+          return acpPerTurnPromptUsage(
+            context.promptUsage,
+            hasSubagents,
+            status,
+            flavor.geminiPromptUsage,
+          );
+        };
+
         const providerTurnPayload = (
           context: ActiveAcpTurn,
           status: OrchestrationV2ProviderTurn["status"],
           completedAt: DateTime.Utc | null,
-        ): OrchestrationV2ProviderTurn => ({
-          id: context.providerTurnId,
-          providerThreadId: context.input.providerThread.id,
-          nodeId: context.input.rootNodeId,
-          runAttemptId: context.input.attemptId,
-          nativeTurnRef:
-            context.nativePromptId === undefined
-              ? { driver, nativeId: context.nativeTurnId, strength: "weak" }
-              : { driver, nativeId: context.nativePromptId, strength: "strong" },
-          ordinal: context.input.providerTurnOrdinal,
-          status,
-          startedAt: context.startedAt,
-          completedAt,
-          ...(status === "running" || status === "pending"
-            ? {}
-            : {
-                // The prompt tap only captures usage for flavors that declared
-                // per-turn counters, so undeclared agents stay unavailable here.
-                turnTokenUsage: acpPerTurnPromptUsage(
-                  context.promptUsage,
-                  context.subagents.size > 0,
-                  status,
-                  flavor.geminiPromptUsage,
-                ),
-              }),
-        });
+        ): OrchestrationV2ProviderTurn => {
+          const reportedModel =
+            context.observedTurnUsage?.models?.at(-1) ??
+            context.observedTurnUsage?.usage?.models?.at(-1);
+          return {
+            id: context.providerTurnId,
+            providerThreadId: context.input.providerThread.id,
+            nodeId: context.input.rootNodeId,
+            runAttemptId: context.input.attemptId,
+            nativeTurnRef:
+              context.nativePromptId === undefined
+                ? { driver, nativeId: context.nativeTurnId, strength: "weak" }
+                : { driver, nativeId: context.nativePromptId, strength: "strong" },
+            ordinal: context.input.providerTurnOrdinal,
+            status,
+            startedAt: context.startedAt,
+            completedAt,
+            ...(context.liveTokenUsage === undefined ? {} : { tokenUsage: context.liveTokenUsage }),
+            ...(reportedModel ? { model: reportedModel } : {}),
+            ...(status === "running" || status === "pending"
+              ? {}
+              : {
+                  // The prompt tap only captures usage for flavors that declared
+                  // per-turn counters, or a turn usage watcher when provided.
+                  turnTokenUsage: resolveTurnTokenUsage(context, status),
+                }),
+          };
+        };
 
         const terminalizeOpenRunOwnedItems = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
@@ -8723,6 +8917,32 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             });
           }
           yield* reportAgentModeChanges(context.input.threadId);
+          if (context.turnUsageWatcher !== undefined) {
+            const finalSample = yield* context.turnUsageWatcher
+              .collectFinal()
+              .pipe(Effect.catchCause(() => Effect.undefined));
+            if (finalSample !== undefined) {
+              context.observedTurnUsage = finalSample;
+              const finalLiveTokenUsage = buildAcpProviderTurnTokenUsage({
+                contextUsage: context.contextUsage,
+                sample: finalSample,
+                updatedAt: DateTime.formatIso(now),
+              });
+              if (finalLiveTokenUsage !== undefined) {
+                context.liveTokenUsage = finalLiveTokenUsage;
+                if (context.contextUsage !== null) {
+                  const enrichedContextUsage = enrichAcpContextUsage(
+                    context.contextUsage,
+                    finalLiveTokenUsage,
+                  );
+                  context.contextUsage = enrichedContextUsage;
+                  yield* Ref.update(contextUsageBySessionId, (current) =>
+                    new Map(current).set(context.nativeThreadId, enrichedContextUsage),
+                  );
+                }
+              }
+            }
+          }
           const turn = providerTurnPayload(context, settledStatus, now);
           yield* Ref.update(providerTurns, (current) => {
             const updated = new Map(current);
@@ -9506,6 +9726,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 new Map(current).set(requestedSessionId, initialNativeMetadata),
               );
             }
+            const turnUsageWatcher =
+              flavor.watchTurnUsage === undefined
+                ? undefined
+                : yield* flavor
+                    .watchTurnUsage({
+                      sessionId: requestedSessionId,
+                      cwd: turnInput.runtimePolicy.cwd ?? providerSession.cwd,
+                    })
+                    .pipe(Effect.catchCause(() => Effect.undefined));
             const context: ActiveAcpTurn = {
               input: turnInput,
               providerTurnId,
@@ -9552,6 +9781,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               promptSentAt: null,
               promptStarted,
               promptUsage: undefined,
+              turnUsageWatcher,
+              observedTurnUsage: undefined,
+              liveTokenUsage: undefined,
               backgroundFinalizeGeneration: 0,
               replyOpen: false,
               nativePromptId: undefined,

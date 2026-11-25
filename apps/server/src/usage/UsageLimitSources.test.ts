@@ -489,3 +489,140 @@ it.effect("the reset fallback refreshes its hub, and a stalled hub cannot hold t
     expect(yield* Fiber.join(stalled)).toBeNull();
   }),
 );
+
+it.effect("dispatches newapi and openaiBilling sources via relayQuotaApi and rejects reset credit consumption", () => {
+  const seenHeaders: Array<{ readonly path: string; readonly user?: string | undefined }> = [];
+  return Effect.gen(function* () {
+    const sources = yield* UsageLimitSources.make;
+    yield* sources.refresh;
+    const snapshots = yield* sources.current;
+
+    expect(snapshots).toHaveLength(2);
+    expect(() =>
+      encodeConfigEvent({
+        version: 1,
+        type: "usageLimitSourcesUpdated",
+        payload: { sources: snapshots },
+      }),
+    ).not.toThrow();
+
+    const newApiSnapshot = snapshots.find((item) => item.id === "my-newapi");
+    const billingSnapshot = snapshots.find((item) => item.id === "my-billing");
+
+    expect(newApiSnapshot).toMatchObject({
+      kind: "newapi",
+      label: "Primary New API",
+      origin: "https://newapi.example.com",
+      endpoint: "https://newapi.example.com",
+    });
+    expect(newApiSnapshot?.error).toBeUndefined();
+    expect(newApiSnapshot?.accounts[0]).toMatchObject({
+      id: "7",
+      driver: "openaiCompatible",
+      email: "owner@example.com",
+      plan: "New API · default",
+      usageLimits: {
+        windows: [
+          {
+            id: "relay-balance",
+            kind: "monthly",
+            label: "$10.00 left · $5.00 / $15.00",
+            usedPercent: 33.3,
+          },
+        ],
+      },
+    });
+    expect(seenHeaders).toContainEqual({ path: "/api/user/self", user: "7" });
+
+    expect(billingSnapshot).toMatchObject({
+      kind: "openaiBilling",
+      label: "OpenAI Relay",
+      origin: "https://relay.example.com",
+      endpoint: "https://relay.example.com",
+    });
+    expect(billingSnapshot?.error).toBeUndefined();
+    expect(billingSnapshot?.accounts[0]?.usageLimits.windows[0]).toMatchObject({
+      id: "relay-balance",
+      label: "$80.00 left · $20.00 / $100.00",
+      usedPercent: 20,
+    });
+
+    const consumeError = yield* Effect.flip(
+      sources.consumeResetCredit({
+        sourceId: UsageLimitSourceId.make("my-newapi"),
+        accountId: "7",
+        creditId: "credit-1",
+      }),
+    );
+    expect(consumeError.detail).toContain("CLIProxyAPI");
+  }).pipe(
+    Effect.provide([
+      ServerSettings.layerTest({
+        usageLimitSources: {
+          [UsageLimitSourceId.make("my-newapi")]: {
+            kind: "newapi",
+            label: "Primary New API",
+            url: "https://newapi.example.com/v1",
+            managementKey: "sys-access-token",
+            userId: "7",
+            enabled: true,
+          },
+          [UsageLimitSourceId.make("my-billing")]: {
+            kind: "openaiBilling",
+            label: "OpenAI Relay",
+            url: "https://relay.example.com/v1/",
+            managementKey: "sk-relay-key",
+            enabled: true,
+          },
+        },
+      }),
+      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+        shouldRunScopeWork: () => Effect.succeed(false),
+      }),
+      Layer.succeed(SecretResolver.SecretResolver, {
+        label: (provider) => Effect.succeed(provider),
+        read: (references) => Effect.succeed(references.map(() => undefined)),
+        invalidate: () => Effect.void,
+      }),
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.sync(() => {
+            const parsed = new URL(request.url);
+            seenHeaders.push({ path: parsed.pathname, user: request.headers["new-api-user"] });
+            if (parsed.pathname === "/api/user/self") {
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  success: true,
+                  data: {
+                    id: 7,
+                    username: "owner",
+                    email: "owner@example.com",
+                    quota: 5_000_000,
+                    used_quota: 2_500_000,
+                    group: "default",
+                  },
+                }),
+              );
+            }
+            if (parsed.pathname === "/v1/dashboard/billing/subscription") {
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({ hard_limit_usd: 100 }),
+              );
+            }
+            if (parsed.pathname === "/v1/dashboard/billing/usage") {
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({ total_usage: 2000 }),
+              );
+            }
+            return HttpClientResponse.fromWeb(request, Response.json({}, { status: 404 }));
+          }),
+        ),
+      ),
+      NodeCrypto.layer,
+    ]),
+  );
+});

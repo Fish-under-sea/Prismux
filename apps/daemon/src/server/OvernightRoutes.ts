@@ -1,15 +1,10 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync
-} from "node:fs";
-import net from "node:net";
-import { basename, dirname, join } from "node:path";
-import tls from "node:tls";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeNet from "node:net";
+import * as NodePath from "node:path";
+import * as NodeTls from "node:tls";
+import * as NodeUtil from "node:util";
 import type { EncryptedPluginCredentialStore } from "@prismux/cordis-kernel";
 import type { SqliteMemoryStore } from "@prismux/memory-core";
 import {
@@ -23,6 +18,11 @@ import {
   AntigravityGuardDeniedError,
   type AntigravityPolicyGuard
 } from "../security/AntigravityPolicyGuard.js";
+import {
+  buildSafeCliSpawnSpec,
+  decodeWindowsProcessOutput,
+  findExecutableOnPath
+} from "../system/WindowsEnvRefresh.js";
 import {
   GmailOAuth2InboundAdapter,
   ImapIdleInboundAdapter,
@@ -41,13 +41,38 @@ import {
 } from "../workflows/OvernightFactory.js";
 import { BusinessRouteError } from "./DaemonBusinessRoutes.js";
 
+const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
+
 export const OVERNIGHT_CREDENTIAL_BUCKET = "overnight-factory" as const;
 const OVERNIGHT_CONFIG_FILENAME = "overnight-factory.json" as const;
 const OVERNIGHT_RUNS_FILENAME = "overnight-factory-runs.json" as const;
 const MAX_PERSISTED_RUNS = 100;
 const OAUTH_STATE_TTL_MS = 10 * 60_000;
+const AGENT_MAIL_PROBE_CACHE_TTL_MS = 15_000;
+const AGENT_MAIL_SNAPSHOT_PROBE_TIMEOUT_MS = 2_500;
+const AGENT_MAIL_STATUS_TIMEOUT_MS = 8_000;
+const AGENT_MAIL_INSTALL_TIMEOUT_MS = 120_000;
+const AGENT_MAIL_LOGIN_URL_WAIT_MS = 10_000;
+const AGENT_MAIL_LOGIN_MAX_LIFETIME_MS = 5 * 60_000;
+const AGENT_MAIL_CLI_OP_TIMEOUT_MS = 15_000;
 
-export type OvernightMailPresetId = "qq" | "163" | "gmail" | "outlook" | "custom";
+export const AGENT_MAIL_CLI_COMMAND = "agently-cli" as const;
+export const AGENT_MAIL_NPM_PACKAGE = "@tencent-qqmail/agently-cli" as const;
+export const AGENT_MAIL_PORTAL_URL = "https://agent.qq.com/page" as const;
+export const AGENT_MAIL_DOC_URL = "https://agent.qq.com/doc/cli-setup.md" as const;
+
+export type OvernightEmailProvider = "imap_smtp" | "gmail_oauth2" | "agent_mail";
+export type OvernightNeteaseDomain = "163.com" | "126.com";
+export type OvernightCanonicalMailPresetId =
+  | "gmail"
+  | "qq"
+  | "agent_mail"
+  | "outlook"
+  | "netease"
+  | "custom";
+/** Includes legacy `"163"` and `"126"` aliases for backwards-compatible persistence. */
+export type OvernightMailPresetId = OvernightCanonicalMailPresetId | "163" | "126";
+export type OvernightAgentMailAction = "status" | "install" | "login";
 export type OvernightWindowMode = "scheduled" | "always";
 export type OvernightRunStatus =
   | "completed"
@@ -58,7 +83,7 @@ export type OvernightRunStatus =
   | "skipped";
 
 export interface OvernightMailPresetSpec {
-  readonly id: OvernightMailPresetId;
+  readonly id: OvernightCanonicalMailPresetId;
   readonly label: string;
   readonly imapHost: string;
   readonly imapPort: number;
@@ -68,9 +93,59 @@ export interface OvernightMailPresetSpec {
   readonly smtpSecure: boolean;
 }
 
-export const OVERNIGHT_MAIL_PRESETS: Readonly<
-  Record<OvernightMailPresetId, OvernightMailPresetSpec>
+export const OVERNIGHT_MAIL_PRESET_ORDER: readonly OvernightCanonicalMailPresetId[] = [
+  "gmail",
+  "qq",
+  "agent_mail",
+  "outlook",
+  "netease",
+  "custom"
+] as const;
+
+export const NETEASE_MAIL_DOMAIN_HOSTS: Readonly<
+  Record<
+    OvernightNeteaseDomain,
+    {
+      readonly imapHost: string;
+      readonly imapPort: number;
+      readonly imapSecure: boolean;
+      readonly smtpHost: string;
+      readonly smtpPort: number;
+      readonly smtpSecure: boolean;
+    }
+  >
 > = {
+  "163.com": {
+    imapHost: "imap.163.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.163.com",
+    smtpPort: 465,
+    smtpSecure: true
+  },
+  "126.com": {
+    imapHost: "imap.126.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.126.com",
+    smtpPort: 465,
+    smtpSecure: true
+  }
+};
+
+export const OVERNIGHT_MAIL_PRESETS: Readonly<
+  Record<OvernightCanonicalMailPresetId, OvernightMailPresetSpec>
+> = {
+  gmail: {
+    id: "gmail",
+    label: "谷歌邮箱 (Gmail)",
+    imapHost: "imap.gmail.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.gmail.com",
+    smtpPort: 465,
+    smtpSecure: true
+  },
   qq: {
     id: "qq",
     label: "QQ 邮箱",
@@ -81,23 +156,13 @@ export const OVERNIGHT_MAIL_PRESETS: Readonly<
     smtpPort: 465,
     smtpSecure: true
   },
-  "163": {
-    id: "163",
-    label: "163 邮箱",
-    imapHost: "imap.163.com",
+  agent_mail: {
+    id: "agent_mail",
+    label: "Agent 邮箱",
+    imapHost: "",
     imapPort: 993,
     imapSecure: true,
-    smtpHost: "smtp.163.com",
-    smtpPort: 465,
-    smtpSecure: true
-  },
-  gmail: {
-    id: "gmail",
-    label: "谷歌邮箱 (Gmail)",
-    imapHost: "imap.gmail.com",
-    imapPort: 993,
-    imapSecure: true,
-    smtpHost: "smtp.gmail.com",
+    smtpHost: "",
     smtpPort: 465,
     smtpSecure: true
   },
@@ -111,6 +176,16 @@ export const OVERNIGHT_MAIL_PRESETS: Readonly<
     smtpPort: 587,
     smtpSecure: false
   },
+  netease: {
+    id: "netease",
+    label: "网易邮箱（163 / 126）",
+    imapHost: "imap.163.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.163.com",
+    smtpPort: 465,
+    smtpSecure: true
+  },
   custom: {
     id: "custom",
     label: "自定义",
@@ -123,14 +198,151 @@ export const OVERNIGHT_MAIL_PRESETS: Readonly<
   }
 };
 
+function isOvernightEmailProvider(value: unknown): value is OvernightEmailProvider {
+  return value === "imap_smtp" || value === "gmail_oauth2" || value === "agent_mail";
+}
+
+function isOvernightAgentMailAction(value: unknown): value is OvernightAgentMailAction {
+  return value === "status" || value === "install" || value === "login";
+}
+
 function isOvernightMailPresetId(value: unknown): value is OvernightMailPresetId {
   return (
-    value === "qq" ||
-    value === "163" ||
     value === "gmail" ||
+    value === "qq" ||
+    value === "agent_mail" ||
     value === "outlook" ||
+    value === "netease" ||
+    value === "163" ||
+    value === "126" ||
     value === "custom"
   );
+}
+
+export function detectNeteaseDomainFromEmail(email: string): OvernightNeteaseDomain | null {
+  const normalized = extractEmailAddress(email);
+  if (normalized.endsWith("@126.com")) return "126.com";
+  if (normalized.endsWith("@163.com")) return "163.com";
+  return null;
+}
+
+export function normalizeOvernightMailPresetId(
+  value: unknown,
+  fallback: OvernightCanonicalMailPresetId
+): OvernightCanonicalMailPresetId {
+  if (value === "163" || value === "126" || value === "netease") {
+    return "netease";
+  }
+  if (
+    value === "gmail" ||
+    value === "qq" ||
+    value === "agent_mail" ||
+    value === "outlook" ||
+    value === "custom"
+  ) {
+    return value;
+  }
+  return fallback;
+}
+
+export function resolveOvernightMailPresetSpec(
+  rawPreset: OvernightMailPresetId,
+  email?: string
+): OvernightMailPresetSpec {
+  const canonical = normalizeOvernightMailPresetId(rawPreset, "qq");
+  if (canonical === "netease") {
+    const emailDomain = email ? detectNeteaseDomainFromEmail(email) : null;
+    const domain: OvernightNeteaseDomain =
+      rawPreset === "126" ? "126.com" : emailDomain ?? "163.com";
+    const hosts = NETEASE_MAIL_DOMAIN_HOSTS[domain];
+    return {
+      ...OVERNIGHT_MAIL_PRESETS.netease,
+      ...hosts
+    };
+  }
+  return OVERNIGHT_MAIL_PRESETS[canonical];
+}
+
+const ANSI_ESCAPE_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+
+export function stripAnsiEscapes(raw: string): string {
+  return raw.replace(ANSI_ESCAPE_RE, "");
+}
+
+export function sanitizeAgentMailOutput(raw: string, maxLength = 1200): string {
+  const cleaned = stripAnsiEscapes(raw)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/(token|secret|password|authorization)(\s*[=:]\s*)([^\s"'&,;]+)/gi, "$1$2[REDACTED]")
+    .trim();
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, maxLength)}...`;
+}
+
+/**
+ * Extracts the exact, unmodified opaque OAuth URL printed by `agently-cli auth login`.
+ * Never URL-encodes, decodes, or re-serializes the captured string.
+ */
+export function extractOpaqueOAuthUrl(rawOutput: string): string | null {
+  const cleaned = stripAnsiEscapes(rawOutput);
+  const match = /https:\/\/[^\s"'<>`\r\n\u0000-\u001f\u3000-\u303f\uff00-\uffef]+/.exec(cleaned);
+  return match?.[0] ?? null;
+}
+
+function findEmailInJsonValue(value: unknown, depth = 0): string | null {
+  if (depth > 4 || value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const agentMatch = /([a-zA-Z0-9._%+-]+@agent\.qq\.com)/i.exec(value);
+    if (agentMatch?.[1]) return agentMatch[1].toLowerCase();
+    const genericMatch = /^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$/.exec(value.trim());
+    return genericMatch?.[1]?.toLowerCase() ?? null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findEmailInJsonValue(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const priorityKeys = ["email", "address", "mail", "account", "user", "data", "aliases"];
+    for (const key of priorityKeys) {
+      if (key in record) {
+        const found = findEmailInJsonValue(record[key], depth + 1);
+        if (found) return found;
+      }
+    }
+    for (const val of Object.values(record)) {
+      const found = findEmailInJsonValue(val, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function extractAgentMailAddress(rawOutput: string): string | null {
+  const cleaned = stripAnsiEscapes(rawOutput).trim();
+  if (!cleaned) return null;
+
+  const directAgent = /([a-zA-Z0-9._%+-]+@agent\.qq\.com)/i.exec(cleaned);
+  if (directAgent?.[1]) {
+    return directAgent[1].toLowerCase();
+  }
+
+  if (cleaned.startsWith("{") || cleaned.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(cleaned) as unknown;
+      const fromJson = findEmailInJsonValue(parsed);
+      if (fromJson) return fromJson;
+    } catch {
+      // fall through to regex match
+    }
+  }
+
+  const fallbackEmail = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/.exec(cleaned);
+  return fallbackEmail?.[1]?.toLowerCase() ?? null;
 }
 
 export interface OvernightGmailConfig {
@@ -143,7 +355,7 @@ export interface OvernightGmailConfig {
 }
 
 export interface OvernightImapSmtpConfig {
-  preset: OvernightMailPresetId;
+  preset: OvernightCanonicalMailPresetId;
   email: string;
   imapHost: string;
   imapPort: number;
@@ -177,9 +389,20 @@ export interface OvernightFactoryPersistedConfig {
   updatedAt: number;
   enabled: boolean;
   mode: FactoryInboundMode;
+  emailProvider: OvernightEmailProvider;
+  agentMailAddress: string;
   gmail: OvernightGmailConfig;
   imapSmtp: OvernightImapSmtpConfig;
   strategy: OvernightStrategyConfig;
+}
+
+export interface OvernightAgentMailRuntimeSnapshot {
+  cliInstalled: boolean;
+  cliPath?: string;
+  authorizedEmail?: string | null;
+  authInProgress?: boolean;
+  pendingAuthUrl?: string | null;
+  lastError?: string | null;
 }
 
 export interface OvernightSecretPresence {
@@ -199,11 +422,21 @@ export interface OvernightMailProbeChannelResult {
 export interface OvernightMailTestResult {
   ok: boolean;
   mode: FactoryInboundMode;
+  emailProvider?: OvernightEmailProvider;
   checkedAt: number;
   durationMs: number;
   inbound: OvernightMailProbeChannelResult;
   outbound: OvernightMailProbeChannelResult;
   message: string;
+  agentMailAction?: OvernightAgentMailAction;
+  installed?: boolean;
+  cliPath?: string;
+  authorizedEmail?: string | null;
+  authUrl?: string | null;
+  authInProgress?: boolean;
+  stdout?: string;
+  stderr?: string;
+  agentMail?: OvernightAgentMailRuntimeSnapshot;
 }
 
 export interface OvernightRunRecord {
@@ -231,6 +464,7 @@ export interface OvernightConfigSnapshot {
   config: OvernightFactoryPersistedConfig;
   secrets: OvernightSecretPresence;
   credentialsFile: string;
+  agentMail: OvernightAgentMailRuntimeSnapshot;
   runtime: {
     pollerActive: boolean;
     inAllowedWindow: boolean;
@@ -302,6 +536,22 @@ export interface SmtpConfigParams {
   timeoutMs?: number;
 }
 
+export interface AgentMailCommandOutput {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  timedOut?: boolean;
+  errorMessage?: string;
+}
+
+export interface AgentMailLoginSpawnHandle {
+  onStdout: (cb: (chunk: string) => void) => void;
+  onStderr: (cb: (chunk: string) => void) => void;
+  onExit: (cb: (code: number | null, signal: NodeJS.Signals | null) => void) => void;
+  onError: (cb: (err: Error) => void) => void;
+  kill: () => void;
+}
+
 export interface OvernightNetworkHooks {
   probeImap?: (params: ImapProbeParams) => Promise<OvernightMailProbeChannelResult>;
   probeSmtp?: (params: SmtpConfigParams) => Promise<OvernightMailProbeChannelResult>;
@@ -317,6 +567,15 @@ export interface OvernightNetworkHooks {
     config: OvernightFactoryPersistedConfig,
     secrets: ResolvedOvernightSecrets
   ) => OutboundMailer | null;
+  findAgentMailCli?: () => string | null;
+  runAgentMailCli?: (
+    cliPath: string,
+    args: readonly string[],
+    timeoutMs: number
+  ) => Promise<AgentMailCommandOutput>;
+  installAgentMailCli?: (timeoutMs: number) => Promise<AgentMailCommandOutput>;
+  spawnAgentMailLogin?: (cliPath: string) => AgentMailLoginSpawnHandle;
+  agentMailLoginUrlWaitMs?: number;
   fetchFn?: typeof fetch;
   now?: () => number;
 }
@@ -355,18 +614,18 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function writeJsonAtomic(filePath: string, payload: unknown): void {
-  const dir = dirname(filePath);
-  mkdirSync(dir, { recursive: true });
-  const tmpPath = join(
+  const dir = NodePath.dirname(filePath);
+  NodeFS.mkdirSync(dir, { recursive: true });
+  const tmpPath = NodePath.join(
     dir,
-    `.tmp-${basename(filePath)}-${process.pid}-${randomUUID()}`
+    `.tmp-${NodePath.basename(filePath)}-${NodeCrypto.randomUUID()}`
   );
   try {
-    writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    renameSync(tmpPath, filePath);
+    NodeFS.writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    NodeFS.renameSync(tmpPath, filePath);
   } catch (err) {
     try {
-      rmSync(tmpPath, { force: true });
+      NodeFS.rmSync(tmpPath, { force: true });
     } catch {
       // ignore cleanup error
     }
@@ -499,6 +758,8 @@ export function createDefaultOvernightConfig(): OvernightFactoryPersistedConfig 
     updatedAt: 0,
     enabled: false,
     mode: "imap",
+    emailProvider: "imap_smtp",
+    agentMailAddress: "",
     gmail: {
       clientId: "",
       redirectUri: "",
@@ -541,7 +802,7 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
   const base = createDefaultOvernightConfig();
   if (!isPlainRecord(raw)) return base;
 
-  const mode: FactoryInboundMode =
+  const rawMode: FactoryInboundMode =
     raw["mode"] === "gmail-oauth2" || raw["mode"] === "imap"
       ? raw["mode"]
       : base.mode;
@@ -579,17 +840,34 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
 
   const imapRaw = isPlainRecord(raw["imapSmtp"]) ? raw["imapSmtp"] : {};
   const presetRaw = imapRaw["preset"];
-  const preset: OvernightMailPresetId = isOvernightMailPresetId(presetRaw)
-    ? presetRaw
-    : base.imapSmtp.preset;
-  const presetSpec = OVERNIGHT_MAIL_PRESETS[preset];
+  const email =
+    typeof imapRaw["email"] === "string"
+      ? imapRaw["email"].trim()
+      : base.imapSmtp.email;
+  const preset: OvernightCanonicalMailPresetId = normalizeOvernightMailPresetId(
+    presetRaw,
+    base.imapSmtp.preset
+  );
+  const presetSpec = isOvernightMailPresetId(presetRaw)
+    ? resolveOvernightMailPresetSpec(presetRaw, email)
+    : resolveOvernightMailPresetSpec(preset, email);
+
+  const emailProvider: OvernightEmailProvider = isOvernightEmailProvider(raw["emailProvider"])
+    ? raw["emailProvider"]
+    : rawMode === "gmail-oauth2"
+      ? "gmail_oauth2"
+      : preset === "agent_mail"
+        ? "agent_mail"
+        : "imap_smtp";
+  const mode: FactoryInboundMode = emailProvider === "gmail_oauth2" ? "gmail-oauth2" : "imap";
+  const agentMailAddress =
+    typeof raw["agentMailAddress"] === "string"
+      ? raw["agentMailAddress"].trim()
+      : base.agentMailAddress;
 
   const imapSmtp: OvernightImapSmtpConfig = {
-    preset,
-    email:
-      typeof imapRaw["email"] === "string"
-        ? imapRaw["email"].trim()
-        : base.imapSmtp.email,
+    preset: emailProvider === "agent_mail" ? "agent_mail" : preset,
+    email,
     imapHost:
       typeof imapRaw["imapHost"] === "string" && imapRaw["imapHost"].trim().length > 0
         ? imapRaw["imapHost"].trim()
@@ -683,6 +961,8 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
         : 0,
     enabled,
     mode,
+    emailProvider,
+    agentMailAddress,
     gmail,
     imapSmtp,
     strategy
@@ -711,7 +991,7 @@ export function buildRfc2822MimeMessage(input: {
   inReplyTo?: string;
   references?: readonly string[];
 }): string {
-  const boundary = `pmx-factory-${randomUUID().replaceAll("-", "")}`;
+  const boundary = `pmx-factory-${NodeCrypto.randomUUID().replaceAll("-", "")}`;
   const fromHeader =
     input.fromName && input.fromName.trim().length > 0
       ? `${encodeMimeHeaderUtf8(input.fromName.trim())} <${input.fromAddress}>`
@@ -791,16 +1071,16 @@ export async function defaultProbeImapConnection(
     return { ok: false, latencyMs: 0, message: "未填写或未保存 IMAP 授权码/密码。" };
   }
 
-  let socket: net.Socket | tls.TLSSocket | undefined;
+  let socket: NodeNet.Socket | NodeTls.TLSSocket | undefined;
   try {
-    socket = await new Promise<net.Socket | tls.TLSSocket>((resolveSocket, rejectSocket) => {
+    socket = await new Promise<NodeNet.Socket | NodeTls.TLSSocket>((resolveSocket, rejectSocket) => {
       const s = params.secure
-        ? tls.connect({
+        ? NodeTls.connect({
             host: params.host,
             port: params.port,
             servername: params.host
           })
-        : net.connect({
+        : NodeNet.connect({
             host: params.host,
             port: params.port
           });
@@ -934,14 +1214,14 @@ async function runSmtpTransaction(
     throw new Error("未填写或未保存 SMTP 授权码/密码。");
   }
 
-  let socket: net.Socket | tls.TLSSocket = await new Promise((resolveSocket, rejectSocket) => {
+  let socket: NodeNet.Socket | NodeTls.TLSSocket = await new Promise((resolveSocket, rejectSocket) => {
     const s = params.secure
-      ? tls.connect({
+      ? NodeTls.connect({
           host: params.host,
           port: params.port,
           servername: params.host
         })
-      : net.connect({
+      : NodeNet.connect({
           host: params.host,
           port: params.port
         });
@@ -963,7 +1243,7 @@ async function runSmtpTransaction(
 
   let buffer = "";
   let waiters: Array<() => void> = [];
-  const attachListeners = (sock: net.Socket | tls.TLSSocket) => {
+  const attachListeners = (sock: NodeNet.Socket | NodeTls.TLSSocket) => {
     const notify = () => {
       const pending = waiters;
       waiters = [];
@@ -1034,8 +1314,8 @@ async function runSmtpTransaction(
       rawPlain.removeAllListeners("close");
       rawPlain.removeAllListeners("error");
       buffer = "";
-      socket = await new Promise<tls.TLSSocket>((resolveTls, rejectTls) => {
-        const tlsSock = tls.connect({
+      socket = await new Promise<NodeTls.TLSSocket>((resolveTls, rejectTls) => {
+        const tlsSock = NodeTls.connect({
           socket: rawPlain,
           servername: params.host
         });
@@ -1068,7 +1348,7 @@ async function runSmtpTransaction(
       "SMTP 密码/授权码认证"
     );
 
-    const messageId = `prismux-${Date.now()}-${randomUUID().slice(0, 8)}@prismux.local`;
+    const messageId = `prismux-${Date.now()}-${NodeCrypto.randomUUID().slice(0, 8)}@prismux.local`;
 
     if (payload) {
       const fromAddr = extractEmailAddress(params.fromAddress || params.username);
@@ -1152,12 +1432,189 @@ export async function defaultSendSmtpMail(
 }
 
 function createPkceChallenge(verifier: string): string {
-  return createHash("sha256")
+  return NodeCrypto.createHash("sha256")
     .update(verifier, "utf8")
     .digest("base64")
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replaceAll("=", "");
+}
+
+function defaultFindAgentMailCli(): string | null {
+  return findExecutableOnPath([AGENT_MAIL_CLI_COMMAND]);
+}
+
+async function runSafeCommandWithOutput(
+  executablePath: string,
+  args: readonly string[],
+  timeoutMs: number
+): Promise<AgentMailCommandOutput> {
+  const spec = buildSafeCliSpawnSpec(executablePath, args);
+  try {
+    const result = await execFileAsync(spec.file, spec.args, {
+      timeout: timeoutMs,
+      windowsHide: true,
+      windowsVerbatimArguments: spec.windowsVerbatimArguments,
+      maxBuffer: 4 * 1024 * 1024,
+      encoding: "buffer",
+      env: { ...spec.env, NO_COLOR: "1", FORCE_COLOR: "0" }
+    });
+    return {
+      exitCode: 0,
+      stdout: decodeWindowsProcessOutput(result.stdout),
+      stderr: decodeWindowsProcessOutput(result.stderr)
+    };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & {
+      code?: number | string;
+      killed?: boolean;
+      signal?: string;
+      stdout?: Buffer | string;
+      stderr?: Buffer | string;
+    };
+    const stdout = e.stdout !== undefined ? decodeWindowsProcessOutput(e.stdout) : "";
+    const stderr = e.stderr !== undefined ? decodeWindowsProcessOutput(e.stderr) : "";
+    const timedOut = Boolean(e.killed && (e.signal === "SIGTERM" || e.signal === "SIGKILL"));
+    const numericCode = typeof e.code === "number" ? e.code : 1;
+    return {
+      exitCode: numericCode,
+      stdout,
+      stderr,
+      timedOut,
+      errorMessage: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+
+async function defaultRunAgentMailCli(
+  cliPath: string,
+  args: readonly string[],
+  timeoutMs: number
+): Promise<AgentMailCommandOutput> {
+  return runSafeCommandWithOutput(cliPath, args, timeoutMs);
+}
+
+async function defaultInstallAgentMailCli(timeoutMs: number): Promise<AgentMailCommandOutput> {
+  const npmPath = findExecutableOnPath(["npm"]);
+  if (!npmPath) {
+    return {
+      exitCode: 127,
+      stdout: "",
+      stderr: "",
+      errorMessage: "未在 PATH 中找到 npm，请先安装 Node.js 或在终端手动执行 npm install -g @tencent-qqmail/agently-cli。"
+    };
+  }
+  return runSafeCommandWithOutput(npmPath, ["install", "-g", AGENT_MAIL_NPM_PACKAGE], timeoutMs);
+}
+
+function defaultSpawnAgentMailLogin(cliPath: string): AgentMailLoginSpawnHandle {
+  const spec = buildSafeCliSpawnSpec(cliPath, ["auth", "login"]);
+  const child = NodeChildProcess.spawn(spec.file, spec.args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    windowsVerbatimArguments: spec.windowsVerbatimArguments,
+    env: { ...spec.env, NO_COLOR: "1", FORCE_COLOR: "0" }
+  });
+  return {
+    onStdout: (cb) => {
+      child.stdout?.on("data", (buf: Buffer | string) => {
+        cb(decodeWindowsProcessOutput(buf));
+      });
+    },
+    onStderr: (cb) => {
+      child.stderr?.on("data", (buf: Buffer | string) => {
+        cb(decodeWindowsProcessOutput(buf));
+      });
+    },
+    onExit: (cb) => {
+      child.once("exit", (code, signal) => {
+        cb(code, signal);
+      });
+    },
+    onError: (cb) => {
+      child.once("error", cb);
+    },
+    kill: () => {
+      try {
+        child.kill();
+      } catch {
+        // ignore kill errors
+      }
+    }
+  };
+}
+
+function parseAgentMailListMessages(rawOutput: string): InboundEmailMessage[] {
+  const cleaned = stripAnsiEscapes(rawOutput).trim();
+  if (!cleaned) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return [];
+  }
+  const items: unknown[] = Array.isArray(parsed)
+    ? parsed
+    : isPlainRecord(parsed) && Array.isArray(parsed["messages"])
+      ? parsed["messages"]
+      : isPlainRecord(parsed) && Array.isArray(parsed["data"])
+        ? parsed["data"]
+        : isPlainRecord(parsed) && Array.isArray(parsed["items"])
+          ? parsed["items"]
+          : [];
+
+  const out: InboundEmailMessage[] = [];
+  for (const item of items) {
+    if (!isPlainRecord(item)) continue;
+    const rawId = item["id"] ?? item["messageId"] ?? item["message_id"] ?? item["uid"];
+    const messageId =
+      typeof rawId === "string" && rawId.trim().length > 0
+        ? rawId.trim()
+        : typeof rawId === "number"
+          ? String(rawId)
+          : `agent-mail-${NodeCrypto.randomUUID().slice(0, 8)}`;
+    const fromVal = item["from"] ?? item["sender"] ?? "";
+    const from =
+      typeof fromVal === "string"
+        ? fromVal
+        : isPlainRecord(fromVal) && typeof fromVal["address"] === "string"
+          ? fromVal["address"]
+          : isPlainRecord(fromVal) && typeof fromVal["email"] === "string"
+            ? fromVal["email"]
+            : "";
+    const toVal = item["to"];
+    const to = Array.isArray(toVal)
+      ? toVal.filter((entry): entry is string => typeof entry === "string")
+      : typeof toVal === "string" && toVal.trim().length > 0
+        ? [toVal.trim()]
+        : [];
+    const subject = typeof item["subject"] === "string" ? item["subject"] : "";
+    const textBody =
+      typeof item["text"] === "string"
+        ? item["text"]
+        : typeof item["textBody"] === "string"
+          ? item["textBody"]
+          : typeof item["body"] === "string"
+            ? item["body"]
+            : typeof item["snippet"] === "string"
+              ? item["snippet"]
+              : undefined;
+    const htmlBody =
+      typeof item["html"] === "string"
+        ? item["html"]
+        : typeof item["htmlBody"] === "string"
+          ? item["htmlBody"]
+          : undefined;
+    out.push({
+      messageId,
+      from,
+      to,
+      subject,
+      ...(textBody !== undefined ? { textBody } : {}),
+      ...(htmlBody !== undefined ? { htmlBody } : {})
+    });
+  }
+  return out;
 }
 
 function renderOAuthCallbackHtml(options: {
@@ -1187,11 +1644,8 @@ function renderOAuthCallbackHtml(options: {
 }
 
 /**
- * Self-contained Overnight Factory control service:
- * - Persists non-secret config to `<dataDir>/overnight-factory.json`
- * - Persists ALL secrets write-only in AES-256-GCM `<dataDir>/credentials/overnight-factory.enc` (mode 0600)
- * - Supports Gmail OAuth2 (PKCE login + callback + disconnect) & IMAP/SMTP (QQ/163/Outlook/Custom)
- * - Runs connectivity probes, HTML morning test report sends, whitelist-enforced manual & scheduled polling
+ * Self-contained Overnight Factory control service managing non-secret JSON config,
+ * write-only AES-256-GCM credentials, Gmail OAuth2, IMAP/SMTP, and Tencent Agent Mail CLI.
  */
 export class OvernightRouteService {
   private readonly dataDir: string;
@@ -1212,10 +1666,25 @@ export class OvernightRouteService {
   private pollTimer: NodeJS.Timeout | undefined;
   private pollingInFlight = false;
 
+  // Agent Mail CLI live probe cache & interactive login background handle
+  private agentMailProbeCache: {
+    checkedAt: number;
+    cliInstalled: boolean;
+    cliPath?: string;
+    authorizedEmail: string | null;
+    lastError: string | null;
+  } | null = null;
+  private agentMailProbeInFlight: Promise<OvernightAgentMailRuntimeSnapshot> | null = null;
+  private agentMailLoginHandle: AgentMailLoginSpawnHandle | null = null;
+  private agentMailLoginTimer: NodeJS.Timeout | undefined;
+  private agentMailAuthInProgress = false;
+  private agentMailPendingAuthUrl: string | null = null;
+  private agentMailLastError: string | null = null;
+
   constructor(options: OvernightRouteServiceOptions) {
     this.dataDir = options.dataDir;
-    this.configPath = join(options.dataDir, OVERNIGHT_CONFIG_FILENAME);
-    this.runsPath = join(options.dataDir, OVERNIGHT_RUNS_FILENAME);
+    this.configPath = NodePath.join(options.dataDir, OVERNIGHT_CONFIG_FILENAME);
+    this.runsPath = NodePath.join(options.dataDir, OVERNIGHT_RUNS_FILENAME);
     this.overnightFactory =
       options.overnightFactory ??
       new OvernightFactory({
@@ -1255,15 +1724,155 @@ export class OvernightRouteService {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
+    this.stopActiveAgentMailLogin();
     this.pendingOAuth.clear();
   }
 
+  private stopActiveAgentMailLogin(): void {
+    if (this.agentMailLoginTimer !== undefined) {
+      clearTimeout(this.agentMailLoginTimer);
+      this.agentMailLoginTimer = undefined;
+    }
+    if (this.agentMailLoginHandle !== null) {
+      const handle = this.agentMailLoginHandle;
+      this.agentMailLoginHandle = null;
+      handle.kill();
+    }
+    this.agentMailAuthInProgress = false;
+    this.agentMailPendingAuthUrl = null;
+  }
+
+  private resolveAgentMailCliPath(): string | null {
+    try {
+      return (this.hooks.findAgentMailCli ?? defaultFindAgentMailCli)();
+    } catch {
+      return null;
+    }
+  }
+
+  private runAgentMailCli(
+    cliPath: string,
+    args: readonly string[],
+    timeoutMs: number
+  ): Promise<AgentMailCommandOutput> {
+    return (this.hooks.runAgentMailCli ?? defaultRunAgentMailCli)(cliPath, args, timeoutMs);
+  }
+
+  private buildAgentMailSnapshot(base: {
+    cliInstalled: boolean;
+    cliPath?: string;
+    authorizedEmail: string | null;
+    lastError: string | null;
+  }): OvernightAgentMailRuntimeSnapshot {
+    const resolvedEmail = base.authorizedEmail ?? (this.config.agentMailAddress || null);
+    return {
+      cliInstalled: base.cliInstalled,
+      ...(base.cliPath ? { cliPath: base.cliPath } : {}),
+      authorizedEmail: resolvedEmail,
+      authInProgress: this.agentMailAuthInProgress,
+      pendingAuthUrl: this.agentMailPendingAuthUrl,
+      lastError: this.agentMailLastError ?? base.lastError
+    };
+  }
+
+  private async probeAgentMailStatus(options: {
+    force?: boolean;
+    timeoutMs?: number;
+    persistOnSuccess?: boolean;
+  } = {}): Promise<OvernightAgentMailRuntimeSnapshot> {
+    const force = options.force === true;
+    const timeoutMs = options.timeoutMs ?? AGENT_MAIL_SNAPSHOT_PROBE_TIMEOUT_MS;
+    const now = this.now();
+
+    if (
+      !force &&
+      this.agentMailProbeCache !== null &&
+      now - this.agentMailProbeCache.checkedAt < AGENT_MAIL_PROBE_CACHE_TTL_MS
+    ) {
+      return this.buildAgentMailSnapshot(this.agentMailProbeCache);
+    }
+
+    if (!force && this.agentMailProbeInFlight !== null) {
+      return this.agentMailProbeInFlight;
+    }
+
+    const execute = async (): Promise<OvernightAgentMailRuntimeSnapshot> => {
+      const cliPath = this.resolveAgentMailCliPath();
+      if (!cliPath) {
+        const entry = {
+          checkedAt: this.now(),
+          cliInstalled: false,
+          authorizedEmail: this.config.agentMailAddress || null,
+          lastError: null
+        };
+        this.agentMailProbeCache = entry;
+        return this.buildAgentMailSnapshot(entry);
+      }
+
+      try {
+        const res = await this.runAgentMailCli(cliPath, ["+me"], timeoutMs);
+        const combined = `${res.stdout}\n${res.stderr}`;
+        const parsedEmail = res.exitCode === 0 ? extractAgentMailAddress(combined) : null;
+        const lastError =
+          res.exitCode === 0
+            ? null
+            : res.timedOut
+              ? "检测 agently-cli +me 超时，请稍后重试。"
+              : sanitizeAgentMailOutput(res.stderr || res.stdout || res.errorMessage || "", 320) ||
+                null;
+
+        if (parsedEmail) {
+          this.agentMailLastError = null;
+          if (
+            options.persistOnSuccess !== false &&
+            parsedEmail !== this.config.agentMailAddress
+          ) {
+            this.config.agentMailAddress = parsedEmail;
+            this.persistConfig();
+            this.onConfigChanged?.();
+          }
+        }
+
+        const entry = {
+          checkedAt: this.now(),
+          cliInstalled: true,
+          cliPath,
+          authorizedEmail: parsedEmail,
+          lastError
+        };
+        this.agentMailProbeCache = entry;
+        return this.buildAgentMailSnapshot(entry);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const entry = {
+          checkedAt: this.now(),
+          cliInstalled: true,
+          cliPath,
+          authorizedEmail: this.config.agentMailAddress || null,
+          lastError: sanitizeAgentMailOutput(msg, 320)
+        };
+        this.agentMailProbeCache = entry;
+        return this.buildAgentMailSnapshot(entry);
+      }
+    };
+
+    const runPromise = execute().finally(() => {
+      if (this.agentMailProbeInFlight === runPromise) {
+        this.agentMailProbeInFlight = null;
+      }
+    });
+    if (!force) {
+      this.agentMailProbeInFlight = runPromise;
+    }
+    return runPromise;
+  }
+
   private loadPersistedConfig(): OvernightFactoryPersistedConfig {
-    if (!existsSync(this.configPath)) {
+    if (!NodeFS.existsSync(this.configPath)) {
       return createDefaultOvernightConfig();
     }
     try {
-      const raw = JSON.parse(readFileSync(this.configPath, "utf8")) as unknown;
+      const raw = JSON.parse(NodeFS.readFileSync(this.configPath, "utf8")) as unknown;
       return normalizePersistedConfig(raw);
     } catch {
       return createDefaultOvernightConfig();
@@ -1279,11 +1888,11 @@ export class OvernightRouteService {
   }
 
   private loadPersistedRuns(): OvernightRunRecord[] {
-    if (!existsSync(this.runsPath)) {
+    if (!NodeFS.existsSync(this.runsPath)) {
       return [];
     }
     try {
-      const parsed = JSON.parse(readFileSync(this.runsPath, "utf8")) as unknown;
+      const parsed = JSON.parse(NodeFS.readFileSync(this.runsPath, "utf8")) as unknown;
       if (!Array.isArray(parsed)) return [];
       return parsed
         .filter((item): item is OvernightRunRecord => isPlainRecord(item) && typeof item["id"] === "string")
@@ -1312,7 +1921,7 @@ export class OvernightRouteService {
     if (this.credentialStore) {
       return this.credentialStore.getCredentialFilePath(OVERNIGHT_CREDENTIAL_BUCKET);
     }
-    return join(this.dataDir, "credentials", `${OVERNIGHT_CREDENTIAL_BUCKET}.enc`);
+    return NodePath.join(this.dataDir, "credentials", `${OVERNIGHT_CREDENTIAL_BUCKET}.enc`);
   }
 
   private openCredentials() {
@@ -1394,12 +2003,20 @@ export class OvernightRouteService {
   ): Promise<OvernightConfigSnapshot> {
     assertOwnerChief(trustedCallerScope, "/v1/overnight/config");
     this.purgeExpiredOAuthStates();
-    const secrets = await this.readSecretPresence();
+    const [secrets, agentMail] = await Promise.all([
+      this.readSecretPresence(),
+      this.probeAgentMailStatus({
+        force: false,
+        timeoutMs: AGENT_MAIL_SNAPSHOT_PROBE_TIMEOUT_MS,
+        persistOnSuccess: true
+      })
+    ]);
     return {
       ok: true,
       config: structuredClone(this.config),
       secrets,
       credentialsFile: this.getCredentialFilePathDisplay(),
+      agentMail,
       runtime: {
         pollerActive: this.pollTimer !== undefined && this.config.enabled,
         inAllowedWindow: isWithinExecutionWindow(this.config.strategy, this.now()),
@@ -1430,8 +2047,18 @@ export class OvernightRouteService {
     if (typeof rawBody["enabled"] === "boolean") {
       next.enabled = rawBody["enabled"];
     }
-    if (rawBody["mode"] === "gmail-oauth2" || rawBody["mode"] === "imap") {
+    if (isOvernightEmailProvider(rawBody["emailProvider"])) {
+      next.emailProvider = rawBody["emailProvider"];
+      next.mode = rawBody["emailProvider"] === "gmail_oauth2" ? "gmail-oauth2" : "imap";
+      if (rawBody["emailProvider"] === "agent_mail") {
+        next.imapSmtp.preset = "agent_mail";
+      }
+    } else if (rawBody["mode"] === "gmail-oauth2" || rawBody["mode"] === "imap") {
       next.mode = rawBody["mode"];
+      next.emailProvider = rawBody["mode"] === "gmail-oauth2" ? "gmail_oauth2" : "imap_smtp";
+    }
+    if (typeof rawBody["agentMailAddress"] === "string") {
+      next.agentMailAddress = rawBody["agentMailAddress"].trim();
     }
 
     if (isPlainRecord(rawBody["gmail"])) {
@@ -1443,10 +2070,23 @@ export class OvernightRouteService {
 
     if (isPlainRecord(rawBody["imapSmtp"])) {
       const im = rawBody["imapSmtp"];
+      const incomingEmail = typeof im["email"] === "string" ? im["email"].trim() : next.imapSmtp.email;
       if (isOvernightMailPresetId(im["preset"])) {
-        next.imapSmtp.preset = im["preset"];
-        if (im["preset"] !== "custom") {
-          const presetSpec = OVERNIGHT_MAIL_PRESETS[im["preset"]];
+        const canonicalPreset = normalizeOvernightMailPresetId(im["preset"], next.imapSmtp.preset);
+        next.imapSmtp.preset = canonicalPreset;
+        if (canonicalPreset === "agent_mail" && !isOvernightEmailProvider(rawBody["emailProvider"])) {
+          next.emailProvider = "agent_mail";
+          next.mode = "imap";
+        } else if (
+          canonicalPreset !== "agent_mail" &&
+          !isOvernightEmailProvider(rawBody["emailProvider"]) &&
+          rawBody["mode"] !== "gmail-oauth2" &&
+          next.emailProvider === "agent_mail"
+        ) {
+          next.emailProvider = "imap_smtp";
+        }
+        if (canonicalPreset !== "custom" && canonicalPreset !== "agent_mail") {
+          const presetSpec = resolveOvernightMailPresetSpec(im["preset"], incomingEmail);
           if (typeof im["imapHost"] !== "string" || im["imapHost"].trim().length === 0) {
             next.imapSmtp.imapHost = presetSpec.imapHost;
           }
@@ -1467,7 +2107,24 @@ export class OvernightRouteService {
           }
         }
       }
-      if (typeof im["email"] === "string") next.imapSmtp.email = im["email"].trim();
+      if (typeof im["email"] === "string") {
+        next.imapSmtp.email = incomingEmail;
+        const detectedNetease = detectNeteaseDomainFromEmail(incomingEmail);
+        if (
+          detectedNetease !== null &&
+          next.imapSmtp.preset === "netease" &&
+          (typeof im["imapHost"] !== "string" || im["imapHost"].trim().length === 0) &&
+          (typeof im["smtpHost"] !== "string" || im["smtpHost"].trim().length === 0)
+        ) {
+          const hosts = NETEASE_MAIL_DOMAIN_HOSTS[detectedNetease];
+          next.imapSmtp.imapHost = hosts.imapHost;
+          next.imapSmtp.imapPort = hosts.imapPort;
+          next.imapSmtp.imapSecure = hosts.imapSecure;
+          next.imapSmtp.smtpHost = hosts.smtpHost;
+          next.imapSmtp.smtpPort = hosts.smtpPort;
+          next.imapSmtp.smtpSecure = hosts.smtpSecure;
+        }
+      }
       if (typeof im["imapHost"] === "string" && (next.imapSmtp.preset === "custom" || im["imapHost"].trim().length > 0)) {
         next.imapSmtp.imapHost = im["imapHost"].trim();
       }
@@ -1677,8 +2334,8 @@ export class OvernightRouteService {
     this.config.gmail.redirectUri = redirectUri;
     this.persistConfig();
 
-    const state = randomBytes(24).toString("base64url");
-    const codeVerifier = randomBytes(32).toString("base64url");
+    const state = NodeCrypto.randomBytes(24).toString("base64url");
+    const codeVerifier = NodeCrypto.randomBytes(32).toString("base64url");
     const codeChallenge = createPkceChallenge(codeVerifier);
     const createdAt = this.now();
     const expiresAt = createdAt + OAUTH_STATE_TTL_MS;
@@ -1870,6 +2527,7 @@ export class OvernightRouteService {
       }
 
       this.config.mode = "gmail-oauth2";
+      this.config.emailProvider = "gmail_oauth2";
       this.config.gmail.boundEmail = boundEmail;
       this.config.gmail.connected = true;
       this.config.gmail.connectedAt = this.now();
@@ -1933,8 +2591,18 @@ export class OvernightRouteService {
     }
 
     const merged = structuredClone(this.config);
-    if (rawOverride["mode"] === "gmail-oauth2" || rawOverride["mode"] === "imap") {
+    if (isOvernightEmailProvider(rawOverride["emailProvider"])) {
+      merged.emailProvider = rawOverride["emailProvider"];
+      merged.mode = rawOverride["emailProvider"] === "gmail_oauth2" ? "gmail-oauth2" : "imap";
+      if (rawOverride["emailProvider"] === "agent_mail") {
+        merged.imapSmtp.preset = "agent_mail";
+      }
+    } else if (rawOverride["mode"] === "gmail-oauth2" || rawOverride["mode"] === "imap") {
       merged.mode = rawOverride["mode"];
+      merged.emailProvider = rawOverride["mode"] === "gmail-oauth2" ? "gmail_oauth2" : "imap_smtp";
+    }
+    if (typeof rawOverride["agentMailAddress"] === "string") {
+      merged.agentMailAddress = rawOverride["agentMailAddress"].trim();
     }
     if (isPlainRecord(rawOverride["gmail"])) {
       const g = rawOverride["gmail"];
@@ -1943,10 +2611,17 @@ export class OvernightRouteService {
     }
     if (isPlainRecord(rawOverride["imapSmtp"])) {
       const im = rawOverride["imapSmtp"];
+      const incomingEmail =
+        typeof im["email"] === "string" ? im["email"].trim() : merged.imapSmtp.email;
       if (isOvernightMailPresetId(im["preset"])) {
-        merged.imapSmtp.preset = im["preset"];
-        if (im["preset"] !== "custom") {
-          const presetSpec = OVERNIGHT_MAIL_PRESETS[im["preset"]];
+        const canonicalPreset = normalizeOvernightMailPresetId(im["preset"], merged.imapSmtp.preset);
+        merged.imapSmtp.preset = canonicalPreset;
+        if (canonicalPreset === "agent_mail" && !isOvernightEmailProvider(rawOverride["emailProvider"])) {
+          merged.emailProvider = "agent_mail";
+          merged.mode = "imap";
+        }
+        if (canonicalPreset !== "custom" && canonicalPreset !== "agent_mail") {
+          const presetSpec = resolveOvernightMailPresetSpec(im["preset"], incomingEmail);
           if (typeof im["imapHost"] !== "string" || im["imapHost"].trim().length === 0) {
             merged.imapSmtp.imapHost = presetSpec.imapHost;
           }
@@ -1967,7 +2642,7 @@ export class OvernightRouteService {
           }
         }
       }
-      if (typeof im["email"] === "string") merged.imapSmtp.email = im["email"].trim();
+      if (typeof im["email"] === "string") merged.imapSmtp.email = incomingEmail;
       if (typeof im["imapHost"] === "string" && (merged.imapSmtp.preset === "custom" || im["imapHost"].trim().length > 0)) {
         merged.imapSmtp.imapHost = im["imapHost"].trim();
       }
@@ -2053,7 +2728,7 @@ export class OvernightRouteService {
     payload: OutboundMailPayload
   ): Promise<OutboundMailReceipt> {
     const fetchImpl = this.hooks.fetchFn ?? fetch;
-    const messageId = `prismux-${Date.now()}-${randomUUID().slice(0, 8)}@prismux.local`;
+    const messageId = `prismux-${Date.now()}-${NodeCrypto.randomUUID().slice(0, 8)}@prismux.local`;
     const mime = buildRfc2822MimeMessage({
       fromAddress,
       fromName,
@@ -2092,13 +2767,418 @@ export class OvernightRouteService {
     };
   }
 
+  private async handleAgentMailStatusAction(startedAt: number): Promise<OvernightMailTestResult> {
+    const snapshot = await this.probeAgentMailStatus({
+      force: true,
+      timeoutMs: AGENT_MAIL_STATUS_TIMEOUT_MS,
+      persistOnSuccess: true
+    });
+    const durationMs = Math.max(1, this.now() - startedAt);
+    const installed = snapshot.cliInstalled;
+    const authorizedEmail = snapshot.authorizedEmail ?? null;
+    const ok = installed && Boolean(authorizedEmail);
+    const message = !installed
+      ? `未检测到 ${AGENT_MAIL_CLI_COMMAND}，请先点击「一键安装 / 更新 CLI」安装 ${AGENT_MAIL_NPM_PACKAGE}。`
+      : authorizedEmail
+        ? `Agent 邮箱已授权：${authorizedEmail}`
+        : snapshot.lastError ||
+          `已安装 ${AGENT_MAIL_CLI_COMMAND}，但尚未完成 OAuth 授权，请点击「发起 OAuth 浏览器授权」。`;
+
+    const res: OvernightMailTestResult = {
+      ok,
+      mode: "imap",
+      emailProvider: "agent_mail",
+      agentMailAction: "status",
+      installed,
+      ...(snapshot.cliPath ? { cliPath: snapshot.cliPath } : {}),
+      authorizedEmail,
+      authInProgress: Boolean(snapshot.authInProgress),
+      authUrl: snapshot.pendingAuthUrl ?? null,
+      agentMail: snapshot,
+      checkedAt: this.now(),
+      durationMs,
+      inbound: {
+        ok,
+        latencyMs: durationMs,
+        message,
+        ...(snapshot.cliPath ? { detail: snapshot.cliPath } : {})
+      },
+      outbound: {
+        ok,
+        latencyMs: durationMs,
+        message: ok
+          ? `agently-cli 发信通道就绪（${authorizedEmail}）`
+          : message
+      },
+      message
+    };
+    this.lastTestResult = res;
+    return res;
+  }
+
+  private async handleAgentMailInstallAction(startedAt: number): Promise<OvernightMailTestResult> {
+    const installFn = this.hooks.installAgentMailCli ?? defaultInstallAgentMailCli;
+    const cmdOut = await installFn(AGENT_MAIL_INSTALL_TIMEOUT_MS);
+    this.agentMailProbeCache = null;
+
+    const stdout = sanitizeAgentMailOutput(cmdOut.stdout);
+    const stderr = sanitizeAgentMailOutput(cmdOut.stderr);
+    const snapshot = await this.probeAgentMailStatus({
+      force: true,
+      timeoutMs: AGENT_MAIL_SNAPSHOT_PROBE_TIMEOUT_MS,
+      persistOnSuccess: true
+    });
+    const durationMs = Math.max(1, this.now() - startedAt);
+    const ok = cmdOut.exitCode === 0 && snapshot.cliInstalled;
+    const message = ok
+      ? snapshot.authorizedEmail
+        ? `已安装并验证 ${AGENT_MAIL_NPM_PACKAGE}（当前已授权邮箱：${snapshot.authorizedEmail}）。`
+        : `已成功安装 / 更新 ${AGENT_MAIL_NPM_PACKAGE}，接下来请点击「发起 OAuth 浏览器授权」。`
+      : cmdOut.timedOut
+        ? `安装 ${AGENT_MAIL_NPM_PACKAGE} 超时，请检查网络连接或在终端手动运行 npm install -g ${AGENT_MAIL_NPM_PACKAGE}。`
+        : `安装 ${AGENT_MAIL_NPM_PACKAGE} 失败（退出码 ${cmdOut.exitCode}）：${stderr || cmdOut.errorMessage || stdout || "未知错误"}`;
+
+    if (!ok) {
+      this.agentMailLastError = message;
+    } else {
+      this.agentMailLastError = null;
+    }
+
+    const res: OvernightMailTestResult = {
+      ok,
+      mode: "imap",
+      emailProvider: "agent_mail",
+      agentMailAction: "install",
+      installed: snapshot.cliInstalled,
+      ...(snapshot.cliPath ? { cliPath: snapshot.cliPath } : {}),
+      authorizedEmail: snapshot.authorizedEmail ?? null,
+      authInProgress: Boolean(snapshot.authInProgress),
+      authUrl: snapshot.pendingAuthUrl ?? null,
+      stdout,
+      stderr,
+      agentMail: {
+        ...snapshot,
+        lastError: ok ? null : message
+      },
+      checkedAt: this.now(),
+      durationMs,
+      inbound: {
+        ok,
+        latencyMs: durationMs,
+        message
+      },
+      outbound: {
+        ok,
+        latencyMs: durationMs,
+        message
+      },
+      message
+    };
+    return res;
+  }
+
+  private async handleAgentMailLoginAction(startedAt: number): Promise<OvernightMailTestResult> {
+    const cliPath = this.resolveAgentMailCliPath();
+    if (!cliPath) {
+      const durationMs = Math.max(1, this.now() - startedAt);
+      const message = `尚未安装 ${AGENT_MAIL_CLI_COMMAND}，请先执行步骤 1 安装 ${AGENT_MAIL_NPM_PACKAGE}。`;
+      return {
+        ok: false,
+        mode: "imap",
+        emailProvider: "agent_mail",
+        agentMailAction: "login",
+        installed: false,
+        authorizedEmail: this.config.agentMailAddress || null,
+        authUrl: null,
+        authInProgress: false,
+        agentMail: {
+          cliInstalled: false,
+          authorizedEmail: this.config.agentMailAddress || null,
+          authInProgress: false,
+          pendingAuthUrl: null,
+          lastError: message
+        },
+        checkedAt: this.now(),
+        durationMs,
+        inbound: { ok: false, latencyMs: durationMs, message },
+        outbound: { ok: false, latencyMs: durationMs, message },
+        message
+      };
+    }
+
+    if (this.agentMailAuthInProgress && this.agentMailPendingAuthUrl) {
+      const durationMs = Math.max(1, this.now() - startedAt);
+      const message = "请点击或复制以下链接在浏览器中完成授权：";
+      return {
+        ok: true,
+        mode: "imap",
+        emailProvider: "agent_mail",
+        agentMailAction: "login",
+        installed: true,
+        cliPath,
+        authorizedEmail: this.config.agentMailAddress || null,
+        authUrl: this.agentMailPendingAuthUrl,
+        authInProgress: true,
+        agentMail: {
+          cliInstalled: true,
+          cliPath,
+          authorizedEmail: this.config.agentMailAddress || null,
+          authInProgress: true,
+          pendingAuthUrl: this.agentMailPendingAuthUrl,
+          lastError: null
+        },
+        checkedAt: this.now(),
+        durationMs,
+        inbound: { ok: true, latencyMs: durationMs, message },
+        outbound: { ok: true, latencyMs: durationMs, message },
+        message
+      };
+    }
+
+    this.stopActiveAgentMailLogin();
+    const spawnLogin = this.hooks.spawnAgentMailLogin ?? defaultSpawnAgentMailLogin;
+    const urlWaitMs = this.hooks.agentMailLoginUrlWaitMs ?? AGENT_MAIL_LOGIN_URL_WAIT_MS;
+    const handle = spawnLogin(cliPath);
+    this.agentMailLoginHandle = handle;
+    this.agentMailAuthInProgress = true;
+    this.agentMailPendingAuthUrl = null;
+    this.agentMailLastError = null;
+
+    this.agentMailLoginTimer = setTimeout(() => {
+      if (this.agentMailLoginHandle === handle) {
+        this.agentMailLastError = "OAuth 授权等待超时，请重新发起授权。";
+        this.stopActiveAgentMailLogin();
+      }
+    }, AGENT_MAIL_LOGIN_MAX_LIFETIME_MS);
+    this.agentMailLoginTimer.unref?.();
+
+    let combinedOutput = "";
+
+    const captured = await new Promise<{
+      ok: boolean;
+      authUrl: string | null;
+      authInProgress: boolean;
+      authorizedEmail: string | null;
+      message: string;
+    }>((resolveCapture) => {
+      let settled = false;
+      const finish = (outcome: {
+        ok: boolean;
+        authUrl: string | null;
+        authInProgress: boolean;
+        authorizedEmail: string | null;
+        message: string;
+      }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(waitTimer);
+        resolveCapture(outcome);
+      };
+
+      const waitTimer = setTimeout(() => {
+        const sanitized = sanitizeAgentMailOutput(combinedOutput, 400);
+        this.agentMailLastError =
+          sanitized || "启动 agently-cli auth login 超时，未捕获到浏览器授权链接。";
+        if (this.agentMailLoginHandle === handle) {
+          this.stopActiveAgentMailLogin();
+        }
+        finish({
+          ok: false,
+          authUrl: null,
+          authInProgress: false,
+          authorizedEmail: this.config.agentMailAddress || null,
+          message: this.agentMailLastError
+        });
+      }, urlWaitMs);
+      waitTimer.unref?.();
+
+      const inspectChunk = (chunk: string) => {
+        combinedOutput += chunk;
+        if (this.agentMailPendingAuthUrl === null) {
+          const url = extractOpaqueOAuthUrl(combinedOutput);
+          if (url) {
+            this.agentMailPendingAuthUrl = url;
+            finish({
+              ok: true,
+              authUrl: url,
+              authInProgress: true,
+              authorizedEmail: this.config.agentMailAddress || null,
+              message: "请点击或复制以下链接在浏览器中完成授权："
+            });
+          }
+        }
+      };
+
+      handle.onStdout(inspectChunk);
+      handle.onStderr(inspectChunk);
+
+      handle.onError((err) => {
+        const msg = `无法启动 ${AGENT_MAIL_CLI_COMMAND} auth login：${err.message}`;
+        this.agentMailLastError = msg;
+        if (this.agentMailLoginHandle === handle) {
+          this.stopActiveAgentMailLogin();
+        }
+        finish({
+          ok: false,
+          authUrl: null,
+          authInProgress: false,
+          authorizedEmail: this.config.agentMailAddress || null,
+          message: msg
+        });
+      });
+
+      handle.onExit((code) => {
+        if (this.agentMailLoginTimer !== undefined && this.agentMailLoginHandle === handle) {
+          clearTimeout(this.agentMailLoginTimer);
+          this.agentMailLoginTimer = undefined;
+        }
+        if (this.agentMailLoginHandle === handle) {
+          this.agentMailLoginHandle = null;
+        }
+        this.agentMailAuthInProgress = false;
+        this.agentMailPendingAuthUrl = null;
+
+        if (code === 0) {
+          this.agentMailLastError = null;
+          void this.probeAgentMailStatus({
+            force: true,
+            timeoutMs: AGENT_MAIL_STATUS_TIMEOUT_MS,
+            persistOnSuccess: true
+          }).then((probed) => {
+            finish({
+              ok: true,
+              authUrl: null,
+              authInProgress: false,
+              authorizedEmail: probed.authorizedEmail ?? null,
+              message: probed.authorizedEmail
+                ? `邮箱地址 ${probed.authorizedEmail} 已授权成功，可以用它来收发邮件了。`
+                : "Agent 邮箱 OAuth 授权已完成，请点击「检测授权身份」同步邮箱地址。"
+            });
+          });
+        } else {
+          const detail = sanitizeAgentMailOutput(combinedOutput, 400);
+          const msg = `agently-cli auth login 异常退出（退出码 ${code ?? "null"}）${detail ? `：${detail}` : ""}`;
+          this.agentMailLastError = msg;
+          finish({
+            ok: false,
+            authUrl: null,
+            authInProgress: false,
+            authorizedEmail: this.config.agentMailAddress || null,
+            message: msg
+          });
+        }
+      });
+    });
+
+    const durationMs = Math.max(1, this.now() - startedAt);
+    const snapshot: OvernightAgentMailRuntimeSnapshot = {
+      cliInstalled: true,
+      cliPath,
+      authorizedEmail: captured.authorizedEmail,
+      authInProgress: captured.authInProgress,
+      pendingAuthUrl: captured.authUrl,
+      lastError: captured.ok ? null : captured.message
+    };
+    return {
+      ok: captured.ok,
+      mode: "imap",
+      emailProvider: "agent_mail",
+      agentMailAction: "login",
+      installed: true,
+      cliPath,
+      authorizedEmail: captured.authorizedEmail,
+      authUrl: captured.authUrl,
+      authInProgress: captured.authInProgress,
+      agentMail: snapshot,
+      checkedAt: this.now(),
+      durationMs,
+      inbound: {
+        ok: captured.ok,
+        latencyMs: durationMs,
+        message: captured.message
+      },
+      outbound: {
+        ok: captured.ok,
+        latencyMs: durationMs,
+        message: captured.message
+      },
+      message: captured.message
+    };
+  }
+
+  private async handleAgentMailVerifyConnection(
+    startedAt: number
+  ): Promise<OvernightMailTestResult> {
+    const snapshot = await this.probeAgentMailStatus({
+      force: true,
+      timeoutMs: AGENT_MAIL_STATUS_TIMEOUT_MS,
+      persistOnSuccess: true
+    });
+    const durationMs = Math.max(1, this.now() - startedAt);
+    const email = snapshot.authorizedEmail ?? null;
+    const isValidAgentMailbox = Boolean(email && /@agent\.qq\.com$/i.test(email));
+    const ok = snapshot.cliInstalled && isValidAgentMailbox;
+    const message = !snapshot.cliInstalled
+      ? `未检测到 ${AGENT_MAIL_CLI_COMMAND}，请先安装 ${AGENT_MAIL_NPM_PACKAGE}。`
+      : isValidAgentMailbox
+        ? `Agent 邮箱连通性校验通过（${email}）。`
+        : email
+          ? `检测到已登录邮箱 ${email}，但并非 @agent.qq.com 地址，请重新授权腾讯 Agent 邮箱。`
+          : snapshot.lastError ||
+            "尚未完成 Agent 邮箱 OAuth 授权，请点击「发起 OAuth 浏览器授权」后重试。";
+
+    const res: OvernightMailTestResult = {
+      ok,
+      mode: "imap",
+      emailProvider: "agent_mail",
+      installed: snapshot.cliInstalled,
+      ...(snapshot.cliPath ? { cliPath: snapshot.cliPath } : {}),
+      authorizedEmail: email,
+      authInProgress: Boolean(snapshot.authInProgress),
+      authUrl: snapshot.pendingAuthUrl ?? null,
+      agentMail: snapshot,
+      checkedAt: this.now(),
+      durationMs,
+      inbound: {
+        ok,
+        latencyMs: durationMs,
+        message: ok ? `Agent 邮箱收信就绪（${email}）` : message,
+        ...(snapshot.cliPath ? { detail: snapshot.cliPath } : {})
+      },
+      outbound: {
+        ok,
+        latencyMs: durationMs,
+        message: ok ? `Agent 邮箱发信就绪（agently-cli · ${email}）` : message
+      },
+      message
+    };
+    this.lastTestResult = res;
+    return res;
+  }
+
   async testMailConnection(
     rawBody: unknown,
     trustedCallerScope: CallerScope
   ): Promise<OvernightMailTestResult> {
     assertOwnerChief(trustedCallerScope, "/v1/overnight/test-mail");
     const startedAt = this.now();
+
+    if (isPlainRecord(rawBody) && isOvernightAgentMailAction(rawBody["agentMailAction"])) {
+      const action = rawBody["agentMailAction"];
+      if (action === "status") {
+        return this.handleAgentMailStatusAction(startedAt);
+      }
+      if (action === "install") {
+        return this.handleAgentMailInstallAction(startedAt);
+      }
+      return this.handleAgentMailLoginAction(startedAt);
+    }
+
     const { config, secrets } = await this.resolveEffectiveMailInput(rawBody);
+
+    if (config.emailProvider === "agent_mail") {
+      return this.handleAgentMailVerifyConnection(startedAt);
+    }
 
     if (config.mode === "gmail-oauth2") {
       const probeStart = this.now();
@@ -2265,6 +3345,88 @@ export class OvernightRouteService {
       if (injected) return injected;
     }
 
+    if (config.emailProvider === "agent_mail") {
+      const cliPath = this.resolveAgentMailCliPath();
+      if (!cliPath) {
+        throw new BusinessRouteError(
+          400,
+          "AGENT_MAIL_CLI_NOT_INSTALLED",
+          `未检测到 ${AGENT_MAIL_CLI_COMMAND}，请先在邮箱设置中一键安装 ${AGENT_MAIL_NPM_PACKAGE}。`
+        );
+      }
+      const authorizedEmail =
+        config.agentMailAddress || this.agentMailProbeCache?.authorizedEmail || "";
+      if (!authorizedEmail) {
+        throw new BusinessRouteError(
+          400,
+          "AGENT_MAIL_NOT_AUTHORIZED",
+          "Agent 邮箱尚未完成 OAuth 授权，请先点击「发起 OAuth 浏览器授权」并完成身份检测。"
+        );
+      }
+      return {
+        send: async (payload: OutboundMailPayload) => {
+          const recipient = payload.to[0];
+          if (!recipient) {
+            throw new BusinessRouteError(400, "RECIPIENT_MISSING", "发信收件人邮箱不能为空。");
+          }
+          const primaryArgs = [
+            "message",
+            "+send",
+            "--to",
+            recipient,
+            "--subject",
+            payload.subject,
+            "--html",
+            payload.html,
+            "--confirmed",
+            "--json"
+          ];
+          let res = await this.runAgentMailCli(cliPath, primaryArgs, AGENT_MAIL_CLI_OP_TIMEOUT_MS);
+          if (res.exitCode !== 0 && /unknown option|unrecognized/i.test(`${res.stderr} ${res.stdout}`)) {
+            res = await this.runAgentMailCli(
+              cliPath,
+              [
+                "message",
+                "+send",
+                "--to",
+                recipient,
+                "--subject",
+                payload.subject,
+                "--text",
+                payload.text ?? payload.subject
+              ],
+              AGENT_MAIL_CLI_OP_TIMEOUT_MS
+            );
+          }
+          if (res.exitCode !== 0) {
+            const detail = sanitizeAgentMailOutput(res.stderr || res.stdout || res.errorMessage || "", 320);
+            throw new BusinessRouteError(
+              502,
+              "AGENT_MAIL_SEND_FAILED",
+              `通过 ${AGENT_MAIL_CLI_COMMAND} 发信失败（退出码 ${res.exitCode}）：${detail || "请检查授权状态"}`
+            );
+          }
+          let parsedId = `agent-mail-${this.now()}-${NodeCrypto.randomUUID().slice(0, 8)}`;
+          try {
+            const parsed = JSON.parse(stripAnsiEscapes(res.stdout).trim()) as unknown;
+            if (isPlainRecord(parsed)) {
+              const maybeId = parsed["messageId"] ?? parsed["id"];
+              if (typeof maybeId === "string" && maybeId.trim().length > 0) {
+                parsedId = maybeId.trim();
+              }
+            }
+          } catch {
+            // keep generated messageId when CLI returns plain text confirmation
+          }
+          return {
+            messageId: parsedId,
+            acceptedAt: this.now(),
+            provider: `agent_mail:${AGENT_MAIL_CLI_COMMAND}`
+          };
+        }
+      };
+    }
+
     if (config.mode === "gmail-oauth2") {
       if (!config.gmail.clientId || !secrets.gmailClientSecret || !secrets.gmailRefreshToken) {
         throw new BusinessRouteError(
@@ -2325,14 +3487,27 @@ export class OvernightRouteService {
     const body = isPlainRecord(rawBody) ? rawBody : {};
     const { config, secrets } = await this.resolveEffectiveMailInput(body);
 
+    if (config.emailProvider === "agent_mail" && !config.agentMailAddress) {
+      await this.probeAgentMailStatus({
+        force: false,
+        timeoutMs: AGENT_MAIL_SNAPSHOT_PROBE_TIMEOUT_MS,
+        persistOnSuccess: true
+      });
+    }
+
     const explicitRecipient =
       typeof body["recipient"] === "string" && body["recipient"].trim().length > 0
         ? body["recipient"].trim()
         : "";
     const defaultRecipient =
-      config.mode === "gmail-oauth2"
-        ? config.gmail.boundEmail || config.strategy.allowedSenders[0] || ""
-        : config.imapSmtp.email || config.strategy.allowedSenders[0] || "";
+      config.emailProvider === "agent_mail"
+        ? config.agentMailAddress ||
+          this.agentMailProbeCache?.authorizedEmail ||
+          config.strategy.allowedSenders[0] ||
+          ""
+        : config.mode === "gmail-oauth2"
+          ? config.gmail.boundEmail || config.strategy.allowedSenders[0] || ""
+          : config.imapSmtp.email || config.strategy.allowedSenders[0] || "";
     const recipient = explicitRecipient || defaultRecipient;
     if (!recipient || !recipient.includes("@")) {
       throw new BusinessRouteError(
@@ -2348,7 +3523,7 @@ export class OvernightRouteService {
       threadId: sampleThreadId,
       branchName: "factory/test-morning-report",
       repoName: config.strategy.targetWorkspaceDir
-        ? basename(config.strategy.targetWorkspaceDir)
+        ? NodePath.basename(config.strategy.targetWorkspaceDir)
         : BRAND.appName,
       summary:
         "这是一封来自 Prismux 夜间全自动工场的连通性测试完工早报，用于验证 HTML 样式、Diff 高亮与桌面端深度链接唤醒。",
@@ -2410,6 +3585,47 @@ export class OvernightRouteService {
     if (this.hooks.createInboundAdapter) {
       const injected = this.hooks.createInboundAdapter(config, secrets);
       if (injected) return injected;
+    }
+
+    if (config.emailProvider === "agent_mail") {
+      const cliPath = this.resolveAgentMailCliPath();
+      if (!cliPath) {
+        throw new BusinessRouteError(
+          400,
+          "AGENT_MAIL_CLI_NOT_INSTALLED",
+          `未检测到 ${AGENT_MAIL_CLI_COMMAND}，请先在邮箱设置中一键安装 ${AGENT_MAIL_NPM_PACKAGE}。`
+        );
+      }
+      const authorizedEmail =
+        config.agentMailAddress || this.agentMailProbeCache?.authorizedEmail || "";
+      if (!authorizedEmail) {
+        throw new BusinessRouteError(
+          400,
+          "AGENT_MAIL_NOT_AUTHORIZED",
+          "Agent 邮箱尚未完成 OAuth 授权，请先完成授权后再拉取邮件。"
+        );
+      }
+      return {
+        mode: "imap",
+        pollIncremental: async () => {
+          const res = await this.runAgentMailCli(
+            cliPath,
+            ["message", "+list", "--limit", "20", "--json"],
+            AGENT_MAIL_CLI_OP_TIMEOUT_MS
+          );
+          if (res.exitCode !== 0) {
+            const detail = sanitizeAgentMailOutput(res.stderr || res.stdout || res.errorMessage || "", 320);
+            throw new BusinessRouteError(
+              502,
+              "AGENT_MAIL_POLL_FAILED",
+              `通过 ${AGENT_MAIL_CLI_COMMAND} 拉取邮件失败（退出码 ${res.exitCode}）：${detail || "请检查授权状态"}`
+            );
+          }
+          return {
+            messages: parseAgentMailListMessages(res.stdout)
+          };
+        }
+      };
     }
 
     if (config.mode === "gmail-oauth2") {
@@ -2504,8 +3720,8 @@ export class OvernightRouteService {
           blockedByWhitelistCount += 1;
           this.overnightFactory.markMessageProcessed(email.messageId);
           const blockedRecord: OvernightRunRecord = {
-            id: `run-${polledAt}-${randomUUID().slice(0, 6)}`,
-            jobId: `blocked-${randomUUID().slice(0, 8)}`,
+            id: `run-${polledAt}-${NodeCrypto.randomUUID().slice(0, 6)}`,
+            jobId: `blocked-${NodeCrypto.randomUUID().slice(0, 8)}`,
             messageId: email.messageId,
             threadId: "",
             subject: email.subject || "(无主题)",
@@ -2578,11 +3794,11 @@ export class OvernightRouteService {
     const sender = extractEmailAddress(email.from) || email.from;
     const workspaceDir = config.strategy.targetWorkspaceDir.trim();
 
-    if (!workspaceDir || !existsSync(workspaceDir)) {
+    if (!workspaceDir || !NodeFS.existsSync(workspaceDir)) {
       this.overnightFactory.markMessageProcessed(email.messageId);
       return {
-        id: `run-${startedAt}-${randomUUID().slice(0, 6)}`,
-        jobId: `fac-cfg-${randomUUID().slice(0, 6)}`,
+        id: `run-${startedAt}-${NodeCrypto.randomUUID().slice(0, 6)}`,
+        jobId: `fac-cfg-${NodeCrypto.randomUUID().slice(0, 6)}`,
         messageId: email.messageId,
         threadId: "",
         subject: email.subject || "(无主题)",
@@ -2613,7 +3829,7 @@ export class OvernightRouteService {
       const result = await this.overnightFactory.runEmailPipeline(email, {
         repoTarget: {
           repoPath: workspaceDir,
-          repoSlug: basename(workspaceDir),
+          repoSlug: NodePath.basename(workspaceDir),
           testCommand: "node -e \"process.exit(0)\""
         },
         callerKind,
@@ -2631,7 +3847,7 @@ export class OvernightRouteService {
 
       const completedAt = this.now();
       return {
-        id: `run-${startedAt}-${randomUUID().slice(0, 6)}`,
+        id: `run-${startedAt}-${NodeCrypto.randomUUID().slice(0, 6)}`,
         jobId: result.jobId,
         messageId: email.messageId,
         threadId: result.threadId,
@@ -2663,10 +3879,10 @@ export class OvernightRouteService {
       const msg = err instanceof Error ? err.message : String(err);
       const isPolicyBlocked = err instanceof AntigravityGuardDeniedError;
       return {
-        id: `run-${startedAt}-${randomUUID().slice(0, 6)}`,
+        id: `run-${startedAt}-${NodeCrypto.randomUUID().slice(0, 6)}`,
         jobId: isPolicyBlocked
-          ? `fac-policy-${randomUUID().slice(0, 6)}`
-          : `fac-err-${randomUUID().slice(0, 6)}`,
+          ? `fac-policy-${NodeCrypto.randomUUID().slice(0, 6)}`
+          : `fac-err-${NodeCrypto.randomUUID().slice(0, 6)}`,
         messageId: email.messageId,
         threadId: "",
         subject: email.subject || "(无主题)",

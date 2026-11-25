@@ -129,14 +129,22 @@ function useQuickPanelVirtualWindow(
       rafId = 0;
       const meta = metaRef.current;
       let cols = 1;
+      let measuredItemH = meta.itemHeight;
       if (meta.cardsView) {
         const width = el.clientWidth;
         const firstCard = el.querySelector<HTMLElement>(".pmx-wp-qp__card");
         const cw = firstCard ? firstCard.offsetWidth : 0;
+        const ch = firstCard ? firstCard.offsetHeight : 0;
         cols =
           cw > 0
             ? Math.max(1, Math.round((width + meta.gap) / (cw + meta.gap)))
             : Math.max(1, Math.floor((width + meta.gap) / (QP_CARD_MIN + meta.gap)));
+        if (ch > 0) {
+          measuredItemH = ch;
+        } else if (width > 0 && cols > 0) {
+          const estW = Math.max(QP_CARD_MIN, (width - meta.gap * (cols - 1)) / cols);
+          measuredItemH = Math.round((estW * 9) / 16);
+        }
       }
 
       const sc = findScrollContainer(el);
@@ -164,7 +172,7 @@ function useQuickPanelVirtualWindow(
 
       const computed = computeVirtualWindow({
         count: meta.count,
-        itemHeight: meta.itemHeight,
+        itemHeight: measuredItemH,
         gap: meta.gap,
         cols,
         scrollTop,
@@ -338,9 +346,10 @@ export function WallpaperQuickPanel({
     ? () => adapter.openSettingsSection?.("appearance")
     : undefined;
 
-  const handleCardPointer = (w: WallpaperItem, immediate: boolean) => {
+  // Prewarm single metadata slot ONLY on intentional pointer-down (never on hover to prevent D3D11 flicker)
+  const handleCardPointerDown = (w: WallpaperItem) => {
     if (w.type === "video" && w.mediaUrl) {
-      schedulePrewarmVideo(w.mediaUrl, immediate);
+      schedulePrewarmVideo(w.mediaUrl, true);
     }
   };
 
@@ -355,8 +364,7 @@ export function WallpaperQuickPanel({
         tabIndex={0}
         aria-selected={isCurrent}
         title={w.title}
-        onPointerOver={() => handleCardPointer(w, false)}
-        onPointerDown={() => handleCardPointer(w, true)}
+        onPointerDown={() => handleCardPointerDown(w)}
         onClick={() => store.selectWallpaper(w.id)}
         onKeyDown={cardKeyDown}
       >
@@ -365,11 +373,9 @@ export function WallpaperQuickPanel({
             src={w.previewUrl}
             alt=""
             loading="lazy"
+            decoding="async"
             onError={(e) => {
               e.currentTarget.style.display = "none";
-            }}
-            onLoad={(e) => {
-              e.currentTarget.style.opacity = "1";
             }}
           />
         ) : (
@@ -393,8 +399,7 @@ export function WallpaperQuickPanel({
         tabIndex={0}
         aria-selected={isCurrent}
         title={w.title}
-        onPointerOver={() => handleCardPointer(w, false)}
-        onPointerDown={() => handleCardPointer(w, true)}
+        onPointerDown={() => handleCardPointerDown(w)}
         onClick={() => store.selectWallpaper(w.id)}
         onKeyDown={cardKeyDown}
       >
@@ -404,11 +409,9 @@ export function WallpaperQuickPanel({
               src={w.previewUrl}
               alt=""
               loading="lazy"
+              decoding="async"
               onError={(e) => {
                 e.currentTarget.style.display = "none";
-              }}
-              onLoad={(e) => {
-                e.currentTarget.style.opacity = "1";
               }}
             />
           ) : null}
@@ -441,7 +444,8 @@ export function WallpaperQuickPanel({
         <>
           <div
             className={
-              "pmx-wp-qp__current" + (playbackLive ? " pmx-wp-qp__current--playing" : "")
+              "pmx-wp-glass-card pmx-wp-qp__current" +
+              (playbackLive ? " pmx-wp-qp__current--playing" : "")
             }
           >
         <span className="pmx-wp-qp__thumb">
@@ -450,9 +454,7 @@ export function WallpaperQuickPanel({
               src={current.previewUrl}
               alt=""
               loading="lazy"
-              onLoad={(e) => {
-                e.currentTarget.style.opacity = "1";
-              }}
+              decoding="async"
             />
           ) : null}
         </span>
@@ -500,7 +502,7 @@ export function WallpaperQuickPanel({
       </div>
 
       {/* ② 轮播条（常驻：分组下拉 + 下一张 + 自动轮播） */}
-      <div className="pmx-wp-qp__section">
+      <div className="pmx-wp-glass-card pmx-wp-qp__rotation">
         <div className="pmx-wp-qp__row">
           <select
             className="pmx-wp-select pmx-wp-qp__group"
@@ -623,7 +625,7 @@ export function WallpaperQuickPanel({
           </>
         ) : (
           /* 壁纸库（搜索 + 分级/类型/方向筛选 + 列表/卡片切换 + 虚拟滚动列表） */
-          <div className="pmx-wp-qp__section pmx-wp-qp__library">
+          <div className="pmx-wp-glass-card pmx-wp-qp__library">
               {snap.inventoryError ? (
                 <div className="pmx-wp-qp__error-box">
                   <div className="pmx-wp-error">壁纸库扫描失败：{snap.inventoryError}</div>

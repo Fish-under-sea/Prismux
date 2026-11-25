@@ -15,9 +15,9 @@
     "@prismux/source-control-azure-devops": "workspace:*",
     "@prismux/source-control-bitbucket": "workspace:*",
     "@prismux/source-control-core": "workspace:*",
-    "@prismux/source-control-cursor-origin": "workspace:*",
     "@prismux/source-control-forgejo": "workspace:*",
     "@prismux/source-control-gitcafe": "workspace:*",
+    "@prismux/source-control-gitee": "workspace:*",
     "@prismux/source-control-github": "workspace:*",
     "@prismux/source-control-gitlab": "workspace:*",
     "@prismux/source-control-tanstack-source": "workspace:*"

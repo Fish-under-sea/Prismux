@@ -4,6 +4,7 @@ import {
   type ProviderInstanceId,
   type SecretReference,
   type ServerProvider,
+  type ServerSettings,
   TextGeneratorConfig,
   type TextGeneratorModel,
 } from "@prismux/core-contracts";
@@ -12,7 +13,7 @@ import { AsyncResult } from "effect/reactivity";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { CheckIcon, MoreVertical, PlusIcon, ServerIcon } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 
@@ -30,17 +31,10 @@ import {
   textGeneratorBrand,
   textGeneratorDisplayName,
 } from "../../textGenerators";
-import {
-  getTextGenerationModelOptionsByInstance,
-  resolveTextGenerationProviders,
-} from "../../modelSelection";
+import { getTextGenerationModelOptionsByInstance } from "../../modelSelection";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import {
-  AGY_TEXT_GEN_WAIVER_PILL_TEXT,
-  AgyWaiverRequiredBadge,
   SUBSCRIPTION_WAIVER_ANCHOR_ID,
-  isAntigravityControlledAutomationAllowed,
-  isAntigravityProviderLike,
   resolveAntigravityComplianceBlock,
   useSubscriptionWaiverState,
 } from "../../prismux/SubscriptionRiskWaiverSection";
@@ -75,26 +69,76 @@ import { Switch } from "../ui/switch";
 import { WizardFooter, WizardHeader, WizardPanel, WizardPopup, WizardSteps } from "../ui/wizard";
 import { SecretSourceInput, useSecretSources } from "./SecretSourceInput";
 import { useSearchableSetting } from "./settingsSearch";
-import { SETTINGS_PICKER_TRIGGER_CLASSNAME, SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  SETTINGS_PICKER_TRIGGER_CLASSNAME,
+  SettingsRow,
+  SettingsSection,
+} from "./settingsLayout";
 
 const decodeTextGenerator = Schema.decodeUnknownOption(TextGeneratorConfig);
+const LIGHTWEIGHT_TEXT_GENERATOR_MODEL_PATTERN =
+  /(?:^|[-_.\s/])(?:mini|flash|haiku|nano)(?:$|[-_.\s/])/i;
+const NO_CODING_AGENT_PROVIDERS: ReadonlyArray<ServerProvider> = [];
+
+/**
+ * Picks a fast, lightweight model for short-text generation (titles, commits, summaries),
+ * preferring `mini` / `flash` / `haiku` / `nano` variants before falling back to the first model.
+ */
+export function pickRecommendedTextGeneratorModel(
+  models: ReadonlyArray<TextGeneratorModel>,
+): TextGeneratorModel | null {
+  if (models.length === 0) return null;
+  return (
+    models.find(
+      (model) =>
+        LIGHTWEIGHT_TEXT_GENERATOR_MODEL_PATTERN.test(model.id) ||
+        LIGHTWEIGHT_TEXT_GENERATOR_MODEL_PATTERN.test(model.name),
+    ) ??
+    models[0] ??
+    null
+  );
+}
+
+/**
+ * Returns true when `textGenerationModelSelection` does not currently point to an enabled
+ * standalone API text generator, so adding/enabling an API generator activates it immediately.
+ */
+export function shouldAutoSelectTextGeneratorModel(
+  settings: Pick<ServerSettings, "textGenerators" | "textGenerationModelSelection">,
+): boolean {
+  const currentId = settings.textGenerationModelSelection.instanceId;
+  const currentGenerator = settings.textGenerators[currentId];
+  return currentGenerator?.enabled !== true;
+}
 
 type Saved = { readonly id: ProviderInstanceId; readonly config: TextGeneratorConfig };
 type Editing = Saved | "new";
 
-/** Rows that list, add, edit, and remove one environment's text generators. */
-export function TextGeneratorsSettings({
-  environmentId,
-  environmentLabel,
-  providers,
-  readOnly,
-}: {
+export interface TextGeneratorsEnvironmentProps {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly readOnly: boolean;
+}
+
+/**
+ * Shared state + dialogs + row renderer for standalone API text generators so the section can
+ * either render standalone or embed seamlessly inside the unified Text generation card.
+ */
+export function TextGeneratorsController({
+  environmentId,
+  environmentLabel,
+  providers,
+  readOnly,
+  children,
+}: TextGeneratorsEnvironmentProps & {
+  readonly children: (parts: {
+    readonly addAction: ReactNode;
+    readonly generatorRows: ReadonlyArray<ReactNode>;
+    readonly generatorCount: number;
+    readonly hasEnabledGenerator: boolean;
+  }) => ReactNode;
 }) {
-  const setting = useSearchableSetting();
   const gt = useGT();
   const messages = useMessages();
   const settings = useEnvironmentSettings(environmentId);
@@ -105,107 +149,108 @@ export function TextGeneratorsSettings({
   const generators = Object.entries(settings.textGenerators) as Array<
     [ProviderInstanceId, TextGeneratorConfig]
   >;
+  const hasEnabledGenerator = generators.some(([, config]) => config.enabled);
   const removingConfig = removing === null ? undefined : settings.textGenerators[removing];
+
+  const addAction = !readOnly ? (
+    <Button size="xs" variant="outline" onClick={() => setEditing("new")}>
+      <PlusIcon className="size-3" aria-hidden />
+      <T>Add generator</T>
+    </Button>
+  ) : null;
+
+  const generatorRows = generators.map(([id, config]) => {
+    const name = textGeneratorDisplayName(config, messages);
+    return (
+      <SettingsRow
+        key={id}
+        title={
+          <span className="inline-flex items-center gap-2.5">
+            <ProviderInstanceIcon
+              driverKind={textGeneratorBrand(config)}
+              displayName={name}
+              badgeContent="none"
+            />
+            {name}
+          </span>
+        }
+        description={
+          // Indented past the icon so it lines up with the name.
+          <span className="block truncate ps-7.5">
+            {config.enabled ? "" : gt("Off · ")}
+            {config.baseUrl.replace(/^https?:\/\//, "")}
+          </span>
+        }
+        control={
+          readOnly ? null : (
+            <div className="flex items-center gap-2">
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      size="icon-sm"
+                      variant="ghost-muted"
+                      aria-label={gt("More actions for {name}", { name })}
+                    />
+                  }
+                >
+                  <MoreVertical />
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <MenuItem onClick={() => setEditing({ id, config })}>
+                    <T>Edit</T>
+                  </MenuItem>
+                  <MenuItem disabled={!config.enabled} onClick={() => setViewing({ id, config })}>
+                    <T>Show models</T>
+                  </MenuItem>
+                  <MenuItem variant="destructive" onClick={() => setRemoving(id)}>
+                    <T>Remove</T>
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
+              <Switch
+                checked={config.enabled}
+                onCheckedChange={(enabled) =>
+                  updateSettings({ textGenerators: { [id]: { ...config, enabled } } })
+                }
+                aria-label={gt("Enable {name}", { name })}
+              />
+            </div>
+          )
+        }
+      />
+    );
+  });
 
   return (
     <>
-      <SettingsSection
-        {...setting("text-generators")}
-        headerAction={
-          !readOnly ? (
-            <Button size="xs" variant="outline" onClick={() => setEditing("new")}>
-              <PlusIcon className="size-3" aria-hidden />
-              <T>Add generator</T>
-            </Button>
-          ) : null
-        }
-      >
-        {generators.length === 0 ? (
-          <SettingsRow
-            title={gt("No text generators yet")}
-            description={gt(
-              "Add a model API to write thread titles, commit messages, and other short text without starting a coding agent.",
-            )}
-          />
-        ) : null}
-        {generators.map(([id, config]) => {
-          const name = textGeneratorDisplayName(config, messages);
-          return (
-            <SettingsRow
-              key={id}
-              title={
-                <span className="inline-flex items-center gap-2.5">
-                  <ProviderInstanceIcon
-                    driverKind={textGeneratorBrand(config)}
-                    displayName={name}
-                    badgeContent="none"
-                  />
-                  {name}
-                </span>
-              }
-              description={
-                // Indented past the icon so it lines up with the name.
-                <span className="block truncate ps-7.5">
-                  {config.enabled ? "" : gt("Off · ")}
-                  {config.baseUrl.replace(/^https?:\/\//, "")}
-                </span>
-              }
-              control={
-                readOnly ? null : (
-                  <div className="flex items-center gap-2">
-                    <Menu>
-                      <MenuTrigger
-                        render={
-                          <Button
-                            size="icon-sm"
-                            variant="ghost-muted"
-                            aria-label={gt("More actions for {name}", { name })}
-                          />
-                        }
-                      >
-                        <MoreVertical />
-                      </MenuTrigger>
-                      <MenuPopup align="end">
-                        <MenuItem onClick={() => setEditing({ id, config })}>
-                          <T>Edit</T>
-                        </MenuItem>
-                        <MenuItem
-                          disabled={!config.enabled}
-                          onClick={() => setViewing({ id, config })}
-                        >
-                          <T>Show models</T>
-                        </MenuItem>
-                        <MenuItem variant="destructive" onClick={() => setRemoving(id)}>
-                          <T>Remove</T>
-                        </MenuItem>
-                      </MenuPopup>
-                    </Menu>
-                    <Switch
-                      checked={config.enabled}
-                      onCheckedChange={(enabled) =>
-                        updateSettings({ textGenerators: { [id]: { ...config, enabled } } })
-                      }
-                      aria-label={gt("Enable {name}", { name })}
-                    />
-                  </div>
-                )
-              }
-            />
-          );
-        })}
-      </SettingsSection>
+      {children({
+        addAction,
+        generatorRows,
+        generatorCount: generators.length,
+        hasEnabledGenerator,
+      })}
       {editing !== null ? (
         <TextGeneratorWizard
           environmentId={environmentId}
           editing={editing}
           providers={providers}
           onClose={() => setEditing(null)}
-          onSave={(id, config) =>
+          onSave={(id, config, discoveredModels) => {
+            const recommended =
+              config.enabled && shouldAutoSelectTextGeneratorModel(settings)
+                ? pickRecommendedTextGeneratorModel(discoveredModels)
+                : null;
             updateSettings(
-              { textGenerators: { [id]: config } },
+              {
+                textGenerators: { [id]: config },
+                ...(recommended
+                  ? { textGenerationModelSelection: { instanceId: id, model: recommended.id } }
+                  : {}),
+              },
               { onSaved: () => rereadTextGeneratorModels(environmentId, id) },
-            )
-          }
+            );
+          }}
           newId={(preset) => nextTextGeneratorId(preset.id, settings, providers)}
         />
       ) : null}
@@ -260,6 +305,29 @@ export function TextGeneratorsSettings({
   );
 }
 
+/** Rows that list, add, edit, and remove one environment's text generators. */
+export function TextGeneratorsSettings(props: TextGeneratorsEnvironmentProps) {
+  const setting = useSearchableSetting();
+  const gt = useGT();
+  return (
+    <TextGeneratorsController {...props}>
+      {({ addAction, generatorRows, generatorCount }) => (
+        <SettingsSection {...setting("text-generators")} headerAction={addAction}>
+          {generatorCount === 0 ? (
+            <SettingsRow
+              title={gt("No text generators yet")}
+              description={gt(
+                "Add a model API to write thread titles, commit messages, and other short text without starting a coding agent.",
+              )}
+            />
+          ) : null}
+          {generatorRows}
+        </SettingsSection>
+      )}
+    </TextGeneratorsController>
+  );
+}
+
 const STEPS = [msg("Connect", { $context: "wizard step" }), msg("Use it")] as const;
 
 /** Text tasks a generator can write, in the order the settings pages show them. */
@@ -289,7 +357,11 @@ function TextGeneratorWizard({
   readonly editing: Editing;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly onClose: () => void;
-  readonly onSave: (id: ProviderInstanceId, config: TextGeneratorConfig) => void;
+  readonly onSave: (
+    id: ProviderInstanceId,
+    config: TextGeneratorConfig,
+    discoveredModels: ReadonlyArray<TextGeneratorModel>,
+  ) => void;
   readonly newId: (preset: TextGeneratorPreset) => ProviderInstanceId;
 }) {
   const messages = useMessages();
@@ -328,7 +400,7 @@ function TextGeneratorWizard({
   const showBaseUrl =
     existing === null
       ? preset.id === "custom"
-      : !["openai", "anthropic", "openrouter"].includes(textGeneratorBrand(existing));
+      : !["openai", "anthropic", "gemini"].includes(textGeneratorBrand(existing));
   const canConnect = keyValid && Option.isSome(config) && (!keyRequired || apiKey !== "");
   const name = Option.isSome(config)
     ? textGeneratorDisplayName(config.value, messages)
@@ -346,7 +418,7 @@ function TextGeneratorWizard({
       setCheckError(result.error);
       return;
     }
-    onSave(id, config.value);
+    onSave(id, config.value, result.models);
     setSavedId(id);
     setModelCount(result.models.length);
     setStep(1);
@@ -563,7 +635,6 @@ function TextGenerationTaskPicker({
   const settings = useEnvironmentSettings(environmentId);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const waiver = useSubscriptionWaiverState();
-  const allowAntigravityTextGeneration = isAntigravityControlledAutomationAllowed(waiver);
   const openSubscriptionWaiver = () => {
     void navigate({
       to: "/settings/providers",
@@ -571,26 +642,21 @@ function TextGenerationTaskPicker({
     });
   };
   const isPrimaryTextGenTask = settingKey === "textGenerationModelSelection";
-  const hasBlockedAntigravityProvider =
-    !allowAntigravityTextGeneration &&
-    providers.some(
-      (provider) =>
-        (provider.enabled || provider.installed) &&
-        provider.availability !== "unavailable" &&
-        isAntigravityProviderLike(provider.driver),
-    );
   const getProviderComplianceBlock = (entry: ProviderInstanceEntry) =>
-    resolveAntigravityComplianceBlock({
-      entry,
-      waiver,
-      mode: "controlled",
-      onOpenWaiver: openSubscriptionWaiver,
-    });
+    isPrimaryTextGenTask
+      ? null
+      : resolveAntigravityComplianceBlock({
+          entry,
+          waiver,
+          mode: "controlled",
+          onOpenWaiver: openSubscriptionWaiver,
+        });
   const own = settings[settingKey];
   // Source control and voice follow the text generation model until they get their own.
   const selection = own ?? settings.textGenerationModelSelection;
+  // Text generation is strictly standalone API text generators (no coding agents).
   const eligibleProviders = isPrimaryTextGenTask
-    ? resolveTextGenerationProviders(providers, { allowAntigravityTextGeneration })
+    ? NO_CODING_AGENT_PROVIDERS
     : providers.filter((provider) => provider.supportsTextGeneration !== false);
   const targets = useTextGenerationTargets({
     environmentId,
@@ -637,14 +703,6 @@ function TextGenerationTaskPicker({
             <T>Follows the text generation model</T>
           </span>
         ) : null}
-        {isPrimaryTextGenTask && hasBlockedAntigravityProvider ? (
-          <div className="pt-0.5">
-            <AgyWaiverRequiredBadge
-              label={AGY_TEXT_GEN_WAIVER_PILL_TEXT}
-              onClick={openSubscriptionWaiver}
-            />
-          </div>
-        ) : null}
       </div>
       <div className="justify-self-end">
         <ProviderModelPicker
@@ -658,11 +716,7 @@ function TextGenerationTaskPicker({
             targets.providers,
             selection.instanceId,
             selection.model,
-            {
-              allowAntigravityTextGeneration: isPrimaryTextGenTask
-                ? allowAntigravityTextGeneration
-                : true,
-            },
+            { allowAntigravityTextGeneration: true },
           )}
           getProviderComplianceBlock={getProviderComplianceBlock}
           triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}

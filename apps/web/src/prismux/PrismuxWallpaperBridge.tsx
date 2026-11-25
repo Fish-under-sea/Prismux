@@ -33,7 +33,7 @@ export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop()
       if (wallpaper.mediaUrl) {
         return daemon.resolveMediaUrl(wallpaper.mediaUrl);
       }
-      return daemon.buildMediaUrl("web", wallpaper.id);
+      return daemon.buildMediaUrl("web", wallpaper.id, "index.html");
     },
     [daemon],
   );

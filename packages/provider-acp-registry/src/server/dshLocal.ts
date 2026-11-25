@@ -5,13 +5,29 @@ import * as NodePath from "node:path";
 
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import {
+  discoverWindowsUninstallInstallDirs,
   npmNodeShimCommand,
   npmShimExecutable,
+  resolveKnownAgentCliDirs,
   type SpawnExecutableResolver,
+  type WindowsRegistryQueryRunner,
 } from "@prismux/core-shared/shell";
 
-const BARE_DSH_COMMAND_PATTERN = /^dsh(?:\.cmd|\.exe)?$/iu;
+const BARE_DSH_COMMAND_PATTERN = /^dsh(?:\.cmd|\.bat|\.exe)?$/iu;
 const DSH_DESKTOP_EXE_PATTERN = /^(?:dsh\s+next|dsh|deepseek\s+harness)(?:\.exe)?$/iu;
+const DSH_UNINSTALL_ENTRY_PATTERN = /\b(?:dsh(?:\s+next)?|deepseek\s+harness)\b/iu;
+const WINDOWS_UNINSTALLER_EXE_PATTERN = /(?:uninstall|uninst|setup|update|squirrel)/iu;
+const WINDOWS_COMMON_DRIVES = ["C:", "D:", "E:", "F:"] as const;
+const WINDOWS_DSH_DRIVE_SUBDIRS = [
+  "DSH NEXT",
+  "Program Files\\DSH NEXT",
+  "Programs\\DSH NEXT",
+  "DeepSeek Harness",
+  "Program Files\\DeepSeek Harness",
+  "Programs\\DeepSeek Harness",
+  "DSH",
+] as const;
+const DSH_HOME_APP_FOLDERS = ["DSH NEXT", "DSH", "DeepSeek Harness"] as const;
 const DSH_ENTRY_SCRIPT_PATTERN =
   /(?:^|[\\/])(?:resources[\\/]app\.asar[\\/]lib[\\/]desktop-cli\.js|@deepseek-ai[\\/]dsh[\\/]lib[\\/]bin\.js)$/iu;
 const DSH_ASAR_BOOTSTRAP_ENTRIES = [
@@ -45,6 +61,15 @@ export interface LocalAcpResolutionFs {
   readonly isDirectory: (filePath: string) => boolean;
   readonly readTextFile: (filePath: string) => string | undefined;
   readonly hasAsarEntry: (asarPath: string, relativeEntry: string) => boolean;
+  readonly listDirectory?: (dirPath: string) => ReadonlyArray<string>;
+}
+
+function defaultListDirectory(dirPath: string): ReadonlyArray<string> {
+  try {
+    return NodeFS.readdirSync(dirPath);
+  } catch {
+    return [];
+  }
 }
 
 function defaultIsFile(filePath: string): boolean {
@@ -446,6 +471,7 @@ const DEFAULT_FS: LocalAcpResolutionFs = {
   isDirectory: defaultIsDirectory,
   readTextFile: defaultReadTextFile,
   hasAsarEntry: hasAsarEntrySync,
+  listDirectory: defaultListDirectory,
 };
 
 function readEnvValue(
@@ -542,38 +568,70 @@ export function resolveDshDesktopHome(
     return undefined;
   }
   const path = platform === "win32" ? NodePath.win32 : NodePath.posix;
-  let lastHomeConfigPath: string | undefined;
+  const lastHomeConfigCandidates: Array<string> = [];
+  let fallbackDotDshDir: string | undefined;
   if (platform === "win32") {
     const userProfile = readEnvValue(env, "USERPROFILE", platform);
     const appData =
       readEnvValue(env, "APPDATA", platform) ??
       (userProfile ? path.join(userProfile, "AppData", "Roaming") : undefined);
     if (appData) {
-      lastHomeConfigPath = path.join(appData, "DSH NEXT", "home", "desktop-next-last-home.json");
+      for (const appFolder of DSH_HOME_APP_FOLDERS) {
+        lastHomeConfigCandidates.push(
+          path.join(appData, appFolder, "home", "desktop-next-last-home.json"),
+        );
+      }
+    }
+    if (userProfile) {
+      fallbackDotDshDir = path.join(userProfile, ".dsh");
     }
   } else if (platform === "darwin") {
     const home = readEnvValue(env, "HOME", platform);
     if (home) {
-      lastHomeConfigPath = path.join(
-        home,
-        "Library",
-        "Application Support",
-        "DSH NEXT",
-        "home",
-        "desktop-next-last-home.json",
-      );
+      for (const appFolder of DSH_HOME_APP_FOLDERS) {
+        lastHomeConfigCandidates.push(
+          path.join(
+            home,
+            "Library",
+            "Application Support",
+            appFolder,
+            "home",
+            "desktop-next-last-home.json",
+          ),
+        );
+      }
+      fallbackDotDshDir = path.join(home, ".dsh");
+    }
+  } else {
+    const home = readEnvValue(env, "HOME", platform);
+    const xdgConfigHome =
+      readEnvValue(env, "XDG_CONFIG_HOME", platform) ??
+      (home ? path.join(home, ".config") : undefined);
+    if (xdgConfigHome) {
+      for (const appFolder of DSH_HOME_APP_FOLDERS) {
+        lastHomeConfigCandidates.push(
+          path.join(xdgConfigHome, appFolder, "home", "desktop-next-last-home.json"),
+        );
+      }
+    }
+    if (home) {
+      fallbackDotDshDir = path.join(home, ".dsh");
     }
   }
-  if (!lastHomeConfigPath) return undefined;
-  const raw = fs.readTextFile(lastHomeConfigPath);
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as { readonly home?: unknown };
-    if (typeof parsed.home === "string" && parsed.home.trim().length > 0) {
-      const candidate = parsed.home.trim();
-      return fs.isDirectory(candidate) ? candidate : undefined;
-    }
-  } catch {}
+  for (const configPath of lastHomeConfigCandidates) {
+    const raw = fs.readTextFile(configPath);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as { readonly home?: unknown };
+      if (typeof parsed.home === "string" && parsed.home.trim().length > 0) {
+        const candidate = parsed.home.trim();
+        if (fs.isDirectory(candidate)) return candidate;
+      }
+    } catch {}
+  }
+  if (fallbackDotDshDir && fs.isDirectory(fallbackDotDshDir)) {
+    return fallbackDotDshDir;
+  }
   return undefined;
 }
 
@@ -623,16 +681,40 @@ function buildDshDesktopSpawn(input: {
   };
 }
 
+function collectWindowsDshDirExecutableCandidates(
+  installDir: string,
+  fs: LocalAcpResolutionFs,
+): ReadonlyArray<string> {
+  const path = NodePath.win32;
+  const candidates: Array<string> = [];
+  for (const known of WINDOWS_DSH_DESKTOP_CANDIDATES) {
+    candidates.push(path.join(installDir, known.executable));
+  }
+  if (fs.listDirectory) {
+    for (const entryName of fs.listDirectory(installDir)) {
+      if (!/\.exe$/iu.test(entryName) || WINDOWS_UNINSTALLER_EXE_PATTERN.test(entryName)) {
+        continue;
+      }
+      candidates.push(path.join(installDir, entryName));
+    }
+  }
+  return candidates;
+}
+
 /**
- * Discovers a packaged DSH Desktop (`DSH NEXT` / `DSH`) installation from environment-derived
- * standard install directories so `dsh acp` works seamlessly even when `dsh` is not on `PATH`.
+ * Discovers a packaged DSH Desktop (`DSH NEXT` / `DSH` / `DeepSeek Harness`) installation from
+ * environment-derived standard install directories, Windows Uninstall Registry entries, and
+ * common cross-drive roots so `dsh acp` works seamlessly even when `dsh` is not on `PATH`.
  */
 export function resolvePackagedDshDesktopSpawn(input: {
   readonly commandArgs: ReadonlyArray<string>;
   readonly platform: NodeJS.Platform;
   readonly env: NodeJS.ProcessEnv;
   readonly fs?: LocalAcpResolutionFs;
+  readonly queryRegistry?: WindowsRegistryQueryRunner;
+  readonly probeDriveRoots?: boolean;
 }): LocalAcpSpawnResolution | undefined {
+  const usingDefaultHostFs = input.fs === undefined;
   const fs = input.fs ?? DEFAULT_FS;
   const { platform, env } = input;
   const path = platform === "win32" ? NodePath.win32 : NodePath.posix;
@@ -651,7 +733,7 @@ export function resolvePackagedDshDesktopSpawn(input: {
     });
   }
 
-  // 2. Probe standard OS install directories derived strictly from `env` (keeps tests hermetic).
+  // 2. Probe standard OS install directories, Windows Uninstall Registry, and common drive roots.
   const candidateExecutables: Array<string> = [];
   if (platform === "win32") {
     const userProfile = readEnvValue(env, "USERPROFILE", platform);
@@ -659,13 +741,43 @@ export function resolvePackagedDshDesktopSpawn(input: {
       readEnvValue(env, "LOCALAPPDATA", platform) ??
       (userProfile ? path.join(userProfile, "AppData", "Local") : undefined);
     const programFiles = readEnvValue(env, "ProgramFiles", platform);
-    const roots = [
-      ...(localAppData ? [path.join(localAppData, "Programs")] : []),
+    const programFilesX86 = readEnvValue(env, "ProgramFiles(x86)", platform);
+    const envRoots = [
+      ...(localAppData ? [path.join(localAppData, "Programs"), localAppData] : []),
       ...(programFiles ? [programFiles] : []),
+      ...(programFilesX86 ? [programFilesX86] : []),
     ];
-    for (const root of roots) {
+    for (const root of envRoots) {
       for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
         candidateExecutables.push(path.join(root, candidate.folder, candidate.executable));
+      }
+    }
+
+    // Never spawn live `reg.exe` when a custom mock `fs` is injected unless `queryRegistry` is provided.
+    if (usingDefaultHostFs || input.queryRegistry !== undefined) {
+      const registryInstallDirs = discoverWindowsUninstallInstallDirs({
+        cacheKey: "dsh",
+        searchTerms: ["DSH", "DeepSeek"],
+        matchEntry: (entry) =>
+          DSH_UNINSTALL_ENTRY_PATTERN.test(entry.displayName ?? "") ||
+          DSH_UNINSTALL_ENTRY_PATTERN.test(entry.comments ?? "") ||
+          DSH_UNINSTALL_ENTRY_PATTERN.test(entry.uninstallString ?? "") ||
+          DSH_UNINSTALL_ENTRY_PATTERN.test(entry.displayIcon ?? ""),
+        ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+      });
+      for (const installDir of registryInstallDirs) {
+        candidateExecutables.push(...collectWindowsDshDirExecutableCandidates(installDir, fs));
+      }
+    }
+
+    // Probe common drive roots only on default host FS (or when explicitly opted-in for tests).
+    if (input.probeDriveRoots ?? usingDefaultHostFs) {
+      for (const drive of WINDOWS_COMMON_DRIVES) {
+        for (const subdir of WINDOWS_DSH_DRIVE_SUBDIRS) {
+          const installDir = `${drive}\\${subdir}`;
+          if (!fs.isDirectory(installDir)) continue;
+          candidateExecutables.push(...collectWindowsDshDirExecutableCandidates(installDir, fs));
+        }
       }
     }
   } else if (platform === "darwin") {
@@ -681,7 +793,11 @@ export function resolvePackagedDshDesktopSpawn(input: {
     }
   }
 
+  const seenExecutables = new Set<string>();
   for (const executablePath of candidateExecutables) {
+    const dedupeKey = platform === "win32" ? executablePath.toLowerCase() : executablePath;
+    if (seenExecutables.has(dedupeKey)) continue;
+    seenExecutables.add(dedupeKey);
     const bootstrapPath = resolveDshBootstrapForExecutable(executablePath, platform, fs);
     if (bootstrapPath !== undefined) {
       return buildDshDesktopSpawn({
@@ -737,11 +853,57 @@ function unwrapPnpmNodeCmdShim(input: {
   };
 }
 
+const GENERIC_BAT_EXE_SHIM =
+  /^\s*@?(?:call\s+)?"%(?:~dp0|dp0%)\\?([^"\r\n]+\.exe)"(?:\s+%\*)?\s*$/imu;
+const GENERIC_BAT_NODE_SHIM =
+  /^\s*@?"?(?:node(?:\.exe)?)"?\s+"%(?:~dp0|dp0%)\\?([^"\r\n]+\.(?:js|mjs|cjs))"(?:\s+%\*)?\s*$/imu;
+
+function unwrapSimpleBatShim(input: {
+  readonly shimPath: string;
+  readonly contents: string;
+  readonly commandArgs: ReadonlyArray<string>;
+  readonly env: NodeJS.ProcessEnv;
+  readonly resolveExecutable: SpawnExecutableResolver;
+  readonly fs: LocalAcpResolutionFs;
+}): LocalAcpSpawnResolution | undefined {
+  const path = NodePath.win32;
+  const shimDir = path.dirname(input.shimPath);
+  const exeMatch = GENERIC_BAT_EXE_SHIM.exec(input.contents);
+  if (exeMatch?.[1]) {
+    const targetExe = path.join(shimDir, exeMatch[1]);
+    if (input.fs.isFile(targetExe)) {
+      return {
+        command: targetExe,
+        args: [...input.commandArgs],
+        env: input.env,
+      };
+    }
+  }
+  const nodeMatch = GENERIC_BAT_NODE_SHIM.exec(input.contents);
+  if (nodeMatch?.[1]) {
+    const scriptPath = path.join(shimDir, nodeMatch[1]);
+    if (!input.fs.isFile(scriptPath)) return undefined;
+    const bundledNode = path.join(shimDir, "node.exe");
+    const nodeExecutable = input.fs.isFile(bundledNode)
+      ? bundledNode
+      : input.resolveExecutable("node", "win32", input.env);
+    if (!nodeExecutable || path.extname(nodeExecutable).toLowerCase() !== ".exe") {
+      return undefined;
+    }
+    return {
+      command: nodeExecutable,
+      args: [scriptPath, ...input.commandArgs],
+      env: input.env,
+    };
+  }
+  return undefined;
+}
+
 /**
- * Unwraps verified Windows `.cmd` shims (npm native `.exe` shim, npm Node `.cmd` shim,
- * pnpm Node `.cmd` shim, or DSH Desktop's internal `dsh.cmd` shim) into a direct
- * `shell: false` executable launch. Unknown/arbitrary batch scripts return `undefined`
- * so `validateLocalExecutable` continues rejecting them cleanly.
+ * Unwraps verified Windows `.cmd` / `.bat` shims (npm native `.exe` shim, npm Node `.cmd` shim,
+ * pnpm Node `.cmd` shim, Scoop/simple `.bat` shim, or DSH Desktop's internal `dsh.cmd` shim)
+ * into a direct `shell: false` executable launch. Unknown/arbitrary batch scripts return
+ * `undefined` so `validateLocalExecutable` continues rejecting them cleanly.
  */
 export function unwrapWindowsLocalCmdShim(input: {
   readonly shimPath: string;
@@ -749,8 +911,10 @@ export function unwrapWindowsLocalCmdShim(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly resolveExecutable: SpawnExecutableResolver;
   readonly fs?: LocalAcpResolutionFs;
+  readonly queryRegistry?: WindowsRegistryQueryRunner;
+  readonly probeDriveRoots?: boolean;
 }): LocalAcpSpawnResolution | undefined {
-  if (!/\.cmd$/iu.test(input.shimPath)) {
+  if (!/\.(?:cmd|bat)$/iu.test(input.shimPath)) {
     return undefined;
   }
   const fs = input.fs ?? DEFAULT_FS;
@@ -784,21 +948,95 @@ export function unwrapWindowsLocalCmdShim(input: {
       commandArgs: input.commandArgs,
       platform: "win32",
       env: input.env,
-      fs,
+      ...(input.fs ? { fs: input.fs } : {}),
+      ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+      ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
     });
   }
-  return unwrapPnpmNodeCmdShim({
-    shimPath: input.shimPath,
-    contents,
-    commandArgs: input.commandArgs,
-    env: input.env,
-    resolveExecutable: input.resolveExecutable,
-    fs,
-  });
+  return (
+    unwrapPnpmNodeCmdShim({
+      shimPath: input.shimPath,
+      contents,
+      commandArgs: input.commandArgs,
+      env: input.env,
+      resolveExecutable: input.resolveExecutable,
+      fs,
+    }) ??
+    unwrapSimpleBatShim({
+      shimPath: input.shimPath,
+      contents,
+      commandArgs: input.commandArgs,
+      env: input.env,
+      resolveExecutable: input.resolveExecutable,
+      fs,
+    })
+  );
+}
+
+function resolveBareCommandInFallbackDirs(input: {
+  readonly baseName: string;
+  readonly commandArgs: ReadonlyArray<string>;
+  readonly platform: NodeJS.Platform;
+  readonly env: NodeJS.ProcessEnv;
+  readonly resolveExecutable: SpawnExecutableResolver;
+  readonly fs?: LocalAcpResolutionFs;
+  readonly queryRegistry?: WindowsRegistryQueryRunner;
+  readonly probeDriveRoots?: boolean;
+}): LocalAcpSpawnResolution | undefined {
+  const fs = input.fs ?? DEFAULT_FS;
+  const fallbackBinDirs = resolveKnownAgentCliDirs(input.env, input.platform);
+  if (fallbackBinDirs.length === 0) return undefined;
+  const path = input.platform === "win32" ? NodePath.win32 : NodePath.posix;
+  const strippedName =
+    input.platform === "win32"
+      ? input.baseName.replace(/\.(?:exe|cmd|bat)$/iu, "")
+      : input.baseName;
+
+  for (const dir of fallbackBinDirs) {
+    if (input.platform === "win32") {
+      const exeCandidate = path.join(dir, `${strippedName}.exe`);
+      if (fs.isFile(exeCandidate)) {
+        return {
+          command: exeCandidate,
+          args: input.commandArgs,
+          env: input.env,
+        };
+      }
+      for (const ext of [".cmd", ".bat"] as const) {
+        const shimCandidate = path.join(dir, `${strippedName}${ext}`);
+        if (!fs.isFile(shimCandidate)) continue;
+        const unwrapped = unwrapWindowsLocalCmdShim({
+          shimPath: shimCandidate,
+          commandArgs: input.commandArgs,
+          env: input.env,
+          resolveExecutable: input.resolveExecutable,
+          ...(input.fs ? { fs: input.fs } : {}),
+          ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+          ...(input.probeDriveRoots !== undefined
+            ? { probeDriveRoots: input.probeDriveRoots }
+            : {}),
+        });
+        if (unwrapped !== undefined) {
+          return unwrapped;
+        }
+      }
+    } else {
+      const candidate = path.join(dir, strippedName);
+      if (fs.isFile(candidate)) {
+        return {
+          command: candidate,
+          args: input.commandArgs,
+          env: input.env,
+        };
+      }
+    }
+  }
+  return undefined;
 }
 
 /**
- * Resolves a local ACP spawn (`PATH`, Windows `.cmd` unwrap, and packaged DSH Desktop auto-discovery).
+ * Resolves a local ACP spawn (`PATH`, Windows `.cmd`/`.bat` unwrap, standard CLI bin dir
+ * fallback, and packaged DSH Desktop auto-discovery across Uninstall Registry & drive roots).
  */
 export function resolveLocalAcpSpawn(input: {
   readonly commandPath: string;
@@ -807,6 +1045,8 @@ export function resolveLocalAcpSpawn(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly resolveExecutable: SpawnExecutableResolver;
   readonly fs?: LocalAcpResolutionFs;
+  readonly queryRegistry?: WindowsRegistryQueryRunner;
+  readonly probeDriveRoots?: boolean;
 }): LocalAcpSpawnResolution | undefined {
   const fs = input.fs ?? DEFAULT_FS;
   const executable = input.commandPath.trim();
@@ -814,13 +1054,15 @@ export function resolveLocalAcpSpawn(input: {
 
   const resolved = input.resolveExecutable(executable, input.platform, input.env);
   if (resolved !== undefined) {
-    if (input.platform === "win32" && /\.cmd$/iu.test(resolved)) {
+    if (input.platform === "win32" && /\.(?:cmd|bat)$/iu.test(resolved)) {
       const unwrapped = unwrapWindowsLocalCmdShim({
         shimPath: resolved,
         commandArgs: input.commandArgs,
         env: input.env,
         resolveExecutable: input.resolveExecutable,
-        fs,
+        ...(input.fs ? { fs: input.fs } : {}),
+        ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+        ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
       });
       if (unwrapped !== undefined) {
         return unwrapped;
@@ -848,51 +1090,39 @@ export function resolveLocalAcpSpawn(input: {
   }
 
   if (isBareDshCommand(executable)) {
-    if (input.platform === "win32") {
-      const path = NodePath.win32;
-      const userProfile = readEnvValue(input.env, "USERPROFILE", "win32");
-      const appData =
-        readEnvValue(input.env, "APPDATA", "win32") ??
-        (userProfile ? path.join(userProfile, "AppData", "Roaming") : undefined);
-      const localAppData =
-        readEnvValue(input.env, "LOCALAPPDATA", "win32") ??
-        (userProfile ? path.join(userProfile, "AppData", "Local") : undefined);
-      const pnpmHome = readEnvValue(input.env, "PNPM_HOME", "win32");
-      const fallbackBinDirs = [
-        ...(pnpmHome ? [pnpmHome] : []),
-        ...(appData ? [path.join(appData, "npm")] : []),
-        ...(localAppData ? [path.join(localAppData, "pnpm")] : []),
-        ...(userProfile ? [path.join(userProfile, ".local", "bin")] : []),
-      ];
-      for (const dir of fallbackBinDirs) {
-        const exeCandidate = path.join(dir, "dsh.exe");
-        if (fs.isFile(exeCandidate)) {
-          return {
-            command: exeCandidate,
-            args: input.commandArgs,
-            env: input.env,
-          };
-        }
-        const cmdCandidate = path.join(dir, "dsh.cmd");
-        if (fs.isFile(cmdCandidate)) {
-          const unwrapped = unwrapWindowsLocalCmdShim({
-            shimPath: cmdCandidate,
-            commandArgs: input.commandArgs,
-            env: input.env,
-            resolveExecutable: input.resolveExecutable,
-            fs,
-          });
-          if (unwrapped !== undefined) {
-            return unwrapped;
-          }
-        }
-      }
+    const cliFallback = resolveBareCommandInFallbackDirs({
+      baseName: "dsh",
+      commandArgs: input.commandArgs,
+      platform: input.platform,
+      env: input.env,
+      resolveExecutable: input.resolveExecutable,
+      ...(input.fs ? { fs: input.fs } : {}),
+      ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+      ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
+    });
+    if (cliFallback !== undefined) {
+      return cliFallback;
     }
     return resolvePackagedDshDesktopSpawn({
       commandArgs: input.commandArgs,
       platform: input.platform,
       env: input.env,
-      fs,
+      ...(input.fs ? { fs: input.fs } : {}),
+      ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+      ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
+    });
+  }
+
+  if (!executable.includes("/") && !executable.includes("\\")) {
+    return resolveBareCommandInFallbackDirs({
+      baseName: executable,
+      commandArgs: input.commandArgs,
+      platform: input.platform,
+      env: input.env,
+      resolveExecutable: input.resolveExecutable,
+      ...(input.fs ? { fs: input.fs } : {}),
+      ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+      ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
     });
   }
 

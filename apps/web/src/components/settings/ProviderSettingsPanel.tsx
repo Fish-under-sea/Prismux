@@ -119,7 +119,6 @@ import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
 import { Badge } from "../ui/badge";
-import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
@@ -151,6 +150,7 @@ import {
   classifyProviderEnvironmentAccess,
   extractAcpRegistryManagedAgentId,
   isProviderSettingsEnvironmentAvailable,
+  normalizeProviderInstanceForSave,
   type ProviderEnvironmentAccess,
   type ProviderOperateAccess,
   type ProviderSettingsRowDescriptor,
@@ -361,7 +361,7 @@ export const PROVIDERS_TAB_IDS = {
 } as const;
 
 export const PROVIDERS_TAB_HASH_ANCHORS = {
-  providers: ["providers", "usage-providers", "text-generators"] as const,
+  providers: ["providers", "usage-providers"] as const,
   defaults: [
     "default-chat-models",
     "default-model",
@@ -369,6 +369,7 @@ export const PROVIDERS_TAB_HASH_ANCHORS = {
     "default-reasoning-effort",
     "text-generation",
     "text-generation-model",
+    "text-generators",
     "thread-title-instructions",
     "default-launch-mode",
     "provider-updates",
@@ -904,7 +905,9 @@ export function EnvironmentProviderSettings({
       previous: ProviderInstanceConfig,
       next: ProviderInstanceConfig,
     ) => {
-      const isDisabling = next.enabled === false && resolveProviderInstanceEnabled(previous);
+      const normalizedNext = normalizeProviderInstanceForSave({ instanceId, previous, next });
+      const isDisabling =
+        normalizedNext.enabled === false && resolveProviderInstanceEnabled(previous);
       const shouldClearTextGen =
         isDisabling &&
         resolveAppModelSelectionState(settings, serverProviders, {
@@ -913,7 +916,7 @@ export function EnvironmentProviderSettings({
         readEnvironmentScope(environmentId, AuthSettingsWriteScope);
       return persistInstance(
         instanceId,
-        next,
+        normalizedNext,
         shouldClearTextGen ? DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection : undefined,
       );
     },
@@ -921,7 +924,7 @@ export function EnvironmentProviderSettings({
 
   const enableInstance = useStableCallback(
     (instanceId: ProviderInstanceId, next: ProviderInstanceConfig) =>
-      persistInstance(instanceId, next),
+      persistInstance(instanceId, normalizeProviderInstanceForSave({ instanceId, next })),
   );
 
   const requestDeleteInstance = useStableCallback(
@@ -1366,17 +1369,6 @@ export function EnvironmentProviderSettings({
             sources={settings.usageLimitSources}
             readOnly={readOnly}
           />
-
-          {/* The server drops text generators under a provider allow-list. */}
-          {managedPolicy?.limits?.providers?.allowedDrivers === undefined ? (
-            <TextGeneratorsSettings
-              key={`text-generators:${environmentId}`}
-              environmentId={environmentId}
-              environmentLabel={environmentLabel}
-              providers={serverProviders}
-              readOnly={readOnly}
-            />
-          ) : null}
         </>
       ),
     },
@@ -1388,7 +1380,19 @@ export function EnvironmentProviderSettings({
         <>
           <DefaultChatModelsSection />
 
-          <TextGenerationSettingsSection />
+          {/* The server drops text generators under a provider allow-list. */}
+          <TextGenerationSettingsSection
+            textGeneratorsEnvironment={
+              managedPolicy?.limits?.providers?.allowedDrivers === undefined
+                ? {
+                    environmentId,
+                    environmentLabel,
+                    providers: serverProviders,
+                    readOnly,
+                  }
+                : null
+            }
+          />
 
           <SettingsSection id="provider-updates" title={gt("Global launch & update policy")}>
             <SettingsRow
@@ -1409,7 +1413,9 @@ export function EnvironmentProviderSettings({
                     }
                   }}
                 >
-                  <Toggle value="chat">Chat</Toggle>
+                  <Toggle value="chat">
+                    <T>Chat</T>
+                  </Toggle>
                   <Toggle value="cli">CLI</Toggle>
                 </ToggleGroup>
               }

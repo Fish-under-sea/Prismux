@@ -34,7 +34,8 @@ export type BuiltInUsageReadersEnv =
   | ProviderUsageReaderEnv<typeof CodexDriver>
   | ProviderUsageReaderEnv<typeof OpenCodeDriver>
   | ProviderUsageReaderEnv<typeof AntigravityDriver>
-  | ProviderUsageReaderEnv<typeof PiDriver>;
+  | ProviderUsageReaderEnv<typeof PiDriver>
+  | ProviderUsageReaderEnv<typeof AcpRegistryDriver>;
 
 /** Order matters: aggregation keeps the first duplicate record. */
 export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
@@ -45,4 +46,5 @@ export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
   PiDriver,
   OpenCodeDriver,
   AntigravityDriver,
+  AcpRegistryDriver,
 ];

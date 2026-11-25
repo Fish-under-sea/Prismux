@@ -42,7 +42,6 @@ import {
 } from "./timelineRowContext";
 import { ActivityShimmerOverlay } from "./TimelineRowParts";
 import {
-  failedToolIconClassName,
   toolIconAcceptsTint,
   type WorkEntryIconName,
   ToolActivityIconView,
@@ -484,7 +483,7 @@ function BackgroundWorktreeSetupChip({ snapshot }: { snapshot: WorktreeSetupSnap
 function CompactingLabel({ createdAt }: { createdAt: string | null }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <Minimize2Icon aria-hidden="true" className="size-3" />
+      <Minimize2Icon aria-hidden="true" className="size-3 text-primary" />
       {createdAt ? (
         <span>
           <T>
@@ -522,6 +521,7 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
       shimmer={live}
       expandable={expandable}
       expanded={row.expanded === true}
+      accentLabel
     />
   );
   if (!expandable) return activity;
@@ -546,6 +546,7 @@ function LiveActivityRow({
   shimmer = false,
   expandable = false,
   expanded = false,
+  accentLabel = false,
 }: {
   label: ReactNode;
   iconName?: WorkEntryIconName;
@@ -555,6 +556,7 @@ function LiveActivityRow({
   shimmer?: boolean;
   expandable?: boolean;
   expanded?: boolean;
+  accentLabel?: boolean;
 }) {
   const animated = active && !failed;
   const showShimmer = animated && shimmer;
@@ -576,6 +578,7 @@ function LiveActivityRow({
         liveAccent={animated}
         expandable={expandable}
         expanded={expanded}
+        accentLabel={accentLabel}
       />
       {showShimmer ? (
         <ActivityShimmerOverlay>
@@ -587,6 +590,7 @@ function LiveActivityRow({
             liveAccent={animated}
             expandable={false}
             expanded={expanded}
+            accentLabel={accentLabel}
           />
         </ActivityShimmerOverlay>
       ) : null}
@@ -605,6 +609,7 @@ function LiveActivityContent({
   liveAccent = false,
   expandable = false,
   expanded = false,
+  accentLabel = false,
 }: {
   label: ReactNode;
   iconName: WorkEntryIconName | undefined;
@@ -616,6 +621,7 @@ function LiveActivityContent({
   liveAccent?: boolean;
   expandable?: boolean;
   expanded?: boolean;
+  accentLabel?: boolean;
 }) {
   const gt = useGT();
   const showTrailingFailureMark =
@@ -627,21 +633,13 @@ function LiveActivityContent({
           icon={toolIcon}
           fallbackName={iconName}
           className="block size-3.5 shrink-0 stroke-2"
-          muted={!highlighted && !liveAccent}
+          muted={false}
         />
       }
       expandable={expandable && !highlighted}
       expanded={expanded}
       groupScope="live-work"
-      iconClassName={cn(
-        failed
-          ? failedToolIconClassName
-          : liveAccent
-            ? "text-primary"
-            : highlighted
-              ? "text-foreground"
-              : "text-inherit",
-      )}
+      iconClassName={failed ? "text-destructive" : "text-primary"}
       role={announceFailure ? "img" : undefined}
       ariaLabel={announceFailure ? gt("Tool call failed") : undefined}
       liveDot={liveAccent && !highlighted}
@@ -652,16 +650,23 @@ function LiveActivityContent({
     <div className="flex h-6 w-full min-w-0 items-center gap-1.5 text-sm leading-6 text-muted-foreground transition-colors duration-200 ease-out group-hover/live-work:text-foreground motion-reduce:transition-none">
       {iconContent}
       <span
+        data-live-activity-label="true"
         className={cn(
           "min-w-0 flex-1 truncate",
-          highlighted ? "text-foreground" : "text-inherit",
-          active && "live-tool-shine",
+          accentLabel && !failed
+            ? highlighted
+              ? "font-medium text-foreground"
+              : "font-medium text-primary"
+            : highlighted
+              ? "text-foreground"
+              : "text-inherit",
+          active && !accentLabel && "live-tool-shine",
         )}
       >
         {label}
       </span>
       {showTrailingFailureMark ? (
-        <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+        <XIcon aria-hidden className="size-3 shrink-0 text-destructive" />
       ) : null}
     </div>
   );
@@ -727,12 +732,12 @@ export function LiveWorkEntryTimelineRow({
       {thoughtLine ? (
         <WorkLogRow
           icon={
-            <span className="flex size-4 items-center justify-center text-primary/80">
+            <span className="flex size-4 items-center justify-center text-primary">
               <ToolActivityIconView
                 icon={undefined}
                 fallbackName="brain"
                 className="block size-4 shrink-0 stroke-2"
-                muted
+                muted={false}
               />
             </span>
           }
@@ -789,6 +794,9 @@ export function LiveWorkEntryTimelineRow({
         shimmer={useDshHeader && row.active}
         expandable
         expanded={row.expanded}
+        accentLabel={
+          dshLive?.category === "thinking" || row.entry.itemType === "reasoning" || thoughtIsStatus
+        }
       />
     </button>
   );
@@ -847,15 +855,23 @@ function WorkGroupHeader(props: {
             icon={props.toolIcon}
             fallbackName={props.iconName}
             className="block size-3.5 shrink-0 stroke-2"
-            muted={!props.failed}
+            muted={false}
           />
         }
         expandable
         expanded={props.expanded}
         groupScope="timeline-row"
-        iconClassName={props.failed ? failedToolIconClassName : "text-inherit"}
+        iconClassName={props.failed ? "text-destructive" : "text-primary"}
       />
-      <span className="min-w-0 truncate">{props.label}</span>
+      <span
+        data-work-group-label="true"
+        className={cn(
+          "min-w-0 truncate",
+          props.iconName === "brain" && !props.failed && "font-medium text-primary",
+        )}
+      >
+        {props.label}
+      </span>
     </button>
   );
 }

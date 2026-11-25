@@ -1,9 +1,9 @@
 import * as AzureDevOpsDriver from "@prismux/source-control-azure-devops/server/driver";
 import * as BitbucketDriver from "@prismux/source-control-bitbucket/server/driver";
-import * as CursorOriginDriver from "@prismux/source-control-cursor-origin/server/driver";
 import { builtInSourceControlDefinitions } from "@prismux/source-control-definitions/registry";
 import * as ForgejoDriver from "@prismux/source-control-forgejo/server/driver";
 import * as GitCafeDriver from "@prismux/source-control-gitcafe/server/driver";
+import * as GiteeDriver from "@prismux/source-control-gitee/server/driver";
 import * as GitHubDriver from "@prismux/source-control-github/server/driver";
 import * as GitLabDriver from "@prismux/source-control-gitlab/server/driver";
 import * as TanStackSourceDriver from "@prismux/source-control-tanstack-source/server/driver";
@@ -14,7 +14,7 @@ import * as TanStackSourceDriver from "@prismux/source-control-tanstack-source/s
  */
 export const BUILT_IN_SOURCE_CONTROL_DRIVER_LIST = [
   GitHubDriver.driver,
-  CursorOriginDriver.driver,
+  GiteeDriver.driver,
   GitLabDriver.driver,
   GitCafeDriver.driver,
   TanStackSourceDriver.driver,

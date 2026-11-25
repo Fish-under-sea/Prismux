@@ -49,7 +49,9 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { collectUint8StreamText } from "@prismux/provider-core/server/collectStreamText";
 import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
 import type * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
-import { resolveLocalAcpSpawn } from "./dshLocal.ts";
+import { resolveLocalAcpSpawn, resolvePackagedDshDesktopSpawn } from "./dshLocal.ts";
+
+export { resolveLocalAcpSpawn, resolvePackagedDshDesktopSpawn };
 
 const ACP_REGISTRY_URL = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 

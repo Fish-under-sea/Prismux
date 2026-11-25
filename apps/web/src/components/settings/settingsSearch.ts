@@ -1089,12 +1089,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "usage-providers",
-    title: msg("Usage providers"),
+    title: msg("API Relay Quotas"),
     to: "/settings/providers",
     searchTerms: [
       msg(
-        "usage sources CLIProxyAPI CLI proxy hub quota subscription limits management key add remove",
+        "api relay quotas balance newapi oneapi veloera voapi rixapi openai billing cliproxy hub quota subscription limits management key add remove",
       ),
+      "API 中转站配额 中转站 余额 配额 用量数据提供方 newapi oneapi veloera voapi rixapi cliproxy",
     ],
     providerSettingsOnly: true,
   },

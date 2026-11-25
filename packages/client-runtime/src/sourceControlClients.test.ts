@@ -26,7 +26,7 @@ describe("sourceControlClients.parseChangeRequestUrl", () => {
       const url = `https://git.cafe/Fish-under-sea/Prismux/${path}/23897`;
       expect(parse(url), path).toEqual({
         host: "git.cafe",
-        repository: "Fish-under-sea/Prismux",
+        repository: "fish-under-sea/prismux",
         number: 23897,
       });
       expect(kindOf(url), path).toBe("gitcafe");
@@ -51,24 +51,26 @@ describe("sourceControlClients.parseChangeRequestUrl", () => {
     );
   });
 
-  it("reads a Cursor Origin pull request under Origin's git host, not as GitHub's /pull/", () => {
+  it("reads a Gitee pull request on gitee.com and enterprise hosts, not as Forgejo's /pulls/", () => {
     for (const url of [
-      "https://cursor.com/codebase/Acme.Team/Web-App/pull/42",
-      "http://www.cursor.com/codebase/Acme.Team/Web-App/pull/42/files?w=1#diff",
+      "https://gitee.com/Fish-under-sea/Prismux/pulls/42",
+      "https://gitee.com/Fish-under-sea/Prismux/pulls/42/files?w=1#diff",
     ]) {
       expect(parse(url), url).toEqual({
-        host: "origin.cursor.com",
-        repository: "acme.team/web-app",
+        host: "gitee.com",
+        repository: "fish-under-sea/prismux",
         number: 42,
       });
-      expect(kindOf(url), url).toBe("cursor-origin");
+      expect(kindOf(url), url).toBe("gitee");
     }
     expect(
-      sourceControlClients.parseChangeRequestUrl("https://cursor.com/codebase/acme/web/pull/42")
-        ?.link.repositoryUrl,
-    ).toBe("https://cursor.com/codebase/acme/web");
-    expect(parse("https://cursor.com/codebase/acme/web")).toBeNull();
-    expect(kindOf("https://www.cursor.com/updates/pull/42")).toBeUndefined();
+      sourceControlClients.parseChangeRequestUrl(
+        "https://gitee.com/Fish-under-sea/Prismux/pulls/42",
+      )?.link.repositoryUrl,
+    ).toBe("https://gitee.com/Fish-under-sea/Prismux");
+    expect(kindOf("https://gitee.corp.example/acme/web/pulls/9")).toBe("gitee");
+    expect(parse("https://gitee.com/Fish-under-sea/Prismux")).toBeNull();
+    expect(parse("https://gitee.com/Fish-under-sea/Prismux/issues/I8ABCD")).toBeNull();
     expect(kindOf("https://github.com/acme/web/pull/42")).toBe("github");
   });
 
@@ -288,7 +290,9 @@ describe("sourceControlClients.recognizeRemote", () => {
     expect(kindOfRemote("https://bitbucket.gitlab.example/o/r")).toBe("gitlab");
     expect(kindOfRemote("https://bitbucket.visualstudio.com/p/_git/r")).toBe("azure-devops");
     expect(kindOfRemote("git@git.cafe:Fish-under-sea/Prismux.git")).toBe("gitcafe");
-    expect(kindOfRemote("https://origin.cursor.com/acme/web.git")).toBe("cursor-origin");
+    expect(kindOfRemote("https://gitee.com/Fish-under-sea/Prismux.git")).toBe("gitee");
+    expect(kindOfRemote("git@gitee.com:Fish-under-sea/Prismux.git")).toBe("gitee");
+    expect(kindOfRemote("ssh://git@gitee.com/Fish-under-sea/Prismux.git")).toBe("gitee");
     expect(kindOfRemote("https://source.tanstack.com/@TanStack/router.git")).toBe(
       "tanstack-source",
     );
@@ -423,6 +427,7 @@ describe("sourceControlClients.findByPublicDomain", () => {
   it("names the host a link is on, subdomains included", () => {
     const kindOf = (hostname: string) => sourceControlClients.findByPublicDomain(hostname)?.kind;
     expect(kindOf("gist.github.com")).toBe("github");
+    expect(kindOf("gitee.com")).toBe("gitee");
     expect(kindOf("GitLab.com")).toBe("gitlab");
     expect(kindOf("codeberg.org")).toBe("forgejo");
     expect(kindOf("git.cafe")).toBe("gitcafe");

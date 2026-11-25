@@ -19,6 +19,7 @@ import {
   type SimlockDeviceHostConfig,
 } from "@prismux/core-contracts";
 import { createModelSelection } from "@prismux/core-shared/model";
+import { symlinksSupported } from "@prismux/core-shared/testing/symlinks";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -343,7 +344,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
-  it.effect("saves through a symlinked settings file without replacing the link", () =>
+  it.effect.skipIf(!symlinksSupported)(
+    "saves through a symlinked settings file without replacing the link",
+    () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fs = yield* FileSystem.FileSystem;
@@ -1515,12 +1518,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         const config = yield* ServerConfig.ServerConfig;
         const fs = yield* FileSystem.FileSystem;
         const store = yield* ServerSecretStore.ServerSecretStore;
-        const instanceId = ProviderInstanceId.make("antigravity_secrets");
+        const instanceId = ProviderInstanceId.make("opencode_secrets");
         const saved = yield* service.updateSettings({
           providerInstances: {
             [instanceId]: {
-              driver: ProviderDriverKind.make("antigravity"),
-              config: { apiKey: "config-secret" },
+              driver: ProviderDriverKind.make("opencode"),
+              config: { serverPassword: "config-secret" },
               environment: [
                 { name: "API_TOKEN", value: "env-secret", sensitive: true },
                 { name: "BASE_URL", value: "https://example.test", sensitive: false },
@@ -1586,24 +1589,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         });
         assert.propertyVal(
           renamed.providerInstances[instanceId]?.config,
-          "apiKey",
+          "serverPassword",
           "config-secret",
         );
 
-        for (const apiKey of ["replacement-secret", ""]) {
+        for (const serverPassword of ["replacement-secret", ""]) {
           const changed = yield* service.updateProviderInstance({
             operation: "upsert",
             instanceId,
-            instance: { ...client.providerInstances[instanceId]!, config: { apiKey } },
+            instance: { ...client.providerInstances[instanceId]!, config: { serverPassword } },
           });
-          assert.propertyVal(changed.providerInstances[instanceId]?.config, "apiKey", apiKey);
+          assert.propertyVal(
+            changed.providerInstances[instanceId]?.config,
+            "serverPassword",
+            serverPassword,
+          );
           const redacted = ServerSettingsModule.redactServerSettingsForClient(changed, {
             secretReferences: true,
           });
           assert.propertyVal(
             redacted.providerInstances[instanceId]?.config,
-            "apiKey",
-            apiKey ? "••••••" : "",
+            "serverPassword",
+            serverPassword ? "••••••" : "",
           );
         }
 
@@ -1613,9 +1620,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           instance: saved.providerInstances[instanceId]!,
         });
 
+        const encodeSecretPart = (value: string) => Buffer.from(value, "utf8").toString("base64url");
         const secretNames = [
-          "provider-config-YW50aWdyYXZpdHlfc2VjcmV0cw-YW50aWdyYXZpdHk-YXBpS2V5",
-          "provider-env-YW50aWdyYXZpdHlfc2VjcmV0cw-QVBJX1RPS0VO",
+          `provider-config-${encodeSecretPart("opencode_secrets")}-${encodeSecretPart("opencode")}-${encodeSecretPart("serverPassword")}`,
+          `provider-env-${encodeSecretPart("opencode_secrets")}-${encodeSecretPart("API_TOKEN")}`,
           sourceControlHostSecretName({
             kind: "github",
             field: "tokens",
@@ -1676,7 +1684,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         config.settingsPath,
         JSON.stringify({
           providerInstances: {
-            antigravity: { driver: "antigravity", config: { apiKey: "legacy-api-key" } },
             opencode: {
               driver: "opencode",
               config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "legacy-password" },
@@ -1687,11 +1694,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       const saved = yield* service.getSettings;
       const opencode = ProviderInstanceId.make("opencode");
       assert.propertyVal(
-        saved.providerInstances[ProviderInstanceId.make("antigravity")]?.config,
-        "apiKey",
-        "legacy-api-key",
-      );
-      assert.propertyVal(
         saved.providerInstances[opencode]?.config,
         "serverPassword",
         "legacy-password",
@@ -1699,7 +1701,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       const client = ServerSettingsModule.redactServerSettingsForClient(saved, {
         secretReferences: true,
       });
-      for (const value of ["legacy-api-key", "legacy-password"]) {
+      for (const value of ["legacy-password"]) {
         assert.notInclude(yield* fs.readFileString(config.settingsPath), value);
         assert.notInclude(JSON.stringify(client), value);
       }
@@ -1827,15 +1829,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           provider: SecretProviderId.make("personal"),
           reference: "op://Private/Simlock/token",
         };
-        const antigravityReference = {
-          provider: SecretProviderId.make("personal"),
-          reference: "op://Private/Gemini/key",
-        };
         const openCodeReference = {
           provider: SecretProviderId.make("personal"),
           reference: "op://Private/OpenCode/password",
         };
-        const antigravity = ProviderInstanceId.make("antigravity");
         const openCode = ProviderInstanceId.make("opencode");
         const hub = UsageLimitSourceId.make("hub");
         const router = ProviderInstanceId.make("openrouter");
@@ -1880,10 +1877,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
             },
           ],
           providerInstances: {
-            [antigravity]: {
-              driver: ProviderDriverKind.make("antigravity"),
-              config: { authMethod: "gemini-api-key", apiKey: antigravityReference },
-            },
             [openCode]: {
               driver: ProviderDriverKind.make("opencode"),
               config: { serverUrl: "http://127.0.0.1:4096", serverPassword: openCodeReference },
@@ -1906,7 +1899,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         assert.equal(legacy.simlockDeviceHosts[0]?.agentToken, SECRET_REDACTED);
         const configOf = (settings: ServerSettings, id: ProviderInstanceId) =>
           settings.providerInstances[id]?.config as Record<string, unknown> | undefined;
-        assert.equal(configOf(legacy, antigravity)?.apiKey, SECRET_REDACTED);
         assert.equal(configOf(legacy, openCode)?.serverPassword, SECRET_REDACTED);
         const echoed = yield* serverSettings.updateSettings({
           cloudSpeechCredentials: legacy.cloudSpeechCredentials,
@@ -1931,7 +1923,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         });
         assert.deepEqual(echoed.easDeviceHosts[0]?.accessToken, easReference);
         assert.deepEqual(echoed.simlockDeviceHosts[0]?.agentToken, simlockReference);
-        assert.deepEqual(configOf(echoed, antigravity)?.apiKey, antigravityReference);
         assert.deepEqual(configOf(echoed, openCode)?.serverPassword, openCodeReference);
         assert.isTrue(Option.isSome(yield* stored("github", "tokens", "ghe.acme.test")));
         // A saved token goes only to the gateway it was saved for, however it is echoed.
@@ -2663,9 +2654,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
         yield* service.updateSettings({ enableAgentDeviceAccess: false, defaultAutoPull: true });
         assert.isTrue((yield* service.getSettings).defaultAutoPull);
 
-        // The user's own value stays on disk, ready for when the policy is removed.
+        // The user's own value is never overwritten by the locked false on disk, so removing the policy restores true.
         const stored = JSON.parse(yield* fs.readFileString(config.settingsPath));
-        assert.isTrue(stored.enableAgentDeviceAccess);
+        assert.notEqual(stored.enableAgentDeviceAccess, false);
+        assert.isTrue((yield* decodeServerSettings(stored)).enableAgentDeviceAccess);
       }).pipe(Effect.provide(layerServerSettings(policy))),
     );
     it.effect("accepts a project override that brings the locked value inside a new setting", () =>
@@ -2827,7 +2819,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
           })
           .pipe(Effect.flip);
         assert.equal(rejected.operation, "use-disallowed-provider");
-        assert.equal(rejected.message, "Example Corp's policy does not allow the Cursor provider.");
+        // cursor is retired from Prismux KNOWN_DRIVERS, so the denial message uses its raw driver id.
+        assert.equal(rejected.message, "Example Corp's policy does not allow the cursor provider.");
         // Switching it on for one project is enabling it too.
         const perProject = yield* service
           .updateSettings({
@@ -3196,7 +3189,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
   },
 );
 
-it.live("reloads a symlinked settings file after its target directory is replaced", () =>
+it.live.skipIf(!symlinksSupported)(
+  "reloads a symlinked settings file after its target directory is replaced",
+  () =>
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
@@ -3251,7 +3246,9 @@ it.live("reloads a symlinked settings file after its target directory is replace
   ),
 );
 
-it.effect("starts with symlinked settings when the settings directory watch fails", () =>
+it.effect.skipIf(!symlinksSupported)(
+  "starts with symlinked settings when the settings directory watch fails",
+  () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -3289,7 +3286,9 @@ it.effect("starts with symlinked settings when the settings directory watch fail
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
-it.effect("publishes edits made before the restored settings watch is registered", () =>
+it.effect.skipIf(!symlinksSupported)(
+  "publishes edits made before the restored settings watch is registered",
+  () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -3366,4 +3365,192 @@ it.effect("publishes edits made before the restored settings watch is registered
       assert.equal(Option.getOrThrow(published).responseStreamingMode, "paragraph");
     }).pipe(Effect.provide(settingsLayer));
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect(
+  "auto-seeds discovered built-in agents and DSH on first start, respects user disable and removal across restarts, and heals incomplete local DSH config",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseConfig = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(
+          Layer.fresh(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "prismux-autoseed-",
+            }),
+          ),
+        ),
+      );
+      const sharedConfigLayer = Layer.succeed(ServerConfig.ServerConfig, baseConfig);
+
+      const makeLayer = (discovered: ReadonlyArray<ServerSettingsModule.AutoSeedProviderId>) =>
+        ServerSettingsModule.layer.pipe(
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ManagedPolicy.layerTest()),
+          Layer.provide(Layer.fresh(SqlitePersistence.layerMemory)),
+          Layer.provide(sharedConfigLayer),
+          Layer.provide(
+            Layer.succeed(ServerSettingsModule.LocalAgentAutoDiscovery, () =>
+              Effect.succeed(discovered),
+            ),
+          ),
+        );
+
+      const allSix: ReadonlyArray<ServerSettingsModule.AutoSeedProviderId> = [
+        "codex",
+        "claudeAgent",
+        "antigravity",
+        "dsh",
+        "opencode",
+        "pi",
+      ];
+
+      // 1. First boot auto-seeds & enables all discovered agents including DSH.
+      yield* Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        yield* service.start;
+        const settings = yield* service.getSettings;
+
+        for (const id of allSix) {
+          assert.equal(
+            settings.providerInstances[ProviderInstanceId.make(id)]?.enabled,
+            true,
+            `expected ${id} to be auto-seeded and enabled`,
+          );
+        }
+        assert.deepEqual(settings.providerInstances[ProviderInstanceId.make("dsh")], {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          displayName: "DSH",
+          enabled: true,
+          config: {
+            source: "local",
+            commandPath: "dsh",
+            commandArgs: ["acp"],
+            homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
+          },
+        });
+
+        // 2. User disables opencode and removes dsh.
+        yield* service.updateProviderInstance({
+          operation: "upsert",
+          instanceId: ProviderInstanceId.make("opencode"),
+          instance: {
+            driver: ProviderDriverKind.make("opencode"),
+            enabled: false,
+          },
+        });
+        yield* service.updateProviderInstance({
+          operation: "remove",
+          instanceId: ProviderInstanceId.make("dsh"),
+        });
+      }).pipe(Effect.provide(makeLayer(allSix)));
+
+      // 3. Restarting MUST NOT re-enable opencode or resurrect deleted dsh!
+      yield* Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        yield* service.start;
+        const settings = yield* service.getSettings;
+        assert.equal(
+          settings.providerInstances[ProviderInstanceId.make("opencode")]?.enabled,
+          false,
+        );
+        assert.isUndefined(settings.providerInstances[ProviderInstanceId.make("dsh")]);
+      }).pipe(Effect.provide(makeLayer(allSix)));
+
+      // 4. Auto-heals an incomplete local DSH entry while preserving enabled: false.
+      const brokenDshSettings = {
+        providerInstances: {
+          dsh: {
+            driver: "acpRegistry",
+            enabled: false,
+            config: { source: "local", commandPath: "", commandArgs: [] },
+          },
+        },
+      };
+      yield* fs.writeFileString(baseConfig.settingsPath, JSON.stringify(brokenDshSettings, null, 2));
+      yield* Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const settings = yield* service.getSettings;
+        assert.deepEqual(settings.providerInstances[ProviderInstanceId.make("dsh")], {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          displayName: "DSH",
+          enabled: false,
+          config: {
+            source: "local",
+            commandPath: "dsh",
+            commandArgs: ["acp"],
+            homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
+          },
+        });
+      }).pipe(Effect.provide(makeLayer([])));
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect(
+  "persists enabled standalone API text generators in textGenerationModelSelection and DSH in default/fallback selections without silent revert",
+  () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const geminiId = ProviderInstanceId.make("gemini");
+      const dshId = ProviderInstanceId.make("dsh");
+
+      yield* serverSettings.updateProviderInstance({
+        operation: "create",
+        instanceId: dshId,
+        instance: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          displayName: "DSH",
+          enabled: true,
+          config: {
+            source: "local",
+            commandPath: "dsh",
+            commandArgs: ["acp"],
+            homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
+          },
+        },
+      });
+
+      const updated = yield* serverSettings.updateSettings({
+        textGenerators: {
+          [geminiId]: {
+            kind: "openaiCompatible",
+            label: "Gemini",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            apiKey: "test-key",
+            enabled: true,
+          },
+        },
+        textGenerationModelSelection: {
+          instanceId: geminiId,
+          model: "gemini-2.5-flash",
+        },
+        defaultModelSelection: {
+          instanceId: dshId,
+          model: '["deepseek","deepseek-chat"]',
+        },
+        fallbackModelSelection: {
+          instanceId: dshId,
+          model: '["deepseek","deepseek-chat"]',
+        },
+      });
+
+      assert.deepEqual(updated.textGenerationModelSelection, {
+        instanceId: geminiId,
+        model: "gemini-2.5-flash",
+      });
+      assert.deepEqual(updated.defaultModelSelection, {
+        instanceId: dshId,
+        model: '["deepseek","deepseek-chat"]',
+      });
+      assert.deepEqual(updated.fallbackModelSelection, {
+        instanceId: dshId,
+        model: '["deepseek","deepseek-chat"]',
+      });
+    }).pipe(
+      Effect.provide(
+        layerServerSettings().pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
+    ),
 );

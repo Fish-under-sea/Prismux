@@ -1915,6 +1915,206 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.live(
+    "hydrates live tokenUsage on usage_update and final turnTokenUsage via flavor.watchTurnUsage",
+    () =>
+      Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("acp-usage-watcher");
+        const threadId = ThreadId.make("thread-acp-usage-watcher");
+        const promptGate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+        let sessionUpdateHandler:
+          | Parameters<AcpSessionRuntime.AcpSessionRuntime["Service"]["handleSessionUpdate"]>[0]
+          | undefined;
+        let activeSessionId = "mock-session-1";
+        let stepCount = 0;
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            watchTurnUsage: () =>
+              Effect.succeed({
+                sampleLive: () =>
+                  Effect.sync(() => {
+                    stepCount += 1;
+                    return {
+                      usage: {
+                        usageScope: "main_agent" as const,
+                        usageStatus: "complete" as const,
+                        hasSubagents: false,
+                        inputTokens: 51_557,
+                        cachedInputTokens: 51_200,
+                        cacheCreationTokens: 0,
+                        outputTokens: 80,
+                        reasoningTokens: 32,
+                        models: ["group/deepseek"],
+                        ttftMs: 900,
+                        decodeMs: 1_500,
+                        modelDurationMs: 2_400,
+                      },
+                      liveTokenUsage: {
+                        inputTokens: 51_557,
+                        cachedInputTokens: 51_200,
+                        cacheCreationTokens: 0,
+                        outputTokens: 80,
+                        reasoningOutputTokens: 32,
+                        ttftMs: 900,
+                        decodeMs: 1_500,
+                        durationMs: 2_400,
+                      },
+                      models: ["group/deepseek"],
+                    };
+                  }),
+                collectFinal: () =>
+                  Effect.succeed({
+                    usage: {
+                      usageScope: "main_agent" as const,
+                      usageStatus: "complete" as const,
+                      hasSubagents: false,
+                      inputTokens: 51_557,
+                      cachedInputTokens: 51_200,
+                      cacheCreationTokens: 0,
+                      outputTokens: 189,
+                      reasoningTokens: 48,
+                      models: ["group/deepseek"],
+                      ttftMs: 1_100,
+                      decodeMs: 2_900,
+                      modelDurationMs: 4_000,
+                    },
+                    liveTokenUsage: {
+                      inputTokens: 51_557,
+                      cachedInputTokens: 51_200,
+                      cacheCreationTokens: 0,
+                      outputTokens: 189,
+                      reasoningOutputTokens: 48,
+                      ttftMs: 1_100,
+                      decodeMs: 2_900,
+                      durationMs: 4_000,
+                    },
+                    models: ["group/deepseek"],
+                  }),
+              }),
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+              mockAgentPath: yield* bundledMockAgentPath,
+              environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                start: () =>
+                  runtime.start().pipe(
+                    Effect.tap((started) =>
+                      Effect.sync(() => {
+                        activeSessionId = started.sessionId;
+                      }),
+                    ),
+                  ),
+                handleSessionUpdate: (handler) =>
+                  Effect.sync(() => {
+                    sessionUpdateHandler = handler;
+                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                prompt: () => Deferred.await(promptGate),
+              }),
+            }),
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-usage-watcher"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const eventQueue = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(eventQueue, event)),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+        );
+        if (sessionUpdateHandler === undefined) {
+          return yield* Effect.die("sessionUpdateHandler must be registered");
+        }
+        yield* sessionUpdateHandler({
+          sessionId: activeSessionId,
+          update: {
+            sessionUpdate: "usage_update",
+            used: 51_746,
+            size: 131_072,
+          },
+        });
+        yield* Deferred.succeed(promptGate, { stopReason: "end_turn" });
+
+        const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+        while (true) {
+          const event = yield* Queue.take(eventQueue);
+          events.push(event);
+          if (event.type === "turn.terminal") break;
+        }
+        assert.isAtLeast(stepCount, 1);
+
+        const liveTurn = events.find(
+          (event) =>
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.status === "running" &&
+            event.providerTurn.tokenUsage !== undefined,
+        );
+        assert.isDefined(liveTurn);
+        if (liveTurn?.type === "provider_turn.updated") {
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.usedTokens, 51_746);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.maxTokens, 131_072);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.inputTokens, 51_557);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.cachedInputTokens, 51_200);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.outputTokens, 80);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.reasoningOutputTokens, 32);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.ttftMs, 900);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.decodeMs, 1_500);
+          assert.strictEqual(liveTurn.providerTurn.tokenUsage?.durationMs, 2_400);
+          assert.strictEqual(liveTurn.providerTurn.model, "group/deepseek");
+        }
+
+        const completed = events.find(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+        );
+        assert.isDefined(completed);
+        if (completed?.type === "provider_turn.updated") {
+          assert.deepEqual(completed.providerTurn.turnTokenUsage, {
+            usageScope: "main_agent",
+            usageStatus: "complete",
+            hasSubagents: false,
+            inputTokens: 51_557,
+            cachedInputTokens: 51_200,
+            cacheCreationTokens: 0,
+            outputTokens: 189,
+            reasoningTokens: 48,
+            models: ["group/deepseek"],
+            ttftMs: 1_100,
+            decodeMs: 2_900,
+            modelDurationMs: 4_000,
+          });
+          assert.strictEqual(completed.providerTurn.tokenUsage?.outputTokens, 189);
+          assert.strictEqual(completed.providerTurn.tokenUsage?.reasoningOutputTokens, 48);
+          assert.strictEqual(completed.providerTurn.tokenUsage?.ttftMs, 1_100);
+          assert.strictEqual(completed.providerTurn.tokenUsage?.decodeMs, 2_900);
+          assert.strictEqual(completed.providerTurn.tokenUsage?.durationMs, 4_000);
+          assert.strictEqual(completed.providerTurn.model, "group/deepseek");
+        }
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   it.live.each(["details", "none"] as const)(
     "fails the turn on an ACP v2 idle error with %s, settles its open tool, and accepts the next prompt",
     (details) =>

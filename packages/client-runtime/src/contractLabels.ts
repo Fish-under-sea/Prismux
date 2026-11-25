@@ -145,7 +145,9 @@ function managedCapabilityDeniedMessage(
         }),
       );
     case "connect":
-      return resolve(msg("{organization}'s policy does not allow Prismux Connect.", { organization }));
+      return resolve(
+        msg("{organization}'s policy does not allow Prismux Connect.", { organization }),
+      );
     case "webhookTasks":
       return resolve(
         msg("{organization}'s policy does not allow webhook tasks.", { organization }),
@@ -260,10 +262,9 @@ const INSTALL_HINTS = [
     },
   ),
   msg("Add a Bitbucket token in Settings → Source control & issues."),
-  msg("Install the Origin CLI with {install}, then run {login}.", {
-    install: "`curl -fsSL https://downloads.cursor.com/origin/install.sh | sh`",
-    login: "`origin auth login`",
-  }),
+  msg(
+    "Add a Gitee personal access token in Settings → Version Control & Issues, or set GITEE_TOKEN.",
+  ),
   msg(
     "Install {fj} 0.6 or later from {fjUrl} and run {fjLogin}, or install {tea} 0.16 or later from {teaUrl} and run {teaLogin} for each Forgejo or Gitea server.",
     {

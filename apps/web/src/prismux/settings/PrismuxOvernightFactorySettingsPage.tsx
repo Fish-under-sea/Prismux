@@ -1,3 +1,4 @@
+/* oxlint-disable prismux/no-untranslated-copy -- Prismux-native Chinese overnight factory settings UI */
 import { useAtomValue } from "@effect/atom-react";
 import type { ServerProvider } from "@prismux/core-contracts";
 import type { UnifiedSettings } from "@prismux/core-contracts/settings";
@@ -6,6 +7,7 @@ import {
   AlertTriangleIcon,
   ArrowRightLeftIcon,
   BookOpenIcon,
+  BotIcon,
   CheckCircle2Icon,
   CheckIcon,
   ChevronDownIcon,
@@ -14,6 +16,7 @@ import {
   CircleIcon,
   Clock3Icon,
   CopyIcon,
+  DownloadIcon,
   ExternalLinkIcon,
   FolderGit2Icon,
   GitBranchIcon,
@@ -27,13 +30,13 @@ import {
   SendIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
-  SparklesIcon,
+  TerminalIcon,
   Unlink2Icon,
   WifiIcon,
   XCircleIcon,
   XIcon,
 } from "lucide-react";
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { SettingsPageContainer, SettingsSection } from "../../components/settings/settingsLayout";
 import { useNavigateToMainApp } from "../../components/sidebar/mainAppLocation";
@@ -76,13 +79,21 @@ import {
   type SubscriptionWaiverState,
 } from "../SubscriptionRiskWaiverSection";
 import {
+  AGENT_MAIL_DOC_URL,
+  AGENT_MAIL_INSTALL_CMD,
+  AGENT_MAIL_OFFICIAL_PROMPT,
+  AGENT_MAIL_PORTAL_URL,
   GMAIL_APP_PASSWORD_LINKS,
   GMAIL_OAUTH_QUICK_LINKS,
   GMAIL_OAUTH_SCOPES_TEXT,
   GMAIL_OAUTH_TUTORIAL_STEPS,
+  NETEASE_DOMAIN_PRESETS,
   OVERNIGHT_DEFAULT_MODEL_SENTINEL,
   OVERNIGHT_MAIL_PRESETS,
+  applyNeteaseDomain,
+  applyOvernightEmailInput,
   applyOvernightMailPreset,
+  buildAgentMailActionTestPayload,
   buildOvernightLiveProviderOptions,
   buildOvernightMailSavePayload,
   buildOvernightModelOptions,
@@ -90,18 +101,22 @@ import {
   createDefaultOvernightDraft,
   evaluateGmailOAuthReadiness,
   evaluateOvernightAgyCompliance,
+  extractAgentMailStatusFromSnapshot,
   formatOvernightRunStatusBadge,
   formatOvernightTimestamp,
   hydrateOvernightDraftFromSnapshot,
   isMailChannelConfigured,
   isSafeHttpsUrl,
+  parseAgentMailTestResponse,
   parseAllowedSendersInput,
   resolveGmailOAuthRedirectUri,
   shouldDefaultExpandMailChannel,
   shouldDefaultExpandStrategy,
+  toDaemonOvernightPatch,
   toggleTutorialStepCompletion,
   type GmailOAuthTutorialStepNumber,
   type OvernightFactoryDraft,
+  type OvernightNeteaseDomain,
 } from "./overnightFactory.logic";
 
 type OvernightDaemonSubset = Pick<
@@ -312,9 +327,17 @@ function PrismuxOvernightFactoryShell({
   const [savingStrategy, setSavingStrategy] = useState<boolean>(false);
   const [pollingNow, setPollingNow] = useState<boolean>(false);
 
+  // Tencent Agent Mail (agently-cli) interactive setup state
+  const [installingAgentMail, setInstallingAgentMail] = useState<boolean>(false);
+  const [loggingInAgentMail, setLoggingInAgentMail] = useState<boolean>(false);
+  const [checkingAgentMail, setCheckingAgentMail] = useState<boolean>(false);
+  const [agentMailPromptOpen, setAgentMailPromptOpen] = useState<boolean>(false);
+  const [agentMailActionDetail, setAgentMailActionDetail] = useState<string | null>(null);
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- cleanup pending clipboard copy badge timer on unmount
   useEffect(() => {
     return () => {
       if (copiedTimerRef.current !== null) {
@@ -323,28 +346,25 @@ function PrismuxOvernightFactoryShell({
     };
   }, []);
 
-  const handleOpenWaiverSettings = useCallback(() => {
+  const handleOpenWaiverSettings = () => {
     void navigate({
       to: "/settings/providers",
       hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
     });
-  }, [navigate]);
+  };
 
-  const handleOpenProvidersSettings = useCallback(() => {
+  const handleOpenProvidersSettings = () => {
     void navigate({
       to: "/settings/providers",
     });
-  }, [navigate]);
+  };
 
-  const handleOpenHttpsUrl = useCallback(
-    (url: string) => {
-      if (!isSafeHttpsUrl(url)) return;
-      onOpenExternalUrl(url);
-    },
-    [onOpenExternalUrl],
-  );
+  const handleOpenHttpsUrl = (url: string) => {
+    if (!isSafeHttpsUrl(url)) return;
+    onOpenExternalUrl(url);
+  };
 
-  const handleCopyText = useCallback(async (key: string, value: string, label: string) => {
+  const handleCopyText = async (key: string, value: string, label: string) => {
     const ok = await copyTextToClipboard(value);
     if (ok) {
       setCopiedKey(key);
@@ -359,98 +379,144 @@ function PrismuxOvernightFactoryShell({
     } else {
       setErrorMsg(`无法自动复制${label}，请手动选中文本框内容复制。`);
     }
-  }, []);
+  };
 
-  const applySnapshot = useCallback(
-    (snapshot: DaemonOvernightConfigSnapshot, syncCollapse = false) => {
-      setDraft(hydrateOvernightDraftFromSnapshot(snapshot));
-      setCredentialsFile(snapshot.credentialsFile);
-      setLastPollAt(snapshot.runtime.lastPollAt);
-      setLastPollError(snapshot.runtime.lastPollError);
-      if (snapshot.runtime.lastTestResult) {
-        setTestResult(snapshot.runtime.lastTestResult);
-      }
-      if (syncCollapse) {
-        setMailExpanded(shouldDefaultExpandMailChannel(snapshot, standalone));
-        setStrategyExpanded(shouldDefaultExpandStrategy(snapshot));
-        setOauthTutorialOpen(!snapshot.config.gmail.connected);
-      }
-    },
-    [standalone],
-  );
+  const applySnapshot = (snapshot: DaemonOvernightConfigSnapshot, syncCollapse = false) => {
+    setDraft(hydrateOvernightDraftFromSnapshot(snapshot));
+    setCredentialsFile(snapshot.credentialsFile);
+    setLastPollAt(snapshot.runtime.lastPollAt);
+    setLastPollError(snapshot.runtime.lastPollError);
+    if (snapshot.runtime.lastTestResult) {
+      setTestResult(snapshot.runtime.lastTestResult);
+    }
+    if (syncCollapse) {
+      setMailExpanded(shouldDefaultExpandMailChannel(snapshot, standalone));
+      setStrategyExpanded(shouldDefaultExpandStrategy(snapshot));
+      setOauthTutorialOpen(!snapshot.config.gmail.connected);
+    }
+  };
 
-  const loadAll = useCallback(
-    async (syncCollapse = false) => {
-      setLoading(true);
-      setErrorMsg(null);
+  const loadAll = async (syncCollapse = false) => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const [snap, runsResp] = await Promise.all([
+        daemon.fetchOvernightConfig(),
+        daemon.fetchOvernightRuns(30),
+      ]);
+      applySnapshot(snap, syncCollapse);
+      setRuns(runsResp.runs);
+      setLastPollAt(runsResp.lastPollAt ?? snap.runtime.lastPollAt);
+      setLastPollError(runsResp.lastPollError ?? snap.runtime.lastPollError);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "加载夜间工场与邮箱配置失败，请确认 Daemon 已启动。",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- fetch initial daemon overnight config and runs once on mount
+  useEffect(() => {
+    if (initialSnapshotOverride) return;
+    let cancelled = false;
+    void (async () => {
       try {
         const [snap, runsResp] = await Promise.all([
           daemon.fetchOvernightConfig(),
           daemon.fetchOvernightRuns(30),
         ]);
-        applySnapshot(snap, syncCollapse);
-        setRuns(runsResp.runs);
+        if (cancelled) return;
+        setDraft(hydrateOvernightDraftFromSnapshot(snap));
+        setCredentialsFile(snap.credentialsFile);
         setLastPollAt(runsResp.lastPollAt ?? snap.runtime.lastPollAt);
         setLastPollError(runsResp.lastPollError ?? snap.runtime.lastPollError);
+        if (snap.runtime.lastTestResult) {
+          setTestResult(snap.runtime.lastTestResult);
+        }
+        setMailExpanded(shouldDefaultExpandMailChannel(snap, standalone));
+        setStrategyExpanded(shouldDefaultExpandStrategy(snap));
+        setOauthTutorialOpen(!snap.config.gmail.connected);
+        setRuns(runsResp.runs);
       } catch (err) {
+        if (cancelled) return;
         setErrorMsg(
           err instanceof Error ? err.message : "加载夜间工场与邮箱配置失败，请确认 Daemon 已启动。",
         );
-      } finally {
-        setLoading(false);
       }
-    },
-    [applySnapshot, daemon],
-  );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [daemon, initialSnapshotOverride, standalone]);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- poll daemon config every 3s while agently-cli OAuth browser authorization is in progress
   useEffect(() => {
-    if (initialSnapshotOverride) return;
-    void loadAll(true);
-  }, [initialSnapshotOverride, loadAll]);
+    if (!draft.agentMailAuthInProgress || initialSnapshotOverride) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const snap = await daemon.fetchOvernightConfig();
+          if (cancelled) return;
+          const am = extractAgentMailStatusFromSnapshot(snap);
+          setDraft((prev) => ({
+            ...prev,
+            agentMailCliInstalled: am.cliInstalled,
+            agentMailCliPath: am.cliPath ?? prev.agentMailCliPath,
+            agentMailAuthorizedEmail: am.authorizedEmail,
+            agentMailAddress: am.authorizedEmail || prev.agentMailAddress,
+            agentMailAuthInProgress: am.authInProgress,
+            agentMailPendingAuthUrl: am.pendingAuthUrl,
+            agentMailLastError: am.lastError,
+          }));
+          if (!am.authInProgress) {
+            if (am.authorizedEmail) {
+              setStatusMsg(`邮箱地址 ${am.authorizedEmail} 已授权成功，可以用它来收发邮件了。`);
+              setErrorMsg(null);
+            } else if (am.lastError) {
+              setErrorMsg(am.lastError);
+            }
+          }
+        } catch {
+          // Transient polling error ignored; next tick retries.
+        }
+      })();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [daemon, draft.agentMailAuthInProgress, initialSnapshotOverride]);
 
-  const providerOptions = useMemo(
-    () => buildOvernightLiveProviderOptions({ serverProviders, settings }),
-    [serverProviders, settings],
-  );
-  const liveConfiguredProviders = useMemo(
-    () => providerOptions.filter((item) => !item.isChief),
-    [providerOptions],
-  );
-  const firstCompliantProvider = useMemo(
-    () => liveConfiguredProviders.find((item) => !item.isAntigravity),
-    [liveConfiguredProviders],
-  );
-  const activeProviderOption = useMemo(
-    () => providerOptions.find((item) => item.id === draft.agentProvider),
-    [draft.agentProvider, providerOptions],
-  );
-  const modelOptions = useMemo(
-    () =>
-      buildOvernightModelOptions({
-        selectedProvider: activeProviderOption,
-        currentModel: draft.agentModel,
-      }),
-    [activeProviderOption, draft.agentModel],
-  );
-  const agyCompliance = useMemo(
-    () =>
-      evaluateOvernightAgyCompliance({
-        agentProvider: draft.agentProvider,
-        chiefProvider,
-        waiver,
-      }),
-    [chiefProvider, draft.agentProvider, waiver],
-  );
+  const providerOptions = buildOvernightLiveProviderOptions({ serverProviders, settings });
+  const liveConfiguredProviders = providerOptions.filter((item) => !item.isChief);
+  const firstCompliantProvider = liveConfiguredProviders.find((item) => !item.isAntigravity);
+  const activeProviderOption = providerOptions.find((item) => item.id === draft.agentProvider);
+  const modelOptions = buildOvernightModelOptions({
+    selectedProvider: activeProviderOption,
+    currentModel: draft.agentModel,
+  });
+  const agyCompliance = evaluateOvernightAgyCompliance({
+    agentProvider: draft.agentProvider,
+    chiefProvider,
+    waiver,
+  });
 
   const handleSaveMail = async () => {
     setSavingMail(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const payload = buildOvernightMailSavePayload(draft);
+      const payload = toDaemonOvernightPatch(buildOvernightMailSavePayload(draft));
       const updated = await daemon.updateOvernightConfig(payload);
       applySnapshot(updated, false);
-      setStatusMsg("邮箱配置已保存，敏感授权码/密钥已以 0600 权限加密密封写入本地凭据库。");
+      setStatusMsg(
+        draft.preset === "agent_mail"
+          ? "Agent 邮箱配置已保存。"
+          : "邮箱配置已保存，敏感授权码/密钥已以 0600 权限加密密封写入本地凭据库。",
+      );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "保存邮箱配置失败。");
     } finally {
@@ -463,9 +529,22 @@ function PrismuxOvernightFactoryShell({
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const payload = buildOvernightMailSavePayload(draft);
+      const payload = toDaemonOvernightPatch(buildOvernightMailSavePayload(draft));
       const res = await daemon.testOvernightMail(payload);
       setTestResult(res);
+      if (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail") {
+        const parsed = parseAgentMailTestResponse(res);
+        setDraft((prev) => ({
+          ...prev,
+          agentMailCliInstalled: parsed.installed || prev.agentMailCliInstalled,
+          agentMailCliPath: parsed.cliPath ?? prev.agentMailCliPath,
+          agentMailAuthorizedEmail: parsed.authorizedEmail,
+          agentMailAddress: parsed.authorizedEmail || prev.agentMailAddress,
+          agentMailAuthInProgress: parsed.authInProgress,
+          agentMailPendingAuthUrl: parsed.authUrl,
+          agentMailLastError: parsed.ok ? null : parsed.message,
+        }));
+      }
       if (res.ok) {
         setStatusMsg(res.message);
       } else {
@@ -478,12 +557,103 @@ function PrismuxOvernightFactoryShell({
     }
   };
 
+  const handleInstallAgentMail = async () => {
+    setInstallingAgentMail(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    setAgentMailActionDetail(null);
+    try {
+      const res = await daemon.testOvernightMail(buildAgentMailActionTestPayload("install"));
+      const parsed = parseAgentMailTestResponse(res);
+      setDraft((prev) => ({
+        ...prev,
+        agentMailCliInstalled: parsed.installed,
+        agentMailCliPath: parsed.cliPath ?? prev.agentMailCliPath,
+        agentMailAuthorizedEmail: parsed.authorizedEmail ?? prev.agentMailAuthorizedEmail,
+        agentMailAddress: parsed.authorizedEmail || prev.agentMailAddress,
+        agentMailLastError: parsed.ok ? null : parsed.message,
+      }));
+      const outputSnippet = (parsed.stdout || parsed.stderr).trim();
+      if (outputSnippet) {
+        setAgentMailActionDetail(outputSnippet);
+      }
+      if (parsed.ok) {
+        setStatusMsg(parsed.message);
+      } else {
+        setErrorMsg(parsed.message);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "安装 agently-cli 失败。");
+    } finally {
+      setInstallingAgentMail(false);
+    }
+  };
+
+  const handleStartAgentMailLogin = async () => {
+    setLoggingInAgentMail(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = await daemon.testOvernightMail(buildAgentMailActionTestPayload("login"));
+      const parsed = parseAgentMailTestResponse(res);
+      setDraft((prev) => ({
+        ...prev,
+        agentMailCliInstalled: parsed.installed || prev.agentMailCliInstalled,
+        agentMailCliPath: parsed.cliPath ?? prev.agentMailCliPath,
+        agentMailAuthorizedEmail: parsed.authorizedEmail ?? prev.agentMailAuthorizedEmail,
+        agentMailAddress: parsed.authorizedEmail || prev.agentMailAddress,
+        agentMailAuthInProgress: parsed.authInProgress,
+        agentMailPendingAuthUrl: parsed.authUrl,
+        agentMailLastError: parsed.ok ? null : parsed.message,
+      }));
+      if (parsed.ok) {
+        setStatusMsg(parsed.message);
+      } else {
+        setErrorMsg(parsed.message);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "发起 Agent 邮箱 OAuth 授权失败。");
+    } finally {
+      setLoggingInAgentMail(false);
+    }
+  };
+
+  const handleCheckAgentMailStatus = async () => {
+    setCheckingAgentMail(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = await daemon.testOvernightMail(buildAgentMailActionTestPayload("status"));
+      const parsed = parseAgentMailTestResponse(res);
+      setTestResult(res);
+      setDraft((prev) => ({
+        ...prev,
+        agentMailCliInstalled: parsed.installed,
+        agentMailCliPath: parsed.cliPath ?? prev.agentMailCliPath,
+        agentMailAuthorizedEmail: parsed.authorizedEmail,
+        agentMailAddress: parsed.authorizedEmail || prev.agentMailAddress,
+        agentMailAuthInProgress: parsed.authInProgress,
+        agentMailPendingAuthUrl: parsed.authUrl,
+        agentMailLastError: parsed.ok ? null : parsed.message,
+      }));
+      if (parsed.ok) {
+        setStatusMsg(parsed.message);
+      } else {
+        setErrorMsg(parsed.message);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "检测 agently-cli 授权身份失败。");
+    } finally {
+      setCheckingAgentMail(false);
+    }
+  };
+
   const handleSendTestReport = async () => {
     setSendingReport(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const payload = buildOvernightMailSavePayload(draft);
+      const payload = toDaemonOvernightPatch(buildOvernightMailSavePayload(draft));
       const res = await daemon.sendOvernightTestReport(payload);
       setStatusMsg(`${res.message}（Message-ID: ${res.messageId}）`);
     } catch (err) {
@@ -621,6 +791,11 @@ function PrismuxOvernightFactoryShell({
   }, [navigateToMainApp, standalone]);
 
   const mailConfigured = isMailChannelConfigured(draft);
+  const isAgentMailSelected =
+    draft.mode === "imap" &&
+    (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail");
+  const activeAgentMailEmail = (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim();
+  const activeNeteaseSpec = NETEASE_DOMAIN_PRESETS[draft.neteaseDomain];
   const parsedWhitelistCount = parseAllowedSendersInput(draft.allowedSendersText).length;
   const activePresetSpec =
     OVERNIGHT_MAIL_PRESETS.find((item) => item.id === draft.preset) ?? OVERNIGHT_MAIL_PRESETS[0]!;
@@ -650,7 +825,7 @@ function PrismuxOvernightFactoryShell({
       <Badge variant={draft.enabled ? "success" : "secondary"}>
         {draft.enabled ? "已启用" : "默认关闭 · 待命"}
       </Badge>
-      <Badge variant="outline" className="gap-1">
+      <Badge variant="outline">
         <LockIcon className="size-3" />
         凭据 0600 加密密封
       </Badge>
@@ -675,9 +850,9 @@ function PrismuxOvernightFactoryShell({
           role="status"
           aria-live="polite"
           data-pmx-work-panel-card="1"
-          className="flex items-center gap-2 rounded-xl border border-emerald-500/35 bg-emerald-500/12 px-3.5 py-2.5 text-xs text-foreground"
+          className="flex items-center gap-2 rounded-xl border border-success/35 bg-success/12 px-3.5 py-2.5 text-xs text-foreground"
         >
-          <CheckCircle2Icon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <CheckCircle2Icon className="size-4 shrink-0 text-success" />
           <span className="min-w-0 flex-1">{statusMsg}</span>
         </div>
       ) : null}
@@ -709,14 +884,22 @@ function PrismuxOvernightFactoryShell({
               ? draft.gmailConnected && draft.gmailBoundEmail
                 ? draft.gmailBoundEmail
                 : "Gmail OAuth2"
-              : draft.email.trim() || `${activePresetSpec.label} · IMAP/SMTP`}
+              : isAgentMailSelected
+                ? activeAgentMailEmail || "Agent 邮箱 · agently-cli"
+                : draft.email.trim() || `${activePresetSpec.label} · IMAP/SMTP`}
           </div>
           <div className="truncate text-xs text-muted-foreground">
             {draft.mode === "gmail-oauth2"
               ? draft.gmailConnected
                 ? "Google OAuth2 · 已在线绑定"
                 : "Google OAuth2 · 待完成浏览器授权"
-              : `${activePresetSpec.label} · ${draft.imapHost || "自定义主机"}:${draft.imapPort || "993"}`}
+              : isAgentMailSelected
+                ? activeAgentMailEmail
+                  ? "agent.qq.com · agently-cli 已授权"
+                  : draft.agentMailCliInstalled
+                    ? "agent.qq.com · 待完成浏览器授权"
+                    : "agent.qq.com · 待安装 agently-cli"
+                : `${activePresetSpec.label} · ${draft.imapHost || "自定义主机"}:${draft.imapPort || "993"}`}
           </div>
         </div>
       </div>
@@ -758,10 +941,7 @@ function PrismuxOvernightFactoryShell({
       >
         <div className="flex items-center justify-between gap-2">
           <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <ShieldCheckIcon
-              className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-              aria-hidden="true"
-            />
+            <ShieldCheckIcon className="size-3.5 shrink-0 text-success" aria-hidden="true" />
             触发规则与白名单
           </span>
           <Badge variant={parsedWhitelistCount > 0 ? "success" : "warning"}>
@@ -832,7 +1012,9 @@ function PrismuxOvernightFactoryShell({
             {mailConfigured
               ? draft.mode === "gmail-oauth2"
                 ? `Gmail 已绑定${draft.gmailBoundEmail ? ` · ${draft.gmailBoundEmail}` : ""}`
-                : `IMAP/SMTP 已配置${draft.email ? ` · ${draft.email}` : ""}`
+                : isAgentMailSelected
+                  ? `Agent 邮箱已授权${activeAgentMailEmail ? ` · ${activeAgentMailEmail}` : ""}`
+                  : `IMAP/SMTP 已配置${draft.email ? ` · ${draft.email}` : ""}`
               : mailExpanded
                 ? "待配置邮箱通道"
                 : "通道未配置（已折叠）"}
@@ -845,7 +1027,6 @@ function PrismuxOvernightFactoryShell({
             data-pmx-work-panel-control="1"
             aria-expanded={mailExpanded}
             onClick={() => setMailExpanded((prev) => !prev)}
-            className="h-7 rounded-lg active:translate-y-px"
           >
             {mailExpanded ? (
               <>
@@ -864,7 +1045,7 @@ function PrismuxOvernightFactoryShell({
     >
       <div data-testid="overnight-mail-section" className="space-y-4 p-4">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          默认使用通用 IMAP / SMTP 邮箱绑定（内置 QQ / 163 / 谷歌邮箱 Gmail / Outlook / 自定义预设），也支持 Google OAuth2 授权。所有授权码与密钥仅写加密落盘，界面永不回显明文。
+          支持通用 IMAP / SMTP（内置谷歌邮箱 Gmail / QQ / Agent 邮箱 / Outlook / 网易 163 & 126 / 自定义预设）与 Google OAuth2 授权。所有授权码与密钥仅写加密落盘，界面永不回显明文。
         </p>
 
         {/* Compact Summary Bar when collapsed */}
@@ -878,7 +1059,11 @@ function PrismuxOvernightFactoryShell({
               <span>
                 当前接入方式：
                 <strong className="font-medium text-foreground">
-                  {draft.mode === "gmail-oauth2" ? "Gmail OAuth2" : "IMAP / SMTP 通用邮箱"}
+                  {draft.mode === "gmail-oauth2"
+                    ? "Gmail OAuth2"
+                    : isAgentMailSelected
+                      ? "Agent 邮箱（agent.qq.com）"
+                      : "IMAP / SMTP 通用邮箱"}
                 </strong>
                 {" · 凭据文件："}
                 <code className="rounded bg-muted/75 px-1.5 py-0.5 font-mono text-xs text-foreground">
@@ -891,14 +1076,13 @@ function PrismuxOvernightFactoryShell({
               size="xs"
               variant="default"
               onClick={() => setMailExpanded(true)}
-              className="h-7 rounded-lg active:translate-y-px"
             >
               配置收发邮箱
             </Button>
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Mode Switcher — IMAP / SMTP 通用邮箱 FIRST (left), Gmail OAuth2 SECOND (right) */}
+            {/* Mode Switcher: IMAP / SMTP 通用邮箱 FIRST (left), Gmail OAuth2 SECOND (right) */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 space-y-0.5">
                 <div className="text-xs font-medium text-foreground">接入方式</div>
@@ -917,6 +1101,12 @@ function PrismuxOvernightFactoryShell({
                     setDraft((prev) => ({
                       ...prev,
                       mode: selected as DaemonOvernightInboundMode,
+                      emailProvider:
+                        selected === "gmail-oauth2"
+                          ? "gmail_oauth2"
+                          : prev.preset === "agent_mail"
+                            ? "agent_mail"
+                            : "imap_smtp",
                     }));
                   }
                 }}
@@ -930,19 +1120,24 @@ function PrismuxOvernightFactoryShell({
               </ToggleGroup>
             </div>
 
-            {/* Generic IMAP / SMTP Mode (Default) */}
+            {/* Generic IMAP / SMTP & Agent Mail Preset Workbench (Default) */}
             {draft.mode === "imap" ? (
               <div
                 data-testid="overnight-imap-form"
                 data-pmx-work-panel-card="1"
                 className="space-y-3.5 rounded-xl border border-border/75 bg-muted/20 p-3.5"
               >
-                {/* One-click Presets */}
+                {/* Exact 6-Card Mailbox Preset Grid (3x2 Balanced Grid) */}
                 <div className="space-y-2">
                   <div className="text-xs font-medium text-foreground">国内 / 国际邮箱一键预设</div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <div
+                    data-testid="overnight-mailbox-presets-grid"
+                    className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3"
+                  >
                     {OVERNIGHT_MAIL_PRESETS.map((preset) => {
                       const active = draft.preset === preset.id;
+                      const subtitleText =
+                        preset.id === "netease" && active ? activeNeteaseSpec.note : preset.note;
                       return (
                         <button
                           key={preset.id}
@@ -954,20 +1149,20 @@ function PrismuxOvernightFactoryShell({
                             setDraft((prev) => applyOvernightMailPreset(prev, preset.id))
                           }
                           className={cn(
-                            "cursor-pointer rounded-lg border px-3 py-2 text-left text-xs transition-all motion-reduce:transition-none active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            "cursor-pointer rounded-lg border px-3 py-2 text-left text-xs transition-all motion-reduce:transition-none active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                             active
-                              ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
+                              ? "border-primary/70 bg-primary/15 font-semibold text-foreground shadow-sm ring-1 ring-primary/30"
                               : "border-border/80 bg-card/80 text-foreground/90 hover:border-primary/45 hover:bg-accent/55 hover:text-foreground",
                           )}
                         >
                           <div className="truncate">{preset.label}</div>
                           <div
                             className={cn(
-                              "mt-0.5 truncate text-[11px]",
-                              active ? "text-primary-foreground/85" : "text-muted-foreground",
+                              "mt-0.5 truncate text-2xs font-normal",
+                              active ? "text-foreground/75" : "text-muted-foreground",
                             )}
                           >
-                            {preset.note}
+                            {subtitleText}
                           </div>
                         </button>
                       );
@@ -975,212 +1170,607 @@ function PrismuxOvernightFactoryShell({
                   </div>
                 </div>
 
-                {/* Contextual Gmail App Password Banner */}
-                {draft.preset === "gmail" ? (
+                {/* Self-contained Tencent Agent Mail (agent.qq.com) Setup Card */}
+                {isAgentMailSelected ? (
                   <div
-                    data-testid="overnight-gmail-imap-hint"
+                    data-testid="overnight-agent-mail-card"
                     data-pmx-work-panel-card="1"
-                    className="space-y-2.5 rounded-xl border border-primary/35 bg-primary/10 px-3.5 py-3 text-xs text-foreground"
+                    className="space-y-3.5 rounded-xl border border-primary/30 bg-card/75 p-4 text-xs text-foreground"
                   >
-                    <div className="flex items-start gap-2">
-                      <KeyRoundIcon
-                        className="mt-0.5 size-4 shrink-0 text-primary"
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0 space-y-1">
-                        <div className="font-semibold text-foreground">
-                          谷歌邮箱 (Gmail) 通用接入指南（无需配置 Google Cloud OAuth）
-                        </div>
-                        <p className="leading-relaxed text-foreground/90">
-                          Gmail 通用邮箱登录需先开启 Google 两步验证，再生成一个 16 位「应用专用密码 (App Password)」，直接填入下方 IMAP/SMTP 授权码即可完成绑定。
-                        </p>
+                    {/* Top Status Row */}
+                    <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-border/60 pb-3">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <BotIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                        <span className="font-semibold text-foreground">
+                          Agent 邮箱（agent.qq.com）
+                        </span>
+                        <Badge
+                          data-testid="overnight-agent-mail-cli-badge"
+                          variant={draft.agentMailCliInstalled ? "success" : "secondary"}
+                        >
+                          {draft.agentMailCliInstalled ? "agently-cli 已安装" : "未安装 CLI"}
+                        </Badge>
+                        <Badge
+                          data-testid="overnight-agent-mail-auth-badge"
+                          variant={
+                            activeAgentMailEmail
+                              ? "success"
+                              : draft.agentMailAuthInProgress
+                                ? "warning"
+                                : "outline"
+                          }
+                        >
+                          {activeAgentMailEmail
+                            ? "已授权"
+                            : draft.agentMailAuthInProgress
+                              ? "等待浏览器授权..."
+                              : "未授权"}
+                        </Badge>
                       </div>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        data-testid="overnight-agent-mail-portal-btn"
+                        data-pmx-work-panel-control="1"
+                        onClick={() => handleOpenHttpsUrl(AGENT_MAIL_PORTAL_URL)}
+                      >
+                        <ExternalLinkIcon className="size-3.5" />
+                        打开 agent.qq.com ↗
+                      </Button>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 pl-6">
-                      {GMAIL_APP_PASSWORD_LINKS.map((link) => (
+
+                    {/* Authorized Identity Highlight */}
+                    {activeAgentMailEmail ? (
+                      <div
+                        data-testid="overnight-agent-mail-address"
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-success/35 bg-success/10 px-3 py-2 text-xs text-foreground"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <CheckCircle2Icon className="size-4 shrink-0 text-success" />
+                          <span>已授权 Agent 邮箱：</span>
+                          <code className="rounded bg-card/80 px-1.5 py-0.5 font-mono font-semibold text-foreground">
+                            {activeAgentMailEmail}
+                          </code>
+                        </div>
                         <Button
-                          key={link.id}
                           type="button"
                           size="xs"
-                          variant={link.id === "apppasswords" ? "default" : "outline"}
-                          data-testid={`overnight-gmail-imap-${link.id}-btn`}
-                          data-pmx-work-panel-control={link.id === "apppasswords" ? undefined : "1"}
-                          onClick={() => handleOpenHttpsUrl(link.url)}
-                          className="h-7 rounded-lg active:translate-y-px"
+                          variant="outline"
+                          data-pmx-work-panel-control="1"
+                          onClick={() =>
+                            void handleCopyText(
+                              "agent-mail-address",
+                              activeAgentMailEmail,
+                              "Agent 邮箱地址",
+                            )
+                          }
                         >
-                          <ExternalLinkIcon className="size-3.5" />
-                          {link.label}
+                          {copiedKey === "agent-mail-address" ? (
+                            <>
+                              <CheckIcon className="size-3.5 text-success" />
+                              已复制
+                            </>
+                          ) : (
+                            <>
+                              <CopyIcon className="size-3.5" />
+                              复制邮箱
+                            </>
+                          )}
                         </Button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+                      </div>
+                    ) : (
+                      <p className="leading-relaxed text-muted-foreground">
+                        腾讯 QQ 邮箱专为 AI Agent 打造的原生邮箱，无需配置 IMAP / SMTP 授权码。按下方 3 步完成 CLI 安装与 OAuth 浏览器授权即可直接收发邮件。
+                      </p>
+                    )}
 
-                {/* Email & Write-only Auth Code */}
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium text-foreground">发件 / 收件邮箱地址</span>
-                    <Input
-                      data-pmx-work-panel-control="1"
-                      type="email"
-                      data-testid="overnight-imap-email-input"
-                      value={draft.email}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          email: e.target.value,
-                          imapUsername: e.target.value,
-                          smtpUsername: e.target.value,
-                        }))
-                      }
-                      placeholder={
-                        draft.preset === "gmail"
-                          ? "you@gmail.com"
-                          : "you@qq.com / you@163.com / you@gmail.com"
-                      }
-                      className="h-8 rounded-lg text-xs"
-                    />
-                  </label>
-
-                  <label className="space-y-1">
-                    <span className="flex items-center justify-between gap-2 text-xs font-medium text-foreground">
-                      <span>邮箱授权码 / 密码（仅写加密密封）</span>
-                      <Badge
-                        data-testid="overnight-imap-secret-badge"
-                        variant={draft.hasImapPassword ? "success" : "secondary"}
+                    {/* 3-Step Guided Action Bar */}
+                    <div className="grid gap-2.5 md:grid-cols-3">
+                      {/* Step 1: Install / Update CLI */}
+                      <div
+                        data-pmx-work-panel-card="1"
+                        className="flex flex-col justify-between gap-2 rounded-lg border border-border/70 bg-muted/25 p-3"
                       >
-                        {draft.hasImapPassword ? "已密封保存" : "未配置"}
-                      </Badge>
-                    </span>
-                    <Input
-                      data-pmx-work-panel-control="1"
-                      type="password"
-                      autoComplete="new-password"
-                      data-testid="overnight-imap-password-input"
-                      value={draft.imapPasswordInput}
-                      onChange={(e) =>
-                        setDraft((prev) => ({ ...prev, imapPasswordInput: e.target.value }))
-                      }
-                      placeholder={
-                        draft.hasImapPassword
-                          ? "已密封保存（留空保留原授权码，输入新值则覆盖）"
-                          : draft.preset === "gmail"
-                            ? "请输入 16 位 Google 应用专用密码"
-                            : "请输入邮箱客户端专用授权码"
-                      }
-                      className="h-8 rounded-lg font-mono text-xs"
-                    />
-                  </label>
-                </div>
+                        <div className="space-y-1">
+                          <div className="font-semibold text-foreground">1. 安装 / 更新 CLI</div>
+                          <code className="block truncate rounded bg-card/80 px-2 py-1 font-mono text-2xs text-muted-foreground">
+                            {AGENT_MAIL_INSTALL_CMD}
+                          </code>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="default"
+                            data-testid="overnight-agent-mail-install-btn"
+                            disabled={installingAgentMail}
+                            aria-busy={installingAgentMail}
+                            onClick={() => void handleInstallAgentMail()}
+                          >
+                            <DownloadIcon className="size-3.5" />
+                            {installingAgentMail ? "安装中..." : "一键安装 / 更新 CLI"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            data-testid="overnight-agent-mail-copy-install-btn"
+                            data-pmx-work-panel-control="1"
+                            onClick={() =>
+                              void handleCopyText(
+                                "agent-mail-install-cmd",
+                                AGENT_MAIL_INSTALL_CMD,
+                                "安装命令",
+                              )
+                            }
+                          >
+                            {copiedKey === "agent-mail-install-cmd" ? (
+                              <CheckIcon className="size-3.5 text-success" />
+                            ) : (
+                              <CopyIcon className="size-3.5" />
+                            )}
+                            复制命令
+                          </Button>
+                        </div>
+                      </div>
 
-                {/* IMAP & SMTP Host / Port / TLS */}
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div
-                    data-pmx-work-panel-card="1"
-                    className="space-y-2 rounded-lg border border-border/70 bg-card/65 p-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-foreground">IMAP 收信服务器</span>
-                      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                        <span>SSL/TLS</span>
-                        <Switch
-                          checked={draft.imapSecure}
-                          onCheckedChange={(checked) =>
-                            setDraft((prev) => ({ ...prev, imapSecure: checked }))
+                      {/* Step 2: OAuth Login */}
+                      <div
+                        data-pmx-work-panel-card="1"
+                        className="flex flex-col justify-between gap-2 rounded-lg border border-border/70 bg-muted/25 p-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="font-semibold text-foreground">2. 发起 OAuth 浏览器授权</div>
+                          <div className="text-2xs leading-relaxed text-muted-foreground">
+                            后台启动 <code className="font-mono text-foreground">agently-cli auth login</code>，浏览器授权完成后自动回填邮箱。
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="default"
+                            data-testid="overnight-agent-mail-login-btn"
+                            disabled={loggingInAgentMail}
+                            aria-busy={loggingInAgentMail}
+                            onClick={() => void handleStartAgentMailLogin()}
+                          >
+                            <KeyRoundIcon className="size-3.5" />
+                            {loggingInAgentMail ? "正在获取授权链接..." : "发起 OAuth 浏览器授权"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Step 3: Verify Identity */}
+                      <div
+                        data-pmx-work-panel-card="1"
+                        className="flex flex-col justify-between gap-2 rounded-lg border border-border/70 bg-muted/25 p-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="font-semibold text-foreground">3. 检测授权身份</div>
+                          <div className="text-2xs leading-relaxed text-muted-foreground">
+                            运行 <code className="font-mono text-foreground">agently-cli +me</code> 验证已绑定的 @agent.qq.com 邮箱地址。
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            data-testid="overnight-agent-mail-status-btn"
+                            data-pmx-work-panel-control="1"
+                            disabled={checkingAgentMail}
+                            aria-busy={checkingAgentMail}
+                            onClick={() => void handleCheckAgentMailStatus()}
+                          >
+                            <RefreshCwIcon
+                              className={cn(
+                                "size-3.5",
+                                checkingAgentMail && "animate-spin motion-reduce:animate-none",
+                              )}
+                            />
+                            {checkingAgentMail
+                              ? "检测中..."
+                              : "检测授权身份（agently-cli +me）"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Verbatim Unmodified Opaque OAuth URL Display */}
+                    {draft.agentMailPendingAuthUrl ? (
+                      <div
+                        data-testid="overnight-agent-mail-oauth-box"
+                        className="space-y-2 rounded-lg border border-primary/40 bg-primary/10 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-foreground">
+                            请点击或复制以下链接在浏览器中完成授权：
+                          </span>
+                          {draft.agentMailAuthInProgress ? (
+                            <Badge variant="warning">等待浏览器授权，自动刷新中...</Badge>
+                          ) : null}
+                        </div>
+                        <pre
+                          data-testid="overnight-agent-mail-oauth-url"
+                          className="overflow-x-auto rounded-md border border-border/75 bg-card/90 px-3 py-2 font-mono text-2xs break-all whitespace-pre-wrap text-foreground select-all"
+                        >
+                          <code>{draft.agentMailPendingAuthUrl}</code>
+                        </pre>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="default"
+                            data-testid="overnight-agent-mail-open-auth-btn"
+                            onClick={() => handleOpenHttpsUrl(draft.agentMailPendingAuthUrl!)}
+                          >
+                            <ExternalLinkIcon className="size-3.5" />
+                            在浏览器打开授权 ↗
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            data-testid="overnight-agent-mail-copy-auth-btn"
+                            data-pmx-work-panel-control="1"
+                            onClick={() =>
+                              void handleCopyText(
+                                "agent-mail-oauth-url",
+                                draft.agentMailPendingAuthUrl!,
+                                "授权链接",
+                              )
+                            }
+                          >
+                            {copiedKey === "agent-mail-oauth-url" ? (
+                              <>
+                                <CheckIcon className="size-3.5 text-success" />
+                                已复制授权链接
+                              </>
+                            ) : (
+                              <>
+                                <CopyIcon className="size-3.5" />
+                                复制授权链接
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Optional CLI Action Output / Error Feedback */}
+                    {agentMailActionDetail ? (
+                      <pre className="max-h-32 overflow-auto rounded-lg border border-border/70 bg-muted/40 px-3 py-2 font-mono text-2xs whitespace-pre-wrap text-muted-foreground">
+                        {agentMailActionDetail}
+                      </pre>
+                    ) : null}
+
+                    {/* Compact Collapsible Official Agent Prompt Tip */}
+                    <div className="overflow-hidden rounded-lg border border-border/70 bg-muted/20">
+                      <button
+                        type="button"
+                        data-testid="overnight-agent-mail-prompt-toggle"
+                        aria-expanded={agentMailPromptOpen}
+                        onClick={() => setAgentMailPromptOpen((prev) => !prev)}
+                        className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <TerminalIcon className="size-3.5 text-primary" aria-hidden="true" />
+                          <span>让 AI Agent 自动安装并配置（一键复制官方接入提示词）</span>
+                        </span>
+                        {agentMailPromptOpen ? (
+                          <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+                        ) : (
+                          <ChevronRightIcon className="size-3.5 text-muted-foreground" />
+                        )}
+                      </button>
+                      {agentMailPromptOpen ? (
+                        <div
+                          data-testid="overnight-agent-mail-prompt-body"
+                          className="space-y-2 border-t border-border/60 bg-card/75 px-3 py-2.5"
+                        >
+                          <code className="block rounded-md bg-muted/75 px-2.5 py-1.5 font-mono text-2xs break-all text-foreground select-all">
+                            {AGENT_MAIL_OFFICIAL_PROMPT}
+                          </code>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              data-testid="overnight-agent-mail-copy-prompt-btn"
+                              data-pmx-work-panel-control="1"
+                              onClick={() =>
+                                void handleCopyText(
+                                  "agent-mail-official-prompt",
+                                  AGENT_MAIL_OFFICIAL_PROMPT,
+                                  "官方 Agent 接入提示词",
+                                )
+                              }
+                            >
+                              {copiedKey === "agent-mail-official-prompt" ? (
+                                <>
+                                  <CheckIcon className="size-3.5 text-success" />
+                                  已复制提示词
+                                </>
+                              ) : (
+                                <>
+                                  <CopyIcon className="size-3.5" />
+                                  复制官方接入提示词
+                                </>
+                              )}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              data-pmx-work-panel-control="1"
+                              onClick={() => handleOpenHttpsUrl(AGENT_MAIL_DOC_URL)}
+                            >
+                              <ExternalLinkIcon className="size-3.5" />
+                              查看 cli-setup.md ↗
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Contextual NetEase 163.com / 126.com Inline Segmented Switch */}
+                    {draft.preset === "netease" ? (
+                      <div
+                        data-testid="overnight-netease-domain-bar"
+                        data-pmx-work-panel-card="1"
+                        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-primary/30 bg-primary/10 px-3.5 py-2.5 text-xs text-foreground"
+                      >
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="font-semibold text-foreground">
+                            网易邮箱域名切换（163.com / 126.com）
+                          </div>
+                          <div className="text-2xs text-muted-foreground">
+                            当前服务器：{activeNeteaseSpec.note} · 输入 @126.com 或 @163.com 邮箱时也会自动切换主机
+                          </div>
+                        </div>
+                        <ToggleGroup
+                          variant="segmented"
+                          aria-label="网易邮箱域名"
+                          data-testid="overnight-netease-domain-switch"
+                          value={[draft.neteaseDomain]}
+                          onValueChange={(next) => {
+                            const selected = next[0];
+                            if (selected === "163.com" || selected === "126.com") {
+                              setDraft((prev) =>
+                                applyNeteaseDomain(prev, selected as OvernightNeteaseDomain),
+                              );
+                            }
+                          }}
+                        >
+                          <Toggle value="163.com" data-testid="overnight-netease-domain-163">
+                            163.com
+                          </Toggle>
+                          <Toggle value="126.com" data-testid="overnight-netease-domain-126">
+                            126.com
+                          </Toggle>
+                        </ToggleGroup>
+                      </div>
+                    ) : null}
+
+                    {/* Contextual Gmail App Password Banner */}
+                    {draft.preset === "gmail" ? (
+                      <div
+                        data-testid="overnight-gmail-imap-hint"
+                        data-pmx-work-panel-card="1"
+                        className="space-y-2.5 rounded-xl border border-primary/35 bg-primary/10 px-3.5 py-3 text-xs text-foreground"
+                      >
+                        <div className="flex items-start gap-2">
+                          <KeyRoundIcon
+                            className="mt-0.5 size-4 shrink-0 text-primary"
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0 space-y-1">
+                            <div className="font-semibold text-foreground">
+                              谷歌邮箱 (Gmail) 通用接入指南（无需配置 Google Cloud OAuth）
+                            </div>
+                            <p className="leading-relaxed text-foreground/90">
+                              Gmail 通用邮箱登录需先开启 Google 两步验证，再生成一个 16 位「应用专用密码 (App Password)」，直接填入下方 IMAP/SMTP 授权码即可完成绑定。
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 pl-6">
+                          {GMAIL_APP_PASSWORD_LINKS.map((link) => (
+                            <Button
+                              key={link.id}
+                              type="button"
+                              size="xs"
+                              variant={link.id === "apppasswords" ? "default" : "outline"}
+                              data-testid={`overnight-gmail-imap-${link.id}-btn`}
+                              data-pmx-work-panel-control={
+                                link.id === "apppasswords" ? undefined : "1"
+                              }
+                              onClick={() => handleOpenHttpsUrl(link.url)}
+                            >
+                              <ExternalLinkIcon className="size-3.5" />
+                              {link.label}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Email & Write-only Auth Code */}
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-foreground">
+                          发件 / 收件邮箱地址
+                        </span>
+                        <Input
+                          size="sm"
+                          data-pmx-work-panel-control="1"
+                          type="email"
+                          data-testid="overnight-imap-email-input"
+                          value={draft.email}
+                          onChange={(e) =>
+                            setDraft((prev) => applyOvernightEmailInput(prev, e.target.value))
+                          }
+                          placeholder={
+                            draft.preset === "gmail"
+                              ? "you@gmail.com"
+                              : draft.preset === "netease"
+                                ? "you@163.com / you@126.com"
+                                : "you@qq.com / you@163.com / you@126.com / you@gmail.com"
+                          }
+                        />
+                      </label>
+
+                      <label className="space-y-1">
+                        <span className="flex items-center justify-between gap-2 text-xs font-medium text-foreground">
+                          <span>邮箱授权码 / 密码（仅写加密密封）</span>
+                          <Badge
+                            data-testid="overnight-imap-secret-badge"
+                            variant={draft.hasImapPassword ? "success" : "secondary"}
+                          >
+                            {draft.hasImapPassword ? "已密封保存" : "未配置"}
+                          </Badge>
+                        </span>
+                        <Input
+                          size="sm"
+                          data-pmx-work-panel-control="1"
+                          type="password"
+                          autoComplete="new-password"
+                          data-testid="overnight-imap-password-input"
+                          value={draft.imapPasswordInput}
+                          onChange={(e) =>
+                            setDraft((prev) => ({ ...prev, imapPasswordInput: e.target.value }))
+                          }
+                          placeholder={
+                            draft.hasImapPassword
+                              ? "已密封保存（留空保留原授权码，输入新值则覆盖）"
+                              : draft.preset === "gmail"
+                                ? "请输入 16 位 Google 应用专用密码"
+                                : "请输入邮箱客户端专用授权码"
                           }
                         />
                       </label>
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <Input
-                        data-pmx-work-panel-control="1"
-                        data-testid="overnight-imap-host-input"
-                        value={draft.imapHost}
-                        onChange={(e) =>
-                          setDraft((prev) => ({ ...prev, imapHost: e.target.value }))
-                        }
-                        placeholder="imap.qq.com"
-                        className="col-span-2 h-8 rounded-lg font-mono text-xs"
-                      />
-                      <Input
-                        data-pmx-work-panel-control="1"
-                        data-testid="overnight-imap-port-input"
-                        value={draft.imapPort}
-                        onChange={(e) =>
-                          setDraft((prev) => ({ ...prev, imapPort: e.target.value }))
-                        }
-                        placeholder="993"
-                        className="h-8 rounded-lg font-mono text-xs tabular-nums"
-                      />
-                    </div>
-                  </div>
 
-                  <div
-                    data-pmx-work-panel-card="1"
-                    className="space-y-2 rounded-lg border border-border/70 bg-card/65 p-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-foreground">SMTP 发信服务器</span>
-                      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                        <span>SSL/TLS</span>
+                    {/* IMAP & SMTP Host / Port / TLS */}
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div
+                        data-pmx-work-panel-card="1"
+                        className="space-y-2 rounded-lg border border-border/70 bg-card/65 p-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-foreground">
+                            IMAP 收信服务器
+                          </span>
+                          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                            <span>SSL/TLS</span>
+                            <Switch
+                              checked={draft.imapSecure}
+                              onCheckedChange={(checked) =>
+                                setDraft((prev) => ({ ...prev, imapSecure: checked }))
+                              }
+                            />
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <Input
+                            size="sm"
+                            data-pmx-work-panel-control="1"
+                            data-testid="overnight-imap-host-input"
+                            value={draft.imapHost}
+                            onChange={(e) =>
+                              setDraft((prev) => ({ ...prev, imapHost: e.target.value }))
+                            }
+                            placeholder="imap.qq.com"
+                            className="col-span-2"
+                          />
+                          <Input
+                            size="sm"
+                            data-pmx-work-panel-control="1"
+                            data-testid="overnight-imap-port-input"
+                            value={draft.imapPort}
+                            onChange={(e) =>
+                              setDraft((prev) => ({ ...prev, imapPort: e.target.value }))
+                            }
+                            placeholder="993"
+                          />
+                        </div>
+                      </div>
+
+                      <div
+                        data-pmx-work-panel-card="1"
+                        className="space-y-2 rounded-lg border border-border/70 bg-card/65 p-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-foreground">
+                            SMTP 发信服务器
+                          </span>
+                          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                            <span>SSL/TLS</span>
+                            <Switch
+                              checked={draft.smtpSecure}
+                              onCheckedChange={(checked) =>
+                                setDraft((prev) => ({ ...prev, smtpSecure: checked }))
+                              }
+                            />
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <Input
+                            size="sm"
+                            data-pmx-work-panel-control="1"
+                            data-testid="overnight-smtp-host-input"
+                            value={draft.smtpHost}
+                            onChange={(e) =>
+                              setDraft((prev) => ({ ...prev, smtpHost: e.target.value }))
+                            }
+                            placeholder="smtp.qq.com"
+                            className="col-span-2"
+                          />
+                          <Input
+                            size="sm"
+                            data-pmx-work-panel-control="1"
+                            data-testid="overnight-smtp-port-input"
+                            value={draft.smtpPort}
+                            onChange={(e) =>
+                              setDraft((prev) => ({ ...prev, smtpPort: e.target.value }))
+                            }
+                            placeholder="465"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Optional Separate SMTP Password */}
+                    <div className="space-y-2">
+                      <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                         <Switch
-                          checked={draft.smtpSecure}
+                          checked={draft.useSeparateSmtpPassword}
                           onCheckedChange={(checked) =>
-                            setDraft((prev) => ({ ...prev, smtpSecure: checked }))
+                            setDraft((prev) => ({ ...prev, useSeparateSmtpPassword: checked }))
                           }
                         />
+                        <span>使用与 IMAP 不同的独立 SMTP 授权码</span>
                       </label>
+                      {draft.useSeparateSmtpPassword ? (
+                        <Input
+                          size="sm"
+                          data-pmx-work-panel-control="1"
+                          type="password"
+                          autoComplete="new-password"
+                          value={draft.smtpPasswordInput}
+                          onChange={(e) =>
+                            setDraft((prev) => ({ ...prev, smtpPasswordInput: e.target.value }))
+                          }
+                          placeholder="输入独立 SMTP 授权码（留空默认复用 IMAP 授权码）"
+                          className="max-w-md"
+                        />
+                      ) : null}
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <Input
-                        data-pmx-work-panel-control="1"
-                        data-testid="overnight-smtp-host-input"
-                        value={draft.smtpHost}
-                        onChange={(e) =>
-                          setDraft((prev) => ({ ...prev, smtpHost: e.target.value }))
-                        }
-                        placeholder="smtp.qq.com"
-                        className="col-span-2 h-8 rounded-lg font-mono text-xs"
-                      />
-                      <Input
-                        data-pmx-work-panel-control="1"
-                        data-testid="overnight-smtp-port-input"
-                        value={draft.smtpPort}
-                        onChange={(e) =>
-                          setDraft((prev) => ({ ...prev, smtpPort: e.target.value }))
-                        }
-                        placeholder="465"
-                        className="h-8 rounded-lg font-mono text-xs tabular-nums"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Optional Separate SMTP Password */}
-                <div className="space-y-2">
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                    <Switch
-                      checked={draft.useSeparateSmtpPassword}
-                      onCheckedChange={(checked) =>
-                        setDraft((prev) => ({ ...prev, useSeparateSmtpPassword: checked }))
-                      }
-                    />
-                    <span>使用与 IMAP 不同的独立 SMTP 授权码</span>
-                  </label>
-                  {draft.useSeparateSmtpPassword ? (
-                    <Input
-                      data-pmx-work-panel-control="1"
-                      type="password"
-                      autoComplete="new-password"
-                      value={draft.smtpPasswordInput}
-                      onChange={(e) =>
-                        setDraft((prev) => ({ ...prev, smtpPasswordInput: e.target.value }))
-                      }
-                      placeholder="输入独立 SMTP 授权码（留空默认复用 IMAP 授权码）"
-                      className="h-8 max-w-md rounded-lg font-mono text-xs"
-                    />
-                  ) : null}
-                </div>
+                  </>
+                )}
               </div>
             ) : (
               /* Gmail OAuth2 Mode */
@@ -1214,7 +1804,7 @@ function PrismuxOvernightFactoryShell({
                         applyOvernightMailPreset({ ...prev, mode: "imap" }, "gmail"),
                       )
                     }
-                    className="h-7 shrink-0 rounded-lg active:translate-y-px"
+                    className="shrink-0"
                   >
                     <ArrowRightLeftIcon className="size-3.5" />
                     改用通用邮箱 · 谷歌邮箱 (应用专用密码，1 分钟完成)
@@ -1244,7 +1834,6 @@ function PrismuxOvernightFactoryShell({
                       disabled={disconnectingGmail}
                       aria-busy={disconnectingGmail}
                       onClick={() => void handleDisconnectGmail()}
-                      className="h-7 rounded-lg active:translate-y-px"
                     >
                       <Unlink2Icon className="size-3.5" />
                       解除绑定
@@ -1253,7 +1842,7 @@ function PrismuxOvernightFactoryShell({
                 </div>
 
                 {draft.gmailConnected && draft.gmailBoundEmail ? (
-                  <div className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-foreground">
+                  <div className="rounded-lg border border-success/35 bg-success/10 px-3 py-2 text-xs text-foreground">
                     已绑定邮箱：
                     <strong className="font-mono font-semibold">{draft.gmailBoundEmail}</strong>
                     {draft.gmailConnectedAt ? (
@@ -1286,7 +1875,7 @@ function PrismuxOvernightFactoryShell({
                         data-testid={`overnight-oauth-quick-${item.id}`}
                         data-pmx-work-panel-control="1"
                         onClick={() => handleOpenHttpsUrl(item.url)}
-                        className="h-8 justify-between rounded-lg px-2.5 text-xs active:translate-y-px"
+                        className="justify-between"
                       >
                         <span className="truncate">{item.label}</span>
                         <ExternalLinkIcon className="size-3.5 shrink-0 opacity-75" />
@@ -1310,7 +1899,6 @@ function PrismuxOvernightFactoryShell({
                       <Badge
                         data-testid="overnight-oauth-tutorial-progress-badge"
                         variant={completedStepCount === 5 ? "success" : "secondary"}
-                        className="tabular-nums"
                       >
                         已完成 {completedStepCount} / 5 步
                       </Badge>
@@ -1323,7 +1911,6 @@ function PrismuxOvernightFactoryShell({
                       data-pmx-work-panel-control="1"
                       aria-expanded={oauthTutorialOpen}
                       onClick={() => setOauthTutorialOpen((prev) => !prev)}
-                      className="h-7 rounded-lg active:translate-y-px"
                     >
                       {oauthTutorialOpen ? (
                         <>
@@ -1384,11 +1971,11 @@ function PrismuxOvernightFactoryShell({
                               data-pmx-work-panel-control={isActive ? undefined : "1"}
                               onClick={() => setActiveTutorialStep(item.step)}
                               className={cn(
-                                "flex cursor-pointer items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-all motion-reduce:transition-none active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                                "flex cursor-pointer items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-all motion-reduce:transition-none active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                                 isActive
-                                  ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
+                                  ? "border-primary/70 bg-primary/15 font-semibold text-foreground shadow-sm ring-1 ring-primary/30"
                                   : isDone
-                                    ? "border-emerald-500/45 bg-emerald-500/12 text-foreground hover:bg-emerald-500/20"
+                                    ? "border-success/45 bg-success/12 text-foreground hover:bg-success/20"
                                     : "border-border/75 bg-card/80 text-foreground/90 hover:border-primary/45 hover:bg-accent/55 hover:text-foreground",
                               )}
                             >
@@ -1396,9 +1983,7 @@ function PrismuxOvernightFactoryShell({
                                 <CheckIcon
                                   className={cn(
                                     "size-3 shrink-0",
-                                    isActive
-                                      ? "text-primary-foreground"
-                                      : "text-emerald-600 dark:text-emerald-400",
+                                    isActive ? "text-primary" : "text-success",
                                   )}
                                 />
                               ) : null}
@@ -1424,8 +2009,8 @@ function PrismuxOvernightFactoryShell({
                         </div>
 
                         {currentTutorialStepSpec.pitfall ? (
-                          <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/12 px-3 py-2 text-xs text-foreground">
-                            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                          <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-surface px-3 py-2 text-xs text-foreground">
+                            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
                             <span className="leading-relaxed">{currentTutorialStepSpec.pitfall}</span>
                           </div>
                         ) : null}
@@ -1450,11 +2035,10 @@ function PrismuxOvernightFactoryShell({
                                     "Gmail OAuth Scope",
                                   )
                                 }
-                                className="h-7 rounded-lg active:translate-y-px"
                               >
                                 {copiedKey === "oauth-scopes" ? (
                                   <>
-                                    <CheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                                    <CheckIcon className="size-3.5 text-success" />
                                     已复制 Scope
                                   </>
                                 ) : (
@@ -1465,7 +2049,7 @@ function PrismuxOvernightFactoryShell({
                                 )}
                               </Button>
                             </div>
-                            <code className="block break-all rounded-md bg-muted/75 px-2.5 py-1.5 font-mono text-[11px] text-foreground">
+                            <code className="block break-all rounded-md bg-muted/75 px-2.5 py-1.5 font-mono text-2xs text-foreground">
                               {GMAIL_OAUTH_SCOPES_TEXT}
                             </code>
                           </div>
@@ -1491,11 +2075,10 @@ function PrismuxOvernightFactoryShell({
                                     "回调地址",
                                   )
                                 }
-                                className="h-7 rounded-lg active:translate-y-px"
                               >
                                 {copiedKey === "tutorial-redirect" ? (
                                   <>
-                                    <CheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                                    <CheckIcon className="size-3.5 text-success" />
                                     已复制回调地址
                                   </>
                                 ) : (
@@ -1508,7 +2091,7 @@ function PrismuxOvernightFactoryShell({
                             </div>
                             <code
                               data-testid="overnight-tutorial-redirect-uri-code"
-                              className="block break-all rounded-md bg-muted/75 px-2.5 py-1.5 font-mono text-[11px] text-foreground"
+                              className="block break-all rounded-md bg-muted/75 px-2.5 py-1.5 font-mono text-2xs text-foreground"
                             >
                               {effectiveRedirectUri}
                             </code>
@@ -1527,7 +2110,7 @@ function PrismuxOvernightFactoryShell({
                             <div className="grid gap-2 sm:grid-cols-2">
                               <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5">
                                 {oauthReadiness.clientIdReady ? (
-                                  <CheckCircle2Icon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                                  <CheckCircle2Icon className="size-4 shrink-0 text-success" />
                                 ) : (
                                   <CircleIcon className="size-4 shrink-0 text-muted-foreground" />
                                 )}
@@ -1537,7 +2120,7 @@ function PrismuxOvernightFactoryShell({
                               </div>
                               <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5">
                                 {oauthReadiness.clientSecretReady ? (
-                                  <CheckCircle2Icon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                                  <CheckCircle2Icon className="size-4 shrink-0 text-success" />
                                 ) : (
                                   <CircleIcon className="size-4 shrink-0 text-muted-foreground" />
                                 )}
@@ -1560,7 +2143,6 @@ function PrismuxOvernightFactoryShell({
                                 disabled={!oauthReadiness.canStartOAuth || startingOAuth}
                                 aria-busy={startingOAuth}
                                 onClick={() => void handleStartGmailOAuth()}
-                                className="h-7 rounded-lg active:translate-y-px"
                               >
                                 <ExternalLinkIcon className="size-3.5" />
                                 {startingOAuth ? "正在启动授权..." : "保存凭据并启动浏览器授权"}
@@ -1587,7 +2169,6 @@ function PrismuxOvernightFactoryShell({
                                 onClick={() =>
                                   handleOpenHttpsUrl(currentTutorialStepSpec.actionUrl!)
                                 }
-                                className="h-7 rounded-lg active:translate-y-px"
                               >
                                 <ExternalLinkIcon className="size-3.5" />
                                 {currentTutorialStepSpec.actionLabel}
@@ -1623,7 +2204,6 @@ function PrismuxOvernightFactoryShell({
                                   (prev) => Math.max(1, prev - 1) as GmailOAuthTutorialStepNumber,
                                 )
                               }
-                              className="h-7 rounded-lg active:translate-y-px"
                             >
                               <ChevronLeftIcon className="size-3.5" />
                               上一步
@@ -1640,7 +2220,6 @@ function PrismuxOvernightFactoryShell({
                                   (prev) => Math.min(5, prev + 1) as GmailOAuthTutorialStepNumber,
                                 )
                               }
-                              className="h-7 rounded-lg active:translate-y-px"
                             >
                               下一步
                               <ChevronRightIcon className="size-3.5" />
@@ -1657,6 +2236,7 @@ function PrismuxOvernightFactoryShell({
                   <label className="space-y-1">
                     <span className="text-xs font-medium text-foreground">OAuth Client ID</span>
                     <Input
+                      size="sm"
                       data-pmx-work-panel-control="1"
                       data-testid="overnight-gmail-client-id-input"
                       value={draft.gmailClientId}
@@ -1664,7 +2244,6 @@ function PrismuxOvernightFactoryShell({
                         setDraft((prev) => ({ ...prev, gmailClientId: e.target.value }))
                       }
                       placeholder="xxxx.apps.googleusercontent.com"
-                      className="h-8 rounded-lg font-mono text-xs"
                     />
                   </label>
 
@@ -1676,6 +2255,7 @@ function PrismuxOvernightFactoryShell({
                       </Badge>
                     </span>
                     <Input
+                      size="sm"
                       data-pmx-work-panel-control="1"
                       data-testid="overnight-gmail-client-secret-input"
                       type="password"
@@ -1692,7 +2272,6 @@ function PrismuxOvernightFactoryShell({
                           ? "已密封保存（留空保留原密钥，输入新值则覆盖）"
                           : "输入 Google OAuth Client Secret"
                       }
-                      className="h-8 rounded-lg font-mono text-xs"
                     />
                   </label>
 
@@ -1706,6 +2285,7 @@ function PrismuxOvernightFactoryShell({
                     <div className="flex items-center gap-2">
                       <Input
                         id="overnight-gmail-redirect-uri-input"
+                        size="sm"
                         data-pmx-work-panel-control="1"
                         data-testid="overnight-gmail-redirect-uri-input"
                         value={draft.gmailRedirectUri}
@@ -1713,7 +2293,7 @@ function PrismuxOvernightFactoryShell({
                           setDraft((prev) => ({ ...prev, gmailRedirectUri: e.target.value }))
                         }
                         placeholder={defaultRedirectUri}
-                        className="h-8 min-w-0 flex-1 rounded-lg font-mono text-xs"
+                        className="min-w-0 flex-1"
                       />
                       <Button
                         type="button"
@@ -1724,11 +2304,11 @@ function PrismuxOvernightFactoryShell({
                         onClick={() =>
                           void handleCopyText("field-redirect", effectiveRedirectUri, "回调地址")
                         }
-                        className="h-8 shrink-0 rounded-lg px-2.5 active:translate-y-px"
+                        className="shrink-0"
                       >
                         {copiedKey === "field-redirect" ? (
                           <>
-                            <CheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                            <CheckIcon className="size-3.5 text-success" />
                             已复制
                           </>
                         ) : (
@@ -1751,7 +2331,6 @@ function PrismuxOvernightFactoryShell({
                     disabled={startingOAuth}
                     aria-busy={startingOAuth}
                     onClick={() => void handleStartGmailOAuth()}
-                    className="rounded-lg active:translate-y-px"
                   >
                     <ExternalLinkIcon className="size-3.5" />
                     {startingOAuth ? "正在生成授权链接..." : "一键浏览器登录绑定 Gmail"}
@@ -1763,7 +2342,6 @@ function PrismuxOvernightFactoryShell({
                       variant="outline"
                       data-pmx-work-panel-control="1"
                       onClick={() => void loadAll(false)}
-                      className="rounded-lg active:translate-y-px"
                     >
                       <RefreshCwIcon className="size-3.5" />
                       已完成授权，同步状态
@@ -1783,7 +2361,6 @@ function PrismuxOvernightFactoryShell({
                 disabled={savingMail}
                 aria-busy={savingMail}
                 onClick={() => void handleSaveMail()}
-                className="rounded-lg active:translate-y-px"
               >
                 <SaveIcon className="size-3.5" />
                 {savingMail ? "保存中..." : "保存邮箱配置"}
@@ -1797,7 +2374,6 @@ function PrismuxOvernightFactoryShell({
                 disabled={testingMail}
                 aria-busy={testingMail}
                 onClick={() => void handleTestMail()}
-                className="rounded-lg active:translate-y-px"
               >
                 <WifiIcon className="size-3.5" />
                 {testingMail ? "测试连接中..." : "测试收发连通性"}
@@ -1811,7 +2387,6 @@ function PrismuxOvernightFactoryShell({
                 disabled={sendingReport}
                 aria-busy={sendingReport}
                 onClick={() => void handleSendTestReport()}
-                className="rounded-lg active:translate-y-px"
               >
                 <SendIcon className="size-3.5" />
                 {sendingReport ? "发送中..." : "发送测试早报"}
@@ -1826,14 +2401,14 @@ function PrismuxOvernightFactoryShell({
                 className={cn(
                   "space-y-2 rounded-xl border px-3.5 py-2.5 text-xs",
                   testResult.ok
-                    ? "border-emerald-500/35 bg-emerald-500/10 text-foreground"
+                    ? "border-success/35 bg-success/10 text-foreground"
                     : "border-destructive/40 bg-destructive/10 text-foreground",
                 )}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5 font-medium">
                     {testResult.ok ? (
-                      <CheckCircle2Icon className="size-4 text-emerald-600 dark:text-emerald-400" />
+                      <CheckCircle2Icon className="size-4 text-success" />
                     ) : (
                       <XCircleIcon className="size-4 text-destructive" />
                     )}
@@ -1903,7 +2478,6 @@ function PrismuxOvernightFactoryShell({
             data-pmx-work-panel-control="1"
             aria-expanded={strategyExpanded}
             onClick={() => setStrategyExpanded((prev) => !prev)}
-            className="h-7 rounded-lg active:translate-y-px"
           >
             {strategyExpanded ? (
               <>
@@ -1951,7 +2525,6 @@ function PrismuxOvernightFactoryShell({
               variant="outline"
               data-pmx-work-panel-control="1"
               onClick={() => setStrategyExpanded(true)}
-              className="h-7 rounded-lg active:translate-y-px"
             >
               编辑执行策略
             </Button>
@@ -1962,6 +2535,7 @@ function PrismuxOvernightFactoryShell({
               <label className="space-y-1">
                 <span className="text-xs font-medium text-foreground">触发主题前缀 / 标签</span>
                 <Input
+                  size="sm"
                   data-pmx-work-panel-control="1"
                   data-testid="overnight-trigger-tag-input"
                   value={draft.triggerTag}
@@ -1969,13 +2543,13 @@ function PrismuxOvernightFactoryShell({
                     setDraft((prev) => ({ ...prev, triggerTag: e.target.value }))
                   }
                   placeholder="#factory"
-                  className="h-8 rounded-lg font-mono text-xs"
                 />
               </label>
 
               <label className="space-y-1">
                 <span className="text-xs font-medium text-foreground">轮询间隔（分钟）</span>
                 <Input
+                  size="sm"
                   data-pmx-work-panel-control="1"
                   type="number"
                   min={1}
@@ -1984,7 +2558,6 @@ function PrismuxOvernightFactoryShell({
                   onChange={(e) =>
                     setDraft((prev) => ({ ...prev, pollIntervalMinutes: e.target.value }))
                   }
-                  className="h-8 rounded-lg font-mono text-xs tabular-nums"
                 />
               </label>
             </div>
@@ -1993,7 +2566,7 @@ function PrismuxOvernightFactoryShell({
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                  <ShieldAlertIcon className="size-3.5 text-amber-500" />
+                  <ShieldAlertIcon className="size-3.5 text-warning" />
                   发件人白名单（一行一个邮箱，物理防陌生人邮件触发编码）
                 </span>
                 <Badge variant={parsedWhitelistCount > 0 ? "success" : "warning"}>
@@ -2003,6 +2576,7 @@ function PrismuxOvernightFactoryShell({
                 </Badge>
               </div>
               <Textarea
+                size="sm"
                 data-pmx-work-panel-control="1"
                 data-testid="overnight-whitelist-textarea"
                 rows={3}
@@ -2011,7 +2585,6 @@ function PrismuxOvernightFactoryShell({
                   setDraft((prev) => ({ ...prev, allowedSendersText: e.target.value }))
                 }
                 placeholder={"your-email@qq.com\nbackup@gmail.com\n*@your-team.dev"}
-                className="rounded-lg font-mono text-xs"
               />
             </div>
 
@@ -2046,26 +2619,28 @@ function PrismuxOvernightFactoryShell({
                   <label className="space-y-1">
                     <span className="block text-xs text-muted-foreground">开始时间</span>
                     <Input
+                      size="sm"
                       data-pmx-work-panel-control="1"
                       type="time"
                       value={draft.windowStart}
                       onChange={(e) =>
                         setDraft((prev) => ({ ...prev, windowStart: e.target.value }))
                       }
-                      className="h-8 w-28 rounded-lg font-mono text-xs tabular-nums"
+                      className="w-28"
                     />
                   </label>
-                  <span className="pb-1.5 text-xs text-muted-foreground">—</span>
+                  <span className="pb-1.5 text-xs text-muted-foreground">-</span>
                   <label className="space-y-1">
                     <span className="block text-xs text-muted-foreground">结束时间</span>
                     <Input
+                      size="sm"
                       data-pmx-work-panel-control="1"
                       type="time"
                       value={draft.windowEnd}
                       onChange={(e) =>
                         setDraft((prev) => ({ ...prev, windowEnd: e.target.value }))
                       }
-                      className="h-8 w-28 rounded-lg font-mono text-xs tabular-nums"
+                      className="w-28"
                     />
                   </label>
                 </div>
@@ -2080,6 +2655,7 @@ function PrismuxOvernightFactoryShell({
                   目标工作区目录（本地 Git 仓库路径）
                 </span>
                 <Input
+                  size="sm"
                   data-pmx-work-panel-control="1"
                   data-testid="overnight-workspace-input"
                   value={draft.targetWorkspaceDir}
@@ -2087,7 +2663,6 @@ function PrismuxOvernightFactoryShell({
                     setDraft((prev) => ({ ...prev, targetWorkspaceDir: e.target.value }))
                   }
                   placeholder="例如 D:\Projects\Prismux"
-                  className="h-8 rounded-lg font-mono text-xs"
                 />
               </label>
               {workspaceOptions.length > 0 ? (
@@ -2101,7 +2676,7 @@ function PrismuxOvernightFactoryShell({
                       onClick={() =>
                         setDraft((prev) => ({ ...prev, targetWorkspaceDir: proj.cwd }))
                       }
-                      className="cursor-pointer rounded-md border border-border/75 bg-card/80 px-2 py-0.5 text-xs text-foreground/90 transition-all motion-reduce:transition-none hover:border-primary/50 hover:bg-accent/60 hover:text-foreground active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="cursor-pointer rounded-md border border-border/75 bg-card/80 px-2 py-0.5 text-xs text-foreground/90 transition-all motion-reduce:transition-none hover:border-primary/50 hover:bg-accent/60 hover:text-foreground active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     >
                       {proj.title}
                     </button>
@@ -2128,36 +2703,41 @@ function PrismuxOvernightFactoryShell({
                   {providerOptions.map((prov) => {
                     if (prov.isAntigravity) {
                       return (
-                        <button
-                          key={prov.id}
-                          type="button"
-                          data-testid="overnight-provider-antigravity"
-                          data-agy-blocked="true"
-                          aria-disabled="true"
-                          title={
-                            agyCompliance.waiverAllowed
-                              ? "24h 无人值守夜间工场禁止使用个人版 Antigravity，点击前往查看合规策略"
-                              : "Antigravity 个人订阅需先签署免责协议且夜间无人值守不可用，点击前往签署与查看合规"
-                          }
-                          onClick={handleOpenWaiverSettings}
-                          className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-destructive/55 bg-muted/45 px-2.5 py-1 text-xs text-muted-foreground opacity-60 transition-all motion-reduce:transition-none hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive"
-                        >
-                          <span className="inline-flex items-center gap-1.5 grayscale">
-                            <AgentBrandLogo
-                              provider="antigravity"
-                              size={14}
-                              monochrome
-                              className="shrink-0"
-                            />
-                            <span>{prov.label}</span>
-                          </span>
-                          <span
-                            data-testid="overnight-provider-antigravity-waiver-badge"
-                            className="inline-flex items-center rounded-md border border-destructive bg-background/95 px-1.5 py-0.5 text-[11px] leading-none font-semibold text-destructive shadow-xs"
+                        <Tooltip key={prov.id}>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                data-testid="overnight-provider-antigravity"
+                                data-agy-blocked="true"
+                                aria-disabled="true"
+                                onClick={handleOpenWaiverSettings}
+                                className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-destructive/55 bg-muted/45 px-2.5 py-1 text-xs text-muted-foreground opacity-60 transition-all motion-reduce:transition-none hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive"
+                              />
+                            }
                           >
-                            {agyCompliance.badgeLabel}
-                          </span>
-                        </button>
+                            <span className="inline-flex items-center gap-1.5 grayscale">
+                              <AgentBrandLogo
+                                provider="antigravity"
+                                size={14}
+                                monochrome
+                                className="shrink-0"
+                              />
+                              <span>{prov.label}</span>
+                            </span>
+                            <span
+                              data-testid="overnight-provider-antigravity-waiver-badge"
+                              className="inline-flex items-center rounded-md border border-destructive bg-background/95 px-1.5 py-0.5 text-2xs leading-none font-semibold text-destructive shadow-xs"
+                            >
+                              {agyCompliance.badgeLabel}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipPopup side="top" sideOffset={6}>
+                            {agyCompliance.waiverAllowed
+                              ? "24h 无人值守夜间工场禁止使用个人版 Antigravity，点击前往查看合规策略"
+                              : "Antigravity 个人订阅需先签署免责协议且夜间无人值守不可用，点击前往签署与查看合规"}
+                          </TooltipPopup>
+                        </Tooltip>
                       );
                     }
 
@@ -2182,14 +2762,14 @@ function PrismuxOvernightFactoryShell({
                           })
                         }
                         className={cn(
-                          "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-all motion-reduce:transition-none active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-all motion-reduce:transition-none active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                           active
-                            ? "border-primary bg-primary font-semibold text-primary-foreground shadow-xs"
+                            ? "border-primary/70 bg-primary/15 font-semibold text-foreground shadow-sm ring-1 ring-primary/30"
                             : "border-border/80 bg-card/80 text-foreground/90 hover:border-primary/45 hover:bg-accent/55 hover:text-foreground",
                         )}
                       >
                         {prov.isChief ? (
-                          <SparklesIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                          <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
                         ) : (
                           <AgentBrandLogo
                             provider={prov.brandProvider}
@@ -2217,7 +2797,6 @@ function PrismuxOvernightFactoryShell({
                       data-testid="overnight-open-providers-settings-btn"
                       data-pmx-work-panel-control="1"
                       onClick={handleOpenProvidersSettings}
-                      className="h-7 rounded-lg active:translate-y-px"
                     >
                       前往配置智能体
                     </Button>
@@ -2245,7 +2824,7 @@ function PrismuxOvernightFactoryShell({
                     size="sm"
                     data-testid="overnight-agent-model-select"
                     data-pmx-work-panel-control="1"
-                    className="h-8 w-full rounded-lg text-xs"
+                    className="w-full"
                   >
                     <SelectValue>
                       <span className="truncate">
@@ -2265,7 +2844,7 @@ function PrismuxOvernightFactoryShell({
                             ? "跟随主秘书默认模型"
                             : "跟随提供方默认"}
                         </span>
-                        <span className="text-[11px] text-muted-foreground">
+                        <span className="text-2xs text-muted-foreground">
                           {activeProviderOption?.isChief
                             ? "自动继承主秘书槽位当前配置的执行模型"
                             : `使用 ${activeProviderOption?.label ?? "所选提供方"} 的默认模型`}
@@ -2277,7 +2856,7 @@ function PrismuxOvernightFactoryShell({
                         <div className="flex flex-col">
                           <span className="font-medium">{model.label}</span>
                           {model.subtitle ? (
-                            <span className="text-[11px] text-muted-foreground">
+                            <span className="text-2xs text-muted-foreground">
                               {model.subtitle}
                             </span>
                           ) : null}
@@ -2333,7 +2912,6 @@ function PrismuxOvernightFactoryShell({
                           agentModel: "",
                         }))
                       }
-                      className="h-7 rounded-lg active:translate-y-px"
                     >
                       改用 {firstCompliantProvider.label}
                     </Button>
@@ -2341,10 +2919,9 @@ function PrismuxOvernightFactoryShell({
                   <Button
                     type="button"
                     size="xs"
-                    variant="outline"
+                    variant="destructive-outline"
                     data-testid="overnight-agy-waiver-jump-btn"
                     onClick={handleOpenWaiverSettings}
-                    className="h-7 rounded-lg border-destructive bg-background/95 font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive active:translate-y-px"
                   >
                     <ExternalLinkIcon className="size-3.5" />
                     需签署免责 · 前往设置
@@ -2361,7 +2938,7 @@ function PrismuxOvernightFactoryShell({
               >
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                    <SparklesIcon className="size-3.5 text-primary" />
+                    <BotIcon className="size-3.5 text-primary" />
                     Oracle 只读挑刺审校
                   </div>
                   <div className="text-xs leading-relaxed text-muted-foreground">
@@ -2382,7 +2959,7 @@ function PrismuxOvernightFactoryShell({
               >
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                    <ShieldCheckIcon className="size-3.5 text-emerald-500" />
+                    <ShieldCheckIcon className="size-3.5 text-success" />
                     安全保护：仅提交本地隔离 Worktree 分支
                   </div>
                   <div className="text-xs leading-relaxed text-muted-foreground">
@@ -2407,7 +2984,6 @@ function PrismuxOvernightFactoryShell({
                 disabled={savingStrategy || agyCompliance.blocked}
                 aria-busy={savingStrategy}
                 onClick={() => void handleSaveStrategy()}
-                className="rounded-lg active:translate-y-px"
               >
                 <SaveIcon className="size-3.5" />
                 {savingStrategy ? "保存中..." : "保存执行策略"}
@@ -2443,7 +3019,6 @@ function PrismuxOvernightFactoryShell({
             disabled={pollingNow}
             aria-busy={pollingNow}
             onClick={() => void handlePollNow()}
-            className="h-7 rounded-lg active:translate-y-px"
           >
             <RefreshCwIcon
               className={cn("size-3.5", pollingNow && "animate-spin motion-reduce:animate-none")}
@@ -2520,7 +3095,7 @@ function PrismuxOvernightFactoryShell({
                         {run.branchName ? (
                           <>
                             <span>·</span>
-                            <span className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/70 px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+                            <span className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/70 px-1.5 py-0.5 font-mono text-2xs text-foreground">
                               <GitBranchIcon className="size-3" />
                               {run.branchName}
                             </span>
@@ -2541,7 +3116,6 @@ function PrismuxOvernightFactoryShell({
                         variant="outline"
                         data-pmx-work-panel-control="1"
                         onClick={() => onOpenExternalUrl(run.deepLink!)}
-                        className="h-7 rounded-lg active:translate-y-px"
                       >
                         <ExternalLinkIcon className="size-3" />
                         审查分支
@@ -2577,7 +3151,7 @@ function PrismuxOvernightFactoryShell({
             data-testid="prismux-overnight-factory-page"
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
           >
-            {/* Unified Compact Full-Bleed Header Bar — aligned 1:1 with Tasks / Board / Scheduled Tasks */}
+            {/* Unified Compact Full-Bleed Header Bar: aligned 1:1 with Tasks / Board / Scheduled Tasks */}
             <header className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5">
               <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                 <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
@@ -2600,7 +3174,6 @@ function PrismuxOvernightFactoryShell({
                   disabled={pollingNow}
                   aria-busy={pollingNow}
                   onClick={() => void handlePollNow()}
-                  className="h-7 rounded-lg active:translate-y-px"
                 >
                   <RefreshCwIcon
                     className={cn("size-3.5", pollingNow && "animate-spin motion-reduce:animate-none")}
@@ -2615,7 +3188,6 @@ function PrismuxOvernightFactoryShell({
                   disabled={loading}
                   aria-busy={loading}
                   onClick={() => void loadAll(false)}
-                  className="h-7 rounded-lg active:translate-y-px"
                 >
                   <RefreshCwIcon
                     className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")}
@@ -2697,7 +3269,6 @@ function PrismuxOvernightFactoryShell({
           disabled={loading}
           aria-busy={loading}
           onClick={() => void loadAll(false)}
-          className="h-7 rounded-lg active:translate-y-px"
         >
           <RefreshCwIcon
             className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")}
@@ -2713,8 +3284,6 @@ function PrismuxOvernightFactoryShell({
     </SettingsPageContainer>
   );
 }
-
-const MemoizedOvernightFactoryShell = memo(PrismuxOvernightFactoryShell);
 
 export function PrismuxOvernightFactorySettingsPage({
   standalone,
@@ -2756,7 +3325,7 @@ export function PrismuxOvernightFactorySettingsPage({
     }));
 
   return (
-    <MemoizedOvernightFactoryShell
+    <PrismuxOvernightFactoryShell
       standalone={isStandaloneWorkPanel}
       daemon={daemon}
       daemonReady={daemonReady}

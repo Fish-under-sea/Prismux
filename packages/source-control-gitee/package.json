@@ -1,5 +1,5 @@
 {
-  "name": "@prismux/source-control-cursor-origin",
+  "name": "@prismux/source-control-gitee",
   "private": true,
   "type": "module",
   "exports": {
@@ -17,15 +17,16 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
-    "@effect/platform-node": "catalog:",
     "@prismux/core-contracts": "workspace:*",
-    "@prismux/provider-core": "workspace:*",
     "@prismux/core-shared": "workspace:*",
+    "@prismux/provider-core": "workspace:*",
     "@prismux/source-control-core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@prismux/source-control-testing": "workspace:*",
     "@types/node": "catalog:",
     "vite-plus": "catalog:"
   }

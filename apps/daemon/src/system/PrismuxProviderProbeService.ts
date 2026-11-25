@@ -12,7 +12,9 @@ import type {
 import type { CoreRpcClient, CoreProviderSummary } from "../core/CoreRpcClient.js";
 import {
   defaultCliProbe,
+  findPackagedAntigravityCli,
   findPackagedDshDesktopCli,
+  getDefaultCliExtraDirs,
   isPlaceholderDshVersion,
   resolveDshInstalledVersionFastSync,
   type CliProbeResult
@@ -1335,35 +1337,6 @@ function extractServerAuthFromSummary(
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
-function getDefaultExtraBinaryDirs(
-  env: Record<string, string | undefined>,
-  platform: NodeJS.Platform,
-  homeDir: string
-): string[] {
-  const dirs: string[] = [];
-  if (platform === "win32") {
-    const appData = env["APPDATA"]?.trim() || join(homeDir, "AppData", "Roaming");
-    const localAppData =
-      env["LOCALAPPDATA"]?.trim() || join(homeDir, "AppData", "Local");
-    const userProfile = env["USERPROFILE"]?.trim() || homeDir;
-    const pnpmHome = env["PNPM_HOME"]?.trim();
-    if (pnpmHome) dirs.push(pnpmHome);
-    dirs.push(
-      join(localAppData, "agy", "bin"),
-      join(userProfile, ".local", "bin"),
-      join(appData, "npm"),
-      join(localAppData, "pnpm"),
-      join(localAppData, "Microsoft", "WinGet", "Links"),
-      join(userProfile, "scoop", "shims")
-    );
-  } else {
-    const pnpmHome = env["PNPM_HOME"]?.trim();
-    if (pnpmHome) dirs.push(pnpmHome);
-    dirs.push(join(homeDir, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin");
-  }
-  return dirs;
-}
-
 /**
  * Unified single-source-of-truth provider probe serving:
  * - `GET /v1/providers/probe`
@@ -1430,16 +1403,20 @@ export class PrismuxProviderProbeService {
         const direct = findExecutableOnPath([command], {
           env,
           platform,
-          extraDirs: getDefaultExtraBinaryDirs(env, platform, this.homeDir)
+          extraDirs: getDefaultCliExtraDirs(env, platform, this.homeDir)
         });
         if (direct) {
           return direct;
         }
-        if (command.trim().toLowerCase() === "dsh") {
+        const normalizedCommand = command.trim().toLowerCase();
+        if (normalizedCommand === "dsh") {
           return (
             findPackagedDshDesktopCli(env, platform, this.homeDir)?.executablePath ??
             null
           );
+        }
+        if (normalizedCommand === "agy") {
+          return findPackagedAntigravityCli(env, platform, this.homeDir);
         }
         return null;
       });

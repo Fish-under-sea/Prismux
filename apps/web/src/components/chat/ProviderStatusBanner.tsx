@@ -15,6 +15,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { RefreshIcon } from "../ui/refresh-icon";
+import { isProviderConfirmedNotInstalled } from "../settings/providerStatus";
 
 function getIncompatibleVersion(status: ServerProvider) {
   const compatibility = status.compatibilityAdvisory;
@@ -26,7 +27,7 @@ function getIncompatibleVersion(status: ServerProvider) {
 }
 
 export function getProviderStatusBannerKey(status: ServerProvider | null): string | null {
-  if (!status || status.status === "disabled") return null;
+  if (!status || !status.enabled || status.status === "disabled") return null;
   const incompatible = getIncompatibleVersion(status);
   if (incompatible) {
     return [
@@ -114,7 +115,7 @@ export function getProviderStatusMessage(
   }
   if (status.message) return status.message;
   const providerName = status.displayName?.trim() || formatProviderDriverKindLabel(status.driver);
-  if (!status.installed && hasProviderSetup(status)) {
+  if (isProviderConfirmedNotInstalled(status) && hasProviderSetup(status)) {
     return resolve(
       msg("Open provider setup to install {provider} on this environment.", {
         provider: formatProviderDriverKindLabel(status.driver),

@@ -32,6 +32,7 @@ import {
 import { AlertTriangleIcon, ChevronRightIcon } from "lucide-react";
 import {
   AgentBrandLogo,
+  resolveAcpAgentBrandKey,
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
 import type { ProviderComplianceBlock } from "../../prismux/SubscriptionRiskWaiverSection";
@@ -1322,7 +1323,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                               })
                                 ? "dsh"
                                 : entry.driverKind === "acpRegistry"
-                                  ? entry.acpRegistryAgentId || entry.displayName || entry.instanceId
+                                  ? (resolveAcpAgentBrandKey({
+                                      agentId: entry.acpRegistryAgentId,
+                                      instanceId: entry.instanceId,
+                                      displayName: entry.displayName,
+                                    }) ??
+                                    (entry.acpRegistryAgentId ||
+                                      entry.displayName ||
+                                      entry.instanceId))
                                   : entry.driverKind
                             }
                             size={16}

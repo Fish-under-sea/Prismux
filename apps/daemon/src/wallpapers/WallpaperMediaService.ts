@@ -165,6 +165,12 @@ const ALLOWED_VIDEO_EXTENSIONS = new Set<string>([
   ".m4v"
 ]);
 
+const ALL_RECOGNIZED_VIDEO_EXTENSIONS = new Set<string>([
+  ...ALLOWED_VIDEO_EXTENSIONS,
+  ".mkv",
+  ".avi"
+]);
+
 const ALLOWED_IMPORT_EXTENSIONS = new Set<string>([
   ...ALLOWED_IMAGE_EXTENSIONS,
   ...ALLOWED_VIDEO_EXTENSIONS
@@ -184,15 +190,21 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".webm": "video/webm",
   ".mov": "video/quicktime",
   ".m4v": "video/mp4",
+  ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo",
   ".mp3": "audio/mpeg",
   ".ogg": "audio/ogg",
   ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
+  ".flac": "audio/flac",
+  ".aac": "audio/aac",
   ".html": "text/html; charset=utf-8",
   ".htm": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".mjs": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
   ".wasm": "application/wasm",
   ".woff": "font/woff",
@@ -201,7 +213,11 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".otf": "font/otf",
   ".glsl": "text/plain; charset=utf-8",
   ".frag": "text/plain; charset=utf-8",
-  ".vert": "text/plain; charset=utf-8"
+  ".vert": "text/plain; charset=utf-8",
+  ".skel": "application/octet-stream",
+  ".atlas": "text/plain; charset=utf-8",
+  ".moc3": "application/octet-stream",
+  ".bin": "application/octet-stream"
 };
 
 export const BUILTIN_WEBWALLGL_WALLPAPERS: readonly WallpaperInventoryItem[] = [];
@@ -290,6 +306,34 @@ export function isPathStrictlyInsideDir(
   } catch {
     return false;
   }
+}
+
+/**
+ * Resolves a raw local filesystem relative path (e.g. from Steam `project.json`)
+ * strictly inside `rootDir` WITHOUT calling `decodeURIComponent()` so filenames
+ * containing literal `%` characters are preserved intact.
+ */
+export function safeResolveLocalPath(
+  rootDir: string,
+  rawRelativePath: string
+): string | null {
+  if (rawRelativePath.includes("\0")) {
+    return null;
+  }
+  const normalizedSlashes = rawRelativePath.replace(/\\/g, "/");
+  const segments = normalizedSlashes.split("/");
+  if (segments.some((seg) => seg === "..")) {
+    return null;
+  }
+  const cleanRel = normalizedSlashes.replace(/^\/+/, "");
+  if (cleanRel.length === 0) {
+    return null;
+  }
+  const candidate = resolve(rootDir, cleanRel);
+  if (!isPathStrictlyInsideDir(candidate, rootDir)) {
+    return null;
+  }
+  return candidate;
 }
 
 export function safeResolveInsideDir(
@@ -537,6 +581,307 @@ export function readImageDimensions(
   }
 }
 
+const VIDEO_HEAD_PROBE_BYTES = 128 * 1024;
+const VIDEO_TAIL_PROBE_BYTES = 256 * 1024;
+const MAX_MOOV_READ_BYTES = 2 * 1024 * 1024;
+
+function parseMp4TkhdAt(
+  buf: Buffer,
+  payloadStart: number,
+  payloadEnd: number
+): { width: number; height: number } | null {
+  if (payloadStart + 84 > payloadEnd) {
+    return null;
+  }
+  const version = buf[payloadStart]!;
+  if (version !== 0 && version !== 1) {
+    return null;
+  }
+  const matrixOff = payloadStart + (version === 1 ? 52 : 40);
+  const dimOff = payloadStart + (version === 1 ? 88 : 76);
+  if (dimOff + 8 > payloadEnd) {
+    return null;
+  }
+  const rawWidth = Math.round(buf.readUInt32BE(dimOff) / 65536);
+  const rawHeight = Math.round(buf.readUInt32BE(dimOff + 4) / 65536);
+  if (
+    rawWidth < 16 ||
+    rawHeight < 16 ||
+    rawWidth > 16_384 ||
+    rawHeight > 16_384
+  ) {
+    return null;
+  }
+  // Check 2x2 transform matrix [a, b; c, d] for 90°/270° rotation
+  const a = buf.readInt32BE(matrixOff);
+  const b = buf.readInt32BE(matrixOff + 4);
+  const c = buf.readInt32BE(matrixOff + 12);
+  const d = buf.readInt32BE(matrixOff + 16);
+  const rotated90 = a === 0 && d === 0 && b !== 0 && c !== 0;
+  return rotated90
+    ? { width: rawHeight, height: rawWidth }
+    : { width: rawWidth, height: rawHeight };
+}
+
+function parseMp4BoxesForDimensions(
+  buf: Buffer,
+  start: number,
+  end: number,
+  depth = 0
+): { width: number; height: number } | null {
+  if (depth > 6) {
+    return null;
+  }
+  let best: { width: number; height: number } | null = null;
+  let offset = start;
+  while (offset + 8 <= end) {
+    let boxSize = buf.readUInt32BE(offset);
+    const boxType = buf.subarray(offset + 4, offset + 8).toString("ascii");
+    let headerSize = 8;
+    if (boxSize === 1) {
+      if (offset + 16 > end) break;
+      const hi = buf.readUInt32BE(offset + 8);
+      const lo = buf.readUInt32BE(offset + 12);
+      boxSize = hi * 0x100000000 + lo;
+      headerSize = 16;
+    } else if (boxSize === 0) {
+      boxSize = end - offset;
+    }
+    if (!Number.isFinite(boxSize) || boxSize < headerSize) {
+      break;
+    }
+    const boxEnd = Math.min(end, offset + boxSize);
+    const payloadStart = offset + headerSize;
+    if (boxType === "tkhd") {
+      const dims = parseMp4TkhdAt(buf, payloadStart, boxEnd);
+      if (dims && (!best || dims.width * dims.height > best.width * best.height)) {
+        best = dims;
+      }
+    } else if (boxType === "moov" || boxType === "trak") {
+      const nested = parseMp4BoxesForDimensions(buf, payloadStart, boxEnd, depth + 1);
+      if (nested && (!best || nested.width * nested.height > best.width * best.height)) {
+        best = nested;
+      }
+    }
+    if (offset + boxSize <= offset) break;
+    offset += boxSize;
+  }
+  return best;
+}
+
+function scanBufferForTkhd(buf: Buffer): { width: number; height: number } | null {
+  let best: { width: number; height: number } | null = null;
+  let searchFrom = 4;
+  while (searchFrom < buf.length - 84) {
+    const idx = buf.indexOf("tkhd", searchFrom, "ascii");
+    if (idx < 4) break;
+    const boxSize = buf.readUInt32BE(idx - 4);
+    if (boxSize >= 84 && boxSize <= 512) {
+      const boxEnd = Math.min(buf.length, idx - 4 + boxSize);
+      const dims = parseMp4TkhdAt(buf, idx + 4, boxEnd);
+      if (dims && (!best || dims.width * dims.height > best.width * best.height)) {
+        best = dims;
+      }
+    }
+    searchFrom = idx + 4;
+  }
+  return best;
+}
+
+function readEbmlVint(
+  buf: Buffer,
+  offset: number,
+  maskLengthBit: boolean
+): { value: number; length: number } | null {
+  if (offset >= buf.length) return null;
+  const first = buf[offset]!;
+  if (first === 0) return null;
+  let mask = 0x80;
+  let length = 1;
+  while (length <= 8 && (first & mask) === 0) {
+    mask >>= 1;
+    length += 1;
+  }
+  if (length > 8 || offset + length > buf.length) return null;
+  let value = maskLengthBit ? first & ~mask : first;
+  for (let i = 1; i < length; i += 1) {
+    value = value * 256 + buf[offset + i]!;
+  }
+  return { value, length };
+}
+
+function parseEbmlVideoDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (
+    buf.length < 32 ||
+    buf[0] !== 0x1a ||
+    buf[1] !== 0x45 ||
+    buf[2] !== 0xdf ||
+    buf[3] !== 0xa3
+  ) {
+    return null;
+  }
+
+  const CONTAINER_IDS = new Set([
+    0x18538067, // Segment
+    0x1654ae6b, // Tracks
+    0xae,       // TrackEntry
+    0xe0        // Video
+  ]);
+
+  let width: number | null = null;
+  let height: number | null = null;
+
+  const walk = (start: number, end: number, inVideo: boolean, depth: number): boolean => {
+    if (depth > 6) return false;
+    let offset = start;
+    while (offset < end) {
+      const id = readEbmlVint(buf, offset, false);
+      if (!id) break;
+      offset += id.length;
+      const size = readEbmlVint(buf, offset, true);
+      if (!size) break;
+      offset += size.length;
+      // Unknown-size EBML element (all data bits 1) extends to parent end
+      const isUnknownSize =
+        size.length <= 4 && size.value === (1 << (7 * size.length)) - 1;
+      const dataEnd = isUnknownSize ? end : Math.min(end, offset + size.value);
+      if (dataEnd < offset) break;
+
+      if (CONTAINER_IDS.has(id.value)) {
+        const nextInVideo = inVideo || id.value === 0xe0;
+        if (walk(offset, dataEnd, nextInVideo, depth + 1)) {
+          return true;
+        }
+      } else if (inVideo && (id.value === 0xb0 || id.value === 0xba)) {
+        const byteLen = dataEnd - offset;
+        if (byteLen >= 1 && byteLen <= 4) {
+          let val = 0;
+          for (let i = 0; i < byteLen; i += 1) {
+            val = val * 256 + buf[offset + i]!;
+          }
+          if (val >= 16 && val <= 16_384) {
+            if (id.value === 0xb0) width = val;
+            if (id.value === 0xba) height = val;
+            if (width !== null && height !== null) {
+              return true;
+            }
+          }
+        }
+      }
+
+      if (dataEnd <= offset) break;
+      offset = dataEnd;
+    }
+    return false;
+  };
+
+  walk(0, buf.length, false, 0);
+  if (width !== null && height !== null) {
+    return { width, height };
+  }
+  return null;
+}
+
+/**
+ * Pure-Node binary video dimension parser supporting MP4/MOV/M4V (`moov`/`tkhd` in head,
+ * top-level box seek over large `mdat`, or EOF tail) and WebM/MKV (EBML `PixelWidth`/`PixelHeight`).
+ */
+export function readVideoDimensions(
+  filePath: string
+): { width: number; height: number } | null {
+  let fd: number | undefined;
+  try {
+    const stats = statSync(filePath);
+    if (!stats.isFile() || stats.size < 16) {
+      return null;
+    }
+    const fileSize = stats.size;
+    fd = openSync(filePath, "r");
+
+    // 1. Read head 128 KB (covers fast-start MP4 and WebM/MKV headers)
+    const headLen = Math.min(fileSize, VIDEO_HEAD_PROBE_BYTES);
+    const headBuf = Buffer.allocUnsafe(headLen);
+    const headRead = readSync(fd, headBuf, 0, headLen, 0);
+    const head = headBuf.subarray(0, headRead);
+
+    // WebM / MKV EBML check
+    if (
+      head.length >= 4 &&
+      head[0] === 0x1a &&
+      head[1] === 0x45 &&
+      head[2] === 0xdf &&
+      head[3] === 0xa3
+    ) {
+      return parseEbmlVideoDimensions(head);
+    }
+
+    // MP4 / MOV fast-start head parse
+    const fromHead = parseMp4BoxesForDimensions(head, 0, head.length) ?? scanBufferForTkhd(head);
+    if (fromHead) {
+      return fromHead;
+    }
+
+    // 2. Walk top-level MP4 boxes to jump directly over huge `mdat` (e.g. 478 MB) straight to `moov`
+    if (fileSize > headLen) {
+      const hdr = Buffer.allocUnsafe(16);
+      let pos = 0;
+      for (let i = 0; i < 64 && pos + 8 <= fileSize; i += 1) {
+        const got = readSync(fd, hdr, 0, Math.min(16, fileSize - pos), pos);
+        if (got < 8) break;
+        let boxSize = hdr.readUInt32BE(0);
+        const boxType = hdr.subarray(4, 8).toString("ascii");
+        let headerSize = 8;
+        if (boxSize === 1) {
+          if (got < 16) break;
+          boxSize = hdr.readUInt32BE(8) * 0x100000000 + hdr.readUInt32BE(12);
+          headerSize = 16;
+        } else if (boxSize === 0) {
+          boxSize = fileSize - pos;
+        }
+        if (!Number.isFinite(boxSize) || boxSize < headerSize) break;
+        if (boxType === "moov") {
+          const readLen = Math.min(boxSize, MAX_MOOV_READ_BYTES, fileSize - pos);
+          const moovBuf = Buffer.allocUnsafe(readLen);
+          const moovGot = readSync(fd, moovBuf, 0, readLen, pos);
+          const moovSlice = moovBuf.subarray(0, moovGot);
+          const fromMoov =
+            parseMp4BoxesForDimensions(moovSlice, 0, moovSlice.length) ??
+            scanBufferForTkhd(moovSlice);
+          if (fromMoov) {
+            return fromMoov;
+          }
+          break;
+        }
+        if (pos + boxSize <= pos) break;
+        pos += boxSize;
+      }
+
+      // 3. Tail 256 KB fallback (catches non-standard EOF moov layouts)
+      const tailLen = Math.min(fileSize, VIDEO_TAIL_PROBE_BYTES);
+      const tailOffset = Math.max(0, fileSize - tailLen);
+      const tailBuf = Buffer.allocUnsafe(tailLen);
+      const tailGot = readSync(fd, tailBuf, 0, tailLen, tailOffset);
+      const tail = tailBuf.subarray(0, tailGot);
+      const fromTail = scanBufferForTkhd(tail);
+      if (fromTail) {
+        return fromTail;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore close failure
+      }
+    }
+  }
+}
+
 export function classifyOrientation(
   width: number | null,
   height: number | null
@@ -590,7 +935,7 @@ function normalizeWallpaperType(
   }
   if (fileName) {
     const ext = extname(fileName).toLowerCase();
-    if (ALLOWED_VIDEO_EXTENSIONS.has(ext)) {
+    if (ALL_RECOGNIZED_VIDEO_EXTENSIONS.has(ext)) {
       return "video";
     }
     if (ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
@@ -1194,23 +1539,41 @@ export class WallpaperMediaService {
     rawId: string,
     rawRelPath: string,
     req: IncomingMessage,
-    res: ServerResponse
+    res: ServerResponse,
+    options?: { refererWallpaperId?: string | null }
   ): Promise<void> {
     if (hasRawTraversal(rawRelPath)) {
       this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Path traversal is forbidden.");
       return;
     }
 
-    const entry = await this.resolveIndexedEntry(rawId);
+    let entry = await this.resolveIndexedEntry(rawId);
+    let effectiveRelPath = rawRelPath;
+
+    // Steam Web wallpapers (e.g. Spine) may fetch `../assets/...` which normalizes to
+    // `/web-t/<token>/assets/...`; re-bind inside the verified same-token Referer's webRootDir.
+    if ((!entry || !entry.webRootDir) && options?.refererWallpaperId) {
+      const refererEntry = await this.resolveIndexedEntry(options.refererWallpaperId);
+      if (refererEntry && refererEntry.webRootDir) {
+        entry = refererEntry;
+        effectiveRelPath =
+          rawRelPath.trim().length > 0 ? `${rawId}/${rawRelPath}` : rawId;
+        if (hasRawTraversal(effectiveRelPath)) {
+          this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Path traversal is forbidden.");
+          return;
+        }
+      }
+    }
+
     if (!entry || !entry.webRootDir) {
       this.writeError(res, 404, "WEB_WALLPAPER_NOT_FOUND", "Web wallpaper not found.");
       return;
     }
 
     const requestedRel =
-      rawRelPath.trim().length === 0
+      effectiveRelPath.trim().length === 0
         ? (entry.webEntryRelPath ?? "index.html")
-        : rawRelPath;
+        : effectiveRelPath;
 
     const resolvedAsset = safeResolveInsideDir(entry.webRootDir, requestedRel);
     if (resolvedAsset === null) {
@@ -1223,7 +1586,64 @@ export class WallpaperMediaService {
       return;
     }
 
+    const ext = extname(resolvedAsset).toLowerCase();
+    if ((ext === ".html" || ext === ".htm") && !req.headers.range) {
+      this.serveWebHtmlWithBridge(resolvedAsset, entry, req, res);
+      return;
+    }
+
     this.streamValidatedFile(resolvedAsset, entry.webRootDir, req, res, "no-cache");
+  }
+
+  /**
+   * Serves Steam Web wallpaper HTML entry points with a lightweight Wallpaper Engine
+   * `window.wallpaperPropertyListener` & `window.wallpaperRegisterAudioListener` bridge
+   * so postMessage updates and `project.json` default properties activate Spine/Live2D
+   * wallpapers that wait for `applyUserProperties(...)` before rendering.
+   */
+  private serveWebHtmlWithBridge(
+    filePath: string,
+    entry: IndexedWallpaperEntry,
+    req: IncomingMessage,
+    res: ServerResponse
+  ): void {
+    if (!entry.webRootDir || !isPathStrictlyInsideDir(filePath, entry.webRootDir)) {
+      this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "File is outside allowed directory.");
+      return;
+    }
+
+    let htmlText: string;
+    try {
+      htmlText = readFileSync(filePath, "utf8");
+    } catch {
+      this.writeError(res, 404, "FILE_NOT_FOUND", "Web wallpaper HTML missing.");
+      return;
+    }
+
+    const defaultProps: Record<string, { value: string | number | boolean | null }> = {};
+    for (const prop of entry.item.userProperties ?? []) {
+      defaultProps[prop.name] = { value: prop.defaultValue };
+    }
+    const serializedDefaults = JSON.stringify(defaultProps).replace(/</g, "\\u003c");
+    const bridgeScript = `<script data-pmx-we-bridge="1">(()=>{const d=${serializedDefaults};let delivered=false,lastVals=Object.create(null),timer=null;if(typeof window.wallpaperRegisterAudioListener!=="function"){window.wallpaperRegisterAudioListener=function(cb){window.__pmxWeAudioListener=cb;};}function applyProps(raw,isInitial){const l=window.wallpaperPropertyListener;if(!l||typeof l.applyUserProperties!=="function")return false;const out={};let n=0;for(const k of Object.keys(raw)){const item=raw[k];if(!item||typeof item!=="object"||!("value" in item))continue;if(!isInitial&&Object.prototype.hasOwnProperty.call(lastVals,k)&&lastVals[k]===item.value)continue;lastVals[k]=item.value;out[k]=item;n++;}if(n>0||isInitial){try{l.applyUserProperties(out);}catch{}}return true;}function deliver(raw,gen){const isInit=!delivered;const merged=isInit?Object.assign({},d,raw||{}):(raw||{});if(applyProps(merged,isInit)){delivered=true;if(timer){clearTimeout(timer);timer=null;}}const l=window.wallpaperPropertyListener;if(gen&&l){if(typeof l.applyGeneralProperties==="function"){try{l.applyGeneralProperties(gen);}catch{}}if(typeof gen.paused==="boolean"&&typeof l.setPaused==="function"){try{l.setPaused(gen.paused);}catch{}}}}window.addEventListener("message",(e)=>{const m=e&&e.data;if(!m||typeof m!=="object")return;if(m.type==="wallpaperPropertyListener"){deliver(m.applyUserProperties,m.applyGeneralProperties);}});function scheduleFallback(){if(delivered||timer)return;timer=setTimeout(()=>{timer=null;if(!delivered)deliver({},null);},80);}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",scheduleFallback,{once:true});}else{scheduleFallback();}window.addEventListener("load",scheduleFallback,{once:true});})();</script>`;
+
+    const headOpenMatch = /<head\b[^>]*>/i.exec(htmlText);
+    const injectedHtml = headOpenMatch
+      ? `${htmlText.slice(0, headOpenMatch.index + headOpenMatch[0].length)}${bridgeScript}${htmlText.slice(headOpenMatch.index + headOpenMatch[0].length)}`
+      : `${bridgeScript}${htmlText}`;
+
+    const body = Buffer.from(injectedHtml, "utf8");
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": String(body.byteLength),
+      "cache-control": "no-cache",
+      "cross-origin-resource-policy": "cross-origin"
+    });
+    if (req.method?.toUpperCase() === "HEAD") {
+      res.end();
+      return;
+    }
+    res.end(body);
   }
 
   private async resolveIndexedEntry(
@@ -1393,9 +1813,9 @@ export class WallpaperMediaService {
           ? project["preview"].trim()
           : null;
 
-      const mediaFile = rawFile ? safeResolveInsideDir(itemDir, rawFile) : null;
+      const mediaFile = rawFile ? safeResolveLocalPath(itemDir, rawFile) : null;
       const previewFile = rawPreview
-        ? safeResolveInsideDir(itemDir, rawPreview)
+        ? safeResolveLocalPath(itemDir, rawPreview)
         : null;
 
       const resolvedMedia =
@@ -1411,7 +1831,9 @@ export class WallpaperMediaService {
         : [];
 
       let dimensions: { width: number; height: number } | null = null;
-      if (type === "image" && resolvedMedia) {
+      if (type === "video" && resolvedMedia) {
+        dimensions = readVideoDimensions(resolvedMedia);
+      } else if (type === "image" && resolvedMedia) {
         dimensions = readImageDimensions(resolvedMedia);
       }
       if (!dimensions && resolvedPreview) {
@@ -1609,7 +2031,9 @@ export class WallpaperMediaService {
         continue;
       }
 
-      const dimensions = isVideo ? null : readImageDimensions(fullPath);
+      const dimensions = isVideo
+        ? readVideoDimensions(fullPath)
+        : readImageDimensions(fullPath);
       const encodedId = encodeURIComponent(id);
       const mediaUrl = `/v1/wallpapers/media/${encodedId}`;
       const previewUrl = isVideo ? null : `/v1/wallpapers/preview/${encodedId}`;
@@ -1741,7 +2165,7 @@ export class WallpaperMediaService {
     const stream = createReadStream(filePath, {
       start: parsedRange.start,
       end: parsedRange.end,
-      highWaterMark: Math.min(64 * 1024, DEFAULT_CHUNK_BYTES)
+      highWaterMark: Math.min(256 * 1024, DEFAULT_CHUNK_BYTES)
     });
 
     const cleanup = () => {

@@ -25,6 +25,9 @@ import {
   SubscriptionWaiverError,
   SubscriptionWaiverStore,
   classifyProviderAuth,
+  findPackagedAntigravityCli,
+  findPackagedDshDesktopCli,
+  getDefaultCliExtraDirs,
   parseCodexRoutingConfigToml,
   resolveDshInstalledVersionFastSync
 } from "../index.js";
@@ -919,5 +922,91 @@ describe("Prismux v3 Unified Provider Probe + Merged Subscription Risk Waiver", 
     assert.equal(snap.status, "ready");
     assert.equal(snap.version, "0.2.2-rc.4");
     assert.equal(snap.authLabel, AUTH_LABEL_API_CUSTOM);
+  });
+
+  test("Daemon mirrors Windows Uninstall Registry + modern CLI bin dir discovery for DSH NEXT and Antigravity", () => {
+    const root = makeTempDir("pmx-daemon-reg-discover-");
+    const customDshDir = join(root, "CustomApps", "DSH NEXT");
+    const customDshRes = join(customDshDir, "resources");
+    mkdirSync(customDshRes, { recursive: true });
+    const dshExe = join(customDshDir, "DSH NEXT.exe");
+    writeFileSync(dshExe, "");
+
+    const headerJson = Buffer.from(
+      JSON.stringify({
+        files: {
+          lib: {
+            files: {
+              "desktop-cli.js": { size: 9, offset: "0" }
+            }
+          }
+        }
+      }),
+      "utf8"
+    );
+    const alignedJsonSize = Math.ceil(headerJson.length / 4) * 4;
+    const headerSize = alignedJsonSize + 8;
+    const header = Buffer.alloc(16 + alignedJsonSize);
+    header.writeUInt32LE(4, 0);
+    header.writeUInt32LE(headerSize, 4);
+    header.writeUInt32LE(headerSize - 4, 8);
+    header.writeUInt32LE(headerJson.length, 12);
+    headerJson.copy(header, 16);
+    writeFileSync(
+      join(customDshRes, "app.asar"),
+      Buffer.concat([header, Buffer.from("export {};", "utf8")])
+    );
+
+    const customAgyDir = join(root, "CustomApps", "Antigravity");
+    const customAgyBin = join(customAgyDir, "bin");
+    mkdirSync(customAgyBin, { recursive: true });
+    const agyExe = join(customAgyBin, "agy.exe");
+    writeFileSync(agyExe, "");
+
+    const regOutput = [
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\dsh-guid",
+      "    DisplayName    REG_SZ    DSH NEXT 2.0.24-next",
+      `    UninstallString    REG_SZ    "${join(customDshDir, "Uninstall DSH NEXT.exe")}" /currentuser`,
+      "",
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\agy-guid",
+      "    DisplayName    REG_SZ    Antigravity 2.35.1",
+      `    InstallLocation    REG_SZ    ${customAgyDir}`,
+      "",
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\skin-guid",
+      "    DisplayName    REG_SZ    AntigravityStarSuiteSkin",
+      `    InstallLocation    REG_SZ    ${root}`
+    ].join("\r\n");
+
+    const mockEnv = { USERPROFILE: root, LOCALAPPDATA: join(root, "AppData", "Local") };
+    const foundDsh = findPackagedDshDesktopCli(mockEnv, "win32", root, {
+      queryRegistry: () => regOutput,
+      scanDriveRoots: false
+    });
+    assert.equal(foundDsh?.executablePath, dshExe);
+
+    const foundAgy = findPackagedAntigravityCli(mockEnv, "win32", root, {
+      queryRegistry: () => regOutput,
+      scanDriveRoots: false
+    });
+    assert.equal(foundAgy, agyExe);
+
+    const extraDirs = getDefaultCliExtraDirs(
+      {
+        USERPROFILE: root,
+        LOCALAPPDATA: join(root, "AppData", "Local"),
+        APPDATA: join(root, "AppData", "Roaming"),
+        VOLTA_HOME: join(root, "volta"),
+        NVM_SYMLINK: join(root, "nvm")
+      },
+      "win32",
+      root
+    );
+    assert.ok(extraDirs.includes(join(root, ".bun", "bin")));
+    assert.ok(extraDirs.includes(join(root, "scoop", "shims")));
+    assert.ok(extraDirs.includes(join(root, "volta", "bin")));
+    assert.ok(extraDirs.includes(join(root, "nvm")));
+    assert.ok(extraDirs.includes(join(root, ".opencode", "bin")));
+    assert.ok(extraDirs.includes(join(root, ".dsh", "bin")));
+    assert.ok(extraDirs.includes(join(root, "AppData", "Local", "DSH NEXT", "bin")));
   });
 });

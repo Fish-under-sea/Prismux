@@ -54,6 +54,24 @@ describe("compatibility banners", () => {
     expect(
       getProviderStatusBannerKey({
         ...provider,
+        enabled: false,
+        installed: false,
+        status: "error",
+      }),
+    ).toBeNull();
+    const { compatibilityAdvisory: _advisory, ...baseProvider } = provider;
+    expect(
+      getProviderStatusMessage({
+        ...baseProvider,
+        enabled: false,
+        installed: false,
+        status: "disabled",
+        setup: { canInstall: true, canAuthenticate: true },
+      }),
+    ).not.toContain("install");
+    expect(
+      getProviderStatusBannerKey({
+        ...provider,
         compatibilityAdvisory: { ...provider.compatibilityAdvisory!, status: "graceful" },
       }),
     ).toBeNull();

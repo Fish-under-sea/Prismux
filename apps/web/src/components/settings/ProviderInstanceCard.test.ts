@@ -315,7 +315,7 @@ describe("ProviderInstanceCard dual-entry deletion controls", () => {
     expect(listHtml).toContain("items-center gap-2.5");
     expect(listHtml).not.toContain("items-start gap-3");
     expect(listHtml).toContain('data-provider-list-status="true"');
-    expect(listHtml).toContain("text-2xs font-normal leading-snug text-muted-foreground/65");
+    expect(listHtml).toContain("text-[11px] font-normal leading-snug text-muted-foreground");
     expect(listHtml).toContain("truncate whitespace-nowrap");
     expect(listHtml).not.toContain("line-clamp-2");
     expect(listHtml).toContain("agy CLI · Ultra");
@@ -349,5 +349,61 @@ describe("ProviderInstanceCard dual-entry deletion controls", () => {
     expect(editorHtml).toContain('data-provider-advanced-toggle="antigravity"');
     expect(editorHtml).not.toContain(">Status</h3>");
     expect(editorHtml).toContain("Choose whether new sessions open in Chat or CLI mode.");
+  });
+
+  it("never shows missing-CLI install prompt when provider is disabled, and shows it when enabled and missing", () => {
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const claudeDriver = ProviderDriverKind.make("claudeAgent");
+    const disabledEditorHtml = renderCard({
+      mode: "editor",
+      instanceId: claudeId,
+      instance: {
+        driver: claudeDriver,
+        displayName: "Claude",
+        enabled: false,
+      },
+      liveProvider: {
+        instanceId: claudeId,
+        driver: claudeDriver,
+        displayName: "Claude",
+        enabled: false,
+        installed: false,
+        version: null,
+        status: "disabled",
+        auth: { status: "unknown" },
+        checkedAt: IsoDateTime.make("2026-11-24T00:00:00.000Z"),
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+    });
+    expect(disabledEditorHtml).not.toContain('data-slot="agent-install-prompt"');
+    expect(disabledEditorHtml).not.toContain("Install Claude");
+
+    const enabledMissingEditorHtml = renderCard({
+      mode: "editor",
+      instanceId: claudeId,
+      instance: {
+        driver: claudeDriver,
+        displayName: "Claude",
+        enabled: true,
+      },
+      liveProvider: {
+        instanceId: claudeId,
+        driver: claudeDriver,
+        displayName: "Claude",
+        enabled: true,
+        installed: false,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        checkedAt: IsoDateTime.make("2026-11-24T00:00:00.000Z"),
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+    });
+    expect(enabledMissingEditorHtml).toContain('data-slot="agent-install-prompt"');
+    expect(enabledMissingEditorHtml).toContain("Install Claude");
   });
 });

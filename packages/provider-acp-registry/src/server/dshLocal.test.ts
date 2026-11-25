@@ -53,6 +53,17 @@ function makeMemoryFs(input: {
     readTextFile: (filePath) => files.get(filePath.toLowerCase()),
     hasAsarEntry: (asarPath, relativeEntry) =>
       asars.get(asarPath.toLowerCase())?.has(relativeEntry.toLowerCase()) ?? false,
+    listDirectory: (dirPath) => {
+      const normalized = dirPath.replace(/[\\/]+$/, "").toLowerCase();
+      const seen = new Set<string>();
+      for (const key of files.keys()) {
+        const lastSep = Math.max(key.lastIndexOf("\\"), key.lastIndexOf("/"));
+        if (lastSep > 0 && key.slice(0, lastSep) === normalized) {
+          seen.add(key.slice(lastSep + 1));
+        }
+      }
+      return Array.from(seen);
+    },
   };
 }
 
@@ -651,6 +662,154 @@ rl.on("line", (line) => {
         ),
       ),
   );
+
+  it("discovers packaged DSH NEXT on custom drives via Windows Uninstall Registry without spawning live reg.exe for mock fs", () => {
+    const customExe = "D:\\Apps\\DSH NEXT\\DSH NEXT.exe";
+    const customAsar = "D:\\Apps\\DSH NEXT\\resources\\app.asar";
+    const fallbackHome = "C:\\Users\\custom\\.dsh";
+    const fs = makeMemoryFs({
+      files: {
+        [customExe]: "",
+        [customAsar]: "",
+      },
+      directories: [fallbackHome],
+      asarEntries: {
+        [customAsar]: ["lib/desktop-cli.js"],
+      },
+    });
+    const env: NodeJS.ProcessEnv = {
+      PATH: "",
+      USERPROFILE: "C:\\Users\\custom",
+      APPDATA: "C:\\Users\\custom\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\custom\\AppData\\Local",
+    };
+
+    // Without queryRegistry, custom mock fs stays strictly hermetic (no live reg.exe).
+    expect(
+      resolvePackagedDshDesktopSpawn({
+        commandArgs: ["acp"],
+        env,
+        platform: "win32",
+        fs,
+      }),
+    ).toBeUndefined();
+
+    // With Uninstall Registry entry pointing to D:\Apps\DSH NEXT, DSH NEXT resolves cleanly
+    // AND resolves DSH_HOME via ~/.dsh fallback!
+    const regOutput = [
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\4a513c97-f710-5eb4-97f6-b8e556e2c341",
+      "    DisplayName    REG_SZ    DSH NEXT 2.0.24-next",
+      '    UninstallString    REG_SZ    "D:\\Apps\\DSH NEXT\\Uninstall DSH NEXT.exe" /currentuser',
+      "    DisplayIcon    REG_SZ    D:\\Apps\\DSH NEXT\\uninstallerIcon.ico",
+    ].join("\r\n");
+
+    const resolved = resolveLocalAcpSpawn({
+      commandPath: "dsh",
+      commandArgs: ["acp"],
+      env,
+      platform: "win32",
+      fs,
+      resolveExecutable: () => undefined,
+      queryRegistry: () => regOutput,
+    });
+    expect(resolved).toMatchObject({
+      command: customExe,
+      args: ["--expose-internals", `${customAsar}\\lib\\desktop-cli.js`, "acp"],
+      env: expect.objectContaining({
+        ELECTRON_RUN_AS_NODE: "1",
+        DSH_HOME: fallbackHome,
+      }),
+    });
+  });
+
+  it("discovers bare dsh CLI shims in bun, scoop, volta, nvm, and ~/.dsh/bin including dsh.bat", () => {
+    const bunDsh = "C:\\Users\\dev\\.bun\\bin\\dsh.exe";
+    const scoopDsh = "C:\\Users\\dev\\scoop\\shims\\dsh.bat";
+    const scoopScript = "C:\\Users\\dev\\scoop\\apps\\dsh\\current\\lib\\bin.js";
+    const voltaDsh = "C:\\Volta\\bin\\dsh.exe";
+    const dotDshBin = "C:\\Users\\dev\\.dsh\\bin\\dsh.exe";
+    const baseEnv: NodeJS.ProcessEnv = {
+      PATH: "",
+      USERPROFILE: "C:\\Users\\dev",
+      VOLTA_HOME: "C:\\Volta",
+    };
+
+    for (const [label, exePath] of [
+      ["bun", bunDsh],
+      ["volta", voltaDsh],
+      ["~/.dsh/bin", dotDshBin],
+    ] as const) {
+      const fs = makeMemoryFs({
+        files: {
+          [exePath]: "",
+        },
+      });
+      const resolved = resolveLocalAcpSpawn({
+        commandPath: "dsh",
+        commandArgs: ["acp"],
+        env: baseEnv,
+        platform: "win32",
+        fs,
+        resolveExecutable: () => undefined,
+      });
+      expect(resolved, `expected ${label} discovery`).toBeDefined();
+      expect(resolved?.command).toBe(exePath);
+      expect(resolved?.args).toEqual(["acp"]);
+    }
+
+    // Scoop .bat shim safely unwraps to direct node.exe execution without shell: true.
+    const scoopFs = makeMemoryFs({
+      files: {
+        [scoopDsh]: '@echo off\r\n"node" "%~dp0..\\apps\\dsh\\current\\lib\\bin.js" %*\r\n',
+        [scoopScript]: "export {};",
+      },
+    });
+    const resolvedScoop = resolveLocalAcpSpawn({
+      commandPath: "dsh",
+      commandArgs: ["acp"],
+      env: baseEnv,
+      platform: "win32",
+      fs: scoopFs,
+      resolveExecutable: (cmd) => (cmd === "node" ? "C:\\Program Files\\nodejs\\node.exe" : undefined),
+    });
+    expect(resolvedScoop).toMatchObject({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: [scoopScript, "acp"],
+    });
+  });
+
+  it("broadens resolveDshDesktopHome across DSH NEXT, DSH, DeepSeek Harness, and ~/.dsh fallback", () => {
+    const exePath = "C:\\Users\\dev\\AppData\\Local\\Programs\\DSH\\DSH.exe";
+    const asarPath = "C:\\Users\\dev\\AppData\\Local\\Programs\\DSH\\resources\\app.asar";
+    const markerPath = "C:\\Users\\dev\\AppData\\Roaming\\DeepSeek Harness\\home\\desktop-next-last-home.json";
+    const persistedHome = "E:\\Work\\dsh-home";
+    const fs = makeMemoryFs({
+      files: {
+        [exePath]: "",
+        [asarPath]: "",
+        [markerPath]: JSON.stringify({ home: persistedHome }),
+      },
+      directories: [persistedHome],
+      asarEntries: {
+        [asarPath]: ["lib/desktop-cli.js"],
+      },
+    });
+
+    const resolved = resolvePackagedDshDesktopSpawn({
+      commandArgs: ["acp"],
+      env: {
+        USERPROFILE: "C:\\Users\\dev",
+        APPDATA: "C:\\Users\\dev\\AppData\\Roaming",
+        LOCALAPPDATA: "C:\\Users\\dev\\AppData\\Local",
+      },
+      platform: "win32",
+      fs,
+    });
+    expect(resolved?.env).toMatchObject({
+      ELECTRON_RUN_AS_NODE: "1",
+      DSH_HOME: persistedHome,
+    });
+  });
 
   it.live.runIf(process.env.PRISMUX_LIVE_DSH_PROBE === "1")(
     "LIVE: discovers local DSH NEXT on Windows, connects over ACP, and lists real models",

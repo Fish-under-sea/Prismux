@@ -1,6 +1,7 @@
 import {
   DEFAULT_APPEARANCE_CONFIG,
   InlineAppearanceStudio,
+  LiquidGlassCard,
   type AppearanceConfig,
 } from "@prismux/appearance";
 import {
@@ -20,6 +21,7 @@ import {
 } from "../components/chat/PanelLayoutControls";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { PrismuxWallpaperQuickPanel, PrismuxTopbarControls } from "./PrismuxWallpaperBridge";
+import { PrismuxDaemonClient } from "./daemonClient";
 import { PrismuxRuntimeProvider } from "./PrismuxRuntimeProvider";
 import { PrismuxAppearanceIntegration } from "./settings/PrismuxAppearanceIntegration";
 
@@ -264,23 +266,88 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
     expect(html).not.toContain("极光棱镜");
   });
 
-  it("renders /settings/appearance PrismuxAppearanceIntegration with 5-zone glass configurator and no sidebar corner radius controls", () => {
+  it("renders /settings/appearance PrismuxAppearanceIntegration 3-tab hub and 8-zone LiquidGlassCard configurator", () => {
+    initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
     const html = renderToStaticMarkup(
-      <PrismuxRuntimeProvider>
-        <PrismuxAppearanceIntegration />
-      </PrismuxRuntimeProvider>,
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxRuntimeProvider>
+          <PrismuxAppearanceIntegration />
+        </PrismuxRuntimeProvider>
+      </GTProvider>,
     );
 
-    expect(html).toContain("Prismux 液态玻璃与光学主题");
-    expect(html).toContain('data-glass-card="true"');
-    expect(html).toContain('data-pmx-zone-item="shellFrame"');
-    expect(html).toContain('data-pmx-zone-item="rightSidebar"');
-    expect(html).toContain('data-pmx-zone-item="mainCanvas"');
-    expect(html).toContain('data-pmx-zone-item="composer"');
-    expect(html).toContain('data-pmx-zone-item="overlays"');
-    expect(html).not.toContain('data-pmx-zone-item="leftSidebar"');
-    expect(html).not.toContain('data-pmx-zone-item="chromeBars"');
-    // Sidebar corner radius card & copy removed per #362
-    expect(html).not.toContain("侧边栏圆角");
+    expect(html).toContain('data-slot="settings-segmented-tabs"');
+    expect(html).toContain('data-tab-id="theme"');
+    expect(html).toContain('data-tab-id="glass"');
+    expect(html).toContain('data-tab-id="typography"');
+    expect(html).toContain('data-pmx-snapshot-actions="1"');
+    expect(html).toContain("主题与背景");
+    expect(html).toContain('data-pmx-theme-palette-card="true"');
+
+    const glassHtml = renderToStaticMarkup(
+      <LiquidGlassCard
+        config={{ ...DEFAULT_APPEARANCE_CONFIG, themeMode: "glass" }}
+        onChange={() => {}}
+        activeSlot={null}
+        onOpenColorPicker={() => {}}
+        alwaysShow
+        showAccentRow={false}
+      />,
+    );
+    expect(glassHtml).toContain('data-glass-card="true"');
+    for (const zone of [
+      "shellFrame",
+      "rightSidebar",
+      "mainCanvas",
+      "workPanels",
+      "composer",
+      "overlays",
+      "userBubble",
+      "overviewPanel",
+    ]) {
+      expect(glassHtml).toContain(`data-pmx-zone-item="${zone}"`);
+    }
+    expect(glassHtml).not.toContain('data-pmx-zone-item="leftSidebar"');
+    expect(glassHtml).not.toContain('data-pmx-zone-item="chromeBars"');
+  });
+
+  it("rewrites web wallpaper URLs to zero-cookie URL-path token route /v1/wallpapers/web-t/<token>/<id>/...", async () => {
+    const prevUrl = (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__;
+    const prevToken = (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__;
+    (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ =
+      "http://127.0.0.1:47910";
+    (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ =
+      "secret-wp-token";
+    try {
+      const client = new PrismuxDaemonClient();
+      await client.getConnectionInfo(true);
+
+      expect(client.resolveMediaUrl("/v1/wallpapers/web/3650874083/index.html")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
+      );
+      expect(
+        client.resolveMediaUrl("http://127.0.0.1:47910/v1/wallpapers/web/3650874083/index.html?token=old"),
+      ).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
+      );
+      // Idempotent if already tokenized in path
+      expect(
+        client.resolveMediaUrl(
+          "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
+        ),
+      ).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
+      );
+      expect(client.buildMediaUrl("web", "3650874083")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
+      );
+      // Media & preview still use query token
+      expect(client.resolveMediaUrl("/v1/wallpapers/media/3839308585")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/media/3839308585?token=secret-wp-token",
+      );
+    } finally {
+      (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ = prevUrl;
+      (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ = prevToken;
+    }
   });
 });

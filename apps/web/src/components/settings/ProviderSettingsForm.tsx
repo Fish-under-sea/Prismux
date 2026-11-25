@@ -118,6 +118,8 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   ["Server URL", msg("Server URL")],
   ["Server password", msg("Server password")],
   ["Access token", msg("Access token")],
+  ["Personal access token", msg("Personal access token")],
+  ["API base URL", msg("API base URL")],
   ["Atlassian account email", msg("Atlassian account email")],
   ["API token", msg("API token")],
   ["Token", msg("Token", { $context: "settings field, an access token" })],
@@ -160,7 +162,9 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   ],
   [
     "Antigravity uses your official local agy CLI session (~/.gemini/antigravity-cli) via ACP.",
-    msg("Antigravity uses your official local agy CLI session (~/.gemini/antigravity-cli) via ACP."),
+    msg(
+      "Antigravity uses your official local agy CLI session (~/.gemini/antigravity-cli) via ACP.",
+    ),
   ],
   [
     "Custom agy CLI executable. Leave empty to detect automatically.",
@@ -220,6 +224,16 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
     msg(
       "A git.cafe token, used before CAFE_TOKEN and the cafe login, so GitCafe works without the CLI signed in.",
     ),
+  ],
+  [
+    "Generate a private token at https://gitee.com/profile/personal_access_tokens (grant projects, pull_requests, user_info). Used before GITEE_TOKEN.",
+    msg(
+      "Generate a private token at https://gitee.com/profile/personal_access_tokens (grant projects, pull_requests, user_info). Used before GITEE_TOKEN.",
+    ),
+  ],
+  [
+    "Optional Gitee Enterprise OpenAPI v5 endpoint. Leave blank for https://gitee.com/api/v5.",
+    msg("Optional Gitee Enterprise OpenAPI v5 endpoint. Leave blank for https://gitee.com/api/v5."),
   ],
   ["e.g. --chrome", msg("e.g. --chrome")],
   ["e.g. 300000", msg("e.g. 300000")],

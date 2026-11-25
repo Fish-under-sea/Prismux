@@ -257,18 +257,17 @@ function isChineseLocale(locale?: string | null): boolean {
 
 /**
  * Resolves the unified BTW side-question label across locales:
- * renders `"旁路提问"` in Chinese UI even before a dedicated GT hash entry lands,
- * and `"Side question"` in English UI (or translated string in any other locale).
+ * renders `"旁路提问"` in Chinese UI and `"Side question"` in English UI
+ * (or the localized GT string in any other locale).
  */
 export function resolveSideQuestionLabel(
   resolve: MessageResolver = m,
   locale?: string | null,
 ): string {
-  const translated = resolve(SIDE_QUESTION_MSG);
-  if (translated !== "Side question") {
-    return translated;
+  if (isChineseLocale(locale)) {
+    return "旁路提问";
   }
-  return isChineseLocale(locale) ? "旁路提问" : translated;
+  return resolve(SIDE_QUESTION_MSG);
 }
 
 const SURFACE_DISABLED_REASONS = {
@@ -1816,6 +1815,7 @@ export function RightPanelActivityBar(props: {
         ref={containerRef}
         role="toolbar"
         aria-label="右侧表面快捷栏（支持拖拽排序）"
+        data-right-panel-activity-bar
         data-testid="right-panel-activity-bar"
         className="flex h-7.5 shrink-0 items-center gap-1 overflow-hidden border-b border-border/60 bg-black/[0.02] px-1.5 [-webkit-app-region:no-drag] dark:bg-white/[0.02] [[data-pmx-glass='1']_&]:border-white/12 [[data-pmx-glass='1']_&]:bg-black/15 [html:not(.dark)[data-pmx-glass='1']_&]:border-black/10 [html:not(.dark)[data-pmx-glass='1']_&]:bg-white/25"
       >
@@ -2323,24 +2323,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     sideChat: effectiveSideChatAvailable,
   };
 
-  const orderedActivityActions = buildRightPanelActivityActions({
-    order: activityBarOrder,
-    focusedSurfaceKind: focusedSurface?.kind ?? null,
-    mobileSimulatorIdleActive,
-    resolveMessage: messages,
-    locale,
-    availability: sharedAvailability,
-    handlers: {
-      onPullRequests: props.onAddPullRequests,
-      onDiff: props.onAddDiff,
-      onFiles: props.onAddFiles,
-      onTerminal: props.onAddTerminal,
-      onPreview: handleOpenBrowser,
-      onMobileSimulator: handleOpenMobileSimulator,
-      onSideChat: () => props.onAddSideChat?.(),
-    },
-  });
-
   const sharedLauncherHandlers = {
     onPullRequests: props.onAddPullRequests,
     onDiff: props.onAddDiff,
@@ -2838,14 +2820,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           />
         ) : null}
       </div>
-      {props.open !== false ? (
-        <RightPanelActivityBar
-          actions={orderedActivityActions}
-          isCustomOrder={isCustomActivityBarOrder}
-          onReorder={reorderActivityBar}
-          onResetOrder={resetActivityBarOrder}
-        />
-      ) : null}
       <div
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         data-right-panel-surface-content

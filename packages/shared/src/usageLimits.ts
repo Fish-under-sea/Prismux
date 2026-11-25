@@ -284,7 +284,7 @@ const hubRowKey = (
   source: UsageLimitSourceSnapshot,
   account: UsageLimitSourceAccount,
 ) =>
-  resolveKey(account) ??
+  (source.kind === "cliproxy" ? resolveKey(account) : null) ??
   `${hubIdentity(environmentId, source)}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
 
 // Source ids are environment-local, so only a remote endpoint names the same hub across environments.
@@ -420,14 +420,15 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         : source.label;
       for (const account of source.accounts) {
         if (limitsNotice(account.usageLimits) !== null) continue;
-        const resolved = resolveKey(account);
+        const isRelay = source.kind !== "cliproxy";
+        const resolved = isRelay ? null : resolveKey(account);
         // A resolved account already has an identity; its public key must stay distinct from others'.
         const hub = resolved ? `${environmentId}:${source.id}` : hubIdentity(environmentId, source);
         const key = `${hub}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
         merge(hubRowKey(resolveKey, environmentId, source, account), {
           key,
           driver: account.driver,
-          displayName: account.email ? null : hubAccountName(account),
+          displayName: isRelay ? source.label : account.email ? null : hubAccountName(account),
           email: account.email,
           plan: account.plan,
           accentColor: undefined,
@@ -726,7 +727,8 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
     return {
       id,
       kind: first.kind,
-      label: first.label,
+      label:
+        members.length > 1 && first.id === "relay-balance" ? "API Relay Balance" : first.label,
       members,
       columns: accounts.map(
         (account) => memberByAccount.get(account.key) ?? { account, window: null },
@@ -1073,7 +1075,12 @@ export function collectProviderUsageLimits(
         id: `${source.id}:${account.id}`,
         driver: account.driver,
         label: `${source.label} · ${hubAccountName(account)}`,
-        sourceLabel: "CLI Proxy",
+        sourceLabel:
+          source.kind === "newapi"
+            ? "New API / One API"
+            : source.kind === "openaiBilling"
+              ? "OpenAI Compatible"
+              : "CLI Proxy",
         ...(account.usageLimits.resetCredits?.nextCreditId
           ? {
               resetCreditInput: {

@@ -185,6 +185,112 @@ function extractBearerToken(req: IncomingMessage): string | null {
 }
 
 const WEB_WALLPAPER_AUTH_COOKIE = "prismux_wp_token";
+const WEB_TOKEN_ROUTE_PREFIX = "/v1/wallpapers/web-t/";
+
+interface ParsedWebTokenRoute {
+  token: string;
+  rawId: string;
+  relPath: string;
+}
+
+function parseWebTokenRoutePath(pathname: string): ParsedWebTokenRoute | null {
+  if (!pathname.startsWith(WEB_TOKEN_ROUTE_PREFIX)) {
+    return null;
+  }
+  const rest = pathname.slice(WEB_TOKEN_ROUTE_PREFIX.length);
+  const tokenSlash = rest.indexOf("/");
+  if (tokenSlash <= 0) {
+    return null;
+  }
+  const rawToken = rest.slice(0, tokenSlash);
+  let token: string;
+  try {
+    token = decodeURIComponent(rawToken).trim();
+  } catch {
+    return null;
+  }
+  if (token.length === 0) {
+    return null;
+  }
+  const afterToken = rest.slice(tokenSlash + 1);
+  const idSlash = afterToken.indexOf("/");
+  const rawId = idSlash >= 0 ? afterToken.slice(0, idSlash) : afterToken;
+  const relPath = idSlash >= 0 ? afterToken.slice(idSlash + 1) : "";
+  return { token, rawId, relPath };
+}
+
+function isLoopbackSameHostReferer(req: IncomingMessage, refererUrl: URL): boolean {
+  if (refererUrl.protocol !== "http:" && refererUrl.protocol !== "https:") {
+    return false;
+  }
+  const host = refererUrl.hostname.toLowerCase();
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]" && host !== "::1") {
+    return false;
+  }
+  const reqHost = typeof req.headers.host === "string" ? req.headers.host.trim().toLowerCase() : "";
+  return reqHost.length > 0 && refererUrl.host.toLowerCase() === reqHost;
+}
+
+function extractWebRefererQueryToken(
+  req: IncomingMessage,
+  requestUrl: URL
+): string | null {
+  if (!requestUrl.pathname.startsWith("/v1/wallpapers/web/")) {
+    return null;
+  }
+  const rawReferer = req.headers.referer;
+  if (typeof rawReferer !== "string" || rawReferer.trim().length === 0) {
+    return null;
+  }
+  let refUrl: URL;
+  try {
+    refUrl = new URL(rawReferer);
+  } catch {
+    return null;
+  }
+  if (!isLoopbackSameHostReferer(req, refUrl)) {
+    return null;
+  }
+  const suffix = requestUrl.pathname.slice("/v1/wallpapers/web/".length);
+  const slashIdx = suffix.indexOf("/");
+  const rawId = slashIdx >= 0 ? suffix.slice(0, slashIdx) : suffix;
+  if (rawId.length === 0) {
+    return null;
+  }
+  const expectedPrefix = `/v1/wallpapers/web/${rawId}`;
+  if (
+    refUrl.pathname !== expectedPrefix &&
+    !refUrl.pathname.startsWith(`${expectedPrefix}/`)
+  ) {
+    return null;
+  }
+  const refToken = refUrl.searchParams.get("token")?.trim();
+  return refToken && refToken.length > 0 ? refToken : null;
+}
+
+function extractWebTokenRefererWallpaperId(
+  req: IncomingMessage,
+  expectedToken: string
+): string | null {
+  const rawReferer = req.headers.referer;
+  if (typeof rawReferer !== "string" || rawReferer.trim().length === 0) {
+    return null;
+  }
+  let refUrl: URL;
+  try {
+    refUrl = new URL(rawReferer);
+  } catch {
+    return null;
+  }
+  if (!isLoopbackSameHostReferer(req, refUrl)) {
+    return null;
+  }
+  const parsed = parseWebTokenRoutePath(refUrl.pathname);
+  if (!parsed || parsed.token !== expectedToken || parsed.rawId.length === 0) {
+    return null;
+  }
+  return parsed.rawId;
+}
 
 function extractCookieValue(req: IncomingMessage, cookieName: string): string | null {
   const rawCookie = req.headers.cookie;
@@ -223,6 +329,10 @@ function extractRequestToken(
     return customHeader.trim();
   }
   if (allowQueryToken) {
+    const webPathParsed = parseWebTokenRoutePath(requestUrl.pathname);
+    if (webPathParsed !== null) {
+      return webPathParsed.token;
+    }
     const queryToken = requestUrl.searchParams.get("token")?.trim();
     if (queryToken !== undefined && queryToken.length > 0) {
       return queryToken;
@@ -231,6 +341,10 @@ function extractRequestToken(
       const cookieToken = extractCookieValue(req, WEB_WALLPAPER_AUTH_COOKIE);
       if (cookieToken !== null) {
         return cookieToken;
+      }
+      const refererToken = extractWebRefererQueryToken(req, requestUrl);
+      if (refererToken !== null) {
+        return refererToken;
       }
     }
   }
@@ -1015,13 +1129,17 @@ export class DaemonRpcServer {
       rawPathPart.startsWith("/v1/wallpapers/") &&
       /(?:^|[\\/])\.\.(?:[\\/]|$)|%2e%2e|\0/i.test(rawPathPart)
     ) {
-      const trustedCallerScope = this.authenticateHttpRequest(
-        req,
-        res,
-        requestUrl,
-        true
-      );
-      if (trustedCallerScope === null) {
+      const parsedRawWebToken = rawPathPart.startsWith(WEB_TOKEN_ROUTE_PREFIX)
+        ? parseWebTokenRoutePath(rawPathPart)
+        : null;
+      const pathTokenScope =
+        parsedRawWebToken !== null
+          ? this.pairingManager.resolveTokenScope(parsedRawWebToken.token)
+          : null;
+      if (
+        pathTokenScope === null &&
+        this.authenticateHttpRequest(req, res, requestUrl, true) === null
+      ) {
         return true;
       }
       writeJsonResponse(res, 403, {
@@ -1133,6 +1251,8 @@ export class DaemonRpcServer {
           "WallpaperMediaService is not configured."
         );
       }
+      req.socket?.setTimeout?.(0);
+      res.setTimeout?.(0);
       const rawId = pathname.slice("/v1/wallpapers/preview/".length);
       await this.wallpaperService.servePreview(rawId, req, res);
       return true;
@@ -1152,8 +1272,55 @@ export class DaemonRpcServer {
           "WallpaperMediaService is not configured."
         );
       }
+      req.socket?.setTimeout?.(0);
+      res.setTimeout?.(0);
       const rawId = pathname.slice("/v1/wallpapers/media/".length);
       await this.wallpaperService.serveMedia(rawId, req, res);
+      return true;
+    }
+
+    if (
+      (method === "GET" || method === "HEAD") &&
+      (pathname === "/v1/wallpapers/web-t" ||
+        pathname.startsWith(WEB_TOKEN_ROUTE_PREFIX))
+    ) {
+      const parsed = parseWebTokenRoutePath(pathname);
+      const trustedScope =
+        parsed !== null ? this.pairingManager.resolveTokenScope(parsed.token) : null;
+      if (parsed === null || trustedScope === null) {
+        writeJsonResponse(res, 401, {
+          ok: false,
+          error: {
+            code: "unauthorized",
+            message: "Missing or invalid Bearer token."
+          }
+        });
+        return true;
+      }
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      req.socket?.setTimeout?.(0);
+      res.setTimeout?.(0);
+      if (parsed.rawId.length === 0) {
+        writeJsonResponse(res, 404, {
+          ok: false,
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+        });
+        return true;
+      }
+      const refererWallpaperId = extractWebTokenRefererWallpaperId(req, parsed.token);
+      await this.wallpaperService.serveWebAsset(
+        parsed.rawId,
+        parsed.relPath,
+        req,
+        res,
+        { refererWallpaperId }
+      );
       return true;
     }
 
@@ -1181,6 +1348,8 @@ export class DaemonRpcServer {
           "WallpaperMediaService is not configured."
         );
       }
+      req.socket?.setTimeout?.(0);
+      res.setTimeout?.(0);
       const suffix = pathname.slice("/v1/wallpapers/web/".length);
       const slashIdx = suffix.indexOf("/");
       const rawId = slashIdx >= 0 ? suffix.slice(0, slashIdx) : suffix;

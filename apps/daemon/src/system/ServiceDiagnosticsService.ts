@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -43,6 +43,7 @@ import {
 import type { ResourceMonitorService } from "./ResourceMonitorService.js";
 import {
   buildSafeCliSpawnSpec,
+  decodeWindowsProcessOutput,
   findExecutableOnPath,
   refreshWindowsEnvironmentFromRegistry,
   type WindowsEnvRefreshResult
@@ -135,33 +136,91 @@ const CATEGORY_LABELS: Record<DiagnosticCategoryId, string> = {
   dormant_engines: "沉睡内核状态摘要"
 };
 
-function getDefaultCliExtraDirs(
+function readEnvCaseInsensitive(
+  env: Record<string, string | undefined>,
+  key: string,
+  platform: NodeJS.Platform
+): string | undefined {
+  if (platform !== "win32") {
+    const val = env[key]?.trim();
+    return val && val.length > 0 ? val : undefined;
+  }
+  const upper = key.toUpperCase();
+  for (const [k, v] of Object.entries(env)) {
+    if (k.toUpperCase() === upper && v?.trim()) {
+      return v.trim();
+    }
+  }
+  return undefined;
+}
+
+export function getDefaultCliExtraDirs(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
   homeDir: string = homedir()
 ): string[] {
   const dirs: string[] = [];
   if (platform === "win32") {
-    const appData = env["APPDATA"]?.trim() || join(homeDir, "AppData", "Roaming");
+    const userProfile = readEnvCaseInsensitive(env, "USERPROFILE", platform) || homeDir;
+    const appData =
+      readEnvCaseInsensitive(env, "APPDATA", platform) || join(userProfile, "AppData", "Roaming");
     const localAppData =
-      env["LOCALAPPDATA"]?.trim() || join(homeDir, "AppData", "Local");
-    const userProfile = env["USERPROFILE"]?.trim() || homeDir;
-    const pnpmHome = env["PNPM_HOME"]?.trim();
+      readEnvCaseInsensitive(env, "LOCALAPPDATA", platform) ||
+      join(userProfile, "AppData", "Local");
+    const pnpmHome = readEnvCaseInsensitive(env, "PNPM_HOME", platform);
+    const voltaHome = readEnvCaseInsensitive(env, "VOLTA_HOME", platform);
+    const nvmSymlink = readEnvCaseInsensitive(env, "NVM_SYMLINK", platform);
+    const bunInstall = readEnvCaseInsensitive(env, "BUN_INSTALL", platform);
     if (pnpmHome) dirs.push(pnpmHome);
     dirs.push(
       join(appData, "npm"),
       join(localAppData, "pnpm"),
-      join(userProfile, ".local", "bin"),
       join(localAppData, "agy", "bin"),
       join(localAppData, "Microsoft", "WinGet", "Links"),
-      join(userProfile, "scoop", "shims")
+      join(localAppData, "Volta", "bin"),
+      join(localAppData, "DSH NEXT", "bin"),
+      join(localAppData, "Programs", "nodejs")
+    );
+    if (voltaHome) dirs.push(join(voltaHome, "bin"));
+    if (nvmSymlink) dirs.push(nvmSymlink);
+    if (bunInstall) dirs.push(join(bunInstall, "bin"));
+    dirs.push(
+      join(userProfile, ".local", "bin"),
+      join(userProfile, ".bun", "bin"),
+      join(userProfile, "scoop", "shims"),
+      join(userProfile, ".opencode", "bin"),
+      join(userProfile, ".dsh", "bin")
     );
   } else {
-    const pnpmHome = env["PNPM_HOME"]?.trim();
+    const home = readEnvCaseInsensitive(env, "HOME", platform) || homeDir;
+    const pnpmHome = readEnvCaseInsensitive(env, "PNPM_HOME", platform);
+    const bunInstall = readEnvCaseInsensitive(env, "BUN_INSTALL", platform);
+    const voltaHome = readEnvCaseInsensitive(env, "VOLTA_HOME", platform);
     if (pnpmHome) dirs.push(pnpmHome);
-    dirs.push(join(homeDir, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin");
+    if (bunInstall) dirs.push(join(bunInstall, "bin"));
+    if (voltaHome) dirs.push(join(voltaHome, "bin"));
+    dirs.push(
+      join(home, ".local", "bin"),
+      join(home, ".bun", "bin"),
+      join(home, ".opencode", "bin"),
+      join(home, ".dsh", "bin"),
+      join(home, ".volta", "bin"),
+      join(home, ".npm-global", "bin"),
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    );
   }
-  return dirs;
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const dir of dirs) {
+    const trimmed = dir.trim();
+    if (!trimmed) continue;
+    const key = platform === "win32" ? trimmed.toLowerCase() : trimmed;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(trimmed);
+  }
+  return deduped;
 }
 
 function extractFirstVersionLine(output: string): string | null {
@@ -502,24 +561,259 @@ function hasAsarEntrySync(asarPath: string, relativeEntry: string): boolean {
   }
 }
 
+const WINDOWS_UNINSTALL_REGISTRY_KEYS = [
+  "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+  "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+  "HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+] as const;
+
+const WINDOWS_COMMON_DRIVES = ["C:", "D:", "E:", "F:"] as const;
+const WINDOWS_DSH_DRIVE_SUBDIRS = [
+  "DSH NEXT",
+  "Program Files\\DSH NEXT",
+  "Programs\\DSH NEXT",
+  "DeepSeek Harness",
+  "Program Files\\DeepSeek Harness",
+  "Programs\\DeepSeek Harness",
+  "DSH"
+] as const;
+const WINDOWS_UNINSTALLER_EXE_RE = /(?:uninstall|uninst|setup|update|squirrel)/i;
+const DSH_UNINSTALL_MATCH_RE = /\b(?:dsh(?:\s+next)?|deepseek\s+harness)\b/i;
+const ANTIGRAVITY_UNINSTALL_MATCH_RE = /^(?:google\s+)?antigravity(?:\s|$)/i;
+
+interface DaemonWindowsUninstallEntry {
+  readonly subkey: string;
+  readonly displayName?: string;
+  readonly installLocation?: string;
+  readonly uninstallString?: string;
+  readonly quietUninstallString?: string;
+  readonly displayIcon?: string;
+  readonly comments?: string;
+}
+
+export type DaemonWindowsRegistryQueryRunner = (
+  args: readonly string[]
+) => string | undefined;
+
+const daemonUninstallDirsCache = new Map<string, readonly string[]>();
+
+function runWindowsUninstallRegQuery(args: readonly string[]): string | undefined {
+  try {
+    const raw = execFileSync("reg.exe", [...args], {
+      timeout: 1_500,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return decodeWindowsProcessOutput(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeWinInstallDir(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().replace(/^"+|"+$/g, "").replace(/\//g, "\\");
+  if (!/^[A-Za-z]:\\/.test(cleaned)) return null;
+  const trimmed = cleaned.length > 3 ? cleaned.replace(/\\+$/, "") : cleaned;
+  if (/^[A-Za-z]:\\Windows\\(?:System32|SysWOW64)$/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+function extractDirFromWinCommandOrIcon(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  let candidatePath: string | null = null;
+  if (trimmed.startsWith('"')) {
+    const endQuote = trimmed.indexOf('"', 1);
+    if (endQuote > 1) {
+      candidatePath = trimmed.slice(1, endQuote).trim();
+    }
+  }
+  if (!candidatePath) {
+    const exeMatch = /^([A-Za-z]:[\\/][^"<>|*?\r\n]+?\.(?:exe|cmd|bat|ico))(?:,|\s|$)/i.exec(
+      trimmed
+    );
+    candidatePath = exeMatch?.[1]?.trim() ?? null;
+  }
+  if (!candidatePath) {
+    const cleaned = trimmed.replace(/,-?\d+$/, "").replace(/^"+|"+$/g, "").trim();
+    if (/^[A-Za-z]:[\\/]/.test(cleaned)) {
+      candidatePath = cleaned;
+    }
+  }
+  if (!candidatePath || /\bmsiexec(?:\.exe)?$/i.test(candidatePath)) return null;
+  const normalized = candidatePath.replace(/,-?\d+$/, "").replace(/\//g, "\\");
+  if (/\.(?:exe|cmd|bat|ico|dll|lnk)$/i.test(normalized)) {
+    return normalizeWinInstallDir(dirname(normalized));
+  }
+  return normalizeWinInstallDir(normalized);
+}
+
+function parseDaemonUninstallRegOutput(stdout: string): DaemonWindowsUninstallEntry[] {
+  const entries = new Map<string, { subkey: string; values: Record<string, string> }>();
+  let currentSubkey: string | null = null;
+  const valueLineRe = /^\s{2,}(.+?)\s{4,}(REG_[A-Z0-9_]+)(?:\s{4,}(.*))?$/;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || /^End of search:/i.test(trimmed)) continue;
+    if (/^HKEY_[A-Z_]+\\/.test(trimmed)) {
+      currentSubkey = trimmed;
+      const key = trimmed.toLowerCase();
+      if (!entries.has(key)) {
+        entries.set(key, { subkey: trimmed, values: {} });
+      }
+      continue;
+    }
+    if (!currentSubkey) continue;
+    const match = valueLineRe.exec(rawLine);
+    if (!match) continue;
+    const name = match[1]?.trim().toLowerCase() ?? "";
+    const type = match[2]?.trim() ?? "";
+    const value = (match[3] ?? "").trim();
+    if (!name || (type !== "REG_SZ" && type !== "REG_EXPAND_SZ") || !value) continue;
+    const bucket = entries.get(currentSubkey.toLowerCase());
+    if (bucket) bucket.values[name] = value;
+  }
+  return Array.from(entries.values()).map(({ subkey, values }) => ({
+    subkey,
+    ...(values["displayname"] ? { displayName: values["displayname"] } : {}),
+    ...(values["installlocation"] ? { installLocation: values["installlocation"] } : {}),
+    ...(values["uninstallstring"] ? { uninstallString: values["uninstallstring"] } : {}),
+    ...(values["quietuninstallstring"]
+      ? { quietUninstallString: values["quietuninstallstring"] }
+      : {}),
+    ...(values["displayicon"] ? { displayIcon: values["displayicon"] } : {}),
+    ...(values["comments"] ? { comments: values["comments"] } : {})
+  }));
+}
+
+function mergeDaemonUninstallEntry(
+  base: DaemonWindowsUninstallEntry,
+  incoming: DaemonWindowsUninstallEntry
+): DaemonWindowsUninstallEntry {
+  return {
+    subkey: base.subkey,
+    ...(incoming.displayName ?? base.displayName
+      ? { displayName: incoming.displayName ?? base.displayName }
+      : {}),
+    ...(incoming.installLocation ?? base.installLocation
+      ? { installLocation: incoming.installLocation ?? base.installLocation }
+      : {}),
+    ...(incoming.uninstallString ?? base.uninstallString
+      ? { uninstallString: incoming.uninstallString ?? base.uninstallString }
+      : {}),
+    ...(incoming.quietUninstallString ?? base.quietUninstallString
+      ? { quietUninstallString: incoming.quietUninstallString ?? base.quietUninstallString }
+      : {}),
+    ...(incoming.displayIcon ?? base.displayIcon
+      ? { displayIcon: incoming.displayIcon ?? base.displayIcon }
+      : {}),
+    ...(incoming.comments ?? base.comments
+      ? { comments: incoming.comments ?? base.comments }
+      : {})
+  };
+}
+
+function discoverWindowsUninstallInstallDirsSync(options: {
+  cacheKey: string;
+  searchTerms: readonly string[];
+  matchEntry: (entry: DaemonWindowsUninstallEntry) => boolean;
+  queryRegistry?: DaemonWindowsRegistryQueryRunner;
+}): readonly string[] {
+  const useCache = options.queryRegistry === undefined;
+  if (useCache) {
+    const cached = daemonUninstallDirsCache.get(options.cacheKey);
+    if (cached !== undefined) return cached;
+  }
+
+  const runQuery = options.queryRegistry ?? runWindowsUninstallRegQuery;
+  const bySubkey = new Map<string, DaemonWindowsUninstallEntry>();
+
+  for (const rootKey of WINDOWS_UNINSTALL_REGISTRY_KEYS) {
+    for (const term of options.searchTerms) {
+      const stdout = runQuery(["query", rootKey, "/s", "/d", "/f", term]);
+      if (!stdout) continue;
+      for (const parsed of parseDaemonUninstallRegOutput(stdout)) {
+        const key = parsed.subkey.toLowerCase();
+        const existing = bySubkey.get(key);
+        bySubkey.set(key, existing ? mergeDaemonUninstallEntry(existing, parsed) : parsed);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const [key, partial] of bySubkey.entries()) {
+    let complete = partial;
+    const hasPathSignal =
+      complete.installLocation !== undefined ||
+      complete.uninstallString !== undefined ||
+      complete.quietUninstallString !== undefined ||
+      complete.displayIcon !== undefined;
+    if (!hasPathSignal || complete.displayName === undefined) {
+      const fullOut = runQuery(["query", complete.subkey]);
+      if (fullOut) {
+        const exact = parseDaemonUninstallRegOutput(fullOut).find(
+          (entry) => entry.subkey.toLowerCase() === key
+        );
+        if (exact) complete = mergeDaemonUninstallEntry(complete, exact);
+      }
+    }
+    if (!options.matchEntry(complete)) continue;
+    for (const candidate of [
+      normalizeWinInstallDir(complete.installLocation),
+      extractDirFromWinCommandOrIcon(complete.uninstallString),
+      extractDirFromWinCommandOrIcon(complete.quietUninstallString),
+      extractDirFromWinCommandOrIcon(complete.displayIcon)
+    ]) {
+      if (!candidate) continue;
+      const lower = candidate.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      dirs.push(candidate);
+    }
+  }
+
+  if (useCache) {
+    daemonUninstallDirsCache.set(options.cacheKey, dirs);
+  }
+  return dirs;
+}
+
+function collectDshDirExecutableCandidatesSync(installDir: string): string[] {
+  const candidates: string[] = [];
+  for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
+    candidates.push(join(installDir, candidate.executable));
+  }
+  try {
+    if (existsSync(installDir)) {
+      for (const name of readdirSync(installDir)) {
+        if (!/\.exe$/i.test(name) || WINDOWS_UNINSTALLER_EXE_RE.test(name)) continue;
+        candidates.push(join(installDir, name));
+      }
+    }
+  } catch {
+    // ignore unreadable directory
+  }
+  return candidates;
+}
+
 export function findPackagedDshDesktopCli(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
-  homeDir: string = homedir()
+  homeDir: string = homedir(),
+  options: {
+    queryRegistry?: DaemonWindowsRegistryQueryRunner;
+    scanRegistry?: boolean;
+    scanDriveRoots?: boolean;
+  } = {}
 ): { executablePath: string; bootstrapPath: string } | null {
-  const readEnv = (key: string): string | undefined => {
-    if (platform !== "win32") {
-      const val = env[key]?.trim();
-      return val && val.length > 0 ? val : undefined;
-    }
-    const upper = key.toUpperCase();
-    for (const [k, v] of Object.entries(env)) {
-      if (k.toUpperCase() === upper && v?.trim()) {
-        return v.trim();
-      }
-    }
-    return undefined;
-  };
+  const readEnv = (key: string): string | undefined =>
+    readEnvCaseInsensitive(env, key, platform);
 
   const explicitApp = readEnv("DSH_DESKTOP_APP_EXECUTABLE");
   const explicitBootstrap = readEnv("DSH_DESKTOP_DSH_BOOTSTRAP");
@@ -532,13 +826,43 @@ export function findPackagedDshDesktopCli(
     const userProfile = readEnv("USERPROFILE") || homeDir;
     const localAppData = readEnv("LOCALAPPDATA") || join(userProfile, "AppData", "Local");
     const programFiles = readEnv("ProgramFiles");
+    const programFilesX86 = readEnv("ProgramFiles(x86)");
     const roots = [
       join(localAppData, "Programs"),
-      ...(programFiles ? [programFiles] : [])
+      localAppData,
+      ...(programFiles ? [programFiles] : []),
+      ...(programFilesX86 ? [programFilesX86] : [])
     ];
     for (const root of roots) {
       for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
         candidateExes.push(join(root, candidate.folder, candidate.executable));
+      }
+    }
+
+    if (options.scanRegistry !== false) {
+      const registryDirs = discoverWindowsUninstallInstallDirsSync({
+        cacheKey: "dsh",
+        searchTerms: ["DSH", "DeepSeek"],
+        matchEntry: (entry) =>
+          DSH_UNINSTALL_MATCH_RE.test(entry.displayName ?? "") ||
+          DSH_UNINSTALL_MATCH_RE.test(entry.comments ?? "") ||
+          DSH_UNINSTALL_MATCH_RE.test(entry.uninstallString ?? "") ||
+          DSH_UNINSTALL_MATCH_RE.test(entry.displayIcon ?? ""),
+        ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {})
+      });
+      for (const dir of registryDirs) {
+        candidateExes.push(...collectDshDirExecutableCandidatesSync(dir));
+      }
+    }
+
+    if (options.scanDriveRoots !== false) {
+      for (const drive of WINDOWS_COMMON_DRIVES) {
+        for (const subdir of WINDOWS_DSH_DRIVE_SUBDIRS) {
+          const dir = `${drive}\\${subdir}`;
+          if (existsSync(dir)) {
+            candidateExes.push(...collectDshDirExecutableCandidatesSync(dir));
+          }
+        }
       }
     }
   } else if (platform === "darwin") {
@@ -552,7 +876,11 @@ export function findPackagedDshDesktopCli(
     }
   }
 
+  const seen = new Set<string>();
   for (const executablePath of candidateExes) {
+    const dedupeKey = platform === "win32" ? executablePath.toLowerCase() : executablePath;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     if (!isExistingFile(executablePath)) continue;
     const appDir = dirname(executablePath);
     const asarPath =
@@ -569,6 +897,85 @@ export function findPackagedDshDesktopCli(
     }
   }
 
+  return null;
+}
+
+export function findPackagedAntigravityCli(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir(),
+  options: {
+    queryRegistry?: DaemonWindowsRegistryQueryRunner;
+    scanRegistry?: boolean;
+    scanDriveRoots?: boolean;
+  } = {}
+): string | null {
+  if (platform !== "win32") {
+    const home = readEnvCaseInsensitive(env, "HOME", platform) || homeDir;
+    for (const candidate of [
+      join(home, ".antigravity", "bin", "agy"),
+      join(home, ".local", "bin", "agy"),
+      "/opt/homebrew/bin/agy",
+      "/usr/local/bin/agy"
+    ]) {
+      if (isExistingFile(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  const userProfile = readEnvCaseInsensitive(env, "USERPROFILE", platform) || homeDir;
+  const localAppData =
+    readEnvCaseInsensitive(env, "LOCALAPPDATA", platform) || join(userProfile, "AppData", "Local");
+  const programFiles = readEnvCaseInsensitive(env, "ProgramFiles", platform);
+  const programFilesX86 = readEnvCaseInsensitive(env, "ProgramFiles(x86)", platform);
+
+  const candidateDirs: string[] = [
+    join(localAppData, "agy", "bin"),
+    join(userProfile, ".antigravity", "bin"),
+    join(localAppData, "Programs", "antigravity", "bin"),
+    join(localAppData, "Programs", "Antigravity"),
+    ...(programFiles
+      ? [join(programFiles, "Antigravity", "bin"), join(programFiles, "Antigravity")]
+      : []),
+    ...(programFilesX86
+      ? [join(programFilesX86, "Antigravity", "bin"), join(programFilesX86, "Antigravity")]
+      : [])
+  ];
+
+  if (options.scanRegistry !== false) {
+    const registryDirs = discoverWindowsUninstallInstallDirsSync({
+      cacheKey: "antigravity",
+      searchTerms: ["Antigravity"],
+      matchEntry: (entry) =>
+        entry.displayName !== undefined &&
+        ANTIGRAVITY_UNINSTALL_MATCH_RE.test(entry.displayName.trim()),
+      ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {})
+    });
+    for (const dir of registryDirs) {
+      candidateDirs.push(join(dir, "bin"), dir, join(dir, "resources", "app", "bin"));
+    }
+  }
+
+  if (options.scanDriveRoots !== false) {
+    for (const drive of WINDOWS_COMMON_DRIVES) {
+      candidateDirs.push(
+        `${drive}\\Antigravity\\bin`,
+        `${drive}\\Program Files\\Antigravity\\bin`,
+        `${drive}\\Programs\\Antigravity\\bin`
+      );
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const dir of candidateDirs) {
+    const key = dir.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
+      const candidate = join(dir, exe);
+      if (isExistingFile(candidate)) return candidate;
+    }
+  }
   return null;
 }
 
@@ -589,11 +996,18 @@ export async function defaultCliProbe(
     options.includeFallbackDirs === false
       ? []
       : getDefaultCliExtraDirs(env, platform);
-  const located = findExecutableOnPath([command], {
+  let located = findExecutableOnPath([command], {
     env,
     platform,
     extraDirs
   });
+  if (
+    !located &&
+    command.trim().toLowerCase() === "agy" &&
+    options.includeFallbackDirs !== false
+  ) {
+    located = findPackagedAntigravityCli(env, platform);
+  }
   if (!located) {
     if (command.trim().toLowerCase() === "dsh" && options.includeFallbackDirs !== false) {
       const packagedDsh = findPackagedDshDesktopCli(env, platform);

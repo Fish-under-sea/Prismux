@@ -1,27 +1,35 @@
-import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, it } from "node:test";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeTest from "node:test";
 import { EncryptedPluginCredentialStore } from "@prismux/cordis-kernel";
 import {
   OVERNIGHT_CREDENTIAL_BUCKET,
   OVERNIGHT_MAIL_PRESETS,
+  OVERNIGHT_MAIL_PRESET_ORDER,
   OvernightRouteService,
   PrismuxDaemon,
+  extractAgentMailAddress,
+  extractOpaqueOAuthUrl,
   isSenderAllowed,
   isWithinExecutionWindow,
+  type AgentMailLoginSpawnHandle,
   type OutboundMailPayload
 } from "../index.js";
 
+const assert: typeof NodeAssert = NodeAssert;
+const { describe, it } = NodeTest;
+const FIXED_TEST_EPOCH_MS = 1_763_000_000_000;
+
 describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OAuth2, whitelist & mail)", () => {
   it("persists non-secret config in JSON and seals all mail secrets write-only into overnight-factory.enc", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pmx-overnight-cred-"));
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pmx-overnight-cred-"));
     try {
       const store = new EncryptedPluginCredentialStore({
         dataDir: dir,
-        masterKey: randomBytes(32)
+        masterKey: NodeCrypto.randomBytes(32)
       });
       const service = new OvernightRouteService({
         dataDir: dir,
@@ -82,19 +90,20 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       ]);
 
       // 2. Plaintext JSON config contains zero secrets
-      const rawJson = readFileSync(join(dir, "overnight-factory.json"), "utf8");
+      const rawJson = NodeFS.readFileSync(NodePath.join(dir, "overnight-factory.json"), "utf8");
       assert.equal(rawJson.includes(secretPass), false);
       assert.equal(rawJson.includes(gmailSecret), false);
 
       // 3. Encrypted credential file exists at credentials/overnight-factory.enc without plaintext
       const encPath = store.getCredentialFilePath(OVERNIGHT_CREDENTIAL_BUCKET);
-      assert.equal(existsSync(encPath), true);
+      assert.equal(NodeFS.existsSync(encPath), true);
       assert.ok(encPath.endsWith(`${OVERNIGHT_CREDENTIAL_BUCKET}.enc`));
-      const encRaw = readFileSync(encPath, "utf8");
+      const encRaw = NodeFS.readFileSync(encPath, "utf8");
       assert.equal(encRaw.includes(secretPass), false);
       assert.equal(encRaw.includes(gmailSecret), false);
-      if (process.platform !== "win32") {
-        assert.equal(statSync(encPath).mode & 0o777, 0o600);
+      // oxlint-disable-next-line prismux/no-global-process-runtime -- daemon node:test checks POSIX 0600 file permissions outside Effect HostProcess
+      if (NodeOS.platform() !== "win32") {
+        assert.equal(NodeFS.statSync(encPath).mode & 0o777, 0o600);
       }
 
       // 4. Subsequent PUT with empty secret strings preserves existing sealed secrets
@@ -119,13 +128,30 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
 
       service.stop();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("supports Gmail generic IMAP/SMTP preset with automatic SSL host/port defaults and reload persistence", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pmx-overnight-gmail-imap-"));
+  it("supports exact 6-card mailbox preset order, Gmail IMAP/SMTP, and NetEase 163/126 auto-host switching", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pmx-overnight-gmail-imap-"));
     try {
+      assert.deepEqual(OVERNIGHT_MAIL_PRESET_ORDER, [
+        "gmail",
+        "qq",
+        "agent_mail",
+        "outlook",
+        "netease",
+        "custom"
+      ]);
+      assert.deepEqual(Object.keys(OVERNIGHT_MAIL_PRESETS), [
+        "gmail",
+        "qq",
+        "agent_mail",
+        "outlook",
+        "netease",
+        "custom"
+      ]);
+
       assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.id, "gmail");
       assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.label, "谷歌邮箱 (Gmail)");
       assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.imapHost, "imap.gmail.com");
@@ -134,10 +160,11 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.smtpHost, "smtp.gmail.com");
       assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.smtpPort, 465);
       assert.equal(OVERNIGHT_MAIL_PRESETS.gmail.smtpSecure, true);
+      assert.equal(OVERNIGHT_MAIL_PRESETS.netease.label, "网易邮箱（163 / 126）");
 
       const store = new EncryptedPluginCredentialStore({
         dataDir: dir,
-        masterKey: randomBytes(32)
+        masterKey: NodeCrypto.randomBytes(32)
       });
       const service = new OvernightRouteService({
         dataDir: dir,
@@ -146,6 +173,7 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
 
       const initial = await service.getConfigSnapshot("owner_chief");
       assert.equal(initial.config.mode, "imap");
+      assert.equal(initial.config.emailProvider, "imap_smtp");
 
       // Patching preset="gmail" without explicit host/port auto-fills Gmail SSL defaults
       const updated = await service.updateConfig(
@@ -173,29 +201,243 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       assert.equal(updated.config.imapSmtp.smtpSecure, true);
       assert.equal(updated.secrets.hasImapPassword, true);
       assert.equal(updated.secrets.hasSmtpPassword, true);
+
+      // NetEase preset with @126.com email automatically resolves imap.126.com / smtp.126.com
+      const netease126 = await service.updateConfig(
+        {
+          mode: "imap",
+          imapSmtp: {
+            preset: "netease",
+            email: "nightowl@126.com"
+          }
+        },
+        "owner_chief"
+      );
+      assert.equal(netease126.config.imapSmtp.preset, "netease");
+      assert.equal(netease126.config.imapSmtp.imapHost, "imap.126.com");
+      assert.equal(netease126.config.imapSmtp.smtpHost, "smtp.126.com");
+      assert.equal(netease126.config.imapSmtp.imapPort, 993);
+      assert.equal(netease126.config.imapSmtp.smtpPort, 465);
+
+      // Legacy preset="163" normalizes cleanly to "netease" with imap.163.com / smtp.163.com
+      const legacy163 = await service.updateConfig(
+        {
+          mode: "imap",
+          imapSmtp: {
+            preset: "163",
+            email: "nightowl@163.com"
+          }
+        },
+        "owner_chief"
+      );
+      assert.equal(legacy163.config.imapSmtp.preset, "netease");
+      assert.equal(legacy163.config.imapSmtp.imapHost, "imap.163.com");
+      assert.equal(legacy163.config.imapSmtp.smtpHost, "smtp.163.com");
       service.stop();
 
-      // Reload from persisted JSON preserves "gmail" preset and SSL endpoints
+      // Reload from persisted JSON preserves normalized "netease" preset and endpoints
       const reloaded = new OvernightRouteService({
         dataDir: dir,
         credentialStore: store
       });
       const snap = await reloaded.getConfigSnapshot("owner_chief");
-      assert.equal(snap.config.imapSmtp.preset, "gmail");
-      assert.equal(snap.config.imapSmtp.imapHost, "imap.gmail.com");
-      assert.equal(snap.config.imapSmtp.smtpHost, "smtp.gmail.com");
+      assert.equal(snap.config.imapSmtp.preset, "netease");
+      assert.equal(snap.config.imapSmtp.imapHost, "imap.163.com");
+      assert.equal(snap.config.imapSmtp.smtpHost, "smtp.163.com");
       reloaded.stop();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("integrates Tencent Agent Mail CLI (status, install, opaque OAuth login, auto-persist +me, send report & pollNow)", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pmx-overnight-agentmail-"));
+    try {
+      const store = new EncryptedPluginCredentialStore({
+        dataDir: dir,
+        masterKey: NodeCrypto.randomBytes(32)
+      });
+
+      const opaqueUrl =
+        "https://agent.qq.com/oauth/authorize?client_id=agently&state=RAW%2BOPAQUE%3D%3D&nonce=AbC_123";
+      assert.equal(
+        extractOpaqueOAuthUrl(`\u001b[36m请打开链接：${opaqueUrl}\u001b[0m\n`),
+        opaqueUrl
+      );
+      assert.equal(
+        extractAgentMailAddress('{"email":"fishundersea@agent.qq.com","aliases":[]}'),
+        "fishundersea@agent.qq.com"
+      );
+
+      let cliInstalled = false;
+      let loggedIn = false;
+      const loginHooks: {
+        exit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+      } = {};
+      let resolvePostLoginPersist: (() => void) | null = null;
+      const postLoginPersisted = new Promise<void>((resolve) => {
+        resolvePostLoginPersist = resolve;
+      });
+      const invokedCliArgs: string[][] = [];
+
+      const service = new OvernightRouteService({
+        dataDir: dir,
+        credentialStore: store,
+        onConfigChanged: () => {
+          if (loggedIn) {
+            resolvePostLoginPersist?.();
+          }
+        },
+        networkHooks: {
+          now: () => FIXED_TEST_EPOCH_MS,
+          findAgentMailCli: () => (cliInstalled ? "/usr/local/bin/agently-cli" : null),
+          installAgentMailCli: async () => {
+            cliInstalled = true;
+            return {
+              exitCode: 0,
+              stdout: "added 1 package @tencent-qqmail/agently-cli Bearer secret_token_should_redact",
+              stderr: ""
+            };
+          },
+          runAgentMailCli: async (_cliPath, args) => {
+            invokedCliArgs.push([...args]);
+            if (args[0] === "+me") {
+              if (!loggedIn) {
+                return { exitCode: 1, stdout: "", stderr: "not logged in" };
+              }
+              return {
+                exitCode: 0,
+                stdout: "Current account: fishundersea@agent.qq.com\n",
+                stderr: ""
+              };
+            }
+            if (args[0] === "message" && args[1] === "+send") {
+              return {
+                exitCode: 0,
+                stdout: JSON.stringify({ success: true, messageId: "agm-report-9001" }),
+                stderr: ""
+              };
+            }
+            if (args[0] === "message" && args[1] === "+list") {
+              return {
+                exitCode: 0,
+                stdout: JSON.stringify({
+                  messages: [
+                    {
+                      id: "agm-msg-1",
+                      from: "stranger@untrusted.dev",
+                      to: ["fishundersea@agent.qq.com"],
+                      subject: "#factory unauthorized",
+                      text: "blocked by whitelist"
+                    }
+                  ]
+                }),
+                stderr: ""
+              };
+            }
+            return { exitCode: 1, stdout: "", stderr: "unexpected command" };
+          },
+          spawnAgentMailLogin: (): AgentMailLoginSpawnHandle => {
+            let stdoutCb: ((chunk: string) => void) | null = null;
+            return {
+              onStdout: (cb) => {
+                stdoutCb = cb;
+                queueMicrotask(() => {
+                  stdoutCb?.(`请打开浏览器完成授权：\n${opaqueUrl}\n`);
+                });
+              },
+              onStderr: () => {},
+              onExit: (cb) => {
+                loginHooks.exit = cb;
+              },
+              onError: () => {},
+              kill: () => {}
+            };
+          }
+        }
+      });
+
+      // 1. When CLI is absent, getConfigSnapshot never crashes and reports cliInstalled=false
+      const snapBefore = await service.getConfigSnapshot("owner_chief");
+      assert.equal(snapBefore.agentMail.cliInstalled, false);
+      assert.equal(snapBefore.agentMail.authorizedEmail, null);
+
+      // 2. Persist emailProvider="agent_mail"
+      const switched = await service.updateConfig(
+        { emailProvider: "agent_mail" },
+        "owner_chief"
+      );
+      assert.equal(switched.config.emailProvider, "agent_mail");
+      assert.equal(switched.config.imapSmtp.preset, "agent_mail");
+
+      // 3. agentMailAction="install" installs CLI and redacts tokens in stdout
+      const installRes = await service.testMailConnection(
+        { emailProvider: "agent_mail", agentMailAction: "install" },
+        "owner_chief"
+      );
+      assert.equal(installRes.ok, true);
+      assert.equal(installRes.installed, true);
+      assert.equal(installRes.stdout?.includes("secret_token_should_redact"), false);
+      assert.equal(installRes.stdout?.includes("[REDACTED]"), true);
+
+      // 4. agentMailAction="login" captures exact unmodified opaque OAuth URL immediately
+      const loginRes = await service.testMailConnection(
+        { emailProvider: "agent_mail", agentMailAction: "login" },
+        "owner_chief"
+      );
+      assert.equal(loginRes.ok, true);
+      assert.equal(loginRes.authInProgress, true);
+      assert.equal(loginRes.authUrl, opaqueUrl);
+
+      const duringAuth = await service.getConfigSnapshot("owner_chief");
+      assert.equal(duringAuth.agentMail.authInProgress, true);
+      assert.equal(duringAuth.agentMail.pendingAuthUrl, opaqueUrl);
+
+      // 5. Simulate user finishing browser authorization -> login process exits 0 -> +me persists agentMailAddress
+      loggedIn = true;
+      loginHooks.exit?.(0, null);
+      await postLoginPersisted;
+
+      const afterAuth = await service.getConfigSnapshot("owner_chief");
+      assert.equal(afterAuth.agentMail.cliInstalled, true);
+      assert.equal(afterAuth.agentMail.authInProgress, false);
+      assert.equal(afterAuth.agentMail.authorizedEmail, "fishundersea@agent.qq.com");
+      assert.equal(afterAuth.config.agentMailAddress, "fishundersea@agent.qq.com");
+
+      // 6. Standard testMailConnection verifies @agent.qq.com mailbox
+      const verified = await service.testMailConnection(
+        { emailProvider: "agent_mail" },
+        "owner_chief"
+      );
+      assert.equal(verified.ok, true);
+      assert.equal(verified.authorizedEmail, "fishundersea@agent.qq.com");
+
+      // 7. sendTestMorningReport sends cleanly through agently-cli message +send
+      const report = await service.sendTestMorningReport({}, "owner_chief");
+      assert.equal(report.ok, true);
+      assert.equal(report.recipient, "fishundersea@agent.qq.com");
+      assert.equal(report.messageId, "agm-report-9001");
+      assert.equal(report.provider, "agent_mail:agently-cli");
+
+      // 8. pollNow lists messages via agently-cli message +list and enforces sender whitelist
+      const poll = await service.pollNow({}, "owner_chief");
+      assert.equal(poll.ok, true);
+      assert.equal(poll.fetchedCount, 1);
+      assert.equal(poll.blockedByWhitelistCount, 1);
+      assert.ok(invokedCliArgs.some((args) => args[0] === "message" && args[1] === "+list"));
+
+      service.stop();
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("handles Gmail OAuth2 PKCE start -> callback -> token seal -> connectivity test -> disconnect", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pmx-overnight-oauth-"));
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pmx-overnight-oauth-"));
     try {
       const store = new EncryptedPluginCredentialStore({
         dataDir: dir,
-        masterKey: randomBytes(32)
+        masterKey: NodeCrypto.randomBytes(32)
       });
 
       const fakeFetch: typeof fetch = async (input) => {
@@ -262,6 +504,7 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
 
       const snap = await service.getConfigSnapshot("owner_chief");
       assert.equal(snap.config.mode, "gmail-oauth2");
+      assert.equal(snap.config.emailProvider, "gmail_oauth2");
       assert.equal(snap.config.gmail.connected, true);
       assert.equal(snap.config.gmail.boundEmail, "owner@gmail.com");
       assert.equal(snap.secrets.hasGmailRefreshToken, true);
@@ -281,16 +524,16 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
 
       service.stop();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("tests IMAP/SMTP connectivity, sends HTML morning test report, and enforces sender whitelist during pollNow", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pmx-overnight-poll-"));
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pmx-overnight-poll-"));
     try {
       const store = new EncryptedPluginCredentialStore({
         dataDir: dir,
-        masterKey: randomBytes(32)
+        masterKey: NodeCrypto.randomBytes(32)
       });
       const sentPayloads: OutboundMailPayload[] = [];
 
@@ -298,6 +541,7 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
         dataDir: dir,
         credentialStore: store,
         networkHooks: {
+          now: () => FIXED_TEST_EPOCH_MS,
           probeImap: async (params) => ({
             ok: params.host === "imap.qq.com" && params.password === "valid-auth-code",
             latencyMs: 18,
@@ -312,7 +556,7 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
             sentPayloads.push(payload);
             return {
               messageId: "mock-report-001@prismux.local",
-              acceptedAt: Date.now(),
+              acceptedAt: FIXED_TEST_EPOCH_MS,
               provider: "smtp:smtp.qq.com"
             };
           },
@@ -430,12 +674,12 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
 
       service.stop();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("exposes authenticated /v1/overnight/* endpoints on PrismuxDaemon HTTP server", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pmx-overnight-http-"));
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pmx-overnight-http-"));
     const token = "overnight-http-test-token";
     const daemon = new PrismuxDaemon({
       headless: true,
@@ -457,7 +701,7 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       const unauth = await fetch(`${ready.httpUrl}/v1/overnight/config`);
       assert.equal(unauth.status, 401);
 
-      // Authenticated GET returns default config (Generic IMAP/SMTP mode) & secret badges
+      // Authenticated GET returns default config (Generic IMAP/SMTP mode), secret badges, and agentMail probe
       const getRes = await fetch(`${ready.httpUrl}/v1/overnight/config`, {
         headers: authHeaders
       });
@@ -467,19 +711,23 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
         config: {
           enabled: boolean;
           mode: string;
+          emailProvider: string;
           imapSmtp: { preset: string };
           strategy: { triggerTag: string };
         };
+        agentMail: { cliInstalled: boolean };
         secrets: { hasImapPassword: boolean };
       };
       assert.equal(getJson.ok, true);
       assert.equal(getJson.config.enabled, false);
       assert.equal(getJson.config.mode, "imap");
+      assert.equal(getJson.config.emailProvider, "imap_smtp");
       assert.equal(getJson.config.imapSmtp.preset, "qq");
       assert.equal(getJson.config.strategy.triggerTag, "#factory");
       assert.equal(getJson.secrets.hasImapPassword, false);
+      assert.equal(typeof getJson.agentMail.cliInstalled, "boolean");
 
-      // Authenticated PUT saves sanitized config + sealed password
+      // Authenticated PUT saves sanitized config + sealed password and normalizes legacy 163 -> netease
       const putRes = await fetch(`${ready.httpUrl}/v1/overnight/config`, {
         method: "PUT",
         headers: authHeaders,
@@ -493,9 +741,10 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       const putText = await putRes.text();
       assert.equal(putText.includes("163-secret-code"), false);
       const putJson = JSON.parse(putText) as {
-        config: { imapSmtp: { email: string } };
+        config: { imapSmtp: { preset: string; email: string } };
         secrets: { hasImapPassword: boolean };
       };
+      assert.equal(putJson.config.imapSmtp.preset, "netease");
       assert.equal(putJson.config.imapSmtp.email, "dev@163.com");
       assert.equal(putJson.secrets.hasImapPassword, true);
 
@@ -520,7 +769,7 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       assert.equal(overnightDiag?.settingsRoute, "/settings/overnight-factory");
     } finally {
       await daemon.stop();
-      rmSync(dir, { recursive: true, force: true });
+      NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

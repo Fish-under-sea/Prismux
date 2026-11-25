@@ -500,7 +500,7 @@ describe("RightPanel 7-item strict order, synced top/bottom DnD & BTW side-quest
     expect(inactiveClass).not.toContain("bg-primary");
   });
 
-  it("renders RightPanelTabs with exact 7-item Activity Bar DOM order, 旁路提问 tab title, and keeps PR/wallpaper surfaces openable", () => {
+  it("omits top RightPanelActivityBar from RightPanelTabs while preserving tabs, + menu, 旁路提问, PR, and wallpaper surfaces", () => {
     useRightPanelStore.getState().resetActivityBarOrder();
     const html = renderPanelHtml({
       surfaces: [
@@ -517,44 +517,19 @@ describe("RightPanel 7-item strict order, synced top/bottom DnD & BTW side-quest
       activeSurfaceId: "side-chat:empty",
     });
 
-    const renderedIds = [...html.matchAll(/data-activity-item="([^"]+)"/g)].map(
-      (match) => match[1],
-    );
-    expect(renderedIds).toEqual([
-      "pull-requests",
-      "diff",
-      "files",
-      "terminal",
-      "preview",
-      "mobile-simulator",
-      "side-chat",
-    ]);
-    const renderedLabels = [
-      ...html.matchAll(/data-activity-item="[^"]+"[^>]*aria-label="([^"]+)"/g),
-    ].map((match) => match[1]);
-    expect(renderedLabels).toEqual([
-      "已关联项",
-      "差异",
-      "文件",
-      "终端",
-      "浏览器",
-      "手机模拟",
-      "旁路提问",
-    ]);
-    expect(html).toContain("旁路提问");
-    expect(html).toContain("手机模拟");
-    expect(html).not.toContain("手机模拟器");
-    expect(html).not.toContain('aria-label="设备"');
-    expect(html).not.toContain('data-activity-item="pull-request"');
-    expect(html).not.toContain('data-activity-item="wallpaper"');
-    expect(html).toContain('data-activity-item="side-chat"');
-    expect(html).toContain('data-active="true"');
-    expect(html).toContain("bg-primary");
-    // PR detail tab and Wallpaper surface tab still render in the tab strip.
+    // Regression: top redundant RightPanelActivityBar must NOT render inside RightPanelTabs.
+    expect(html).not.toContain("data-right-panel-activity-bar");
+    expect(html).not.toContain('data-testid="right-panel-activity-bar"');
+    expect(html).not.toContain("data-activity-item=");
+
+    // Top tab strip, + add surface button, and open surface tabs remain intact.
+    expect(html).toContain("data-right-panel-tabbar");
+    expect(html).toContain("data-right-panel-surface-content");
+    expect(html).toContain(">旁路提问<");
     expect(html).toContain("#42");
     expect(html).toContain(">壁纸<");
 
-    // English locale renders "Side question" for both the side-chat tab and Activity Bar item.
+    // English locale renders "Side question" for the side-chat tab and still omits the activity bar.
     const enHtml = renderPanelHtml(
       {
         surfaces: [{ id: "side-chat:empty", kind: "side-chat-empty" }],
@@ -562,11 +537,13 @@ describe("RightPanel 7-item strict order, synced top/bottom DnD & BTW side-quest
       },
       "en",
     );
-    expect(enHtml).toContain('aria-label="Side question"');
+    expect(enHtml).not.toContain("data-right-panel-activity-bar");
+    expect(enHtml).not.toContain('data-testid="right-panel-activity-bar"');
+    expect(enHtml).not.toContain("data-activity-item=");
     expect(enHtml).toContain(">Side question<");
   });
 
-  it("syncs top bar, bottom empty launcher, and + menu order across drag-end and reset, with both enabled and disabled rows sortable", () => {
+  it("syncs empty launcher and + menu order across drag-end and reset, with both enabled and disabled rows sortable", () => {
     useRightPanelStore.getState().resetActivityBarOrder();
 
     // 1. Full RightPanelTabs SSR integration check on default order with disabled diff row.
@@ -575,9 +552,10 @@ describe("RightPanel 7-item strict order, synced top/bottom DnD & BTW side-quest
       surfaces: [],
       diffAvailable: false,
     });
-    const topIdsDefault = [...defaultPanelHtml.matchAll(/data-activity-item="([^"]+)"/g)].map(
-      (match) => match[1],
-    );
+    expect(defaultPanelHtml).not.toContain("data-right-panel-activity-bar");
+    expect(defaultPanelHtml).not.toContain('data-testid="right-panel-activity-bar"');
+    expect(defaultPanelHtml).not.toContain("data-activity-item=");
+
     const launcherIdsDefault = [...defaultPanelHtml.matchAll(/data-launcher-item="([^"]+)"/g)].map(
       (match) => match[1],
     );
@@ -585,7 +563,7 @@ describe("RightPanel 7-item strict order, synced top/bottom DnD & BTW side-quest
       ...defaultPanelHtml.matchAll(/data-launcher-drag-handle="([^"]+)"/g),
     ].map((match) => match[1]);
 
-    expect(topIdsDefault).toEqual([
+    expect(launcherIdsDefault).toEqual([
       "pull-requests",
       "diff",
       "files",
@@ -594,8 +572,7 @@ describe("RightPanel 7-item strict order, synced top/bottom DnD & BTW side-quest
       "mobile-simulator",
       "side-chat",
     ]);
-    expect(launcherIdsDefault).toEqual(topIdsDefault);
-    expect(dragHandleIdsDefault).toEqual(topIdsDefault);
+    expect(dragHandleIdsDefault).toEqual(launcherIdsDefault);
     // All 7 rows (including disabled "diff") carry sortable attributes & drag handle.
     expect(defaultPanelHtml.match(/data-launcher-sortable="true"/g)).toHaveLength(7);
     expect(

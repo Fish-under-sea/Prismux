@@ -1,7 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import fs from "node:fs";
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import path from "node:path";
+import * as NodePath from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
@@ -445,8 +445,8 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(modalHtml).not.toContain("**官方四大插件");
 
     // Verify PrismuxUpdatesSettingsPage no longer renders raw <pre> releaseNotes
-    const updatesSettingsSource = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../settings/PrismuxUpdatesSettingsPage.tsx"),
+    const updatesSettingsSource = NodeFS.readFileSync(
+      NodePath.resolve(import.meta.dirname, "../settings/PrismuxUpdatesSettingsPage.tsx"),
       "utf8",
     );
     expect(updatesSettingsSource).toContain("<PrismuxReleaseNotesMarkdown");
@@ -657,6 +657,12 @@ describe("Sidebar update capsule & release modal rendering", () => {
     prismuxUpdateNotifierStore.openReleaseModal();
 
     const modalHtml = renderToStaticMarkup(createElement(PrismuxUpdateReleaseModal));
+    const progressIdx = modalHtml.indexOf('data-testid="prismux-update-modal-progress"');
+    const releaseNotesIdx = modalHtml.indexOf('data-testid="prismux-update-release-notes"');
+    expect(progressIdx).toBeGreaterThan(-1);
+    expect(releaseNotesIdx).toBeGreaterThan(-1);
+    expect(progressIdx).toBeLessThan(releaseNotesIdx);
+    expect(modalHtml).toContain('data-testid="prismux-update-modal-status-slot"');
     expect(modalHtml).toContain('data-progress-mode="determinate"');
     expect(modalHtml).toContain('data-testid="prismux-update-modal-progressbar-fill"');
     expect(modalHtml).toContain("width:42.6%");
@@ -673,7 +679,7 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(modalHtml).toContain("90–95%");
     expect(modalHtml).toContain("95–100%");
 
-    // Collapsed sidebar capsule shows live percentage & hairline progress bar.
+    // Collapsed sidebar capsule shows live percentage & theme-accent primary hairline progress bar (zero hardcoded sky-*).
     prismuxUpdateNotifierStore.collapseToCapsule(null, true);
     const capsuleHtml = renderToStaticMarkup(
       createElement(PrismuxSidebarUpdateCapsule, { railCompact: false }),
@@ -681,6 +687,68 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(capsuleHtml).toContain("下载更新 43%");
     expect(capsuleHtml).toContain('data-testid="prismux-sidebar-update-capsule-progress"');
     expect(capsuleHtml).toContain("width:42.6%");
+    expect(capsuleHtml).toContain("border-primary/45");
+    expect(capsuleHtml).toContain("bg-primary/18");
+    expect(capsuleHtml).toContain("text-primary");
+    expect(capsuleHtml).toContain("bg-primary");
+    expect(capsuleHtml).not.toContain("sky-500");
+    expect(capsuleHtml).not.toContain("sky-400");
+    expect(capsuleHtml).not.toContain("sky-800");
+    expect(capsuleHtml).not.toContain("sky-200");
+
+    const compactTransferCapsuleHtml = renderToStaticMarkup(
+      createElement(PrismuxSidebarUpdateCapsule, { railCompact: true }),
+    );
+    expect(compactTransferCapsuleHtml).toContain("border-primary/45");
+    expect(compactTransferCapsuleHtml).toContain("text-primary");
+    expect(compactTransferCapsuleHtml).not.toContain("sky-500");
+    expect(compactTransferCapsuleHtml).not.toContain("sky-400");
+    expect(compactTransferCapsuleHtml).not.toContain("sky-200");
+  });
+
+  it("pins inline update errors above release notes in modal and follows semantic theme tokens across capsule & sidebar pill", () => {
+    prismuxUpdateNotifierStore.reportUpdateAvailable(makeUpdateCheck());
+    prismuxUpdateNotifierStore.openReleaseModal();
+    prismuxUpdateNotifierStore.setMessages({
+      error: "下载分卷 2/3 失败：网络连接重置",
+    });
+
+    const modalHtml = renderToStaticMarkup(createElement(PrismuxUpdateReleaseModal));
+    const errorIdx = modalHtml.indexOf('data-testid="prismux-update-modal-error"');
+    const releaseNotesIdx = modalHtml.indexOf('data-testid="prismux-update-release-notes"');
+    expect(errorIdx).toBeGreaterThan(-1);
+    expect(releaseNotesIdx).toBeGreaterThan(-1);
+    expect(errorIdx).toBeLessThan(releaseNotesIdx);
+    expect(modalHtml).toContain("下载分卷 2/3 失败：网络连接重置");
+
+    // Collapsed error state in sidebar capsule uses destructive tone without hardcoded sky-*.
+    prismuxUpdateNotifierStore.collapseToCapsule(null, true);
+    const errorCapsuleHtml = renderToStaticMarkup(
+      createElement(PrismuxSidebarUpdateCapsule, { railCompact: false }),
+    );
+    expect(errorCapsuleHtml).toContain('data-update-tone="error"');
+    expect(errorCapsuleHtml).toContain("border-destructive/45");
+    expect(errorCapsuleHtml).not.toContain("sky-500");
+
+    // Verified SidebarUpdatePill & PrismuxSidebarUpdateCapsule sources carry zero hardcoded sky-* tokens.
+    const webSrc = NodePath.resolve(import.meta.dirname, "../..");
+    const sidebarPillSource = NodeFS.readFileSync(
+      NodePath.join(webSrc, "components/sidebar/SidebarUpdatePill.tsx"),
+      "utf8",
+    );
+    expect(sidebarPillSource).toContain("border-primary/45");
+    expect(sidebarPillSource).not.toContain("sky-500");
+    expect(sidebarPillSource).not.toContain("sky-800");
+    expect(sidebarPillSource).not.toContain("sky-200");
+
+    const sidebarCapsuleSource = NodeFS.readFileSync(
+      NodePath.join(webSrc, "prismux/updates/PrismuxSidebarUpdateCapsule.tsx"),
+      "utf8",
+    );
+    expect(sidebarCapsuleSource).not.toContain("sky-500");
+    expect(sidebarCapsuleSource).not.toContain("sky-400");
+    expect(sidebarCapsuleSource).not.toContain("sky-800");
+    expect(sidebarCapsuleSource).not.toContain("sky-200");
   });
 
   it("renders reduced-motion-safe indeterminate shimmer bar during null-percent connection handshake instead of static 14%/15%", () => {
@@ -791,6 +859,10 @@ describe("Sidebar update capsule & release modal rendering", () => {
     const registeredTicks: Array<() => void> = [];
     let cleared = false;
     let pollCalls = 0;
+    let notifyHydrated: (() => void) | null = null;
+    const pollHydrated = new Promise<void>((resolve) => {
+      notifyHydrated = resolve;
+    });
 
     const stop = startUpdaterStatusFallbackPoller({
       store,
@@ -804,6 +876,9 @@ describe("Sidebar update capsule & release modal rendering", () => {
       clearIntervalFn: (() => {
         cleared = true;
       }) as typeof clearInterval,
+      onHydrated: () => {
+        notifyHydrated?.();
+      },
       fetchStatus: async () => {
         pollCalls += 1;
         return {
@@ -840,7 +915,7 @@ describe("Sidebar update capsule & release modal rendering", () => {
     // Clock crosses 700ms SSE silence -> fallback poll executes & updates store + live speed
     clock = 11_000;
     runTick();
-    await new Promise((r) => setTimeout(r, 10));
+    await pollHydrated;
     expect(pollCalls).toBe(1);
     expect(store.getState().updaterStatus?.progress?.percent).toBe(58.4);
     expect(store.getState().updaterStatus?.progress?.currentPart).toBe(2);
@@ -1032,10 +1107,10 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
   });
 
   it("enforces symmetric centering, document.body portaling, and backdrop dismissal across all scoped modals", () => {
-    const webSrc = path.resolve(import.meta.dirname, "../..");
+    const webSrc = NodePath.resolve(import.meta.dirname, "../..");
 
-    const appRouteModal = fs.readFileSync(
-      path.join(webSrc, "components/AppRouteModal.tsx"),
+    const appRouteModal = NodeFS.readFileSync(
+      NodePath.join(webSrc, "components/AppRouteModal.tsx"),
       "utf8",
     );
     expect(appRouteModal).toContain("sm:py-(--app-modal-safe-y)");
@@ -1044,13 +1119,13 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
     expect(appRouteModal).toContain("shouldDismissOnBackdropClick");
     expect(appRouteModal).toContain("container={portalContainer}");
 
-    const uiDialog = fs.readFileSync(path.join(webSrc, "components/ui/dialog.tsx"), "utf8");
+    const uiDialog = NodeFS.readFileSync(NodePath.join(webSrc, "components/ui/dialog.tsx"), "utf8");
     expect(uiDialog).toContain("fixed inset-0 z-50 flex items-center justify-center");
     expect(uiDialog).toContain("document.body");
     expect(uiDialog).toContain("shouldDismissOnBackdropClick");
 
-    const uiAlertDialog = fs.readFileSync(
-      path.join(webSrc, "components/ui/alert-dialog.tsx"),
+    const uiAlertDialog = NodeFS.readFileSync(
+      NodePath.join(webSrc, "components/ui/alert-dialog.tsx"),
       "utf8",
     );
     expect(uiAlertDialog).toContain("fixed inset-0 z-50 flex items-center justify-center");
@@ -1058,22 +1133,22 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
     expect(uiAlertDialog).toContain("dismissOnBackdropClick = true");
     expect(uiAlertDialog).toContain("shouldDismissOnBackdropClick");
 
-    const providerDelete = fs.readFileSync(
-      path.join(webSrc, "components/settings/ProviderDeleteDialog.tsx"),
+    const providerDelete = NodeFS.readFileSync(
+      NodePath.join(webSrc, "components/settings/ProviderDeleteDialog.tsx"),
       "utf8",
     );
     expect(providerDelete).toContain("dismissOnBackdropClick={!isDeleting}");
 
-    const pluginTrust = fs.readFileSync(
-      path.join(webSrc, "prismux/settings/plugins/PluginTrustAuditModal.tsx"),
+    const pluginTrust = NodeFS.readFileSync(
+      NodePath.join(webSrc, "prismux/settings/plugins/PluginTrustAuditModal.tsx"),
       "utf8",
     );
     // Symmetric visual vertical centering (top 0 + pt-10 = 40px, bottom 20px + pb-5 20px = 40px)
     expect(pluginTrust).toContain("px-4 pt-10 pb-5");
     expect(pluginTrust).toContain("shouldDismissOnBackdropClick");
 
-    const pluginRollback = fs.readFileSync(
-      path.join(webSrc, "prismux/settings/plugins/PluginRollbackDialog.tsx"),
+    const pluginRollback = NodeFS.readFileSync(
+      NodePath.join(webSrc, "prismux/settings/plugins/PluginRollbackDialog.tsx"),
       "utf8",
     );
     expect(pluginRollback).toContain("fixed inset-0 z-[80] flex items-center justify-center");

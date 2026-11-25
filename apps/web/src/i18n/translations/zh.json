@@ -48,7 +48,7 @@
   "6ff697b80a1714c7": "请从 {url} 或包管理器（例如 {command}）安装 GitLab 命令行工具（{cli}）。",
   "929a11e234f6e5d9": "请安装 Azure 命令行工具（{cli}），然后使用 {command} 启用 Azure DevOps 支持。",
   "ad599e9de33538dd": "请在“设置 → 版本控制与 issue”中添加 Bitbucket token。",
-  "d810ecd91e8cf9d0": "请使用 {install} 安装 Origin CLI，然后运行 {login}。",
+  "168fc95d71e2d0cb": "请在「设置 → 版本控制与 Issue」中添加 Gitee 私人令牌（Personal Access Token），或设置环境变量 GITEE_TOKEN。",
   "eb0f60ef4f92ab7d": "请从 {fjUrl} 安装 {fj} 0.6 或更高版本并运行 {fjLogin}，或从 {teaUrl} 安装 {tea} 0.16 或更高版本，并为每个 Forgejo 或 Gitea 服务器运行 {teaLogin}。",
   "d026a85e2e50e675": "请使用 {install} 安装 GitCafe CLI，然后运行 {login}、在设置中保存 token，或在服务器上设置 {variable}。",
   "22d3c0c48a34b5b3": "请使用 {install} 安装 TanStack Source CLI，然后运行 {login}、在设置中保存 token，或在服务器上设置 {variable}。",
@@ -13076,5 +13076,9 @@
   "ecc0fc90d5dc77b5": "正在更新计划",
   "ff74baa9c60e7940": "已更新计划",
   "4e4e846891f5e99e": "正在调用工具",
-  "d5ffd29426d52e9f": "已调用工具"
+  "d5ffd29426d52e9f": "已调用工具",
+  "825250957a58b972": "私人令牌（Personal Access Token）",
+  "b27817d6467ae90b": "API 基础地址",
+  "518f9dfbaae80a0e": "前往 https://gitee.com/profile/personal_access_tokens 生成私人令牌（勾选 projects、pull_requests、user_info），优先级高于环境变量 GITEE_TOKEN。",
+  "9841ae59891b83aa": "可选的 Gitee 企业版 OpenAPI v5 地址，留空默认使用 https://gitee.com/api/v5。"
 }

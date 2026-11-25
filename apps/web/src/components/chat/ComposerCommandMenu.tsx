@@ -541,6 +541,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         <ProviderInstanceIcon
           driverKind={props.item.driverKind}
           displayName={props.item.providerDisplayName}
+          instanceId={props.item.instanceId}
           acpRegistryAgentId={props.item.acpRegistryAgentId}
           acpRegistryIconUrl={props.item.acpRegistryIconUrl}
           className="size-4 shrink-0"

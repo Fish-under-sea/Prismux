@@ -107,6 +107,7 @@ export function ModelMentionChip(props: {
         <ProviderInstanceIcon
           driverKind={presentation.driverKind}
           displayName={presentation.providerDisplayName}
+          instanceId={props.instanceId}
           acpRegistryAgentId={presentation.acpRegistryAgentId}
           acpRegistryIconUrl={presentation.acpRegistryIconUrl}
           className="z-auto"

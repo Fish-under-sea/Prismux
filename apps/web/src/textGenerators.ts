@@ -31,7 +31,7 @@ import { formatEnvironmentQueryError } from "./state/query";
 import { serverEnvironment } from "./state/server";
 
 export interface TextGeneratorPreset {
-  readonly id: "openai" | "openrouter" | "anthropic" | "custom";
+  readonly id: "openai" | "anthropic" | "gemini" | "custom";
   readonly label: string;
   readonly kind: TextGeneratorKind;
   /** Empty for a custom server, whose URL the user enters. */
@@ -41,16 +41,16 @@ export interface TextGeneratorPreset {
 export const TEXT_GENERATOR_PRESETS: ReadonlyArray<TextGeneratorPreset> = [
   { id: "openai", label: "OpenAI", kind: "openaiCompatible", baseUrl: "https://api.openai.com/v1" },
   {
-    id: "openrouter",
-    label: "OpenRouter",
-    kind: "openaiCompatible",
-    baseUrl: "https://openrouter.ai/api/v1",
-  },
-  {
     id: "anthropic",
     label: "Anthropic",
     kind: "anthropic",
     baseUrl: "https://api.anthropic.com/v1",
+  },
+  {
+    id: "gemini",
+    label: msg("Gemini"),
+    kind: "openaiCompatible",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
   },
   {
     id: "custom",
@@ -87,6 +87,7 @@ export function textGeneratorBrand(config: Pick<TextGeneratorConfig, "kind" | "b
     url = new URL(config.baseUrl);
   } catch {}
   const host = url?.hostname ?? "";
+  if (host === "generativelanguage.googleapis.com") return ProviderDriverKind.make("gemini");
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
     return ProviderDriverKind.make("openrouter");
   }

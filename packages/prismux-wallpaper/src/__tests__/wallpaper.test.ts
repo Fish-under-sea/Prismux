@@ -17,6 +17,7 @@ import {
   parseByteRange,
   parseLibraryFoldersVdf,
   prepareMediaRangeResponse,
+  readVideoDimensions,
   resolveSafeMediaPath,
   scanCustomWallpaperDir,
   scanSteamWorkshop431960,
@@ -907,5 +908,102 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.doesNotMatch(viewSrc, /0 Token/, "raw 0 Token jargon must not appear in user-facing copy");
     assert.match(panelCss, /\.pmx-wp-tabs-row\s*\{/);
     assert.match(panelCss, /\.pmx-wp-tabs-trailing\s*\{/);
+  });
+
+  it("extracts true MP4 (head & EOF moov) and WebM video dimensions instead of 512x512 square preview fallback", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pmx-wp-vid-dims-"));
+    try {
+      const box = (type: string, payload: Buffer): Buffer => {
+        const hdr = Buffer.alloc(8);
+        hdr.writeUInt32BE(8 + payload.length, 0);
+        hdr.write(type, 4, 4, "ascii");
+        return Buffer.concat([hdr, payload]);
+      };
+      const makeMp4 = (w: number, h: number, eofMoov: boolean): Buffer => {
+        const tkhdPayload = Buffer.alloc(84, 0);
+        tkhdPayload.writeInt32BE(0x00010000, 40);
+        tkhdPayload.writeInt32BE(0x00010000, 56);
+        tkhdPayload.writeInt32BE(0x40000000, 72);
+        tkhdPayload.writeUInt32BE((w << 16) >>> 0, 76);
+        tkhdPayload.writeUInt32BE((h << 16) >>> 0, 80);
+        const moov = box("moov", box("trak", box("tkhd", tkhdPayload)));
+        const ftyp = box("ftyp", Buffer.from("isom\x00\x00\x02\x00isommp41", "latin1"));
+        const mdat = box("mdat", Buffer.alloc(eofMoov ? 180_000 : 128, 0x55));
+        return eofMoov ? Buffer.concat([ftyp, mdat, moov]) : Buffer.concat([ftyp, moov, mdat]);
+      };
+
+      const mp4Eof = join(root, "eof-4k.mp4");
+      await writeFile(mp4Eof, makeMp4(3840, 2160, true));
+      assert.deepEqual(await readVideoDimensions(mp4Eof), { width: 3840, height: 2160 });
+
+      const mp4Head = join(root, "head-portrait.mp4");
+      await writeFile(mp4Head, makeMp4(1080, 1920, false));
+      assert.deepEqual(await readVideoDimensions(mp4Head), { width: 1080, height: 1920 });
+
+      // WebM EBML PixelWidth / PixelHeight
+      const ebml = Buffer.concat([
+        Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x84, 0x42, 0x86, 0x81, 0x01]),
+        Buffer.from([0x18, 0x53, 0x80, 0x67, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+        Buffer.from([0x16, 0x54, 0xae, 0x6b, 0x8c]),
+        Buffer.from([0xae, 0x8a]),
+        Buffer.from([0xe0, 0x88]),
+        Buffer.from([0xb0, 0x82, 0x0a, 0x00]), // 2560
+        Buffer.from([0xba, 0x82, 0x05, 0xa0]), // 1440
+      ]);
+      const webmFile = join(root, "clip.webm");
+      await writeFile(webmFile, ebml);
+      assert.deepEqual(await readVideoDimensions(webmFile), { width: 2560, height: 1440 });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("eliminates multi-wallpaper tab flicker, fixes 16:9 card & numeric pill layout, and groups playback controls into glass cards (RC.2)", async () => {
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const [viewSrc, panelSrc, playbackSrc, stageSrc, panelCss] = await Promise.all([
+      readFile(join(pkgRoot, "src", "WallpaperSettingsView.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "WallpaperQuickPanel.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "renderers", "PlaybackSections.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "WallpaperStage.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8"),
+    ]);
+
+    // Flicker root-cause A: NO opacity: 0 on wallpaper card/quickpanel thumbnails
+    assert.doesNotMatch(panelCss, /\.pmx-wp-card img\s*\{[^}]*opacity:\s*0;/s);
+    assert.doesNotMatch(panelCss, /\.pmx-wp-qp__card img\s*\{[^}]*opacity:\s*0;/s);
+    assert.doesNotMatch(
+      panelCss,
+      /\.pmx-wp-qp__thumb img,\s*\.pmx-wp-qp__item-thumb img\s*\{[^}]*opacity:\s*0;/s,
+    );
+
+    // Flicker root-cause B: NO hover video prewarm churn on card grids
+    assert.doesNotMatch(viewSrc, /onPointerOver=\{\(\)\s*=>\s*\{[\s\S]*?schedulePrewarmVideo/);
+    assert.doesNotMatch(panelSrc, /onPointerOver=\{\(\)\s*=>\s*handleCardPointer/);
+
+    // Flicker root-cause C: Library tabpanel stays mounted with hidden toggle
+    assert.match(viewSrc, /hidden=\{tab !== "library"\}/);
+    assert.match(panelCss, /\.pmx-wp-tabpanel\[hidden\]\s*\{\s*display:\s*none;\s*\}/);
+
+    // Aspect ratio & framing fixes: 16:9 cards with center 22% portrait-safe framing, ambient backdrop on stage
+    assert.match(panelCss, /\.pmx-wp-card\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9;/s);
+    assert.match(panelCss, /\.pmx-wp-qp__card\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9;/s);
+    assert.match(panelCss, /object-position:\s*center 22%;/);
+    assert.match(panelCss, /\.pmx-wp-stage__ambient\s*\{/);
+    assert.match(stageSrc, /function AmbientBackdrop\(/);
+    assert.match(stageSrc, /videoReady && !videoFailed/);
+
+    // UI/UX hierarchy: elevated glass cards + translucent accent active pills + non-clipping numeric pills
+    assert.match(panelCss, /\.pmx-wp-glass-card\s*\{/);
+    assert.match(panelCss, /\.pmx-wp-value\s*\{[^}]*min-width:\s*58px;/s);
+    assert.match(panelCss, /\.pmx-wp-value-input::-webkit-inner-spin-button/);
+    assert.match(
+      panelCss,
+      /\.pmx-wp-rate--active\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--pmx-wp-accent\) 26%/s,
+    );
+    for (const card of ["filters", "framing", "scrim", "power", "audio"]) {
+      assert.match(playbackSrc, new RegExp(`data-pmx-playback-card="${card}"`));
+    }
+    assert.doesNotMatch(playbackSrc, /0 Token/);
   });
 });

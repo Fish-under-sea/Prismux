@@ -53,6 +53,11 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 
+const NonNegativeFiniteNumber = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+
 // Input includes cache reads/writes; output includes the optional reasoningTokens subset.
 const TurnTokenUsageCommonFields = {
   usageScope: Schema.Literal("main_agent"),
@@ -68,6 +73,10 @@ const TurnTokenUsageCommonFields = {
   otherUsage: Schema.optional(
     Schema.Struct({ inputTokens: NonNegativeInt, outputTokens: NonNegativeInt }),
   ),
+  // Provider-reported server-side model timing (ms), when recorded in native logs.
+  ttftMs: Schema.optional(NonNegativeFiniteNumber),
+  decodeMs: Schema.optional(NonNegativeFiniteNumber),
+  modelDurationMs: Schema.optional(NonNegativeFiniteNumber),
 };
 export const TurnTokenUsage = Schema.Union([
   Schema.Struct({

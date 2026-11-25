@@ -550,13 +550,16 @@ export function resolveComposerProviderSelection(input: {
 
 export function getAntigravitySendBlockReason(
   provider:
-    | Pick<ServerProvider, "driver" | "installed" | "auth" | "models" | "status">
+    | (Pick<ServerProvider, "driver" | "installed" | "auth" | "models" | "status"> & {
+        readonly enabled?: boolean;
+      })
     | null
     | undefined,
   model: string,
   resolve: MessageResolver = m,
 ): string | null {
   if (provider?.driver !== "antigravity") return null;
+  if (provider.enabled === false || provider.status === "disabled") return null;
   if (!provider.installed) {
     return resolve(msg("Install Antigravity in provider settings before sending."));
   }

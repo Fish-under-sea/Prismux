@@ -86,6 +86,7 @@ import {
   getProviderStatusKey,
   getProviderSummary,
   getProviderVersionLabel,
+  isProviderConfirmedNotInstalled,
   providerAuthLabel,
 } from "./providerStatus";
 import {
@@ -969,7 +970,7 @@ export function ProviderInstanceCard({
     instanceId,
     config: instance.config,
   });
-  const isMissingCli = liveProvider !== undefined && !liveProvider.installed;
+  const isMissingCli = isProviderConfirmedNotInstalled(effectiveProvider);
   const effectiveUpdateCommand =
     updateCommand ?? (versionAdvisory && cliMeta?.updateCommandHint ? cliMeta.updateCommandHint : null);
   const latestVersionBadge =
@@ -1149,6 +1150,7 @@ export function ProviderInstanceCard({
         accentColor={isDshInstance ? undefined : accentColor}
         acpRegistryAgentId={acpRegistryAgentId}
         acpRegistryIconUrl={acpRegistryIconUrl}
+        acpCommandPath={localCommandPath ?? undefined}
         showBadge={!isDshInstance && Boolean(accentColor)}
         className="size-5"
         iconClassName="size-5 text-foreground/85"
@@ -1169,6 +1171,7 @@ export function ProviderInstanceCard({
         accentColor={isDshInstance ? undefined : accentColor}
         acpRegistryAgentId={acpRegistryAgentId}
         acpRegistryIconUrl={acpRegistryIconUrl}
+        acpCommandPath={localCommandPath ?? undefined}
         showBadge={!isDshInstance && Boolean(accentColor)}
         className="size-6"
         iconClassName="size-6 text-foreground/90"

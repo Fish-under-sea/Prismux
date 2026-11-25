@@ -1072,6 +1072,7 @@ function AgentLogoStack({
             key={provider.instanceId}
             driverKind={provider.driver}
             displayName={entry?.displayName ?? agentName(provider)}
+            instanceId={provider.instanceId}
             accentColor={entry?.accentColor}
             acpRegistryAgentId={entry?.acpRegistryAgentId}
             acpRegistryIconUrl={entry?.acpRegistryIconUrl ?? provider.iconUrl}
@@ -1477,6 +1478,7 @@ function AgentRow({
         <ProviderInstanceIcon
           driverKind={provider.driver}
           displayName={name}
+          instanceId={provider.instanceId}
           accentColor={entry?.accentColor}
           acpRegistryAgentId={entry?.acpRegistryAgentId}
           acpRegistryIconUrl={entry?.acpRegistryIconUrl ?? provider.iconUrl}

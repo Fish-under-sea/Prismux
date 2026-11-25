@@ -17,12 +17,19 @@ import {
   buildProviderRemovalMutation,
   canDeleteProviderRow,
   classifyProviderRemoval,
+  DSH_DEFAULT_DISPLAY_NAME,
+  DSH_DEFAULT_HOMEPAGE_URL,
   extractAcpRegistryManagedAgentId,
+  normalizeProviderInstanceForSave,
   orderProviderInstanceRows,
   reorderProviderInstanceIds,
   resolveNextSelectedProviderInstanceId,
   resolveRemoteOperateAccess,
 } from "./ProviderSettingsPanel.logic";
+import {
+  pickRecommendedTextGeneratorModel,
+  shouldAutoSelectTextGeneratorModel,
+} from "./TextGeneratorsSettings";
 import { reorderModelsWithinGroup } from "./ProviderModelsSection";
 import { PROVIDERS_TAB_HASH_ANCHORS, PROVIDERS_TAB_IDS } from "./ProviderSettingsPanel";
 import { CHAT_TAB_HASH_ANCHORS } from "./SettingsPanels";
@@ -367,19 +374,16 @@ describe("provider configuration deletion logic", () => {
     expect(reorderModelsWithinGroup(models, groupOf, "vis-a", "fav-a")).toBeNull();
     expect(reorderModelsWithinGroup(models, groupOf, "hid-a", "vis-c")).toBeNull();
   });
-  it("defines 3 segmented Agent configurator tabs and relocates default/fallback/text-gen/compact-idle anchors out of /settings/chat", () => {
+  it("defines 3 segmented Agent configurator tabs and relocates default/fallback/text-gen/text-generators/compact-idle anchors cleanly", () => {
     expect(Object.values(PROVIDERS_TAB_IDS)).toEqual(["providers", "defaults", "compliance"]);
-    expect(PROVIDERS_TAB_HASH_ANCHORS.providers).toEqual([
-      "providers",
-      "usage-providers",
-      "text-generators",
-    ]);
+    expect(PROVIDERS_TAB_HASH_ANCHORS.providers).toEqual(["providers", "usage-providers"]);
     for (const anchor of [
       "default-model",
       "fallback-model",
       "default-reasoning-effort",
       "text-generation",
       "text-generation-model",
+      "text-generators",
       "thread-title-instructions",
       "default-launch-mode",
       "provider-updates",
@@ -393,6 +397,100 @@ describe("provider configuration deletion logic", () => {
       "subscription-risk-waiver",
       "antigravity-controlled-lock",
     ]);
+  });
+
+  it("normalizes first-enable DSH and Antigravity configs with verified defaults", () => {
+    expect(
+      normalizeProviderInstanceForSave({
+        instanceId: dshId,
+        next: {
+          driver: acpDriver,
+          enabled: true,
+        },
+      }),
+    ).toEqual({
+      driver: acpDriver,
+      displayName: DSH_DEFAULT_DISPLAY_NAME,
+      enabled: true,
+      config: {
+        source: "local",
+        commandPath: "dsh",
+        commandArgs: ["acp"],
+        homepageUrl: DSH_DEFAULT_HOMEPAGE_URL,
+      },
+    });
+
+    // Preserves custom paths/args when already set and never mutates managed ACP registry agents.
+    expect(
+      normalizeProviderInstanceForSave({
+        instanceId: dshId,
+        next: {
+          driver: acpDriver,
+          displayName: "My DSH",
+          enabled: true,
+          config: { source: "local", commandPath: "D:\\DSH\\dsh.exe", commandArgs: ["acp", "--fast"] },
+        },
+      }),
+    ).toEqual({
+      driver: acpDriver,
+      displayName: "My DSH",
+      enabled: true,
+      config: {
+        source: "local",
+        commandPath: "D:\\DSH\\dsh.exe",
+        commandArgs: ["acp", "--fast"],
+        homepageUrl: DSH_DEFAULT_HOMEPAGE_URL,
+      },
+    });
+
+    expect(
+      normalizeProviderInstanceForSave({
+        instanceId: antigravityId,
+        next: { driver: antigravityDriver, enabled: true },
+      }),
+    ).toEqual({
+      driver: antigravityDriver,
+      enabled: true,
+      config: { authMethod: "local-cli" },
+    });
+  });
+
+  it("picks lightweight models and auto-selects newly added standalone API text generators", () => {
+    expect(
+      pickRecommendedTextGeneratorModel([
+        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+        { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+      ]),
+    ).toEqual({ id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" });
+
+    expect(
+      pickRecommendedTextGeneratorModel([
+        { id: "custom-model-a", name: "Custom Model A" },
+        { id: "custom-model-b", name: "Custom Model B" },
+      ]),
+    ).toEqual({ id: "custom-model-a", name: "Custom Model A" });
+
+    expect(
+      shouldAutoSelectTextGeneratorModel({
+        textGenerators: {},
+        textGenerationModelSelection: { instanceId: codexId, model: "gpt-5.4-mini" },
+      }),
+    ).toBe(true);
+
+    const geminiId = ProviderInstanceId.make("gemini");
+    expect(
+      shouldAutoSelectTextGeneratorModel({
+        textGenerators: {
+          [geminiId]: {
+            kind: "openaiCompatible",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            apiKey: "",
+            enabled: true,
+          },
+        },
+        textGenerationModelSelection: { instanceId: geminiId, model: "gemini-2.5-flash" },
+      }),
+    ).toBe(false);
   });
 });
 

@@ -151,15 +151,15 @@ function ProviderSetupActions({
               ? !installation?.installedVersion
                 ? gt("Using local agy CLI.")
                 : gt("Installed.")
-              : usesCustomBinary
-                ? enabled
+              : !enabled || provider.status === "disabled"
+                ? gt("The configured Antigravity runtime has not been checked.")
+                : usesCustomBinary
                   ? gt("The configured Antigravity runtime is unavailable.")
-                  : gt("The configured Antigravity runtime has not been checked.")
-                : installation?.totalBytes
-                  ? gt("{size} MB download.", {
-                      size: Math.ceil(installation.totalBytes / 1_000_000),
-                    })
-                  : gt("Not installed.");
+                  : installation?.totalBytes
+                    ? gt("{size} MB download.", {
+                        size: Math.ceil(installation.totalBytes / 1_000_000),
+                      })
+                    : gt("Not installed.");
 
   async function runCommand<A, E>(
     label: string,

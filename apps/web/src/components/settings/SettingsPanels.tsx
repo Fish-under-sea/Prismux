@@ -1,15 +1,14 @@
 import { NotificationSettings } from "./NotificationSettings";
 import { PRISMUX_REPOSITORY_URL, PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
-import { msg, T, useGT, useMessages } from "gt-react";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
+import { Link } from "@tanstack/react-router";
+import { type ReactNode, useRef, useState } from "react";
 import {
   IDLE_COMPACTION_MODES,
   type IdleCompactionMode,
   globalIdleCompaction,
-  ProviderDriverKind,
-  type ProviderInstanceId,
+  type ServerProvider,
   type SidebarProjectGroupingMode,
 } from "@prismux/core-contracts";
 import {
@@ -27,12 +26,11 @@ import {
   WorkStepsCollapseTiming,
   WorkStepsDisplay,
 } from "@prismux/core-contracts/settings";
-import { createModelSelection, pickModelSelection } from "@prismux/core-shared/model";
+import { pickModelSelection } from "@prismux/core-shared/model";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
-import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import {
   readAppearanceModePreference,
@@ -51,35 +49,24 @@ import { scopedIdleCompaction } from "./scopedSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadDetailsItemsRow } from "./ThreadDetailsItemsRow";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
+import {
+  TextGeneratorsController,
+  type TextGeneratorsEnvironmentProps,
+} from "./TextGeneratorsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
 import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
   getTextGenerationModelOptionsByInstance,
   resolveAppModelSelectionState,
-  resolveTextGenerationProviders,
-  selectsPlanAgent,
 } from "../../modelSelection";
-import {
-  AGY_TEXT_GEN_WAIVER_PILL_TEXT,
-  AgyWaiverRequiredBadge,
-  SUBSCRIPTION_WAIVER_ANCHOR_ID,
-  isAntigravityControlledAutomationAllowed,
-  isAntigravityProviderLike,
-  resolveAntigravityComplianceBlock,
-  useSubscriptionWaiverState,
-} from "../../prismux/SubscriptionRiskWaiverSection";
-import type { ProviderInstanceEntry } from "../../providerInstances";
-import { useTextGenerationTargets } from "../../textGenerators";
+import { testTextGeneratorModel, useTextGenerationTargets } from "../../textGenerators";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import {
-  useEnvironmentProviders,
-  usePrimaryEnvironmentId,
-} from "../../state/environments";
-import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Spinner } from "../ui/spinner";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -103,6 +90,7 @@ import {
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
+  SettingsSearchTarget,
   SettingsSection,
 } from "./settingsLayout";
 import { SettingsSegmentedTabs, type SettingsSegmentedTabItem } from "./SettingsSegmentedTabs";
@@ -255,8 +243,6 @@ const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
   hold: msg("Hold"),
   "double-click": msg("Double press"),
 };
-
-const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 export function useSettingsRestore(onRestored?: () => void) {
   const messages = useMessages();
@@ -2115,54 +2101,36 @@ function ScopedCompactIdleThreadsRow() {
 }
 
 /** The Agent configurator panel can render without a settings scope, as its tests do; this section needs one. */
-export function TextGenerationSettingsSection() {
-  return useOptionalSettingsScope() === null ? null : <ScopedTextGenerationSettingsSection />;
+export function TextGenerationSettingsSection({
+  textGeneratorsEnvironment,
+}: {
+  readonly textGeneratorsEnvironment?: TextGeneratorsEnvironmentProps | null | undefined;
+} = {}) {
+  return useOptionalSettingsScope() === null ? null : (
+    <ScopedTextGenerationSettingsSection textGeneratorsEnvironment={textGeneratorsEnvironment} />
+  );
 }
 
-function ScopedTextGenerationSettingsSection() {
+const NO_TEXT_GENERATION_AGENT_PROVIDERS: ReadonlyArray<ServerProvider> = [];
+
+function ScopedTextGenerationSettingsSection({
+  textGeneratorsEnvironment,
+}: {
+  readonly textGeneratorsEnvironment?: TextGeneratorsEnvironmentProps | null | undefined;
+}) {
   const setting = useSearchableSetting();
   const gt = useGT();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const navigate = useNavigate();
   const { environment, connectedEnvironments, target } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const hasServerTargets = connectedEnvironments.length > 0;
-  const providersByEnvironment = useEnvironmentProviders();
-  const serverProviders =
-    (environment?.serverConfig
-      ? providersByEnvironment.get(environment.environmentId)
-      : undefined) ?? EMPTY_SERVER_PROVIDERS;
 
-  const waiver = useSubscriptionWaiverState();
-  const allowAntigravityTextGeneration = isAntigravityControlledAutomationAllowed(waiver);
-  const textGenerationEligibility = { allowAntigravityTextGeneration } as const;
-  const openSubscriptionWaiver = () => {
-    void navigate({
-      to: "/settings/providers",
-      hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
-    });
-  };
-  const hasBlockedAntigravityProvider =
-    !allowAntigravityTextGeneration &&
-    serverProviders.some(
-      (provider) =>
-        (provider.enabled || provider.installed) &&
-        provider.availability !== "unavailable" &&
-        isAntigravityProviderLike(provider.driver),
-    );
-  const getProviderComplianceBlock = (entry: ProviderInstanceEntry) =>
-    resolveAntigravityComplianceBlock({
-      entry,
-      waiver,
-      mode: "controlled",
-      onOpenWaiver: openSubscriptionWaiver,
-    });
-
+  // Text generation is strictly standalone API text generators (never coding agents).
   const textGenerationTargets = useTextGenerationTargets({
     environmentId,
     settings,
-    providers: resolveTextGenerationProviders(serverProviders, textGenerationEligibility),
+    providers: NO_TEXT_GENERATION_AGENT_PROVIDERS,
     projectId: target?.projectId ?? null,
     selections: [settings.textGenerationModelSelection],
   });
@@ -2170,11 +2138,9 @@ function ScopedTextGenerationSettingsSection() {
   const textGenerationModelSelection = resolveAppModelSelectionState(
     settings,
     textGenerationProviders,
-    textGenerationEligibility,
   );
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const textGenModel = textGenerationModelSelection.model;
-  const textGenModelOptions = textGenerationModelSelection.options;
   const textGenerationModelInstanceEntries = textGenerationTargets.entries;
   const hasTextGenerationProvider = textGenerationModelInstanceEntries.some(
     (entry) => entry.enabled && entry.isAvailable,
@@ -2182,14 +2148,11 @@ function ScopedTextGenerationSettingsSection() {
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(
     (entry) => entry.instanceId === textGenInstanceId,
   );
-  const textGenProvider: ProviderDriverKind =
-    textGenInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
   const textGenerationModelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,
     textGenerationProviders,
     textGenInstanceId,
     textGenModel,
-    textGenerationEligibility,
   );
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -2202,17 +2165,59 @@ function ScopedTextGenerationSettingsSection() {
   );
   const mixedTextGenerationModel = useScopedSettingsMixed(["textGenerationModelSelection"]);
 
-  return (
-    <SettingsSection id="text-generation" title={gt("Text generation")}>
+  const [testingModel, setTestingModel] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    readonly key: string;
+    readonly error: string | null;
+  } | null>(null);
+  const testKey = `${textGenInstanceId}:${textGenModel}`;
+  const shownTestResult = testResult?.key === testKey ? testResult : null;
+  const canTestSelectedApi =
+    environmentId !== null &&
+    textGenInstanceEntry !== undefined &&
+    textGenModel.length > 0 &&
+    Object.hasOwn(settings.textGenerators, textGenInstanceId);
+  const handleTestSelectedApi = async () => {
+    if (!environmentId || !canTestSelectedApi || testingModel) return;
+    setTestingModel(true);
+    const error = await testTextGeneratorModel(environmentId, textGenInstanceId, textGenModel);
+    setTestingModel(false);
+    setTestResult({ key: testKey, error });
+  };
+
+  const renderSection = (parts?: {
+    readonly addAction: ReactNode;
+    readonly generatorRows: ReadonlyArray<ReactNode>;
+    readonly generatorCount: number;
+    readonly hasEnabledGenerator: boolean;
+  }) => {
+    const modelRow = (
       <SettingsRow
         serverScoped
         settingKeys={["textGenerationModelSelection"]}
         {...setting("text-generation-model")}
-        description={gt(
-          "For thread titles and other generated text. Source control has its own setting. Text generators from Agent configurator also appear here.",
-        )}
+        description={
+          hasTextGenerationProvider
+            ? gt("For thread titles and other generated text. Source control has its own setting.")
+            : gt(
+                "Add a model API to write thread titles, commit messages, and other short text without starting a coding agent.",
+              )
+        }
+        status={
+          shownTestResult?.error ? (
+            <span role="alert" className="text-destructive">
+              {shownTestResult.error}
+            </span>
+          ) : shownTestResult ? (
+            <span role="status">
+              <T>
+                <Var>{textGenModel}</Var> answered. It works.
+              </T>
+            </span>
+          ) : undefined
+        }
         resetAction={
-          hasServerTargets && isTextGenerationModelDirty ? (
+          hasServerTargets && hasTextGenerationProvider && isTextGenerationModelDirty ? (
             <SettingResetButton
               ariaLabel={gt("Reset text generation model to default")}
               onClick={() =>
@@ -2231,15 +2236,12 @@ function ScopedTextGenerationSettingsSection() {
             </span>
           ) : !hasTextGenerationProvider ? (
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className="text-sm text-muted-foreground">
-                <T>No text generation providers available.</T>
+              <span className="text-xs text-muted-foreground">
+                {parts && parts.generatorCount > 0
+                  ? gt("No text generation providers available.")
+                  : gt("No text generators yet")}
               </span>
-              {hasBlockedAntigravityProvider ? (
-                <AgyWaiverRequiredBadge
-                  label={AGY_TEXT_GEN_WAIVER_PILL_TEXT}
-                  onClick={openSubscriptionWaiver}
-                />
-              ) : null}
+              {parts && parts.generatorCount === 0 ? parts.addAction : null}
             </div>
           ) : (
             <div className="flex flex-wrap items-center justify-end gap-1.5">
@@ -2253,28 +2255,7 @@ function ScopedTextGenerationSettingsSection() {
                 triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                 {...(mixedTextGenerationModel ? { triggerLabel: gt("Mixed") } : {})}
                 getModelDisabledReason={textGenerationModelDisabledReason}
-                getProviderComplianceBlock={getProviderComplianceBlock}
-                {...(environmentId
-                  ? {
-                      onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
-                        void navigate({
-                          to: "/settings/providers",
-                          search: { environmentId, instanceId },
-                        });
-                      },
-                    }
-                  : {})}
                 onInstanceModelChange={(instanceId, model) => {
-                  const targetEntry = textGenerationModelInstanceEntries.find(
-                    (entry) => entry.instanceId === instanceId,
-                  );
-                  const complianceBlock = targetEntry
-                    ? getProviderComplianceBlock(targetEntry)
-                    : null;
-                  if (complianceBlock) {
-                    complianceBlock.onOpenWaiver();
-                    return;
-                  }
                   const reason = textGenerationModelDisabledReason(instanceId, model);
                   if (reason) {
                     toastManager.add({
@@ -2285,63 +2266,80 @@ function ScopedTextGenerationSettingsSection() {
                     return;
                   }
                   updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: pickModelSelection(
-                          textGenerationModelSelection,
-                          instanceId,
-                          model,
-                        ),
-                      },
-                      textGenerationProviders,
-                      textGenerationEligibility,
+                    textGenerationModelSelection: pickModelSelection(
+                      textGenerationModelSelection,
+                      instanceId,
+                      model,
                     ),
                   });
                 }}
               />
-              {textGenInstanceEntry ? (
-                <TraitsPicker
-                  provider={textGenProvider}
-                  models={textGenInstanceEntry?.models ?? []}
-                  model={textGenModel}
-                  modelOptions={textGenModelOptions}
-                  allowPromptInjectedEffort={false}
-                  includePlanAgent={selectsPlanAgent(textGenModelOptions)}
-                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  onModelOptionsChange={(nextOptions) => {
-                    updateSettings({
-                      textGenerationModelSelection: resolveAppModelSelectionState(
-                        {
-                          ...settings,
-                          textGenerationModelSelection: createModelSelection(
-                            textGenInstanceId,
-                            textGenModel,
-                            nextOptions,
-                          ),
-                        },
-                        textGenerationProviders,
-                        textGenerationEligibility,
-                      ),
-                    });
-                  }}
-                />
-              ) : null}
-              {hasBlockedAntigravityProvider ? (
-                <AgyWaiverRequiredBadge
-                  label={AGY_TEXT_GEN_WAIVER_PILL_TEXT}
-                  onClick={openSubscriptionWaiver}
-                />
+              {canTestSelectedApi ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  aria-busy={testingModel}
+                  disabled={testingModel}
+                  onClick={() => void handleTestSelectedApi()}
+                >
+                  <span className="relative">
+                    <span className={testingModel ? "invisible" : undefined}>
+                      <T>Test</T>
+                    </span>
+                    {testingModel ? (
+                      <span className="absolute inset-0 flex items-center justify-center">
+                        <Spinner />
+                      </span>
+                    ) : null}
+                  </span>
+                </Button>
               ) : null}
             </div>
           )
         }
       />
-      <AdvancedSettings targetIds={[setting("thread-title-instructions").id]}>
-        <ThreadTitleInstructionsSettings />
-      </AdvancedSettings>
-    </SettingsSection>
-  );
+    );
+
+    return (
+      <SettingsSection id="text-generation" title={gt("Text generation")}>
+        {parts && parts.generatorCount === 0 ? (
+          <SettingsSearchTarget {...setting("text-generators")}>{modelRow}</SettingsSearchTarget>
+        ) : (
+          modelRow
+        )}
+        {parts && parts.generatorCount > 0 ? (
+          <SettingsSearchTarget
+            {...setting("text-generators")}
+            className="divide-y divide-border/50"
+          >
+            <div className="flex items-center justify-between gap-3 bg-muted/15 px-3 py-2 sm:px-4">
+              <span className="text-xs font-medium text-muted-foreground">
+                {gt("Text generators")}
+              </span>
+              {parts.addAction}
+            </div>
+            {parts.generatorRows}
+          </SettingsSearchTarget>
+        ) : null}
+        <AdvancedSettings targetIds={[setting("thread-title-instructions").id]}>
+          <ThreadTitleInstructionsSettings />
+        </AdvancedSettings>
+      </SettingsSection>
+    );
+  };
+
+  if (textGeneratorsEnvironment) {
+    return (
+      <TextGeneratorsController
+        key={`text-generators:${textGeneratorsEnvironment.environmentId}`}
+        {...textGeneratorsEnvironment}
+      >
+        {(parts) => renderSection(parts)}
+      </TextGeneratorsController>
+    );
+  }
+
+  return renderSection();
 }
 
 export function ThreadsSettingsSections() {

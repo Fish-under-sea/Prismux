@@ -5,6 +5,7 @@ import {
   getProviderSummary,
   getProviderVersionAdvisoryPresentation,
   getProviderStatusKey,
+  isProviderConfirmedNotInstalled,
 } from "./providerStatus";
 
 const provider: ServerProvider = {
@@ -205,19 +206,77 @@ it("shows compatibility in the version popover even when the installed version i
     emphasis: "strong",
     targetVersion: "1.9.0",
   });
-  expect(
-    getProviderVersionAdvisoryPresentation(undefined, {
-      ...compatibility,
-      status: "graceful",
-      recommendedVersion: null,
-      recommendedRange: ">=2.1.0",
-      message: null,
-    }),
-  ).toEqual({
-    title: "Limited support",
-    detail: "Use >=2.1.0 for full support.",
-    updateCommand: null,
-    emphasis: "normal",
-    targetVersion: null,
+    expect(
+      getProviderVersionAdvisoryPresentation(undefined, {
+        ...compatibility,
+        status: "graceful",
+        recommendedVersion: null,
+        recommendedRange: ">=2.1.0",
+        message: null,
+      }),
+    ).toEqual({
+      title: "Limited support",
+      detail: "Use >=2.1.0 for full support.",
+      updateCommand: null,
+      emphasis: "normal",
+      targetVersion: null,
+    });
+  });
+
+describe("isProviderConfirmedNotInstalled", () => {
+  const drivers = ["claudeAgent", "codex", "antigravity", "opencode", "pi", "acpRegistry"] as const;
+
+  it("returns false for disabled providers across all drivers even when installed is false (unprobed)", () => {
+    expect(isProviderConfirmedNotInstalled(undefined)).toBe(false);
+    expect(isProviderConfirmedNotInstalled(null)).toBe(false);
+
+    for (const driver of drivers) {
+      expect(
+        isProviderConfirmedNotInstalled({
+          enabled: false,
+          installed: false,
+          status: "disabled",
+        }),
+        `${driver} disabled`,
+      ).toBe(false);
+
+      expect(
+        isProviderConfirmedNotInstalled({
+          enabled: true,
+          installed: false,
+          status: "disabled",
+        }),
+        `${driver} status=disabled`,
+      ).toBe(false);
+
+      expect(
+        isProviderConfirmedNotInstalled({
+          enabled: false,
+          installed: false,
+          status: "error",
+        }),
+        `${driver} enabled=false`,
+      ).toBe(false);
+    }
+  });
+
+  it("returns true only when an enabled provider is confirmed missing (error or warning)", () => {
+    for (const status of ["error", "warning"] as const) {
+      expect(
+        isProviderConfirmedNotInstalled({
+          enabled: true,
+          installed: false,
+          status,
+        }),
+      ).toBe(true);
+    }
+
+    expect(
+      isProviderConfirmedNotInstalled({
+        enabled: true,
+        installed: true,
+        status: "ready",
+      }),
+    ).toBe(false);
   });
 });

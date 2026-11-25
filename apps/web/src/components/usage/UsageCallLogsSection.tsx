@@ -1,4 +1,4 @@
-import { type ProviderInstanceId, type UsageProviderKind } from "@prismux/core-contracts";
+import { type ProviderInstanceId } from "@prismux/core-contracts";
 import { formatTokens } from "@prismux/core-shared/usageFormat";
 import { msg, useLocale, useMessages } from "gt-react";
 import {
@@ -7,25 +7,29 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
 } from "lucide-react";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { Button } from "../ui/button";
 import {
+  clampTtftToDuration,
   formatCacheHitRate,
   formatDurationMs,
   formatTps,
   formatTtft,
+  formatUsageModelDisplayName,
   type UsageCallLogRecord,
   type UsageCallStatus,
 } from "./usageCallTelemetryStore";
 import {
-  PROVIDER_PRESENTATION,
-  resolveUsageProviderLabel,
+  resolveUsageProviderDisplay,
   useConfiguredUsageProviders,
 } from "./usageProviders";
+
+// oxlint-disable-next-line prismux/no-em-dash-copy -- tabular empty-cell placeholder for missing call log values
+const EMPTY_CELL_DASH = "—";
 
 export type CallLogsSortField = "timestamp" | "ttftMs" | "tps" | "cacheHitRate";
 export type CallLogsSortDirection = "asc" | "desc";
@@ -42,6 +46,8 @@ export const USAGE_CALL_LOG_MESSAGES = {
   sortTtft: msg("TTFT"),
   sortTps: msg("Speed (TPS)"),
   sortCacheHit: msg("Cache hit"),
+  sortDescending: msg("Descending"),
+  sortAscending: msg("Ascending"),
   colTime: msg("Time"),
   colModelProvider: msg("Model / Provider"),
   colTtft: msg("TTFT"),
@@ -55,6 +61,8 @@ export const USAGE_CALL_LOG_MESSAGES = {
   statusError: msg("Error"),
   sourceLive: msg("Live capture"),
   sourceBackend: msg("Local transcript"),
+  acpAgent: msg("ACP Agent"),
+  detailModel: msg("Model"),
   detailCallId: msg("Call ID"),
   detailSource: msg("Source"),
   detailThreadId: msg("Thread ID"),
@@ -73,6 +81,7 @@ export const USAGE_CALL_LOG_MESSAGES = {
 export interface FilterAndSortCallLogsOptions {
   readonly provider?: string | null | undefined;
   readonly model?: string | null | undefined;
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
   readonly sortField: CallLogsSortField;
   readonly sortDirection: CallLogsSortDirection;
 }
@@ -87,7 +96,14 @@ export function filterAndSortCallLogs(
 
   const filtered = logs.filter((log) => {
     if (providerFilter && log.provider !== providerFilter) return false;
-    if (modelFilter && log.model !== modelFilter) return false;
+    if (modelFilter) {
+      const displayModel = formatUsageModelDisplayName(
+        log.model,
+        options.providerEntries,
+        log.provider,
+      );
+      if (log.model !== modelFilter && displayModel !== modelFilter) return false;
+    }
     return true;
   });
 
@@ -97,8 +113,14 @@ export function filterAndSortCallLogs(
     if (options.sortField === "timestamp") {
       return (left.timestamp - right.timestamp) * dir;
     }
-    const leftVal = left[options.sortField];
-    const rightVal = right[options.sortField];
+    const leftVal =
+      options.sortField === "ttftMs"
+        ? clampTtftToDuration(left.ttftMs, left.durationMs)
+        : left[options.sortField];
+    const rightVal =
+      options.sortField === "ttftMs"
+        ? clampTtftToDuration(right.ttftMs, right.durationMs)
+        : right[options.sortField];
     if (leftVal === null && rightVal === null) {
       return right.timestamp - left.timestamp;
     }
@@ -109,23 +131,6 @@ export function filterAndSortCallLogs(
     }
     return (leftVal - rightVal) * dir;
   });
-}
-
-function resolveProviderDisplay(
-  provider: string,
-  entries?: ReadonlyArray<ProviderInstanceEntry>,
-): {
-  readonly label: string;
-  readonly driverKind: (typeof PROVIDER_PRESENTATION)[UsageProviderKind]["driverKind"] | null;
-} {
-  if (provider in PROVIDER_PRESENTATION) {
-    const info = PROVIDER_PRESENTATION[provider as UsageProviderKind];
-    return {
-      label: resolveUsageProviderLabel(provider, entries),
-      driverKind: info.driverKind,
-    };
-  }
-  return { label: resolveUsageProviderLabel(provider, entries), driverKind: null };
 }
 
 const callTimeFormatters = new Map<string, Intl.DateTimeFormat>();
@@ -165,7 +170,7 @@ export function formatCallTimestamp(
   locale: string,
 ): string {
   const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return EMPTY_CELL_DASH;
   try {
     return getCallTimeFormatter(locale, timeZone || undefined, hour12).format(date);
   } catch {
@@ -204,31 +209,30 @@ export function UsageCallLogsSection({
   const [sortDirection, setSortDirection] = useState<CallLogsSortDirection>("desc");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const availableProviders = useMemo(() => {
-    const set = new Set<string>();
-    for (const log of logs) set.add(log.provider);
-    return orderProviders(Array.from(set).toSorted());
-  }, [logs, orderProviders]);
+  const availableProviderSet = new Set<string>();
+  for (const log of logs) availableProviderSet.add(log.provider);
+  const availableProviders = orderProviders(Array.from(availableProviderSet).toSorted());
 
-  const availableModels = useMemo(() => {
-    const set = new Set<string>();
-    for (const log of logs) {
-      if (providerFilter !== "all" && log.provider !== providerFilter) continue;
-      set.add(log.model);
-    }
-    return Array.from(set).toSorted();
-  }, [logs, providerFilter]);
+  const availableModelSet = new Set<string>();
+  for (const log of logs) {
+    if (providerFilter !== "all" && log.provider !== providerFilter) continue;
+    const displayModel = formatUsageModelDisplayName(
+      log.model,
+      configuredEntries,
+      log.provider,
+    );
+    if (displayModel) availableModelSet.add(displayModel);
+  }
+  const availableModels = Array.from(availableModelSet).toSorted();
 
-  const visibleLogs = useMemo(
-    () =>
-      filterAndSortCallLogs(logs, {
-        provider: providerFilter,
-        model: modelFilter,
-        sortField,
-        sortDirection,
-      }),
-    [logs, modelFilter, providerFilter, sortDirection, sortField],
-  );
+  const visibleLogs = filterAndSortCallLogs(logs, {
+    provider: providerFilter,
+    model: modelFilter,
+    providerEntries: configuredEntries,
+    sortField,
+    sortDirection,
+  });
+  const fallbackAcpLabel = m(USAGE_CALL_LOG_MESSAGES.acpAgent);
 
   const hasActiveFilter = providerFilter !== "all" || modelFilter !== "all";
 
@@ -270,12 +274,12 @@ export function UsageCallLogsSection({
               setProviderFilter(event.target.value);
               setModelFilter("all");
             }}
-            className="h-7 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="h-7 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <option value="all">{m(USAGE_CALL_LOG_MESSAGES.filterAllProviders)}</option>
             {availableProviders.map((provider) => (
               <option key={provider} value={provider}>
-                {resolveProviderDisplay(provider, configuredEntries).label}
+                {resolveUsageProviderDisplay(provider, configuredEntries, fallbackAcpLabel).label}
               </option>
             ))}
           </select>
@@ -284,7 +288,7 @@ export function UsageCallLogsSection({
             aria-label={m(USAGE_CALL_LOG_MESSAGES.filterAllModels)}
             value={modelFilter}
             onChange={(event) => setModelFilter(event.target.value)}
-            className="h-7 max-w-52 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="h-7 max-w-52 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <option value="all">{m(USAGE_CALL_LOG_MESSAGES.filterAllModels)}</option>
             {availableModels.map((model) => (
@@ -314,7 +318,7 @@ export function UsageCallLogsSection({
             aria-label={m(USAGE_CALL_LOG_MESSAGES.sortBy)}
             value={sortField}
             onChange={(event) => setSortField(event.target.value as CallLogsSortField)}
-            className="h-7 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="h-7 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <option value="timestamp">{m(USAGE_CALL_LOG_MESSAGES.sortTime)}</option>
             <option value="ttftMs">{m(USAGE_CALL_LOG_MESSAGES.sortTtft)}</option>
@@ -324,7 +328,11 @@ export function UsageCallLogsSection({
           <Button
             size="icon-xs"
             variant="outline"
-            aria-label={sortDirection === "desc" ? "Descending" : "Ascending"}
+            aria-label={
+              sortDirection === "desc"
+                ? m(USAGE_CALL_LOG_MESSAGES.sortDescending)
+                : m(USAGE_CALL_LOG_MESSAGES.sortAscending)
+            }
             onClick={() => setSortDirection((prev) => (prev === "desc" ? "asc" : "desc"))}
           >
             {sortDirection === "desc" ? (
@@ -376,7 +384,17 @@ export function UsageCallLogsSection({
             ) : (
               visibleLogs.map((log) => {
                 const isExpanded = expandedId === log.id;
-                const providerInfo = resolveProviderDisplay(log.provider, configuredEntries);
+                const providerInfo = resolveUsageProviderDisplay(
+                  log.provider,
+                  configuredEntries,
+                  fallbackAcpLabel,
+                );
+                const displayModel = formatUsageModelDisplayName(
+                  log.model,
+                  configuredEntries,
+                  log.provider,
+                );
+                const clampedTtftMs = clampTtftToDuration(log.ttftMs, log.durationMs);
                 return (
                   <Fragment key={log.id}>
                     <tr
@@ -409,19 +427,22 @@ export function UsageCallLogsSection({
                           {providerInfo.driverKind ? (
                             <ProviderInstanceIcon
                               driverKind={providerInfo.driverKind}
+                              acpRegistryAgentId={providerInfo.acpRegistryAgentId}
+                              acpRegistryIconUrl={providerInfo.acpRegistryIconUrl}
+                              instanceId={providerInfo.instanceId}
                               displayName={providerInfo.label}
                               iconClassName="size-3.5 shrink-0"
                             />
                           ) : null}
-                          <span className="max-w-44 truncate font-medium text-foreground" title={log.model}>
-                            {log.model}
+                          <span className="max-w-44 truncate font-medium text-foreground">
+                            {displayModel}
                           </span>
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-2xs text-muted-foreground">
                             {providerInfo.label}
                           </span>
                         </div>
                       </td>
-                      <td className="py-2 px-3 text-foreground">{formatTtft(log.ttftMs)}</td>
+                      <td className="py-2 px-3 text-foreground">{formatTtft(clampedTtftMs)}</td>
                       <td className="py-2 px-3 text-foreground">{formatTps(log.tps)}</td>
                       <td className="hidden py-2 px-3 text-muted-foreground md:table-cell">
                         <span>{formatTokens(log.inputTokens)}</span>
@@ -442,7 +463,7 @@ export function UsageCallLogsSection({
                           </span>
                           <span
                             className={cn(
-                              "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none",
+                              "inline-flex items-center rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none",
                               statusBadgeClass(log.status),
                             )}
                           >
@@ -455,12 +476,20 @@ export function UsageCallLogsSection({
                     {isExpanded ? (
                       <tr className="bg-muted/20 text-left">
                         <td colSpan={7} className="px-4 py-3 whitespace-normal">
-                          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-[11px] sm:grid-cols-4">
+                          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-2xs sm:grid-cols-4">
+                            <div>
+                              <dt className="text-muted-foreground">
+                                {m(USAGE_CALL_LOG_MESSAGES.detailModel)}
+                              </dt>
+                              <dd className="truncate font-medium text-foreground">
+                                {displayModel}
+                              </dd>
+                            </div>
                             <div>
                               <dt className="text-muted-foreground">
                                 {m(USAGE_CALL_LOG_MESSAGES.detailCallId)}
                               </dt>
-                              <dd className="truncate font-mono text-foreground" title={log.id}>
+                              <dd className="truncate font-mono text-foreground">
                                 {log.id}
                               </dd>
                             </div>
@@ -479,7 +508,7 @@ export function UsageCallLogsSection({
                                 {m(USAGE_CALL_LOG_MESSAGES.detailThreadId)}
                               </dt>
                               <dd className="truncate font-mono text-foreground">
-                                {log.threadId ?? "—"}
+                                {log.threadId ?? EMPTY_CELL_DASH}
                               </dd>
                             </div>
                             <div>
@@ -489,7 +518,7 @@ export function UsageCallLogsSection({
                               <dd className="text-foreground">
                                 {typeof log.contextPercent === "number"
                                   ? `${log.contextPercent.toFixed(1)}%`
-                                  : "—"}
+                                  : EMPTY_CELL_DASH}
                               </dd>
                             </div>
                             <div>

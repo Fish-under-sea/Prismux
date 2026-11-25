@@ -9,12 +9,14 @@ import * as DateTime from "effect/DateTime";
 import { useSyncExternalStore } from "react";
 
 import {
+  clampTtftToDuration,
   computeCacheHitRate,
   computeOutputTps,
+  formatUsageModelDisplayName,
+  unwrapUsageModelSlug,
   type SessionLiveTelemetrySnapshot,
   type UsageCallLogRecord,
 } from "../usage/usageCallTelemetryStore";
-import { getDisplayModelName } from "./providerIconUtils";
 
 export type TelemetryPopoverId = "stats" | "tokens" | "context";
 export type ContextRingTone = "unknown" | "normal" | "warning" | "compact" | "overflow";
@@ -155,6 +157,8 @@ export interface ResolvedTelemetryDisplay {
 export type SessionProjectionLike = Partial<
   Pick<
     ThreadStructure,
+    | "thread"
+    | "providerThreads"
     | "runs"
     | "nodes"
     | "subagents"
@@ -249,13 +253,7 @@ export function formatCompactPopoverTokens(tokens: number | null | undefined): s
   return `${(tokens / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`;
 }
 
-/**
- * Classifies context occupancy into Spec 3's 4-tier color bands:
- * - `< 60%`     → emerald green (`normal`)
- * - `60–94.9%`  → amber (`warning`)
- * - `95–100%`   → orange (`compact`)
- * - `> 100%`    → red (`overflow`)
- */
+/** Context occupancy bands: <60% normal, 60-94.9% warning, 95-100% compact, >100% overflow. */
 export function resolveContextRingTone(
   contextPercent: number | null | undefined,
 ): ContextRingTone {
@@ -311,30 +309,8 @@ export function resolveModelDisplayName(
 ): string | null {
   const trimmed = rawModelId?.trim();
   if (!trimmed || trimmed === "unknown") return null;
-  if (!providerStatuses || providerStatuses.length === 0) {
-    return trimmed;
-  }
-  const normalizedTarget = trimmed.toLowerCase();
-  const preferredLower = preferredProvider?.trim().toLowerCase() ?? null;
-
-  let fallbackMatch: string | null = null;
-  for (const provider of providerStatuses) {
-    const providerMatches =
-      preferredLower !== null &&
-      (provider.driver.toLowerCase() === preferredLower ||
-        provider.instanceId.toLowerCase() === preferredLower);
-    for (const model of provider.models) {
-      const slugMatch = model.slug.toLowerCase() === normalizedTarget;
-      const aliasMatch =
-        model.aliases?.some((alias) => alias.toLowerCase() === normalizedTarget) ?? false;
-      const nameMatch = model.name.toLowerCase() === normalizedTarget;
-      if (!slugMatch && !aliasMatch && !nameMatch) continue;
-      const friendly = getDisplayModelName(model);
-      if (providerMatches) return friendly;
-      if (fallbackMatch === null) fallbackMatch = friendly;
-    }
-  }
-  return fallbackMatch ?? trimmed;
+  const formatted = formatUsageModelDisplayName(trimmed, providerStatuses, preferredProvider);
+  return formatted && formatted !== "unknown" ? formatted : null;
 }
 
 export function mergeTimeIntervals(
@@ -472,6 +448,17 @@ export interface ExtractedTurnUsageDetail {
   readonly hasSubagents: boolean;
   readonly reportedModels: readonly string[];
   readonly hasMeasuredTokens: boolean;
+  readonly ttftMs: number | null;
+  readonly decodeMs: number | null;
+  readonly modelDurationMs: number | null;
+}
+
+function nonNegFiniteNullable(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function posFiniteNullable(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export function extractTurnUsageDetail(
@@ -489,37 +476,51 @@ export function extractTurnUsageDetail(
       hasSubagents: false,
       reportedModels: [],
       hasMeasuredTokens: false,
+      ttftMs: null,
+      decodeMs: null,
+      modelDurationMs: null,
     };
   }
 
   const finalUsage = turn.turnTokenUsage;
+  const usableFinalUsage =
+    finalUsage && finalUsage.usageStatus !== "unavailable" ? finalUsage : undefined;
   const liveUsage = turn.tokenUsage;
   const reportedModels: string[] = [];
   if (Array.isArray(finalUsage?.models)) {
     for (const m of finalUsage.models) {
-      const trimmed = m.trim();
-      if (trimmed && !reportedModels.includes(trimmed)) reportedModels.push(trimmed);
+      const cleaned = unwrapUsageModelSlug(m);
+      if (cleaned && !reportedModels.includes(cleaned)) reportedModels.push(cleaned);
     }
   }
-  const turnModel = turn.model?.trim();
+  const turnModel = turn.model ? unwrapUsageModelSlug(turn.model) : "";
   if (turnModel && !reportedModels.includes(turnModel)) {
     reportedModels.unshift(turnModel);
   }
+
+  const modelDurationMs = nonNegFiniteNullable(
+    usableFinalUsage?.modelDurationMs ?? liveUsage?.durationMs,
+  );
+  const ttftMs = clampTtftToDuration(
+    usableFinalUsage?.ttftMs ?? liveUsage?.ttftMs,
+    modelDurationMs,
+  );
+  const decodeMs = posFiniteNullable(usableFinalUsage?.decodeMs ?? liveUsage?.decodeMs);
 
   const otherUsageTokens = finalUsage?.otherUsage
     ? nonNegInt(finalUsage.otherUsage.inputTokens) + nonNegInt(finalUsage.otherUsage.outputTokens)
     : 0;
   const hasSubagents = finalUsage?.hasSubagents === true || otherUsageTokens > 0;
 
-  if (finalUsage && finalUsage.usageStatus !== "unavailable") {
-    const cached = nonNegInt(finalUsage.cachedInputTokens);
-    const cacheCreate = nonNegInt(finalUsage.cacheCreationTokens);
-    const rawInput = nonNegInt(finalUsage.inputTokens);
+  if (usableFinalUsage) {
+    const cached = nonNegInt(usableFinalUsage.cachedInputTokens);
+    const cacheCreate = nonNegInt(usableFinalUsage.cacheCreationTokens);
+    const rawInput = nonNegInt(usableFinalUsage.inputTokens);
     const uncached = Math.max(0, rawInput - cached - cacheCreate);
-    const output = nonNegInt(finalUsage.outputTokens);
+    const output = nonNegInt(usableFinalUsage.outputTokens);
     const reasoning = Math.min(
       output,
-      nonNegInt(finalUsage.reasoningTokens ?? liveUsage?.reasoningOutputTokens),
+      nonNegInt(usableFinalUsage.reasoningTokens ?? liveUsage?.reasoningOutputTokens),
     );
     const total = uncached + cached + cacheCreate + output;
     if (total > 0) {
@@ -534,22 +535,29 @@ export function extractTurnUsageDetail(
         hasSubagents,
         reportedModels,
         hasMeasuredTokens: true,
+        ttftMs,
+        decodeMs,
+        modelDurationMs,
       };
     }
   }
 
   if (liveUsage) {
     const cached = nonNegInt(liveUsage.cachedInputTokens);
+    const cacheCreate = nonNegInt(liveUsage.cacheCreationTokens);
     const rawInput = nonNegInt(liveUsage.inputTokens);
-    const uncached = Math.max(0, rawInput - cached);
+    const uncached = Math.max(0, rawInput - cached - cacheCreate);
     const output = nonNegInt(liveUsage.outputTokens);
     const reasoning = Math.min(output, nonNegInt(liveUsage.reasoningOutputTokens));
-    const total = Math.max(nonNegInt(liveUsage.usedTokens), uncached + cached + output);
+    const total = Math.max(
+      nonNegInt(liveUsage.usedTokens),
+      uncached + cached + cacheCreate + output,
+    );
     if (total > 0) {
       return {
         uncachedInputTokens: uncached,
         cachedInputTokens: cached,
-        cacheCreationTokens: 0,
+        cacheCreationTokens: cacheCreate,
         outputTokens: output,
         reasoningTokens: reasoning,
         totalTokens: total,
@@ -557,6 +565,9 @@ export function extractTurnUsageDetail(
         hasSubagents,
         reportedModels,
         hasMeasuredTokens: true,
+        ttftMs,
+        decodeMs,
+        modelDurationMs,
       };
     }
   }
@@ -572,6 +583,9 @@ export function extractTurnUsageDetail(
     hasSubagents,
     reportedModels,
     hasMeasuredTokens: false,
+    ttftMs,
+    decodeMs,
+    modelDurationMs,
   };
 }
 
@@ -740,17 +754,18 @@ export function deriveSessionTelemetryDetail(
   let latestRequestTps: number | null = null;
 
   const turnIntervals: Array<[number, number]> = [];
+  let turnExtraModelDurationMs = 0;
   const tokensByModel = new Map<string, number>();
   const distinctSampledModels: string[] = [];
   let latestSampledModelId: string | null = null;
 
   const recordSampledModel = (modelId: string | null | undefined) => {
-    const trimmed = modelId?.trim();
-    if (!trimmed || trimmed === "unknown") return;
-    if (!distinctSampledModels.includes(trimmed)) {
-      distinctSampledModels.push(trimmed);
+    const cleaned = modelId ? unwrapUsageModelSlug(modelId) : "";
+    if (!cleaned || cleaned === "unknown") return;
+    if (!distinctSampledModels.includes(cleaned)) {
+      distinctSampledModels.push(cleaned);
     }
-    latestSampledModelId = trimmed;
+    latestSampledModelId = cleaned;
   };
 
   for (const turn of turns) {
@@ -759,20 +774,33 @@ export function deriveSessionTelemetryDetail(
     const startedMs =
       parseTelemetryTimestampMs(turn.startedAt) ?? observed?.turnStartedAt ?? null;
     const completedMs = parseTelemetryTimestampMs(turn.completedAt);
-    const durationMs =
+    const wallDurationMs =
       startedMs !== null && completedMs !== null && completedMs >= startedMs
         ? completedMs - startedMs
         : null;
-    const ttftMs =
+    const durationMs = wallDurationMs ?? extracted.modelDurationMs;
+    const observedTtftMs =
       startedMs !== null &&
       observed?.firstTokenAt !== null &&
       observed?.firstTokenAt !== undefined &&
       observed.firstTokenAt >= startedMs
         ? observed.firstTokenAt - startedMs
         : null;
+    const clampedDurationBound =
+      wallDurationMs !== null && extracted.modelDurationMs !== null
+        ? Math.min(wallDurationMs, extracted.modelDurationMs)
+        : (wallDurationMs ?? extracted.modelDurationMs);
+    // Prefer authoritative server-reported TTFT over noisy client WS receive timestamps,
+    // and enforce physical invariant `ttftMs <= durationMs`.
+    const ttftMs = clampTtftToDuration(
+      extracted.ttftMs ?? observedTtftMs,
+      clampedDurationBound,
+    );
 
     if (startedMs !== null && completedMs !== null && completedMs > startedMs) {
       turnIntervals.push([startedMs, completedMs]);
+    } else if (extracted.modelDurationMs !== null && extracted.modelDurationMs > 0) {
+      turnExtraModelDurationMs += extracted.modelDurationMs;
     }
 
     if (extracted.hasSubagents) {
@@ -781,7 +809,10 @@ export function deriveSessionTelemetryDetail(
     }
 
     const hasSample =
-      extracted.hasMeasuredTokens || durationMs !== null || ttftMs !== null;
+      extracted.hasMeasuredTokens ||
+      durationMs !== null ||
+      ttftMs !== null ||
+      extracted.decodeMs !== null;
     if (hasSample) {
       samples += 1;
     }
@@ -799,8 +830,9 @@ export function deriveSessionTelemetryDetail(
       totalReasoning += extracted.reasoningTokens;
       sessionTotalTokens += extracted.totalTokens;
 
-      const primaryModel =
+      const primaryModelRaw =
         extracted.reportedModels[0] ?? activeModel?.trim() ?? null;
+      const primaryModel = primaryModelRaw ? unwrapUsageModelSlug(primaryModelRaw) : null;
       if (primaryModel && primaryModel !== "unknown") {
         tokensByModel.set(
           primaryModel,
@@ -822,19 +854,28 @@ export function deriveSessionTelemetryDetail(
     if (
       turn.status !== "running" &&
       turn.status !== "pending" &&
-      extracted.outputTokens > 0 &&
-      durationMs !== null &&
-      durationMs > 0
+      extracted.outputTokens > 0
     ) {
-      const turnTps = computeOutputTps(extracted.outputTokens, durationMs, ttftMs);
-      if (turnTps !== null) {
-        latestRequestTps = turnTps;
-        tpsSum += turnTps;
-        tpsSampleCount += 1;
-        const genMs = ttftMs !== null && durationMs > ttftMs ? durationMs - ttftMs : durationMs;
-        if (genMs > 0) {
+      if (extracted.decodeMs !== null && extracted.decodeMs > 0) {
+        const turnTps = extracted.outputTokens / (extracted.decodeMs / 1_000);
+        if (Number.isFinite(turnTps) && turnTps > 0) {
+          latestRequestTps = turnTps;
+          tpsSum += turnTps;
+          tpsSampleCount += 1;
           timedOutputSum += extracted.outputTokens;
-          timedGenMsSum += genMs;
+          timedGenMsSum += extracted.decodeMs;
+        }
+      } else if (durationMs !== null && durationMs > 0) {
+        const turnTps = computeOutputTps(extracted.outputTokens, durationMs, ttftMs);
+        if (turnTps !== null) {
+          latestRequestTps = turnTps;
+          tpsSum += turnTps;
+          tpsSampleCount += 1;
+          const genMs = ttftMs !== null && durationMs > ttftMs ? durationMs - ttftMs : durationMs;
+          if (genMs > 0) {
+            timedOutputSum += extracted.outputTokens;
+            timedGenMsSum += genMs;
+          }
         }
       }
     }
@@ -872,8 +913,9 @@ export function deriveSessionTelemetryDetail(
       sessionTotalTokens = fallbackTotal;
       if (samples === 0) samples = 1;
       if (activeModel && activeModel.trim() && activeModel.trim() !== "unknown") {
-        tokensByModel.set(activeModel.trim(), fallbackTotal);
-        recordSampledModel(activeModel.trim());
+        const cleanedActiveModel = unwrapUsageModelSlug(activeModel);
+        tokensByModel.set(cleanedActiveModel, fallbackTotal);
+        recordSampledModel(cleanedActiveModel);
       }
     }
     if (latestRequestTps === null && output > 0 && activeContextWindow.durationMs) {
@@ -889,15 +931,6 @@ export function deriveSessionTelemetryDetail(
   if (typeof activeLiveTps === "number" && Number.isFinite(activeLiveTps) && activeLiveTps > 0) {
     latestRequestTps = activeLiveTps;
   }
-  if (
-    ttftSampleCount === 0 &&
-    typeof activeLiveTtftMs === "number" &&
-    Number.isFinite(activeLiveTtftMs) &&
-    activeLiveTtftMs >= 0
-  ) {
-    ttftSum = activeLiveTtftMs;
-    ttftSampleCount = 1;
-  }
 
   // Model call duration = merged turn wall time minus overlapping merged tool intervals
   const mergedTurnIntervals = mergeTimeIntervals(turnIntervals);
@@ -906,9 +939,27 @@ export function deriveSessionTelemetryDetail(
   if (totalTurnWallMs > 0) {
     const toolOverlapInsideTurns = overlapDurationMs(mergedTurnIntervals, mergedToolIntervals);
     const netModelMs = totalTurnWallMs - toolOverlapInsideTurns;
-    modelCallDurationMs = netModelMs > 0 ? netModelMs : totalTurnWallMs;
+    modelCallDurationMs = (netModelMs > 0 ? netModelMs : totalTurnWallMs) + turnExtraModelDurationMs;
+  } else if (turnExtraModelDurationMs > 0) {
+    modelCallDurationMs = Math.round(turnExtraModelDurationMs);
   } else if (activeContextWindow?.durationMs && activeContextWindow.durationMs > 0) {
     modelCallDurationMs = nonNegInt(activeContextWindow.durationMs);
+  }
+
+  if (
+    ttftSampleCount === 0 &&
+    typeof activeLiveTtftMs === "number" &&
+    Number.isFinite(activeLiveTtftMs) &&
+    activeLiveTtftMs >= 0
+  ) {
+    const hasInFlightTurn = turns.some(
+      (turn) => turn.status === "running" || turn.status === "pending",
+    );
+    const effectiveActiveTtft = hasInFlightTurn
+      ? activeLiveTtftMs
+      : (clampTtftToDuration(activeLiveTtftMs, modelCallDurationMs) ?? activeLiveTtftMs);
+    ttftSum = effectiveActiveTtft;
+    ttftSampleCount = 1;
   }
 
   const effectiveSubagentCount =
@@ -1038,15 +1089,8 @@ export function resolveGlobalTodayAndMonthTokens(input: {
 }
 
 /**
- * Resolves the complete display payload for the 3 independent composer triggers
- * and 3 independent popovers.
- *
- * CRITICAL CONTRACT:
- * - Current-session metrics (Trigger 1/2/3, Popover 1, Popover 2 top/donut, Popover 3)
- *   are derived STRICTLY from the active thread (`detail`, `live`, `contextWindow`,
- *   and `callLogs` matching `threadId`).
- * - Global machine usage (`mergedUsage`) is ONLY used for Popover 2's bottom
- *   `今日用量 / 本月用量` reference cards — NEVER leaked into the active session bar.
+ * Active-session telemetry display for the 3 composer triggers/popovers.
+ * Strictly thread-scoped; `mergedUsage` is ONLY for Popover 2 global Today/Month cards.
  */
 export function resolveSessionTelemetryDisplay(
   input: SessionTelemetryDisplayInput,
@@ -1100,26 +1144,24 @@ export function resolveSessionTelemetryDisplay(
     if (log.durationMs !== null && log.durationMs > 0) {
       logDurationSum += log.durationMs;
     }
-    if (log.ttftMs !== null && Number.isFinite(log.ttftMs) && log.ttftMs >= 0) {
-      logTtftSum += log.ttftMs;
+    const clampedLogTtftMs = clampTtftToDuration(log.ttftMs, log.durationMs);
+    if (clampedLogTtftMs !== null && Number.isFinite(clampedLogTtftMs) && clampedLogTtftMs >= 0) {
+      logTtftSum += clampedLogTtftMs;
       logTtftCount += 1;
     }
     if (log.tps !== null && Number.isFinite(log.tps) && log.tps > 0) {
       if (logLatestTps === null) logLatestTps = log.tps;
       logTpsSum += log.tps;
       logTpsCount += 1;
-      if (log.outputTokens > 0 && log.durationMs !== null && log.durationMs > 0) {
-        const genMs =
-          log.ttftMs !== null && log.durationMs > log.ttftMs
-            ? log.durationMs - log.ttftMs
-            : log.durationMs;
-        if (genMs > 0) {
+      if (log.outputTokens > 0) {
+        const genMs = (log.outputTokens / log.tps) * 1_000;
+        if (Number.isFinite(genMs) && genMs > 0) {
           logTimedOutput += log.outputTokens;
           logTimedGenMs += genMs;
         }
       }
     }
-    const modelTrimmed = log.model.trim();
+    const modelTrimmed = unwrapUsageModelSlug(log.model);
     if (modelTrimmed && modelTrimmed !== "unknown") {
       if (logLatestModelId === null) logLatestModelId = modelTrimmed;
       if (!logDistinctModels.includes(modelTrimmed)) {
@@ -1299,8 +1341,10 @@ export function resolveSessionTelemetryDisplay(
   const sampledRawModelId =
     detail?.latestSampledModelId ??
     logLatestModelId ??
-    (live?.model && live.model !== "unknown" ? live.model : null);
-  const primaryEntrypointId = sampledRawModelId ?? (selectedModelId?.trim() || null);
+    (live?.model && live.model !== "unknown" ? unwrapUsageModelSlug(live.model) : null);
+  const cleanedSelectedModelId =
+    selectedModelId?.trim() ? unwrapUsageModelSlug(selectedModelId.trim()) : null;
+  const primaryEntrypointId = sampledRawModelId ?? cleanedSelectedModelId;
   const sampledModelDisplayName =
     detail?.latestSampledModelDisplayName ??
     (primaryEntrypointId

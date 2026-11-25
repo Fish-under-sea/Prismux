@@ -33,8 +33,12 @@ export function disposePrewarmedVideo(): void {
   }
   try {
     entry.el.pause();
+    const startedLoading = entry.el.readyState > 0 || entry.el.networkState === 2;
     entry.el.removeAttribute("src");
-    entry.el.load();
+    // Avoid triggering unnecessary Chromium D3D11 decoder teardown/re-init if nothing started buffering
+    if (startedLoading) {
+      entry.el.load();
+    }
   } catch {
     // Ignore detached DOM errors
   }
@@ -87,6 +91,16 @@ export function consumePrewarmedVideo(url: string | null | undefined): HTMLVideo
   warmEntry = null;
   if (entry.timer !== null) {
     clearTimeout(entry.timer);
+  }
+  // Discard broken/errored elements so Stage always starts from a clean <video>
+  if (entry.el.error !== null || (entry.el.readyState === 0 && entry.el.networkState === 3)) {
+    try {
+      entry.el.pause();
+      entry.el.removeAttribute("src");
+    } catch {
+      // Ignore detached DOM errors
+    }
+    return null;
   }
   return entry.el;
 }

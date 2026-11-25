@@ -46,6 +46,14 @@ function isAntigravitySignInUnchecked(provider: ServerProvider): boolean {
   );
 }
 
+export function isProviderConfirmedNotInstalled(
+  provider: Pick<ServerProvider, "enabled" | "installed" | "status"> | null | undefined,
+): boolean {
+  if (!provider) return false;
+  if (!provider.enabled || provider.status === "disabled") return false;
+  return !provider.installed;
+}
+
 export function getProviderStatusKey(provider: ServerProvider | undefined): ProviderStatusKey {
   if (provider && !provider.enabled) return "disabled";
   if (provider && isAntigravitySignInUnchecked(provider)) return "neutral";

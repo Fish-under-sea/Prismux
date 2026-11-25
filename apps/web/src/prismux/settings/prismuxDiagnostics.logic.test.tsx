@@ -22,6 +22,8 @@ import {
   DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
   DORMANT_ENGINES_GROUP_ID,
   filterDiagnosticsReport,
+  formatCompactDiagnosticSummary,
+  formatCompactDiagnosticVersion,
   getDiagnosticsStandaloneCopy,
   getLatestNormalizedDiagnosticsReport,
   isDiagnosticsAutoRefreshSettingsPath,
@@ -369,13 +371,29 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(html).toContain("Total checks");
   });
 
-  it("renders equal-height Liquid Glass diagnostic cards with 4-level typography and zero <code> blocks", () => {
+  it("renders unified compact Liquid Glass diagnostic cards with single-line truncation, inline bottom strip, and zero <code> blocks", () => {
+    const raw7ZipVersion =
+      "7-Zip (a) 24.09 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-11-29";
+    const raw7ZipSummary = `可用（${raw7ZipVersion}）`;
+
+    expect(formatCompactDiagnosticSummary(raw7ZipSummary)).toBe("可用 · 7-Zip 24.09 (x64)");
+    expect(formatCompactDiagnosticSummary(`Available (${raw7ZipVersion})`)).toBe(
+      "Available · 7-Zip 24.09 (x64)",
+    );
+    expect(formatCompactDiagnosticSummary("已安装（git version 2.52.0.windows.1）")).toBe(
+      "已安装（git version 2.52.0.windows.1）",
+    );
+    expect(formatCompactDiagnosticVersion(raw7ZipVersion)).toBe("7-Zip 24.09 (x64)");
+    expect(formatCompactDiagnosticVersion("git version 2.52.0.windows.1")).toBe(
+      "git version 2.52.0.windows.1",
+    );
+
     const report = normalizeDiagnosticsResponse({
       ok: true,
       checkedAt: 1_763_000_000_000,
       durationMs: 120,
       cached: false,
-      summary: { total: 3, ok: 1, degraded: 1, error: 1 },
+      summary: { total: 4, ok: 2, degraded: 1, error: 1 },
       items: [
         {
           id: "provider.codex",
@@ -385,6 +403,17 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
           summary: "Detected on PATH",
           version: "0.92.0",
           latencyMs: 14,
+        },
+        {
+          id: "tool.7zip",
+          category: "simulators_media",
+          name: "7za / 7z 解压工具",
+          status: "ok",
+          summary: raw7ZipSummary,
+          detail: "C:\\Program Files\\7-Zip\\7za.exe",
+          version: raw7ZipVersion,
+          latencyMs: 18,
+          settingsRoute: "/settings/updates",
         },
         {
           id: "memory.sqlite_vec",
@@ -414,23 +443,42 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
       </GTProvider>,
     );
 
-    // Equal-height stretch grid + Liquid Glass Fresnel top highlight + no opaque bg-card/85 or ugly break-all
-    expect(fullHtml).toContain("grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3");
+    // Compact 4-column equal-height grid + Liquid Glass Fresnel rim + Light/Dark Glass contrast hooks
+    expect(fullHtml).toContain(
+      "grid grid-cols-1 items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+    );
     expect(fullHtml).toContain("shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]");
     expect(fullHtml).toContain("dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.07)]");
+    expect(fullHtml).toContain("[[data-pmx-glass=&#x27;1&#x27;]_&amp;]");
     expect(fullHtml).toContain("motion-reduce:transition-none");
     expect(fullHtml).not.toContain("bg-card/85");
     expect(fullHtml).not.toContain("break-all");
-    expect(fullHtml).toContain("break-words");
 
-    // 4-level typography hierarchy & semantic left accent bars for degraded / error
+    // Compact single-line 3-band card typography (no multi-line bloat or bulky separated footer row)
+    expect(fullHtml).toContain("flex h-full min-w-0 flex-col gap-1.5 p-3");
     expect(fullHtml).toContain("text-[13px] font-semibold tracking-tight text-foreground");
-    expect(fullHtml).toContain("line-clamp-2 text-xs font-medium leading-relaxed text-foreground/85");
+    expect(fullHtml).toContain("truncate text-xs font-medium leading-4.25 text-foreground/88");
+    expect(fullHtml).toContain("truncate font-mono text-2xs leading-3.75 text-muted-foreground");
+    expect(fullHtml).not.toContain("line-clamp-2");
+    expect(fullHtml).not.toContain("border-t border-border/50 pt-2.5");
     expect(fullHtml).toContain("border-l-[3px] border-l-amber-500");
     expect(fullHtml).toContain("border-l-[3px] border-l-destructive");
-    expect(fullHtml).toContain('data-diagnostic-card-footer="true"');
 
-    // Healthy card without actions renders no empty footer block
+    // Unified single-row bottom strip with preserved action attributes
+    expect(fullHtml).toContain('data-diagnostic-card-bottom="true"');
+    expect(fullHtml).toContain('data-diagnostic-card-footer="true"');
+    expect(fullHtml).toContain('data-diagnostic-copy-command="true"');
+    expect(fullHtml).toContain('data-diagnostic-settings-link="true"');
+    expect(fullHtml).toContain('title="dsh --version"');
+    expect(fullHtml).not.toContain("<code");
+
+    // 7-Zip card strips noisy Copyright boilerplate from display while keeping full raw title tooltip
+    expect(fullHtml).toContain(">可用 · 7-Zip 24.09 (x64)</p>");
+    expect(fullHtml).toContain(`title="${raw7ZipSummary}"`);
+    expect(fullHtml).toContain(">7-Zip 24.09 (x64)</span>");
+    expect(fullHtml).toContain(`title="${raw7ZipVersion}"`);
+
+    // Healthy card without actions renders bottom meta strip but no footer action block
     const healthyCardHtml = renderToStaticMarkup(
       <GTProvider locale="en" translations={{}}>
         <DiagnosticItemCard
@@ -442,27 +490,38 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     );
     expect(healthyCardHtml).toContain('data-diagnostic-card="true"');
     expect(healthyCardHtml).toContain('data-diagnostic-status="ok"');
+    expect(healthyCardHtml).toContain('data-diagnostic-card-bottom="true"');
     expect(healthyCardHtml).not.toContain('data-diagnostic-card-footer="true"');
+    expect(healthyCardHtml).not.toContain('data-diagnostic-settings-link="true"');
     expect(healthyCardHtml).not.toContain("border-l-[3px]");
     expect(healthyCardHtml).not.toContain("<code");
 
-    // No redundant <code> command block rendered under the copy button
-    expect(fullHtml).not.toContain("<code");
-    expect(fullHtml).toContain('data-diagnostic-copy-command="true"');
-    expect(fullHtml).toContain('title="dsh --version"');
-
-    // Copied feedback renders checkmark state on DiagnosticItemCard
+    // Copied feedback renders checkmark state on DiagnosticItemCard, and zh locale uses compact "复制修复"
     const copiedCardHtml = renderToStaticMarkup(
       <GTProvider locale="en" translations={{}}>
         <DiagnosticItemCard
-          item={report.items[2]!}
+          item={report.items[3]!}
           copied
           onCopyCommand={() => undefined}
         />
       </GTProvider>,
     );
     expect(copiedCardHtml).toContain("Copied ✓");
+    expect(copiedCardHtml).toContain('data-diagnostic-settings-link="true"');
     expect(copiedCardHtml).not.toContain("<code");
+
+    const zhActionCardHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <DiagnosticItemCard
+          item={report.items[3]!}
+          copied={false}
+          onCopyCommand={() => undefined}
+        />
+      </GTProvider>,
+    );
+    expect(zhActionCardHtml).toContain("复制修复");
+    expect(zhActionCardHtml).toContain('data-diagnostic-copy-command="true"');
+    expect(zhActionCardHtml).toContain('data-diagnostic-settings-link="true"');
 
     // Streamlined single-line memory retrieval status strip links directly to /settings/memory
     expect(fullHtml).toContain('data-diagnostic-memory-banner="true"');
@@ -541,7 +600,11 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(fullHtml.match(/data-diagnostic-id="engine\.worktree_sandbox"/g)).toHaveLength(1);
     expect(fullHtml).toContain("Dormant Engines Read-Only Summary");
     expect(fullHtml).toContain("Read-only");
-    expect(fullHtml).toContain("sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4");
+    expect(fullHtml).toContain('data-diagnostic-readonly="true"');
+    expect(fullHtml).toContain(
+      "grid grid-cols-1 items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+    );
+    expect(fullHtml).not.toContain("line-clamp-2");
   });
 
   it("renders standalone full-width workbench panel at /diagnostics inside workPanels PrismuxStageFrame without max-w container", () => {
@@ -600,8 +663,10 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
       expect(autoHtml).toContain('data-pmx-work-panel-control="1"');
       expect(autoHtml).toContain('data-testid="diagnostics-close-button"');
       expect(autoHtml).toContain("grid-cols-2 gap-3 lg:grid-cols-4");
-      expect(autoHtml).toContain("grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4");
-      expect(autoHtml).toContain("grid items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4");
+      expect(autoHtml).toContain(
+        "grid grid-cols-1 items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+      );
+      expect(autoHtml).not.toContain("line-clamp-2");
       // Full-bleed edge-to-edge body must NEVER wrap in narrow centered max-w-* containers
       expect(autoHtml).not.toMatch(/\bmax-w-(?:3xl|4xl|5xl|6xl|7xl)\b/);
     } finally {
@@ -610,12 +675,14 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
 
     const zhCopy = getDiagnosticsStandaloneCopy("zh-CN");
     expect(zhCopy.closeTooltip).toBe("返回主会话 (Esc)");
+    expect(zhCopy.copyFixLabel).toBe("复制修复");
     expect(zhCopy.summaryHealthyPill(25, 26)).toBe("25/26 正常");
     expect(zhCopy.summaryDegradedPill(1)).toBe("1 降级");
     expect(zhCopy.summaryErrorPill(2)).toBe("2 异常");
 
     const enCopy = getDiagnosticsStandaloneCopy("en-US");
     expect(enCopy.closeTooltip).toBe("Return to main session (Esc)");
+    expect(enCopy.copyFixLabel).toBe("Copy fix");
     expect(enCopy.summaryHealthyPill(25, 26)).toBe("25/26 healthy");
 
     expect(isDiagnosticsStandalonePathname("/diagnostics")).toBe(true);

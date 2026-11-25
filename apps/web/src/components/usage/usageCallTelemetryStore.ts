@@ -1,4 +1,9 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
+
+import { getDisplayModelName, type ModelEsque } from "../chat/providerIconUtils";
+
+// oxlint-disable-next-line prismux/no-em-dash-copy -- tabular empty-metric placeholder for unmeasured numbers
+const EMPTY_METRIC_DASH = "—";
 
 export const MAX_USAGE_CALL_LOGS = 500;
 export const USAGE_CALL_TELEMETRY_STORAGE_KEY = "prismux.usage.callTelemetry.v1";
@@ -49,6 +54,8 @@ export interface BackendUsageCallLogLike {
   readonly turnId?: string | null | undefined;
   readonly ttftMs?: number | null | undefined;
   readonly ttft_ms?: number | null | undefined;
+  readonly decodeMs?: number | null | undefined;
+  readonly decode_ms?: number | null | undefined;
   readonly durationMs?: number | null | undefined;
   readonly duration_ms?: number | null | undefined;
   readonly tps?: number | null | undefined;
@@ -77,6 +84,7 @@ export interface RecordModelCallTelemetryInput {
   readonly firstTokenAt?: number | null | undefined;
   readonly completedAt?: number | null | undefined;
   readonly ttftMs?: number | null | undefined;
+  readonly decodeMs?: number | null | undefined;
   readonly durationMs?: number | null | undefined;
   readonly tps?: number | null | undefined;
   readonly inputTokens?: number | undefined;
@@ -164,6 +172,168 @@ function positiveNullable(value: number | null | undefined): number | null {
   return value;
 }
 
+/**
+ * Physical timing invariant: TTFT can never exceed total call duration (`ttftMs <= durationMs`).
+ * Whenever both `ttftMs` and `durationMs` are known non-negative finite numbers and
+ * `ttftMs > durationMs`, clamps `ttftMs` to `durationMs`.
+ */
+export function clampTtftToDuration(
+  ttftMs: number | null | undefined,
+  durationMs: number | null | undefined,
+): number | null {
+  const ttft = positiveOrZeroNullable(ttftMs);
+  if (ttft === null) return null;
+  const dur = positiveOrZeroNullable(durationMs);
+  if (dur === null) return ttft;
+  return Math.min(ttft, dur);
+}
+
+export interface UsageModelCatalogProviderLike {
+  readonly models: ReadonlyArray<ModelEsque>;
+  readonly driver?: string | undefined;
+  readonly driverKind?: string | undefined;
+  readonly instanceId?: string | undefined;
+  readonly acpRegistryAgentId?: string | undefined;
+  readonly displayName?: string | undefined;
+}
+
+function parseUsageModelTuple(raw: string): readonly [string, string] | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.length >= 2 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string"
+    ) {
+      const route = parsed[0].trim();
+      const slug = parsed[1].trim();
+      if (slug.length > 0) {
+        return [route, slug];
+      }
+      if (route.length > 0) {
+        return [route, route];
+      }
+    }
+  } catch {
+    // Ignore malformed JSON-like strings and fall back to the original string.
+  }
+  return null;
+}
+
+function formatUnwrappedTupleFallback(route: string, slug: string): string {
+  if (
+    !slug.includes("/") &&
+    !slug.includes("-") &&
+    !/\d/.test(slug) &&
+    route.length > 0 &&
+    route.toLowerCase() !== slug.toLowerCase()
+  ) {
+    return `${route}/${slug}`;
+  }
+  return slug;
+}
+
+/**
+ * Unwraps ACP tuple-encoded model slugs (e.g. `["magpie","group/deepseek"]` → `group/deepseek`)
+ * into a clean readable slug without JSON brackets or quotes.
+ */
+export function unwrapUsageModelSlug(rawModel: string): string {
+  const trimmed = (rawModel ?? "").trim();
+  if (!trimmed) return "";
+  const tuple = parseUsageModelTuple(trimmed);
+  if (!tuple) return trimmed;
+  return formatUnwrappedTupleFallback(tuple[0], tuple[1]);
+}
+
+function matchesPreferredProvider(
+  entry: UsageModelCatalogProviderLike,
+  preferredLower: string | null,
+): boolean {
+  if (!preferredLower) return false;
+  const candidates = [entry.driver, entry.driverKind, entry.instanceId, entry.acpRegistryAgentId];
+  for (const candidate of candidates) {
+    if (candidate && candidate.trim().toLowerCase() === preferredLower) {
+      return true;
+    }
+  }
+  if (
+    preferredLower === "dsh" &&
+    (entry.acpRegistryAgentId?.trim().toLowerCase() === "dsh" ||
+      entry.instanceId?.trim().toLowerCase().includes("dsh") ||
+      entry.displayName?.trim().toLowerCase().includes("deepseek harness"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Formats a usage/telemetry model identifier into a clean human-friendly display name:
+ * 1. Matches configured provider models by `slug` (raw or unwrapped tuple), `aliases`, or `name`.
+ * 2. Safely unwraps JSON 2-element tuple strings like `["magpie","group/deepseek"]` so ugly
+ *    JSON brackets/quotes never appear in Call Logs, `/usage`, or composer telemetry popovers.
+ */
+export function formatUsageModelDisplayName(
+  rawModel: string,
+  providerEntries?: ReadonlyArray<UsageModelCatalogProviderLike>,
+  preferredProvider?: string | null,
+): string {
+  const trimmed = (rawModel ?? "").trim();
+  if (!trimmed) return "";
+  if (trimmed === "unknown") return "unknown";
+
+  const tuple = parseUsageModelTuple(trimmed);
+  const unwrapped = tuple ? tuple[1] : trimmed;
+  const fallbackDisplay = tuple ? formatUnwrappedTupleFallback(tuple[0], tuple[1]) : trimmed;
+
+  if (providerEntries && providerEntries.length > 0) {
+    const candidateKeys = new Set<string>([
+      trimmed.toLowerCase(),
+      unwrapped.toLowerCase(),
+      fallbackDisplay.toLowerCase(),
+    ]);
+    const preferredLower = preferredProvider?.trim().toLowerCase() ?? null;
+    let fallbackMatch: string | null = null;
+
+    for (const provider of providerEntries) {
+      const providerMatches = matchesPreferredProvider(provider, preferredLower);
+      for (const model of provider.models) {
+        const slugLower = model.slug.trim().toLowerCase();
+        const slugTuple = parseUsageModelTuple(model.slug);
+        const slugUnwrappedLower = (slugTuple ? slugTuple[1] : model.slug).trim().toLowerCase();
+        const nameLower = model.name.trim().toLowerCase();
+        const aliasMatch =
+          model.aliases?.some((alias) => {
+            const aliasTrimmed = alias.trim().toLowerCase();
+            const aliasUnwrapped = unwrapUsageModelSlug(alias).toLowerCase();
+            return candidateKeys.has(aliasTrimmed) || candidateKeys.has(aliasUnwrapped);
+          }) ?? false;
+
+        if (
+          !candidateKeys.has(slugLower) &&
+          !candidateKeys.has(slugUnwrappedLower) &&
+          !aliasMatch &&
+          !candidateKeys.has(nameLower)
+        ) {
+          continue;
+        }
+
+        const friendlyRaw = getDisplayModelName(model);
+        const friendly = unwrapUsageModelSlug(friendlyRaw) || friendlyRaw;
+        if (providerMatches) return friendly;
+        if (fallbackMatch === null) fallbackMatch = friendly;
+      }
+    }
+
+    if (fallbackMatch !== null) return fallbackMatch;
+  }
+
+  return fallbackDisplay;
+}
+
 function normalizeCacheHitRateValue(value: number | null | undefined): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
   // Support both 0..1 ratio (canonical) and accidental 0..100 percentage inputs cleanly.
@@ -220,13 +390,13 @@ export function computeOutputTps(
 }
 
 export function formatTtft(ms: number | null | undefined): string {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "—";
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return EMPTY_METRIC_DASH;
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(ms >= 10_000 ? 1 : 2)} s`;
 }
 
 export function formatDurationMs(ms: number | null | undefined): string {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "—";
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return EMPTY_METRIC_DASH;
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(ms >= 10_000 ? 1 : 2)} s`;
   const mins = Math.floor(ms / 60_000);
@@ -235,14 +405,14 @@ export function formatDurationMs(ms: number | null | undefined): string {
 }
 
 export function formatTps(tps: number | null | undefined): string {
-  if (typeof tps !== "number" || !Number.isFinite(tps) || tps <= 0) return "—";
+  if (typeof tps !== "number" || !Number.isFinite(tps) || tps <= 0) return EMPTY_METRIC_DASH;
   const rounded = tps >= 100 ? Math.round(tps).toString() : tps.toFixed(1);
   return `${rounded} tok/s`;
 }
 
 export function formatCacheHitRate(rate: number | null | undefined): string {
   const normalized = normalizeCacheHitRateValue(rate);
-  if (normalized === null) return "—";
+  if (normalized === null) return EMPTY_METRIC_DASH;
   const pct = normalized * 100;
   if (pct === 0) return "0%";
   if (pct >= 99.95) return "100%";
@@ -272,6 +442,19 @@ export function normalizeUsageProviderKey(provider: string | null | undefined): 
   const lowered = trimmed.toLowerCase();
   if (lowered === "claudeagent" || lowered === "claude-agent" || lowered === "claude_agent") {
     return "claude";
+  }
+  if (
+    lowered === "dsh" ||
+    lowered === "dsh-acp" ||
+    lowered === "dsh_acp" ||
+    lowered === "dsh-cli" ||
+    lowered === "dsh_cli" ||
+    lowered === "deepseek-harness" ||
+    lowered === "deepseek_harness" ||
+    lowered === "deepseek harness" ||
+    lowered === "deepseekharness"
+  ) {
+    return "dsh";
   }
   return trimmed;
 }
@@ -327,15 +510,17 @@ function loadFromStorage(): readonly UsageCallLogRecord[] {
     const valid: UsageCallLogRecord[] = [];
     for (const item of parsed) {
       if (!isValidPersistedRecord(item)) continue;
+      const durationMs = positiveOrZeroNullable(item.durationMs);
+      const ttftMs = clampTtftToDuration(item.ttftMs, durationMs);
       valid.push({
         id: item.id,
         timestamp: item.timestamp,
-        provider: item.provider,
-        model: item.model,
+        provider: normalizeUsageProviderKey(item.provider),
+        model: unwrapUsageModelSlug(item.model) || item.model,
         threadId: typeof item.threadId === "string" ? item.threadId : undefined,
         turnId: typeof item.turnId === "string" ? item.turnId : undefined,
-        ttftMs: positiveOrZeroNullable(item.ttftMs),
-        durationMs: positiveOrZeroNullable(item.durationMs),
+        ttftMs,
+        durationMs,
         tps: positiveNullable(item.tps),
         inputTokens: nonNegativeFinite(item.inputTokens),
         cachedInputTokens: nonNegativeFinite(item.cachedInputTokens),
@@ -382,6 +567,15 @@ function ensureHydrated(): void {
   }
 }
 
+/** Re-hydrate persisted call logs from `localStorage` (enforcing timing & model invariants). */
+export function reloadUsageCallLogsFromStorage(): readonly UsageCallLogRecord[] {
+  hydrated = true;
+  const loaded = loadFromStorage();
+  state = { ...state, logs: loaded };
+  notifyListeners();
+  return loaded;
+}
+
 function subscribeTelemetry(listener: () => void): () => void {
   ensureHydrated();
   listeners.add(listener);
@@ -424,19 +618,21 @@ export function recordModelCallTelemetry(
   const timestamp =
     positiveNullable(input.timestamp) ?? turnStartedAt ?? completedAt ?? now;
 
-  const derivedTtftMs =
-    input.ttftMs !== undefined
-      ? positiveOrZeroNullable(input.ttftMs)
-      : turnStartedAt !== null && firstTokenAt !== null && firstTokenAt >= turnStartedAt
-        ? firstTokenAt - turnStartedAt
-        : null;
-
   const derivedDurationMs =
     input.durationMs !== undefined
       ? positiveOrZeroNullable(input.durationMs)
       : turnStartedAt !== null && completedAt !== null && completedAt >= turnStartedAt
         ? completedAt - turnStartedAt
         : null;
+
+  const rawTtftMs =
+    input.ttftMs !== undefined
+      ? positiveOrZeroNullable(input.ttftMs)
+      : turnStartedAt !== null && firstTokenAt !== null && firstTokenAt >= turnStartedAt
+        ? firstTokenAt - turnStartedAt
+        : null;
+
+  const derivedTtftMs = clampTtftToDuration(rawTtftMs, derivedDurationMs);
 
   const inputTokens = nonNegativeFinite(input.inputTokens);
   const cachedInputTokens = nonNegativeFinite(input.cachedInputTokens);
@@ -448,10 +644,13 @@ export function recordModelCallTelemetry(
   const computedTotal = inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
   const totalTokens = Math.max(nonNegativeFinite(input.totalTokens), computedTotal);
 
+  const authoritativeDecodeMs = positiveNullable(input.decodeMs);
   const derivedTps =
     input.tps !== undefined
       ? positiveNullable(input.tps)
-      : computeOutputTps(outputTokens, derivedDurationMs, derivedTtftMs);
+      : authoritativeDecodeMs !== null && outputTokens > 0
+        ? positiveNullable(outputTokens / (authoritativeDecodeMs / 1000))
+        : computeOutputTps(outputTokens, derivedDurationMs, derivedTtftMs);
 
   const derivedCacheHitRate =
     input.cacheHitRate !== undefined
@@ -466,7 +665,7 @@ export function recordModelCallTelemetry(
     id: resolvedId,
     timestamp,
     provider: normalizeUsageProviderKey(input.provider),
-    model: input.model.trim() || "unknown",
+    model: unwrapUsageModelSlug(input.model) || "unknown",
     threadId: input.threadId,
     turnId: input.turnId,
     ttftMs: derivedTtftMs,
@@ -682,13 +881,16 @@ export function normalizeBackendUsageCallLog(
   const reasoningTokens = nonNegativeFinite(raw.reasoningTokens);
   const computedTotal = inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
   const totalTokens = Math.max(nonNegativeFinite(raw.totalTokens), computedTotal);
-  const ttftMs = positiveOrZeroNullable(raw.ttftMs ?? raw.ttft_ms);
   const durationMs = positiveNullable(raw.durationMs ?? raw.duration_ms);
+  const ttftMs = clampTtftToDuration(raw.ttftMs ?? raw.ttft_ms, durationMs);
+  const decodeMs = positiveNullable(raw.decodeMs ?? raw.decode_ms);
   const rawTps = raw.tps ?? raw.tokensPerSecond ?? raw.tokens_per_second;
   const tps =
     rawTps !== undefined && rawTps !== null
       ? positiveNullable(rawTps)
-      : computeOutputTps(outputTokens, durationMs, ttftMs);
+      : decodeMs !== null && outputTokens > 0
+        ? positiveNullable(outputTokens / (decodeMs / 1000))
+        : computeOutputTps(outputTokens, durationMs, ttftMs);
   const cacheHitRate =
     raw.cacheHitRate !== undefined && raw.cacheHitRate !== null
       ? normalizeCacheHitRateValue(raw.cacheHitRate)
@@ -698,7 +900,7 @@ export function normalizeBackendUsageCallLog(
     id: raw.id,
     timestamp,
     provider: normalizeUsageProviderKey(raw.provider),
-    model: raw.model,
+    model: unwrapUsageModelSlug(raw.model) || raw.model,
     threadId: raw.threadId ?? undefined,
     turnId: raw.turnId ?? undefined,
     ttftMs,
@@ -727,7 +929,14 @@ export function mergeUsageCallLogs(
 ): readonly UsageCallLogRecord[] {
   const byId = new Map<string, UsageCallLogRecord>();
   for (const log of localLogs) {
-    byId.set(log.id, log);
+    const clampedTtftMs = clampTtftToDuration(log.ttftMs, log.durationMs);
+    const cleanedModel = unwrapUsageModelSlug(log.model) || log.model;
+    byId.set(
+      log.id,
+      clampedTtftMs === log.ttftMs && cleanedModel === log.model
+        ? log
+        : { ...log, ttftMs: clampedTtftMs, model: cleanedModel },
+    );
   }
   if (backendLogs && backendLogs.length > 0) {
     for (const raw of backendLogs) {
@@ -735,8 +944,11 @@ export function mergeUsageCallLogs(
       const normalized = normalizeBackendUsageCallLog(raw);
       const existing = byId.get(normalized.id);
       if (existing) {
-        const mergedTtftMs = existing.ttftMs ?? normalized.ttftMs;
         const mergedDurationMs = existing.durationMs ?? normalized.durationMs;
+        const mergedTtftMs = clampTtftToDuration(
+          existing.ttftMs ?? normalized.ttftMs,
+          mergedDurationMs,
+        );
         const mergedOutputTokens = Math.max(existing.outputTokens, normalized.outputTokens);
         const mergedTps =
           existing.tps ??
@@ -760,9 +972,13 @@ export function mergeUsageCallLogs(
         if (
           candidate.source === "live" &&
           candidate.provider === normalized.provider &&
-          candidate.model === normalized.model &&
           candidate.outputTokens === normalized.outputTokens &&
-          Math.abs(candidate.timestamp - normalized.timestamp) <= 15_000
+          Math.abs(candidate.timestamp - normalized.timestamp) <= 15_000 &&
+          (unwrapUsageModelSlug(candidate.model) === unwrapUsageModelSlug(normalized.model) ||
+            (candidate.outputTokens > 0 &&
+              candidate.inputTokens === normalized.inputTokens &&
+              candidate.cachedInputTokens === normalized.cachedInputTokens &&
+              candidate.totalTokens === normalized.totalTokens))
         ) {
           matchedKey = key;
           break;
@@ -770,8 +986,11 @@ export function mergeUsageCallLogs(
       }
       if (matchedKey !== null) {
         const live = byId.get(matchedKey)!;
-        const mergedTtftMs = live.ttftMs ?? normalized.ttftMs;
         const mergedDurationMs = live.durationMs ?? normalized.durationMs;
+        const mergedTtftMs = clampTtftToDuration(
+          live.ttftMs ?? normalized.ttftMs,
+          mergedDurationMs,
+        );
         const mergedOutputTokens = Math.max(live.outputTokens, normalized.outputTokens);
         const mergedTps =
           live.tps ??
@@ -868,7 +1087,7 @@ export function useUsageCallLogs(
     () => getTelemetryState().logs,
     () => SERVER_EMPTY_LOGS,
   );
-  return useMemo(() => mergeUsageCallLogs(localLogs, backendLogs), [backendLogs, localLogs]);
+  return mergeUsageCallLogs(localLogs, backendLogs);
 }
 
 /** Subscribe to real-time per-thread telemetry (for composer footer bar & live turn readouts). */

@@ -244,7 +244,7 @@ export function WallpaperSettingsView({
   const renderTabReset = (targetTab: WallpaperSettingsTabId) => {
     const token = `tab:${targetTab}`;
     return (
-      <div className="pmx-wp-section">
+      <section className="pmx-wp-glass-card pmx-wp-reset-card">
         <div className="pmx-wp-section-head">
           <span className="pmx-wp-section-reset-label">重置本页</span>
         </div>
@@ -270,7 +270,7 @@ export function WallpaperSettingsView({
           }}
           onCancel={() => setArmedConfirm(null)}
         />
-      </div>
+      </section>
     );
   };
 
@@ -349,114 +349,121 @@ export function WallpaperSettingsView({
         </div>
       </div>
 
-      {/* ── Tab 1: 壁纸库 ── */}
-      {tab === "library" ? (
-        <div className="pmx-wp-tabpanel">
-          {/* 当前壁纸黑胶大卡 */}
-          <div className="pmx-wp-current-card">
-            <VinylRecord
-              cover={current?.previewUrl}
-              title={current?.title}
-              playing={playbackLive}
-              size="sm"
+      {/* ── Tab 1: 壁纸库（保持挂载避免切页重挂载 50+ 缩略图引发黑屏闪烁）── */}
+      <div
+        className="pmx-wp-tabpanel"
+        data-pmx-settings-tab="library"
+        hidden={tab !== "library"}
+      >
+        {/* 当前壁纸黑胶大卡 */}
+        <section className="pmx-wp-glass-card pmx-wp-current-card">
+          <VinylRecord
+            cover={current?.previewUrl}
+            title={current?.title}
+            playing={playbackLive}
+            size="sm"
+          />
+          <div className="pmx-wp-current-card__info">
+            <div className="pmx-wp-current-card__title">
+              {current ? current.title : "尚未选择壁纸"}
+            </div>
+            <div className="pmx-wp-current-card__meta">
+              {current
+                ? `${CARD_TYPE_LABELS[current.type]} · 来源：${
+                    current.source === "steam"
+                      ? "Steam 创意工坊"
+                      : current.source === "custom"
+                        ? "本地导入"
+                        : "内置动态场景"
+                  }${current.width && current.height ? ` · ${current.width}×${current.height}` : ""} · ${
+                    playbackLive ? "播放中" : "已暂停"
+                  }`
+                : "从下方网格选择壁纸或导入本地图片/视频"}
+            </div>
+            {snap.videoError ? <div className="pmx-wp-error">{snap.videoError}</div> : null}
+          </div>
+          <div className="pmx-wp-current-card__actions">
+            <button
+              type="button"
+              className="pmx-wp-btn pmx-wp-btn--primary"
+              disabled={!current}
+              onClick={() => store.togglePlay()}
+            >
+              {playbackLive ? "暂停" : "播放"}
+            </button>
+            {current && (current.type === "scene" || current.type === "web" || (current.userProperties?.length ?? 0) > 0) ? (
+              <button
+                type="button"
+                className={"pmx-wp-btn" + (showInlineProps ? " is-on" : "")}
+                onClick={() => setShowInlineProps((v) => !v)}
+              >
+                {showInlineProps ? "收起属性" : "壁纸属性"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="pmx-wp-btn"
+              disabled={!current}
+              onClick={() => store.clearWallpaper()}
+            >
+              清除
+            </button>
+          </div>
+        </section>
+
+        {showInlineProps && current ? (
+          <UserPropsDrillPanel store={store} adapter={adapter} />
+        ) : null}
+
+        {/* 本地图片 / 视频上传导入栏 */}
+        <section className="pmx-wp-glass-card pmx-wp-uploads">
+          <div className="pmx-wp-row">
+            <CtlText
+              label="导入本地图片 / 视频壁纸"
+              hint="支持常见图片与视频格式，导入后自动保存到本地壁纸库。"
             />
-            <div className="pmx-wp-current-card__info">
-              <div className="pmx-wp-current-card__title">
-                {current ? current.title : "尚未选择壁纸"}
-              </div>
-              <div className="pmx-wp-current-card__meta">
-                {current
-                  ? `${CARD_TYPE_LABELS[current.type]} · 来源：${
-                      current.source === "steam"
-                        ? "Steam 创意工坊"
-                        : current.source === "custom"
-                          ? "本地导入"
-                          : "内置动态场景"
-                    }${current.width && current.height ? ` · ${current.width}×${current.height}` : ""} · ${
-                      playbackLive ? "播放中" : "已暂停"
-                    }`
-                  : "从下方网格选择壁纸或导入本地图片/视频"}
-              </div>
-            </div>
-            <div className="pmx-wp-current-card__actions">
-              <button
-                type="button"
-                className="pmx-wp-btn pmx-wp-btn--primary"
-                disabled={!current}
-                onClick={() => store.togglePlay()}
-              >
-                {playbackLive ? "暂停" : "播放"}
-              </button>
-              {current && (current.type === "scene" || current.type === "web" || (current.userProperties?.length ?? 0) > 0) ? (
-                <button
-                  type="button"
-                  className={"pmx-wp-btn" + (showInlineProps ? " is-on" : "")}
-                  onClick={() => setShowInlineProps((v) => !v)}
-                >
-                  {showInlineProps ? "收起属性" : "壁纸属性"}
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="pmx-wp-btn"
-                disabled={!current}
-                onClick={() => store.clearWallpaper()}
-              >
-                清除
-              </button>
-            </div>
+            <button
+              type="button"
+              className="pmx-wp-btn"
+              onClick={() => {
+                if (adapter?.pickLocalFiles) {
+                  void adapter.pickLocalFiles().then((added) => {
+                    if (added.length > 0) {
+                      store.setWallpapers([...wallpapers, ...added]);
+                      store.selectWallpaper(added[0]!.id);
+                      setImportStatus(`已导入 ${added.length} 个本地壁纸`);
+                    }
+                  });
+                } else {
+                  fileInputRef.current?.click();
+                }
+              }}
+            >
+              选择本地文件…
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.mp4,.webm,.mov,image/*,video/*"
+              style={{ display: "none" }}
+              onChange={(e) => void handleLocalFileChange(e)}
+            />
           </div>
+          {importStatus ? <div className="pmx-wp-note">{importStatus}</div> : null}
+        </section>
 
-          {showInlineProps && current ? (
-            <UserPropsDrillPanel store={store} adapter={adapter} />
-          ) : null}
-
-          {/* 本地图片 / 视频上传导入栏 */}
-          <div className="pmx-wp-uploads">
-            <div className="pmx-wp-row">
-              <CtlText
-                label="导入本地图片 / 视频壁纸"
-                hint="支持常见图片与视频格式，导入后自动保存到本地壁纸库。"
-              />
-              <button
-                type="button"
-                className="pmx-wp-btn"
-                onClick={() => {
-                  if (adapter?.pickLocalFiles) {
-                    void adapter.pickLocalFiles().then((added) => {
-                      if (added.length > 0) {
-                        store.setWallpapers([...wallpapers, ...added]);
-                        store.selectWallpaper(added[0]!.id);
-                        setImportStatus(`已导入 ${added.length} 个本地壁纸`);
-                      }
-                    });
-                  } else {
-                    fileInputRef.current?.click();
-                  }
-                }}
-              >
-                选择本地文件…
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.mp4,.webm,.mov,image/*,video/*"
-                style={{ display: "none" }}
-                onChange={(e) => void handleLocalFileChange(e)}
-              />
-            </div>
-            {importStatus ? <div className="pmx-wp-note">{importStatus}</div> : null}
-          </div>
-
+        {/* 壁纸库筛选与 16:9 网格卡片 */}
+        <section className="pmx-wp-glass-card pmx-wp-library-card">
           {/* 工具栏 + 批量管理 */}
           <div className="pmx-wp-row">
+            <span className="pmx-wp-section-label">全部壁纸</span>
             <span className="pmx-wp-hint">
-              {visibleList.length} 个可播放壁纸 · 点击卡片即刻切换
+              {visibleList.length} 个可播放 · 点击卡片即刻切换
             </span>
             <button
               type="button"
-              className={"pmx-wp-btn" + (batchMode ? " is-on" : "")}
+              className={"pmx-wp-btn pmx-wp-btn--mini pmx-wp-library-batch-btn" + (batchMode ? " is-on" : "")}
               disabled={visibleList.length === 0}
               onClick={() => {
                 setBatchMode((prev) => !prev);
@@ -615,10 +622,7 @@ export function WallpaperSettingsView({
                     }
                     role="button"
                     tabIndex={0}
-                    title={w.title}
-                    onPointerOver={() => {
-                      if (w.type === "video" && w.mediaUrl) schedulePrewarmVideo(w.mediaUrl, false);
-                    }}
+                    aria-label={w.title}
                     onPointerDown={() => {
                       if (w.type === "video" && w.mediaUrl) schedulePrewarmVideo(w.mediaUrl, true);
                     }}
@@ -633,9 +637,7 @@ export function WallpaperSettingsView({
                         src={w.previewUrl}
                         alt={w.title}
                         loading="lazy"
-                        onLoad={(e) => {
-                          e.currentTarget.style.opacity = "1";
-                        }}
+                        decoding="async"
                       />
                     ) : (
                       <span className="pmx-wp-card__placeholder">无预览</span>
@@ -664,13 +666,13 @@ export function WallpaperSettingsView({
               })
             )}
           </div>
-          {renderTabReset("library")}
-        </div>
-      ) : null}
+        </section>
+        {renderTabReset("library")}
+      </div>
 
       {/* ── Tab 2: 画面与播放（100% 共享 PlaybackSections）── */}
       {tab === "playback" ? (
-        <div className="pmx-wp-tabpanel">
+        <div className="pmx-wp-tabpanel" data-pmx-settings-tab="playback">
           <PlaybackEffectsSection
             store={store}
             surface="settings"
@@ -681,10 +683,10 @@ export function WallpaperSettingsView({
         </div>
       ) : null}
 
-      {/* ── Tab 4: 轮播与隐藏 ── */}
+      {/* ── Tab 3: 轮播与隐藏 ── */}
       {tab === "rotation" ? (
-        <div className="pmx-wp-tabpanel">
-          <div className="pmx-wp-section">
+        <div className="pmx-wp-tabpanel" data-pmx-settings-tab="rotation">
+          <section className="pmx-wp-glass-card">
             <SectionHead label="自动轮播分组" />
             <SwitchRow
               label="启用自动轮播"
@@ -858,10 +860,10 @@ export function WallpaperSettingsView({
                 </div>
               </div>
             ) : null}
-          </div>
+          </section>
 
           {/* 已隐藏壁纸恢复 */}
-          <div className="pmx-wp-section">
+          <section className="pmx-wp-glass-card">
             <SectionHead label={`已隐藏壁纸（${hiddenList.length}）`} />
             {hiddenList.length === 0 ? (
               <span className="pmx-wp-hint">没有已隐藏的壁纸</span>
@@ -897,9 +899,7 @@ export function WallpaperSettingsView({
                           src={w.previewUrl}
                           alt={w.title}
                           loading="lazy"
-                          onLoad={(e) => {
-                            e.currentTarget.style.opacity = "1";
-                          }}
+                          decoding="async"
                         />
                       ) : (
                         <span className="pmx-wp-card__placeholder">无预览</span>
@@ -919,17 +919,17 @@ export function WallpaperSettingsView({
                 </div>
               </>
             )}
-          </div>
+          </section>
           {renderTabReset("rotation")}
         </div>
       ) : null}
 
-      {/* ── Tab 5: 系统与目录 ── */}
+      {/* ── Tab 4: 系统与目录 ── */}
       {tab === "system" ? (
-        <div className="pmx-wp-tabpanel">
-          <div className="pmx-wp-section">
-            <SectionHead label="壁纸来源目录" />
-            <div className="pmx-wp-uploads">
+        <div className="pmx-wp-tabpanel" data-pmx-settings-tab="system">
+          <section className="pmx-wp-glass-card">
+            <SectionHead label="壁纸来源目录" hint="Steam 431960 & 本地" />
+            <div className="pmx-wp-dir-stack">
               <div className="pmx-wp-row">
                 <span className="pmx-wp-label">Steam 根目录</span>
                 <input
@@ -1009,14 +1009,14 @@ export function WallpaperSettingsView({
                 </button>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="pmx-wp-section">
+          <section className="pmx-wp-glass-card">
             <SectionHead label="浏览与省电偏好" />
             <SwitchRow
               label="紧凑 CD 架网格"
               checked={settings.pickerLayout === "classic"}
-              hint={settings.pickerLayout === "classic" ? "层叠唱片架视觉风格" : "标准固定高度卡片网格"}
+              hint={settings.pickerLayout === "classic" ? "层叠唱片架视觉风格" : "标准 16:9 宽屏卡片网格"}
               onChange={(on) => store.setSetting("pickerLayout", on ? "classic" : "fixed")}
             />
             <SwitchRow
@@ -1031,9 +1031,9 @@ export function WallpaperSettingsView({
               hint="下次打开应用时保留已选壁纸但保持静态首帧"
               onChange={(on) => store.setSetting("startPaused", on)}
             />
-          </div>
+          </section>
 
-          <div className="pmx-wp-section">
+          <section className="pmx-wp-glass-card pmx-wp-reset-card">
             <div className="pmx-wp-section-head">
               <span className="pmx-wp-section-reset-label">重置全部壁纸与播放设置</span>
             </div>
@@ -1062,7 +1062,7 @@ export function WallpaperSettingsView({
               }}
               onCancel={() => setArmedConfirm(null)}
             />
-          </div>
+          </section>
         </div>
       ) : null}
     </div>

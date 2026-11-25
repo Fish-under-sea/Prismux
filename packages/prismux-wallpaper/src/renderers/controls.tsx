@@ -19,6 +19,7 @@ export function CtlText({ label, hint, tooltip, onDoubleClick }: CtlTextProps) {
 
 export interface SectionHeadProps {
   label: string;
+  hint?: string;
   open?: boolean;
   onToggle?: () => void;
   resetModule?: WallpaperModuleResetKey;
@@ -28,6 +29,7 @@ export interface SectionHeadProps {
 
 export function SectionHead({
   label,
+  hint,
   open,
   onToggle,
   resetModule,
@@ -57,6 +59,7 @@ export function SectionHead({
       title={tooltip}
     >
       <span className="pmx-wp-section-label">{label}</span>
+      {hint ? <span className="pmx-wp-section-hint">{hint}</span> : null}
       {resetModule && onResetModule ? (
         <button
           type="button"
@@ -140,11 +143,12 @@ export function SliderRow({
         aria-label={label}
         onChange={(e) => onChange(Number(e.target.value))}
       />
-      <span className="pmx-wp-value">
+      <span className={"pmx-wp-value" + (numberEdit ? " pmx-wp-value--editable" : "")}>
         {numberEdit ? (
           <>
             <input
               type="number"
+              inputMode="numeric"
               className="pmx-wp-value-input"
               min={min}
               max={max}

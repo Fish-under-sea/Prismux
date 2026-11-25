@@ -1,14 +1,26 @@
 import { useAtomValue } from "@effect/atom-react";
+import { providerInstanceInitials } from "@prismux/client-runtime/state/provider-instance-display";
+import {
+  ProviderDriverKind,
+  officialAcpRegistryIconUrlForAgentId,
+  resolveOfficialAcpRegistryIconUrl,
+} from "@prismux/core-contracts";
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useId, useState } from "react";
-import {
-  resolveOfficialAcpRegistryIconUrl,
-  officialAcpRegistryIconUrlForAgentId,
-} from "@prismux/core-contracts";
 
 import { cn } from "../../lib/utils";
-import { ACPRegistryIcon } from "../Icons";
+import {
+  type AcpAgentBrandKey,
+  acpBrandKeyToAgentBrandId,
+  getAcpAgentBrandAccentColor,
+  renderBundledBrandSvg,
+  resolveAcpAgentBrandKey,
+  stripUuidNoise,
+} from "../../prismux/agentBrand";
+import { AntigravityIcon, ClaudeAI, OpenAI } from "../Icons";
+import { ProviderPackageIcon } from "../chat/ProviderPackageIcon";
+import { providerClients } from "./providerDriverMeta";
 
 const ACP_REGISTRY_ICON_CACHE = "t3-acp-registry-icons-v1";
 const MAX_ICON_BYTES = 512 * 1_024;
@@ -96,16 +108,125 @@ const acpRegistryIconSourceAtom = Atom.family((iconUrl: string) =>
 
 const NO_ICON_SOURCE_ATOM = Atom.make(AsyncResult.initial<string>());
 
+function resolveCustomAcpMonogram(input: {
+  readonly displayName?: string | null | undefined;
+  readonly agentId?: string | null | undefined;
+  readonly instanceId?: string | null | undefined;
+}): string {
+  const candidates = [input.displayName, input.agentId, input.instanceId];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const cleaned = stripUuidNoise(
+      candidate.trim().replace(/^(?:acp[-_]?registry|local)[:/_-]+/i, ""),
+    ).trim();
+    if (!cleaned) continue;
+    const initials = providerInstanceInitials(cleaned).trim();
+    if (initials.length > 0) {
+      return initials;
+    }
+  }
+  return "AC";
+}
+
+export function BundledAcpBrandIcon({
+  brandKey,
+  className,
+}: {
+  readonly brandKey: AcpAgentBrandKey;
+  readonly className?: string;
+}) {
+  const rawId = useId();
+  const gradientPrefix = rawId.replace(/[^a-zA-Z0-9_-]/g, "");
+
+  if (brandKey === "claude") {
+    return (
+      <ClaudeAI
+        className={cn("size-full", className)}
+        data-acp-brand-icon="claude"
+        aria-hidden
+      />
+    );
+  }
+  if (brandKey === "codex") {
+    return (
+      <OpenAI
+        className={cn("size-full", className)}
+        data-acp-brand-icon="codex"
+        aria-hidden
+      />
+    );
+  }
+  if (brandKey === "antigravity") {
+    return (
+      <AntigravityIcon
+        className={cn("size-full", className)}
+        data-acp-brand-icon="antigravity"
+        aria-hidden
+      />
+    );
+  }
+  if (brandKey === "opencode") {
+    const openCodePackageIcon = providerClients.get(ProviderDriverKind.make("opencode"))?.icon;
+    if (openCodePackageIcon) {
+      return (
+        <ProviderPackageIcon
+          icon={openCodePackageIcon}
+          className={cn("size-full", className)}
+          data-acp-brand-icon="opencode"
+          aria-hidden
+        />
+      );
+    }
+  }
+  if (brandKey === "pi") {
+    const piPackageIcon = providerClients.get(ProviderDriverKind.make("pi"))?.icon;
+    if (piPackageIcon) {
+      return (
+        <ProviderPackageIcon
+          icon={piPackageIcon}
+          className={cn("size-full", className)}
+          data-acp-brand-icon="pi"
+          aria-hidden
+        />
+      );
+    }
+  }
+
+  return renderBundledBrandSvg({
+    brandId: acpBrandKeyToAgentBrandId(brandKey),
+    gradientPrefix,
+    className: cn("size-full", className),
+    dataAttributes: {
+      "data-acp-brand-icon": brandKey,
+    },
+  });
+}
+
 export function AcpRegistryAgentIcon({
   icon,
+  agentId,
+  instanceId,
+  displayName,
+  commandPath,
   className,
   fallbackClassName,
 }: {
   readonly icon: string | null;
+  readonly agentId?: string | null | undefined;
+  readonly instanceId?: string | null | undefined;
+  readonly displayName?: string | null | undefined;
+  readonly commandPath?: string | null | undefined;
   readonly className?: string;
   readonly fallbackClassName?: string;
 }) {
   const colorFilterId = useId();
+  const brandKey = resolveAcpAgentBrandKey({
+    agentId,
+    instanceId,
+    displayName,
+    commandPath,
+  });
+  const brandAccentColor = brandKey ? getAcpAgentBrandAccentColor(brandKey) : null;
   const iconUrl = resolveOfficialAcpRegistryIconUrl(icon);
   // Render only after the load pipeline resolves, so the fallback icon does
   // not flash a broken image.
@@ -118,30 +239,47 @@ export function AcpRegistryAgentIcon({
     readonly status: "loaded" | "failed";
   } | null>(null);
   const status = source !== null && image?.source === source ? image.status : "loading";
+  const monogram =
+    brandKey === null ? resolveCustomAcpMonogram({ displayName, agentId, instanceId }) : null;
 
   return (
     <span
       aria-hidden
+      data-acp-brand={brandKey ?? "custom"}
       className={cn(
-        "relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground",
+        "relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-foreground",
         className,
       )}
     >
       {/* Recolor alpha because external images cannot inherit currentColor; local SVG filters work despite
-       * CDN mask CORS restrictions. */}
+       * CDN mask CORS restrictions. Preserves brand accent pigment for colored brands and adapts monochrome
+       * marks cleanly across Light/Dark themes. */}
       <svg aria-hidden className="pointer-events-none absolute size-0" focusable="false">
         <defs>
           <filter id={colorFilterId} colorInterpolationFilters="sRGB">
-            <feFlood floodColor="currentColor" />
+            <feFlood floodColor={brandAccentColor ?? "currentColor"} />
             <feComposite in2="SourceAlpha" operator="in" />
           </filter>
         </defs>
       </svg>
       {status !== "loaded" ? (
-        <ACPRegistryIcon
-          className={cn("size-4", fallbackClassName)}
-          data-slot="acp-icon-fallback"
-        />
+        brandKey !== null ? (
+          <BundledAcpBrandIcon
+            brandKey={brandKey}
+            className={cn("size-4", fallbackClassName)}
+          />
+        ) : (
+          <span
+            data-slot="acp-icon-monogram"
+            data-acp-brand-monogram={monogram ?? "AC"}
+            className={cn(
+              "@container flex size-full items-center justify-center rounded-md border border-border/75 bg-foreground/[0.06] text-4xs font-semibold leading-none tracking-tight text-foreground/85 select-none dark:border-white/15 dark:bg-white/[0.08]",
+              fallbackClassName,
+            )}
+          >
+            {monogram}
+          </span>
+        )
       ) : null}
       {source !== null && status !== "failed" ? (
         <img

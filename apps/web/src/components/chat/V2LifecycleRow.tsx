@@ -244,6 +244,8 @@ export function SubagentElapsed({ agent }: { agent: Parameters<typeof AgentElaps
 function SubagentAvatar({
   driver,
   displayName,
+  instanceId,
+  acpRegistryAgentId,
   iconUrl,
   accentColor,
   showBadge,
@@ -253,6 +255,8 @@ function SubagentAvatar({
 }: {
   driver?: ProviderDriverKind | undefined;
   displayName?: string | undefined;
+  instanceId?: string | undefined;
+  acpRegistryAgentId?: string | undefined;
   iconUrl?: string | undefined;
   accentColor?: string | undefined;
   showBadge: boolean;
@@ -272,7 +276,9 @@ function SubagentAvatar({
         <ProviderInstanceIcon
           driverKind={driver}
           displayName={displayName ?? driver}
+          instanceId={instanceId}
           accentColor={accentColor}
+          acpRegistryAgentId={acpRegistryAgentId}
           acpRegistryIconUrl={iconUrl}
           showBadge={showBadge}
           size="compact"
@@ -342,16 +348,26 @@ export function EnvironmentSubagentAvatar({
   const anyInstanceBadge = useAtomValue(providersAtom, (providers) =>
     hasInstanceBadge(entries(providers)),
   );
-  const iconUrl = useAtomValue(
+  const acpRegistryAgentId = useAtomValue(
     providersAtom,
     (providers) =>
-      providers?.find((provider) => provider.instanceId === providerInstanceId)?.iconUrl,
+      entries(providers).find((entry) => entry.instanceId === providerInstanceId)
+        ?.acpRegistryAgentId,
   );
+  const iconUrl = useAtomValue(providersAtom, (providers) => {
+    const entry = entries(providers).find((candidate) => candidate.instanceId === providerInstanceId);
+    return (
+      entry?.acpRegistryIconUrl ??
+      providers?.find((provider) => provider.instanceId === providerInstanceId)?.iconUrl
+    );
+  });
   return (
     <SubagentAvatar
       {...props}
       driver={providerDriver ?? (remote === undefined ? driver : undefined)}
       displayName={displayName}
+      instanceId={providerInstanceId}
+      acpRegistryAgentId={acpRegistryAgentId}
       iconUrl={iconUrl}
       accentColor={accentColor}
       showBadge={showBadge}

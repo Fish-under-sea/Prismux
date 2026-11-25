@@ -5,7 +5,13 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { useAtomValue } from "@effect/atom-react";
-import { ArrowUpCircleIcon, CheckIcon, ChevronDownIcon, ExternalLinkIcon } from "lucide-react";
+import {
+  ArrowUpCircleIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ExternalLinkIcon,
+} from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import type { MessageResolver } from "../../i18n/messages";
@@ -32,7 +38,6 @@ import {
 } from "../../hooks/useSettings";
 
 import { cn } from "../../lib/utils";
-import { normalizeProviderAccentColor } from "../../providerInstances";
 import { managedInstanceLocks, useManagedPolicy } from "../../state/managedPolicy";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
@@ -43,6 +48,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { Input } from "../ui/input";
 import { RadioGroup } from "../ui/radio-group";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { providerClients } from "./providerDriverMeta";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { SettingsGroup } from "./SettingsGroup";
@@ -52,10 +58,16 @@ import { WizardPanel, WizardPopup, WizardHeader, WizardFooter } from "../ui/wiza
 import {
   ADD_PROVIDER_WIZARD_STEPS,
   ACP_REGISTRY_WIZARD_STEPS,
+  DSH_FEATURED_PRESET_INSERT_INDEX,
+  DSH_FEATURED_PRESET_LABEL,
   LOCAL_ACP_WIZARD_STEPS,
+  buildNewProviderInstanceConfig,
   filterSelectableProviderDrivers,
+  orderFeaturedProviderDrivers,
   resolveAcpRegistryWizardNavigation,
   resolveWizardNavigation,
+  selectPreferredLiveProvidersByDriver,
+  shouldDefaultExpandAdvancedConfig,
   updateProviderIdentityDraft,
   type ProviderIdentityDraft,
   type WizardNavigation,
@@ -80,6 +92,7 @@ import { AgentInstallPrompt } from "./AgentInstallPrompt";
 import {
   getProviderVersionAdvisoryPresentation,
   getProviderVersionLabel,
+  isProviderConfirmedNotInstalled,
 } from "./providerStatus";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 
@@ -90,7 +103,9 @@ const DSH_FEATURED_PRESET_VALUE = "preset:dsh";
 
 const DEFAULT_DRIVER_OPTION = providerClients.definitions[0]!;
 const DRIVER_OPTIONS = filterSelectableProviderDrivers(providerClients.definitions);
-const FEATURED_DRIVER_OPTIONS = DRIVER_OPTIONS.filter((option) => option.featured !== false);
+const FEATURED_DRIVER_OPTIONS = orderFeaturedProviderDrivers(
+  DRIVER_OPTIONS.filter((option) => option.featured !== false),
+);
 const MORE_DRIVER_OPTIONS = DRIVER_OPTIONS.filter((option) => option.featured === false);
 const EMPTY_CONFIG_DRAFT: Record<string, unknown> = {};
 function validateInstanceId(
@@ -144,7 +159,7 @@ function ProviderOptionGrid({
     : -1;
   const renderOptionCard = (option: ProviderClientDefinition) => {
     const liveProvider = liveProvidersByDriver?.get(option.driverKind);
-    const isNotInstalled = liveProvider !== undefined && !liveProvider.installed;
+    const isNotInstalled = isProviderConfirmedNotInstalled(liveProvider);
     const safeHomepageUrl = resolveSafeAgentHomepageUrl({
       driver: option.driverKind,
       displayName: option.label,
@@ -193,18 +208,24 @@ function ProviderOptionGrid({
             {option.label}
           </span>
           {versionAdvisory && updateCmd ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onCopyUpdateCommand?.(updateCmd, option.label);
-              }}
-              title={updateTooltip}
-              className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/35 bg-primary/10 px-1.5 text-2xs font-medium text-primary hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <ArrowUpCircleIcon className="size-3 shrink-0" />
-              <span className="tabular-nums">{latestVerLabel ?? gt("Update")}</span>
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onCopyUpdateCommand?.(updateCmd, option.label);
+                    }}
+                    className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/35 bg-primary/10 px-1.5 text-2xs font-medium text-primary hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  >
+                    <ArrowUpCircleIcon className="size-3 shrink-0" />
+                    <span className="tabular-nums">{latestVerLabel ?? gt("Update")}</span>
+                  </button>
+                }
+              />
+              <TooltipPopup side="top">{updateTooltip}</TooltipPopup>
+            </Tooltip>
           ) : null}
           <RadioPrimitive.Indicator
             className="grid size-5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground"
@@ -230,7 +251,7 @@ function ProviderOptionGrid({
                   event.stopPropagation();
                   openSafeExternalHttpsFromAnchor(event);
                 }}
-                className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 <span>{gt("Install guide")}</span>
                 <ExternalLinkIcon className="size-3 shrink-0" />
@@ -312,12 +333,7 @@ export function AddProviderInstanceDialog({
   const m = useMessages();
   const settings = useEnvironmentSettings(environmentId);
   const liveProviders = useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? [];
-  const liveProvidersByDriver = new Map<string, (typeof liveProviders)[number]>();
-  for (const provider of liveProviders) {
-    if (!liveProvidersByDriver.has(provider.driver)) {
-      liveProvidersByDriver.set(provider.driver, provider);
-    }
-  }
+  const liveProvidersByDriver = selectPreferredLiveProvidersByDriver(liveProviders);
   const { copyToClipboard: copyCliUpdateCommand } = useCopyToClipboard<{ label: string }>({
     onCopy: ({ label: providerLabel }) => {
       toastManager.add({
@@ -357,6 +373,7 @@ export function AddProviderInstanceDialog({
   >([]);
   const [isManualAcpConfiguration, setIsManualAcpConfiguration] = useState(false);
   const [showMoreProviders, setShowMoreProviders] = useState(initialShowMoreProviders);
+  const [advancedConfigOpen, setAdvancedConfigOpen] = useState(false);
   const [configByDriver, setConfigByDriver] = useState<Record<string, Record<string, unknown>>>({});
   const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -420,7 +437,7 @@ export function AddProviderInstanceDialog({
   const wizardStepSummaries = isAcpRegistry
     ? ([
         selectedFeaturedPreset === "dsh"
-          ? DSH_LOCAL_ACP_PRESET.label
+          ? DSH_FEATURED_PRESET_LABEL
           : isLocalAcp
             ? gt("Local ACP command")
             : (selectedAcp?.name ?? (manualAgentId || null)),
@@ -442,13 +459,19 @@ export function AddProviderInstanceDialog({
   const handleSelectDshLocalAcpPreset = () => {
     const nextInstanceId = deriveAvailableInstanceId(
       () => DSH_LOCAL_ACP_PRESET.instanceId,
-      DSH_LOCAL_ACP_PRESET.label,
+      DSH_FEATURED_PRESET_LABEL,
       existingIds,
     );
     setSelectedFeaturedPreset("dsh");
     setDriver(ACP_REGISTRY_DRIVER_KIND);
     setSelectedAcp(null);
     setIsManualAcpConfiguration(true);
+    setAdvancedConfigOpen(
+      shouldDefaultExpandAdvancedConfig({
+        isLocalAcp: true,
+        selectedFeaturedPreset: "dsh",
+      }),
+    );
     setConfigByDriver((existing) => ({
       ...existing,
       [ACP_REGISTRY_DRIVER_KIND]: {
@@ -460,7 +483,7 @@ export function AddProviderInstanceDialog({
     }));
     setIdentityByDriver((existing) =>
       updateProviderIdentityDraft(existing, ACP_REGISTRY_DRIVER_KIND, {
-        label: DSH_LOCAL_ACP_PRESET.label,
+        label: DSH_FEATURED_PRESET_LABEL,
         accentColor: "",
         instanceIdOverride: nextInstanceId,
       }),
@@ -476,6 +499,12 @@ export function AddProviderInstanceDialog({
     setSelectedFeaturedPreset(null);
     setDriver(ProviderDriverKind.make(value));
     setIsManualAcpConfiguration(false);
+    setAdvancedConfigOpen(
+      shouldDefaultExpandAdvancedConfig({
+        isLocalAcp: false,
+        selectedFeaturedPreset: null,
+      }),
+    );
     setHasAttemptedSubmit(false);
   };
   const setIdentityDraft = (update: Partial<ProviderIdentityDraft>) => {
@@ -550,6 +579,7 @@ export function AddProviderInstanceDialog({
     setDriver(ACP_REGISTRY_DRIVER_KIND);
     setSelectedAcp(null);
     setIsManualAcpConfiguration(true);
+    setAdvancedConfigOpen(true);
     setConfigByDriver((existing) => {
       const next = { ...existing };
       delete next[ACP_REGISTRY_DRIVER_KIND];
@@ -569,6 +599,12 @@ export function AddProviderInstanceDialog({
     setDriver(ACP_REGISTRY_DRIVER_KIND);
     setSelectedAcp(null);
     setIsManualAcpConfiguration(true);
+    setAdvancedConfigOpen(
+      shouldDefaultExpandAdvancedConfig({
+        isLocalAcp: true,
+        selectedFeaturedPreset: null,
+      }),
+    );
     setConfigByDriver((existing) => ({
       ...existing,
       [ACP_REGISTRY_DRIVER_KIND]: { source: "local", commandArgs: [] },
@@ -585,6 +621,10 @@ export function AddProviderInstanceDialog({
 
   // A policy that owns this driver's launch settings also rules out ChatGPT's own runtime.
   const driverLocks = managedInstanceLocks(managedPolicy, driver, m);
+  const canQuickAddOnCurrentStep =
+    canManageProviders &&
+    instanceIdError === null &&
+    (!isAcpRegistry || (isLocalAcp && acpSelectionError === null));
 
   const handleSave = async () => {
     if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
@@ -592,21 +632,15 @@ export function AddProviderInstanceDialog({
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null || (isAcpRegistry && acpSelectionError !== null)) return;
 
-    const config =
-      driver === "codex"
-        ? { ...configByDriver[driver], setupMode: "existing" }
-        : (configByDriver[driver] ?? {});
-    const hasConfig = Object.keys(config).length > 0;
-    const normalizedAccentColor = normalizeProviderAccentColor(accentColor);
-
-    const nextInstance: ProviderInstanceConfig = {
+    const nextInstance: ProviderInstanceConfig = buildNewProviderInstanceConfig({
       driver,
-      enabled: true,
-      ...(label.trim().length > 0 ? { displayName: label.trim() } : {}),
-      ...(normalizedAccentColor ? { accentColor: normalizedAccentColor } : {}),
-      ...(hasConfig ? { config } : {}),
-      ...(isLocalAcp && localEnvironment.length > 0 ? { environment: localEnvironment } : {}),
-    };
+      label,
+      accentColor,
+      configDraft: configByDriver[driver],
+      isLocalAcp,
+      selectedFeaturedPreset,
+      localEnvironment,
+    });
     const brandedId = ProviderInstanceId.make(instanceId);
     setIsSaving(true);
     const result = await persistProviderInstance({
@@ -714,9 +748,9 @@ export function AddProviderInstanceDialog({
                   featuredPresetOption={
                     acpRegistryAllowed
                       ? {
-                          insertAtIndex: 2,
+                          insertAtIndex: DSH_FEATURED_PRESET_INSERT_INDEX,
                           value: DSH_FEATURED_PRESET_VALUE,
-                          label: DSH_LOCAL_ACP_PRESET.label,
+                          label: DSH_FEATURED_PRESET_LABEL,
                           commandBadge: `${DSH_LOCAL_ACP_PRESET.command} ${DSH_LOCAL_ACP_PRESET.args.join(" ")}`,
                           icon: <DshIcon className="size-4 shrink-0" />,
                         }
@@ -726,7 +760,12 @@ export function AddProviderInstanceDialog({
                 />
                 {(() => {
                   const selectedLive = liveProvidersByDriver.get(driver);
-                  if (!selectedLive || selectedLive.installed) return null;
+                  if (
+                    selectedFeaturedPreset !== null ||
+                    !selectedLive ||
+                    !isProviderConfirmedNotInstalled(selectedLive)
+                  )
+                    return null;
                   const activeOption = providerClients.definitions.find(
                     (option) => option.driverKind === driver,
                   );
@@ -814,24 +853,61 @@ export function AddProviderInstanceDialog({
                               <T>Search registry</T>
                             </Button>
                           </div>
-                          <SettingsGroup variant="plain">
-                            <ProviderSettingsForm
-                              definition={driverOption}
-                              value={configDraft}
-                              idPrefix="add-provider-acpRegistry-manual"
-                              variant="settings"
-                              onChange={setConfigDraft}
-                              environmentId={environmentId}
-                            />
-                            {isLocalAcp ? (
-                              <ProviderEnvironmentSection
-                                environment={localEnvironment}
-                                onChange={setLocalEnvironment}
-                                secretSources={secretSources}
+                          {selectedFeaturedPreset === "dsh" ? (
+                            <div className="rounded-lg border border-border/60">
+                              <Collapsible
+                                open={advancedConfigOpen}
+                                onOpenChange={setAdvancedConfigOpen}
+                              >
+                                <CollapsibleTrigger className="group flex min-h-10 w-full items-center gap-1.5 rounded-lg px-3 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-panel-open:rounded-b-none sm:px-4">
+                                  <ChevronRightIcon
+                                    aria-hidden
+                                    className="size-3.5 shrink-0 transition-transform duration-150 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+                                  />
+                                  <T>Advanced</T>
+                                </CollapsibleTrigger>
+                                <CollapsiblePanel animate={false}>
+                                  <div className="border-t border-border/50">
+                                    <SettingsGroup variant="plain">
+                                      <ProviderSettingsForm
+                                        definition={driverOption}
+                                        value={configDraft}
+                                        idPrefix="add-provider-acpRegistry-manual"
+                                        variant="settings"
+                                        onChange={setConfigDraft}
+                                        environmentId={environmentId}
+                                      />
+                                      <ProviderEnvironmentSection
+                                        environment={localEnvironment}
+                                        onChange={setLocalEnvironment}
+                                        secretSources={secretSources}
+                                        environmentId={environmentId}
+                                      />
+                                    </SettingsGroup>
+                                  </div>
+                                </CollapsiblePanel>
+                              </Collapsible>
+                            </div>
+                          ) : (
+                            <SettingsGroup variant="plain">
+                              <ProviderSettingsForm
+                                definition={driverOption}
+                                value={configDraft}
+                                idPrefix="add-provider-acpRegistry-manual"
+                                variant="settings"
+                                onChange={setConfigDraft}
                                 environmentId={environmentId}
                               />
-                            ) : null}
-                          </SettingsGroup>
+                              {isLocalAcp ? (
+                                <ProviderEnvironmentSection
+                                  environment={localEnvironment}
+                                  onChange={setLocalEnvironment}
+                                  secretSources={secretSources}
+                                  environmentId={environmentId}
+                                />
+                              ) : null}
+                            </SettingsGroup>
+                          )}
                           {isAcpRegistry && hasAttemptedSubmit && acpSelectionError ? (
                             <p className="text-2xs text-destructive">{acpSelectionError}</p>
                           ) : null}
@@ -981,20 +1057,77 @@ export function AddProviderInstanceDialog({
                 />
               </SettingsGroup>
 
+              {isLocalAcp && selectedFeaturedPreset === "dsh" && wizardStep === identityStep ? (
+                <div className="mt-4 rounded-lg border border-border/60">
+                  <Collapsible open={advancedConfigOpen} onOpenChange={setAdvancedConfigOpen}>
+                    <CollapsibleTrigger className="group flex min-h-10 w-full items-center gap-1.5 rounded-lg px-3 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-panel-open:rounded-b-none sm:px-4">
+                      <ChevronRightIcon
+                        aria-hidden
+                        className="size-3.5 shrink-0 transition-transform duration-150 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+                      />
+                      <T>Advanced</T>
+                    </CollapsibleTrigger>
+                    <CollapsiblePanel animate={false}>
+                      <div className="border-t border-border/50">
+                        <SettingsGroup variant="plain">
+                          <ProviderSettingsForm
+                            definition={driverOption}
+                            value={configDraft}
+                            idPrefix="add-provider-dsh-advanced"
+                            variant="settings"
+                            onChange={setConfigDraft}
+                            environmentId={environmentId}
+                          />
+                          <ProviderEnvironmentSection
+                            environment={localEnvironment}
+                            onChange={setLocalEnvironment}
+                            secretSources={secretSources}
+                            environmentId={environmentId}
+                          />
+                        </SettingsGroup>
+                      </div>
+                    </CollapsiblePanel>
+                  </Collapsible>
+                </div>
+              ) : null}
+
               {!isAcpRegistry && driverSettingsFields.length > 0 ? (
-                <SettingsGroup variant="plain" className={cn(wizardStep !== 2 && "hidden")}>
-                  <ProviderSettingsForm
-                    definition={driverOption}
-                    value={configDraft}
-                    idPrefix={`add-provider-${driver}`}
-                    variant="settings"
-                    onChange={setConfigDraft}
-                    managed={
-                      driverLocks && { keys: driverLocks.configKeys, reason: driverLocks.reason }
-                    }
-                    environmentId={environmentId}
-                  />
-                </SettingsGroup>
+                <div className={cn("grid gap-3", wizardStep !== 2 && "hidden")}>
+                  <p className="text-sm text-muted-foreground">
+                    <T>This driver has no required configuration. You can add the instance now.</T>
+                  </p>
+                  <div className="rounded-lg border border-border/60">
+                    <Collapsible open={advancedConfigOpen} onOpenChange={setAdvancedConfigOpen}>
+                      <CollapsibleTrigger className="group flex min-h-10 w-full items-center gap-1.5 rounded-lg px-3 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-panel-open:rounded-b-none sm:px-4">
+                        <ChevronRightIcon
+                          aria-hidden
+                          className="size-3.5 shrink-0 transition-transform duration-150 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+                        />
+                        <T>Advanced</T>
+                      </CollapsibleTrigger>
+                      <CollapsiblePanel animate={false}>
+                        <div className="border-t border-border/50">
+                          <SettingsGroup variant="plain">
+                            <ProviderSettingsForm
+                              definition={driverOption}
+                              value={configDraft}
+                              idPrefix={`add-provider-${driver}`}
+                              variant="settings"
+                              onChange={setConfigDraft}
+                              managed={
+                                driverLocks && {
+                                  keys: driverLocks.configKeys,
+                                  reason: driverLocks.reason,
+                                }
+                              }
+                              environmentId={environmentId}
+                            />
+                          </SettingsGroup>
+                        </div>
+                      </CollapsiblePanel>
+                    </Collapsible>
+                  </div>
+                </div>
               ) : !isAcpRegistry && wizardStep === 2 ? (
                 <div className="grid gap-2">
                   <p className="text-sm text-muted-foreground">
@@ -1032,13 +1165,25 @@ export function AddProviderInstanceDialog({
                   )}
                 </>
               ) : wizardStep < (isAcpRegistry ? 1 : 2) ? (
-                <Button
-                  size="sm"
-                  disabled={isPreparingRegistryAgent}
-                  onClick={() => navigateToStep(wizardStep + 1)}
-                >
-                  <T>Next</T>
-                </Button>
+                <>
+                  <Button
+                    variant={canQuickAddOnCurrentStep ? "outline" : "default"}
+                    size="sm"
+                    disabled={isPreparingRegistryAgent}
+                    onClick={() => navigateToStep(wizardStep + 1)}
+                  >
+                    <T>Next</T>
+                  </Button>
+                  {canQuickAddOnCurrentStep ? (
+                    <Button
+                      size="sm"
+                      disabled={isSaving || isPreparingRegistryAgent}
+                      onClick={() => void handleSave()}
+                    >
+                      {isSaving ? gt("Adding...") : gt("Add instance")}
+                    </Button>
+                  ) : null}
+                </>
               ) : (
                 <Button
                   size="sm"

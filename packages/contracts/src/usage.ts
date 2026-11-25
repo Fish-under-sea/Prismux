@@ -16,6 +16,7 @@ export const UsageProviderKind = Schema.Literals([
   "antigravity",
   "pi",
   "muse",
+  "dsh",
 ]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
@@ -152,11 +153,8 @@ export const UsageSpeedKind = Schema.Literals(["standard", "fast", "ultrafast"])
 export type UsageSpeedKind = typeof UsageSpeedKind.Type;
 
 /**
- * Individual model invocation telemetry derived strictly from real local transcripts/sessions.
- * Timing fields (`ttftMs`, `durationMs`, `tps`) are `null` whenever transcripts lack real
- * request/first-token/completion timestamps. `inputTokens` is uncached prompt input tokens;
- * `cacheHitRate` is in `[0, 1]` (`cachedInputTokens / (inputTokens + cachedInputTokens + cacheCreationTokens)`),
- * or `null` when total input tokens is `0`.
+ * Per-call telemetry from real local logs; timings are `null` when absent.
+ * `inputTokens` is uncached; `cacheHitRate` is `cached / totalInput` or `null`.
  */
 export const UsageCallLog = Schema.Struct({
   id: TrimmedNonEmptyString,

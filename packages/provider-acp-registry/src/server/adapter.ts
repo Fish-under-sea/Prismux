@@ -21,6 +21,7 @@ import {
   rewriteDshUserText,
 } from "./dshAcp.ts";
 import { augmentDshAvailableCommands, discoverDshLocalSkills } from "./dshSkills.ts";
+import { makeDshTurnUsageWatcher, resolveDshHomeDir } from "./dshSessionUsage.ts";
 import { makeKimiPromptOutcomeWatch } from "./kimiAcp.ts";
 import { extractOpenCodeElicitationForm } from "./opencodeAcp.ts";
 import {
@@ -262,6 +263,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   let isDshRuntime = isDeepSeekHarnessSettings(options.settings);
   let activeWorkspaceCwd: string | undefined;
   const hostPlatform = yield* HostProcess.Platform;
+  const hostHomeDirectory = yield* HostProcess.HomeDirectory;
   const runtimeOptions = isClaude
     ? {
         ...options,
@@ -346,6 +348,17 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
         : {}),
     // glm-acp-agent is the one agent whose per-turn usage a live probe has verified.
     ...(isGlm ? { reportsPerTurnPromptUsage: true } : {}),
+    watchTurnUsage: ({ sessionId, cwd }) => {
+      if (!isDshRuntime) return Effect.undefined;
+      return Effect.sync(() => {
+        const dshHome = resolveDshHomeDir(options.environment, hostHomeDirectory, hostPlatform);
+        const watcher = makeDshTurnUsageWatcher({ dshHome, sessionId, cwd });
+        return {
+          sampleLive: () => Effect.sync(() => watcher.readTurnDelta()),
+          collectFinal: () => Effect.promise(() => watcher.collectFinal()),
+        };
+      });
+    },
     ...(watchKimiPromptOutcome === undefined
       ? {}
       : {

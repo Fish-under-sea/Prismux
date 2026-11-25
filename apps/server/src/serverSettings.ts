@@ -16,6 +16,7 @@ import {
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
+  textGeneratorForSelection,
   type ManagedPolicySummary,
   globalIdleCompaction,
   isSecretReference,
@@ -44,7 +45,13 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { writeFileStringAtomically } from "@prismux/core-shared/atomicWrite";
+import * as HostProcess from "@prismux/core-shared/HostProcess";
+import {
+  resolveAgentExecutableWithFallback,
+  SpawnExecutableResolution,
+} from "@prismux/core-shared/shell";
 import { resolveSymlinkTarget } from "@prismux/core-shared/symlink";
+import { resolveLocalAcpSpawn } from "@prismux/provider-acp-registry/server/AcpRegistrySupport";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@prismux/core-shared/Struct";
 import { fromJsonStringPretty, fromLenientJson } from "@prismux/core-shared/schemaJson";
@@ -136,12 +143,266 @@ const normalizeHiddenDefaultProviderInstances = (settings: ServerSettings): Serv
   return { ...settings, hiddenDefaultProviderInstances: deduped };
 };
 
+const DSH_INSTANCE_ID = ProviderInstanceId.make("dsh");
+const DSH_DEFAULT_DISPLAY_NAME = "DSH";
+const DSH_DEFAULT_HOMEPAGE_URL = "https://github.com/deepseek-ai/deepseek-harness";
+
+export const AUTO_SEED_PROVIDER_IDS = [
+  "codex",
+  "claudeAgent",
+  "antigravity",
+  "dsh",
+  "opencode",
+  "pi",
+] as const;
+export type AutoSeedProviderId = (typeof AUTO_SEED_PROVIDER_IDS)[number];
+
+export interface AutoSeedProviderMarker {
+  readonly seeded: ReadonlyArray<string>;
+  readonly dismissed: ReadonlyArray<string>;
+}
+
+const EMPTY_AUTO_SEED_MARKER: AutoSeedProviderMarker = {
+  seeded: [],
+  dismissed: [],
+};
+
+export function buildDefaultAutoSeededProviderInstance(
+  id: AutoSeedProviderId,
+): ProviderInstanceConfig {
+  if (id === "dsh") {
+    return {
+      driver: ProviderDriverKind.make("acpRegistry"),
+      displayName: DSH_DEFAULT_DISPLAY_NAME,
+      enabled: true,
+      config: {
+        source: "local",
+        commandPath: "dsh",
+        commandArgs: ["acp"],
+        homepageUrl: DSH_DEFAULT_HOMEPAGE_URL,
+      },
+    };
+  }
+  if (id === "antigravity") {
+    return {
+      driver: ProviderDriverKind.make("antigravity"),
+      enabled: true,
+      config: { authMethod: "local-cli" },
+    };
+  }
+  return {
+    driver: ProviderDriverKind.make(id),
+    enabled: true,
+  };
+}
+
+/**
+ * Auto-heals an existing `"dsh"` local ACP provider instance when `commandPath` or
+ * `commandArgs` is missing/empty so enabling DSH never fails with
+ * `"Local ACP provider requires an executable"`.
+ * Preserves `enabled`, custom overrides, and non-local registry agent configurations.
+ */
+export function autoHealDshProviderInstanceConfig(settings: ServerSettings): ServerSettings {
+  if (!Object.hasOwn(settings.providerInstances, DSH_INSTANCE_ID)) {
+    return settings;
+  }
+  const existing = settings.providerInstances[DSH_INSTANCE_ID];
+  if (!existing || existing.driver !== ACP_REGISTRY_DRIVER) {
+    return settings;
+  }
+  const rawConfig =
+    existing.config !== null &&
+    typeof existing.config === "object" &&
+    !Array.isArray(existing.config)
+      ? (existing.config as Record<string, unknown>)
+      : undefined;
+  const rawSource = typeof rawConfig?.source === "string" ? rawConfig.source.trim() : "";
+  const rawAgentId = typeof rawConfig?.agentId === "string" ? rawConfig.agentId.trim() : "";
+  if (rawSource !== "local" && rawAgentId.length > 0) {
+    return settings;
+  }
+
+  const rawCommandPath =
+    typeof rawConfig?.commandPath === "string" ? rawConfig.commandPath.trim() : "";
+  const rawCommandArgs = Array.isArray(rawConfig?.commandArgs)
+    ? rawConfig.commandArgs.filter(
+        (arg): arg is string => typeof arg === "string" && arg.trim().length > 0,
+      )
+    : [];
+  const rawHomepageUrl =
+    typeof rawConfig?.homepageUrl === "string" ? rawConfig.homepageUrl.trim() : "";
+
+  const needsSource = rawSource !== "local";
+  const needsCommandPath = rawCommandPath.length === 0;
+  const needsCommandArgs = rawCommandArgs.length === 0;
+  const needsHomepageUrl = rawHomepageUrl.length === 0;
+
+  if (!needsSource && !needsCommandPath && !needsCommandArgs && !needsHomepageUrl) {
+    return settings;
+  }
+
+  const healedConfig: Record<string, unknown> = {
+    ...rawConfig,
+    source: "local",
+    commandPath: needsCommandPath ? "dsh" : rawConfig!.commandPath,
+    commandArgs: needsCommandArgs ? ["acp"] : rawConfig!.commandArgs,
+    homepageUrl: needsHomepageUrl ? DSH_DEFAULT_HOMEPAGE_URL : rawConfig!.homepageUrl,
+  };
+  return {
+    ...settings,
+    providerInstances: {
+      ...settings.providerInstances,
+      [DSH_INSTANCE_ID]: {
+        ...existing,
+        ...(existing.displayName ? {} : { displayName: DSH_DEFAULT_DISPLAY_NAME }),
+        config: healedConfig,
+      },
+    },
+  };
+}
+
+export function applyAutoSeededProviders(input: {
+  readonly settings: ServerSettings;
+  readonly discovered: ReadonlyArray<AutoSeedProviderId>;
+  readonly marker: AutoSeedProviderMarker;
+  readonly isDriverAllowed?: (driver: ProviderDriverKind) => boolean;
+}): {
+  readonly settings: ServerSettings;
+  readonly marker: AutoSeedProviderMarker;
+  readonly seededIds: ReadonlyArray<AutoSeedProviderId>;
+} {
+  if (input.discovered.length === 0) {
+    return { settings: input.settings, marker: input.marker, seededIds: [] };
+  }
+  const hidden = new Set<string>(input.settings.hiddenDefaultProviderInstances);
+  const seededSet = new Set<string>(input.marker.seeded);
+  const dismissedSet = new Set<string>(input.marker.dismissed);
+  const nextInstances: Record<ProviderInstanceId, ProviderInstanceConfig> = {
+    ...input.settings.providerInstances,
+  };
+  const seededIds: AutoSeedProviderId[] = [];
+
+  for (const id of input.discovered) {
+    const instanceId = ProviderInstanceId.make(id);
+    if (
+      Object.hasOwn(nextInstances, instanceId) ||
+      hidden.has(id) ||
+      seededSet.has(id) ||
+      dismissedSet.has(id)
+    ) {
+      continue;
+    }
+    const instance = buildDefaultAutoSeededProviderInstance(id);
+    if (input.isDriverAllowed && !input.isDriverAllowed(instance.driver)) {
+      continue;
+    }
+    nextInstances[instanceId] = instance;
+    seededSet.add(id);
+    seededIds.push(id);
+  }
+
+  if (seededIds.length === 0) {
+    return { settings: input.settings, marker: input.marker, seededIds: [] };
+  }
+  return {
+    settings: {
+      ...input.settings,
+      providerInstances: nextInstances,
+    },
+    marker: {
+      seeded: Array.from(seededSet),
+      dismissed: Array.from(dismissedSet),
+    },
+    seededIds,
+  };
+}
+
+export function discoverInstalledLocalAgentsSync(input: {
+  readonly platform: NodeJS.Platform;
+  readonly env: NodeJS.ProcessEnv;
+  readonly resolveExecutable?: Parameters<typeof resolveAgentExecutableWithFallback>[0]["resolveExecutable"];
+  readonly isFile?: (filePath: string) => boolean;
+  readonly dshFs?: Parameters<typeof resolveLocalAcpSpawn>[0]["fs"];
+  readonly queryRegistry?: Parameters<typeof resolveAgentExecutableWithFallback>[0]["queryRegistry"];
+  readonly probeDriveRoots?: boolean;
+}): ReadonlyArray<AutoSeedProviderId> {
+  const discovered: AutoSeedProviderId[] = [];
+  const resolveExecutable =
+    input.resolveExecutable ?? SpawnExecutableResolution.defaultValue();
+  const sharedOpts = {
+    platform: input.platform,
+    env: input.env,
+    resolveExecutable,
+    ...(input.isFile ? { isFile: input.isFile } : {}),
+    ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+    ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
+  };
+
+  if (resolveAgentExecutableWithFallback({ ...sharedOpts, command: "codex" }) !== undefined) {
+    discovered.push("codex");
+  }
+  if (resolveAgentExecutableWithFallback({ ...sharedOpts, command: "claude" }) !== undefined) {
+    discovered.push("claudeAgent");
+  }
+  if (resolveAgentExecutableWithFallback({ ...sharedOpts, command: "agy" }) !== undefined) {
+    discovered.push("antigravity");
+  }
+  if (
+    resolveLocalAcpSpawn({
+      commandPath: "dsh",
+      commandArgs: ["acp"],
+      platform: input.platform,
+      env: input.env,
+      resolveExecutable,
+      ...(input.dshFs ? { fs: input.dshFs } : {}),
+      ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+      ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
+    }) !== undefined
+  ) {
+    discovered.push("dsh");
+  }
+  if (resolveAgentExecutableWithFallback({ ...sharedOpts, command: "opencode" }) !== undefined) {
+    discovered.push("opencode");
+  }
+  if (resolveAgentExecutableWithFallback({ ...sharedOpts, command: "pi" }) !== undefined) {
+    discovered.push("pi");
+  }
+
+  return discovered;
+}
+
+export type LocalAgentAutoDiscoverer = () => Effect.Effect<ReadonlyArray<AutoSeedProviderId>>;
+
+const defaultDiscoverInstalledLocalAgents: LocalAgentAutoDiscoverer = Effect.fn(
+  "serverSettings.discoverInstalledLocalAgents",
+)(
+  function* () {
+    const platform = yield* HostProcess.Platform;
+    const env = yield* HostProcess.Environment;
+    const resolveExecutable = yield* SpawnExecutableResolution;
+    return discoverInstalledLocalAgentsSync({
+      platform,
+      env,
+      resolveExecutable,
+    });
+  },
+  Effect.orElseSucceed((): ReadonlyArray<AutoSeedProviderId> => []),
+);
+
+export const LocalAgentAutoDiscovery = Context.Reference<LocalAgentAutoDiscoverer>(
+  "@prismux/server/serverSettings/LocalAgentAutoDiscovery",
+  {
+    defaultValue: () => defaultDiscoverInstalledLocalAgents,
+  },
+);
+
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
+    Effect.map(autoHealDshProviderInstanceConfig),
     Effect.map(normalizeHiddenDefaultProviderInstances),
     Effect.map((next) => withIdleCompaction(next, globalIdleCompaction(next))),
     Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
@@ -550,6 +811,12 @@ function resolveTextGenerationProvider(
   isDriverAllowed: DriverAllowed = anyDriver,
 ): ServerSettings {
   const selection = settings.textGenerationModelSelection;
+  const textGenerator = textGeneratorForSelection(settings, selection.instanceId);
+  if (textGenerator !== undefined) {
+    return textGenerator.enabled
+      ? settings
+      : fallbackTextGenerationProvider(settings, isDriverAllowed);
+  }
   return !isHiddenDefaultProviderInstance(settings, selection.instanceId) &&
     isModelSelectionProviderEnabled(settings, selection) &&
     selectionSupportsTextGeneration(settings, selection) &&
@@ -926,9 +1193,10 @@ const make = Effect.gen(function* () {
         ? settings
         : migrateLegacyProviderSettings(settings, legacyProviders, providerHistory),
     );
+    const healed = settingsFileTrusted ? autoHealDshProviderInstanceConfig(loaded) : loaded;
     const folded = settingsFileTrusted
-      ? foldLegacyProjectSettings(loaded, legacyProjectRows)
-      : loaded;
+      ? foldLegacyProjectSettings(healed, legacyProjectRows)
+      : healed;
     // Remove retired keys only after copying secrets and writing the new file; failures retry on next load.
     const legacySecretsCopied = yield* Effect.forEach(
       settingsFileTrusted
@@ -1427,6 +1695,99 @@ const make = Effect.gen(function* () {
     yield* Deferred.await(linkTargetReady);
   });
 
+  const discoverInstalledLocalAgents = yield* LocalAgentAutoDiscovery;
+  const autoSeedMarkerPath = pathService.join(
+    pathService.dirname(settingsPath),
+    ".auto-seeded-providers.json",
+  );
+
+  const readAutoSeedMarker = fs.readFileString(autoSeedMarkerPath).pipe(
+    Effect.map((raw): AutoSeedProviderMarker => {
+      try {
+        const parsed = JSON.parse(raw) as { seeded?: unknown; dismissed?: unknown };
+        const seeded = Array.isArray(parsed.seeded)
+          ? parsed.seeded.filter((v): v is string => typeof v === "string" && v.length > 0)
+          : [];
+        const dismissed = Array.isArray(parsed.dismissed)
+          ? parsed.dismissed.filter((v): v is string => typeof v === "string" && v.length > 0)
+          : [];
+        return { seeded, dismissed };
+      } catch {
+        return EMPTY_AUTO_SEED_MARKER;
+      }
+    }),
+    Effect.orElseSucceed(() => EMPTY_AUTO_SEED_MARKER),
+  );
+
+  const writeAutoSeedMarker = (marker: AutoSeedProviderMarker) =>
+    writeFileStringAtomically({
+      filePath: autoSeedMarkerPath,
+      contents: `${JSON.stringify(marker, null, 2)}\n`,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, pathService),
+      Effect.ignore,
+    );
+
+  const recordAutoSeedProviderMutation = Effect.fn("serverSettings.recordAutoSeedProviderMutation")(
+    function* (mutation: ProviderInstanceMutation) {
+      const id = String(mutation.instanceId);
+      const marker = yield* readAutoSeedMarker;
+      const seeded = new Set(marker.seeded);
+      const dismissed = new Set(marker.dismissed);
+      if (mutation.operation === "remove") {
+        dismissed.add(id);
+      } else {
+        dismissed.delete(id);
+      }
+      const nextMarker: AutoSeedProviderMarker = {
+        seeded: Array.from(seeded),
+        dismissed: Array.from(dismissed),
+      };
+      if (
+        nextMarker.seeded.length !== marker.seeded.length ||
+        nextMarker.dismissed.length !== marker.dismissed.length ||
+        nextMarker.dismissed.some((entry, idx) => marker.dismissed[idx] !== entry)
+      ) {
+        yield* writeAutoSeedMarker(nextMarker);
+      }
+    },
+    (effect) => Effect.ignore(effect),
+  );
+
+  const autoSeedInstalledProviders = writeSemaphore.withPermits(1)(
+    Effect.gen(function* () {
+      const { settings: current, parseFailure } = yield* reloadSettings;
+      if (Option.isSome(parseFailure)) {
+        return;
+      }
+      const discovered = yield* discoverInstalledLocalAgents();
+      if (discovered.length === 0) {
+        return;
+      }
+      const marker = yield* readAutoSeedMarker;
+      const result = applyAutoSeededProviders({
+        settings: current,
+        discovered,
+        marker,
+        isDriverAllowed: managedProviders.isDriverAllowed,
+      });
+      if (result.seededIds.length === 0) {
+        return;
+      }
+      const next = yield* normalizeServerSettings(result.settings);
+      yield* writeSettingsAtomically(next);
+      yield* writeAutoSeedMarker(result.marker);
+      yield* invalidateMaterialized;
+      yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
+      yield* emitChange(next);
+    }),
+  ).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("auto-seed installed providers skipped", { cause }),
+    ),
+  );
+
   const start = Effect.gen(function* () {
     const shouldStart = yield* Ref.modify(startedRef, (started) => [!started, true]);
     if (!shouldStart) {
@@ -1434,6 +1795,7 @@ const make = Effect.gen(function* () {
     }
 
     const startup = Effect.gen(function* () {
+      yield* autoSeedInstalledProviders;
       yield* startWatcher;
       yield* reloadSettings;
     });
@@ -1466,7 +1828,7 @@ const make = Effect.gen(function* () {
           const patched = applyServerSettingsPatch(current, patch);
           return applyProviderInstanceMutation(patched, mutation);
         }),
-      ),
+      ).pipe(Effect.tap(() => recordAutoSeedProviderMutation(mutation))),
     withSettingsSnapshot,
     get streamChanges() {
       return materializeChanges(Stream.fromPubSub(changesPubSub));

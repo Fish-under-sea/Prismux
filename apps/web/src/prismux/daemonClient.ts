@@ -1131,11 +1131,16 @@ export class PrismuxDaemonClient {
   buildMediaUrl(kind: "media" | "preview" | "web", id: string, subPath?: string): string {
     const encodedId = encodeURIComponent(id);
     const tail = subPath && subPath.trim().length > 0 ? `/${encodeSubPath(subPath)}` : "";
-    const route = `/v1/wallpapers/${kind}/${encodedId}${tail}`;
     const base = this.cachedInfo.baseUrl ? normalizeBaseUrl(this.cachedInfo.baseUrl) : "";
-    const tokenQuery = this.cachedInfo.token
-      ? `?token=${encodeURIComponent(this.cachedInfo.token)}`
-      : "";
+    const token = this.cachedInfo.token;
+    if (kind === "web" && token) {
+      // Embed token in URL path so Chromium iframes hosted on cross-site `prismux://`
+      // authenticate every relative subresource (JS/CSS/Spine/WebGL/audio) without cookies.
+      const webTail = tail || "/index.html";
+      return `${base}/v1/wallpapers/web-t/${encodeURIComponent(token)}/${encodedId}${webTail}`;
+    }
+    const route = `/v1/wallpapers/${kind}/${encodedId}${tail}`;
+    const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : "";
     return `${base}${route}${tokenQuery}`;
   }
 
@@ -1152,6 +1157,34 @@ export class PrismuxDaemonClient {
     }
     const base = this.cachedInfo.baseUrl ? normalizeBaseUrl(this.cachedInfo.baseUrl) : "";
     const token = this.cachedInfo.token;
+
+    const rewriteWebToTokenPath = (relPathWithQuery: string): string => {
+      const qIdx = relPathWithQuery.indexOf("?");
+      const pathPart = qIdx >= 0 ? relPathWithQuery.slice(0, qIdx) : relPathWithQuery;
+      const queryPart = qIdx >= 0 ? relPathWithQuery.slice(qIdx + 1) : "";
+      const params = new URLSearchParams(queryPart);
+      params.delete("token");
+      const remainingQuery = params.toString();
+      const suffix = remainingQuery ? `?${remainingQuery}` : "";
+      const rest = pathPart.slice("/v1/wallpapers/web/".length);
+      if (!token) {
+        return `${base}${pathPart}${suffix}`;
+      }
+      return `${base}/v1/wallpapers/web-t/${encodeURIComponent(token)}/${rest}${suffix}`;
+    };
+
+    if (trimmed.startsWith("/v1/wallpapers/web-t/")) {
+      return base ? `${base}${trimmed}` : trimmed;
+    }
+    if (base && trimmed.startsWith(`${base}/v1/wallpapers/web-t/`)) {
+      return trimmed;
+    }
+    if (trimmed.startsWith("/v1/wallpapers/web/")) {
+      return rewriteWebToTokenPath(trimmed);
+    }
+    if (base && trimmed.startsWith(`${base}/v1/wallpapers/web/`)) {
+      return rewriteWebToTokenPath(trimmed.slice(base.length));
+    }
 
     if (trimmed.startsWith("/v1/wallpapers/")) {
       const prefix = base ? `${base}${trimmed}` : trimmed;

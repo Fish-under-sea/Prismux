@@ -27,6 +27,14 @@ it.each([
 it.each([
   ["https://github.com/Acme/Web/issues/42", "github", "github.com", "acme/web", "42"],
   [
+    "https://gitee.com/Fish-under-sea/Prismux/issues/I8ABCD",
+    "gitee",
+    "gitee.com",
+    "fish-under-sea/prismux",
+    "I8ABCD",
+  ],
+  ["https://gitee.com/Acme/Web/issues/42", "gitee", "gitee.com", "acme/web", "42"],
+  [
     "https://gitlab.acme.test/group/sub/web/-/issues/7",
     "gitlab",
     "gitlab.acme.test",

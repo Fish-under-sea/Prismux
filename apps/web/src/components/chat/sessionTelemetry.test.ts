@@ -40,6 +40,7 @@ import {
   clearSessionTelemetryDetails,
   computeDonutSegments,
   deriveSessionTelemetryDetail,
+  extractTurnUsageDetail,
   formatCompactPopoverTokens,
   formatIntegerTokens,
   mergeTimeIntervals,
@@ -52,6 +53,7 @@ import {
   deriveContextOccupancyPercent,
   deriveSessionTelemetryFromProjection,
   extractProviderTurnTokenCounts,
+  resolveTelemetryCanonicalProvider,
 } from "./useSessionCallTelemetry";
 
 function makeProviderTurn(
@@ -828,5 +830,274 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(shouldWrapComposerTelemetryRow(699)).toBe(true);
     expect(shouldWrapComposerTelemetryRow(700)).toBe(false);
     expect(shouldWrapComposerTelemetryRow(1200)).toBe(false);
+  });
+
+  it("consumes authoritative DSH server ttftMs/decodeMs/modelDurationMs, formats tuple model names, and renders real cache hit & text/thinking split", () => {
+    initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
+    const dshProviders: readonly ServerProvider[] = [
+      {
+        instanceId: "acpRegistry-dsh",
+        driver: "acpRegistry",
+        displayName: "DeepSeek Harness",
+        enabled: true,
+        models: [
+          {
+            slug: '["magpie","group/deepseek"]',
+            name: "DeepSeek-V4.1-Flash",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+      } as unknown as ServerProvider,
+    ];
+
+    const dshTurn = makeProviderTurn({
+      id: "turn-dsh-1" as OrchestrationV2ProviderTurn["id"],
+      model: '["magpie","group/deepseek"]',
+      startedAt: "2026-11-25T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+      completedAt: "2026-11-25T10:00:08.738Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: false,
+        usageStatus: "complete",
+        inputTokens: 51_557,
+        cachedInputTokens: 51_200,
+        cacheCreationTokens: 0,
+        outputTokens: 189,
+        reasoningTokens: 82,
+        ttftMs: 7_916,
+        decodeMs: 822,
+        modelDurationMs: 8_738,
+        models: ['["magpie","group/deepseek"]'],
+      },
+    });
+
+    const extracted = extractTurnUsageDetail(dshTurn);
+    expect(extracted.ttftMs).toBe(7_916);
+    expect(extracted.decodeMs).toBe(822);
+    expect(extracted.modelDurationMs).toBe(8_738);
+    expect(extracted.reportedModels).toEqual(["group/deepseek"]);
+
+    // Noisy client WebSocket first-token arrival (8,470ms) MUST lose to authoritative server TTFT (7,916ms).
+    const noisyTimings = new Map([
+      [
+        "turn-dsh-1",
+        {
+          turnStartedAt: Date.parse("2026-11-25T10:00:00.000Z"),
+          firstTokenAt: Date.parse("2026-11-25T10:00:08.470Z"),
+        },
+      ],
+    ]);
+
+    const detail = deriveSessionTelemetryDetail({
+      threadId: "thread-dsh",
+      serverProjection: {
+        runs: [makeRun("run-dsh-1", 1)],
+        providerTurns: [dshTurn],
+        turnItems: [],
+        messages: [],
+        subagents: [],
+        nodes: [],
+      },
+      activeContextWindow: {
+        usedTokens: 51_746,
+        maxTokens: 128_000,
+      } as ContextWindowSnapshot,
+      providerStatuses: dshProviders,
+      activeProvider: "dsh",
+      activeModel: '["magpie","group/deepseek"]',
+      turnTimingsById: noisyTimings,
+    });
+
+    const expectedTps = 189 / (822 / 1_000);
+    expect(detail.avgTtftMs).toBe(7_916);
+    expect(detail.modelCallDurationMs).toBe(8_738);
+    expect(detail.avgTtftMs!).toBeLessThanOrEqual(detail.modelCallDurationMs!);
+    expect(detail.sessionTps).toBeCloseTo(expectedTps, 4);
+    expect(detail.latestRequestTps).toBeCloseTo(expectedTps, 4);
+    expect(detail.textOutputTokens).toBe(107);
+    expect(detail.reasoningOutputTokens).toBe(82);
+    expect(detail.cacheHitRate).toBeCloseTo(51_200 / 51_557, 5);
+    expect(detail.modelDistribution).toHaveLength(1);
+    expect(detail.modelDistribution[0]!.displayName).toBe("DeepSeek-V4.1-Flash");
+    expect(detail.latestSampledModelDisplayName).toBe("DeepSeek-V4.1-Flash");
+    expect(detail.latestSampledModelId).toBe("group/deepseek");
+
+    // `deriveSessionTelemetryFromProjection` also computes exact TPS from `decodeMs`.
+    const projDerived = deriveSessionTelemetryFromProjection({
+      serverProjection: { providerTurns: [dshTurn], messages: [] },
+      activeContextWindow: null,
+    });
+    expect(projDerived.latestTps).toBeCloseTo(expectedTps, 4);
+    expect(projDerived.latestCacheHitRate).toBeCloseTo(51_200 / 51_557, 5);
+
+    const display = resolveComposerTelemetryDisplay(null, {
+      usedTokens: 51_746,
+      maxTokens: 128_000,
+    } as ContextWindowSnapshot, {
+      threadId: "thread-dsh",
+      detail,
+      providerStatuses: dshProviders,
+      selectedProvider: "dsh",
+      selectedModelId: '["magpie","group/deepseek"]',
+    });
+
+    const zhCopy = getSessionTelemetryCopy("zh");
+    const stripHtml = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: {} },
+        createElement(ComposerLiveTelemetryStripView, {
+          display,
+          onOpenUsage: () => undefined,
+        }),
+      ),
+    );
+    expect(stripHtml).toContain(`${expectedTps.toFixed(1)} tok/s`);
+    expect(stripHtml).toContain("缓存命中 99.3%");
+
+    const statsHtml = renderToStaticMarkup(
+      createElement(SessionStatsPopoverContent, { display, copy: zhCopy }),
+    );
+    expect(statsHtml).toContain("7.92 秒");
+    expect(statsHtml).toContain(`${expectedTps.toFixed(1)} tok/s`);
+    expect(statsHtml).toContain("107 / 82 tok");
+
+    const tokensHtml = renderToStaticMarkup(
+      createElement(SessionTokenUsagePopoverContent, {
+        display,
+        copy: zhCopy,
+        onOpenUsage: () => undefined,
+      }),
+    );
+    expect(tokensHtml).toContain("99.3%");
+    expect(tokensHtml).toContain("DeepSeek-V4.1-Flash");
+    expect(tokensHtml).not.toContain('["magpie"');
+  });
+
+  it("extracts live tokenUsage cacheCreationTokens/timings, clamps ttftMs <= durationMs, and normalizes DSH canonical provider", () => {
+    const liveOnlyTurn = makeProviderTurn({
+      id: "turn-live-cache" as OrchestrationV2ProviderTurn["id"],
+      startedAt: "2026-11-25T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+      completedAt: "2026-11-25T10:00:08.430Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      turnTokenUsage: undefined,
+      tokenUsage: {
+        usedTokens: 10_200,
+        inputTokens: 10_000,
+        cachedInputTokens: 7_000,
+        cacheCreationTokens: 1_500,
+        outputTokens: 200,
+        reasoningOutputTokens: 50,
+        ttftMs: 8_470,
+        decodeMs: 500,
+        durationMs: 8_430,
+        updatedAt: "2026-11-25T10:00:08.430Z",
+      },
+    });
+
+    const extracted = extractTurnUsageDetail(liveOnlyTurn);
+    expect(extracted.uncachedInputTokens).toBe(1_500);
+    expect(extracted.cachedInputTokens).toBe(7_000);
+    expect(extracted.cacheCreationTokens).toBe(1_500);
+    expect(extracted.outputTokens).toBe(200);
+    expect(extracted.reasoningTokens).toBe(50);
+    // Clamped to durationMs (8430), never 8470 > 8430!
+    expect(extracted.ttftMs).toBe(8_430);
+    expect(extracted.decodeMs).toBe(500);
+    expect(extracted.modelDurationMs).toBe(8_430);
+
+    const liveCounts = extractProviderTurnTokenCounts(liveOnlyTurn);
+    expect(liveCounts.uncachedInputTokens).toBe(1_500);
+    expect(liveCounts.cacheCreationTokens).toBe(1_500);
+
+    // Client-observed TTFT (8470ms) exceeding wall duration (8430ms) MUST clamp to 8430ms.
+    const clampedDetail = deriveSessionTelemetryDetail({
+      threadId: "thread-clamp",
+      serverProjection: {
+        runs: [makeRun("run-c1", 1)],
+        providerTurns: [
+          makeProviderTurn({
+            id: "turn-clamp" as OrchestrationV2ProviderTurn["id"],
+            startedAt: "2026-11-25T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+            completedAt: "2026-11-25T10:00:08.430Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+            turnTokenUsage: {
+              usageScope: "main_agent",
+              hasSubagents: false,
+              usageStatus: "complete",
+              inputTokens: 1_000,
+              outputTokens: 100,
+            },
+          }),
+        ],
+        turnItems: [],
+        messages: [],
+        subagents: [],
+        nodes: [],
+      },
+      activeContextWindow: null,
+      turnTimingsById: new Map([
+        [
+          "turn-clamp",
+          {
+            turnStartedAt: Date.parse("2026-11-25T10:00:00.000Z"),
+            firstTokenAt: Date.parse("2026-11-25T10:00:08.470Z"),
+          },
+        ],
+      ]),
+    });
+    expect(clampedDetail.modelCallDurationMs).toBe(8_430);
+    expect(clampedDetail.avgTtftMs).toBe(8_430);
+
+    // Canonical provider normalization maps DSH `acpRegistry` instances to `"dsh"`.
+    const dshStatuses: readonly ServerProvider[] = [
+      {
+        instanceId: "acpRegistry-deepseek-harness",
+        driver: "acpRegistry",
+        displayName: "DeepSeek Harness",
+        enabled: true,
+        models: [
+          {
+            slug: '["magpie","group/deepseek"]',
+            name: "DeepSeek-V4.1-Flash",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+      } as unknown as ServerProvider,
+    ];
+    expect(
+      resolveTelemetryCanonicalProvider({
+        provider: "acpRegistry",
+        providerInstanceId: "acpRegistry-deepseek-harness",
+        providerStatuses: dshStatuses,
+      }),
+    ).toBe("dsh");
+    expect(
+      resolveTelemetryCanonicalProvider({
+        provider: "acpRegistry",
+        providerStatuses: dshStatuses,
+        model: '["magpie","group/deepseek"]',
+      }),
+    ).toBe("dsh");
+    expect(
+      resolveTelemetryCanonicalProvider({
+        provider: "acpRegistry",
+        providerInstanceId: "acpRegistry-goose",
+        providerStatuses: [
+          {
+            instanceId: "acpRegistry-goose",
+            driver: "acpRegistry",
+            displayName: "Goose",
+            enabled: true,
+            models: [],
+          } as unknown as ServerProvider,
+        ],
+      }),
+    ).toBe("acpRegistry");
+    expect(
+      resolveTelemetryCanonicalProvider({
+        provider: "claudeAgent",
+      }),
+    ).toBe("claude");
   });
 });

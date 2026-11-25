@@ -120,12 +120,10 @@ import {
 } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, TimelineRowTimestamp } from "./TimelineRowParts";
 import {
-  failedToolIconClassName,
   toolIconAcceptsTint,
   ToolActivityIconView,
 } from "./TimelineToolActivityIcon";
 import {
-  workToneIcon,
   workEntryRawCommand,
   buildToolCallExpandedBody,
   workEntryIconName,
@@ -290,7 +288,7 @@ export function DshDisclosureLeadingSlot({
             data-disclosure-state={expanded ? "open" : "closed"}
             aria-hidden="true"
             className={cn(
-              "inline-flex items-center justify-center text-foreground/85 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+              "inline-flex items-center justify-center text-current transition-opacity duration-200 ease-out motion-reduce:transition-none",
               expanded
                 ? "size-4 opacity-100"
                 : cn("pointer-events-none absolute inset-0 opacity-0", showOnHoverFocus),
@@ -699,13 +697,13 @@ function DshReasoningWorkEntryRow({
                 icon={undefined}
                 fallbackName="brain"
                 className="block size-3.5 shrink-0 stroke-2"
-                muted={!isReasoningLive}
+                muted={false}
               />
             }
             expandable={canExpandProjectedItem}
             expanded={expanded}
             groupScope="disclosure-row"
-            iconClassName={cn("mr-1.5", isReasoningLive ? "text-primary" : "text-inherit")}
+            iconClassName="mr-1.5 text-primary"
             liveDot={isReasoningLive}
           />
           <span
@@ -713,10 +711,8 @@ function DshReasoningWorkEntryRow({
             className="flex min-w-0 flex-1 items-center overflow-hidden text-xs leading-6"
           >
             <span
-              className={cn(
-                "shrink-0 font-normal",
-                isReasoningLive ? "text-primary" : "text-inherit",
-              )}
+              data-reasoning-title="true"
+              className="shrink-0 font-medium text-primary"
             >
               {reasoningTitleLabel}
             </span>
@@ -731,7 +727,7 @@ function DshReasoningWorkEntryRow({
                   data-reasoning-summary-preview="true"
                   data-streaming={isReasoningLive ? "true" : undefined}
                   className={cn(
-                    "min-w-0 flex-1 overflow-hidden whitespace-nowrap text-xs leading-5 text-muted-foreground/85",
+                    "min-w-0 flex-1 overflow-hidden whitespace-nowrap text-xs leading-5 text-muted-foreground/80",
                     isReasoningLive &&
                       "live-tool-shine [mask-image:linear-gradient(to_right,black_calc(100%-48px),transparent)]",
                   )}
@@ -1825,7 +1821,6 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     );
   }
 
-  const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const showFailedIndicator =
     !showWarningIndicator && workEntryDisplayIndicatesToolFailure(workEntry);
@@ -2038,17 +2033,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     "relative flex size-4 items-center justify-center",
     showWarningIndicator
       ? "text-warning"
-      : showDestructiveRowStyle
+      : showDestructiveRowStyle || showFailedIndicator || workEntry.tone === "error"
         ? "text-destructive"
-        : showFailedIndicator
-          ? failedToolIconClassName
-          : isRunning
-            ? "text-primary"
-            : isReasoning
-              ? "text-primary/80"
-              : workEntry.tone === "tool"
-                ? "text-icon-muted"
-                : iconConfig.className,
+        : entryIconName === "check"
+          ? "text-success-foreground"
+          : "text-primary",
   );
   const headingClass = showWarningIndicator
     ? "font-medium text-warning"
@@ -2131,7 +2120,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                 icon={entryToolIcon}
                 fallbackName={entryIconName}
                 className="block size-3.5 shrink-0 stroke-2"
-                muted={!isRunning}
+                muted={false}
               />
             }
             expandable={canExpandProjectedItem}
@@ -2379,7 +2368,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             {showFailedIndicator &&
             !showDestructiveRowStyle &&
             !toolIconAcceptsTint(entryToolIcon) ? (
-              <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+              <XIcon aria-hidden className="size-3 shrink-0 text-destructive" />
             ) : null}
           </div>
         ) : null}

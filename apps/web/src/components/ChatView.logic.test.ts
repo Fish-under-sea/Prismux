@@ -736,7 +736,9 @@ describe("resolveComposerProviderSelection", () => {
     expect(selection.selectedProviderEntry?.instanceId).toBe(signedOutEntry.instanceId);
     expect(
       getAntigravitySendBlockReason(selection.selectedProviderEntry?.snapshot, "gemini-pro"),
-    ).toBe("Sign in to Antigravity in provider settings before sending.");
+    ).toBe(
+      "Sign in with local 'agy' CLI in a terminal, then reconnect Antigravity in provider settings before sending.",
+    );
   });
 
   it("blocks a saved model that a ready catalog no longer lists", () => {
@@ -760,6 +762,18 @@ describe("resolveComposerProviderSelection", () => {
     expect(
       getAntigravitySendBlockReason(provider, "saved-model-not-in-current-catalog"),
     ).toBeNull();
+  });
+
+  it("does not misreport a disabled unprobed Antigravity provider as uninstalled", () => {
+    const disabledProvider = entry("antigravity", "antigravity", {
+      enabled: false,
+      installed: false,
+      status: "disabled",
+      auth: { status: "unknown" },
+      models: [],
+    }).snapshot;
+
+    expect(getAntigravitySendBlockReason(disabledProvider, "gemini-pro")).toBeNull();
   });
 
   it("does not continue an existing Antigravity thread in another profile after deletion", () => {

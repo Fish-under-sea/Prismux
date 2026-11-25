@@ -280,9 +280,10 @@ test("ResourceMonitorService live calibration captures ~1-core CPU usage from a 
       burnerCpu >= expectedOneCoreTotalPct * 0.4 && burnerCpu <= expectedOneCoreTotalPct * 1.85,
       `Expected live 1-core burner CPU% near ${expectedOneCoreTotalPct.toFixed(2)}% (±tolerance), got ${burnerCpu}%`
     );
+    const roundedBurnerCpu = Math.round(burnerCpu * 10) / 10;
     assert.ok(
-      typeof snap2.totalCpuPercent === "number" && snap2.totalCpuPercent >= burnerCpu,
-      `Expected totalCpuPercent (${String(snap2.totalCpuPercent)}) >= burnerCpu (${burnerCpu})`
+      typeof snap2.totalCpuPercent === "number" && snap2.totalCpuPercent >= roundedBurnerCpu,
+      `Expected totalCpuPercent (${String(snap2.totalCpuPercent)}) >= roundedBurnerCpu (${roundedBurnerCpu}, raw ${burnerCpu})`
     );
     // Verify totalCpuPercent equals rounded sum of unique process entries (zero double-counting).
     const processCpuSum = Math.round(

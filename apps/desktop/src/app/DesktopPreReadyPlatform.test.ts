@@ -302,4 +302,37 @@ describe("DesktopPreReadyPlatform", () => {
         assert.equal(setDesktopNameMock.mock.calls.length, 0);
       }),
   );
+
+  it.effect(
+    "enables PlatformHEVCDecoderSupport on Windows without clobbering existing enable-features",
+    () =>
+      Effect.gen(function* () {
+        // Case 1: no existing enable-features switch
+        hasSwitchMock.mockReturnValue(false);
+        getSwitchValueMock.mockReturnValue("");
+        yield* DesktopPreReadyPlatform.make;
+        assert.deepEqual(appendSwitchMock.mock.calls, [
+          ["enable-features", "PlatformHEVCDecoderSupport"],
+        ]);
+
+        // Case 2: existing enable-features gets merged cleanly
+        appendSwitchMock.mockClear();
+        hasSwitchMock.mockImplementation((name: string) => name === "enable-features");
+        getSwitchValueMock.mockImplementation((name: string) =>
+          name === "enable-features" ? "HardwareMediaKeyHandling,WebGPU" : "",
+        );
+        yield* DesktopPreReadyPlatform.make;
+        assert.deepEqual(appendSwitchMock.mock.calls, [
+          ["enable-features", "HardwareMediaKeyHandling,WebGPU,PlatformHEVCDecoderSupport"],
+        ]);
+
+        // Case 3: already present -> no duplicate append
+        appendSwitchMock.mockClear();
+        getSwitchValueMock.mockImplementation((name: string) =>
+          name === "enable-features" ? "WebGPU,PlatformHEVCDecoderSupport" : "",
+        );
+        yield* DesktopPreReadyPlatform.make;
+        assert.equal(appendSwitchMock.mock.calls.length, 0);
+      }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+  );
 });

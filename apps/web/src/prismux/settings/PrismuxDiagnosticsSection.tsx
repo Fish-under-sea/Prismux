@@ -1,14 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { ServerProvider } from "@prismux/core-contracts";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode,
-} from "react";
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { T, useGT, useLocale } from "gt-react";
 import {
@@ -46,6 +38,7 @@ import {
   PrismuxStageFrame,
   useWorkspaceTopbarPortal,
 } from "../../components/workspace/WorkspaceTopbarPortalContext";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { cn } from "../../lib/utils";
 import {
   brandProviderInstanceEntries,
@@ -64,6 +57,8 @@ import {
   createDiagnosticsRefreshController,
   DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
   filterDiagnosticsReport,
+  formatCompactDiagnosticSummary,
+  formatCompactDiagnosticVersion,
   formatDiagnosticsTimestamp,
   getDiagnosticsStandaloneCopy,
   getLatestNormalizedDiagnosticsReport,
@@ -84,7 +79,11 @@ import {
  * PrismuxPluginCenterView across Light, Dark, and Liquid Glass themes.
  */
 const GLASS_SURFACE_RIM =
+  // oxlint-disable-next-line shadcn/no-arbitrary-values -- Apple Liquid Glass Fresnel specular top highlight rim
   "rounded-xl border shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.07)]";
+
+const CARD_META_PILL_CLASS =
+  "rounded-md bg-foreground/[0.055] px-1.5 py-0.5 font-mono text-2xs leading-tight tabular-nums text-muted-foreground dark:bg-white/[0.08] [[data-pmx-glass='1']_&]:bg-white/[0.10] [[data-pmx-glass='1']_&]:text-foreground/80 [html:not(.dark)[data-pmx-glass='1']_&]:bg-foreground/[0.075] [html:not(.dark)[data-pmx-glass='1']_&]:text-foreground/75";
 
 function statusToneClasses(status: DaemonDiagnosticsStatus): {
   readonly dot: string;
@@ -96,32 +95,33 @@ function statusToneClasses(status: DaemonDiagnosticsStatus): {
   switch (status) {
     case "ok":
       return {
-        dot: "bg-emerald-500",
+        dot: "bg-success",
         cardSurface:
-          "border-border/60 bg-foreground/[0.025] hover:-translate-y-px hover:border-border hover:bg-foreground/[0.045] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_6px_16px_-10px_rgba(0,0,0,0.12)] dark:bg-white/[0.035] dark:hover:border-white/20 dark:hover:bg-white/[0.055] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_8px_20px_-10px_rgba(0,0,0,0.45)]",
-        dormantSurface: "border-border/60 bg-foreground/[0.025] dark:bg-white/[0.035]",
+          "border-border/60 bg-foreground/[0.025] hover:-translate-y-px hover:border-border hover:bg-foreground/[0.045] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_6px_16px_-10px_rgba(0,0,0,0.12)] dark:bg-white/[0.035] dark:hover:border-white/20 dark:hover:bg-white/[0.055] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_8px_20px_-10px_rgba(0,0,0,0.45)] [[data-pmx-glass='1']_&]:border-white/14 [[data-pmx-glass='1']_&]:bg-white/[0.055] [[data-pmx-glass='1']_&]:hover:border-white/24 [[data-pmx-glass='1']_&]:hover:bg-white/[0.085] [html:not(.dark)[data-pmx-glass='1']_&]:border-foreground/12 [html:not(.dark)[data-pmx-glass='1']_&]:bg-white/58 [html:not(.dark)[data-pmx-glass='1']_&]:hover:border-foreground/20 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-white/74",
+        dormantSurface:
+          "border-border/60 bg-foreground/[0.025] hover:border-border hover:bg-foreground/[0.04] dark:bg-white/[0.035] dark:hover:border-white/18 dark:hover:bg-white/[0.05] [[data-pmx-glass='1']_&]:border-white/14 [[data-pmx-glass='1']_&]:bg-white/[0.055] [[data-pmx-glass='1']_&]:hover:border-white/22 [html:not(.dark)[data-pmx-glass='1']_&]:border-foreground/12 [html:not(.dark)[data-pmx-glass='1']_&]:bg-white/58 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-white/70",
         groupIconTray:
           "border-border/60 bg-foreground/[0.04] text-muted-foreground dark:bg-white/[0.06]",
         badgeVariant: "success",
       };
     case "degraded":
       return {
-        dot: "bg-amber-500 ring-2 ring-amber-500/20",
+        dot: "bg-warning ring-2 ring-warning/20",
         cardSurface:
-          "border-amber-500/35 border-l-[3px] border-l-amber-500 bg-amber-500/[0.06] hover:-translate-y-px hover:border-amber-500/55 hover:bg-amber-500/[0.085] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.60),0_6px_16px_-10px_rgba(217,119,6,0.18)] dark:border-amber-400/35 dark:border-l-amber-400 dark:bg-amber-400/[0.07] dark:hover:border-amber-400/55 dark:hover:bg-amber-400/[0.10] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_8px_20px_-10px_rgba(0,0,0,0.45)]",
+          "border-amber-500/35 border-l-[3px] border-l-amber-500 bg-amber-500/[0.06] hover:-translate-y-px hover:border-amber-500/55 hover:bg-amber-500/[0.085] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.60),0_6px_16px_-10px_rgba(217,119,6,0.18)] dark:border-amber-400/35 dark:border-l-amber-400 dark:bg-amber-400/[0.07] dark:hover:border-amber-400/55 dark:hover:bg-amber-400/[0.10] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_8px_20px_-10px_rgba(0,0,0,0.45)] [[data-pmx-glass='1']_&]:border-warning/40 [[data-pmx-glass='1']_&]:bg-warning/[0.095] [[data-pmx-glass='1']_&]:hover:border-warning/60 [[data-pmx-glass='1']_&]:hover:bg-warning/[0.135] [html:not(.dark)[data-pmx-glass='1']_&]:border-warning/40 [html:not(.dark)[data-pmx-glass='1']_&]:bg-warning/[0.11] [html:not(.dark)[data-pmx-glass='1']_&]:hover:border-warning/60 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-warning/[0.16]",
         dormantSurface:
-          "border-amber-500/35 border-l-[3px] border-l-amber-500 bg-amber-500/[0.06] dark:border-amber-400/35 dark:border-l-amber-400 dark:bg-amber-400/[0.07]",
+          "border-amber-500/35 border-l-[3px] border-l-amber-500 bg-amber-500/[0.06] hover:border-amber-500/50 dark:border-amber-400/35 dark:border-l-amber-400 dark:bg-amber-400/[0.07] dark:hover:border-amber-400/50 [[data-pmx-glass='1']_&]:border-warning/40 [[data-pmx-glass='1']_&]:bg-warning/[0.095] [html:not(.dark)[data-pmx-glass='1']_&]:border-warning/40 [html:not(.dark)[data-pmx-glass='1']_&]:bg-warning/[0.11]",
         groupIconTray:
-          "border-amber-500/35 bg-amber-500/12 text-warning-foreground dark:border-amber-400/35 dark:bg-amber-400/15",
+          "border-warning/35 bg-warning/12 text-warning-foreground dark:border-warning/35 dark:bg-warning/15",
         badgeVariant: "warning",
       };
     case "error":
       return {
         dot: "bg-destructive ring-2 ring-destructive/20",
         cardSurface:
-          "border-destructive/40 border-l-[3px] border-l-destructive bg-destructive/[0.065] hover:-translate-y-px hover:border-destructive/60 hover:bg-destructive/[0.09] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.60),0_6px_16px_-10px_rgba(239,68,68,0.20)] dark:border-destructive/45 dark:border-l-destructive dark:bg-destructive/[0.09] dark:hover:border-destructive/65 dark:hover:bg-destructive/[0.12] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_8px_20px_-10px_rgba(0,0,0,0.45)]",
+          "border-destructive/40 border-l-[3px] border-l-destructive bg-destructive/[0.065] hover:-translate-y-px hover:border-destructive/60 hover:bg-destructive/[0.09] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.60),0_6px_16px_-10px_rgba(239,68,68,0.20)] dark:border-destructive/45 dark:border-l-destructive dark:bg-destructive/[0.09] dark:hover:border-destructive/65 dark:hover:bg-destructive/[0.12] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_8px_20px_-10px_rgba(0,0,0,0.45)] [[data-pmx-glass='1']_&]:border-destructive/50 [[data-pmx-glass='1']_&]:bg-destructive/[0.13] [[data-pmx-glass='1']_&]:hover:border-destructive/70 [[data-pmx-glass='1']_&]:hover:bg-destructive/[0.17] [html:not(.dark)[data-pmx-glass='1']_&]:border-destructive/45 [html:not(.dark)[data-pmx-glass='1']_&]:bg-destructive/[0.11] [html:not(.dark)[data-pmx-glass='1']_&]:hover:border-destructive/65 [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-destructive/[0.16]",
         dormantSurface:
-          "border-destructive/40 border-l-[3px] border-l-destructive bg-destructive/[0.065] dark:border-destructive/45 dark:border-l-destructive dark:bg-destructive/[0.09]",
+          "border-destructive/40 border-l-[3px] border-l-destructive bg-destructive/[0.065] hover:border-destructive/55 dark:border-destructive/45 dark:border-l-destructive dark:bg-destructive/[0.09] dark:hover:border-destructive/60 [[data-pmx-glass='1']_&]:border-destructive/50 [[data-pmx-glass='1']_&]:bg-destructive/[0.13] [html:not(.dark)[data-pmx-glass='1']_&]:border-destructive/45 [html:not(.dark)[data-pmx-glass='1']_&]:bg-destructive/[0.11]",
         groupIconTray:
           "border-destructive/35 bg-destructive/12 text-destructive-foreground dark:border-destructive/40 dark:bg-destructive/18",
         badgeVariant: "error",
@@ -152,32 +152,29 @@ function useCopyFixCommand() {
   const gt = useGT();
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const copyCommand = useCallback(
-    async (id: string, command: string) => {
-      try {
-        if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-          throw new Error("Clipboard unavailable");
-        }
-        await navigator.clipboard.writeText(command);
-        setCopiedId(id);
-        toastManager.add({
-          type: "success",
-          title: gt("Command copied"),
-          description: command,
-        });
-        window.setTimeout(() => {
-          setCopiedId((current) => (current === id ? null : current));
-        }, 1600);
-      } catch {
-        toastManager.add({
-          type: "error",
-          title: gt("Could not copy command"),
-          description: command,
-        });
+  const copyCommand = async (id: string, command: string) => {
+    try {
+      if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+        throw new Error("Clipboard unavailable");
       }
-    },
-    [gt],
-  );
+      await navigator.clipboard.writeText(command);
+      setCopiedId(id);
+      toastManager.add({
+        type: "success",
+        title: gt("Command copied"),
+        description: command,
+      });
+      window.setTimeout(() => {
+        setCopiedId((current) => (current === id ? null : current));
+      }, 1600);
+    } catch {
+      toastManager.add({
+        type: "error",
+        title: gt("Could not copy command"),
+        description: command,
+      });
+    }
+  };
 
   return { copiedId, copyCommand };
 }
@@ -218,16 +215,16 @@ function statusLabel(status: DaemonDiagnosticsStatus, gt: ReturnType<typeof useG
 function GroupStatusPills({ group }: { readonly group: NormalizedDiagnosticGroup }) {
   const gt = useGT();
   return (
-    <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10.5px] tabular-nums">
+    <div className="flex flex-wrap items-center gap-1.5 font-mono text-2xs tabular-nums">
       {group.okCount > 0 ? (
-        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 font-medium text-success-foreground dark:bg-emerald-400/14">
-          <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+        <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 font-medium text-success-foreground dark:bg-success/14">
+          <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
           {group.okCount} {gt("Healthy")}
         </span>
       ) : null}
       {group.degradedCount > 0 ? (
-        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/12 px-2 py-0.5 font-medium text-warning-foreground dark:bg-amber-400/16">
-          <span className="size-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+        <span className="inline-flex items-center gap-1 rounded-full bg-warning/12 px-2 py-0.5 font-medium text-warning-foreground dark:bg-warning/16">
+          <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />
           {group.degradedCount} {gt("Degraded")}
         </span>
       ) : null}
@@ -241,72 +238,178 @@ function GroupStatusPills({ group }: { readonly group: NormalizedDiagnosticGroup
   );
 }
 
-function DormantEngineReadOnlyCard({ engine }: { readonly engine: NormalizedDiagnosticItem }) {
+/**
+ * Unified 3-band compact diagnostic card (~108–118px consistent footprint across every group):
+ * 1. Single-line header: status dot + bold 13px title + compact status badge
+ * 2. Crisp 2-line body: single-line summary + single-line mono path/detail (full tooltips, zero multi-line bloat)
+ * 3. Unified single-row bottom strip: version/latency capsules on left + inline actions on right
+ */
+function CompactDiagnosticCard({
+  item,
+  readOnly = false,
+  copied = false,
+  onCopyCommand,
+}: {
+  readonly item: NormalizedDiagnosticItem;
+  readonly readOnly?: boolean;
+  readonly copied?: boolean;
+  readonly onCopyCommand?: (id: string, command: string) => void;
+}) {
   const gt = useGT();
-  const tone = statusToneClasses(engine.status);
+  const locale = useLocale();
+  const cardCopy = getDiagnosticsStandaloneCopy(locale);
+  const tone = statusToneClasses(item.status);
+  const displaySummary = formatCompactDiagnosticSummary(item.summary);
+  const displayVersion = formatCompactDiagnosticVersion(item.version);
+  const secondaryDetail = readOnly ? item.detail : (item.detail ?? item.fixAction ?? null);
+  const fixCommand = readOnly ? null : item.fixCommand;
+  const settingsRoute = readOnly ? null : item.settingsRoute;
+  const hasFooterActions = Boolean(fixCommand || settingsRoute);
+  const hasBottomStrip = Boolean(displayVersion || item.latencyMs !== null || hasFooterActions);
 
   return (
     <article
       data-diagnostic-card="true"
-      data-diagnostic-id={engine.id}
-      data-diagnostic-status={engine.status}
-      data-diagnostic-readonly="true"
+      data-diagnostic-id={item.id}
+      data-diagnostic-status={item.status}
+      data-diagnostic-readonly={readOnly ? "true" : undefined}
       className={cn(
-        "flex h-full flex-col p-3.5 transition-colors duration-150 motion-reduce:transition-none",
+        "group/diag-card flex h-full min-w-0 flex-col gap-1.5 p-3 transition-all duration-150 motion-reduce:transition-none motion-reduce:transform-none",
         GLASS_SURFACE_RIM,
-        tone.dormantSurface,
+        readOnly ? tone.dormantSurface : tone.cardSurface,
       )}
     >
+      {/* Band 1: Single-line header */}
       <div className="flex min-h-5 shrink-0 items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
           <span className={cn("size-2 shrink-0 rounded-full", tone.dot)} aria-hidden="true" />
           <h5
+            // oxlint-disable-next-line shadcn/no-arbitrary-values -- compact 13px Level-1 card heading per diagnostics spec
             className="truncate text-[13px] font-semibold tracking-tight text-foreground"
-            title={engine.name}
+            // oxlint-disable-next-line prismux/no-native-title-tooltip -- preserves full truncated title on hover
+            title={item.name}
           >
-            {engine.name}
+            {item.name}
           </h5>
         </div>
         <Badge variant={tone.badgeVariant} size="sm" className="shrink-0">
-          {statusLabel(engine.status, gt)}
+          {statusLabel(item.status, gt)}
         </Badge>
       </div>
 
-      <p
-        className="mt-2 line-clamp-2 text-xs font-medium leading-relaxed text-foreground/85"
-        title={engine.summary}
-      >
-        {engine.summary}
-      </p>
-
-      {engine.detail ? (
+      {/* Band 2: Crisp 2-line body (single-line primary summary + single-line mono path/detail) */}
+      <div className="flex min-h-8.5 min-w-0 flex-col gap-0.5">
         <p
-          className="mt-1 line-clamp-2 break-words text-[11px] leading-relaxed text-muted-foreground"
-          title={engine.detail}
+          data-diagnostic-card-summary="true"
+          className="truncate text-xs font-medium leading-4.25 text-foreground/88"
+          // oxlint-disable-next-line prismux/no-native-title-tooltip -- preserves full raw diagnostic summary on hover for single-line truncated cards
+          title={item.summary}
         >
-          {engine.detail}
+          {displaySummary}
         </p>
-      ) : null}
 
-      {engine.version || engine.latencyMs !== null ? (
-        <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-2">
-          {engine.version ? (
-            <span
-              className="max-w-full truncate rounded-md bg-foreground/[0.055] px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-muted-foreground dark:bg-white/[0.07]"
-              title={engine.version}
+        {secondaryDetail ? (
+          <p
+            data-diagnostic-card-detail="true"
+            className="truncate font-mono text-2xs leading-3.75 text-muted-foreground"
+            // oxlint-disable-next-line prismux/no-native-title-tooltip -- preserves full path/detail on hover for single-line truncated cards
+            title={secondaryDetail}
+          >
+            {secondaryDetail}
+          </p>
+        ) : (
+          <span aria-hidden="true" className="block h-3.75 select-none" />
+        )}
+      </div>
+
+      {/* Band 3: Unified single-row bottom meta + inline action strip (zero <code> tags) */}
+      {hasBottomStrip ? (
+        <div
+          data-diagnostic-card-bottom="true"
+          className="mt-auto flex min-h-5.5 min-w-0 items-center gap-1.5 pt-1.5"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+            {displayVersion ? (
+              <span
+                data-diagnostic-version-pill="true"
+                className={cn("min-w-0 truncate", CARD_META_PILL_CLASS)}
+                // oxlint-disable-next-line prismux/no-native-title-tooltip -- preserves full raw version string on hover for compact version pill
+                title={item.version ?? displayVersion}
+              >
+                {displayVersion}
+              </span>
+            ) : null}
+            {item.latencyMs !== null ? (
+              <span className={cn("shrink-0", CARD_META_PILL_CLASS)}>{item.latencyMs} ms</span>
+            ) : null}
+          </div>
+
+          {hasFooterActions ? (
+            <div
+              data-diagnostic-card-footer="true"
+              className="ml-auto flex shrink-0 items-center gap-1"
             >
-              {engine.version}
-            </span>
-          ) : null}
-          {engine.latencyMs !== null ? (
-            <span className="rounded-md bg-foreground/[0.055] px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-muted-foreground dark:bg-white/[0.07]">
-              {engine.latencyMs} ms
-            </span>
+              {fixCommand && onCopyCommand ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        data-diagnostic-copy-command="true"
+                        aria-label={gt("Copy fix command")}
+                        // oxlint-disable-next-line prismux/no-native-title-tooltip -- keeps raw fix command accessible in both TooltipPopup and native title attribute
+                        title={fixCommand}
+                        onClick={() => onCopyCommand(item.id, fixCommand)}
+                        className={cn(
+                          "inline-flex h-5.5 shrink-0 cursor-pointer items-center gap-1 rounded-md border px-1.5 text-2xs font-medium leading-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none",
+                          copied
+                            ? "border-success/45 bg-success/12 text-success-foreground dark:border-success/45 dark:bg-success/16"
+                            : "border-border/70 bg-foreground/[0.04] text-foreground/85 hover:border-border hover:bg-foreground/[0.08] hover:text-foreground dark:border-white/15 dark:bg-white/[0.07] dark:hover:border-white/25 dark:hover:bg-white/[0.12] [[data-pmx-glass='1']_&]:border-white/20 [[data-pmx-glass='1']_&]:bg-white/[0.09] [[data-pmx-glass='1']_&]:hover:bg-white/[0.16] [html:not(.dark)[data-pmx-glass='1']_&]:border-foreground/18 [html:not(.dark)[data-pmx-glass='1']_&]:bg-white/75 [html:not(.dark)[data-pmx-glass='1']_&]:text-foreground [html:not(.dark)[data-pmx-glass='1']_&]:hover:bg-white/95",
+                        )}
+                      />
+                    }
+                  >
+                    {copied ? (
+                      <CheckIcon
+                        className="size-3 shrink-0 text-success-foreground"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <CopyIcon className="size-3 shrink-0 opacity-80" aria-hidden="true" />
+                    )}
+                    <span className="whitespace-nowrap">
+                      {copied ? `${gt("Copied")} ✓` : cardCopy.copyFixLabel}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipPopup data-pmx-glass-zone="overlays" side="top" sideOffset={6}>
+                    <span className="block max-w-xs break-words font-mono text-2xs">
+                      {fixCommand}
+                    </span>
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null}
+
+              {settingsRoute ? (
+                <Link
+                  to={settingsRoute as never}
+                  data-diagnostic-settings-link="true"
+                  aria-label={gt("Open settings")}
+                  className="inline-flex h-5.5 shrink-0 items-center gap-0.5 rounded px-1 text-2xs font-medium whitespace-nowrap text-primary underline-offset-2 transition-colors duration-150 hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
+                >
+                  <span>{gt("Settings")}</span>
+                  <ArrowRightIcon className="size-3 shrink-0" aria-hidden="true" />
+                </Link>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}
     </article>
   );
+}
+
+function DormantEngineReadOnlyCard({ engine }: { readonly engine: NormalizedDiagnosticItem }) {
+  return <CompactDiagnosticCard item={engine} readOnly />;
 }
 
 export function DiagnosticItemCard({
@@ -318,127 +421,7 @@ export function DiagnosticItemCard({
   readonly copied: boolean;
   readonly onCopyCommand: (id: string, command: string) => void;
 }) {
-  const gt = useGT();
-  const tone = statusToneClasses(item.status);
-  const hasFooterActions = Boolean(item.fixCommand || item.settingsRoute);
-  const secondaryDetail = item.detail ?? (item.fixAction && !item.fixCommand ? item.fixAction : null);
-
-  return (
-    <article
-      data-diagnostic-card="true"
-      data-diagnostic-id={item.id}
-      data-diagnostic-status={item.status}
-      className={cn(
-        "group/diag-card flex h-full flex-col p-4 transition-all duration-150 motion-reduce:transition-none motion-reduce:transform-none",
-        GLASS_SURFACE_RIM,
-        tone.cardSurface,
-      )}
-    >
-      {/* 1. Title row: semantic status indicator + crisp 13px heading + status badge */}
-      <div className="flex min-h-5 shrink-0 items-center justify-between gap-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className={cn("size-2 shrink-0 rounded-full", tone.dot)} aria-hidden="true" />
-          <h5
-            className="truncate text-[13px] font-semibold tracking-tight text-foreground"
-            title={item.name}
-          >
-            {item.name}
-          </h5>
-        </div>
-        <Badge variant={tone.badgeVariant} size="sm" className="shrink-0">
-          {statusLabel(item.status, gt)}
-        </Badge>
-      </div>
-
-      {/* 2-4. Flex-1 body: primary summary + secondary technical detail + metadata capsules */}
-      <div className="mt-2.5 flex min-h-0 flex-1 flex-col gap-1.5">
-        <p
-          className="line-clamp-2 text-xs font-medium leading-relaxed text-foreground/85"
-          title={item.summary}
-        >
-          {item.summary}
-        </p>
-
-        {secondaryDetail ? (
-          <p
-            className="line-clamp-2 break-words text-[11px] leading-relaxed text-muted-foreground"
-            title={secondaryDetail}
-          >
-            {secondaryDetail}
-          </p>
-        ) : null}
-
-        {item.version || item.latencyMs !== null ? (
-          <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-2">
-            {item.version ? (
-              <span
-                className="max-w-full truncate rounded-md bg-foreground/[0.055] px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-muted-foreground dark:bg-white/[0.07]"
-                title={item.version}
-              >
-                {item.version}
-              </span>
-            ) : null}
-            {item.latencyMs !== null ? (
-              <span className="rounded-md bg-foreground/[0.055] px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-muted-foreground dark:bg-white/[0.07]">
-                {item.latencyMs} ms
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-
-      {/* 5. Fixed bottom-aligned action bar (rendered only when actionable, zero <code> tags) */}
-      {hasFooterActions ? (
-        <div
-          data-diagnostic-card-footer="true"
-          className="mt-3 flex shrink-0 flex-wrap items-center gap-2 border-t border-border/50 pt-2.5"
-        >
-          {item.fixCommand ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    data-diagnostic-copy-command="true"
-                    title={item.fixCommand}
-                    className="h-6 max-w-full gap-1.5 px-2 text-[11px]"
-                    onClick={() => onCopyCommand(item.id, item.fixCommand!)}
-                  />
-                }
-              >
-                {copied ? (
-                  <CheckIcon className="size-3 shrink-0 text-success-foreground" />
-                ) : (
-                  <CopyIcon className="size-3 shrink-0" />
-                )}
-                <span className="truncate">
-                  {copied ? `${gt("Copied")} ✓` : gt("Copy fix command")}
-                </span>
-              </TooltipTrigger>
-              <TooltipPopup data-pmx-glass-zone="overlays" side="top" sideOffset={6}>
-                <span className="block max-w-xs break-words font-mono text-[11px]">
-                  {item.fixCommand}
-                </span>
-              </TooltipPopup>
-            </Tooltip>
-          ) : null}
-          {item.settingsRoute ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              className="h-6 gap-1 px-2 text-[11px]"
-              render={<Link to={item.settingsRoute as never} />}
-            >
-              <span>{gt("Open settings")}</span>
-              <ArrowRightIcon className="size-3 shrink-0" />
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-    </article>
-  );
+  return <CompactDiagnosticCard item={item} copied={copied} onCopyCommand={onCopyCommand} />;
 }
 
 function kpiTileSurfaceClasses(
@@ -613,7 +596,7 @@ function PrismuxDiagnosticsStandaloneFrame({
                       className={cn(
                         "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-2xs font-medium tabular-nums",
                         report.summary.error === 0 && report.summary.degraded === 0
-                          ? "border-emerald-500/35 bg-emerald-500/12 text-success-foreground dark:border-emerald-400/35 dark:bg-emerald-400/14"
+                          ? "border-success/35 bg-success/12 text-success-foreground dark:border-success/35 dark:bg-success/14"
                           : "border-border/65 bg-muted/75 text-foreground/85",
                       )}
                     >
@@ -624,8 +607,8 @@ function PrismuxDiagnosticsStandaloneFrame({
                           report.summary.error > 0
                             ? "bg-destructive"
                             : report.summary.degraded > 0
-                              ? "bg-amber-500"
-                              : "bg-emerald-500",
+                              ? "bg-warning"
+                              : "bg-success",
                         )}
                       />
                       {standaloneCopy.summaryHealthyPill(report.summary.ok, report.summary.total)}
@@ -634,7 +617,7 @@ function PrismuxDiagnosticsStandaloneFrame({
                     {report.summary.degraded > 0 ? (
                       <span
                         data-testid="diagnostics-degraded-pill"
-                        className="inline-flex shrink-0 items-center rounded-full border border-amber-500/35 bg-amber-500/12 px-2 py-0.5 font-mono text-2xs font-medium text-warning-foreground tabular-nums dark:border-amber-400/35 dark:bg-amber-400/16"
+                        className="inline-flex shrink-0 items-center rounded-full border border-warning/35 bg-warning/12 px-2 py-0.5 font-mono text-2xs font-medium text-warning-foreground tabular-nums dark:border-warning/35 dark:bg-warning/16"
                       >
                         {standaloneCopy.summaryDegradedPill(report.summary.degraded)}
                       </span>
@@ -654,6 +637,7 @@ function PrismuxDiagnosticsStandaloneFrame({
                       className="text-2xs text-muted-foreground tabular-nums"
                     >
                       {formatDiagnosticsTimestamp(report.checkedAt)}
+                      {/* oxlint-disable-next-line prismux/no-untranslated-copy -- numeric millisecond telemetry suffix */}
                       {report.durationMs !== null ? ` · ${report.durationMs} ms` : ""}
                     </span>
 
@@ -746,15 +730,13 @@ function PrismuxDiagnosticsContent({
   const effectiveProviders = serverProvidersOverride ?? liveServerProviders;
   const effectiveSettings =
     settingsOverride !== undefined ? settingsOverride : liveServerSettings;
-  const configuredProviderEntries = useMemo(() => {
-    const derived = deriveProviderInstanceEntries(effectiveProviders);
-    const branded = effectiveSettings
-      ? brandProviderInstanceEntries(derived, effectiveSettings)
-      : derived;
-    return disambiguateProviderInstanceDisplayNames(
-      orderProviderInstanceEntries(branded, effectiveSettings?.providerOrder),
-    );
-  }, [effectiveProviders, effectiveSettings]);
+  const derivedEntries = deriveProviderInstanceEntries(effectiveProviders);
+  const brandedEntries = effectiveSettings
+    ? brandProviderInstanceEntries(derivedEntries, effectiveSettings)
+    : derivedEntries;
+  const configuredProviderEntries = disambiguateProviderInstanceDisplayNames(
+    orderProviderInstanceEntries(brandedEntries, effectiveSettings?.providerOrder),
+  );
   const [report, setReport] = useState<NormalizedDiagnosticsReport | null>(() =>
     initialReportOverride !== undefined
       ? initialReportOverride
@@ -771,6 +753,7 @@ function PrismuxDiagnosticsContent({
     null,
   );
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- tracks mount lifetime to guard async daemon probe commits after unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -778,7 +761,7 @@ function PrismuxDiagnosticsContent({
     };
   }, []);
 
-  const loadDiagnostics = useCallback(
+  const loadDiagnostics = useStableCallback(
     async (force: boolean, options?: { silent?: boolean }) => {
       const seq = ++requestSeqRef.current;
       setLoading(true);
@@ -809,10 +792,9 @@ function PrismuxDiagnosticsContent({
         }
       }
     },
-    [],
   );
 
-  // Keep refresh controller wired to latest loadDiagnostics while preserving cooldown timestamp.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- binds Imperative refresh throttle controller ref to latest daemon probe callback
   useEffect(() => {
     const prevTimestamp = refreshControllerRef.current?.getLastTriggeredAt();
     const controller = createDiagnosticsRefreshController(
@@ -829,17 +811,18 @@ function PrismuxDiagnosticsContent({
 
   // Initial mount: opening the diagnostics panel always runs a fresh `force=1` hot-probe
   // (refreshing Windows registry env & bypassing TTL cache), while keeping any prior report visible.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- triggers initial external daemon HTTP diagnostics probe on mount
   useEffect(() => {
     if (initialReportOverride !== undefined) return;
-    if (variant === "full") {
+    const forceRefresh = variant === "full";
+    if (forceRefresh) {
       refreshControllerRef.current?.markRefreshed();
-      void loadDiagnostics(true);
-    } else {
-      void loadDiagnostics(false);
     }
+    void Promise.resolve().then(() => loadDiagnostics(forceRefresh));
   }, [initialReportOverride, loadDiagnostics, variant]);
 
   // Sync with externally published reports (e.g. sidebar background refresh) and explicit reload broadcasts.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to external diagnostics broadcast bus for cross-panel sync
   useEffect(() => {
     if (initialReportOverride !== undefined) return;
     const unsubReport = subscribeDiagnosticsReport(({ report: nextReport }) => {
@@ -861,6 +844,7 @@ function PrismuxDiagnosticsContent({
   }, [initialReportOverride, variant]);
 
   // Auto hot-reload on window focus / tab visibility return (debounced 3s to prevent probe storms).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to browser window focus and visibilitychange DOM events
   useEffect(() => {
     if (initialReportOverride !== undefined || variant !== "full") return;
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -882,7 +866,7 @@ function PrismuxDiagnosticsContent({
     };
   }, [initialReportOverride, variant]);
 
-  const filteredView = useMemo(() => {
+  const filteredView = (() => {
     if (!report) return null;
     const base = filterDiagnosticsReport(report, statusFilter);
     const providerOrder = effectiveSettings?.providerOrder;
@@ -911,7 +895,7 @@ function PrismuxDiagnosticsContent({
         };
       }),
     };
-  }, [configuredProviderEntries, effectiveSettings?.providerOrder, report, statusFilter]);
+  })();
 
   if (variant === "compact") {
     if (!report) {
@@ -943,12 +927,12 @@ function PrismuxDiagnosticsContent({
                 compactStatus === "error"
                   ? "border-destructive/35 bg-destructive/[0.045] dark:border-destructive/40 dark:bg-destructive/[0.07]"
                   : compactStatus === "degraded"
-                    ? "border-amber-500/35 bg-amber-500/[0.045] dark:border-amber-400/35 dark:bg-amber-400/[0.06]"
+                    ? "border-warning/35 bg-warning/[0.045] dark:border-warning/35 dark:bg-warning/[0.06]"
                     : "border-border/60 bg-foreground/[0.025] dark:bg-white/[0.035]",
               )}
             >
               <div className="flex flex-wrap items-center justify-between gap-2.5">
-                <CollapsibleTrigger className="group flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+                <CollapsibleTrigger className="group flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none">
                   <span
                     aria-hidden="true"
                     className={cn(
@@ -959,21 +943,28 @@ function PrismuxDiagnosticsContent({
                     <ActivityIcon className="size-4" />
                   </span>
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                    {/* oxlint-disable-next-line shadcn/no-arbitrary-values -- compact 13px Level-1 diagnostics card title */}
                     <span className="text-[13px] font-semibold tracking-tight text-foreground">
                       <T>Prismux Service Diagnostics</T>
                     </span>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant="success" size="sm" className="font-mono tabular-nums">
-                        {report.summary.ok} {gt("Healthy")}
+                      <Badge variant="success" size="sm">
+                        <span className="font-mono tabular-nums">
+                          {report.summary.ok} {gt("Healthy")}
+                        </span>
                       </Badge>
                       {report.summary.degraded > 0 ? (
-                        <Badge variant="warning" size="sm" className="font-mono tabular-nums">
-                          {report.summary.degraded} {gt("Degraded")}
+                        <Badge variant="warning" size="sm">
+                          <span className="font-mono tabular-nums">
+                            {report.summary.degraded} {gt("Degraded")}
+                          </span>
                         </Badge>
                       ) : null}
                       {report.summary.error > 0 ? (
-                        <Badge variant="error" size="sm" className="font-mono tabular-nums">
-                          {report.summary.error} {gt("Error")}
+                        <Badge variant="error" size="sm">
+                          <span className="font-mono tabular-nums">
+                            {report.summary.error} {gt("Error")}
+                          </span>
                         </Badge>
                       ) : null}
                       <Badge
@@ -1009,7 +1000,7 @@ function PrismuxDiagnosticsContent({
                 {attentionItems.length === 0 ? (
                   <div
                     className={cn(
-                      "flex items-center gap-2.5 border-emerald-500/30 bg-emerald-500/[0.05] px-3.5 py-2.5 text-xs text-foreground/85 dark:border-emerald-400/25 dark:bg-emerald-400/[0.06]",
+                      "flex items-center gap-2.5 border-success/30 bg-success/[0.05] px-3.5 py-2.5 text-xs text-foreground/85 dark:border-success/25 dark:bg-success/[0.06]",
                       GLASS_SURFACE_RIM,
                     )}
                   >
@@ -1044,11 +1035,12 @@ function PrismuxDiagnosticsContent({
   const memoryState = report?.memoryRetrievalState ?? "unknown";
   const memoryBannerSurface =
     memoryState === "fts5+sqlite-vec"
-      ? "border-emerald-500/25 bg-emerald-500/[0.04] dark:border-emerald-400/20 dark:bg-emerald-400/[0.05]"
+      ? "border-success/25 bg-success/[0.04] dark:border-success/20 dark:bg-success/[0.05]"
       : memoryState === "fts5-only"
-        ? "border-amber-500/30 bg-amber-500/[0.045] dark:border-amber-400/25 dark:bg-amber-400/[0.055]"
+        ? "border-warning/30 bg-warning/[0.045] dark:border-warning/25 dark:bg-warning/[0.055]"
         : "border-border/55 bg-foreground/[0.02] dark:bg-white/[0.03]";
 
+  /* oxlint-disable prismux/no-em-dash-copy -- standard empty-metric placeholder dash while initial probe is loading */
   const kpiTiles: ReadonlyArray<{
     readonly key: DiagnosticStatusFilter;
     readonly icon: ComponentType<{ className?: string }>;
@@ -1085,6 +1077,7 @@ function PrismuxDiagnosticsContent({
       hasCount: Boolean(report && report.summary.error > 0),
     },
   ];
+  /* oxlint-enable prismux/no-em-dash-copy */
 
   const diagnosticsBody = (
     <>
@@ -1113,7 +1106,7 @@ function PrismuxDiagnosticsContent({
                 setStatusFilter((current) => toggleDiagnosticStatusFilter(current, tile.key))
               }
               className={cn(
-                "relative flex cursor-pointer flex-col justify-between overflow-hidden rounded-xl border px-3.5 py-3 text-left transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:translate-y-px motion-reduce:transition-none motion-reduce:transform-none",
+                "relative flex cursor-pointer flex-col justify-between overflow-hidden rounded-xl border px-3.5 py-3 text-left transition-all duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none active:translate-y-px motion-reduce:transition-none motion-reduce:transform-none",
                 style.container,
               )}
             >
@@ -1128,7 +1121,7 @@ function PrismuxDiagnosticsContent({
                   >
                     <TileIcon className="size-3.5" />
                   </span>
-                  <span className="truncate text-[11.5px] font-medium text-muted-foreground">
+                  <span className="truncate text-2xs font-medium text-muted-foreground">
                     {tile.label}
                   </span>
                 </span>
@@ -1221,6 +1214,7 @@ function PrismuxDiagnosticsContent({
             {report.memoryRetrievalDetail ? (
               <span
                 className="min-w-0 truncate text-muted-foreground"
+                // oxlint-disable-next-line prismux/no-native-title-tooltip -- preserves full truncated memory retrieval detail on hover
                 title={report.memoryRetrievalDetail}
               >
                 {report.memoryRetrievalDetail}
@@ -1253,7 +1247,7 @@ function PrismuxDiagnosticsContent({
             <Badge variant={statusToneClasses(statusFilter).badgeVariant} size="sm">
               {statusLabel(statusFilter, gt)}
             </Badge>
-            <span className="font-mono text-[11px] tabular-nums text-foreground/85">
+            <span className="font-mono text-2xs tabular-nums text-foreground/85">
               {filteredView.totalVisibleCount} / {report.summary.total}
             </span>
           </div>
@@ -1286,7 +1280,10 @@ function PrismuxDiagnosticsContent({
         filteredView.totalVisibleCount === 0 ? (
           <div
             data-diagnostic-empty-state="true"
-            className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/65 bg-foreground/[0.02] px-5 py-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-white/[0.025] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+            className={cn(
+              "flex flex-col items-center justify-center gap-3 border-dashed border-border/65 bg-foreground/[0.02] px-5 py-8 text-center dark:bg-white/[0.025]",
+              GLASS_SURFACE_RIM,
+            )}
           >
             <span
               aria-hidden="true"
@@ -1295,6 +1292,7 @@ function PrismuxDiagnosticsContent({
               <CheckCircle2Icon className="size-4" />
             </span>
             <div className="space-y-1">
+              {/* oxlint-disable-next-line shadcn/no-arbitrary-values -- compact 13px empty-state heading */}
               <p className="text-[13px] font-semibold text-foreground">
                 <T>Nothing matches that.</T>
               </p>
@@ -1303,7 +1301,7 @@ function PrismuxDiagnosticsContent({
                   <Badge variant={statusToneClasses(statusFilter).badgeVariant} size="sm">
                     {statusLabel(statusFilter, gt)}
                   </Badge>
-                  <span className="font-mono text-[11px] tabular-nums">0</span>
+                  <span className="font-mono text-2xs tabular-nums">0</span>
                 </div>
               ) : null}
             </div>
@@ -1320,7 +1318,7 @@ function PrismuxDiagnosticsContent({
             ) : null}
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {filteredView.activeGroups.map((group) => {
               const groupTone = statusToneClasses(group.status);
               const GroupIcon = categoryIconComponent(group.id);
@@ -1328,7 +1326,7 @@ function PrismuxDiagnosticsContent({
                 <section
                   key={group.id}
                   data-diagnostic-group={group.id}
-                  className="space-y-3"
+                  className="space-y-2.5"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
                     <div className="flex min-w-0 items-center gap-2.5">
@@ -1341,10 +1339,11 @@ function PrismuxDiagnosticsContent({
                       >
                         <GroupIcon className="size-3.5" />
                       </span>
+                      {/* oxlint-disable-next-line shadcn/no-arbitrary-values -- compact 13px group heading */}
                       <h4 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
                         {categoryHeadingLabel(group, gt)}
                       </h4>
-                      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-[10.5px] font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
+                      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-2xs font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
                         {group.items.length}
                       </span>
                     </div>
@@ -1353,7 +1352,7 @@ function PrismuxDiagnosticsContent({
 
                   <div
                     data-diagnostic-group-grid={group.id}
-                    className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+                    className="grid grid-cols-1 items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
                   >
                     {group.items.map((item) => (
                       <DiagnosticItemCard
@@ -1374,7 +1373,7 @@ function PrismuxDiagnosticsContent({
                 data-diagnostic-group={filteredView.dormantGroup.id}
                 data-diagnostic-dormant-summary="true"
                 aria-label={categoryHeadingLabel(filteredView.dormantGroup, gt)}
-                className="space-y-3 border-t border-border/50 pt-5"
+                className="space-y-2.5 border-t border-border/50 pt-4"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
                   <div className="flex min-w-0 items-center gap-2.5">
@@ -1387,10 +1386,11 @@ function PrismuxDiagnosticsContent({
                     >
                       <LayersIcon className="size-3.5" />
                     </span>
+                    {/* oxlint-disable-next-line shadcn/no-arbitrary-values -- compact 13px group heading */}
                     <h4 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
                       <T>Dormant Engines Read-Only Summary</T>
                     </h4>
-                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-[10.5px] font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
+                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-2xs font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
                       {filteredView.dormantGroup.items.length}
                     </span>
                   </div>
@@ -1404,7 +1404,7 @@ function PrismuxDiagnosticsContent({
 
                 <div
                   data-diagnostic-group-grid={filteredView.dormantGroup.id}
-                  className="grid items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                  className="grid grid-cols-1 items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
                 >
                   {filteredView.dormantGroup.items.map((engine) => (
                     <DormantEngineReadOnlyCard key={engine.id} engine={engine} />
@@ -1440,6 +1440,7 @@ function PrismuxDiagnosticsContent({
             {report ? (
               <span className="text-2xs text-muted-foreground tabular-nums">
                 {formatDiagnosticsTimestamp(report.checkedAt)}
+                {/* oxlint-disable-next-line prismux/no-untranslated-copy -- numeric millisecond telemetry suffix */}
                 {report.durationMs !== null ? ` · ${report.durationMs} ms` : ""}
               </span>
             ) : null}

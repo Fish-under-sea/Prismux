@@ -8,6 +8,7 @@ export {
   serveMediaFileWithRange,
   orientationFromDimensions,
   readImageDimensions,
+  readVideoDimensions,
   parseLibraryFoldersVdf,
   discoverSteamLibraryDirs,
   scanSteamWorkshop431960,

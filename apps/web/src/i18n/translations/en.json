@@ -48,7 +48,7 @@
   "6ff697b80a1714c7": "Install the GitLab command-line tool ({cli}) from {url} or your package manager (for example {command}).",
   "929a11e234f6e5d9": "Install the Azure command-line tools ({cli}), then enable Azure DevOps support with {command}.",
   "ad599e9de33538dd": "Add a Bitbucket token in Settings → Source control & issues.",
-  "d810ecd91e8cf9d0": "Install the Origin CLI with {install}, then run {login}.",
+  "168fc95d71e2d0cb": "Add a Gitee personal access token in Settings → Version Control & Issues, or set GITEE_TOKEN.",
   "eb0f60ef4f92ab7d": "Install {fj} 0.6 or later from {fjUrl} and run {fjLogin}, or install {tea} 0.16 or later from {teaUrl} and run {teaLogin} for each Forgejo or Gitea server.",
   "d026a85e2e50e675": "Install the GitCafe CLI with {install}, then run {login}, save a token in Settings, or set {variable} on the server.",
   "22d3c0c48a34b5b3": "Install the TanStack Source CLI with {install}, then run {login}, save a token in Settings, or set {variable} on the server.",
@@ -13060,5 +13060,9 @@
   "ecc0fc90d5dc77b5": "Updating plan",
   "ff74baa9c60e7940": "Updated plan",
   "4e4e846891f5e99e": "Running tool",
-  "d5ffd29426d52e9f": "Used tool"
+  "d5ffd29426d52e9f": "Used tool",
+  "825250957a58b972": "Personal access token",
+  "b27817d6467ae90b": "API base URL",
+  "518f9dfbaae80a0e": "Generate a private token at https://gitee.com/profile/personal_access_tokens (grant projects, pull_requests, user_info). Used before GITEE_TOKEN.",
+  "9841ae59891b83aa": "Optional Gitee Enterprise OpenAPI v5 endpoint. Leave blank for https://gitee.com/api/v5."
 }

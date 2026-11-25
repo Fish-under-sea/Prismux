@@ -48,6 +48,7 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "@prismux/provider-core/server/driver";
+import type { ProviderUsageReader } from "@prismux/provider-core/server/usage";
 import {
   providerModelsFromSettings,
   providerProbeEnvironment,
@@ -86,6 +87,12 @@ import {
   selectPreferredDshVersion,
 } from "./dshLocal.ts";
 import { augmentDshAvailableCommands } from "./dshSkills.ts";
+import {
+  dshRateModel,
+  makeDshUsageFileCache,
+  resolveDshHomeDir,
+  scanDshUsageFiles,
+} from "./dshSessionUsage.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -962,7 +969,71 @@ export type AcpRegistryDriverEnv =
   | Digest.Digest
   | ProviderHost.ProviderHost;
 
-export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryDriverEnv> = {
+export type AcpRegistryUsageReaderEnv = FileSystem.FileSystem | Path.Path;
+
+const dshUsageFileCache = makeDshUsageFileCache();
+
+export const dshUsageReader: ProviderUsageReader<AcpRegistrySettings, AcpRegistryUsageReaderEnv> = {
+  kind: "scan",
+  provider: "dsh",
+  rateModel: dshRateModel,
+  scan: Effect.fn("dshUsageReader.scan")(function* ({ instances, windowStartMs }) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const hostHomeDirectory = yield* HostProcess.HomeDirectory;
+    const hostPlatform = yield* HostProcess.Platform;
+
+    const homesBySessionsDir = new Map<string, string>();
+    for (const instance of instances) {
+      if (
+        instance.configured &&
+        instance.config !== undefined &&
+        !isDeepSeekHarnessSettings(instance.config)
+      ) {
+        continue;
+      }
+      const dshHome = resolveDshHomeDir(instance.environment, hostHomeDirectory, hostPlatform);
+      const resolvedHome = yield* fileSystem
+        .realPath(dshHome)
+        .pipe(Effect.orElseSucceed(() => dshHome));
+      const sessionsDir = path.join(resolvedHome, "sessions");
+      const canonicalDir = yield* fileSystem
+        .realPath(sessionsDir)
+        .pipe(Effect.orElseSucceed(() => sessionsDir));
+      if (!homesBySessionsDir.has(canonicalDir)) {
+        homesBySessionsDir.set(canonicalDir, resolvedHome);
+      }
+    }
+
+    return yield* Effect.forEach(
+      [...homesBySessionsDir.entries()],
+      ([dir, dshHome]) =>
+        Effect.sync(() =>
+          scanDshUsageFiles({
+            dshHome,
+            sinceMs: windowStartMs,
+            cache: dshUsageFileCache,
+          }),
+        ).pipe(
+          Effect.map((result) => ({
+            dir,
+            files: result.missing && !result.error ? null : result.files,
+            status: result.error ? ("partial" as const) : ("ok" as const),
+            ...(result.error
+              ? { message: "Some DeepSeek Harness history could not be read." }
+              : {}),
+          })),
+        ),
+      { concurrency: "unbounded" },
+    );
+  }),
+};
+
+export const AcpRegistryDriver: ProviderDriver<
+  AcpRegistrySettings,
+  AcpRegistryDriverEnv,
+  AcpRegistryUsageReaderEnv
+> = {
   driverKind: DRIVER_KIND,
   metadata: {
     displayName: "ACP Registry",
@@ -971,6 +1042,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
   },
   configSchema: AcpRegistrySettings,
   defaultConfig: () => decodeSettings({}),
+  usage: dshUsageReader,
   create: Effect.fn("AcpRegistryDriver.create")(function* ({
     instanceId,
     displayName,

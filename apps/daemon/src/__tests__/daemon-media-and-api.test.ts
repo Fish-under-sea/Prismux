@@ -21,8 +21,10 @@ import {
   AppearanceConfigStore,
   BUILTIN_WEBWALLGL_WALLPAPERS,
   createDefaultAppearanceConfig,
+  getMimeTypeForFile,
   PrismuxDaemon,
   parseWindowsRegistryFontOutput,
+  readVideoDimensions,
   SystemFontService
 } from "../index.js";
 
@@ -1728,4 +1730,250 @@ test("Sync config accepts PUT and POST, rejects incomplete enabled channels with
   assert.equal(putPassJson.channels.github.enabled, true);
   assert.equal(putPassJson.channels.github.owner, "Fish-under-sea");
   assert.equal(putPassJson.channels.github.hasSecret, true);
+});
+
+function buildMinimalMp4Box(type: string, payload: Buffer): Buffer {
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(8 + payload.length, 0);
+  header.write(type, 4, 4, "ascii");
+  return Buffer.concat([header, payload]);
+}
+
+function buildMinimalMp4Buffer(
+  width: number,
+  height: number,
+  moovAtEnd: boolean
+): Buffer {
+  // tkhd v0 payload: 84 bytes (width at offset 76, height at offset 80 as 16.16 fixed-point)
+  const tkhdPayload = Buffer.alloc(84, 0);
+  tkhdPayload[0] = 0; // version 0
+  tkhdPayload[3] = 3; // flags: enabled + in_movie
+  // identity matrix at offset 40..76
+  tkhdPayload.writeInt32BE(0x00010000, 40);
+  tkhdPayload.writeInt32BE(0x00010000, 56);
+  tkhdPayload.writeInt32BE(0x40000000, 72);
+  tkhdPayload.writeUInt32BE((width << 16) >>> 0, 76);
+  tkhdPayload.writeUInt32BE((height << 16) >>> 0, 80);
+
+  const tkhd = buildMinimalMp4Box("tkhd", tkhdPayload);
+  const trak = buildMinimalMp4Box("trak", tkhd);
+  const moov = buildMinimalMp4Box("moov", trak);
+  const ftyp = buildMinimalMp4Box("ftyp", Buffer.from("isom\x00\x00\x02\x00isommp41", "latin1"));
+  // Large mdat (> 128 KB) when testing EOF moov jumping
+  const mdat = buildMinimalMp4Box("mdat", Buffer.alloc(moovAtEnd ? 180_000 : 128, 0xaa));
+  return moovAtEnd ? Buffer.concat([ftyp, mdat, moov]) : Buffer.concat([ftyp, moov, mdat]);
+}
+
+function buildMinimalWebmBuffer(width: number, height: number): Buffer {
+  const ebmlHeader = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x84, 0x42, 0x86, 0x81, 0x01]);
+  // PixelWidth (0xB0) + size 2 (0x82) + uint16BE, PixelHeight (0xBA) + size 2 (0x82) + uint16BE
+  const pw = Buffer.alloc(4);
+  pw[0] = 0xb0;
+  pw[1] = 0x82;
+  pw.writeUInt16BE(width, 2);
+  const ph = Buffer.alloc(4);
+  ph[0] = 0xba;
+  ph[1] = 0x82;
+  ph.writeUInt16BE(height, 2);
+  const videoPayload = Buffer.concat([pw, ph]);
+  const videoEl = Buffer.concat([Buffer.from([0xe0, 0x80 | videoPayload.length]), videoPayload]);
+  const trackEntry = Buffer.concat([Buffer.from([0xae, 0x80 | videoEl.length]), videoEl]);
+  const tracks = Buffer.concat([
+    Buffer.from([0x16, 0x54, 0xae, 0x6b, 0x80 | trackEntry.length]),
+    trackEntry
+  ]);
+  const segment = Buffer.concat([
+    Buffer.from([0x18, 0x53, 0x80, 0x67, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+    tracks
+  ]);
+  return Buffer.concat([ebmlHeader, segment]);
+}
+
+test("RC.2 Web wallpaper URL-path token (/web-t/), Referer fallback, Spine/video MIME types, percent filenames, and true video dimensions", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-wp-rc2-data-"));
+  const steamRoot = mkdtempSync(join(tmpdir(), "prismux-wp-rc2-steam-"));
+  tempDirs.push(dataDir, steamRoot);
+
+  const wsRoot = join(steamRoot, "steamapps", "workshop", "content", "431960");
+  const webDir = join(wsRoot, "3650874083");
+  mkdirSync(join(webDir, "assets", "8k"), { recursive: true });
+  mkdirSync(join(webDir, "css"), { recursive: true });
+  mkdirSync(join(webDir, "js"), { recursive: true });
+
+  writeFileSync(
+    join(webDir, "index.html"),
+    "<!doctype html><html><head><title>BA</title></head><body><canvas id='canvas'></canvas></body></html>",
+    "utf8"
+  );
+  writeFileSync(join(webDir, "css", "style.css"), "body{margin:0}", "utf8");
+  writeFileSync(join(webDir, "assets", "8k", "CH0334_home.skel"), Buffer.from([1, 2, 3, 4]));
+  writeFileSync(join(webDir, "assets", "8k", "CH0334_home.atlas"), "CH0334_home.png\nsize: 8192,8192\n", "utf8");
+  writeFileSync(join(webDir, "preview.gif"), Buffer.from("GIF89a\x00\x02\x00\x02\x00\x00\x00", "latin1"));
+  writeFileSync(
+    join(webDir, "project.json"),
+    JSON.stringify({
+      title: "Blue Archive Spine Web",
+      type: "Web",
+      file: "index.html",
+      preview: "preview.gif",
+      contentrating: "Everyone",
+      general: {
+        properties: {
+          introanimation: { type: "bool", value: true, order: 1, text: "Intro" }
+        }
+      }
+    }),
+    "utf8"
+  );
+
+  // Video wallpaper with EOF moov (3840x2160) + square 512x512 preview + literal '%' in filename
+  const vidDir = join(wsRoot, "3839308585");
+  mkdirSync(vidDir, { recursive: true });
+  const eofMp4Path = join(vidDir, "100%_4K60_eof.mp4");
+  writeFileSync(eofMp4Path, buildMinimalMp4Buffer(3840, 2160, true));
+  writeFileSync(join(vidDir, "preview.png"), createMinimalPngBuffer(512, 512));
+  writeFileSync(
+    join(vidDir, "project.json"),
+    JSON.stringify({
+      title: "4K EOF Moov Video",
+      type: "Video",
+      file: "100%_4K60_eof.mp4",
+      preview: "preview.png",
+      contentrating: "Everyone"
+    }),
+    "utf8"
+  );
+
+  // Direct unit tests for readVideoDimensions on head-moov MP4, EOF-moov MP4, and WebM EBML
+  const headMp4Path = join(dataDir, "head.mp4");
+  const webmPath = join(dataDir, "sample.webm");
+  writeFileSync(headMp4Path, buildMinimalMp4Buffer(2560, 1440, false));
+  writeFileSync(webmPath, buildMinimalWebmBuffer(1920, 1080));
+  assert.deepEqual(readVideoDimensions(headMp4Path), { width: 2560, height: 1440 });
+  assert.deepEqual(readVideoDimensions(eofMp4Path), { width: 3840, height: 2160 });
+  assert.deepEqual(readVideoDimensions(webmPath), { width: 1920, height: 1080 });
+
+  // MIME coverage for Spine / Live2D / audio / video / XML assets
+  assert.equal(getMimeTypeForFile("model.skel"), "application/octet-stream");
+  assert.equal(getMimeTypeForFile("model.atlas"), "text/plain; charset=utf-8");
+  assert.equal(getMimeTypeForFile("char.moc3"), "application/octet-stream");
+  assert.equal(getMimeTypeForFile("mesh.bin"), "application/octet-stream");
+  assert.equal(getMimeTypeForFile("clip.mkv"), "video/x-matroska");
+  assert.equal(getMimeTypeForFile("clip.avi"), "video/x-msvideo");
+  assert.equal(getMimeTypeForFile("bgm.m4a"), "audio/mp4");
+  assert.equal(getMimeTypeForFile("bgm.flac"), "audio/flac");
+  assert.equal(getMimeTypeForFile("bgm.aac"), "audio/aac");
+  assert.equal(getMimeTypeForFile("meta.xml"), "application/xml; charset=utf-8");
+
+  const authToken = "rc2-web-path-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    host: "127.0.0.1",
+    port: 0,
+    dataDir,
+    authToken,
+    steamRootsDiscoverer: async () => [steamRoot]
+  });
+  const ready = await daemon.start();
+  cleanups.push(async () => {
+    await daemon.stop();
+  });
+
+  // Inventory reports true 3840x2160 landscape for the 4K EOF-moov video (NOT 512x512 square preview!)
+  // and preserves literal '%' filename cleanly without breaking resolution
+  const invRes = await fetch(`${ready.httpUrl}/v1/wallpapers/inventory`, {
+    headers: { Authorization: `Bearer ${authToken}` }
+  });
+  assert.equal(invRes.status, 200);
+  const inv = (await invRes.json()) as {
+    items: Array<{
+      id: string;
+      width: number | null;
+      height: number | null;
+      orientation: string;
+      mediaUrl: string | null;
+    }>;
+  };
+  const vidItem = inv.items.find((x) => x.id === "3839308585");
+  assert.ok(vidItem);
+  assert.equal(vidItem.width, 3840);
+  assert.equal(vidItem.height, 2160);
+  assert.equal(vidItem.orientation, "landscape");
+  assert.equal(vidItem.mediaUrl, "/v1/wallpapers/media/3839308585");
+
+  // 1. /v1/wallpapers/web-t/<token>/<id>/index.html authenticates with ZERO cookies and injects WE bridge
+  const webTEntry = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/index.html`
+  );
+  assert.equal(webTEntry.status, 200);
+  const entryHtml = await webTEntry.text();
+  assert.match(entryHtml, /data-pmx-we-bridge="1"/);
+  assert.match(entryHtml, /introanimation/);
+
+  // 2. Relative subresources resolve cleanly with zero cookies or Authorization header
+  const webTCss = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/css/style.css`
+  );
+  assert.equal(webTCss.status, 200);
+  assert.equal(webTCss.headers.get("content-type"), "text/css; charset=utf-8");
+
+  const webTSkel = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/assets/8k/CH0334_home.skel`
+  );
+  assert.equal(webTSkel.status, 200);
+  assert.equal(webTSkel.headers.get("content-type"), "application/octet-stream");
+
+  // 3. Browser-normalized `../assets/...` subresource via same-token loopback Referer resolves inside wallpaper root
+  const webTRelParent = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/assets/8k/CH0334_home.atlas`,
+    {
+      headers: {
+        Referer: `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/index.html`
+      }
+    }
+  );
+  assert.equal(webTRelParent.status, 200);
+  assert.equal(webTRelParent.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.match(await webTRelParent.text(), /CH0334_home\.png/);
+
+  // 4. Wrong token on /web-t/ returns 401
+  const webTBadToken = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/invalid-token/3650874083/css/style.css`
+  );
+  assert.equal(webTBadToken.status, 401);
+
+  // 5. Traversal on /web-t/ returns 403
+  const webTTraversalStatus = await new Promise<number>((resolveStatus, rejectStatus) => {
+    const req = httpRequest(
+      {
+        host: ready.host,
+        port: ready.port,
+        method: "GET",
+        path: `/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/../../project.json`
+      },
+      (res) => {
+        res.resume();
+        resolveStatus(res.statusCode ?? 0);
+      }
+    );
+    req.once("error", rejectStatus);
+    req.end();
+  });
+  assert.equal(webTTraversalStatus, 403);
+
+  // 6. Legacy /v1/wallpapers/web/<id>/<relPath> supports same-host same-id Referer query-token fallback
+  const refererOk = await fetch(`${ready.httpUrl}/v1/wallpapers/web/3650874083/css/style.css`, {
+    headers: {
+      Referer: `${ready.httpUrl}/v1/wallpapers/web/3650874083/index.html?token=${encodeURIComponent(authToken)}`
+    }
+  });
+  assert.equal(refererOk.status, 200);
+
+  // Cross-id Referer must be rejected (401)
+  const refererCrossId = await fetch(`${ready.httpUrl}/v1/wallpapers/web/3650874083/css/style.css`, {
+    headers: {
+      Referer: `${ready.httpUrl}/v1/wallpapers/web/other-id/index.html?token=${encodeURIComponent(authToken)}`
+    }
+  });
+  assert.equal(refererCrossId.status, 401);
 });

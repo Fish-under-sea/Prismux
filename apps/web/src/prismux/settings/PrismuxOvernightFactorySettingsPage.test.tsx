@@ -196,32 +196,29 @@ function makeSnapshot(
 }
 
 describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
-  it("applies QQ, 163, Gmail, Outlook, and Custom IMAP/SMTP presets accurately", () => {
+  it("applies Gmail, QQ, Agent Mail, Outlook, NetEase (163 / 126), and Custom presets accurately", () => {
     const base = createDefaultOvernightDraft();
     expect(base.mode).toBe("imap");
     expect(OVERNIGHT_MAIL_PRESETS.map((p) => p.id)).toEqual([
-      "qq",
-      "163",
       "gmail",
+      "qq",
+      "agent_mail",
       "outlook",
+      "netease",
       "custom",
     ]);
+    expect(OVERNIGHT_MAIL_PRESETS.map((p) => p.label)).toEqual([
+      "谷歌邮箱 (Gmail)",
+      "QQ 邮箱",
+      "Agent 邮箱",
+      "Outlook / Exchange",
+      "网易邮箱（163 / 126）",
+      "自定义",
+    ]);
 
-    const qq = applyOvernightMailPreset(base, "qq");
-    expect(qq.imapHost).toBe("imap.qq.com");
-    expect(qq.imapPort).toBe("993");
-    expect(qq.imapSecure).toBe(true);
-    expect(qq.smtpHost).toBe("smtp.qq.com");
-    expect(qq.smtpPort).toBe("465");
-    expect(qq.smtpSecure).toBe(true);
-
-    const netease = applyOvernightMailPreset(qq, "163");
-    expect(netease.imapHost).toBe("imap.163.com");
-    expect(netease.smtpHost).toBe("smtp.163.com");
-    expect(netease.smtpPort).toBe("465");
-
-    const gmail = applyOvernightMailPreset(netease, "gmail");
+    const gmail = applyOvernightMailPreset(base, "gmail");
     expect(gmail.preset).toBe("gmail");
+    expect(gmail.emailProvider).toBe("imap_smtp");
     expect(gmail.imapHost).toBe("imap.gmail.com");
     expect(gmail.imapPort).toBe("993");
     expect(gmail.imapSecure).toBe(true);
@@ -229,12 +226,47 @@ describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
     expect(gmail.smtpPort).toBe("465");
     expect(gmail.smtpSecure).toBe(true);
 
-    const outlook = applyOvernightMailPreset(gmail, "outlook");
+    const qq = applyOvernightMailPreset(gmail, "qq");
+    expect(qq.preset).toBe("qq");
+    expect(qq.imapHost).toBe("imap.qq.com");
+    expect(qq.imapPort).toBe("993");
+    expect(qq.imapSecure).toBe(true);
+    expect(qq.smtpHost).toBe("smtp.qq.com");
+    expect(qq.smtpPort).toBe("465");
+    expect(qq.smtpSecure).toBe(true);
+
+    const agentMail = applyOvernightMailPreset(qq, "agent_mail");
+    expect(agentMail.preset).toBe("agent_mail");
+    expect(agentMail.emailProvider).toBe("agent_mail");
+    expect(agentMail.mode).toBe("imap");
+
+    const outlook = applyOvernightMailPreset(agentMail, "outlook");
+    expect(outlook.preset).toBe("outlook");
+    expect(outlook.emailProvider).toBe("imap_smtp");
     expect(outlook.imapHost).toBe("outlook.office365.com");
     expect(outlook.imapPort).toBe("993");
     expect(outlook.smtpHost).toBe("smtp.office365.com");
     expect(outlook.smtpPort).toBe("587");
     expect(outlook.smtpSecure).toBe(false);
+
+    const netease = applyOvernightMailPreset(outlook, "netease");
+    expect(netease.preset).toBe("netease");
+    expect(netease.neteaseDomain).toBe("163.com");
+    expect(netease.imapHost).toBe("imap.163.com");
+    expect(netease.smtpHost).toBe("smtp.163.com");
+    expect(netease.smtpPort).toBe("465");
+
+    const netease126 = applyOvernightMailPreset(netease, "126");
+    expect(netease126.preset).toBe("netease");
+    expect(netease126.neteaseDomain).toBe("126.com");
+    expect(netease126.imapHost).toBe("imap.126.com");
+    expect(netease126.smtpHost).toBe("smtp.126.com");
+
+    // Legacy "163" alias maps cleanly onto NetEase 163.com hosts
+    const legacy163 = applyOvernightMailPreset(netease126, "163");
+    expect(legacy163.preset).toBe("netease");
+    expect(legacy163.neteaseDomain).toBe("163.com");
+    expect(legacy163.imapHost).toBe("imap.163.com");
 
     // Custom keeps current values editable without wiping user entries
     const custom = applyOvernightMailPreset(outlook, "custom");
@@ -663,10 +695,20 @@ describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
       />,
     );
     expect(imapHtml).toContain('data-testid="overnight-imap-form"');
-    expect(imapHtml).toContain("QQ 邮箱");
-    expect(imapHtml).toContain("163 邮箱");
     expect(imapHtml).toContain("谷歌邮箱 (Gmail)");
+    expect(imapHtml).toContain("QQ 邮箱");
+    expect(imapHtml).toContain("Agent 邮箱");
     expect(imapHtml).toContain("Outlook / Exchange");
+    expect(imapHtml).toContain("网易邮箱（163 / 126）");
+    expect(imapHtml).toContain("自定义");
+    const presetOrder = ["gmail", "qq", "agent_mail", "outlook", "netease", "custom"] as const;
+    const presetPositions = presetOrder.map((id) =>
+      imapHtml.indexOf(`data-testid="overnight-preset-${id}"`),
+    );
+    expect(presetPositions.every((pos) => pos > -1)).toBe(true);
+    for (let i = 1; i < presetPositions.length; i += 1) {
+      expect(presetPositions[i]!).toBeGreaterThan(presetPositions[i - 1]!);
+    }
 
     // Live providers: deduplicated DeepSeek Harness (dsh) with blue whale #4176E6 SVG, zero OMP, zero disabled Claude Code
     const dshPillMatches = imapHtml.match(/data-testid="overnight-provider-dsh"/g) ?? [];

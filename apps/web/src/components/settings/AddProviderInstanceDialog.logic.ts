@@ -1,4 +1,11 @@
+import {
+  ProviderDriverKind,
+  type ProviderInstanceConfig,
+  type ProviderInstanceEnvironmentVariable,
+  type ServerProvider,
+} from "@prismux/core-contracts";
 import { msg } from "gt-react";
+import { normalizeProviderAccentColor } from "../../providerInstances";
 
 export type WizardNavigation =
   | { readonly kind: "navigate"; readonly step: number }
@@ -110,6 +117,123 @@ export function resolveWizardNavigation(
 
 export const RETIRED_ADD_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["fx"]);
 
+export const DSH_FEATURED_PRESET_LABEL = "DSH";
+export const DSH_FEATURED_PRESET_COMMAND = "dsh";
+export const DSH_FEATURED_PRESET_ARGS = ["acp"] as const;
+export const DSH_FEATURED_PRESET_HOMEPAGE_URL = "https://github.com/deepseek-ai/deepseek-harness";
+
+/**
+ * Featured 2x2 grid order:
+ * Row 1: Antigravity (left) | Codex (right)
+ * Row 2: Claude (left)      | DSH (right, inserted at index 3)
+ */
+export const FEATURED_DRIVER_ORDER = ["antigravity", "codex", "claudeAgent"] as const;
+export const DSH_FEATURED_PRESET_INSERT_INDEX = 3;
+
+export function orderFeaturedProviderDrivers<T extends { readonly driverKind: string }>(
+  definitions: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const rankOf = (driverKind: string): number => {
+    const index = (FEATURED_DRIVER_ORDER as ReadonlyArray<string>).indexOf(driverKind);
+    return index === -1 ? FEATURED_DRIVER_ORDER.length : index;
+  };
+  return definitions
+    .map((item, originalIndex) => ({ item, rank: rankOf(item.driverKind), originalIndex }))
+    .toSorted((left, right) => left.rank - right.rank || left.originalIndex - right.originalIndex)
+    .map((entry) => entry.item);
+}
+
+/**
+ * Keeps custom binary/command path, launch args, and env overrides tucked under a collapsible
+ * "Advanced" disclosure for all built-in drivers & presets, auto-expanding only for manual
+ * custom Local ACP commands that have no built-in executable default or when overrides exist.
+ */
+export function shouldDefaultExpandAdvancedConfig(input: {
+  readonly isLocalAcp: boolean;
+  readonly selectedFeaturedPreset: "dsh" | null;
+  readonly hasCustomConfigOverrides?: boolean;
+}): boolean {
+  if (input.hasCustomConfigOverrides) return true;
+  return input.isLocalAcp && input.selectedFeaturedPreset === null;
+}
+
+/**
+ * Builds the persisted provider instance configuration for "添加即启用":
+ * every added provider immediately enables with verified out-of-the-box defaults.
+ */
+export function buildNewProviderInstanceConfig(input: {
+  readonly driver: ProviderDriverKind;
+  readonly label: string;
+  readonly accentColor?: string | undefined;
+  readonly configDraft?: Readonly<Record<string, unknown>> | undefined;
+  readonly isLocalAcp: boolean;
+  readonly selectedFeaturedPreset: "dsh" | null;
+  readonly localEnvironment?: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined;
+}): ProviderInstanceConfig {
+  const rawDraft = input.configDraft ?? {};
+  let config: Record<string, unknown>;
+
+  if (input.driver === ProviderDriverKind.make("codex")) {
+    const existingSetupMode =
+      typeof rawDraft.setupMode === "string" ? rawDraft.setupMode.trim() : "";
+    config = {
+      ...rawDraft,
+      setupMode: existingSetupMode.length > 0 ? existingSetupMode : "existing",
+    };
+  } else if (input.driver === ProviderDriverKind.make("antigravity")) {
+    const existingAuthMethod =
+      typeof rawDraft.authMethod === "string" ? rawDraft.authMethod.trim() : "";
+    config = {
+      ...rawDraft,
+      authMethod: existingAuthMethod.length > 0 ? existingAuthMethod : "local-cli",
+    };
+  } else if (
+    input.driver === ProviderDriverKind.make("acpRegistry") &&
+    input.isLocalAcp &&
+    input.selectedFeaturedPreset === "dsh"
+  ) {
+    const rawCommandPath =
+      typeof rawDraft.commandPath === "string" ? rawDraft.commandPath.trim() : "";
+    const existingArgs = Array.isArray(rawDraft.commandArgs)
+      ? rawDraft.commandArgs.filter(
+          (arg): arg is string => typeof arg === "string" && arg.trim().length > 0,
+        )
+      : [];
+    const existingHomepage =
+      typeof rawDraft.homepageUrl === "string" ? rawDraft.homepageUrl.trim() : "";
+    config = {
+      ...rawDraft,
+      source: "local",
+      commandPath: rawCommandPath.length > 0 ? rawCommandPath : DSH_FEATURED_PRESET_COMMAND,
+      commandArgs: existingArgs.length > 0 ? existingArgs : [...DSH_FEATURED_PRESET_ARGS],
+      homepageUrl:
+        existingHomepage.length > 0 ? existingHomepage : DSH_FEATURED_PRESET_HOMEPAGE_URL,
+    };
+  } else {
+    config = { ...rawDraft };
+  }
+
+  const trimmedLabel = input.label.trim();
+  const displayName =
+    trimmedLabel.length > 0
+      ? trimmedLabel
+      : input.selectedFeaturedPreset === "dsh"
+        ? DSH_FEATURED_PRESET_LABEL
+        : undefined;
+  const normalizedAccentColor = normalizeProviderAccentColor(input.accentColor ?? "");
+  const hasConfig = Object.keys(config).length > 0;
+  const localEnvironment = input.localEnvironment ?? [];
+
+  return {
+    driver: input.driver,
+    enabled: true,
+    ...(displayName ? { displayName } : {}),
+    ...(normalizedAccentColor ? { accentColor: normalizedAccentColor } : {}),
+    ...(hasConfig ? { config } : {}),
+    ...(input.isLocalAcp && localEnvironment.length > 0 ? { environment: localEnvironment } : {}),
+  };
+}
+
 /**
  * Excludes ACP Registry (handled separately via search/local preset) and retired drivers
  * such as `fx` from the selectable provider cards in the Add Provider dialog.
@@ -121,6 +245,30 @@ export function filterSelectableProviderDrivers<T extends { readonly driverKind:
     (option) =>
       option.driverKind !== "acpRegistry" && !RETIRED_ADD_PROVIDER_DRIVERS.has(option.driverKind),
   );
+}
+
+export function selectPreferredLiveProvidersByDriver<
+  T extends {
+    readonly driver: string;
+    readonly enabled: boolean;
+    readonly installed: boolean;
+    readonly status: ServerProvider["status"];
+  },
+>(providers: ReadonlyArray<T>): Map<string, T> {
+  const rankOf = (provider: T): number => {
+    const isEnabled = provider.enabled && provider.status !== "disabled";
+    if (isEnabled && provider.installed) return 3;
+    if (isEnabled) return 2;
+    return 1;
+  };
+  const byDriver = new Map<string, T>();
+  for (const provider of providers) {
+    const existing = byDriver.get(provider.driver);
+    if (!existing || rankOf(provider) > rankOf(existing)) {
+      byDriver.set(provider.driver, provider);
+    }
+  }
+  return byDriver;
 }
 
 export function resolveAcpRegistryWizardNavigation(

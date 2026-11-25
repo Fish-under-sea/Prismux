@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties } from "react";
 import type { WallpaperStore } from "./store.js";
 import {
@@ -9,6 +9,7 @@ import {
 } from "./store.js";
 import type {
   BuiltinScenePresetId,
+  ObjectFitMode,
   ThemeMode,
   UserPropDef,
   WallpaperItem,
@@ -528,11 +529,28 @@ function WebWallGLStageCanvas({
   );
 }
 
+function AmbientBackdrop({ src, filter }: { src: string; filter?: string }) {
+  const baseAmbient = "blur(28px) saturate(1.18) brightness(0.72)";
+  const combinedFilter =
+    filter && filter !== "none" ? `${baseAmbient} ${filter}` : baseAmbient;
+  return (
+    <img
+      src={src}
+      alt=""
+      aria-hidden="true"
+      decoding="async"
+      className="pmx-wp-stage__ambient"
+      style={{ filter: combinedFilter }}
+    />
+  );
+}
+
 interface ImageCrossfadeStageProps {
   src: string;
   slides?: string[];
   slideIntervalMs?: number | null;
   paused: boolean;
+  showAmbient: boolean;
   mediaStyle: CSSProperties;
   transitionMs: number;
 }
@@ -542,6 +560,7 @@ function ImageCrossfadeStage({
   slides,
   slideIntervalMs,
   paused,
+  showAmbient,
   mediaStyle,
   transitionMs,
 }: ImageCrossfadeStageProps) {
@@ -574,8 +593,11 @@ function ImageCrossfadeStage({
     });
   }, [effectiveSrc]);
 
+  const filterStr = typeof mediaStyle.filter === "string" ? mediaStyle.filter : undefined;
+
   return (
     <>
+      {showAmbient ? <AmbientBackdrop src={slots.current} filter={filterStr} /> : null}
       {slots.previous && (
         <img
           key={`prev:${slots.previous}`}
@@ -613,6 +635,7 @@ interface VideoStageProps {
   volume: number;
   playbackRate: number;
   loop: boolean;
+  showAmbient: boolean;
   mediaStyle: CSSProperties;
   onEnded: () => void;
   onError: (msg: string | null) => void;
@@ -635,7 +658,7 @@ function tryPlayVideoElement(video: HTMLVideoElement): void {
 }
 
 function formatVideoMediaError(err: MediaError | null): string {
-  if (!err) return "视频壁纸解码失败，请检查文件编码或格式";
+  if (!err) return "视频壁纸解码失败，已自动回退静态预览";
   const detail = err.message ? `（${err.message}）` : "";
   switch (err.code) {
     case 1:
@@ -643,9 +666,9 @@ function formatVideoMediaError(err: MediaError | null): string {
     case 2:
       return `视频媒体流读取失败（网络或鉴权异常）${detail}`;
     case 3:
-      return `视频解码失败，请检查编码格式${detail}`;
+      return `视频解码失败，已回退静态预览${detail}`;
     case 4:
-      return `当前媒体格式或编码不受支持${detail}`;
+      return `当前媒体格式或编码不受支持，已回退静态预览${detail}`;
     default:
       return `视频壁纸播放失败（code=${err.code}）${detail}`;
   }
@@ -659,12 +682,17 @@ function VideoStage({
   volume,
   playbackRate,
   loop,
+  showAmbient,
   mediaStyle,
   onEnded,
   onError,
 }: VideoStageProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [readySrc, setReadySrc] = useState<string | null>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const videoReady = readySrc === src;
+  const videoFailed = failedSrc === src;
   const stateRef = useRef({
     paused,
     muted,
@@ -692,14 +720,42 @@ function VideoStage({
     const container = hostRef.current;
     if (!container) return;
 
+    let disposed = false;
+    let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+    let watchdogRetried = false;
+
+    const clearWatchdog = () => {
+      if (watchdogTimer !== null) {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = null;
+      }
+    };
+
     const latest = stateRef.current;
-    // Adopt prewarmed metadata element when available (instant start without double decode)
-    const adopted = consumePrewarmedVideo(src);
+    // Adopt prewarmed metadata element only if healthy (discard any errored/dead element)
+    const rawAdopted = consumePrewarmedVideo(src);
+    const adopted =
+      rawAdopted &&
+      rawAdopted.error === null &&
+      !(rawAdopted.readyState === 0 && rawAdopted.networkState === 3)
+        ? rawAdopted
+        : null;
+    if (rawAdopted && !adopted) {
+      try {
+        rawAdopted.pause();
+        rawAdopted.removeAttribute("src");
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+
     const video = adopted ?? document.createElement("video");
     videoRef.current = video;
 
     const effectiveMuted = latest.muted || latest.volume <= 0;
     video.className = "pmx-wp-stage__media";
+    video.removeAttribute("width");
+    video.removeAttribute("height");
     video.playsInline = true;
     video.setAttribute("playsinline", "");
     video.autoplay = !latest.paused;
@@ -723,7 +779,7 @@ function VideoStage({
     } else {
       video.removeAttribute("poster");
     }
-    Object.assign(video.style, latest.mediaStyle);
+    Object.assign(video.style, { width: "100%", height: "100%" }, latest.mediaStyle);
 
     if (!adopted || video.src !== src) {
       video.src = src;
@@ -731,12 +787,29 @@ function VideoStage({
 
     const handleContextMenu = (e: Event) => e.preventDefault();
     const handleEnded = () => stateRef.current.onEnded();
-    const handleError = () => stateRef.current.onError(formatVideoMediaError(video.error));
+    const handleError = () => {
+      if (disposed) return;
+      clearWatchdog();
+      setFailedSrc(src);
+      setReadySrc((prev) => (prev === src ? null : prev));
+      stateRef.current.onError(formatVideoMediaError(video.error));
+    };
     const handleReadyToPlay = () => {
+      if (disposed) return;
+      clearWatchdog();
+      setFailedSrc((prev) => (prev === src ? null : prev));
+      setReadySrc(src);
       stateRef.current.onError(null);
       if (!stateRef.current.paused && video.paused) {
         tryPlayVideoElement(video);
       }
+    };
+    const handlePlaying = () => {
+      if (disposed) return;
+      clearWatchdog();
+      setFailedSrc((prev) => (prev === src ? null : prev));
+      setReadySrc(src);
+      stateRef.current.onError(null);
     };
 
     video.addEventListener("contextmenu", handleContextMenu);
@@ -744,25 +817,66 @@ function VideoStage({
     video.addEventListener("error", handleError);
     video.addEventListener("loadeddata", handleReadyToPlay);
     video.addEventListener("canplay", handleReadyToPlay);
+    video.addEventListener("playing", handlePlaying);
 
     container.replaceChildren(video);
 
-    if (!latest.paused) {
+    if (video.readyState >= 2) {
+      queueMicrotask(() => {
+        if (!disposed) {
+          setReadySrc(src);
+        }
+      });
+      stateRef.current.onError(null);
+      if (!latest.paused) {
+        tryPlayVideoElement(video);
+      } else {
+        video.pause();
+      }
+    } else if (!latest.paused) {
       tryPlayVideoElement(video);
+      // Watchdog: when preload transitions metadata -> auto on an adopted element (or huge EOF-moov MP4),
+      // kick video.load() once if readyState stalls at < 2 without error.
+      watchdogTimer = setTimeout(() => {
+        watchdogTimer = null;
+        if (
+          disposed ||
+          watchdogRetried ||
+          video.readyState >= 2 ||
+          video.error !== null ||
+          stateRef.current.paused
+        ) {
+          return;
+        }
+        watchdogRetried = true;
+        try {
+          video.preload = "auto";
+          video.load();
+          tryPlayVideoElement(video);
+        } catch {
+          // Ignore reload failure
+        }
+      }, 1800);
     } else {
       video.pause();
     }
 
     return () => {
+      disposed = true;
+      clearWatchdog();
       video.removeEventListener("contextmenu", handleContextMenu);
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
       video.removeEventListener("loadeddata", handleReadyToPlay);
       video.removeEventListener("canplay", handleReadyToPlay);
+      video.removeEventListener("playing", handlePlaying);
       try {
         video.pause();
+        const hadStarted = video.readyState > 0 || video.networkState === 2;
         video.removeAttribute("src");
-        video.load();
+        if (hadStarted) {
+          video.load();
+        }
       } catch {
         // Ignore cleanup errors
       }
@@ -791,22 +905,55 @@ function VideoStage({
     }
     if (paused) {
       video.pause();
-    } else if (video.paused) {
+    } else if (video.paused && !videoFailed) {
       tryPlayVideoElement(video);
     }
-  }, [paused, muted, volume, playbackRate, loop]);
+  }, [paused, muted, volume, playbackRate, loop, videoFailed]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    Object.assign(video.style, mediaStyle);
+    Object.assign(video.style, { width: "100%", height: "100%" }, mediaStyle);
   }, [mediaStyle]);
 
-  return <div ref={hostRef} className="pmx-wp-stage__slot" />;
+  const filterStr = typeof mediaStyle.filter === "string" ? mediaStyle.filter : undefined;
+
+  return (
+    <div className="pmx-wp-stage__slot">
+      {/* Underlying poster + ambient backdrop prevents solid black flashes during load or decode error */}
+      {poster ? (
+        <>
+          {showAmbient || videoFailed ? (
+            <AmbientBackdrop src={poster} filter={filterStr} />
+          ) : null}
+          <img
+            src={poster}
+            alt=""
+            aria-hidden="true"
+            decoding="async"
+            className="pmx-wp-stage__media pmx-wp-stage__poster"
+            style={{
+              ...mediaStyle,
+              objectFit: videoFailed && mediaStyle.objectFit === "cover" ? "contain" : mediaStyle.objectFit,
+            }}
+          />
+        </>
+      ) : null}
+      <div
+        ref={hostRef}
+        className="pmx-wp-stage__slot pmx-wp-stage__video-layer"
+        style={{
+          opacity: videoReady && !videoFailed ? 1 : 0,
+          transition: "opacity 240ms ease",
+        }}
+      />
+    </div>
+  );
 }
 
 interface WebWallpaperStageProps {
   src: string;
+  poster?: string | null;
   userProps: UserPropDef[];
   paused: boolean;
   fpsLimit: number;
@@ -815,12 +962,15 @@ interface WebWallpaperStageProps {
 
 function WebWallpaperStage({
   src,
+  poster,
   userProps,
   paused,
   fpsLimit,
   mediaStyle,
 }: WebWallpaperStageProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const iframeLoaded = loadedSrc === src;
 
   const postProps = () => {
     const win = iframeRef.current?.contentWindow;
@@ -850,16 +1000,54 @@ function WebWallpaperStage({
   const isLoopbackHttp = /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(src);
 
   return (
-    <iframe
-      ref={iframeRef}
-      src={src}
-      title="Prismux Web Wallpaper"
-      sandbox={isLoopbackHttp ? "allow-scripts allow-same-origin" : "allow-scripts"}
-      className="pmx-wp-stage__media pmx-wp-stage__iframe"
-      style={mediaStyle}
-      onLoad={postProps}
-    />
+    <div className="pmx-wp-stage__slot">
+      {poster && !iframeLoaded ? (
+        <img
+          src={poster}
+          alt=""
+          aria-hidden="true"
+          decoding="async"
+          className="pmx-wp-stage__media pmx-wp-stage__poster"
+          style={{
+            objectFit: "cover",
+            filter: mediaStyle.filter,
+          }}
+        />
+      ) : null}
+      <iframe
+        ref={iframeRef}
+        src={src}
+        title="Prismux Web Wallpaper"
+        sandbox={isLoopbackHttp ? "allow-scripts allow-same-origin" : "allow-scripts"}
+        className="pmx-wp-stage__media pmx-wp-stage__iframe"
+        style={{
+          ...mediaStyle,
+          opacity: iframeLoaded || !poster ? 1 : 0,
+          transition: "opacity 260ms ease",
+        }}
+        onLoad={() => {
+          setLoadedSrc(src);
+          postProps();
+        }}
+      />
+    </div>
   );
+}
+
+function subscribeViewportResize(cb: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("resize", cb, { passive: true });
+  return () => window.removeEventListener("resize", cb);
+}
+
+function getViewportRatioSnapshot(): number {
+  return typeof window !== "undefined" && window.innerHeight > 0
+    ? window.innerWidth / window.innerHeight
+    : 16 / 9;
+}
+
+function getServerViewportRatio(): number {
+  return 16 / 9;
 }
 
 interface SteamSceneFallbackProps {
@@ -869,13 +1057,15 @@ interface SteamSceneFallbackProps {
   fpsLimit: number;
   audioReactive: boolean;
   audioEnergy: number | number[];
+  objectFit: ObjectFitMode;
+  layerPositionX: number;
+  layerPositionY: number;
   mediaStyle: CSSProperties;
 }
 
 /**
- * Intelligent Steam Scene fallback chain (never black screen):
- * 1. If previewUrl exists and loads -> animated parallax preview image (halted immediately when paused/occluded).
- * 2. If previewUrl fails or is missing -> deterministic WebWallGL shader tinted by schemeColor.
+ * Steam Scene fallback: renders preview image / animated preview.gif with ambient backdrop
+ * when aspect ratio mismatches (>1.35x) or contain/center fit, else falls back to WebWallGL.
  */
 function SteamSceneFallback({
   wallpaper,
@@ -884,17 +1074,43 @@ function SteamSceneFallback({
   fpsLimit,
   audioReactive,
   audioEnergy,
+  objectFit,
+  layerPositionX,
+  layerPositionY,
   mediaStyle,
 }: SteamSceneFallbackProps) {
-  const [previewFailed, setPreviewFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [parallax, setParallax] = useState({ x: 0, y: 0 });
+  const [loadedDims, setLoadedDims] = useState<{ url: string; w: number; h: number } | null>(null);
+  const viewportRatio = useSyncExternalStore(
+    subscribeViewportResize,
+    getViewportRatioSnapshot,
+    getServerViewportRatio,
+  );
+
+  const previewUrl = wallpaper.previewUrl ?? null;
+  const previewFailed = previewUrl !== null && failedUrl === previewUrl;
+  const naturalDims =
+    previewUrl !== null && loadedDims !== null && loadedDims.url === previewUrl
+      ? { w: loadedDims.w, h: loadedDims.h }
+      : wallpaper.width && wallpaper.height
+        ? { w: wallpaper.width, h: wallpaper.height }
+        : null;
+
+  const imgRatio = naturalDims && naturalDims.h > 0 ? naturalDims.w / naturalDims.h : 0;
+  const ratioMismatch =
+    imgRatio > 0 &&
+    viewportRatio > 0 &&
+    Math.max(viewportRatio / imgRatio, imgRatio / viewportRatio) > 1.35;
+
+  const needsAmbient =
+    objectFit === "contain" ||
+    objectFit === "center" ||
+    (objectFit === "cover" && ratioMismatch);
+  const parallaxEnabled = !paused && !previewFailed && Boolean(previewUrl) && !needsAmbient;
 
   useEffect(() => {
-    setPreviewFailed(false);
-  }, [wallpaper.id, wallpaper.previewUrl]);
-
-  useEffect(() => {
-    if (paused || previewFailed || !wallpaper.previewUrl) return;
+    if (!parallaxEnabled) return;
     let rafId: number | null = null;
     let targetX = 0;
     let targetY = 0;
@@ -927,23 +1143,54 @@ function SteamSceneFallback({
       window.removeEventListener("pointermove", onMove);
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [paused, previewFailed, wallpaper.previewUrl]);
+  }, [parallaxEnabled]);
 
-  if (wallpaper.previewUrl && !previewFailed) {
+  if (previewUrl && !previewFailed) {
+    const activeParallax = parallaxEnabled ? parallax : { x: 0, y: 0 };
     const [bass] = normalizeAudioTriple(audioReactive, audioEnergy);
-    const baseTransform = typeof mediaStyle.transform === "string" ? mediaStyle.transform : "";
-    const extraScale = 1.04 + bass * 0.02;
+    const filterStr = typeof mediaStyle.filter === "string" ? mediaStyle.filter : undefined;
+    const baseTransform =
+      typeof mediaStyle.transform === "string" && mediaStyle.transform !== "none"
+        ? mediaStyle.transform
+        : "";
+    const smartPosY =
+      objectFit === "cover" && !ratioMismatch && layerPositionY === 50 && imgRatio > 0 && imgRatio < viewportRatio
+        ? 25
+        : layerPositionY;
+
+    const effectiveObjectFit: CSSProperties["objectFit"] =
+      objectFit === "cover" && ratioMismatch ? "contain" : mediaStyle.objectFit;
+    const extraScale = needsAmbient ? 1 + bass * 0.015 : 1.04 + bass * 0.02;
+    const parallaxTransform = needsAmbient
+      ? baseTransform || (bass > 0.01 ? `scale(${extraScale.toFixed(3)})` : "none")
+      : `${baseTransform} translate3d(${(-activeParallax.x).toFixed(2)}px, ${(-activeParallax.y).toFixed(2)}px, 0) scale(${extraScale.toFixed(3)})`.trim();
+
     return (
-      <img
-        src={wallpaper.previewUrl}
-        alt=""
-        className="pmx-wp-stage__media"
-        onError={() => setPreviewFailed(true)}
-        style={{
-          ...mediaStyle,
-          transform: `${baseTransform} translate3d(${(-parallax.x).toFixed(2)}px, ${(-parallax.y).toFixed(2)}px, 0) scale(${extraScale.toFixed(3)})`.trim(),
-        }}
-      />
+      <div className="pmx-wp-stage__slot">
+        {needsAmbient ? (
+          <AmbientBackdrop src={previewUrl} filter={filterStr} />
+        ) : null}
+        <img
+          src={previewUrl}
+          alt=""
+          decoding="async"
+          className="pmx-wp-stage__media"
+          onLoad={(e) => {
+            const nw = e.currentTarget.naturalWidth;
+            const nh = e.currentTarget.naturalHeight;
+            if (nw > 0 && nh > 0) {
+              setLoadedDims({ url: previewUrl, w: nw, h: nh });
+            }
+          }}
+          onError={() => setFailedUrl(previewUrl)}
+          style={{
+            ...mediaStyle,
+            objectFit: effectiveObjectFit,
+            objectPosition: `${layerPositionX}% ${smartPosY}%`,
+            transform: parallaxTransform,
+          }}
+        />
+      </div>
     );
   }
 
@@ -1016,14 +1263,49 @@ export function WallpaperStage({
     [currentWallpaper, settings.userPropOverrides, snap.propsMap, store],
   );
 
-  const mediaStyle = useMemo<CSSProperties>(() => {
+  const { mediaStyle, frameMediaStyle } = useMemo<{
+    mediaStyle: CSSProperties;
+    frameMediaStyle: CSSProperties;
+  }>(() => {
     const objectFit: CSSProperties["objectFit"] =
       settings.objectFit === "center" ? "none" : settings.objectFit;
     const scaleFactor = settings.layerScale / 100;
     const sx = (settings.flipX ? -1 : 1) * scaleFactor;
     const sy = (settings.flipY ? -1 : 1) * scaleFactor;
-    const tx = (settings.layerPositionX - 50) * 0.5;
-    const ty = (settings.layerPositionY - 50) * 0.5;
+
+    // For <img> / <video>, CSS object-position already pans cleanly within the media without
+    // pulling edges off the viewport. Only add bounded translate3d when zoomed in (layerScale > 100).
+    const zoomShiftBound = scaleFactor > 1 ? ((scaleFactor - 1) / (2 * scaleFactor)) * 100 : 0;
+    const mediaTx =
+      zoomShiftBound > 0 ? ((50 - settings.layerPositionX) / 50) * zoomShiftBound : 0;
+    const mediaTy =
+      zoomShiftBound > 0 ? ((50 - settings.layerPositionY) / 50) * zoomShiftBound : 0;
+
+    const mediaTransformParts: string[] = [];
+    if (Math.abs(mediaTx) > 0.001 || Math.abs(mediaTy) > 0.001) {
+      mediaTransformParts.push(`translate3d(${mediaTx.toFixed(3)}%, ${mediaTy.toFixed(3)}%, 0)`);
+    }
+    if (sx !== 1 || sy !== 1) {
+      mediaTransformParts.push(`scale(${sx}, ${sy})`);
+    }
+
+    // For <iframe> / built-in WebGL containers where object-position does not apply:
+    const frameTx =
+      scaleFactor > 1
+        ? ((50 - settings.layerPositionX) / 50) * zoomShiftBound
+        : (settings.layerPositionX - 50) * 0.5;
+    const frameTy =
+      scaleFactor > 1
+        ? ((50 - settings.layerPositionY) / 50) * zoomShiftBound
+        : (settings.layerPositionY - 50) * 0.5;
+
+    const frameTransformParts: string[] = [];
+    if (Math.abs(frameTx) > 0.001 || Math.abs(frameTy) > 0.001) {
+      frameTransformParts.push(`translate3d(${frameTx.toFixed(3)}%, ${frameTy.toFixed(3)}%, 0)`);
+    }
+    if (sx !== 1 || sy !== 1) {
+      frameTransformParts.push(`scale(${sx}, ${sy})`);
+    }
 
     const filterParts: string[] = [];
     if (settings.wallpaperBlur > 0) filterParts.push(`blur(${settings.wallpaperBlur}px)`);
@@ -1038,10 +1320,20 @@ export function WallpaperStage({
     }
 
     return {
-      objectFit,
-      objectPosition: `${settings.layerPositionX}% ${settings.layerPositionY}%`,
-      transform: `translate3d(${tx}%, ${ty}%, 0) scale(${sx}, ${sy})`,
-      filter: filterParts.length > 0 ? filterParts.join(" ") : "none",
+      mediaStyle: {
+        width: "100%",
+        height: "100%",
+        objectFit,
+        objectPosition: `${settings.layerPositionX}% ${settings.layerPositionY}%`,
+        transform: mediaTransformParts.length > 0 ? mediaTransformParts.join(" ") : "none",
+        filter: filterParts.length > 0 ? filterParts.join(" ") : "none",
+      },
+      frameMediaStyle: {
+        width: "100%",
+        height: "100%",
+        transform: frameTransformParts.length > 0 ? frameTransformParts.join(" ") : "none",
+        filter: filterParts.length > 0 ? filterParts.join(" ") : "none",
+      },
     };
   }, [
     settings.objectFit,
@@ -1066,6 +1358,7 @@ export function WallpaperStage({
   const nativeFadeOpacity = normalizeWallpaperFadeOpacity(settings.wallpaperOpacity, 0) / 100;
   const scrimOpacity = normalizeWallpaperScrim(settings.scrim, 0.15);
   const nativeFadeColor = settings.themeMode === "light" ? "#ffffff" : "#000000";
+  const showAmbientBackdrop = settings.objectFit === "contain" || settings.objectFit === "center";
 
   // Extract shader user properties if present
   const propMap = new Map(resolvedProps.map((p) => [p.name, p.value]));
@@ -1099,6 +1392,7 @@ export function WallpaperStage({
             slides={currentWallpaper.slides}
             slideIntervalMs={currentWallpaper.slideIntervalMs}
             paused={effectivePaused}
+            showAmbient={showAmbientBackdrop}
             mediaStyle={mediaStyle}
             transitionMs={transitionMs}
           />
@@ -1113,6 +1407,7 @@ export function WallpaperStage({
             volume={settings.videoVolume}
             playbackRate={settings.playbackRate}
             loop={videoLoop}
+            showAmbient={showAmbientBackdrop}
             mediaStyle={mediaStyle}
             onEnded={() => store.handleVideoEnded()}
             onError={(msg) => store.setVideoError(msg)}
@@ -1122,16 +1417,17 @@ export function WallpaperStage({
         {currentWallpaper.type === "web" && (liveRuntimeUrl || currentWallpaper.mediaUrl) && (
           <WebWallpaperStage
             src={liveRuntimeUrl || currentWallpaper.mediaUrl!}
+            poster={currentWallpaper.previewUrl}
             userProps={resolvedProps}
             paused={effectivePaused}
             fpsLimit={settings.sceneLiveFps}
-            mediaStyle={mediaStyle}
+            mediaStyle={frameMediaStyle}
           />
         )}
 
         {currentWallpaper.type === "scene" &&
           (currentWallpaper.source === "builtin" ? (
-            <div className="pmx-wp-stage__slot" style={mediaStyle}>
+            <div className="pmx-wp-stage__slot" style={frameMediaStyle}>
               <WebWallGLStageCanvas
                 sceneIndex={presetToSceneIndex(
                   currentWallpaper.builtinSceneId,
@@ -1151,10 +1447,11 @@ export function WallpaperStage({
           ) : liveRuntimeUrl ? (
             <WebWallpaperStage
               src={liveRuntimeUrl}
+              poster={currentWallpaper.previewUrl}
               userProps={resolvedProps}
               paused={effectivePaused}
               fpsLimit={settings.sceneLiveFps}
-              mediaStyle={mediaStyle}
+              mediaStyle={frameMediaStyle}
             />
           ) : (
             <SteamSceneFallback
@@ -1164,6 +1461,9 @@ export function WallpaperStage({
               fpsLimit={settings.sceneLiveFps}
               audioReactive={settings.audioReactive}
               audioEnergy={effectiveAudioEnergy}
+              objectFit={settings.objectFit}
+              layerPositionX={settings.layerPositionX}
+              layerPositionY={settings.layerPositionY}
               mediaStyle={mediaStyle}
             />
           ))}

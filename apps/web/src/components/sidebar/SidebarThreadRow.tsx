@@ -245,6 +245,7 @@ function SidebarProviderStack(props: {
     <ProviderInstanceIcon
       driverKind={currentEntry.driverKind}
       displayName={currentEntry.displayName}
+      instanceId={currentEntry.instanceId}
       accentColor={currentEntry.accentColor}
       acpRegistryAgentId={currentEntry.acpRegistryAgentId}
       acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
@@ -274,6 +275,7 @@ function SidebarProviderStack(props: {
             key={instanceId}
             driverKind={entry.driverKind}
             displayName={entry.displayName}
+            instanceId={entry.instanceId}
             acpRegistryAgentId={entry.acpRegistryAgentId}
             acpRegistryIconUrl={entry.acpRegistryIconUrl}
             iconClassName="size-3 opacity-65"
@@ -388,6 +390,7 @@ function SidebarThreadTooltip({
               displayName={
                 providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
               }
+              instanceId={providerEntry?.instanceId ?? modelInstanceId}
               accentColor={providerEntry?.accentColor}
               acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
               acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}

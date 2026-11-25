@@ -456,15 +456,18 @@ export interface DiagnosticsStandaloneCopy {
   readonly isZh: boolean;
   readonly closeLabel: string;
   readonly closeTooltip: string;
+  readonly copyFixLabel: string;
   readonly summaryHealthyPill: (ok: number, total: number) => string;
   readonly summaryDegradedPill: (degraded: number) => string;
   readonly summaryErrorPill: (error: number) => string;
 }
 
+/* oxlint-disable prismux/no-untranslated-copy -- locale-switched bilingual standalone diagnostics copy */
 const ZH_STANDALONE_COPY: DiagnosticsStandaloneCopy = {
   isZh: true,
   closeLabel: "关闭服务体检面板",
   closeTooltip: "返回主会话 (Esc)",
+  copyFixLabel: "复制修复",
   summaryHealthyPill: (ok, total) => `${ok}/${total} 正常`,
   summaryDegradedPill: (degraded) => `${degraded} 降级`,
   summaryErrorPill: (error) => `${error} 异常`,
@@ -474,16 +477,63 @@ const EN_STANDALONE_COPY: DiagnosticsStandaloneCopy = {
   isZh: false,
   closeLabel: "Close service diagnostics",
   closeTooltip: "Return to main session (Esc)",
+  copyFixLabel: "Copy fix",
   summaryHealthyPill: (ok, total) => `${ok}/${total} healthy`,
   summaryDegradedPill: (degraded) => `${degraded} degraded`,
   summaryErrorPill: (error) => `${error} errors`,
 };
+/* oxlint-enable prismux/no-untranslated-copy */
 
 export function getDiagnosticsStandaloneCopy(
   locale: string | null | undefined,
 ): DiagnosticsStandaloneCopy {
   const normalized = (locale ?? getActiveLocale() ?? "en").toLowerCase();
   return normalized.startsWith("zh") ? ZH_STANDALONE_COPY : EN_STANDALONE_COPY;
+}
+
+const COPYRIGHT_BOILERPLATE_RE = /\s*(?:[:：\-—|·]\s*)?copyright\s*(?:\(c\)|©)[^）)\r\n]*/gi;
+const SEVEN_ZIP_VARIANT_RE = /\b(7-Zip)\s*\([a-z]+\)\s+/gi;
+const WRAPPED_SEVEN_ZIP_ZH_RE = /^(可用|已安装|Available|Ready)\s*（\s*(7-Zip[^）]+?)\s*）$/i;
+const WRAPPED_SEVEN_ZIP_EN_RE = /^(可用|已安装|Available|Ready)\s*\(\s*(7-Zip.+?)\s*\)$/i;
+
+/**
+ * Strips noisy copyright boilerplate (e.g. 7-Zip's `: Copyright (c) 1999-2024 Igor Pavlov : ...`)
+ * from displayed version pills while callers preserve the full raw string in `title`.
+ */
+export function formatCompactDiagnosticVersion(version: string | null): string | null {
+  if (typeof version !== "string") return null;
+  const collapsed = version.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return null;
+  const cleaned = collapsed
+    .replace(COPYRIGHT_BOILERPLATE_RE, "")
+    .replace(SEVEN_ZIP_VARIANT_RE, "$1 ")
+    .replace(/\s*[:：\-—]\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length > 0 ? cleaned : collapsed;
+}
+
+/**
+ * Normalizes multi-line or copyright-bloated diagnostic summaries (such as 7-Zip banners)
+ * into a crisp single-line summary while callers preserve the full raw text in `title`.
+ */
+export function formatCompactDiagnosticSummary(summary: string): string {
+  const collapsed = summary.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return "";
+  const stripped = collapsed
+    .replace(COPYRIGHT_BOILERPLATE_RE, "")
+    .replace(SEVEN_ZIP_VARIANT_RE, "$1 ")
+    .replace(/\s*[:：\-—]\s*([）)])/g, "$1")
+    .replace(/\s+([）)])/g, "$1")
+    .replace(/\s*[:：\-—]\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const wrappedMatch =
+    WRAPPED_SEVEN_ZIP_ZH_RE.exec(stripped) ?? WRAPPED_SEVEN_ZIP_EN_RE.exec(stripped);
+  if (wrappedMatch?.[1] && wrappedMatch[2]) {
+    return `${wrappedMatch[1]} · ${wrappedMatch[2].trim()}`;
+  }
+  return stripped.length > 0 ? stripped : collapsed;
 }
 
 export const DORMANT_ENGINES_GROUP_ID = "dormant_engines" as const;
@@ -597,6 +647,7 @@ export function filterDiagnosticsReport(
 
 export function formatDiagnosticsTimestamp(timestampMs: number | null | undefined): string {
   if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs) || timestampMs <= 0) {
+    // oxlint-disable-next-line prismux/no-em-dash-copy -- standard tabular empty-metric placeholder
     return "—";
   }
   try {
@@ -606,6 +657,7 @@ export function formatDiagnosticsTimestamp(timestampMs: number | null | undefine
       second: "2-digit",
     });
   } catch {
+    // oxlint-disable-next-line prismux/no-em-dash-copy -- standard tabular empty-metric placeholder
     return "—";
   }
 }

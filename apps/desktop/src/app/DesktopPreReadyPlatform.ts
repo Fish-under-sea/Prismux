@@ -20,6 +20,24 @@ import {
 } from "./DesktopLinuxUrlHandler.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 
+const WINDOWS_HEVC_DECODER_FEATURE = "PlatformHEVCDecoderSupport";
+
+function parseFeatureListNames(value: string | null): ReadonlyArray<string> {
+  return (value ?? "")
+    .split(",")
+    .flatMap((entry) => entry.trim().match(/^\*?([^<:]+)/)?.[1] ?? []);
+}
+
+export function resolveWindowsEnableFeaturesSwitch(existingEnableFeatures: string | null): string | null {
+  if (parseFeatureListNames(existingEnableFeatures).includes(WINDOWS_HEVC_DECODER_FEATURE)) {
+    return null;
+  }
+  const trimmed = existingEnableFeatures?.trim() ?? "";
+  return trimmed.length === 0
+    ? WINDOWS_HEVC_DECODER_FEATURE
+    : `${trimmed},${WINDOWS_HEVC_DECODER_FEATURE}`;
+}
+
 export interface DesktopPreReadyCommandLineReader {
   readonly hasSwitch: (switchName: string) => boolean;
   readonly getSwitchValue: (switchName: string) => string;
@@ -180,6 +198,16 @@ export const make = Effect.gen(function* () {
       });
       if (disableFeatures !== null) {
         Electron.app.commandLine.appendSwitch("disable-features", disableFeatures);
+      }
+    }
+
+    if (platform === "win32") {
+      // Enable Chromium Windows Media Foundation HEVC/H.265 hardware decoding for 4K video wallpapers.
+      const nextEnableFeatures = resolveWindowsEnableFeaturesSwitch(
+        readCommandLineSwitchValue(Electron.app.commandLine, "enable-features"),
+      );
+      if (nextEnableFeatures !== null) {
+        Electron.app.commandLine.appendSwitch("enable-features", nextEnableFeatures);
       }
     }
 

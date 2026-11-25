@@ -247,17 +247,23 @@ function PrismuxDaemonUpdateBadge() {
               aria-label={detail}
               onClick={() => void navigate({ to: "/settings/updates" as never })}
               className={cn(
-                "inline-flex h-7 max-w-32 cursor-pointer items-center gap-1 rounded-full border px-2 text-[11px] font-medium tabular-nums outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                "inline-flex h-7 max-w-32 cursor-pointer items-center gap-1 rounded-full border px-2 text-2xs font-medium tabular-nums outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                 badge.installState === "ready"
-                  ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-800 hover:bg-emerald-500/25 dark:text-emerald-200"
+                  ? "border-success/50 bg-success/15 text-success-foreground hover:bg-success/25 [[data-pmx-glass='1']_&]:border-success/55 [[data-pmx-glass='1']_&]:bg-success/20 [html:not(.dark)[data-pmx-glass='1']_&]:bg-success/14"
                   : activeStage
-                    ? "border-sky-500/50 bg-sky-500/15 text-sky-800 hover:bg-sky-500/25 dark:text-sky-200"
-                    : "border-amber-500/50 bg-amber-500/15 text-amber-900 hover:bg-amber-500/25 dark:text-amber-200",
+                    ? "border-primary/45 bg-primary/15 text-foreground hover:border-primary/70 hover:bg-primary/22 dark:border-primary/50 dark:bg-primary/20 dark:hover:bg-primary/28 [[data-pmx-glass='1']_&]:border-primary/55 [[data-pmx-glass='1']_&]:bg-primary/22 [html:not(.dark)[data-pmx-glass='1']_&]:bg-primary/14"
+                    : "border-primary/35 bg-primary/10 text-foreground hover:border-primary/60 hover:bg-primary/18 dark:border-primary/40 dark:bg-primary/14 dark:hover:bg-primary/22 [[data-pmx-glass='1']_&]:border-primary/45 [[data-pmx-glass='1']_&]:bg-primary/16 [html:not(.dark)[data-pmx-glass='1']_&]:bg-primary/10",
               )}
             />
           }
         >
-          <DownloadCloudIcon aria-hidden className="size-3 shrink-0" />
+          <DownloadCloudIcon
+            aria-hidden
+            className={cn(
+              "size-3 shrink-0",
+              badge.installState === "ready" ? "text-success-foreground" : "text-primary",
+            )}
+          />
           <span className="truncate">{label}</span>
         </TooltipTrigger>
         <TooltipPopup align="center" side="top">

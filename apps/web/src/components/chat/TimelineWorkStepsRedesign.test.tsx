@@ -25,6 +25,7 @@ import type { WorkLogEntry } from "../../session-logic";
 import { SimpleWorkEntryRow } from "./TimelineWorkEntryRow";
 import {
   LiveWorkEntryTimelineRow,
+  ThinkingTimelineRow,
   WorkGroupSection,
   WorkGroupToggleTimelineRow,
 } from "./TimelineWorkGroupRows";
@@ -95,8 +96,8 @@ vi.mock("./CommandOutputPanel", () => ({
 vi.mock("./TimelineToolActivityIcon", () => ({
   failedToolIconClassName: "text-destructive",
   toolIconAcceptsTint: () => true,
-  ToolActivityIconView: ({ fallbackName }: { fallbackName: string }) => (
-    <span data-mock-tool-icon={fallbackName} />
+  ToolActivityIconView: ({ fallbackName, muted }: { fallbackName: string; muted?: boolean }) => (
+    <span data-mock-tool-icon={fallbackName} data-mock-tool-muted={String(Boolean(muted))} />
   ),
 }));
 
@@ -223,10 +224,15 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
       );
       expect(countDisclosureChevrons(html)).toBe(1);
       expect(html).toContain('data-disclosure-leading="true"');
+      expect(html).toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
+      expect(html).toMatch(/data-disclosure-chevron="true"[^>]*text-current/);
       expect(html).toContain(`data-disclosure-state="${expanded ? "open" : "closed"}"`);
       expect(html).toContain("已执行命令并修改文件");
       expect(html.includes('data-disclosure-icon-idle="true"')).toBe(!expanded);
       expect(html.includes('data-mock-tool-icon="terminal"')).toBe(!expanded);
+      if (!expanded) {
+        expect(html).toContain('data-mock-tool-muted="false"');
+      }
     }
   });
 
@@ -520,11 +526,13 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
     expect(collapsedHtml).toContain('data-reasoning-row="true"');
     expect(collapsedHtml).toContain('data-reasoning-expanded="false"');
     expect(collapsedHtml).toContain('data-disclosure-leading="true"');
+    expect(collapsedHtml).toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
     expect(collapsedHtml).toContain('data-disclosure-icon-idle="true"');
+    expect(collapsedHtml).toContain('data-mock-tool-icon="brain" data-mock-tool-muted="false"');
     expect(collapsedHtml).toContain('data-disclosure-state="closed"');
-    expect(collapsedHtml).toContain("思考了 5.1s");
+    expect(collapsedHtml).toMatch(/data-reasoning-title="true"[^>]*font-medium text-primary[^>]*>思考了 5\.1s</);
     expect(collapsedHtml).toContain('data-reasoning-separator="true"');
-    expect(collapsedHtml).toContain('data-reasoning-summary-preview="true"');
+    expect(collapsedHtml).toMatch(/data-reasoning-summary-preview="true"[^>]*text-muted-foreground\/80/);
     expect(collapsedHtml).toContain("User wants me to think and inspect pwsh");
     expect(collapsedHtml).not.toContain("**User");
     expect(collapsedHtml).not.toContain('data-reasoning-body="true"');
@@ -544,7 +552,8 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
         </TimelineRowActivityCtx>
       </TimelineRowCtx>,
     );
-    expect(streamingHtml).toContain("正在思考");
+    expect(streamingHtml).toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
+    expect(streamingHtml).toMatch(/data-reasoning-title="true"[^>]*font-medium text-primary[^>]*>正在思考/);
     expect(streamingHtml).toContain('data-streaming="true"');
     expect(streamingHtml).toContain("Second step streaming");
     expect(streamingHtml).toContain("linear-gradient(to_right,black_calc(100%-48px),transparent)");
@@ -972,6 +981,236 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
     expect(expandedHtml).toContain('data-disclosure-panel="open"');
     expect(expandedHtml).toContain('data-step-detail-card="command_execution"');
     expect(expandedHtml).not.toContain('data-step-collapsed-preview="true"');
+  });
+
+  it("applies user theme accent text-primary to thinking headers, leading tool icons, search/web card headers, and active todo indicators while preserving semantic error/emerald tints", () => {
+    const shared = makeSharedState();
+
+    // 1. Live ThinkingTimelineRow -> brain icon & label use text-primary
+    const thinkingRow: Extract<TimelineRow, { kind: "thinking" }> = {
+      kind: "thinking",
+      id: "thinking-live-1",
+      createdAt: "2026-11-25T08:49:00.000Z",
+      label: "正在思考…",
+      groupId: "work-group:thinking",
+      expanded: false,
+    };
+    const thinkingHtml = renderToStaticMarkup(
+      <TimelineRowCtx value={shared}>
+        <TimelineRowActivityCtx value={{ ...DEFAULT_ACTIVITY, isWorking: true }}>
+          <ThinkingTimelineRow row={thinkingRow} />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>,
+    );
+    expect(thinkingHtml).toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
+    expect(thinkingHtml).toMatch(/data-live-activity-label="true"[^>]*font-medium text-primary/);
+    expect(thinkingHtml).toContain('data-mock-tool-icon="brain" data-mock-tool-muted="false"');
+
+    // 2. Failed WorkGroupToggle keeps text-destructive; reasoning WorkGroupToggle uses text-primary on icon + label
+    const failedGroupHtml = renderToStaticMarkup(
+      <TimelineRowCtx value={shared}>
+        <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+          <WorkGroupToggleTimelineRow
+            row={{
+              kind: "work-toggle",
+              id: "work-toggle:failed",
+              createdAt: "2026-11-25T08:49:00.000Z",
+              groupId: "work-group:failed",
+              hiddenCount: 2,
+              expanded: false,
+              summary: "命令执行失败",
+              summaryKind: "command",
+              hasFailure: true,
+            }}
+          />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>,
+    );
+    expect(failedGroupHtml).toMatch(/data-disclosure-leading="true"[^>]*text-destructive/);
+    expect(failedGroupHtml).not.toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
+
+    const reasoningGroupHtml = renderToStaticMarkup(
+      <TimelineRowCtx value={shared}>
+        <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+          <WorkGroupToggleTimelineRow
+            row={{
+              kind: "work-toggle",
+              id: "work-toggle:reasoning",
+              createdAt: "2026-11-25T08:49:00.000Z",
+              groupId: "work-group:reasoning",
+              hiddenCount: 1,
+              expanded: false,
+              summary: "思考过程",
+              summaryKind: "reasoning",
+              hasFailure: false,
+            }}
+          />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>,
+    );
+    expect(reasoningGroupHtml).toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
+    expect(reasoningGroupHtml).toMatch(/data-work-group-label="true"[^>]*font-medium text-primary/);
+
+    // 3. Settled tool rows use text-primary on leading icon; failed tool uses text-destructive; completed info checkmark uses text-emerald-500
+    const settledToolEntries: ReadonlyArray<WorkLogEntry> = [
+      {
+        id: "accent-cmd",
+        createdAt: "2026-11-25T08:49:00.000Z",
+        label: "Ran command",
+        tone: "tool",
+        itemType: "command_execution",
+        toolLifecycleStatus: "completed",
+        command: "git status",
+      },
+      {
+        id: "accent-read",
+        createdAt: "2026-11-25T08:49:01.000Z",
+        label: "Read README.md",
+        tone: "tool",
+        itemType: "dynamic_tool",
+        toolTitle: "read_file",
+        toolLifecycleStatus: "completed",
+      },
+      {
+        id: "accent-edit",
+        createdAt: "2026-11-25T08:49:02.000Z",
+        label: "Edited app.tsx",
+        tone: "tool",
+        itemType: "file_change",
+        toolLifecycleStatus: "completed",
+        changedFiles: ["apps/web/src/app.tsx"],
+      },
+    ];
+    for (const entry of settledToolEntries) {
+      const rowHtml = renderToStaticMarkup(
+        <TimelineRowCtx value={shared}>
+          <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+            <SimpleWorkEntryRow workEntry={entry} workspaceRoot="D:\\Fish-code\\Prismux" />
+          </TimelineRowActivityCtx>
+        </TimelineRowCtx>,
+      );
+      expect(rowHtml).toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
+      expect(rowHtml).toContain('data-mock-tool-muted="false"');
+    }
+
+    const failedToolHtml = renderToStaticMarkup(
+      <TimelineRowCtx value={shared}>
+        <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+          <SimpleWorkEntryRow
+            workEntry={{
+              id: "accent-fail",
+              createdAt: "2026-11-25T08:49:03.000Z",
+              label: "Command failed",
+              tone: "error",
+              itemType: "command_execution",
+              toolLifecycleStatus: "failed",
+              command: "exit 1",
+            }}
+            workspaceRoot="D:\\Fish-code\\Prismux"
+          />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>,
+    );
+    expect(failedToolHtml).toMatch(/data-disclosure-leading="true"[^>]*text-destructive/);
+
+    const infoCheckHtml = renderToStaticMarkup(
+      <TimelineRowCtx value={shared}>
+        <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+          <SimpleWorkEntryRow
+            workEntry={{
+              id: "accent-info-check",
+              createdAt: "2026-11-25T08:49:04.000Z",
+              label: "Checkpoint saved",
+              tone: "info",
+              requestKind: "file-change",
+              toolLifecycleStatus: "completed",
+            }}
+            workspaceRoot="D:\\Fish-code\\Prismux"
+          />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>,
+    );
+    expect(infoCheckHtml).toContain('data-mock-tool-icon="check" data-mock-tool-muted="false"');
+    expect(infoCheckHtml).toMatch(/data-disclosure-leading="true"[^>]*text-success-foreground/);
+
+    // 4. Expanded search/web headers and inline todo checklist use text-primary + emerald completed checkmark
+    const expandedShared = makeSharedState(undefined, {
+      workStepsPolicy: resolveWorkStepsPolicy("expanded"),
+    });
+    const searchItem: OrchestrationV2ProjectedTurnItem["item"] = {
+      ...makeProjectedBase("accent-search", "2026-11-25T08:49:00.000Z", "2026-11-25T08:49:00.200Z"),
+      type: "file_search",
+      pattern: "text-primary",
+      results: [{ fileName: "apps/web/src/a.ts", line: 1, preview: "text-primary" }],
+    };
+    const searchHtml = renderToStaticMarkup(
+      <TimelineRowCtx value={expandedShared}>
+        <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+          <SimpleWorkEntryRow
+            workEntry={{
+              id: "accent-search",
+              createdAt: "2026-11-25T08:49:00.000Z",
+              label: "Searched",
+              tone: "tool",
+              itemType: "file_search",
+              toolLifecycleStatus: "completed",
+              structuredPayload: searchItem,
+              projectedItem: {
+                position: 1,
+                visibility: "local",
+                sourceThreadId: ThreadId.make("thread-1"),
+                sourceItemId: searchItem.id,
+                item: searchItem,
+              },
+            }}
+            workspaceRoot="D:\\Fish-code\\Prismux"
+            autoExpandDetails
+          />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>,
+    );
+    expect(searchHtml).toMatch(/data-dsh-search-block="matches"[\s\S]*<svg[^>]*text-primary/);
+
+    const todoItem: OrchestrationV2ProjectedTurnItem["item"] = {
+      ...makeProjectedBase("accent-todo", "2026-11-25T08:49:02.000Z", "2026-11-25T08:49:02.100Z"),
+      type: "todo_list",
+      planId: PlanId.make("plan-accent"),
+      steps: [
+        { id: "s1", text: "已完成步骤", status: "completed" },
+        { id: "s2", text: "进行中步骤", status: "running" },
+      ],
+    };
+    const todoHtml = renderToStaticMarkup(
+      <TimelineRowCtx value={expandedShared}>
+        <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+          <SimpleWorkEntryRow
+            workEntry={{
+              id: "accent-todo",
+              createdAt: "2026-11-25T08:49:02.000Z",
+              label: "Todo list",
+              tone: "tool",
+              itemType: "todo_list",
+              toolLifecycleStatus: "inProgress",
+              structuredPayload: todoItem,
+              projectedItem: {
+                position: 2,
+                visibility: "local",
+                sourceThreadId: ThreadId.make("thread-1"),
+                sourceItemId: todoItem.id,
+                item: todoItem,
+              },
+            }}
+            workspaceRoot="D:\\Fish-code\\Prismux"
+            autoExpandDetails
+          />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>,
+    );
+    expect(todoHtml).toMatch(/class="[^"]*text-primary[^"]*"[^>]*data-agy-progress-ring="active"/);
+    expect(todoHtml).toContain("bg-primary");
+    expect(todoHtml).toMatch(
+      /class="[^"]*text-success-foreground[^"]*"[^>]*data-agy-step-indicator="completed"/,
+    );
   });
 
   // Reference MessageId to verify contract import stays clean if extended later

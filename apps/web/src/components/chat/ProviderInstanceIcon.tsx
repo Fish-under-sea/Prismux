@@ -22,12 +22,14 @@ import {
   DSH_BRAND_COLOR,
   DSH_FISH_LOGO_PATH,
   DSH_FISH_LOGO_VIEWBOX,
+  resolveAcpAgentBrandKey,
   resolveAgentBrandId,
 } from "../../prismux/agentBrand";
 import { providerClients } from "../settings/providerDriverMeta";
 import { ProviderPackageIcon } from "./ProviderPackageIcon";
 import {
   AcpRegistryAgentIcon,
+  BundledAcpBrandIcon,
   officialAcpRegistryIconUrlForAgentId,
   resolveOfficialAcpRegistryIconUrl,
 } from "../settings/AcpRegistryIcon";
@@ -65,12 +67,16 @@ export function isDshProviderInstance(input: {
   readonly displayName?: string | null | undefined;
   readonly acpRegistryAgentId?: string | undefined;
   readonly instanceId?: string | undefined;
+  readonly commandPath?: string | null | undefined;
 }): boolean {
   return (
     resolveAgentBrandId(input.driverKind) === "dsh" ||
-    resolveAgentBrandId(input.acpRegistryAgentId) === "dsh" ||
-    resolveAgentBrandId(input.instanceId) === "dsh" ||
-    resolveAgentBrandId(input.displayName) === "dsh"
+    resolveAcpAgentBrandKey({
+      agentId: input.acpRegistryAgentId,
+      instanceId: input.instanceId,
+      displayName: input.displayName,
+      commandPath: input.commandPath,
+    }) === "dsh"
   );
 }
 
@@ -130,6 +136,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   accentColor?: string | undefined;
   acpRegistryAgentId?: string | undefined;
   acpRegistryIconUrl?: string | undefined;
+  acpCommandPath?: string | undefined;
   showBadge?: boolean;
   badgeContent?: "initials" | "none";
   size?: "default" | "compact";
@@ -155,10 +162,18 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
     displayName: props.displayName,
     acpRegistryAgentId: props.acpRegistryAgentId,
     instanceId: props.instanceId,
+    commandPath: props.acpCommandPath,
   });
   const isAcpRegistry = props.driverKind === "acpRegistry";
-  const isAntigravityAcpRegistry =
-    isAcpRegistry && props.acpRegistryAgentId?.trim().toLowerCase() === "antigravity-acp";
+  const acpBrandKey = isAcpRegistry
+    ? resolveAcpAgentBrandKey({
+        agentId: props.acpRegistryAgentId,
+        instanceId: props.instanceId,
+        displayName: props.displayName,
+        commandPath: props.acpCommandPath,
+      })
+    : null;
+  const isAntigravityAcpRegistry = isAcpRegistry && acpBrandKey === "antigravity";
   // A custom OpenAI-compatible endpoint has no brand: show its name, marked with the protocol.
   const isCustomEndpoint = props.driverKind === "openaiCompatible";
   const acpRegistryIconUrl = resolveProviderInstanceAcpRegistryIconUrl({
@@ -166,6 +181,15 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
     agentId: props.acpRegistryAgentId,
     iconUrl: props.acpRegistryIconUrl,
   });
+  const fallbackBundledBrandKey =
+    !isDshInstance && !isAcpRegistry && !isCustomEndpoint && !packageIcon && !Icon
+      ? resolveAcpAgentBrandKey({
+          agentId: props.driverKind,
+          instanceId: props.instanceId,
+          displayName: props.displayName,
+          commandPath: props.acpCommandPath,
+        })
+      : null;
 
   return (
     <span
@@ -182,9 +206,13 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
         <AntigravityIcon className={cn("size-5 shrink-0", iconClassName)} aria-hidden />
       ) : isAcpRegistry ? (
         <AcpRegistryAgentIcon
-          className={cn("size-5 rounded-none bg-transparent", iconClassName)}
+          className={cn("size-5 rounded-none bg-transparent text-foreground", iconClassName)}
           fallbackClassName="size-full"
           icon={acpRegistryIconUrl}
+          agentId={props.acpRegistryAgentId}
+          instanceId={props.instanceId}
+          displayName={props.displayName}
+          commandPath={props.acpCommandPath}
         />
       ) : isCustomEndpoint ? (
         // The tile is a size container: below ~18px it keeps one letter and drops the mark.
@@ -217,6 +245,11 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
         />
       ) : Icon ? (
         <Icon className={cn("size-5 shrink-0", iconClassName)} aria-hidden />
+      ) : fallbackBundledBrandKey ? (
+        <BundledAcpBrandIcon
+          brandKey={fallbackBundledBrandKey}
+          className={cn("size-5 shrink-0", iconClassName)}
+        />
       ) : (
         <span className={cn("text-3xs font-semibold leading-none", iconClassName)}>
           {providerInstanceInitials(props.displayName)}

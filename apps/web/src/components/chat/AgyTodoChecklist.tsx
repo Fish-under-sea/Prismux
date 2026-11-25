@@ -52,7 +52,7 @@ export function AgyProgressRing({
           ? "text-success-foreground"
           : hasFailed
             ? "text-destructive"
-            : "text-foreground",
+            : "text-primary",
       )}
       data-agy-progress-ring={allCompleted ? "completed" : "active"}
     >
@@ -105,19 +105,19 @@ export function AgyFourDotActivityIcon() {
       className="mt-0.5 inline-grid size-3.5 shrink-0 grid-cols-2 place-items-center gap-0.5 p-0.25"
     >
       <span
-        className="size-1 animate-pulse rounded-full bg-foreground/90 motion-reduce:animate-none"
+        className="size-1 animate-pulse rounded-full bg-primary motion-reduce:animate-none"
         style={{ animationDelay: "0ms" }}
       />
       <span
-        className="size-1 animate-pulse rounded-full bg-foreground/65 motion-reduce:animate-none"
+        className="size-1 animate-pulse rounded-full bg-primary/65 motion-reduce:animate-none"
         style={{ animationDelay: "180ms" }}
       />
       <span
-        className="size-1 animate-pulse rounded-full bg-foreground/65 motion-reduce:animate-none"
+        className="size-1 animate-pulse rounded-full bg-primary/65 motion-reduce:animate-none"
         style={{ animationDelay: "360ms" }}
       />
       <span
-        className="size-1 animate-pulse rounded-full bg-foreground/90 motion-reduce:animate-none"
+        className="size-1 animate-pulse rounded-full bg-primary motion-reduce:animate-none"
         style={{ animationDelay: "540ms" }}
       />
     </span>
@@ -126,10 +126,8 @@ export function AgyFourDotActivityIcon() {
 
 function AgyStepRow({
   step,
-  allCompleted,
 }: {
   readonly step: AgyTodoStep;
-  readonly allCompleted: boolean;
 }) {
   return (
     <li
@@ -143,10 +141,7 @@ function AgyStepRow({
         <CheckCircle2Icon
           aria-hidden="true"
           data-agy-step-indicator="completed"
-          className={cn(
-            "mt-0.5 size-3.5 shrink-0",
-            allCompleted ? "text-success-foreground/90" : "text-muted-foreground/80",
-          )}
+          className="mt-0.5 size-3.5 shrink-0 text-success-foreground"
         />
       ) : step.status === "in_progress" ? (
         <AgyFourDotActivityIcon />
@@ -304,14 +299,18 @@ export const AgyTodoChecklist = memo(function AgyTodoChecklist({
         >
           <span
             data-agy-todo-elapsed="true"
-            className="shrink-0 text-xs font-medium text-muted-foreground"
+            className={cn(
+              "shrink-0 text-xs font-medium",
+              snapshot.hasActiveWork ? "text-primary" : "text-muted-foreground",
+            )}
           >
             {snapshot.elapsedLabelZh}
           </span>
           <ChevronRightIcon
             aria-hidden="true"
             className={cn(
-              "size-3.5 shrink-0 text-muted-foreground/75 transition-transform duration-200 ease-out motion-reduce:transition-none",
+              "size-3.5 shrink-0 transition-transform duration-200 ease-out motion-reduce:transition-none",
+              snapshot.hasActiveWork ? "text-primary" : "text-muted-foreground/75",
               expanded && "rotate-90",
             )}
           />
@@ -353,11 +352,7 @@ export const AgyTodoChecklist = memo(function AgyTodoChecklist({
             ) : null}
             <ul role="list" className="max-h-52 space-y-0.5 overflow-y-auto px-2.5 py-2">
               {snapshot.steps.map((step) => (
-                <AgyStepRow
-                  key={`${step.id}:${step.title}`}
-                  step={step}
-                  allCompleted={snapshot.allCompleted}
-                />
+                <AgyStepRow key={`${step.id}:${step.title}`} step={step} />
               ))}
             </ul>
           </div>

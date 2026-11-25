@@ -1207,19 +1207,521 @@ export const isCommandAvailable = Effect.fn("shell.isCommandAvailable")(function
   return (yield* resolveCommandPath(command, options)) !== null;
 });
 
-function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
-  const appData = env.APPDATA?.trim();
-  const localAppData = env.LOCALAPPDATA?.trim();
-  const userProfile = env.USERPROFILE?.trim();
+function readCaseInsensitiveEnvValue(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  platform: NodeJS.Platform,
+): string | undefined {
+  if (platform !== "win32") {
+    const raw = env[name]?.trim();
+    return raw && raw.length > 0 ? raw : undefined;
+  }
+  const target = name.toUpperCase();
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toUpperCase() === target) {
+      const trimmed = value?.trim();
+      if (trimmed && trimmed.length > 0) return trimmed;
+    }
+  }
+  return undefined;
+}
 
-  return [
-    ...(appData ? [`${appData}\\npm`] : []),
-    ...(localAppData ? [`${localAppData}\\Programs\\nodejs`, `${localAppData}\\Volta\\bin`] : []),
-    ...(localAppData ? [`${localAppData}\\pnpm`] : []),
-    ...(userProfile
-      ? [`${userProfile}\\.local\\bin`, `${userProfile}\\.bun\\bin`, `${userProfile}\\scoop\\shims`]
+function dedupeDirectoryList(
+  dirs: ReadonlyArray<string>,
+  platform: NodeJS.Platform,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of dirs) {
+    const trimmed = raw.trim().replace(/^"+|"+$/gu, "");
+    if (trimmed.length === 0) continue;
+    const key =
+      platform === "win32"
+        ? (trimmed.length > 3 ? trimmed.replace(/[\\/]+$/u, "") : trimmed).toLowerCase()
+        : trimmed;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
+  const appData = readCaseInsensitiveEnvValue(env, "APPDATA", "win32");
+  const localAppData = readCaseInsensitiveEnvValue(env, "LOCALAPPDATA", "win32");
+  const userProfile = readCaseInsensitiveEnvValue(env, "USERPROFILE", "win32");
+  const pnpmHome = readCaseInsensitiveEnvValue(env, "PNPM_HOME", "win32");
+  const voltaHome = readCaseInsensitiveEnvValue(env, "VOLTA_HOME", "win32");
+  const nvmSymlink = readCaseInsensitiveEnvValue(env, "NVM_SYMLINK", "win32");
+  const bunInstall = readCaseInsensitiveEnvValue(env, "BUN_INSTALL", "win32");
+
+  return dedupeDirectoryList(
+    [
+      ...(pnpmHome ? [pnpmHome] : []),
+      ...(appData ? [`${appData}\\npm`] : []),
+      ...(localAppData
+        ? [
+            `${localAppData}\\Programs\\nodejs`,
+            `${localAppData}\\Volta\\bin`,
+            `${localAppData}\\pnpm`,
+            `${localAppData}\\agy\\bin`,
+            `${localAppData}\\Microsoft\\WinGet\\Links`,
+            `${localAppData}\\DSH NEXT\\bin`,
+          ]
+        : []),
+      ...(voltaHome ? [`${voltaHome}\\bin`] : []),
+      ...(nvmSymlink ? [nvmSymlink] : []),
+      ...(bunInstall ? [`${bunInstall}\\bin`] : []),
+      ...(userProfile
+        ? [
+            `${userProfile}\\.local\\bin`,
+            `${userProfile}\\.bun\\bin`,
+            `${userProfile}\\scoop\\shims`,
+            `${userProfile}\\.opencode\\bin`,
+            `${userProfile}\\.dsh\\bin`,
+          ]
+        : []),
+    ],
+    "win32",
+  );
+}
+
+/**
+ * Standard per-platform CLI installation directories derived strictly from `env`
+ * (keeping hermetic tests isolated when profile/home variables are omitted).
+ */
+export function resolveKnownAgentCliDirs(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): ReadonlyArray<string> {
+  if (platform === "win32") {
+    return resolveKnownWindowsCliDirs(env);
+  }
+  const home = readCaseInsensitiveEnvValue(env, "HOME", platform);
+  const pnpmHome = readCaseInsensitiveEnvValue(env, "PNPM_HOME", platform);
+  const bunInstall = readCaseInsensitiveEnvValue(env, "BUN_INSTALL", platform);
+  const voltaHome = readCaseInsensitiveEnvValue(env, "VOLTA_HOME", platform);
+
+  return dedupeDirectoryList(
+    [
+      ...(pnpmHome ? [pnpmHome] : []),
+      ...(bunInstall ? [`${bunInstall}/bin`] : []),
+      ...(voltaHome ? [`${voltaHome}/bin`] : []),
+      ...(home
+        ? [
+            `${home}/.local/bin`,
+            `${home}/.bun/bin`,
+            `${home}/.opencode/bin`,
+            `${home}/.dsh/bin`,
+            `${home}/.volta/bin`,
+            `${home}/.npm-global/bin`,
+            ...(platform === "darwin" ? ["/opt/homebrew/bin"] : []),
+            "/usr/local/bin",
+          ]
+        : []),
+    ],
+    platform,
+  );
+}
+
+export const WINDOWS_UNINSTALL_REGISTRY_KEYS = [
+  "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+  "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+  "HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+] as const;
+
+export interface WindowsUninstallEntry {
+  readonly subkey: string;
+  readonly displayName?: string;
+  readonly installLocation?: string;
+  readonly uninstallString?: string;
+  readonly quietUninstallString?: string;
+  readonly displayIcon?: string;
+  readonly comments?: string;
+  readonly publisher?: string;
+}
+
+export type WindowsRegistryQueryRunner = (args: ReadonlyArray<string>) => string | undefined;
+
+const WINDOWS_UNINSTALL_QUERY_TIMEOUT_MS = 1_500;
+const windowsUninstallDirsCache = new Map<string, ReadonlyArray<string>>();
+
+/**
+ * Decodes `reg.exe` stdout bytes across UTF-8 and Chinese/OEM Windows codepages.
+ */
+export function decodeWindowsRegistryOutput(raw: Buffer | string): string {
+  if (typeof raw === "string") return raw;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch {
+    try {
+      return new TextDecoder("gb18030").decode(raw);
+    } catch {
+      return raw.toString("utf8");
+    }
+  }
+}
+
+function defaultRunWindowsRegQuery(args: ReadonlyArray<string>): string | undefined {
+  try {
+    const raw = NodeChildProcess.execFileSync("reg.exe", [...args], {
+      timeout: WINDOWS_UNINSTALL_QUERY_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return decodeWindowsRegistryOutput(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeWindowsUninstallDir(rawDir: string | undefined): string | undefined {
+  if (!rawDir) return undefined;
+  const cleaned = rawDir.trim().replace(/^"+|"+$/gu, "").replace(/\//gu, "\\");
+  if (!/^[A-Za-z]:\\/u.test(cleaned)) return undefined;
+  const trimmed = cleaned.length > 3 ? cleaned.replace(/\\+$/u, "") : cleaned;
+  if (/^[A-Za-z]:\\Windows\\(?:System32|SysWOW64)$/iu.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function extractDirFromExecutableCommand(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  let candidatePath: string | undefined;
+  if (trimmed.startsWith('"')) {
+    const closeQuote = trimmed.indexOf('"', 1);
+    if (closeQuote > 1) {
+      candidatePath = trimmed.slice(1, closeQuote).trim();
+    }
+  }
+  if (!candidatePath) {
+    const exeMatch = /^([A-Za-z]:[\\/][^"<>|*?\r\n]+?\.(?:exe|cmd|bat|ico))(?:,|\s|$)/iu.exec(
+      trimmed,
+    );
+    candidatePath = exeMatch?.[1]?.trim();
+  }
+  if (!candidatePath) {
+    const withoutIconIndex = trimmed.replace(/,-?\d+$/u, "").replace(/^"+|"+$/gu, "").trim();
+    if (/^[A-Za-z]:[\\/]/u.test(withoutIconIndex)) {
+      candidatePath = withoutIconIndex;
+    }
+  }
+  if (!candidatePath) return undefined;
+  if (/\bmsiexec(?:\.exe)?$/iu.test(candidatePath)) return undefined;
+  const normalizedPath = candidatePath.replace(/,-?\d+$/u, "").replace(/\//gu, "\\");
+  if (/\.(?:exe|cmd|bat|ico|dll|lnk)$/iu.test(normalizedPath)) {
+    return normalizeWindowsUninstallDir(NodePath.win32.dirname(normalizedPath));
+  }
+  return normalizeWindowsUninstallDir(normalizedPath);
+}
+
+export function extractWindowsUninstallInstallDirs(
+  entry: WindowsUninstallEntry,
+): ReadonlyArray<string> {
+  const dirs = [
+    normalizeWindowsUninstallDir(entry.installLocation),
+    extractDirFromExecutableCommand(entry.uninstallString),
+    extractDirFromExecutableCommand(entry.quietUninstallString),
+    extractDirFromExecutableCommand(entry.displayIcon),
+  ].filter((dir): dir is string => dir !== undefined);
+  return dedupeDirectoryList(dirs, "win32");
+}
+
+export function parseWindowsUninstallRegOutput(stdout: string): ReadonlyArray<WindowsUninstallEntry> {
+  const entries = new Map<string, { subkey: string; values: Record<string, string> }>();
+  let currentSubkey: string | undefined;
+  const valueLineRe = /^\s{2,}(.+?)\s{4,}(REG_[A-Z0-9_]+)(?:\s{4,}(.*))?$/u;
+
+  for (const rawLine of stdout.split(/\r?\n/u)) {
+    const trimmed = rawLine.trim();
+    if (trimmed.length === 0 || /^End of search:/iu.test(trimmed)) continue;
+    if (/^HKEY_[A-Z_]+\\/u.test(trimmed)) {
+      currentSubkey = trimmed;
+      const key = trimmed.toLowerCase();
+      if (!entries.has(key)) {
+        entries.set(key, { subkey: trimmed, values: {} });
+      }
+      continue;
+    }
+    if (!currentSubkey) continue;
+    const match = valueLineRe.exec(rawLine);
+    if (!match) continue;
+    const name = match[1]?.trim().toLowerCase() ?? "";
+    const type = match[2]?.trim() ?? "";
+    const value = (match[3] ?? "").trim();
+    if (!name || (type !== "REG_SZ" && type !== "REG_EXPAND_SZ")) continue;
+    const bucket = entries.get(currentSubkey.toLowerCase());
+    if (bucket && value.length > 0) {
+      bucket.values[name] = value;
+    }
+  }
+
+  return Array.from(entries.values()).map(({ subkey, values }) => ({
+    subkey,
+    ...(values.displayname ? { displayName: values.displayname } : {}),
+    ...(values.installlocation ? { installLocation: values.installlocation } : {}),
+    ...(values.uninstallstring ? { uninstallString: values.uninstallstring } : {}),
+    ...(values.quietuninstallstring ? { quietUninstallString: values.quietuninstallstring } : {}),
+    ...(values.displayicon ? { displayIcon: values.displayicon } : {}),
+    ...(values.comments ? { comments: values.comments } : {}),
+    ...(values.publisher ? { publisher: values.publisher } : {}),
+  }));
+}
+
+function mergeUninstallEntry(
+  base: WindowsUninstallEntry,
+  incoming: WindowsUninstallEntry,
+): WindowsUninstallEntry {
+  return {
+    subkey: base.subkey,
+    ...(incoming.displayName ?? base.displayName
+      ? { displayName: incoming.displayName ?? base.displayName }
+      : {}),
+    ...(incoming.installLocation ?? base.installLocation
+      ? { installLocation: incoming.installLocation ?? base.installLocation }
+      : {}),
+    ...(incoming.uninstallString ?? base.uninstallString
+      ? { uninstallString: incoming.uninstallString ?? base.uninstallString }
+      : {}),
+    ...(incoming.quietUninstallString ?? base.quietUninstallString
+      ? { quietUninstallString: incoming.quietUninstallString ?? base.quietUninstallString }
+      : {}),
+    ...(incoming.displayIcon ?? base.displayIcon
+      ? { displayIcon: incoming.displayIcon ?? base.displayIcon }
+      : {}),
+    ...(incoming.comments ?? base.comments ? { comments: incoming.comments ?? base.comments } : {}),
+    ...(incoming.publisher ?? base.publisher
+      ? { publisher: incoming.publisher ?? base.publisher }
+      : {}),
+  };
+}
+
+/**
+ * Discovers Windows application install directories from HKCU/HKLM/WOW6432Node Uninstall
+ * registry entries. Process-cached once per `cacheKey` when using the default live `reg.exe`
+ * runner; bypasses the cache when a custom `queryRegistry` callback is injected for tests.
+ */
+export function discoverWindowsUninstallInstallDirs(options: {
+  readonly cacheKey: string;
+  readonly searchTerms: ReadonlyArray<string>;
+  readonly matchEntry: (entry: WindowsUninstallEntry) => boolean;
+  readonly queryRegistry?: WindowsRegistryQueryRunner;
+}): ReadonlyArray<string> {
+  const useCache = options.queryRegistry === undefined;
+  if (useCache) {
+    const cached = windowsUninstallDirsCache.get(options.cacheKey);
+    if (cached !== undefined) return cached;
+  }
+
+  const runQuery = options.queryRegistry ?? defaultRunWindowsRegQuery;
+  const bySubkey = new Map<string, WindowsUninstallEntry>();
+
+  for (const rootKey of WINDOWS_UNINSTALL_REGISTRY_KEYS) {
+    for (const term of options.searchTerms) {
+      const stdout = runQuery(["query", rootKey, "/s", "/d", "/f", term]);
+      if (!stdout) continue;
+      for (const parsed of parseWindowsUninstallRegOutput(stdout)) {
+        const key = parsed.subkey.toLowerCase();
+        const existing = bySubkey.get(key);
+        bySubkey.set(key, existing ? mergeUninstallEntry(existing, parsed) : parsed);
+      }
+    }
+  }
+
+  const dirs: string[] = [];
+  for (const [key, partial] of bySubkey.entries()) {
+    let complete = partial;
+    const hasPathSignal =
+      complete.installLocation !== undefined ||
+      complete.uninstallString !== undefined ||
+      complete.quietUninstallString !== undefined ||
+      complete.displayIcon !== undefined;
+    if (!hasPathSignal || complete.displayName === undefined) {
+      const fullOut = runQuery(["query", complete.subkey]);
+      if (fullOut) {
+        const fullEntries = parseWindowsUninstallRegOutput(fullOut);
+        const exact = fullEntries.find((entry) => entry.subkey.toLowerCase() === key);
+        if (exact) {
+          complete = mergeUninstallEntry(complete, exact);
+        }
+      }
+    }
+    if (!options.matchEntry(complete)) continue;
+    dirs.push(...extractWindowsUninstallInstallDirs(complete));
+  }
+
+  const deduped = dedupeDirectoryList(dirs, "win32");
+  if (useCache) {
+    windowsUninstallDirsCache.set(options.cacheKey, deduped);
+  }
+  return deduped;
+}
+
+export function clearWindowsUninstallRegistryCacheForTests(): void {
+  windowsUninstallDirsCache.clear();
+}
+
+const ANTIGRAVITY_UNINSTALL_NAME_PATTERN = /^(?:google\s+)?antigravity(?:\s|$)/iu;
+
+/**
+ * Discovers Antigravity CLI (`agy`) binary directories from Windows Uninstall Registry
+ * and standard desktop install roots, returning only directories where an actual `agy`
+ * executable exists.
+ */
+export function findWindowsAntigravityCliDirs(options: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly isFile?: (filePath: string) => boolean;
+  readonly queryRegistry?: WindowsRegistryQueryRunner;
+  readonly probeDriveRoots?: boolean;
+} = { env: process.env }): ReadonlyArray<string> {
+  const isFile = options.isFile ?? isFileSync;
+  const usingDefaultHostFs = options.isFile === undefined;
+  const localAppData = readCaseInsensitiveEnvValue(options.env, "LOCALAPPDATA", "win32");
+  const userProfile = readCaseInsensitiveEnvValue(options.env, "USERPROFILE", "win32");
+  const programFiles = readCaseInsensitiveEnvValue(options.env, "ProgramFiles", "win32");
+  const programFilesX86 = readCaseInsensitiveEnvValue(options.env, "ProgramFiles(x86)", "win32");
+
+  const candidateDirs: string[] = [
+    ...(localAppData
+      ? [
+          `${localAppData}\\agy\\bin`,
+          `${localAppData}\\Programs\\antigravity\\bin`,
+          `${localAppData}\\Programs\\Antigravity`,
+        ]
+      : []),
+    ...(userProfile ? [`${userProfile}\\.antigravity\\bin`] : []),
+    ...(programFiles ? [`${programFiles}\\Antigravity\\bin`, `${programFiles}\\Antigravity`] : []),
+    ...(programFilesX86
+      ? [`${programFilesX86}\\Antigravity\\bin`, `${programFilesX86}\\Antigravity`]
       : []),
   ];
+
+  if (usingDefaultHostFs || options.queryRegistry !== undefined) {
+    const installDirs = discoverWindowsUninstallInstallDirs({
+      cacheKey: "antigravity",
+      searchTerms: ["Antigravity"],
+      matchEntry: (entry) =>
+        entry.displayName !== undefined &&
+        ANTIGRAVITY_UNINSTALL_NAME_PATTERN.test(entry.displayName.trim()),
+      ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {}),
+    });
+    for (const dir of installDirs) {
+      candidateDirs.push(
+        NodePath.win32.join(dir, "bin"),
+        dir,
+        NodePath.win32.join(dir, "resources", "app", "bin"),
+      );
+    }
+  }
+
+  if (options.probeDriveRoots ?? usingDefaultHostFs) {
+    for (const drive of ["C:", "D:", "E:", "F:"]) {
+      candidateDirs.push(
+        `${drive}\\Antigravity\\bin`,
+        `${drive}\\Program Files\\Antigravity\\bin`,
+        `${drive}\\Programs\\Antigravity\\bin`,
+      );
+    }
+  }
+
+  const verifiedDirs: string[] = [];
+  for (const dir of dedupeDirectoryList(candidateDirs, "win32")) {
+    for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
+      if (isFile(NodePath.win32.join(dir, exe))) {
+        verifiedDirs.push(dir);
+        break;
+      }
+    }
+  }
+  return verifiedDirs;
+}
+
+/**
+ * Resolves a bare CLI command against explicit fallback directories using the
+ * same `.exe -> .cmd -> .bat -> .com` priority rules as `SpawnExecutableResolution`.
+ */
+export function resolveAgentExecutableInDirs(input: {
+  readonly command: string;
+  readonly dirs: ReadonlyArray<string>;
+  readonly platform: NodeJS.Platform;
+  readonly env: NodeJS.ProcessEnv;
+  readonly isFile?: (filePath: string) => boolean;
+}): string | undefined {
+  const command = input.command.trim();
+  if (command.length === 0 || command.includes("/") || command.includes("\\")) {
+    return undefined;
+  }
+  const path = input.platform === "win32" ? NodePath.win32 : NodePath.posix;
+  const isFile =
+    input.isFile ??
+    ((filePath: string) =>
+      input.platform === "win32" ? isFileSync(filePath) : isFileSync(filePath) && canExecuteFile(filePath));
+  const candidates =
+    input.platform === "win32"
+      ? /\.(?:exe|cmd|bat|com)$/iu.test(command)
+        ? [command]
+        : [`${command}.exe`, `${command}.cmd`, `${command}.bat`, `${command}.com`]
+      : [command];
+
+  for (const dir of dedupeDirectoryList(input.dirs, input.platform)) {
+    for (const candidate of candidates) {
+      const fullPath = path.join(dir, candidate);
+      if (isFile(fullPath)) return fullPath;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolves any supported agent CLI (`codex`, `claude`, `agy`, `opencode`, `pi`, etc.)
+ * first on `PATH`, then across standard per-platform CLI bin directories, plus
+ * Windows Uninstall Registry discovery for Antigravity Desktop installs.
+ */
+export function resolveAgentExecutableWithFallback(input: {
+  readonly command: string;
+  readonly platform: NodeJS.Platform;
+  readonly env: NodeJS.ProcessEnv;
+  readonly resolveExecutable?: SpawnExecutableResolver;
+  readonly isFile?: (filePath: string) => boolean;
+  readonly queryRegistry?: WindowsRegistryQueryRunner;
+  readonly probeDriveRoots?: boolean;
+}): string | undefined {
+  const command = input.command.trim();
+  if (command.length === 0) return undefined;
+  const resolveExecutable = input.resolveExecutable ?? resolveSpawnExecutableWithNode;
+  const direct = resolveExecutable(command, input.platform, input.env);
+  if (direct !== undefined) return direct;
+
+  if (command.includes("/") || command.includes("\\")) {
+    return undefined;
+  }
+
+  const fallbackDirs = [...resolveKnownAgentCliDirs(input.env, input.platform)];
+  if (
+    input.platform === "win32" &&
+    /^(?:agy|antigravity)(?:\.(?:exe|cmd|bat))?$/iu.test(command)
+  ) {
+    fallbackDirs.push(
+      ...findWindowsAntigravityCliDirs({
+        env: input.env,
+        ...(input.isFile ? { isFile: input.isFile } : {}),
+        ...(input.queryRegistry ? { queryRegistry: input.queryRegistry } : {}),
+        ...(input.probeDriveRoots !== undefined ? { probeDriveRoots: input.probeDriveRoots } : {}),
+      }),
+    );
+  }
+
+  return resolveAgentExecutableInDirs({
+    command,
+    dirs: fallbackDirs,
+    platform: input.platform,
+    env: input.env,
+    ...(input.isFile ? { isFile: input.isFile } : {}),
+  });
 }
 
 /** Keep one PATH spelling in copied Windows environment records. */

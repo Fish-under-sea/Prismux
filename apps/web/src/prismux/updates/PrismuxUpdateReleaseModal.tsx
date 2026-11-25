@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+/* oxlint-disable prismux/no-untranslated-copy -- Prismux-native Chinese updater release modal copy */
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangleIcon,
@@ -130,13 +131,9 @@ export function PrismuxUpdateReleaseModal() {
   const progressPercentText = formatProgressPercentDisplay(barPercent);
   const speedText = formatTransferSpeed(state.speedBytesPerSec);
 
-  const recommendedAsset = useMemo<UpdateAssetView | null>(() => {
-    if (!update) return null;
-    return (
-      update.recommendedAsset ??
-      selectRecommendedUpdateAsset(update.assets, portableMode)
-    );
-  }, [portableMode, update]);
+  const recommendedAsset: UpdateAssetView | null = update
+    ? (update.recommendedAsset ?? selectRecommendedUpdateAsset(update.assets, portableMode))
+    : null;
 
   const isSplitArchive =
     recommendedAsset?.kind === "split-7z-exe" ||
@@ -157,27 +154,26 @@ export function PrismuxUpdateReleaseModal() {
     "https://github.com/Fish-under-sea/Prismux/releases";
 
   const publishedDate = formatPublishedDate(update?.publishedAt);
-  const displayReleaseNotes = useMemo(
-    () => extractReleaseNotesHighlights(update?.releaseNotes),
-    [update?.releaseNotes],
-  );
+  const displayReleaseNotes = extractReleaseNotesHighlights(update?.releaseNotes);
 
-  const handleDismissToCapsule = useCallback(() => {
+  const handleDismissToCapsule = () => {
     if (isInstalling) return;
     const fromRect = captureRectSnapshot(modalRef.current);
     prismuxUpdateNotifierStore.collapseToCapsule(fromRect, prefersReducedMotionNow());
-  }, [isInstalling]);
+  };
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- drives entrance requestAnimationFrame and moves DOM focus to dialog when opened
   useEffect(() => {
-    if (!isOpen) {
-      setEntered(false);
-      return;
-    }
+    if (!isOpen) return;
     const raf = window.requestAnimationFrame(() => setEntered(true));
     modalRef.current?.focus();
-    return () => window.cancelAnimationFrame(raf);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      setEntered(false);
+    };
   }, [isOpen]);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- window Escape keydown listener collapses release modal to sidebar capsule
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -190,7 +186,7 @@ export function PrismuxUpdateReleaseModal() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [handleDismissToCapsule, isInstalling, isOpen]);
 
-  const handleStartDownload = useCallback(async () => {
+  const handleStartDownload = async () => {
     if (isTransferActive || isInstalling) return;
     prismuxUpdateNotifierStore.setDownloading(true);
     prismuxUpdateNotifierStore.setMessages({ error: null, status: null });
@@ -236,6 +232,7 @@ export function PrismuxUpdateReleaseModal() {
             totalParts: null,
             partName: null,
             message: "SHA-256 校验通过，安装包已就绪",
+            // oxlint-disable-next-line react/purity -- Date.now() runs inside async download click handler, not during render (oxc#27309)
             updatedAt: Date.now(),
           },
         },
@@ -252,9 +249,9 @@ export function PrismuxUpdateReleaseModal() {
     } finally {
       prismuxUpdateNotifierStore.setDownloading(false);
     }
-  }, [currentVersion, daemon, isInstalling, isTransferActive, portableMode, recommendedAsset, update]);
+  };
 
-  const handleInstallDownloaded = useCallback(async () => {
+  const handleInstallDownloaded = async () => {
     const filePath = status?.downloadedFilePath;
     const expectedSha256 = status?.downloadedSha256;
     if (!filePath || !expectedSha256) {
@@ -291,7 +288,7 @@ export function PrismuxUpdateReleaseModal() {
     } finally {
       prismuxUpdateNotifierStore.setInstalling(false);
     }
-  }, [status?.downloadedFilePath, status?.downloadedSha256]);
+  };
 
   if (!isOpen || (!update && !hasVerifiedPackage)) {
     return null;
@@ -299,6 +296,11 @@ export function PrismuxUpdateReleaseModal() {
 
   const sourceLabel =
     update?.sourceUsed === "gitee" ? "Gitee Releases（国内源）" : "GitHub Releases（国际源）";
+  const hasPinnedStatusBanner =
+    isTransferActive ||
+    hasVerifiedPackage ||
+    Boolean(state.errorMessage) ||
+    Boolean(state.statusMessage);
 
   const modalNode = (
     <div
@@ -345,7 +347,7 @@ export function PrismuxUpdateReleaseModal() {
                 发现新版本
               </h2>
               {latestVersion ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-medium tabular-nums text-foreground">
+                <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-2xs font-medium tabular-nums text-foreground">
                   <span>{formatVersionBadge(currentVersion) || "当前版本"}</span>
                   <ArrowRightIcon className="size-3 text-muted-foreground" aria-hidden="true" />
                   <span className="font-semibold text-primary">
@@ -357,7 +359,7 @@ export function PrismuxUpdateReleaseModal() {
 
             <div
               id={descId}
-              className="flex flex-wrap items-center gap-2 text-[11.5px] text-muted-foreground"
+              className="flex flex-wrap items-center gap-2 text-2xs text-muted-foreground"
             >
               <span className="inline-flex items-center gap-1">
                 <GlobeIcon className="size-3 shrink-0" aria-hidden="true" />
@@ -396,7 +398,188 @@ export function PrismuxUpdateReleaseModal() {
           </Button>
         </header>
 
-        {/* Scrollable Release Notes + Transfer Progress */}
+        {/* Pinned Non-Scrolling Progress / Verified / Error / Status Slot */}
+        {hasPinnedStatusBanner ? (
+          <div
+            data-testid="prismux-update-modal-status-slot"
+            className="shrink-0 space-y-2.5 border-b border-border/50 px-5 py-3 [[data-pmx-glass='1']_&]:border-white/15 [html:not(.dark)[data-pmx-glass='1']_&]:border-black/10"
+          >
+            {/* Real-time download / split extraction / SHA-256 verification card */}
+            {isTransferActive || hasVerifiedPackage ? (
+              <section
+                data-testid="prismux-update-modal-progress"
+                className={cn(
+                  "space-y-3 rounded-xl border p-3.5 text-xs shadow-xs",
+                  hasVerifiedPackage && !isTransferActive
+                    ? "border-success/35 bg-success/[0.07] dark:border-success/40 dark:bg-success/[0.11] [[data-pmx-glass='1']_&]:border-success/45 [[data-pmx-glass='1']_&]:bg-success/[0.14] [html:not(.dark)[data-pmx-glass='1']_&]:bg-success/[0.10]"
+                    : "border-primary/35 bg-primary/[0.07] dark:border-primary/40 dark:bg-primary/[0.11] [[data-pmx-glass='1']_&]:border-primary/45 [[data-pmx-glass='1']_&]:bg-primary/[0.14] [html:not(.dark)[data-pmx-glass='1']_&]:border-primary/40 [html:not(.dark)[data-pmx-glass='1']_&]:bg-primary/[0.10]",
+                )}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2 font-medium text-foreground">
+                    {hasVerifiedPackage && !isTransferActive ? (
+                      <ShieldCheckIcon className="size-4 shrink-0 text-success-foreground" />
+                    ) : (
+                      <RefreshCwIcon className="size-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
+                    )}
+                    <span className="truncate">
+                      {isTransferActive
+                        ? describeUpdaterProgressStage(progress)
+                        : "SHA-256 整包校验通过，安装包已就绪"}
+                    </span>
+                  </div>
+                  <span
+                    data-testid="prismux-update-modal-percent"
+                    className={cn(
+                      "shrink-0 font-mono tabular-nums",
+                      progressPercentText !== null
+                        ? "text-xs font-semibold text-foreground"
+                        : "text-2xs font-medium text-muted-foreground",
+                    )}
+                  >
+                    {progressPercentText ?? "连接中…"}
+                  </span>
+                </div>
+
+                {/* 4-Stage Visual Progression Indicator */}
+                <div
+                  data-testid="prismux-update-modal-stages"
+                  className="grid grid-cols-4 gap-1.5"
+                >
+                  {stageSteps.map((step) => (
+                    <div
+                      key={step.id}
+                      data-stage-step={step.id}
+                      data-stage-state={step.state}
+                      className={cn(
+                        "flex items-center gap-1.5 rounded-lg border px-2 py-1 text-3xs transition-colors motion-reduce:transition-none",
+                        step.state === "completed"
+                          ? "border-success/35 bg-success/[0.09] text-success-foreground [[data-pmx-glass='1']_&]:border-success/45 [[data-pmx-glass='1']_&]:bg-success/[0.16]"
+                          : step.state === "active"
+                            ? "border-primary/50 bg-primary/[0.16] font-semibold text-foreground dark:border-primary/55 dark:bg-primary/[0.22] [[data-pmx-glass='1']_&]:border-primary/60 [[data-pmx-glass='1']_&]:bg-primary/[0.24]"
+                            : "border-border/50 bg-foreground/[0.025] text-muted-foreground dark:bg-white/[0.03] [[data-pmx-glass='1']_&]:border-white/15 [[data-pmx-glass='1']_&]:bg-white/[0.06] [html:not(.dark)[data-pmx-glass='1']_&]:border-black/10 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/[0.035]",
+                      )}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          step.state === "completed"
+                            ? "bg-success"
+                            : step.state === "active"
+                              ? "bg-primary animate-pulse motion-reduce:animate-none"
+                              : "bg-muted-foreground/40",
+                        )}
+                      />
+                      <span className="truncate">{step.label}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {isTransferActive ? (
+                  <div className="space-y-2">
+                    <div
+                      role="progressbar"
+                      aria-label="软件内更新下载进度"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      {...(barPercent !== null ? { "aria-valuenow": Math.round(barPercent) } : {})}
+                      data-progress-mode={barPercent !== null ? "determinate" : "indeterminate"}
+                      data-testid="prismux-update-modal-progressbar"
+                      className="relative h-2 w-full overflow-hidden rounded-full bg-foreground/12 dark:bg-white/14 [[data-pmx-glass='1']_&]:bg-white/18 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/12"
+                    >
+                      {barPercent !== null ? (
+                        <div
+                          data-testid="prismux-update-modal-progressbar-fill"
+                          className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out motion-reduce:transition-none"
+                          style={{ width: `${barPercent}%` }}
+                        />
+                      ) : (
+                        <div
+                          data-testid="prismux-update-modal-progressbar-indeterminate"
+                          className="h-full w-full rounded-full bg-gradient-to-r from-primary/15 via-primary/85 to-primary/15 animate-pulse motion-reduce:animate-none"
+                        />
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-2xs tabular-nums text-muted-foreground">
+                      <span>
+                        {progress?.stage === "downloading"
+                          ? barPercent === null && progress.bytesDownloaded <= 0
+                            ? "正在连接下载源…"
+                            : progress.bytesDownloaded > 0 || progress.totalBytes
+                              ? `已下载 ${formatUpdateByteSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatUpdateByteSize(progress.totalBytes)}` : ""}`
+                              : "已连接下载源，准备接收数据…"
+                          : progress?.stage === "extracting"
+                            ? `正在通过内置 7za.exe 无损合并分卷…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
+                            : progress?.stage === "verifying"
+                              ? `正在逐字节核验 SHA-256 摘要…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
+                              : progress?.message ?? "正在连接下载源…"}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {speedText && progress?.stage === "downloading" ? (
+                          <span
+                            data-testid="prismux-update-modal-speed"
+                            className="rounded-md border border-primary/25 bg-primary/[0.09] px-1.5 py-0.5 font-mono text-3xs font-medium text-foreground tabular-nums dark:border-primary/35 dark:bg-primary/[0.16] [[data-pmx-glass='1']_&]:border-primary/40 [[data-pmx-glass='1']_&]:bg-primary/[0.20]"
+                          >
+                            {speedText}
+                          </span>
+                        ) : null}
+                        {progress?.totalParts && progress.totalParts > 1 ? (
+                          <span
+                            data-testid="prismux-update-modal-part"
+                            className="inline-flex items-center gap-1 rounded-md border border-primary/25 bg-primary/[0.09] px-1.5 py-0.5 font-mono text-3xs font-medium text-foreground tabular-nums dark:border-primary/35 dark:bg-primary/[0.16] [[data-pmx-glass='1']_&]:border-primary/40 [[data-pmx-glass='1']_&]:bg-primary/[0.20]"
+                          >
+                            <LayersIcon className="size-3 text-primary" />
+                            分卷 {progress.currentPart ?? 1}/{progress.totalParts}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="text-3xs text-muted-foreground/85 tabular-nums">
+                      {stageWeightHint}
+                    </div>
+                  </div>
+                ) : null}
+
+                {hasVerifiedPackage && !isTransferActive ? (
+                  <div className="space-y-1.5 rounded-lg border border-border/60 bg-foreground/[0.04] px-3 py-2 font-mono text-2xs text-muted-foreground dark:bg-white/[0.05] [[data-pmx-glass='1']_&]:border-white/15 [[data-pmx-glass='1']_&]:bg-white/[0.07] [html:not(.dark)[data-pmx-glass='1']_&]:border-black/10 [html:not(.dark)[data-pmx-glass='1']_&]:bg-black/[0.04]">
+                    <div className="break-all text-foreground">
+                      文件：{status?.downloadedFilePath}
+                    </div>
+                    <div className="truncate">SHA-256：{status?.downloadedSha256}</div>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {state.errorMessage ? (
+              <div
+                role="alert"
+                data-testid="prismux-update-modal-error"
+                className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground [[data-pmx-glass='1']_&]:border-destructive/50 [[data-pmx-glass='1']_&]:bg-destructive/18"
+              >
+                <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
+                <span className="min-w-0 flex-1 break-all">{state.errorMessage}</span>
+              </div>
+            ) : null}
+
+            {state.statusMessage ? (
+              <div
+                role="status"
+                aria-live="polite"
+                data-testid="prismux-update-modal-status"
+                className="flex items-start gap-2 rounded-xl border border-success/35 bg-success/10 px-3 py-2 text-xs text-success-foreground [[data-pmx-glass='1']_&]:border-success/45 [[data-pmx-glass='1']_&]:bg-success/16"
+              >
+                <CheckCircle2Icon className="mt-0.5 size-4 shrink-0" />
+                <span className="min-w-0 flex-1">{state.statusMessage}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Scrollable Release Notes */}
         <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto overscroll-contain px-5 py-4">
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -409,7 +592,7 @@ export function PrismuxUpdateReleaseModal() {
                   : ""}
               </h3>
               {recommendedAsset?.sizeBytes ? (
-                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                <span className="font-mono text-2xs tabular-nums text-muted-foreground">
                   安装包 {formatUpdateByteSize(recommendedAsset.sizeBytes)}
                 </span>
               ) : null}
@@ -427,172 +610,6 @@ export function PrismuxUpdateReleaseModal() {
               />
             </div>
           </section>
-
-          {/* Real-time download / split extraction / SHA-256 verification card */}
-          {isTransferActive || hasVerifiedPackage ? (
-            <section
-              data-testid="prismux-update-modal-progress"
-              className="space-y-3 rounded-xl border border-primary/30 bg-primary/[0.06] p-3.5 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-primary/[0.09] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2 font-medium text-foreground">
-                  {hasVerifiedPackage && !isTransferActive ? (
-                    <ShieldCheckIcon className="size-4 shrink-0 text-emerald-500" />
-                  ) : (
-                    <RefreshCwIcon className="size-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
-                  )}
-                  <span className="truncate">
-                    {isTransferActive
-                      ? describeUpdaterProgressStage(progress)
-                      : "SHA-256 整包校验通过，安装包已就绪"}
-                  </span>
-                </div>
-                <span
-                  data-testid="prismux-update-modal-percent"
-                  className={cn(
-                    "shrink-0 font-mono tabular-nums",
-                    progressPercentText !== null
-                      ? "text-[13px] font-semibold text-foreground"
-                      : "text-[11px] font-medium text-muted-foreground",
-                  )}
-                >
-                  {progressPercentText ?? "连接中…"}
-                </span>
-              </div>
-
-              {/* 4-Stage Visual Progression Indicator */}
-              <div
-                data-testid="prismux-update-modal-stages"
-                className="grid grid-cols-4 gap-1.5"
-              >
-                {stageSteps.map((step) => (
-                  <div
-                    key={step.id}
-                    data-stage-step={step.id}
-                    data-stage-state={step.state}
-                    className={cn(
-                      "flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10.5px] transition-colors motion-reduce:transition-none",
-                      step.state === "completed"
-                        ? "border-emerald-500/35 bg-emerald-500/[0.09] text-emerald-800 dark:text-emerald-200"
-                        : step.state === "active"
-                          ? "border-primary/45 bg-primary/[0.14] font-semibold text-foreground"
-                          : "border-border/50 bg-foreground/[0.025] text-muted-foreground dark:bg-white/[0.03]",
-                    )}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "size-1.5 shrink-0 rounded-full",
-                        step.state === "completed"
-                          ? "bg-emerald-500"
-                          : step.state === "active"
-                            ? "bg-primary animate-pulse motion-reduce:animate-none"
-                            : "bg-muted-foreground/40",
-                      )}
-                    />
-                    <span className="truncate">{step.label}</span>
-                  </div>
-                ))}
-              </div>
-
-              {isTransferActive ? (
-                <div className="space-y-2">
-                  <div
-                    role="progressbar"
-                    aria-label="软件内更新下载进度"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    {...(barPercent !== null ? { "aria-valuenow": Math.round(barPercent) } : {})}
-                    data-progress-mode={barPercent !== null ? "determinate" : "indeterminate"}
-                    data-testid="prismux-update-modal-progressbar"
-                    className="relative h-2 w-full overflow-hidden rounded-full bg-foreground/12 dark:bg-white/14"
-                  >
-                    {barPercent !== null ? (
-                      <div
-                        data-testid="prismux-update-modal-progressbar-fill"
-                        className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out motion-reduce:transition-none"
-                        style={{ width: `${barPercent}%` }}
-                      />
-                    ) : (
-                      <div
-                        data-testid="prismux-update-modal-progressbar-indeterminate"
-                        className="h-full w-full rounded-full bg-gradient-to-r from-primary/15 via-primary/85 to-primary/15 animate-pulse motion-reduce:animate-none"
-                      />
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums text-muted-foreground">
-                    <span>
-                      {progress?.stage === "downloading"
-                        ? barPercent === null && progress.bytesDownloaded <= 0
-                          ? "正在连接下载源…"
-                          : progress.bytesDownloaded > 0 || progress.totalBytes
-                            ? `已下载 ${formatUpdateByteSize(progress.bytesDownloaded)}${progress.totalBytes ? ` / ${formatUpdateByteSize(progress.totalBytes)}` : ""}`
-                            : "已连接下载源，准备接收数据…"
-                        : progress?.stage === "extracting"
-                          ? `正在通过内置 7za.exe 无损合并分卷…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
-                          : progress?.stage === "verifying"
-                            ? `正在逐字节核验 SHA-256 摘要…${progress.totalBytes ? `（${formatUpdateByteSize(progress.totalBytes)}）` : ""}`
-                            : progress?.message ?? "正在连接下载源…"}
-                    </span>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {speedText && progress?.stage === "downloading" ? (
-                        <span
-                          data-testid="prismux-update-modal-speed"
-                          className="rounded-md bg-foreground/[0.06] px-1.5 py-0.5 font-mono text-[10.5px] font-medium text-foreground tabular-nums dark:bg-white/[0.08]"
-                        >
-                          {speedText}
-                        </span>
-                      ) : null}
-                      {progress?.totalParts && progress.totalParts > 1 ? (
-                        <span
-                          data-testid="prismux-update-modal-part"
-                          className="inline-flex items-center gap-1 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 font-mono text-[10.5px] font-medium text-foreground tabular-nums dark:bg-white/[0.08]"
-                        >
-                          <LayersIcon className="size-3" />
-                          分卷 {progress.currentPart ?? 1}/{progress.totalParts}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="text-[10.5px] text-muted-foreground/85 tabular-nums">
-                    {stageWeightHint}
-                  </div>
-                </div>
-              ) : null}
-
-              {hasVerifiedPackage && !isTransferActive ? (
-                <div className="space-y-1.5 rounded-lg border border-border/60 bg-foreground/[0.04] px-3 py-2 font-mono text-[11px] text-muted-foreground dark:bg-white/[0.05]">
-                  <div className="truncate text-foreground" title={status?.downloadedFilePath ?? ""}>
-                    文件：{status?.downloadedFilePath}
-                  </div>
-                  <div className="truncate">SHA-256：{status?.downloadedSha256}</div>
-                </div>
-              ) : null}
-            </section>
-          ) : null}
-
-          {state.errorMessage ? (
-            <div
-              role="alert"
-              className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            >
-              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
-              <span className="min-w-0 flex-1 break-all">{state.errorMessage}</span>
-            </div>
-          ) : null}
-
-          {state.statusMessage ? (
-            <div
-              role="status"
-              aria-live="polite"
-              className="flex items-start gap-2 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300"
-            >
-              <CheckCircle2Icon className="mt-0.5 size-4 shrink-0" />
-              <span className="min-w-0 flex-1">{state.statusMessage}</span>
-            </div>
-          ) : null}
         </div>
 
         {/* Footer Actions */}

@@ -31,7 +31,6 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -54,6 +53,7 @@ vi.mock("node:fs/promises", { spy: true });
 const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonString = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeUsageSummary = Schema.decodeEffect(UsageSummary);
 
 function claudeLine(
   id: number,
@@ -239,9 +239,6 @@ const replaceFile = (path: string, content: string) =>
 function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens: number } }[] }) {
   return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
 }
-
-const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
-const HOUR_MS = 60 * 60 * 1000;
 
 const seedCodexHistory = (input: {
   id: string;
@@ -2941,7 +2938,7 @@ describe("UsageService", () => {
       );
       const summary = yield* service.readSummary(WINDOW);
 
-      const decoded = yield* Schema.decodeEffect(UsageSummary)(summary);
+      const decoded = yield* decodeUsageSummary(summary);
       assert.strictEqual(decoded.callLogs?.length, 2);
       const newest = decoded.callLogs?.[0];
       assert.isDefined(newest);
@@ -2960,8 +2957,110 @@ describe("UsageService", () => {
 
       // Backwards compatibility: older server payloads without `callLogs` still decode cleanly.
       const { callLogs: _omit, ...legacySummary } = summary;
-      const decodedLegacy = yield* Schema.decodeEffect(UsageSummary)(legacySummary);
+      const decodedLegacy = yield* decodeUsageSummary(legacySummary);
       assert.isUndefined(decodedLegacy.callLogs);
+    }),
+  );
+
+  it.effect("scans DeepSeek Harness multi-frame zstd session logs into dsh buckets and callLogs", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const dshSessionDir = NodePath.join(home, ".dsh", "sessions", "--D-Proj--", "dsh-sess-1");
+      const startMs = Date.parse("2026-08-01T11:00:00.000Z");
+      const firstTokenMs = startMs + 1_200;
+      const endMs = startMs + 5_200;
+      const frame1 = NodeZlib.zstdCompressSync(
+        Buffer.from(
+          `${JSON.stringify({
+            type: "session",
+            version: 4,
+            id: "dsh-sess-1",
+            createdAt: startMs - 1_000,
+            isSeeded: false,
+            delegationDepth: 0,
+          })}\n`,
+          "utf8",
+        ),
+        { params: { [NodeZlib.constants.ZSTD_c_checksumFlag]: 1 } },
+      );
+      const frame2 = NodeZlib.zstdCompressSync(
+        Buffer.from(
+          [
+            JSON.stringify({ seq: 1, type: "step/start", time: startMs, data: { turn: 1, step: 1 } }),
+            JSON.stringify({
+              seq: 2,
+              type: "assistant/message",
+              time: endMs,
+              data: {
+                turn: 1,
+                step: 1,
+                usage: {
+                  inputTokens: 400,
+                  outputTokens: 200,
+                  totalTokens: 10_200,
+                  cacheReadTokens: 9_600,
+                },
+                message: {
+                  source: { provider: "magpie", model: "group/deepseek" },
+                  content: [{ type: "text", text: "Hello from DSH" }],
+                },
+                stream: [
+                  {
+                    type: "text-chunks",
+                    time0: firstTokenMs,
+                    index: 0,
+                    dt: [],
+                    texts: ["Hello"],
+                  },
+                ],
+              },
+            }),
+          ].join("\n") + "\n",
+          "utf8",
+        ),
+        { params: { [NodeZlib.constants.ZSTD_c_checksumFlag]: 1 } },
+      );
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(dshSessionDir, { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(dshSessionDir, "session.v4.jsonl.zstd"),
+          Buffer.concat([frame1, frame2]),
+        );
+      });
+
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(layerService({ prefix: "usage-service-dsh-test", home, settings })),
+      );
+      const summary = yield* service.readSummary(WINDOW);
+      const decoded = yield* decodeUsageSummary(summary);
+
+      const dshSource = decoded.sources.find((source) => source.fingerprint.provider === "dsh");
+      assert.strictEqual(dshSource?.status, "ok");
+      assert.strictEqual(dshSource?.scannedFiles, 1);
+      assert.strictEqual(dshSource?.distinctSessions, 1);
+
+      const dshBucket = decoded.buckets.find((bucket) => bucket.provider === "dsh");
+      assert.isDefined(dshBucket);
+      assert.strictEqual(dshBucket?.model, "group/deepseek");
+      assert.deepStrictEqual(dshBucket?.totals, {
+        uncachedInputTokens: 400,
+        cachedInputTokens: 9_600,
+        cacheCreationTokens: 0,
+        outputTokens: 200,
+        reasoningTokens: 0,
+      });
+
+      const dshLog = decoded.callLogs?.find((log) => log.provider === "dsh");
+      assert.isDefined(dshLog);
+      assert.strictEqual(dshLog?.model, "group/deepseek");
+      assert.strictEqual(dshLog?.threadId, "dsh-sess-1");
+      assert.strictEqual(dshLog?.inputTokens, 400);
+      assert.strictEqual(dshLog?.cachedInputTokens, 9_600);
+      assert.strictEqual(dshLog?.outputTokens, 200);
+      assert.strictEqual(dshLog?.cacheHitRate, 0.96);
+      assert.strictEqual(dshLog?.ttftMs, 1_200);
+      assert.strictEqual(dshLog?.durationMs, 5_200);
+      assert.strictEqual(dshLog?.tps, 50); // 200 tokens / ((5200 - 1200) / 1000)s
     }),
   );
 });

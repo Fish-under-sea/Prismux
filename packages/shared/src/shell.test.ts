@@ -18,6 +18,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   applyShellEnvironment,
+  clearWindowsUninstallRegistryCacheForTests,
+  discoverWindowsUninstallInstallDirs,
+  findWindowsAntigravityCliDirs,
   pathSetup,
   pathSetupCommand,
   CommandAvailability,
@@ -32,10 +35,13 @@ import {
   mergePathValues,
   npmNodeShimCommand,
   npmShimExecutable,
+  parseWindowsUninstallRegOutput,
   preferGitForWindowsBinary,
   readEnvironmentFromLoginShell,
   readEnvironmentFromWindowsShell,
+  resolveAgentExecutableWithFallback,
   resolveCommandPath,
+  resolveKnownAgentCliDirs,
   resolveSpawnCommand,
   resolveWindowsEnvironment,
   runsGitWithoutConsole,
@@ -1294,9 +1300,14 @@ effectIt.layer(NodeServices.layer)("resolveWindowsEnvironment", (it) => {
           "C:\\Users\\testuser\\AppData\\Local\\Programs\\nodejs",
           "C:\\Users\\testuser\\AppData\\Local\\Volta\\bin",
           "C:\\Users\\testuser\\AppData\\Local\\pnpm",
+          "C:\\Users\\testuser\\AppData\\Local\\agy\\bin",
+          "C:\\Users\\testuser\\AppData\\Local\\Microsoft\\WinGet\\Links",
+          "C:\\Users\\testuser\\AppData\\Local\\DSH NEXT\\bin",
           "C:\\Users\\testuser\\.local\\bin",
           "C:\\Users\\testuser\\.bun\\bin",
           "C:\\Users\\testuser\\scoop\\shims",
+          "C:\\Users\\testuser\\.opencode\\bin",
+          "C:\\Users\\testuser\\.dsh\\bin",
         ].join(";"),
       });
       expect(readEnvironment).toHaveBeenCalledTimes(1);
@@ -1365,9 +1376,14 @@ effectIt.layer(NodeServices.layer)("resolveWindowsEnvironment", (it) => {
           "C:\\Users\\testuser\\AppData\\Local\\Programs\\nodejs",
           "C:\\Users\\testuser\\AppData\\Local\\Volta\\bin",
           "C:\\Users\\testuser\\AppData\\Local\\pnpm",
+          "C:\\Users\\testuser\\AppData\\Local\\agy\\bin",
+          "C:\\Users\\testuser\\AppData\\Local\\Microsoft\\WinGet\\Links",
+          "C:\\Users\\testuser\\AppData\\Local\\DSH NEXT\\bin",
           "C:\\Users\\testuser\\.local\\bin",
           "C:\\Users\\testuser\\.bun\\bin",
           "C:\\Users\\testuser\\scoop\\shims",
+          "C:\\Users\\testuser\\.opencode\\bin",
+          "C:\\Users\\testuser\\.dsh\\bin",
         ].join(";"),
         FNM_DIR: "C:\\Users\\testuser\\AppData\\Roaming\\fnm",
         FNM_MULTISHELL_PATH: "C:\\Users\\testuser\\AppData\\Local\\fnm_multishells\\123",
@@ -1409,6 +1425,8 @@ effectIt.layer(NodeServices.layer)("resolveWindowsEnvironment", (it) => {
           "C:\\Users\\testuser\\.local\\bin",
           "C:\\Users\\testuser\\.bun\\bin",
           "C:\\Users\\testuser\\scoop\\shims",
+          "C:\\Users\\testuser\\.opencode\\bin",
+          "C:\\Users\\testuser\\.dsh\\bin",
         ].join(";"),
         FNM_DIR: "C:\\Users\\testuser\\AppData\\Roaming\\fnm",
       });
@@ -1511,5 +1529,115 @@ describe("pathSetupCommand", () => {
     expect(
       pathSetup({ ...setup, platform: "linux", configHome: "/home/theo/my cfg" }),
     ).toBeUndefined();
+  });
+});
+
+describe("Windows Uninstall Registry & agent CLI fallback discovery", () => {
+  it("parses Uninstall Registry output and extracts install dirs from InstallLocation, UninstallString, and DisplayIcon", () => {
+    const sample = [
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\4a513c97-f710-5eb4-97f6-b8e556e2c341",
+      "    DisplayName    REG_SZ    DSH NEXT 2.0.24-next",
+      '    UninstallString    REG_SZ    "D:\\Apps\\DSH NEXT\\Uninstall DSH NEXT.exe" /currentuser',
+      "    DisplayIcon    REG_SZ    D:\\Apps\\DSH NEXT\\uninstallerIcon.ico,0",
+      "",
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\121a0be4-63bd-531e-acf8-fc3924c7e984",
+      "    DisplayName    REG_SZ    Antigravity 2.35.1",
+      "    InstallLocation    REG_SZ    E:\\Tools\\Antigravity\\",
+      "",
+      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\skin-false-positive",
+      "    DisplayName    REG_SZ    AntigravityStarSuiteSkin",
+      "    InstallLocation    REG_SZ    C:\\Program Files\\StarSuite",
+    ].join("\r\n");
+
+    const parsed = parseWindowsUninstallRegOutput(sample);
+    expect(parsed).toHaveLength(3);
+    expect(parsed[0]?.displayName).toBe("DSH NEXT 2.0.24-next");
+
+    clearWindowsUninstallRegistryCacheForTests();
+    const dshDirs = discoverWindowsUninstallInstallDirs({
+      cacheKey: "test-dsh",
+      searchTerms: ["DSH NEXT"],
+      matchEntry: (entry) =>
+        /\b(?:dsh(?:\s+next)?|deepseek\s+harness)\b/i.test(entry.displayName ?? ""),
+      queryRegistry: () => sample,
+    });
+    expect(dshDirs).toEqual(["D:\\Apps\\DSH NEXT"]);
+
+    const agyFiles = new Set([
+      "e:\\tools\\antigravity\\bin\\agy.exe",
+      "c:\\users\\demo\\appdata\\local\\agy\\bin\\agy.exe",
+      "c:\\program files\\starsuite\\bin\\agy.exe",
+    ]);
+    const agyDirs = findWindowsAntigravityCliDirs({
+      env: { LOCALAPPDATA: "C:\\Users\\demo\\AppData\\Local" },
+      isFile: (filePath) => agyFiles.has(filePath.toLowerCase()),
+      queryRegistry: () => sample,
+      probeDriveRoots: false,
+    });
+    expect(agyDirs).toContain("E:\\Tools\\Antigravity\\bin");
+    expect(agyDirs).toContain("C:\\Users\\demo\\AppData\\Local\\agy\\bin");
+    expect(agyDirs.some((dir) => dir.includes("StarSuite"))).toBe(false);
+  });
+
+  it("discovers agent CLIs installed in bun, scoop, volta, nvm, .opencode/bin, and .dsh/bin", () => {
+    const tmpDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-agent-cli-dirs-"));
+    try {
+      const bunBin = NodePath.join(tmpDir, ".bun", "bin");
+      const scoopShims = NodePath.join(tmpDir, "scoop", "shims");
+      const voltaBin = NodePath.join(tmpDir, "volta", "bin");
+      const nvmDir = NodePath.join(tmpDir, "nvm-nodejs");
+      const opencodeBin = NodePath.join(tmpDir, ".opencode", "bin");
+      const dshBin = NodePath.join(tmpDir, ".dsh", "bin");
+      for (const dir of [bunBin, scoopShims, voltaBin, nvmDir, opencodeBin, dshBin]) {
+        NodeFS.mkdirSync(dir, { recursive: true });
+      }
+      const env: NodeJS.ProcessEnv = {
+        PATH: "",
+        USERPROFILE: tmpDir,
+        VOLTA_HOME: NodePath.join(tmpDir, "volta"),
+        NVM_SYMLINK: nvmDir,
+      };
+      const dirs = resolveKnownAgentCliDirs(env, "win32");
+      expect(dirs).toEqual(
+        expect.arrayContaining([bunBin, scoopShims, voltaBin, nvmDir, opencodeBin, dshBin]),
+      );
+
+      const codexShim = NodePath.join(bunBin, "codex.cmd");
+      const opencodeExe = NodePath.join(opencodeBin, "opencode.exe");
+      const piBat = NodePath.join(scoopShims, "pi.bat");
+      NodeFS.writeFileSync(codexShim, "@echo off\r\n", "utf8");
+      NodeFS.writeFileSync(opencodeExe, "", "utf8");
+      NodeFS.writeFileSync(piBat, "@echo off\r\n", "utf8");
+
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "codex",
+          env,
+          platform: "win32",
+          queryRegistry: () => undefined,
+          probeDriveRoots: false,
+        }),
+      ).toBe(codexShim);
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "opencode",
+          env,
+          platform: "win32",
+          queryRegistry: () => undefined,
+          probeDriveRoots: false,
+        }),
+      ).toBe(opencodeExe);
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "pi",
+          env,
+          platform: "win32",
+          queryRegistry: () => undefined,
+          probeDriveRoots: false,
+        }),
+      ).toBe(piBat);
+    } finally {
+      NodeFS.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

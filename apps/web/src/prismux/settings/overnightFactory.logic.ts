@@ -1,3 +1,4 @@
+/* oxlint-disable prismux/no-untranslated-copy -- Prismux-native Chinese overnight factory settings logic */
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   MUSE_DEFAULT_MODEL,
@@ -28,8 +29,10 @@ import {
 import type {
   DaemonOvernightConfigPatch,
   DaemonOvernightConfigSnapshot,
+  DaemonOvernightImapSmtpConfigDto,
   DaemonOvernightInboundMode,
   DaemonOvernightMailPreset,
+  DaemonOvernightMailTestResponse,
   DaemonOvernightRunStatus,
   DaemonOvernightWindowMode,
 } from "../daemonClient";
@@ -39,6 +42,86 @@ export const GMAIL_OAUTH_CALLBACK_PATH = "/v1/overnight/oauth/gmail/callback";
 export const GMAIL_OAUTH_SCOPES_TEXT =
   "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send";
 export const OVERNIGHT_DEFAULT_MODEL_SENTINEL = "__overnight_provider_default__";
+
+export const AGENT_MAIL_PORTAL_URL = "https://agent.qq.com/page";
+export const AGENT_MAIL_DOC_URL = "https://agent.qq.com/doc/cli-setup.md";
+export const AGENT_MAIL_INSTALL_CMD = "npm install -g @tencent-qqmail/agently-cli";
+export const AGENT_MAIL_LOGIN_CMD = "agently-cli auth login";
+export const AGENT_MAIL_VERIFY_CMD = "agently-cli +me";
+export const AGENT_MAIL_OFFICIAL_PROMPT =
+  "请阅读 https://agent.qq.com/doc/cli-setup.md 文档，按照步骤为我安装并配置 Agent Mail CLI。";
+
+export type OvernightMailboxPresetId =
+  | "gmail"
+  | "qq"
+  | "agent_mail"
+  | "outlook"
+  | "netease"
+  | "custom";
+export type OvernightNeteaseDomain = "163.com" | "126.com";
+export type OvernightEmailProvider = "imap_smtp" | "gmail_oauth2" | "agent_mail";
+export type OvernightAgentMailAction = "status" | "install" | "login";
+
+export interface OvernightAgentMailStatus {
+  readonly cliInstalled: boolean;
+  readonly cliPath?: string;
+  readonly authorizedEmail: string | null;
+  readonly authInProgress: boolean;
+  readonly pendingAuthUrl: string | null;
+  readonly lastError: string | null;
+}
+
+export interface OvernightAgentMailActionResult {
+  readonly ok: boolean;
+  readonly installed: boolean;
+  readonly cliPath?: string;
+  readonly authorizedEmail: string | null;
+  readonly authUrl: string | null;
+  readonly authInProgress: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly message: string;
+  readonly agentMail?: OvernightAgentMailStatus;
+}
+
+export interface OvernightNeteaseDomainSpec {
+  readonly domain: OvernightNeteaseDomain;
+  readonly label: string;
+  readonly note: string;
+  readonly imapHost: string;
+  readonly imapPort: number;
+  readonly imapSecure: boolean;
+  readonly smtpHost: string;
+  readonly smtpPort: number;
+  readonly smtpSecure: boolean;
+}
+
+export const NETEASE_DOMAIN_PRESETS: Readonly<
+  Record<OvernightNeteaseDomain, OvernightNeteaseDomainSpec>
+> = {
+  "163.com": {
+    domain: "163.com",
+    label: "163.com",
+    note: "imap.163.com:993 · smtp.163.com:465 (SSL)",
+    imapHost: "imap.163.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.163.com",
+    smtpPort: 465,
+    smtpSecure: true,
+  },
+  "126.com": {
+    domain: "126.com",
+    label: "126.com",
+    note: "imap.126.com:993 · smtp.126.com:465 (SSL)",
+    imapHost: "imap.126.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.126.com",
+    smtpPort: 465,
+    smtpSecure: true,
+  },
+};
 
 export interface OvernightExternalLinkSpec {
   readonly id: string;
@@ -143,7 +226,7 @@ export const GMAIL_OAUTH_TUTORIAL_STEPS: ReadonlyArray<GmailOAuthTutorialStepSpe
 ];
 
 export interface OvernightMailPresetOption {
-  readonly id: DaemonOvernightMailPreset;
+  readonly id: OvernightMailboxPresetId;
   readonly label: string;
   readonly note: string;
   readonly imapHost: string;
@@ -156,28 +239,6 @@ export interface OvernightMailPresetOption {
 
 export const OVERNIGHT_MAIL_PRESETS: ReadonlyArray<OvernightMailPresetOption> = [
   {
-    id: "qq",
-    label: "QQ 邮箱",
-    note: "imap.qq.com:993 · smtp.qq.com:465 (SSL)",
-    imapHost: "imap.qq.com",
-    imapPort: 993,
-    imapSecure: true,
-    smtpHost: "smtp.qq.com",
-    smtpPort: 465,
-    smtpSecure: true,
-  },
-  {
-    id: "163",
-    label: "163 邮箱",
-    note: "imap.163.com:993 · smtp.163.com:465 (SSL)",
-    imapHost: "imap.163.com",
-    imapPort: 993,
-    imapSecure: true,
-    smtpHost: "smtp.163.com",
-    smtpPort: 465,
-    smtpSecure: true,
-  },
-  {
     id: "gmail",
     label: "谷歌邮箱 (Gmail)",
     note: "imap.gmail.com:993 · smtp.gmail.com:465 (SSL)",
@@ -189,15 +250,48 @@ export const OVERNIGHT_MAIL_PRESETS: ReadonlyArray<OvernightMailPresetOption> = 
     smtpSecure: true,
   },
   {
+    id: "qq",
+    label: "QQ 邮箱",
+    note: "imap.qq.com:993 · smtp.qq.com:465 (SSL)",
+    imapHost: "imap.qq.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.qq.com",
+    smtpPort: 465,
+    smtpSecure: true,
+  },
+  {
+    id: "agent_mail",
+    label: "Agent 邮箱",
+    note: "agent.qq.com · 腾讯 Agent 原生邮箱 / agently-cli",
+    imapHost: "",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "",
+    smtpPort: 465,
+    smtpSecure: true,
+  },
+  {
     id: "outlook",
     label: "Outlook / Exchange",
-    note: "outlook.office365.com:993 · smtp.office365.com:587 (STARTTLS)",
+    note: "outlook.office365.com:993 · smtp.office365.com:587",
     imapHost: "outlook.office365.com",
     imapPort: 993,
     imapSecure: true,
     smtpHost: "smtp.office365.com",
     smtpPort: 587,
     smtpSecure: false,
+  },
+  {
+    id: "netease",
+    label: "网易邮箱（163 / 126）",
+    note: "imap.163.com / imap.126.com:993 · smtp:465 (SSL)",
+    imapHost: "imap.163.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.163.com",
+    smtpPort: 465,
+    smtpSecure: true,
   },
   {
     id: "custom",
@@ -211,6 +305,8 @@ export const OVERNIGHT_MAIL_PRESETS: ReadonlyArray<OvernightMailPresetOption> = 
     smtpSecure: true,
   },
 ];
+
+export const MAILBOX_PRESETS = OVERNIGHT_MAIL_PRESETS;
 
 export interface OvernightLiveModelOption {
   readonly slug: string;
@@ -555,6 +651,14 @@ export function evaluateOvernightAgyCompliance(input: {
 export interface OvernightFactoryDraft {
   enabled: boolean;
   mode: DaemonOvernightInboundMode;
+  emailProvider: OvernightEmailProvider;
+  agentMailAddress: string;
+  agentMailCliInstalled: boolean;
+  agentMailCliPath: string;
+  agentMailAuthorizedEmail: string | null;
+  agentMailAuthInProgress: boolean;
+  agentMailPendingAuthUrl: string | null;
+  agentMailLastError: string | null;
   gmailClientId: string;
   /** Write-only input buffer; cleared immediately after saving. */
   gmailClientSecretInput: string;
@@ -562,7 +666,8 @@ export interface OvernightFactoryDraft {
   gmailBoundEmail: string;
   gmailConnected: boolean;
   gmailConnectedAt: number | null;
-  preset: DaemonOvernightMailPreset;
+  preset: OvernightMailboxPresetId;
+  neteaseDomain: OvernightNeteaseDomain;
   email: string;
   imapHost: string;
   imapPort: string;
@@ -593,6 +698,166 @@ export interface OvernightFactoryDraft {
   hasGmailRefreshToken: boolean;
   hasImapPassword: boolean;
   hasSmtpPassword: boolean;
+}
+
+export interface OvernightMailSavePayload extends Omit<DaemonOvernightConfigPatch, "imapSmtp"> {
+  emailProvider?: OvernightEmailProvider;
+  agentMailAddress?: string;
+  imapSmtp?: Omit<Partial<DaemonOvernightImapSmtpConfigDto>, "preset"> & {
+    preset?: OvernightMailboxPresetId | DaemonOvernightMailPreset;
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function detectNeteaseDomain(email: string): OvernightNeteaseDomain | null {
+  const normalized = email.trim().toLowerCase();
+  if (normalized.endsWith("@126.com")) return "126.com";
+  if (normalized.endsWith("@163.com")) return "163.com";
+  return null;
+}
+
+export function normalizeOvernightPresetId(raw: unknown): OvernightMailboxPresetId {
+  if (raw === "163" || raw === "126" || raw === "netease") return "netease";
+  if (
+    raw === "gmail" ||
+    raw === "qq" ||
+    raw === "agent_mail" ||
+    raw === "outlook" ||
+    raw === "custom"
+  ) {
+    return raw;
+  }
+  return "qq";
+}
+
+export function extractEmailProviderFromSnapshot(
+  snapshot: DaemonOvernightConfigSnapshot,
+): OvernightEmailProvider {
+  const cfg = asRecord(snapshot.config);
+  const rawProvider = cfg?.["emailProvider"];
+  if (
+    rawProvider === "agent_mail" ||
+    rawProvider === "gmail_oauth2" ||
+    rawProvider === "imap_smtp"
+  ) {
+    return rawProvider;
+  }
+  if (snapshot.config.mode === "gmail-oauth2" && hasSavedGmailOAuthConfig(snapshot)) {
+    return "gmail_oauth2";
+  }
+  const rawPreset = asRecord(snapshot.config.imapSmtp)?.["preset"];
+  if (rawPreset === "agent_mail") {
+    return "agent_mail";
+  }
+  return "imap_smtp";
+}
+
+export function extractAgentMailStatusFromSnapshot(
+  snapshot: DaemonOvernightConfigSnapshot,
+): OvernightAgentMailStatus {
+  const root = asRecord(snapshot);
+  const am = asRecord(root?.["agentMail"]);
+  const cfg = asRecord(snapshot.config);
+  const persistedAddr =
+    typeof cfg?.["agentMailAddress"] === "string" ? cfg["agentMailAddress"].trim() : "";
+  const authorizedEmail =
+    typeof am?.["authorizedEmail"] === "string" && am["authorizedEmail"].trim().length > 0
+      ? am["authorizedEmail"].trim()
+      : persistedAddr || null;
+  const cliPath =
+    typeof am?.["cliPath"] === "string" && am["cliPath"].trim().length > 0
+      ? am["cliPath"].trim()
+      : undefined;
+  return {
+    cliInstalled: am?.["cliInstalled"] === true,
+    ...(cliPath ? { cliPath } : {}),
+    authorizedEmail,
+    authInProgress: am?.["authInProgress"] === true,
+    pendingAuthUrl:
+      typeof am?.["pendingAuthUrl"] === "string" && am["pendingAuthUrl"].trim().length > 0
+        ? am["pendingAuthUrl"]
+        : null,
+    lastError:
+      typeof am?.["lastError"] === "string" && am["lastError"].trim().length > 0
+        ? am["lastError"].trim()
+        : null,
+  };
+}
+
+export function toDaemonOvernightPatch(
+  payload: OvernightMailSavePayload | Record<string, unknown>,
+): DaemonOvernightConfigPatch {
+  return payload as unknown as DaemonOvernightConfigPatch;
+}
+
+export function buildAgentMailActionTestPayload(
+  action: OvernightAgentMailAction,
+): DaemonOvernightConfigPatch {
+  return toDaemonOvernightPatch({
+    emailProvider: "agent_mail",
+    agentMailAction: action,
+  });
+}
+
+export function parseAgentMailTestResponse(
+  response: DaemonOvernightMailTestResponse,
+): OvernightAgentMailActionResult {
+  const rec = asRecord(response);
+  const nestedAm = asRecord(rec?.["agentMail"]);
+  const cliPath =
+    typeof rec?.["cliPath"] === "string" && rec["cliPath"].trim().length > 0
+      ? rec["cliPath"].trim()
+      : typeof nestedAm?.["cliPath"] === "string" && nestedAm["cliPath"].trim().length > 0
+        ? nestedAm["cliPath"].trim()
+        : undefined;
+  const authorizedEmail =
+    typeof rec?.["authorizedEmail"] === "string" && rec["authorizedEmail"].trim().length > 0
+      ? rec["authorizedEmail"].trim()
+      : typeof nestedAm?.["authorizedEmail"] === "string" &&
+          nestedAm["authorizedEmail"].trim().length > 0
+        ? nestedAm["authorizedEmail"].trim()
+        : null;
+  const authUrl =
+    typeof rec?.["authUrl"] === "string" && rec["authUrl"].length > 0
+      ? rec["authUrl"]
+      : typeof nestedAm?.["pendingAuthUrl"] === "string" && nestedAm["pendingAuthUrl"].length > 0
+        ? nestedAm["pendingAuthUrl"]
+        : null;
+  const installed = rec?.["installed"] === true || nestedAm?.["cliInstalled"] === true;
+  const authInProgress =
+    rec?.["authInProgress"] === true || nestedAm?.["authInProgress"] === true;
+
+  const agentMail: OvernightAgentMailStatus | undefined = nestedAm
+    ? {
+        cliInstalled: nestedAm["cliInstalled"] === true,
+        ...(cliPath ? { cliPath } : {}),
+        authorizedEmail,
+        authInProgress,
+        pendingAuthUrl: authUrl,
+        lastError:
+          typeof nestedAm["lastError"] === "string" && nestedAm["lastError"].trim().length > 0
+            ? nestedAm["lastError"].trim()
+            : null,
+      }
+    : undefined;
+
+  return {
+    ok: response.ok,
+    installed,
+    ...(cliPath ? { cliPath } : {}),
+    authorizedEmail,
+    authUrl,
+    authInProgress,
+    stdout: typeof rec?.["stdout"] === "string" ? rec["stdout"] : "",
+    stderr: typeof rec?.["stderr"] === "string" ? rec["stderr"] : "",
+    message: response.message,
+    ...(agentMail ? { agentMail } : {}),
+  };
 }
 
 export function isSafeHttpsUrl(rawUrl: string): boolean {
@@ -655,10 +920,18 @@ export function toggleTutorialStepCompletion(
 }
 
 export function createDefaultOvernightDraft(): OvernightFactoryDraft {
-  const qq = OVERNIGHT_MAIL_PRESETS[0]!;
+  const qq = OVERNIGHT_MAIL_PRESETS.find((item) => item.id === "qq") ?? OVERNIGHT_MAIL_PRESETS[0]!;
   return {
     enabled: false,
     mode: "imap",
+    emailProvider: "imap_smtp",
+    agentMailAddress: "",
+    agentMailCliInstalled: false,
+    agentMailCliPath: "",
+    agentMailAuthorizedEmail: null,
+    agentMailAuthInProgress: false,
+    agentMailPendingAuthUrl: null,
+    agentMailLastError: null,
     gmailClientId: "",
     gmailClientSecretInput: "",
     gmailRedirectUri: "",
@@ -666,6 +939,7 @@ export function createDefaultOvernightDraft(): OvernightFactoryDraft {
     gmailConnected: false,
     gmailConnectedAt: null,
     preset: "qq",
+    neteaseDomain: "163.com",
     email: "",
     imapHost: qq.imapHost,
     imapPort: String(qq.imapPort),
@@ -719,20 +993,54 @@ export function hydrateOvernightDraftFromSnapshot(
   snapshot: DaemonOvernightConfigSnapshot,
 ): OvernightFactoryDraft {
   const { config, secrets } = snapshot;
+  const emailProvider = extractEmailProviderFromSnapshot(snapshot);
+  const agentMail = extractAgentMailStatusFromSnapshot(snapshot);
+  const cfgRecord = asRecord(config);
+  const rawAgentMailAddr =
+    typeof cfgRecord?.["agentMailAddress"] === "string"
+      ? cfgRecord["agentMailAddress"].trim()
+      : "";
+
   // Unconfigured snapshots always land on Generic IMAP/SMTP ("imap"), while already-saved
   // Gmail OAuth2 setups stay on "gmail-oauth2" untouched.
   const effectiveMode: DaemonOvernightInboundMode =
-    config.mode === "gmail-oauth2" && !hasSavedGmailOAuthConfig(snapshot) ? "imap" : config.mode;
+    emailProvider === "gmail_oauth2"
+      ? "gmail-oauth2"
+      : config.mode === "gmail-oauth2" && !hasSavedGmailOAuthConfig(snapshot)
+        ? "imap"
+        : config.mode;
+
+  const rawPreset = asRecord(config.imapSmtp)?.["preset"];
+  const normalizedPreset: OvernightMailboxPresetId =
+    emailProvider === "agent_mail" ? "agent_mail" : normalizeOvernightPresetId(rawPreset);
+
+  const detectedFromEmail = detectNeteaseDomain(config.imapSmtp.email);
+  const neteaseDomain: OvernightNeteaseDomain =
+    rawPreset === "126" ||
+    detectedFromEmail === "126.com" ||
+    config.imapSmtp.imapHost.toLowerCase().includes("126.com")
+      ? "126.com"
+      : "163.com";
+
   return {
     enabled: config.enabled,
     mode: effectiveMode,
+    emailProvider: effectiveMode === "gmail-oauth2" ? "gmail_oauth2" : emailProvider,
+    agentMailAddress: rawAgentMailAddr || agentMail.authorizedEmail || "",
+    agentMailCliInstalled: agentMail.cliInstalled,
+    agentMailCliPath: agentMail.cliPath ?? "",
+    agentMailAuthorizedEmail: agentMail.authorizedEmail,
+    agentMailAuthInProgress: agentMail.authInProgress,
+    agentMailPendingAuthUrl: agentMail.pendingAuthUrl,
+    agentMailLastError: agentMail.lastError,
     gmailClientId: config.gmail.clientId,
     gmailClientSecretInput: "",
     gmailRedirectUri: config.gmail.redirectUri,
     gmailBoundEmail: config.gmail.boundEmail,
     gmailConnected: config.gmail.connected,
     gmailConnectedAt: config.gmail.connectedAt,
-    preset: config.imapSmtp.preset,
+    preset: normalizedPreset,
+    neteaseDomain,
     email: config.imapSmtp.email,
     imapHost: config.imapSmtp.imapHost,
     imapPort: String(config.imapSmtp.imapPort),
@@ -765,20 +1073,82 @@ export function hydrateOvernightDraftFromSnapshot(
   };
 }
 
+export function applyNeteaseDomain(
+  draft: OvernightFactoryDraft,
+  domain: OvernightNeteaseDomain,
+): OvernightFactoryDraft {
+  const spec = NETEASE_DOMAIN_PRESETS[domain];
+  return {
+    ...draft,
+    mode: "imap",
+    emailProvider: "imap_smtp",
+    preset: "netease",
+    neteaseDomain: domain,
+    imapHost: spec.imapHost,
+    imapPort: String(spec.imapPort),
+    imapSecure: spec.imapSecure,
+    smtpHost: spec.smtpHost,
+    smtpPort: String(spec.smtpPort),
+    smtpSecure: spec.smtpSecure,
+  };
+}
+
+export function applyOvernightEmailInput(
+  draft: OvernightFactoryDraft,
+  nextEmail: string,
+): OvernightFactoryDraft {
+  const base: OvernightFactoryDraft = {
+    ...draft,
+    email: nextEmail,
+    imapUsername: nextEmail,
+    smtpUsername: nextEmail,
+  };
+  if (draft.preset === "custom" || draft.preset === "agent_mail") {
+    return base;
+  }
+  const detectedDomain = detectNeteaseDomain(nextEmail);
+  if (detectedDomain !== null) {
+    return applyNeteaseDomain(base, detectedDomain);
+  }
+  return base;
+}
+
 export function applyOvernightMailPreset(
   draft: OvernightFactoryDraft,
-  presetId: DaemonOvernightMailPreset,
+  presetId: OvernightMailboxPresetId | DaemonOvernightMailPreset | "126",
 ): OvernightFactoryDraft {
+  if (presetId === "163") {
+    return applyNeteaseDomain(draft, "163.com");
+  }
+  if (presetId === "126") {
+    return applyNeteaseDomain(draft, "126.com");
+  }
+  if (presetId === "netease") {
+    const inferred = detectNeteaseDomain(draft.email) ?? draft.neteaseDomain;
+    return applyNeteaseDomain(draft, inferred);
+  }
+  if (presetId === "agent_mail") {
+    return {
+      ...draft,
+      mode: "imap",
+      emailProvider: "agent_mail",
+      preset: "agent_mail",
+    };
+  }
   const preset = OVERNIGHT_MAIL_PRESETS.find((item) => item.id === presetId);
   if (!preset) return draft;
   if (presetId === "custom") {
     return {
       ...draft,
+      mode: "imap",
+      emailProvider: "imap_smtp",
       preset: "custom",
     };
   }
   return {
     ...draft,
+    mode: "imap",
+    emailProvider: "imap_smtp",
     preset: presetId,
     imapHost: preset.imapHost,
     imapPort: String(preset.imapPort),
@@ -808,7 +1178,7 @@ function parsePollMinutes(raw: string, fallback = 5): number {
  */
 export function buildOvernightMailSavePayload(
   draft: OvernightFactoryDraft,
-): DaemonOvernightConfigPatch {
+): OvernightMailSavePayload {
   const secrets: NonNullable<DaemonOvernightConfigPatch["secrets"]> = {};
   if (draft.gmailClientSecretInput.trim().length > 0) {
     secrets.gmailClientSecret = draft.gmailClientSecretInput.trim();
@@ -820,8 +1190,17 @@ export function buildOvernightMailSavePayload(
     secrets.smtpPassword = draft.smtpPasswordInput.trim();
   }
 
+  const resolvedProvider: OvernightEmailProvider =
+    draft.mode === "gmail-oauth2"
+      ? "gmail_oauth2"
+      : draft.preset === "agent_mail" || draft.emailProvider === "agent_mail"
+        ? "agent_mail"
+        : "imap_smtp";
+
   return {
-    mode: draft.mode,
+    mode: resolvedProvider === "gmail_oauth2" ? "gmail-oauth2" : "imap",
+    emailProvider: resolvedProvider,
+    agentMailAddress: (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim(),
     gmail: {
       clientId: draft.gmailClientId.trim(),
       redirectUri: draft.gmailRedirectUri.trim(),
@@ -867,8 +1246,11 @@ export function buildOvernightStrategySavePayload(
 }
 
 export function isMailChannelConfigured(draft: OvernightFactoryDraft): boolean {
-  if (draft.mode === "gmail-oauth2") {
+  if (draft.mode === "gmail-oauth2" || draft.emailProvider === "gmail_oauth2") {
     return draft.gmailConnected || Boolean(draft.gmailClientId.trim() && draft.hasGmailClientSecret);
+  }
+  if (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail") {
+    return Boolean((draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim());
   }
   return Boolean(draft.email.trim() && draft.imapHost.trim() && draft.hasImapPassword);
 }
@@ -879,6 +1261,11 @@ export function shouldDefaultExpandMailChannel(
 ): boolean {
   if (standalone) {
     return true;
+  }
+  const provider = extractEmailProviderFromSnapshot(snapshot);
+  if (provider === "agent_mail") {
+    const am = extractAgentMailStatusFromSnapshot(snapshot);
+    return Boolean(am.authorizedEmail || am.cliInstalled);
   }
   if (snapshot.config.mode === "gmail-oauth2") {
     return hasSavedGmailOAuthConfig(snapshot);
@@ -923,6 +1310,6 @@ export function formatOvernightTimestamp(timestampMs: number | null | undefined)
       second: "2-digit",
     });
   } catch {
-    return "—";
+    return "-";
   }
 }

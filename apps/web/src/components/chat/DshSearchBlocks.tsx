@@ -398,11 +398,11 @@ export const DshSearchBlock = memo(function DshSearchBlock({
       <div className={DSH_CARD_HEADER_CLASS}>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           {data.kind === "matches" ? (
-            <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
           ) : (
             <FolderSearchIcon
               aria-hidden="true"
-              className="size-3.5 shrink-0 text-muted-foreground"
+              className="size-3.5 shrink-0 text-primary"
             />
           )}
           {data.query ? (
@@ -548,7 +548,7 @@ export const DshWebBlock = memo(function DshWebBlock({
       >
         <div className={DSH_CARD_HEADER_CLASS}>
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            <GlobeIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            <GlobeIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
             {data.safeHref ? (
               <a
                 href={data.safeHref}
@@ -639,7 +639,7 @@ export const DshWebBlock = memo(function DshWebBlock({
     >
       <div className={DSH_CARD_HEADER_CLASS}>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-          <GlobeIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+          <GlobeIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
           {data.queries.map((query) => (
             <span
               key={query}

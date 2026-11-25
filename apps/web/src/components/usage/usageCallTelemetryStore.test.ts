@@ -1,9 +1,20 @@
+import { ProviderDriverKind, ProviderInstanceId } from "@prismux/core-contracts";
+import { GTProvider, initializeGT } from "gt-react";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { filterAndSortCallLogs, formatCallTimestamp } from "./UsageCallLogsSection";
+import type { ProviderInstanceEntry } from "../../providerInstances";
+import {
+  UsageCallLogsSection,
+  filterAndSortCallLogs,
+  formatCallTimestamp,
+} from "./UsageCallLogsSection";
 import { deriveSessionTelemetryFromProjection } from "../chat/useSessionCallTelemetry";
 import {
   MAX_USAGE_CALL_LOGS,
+  USAGE_CALL_TELEMETRY_STORAGE_KEY,
+  clampTtftToDuration,
   clearSessionLiveTelemetry,
   clearUsageCallLogs,
   computeCacheHitRate,
@@ -13,11 +24,13 @@ import {
   formatDurationMs,
   formatTps,
   formatTtft,
+  formatUsageModelDisplayName,
   getRecordedUsageCallLogs,
   getSessionLiveTelemetry,
   mergeUsageCallLogs,
   normalizeBackendUsageCallLog,
   recordModelCallTelemetry,
+  reloadUsageCallLogsFromStorage,
   updateSessionLiveTelemetry,
 } from "./usageCallTelemetryStore";
 
@@ -224,5 +237,273 @@ describe("usageCallTelemetryStore", () => {
       activeContextWindow: null,
     });
     expect(derived.assistantCharCount).toBe("analyzing call log pipeline...".length);
+  });
+
+  it("enforces physical invariant ttftMs <= durationMs on record, localStorage hydration, backend normalize, and merge", () => {
+    expect(clampTtftToDuration(8_470, 8_430)).toBe(8_430);
+    expect(clampTtftToDuration(7_916, 8_738)).toBe(7_916);
+    expect(clampTtftToDuration(null, 8_430)).toBeNull();
+    expect(clampTtftToDuration(500, null)).toBe(500);
+
+    // 1. Direct recordModelCallTelemetry clamps 8470 -> 8430 and uses decodeMs for exact TPS
+    const recorded = recordModelCallTelemetry({
+      id: "turn:clamp-1",
+      provider: "dsh",
+      model: '["magpie","group/deepseek"]',
+      ttftMs: 8_470,
+      durationMs: 8_430,
+      decodeMs: 822,
+      inputTokens: 357,
+      cachedInputTokens: 51_200,
+      outputTokens: 189,
+    });
+    expect(recorded.ttftMs).toBe(8_430);
+    expect(recorded.durationMs).toBe(8_430);
+    expect(recorded.model).toBe("group/deepseek");
+    expect(recorded.tps).toBeCloseTo(189 / (822 / 1_000), 4);
+
+    // 2. Backend normalization clamps 8470 -> 8430
+    const normalizedBackend = normalizeBackendUsageCallLog({
+      id: "backend-clamp-1",
+      timestamp: 200_000,
+      provider: "dsh",
+      model: '["magpie","group/deepseek"]',
+      ttft_ms: 8_470,
+      duration_ms: 8_430,
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+    expect(normalizedBackend.ttftMs).toBe(8_430);
+    expect(normalizedBackend.model).toBe("group/deepseek");
+
+    // 3. Merging a live record (ttftMs: 8470, durationMs: null) with backend (durationMs: 8430) clamps to 8430
+    const liveWithoutDur = recordModelCallTelemetry({
+      id: "turn:merge-clamp",
+      timestamp: 300_000,
+      provider: "dsh",
+      model: "group/deepseek",
+      ttftMs: 8_470,
+      durationMs: null,
+      inputTokens: 100,
+      cachedInputTokens: 900,
+      outputTokens: 50,
+    });
+    const merged = mergeUsageCallLogs([liveWithoutDur], [
+      {
+        id: "turn:merge-clamp",
+        timestamp: 300_000,
+        provider: "dsh",
+        model: "group/deepseek",
+        ttftMs: null,
+        durationMs: 8_430,
+        inputTokens: 100,
+        cachedInputTokens: 900,
+        outputTokens: 50,
+      },
+    ]);
+    expect(merged[0]?.ttftMs).toBe(8_430);
+    expect(merged[0]?.durationMs).toBe(8_430);
+
+    // 4. Hydrating corrupted persisted localStorage records clamps 8470 -> 8430 and unwraps JSON tuple model
+    const previousStorage = globalThis.localStorage;
+    const backing = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          backing.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backing.delete(key);
+        },
+      },
+    });
+    try {
+      backing.set(
+        USAGE_CALL_TELEMETRY_STORAGE_KEY,
+        JSON.stringify([
+          {
+            id: "persisted-bad-ttft",
+            timestamp: 400_000,
+            provider: "acpRegistry",
+            model: '["magpie","group/deepseek"]',
+            ttftMs: 8_470,
+            durationMs: 8_430,
+            tps: 25,
+            inputTokens: 357,
+            cachedInputTokens: 51_200,
+            cacheCreationTokens: 0,
+            outputTokens: 189,
+            totalTokens: 51_746,
+            cacheHitRate: 0.993,
+            status: "completed",
+            source: "live",
+          },
+        ]),
+      );
+      const reloaded = reloadUsageCallLogsFromStorage();
+      expect(reloaded).toHaveLength(1);
+      expect(reloaded[0]?.ttftMs).toBe(8_430);
+      expect(reloaded[0]?.durationMs).toBe(8_430);
+      expect(reloaded[0]?.model).toBe("group/deepseek");
+      expect(reloaded[0]?.provider).toBe("acpRegistry");
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: previousStorage,
+      });
+    }
+  });
+
+  it("formats ACP tuple model slugs cleanly and resolves configured model display names", () => {
+    const dshEntries: readonly ProviderInstanceEntry[] = [
+      {
+        instanceId: ProviderInstanceId.make("acpRegistry-dsh"),
+        driverKind: ProviderDriverKind.make("acpRegistry"),
+        displayName: "My DeepSeek",
+        hasCustomDisplayName: true,
+        acpRegistryAgentId: "dsh",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        isDefault: false,
+        isAvailable: true,
+        snapshot: {} as ProviderInstanceEntry["snapshot"],
+        models: [
+          {
+            slug: '["magpie","group/deepseek"]',
+            name: "DeepSeek-V4.1-Flash",
+            isCustom: false,
+            capabilities: null,
+          } as unknown as ProviderInstanceEntry["models"][number],
+        ],
+      },
+    ];
+
+    const withoutCatalog = formatUsageModelDisplayName('["magpie","group/deepseek"]');
+    expect(withoutCatalog).toBe("group/deepseek");
+    expect(withoutCatalog).not.toContain('["');
+    expect(withoutCatalog).not.toContain('"]');
+
+    expect(formatUsageModelDisplayName('["group","deepseek"]')).toBe("group/deepseek");
+    expect(formatUsageModelDisplayName('["magpie","group/deepseek"]', dshEntries)).toBe(
+      "DeepSeek-V4.1-Flash",
+    );
+    expect(formatUsageModelDisplayName("group/deepseek", dshEntries)).toBe("DeepSeek-V4.1-Flash");
+    expect(formatUsageModelDisplayName("claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
+  });
+
+  it("renders DSH blue whale icon, configured custom DSH name, clean model names, and legacy acpRegistry fallback in UsageCallLogsSection", () => {
+    initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+    const dshEntries: readonly ProviderInstanceEntry[] = [
+      {
+        instanceId: ProviderInstanceId.make("acpRegistry-dsh"),
+        driverKind: ProviderDriverKind.make("acpRegistry"),
+        displayName: "My DeepSeek",
+        hasCustomDisplayName: true,
+        acpRegistryAgentId: "dsh",
+        enabled: true,
+        installed: true,
+        status: "ready",
+        isDefault: false,
+        isAvailable: true,
+        snapshot: {} as ProviderInstanceEntry["snapshot"],
+        models: [
+          {
+            slug: '["magpie","group/deepseek"]',
+            name: "DeepSeek-V4.1-Flash",
+            isCustom: false,
+            capabilities: null,
+          } as unknown as ProviderInstanceEntry["models"][number],
+        ],
+      },
+    ];
+
+    const logs = [
+      {
+        id: "dsh-call-1",
+        timestamp: Date.parse("2026-11-25T10:00:00.000Z"),
+        provider: "dsh",
+        model: '["magpie","group/deepseek"]',
+        ttftMs: 7_916,
+        durationMs: 8_738,
+        tps: 229.9,
+        inputTokens: 357,
+        cachedInputTokens: 51_200,
+        cacheCreationTokens: 0,
+        outputTokens: 189,
+        totalTokens: 51_746,
+        cacheHitRate: 51_200 / 51_557,
+        status: "completed" as const,
+        source: "backend" as const,
+      },
+      {
+        id: "legacy-acp-1",
+        timestamp: Date.parse("2026-11-25T09:50:00.000Z"),
+        provider: "acpRegistry",
+        model: "group/deepseek",
+        ttftMs: 8_470,
+        durationMs: 8_430,
+        tps: 120.5,
+        inputTokens: 400,
+        cachedInputTokens: 4_600,
+        cacheCreationTokens: 0,
+        outputTokens: 100,
+        totalTokens: 5_100,
+        cacheHitRate: 0.92,
+        status: "completed" as const,
+        source: "live" as const,
+      },
+    ];
+
+    // Filtering by clean formatted display model name matches both tuple and unwrapped slugs.
+    const filteredByDisplayName = filterAndSortCallLogs(logs, {
+      model: "DeepSeek-V4.1-Flash",
+      providerEntries: dshEntries,
+      sortField: "timestamp",
+      sortDirection: "desc",
+    });
+    expect(filteredByDisplayName).toHaveLength(2);
+
+    const htmlWithConfiguredDsh = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "en", translations: {} },
+        createElement(UsageCallLogsSection, {
+          logs,
+          timeZone: "UTC",
+          hour12: false,
+          providerEntries: dshEntries,
+        }),
+      ),
+    );
+    expect(htmlWithConfiguredDsh).toContain("DeepSeek-V4.1-Flash");
+    expect(htmlWithConfiguredDsh).toContain("My DeepSeek");
+    expect(htmlWithConfiguredDsh).toContain('data-dsh-brand-icon="true"');
+    expect(htmlWithConfiguredDsh).toContain("8.43 s");
+    expect(htmlWithConfiguredDsh).not.toContain("8.47 s");
+    expect(htmlWithConfiguredDsh).not.toContain('["magpie"');
+    expect(htmlWithConfiguredDsh).not.toContain(">acpRegistry<");
+
+    // Without configured entries: "dsh" -> "DeepSeek Harness" + blue whale icon; legacy "acpRegistry" -> "ACP Agent".
+    const htmlWithoutConfigured = renderToStaticMarkup(
+      createElement(
+        GTProvider,
+        { locale: "en", translations: {} },
+        createElement(UsageCallLogsSection, {
+          logs,
+          timeZone: "UTC",
+          hour12: false,
+          providerEntries: [],
+        }),
+      ),
+    );
+    expect(htmlWithoutConfigured).toContain("DeepSeek Harness");
+    expect(htmlWithoutConfigured).toContain("ACP Agent");
+    expect(htmlWithoutConfigured).toContain('data-dsh-brand-icon="true"');
+    expect(htmlWithoutConfigured).toContain("group/deepseek");
+    expect(htmlWithoutConfigured).not.toContain('["magpie"');
+    expect(htmlWithoutConfigured).not.toContain(">acpRegistry<");
   });
 });

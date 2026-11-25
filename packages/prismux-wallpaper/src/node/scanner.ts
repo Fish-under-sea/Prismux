@@ -527,6 +527,253 @@ export async function readImageDimensions(filePath: string): Promise<ImageDimens
   }
 }
 
+// ── Zero-dependency pure Buffer video dimension parser (MP4/MOV + WebM/MKV) ──
+
+const VIDEO_HEAD_PROBE_BYTES = 128 * 1024;
+const VIDEO_TAIL_PROBE_BYTES = 256 * 1024;
+const MAX_MOOV_READ_BYTES = 2 * 1024 * 1024;
+
+function parseMp4TkhdAt(
+  buf: Buffer,
+  payloadStart: number,
+  payloadEnd: number,
+): ImageDimensions | null {
+  if (payloadStart + 84 > payloadEnd) return null;
+  const version = buf[payloadStart]!;
+  if (version !== 0 && version !== 1) return null;
+  const matrixOff = payloadStart + (version === 1 ? 52 : 40);
+  const dimOff = payloadStart + (version === 1 ? 88 : 76);
+  if (dimOff + 8 > payloadEnd) return null;
+  const rawWidth = Math.round(buf.readUInt32BE(dimOff) / 65536);
+  const rawHeight = Math.round(buf.readUInt32BE(dimOff + 4) / 65536);
+  if (rawWidth < 16 || rawHeight < 16 || rawWidth > 16_384 || rawHeight > 16_384) {
+    return null;
+  }
+  const a = buf.readInt32BE(matrixOff);
+  const b = buf.readInt32BE(matrixOff + 4);
+  const c = buf.readInt32BE(matrixOff + 12);
+  const d = buf.readInt32BE(matrixOff + 16);
+  const rotated90 = a === 0 && d === 0 && b !== 0 && c !== 0;
+  return rotated90
+    ? { width: rawHeight, height: rawWidth }
+    : { width: rawWidth, height: rawHeight };
+}
+
+function parseMp4BoxesForDimensions(
+  buf: Buffer,
+  start: number,
+  end: number,
+  depth = 0,
+): ImageDimensions | null {
+  if (depth > 6) return null;
+  let best: ImageDimensions | null = null;
+  let offset = start;
+  while (offset + 8 <= end) {
+    let boxSize = buf.readUInt32BE(offset);
+    const boxType = buf.subarray(offset + 4, offset + 8).toString("ascii");
+    let headerSize = 8;
+    if (boxSize === 1) {
+      if (offset + 16 > end) break;
+      boxSize = buf.readUInt32BE(offset + 8) * 0x100000000 + buf.readUInt32BE(offset + 12);
+      headerSize = 16;
+    } else if (boxSize === 0) {
+      boxSize = end - offset;
+    }
+    if (!Number.isFinite(boxSize) || boxSize < headerSize) break;
+    const boxEnd = Math.min(end, offset + boxSize);
+    const payloadStart = offset + headerSize;
+    if (boxType === "tkhd") {
+      const dims = parseMp4TkhdAt(buf, payloadStart, boxEnd);
+      if (dims && (!best || dims.width * dims.height > best.width * best.height)) {
+        best = dims;
+      }
+    } else if (boxType === "moov" || boxType === "trak") {
+      const nested = parseMp4BoxesForDimensions(buf, payloadStart, boxEnd, depth + 1);
+      if (nested && (!best || nested.width * nested.height > best.width * best.height)) {
+        best = nested;
+      }
+    }
+    if (offset + boxSize <= offset) break;
+    offset += boxSize;
+  }
+  return best;
+}
+
+function scanBufferForTkhd(buf: Buffer): ImageDimensions | null {
+  let best: ImageDimensions | null = null;
+  let searchFrom = 4;
+  while (searchFrom < buf.length - 84) {
+    const idx = buf.indexOf("tkhd", searchFrom, "ascii");
+    if (idx < 4) break;
+    const boxSize = buf.readUInt32BE(idx - 4);
+    if (boxSize >= 84 && boxSize <= 512) {
+      const boxEnd = Math.min(buf.length, idx - 4 + boxSize);
+      const dims = parseMp4TkhdAt(buf, idx + 4, boxEnd);
+      if (dims && (!best || dims.width * dims.height > best.width * best.height)) {
+        best = dims;
+      }
+    }
+    searchFrom = idx + 4;
+  }
+  return best;
+}
+
+function readEbmlVint(
+  buf: Buffer,
+  offset: number,
+  maskLengthBit: boolean,
+): { value: number; length: number } | null {
+  if (offset >= buf.length) return null;
+  const first = buf[offset]!;
+  if (first === 0) return null;
+  let mask = 0x80;
+  let length = 1;
+  while (length <= 8 && (first & mask) === 0) {
+    mask >>= 1;
+    length += 1;
+  }
+  if (length > 8 || offset + length > buf.length) return null;
+  let value = maskLengthBit ? first & ~mask : first;
+  for (let i = 1; i < length; i += 1) {
+    value = value * 256 + buf[offset + i]!;
+  }
+  return { value, length };
+}
+
+function parseEbmlVideoDimensions(buf: Buffer): ImageDimensions | null {
+  if (
+    buf.length < 32 ||
+    buf[0] !== 0x1a ||
+    buf[1] !== 0x45 ||
+    buf[2] !== 0xdf ||
+    buf[3] !== 0xa3
+  ) {
+    return null;
+  }
+
+  const CONTAINER_IDS = new Set([0x18538067, 0x1654ae6b, 0xae, 0xe0]);
+  let width: number | null = null;
+  let height: number | null = null;
+
+  const walk = (start: number, end: number, inVideo: boolean, depth: number): boolean => {
+    if (depth > 6) return false;
+    let offset = start;
+    while (offset < end) {
+      const id = readEbmlVint(buf, offset, false);
+      if (!id) break;
+      offset += id.length;
+      const size = readEbmlVint(buf, offset, true);
+      if (!size) break;
+      offset += size.length;
+      const isUnknownSize =
+        size.length <= 4 && size.value === (1 << (7 * size.length)) - 1;
+      const dataEnd = isUnknownSize ? end : Math.min(end, offset + size.value);
+      if (dataEnd < offset) break;
+
+      if (CONTAINER_IDS.has(id.value)) {
+        if (walk(offset, dataEnd, inVideo || id.value === 0xe0, depth + 1)) {
+          return true;
+        }
+      } else if (inVideo && (id.value === 0xb0 || id.value === 0xba)) {
+        const byteLen = dataEnd - offset;
+        if (byteLen >= 1 && byteLen <= 4) {
+          let val = 0;
+          for (let i = 0; i < byteLen; i += 1) {
+            val = val * 256 + buf[offset + i]!;
+          }
+          if (val >= 16 && val <= 16_384) {
+            if (id.value === 0xb0) width = val;
+            if (id.value === 0xba) height = val;
+            if (width !== null && height !== null) return true;
+          }
+        }
+      }
+
+      if (dataEnd <= offset) break;
+      offset = dataEnd;
+    }
+    return false;
+  };
+
+  walk(0, buf.length, false, 0);
+  return width !== null && height !== null ? { width, height } : null;
+}
+
+export async function readVideoDimensions(filePath: string): Promise<ImageDimensions | null> {
+  const ext = extname(filePath).toLowerCase();
+  if (!ALL_WE_VIDEO_EXTS.has(ext)) return null;
+  let handle;
+  try {
+    const st = await stat(filePath);
+    if (!st.isFile() || st.size < 16) return null;
+    const fileSize = st.size;
+    handle = await open(filePath, "r");
+
+    const headLen = Math.min(fileSize, VIDEO_HEAD_PROBE_BYTES);
+    const headBuf = Buffer.allocUnsafe(headLen);
+    const { bytesRead: headRead } = await handle.read(headBuf, 0, headLen, 0);
+    const head = headBuf.subarray(0, headRead);
+
+    if (
+      head.length >= 4 &&
+      head[0] === 0x1a &&
+      head[1] === 0x45 &&
+      head[2] === 0xdf &&
+      head[3] === 0xa3
+    ) {
+      return parseEbmlVideoDimensions(head);
+    }
+
+    const fromHead = parseMp4BoxesForDimensions(head, 0, head.length) ?? scanBufferForTkhd(head);
+    if (fromHead) return fromHead;
+
+    if (fileSize > headLen) {
+      const hdr = Buffer.allocUnsafe(16);
+      let pos = 0;
+      for (let i = 0; i < 64 && pos + 8 <= fileSize; i += 1) {
+        const { bytesRead: got } = await handle.read(hdr, 0, Math.min(16, fileSize - pos), pos);
+        if (got < 8) break;
+        let boxSize = hdr.readUInt32BE(0);
+        const boxType = hdr.subarray(4, 8).toString("ascii");
+        let headerSize = 8;
+        if (boxSize === 1) {
+          if (got < 16) break;
+          boxSize = hdr.readUInt32BE(8) * 0x100000000 + hdr.readUInt32BE(12);
+          headerSize = 16;
+        } else if (boxSize === 0) {
+          boxSize = fileSize - pos;
+        }
+        if (!Number.isFinite(boxSize) || boxSize < headerSize) break;
+        if (boxType === "moov") {
+          const readLen = Math.min(boxSize, MAX_MOOV_READ_BYTES, fileSize - pos);
+          const moovBuf = Buffer.allocUnsafe(readLen);
+          const { bytesRead: moovGot } = await handle.read(moovBuf, 0, readLen, pos);
+          const moovSlice = moovBuf.subarray(0, moovGot);
+          const fromMoov =
+            parseMp4BoxesForDimensions(moovSlice, 0, moovSlice.length) ??
+            scanBufferForTkhd(moovSlice);
+          if (fromMoov) return fromMoov;
+          break;
+        }
+        if (pos + boxSize <= pos) break;
+        pos += boxSize;
+      }
+
+      const tailLen = Math.min(fileSize, VIDEO_TAIL_PROBE_BYTES);
+      const tailOffset = Math.max(0, fileSize - tailLen);
+      const tailBuf = Buffer.allocUnsafe(tailLen);
+      const { bytesRead: tailGot } = await handle.read(tailBuf, 0, tailLen, tailOffset);
+      return scanBufferForTkhd(tailBuf.subarray(0, tailGot));
+    }
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
 // ── Steam Discovery & libraryfolders.vdf Parser ─────────────────────────────
 
 async function pathExists(p: string): Promise<boolean> {
@@ -946,9 +1193,11 @@ async function parseWorkshopProjectDir(
     }
   }
 
-  // Extract dimensions from image file or preview image
+  // Extract dimensions from true video/image header before falling back to preview image
   let dims: ImageDimensions | null = null;
-  if (type === "image") {
+  if (type === "video") {
+    dims = await readVideoDimensions(fileAbs);
+  } else if (type === "image") {
     dims = await readImageDimensions(fileAbs);
   }
   if (!dims && previewAbs) {
@@ -1107,7 +1356,10 @@ export async function scanCustomWallpaperDir(
     if (!isPathInsideDir(absDir, absFile, false)) continue;
 
     const type: WallpaperType = VIDEO_EXTS.has(ext) ? "video" : "image";
-    const dims = type === "image" ? await readImageDimensions(absFile) : null;
+    const dims =
+      type === "video"
+        ? await readVideoDimensions(absFile)
+        : await readImageDimensions(absFile);
     let fileSize: number | undefined;
     let mtimeMs: number | undefined;
     try {
@@ -1199,7 +1451,10 @@ export async function importLocalWallpaperFile(
 
   await copyFile(absSrc, destFile);
   const type: WallpaperType = VIDEO_EXTS.has(ext) ? "video" : "image";
-  const dims = type === "image" ? await readImageDimensions(destFile) : null;
+  const dims =
+    type === "video"
+      ? await readVideoDimensions(destFile)
+      : await readImageDimensions(destFile);
   const st = await stat(destFile);
   const mediaUrl = opts.toMediaUrl ? opts.toMediaUrl(destFile) : destFile;
 

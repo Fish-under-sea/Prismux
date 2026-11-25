@@ -327,6 +327,73 @@ export function buildProviderRemovalMutation(input: {
     : { operation: "remove", instanceId: input.instanceId };
 }
 
+export const DSH_DEFAULT_DISPLAY_NAME = "DSH";
+export const DSH_DEFAULT_COMMAND_PATH = "dsh";
+export const DSH_DEFAULT_COMMAND_ARGS = ["acp"] as const;
+export const DSH_DEFAULT_HOMEPAGE_URL = "https://github.com/deepseek-ai/deepseek-harness";
+
+export function normalizeProviderInstanceForSave(input: {
+  readonly instanceId: ProviderInstanceId;
+  readonly next: ProviderInstanceConfig;
+  readonly previous?: ProviderInstanceConfig | undefined;
+}): ProviderInstanceConfig {
+  const { instanceId, next, previous } = input;
+  const rawConfig =
+    next.config !== null && typeof next.config === "object" && !Array.isArray(next.config)
+      ? (next.config as Record<string, unknown>)
+      : {};
+
+  if (next.driver === ProviderDriverKind.make("acpRegistry")) {
+    const rawSource = typeof rawConfig.source === "string" ? rawConfig.source.trim() : "";
+    const rawAgentId = typeof rawConfig.agentId === "string" ? rawConfig.agentId.trim() : "";
+    const isManagedRegistryAgent = rawSource !== "local" && rawAgentId.length > 0;
+    const rawCommandPath =
+      typeof rawConfig.commandPath === "string" ? rawConfig.commandPath.trim() : "";
+    const isDshInstance =
+      !isManagedRegistryAgent &&
+      (String(instanceId).trim().toLowerCase() === "dsh" ||
+        rawCommandPath.toLowerCase() === DSH_DEFAULT_COMMAND_PATH);
+
+    if (isDshInstance) {
+      const existingArgs = Array.isArray(rawConfig.commandArgs)
+        ? rawConfig.commandArgs.filter(
+            (arg): arg is string => typeof arg === "string" && arg.trim().length > 0,
+          )
+        : [];
+      const existingHomepage =
+        typeof rawConfig.homepageUrl === "string" ? rawConfig.homepageUrl.trim() : "";
+      const displayName =
+        next.displayName?.trim() || previous?.displayName?.trim() || DSH_DEFAULT_DISPLAY_NAME;
+      return {
+        ...next,
+        displayName,
+        config: {
+          ...rawConfig,
+          source: "local",
+          commandPath: rawCommandPath.length > 0 ? rawCommandPath : DSH_DEFAULT_COMMAND_PATH,
+          commandArgs:
+            existingArgs.length > 0 ? existingArgs : [...DSH_DEFAULT_COMMAND_ARGS],
+          homepageUrl: existingHomepage.length > 0 ? existingHomepage : DSH_DEFAULT_HOMEPAGE_URL,
+        },
+      };
+    }
+  }
+
+  if (next.driver === ProviderDriverKind.make("antigravity") && next.enabled === true) {
+    const existingAuthMethod =
+      typeof rawConfig.authMethod === "string" ? rawConfig.authMethod.trim() : "";
+    return {
+      ...next,
+      config: {
+        ...rawConfig,
+        authMethod: existingAuthMethod.length > 0 ? existingAuthMethod : "local-cli",
+      },
+    };
+  }
+
+  return next;
+}
+
 export function extractAcpRegistryManagedAgentId(
   instance: Pick<ProviderInstanceConfig, "driver" | "config">,
 ): string | null {
