@@ -1065,6 +1065,7 @@ export const SETTINGS_SEARCH_ITEMS = [
       msg(
         "providers agents cli codex claude cursor grok kiro opencode antigravity pi dsh deepseek google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
       ),
+      "智能体配置 智能体配置器 智能体提供方",
     ],
   },
   {
@@ -1498,6 +1499,7 @@ export const SETTINGS_SEARCH_ITEMS = [
       msg(
         "memory chief thread slot secretary agents.md sqlite wal fts5 sqlite-vec obsidian import memory & sync",
       ),
+      "秘书与记忆 主秘书与记忆",
     ],
   },
   {

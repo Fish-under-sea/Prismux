@@ -368,7 +368,7 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
       </GTProvider>,
     );
 
-    expect(html).toContain("主秘书与记忆");
+    expect(html).toContain("秘书与记忆");
     expect(html).toContain("data-pmx-chief-provider-select");
     expect(html).toContain("data-pmx-chief-model-select");
     // Single reasoning slider ONLY — duplicate effort <Select> dropdown is deleted!

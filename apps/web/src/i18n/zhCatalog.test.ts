@@ -46,13 +46,13 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
   });
 
   it("translates all Prismux settings navigation, breadcrumb, and search labels to Simplified Chinese", () => {
-    expect(m(SETTINGS_SECTION_LABELS["/settings/providers"])).toBe("智能体配置器");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/providers"])).toBe("智能体配置");
     expect(m(SETTINGS_SECTION_LABELS["/settings/chat"])).toBe("对话");
     expect(m(SETTINGS_SECTION_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_SECTION_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_SECTION_LABELS["/settings/projects"])).toBe("项目与归档");
     expect(m(SETTINGS_SECTION_LABELS["/settings/plugins"])).toBe("插件中心");
-    expect(m(SETTINGS_SECTION_LABELS["/settings/memory"])).toBe("主秘书与记忆");
+    expect(m(SETTINGS_SECTION_LABELS["/settings/memory"])).toBe("秘书与记忆");
     expect(m(SETTINGS_SECTION_LABELS["/settings/sync"])).toBe("远程同步");
     expect(m(SETTINGS_SECTION_LABELS["/settings/connections"])).toBe("环境与远控");
     expect(m(SETTINGS_SECTION_LABELS["/settings/maintenance"])).toBe("维护与诊断");
@@ -60,13 +60,13 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(SETTINGS_SECTION_LABELS["/settings/memory-sync"])).toBe("记忆与同步");
     expect(m(SETTINGS_SECTION_LABELS["/settings/updates"])).toBe("软件更新");
 
-    expect(m(SETTINGS_NAV_LABELS["/settings/providers"])).toBe("智能体配置器");
+    expect(m(SETTINGS_NAV_LABELS["/settings/providers"])).toBe("智能体配置");
     expect(m(SETTINGS_NAV_LABELS["/settings/chat"])).toBe("对话");
     expect(m(SETTINGS_NAV_LABELS["/settings/appearance"])).toBe("外观");
     expect(m(SETTINGS_NAV_LABELS["/settings/wallpaper"])).toBe("壁纸");
     expect(m(SETTINGS_NAV_LABELS["/settings/projects"])).toBe("项目与归档");
     expect(m(SETTINGS_NAV_LABELS["/settings/plugins"])).toBe("插件中心");
-    expect(m(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("主秘书与记忆");
+    expect(m(SETTINGS_NAV_LABELS["/settings/memory"])).toBe("秘书与记忆");
     expect(m(SETTINGS_NAV_LABELS["/settings/sync"])).toBe("远程同步");
     expect(m(SETTINGS_NAV_LABELS["/settings/connections"])).toBe("环境与远控");
     expect(m(SETTINGS_NAV_LABELS["/settings/maintenance"])).toBe("维护与诊断");
@@ -86,7 +86,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       },
       {
         heading: "智能体与工作区",
-        labels: ["智能体配置器", "主秘书与记忆", "项目与归档", "浏览器与设备", "源码管理与工作树"],
+        labels: ["智能体配置", "秘书与记忆", "项目与归档", "浏览器与设备", "源码管理与工作树"],
       },
       {
         heading: "扩展与连接",
@@ -116,7 +116,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("All replies", { $context: "collapsed assistant replies" }))).toBe("全部回复");
 
     // Agent configurator 3-tab redesign, unified 柱状 effort wording, prismux.json, and provider detail headings
-    expect(m(msg("Agent configurator"))).toBe("智能体配置器");
+    expect(m(msg("Agent configurator"))).toBe("智能体配置");
     expect(m(msg("Providers & instances"))).toBe("提供方与实例");
     expect(m(msg("Defaults & policies"))).toBe("默认模型与策略");
     expect(m(msg("Compliance & subscription waiver"))).toBe("合规与订阅免责");
@@ -164,7 +164,7 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
           "For thread titles and other generated text. Source control has its own setting. Text generators from Agent configurator also appear here.",
         ),
       ),
-    ).toBe("用于生成会话标题和其他文本。版本控制有单独的设置。“智能体配置器”中添加的文本生成器也会显示在这里。");
+    ).toBe("用于生成会话标题和其他文本。版本控制有单独的设置。“智能体配置”中添加的文本生成器也会显示在这里。");
   });
 
   it("finds Prismux settings items by both Chinese and English queries", () => {
@@ -195,7 +195,11 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["欢迎页", "welcome-page"],
       ["被控代理", "subscription-risk-waiver"],
       ["个人订阅", "subscription-risk-waiver"],
+      ["智能体配置", "providers"],
       ["智能体配置器", "providers"],
+      ["智能体提供方", "providers"],
+      ["秘书与记忆", "prismux-memory"],
+      ["主秘书与记忆", "prismux-memory"],
     ];
 
     for (const [query, expectedId] of cases) {

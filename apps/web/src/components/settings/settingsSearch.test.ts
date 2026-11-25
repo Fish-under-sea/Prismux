@@ -392,6 +392,21 @@ describe("searchSettings", () => {
     expect(searchSettings("软件更新", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
       "prismux-updates",
     );
+    expect(searchSettings("智能体配置", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe("providers");
+    expect(searchSettings("智能体配置器", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
+      "providers",
+    );
+    expect(searchSettings("智能体提供方", SETTINGS_SEARCH_ITEMS, translate)[0]?.id).toBe(
+      "providers",
+    );
+    expect(searchSettings("秘书与记忆", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "prismux-memory",
+      to: "/settings/memory",
+    });
+    expect(searchSettings("主秘书与记忆", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "prismux-memory",
+      to: "/settings/memory",
+    });
   });
 });
 

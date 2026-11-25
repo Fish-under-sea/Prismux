@@ -219,8 +219,8 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
   const onlineLabel = effectiveOnline ? "在线" : "离线 / 本地预览";
 
   const ariaLabel = hasCustomName
-    ? `${effectiveSecretaryName}（主秘书槽位）· 引擎：${brandName}，模型：${modelLabel}，默认思考强度：${effortLabel}，独立 AGENTS.md 已加载，喊「${effectiveSecretaryName}」即可唤起，档位：${dialLabel}，状态：${onlineLabel}，点击管理主秘书与记忆设置`
-    : `主秘书槽位：${brandName}，模型：${modelLabel}，默认思考强度：${effortLabel}，独立 AGENTS.md 已加载，档位：${dialLabel}，状态：${onlineLabel}，点击管理主秘书与记忆设置`;
+    ? `${effectiveSecretaryName}（主秘书槽位）· 引擎：${brandName}，模型：${modelLabel}，默认思考强度：${effortLabel}，独立 AGENTS.md 已加载，喊「${effectiveSecretaryName}」即可唤起，档位：${dialLabel}，状态：${onlineLabel}，点击管理秘书与记忆设置`
+    : `主秘书槽位：${brandName}，模型：${modelLabel}，默认思考强度：${effortLabel}，独立 AGENTS.md 已加载，档位：${dialLabel}，状态：${onlineLabel}，点击管理秘书与记忆设置`;
 
   return (
     <Tooltip>
@@ -286,7 +286,7 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
             </span>
           </div>
           <div className="border-t border-border/50 pt-1 text-[10px] text-muted-foreground">
-            喊「{effectiveSecretaryName}」或 @{effectiveSecretaryName} 即可唤起 · 点击管理主秘书与记忆设置
+            喊「{effectiveSecretaryName}」或 @{effectiveSecretaryName} 即可唤起 · 点击管理秘书与记忆设置
           </div>
         </div>
       </TooltipPopup>

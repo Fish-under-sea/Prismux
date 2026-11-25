@@ -1318,7 +1318,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
           <div className="flex flex-wrap items-center gap-2">
             <DatabaseIcon className="size-4 text-primary" />
             <h1 className="text-base font-semibold tracking-tight text-foreground">
-              主秘书与记忆
+              秘书与记忆
             </h1>
             <Badge variant={daemonReady ? "success" : "warning"} size="sm">
               {daemonReady ? "服务在线" : "服务未连接"}
@@ -1358,7 +1358,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
       <SettingsSegmentedTabs
         tabs={tabs}
         defaultTabId={initialTabOverride ?? "chief"}
-        ariaLabel="主秘书与记忆分区"
+        ariaLabel="秘书与记忆分区"
         trailingAction={
           <Button type="button" size="xs" variant="outline" onClick={handleRefreshAll}>
             <RefreshCwIcon className="size-3.5" />
@@ -1371,7 +1371,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
 });
 
 /**
- * Dedicated `/settings/memory` control center ("主秘书与记忆"), organized into 3 segmented tabs:
+ * Dedicated `/settings/memory` control center ("秘书与记忆"), organized into 3 segmented tabs:
  * 1. `chief` (主秘书与人设)
  * 2. `memory` (混合记忆库)
  * 3. `obsidian` (Obsidian 迁移)
