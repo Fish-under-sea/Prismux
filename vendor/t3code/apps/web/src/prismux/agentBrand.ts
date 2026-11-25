@@ -260,7 +260,7 @@ export function resolveAgentBrandId(providerIdOrName: string | null | undefined)
 }
 
 /**
- * Map a T3 Code driver ID or alias into the canonical Chief provider ID accepted by Prismux Daemon.
+ * Map a Prismux driver ID or alias into the canonical Chief provider ID accepted by Prismux Daemon.
  */
 export function toCanonicalChiefProviderId(providerIdOrName: string | null | undefined): string {
   const brand = resolveAgentBrandId(providerIdOrName);

@@ -1384,11 +1384,11 @@ const program = Effect.gen(function* () {
             rawOutput: {
               action: {
                 type: "search",
-                query: "t3 code",
+                query: "prismux",
                 sources: [
-                  { type: "url", url: "https://t3.codes" },
-                  { type: "url", url: "https://t3.codes" },
-                  { type: "url", url: "https://github.com/pingdotgg/t3code" },
+                  { type: "url", url: "https://prismux.app" },
+                  { type: "url", url: "https://prismux.app" },
+                  { type: "url", url: "https://github.com/Fish-under-sea/Prismux" },
                 ],
               },
               id: "grok-web-search",
@@ -1398,15 +1398,15 @@ const program = Effect.gen(function* () {
           {
             sessionUpdate: "tool_call_update",
             toolCallId: "grok-web-fetch",
-            title: "Fetch: https://t3.codes",
+            title: "Fetch: https://prismux.app",
             kind: "fetch",
             status: "completed",
-            rawInput: { variant: "WebFetch", url: "https://t3.codes" },
+            rawInput: { variant: "WebFetch", url: "https://prismux.app" },
             rawOutput: {
               type: "WebFetch",
-              Content: { url: "https://t3.codes", content: "T3 Code page" },
+              Content: { url: "https://prismux.app", content: "Prismux page" },
             },
-            content: [{ type: "content", content: { type: "text", text: "T3 Code page" } }],
+            content: [{ type: "content", content: { type: "text", text: "Prismux page" } }],
           },
           {
             sessionUpdate: "tool_call_update",

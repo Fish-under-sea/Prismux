@@ -3,7 +3,7 @@
   "version": "0.2.0-rc.1",
   "private": true,
   "type": "module",
-  "description": "Prismux celestial 3-state theme capsule, floating liquid-glass color popover, appearance cards, contrast-clamped glass engine, and T3 Code Tailwind v4 token bridge.",
+  "description": "Prismux celestial 3-state theme capsule, floating liquid-glass color popover, appearance cards, contrast-clamped glass engine, and Prismux Tailwind v4 token bridge.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -28,9 +28,9 @@
       "@prismux/source": "./src/styles/appearance-cards.css",
       "default": "./dist/styles/appearance-cards.css"
     },
-    "./styles/t3-glass-bridge.css": {
-      "@prismux/source": "./src/styles/t3-glass-bridge.css",
-      "default": "./dist/styles/t3-glass-bridge.css"
+    "./styles/prismux-glass-bridge.css": {
+      "@prismux/source": "./src/styles/prismux-glass-bridge.css",
+      "default": "./dist/styles/prismux-glass-bridge.css"
     },
     "./styles/floating-scrollbar.css": {
       "@prismux/source": "./src/styles/floating-scrollbar.css",
@@ -39,7 +39,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit --customConditions @prismux/source",
-    "build": "tsc --rootDir src && node --input-type=module -e \"import fs from 'node:fs'; import path from 'node:path'; fs.mkdirSync('dist/styles', { recursive: true }); const files = ['celestial-capsule.css', 'color-popover.css', 'appearance-cards.css', 't3-glass-bridge.css', 'floating-scrollbar.css']; const chunks = files.map((file) => { const css = fs.readFileSync(path.join('src/styles', file), 'utf8'); fs.writeFileSync(path.join('dist/styles', file), css); return '/* === ' + file + ' === */\\n' + css; }); fs.writeFileSync('dist/styles.css', chunks.join('\\n\\n') + '\\n');\"",
+    "build": "tsc --rootDir src && node --input-type=module -e \"import fs from 'node:fs'; import path from 'node:path'; fs.mkdirSync('dist/styles', { recursive: true }); const files = ['celestial-capsule.css', 'color-popover.css', 'appearance-cards.css', 'prismux-glass-bridge.css', 'floating-scrollbar.css']; const chunks = files.map((file) => { const css = fs.readFileSync(path.join('src/styles', file), 'utf8'); fs.writeFileSync(path.join('dist/styles', file), css); return '/* === ' + file + ' === */\\n' + css; }); fs.writeFileSync('dist/styles.css', chunks.join('\\n\\n') + '\\n');\"",
     "test": "node --test dist/__tests__/appearance.test.js"
   },
   "peerDependencies": {

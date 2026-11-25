@@ -106,7 +106,7 @@ export class DesktopWslEnvironment extends Context.Service<
     readonly getUserHome: (distro: string | null) => Effect.Effect<Option.Option<string>>;
     // Use the distro IP to avoid unreliable wslhost localhost forwarding.
     readonly getDistroIp: (distro: string | null) => Effect.Effect<Option.Option<string>>;
-    // A null t3Home means the distro's login shell has no absolute T3CODE_HOME, so ~/.t3 applies.
+    // A null t3Home means the distro's login shell has no absolute PRISMUX_HOME, so ~/.t3 applies.
     readonly prepareRuntime: (
       distro: string | null,
       archive: WslRuntimeArchive,
@@ -452,8 +452,8 @@ const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
 
 // Capture login-shell PATH because the server launches provider CLIs by name.
 const RESOLVED_PATH_LINE = `printf 'resolvedPath:%s\\n' "$PATH"`;
-// wsl.exe --exec skips the profile, so the server only sees a profile-exported T3CODE_HOME if passed on.
-const T3_HOME_LINE = `printf 't3Home:%s\\n' "\${T3CODE_HOME:-}"`;
+// wsl.exe --exec skips the profile, so the server only sees a profile-exported PRISMUX_HOME if passed on.
+const T3_HOME_LINE = `printf 't3Home:%s\\n' "\${PRISMUX_HOME:-}"`;
 
 const NODE_PTY_PROBE_SCRIPT = (
   linuxServerDir: string,

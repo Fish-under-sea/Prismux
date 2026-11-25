@@ -439,7 +439,7 @@ export async function launchPrimaryAgentDraft(input: {
 }
 
 export interface WorkspaceSplitContainerProps {
-  /** The primary T3 Code route view (`ThreadRouteView` or `<Outlet />`), kept mounted in primary pane. */
+  /** The primary Prismux route view (`ThreadRouteView` or `<Outlet />`), kept mounted in primary pane. */
   readonly primaryContent: ReactNode;
   readonly shownTarget: ThreadRouteTarget | null;
   readonly modalOpen: boolean;
@@ -590,7 +590,7 @@ function SplitResizeHandle(props: {
 }
 
 /**
- * Flush zero-gap host for the primary T3 Code route view directly beneath the unified single `WorkspaceTabBar`.
+ * Flush zero-gap host for the primary Prismux route view directly beneath the unified single `WorkspaceTabBar`.
  * Avoids CSS Backdrop Roots (`contain` / `transform`) so Z-0 liquid glass samples cleanly.
  */
 function PrimaryPaneBody(props: {

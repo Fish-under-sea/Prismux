@@ -197,7 +197,7 @@ it.effect("reads pluginRegistryOverride and routePreference from ~/.prismux conf
       reason: "npm_not_found",
     });
     expect(npmError.message).toContain("Prismux");
-    expect(npmError.message).not.toContain("T3 Code");
+    expect(npmError.message).not.toContain("Prismux");
     expect(npmError.message).not.toContain("T3 server");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

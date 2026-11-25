@@ -115,7 +115,7 @@ const GEMINI_MODEL: ServerProviderModel = {
 };
 
 describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mode", () => {
-  it("maps all 4 T3 Code runtime modes to Orca permission tiers with amber full-access flag", () => {
+  it("maps all 4 Prismux runtime modes to Orca permission tiers with amber full-access flag", () => {
     expect(runtimeModeOptions).toEqual([
       "approval-required",
       "auto-accept-edits",

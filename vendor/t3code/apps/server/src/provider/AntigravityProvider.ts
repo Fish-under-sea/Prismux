@@ -225,7 +225,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         auth: { status: "unknown", type: authType },
         message: settings.enabled
           ? "Checking Antigravity availability."
-          : "Antigravity is disabled in T3 Code settings.",
+          : "Antigravity is disabled in Prismux settings.",
       },
     }),
     setup: { canAuthenticate: true, canInstall: true },

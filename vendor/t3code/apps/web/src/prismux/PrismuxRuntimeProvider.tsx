@@ -796,7 +796,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     () => wallpaperStore.getSnapshot().settings.selectedId,
   );
 
-  // Sync T3 Code theme polarity whenever AppearanceConfig themeMode or glassBasePolarity changes.
+  // Sync Prismux theme polarity whenever AppearanceConfig themeMode or glassBasePolarity changes.
   const syncHostPolarity = useCallback((cfg: AppearanceConfig) => {
     const polarity = resolveBasePolarity(cfg);
     setAppearanceMode(polarity);
@@ -936,7 +936,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     return () => mq.removeEventListener("change", update);
   }, []);
 
-  // Ensure T3 Code's `.dark` class matches Prismux appearance polarity before the very first paint
+  // Ensure Prismux's `.dark` class matches Prismux appearance polarity before the very first paint
   // (eliminates cold-start white FOUC on Light-OS hosts before Daemon hydration completes).
   useLayoutEffect(() => {
     syncHostPolarity(appearanceRef.current);
@@ -951,7 +951,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       syncT3DarkClass: false,
     });
     syncBrowserChromeTheme();
-    // Defense-in-depth for Issue #4: in non-glass Light/Dark modes, T3 Code's
+    // Defense-in-depth for Issue #4: in non-glass Light/Dark modes, Prismux's
     // syncBrowserChromeTheme() stamps an inline background-color on html/body
     // that would hide the Z-0 wallpaper stage. Clear it whenever wallpaper is active.
     if (wallpaperActive && !reducedTransparency && typeof document !== "undefined") {
@@ -960,7 +960,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     }
   }, [appearance, reducedTransparency, wallpaperSelectedId]);
 
-  // Guard against subsequent T3 Code theme mutations re-stamping inline background-color on html/body
+  // Guard against subsequent Prismux theme mutations re-stamping inline background-color on html/body
   // while a wallpaper is active in Light/Dark/Glass mode.
   useEffect(() => {
     const wallpaperActive = Boolean(wallpaperSelectedId);

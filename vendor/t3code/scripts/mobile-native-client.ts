@@ -135,7 +135,7 @@ export const hashBundle = Effect.fn("hashBundle")(function* (root: string) {
 });
 type FileSystemError = import("effect/PlatformError").PlatformError;
 
-const bundleId = "com.t3tools.t3code.dev";
+const bundleId = "io.prismux.desktop.dev";
 const roots = Effect.gen(function* () {
   const path = yield* Path.Path;
   const repo = yield* path.fromFileUrl(new URL("../", import.meta.url));
@@ -215,7 +215,7 @@ const command = Effect.fn("nativeClient.command")(function* (
         ...(sdk ? { ANDROID_HOME: sdk } : {}),
         APP_VARIANT: "development",
         MOBILE_VERSION_POLICY: "appVersion",
-        T3CODE_IOS_PERSONAL_TEAM: "0",
+        PRISMUX_IOS_PERSONAL_TEAM: "0",
         CI: "1",
         EXPO_NO_GIT_STATUS: "1",
         // macOS tar otherwise adds AppleDouble entries that change the extracted bundle.
@@ -1139,7 +1139,7 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
   // A session behind a gateway (a device pool) is reachable only with the config that opened it.
   const target = ["--session", session, ...(config ? ["--config", config] : [])];
   // Daemon variables in the shell (a device-pool login) override the config and authenticate
-  // as someone who does not hold this lease; T3 Code's own launcher drops them the same way.
+  // as someone who does not hold this lease; Prismux's own launcher drops them the same way.
   const agentDeviceEnvironment = config
     ? ["AGENT_DEVICE_DAEMON_BASE_URL", "AGENT_DEVICE_DAEMON_AUTH_TOKEN", "AGENT_DEVICE_CONFIG"]
     : [];
@@ -1244,7 +1244,7 @@ const main = Command.make(
     ),
     config: Flag.String("config").pipe(
       Flag.withDescription(
-        "With --session, the agent-device config the session was opened with (T3 Code's device_open returns it in targetArgs). Needed for a device pool behind a gateway.",
+        "With --session, the agent-device config the session was opened with (Prismux's device_open returns it in targetArgs). Needed for a device pool behind a gateway.",
       ),
       Flag.optional,
     ),

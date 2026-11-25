@@ -35,7 +35,7 @@ import {
   type NetworkRoutePreference,
   type ObsidianImportRequest,
   type PluginRegistryOverride,
-  type T3BridgeStatus,
+  type CoreBridgeStatus,
   type UpdateChannel,
   type UpdatePackageKind,
   type UpdatePolicyPatch,
@@ -62,8 +62,9 @@ import {
 } from "../system/ResourceMonitorService.js";
 import type { ServiceDiagnosticsService } from "../system/ServiceDiagnosticsService.js";
 import { SystemFontService } from "../system/SystemFontService.js";
-import type { T3RpcClient } from "../t3/T3RpcClient.js";
-import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
+import type { CoreRpcClient } from "../core/CoreRpcClient.js";
+import type { CoreServerSupervisor } from "../core/CoreServerSupervisor.js";
+import type { PrismuxProviderProbeService } from "../system/PrismuxProviderProbeService.js";
 import type { AppUpdater } from "../updater/AppUpdater.js";
 import {
   WallpaperServiceError,
@@ -84,7 +85,7 @@ import type { OvernightRouteService } from "./OvernightRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
 import { handleQuotaRoute } from "./QuotaRoutes.js";
 import type { DesktopIpcDispatchHub } from "../dispatch/DesktopIpcDispatchHub.js";
-import type { AntigravityPolicyStore } from "../security/AntigravityPolicyStore.js";
+import type { SubscriptionWaiverStore } from "../security/AntigravityPolicyStore.js";
 import {
   handleDispatchRoute,
   isDispatchOrSecurityRoute
@@ -112,20 +113,27 @@ export interface DaemonRpcServerOptions {
   obsidianImporter?: ObsidianVaultImporterImpl;
   handoffEngine?: HandoffEngine;
   hookBus?: LifecycleHookBus;
-  t3Supervisor?: T3ServerSupervisor;
-  t3RpcClient?: T3RpcClient;
+  coreSupervisor?: CoreServerSupervisor;
+  coreRpcClient?: CoreRpcClient;
+  /** @deprecated Use coreSupervisor */
+  t3Supervisor?: CoreServerSupervisor;
+  /** @deprecated Use coreRpcClient */
+  t3RpcClient?: CoreRpcClient;
   wallpaperService?: WallpaperMediaService;
   fontService?: SystemFontService;
   appearanceStore?: AppearanceConfigStore;
   businessService?: DaemonBusinessService;
   overnightService?: OvernightRouteService;
   diagnosticsService?: ServiceDiagnosticsService;
+  providerProbeService?: PrismuxProviderProbeService;
   cliUpdateService?: CliUpdateService;
   quotaService?: OfficialQuotaService;
   portScannerService?: PortScannerService;
   resourceMonitorService?: ResourceMonitorService;
   agentAuxService?: AgentAuxService;
-  antigravityPolicyStore?: AntigravityPolicyStore;
+  subscriptionWaiverStore?: SubscriptionWaiverStore;
+  /** @deprecated Use subscriptionWaiverStore */
+  antigravityPolicyStore?: SubscriptionWaiverStore;
   dispatchHub?: DesktopIpcDispatchHub;
   startedAt?: number;
   onRequestShutdown?: (reason?: string) => void | Promise<void>;
@@ -261,7 +269,7 @@ async function readJsonBody(
   }
 }
 
-const ALLOWED_DESKTOP_ORIGIN_RE = /^(?:t3code|prismux)(?:-dev)?:\/\//i;
+const ALLOWED_DESKTOP_ORIGIN_RE = /^prismux(?:-dev)?:\/\//i;
 
 function isAllowedCorsOrigin(origin: string): boolean {
   const trimmed = origin.trim();
@@ -436,20 +444,21 @@ export class DaemonRpcServer {
   private readonly handoffEngine: HandoffEngine | undefined;
   private readonly hookBus: LifecycleHookBus | undefined;
   private readonly identityGuard = new ForwardIdentityGuard();
-  private readonly t3Supervisor: T3ServerSupervisor | undefined;
-  private readonly t3RpcClient: T3RpcClient | undefined;
+  private readonly coreSupervisor: CoreServerSupervisor | undefined;
+  private readonly coreRpcClient: CoreRpcClient | undefined;
   private readonly wallpaperService: WallpaperMediaService | undefined;
   private readonly fontService: SystemFontService;
   private readonly appearanceStore: AppearanceConfigStore | undefined;
   private readonly businessService: DaemonBusinessService | undefined;
   private readonly overnightService: OvernightRouteService | undefined;
   private readonly diagnosticsService: ServiceDiagnosticsService | undefined;
+  private readonly providerProbeService: PrismuxProviderProbeService | undefined;
   private readonly cliUpdateRouteService: CliUpdateRouteService | undefined;
   private readonly quotaService: OfficialQuotaService | undefined;
   private readonly portScannerService: PortScannerService | undefined;
   private readonly resourceMonitorService: ResourceMonitorService | undefined;
   private readonly agentAuxService: AgentAuxService;
-  private readonly antigravityPolicyStore: AntigravityPolicyStore | undefined;
+  private readonly subscriptionWaiverStore: SubscriptionWaiverStore | undefined;
   private readonly dispatchHub: DesktopIpcDispatchHub | undefined;
   private readonly startedAt: number;
   private readonly onRequestShutdown:
@@ -481,14 +490,15 @@ export class DaemonRpcServer {
     this.obsidianImporter = options.obsidianImporter;
     this.handoffEngine = options.handoffEngine;
     this.hookBus = options.hookBus;
-    this.t3Supervisor = options.t3Supervisor;
-    this.t3RpcClient = options.t3RpcClient;
+    this.coreSupervisor = options.coreSupervisor ?? options.t3Supervisor;
+    this.coreRpcClient = options.coreRpcClient ?? options.t3RpcClient;
     this.wallpaperService = options.wallpaperService;
     this.fontService = options.fontService ?? new SystemFontService();
     this.appearanceStore = options.appearanceStore;
     this.businessService = options.businessService;
     this.overnightService = options.overnightService;
     this.diagnosticsService = options.diagnosticsService;
+    this.providerProbeService = options.providerProbeService;
     this.cliUpdateRouteService =
       options.cliUpdateService !== undefined
         ? new CliUpdateRouteService(options.cliUpdateService)
@@ -497,7 +507,8 @@ export class DaemonRpcServer {
     this.portScannerService = options.portScannerService;
     this.resourceMonitorService = options.resourceMonitorService;
     this.agentAuxService = options.agentAuxService ?? new AgentAuxService();
-    this.antigravityPolicyStore = options.antigravityPolicyStore;
+    this.subscriptionWaiverStore =
+      options.subscriptionWaiverStore ?? options.antigravityPolicyStore;
     this.dispatchHub = options.dispatchHub;
     this.startedAt = options.startedAt ?? Date.now();
     this.onRequestShutdown = options.onRequestShutdown;
@@ -521,13 +532,15 @@ export class DaemonRpcServer {
   }
 
   getHealthResponse(): DaemonHealthResponse {
-    const supervisorStatus = this.t3Supervisor?.getStatus();
-    const rpcStatus = this.t3RpcClient?.getStatus();
+    const supervisorStatus = this.coreSupervisor?.getStatus();
+    const rpcStatus = this.coreRpcClient?.getStatus();
+    const connected = rpcStatus?.connected ?? false;
     return {
       ok: true,
       headless: this.headless,
       version: this.version,
-      t3Connected: rpcStatus?.connected ?? false,
+      t3Connected: connected,
+      coreConnected: connected,
       supervisorState: supervisorStatus?.state ?? "stopped",
       activeProvider: this.chiefManager.getSlot().activeProvider,
       ptyCount: this.ptyPool.listSessions().length,
@@ -535,9 +548,9 @@ export class DaemonRpcServer {
     };
   }
 
-  getT3BridgeStatus(): T3BridgeStatus {
-    const supervisorStatus = this.t3Supervisor?.getStatus();
-    const rpcStatus = this.t3RpcClient?.getStatus();
+  getCoreBridgeStatus(): CoreBridgeStatus {
+    const supervisorStatus = this.coreSupervisor?.getStatus();
+    const rpcStatus = this.coreRpcClient?.getStatus();
     return {
       supervisorState: supervisorStatus?.state ?? "stopped",
       rpcConnected: rpcStatus?.connected ?? false,
@@ -551,6 +564,11 @@ export class DaemonRpcServer {
           ? { lastError: supervisorStatus.lastError }
           : {})
     };
+  }
+
+  /** @deprecated Use getCoreBridgeStatus */
+  getT3BridgeStatus(): CoreBridgeStatus {
+    return this.getCoreBridgeStatus();
   }
 
   async start(): Promise<void> {
@@ -2013,6 +2031,39 @@ export class DaemonRpcServer {
       }
     }
 
+    if (method === "GET" && pathname === "/v1/providers/probe") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/providers/probe.`
+        );
+      }
+      if (!this.providerProbeService) {
+        throw new BusinessRouteError(
+          503,
+          "PROVIDER_PROBE_UNAVAILABLE",
+          "PrismuxProviderProbeService is not configured."
+        );
+      }
+      const providerParam = requestUrl.searchParams.get("provider");
+      const refreshParam = requestUrl.searchParams.get("refresh")?.trim().toLowerCase();
+      const forceParam = requestUrl.searchParams.get("force")?.trim().toLowerCase();
+      const refresh =
+        refreshParam === "1" ||
+        refreshParam === "true" ||
+        forceParam === "1" ||
+        forceParam === "true";
+      const result = await this.providerProbeService.probeAll({
+        provider: providerParam,
+        refresh
+      });
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
     if (pathname.startsWith("/v1/quota/")) {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
@@ -2091,7 +2142,8 @@ export class DaemonRpcServer {
           }
         },
         {
-          policyStore: this.antigravityPolicyStore,
+          waiverStore: this.subscriptionWaiverStore,
+          policyStore: this.subscriptionWaiverStore,
           dispatchHub: this.dispatchHub
         }
       );

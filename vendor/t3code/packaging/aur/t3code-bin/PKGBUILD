@@ -89,16 +89,16 @@ EOF
 
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/t3code.desktop" <<'EOF'
 [Desktop Entry]
-Name=T3 Code
+Name=Prismux
 Comment=Desktop control surface for local coding agents
 Exec=t3code %U
 TryExec=t3code
 Terminal=false
 Type=Application
 Icon=t3code
-StartupWMClass=com.t3tools.T3Code
+StartupWMClass=io.prismux.desktop
 Categories=Development;
-MimeType=x-scheme-handler/t3code;
+MimeType=x-scheme-handler/prismux;
 EOF
 
   install -Dm644 "$srcdir/${pkgname}-${pkgver}-LICENSE" \

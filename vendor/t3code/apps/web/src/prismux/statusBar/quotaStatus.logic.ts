@@ -607,7 +607,7 @@ export function shouldShowStatusBarQuota(
 /**
  * Aggregates 100% compliant, strictly auth-gated quota data from:
  * 1. Prismux Daemon's official `agy -p "/usage"` CLI snapshot (Antigravity)
- * 2. T3 Code upstream compliant provider snapshots (Codex / Claude Code / etc., strictly excluding Antigravity)
+ * 2. Prismux upstream compliant provider snapshots (Codex / Claude Code / etc., strictly excluding Antigravity)
  */
 export function aggregateQuotaSummary(
   daemonQuota: DaemonOfficialQuotaSummaryResponse | null | undefined,
@@ -701,7 +701,7 @@ export function aggregateQuotaSummary(
     });
   }
 
-  // 2. Upstream compliant providers from T3 Code (Codex / Claude Code / etc., never Antigravity),
+  // 2. Upstream compliant providers from Prismux (Codex / Claude Code / etc., never Antigravity),
   //    strictly gated on enabled + installed + live authenticated status + actual windows.
   for (const provider of upstreamProviders) {
     if (provider.driver === "antigravity" || !isUpstreamProviderQuotaEligible(provider)) continue;

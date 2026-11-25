@@ -244,22 +244,6 @@ export class KeyringNativePackageMissingError extends Schema.TaggedError<Keyring
   }
 }
 
-export class ClerkPasskeyNativePackageMissingError extends Schema.TaggedError<ClerkPasskeyNativePackageMissingError>()(
-  "ClerkPasskeyNativePackageMissingError",
-  {
-    packageName: Schema.String,
-    binaryFileName: Schema.String,
-    packageEntryPath: Schema.String,
-    platform: BuildPlatform,
-    arch: BuildArch,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Clerk passkey native package is missing: ${this.packageName}`;
-  }
-}
-
 export class UnsupportedHostBuildPlatformError extends Schema.TaggedError<UnsupportedHostBuildPlatformError>()(
   "UnsupportedHostBuildPlatformError",
   {
@@ -1298,7 +1282,7 @@ export class InvalidAppleTeamIdError extends Schema.TaggedError<InvalidAppleTeam
   },
 ) {
   override get message(): string {
-    return `T3CODE_APPLE_TEAM_ID '${this.teamId}' must be a 10-character Apple Developer Team ID.`;
+    return `PRISMUX_APPLE_TEAM_ID '${this.teamId}' must be a 10-character Apple Developer Team ID.`;
   }
 }
 
@@ -1307,7 +1291,7 @@ export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedErro
   {},
 ) {
   override get message(): string {
-    return "T3CODE_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.";
+    return "PRISMUX_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.";
   }
 }
 
@@ -1316,7 +1300,7 @@ export class MissingMacPasskeyDomainConfigurationError extends Schema.TaggedErro
   {},
 ) {
   override get message(): string {
-    return "T3CODE_CLERK_PUBLISHABLE_KEY or T3CODE_CLERK_PASSKEY_RP_DOMAINS is required for signed macOS passkey builds.";
+    return "PRISMUX_CLERK_PUBLISHABLE_KEY or PRISMUX_CLERK_PASSKEY_RP_DOMAINS is required for signed macOS passkey builds.";
   }
 }
 
@@ -1327,7 +1311,7 @@ export class InvalidMacPasskeyPublishableKeyError extends Schema.TaggedError<Inv
   },
 ) {
   override get message(): string {
-    return "T3CODE_CLERK_PUBLISHABLE_KEY is invalid.";
+    return "PRISMUX_CLERK_PUBLISHABLE_KEY is invalid.";
   }
 }
 
@@ -1395,22 +1379,22 @@ function normalizePasskeyRpDomain(value: string): string {
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
 ): MacPasskeySigningConfiguration {
-  const teamId = env.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
+  const teamId = env.PRISMUX_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
   if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
     throw new InvalidAppleTeamIdError({ teamId });
   }
 
-  const provisioningProfilePath = env.T3CODE_MACOS_PROVISIONING_PROFILE?.trim() ?? "";
+  const provisioningProfilePath = env.PRISMUX_MACOS_PROVISIONING_PROFILE?.trim() ?? "";
   if (provisioningProfilePath.length === 0) {
     throw new MissingMacPasskeyProvisioningProfileError();
   }
 
-  const configuredRpDomains = env.T3CODE_CLERK_PASSKEY_RP_DOMAINS?.trim();
+  const configuredRpDomains = env.PRISMUX_CLERK_PASSKEY_RP_DOMAINS?.trim();
   let rpDomains: readonly string[];
   if (configuredRpDomains) {
     rpDomains = configuredRpDomains.split(",").map(normalizePasskeyRpDomain);
   } else {
-    const publishableKey = env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim();
+    const publishableKey = env.PRISMUX_CLERK_PUBLISHABLE_KEY?.trim();
     if (!publishableKey) {
       throw new MissingMacPasskeyDomainConfigurationError();
     }
@@ -1599,38 +1583,15 @@ export const stageCursorSdkPlatformPackages = Effect.fn("stageCursorSdkPlatformP
   },
 );
 
-export interface ClerkPasskeyNativeArtifact {
+export interface NativePackageArtifact {
   readonly packageName: string;
   readonly binaryFileName: string;
-}
-
-export function resolveClerkPasskeyNativeArtifacts(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-): readonly ClerkPasskeyNativeArtifact[] {
-  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
-
-  if (platform === "mac") {
-    return architectures.map((architecture) => ({
-      packageName: `@clerk/electron-passkeys-darwin-${architecture}`,
-      binaryFileName: `electron-passkeys.darwin-${architecture}.node`,
-    }));
-  }
-
-  if (platform === "win") {
-    return architectures.map((architecture) => ({
-      packageName: `@clerk/electron-passkeys-win32-${architecture}-msvc`,
-      binaryFileName: `electron-passkeys.win32-${architecture}-msvc.node`,
-    }));
-  }
-
-  return [];
 }
 
 export function resolveKeyringNativeArtifacts(
   platform: typeof BuildPlatform.Type,
   arch: typeof BuildArch.Type,
-): readonly ClerkPasskeyNativeArtifact[] {
+): readonly NativePackageArtifact[] {
   const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
 
   if (platform === "mac") {
@@ -1672,37 +1633,6 @@ const stageKeyringNativeBinaries = Effect.fn("stageKeyringNativeBinaries")(funct
       try: () => packageRequire.resolve(`${artifact.packageName}/${artifact.binaryFileName}`),
       catch: (cause) =>
         new KeyringNativePackageMissingError({
-          packageName: artifact.packageName,
-          binaryFileName: artifact.binaryFileName,
-          packageEntryPath,
-          platform,
-          arch,
-          cause,
-        }),
-    });
-    yield* fs.copyFile(sourcePath, path.join(packageDir, artifact.binaryFileName));
-  }
-});
-
-// Stage pnpm-nested Clerk binaries beside index.js so the loader finds them and electron-builder unpacks them.
-const stageClerkPasskeyNativeBinaries = Effect.fn("stageClerkPasskeyNativeBinaries")(function* (
-  stageAppDir: string,
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const packageEntryPath = yield* fs.realPath(
-    path.join(stageAppDir, "node_modules", "@clerk", "electron-passkeys", "index.js"),
-  );
-  const packageDir = path.dirname(packageEntryPath);
-  const packageRequire = NodeModule.createRequire(packageEntryPath);
-
-  for (const artifact of resolveClerkPasskeyNativeArtifacts(platform, arch)) {
-    const sourcePath = yield* Effect.try({
-      try: () => packageRequire.resolve(artifact.packageName),
-      catch: (cause) =>
-        new ClerkPasskeyNativePackageMissingError({
           packageName: artifact.packageName,
           binaryFileName: artifact.binaryFileName,
           packageEntryPath,
@@ -1780,18 +1710,18 @@ const AzureTrustedSigningOptionsConfig = Config.all({
 });
 
 const BuildEnvConfig = Config.all({
-  platform: Config.schema(BuildPlatform, "T3CODE_DESKTOP_PLATFORM").pipe(Config.option),
-  target: Config.String("T3CODE_DESKTOP_TARGET").pipe(Config.option),
-  arch: Config.schema(BuildArch, "T3CODE_DESKTOP_ARCH").pipe(Config.option),
-  version: Config.String("T3CODE_DESKTOP_VERSION").pipe(Config.option),
-  outputDir: Config.String("T3CODE_DESKTOP_OUTPUT_DIR").pipe(Config.option),
-  skipBuild: Config.Boolean("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
-  keepStage: Config.Boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
-  signed: Config.Boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
-  verbose: Config.Boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
-  mockUpdates: Config.Boolean("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
-  mockUpdateServerPort: Config.String("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
-  wslRuntime: Config.String("T3CODE_DESKTOP_WSL_RUNTIME").pipe(Config.option),
+  platform: Config.schema(BuildPlatform, "PRISMUX_DESKTOP_PLATFORM").pipe(Config.option),
+  target: Config.String("PRISMUX_DESKTOP_TARGET").pipe(Config.option),
+  arch: Config.schema(BuildArch, "PRISMUX_DESKTOP_ARCH").pipe(Config.option),
+  version: Config.String("PRISMUX_DESKTOP_VERSION").pipe(Config.option),
+  outputDir: Config.String("PRISMUX_DESKTOP_OUTPUT_DIR").pipe(Config.option),
+  skipBuild: Config.Boolean("PRISMUX_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
+  keepStage: Config.Boolean("PRISMUX_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
+  signed: Config.Boolean("PRISMUX_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
+  verbose: Config.Boolean("PRISMUX_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
+  mockUpdates: Config.Boolean("PRISMUX_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
+  mockUpdateServerPort: Config.String("PRISMUX_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
+  wslRuntime: Config.String("PRISMUX_DESKTOP_WSL_RUNTIME").pipe(Config.option),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -2062,11 +1992,11 @@ const rustTargetIsInstalled = Effect.fn("rustTargetIsInstalled")(function* (targ
 export const preflightLinuxDesktopBuild = Effect.fn("preflightLinuxDesktopBuild")(function* (
   arch: typeof BuildArch.Type = "x64",
 ) {
-  const reuseResourceMonitor = yield* Config.Boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
+  const reuseResourceMonitor = yield* Config.Boolean("PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
     Config.withDefault(false),
   );
   const reuseCaptureHelpers = yield* Config.Boolean(
-    "T3CODE_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS",
+    "PRISMUX_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS",
   ).pipe(Config.withDefault(false));
   const needsRust = !reuseResourceMonitor || !reuseCaptureHelpers;
   const rustTarget = resolveResourceMonitorRustTargets("linux", arch)[0]!;
@@ -2103,7 +2033,7 @@ export const preflightMacDesktopBuild = Effect.fn("preflightMacDesktopBuild")(fu
   arch: typeof BuildArch.Type,
 ) {
   const rustTargets = resolveResourceMonitorRustTargets("mac", arch);
-  const reuseResourceMonitor = yield* Config.Boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
+  const reuseResourceMonitor = yield* Config.Boolean("PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
     Config.withDefault(false),
   );
   const checks = yield* Effect.all(
@@ -2161,7 +2091,7 @@ export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBu
   function* (input: { readonly arch: typeof BuildArch.Type; readonly bundlesWslRuntime: boolean }) {
     const rustTarget = resolveResourceMonitorRustTargets("win", input.arch)[0]!;
     const reuseResourceMonitor = yield* Config.Boolean(
-      "T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR",
+      "PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR",
     ).pipe(Config.withDefault(false));
     const python = yield* resolvePythonForNodeGyp();
     const checks = yield* Effect.all(
@@ -2351,7 +2281,7 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     // A PR preview's bundle is untrusted and this job may hold signing secrets, so never run it.
-    if (yield* Config.Boolean("T3CODE_DESKTOP_UNTRUSTED_BUNDLE").pipe(Config.withDefault(false))) {
+    if (yield* Config.Boolean("PRISMUX_DESKTOP_UNTRUSTED_BUNDLE").pipe(Config.withDefault(false))) {
       yield* Effect.log(
         "[desktop-artifact] Skipped the bundle self-check for an untrusted bundle.",
       );
@@ -2442,7 +2372,7 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
   const path = yield* Path.Path;
   const [rustTarget] = resolveResourceMonitorRustTargets("linux", input.arch);
   // CI skips Rust on helper-cache hits; allow reuse without rebuilding.
-  const reuseHelpers = yield* Config.Boolean("T3CODE_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS").pipe(
+  const reuseHelpers = yield* Config.Boolean("PRISMUX_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS").pipe(
     Config.withDefault(false),
   );
   const binaryPath = path.join(
@@ -2505,7 +2435,7 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
   const manifestPath = path.join(input.repoRoot, "native/resource-monitor/Cargo.toml");
   const executableName = resourceMonitorExecutableName(input.platform);
   const rustTargets = resolveResourceMonitorRustTargets(input.platform, input.arch);
-  const reuseResourceMonitor = yield* Config.Boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
+  const reuseResourceMonitor = yield* Config.Boolean("PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
     Config.withDefault(false),
   );
   const builtBinaries: string[] = [];
@@ -2863,7 +2793,7 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   updateChannel: "latest" | "nightly",
 ) {
   const env = yield* Config.all({
-    updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
+    updateRepository: Config.String("PRISMUX_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
     githubRepository: Config.String("GITHUB_REPOSITORY").pipe(Config.option),
   });
   const rawRepo = (
@@ -3546,21 +3476,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         // macOS 26 offers Messages/Mail codes in every text field unless opted out.
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
         NSLocalNetworkUsageDescription:
-          "T3 Code connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
+          "Prismux connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
         NSCalendarsUsageDescription:
-          "Commands you run in T3 Code may need access to your calendars.",
+          "Commands you run in Prismux may need access to your calendars.",
         NSCalendarsFullAccessUsageDescription:
-          "Commands you run in T3 Code may need to read and write your calendar events.",
+          "Commands you run in Prismux may need to read and write your calendar events.",
         NSCalendarsWriteOnlyAccessUsageDescription:
-          "Commands you run in T3 Code may need to add events to your calendars.",
+          "Commands you run in Prismux may need to add events to your calendars.",
         NSScreenCaptureUsageDescription:
-          "T3 Code captures the active window when you use the window capture shortcut.",
+          "Prismux captures the active window when you use the window capture shortcut.",
         NSCameraUsageDescription:
-          "T3 Code lets commands run by terminals and coding agents use the camera.",
+          "Prismux lets commands run by terminals and coding agents use the camera.",
         NSMicrophoneUsageDescription:
-          "T3 Code lets commands run by terminals and coding agents use the microphone.",
+          "Prismux lets commands run by terminals and coding agents use the microphone.",
         NSSpeechRecognitionUsageDescription:
-          "T3 Code transcribes your dictation on this Mac when you choose Apple Speech.",
+          "Prismux transcribes your dictation on this Mac when you choose Apple Speech.",
         // macOS lists an app under Default web browser only when it opens web
         // pages as documents as well as http and https links (see protocols).
         CFBundleDocumentTypes: [
@@ -3574,8 +3504,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       },
       protocols: [
         {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          name: "Prismux",
+          schemes: ["prismux", "prismux-dev"],
         },
         {
           name: "Web site URL",
@@ -3624,17 +3554,17 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       icon: "icons",
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
-      maintainer: "T3 Tools <hello@t3.codes>",
+      maintainer: "Prismux <hello@prismux.app>",
       protocols: [
         {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          name: "Prismux",
+          schemes: ["prismux", "prismux-dev"],
         },
       ],
       desktop: {
         entry: {
           // Match Electron's WM_CLASS from setDesktopName so docks use this launcher.
-          StartupWMClass: "com.t3tools.T3Code",
+          StartupWMClass: "io.prismux.desktop",
         },
       },
     };
@@ -3642,14 +3572,14 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     if (buildConfig.publish) {
       buildConfig.appImage = {
         artifactName:
-          updateChannel === "nightly" ? "T3-Code-Nightly-${arch}.${ext}" : "T3-Code-${arch}.${ext}",
+          updateChannel === "nightly" ? "Prismux-Nightly-${arch}.${ext}" : "Prismux-${arch}.${ext}",
       };
     }
     buildConfig.deb = {
       // FPM runs outside the staged app directory, so source paths must be absolute.
       fpm: [
-        `${path.join(repoRoot, "apps/desktop/resources/linux/com.t3tools.t3code.metainfo.xml")}=/usr/share/metainfo/com.t3tools.t3code.metainfo.xml`,
-        `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/t3code/copyright`,
+        `${path.join(repoRoot, "apps/desktop/resources/linux/io.prismux.desktop.metainfo.xml")}=/usr/share/metainfo/io.prismux.desktop.metainfo.xml`,
+        `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/prismux/copyright`,
       ],
       // Debian 13 and Ubuntu 24.04 use 64-bit-time names; retain old-name fallbacks.
       depends: [
@@ -4897,7 +4827,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     }),
     { label: "vp install --prod", verbose: options.verbose },
   );
-  yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
   yield* stageKeyringNativeBinaries(stageAppDir, options.platform, options.arch);
 
   if (options.platform === "win" && windowsServerAsarPath) {
@@ -5111,66 +5040,66 @@ export const copyDesktopBuildArtifacts = Effect.fn("copyDesktopBuildArtifacts")(
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   platform: Flag.Literals("platform", BuildPlatform.literals).pipe(
-    Flag.withDescription("Build platform (env: T3CODE_DESKTOP_PLATFORM)."),
+    Flag.withDescription("Build platform (env: PRISMUX_DESKTOP_PLATFORM)."),
     Flag.optional,
   ),
   target: Flag.String("target").pipe(
     Flag.withDescription(
-      "Artifact target, for example dmg/AppImage/nsis (env: T3CODE_DESKTOP_TARGET).",
+      "Artifact target, for example dmg/AppImage/nsis (env: PRISMUX_DESKTOP_TARGET).",
     ),
     Flag.optional,
   ),
   arch: Flag.Literals("arch", BuildArch.literals).pipe(
-    Flag.withDescription("Build arch, for example arm64/x64/universal (env: T3CODE_DESKTOP_ARCH)."),
+    Flag.withDescription("Build arch, for example arm64/x64/universal (env: PRISMUX_DESKTOP_ARCH)."),
     Flag.optional,
   ),
   buildVersion: Flag.String("build-version").pipe(
     Flag.withDescription(
-      "Compiled bundle and desktop package version (env: T3CODE_DESKTOP_VERSION).",
+      "Compiled bundle and desktop package version (env: PRISMUX_DESKTOP_VERSION).",
     ),
     Flag.optional,
   ),
   outputDir: Flag.String("output-dir").pipe(
-    Flag.withDescription("Output directory for artifacts (env: T3CODE_DESKTOP_OUTPUT_DIR)."),
+    Flag.withDescription("Output directory for artifacts (env: PRISMUX_DESKTOP_OUTPUT_DIR)."),
     Flag.optional,
   ),
   skipBuild: Flag.Boolean("skip-build").pipe(
     Flag.withDescription(
-      "Skip `vp run build:desktop` and use existing dist artifacts (env: T3CODE_DESKTOP_SKIP_BUILD).",
+      "Skip `vp run build:desktop` and use existing dist artifacts (env: PRISMUX_DESKTOP_SKIP_BUILD).",
     ),
     Flag.optional,
   ),
   keepStage: Flag.Boolean("keep-stage").pipe(
-    Flag.withDescription("Keep temporary staging files (env: T3CODE_DESKTOP_KEEP_STAGE)."),
+    Flag.withDescription("Keep temporary staging files (env: PRISMUX_DESKTOP_KEEP_STAGE)."),
     Flag.optional,
   ),
   signed: Flag.Boolean("signed").pipe(
     Flag.withDescription(
-      "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: T3CODE_DESKTOP_SIGNED).",
+      "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: PRISMUX_DESKTOP_SIGNED).",
     ),
     Flag.optional,
   ),
   verbose: Flag.Boolean("verbose").pipe(
-    Flag.withDescription("Stream subprocess stdout (env: T3CODE_DESKTOP_VERBOSE)."),
+    Flag.withDescription("Stream subprocess stdout (env: PRISMUX_DESKTOP_VERBOSE)."),
     Flag.optional,
   ),
   mockUpdates: Flag.Boolean("mock-updates").pipe(
-    Flag.withDescription("Enable mock updates (env: T3CODE_DESKTOP_MOCK_UPDATES)."),
+    Flag.withDescription("Enable mock updates (env: PRISMUX_DESKTOP_MOCK_UPDATES)."),
     Flag.optional,
   ),
   mockUpdateServerPort: Flag.Int("mock-update-server-port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
-    Flag.withDescription("Mock update server port (env: T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
+    Flag.withDescription("Mock update server port (env: PRISMUX_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
     Flag.optional,
   ),
   wslRuntime: Flag.String("wsl-runtime").pipe(
     Flag.withDescription(
-      "Path to the Linux CLI release archive (t3-<version>-linux-x64.tar.gz) to embed as the WSL runtime of a Windows build (env: T3CODE_DESKTOP_WSL_RUNTIME).",
+      "Path to the Linux CLI release archive (t3-<version>-linux-x64.tar.gz) to embed as the WSL runtime of a Windows build (env: PRISMUX_DESKTOP_WSL_RUNTIME).",
     ),
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for T3 Code."),
+  Command.withDescription("Build a desktop artifact for Prismux."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 

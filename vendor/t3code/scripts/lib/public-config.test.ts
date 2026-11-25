@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG, loadRepoEnv } from "./public-config.ts";
+import { DEFAULT_PRISMUX_PUBLIC_CONFIG, loadRepoEnv } from "./public-config.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -19,61 +19,60 @@ describe("loadRepoEnv", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_root\nT3CODE_CLERK_JWT_TEMPLATE=template_root\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root\nT3CODE_RELAY_URL=https://root.example.test\n",
+      "PRISMUX_CLERK_PUBLISHABLE_KEY=pk_root\nPRISMUX_CLERK_JWT_TEMPLATE=template_root\nPRISMUX_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root\nPRISMUX_RELAY_URL=https://root.example.test\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.local"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_local\nT3CODE_CLERK_JWT_TEMPLATE=template_local\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=oauth_local\nT3CODE_RELAY_URL=https://local.example.test\n",
+      "PRISMUX_CLERK_PUBLISHABLE_KEY=pk_local\nPRISMUX_CLERK_JWT_TEMPLATE=template_local\nPRISMUX_CLERK_CLI_OAUTH_CLIENT_ID=oauth_local\nPRISMUX_RELAY_URL=https://local.example.test\n",
     );
 
-    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3CODE_RELAY_URL).toBe(
+    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).PRISMUX_RELAY_URL).toBe(
       "https://local.example.test",
     );
     expect(
       loadRepoEnv({
         baseEnv: {
-          T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-          T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
-          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
-          T3CODE_RELAY_URL: "https://ci.example.test",
+          PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_ci",
+          PRISMUX_CLERK_JWT_TEMPLATE: "template_ci",
+          PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
+          PRISMUX_RELAY_URL: "https://ci.example.test",
         },
         repoRoot,
       }),
     ).toMatchObject({
-      T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
+      PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_ci",
+      PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
       VITE_CLERK_PUBLISHABLE_KEY: "pk_ci",
       EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
+      PRISMUX_CLERK_JWT_TEMPLATE: "template_ci",
       VITE_CLERK_JWT_TEMPLATE: "template_ci",
       EXPO_PUBLIC_CLERK_JWT_TEMPLATE: "template_ci",
-      T3CODE_RELAY_URL: "https://ci.example.test",
-      VITE_T3CODE_RELAY_URL: "https://ci.example.test",
+      PRISMUX_RELAY_URL: "https://ci.example.test",
+      VITE_PRISMUX_RELAY_URL: "https://ci.example.test",
     });
   });
 
-  it("falls back to official public T3 Connect identifiers when .env is absent and respects T3CODE_DISABLE_CLOUD=1", () => {
+  it("leaves cloud/relay defaults empty when .env is absent and strips them under PRISMUX_DISABLE_CLOUD=1", () => {
     const repoRoot = makeTemporaryDirectory();
-    const resolved = loadRepoEnv({ baseEnv: {}, repoRoot });
-    expect(resolved).toMatchObject({
-      T3CODE_CLERK_PUBLISHABLE_KEY:
-        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_PUBLISHABLE_KEY,
-      VITE_CLERK_PUBLISHABLE_KEY:
-        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_PUBLISHABLE_KEY,
-      T3CODE_CLERK_JWT_TEMPLATE:
-        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_JWT_TEMPLATE,
-      VITE_CLERK_JWT_TEMPLATE:
-        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_JWT_TEMPLATE,
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID:
-        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID,
-      VITE_CLERK_CLI_OAUTH_CLIENT_ID:
-        DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID,
-      T3CODE_RELAY_URL: DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_RELAY_URL,
-      VITE_T3CODE_RELAY_URL: DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG.T3CODE_RELAY_URL,
-    });
+    expect(DEFAULT_PRISMUX_PUBLIC_CONFIG).toEqual({});
 
-    const disabled = loadRepoEnv({ baseEnv: { T3CODE_DISABLE_CLOUD: "1" }, repoRoot });
-    expect(disabled.T3CODE_RELAY_URL).toBeUndefined();
+    const resolved = loadRepoEnv({ baseEnv: {}, repoRoot });
+    expect(resolved.PRISMUX_RELAY_URL).toBeUndefined();
+    expect(resolved.VITE_PRISMUX_RELAY_URL).toBeUndefined();
+    expect(resolved.PRISMUX_CLERK_PUBLISHABLE_KEY).toBeUndefined();
+    expect(resolved.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
+
+    const disabled = loadRepoEnv({
+      baseEnv: {
+        PRISMUX_DISABLE_CLOUD: "1",
+        PRISMUX_RELAY_URL: "https://ci.example.test",
+        PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_ci",
+      },
+      repoRoot,
+    });
+    expect(disabled.PRISMUX_RELAY_URL).toBeUndefined();
+    expect(disabled.VITE_PRISMUX_RELAY_URL).toBeUndefined();
+    expect(disabled.PRISMUX_CLERK_PUBLISHABLE_KEY).toBeUndefined();
     expect(disabled.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
   });
 
@@ -82,12 +81,12 @@ describe("loadRepoEnv", () => {
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
       [
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET=relay-ds",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-root-token",
-        "T3CODE_MOBILE_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "T3CODE_MOBILE_OTLP_TRACES_DATASET=mobile-ds",
-        "T3CODE_MOBILE_OTLP_TRACES_TOKEN=xaat-mobile-token",
+        "PRISMUX_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
+        "PRISMUX_RELAY_CLIENT_OTLP_TRACES_DATASET=relay-ds",
+        "PRISMUX_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-root-token",
+        "PRISMUX_MOBILE_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
+        "PRISMUX_MOBILE_OTLP_TRACES_DATASET=mobile-ds",
+        "PRISMUX_MOBILE_OTLP_TRACES_TOKEN=xaat-mobile-token",
       ].join("\n"),
     );
 
@@ -102,15 +101,15 @@ describe("loadRepoEnv", () => {
     });
 
     for (const blockedKey of [
-      "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL",
-      "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET",
-      "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN",
+      "PRISMUX_RELAY_CLIENT_OTLP_TRACES_URL",
+      "PRISMUX_RELAY_CLIENT_OTLP_TRACES_DATASET",
+      "PRISMUX_RELAY_CLIENT_OTLP_TRACES_TOKEN",
       "VITE_RELAY_OTLP_TRACES_URL",
       "VITE_RELAY_OTLP_TRACES_DATASET",
       "VITE_RELAY_OTLP_TRACES_TOKEN",
-      "T3CODE_MOBILE_OTLP_TRACES_URL",
-      "T3CODE_MOBILE_OTLP_TRACES_DATASET",
-      "T3CODE_MOBILE_OTLP_TRACES_TOKEN",
+      "PRISMUX_MOBILE_OTLP_TRACES_URL",
+      "PRISMUX_MOBILE_OTLP_TRACES_DATASET",
+      "PRISMUX_MOBILE_OTLP_TRACES_TOKEN",
       "EXPO_PUBLIC_OTLP_TRACES_URL",
       "EXPO_PUBLIC_OTLP_TRACES_DATASET",
       "EXPO_PUBLIC_OTLP_TRACES_TOKEN",
@@ -121,7 +120,7 @@ describe("loadRepoEnv", () => {
 });
 
 function makeTemporaryDirectory() {
-  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-public-config-"));
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-public-config-"));
   temporaryDirectories.push(directory);
   return directory;
 }

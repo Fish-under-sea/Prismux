@@ -14,7 +14,7 @@ import {
 import { AntigravityGuardDeniedError } from "../security/AntigravityPolicyGuard.js";
 import {
   AntigravityPolicyError,
-  AntigravityPolicyStore
+  SubscriptionWaiverStore
 } from "../security/AntigravityPolicyStore.js";
 
 export interface DispatchRouteContext {
@@ -30,7 +30,8 @@ export interface DispatchRouteContext {
 }
 
 export interface DispatchRouteDeps {
-  policyStore?: AntigravityPolicyStore;
+  policyStore?: SubscriptionWaiverStore;
+  waiverStore?: SubscriptionWaiverStore;
   dispatchHub?: DesktopIpcDispatchHub;
 }
 
@@ -73,14 +74,36 @@ function writeHandledError(res: ServerResponse, err: unknown): void {
   if (err instanceof AntigravityPolicyError) {
     writeJson(res, err.statusCode, {
       ok: false,
+      code: err.code,
+      message: err.message,
       error: { code: err.code, message: err.message }
     });
     return;
   }
   if (err instanceof AntigravityGuardDeniedError) {
+    const blocked = err.toBlockedPayload();
+    if (blocked !== null) {
+      writeJson(res, err.statusCode, {
+        ...blocked,
+        error: {
+          code: blocked.code,
+          reasonCode: blocked.reasonCode,
+          message: blocked.message
+        },
+        ...(err.decision !== undefined ? { decision: err.decision } : {})
+      });
+      return;
+    }
     writeJson(res, err.statusCode, {
       ok: false,
-      error: { code: err.code, message: err.message },
+      code: err.code,
+      ...(err.reasonCode !== undefined ? { reasonCode: err.reasonCode } : {}),
+      message: err.message,
+      error: {
+        code: err.code,
+        ...(err.reasonCode !== undefined ? { reasonCode: err.reasonCode } : {}),
+        message: err.message
+      },
       ...(err.decision !== undefined ? { decision: err.decision } : {})
     });
     return;
@@ -88,6 +111,8 @@ function writeHandledError(res: ServerResponse, err: unknown): void {
   if (err instanceof DispatchHubError) {
     writeJson(res, err.statusCode, {
       ok: false,
+      code: err.code,
+      message: err.message,
       error: { code: err.code, message: err.message }
     });
     return;
@@ -95,6 +120,8 @@ function writeHandledError(res: ServerResponse, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
   writeJson(res, 500, {
     ok: false,
+    code: "DISPATCH_INTERNAL_ERROR",
+    message,
     error: { code: "DISPATCH_INTERNAL_ERROR", message }
   });
 }
@@ -182,10 +209,11 @@ function startDispatchSseStream(
 }
 
 /**
- * Checks whether a pathname belongs to DispatchRoutes or AGY security policy routes.
+ * Checks whether a pathname belongs to DispatchRoutes or Subscription/AGY security policy routes.
  */
 export function isDispatchOrSecurityRoute(pathname: string): boolean {
   return (
+    pathname === "/v1/security/subscription-waiver" ||
     pathname === "/v1/security/antigravity-policy" ||
     pathname === "/v1/dispatch/events" ||
     pathname === "/v1/dispatch/thread" ||
@@ -196,8 +224,11 @@ export function isDispatchOrSecurityRoute(pathname: string): boolean {
 
 /**
  * Handles:
- * - `GET /v1/security/antigravity-policy`
- * - `PUT /v1/security/antigravity-policy`
+ * - `GET /v1/security/subscription-waiver`
+ * - `PUT /v1/security/subscription-waiver`
+ * - `DELETE /v1/security/subscription-waiver`
+ * - `GET /v1/security/antigravity-policy` (backward-compatible)
+ * - `PUT /v1/security/antigravity-policy` (backward-compatible)
  * - `GET /v1/dispatch/events` (SSE)
  * - `POST /v1/dispatch/thread`
  * - `GET /v1/dispatch/tasks`
@@ -219,9 +250,58 @@ export async function handleDispatchRoute(
     return true;
   }
 
-  // 1. AGY Role Hard-Lock Policy Endpoints
+  const resolvedStore = deps.waiverStore ?? deps.policyStore;
+
+  // 1a. Unified Personal Subscription Risk Waiver Endpoints
+  if (pathname === "/v1/security/subscription-waiver") {
+    if (!resolvedStore) {
+      writeJson(res, 503, {
+        ok: false,
+        code: "WAIVER_STORE_UNAVAILABLE",
+        message: "SubscriptionWaiverStore is not configured.",
+        error: {
+          code: "WAIVER_STORE_UNAVAILABLE",
+          message: "SubscriptionWaiverStore is not configured."
+        }
+      });
+      return true;
+    }
+
+    try {
+      if (method === "GET") {
+        writeJson(res, 200, resolvedStore.getWaiver());
+        return true;
+      }
+      if (method === "PUT") {
+        const body = await ctx.readJsonBody();
+        const updated = resolvedStore.updateWaiver(body);
+        writeJson(res, 200, updated);
+        return true;
+      }
+      if (method === "DELETE") {
+        const revoked = resolvedStore.revokeWaiver();
+        writeJson(res, 200, revoked);
+        return true;
+      }
+      writeJson(res, 405, {
+        ok: false,
+        code: "METHOD_NOT_ALLOWED",
+        message: `Method ${method} is not allowed on ${pathname}.`,
+        error: {
+          code: "METHOD_NOT_ALLOWED",
+          message: `Method ${method} is not allowed on ${pathname}.`
+        }
+      });
+      return true;
+    } catch (err) {
+      writeHandledError(res, err);
+      return true;
+    }
+  }
+
+  // 1b. Backward-compatible AGY Role Hard-Lock Policy Endpoints
   if (pathname === "/v1/security/antigravity-policy") {
-    if (!deps.policyStore) {
+    if (!resolvedStore) {
       writeJson(res, 503, {
         ok: false,
         error: {
@@ -234,12 +314,12 @@ export async function handleDispatchRoute(
 
     try {
       if (method === "GET") {
-        writeJson(res, 200, deps.policyStore.getPolicy());
+        writeJson(res, 200, resolvedStore.getPolicy());
         return true;
       }
       if (method === "PUT") {
         const body = await ctx.readJsonBody();
-        const updated = deps.policyStore.updatePolicy(body);
+        const updated = resolvedStore.updatePolicy(body);
         writeJson(res, 200, updated);
         return true;
       }

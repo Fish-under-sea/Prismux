@@ -42,18 +42,18 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
     Effect.gen(function* () {
       const npx = "/home/theo/.npm/_npx/abc/node_modules/t3/dist/bin.mjs";
       expect(yield* rootCommand({ node: "/usr/bin/node", entry: npx })).toBe(
-        "sudo npx t3 browser setup",
+        "sudo npx prismux browser setup",
       );
       expect(
         yield* rootCommand({ node: "/home/theo/.nvm/versions/node/v24/bin/node", entry: npx }),
-      ).toBe('sudo env "PATH=$PATH" npx t3 browser setup');
+      ).toBe('sudo env "PATH=$PATH" npx prismux browser setup');
       expect(
         yield* rootCommand({
           node: "/home/theo/.local/node/bin/node",
           entry: "/home/theo/.local/lib/node_modules/t3/dist/bin.mjs",
           path: yield* pathWithT3,
         }),
-      ).toBe('sudo env "PATH=$PATH" t3 browser setup');
+      ).toBe('sudo env "PATH=$PATH" prismux browser setup');
     }),
   );
 
@@ -67,7 +67,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           path: yield* pathWithT3,
           args,
         }),
-      ).toBe(`sudo env "PATH=$PATH" t3 browser setup --base-dir '/srv/t3 home'`);
+      ).toBe(`sudo env "PATH=$PATH" prismux browser setup --base-dir '/srv/t3 home'`);
       expect(
         yield* rootCommand({ node: "/opt/t3/t3", entry: "/opt/t3/t3", executable: true, args }),
       ).toBe("sudo /opt/t3/t3 browser setup --base-dir '/srv/t3 home'");
@@ -85,7 +85,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       const desktop = {
         node: "/tmp/.mount_T3abc/t3code",
         entry: "/tmp/.mount_T3abc/resources/app.asar/apps/server/dist/bin.mjs",
-        env: { T3CODE_CLI_PATH: shim },
+        env: { PRISMUX_CLI_PATH: shim },
       };
 
       expect(yield* rootCommand(desktop)).toBe(`sudo '${shim}' browser setup`);
@@ -95,11 +95,11 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         `sudo '${shim}' browser setup`,
       );
 
-      // The link the app installs onto PATH leads to its own launcher, so plain `t3` is right.
+      // The link the app installs onto PATH leads to its own launcher, so plain `prismux` is right.
       const linked = yield* fs.makeTempDirectoryScoped();
       yield* fs.symlink(shim, path.join(linked, "t3"));
       expect(yield* rootCommand({ ...desktop, path: linked })).toBe(
-        'sudo env "PATH=$PATH" t3 browser setup',
+        'sudo env "PATH=$PATH" prismux browser setup',
       );
 
       expect(
@@ -137,13 +137,13 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           entry: "/home/theo/.t3/runtime/versions/1.0.0/t3",
           executable: true,
           path: path.join(prefix, "bin"),
-          env: { T3CODE_NPM_LAUNCHER_PATH: npmLauncher },
+          env: { PRISMUX_NPM_LAUNCHER_PATH: npmLauncher },
         }),
-      ).toBe('sudo env "PATH=$PATH" t3 browser setup');
+      ).toBe('sudo env "PATH=$PATH" prismux browser setup');
 
       expect(
-        yield* rootCommand({ ...desktop, env: { T3CODE_CLI_PATH: path.join(home, "gone") } }),
-      ).toBe('sudo env "PATH=$PATH" t3 browser setup');
+        yield* rootCommand({ ...desktop, env: { PRISMUX_CLI_PATH: path.join(home, "gone") } }),
+      ).toBe('sudo env "PATH=$PATH" prismux browser setup');
     }),
   );
 });
@@ -158,20 +158,20 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
       yield* fs.writeFileString(shim, "@echo off\r\n");
       const hostCommand = (platform: NodeJS.Platform, env: Record<string, string>) =>
         resolveHostCliCommand("doctor", ["--base-dir", "C:\\Users\\Jane Doe\\.t3"]).pipe(
-          Effect.provideService(HostProcess.ExecutablePath, "C:\\Program Files\\T3 Code\\t3.exe"),
+          Effect.provideService(HostProcess.ExecutablePath, "C:\\Program Files\\Prismux\\t3.exe"),
           Effect.provideService(HostProcess.Arguments, [
-            "C:\\Program Files\\T3 Code\\t3.exe",
-            "C:\\Program Files\\T3 Code\\resources\\app.asar\\apps\\server\\dist\\bin.mjs",
+            "C:\\Program Files\\Prismux\\t3.exe",
+            "C:\\Program Files\\Prismux\\resources\\app.asar\\apps\\server\\dist\\bin.mjs",
           ]),
           Effect.provideService(HostProcess.IsExecutable, false),
           Effect.provideService(HostProcess.Platform, platform),
           Effect.provideService(HostProcess.Environment, { PATH: "", ...env }),
         );
-      expect((yield* hostCommand("win32", { T3CODE_CLI_PATH: shim })).command).toBe(
+      expect((yield* hostCommand("win32", { PRISMUX_CLI_PATH: shim })).command).toBe(
         `& "${shim}" doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"`,
       );
       expect((yield* hostCommand("win32", {})).command).toBe(
-        't3 doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"',
+        'prismux doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"',
       );
       expect(
         (yield* resolveHostCliCommand("doctor", ["--base-dir", "C:\\T3\\\u201CArchive\u201D"]).pipe(
@@ -181,8 +181,8 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
           Effect.provideService(HostProcess.Arguments, ["C:\\t3.exe", "C:\\bin.mjs"]),
           Effect.provideService(HostProcess.IsExecutable, false),
         )).command,
-      ).toBe('t3 doctor "--base-dir" "C:\\T3\\\u201C\u201CArchive\u201D\u201D"');
-      expect((yield* hostCommand("linux", { T3CODE_CLI_PATH: shim })).command).toMatch(
+      ).toBe('prismux doctor "--base-dir" "C:\\T3\\\u201C\u201CArchive\u201D\u201D"');
+      expect((yield* hostCommand("linux", { PRISMUX_CLI_PATH: shim })).command).toMatch(
         / doctor --base-dir 'C:\\Users\\Jane Doe\\\.t3'$/,
       );
     }),
@@ -218,7 +218,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
           Effect.provideService(HostProcess.IsExecutable, launchedBy),
           Effect.provideService(
             HostProcess.Environment,
-            launchedBy ? { T3CODE_NPM_LAUNCHER_PATH: entry } : {},
+            launchedBy ? { PRISMUX_NPM_LAUNCHER_PATH: entry } : {},
           ),
         );
         expect(installation).toEqual({ kind });
@@ -277,7 +277,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         Effect.provideService(HostProcess.Arguments, [executable, executable]),
         Effect.provideService(HostProcess.IsExecutable, true),
         Effect.provideService(HostProcess.Platform, "linux"),
-        Effect.provideService(HostProcess.Environment, { T3CODE_NPM_LAUNCHER_PATH: launcher }),
+        Effect.provideService(HostProcess.Environment, { PRISMUX_NPM_LAUNCHER_PATH: launcher }),
       );
       for (const [version, expected] of [
         ["0.0.1", null],

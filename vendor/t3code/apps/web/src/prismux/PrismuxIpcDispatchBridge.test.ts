@@ -462,4 +462,47 @@ describe("PrismuxIpcDispatchBridge policy, Parameter Backdoor & Real-UI flow", (
       "gmail:owner@example.com",
     );
   });
+
+  it("triggers onSubscriptionBlocked when dispatch fails with ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED", async () => {
+    const blockedDetails: unknown[] = [];
+    const { deps, calls } = makeDeps({
+      startThreadTurn: vi.fn(async () => ({
+        ok: false,
+        error: JSON.stringify({
+          ok: false,
+          code: "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED",
+          providerId: "codex",
+          authMode: "subscription_oauth",
+          authLabel: "官方个人订阅 OAuth（默认锁定）",
+          settingsRoute: "/settings/providers#subscription-risk-waiver",
+          message: "Blocked personal subscription orchestration",
+        }),
+      })),
+      onSubscriptionBlocked: (detail) => {
+        blockedDetails.push(detail);
+      },
+    });
+
+    const result = await handlePrismuxDispatchEnvelope(
+      makeEnvelope({
+        taskId: "task-blocked-codex",
+        provider: "codex",
+        mode: "send",
+        requiresHumanConfirmation: false,
+      }),
+      deps,
+    );
+
+    expect(result.outcome).toBe("failed");
+    expect(calls.errors).toHaveLength(0);
+    expect(blockedDetails).toEqual([
+      expect.objectContaining({
+        code: "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED",
+        providerId: "codex",
+        authMode: "subscription_oauth",
+        authLabel: "官方个人订阅 OAuth（默认锁定）",
+        settingsRoute: "/settings/providers#subscription-risk-waiver",
+      }),
+    ]);
+  });
 });

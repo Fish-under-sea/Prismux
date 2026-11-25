@@ -8,13 +8,14 @@ import {
   type ThreadId,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
-  T3_PROJECT_FILE_NAME,
+  LEGACY_T3_PROJECT_FILE_NAME,
+  PRISMUX_PROJECT_FILE_NAME,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { flattenTemporaryWorktreeBranchName, isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
-import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
+import { parsePrismuxProjectFile } from "@t3tools/shared/prismuxProjectFile";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
@@ -284,12 +285,26 @@ const make = Effect.gen(function* () {
     (cause: unknown): TaskFolderError =>
       new TaskFolderError({ operation, detail: `${prefix}: ${failureDetail(cause)}`, cause });
 
-  // A project that lays its own thread folder out says so in its `t3.json`.
-  const worktreeLayout = (projectRoot: string) =>
-    fileSystem.readFileString(path.join(projectRoot, T3_PROJECT_FILE_NAME)).pipe(
-      Effect.map((contents) => parseT3ProjectFile(contents)?.worktreeLayout ?? null),
-      Effect.orElseSucceed(() => null),
-    );
+  // A project that lays its own thread folder out says so in its `prismux.json` (or legacy `t3.json`).
+  const worktreeLayout = Effect.fn("worktreeLayout")(function* (projectRoot: string) {
+    const primary = yield* fileSystem
+      .readFileString(path.join(projectRoot, PRISMUX_PROJECT_FILE_NAME))
+      .pipe(Effect.option);
+    if (Option.isSome(primary)) {
+      return parsePrismuxProjectFile(primary.value)?.worktreeLayout ?? null;
+    }
+    const legacy = yield* fileSystem
+      .readFileString(path.join(projectRoot, LEGACY_T3_PROJECT_FILE_NAME))
+      .pipe(Effect.option);
+    if (Option.isSome(legacy)) {
+      yield* Effect.logWarning(
+        `Loaded legacy ${LEGACY_T3_PROJECT_FILE_NAME} read-only; migrate this file to ${PRISMUX_PROJECT_FILE_NAME}.`,
+        { projectRoot },
+      );
+      return parsePrismuxProjectFile(legacy.value)?.worktreeLayout ?? null;
+    }
+    return null;
+  });
   // One at a time per project: the commands share the project folder, and its workspace files.
   const layoutLocks = yield* KeyedLock.make<string>();
   const runLayoutCommand = (

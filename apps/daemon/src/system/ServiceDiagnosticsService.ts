@@ -23,11 +23,15 @@ import {
   selectPlatformSandboxBackend,
   type WorktreeSandbox
 } from "../sandbox/WorktreeSandbox.js";
-import type { T3RpcClient } from "../t3/T3RpcClient.js";
-import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
+import type { CoreRpcClient } from "../core/CoreRpcClient.js";
+import type { CoreServerSupervisor } from "../core/CoreServerSupervisor.js";
 import { resolve7zaBinary, type AppUpdater } from "../updater/AppUpdater.js";
 import type { WallpaperMediaService } from "../wallpapers/WallpaperMediaService.js";
 import type { OvernightFactory } from "../workflows/OvernightFactory.js";
+import {
+  PrismuxProviderProbeService,
+  type ProviderProbeSpec
+} from "./PrismuxProviderProbeService.js";
 import type { ResourceMonitorService } from "./ResourceMonitorService.js";
 import {
   buildSafeCliSpawnSpec,
@@ -65,12 +69,21 @@ export interface ServiceDiagnosticsOptions {
   memoryStore?: SqliteMemoryStore;
   memoryDbPath?: string;
   syncVault?: SyncVaultEngine;
-  t3Supervisor?: T3ServerSupervisor;
-  t3RpcClient?: T3RpcClient;
-  /** Optional explicit T3 Server URL (HTTP or WS) when desktop-hosted. */
+  coreSupervisor?: CoreServerSupervisor;
+  coreRpcClient?: CoreRpcClient;
+  /** @deprecated Use coreSupervisor */
+  t3Supervisor?: CoreServerSupervisor;
+  /** @deprecated Use coreRpcClient */
+  t3RpcClient?: CoreRpcClient;
+  /** Optional explicit Core Server URL (HTTP or WS) when desktop-hosted. */
+  coreServerUrl?: string;
+  /** @deprecated Use coreServerUrl */
   t3ServerUrl?: string;
-  /** Optional T3 Server bearer token used strictly as a probe header (never logged/returned). */
+  /** Optional Core Server bearer token used strictly as a probe header (never logged/returned). */
+  coreToken?: string;
+  /** @deprecated Use coreToken */
   t3Token?: string;
+  providerProbeService?: PrismuxProviderProbeService;
   ptyPool?: PersistentPtyPool;
   resourceMonitor?: ResourceMonitorService;
   appUpdater?: AppUpdater;
@@ -800,6 +813,7 @@ export class ServiceDiagnosticsService {
   };
   private readonly resolve7zaFn: () => string | null;
   private readonly refreshEnvFn: () => Promise<WindowsEnvRefreshResult | void> | void;
+  private readonly providerProbeService: PrismuxProviderProbeService;
 
   private cachedReport: ServiceDiagnosticsResponse | null = null;
   private inflightRun: Promise<ServiceDiagnosticsResponse> | null = null;
@@ -829,12 +843,23 @@ export class ServiceDiagnosticsService {
         refreshWindowsEnvironmentFromRegistry({
           timeoutMs: Math.min(600, this.singleCheckTimeoutMs)
         }));
+    if (options.providerProbeService && !options.cliProbe) {
+      this.providerProbeService = options.providerProbeService;
+    } else {
+      this.providerProbeService = new PrismuxProviderProbeService({
+        coreRpcClient: options.coreRpcClient ?? options.t3RpcClient,
+        cliTimeoutMs: this.singleCheckTimeoutMs,
+        cliProbe: this.cliProbeFn,
+        refreshEnv: this.refreshEnvFn
+      });
+    }
   }
 
   clearCache(): void {
     this.generation += 1;
     this.cachedReport = null;
     this.inflightRun = null;
+    this.providerProbeService.clearCache();
   }
 
   invalidateCache(): void {
@@ -910,7 +935,7 @@ export class ServiceDiagnosticsService {
         id: "host.t3_server",
         category: "host_core",
         name: "Prismux Server",
-        run: () => this.checkT3Server(perCheckTimeout)
+        run: () => this.checkCoreServer(perCheckTimeout)
       },
       {
         id: "host.electron_bridge",
@@ -948,102 +973,48 @@ export class ServiceDiagnosticsService {
         run: async () => this.checkSyncVault()
       },
 
-      // c. AI Provider CLI (6) — version-only probes, ZERO OAuth/keyring reads
+      // c. AI Provider CLI (6) — delegated to unified PrismuxProviderProbeService, ZERO OAuth/keyring reads
       {
         id: "provider.agy",
         category: "ai_providers",
         name: "Antigravity CLI (agy · 纯 ACP)",
         settingsRoute: "/settings/providers",
-        run: () =>
-          this.checkProviderCli({
-            id: "provider.agy",
-            name: "Antigravity CLI (agy · 纯 ACP)",
-            command: "agy",
-            args: ["--version"],
-            fixAction: "安装本机 agy CLI 并运行 ACP 登录",
-            fixCommand: "agy acp --login",
-            timeoutMs: perCheckTimeout
-          })
+        run: () => this.checkProviderViaUnifiedProbe("antigravity", perCheckTimeout)
       },
       {
         id: "provider.claude",
         category: "ai_providers",
         name: "Claude Code CLI (claude)",
         settingsRoute: "/settings/providers",
-        run: () =>
-          this.checkProviderCli({
-            id: "provider.claude",
-            name: "Claude Code CLI (claude)",
-            command: "claude",
-            args: ["--version"],
-            fixAction: "安装官方 Claude Code CLI",
-            fixCommand: "npm install -g @anthropic-ai/claude-code",
-            timeoutMs: perCheckTimeout
-          })
+        run: () => this.checkProviderViaUnifiedProbe("claudeAgent", perCheckTimeout)
       },
       {
         id: "provider.codex",
         category: "ai_providers",
         name: "Codex CLI (codex)",
         settingsRoute: "/settings/providers",
-        run: () =>
-          this.checkProviderCli({
-            id: "provider.codex",
-            name: "Codex CLI (codex)",
-            command: "codex",
-            args: ["--version"],
-            fixAction: "安装官方 Codex CLI",
-            fixCommand: "npm install -g @openai/codex",
-            timeoutMs: perCheckTimeout
-          })
+        run: () => this.checkProviderViaUnifiedProbe("codex", perCheckTimeout)
       },
       {
         id: "provider.dsh",
         category: "ai_providers",
         name: "DeepSeek Harness CLI (dsh · ACP)",
         settingsRoute: "/settings/providers",
-        run: () =>
-          this.checkProviderCli({
-            id: "provider.dsh",
-            name: "DeepSeek Harness CLI (dsh · ACP)",
-            command: "dsh",
-            args: ["--version"],
-            fixAction: "检查本机 DeepSeek Harness (DSH NEXT) 或 dsh CLI 安装",
-            fixCommand: "dsh --version",
-            timeoutMs: perCheckTimeout
-          })
+        run: () => this.checkProviderViaUnifiedProbe("dsh", perCheckTimeout)
       },
       {
         id: "provider.gemini",
         category: "ai_providers",
         name: "Gemini CLI (gemini)",
         settingsRoute: "/settings/providers",
-        run: () =>
-          this.checkProviderCli({
-            id: "provider.gemini",
-            name: "Gemini CLI (gemini)",
-            command: "gemini",
-            args: ["--version"],
-            fixAction: "安装官方 Gemini CLI",
-            fixCommand: "npm install -g @google/gemini-cli",
-            timeoutMs: perCheckTimeout
-          })
+        run: () => this.checkProviderViaUnifiedProbe("gemini", perCheckTimeout)
       },
       {
         id: "provider.opencode",
         category: "ai_providers",
         name: "OpenCode CLI (opencode)",
         settingsRoute: "/settings/providers",
-        run: () =>
-          this.checkProviderCli({
-            id: "provider.opencode",
-            name: "OpenCode CLI (opencode)",
-            command: "opencode",
-            args: ["--version"],
-            fixAction: "安装 OpenCode CLI",
-            fixCommand: "npm install -g opencode-ai",
-            timeoutMs: perCheckTimeout
-          })
+        run: () => this.checkProviderViaUnifiedProbe("opencode", perCheckTimeout)
       },
 
       // d. 模拟器与媒体工具 (7)
@@ -1294,9 +1265,9 @@ export class ServiceDiagnosticsService {
     };
   }
 
-  private async checkT3Server(timeoutMs: number): Promise<DiagnosticCheckItem> {
-    const sup = this.opts.t3Supervisor?.getStatus();
-    const rpc = this.opts.t3RpcClient?.getStatus();
+  private async checkCoreServer(timeoutMs: number): Promise<DiagnosticCheckItem> {
+    const sup = (this.opts.coreSupervisor ?? this.opts.t3Supervisor)?.getStatus();
+    const rpc = (this.opts.coreRpcClient ?? this.opts.t3RpcClient)?.getStatus();
     const connected = rpc?.connected ?? false;
     if (connected) {
       return {
@@ -1310,9 +1281,11 @@ export class ServiceDiagnosticsService {
     }
 
     const rawCandidates = [
+      this.opts.coreServerUrl,
       this.opts.t3ServerUrl,
+      process.env["PRISMUX_SERVER_URL"],
+      process.env["PRISMUX_CORE_SERVER_URL"],
       process.env["PRISMUX_T3_SERVER_URL"],
-      process.env["T3CODE_SERVER_URL"],
       sup?.healthUrl,
       rpc?.wsUrl
     ];
@@ -1331,9 +1304,9 @@ export class ServiceDiagnosticsService {
       const probeHeaders: Record<string, string> = {
         accept: "*/*"
       };
-      const t3Token = this.opts.t3Token?.trim();
-      if (t3Token && t3Token.length > 0) {
-        probeHeaders["authorization"] = `Bearer ${t3Token}`;
+      const serverToken = (this.opts.coreToken ?? this.opts.t3Token)?.trim();
+      if (serverToken && serverToken.length > 0) {
+        probeHeaders["authorization"] = `Bearer ${serverToken}`;
       }
 
       let lastProbeError: string | undefined;
@@ -1572,50 +1545,54 @@ export class ServiceDiagnosticsService {
     };
   }
 
-  private async checkProviderCli(params: {
-    id: string;
-    name: string;
-    command: string;
-    args: string[];
-    fixAction: string;
-    fixCommand: string;
-    timeoutMs: number;
-  }): Promise<DiagnosticCheckItem | null> {
-    const probed = await this.cliProbeFn(
-      params.command,
-      params.args,
-      params.timeoutMs
-    );
-    if (!probed.found) {
+  private async checkProviderViaUnifiedProbe(
+    providerId: string,
+    timeoutMs: number
+  ): Promise<DiagnosticCheckItem | null> {
+    const spec: ProviderProbeSpec | undefined =
+      this.providerProbeService.getProviderSpec(providerId);
+    if (!spec) {
+      return null;
+    }
+    const snapshot = await this.providerProbeService.probeProvider(providerId, {
+      refresh: true,
+      skipEnvRefresh: true,
+      timeoutMs
+    });
+    if (!snapshot.installed) {
       // Optional AI Provider CLIs that are not installed on this machine are omitted
       // completely so uninstalled tools never surface as degraded warning cards.
       return null;
     }
-    if (probed.version && !probed.error) {
+    if (snapshot.version && !snapshot.error) {
       return {
-        id: params.id,
+        id: spec.diagId,
         category: "ai_providers",
-        name: params.name,
+        name: spec.diagName,
         status: "ok",
-        version: probed.version,
-        latencyMs: probed.latencyMs,
-        summary: `已安装（${probed.version}）`,
-        detail: probed.path ?? undefined,
+        version: snapshot.version,
+        ...(snapshot.latencyMs !== undefined
+          ? { latencyMs: snapshot.latencyMs }
+          : {}),
+        summary: `已安装（${snapshot.version}）· ${snapshot.authLabel}`,
+        detail: snapshot.binaryPath ?? undefined,
         settingsRoute: "/settings/providers"
       };
     }
     return {
-      id: params.id,
+      id: spec.diagId,
       category: "ai_providers",
-      name: params.name,
+      name: spec.diagName,
       status: "degraded",
-      latencyMs: probed.latencyMs,
-      summary: probed.error
+      ...(snapshot.latencyMs !== undefined
+        ? { latencyMs: snapshot.latencyMs }
+        : {}),
+      summary: snapshot.error
         ? "本机 CLI 启动或探测异常（需修复）"
         : "已发现可执行文件，但版本探测未返回",
-      detail: probed.error ?? probed.path ?? undefined,
-      fixAction: params.fixAction,
-      fixCommand: params.fixCommand,
+      detail: snapshot.error ?? snapshot.binaryPath ?? undefined,
+      fixAction: spec.fixAction,
+      fixCommand: spec.fixCommand,
       settingsRoute: "/settings/providers"
     };
   }

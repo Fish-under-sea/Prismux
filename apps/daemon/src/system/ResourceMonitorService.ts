@@ -12,8 +12,8 @@ import type {
   WorkspaceResourceEntry
 } from "@prismux/protocol";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
-import type { T3RpcClient } from "../t3/T3RpcClient.js";
-import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
+import type { CoreRpcClient } from "../core/CoreRpcClient.js";
+import type { CoreServerSupervisor } from "../core/CoreServerSupervisor.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -160,8 +160,8 @@ export interface GetResourcesOptions {
 
 export interface ResourceMonitorServiceOptions {
   ptyPool: PersistentPtyPool;
-  t3Supervisor?: T3ServerSupervisor;
-  t3RpcClient?: T3RpcClient;
+  t3Supervisor?: CoreServerSupervisor;
+  t3RpcClient?: CoreRpcClient;
   t3ServerUrl?: string;
   mainPid?: number | null;
   t3ServerPid?: number | null;
@@ -632,7 +632,8 @@ function detectT3ServerFromOsEntry(
     cmd.includes("apps\\server\\") ||
     cmd.includes("apps/server/") ||
     cmd.includes("t3-server") ||
-    cmd.includes("t3code") && (cmd.includes("server") || cmd.includes("--mode desktop")) ||
+    cmd.includes("vendor\\t3code\\apps\\server") ||
+    cmd.includes("vendor/t3code/apps/server") ||
     (cmd.includes("resources\\server\\") || cmd.includes("resources/server/")) ||
     (cmd.includes("dist\\index.mjs") || cmd.includes("dist/index.mjs"))
   );
@@ -865,8 +866,8 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
  */
 export class ResourceMonitorService {
   private readonly ptyPool: PersistentPtyPool;
-  private readonly t3Supervisor: T3ServerSupervisor | undefined;
-  private readonly t3RpcClient: T3RpcClient | undefined;
+  private readonly t3Supervisor: CoreServerSupervisor | undefined;
+  private readonly t3RpcClient: CoreRpcClient | undefined;
   private readonly t3ServerUrl: string | undefined;
   private readonly configuredMainPid: number | null;
   private readonly configuredT3ServerPid: number | null;
@@ -917,7 +918,7 @@ export class ResourceMonitorService {
     this.configuredT3ServerPid =
       options.t3ServerPid !== undefined
         ? parsePositiveInt(options.t3ServerPid)
-        : parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]);
+        : (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]));
     this.customSampleProcessesFn = options.sampleProcesses;
     this.sampleProcessTreeFn = options.sampleProcessTree;
 
@@ -1351,7 +1352,7 @@ export class ResourceMonitorService {
         parsePositiveInt(t3SupervisorStatus?.pid) ??
         parsePositiveInt(hostReport?.t3Server?.pid) ??
         this.configuredT3ServerPid ??
-        parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]);
+        (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]));
       if (hintT3Pid !== null) {
         pidsToSample.push(hintT3Pid);
       }
@@ -1411,7 +1412,7 @@ export class ResourceMonitorService {
       parsePositiveInt(hostReport?.t3Server?.pid) ??
       parsePositiveInt(this.latestHostMetrics?.report.t3Server?.pid) ??
       this.configuredT3ServerPid ??
-      parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]);
+      (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]));
     let t3HostedBy: ExtendedT3ServerResources["hostedBy"] =
       t3SupervisorStatus !== undefined
         ? "daemon-supervisor"
@@ -1571,6 +1572,8 @@ export class ResourceMonitorService {
       hostReport?.t3Server !== undefined ||
       this.t3RpcClient !== undefined ||
       Boolean(this.t3ServerUrl) ||
+      Boolean(process.env["PRISMUX_SERVER_URL"]) ||
+      Boolean(process.env["PRISMUX_CORE_SERVER_URL"]) ||
       Boolean(process.env["PRISMUX_T3_SERVER_URL"]);
 
     const t3Server: ExtendedT3ServerResources | null = hasT3Presence

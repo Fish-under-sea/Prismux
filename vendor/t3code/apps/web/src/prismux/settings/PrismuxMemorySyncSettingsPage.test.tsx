@@ -182,7 +182,7 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     }),
   ];
 
-  it("merges live T3 Code providers with canonical brand names and deduplicates aliases", () => {
+  it("merges live Prismux providers with canonical brand names and deduplicates aliases", () => {
     const options = buildChiefProviderOptions({
       serverProviders: mockProviders,
       settings: null,

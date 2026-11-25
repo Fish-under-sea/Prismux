@@ -387,7 +387,7 @@ describe("PrismuxUpgradeMigration", () => {
       platform: "win32",
       homeDir: sandbox.homeDir,
       env: {
-        T3CODE_HOME: sandbox.baseDir,
+        PRISMUX_HOME: sandbox.baseDir,
         APPDATA: sandbox.appDataDir,
         LOCALAPPDATA: sandbox.localAppDataDir,
       },

@@ -1400,7 +1400,7 @@ test("Daemon CORS preflight allows Cache-Control and Last-Event-ID on /v1/update
       {
         method: "OPTIONS",
         headers: {
-          Origin: "t3code://app",
+          Origin: "prismux://app",
           "Access-Control-Request-Method": "GET",
           "Access-Control-Request-Headers": "cache-control, last-event-id"
         }
@@ -1409,7 +1409,7 @@ test("Daemon CORS preflight allows Cache-Control and Last-Event-ID on /v1/update
     assert.equal(preflightRes.status, 204);
     assert.equal(
       preflightRes.headers.get("access-control-allow-origin"),
-      "t3code://app"
+      "prismux://app"
     );
     const allowedHeaders = (
       preflightRes.headers.get("access-control-allow-headers") ?? ""
@@ -1430,7 +1430,7 @@ test("Daemon CORS preflight allows Cache-Control and Last-Event-ID on /v1/update
       `${ready.httpUrl}/v1/updater/events?token=${encodeURIComponent(authToken)}`,
       {
         headers: {
-          Origin: "t3code://app",
+          Origin: "prismux://app",
           "Cache-Control": "no-cache"
         },
         signal: controller.signal
@@ -1439,7 +1439,7 @@ test("Daemon CORS preflight allows Cache-Control and Last-Event-ID on /v1/update
     assert.equal(sseRes.status, 200);
     assert.equal(
       sseRes.headers.get("access-control-allow-origin"),
-      "t3code://app"
+      "prismux://app"
     );
     assert.ok(
       (sseRes.headers.get("content-type") ?? "").includes("text/event-stream")

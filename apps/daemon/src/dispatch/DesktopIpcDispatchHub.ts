@@ -14,6 +14,9 @@ import {
   isDispatchCallerKind,
   isDispatchReasoningEffort,
   isDispatchTaskCategory,
+  isProviderAuthMode,
+  isProviderAuthSource,
+  SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
   type AntigravityGuardDecision,
   type DispatchCallerKind,
   type DispatchCancelResponse,
@@ -255,16 +258,19 @@ export class DesktopIpcDispatchHub {
     const routed = this.router.route(request);
 
     const decision: AntigravityGuardDecision =
-      this.policyGuard.evaluateDispatch({
+      await this.policyGuard.evaluateDispatchAsync({
         callerKind: request.callerKind,
         targetProvider: routed.provider,
         targetModelId: routed.modelId,
-        explicitAntigravityRequested: routed.explicitAntigravityRequested
+        explicitAntigravityRequested: routed.explicitAntigravityRequested,
+        ...(request.probeSnapshot !== undefined
+          ? { probeSnapshot: request.probeSnapshot }
+          : {})
       });
 
     if (!decision.allowed) {
       throw new AntigravityGuardDeniedError(
-        decision.code ?? "AGY_CONTROLLED_AGENT_LOCKED",
+        decision.code ?? SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
         decision.reason,
         decision
       );
@@ -668,6 +674,28 @@ export class DesktopIpcDispatchHub {
     }
 
     const replyChannel = parseReplyChannel(raw["replyChannel"]);
+    const rawProbe = raw["probeSnapshot"];
+    let probeSnapshot: DispatchThreadRequest["probeSnapshot"];
+    if (isPlainObject(rawProbe)) {
+      probeSnapshot = {
+        ...(typeof rawProbe["providerId"] === "string"
+          ? { providerId: rawProbe["providerId"] }
+          : {}),
+        ...(isProviderAuthMode(rawProbe["authMode"])
+          ? { authMode: rawProbe["authMode"] }
+          : {}),
+        ...(isProviderAuthSource(rawProbe["authSource"])
+          ? { authSource: rawProbe["authSource"] }
+          : {}),
+        ...(typeof rawProbe["authLabel"] === "string"
+          ? { authLabel: rawProbe["authLabel"] }
+          : {}),
+        ...(typeof rawProbe["endpoint"] === "string" ||
+        rawProbe["endpoint"] === null
+          ? { endpoint: rawProbe["endpoint"] }
+          : {})
+      };
+    }
 
     return {
       ...(typeof raw["taskId"] === "string" && raw["taskId"].trim().length > 0
@@ -706,7 +734,8 @@ export class DesktopIpcDispatchHub {
       ...(typeof raw["threadId"] === "string" &&
       raw["threadId"].trim().length > 0
         ? { threadId: raw["threadId"].trim() }
-        : {})
+        : {}),
+      ...(probeSnapshot !== undefined ? { probeSnapshot } : {})
     };
   }
 

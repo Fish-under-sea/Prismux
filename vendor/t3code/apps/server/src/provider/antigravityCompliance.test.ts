@@ -7,11 +7,19 @@ import { describe, expect, it } from "vite-plus/test";
 
 const PROVIDER_DIR = import.meta.dirname;
 const SERVER_SRC_DIR = NodePath.resolve(PROVIDER_DIR, "..");
-const T3CODE_ROOT = NodePath.resolve(SERVER_SRC_DIR, "..", "..", "..");
-const PRISMUX_REPO_ROOT = NodePath.resolve(T3CODE_ROOT, "..", "..");
+const CORE_ROOT = NodePath.resolve(SERVER_SRC_DIR, "..", "..", "..");
+const PRISMUX_REPO_ROOT = NodePath.resolve(CORE_ROOT, "..", "..");
 const PRISMUX_DAEMON_SRC_DIR = NodePath.join(PRISMUX_REPO_ROOT, "apps", "daemon", "src");
+const SUBSCRIPTION_RISK_WAIVER_SECTION_PATH = NodePath.join(
+  CORE_ROOT,
+  "apps",
+  "web",
+  "src",
+  "prismux",
+  "SubscriptionRiskWaiverSection.tsx",
+);
 const AGY_CONTROLLED_LOCK_SECTION_PATH = NodePath.join(
-  T3CODE_ROOT,
+  CORE_ROOT,
   "apps",
   "web",
   "src",
@@ -19,7 +27,7 @@ const AGY_CONTROLLED_LOCK_SECTION_PATH = NodePath.join(
   "AntigravityControlledLockSection.tsx",
 );
 const IPC_DISPATCH_BRIDGE_PATH = NodePath.join(
-  T3CODE_ROOT,
+  CORE_ROOT,
   "apps",
   "web",
   "src",
@@ -69,7 +77,7 @@ const ANTIGRAVITY_UI_SOURCES = [
   "apps/web/src/components/chat/ProviderStatusBanner.tsx",
   "apps/web/src/components/onboarding/WelcomePage.tsx",
   "apps/mobile/src/features/settings/SettingsProviderAccountsRouteScreen.tsx",
-].map((rel) => NodePath.join(T3CODE_ROOT, rel));
+].map((rel) => NodePath.join(CORE_ROOT, rel));
 
 const FORBIDDEN_PATTERNS: ReadonlyArray<{ readonly label: string; readonly regex: RegExp }> = [
   { label: "cloudcode-pa private endpoint", regex: /cloudcode-pa/iu },
@@ -163,7 +171,7 @@ describe("Antigravity (agy) ban-proof compliance static guard", () => {
     const violations: string[] = [];
 
     for (const filePath of ANTIGRAVITY_SERVER_SOURCES) {
-      const rel = NodePath.relative(T3CODE_ROOT, filePath).replaceAll("\\", "/");
+      const rel = NodePath.relative(CORE_ROOT, filePath).replaceAll("\\", "/");
       const contents = NodeFS.readFileSync(filePath, "utf8");
       for (const { label, regex } of FORBIDDEN_PATTERNS) {
         if (regex.test(contents)) {
@@ -183,7 +191,7 @@ describe("Antigravity (agy) ban-proof compliance static guard", () => {
 
     for (const filePath of ANTIGRAVITY_UI_SOURCES) {
       expect(NodeFS.existsSync(filePath), filePath).toBe(true);
-      const rel = NodePath.relative(T3CODE_ROOT, filePath).replaceAll("\\", "/");
+      const rel = NodePath.relative(CORE_ROOT, filePath).replaceAll("\\", "/");
       const contents = NodeFS.readFileSync(filePath, "utf8");
       for (const { label, regex } of uiForbidden) {
         if (regex.test(contents)) {
@@ -228,32 +236,66 @@ describe("Antigravity (agy) ban-proof compliance static guard", () => {
     expect(violations).toEqual([]);
   });
 
-  it("verifies AntigravityControlledLockSection.tsx defaults locked and enforces mandatory disclaimer acceptance", () => {
-    expect(NodeFS.existsSync(AGY_CONTROLLED_LOCK_SECTION_PATH)).toBe(true);
-    const contents = NodeFS.readFileSync(AGY_CONTROLLED_LOCK_SECTION_PATH, "utf8");
+  it("verifies unified SubscriptionRiskWaiverSection.tsx / AntigravityControlledLockSection.tsx default locked and enforce mandatory disclaimer acceptance", () => {
+    const hasUnifiedWaiver = NodeFS.existsSync(SUBSCRIPTION_RISK_WAIVER_SECTION_PATH);
+    const hasLegacyLock = NodeFS.existsSync(AGY_CONTROLLED_LOCK_SECTION_PATH);
+    expect(hasUnifiedWaiver || hasLegacyLock).toBe(true);
 
-    expect(contents).toContain("ANTIGRAVITY_CONTROLLED_DEFAULT_LOCKED = true");
-    expect(contents).toContain("ANTIGRAVITY_CONTROLLED_DEFAULT_ENABLED = false");
-    expect(contents).toContain("默认锁定（仅总控）");
-    expect(contents).toContain("已签署免责解锁");
-    expect(contents).toContain("403");
-    expect(contents).toContain("封号");
-    expect(contents).toContain("企业版");
-    expect(contents).toContain("API Key");
-    expect(contents).toContain("后果自负");
-    expect(contents).toContain('type="checkbox"');
-    expect(contents).toContain("disabled={!disclaimerChecked || saving}");
-    expect(contents).toContain("/v1/security/antigravity-policy");
-    expect(contents).toContain("disclaimerAccepted: true");
-    expect(contents).toContain("v3-2026");
+    if (hasUnifiedWaiver) {
+      const contents = NodeFS.readFileSync(SUBSCRIPTION_RISK_WAIVER_SECTION_PATH, "utf8");
+      expect(contents).toContain('SUBSCRIPTION_WAIVER_ENDPOINT = "/v1/security/subscription-waiver"');
+      expect(contents).toContain('SUBSCRIPTION_WAIVER_VERSION = "v3-unified-2026"');
+      expect(contents).toContain("defaultLocked: true");
+      expect(contents).toContain("signed: false");
+      expect(contents).toContain("allowAntigravityAsControlledAgent: false");
+      expect(contents).toContain("allowExternalSubscriptionAgentsInSwarm: false");
+      expect(contents).toContain("默认锁定");
+      expect(contents).toContain("已签署统一免责");
+      expect(contents).toContain("撤销免责并恢复硬锁");
+      expect(contents).toContain("403");
+      expect(contents).toContain("封号");
+      expect(contents).toContain("企业版");
+      expect(contents).toContain("API Key");
+      expect(contents).toContain("后果自负");
+      expect(contents).toContain('type="checkbox"');
+      expect(contents).toContain("disabled={!waiverChecked || saving}");
+      expect(contents).toContain("signed: true");
+      expect(contents).toContain("if (!waiver.signed");
+    }
 
-    // Ensure every payload setting allowAntigravityAsControlledAgent: true also sets disclaimerAccepted: true.
-    const enablePayloads = [
-      ...contents.matchAll(/allowAntigravityAsControlledAgent\s*:\s*true[\s\S]{0,180}/gu),
-    ];
-    expect(enablePayloads.length).toBeGreaterThan(0);
-    for (const match of enablePayloads) {
-      expect(match[0]).toContain("disclaimerAccepted: true");
+    if (hasLegacyLock) {
+      const contents = NodeFS.readFileSync(AGY_CONTROLLED_LOCK_SECTION_PATH, "utf8");
+      const delegatesToUnified =
+        contents.includes("SubscriptionRiskWaiverSection") &&
+        !contents.includes("/v1/security/antigravity-policy");
+
+      if (delegatesToUnified) {
+        expect(hasUnifiedWaiver).toBe(true);
+      } else {
+        expect(contents).toContain("ANTIGRAVITY_CONTROLLED_DEFAULT_LOCKED = true");
+        expect(contents).toContain("ANTIGRAVITY_CONTROLLED_DEFAULT_ENABLED = false");
+        expect(contents).toContain("默认锁定（仅总控）");
+        expect(contents).toContain("已签署免责解锁");
+        expect(contents).toContain("403");
+        expect(contents).toContain("封号");
+        expect(contents).toContain("企业版");
+        expect(contents).toContain("API Key");
+        expect(contents).toContain("后果自负");
+        expect(contents).toContain('type="checkbox"');
+        expect(contents).toContain("disabled={!disclaimerChecked || saving}");
+        expect(contents).toContain("/v1/security/antigravity-policy");
+        expect(contents).toContain("disclaimerAccepted: true");
+        expect(contents).toContain("v3-2026");
+
+        // Ensure every payload setting allowAntigravityAsControlledAgent: true also sets disclaimerAccepted: true.
+        const enablePayloads = [
+          ...contents.matchAll(/allowAntigravityAsControlledAgent\s*:\s*true[\s\S]{0,180}/gu),
+        ];
+        expect(enablePayloads.length).toBeGreaterThan(0);
+        for (const match of enablePayloads) {
+          expect(match[0]).toContain("disclaimerAccepted: true");
+        }
+      }
     }
 
     // Also verify PrismuxIpcDispatchBridge enforces human confirmation gating for draft_only / remote AGY.

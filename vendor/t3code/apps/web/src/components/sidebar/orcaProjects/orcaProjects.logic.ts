@@ -257,7 +257,7 @@ function isMainComposerEditorTarget(target: EventTarget | null): boolean {
  *
  * Yields whenever a terminal, modal dialog, command palette, model picker, or form input is focused,
  * while permitting `Ctrl+N` / `Ctrl+Shift+H` from the auto-focused main chat composer (matching
- * T3 Code's own `mod+n` `!terminalFocus` ergonomics so the chat composer never leaks `Ctrl+N`
+ * Prismux's own `mod+n` `!terminalFocus` ergonomics so the chat composer never leaks `Ctrl+N`
  * down to T3's `chat.new` command-dialog).
  */
 export function createOrcaSidebarShortcutHandler(

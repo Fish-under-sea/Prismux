@@ -27,8 +27,8 @@ the server process is currently running, and the exact paths for state, logs, an
 the database.
 
 Its triage CLI version (called "Installed version" in older context files) is only
-the version of the \`t3\` that ran \`t3 triage\`. It is often not the build the bug
-happened on: \`npx t3 triage\` runs whatever \`t3\` npm resolves, while the user may
+the version of the \`prismux\` CLI that ran \`prismux triage\`. It is often not the build the bug
+happened on: \`npx prismux triage\` runs whatever \`prismux\` npm resolves, while the user may
 run the desktop app, the background service, or a nightly. The server process line
 gives the local server's version when the server recorded one.
 
@@ -69,9 +69,9 @@ Diagnosis grounded in source beats guessing.
 First establish the shape of the install, because the same symptom points at
 different code depending on it:
 
-- How is Prismux running on this machine: \`prismux serve\` (or \`npx t3 serve\`) in a terminal, the
+- How is Prismux running on this machine: \`prismux serve\` in a terminal, the
   background service, or the desktop app?
-- Which surface is the user connecting from: the website (app.t3.codes), the
+- Which surface is the user connecting from: the web app, the
   desktop app against a local server, the desktop app against a remote server,
   or the mobile app?
 
@@ -168,7 +168,7 @@ user's environment and evidence instead of filing a new issue. A confirmed
 duplicate with fresh evidence is more useful than a second thread.
 `;
 
-/** Where the session started: the `t3 triage` CLI, or "Triage an issue" in a client. */
+/** Where the session started: the `prismux triage` CLI, or "Triage an issue" in a client. */
 export type TriageEntry =
   | { readonly kind: "cli"; readonly cliVersion: string; readonly launchedAs: string }
   | { readonly kind: "app"; readonly client: string };
@@ -243,8 +243,8 @@ export interface TriageContextInput {
 const entryLines = (entry: TriageEntry) =>
   entry.kind === "cli"
     ? {
-        generatedBy: "`t3 triage`",
-        before: `- Triage CLI version: ${entry.cliVersion} (the \`t3\` that ran this command; the bug may have happened on another build)`,
+        generatedBy: "`prismux triage`",
+        before: `- Triage CLI version: ${entry.cliVersion} (the \`prismux\` CLI that ran this command; the bug may have happened on another build)`,
         after: `- CLI launched as: ${entry.launchedAs}`,
       }
     : {
@@ -316,7 +316,7 @@ ${input.entry.kind === "app" ? IN_APP_SECTION : ""}${input.sourceClone === undef
 - Logs dir: ${input.paths.logsDir}
 - Service log (systemd/launchd service installs only): ${input.paths.serviceLogPath}
 - Desktop backend logs (glob; one file per backend plus rotated copies; written only when a backend crashes or fails to start): ${input.paths.desktopBackendLogGlob}
-- T3 Connect tunnel log (ndjson; what the server logged about its cloudflared connector, with rotated copies \`.1\` and \`.2\`): ${input.paths.relayClientLogPath}
+- Prismux Connect tunnel log (ndjson; what the server logged about its cloudflared connector, with rotated copies \`.1\` and \`.2\`): ${input.paths.relayClientLogPath}
 - Server trace (ndjson): ${input.paths.serverTracePath}
 - Provider event log: ${input.paths.providerEventLogPath}
 - Terminal logs: ${input.paths.terminalLogsDir}

@@ -191,8 +191,8 @@ const BundledOnlyModelManifest: ModelManifest["Service"] = {
 const layerBundledOnly = Layer.succeed(ModelManifest, BundledOnlyModelManifest);
 
 /**
- * Prismux hard-disables silent upstream model-manifest polling from
- * `raw.githubusercontent.com/pingdotgg/t3code`. The service reads any valid
+ * Prismux hard-disables silent upstream model-manifest polling from external
+ * GitHub repositories. The service reads any valid
  * local disk cache newer than the bundled manifest and never makes outbound
  * HTTP requests during `current`, `refresh`, `forceRefresh`, `refreshOnDemand`,
  * or `refreshInBackground`.

@@ -10,6 +10,7 @@ import {
   refreshWindowsEnvironmentFromRegistry,
   type WindowsEnvRefreshResult
 } from "./WindowsEnvRefresh.js";
+import type { PrismuxProviderProbeService } from "./PrismuxProviderProbeService.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -144,6 +145,8 @@ export interface OfficialQuotaServiceOptions {
     env: Record<string, string | undefined>,
     platform: NodeJS.Platform
   ) => string | null;
+  /** Optional unified provider probe service used as single source of truth for AGY binary location. */
+  providerProbeService?: PrismuxProviderProbeService;
   /** Injectable official CLI runner for deterministic unit tests. */
   cliRunner?: (
     executablePath: string,
@@ -628,7 +631,15 @@ export class OfficialQuotaService {
           platform: this.platform
         }));
     this.locateExecutable =
-      options.locateExecutable ?? locateOfficialAgyExecutable;
+      options.locateExecutable ??
+      (options.providerProbeService
+        ? (env, platform) =>
+            options.providerProbeService!.locateProviderExecutable(
+              "antigravity",
+              env,
+              platform
+            )
+        : locateOfficialAgyExecutable);
     this.cliRunner = options.cliRunner ?? defaultRunOfficialCli;
     this.lastUsageCacheTtlMs = this.cacheTtlMs;
     this.lastCreditsCacheTtlMs = this.cacheTtlMs;

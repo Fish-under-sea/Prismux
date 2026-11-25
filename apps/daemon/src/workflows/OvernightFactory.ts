@@ -55,7 +55,7 @@ import {
   type SandboxIsolationSpec,
   type WorktreeSandboxPolicy
 } from "../sandbox/WorktreeSandbox.js";
-import { sanitizeChildEnv } from "../t3/T3ServerSupervisor.js";
+import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 
 export const OVERNIGHT_FACTORY_MILESTONE = "M5" as const;
 
@@ -1641,7 +1641,7 @@ export class OvernightFactory {
         ...(explicitAgyMention ? { explicitAntigravityRequested: true } : {})
       });
 
-      const guardDecision = this.policyGuard.evaluateDispatch({
+      const guardDecision = await this.policyGuard.evaluateDispatchAsync({
         callerKind: effectiveCallerKind,
         targetProvider: routedTarget.provider,
         targetModelId: routedTarget.modelId,
@@ -1650,7 +1650,7 @@ export class OvernightFactory {
 
       if (!guardDecision.allowed) {
         throw new AntigravityGuardDeniedError(
-          guardDecision.code ?? "AGY_UNATTENDED_FORBIDDEN",
+          guardDecision.code ?? "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED",
           guardDecision.reason,
           guardDecision
         );

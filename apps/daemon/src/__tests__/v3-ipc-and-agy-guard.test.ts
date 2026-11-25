@@ -234,7 +234,7 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
     assert.equal(unlocked.defaultLocked, true);
     assert.ok(typeof unlocked.disclaimerAcceptedAt === "string");
 
-    const expectedPath = join(dataDir, "config", "antigravity-policy.json");
+    const expectedPath = join(dataDir, "config", "subscription-waiver.json");
     assert.equal(store.getFilePath(), expectedPath);
     assert.equal(existsSync(expectedPath), true);
 
@@ -303,7 +303,8 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
       assert.equal(denied.allowed, false);
       assert.equal(denied.decision, "deny");
       assert.equal(denied.httpStatus, 403);
-      assert.equal(denied.code, "AGY_UNATTENDED_FORBIDDEN");
+      assert.equal(denied.code, "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+      assert.equal(denied.reasonCode, "AGY_UNATTENDED_FORBIDDEN");
     }
 
     // 4. Other AI agents / scripts / post-stop loop targeting AGY -> hard-denied when locked (403 AGY_CONTROLLED_AGENT_LOCKED)
@@ -318,7 +319,8 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
       });
       assert.equal(denied.allowed, false);
       assert.equal(denied.httpStatus, 403);
-      assert.equal(denied.code, "AGY_CONTROLLED_AGENT_LOCKED");
+      assert.equal(denied.code, "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+      assert.equal(denied.reasonCode, "AGY_CONTROLLED_AGENT_LOCKED");
     }
 
     // 5. Remote secretary (QQ / Gmail) requesting personal AGY -> NEVER auto-send; forced Draft-Only
@@ -349,7 +351,8 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
       targetProvider: "antigravity"
     });
     assert.equal(cronStillDenied.allowed, false);
-    assert.equal(cronStillDenied.code, "AGY_UNATTENDED_FORBIDDEN");
+    assert.equal(cronStillDenied.code, "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+    assert.equal(cronStillDenied.reasonCode, "AGY_UNATTENDED_FORBIDDEN");
     assert.equal(cronStillDenied.httpStatus, 403);
 
     const overnightStillDenied = guard.evaluateDispatch({
@@ -357,14 +360,16 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
       targetProvider: "antigravity"
     });
     assert.equal(overnightStillDenied.allowed, false);
-    assert.equal(overnightStillDenied.code, "AGY_UNATTENDED_FORBIDDEN");
+    assert.equal(overnightStillDenied.code, "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+    assert.equal(overnightStillDenied.reasonCode, "AGY_UNATTENDED_FORBIDDEN");
 
     const stopHookStillDenied = guard.evaluateStopHookCallback("antigravity", {
       humanConfirmed: false
     });
     assert.equal(stopHookStillDenied.allowed, false);
     assert.equal(stopHookStillDenied.httpStatus, 403);
-    assert.equal(stopHookStillDenied.code, "AGY_HUMAN_CONFIRMATION_REQUIRED");
+    assert.equal(stopHookStillDenied.code, "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+    assert.equal(stopHookStillDenied.reasonCode, "AGY_HUMAN_CONFIRMATION_REQUIRED");
 
     const qqStillDraftOnly = guard.evaluateDispatch({
       callerKind: "secretary_qq",
@@ -501,7 +506,8 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
       (err: unknown) =>
         err instanceof AntigravityGuardDeniedError &&
         err.statusCode === 403 &&
-        err.code === "AGY_CONTROLLED_AGENT_LOCKED"
+        err.code === "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED" &&
+        err.reasonCode === "AGY_CONTROLLED_AGENT_LOCKED"
     );
     // Allowed for automated worker callback
     assert.equal(backdoor.assertStopCallbackAllowed("codex").allowed, true);
@@ -594,7 +600,7 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
     const cronDenyJson = (await cronDenyRes.json()) as {
       error: { code: string };
     };
-    assert.equal(cronDenyJson.error.code, "AGY_UNATTENDED_FORBIDDEN");
+    assert.equal(cronDenyJson.error.code, "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
 
     // 3. Hard-deny agent_subtask targeting AGY while locked (HTTP 403 AGY_CONTROLLED_AGENT_LOCKED)
     const subtaskDenyRes = await fetch(`${ready.httpUrl}/v1/dispatch/thread`, {
@@ -611,7 +617,7 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
     const subtaskDenyJson = (await subtaskDenyRes.json()) as {
       error: { code: string };
     };
-    assert.equal(subtaskDenyJson.error.code, "AGY_CONTROLLED_AGENT_LOCKED");
+    assert.equal(subtaskDenyJson.error.code, "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
 
     // 4. Offline queueing (tray / locked screen / no SSE renderer connected yet):
     //    Dispatch a QQ remote personal-AGY request -> HTTP 202 Draft-Only staged & queued!
@@ -969,7 +975,8 @@ describe("Prismux v3 IPC Dispatch Hub + AGY Hard-Lock Role Guard + Double Backdo
       (err: unknown) =>
         err instanceof AntigravityGuardDeniedError &&
         err.statusCode === 403 &&
-        err.code === "AGY_UNATTENDED_FORBIDDEN"
+        err.code === "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED" &&
+        err.reasonCode === "AGY_UNATTENDED_FORBIDDEN"
     );
     assert.equal(codingRunCount, 1);
 

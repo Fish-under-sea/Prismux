@@ -348,7 +348,7 @@ export function buildUsageTelemetrySummary(
 /**
  * Collects legal usage windows across providers sorted by urgency, while strictly enforcing
  * the Antigravity ACP-only compliance boundary (zero unofficial quota scraping/display),
- * and enriches with real local today/7-day usage telemetry from T3 Code's `useUsage`.
+ * and enriches with real local today/7-day usage telemetry from Prismux's `useUsage`.
  */
 export function collectStatusBarUsageSummary(
   providers: readonly ServerProvider[],

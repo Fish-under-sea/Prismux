@@ -8,7 +8,8 @@ import {
   type TaskFolderError,
   type Project as ProjectRecord,
   type ServerProvider,
-  T3_PROJECT_FILE_NAME,
+  LEGACY_T3_PROJECT_FILE_NAME,
+  PRISMUX_PROJECT_FILE_NAME,
 } from "@t3tools/contracts";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
@@ -36,7 +37,7 @@ import {
   resolveProjectSettings,
 } from "@t3tools/shared/projectSettings";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
-import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
+import { parsePrismuxProjectFile } from "@t3tools/shared/prismuxProjectFile";
 import { resolveRuntimeMode } from "../../delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -107,18 +108,28 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     });
 });
 
-/** The composer falls back to the project's t3.json when no setting picks the mode. */
+/** The composer falls back to the project's prismux.json (or legacy t3.json read-only) when no setting picks the mode. */
 const projectFileThreadEnvMode = Effect.fn("mcp.projectFileThreadEnvMode")(function* (
   workspaceRoot: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
-  const contents = yield* fileSystem
-    .readFileString(`${workspaceRoot}/${T3_PROJECT_FILE_NAME}`)
+  let contents = yield* fileSystem
+    .readFileString(`${workspaceRoot}/${PRISMUX_PROJECT_FILE_NAME}`)
     .pipe(Effect.orElseSucceed(() => null));
+  if (contents === null) {
+    contents = yield* fileSystem
+      .readFileString(`${workspaceRoot}/${LEGACY_T3_PROJECT_FILE_NAME}`)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (contents !== null) {
+      yield* Effect.logWarning(
+        `Loaded legacy ${LEGACY_T3_PROJECT_FILE_NAME} read-only; migrate this file to ${PRISMUX_PROJECT_FILE_NAME}.`,
+      ).pipe(Effect.annotateLogs({ workspaceRoot, migrationFallback: "read-only" }));
+    }
+  }
   return resolveProjectFileBackedSetting(
     "defaultThreadEnvMode",
     null,
-    contents === null ? null : parseT3ProjectFile(contents),
+    contents === null ? null : parsePrismuxProjectFile(contents),
   ).value;
 });
 

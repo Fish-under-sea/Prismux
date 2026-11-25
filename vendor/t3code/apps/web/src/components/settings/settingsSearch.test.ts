@@ -189,11 +189,16 @@ describe("searchSettings", () => {
       to: "/settings/connections",
       targetId: "mobile-qr-pairing",
     });
-    // Added Antigravity controlled-agent lock under /settings/providers#antigravity-controlled-lock
-    expect(searchSettings("Antigravity controlled-agent lock")[0]).toMatchObject({
-      id: "antigravity-controlled-lock",
+    // Unified personal-subscription risk waiver under /settings/providers#subscription-risk-waiver
+    expect(searchSettings("Personal subscription risk waiver")[0]).toMatchObject({
+      id: "subscription-risk-waiver",
       to: "/settings/providers",
-      targetId: "antigravity-controlled-lock",
+      targetId: "subscription-risk-waiver",
+    });
+    expect(searchSettings("antigravity controlled agent lock")[0]).toMatchObject({
+      id: "subscription-risk-waiver",
+      to: "/settings/providers",
+      targetId: "subscription-risk-waiver",
     });
   });
 

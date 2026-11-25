@@ -1088,6 +1088,36 @@ export class PrismuxDaemonClient {
           : typeof record?.code === "string"
             ? record.code
             : `HTTP_${response.status}`;
+      if (
+        code === "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED" &&
+        typeof window !== "undefined" &&
+        typeof window.dispatchEvent === "function"
+      ) {
+        const detail = {
+          code: "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED" as const,
+          ...(typeof record?.reasonCode === "string" ? { reasonCode: record.reasonCode } : {}),
+          providerId:
+            typeof record?.providerId === "string" && record.providerId.trim().length > 0
+              ? record.providerId.trim()
+              : "agent",
+          authMode: "subscription_oauth" as const,
+          authLabel:
+            typeof record?.authLabel === "string" && record.authLabel.trim().length > 0
+              ? record.authLabel.trim()
+              : // oxlint-disable-next-line t3code/no-untranslated-copy -- Prismux v3 spec fallback Chinese auth label for personal subscription OAuth
+                "官方个人订阅 OAuth",
+          settingsRoute:
+            typeof record?.settingsRoute === "string" && record.settingsRoute.trim().length > 0
+              ? record.settingsRoute.trim()
+              : "/settings/providers#subscription-risk-waiver",
+          message,
+        };
+        if (typeof CustomEvent === "function") {
+          window.dispatchEvent(
+            new CustomEvent("prismux:subscription-orchestration-blocked", { detail }),
+          );
+        }
+      }
       throw new PrismuxDaemonError(message, {
         status: response.status,
         code,
@@ -1644,7 +1674,7 @@ export class PrismuxDaemonClient {
       const tokenQuery = info.token ? `?token=${encodeURIComponent(info.token)}` : "";
       const url = `${info.baseUrl}/v1/updater/events${tokenQuery}`;
       // Use only CORS-safelisted Accept header + Fetch `cache: "no-store"` (token travels in query,
-      // authenticated by DaemonRpcServer `allowQueryToken=true`) so Electron's `t3code://app` origin
+      // authenticated by DaemonRpcServer `allowQueryToken=true`) so Electron's `prismux://app` origin
       // opens the SSE stream as a zero-preflight simple GET request without `Cache-Control` CORS errors.
       const headers = new Headers({
         Accept: "text/event-stream",

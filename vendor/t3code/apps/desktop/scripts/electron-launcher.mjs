@@ -13,11 +13,11 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Beta)";
+const APP_DISPLAY_NAME = isDevelopment ? "Prismux (Dev)" : "Prismux";
 const APP_BUNDLE_ID = isDevelopment
-  ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
-  : "com.t3tools.t3code";
-const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
+  ? `io.prismux.desktop.dev.${devBundleIdSuffix || "local"}`
+  : "io.prismux.desktop";
+const APP_PROTOCOL_SCHEMES = isDevelopment ? ["prismux-dev"] : ["prismux"];
 const LAUNCHER_VERSION = 20;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
@@ -109,14 +109,14 @@ function shellSingleQuote(value) {
 export function makeDevelopmentEnvironmentScript(environment) {
   const envEntries = [
     ["VITE_DEV_SERVER_URL", environment.VITE_DEV_SERVER_URL],
-    ["T3CODE_PORT", environment.T3CODE_PORT],
-    ["T3CODE_HOME", environment.T3CODE_HOME],
-    ["T3CODE_COMMIT_HASH", environment.T3CODE_COMMIT_HASH],
-    ["T3CODE_OTLP_TRACES_URL", environment.T3CODE_OTLP_TRACES_URL],
-    ["T3CODE_OTLP_EXPORT_INTERVAL_MS", environment.T3CODE_OTLP_EXPORT_INTERVAL_MS],
-    ["T3CODE_OTLP_HEADERS", environment.T3CODE_OTLP_HEADERS],
-    ["T3CODE_OTLP_PROTOCOL", environment.T3CODE_OTLP_PROTOCOL],
-    ["T3CODE_DESKTOP_APP_USER_MODEL_ID", APP_BUNDLE_ID],
+    ["PRISMUX_PORT", environment.PRISMUX_PORT],
+    ["PRISMUX_HOME", environment.PRISMUX_HOME],
+    ["PRISMUX_COMMIT_HASH", environment.PRISMUX_COMMIT_HASH],
+    ["PRISMUX_OTLP_TRACES_URL", environment.PRISMUX_OTLP_TRACES_URL],
+    ["PRISMUX_OTLP_EXPORT_INTERVAL_MS", environment.PRISMUX_OTLP_EXPORT_INTERVAL_MS],
+    ["PRISMUX_OTLP_HEADERS", environment.PRISMUX_OTLP_HEADERS],
+    ["PRISMUX_OTLP_PROTOCOL", environment.PRISMUX_OTLP_PROTOCOL],
+    ["PRISMUX_DESKTOP_APP_USER_MODEL_ID", APP_BUNDLE_ID],
   ].filter((entry) => typeof entry[1] === "string" && entry[1].trim().length > 0);
   return [
     ...envEntries.map(
@@ -268,8 +268,8 @@ function resolveMacBundleInfoPlistStrings(executableName) {
     CFBundleExecutable: executableName,
     CFBundleIconFile: "icon.icns",
     NSScreenCaptureUsageDescription:
-      "T3 Code captures the active window when you use the snapshot shortcut.",
-    NSDocumentsFolderUsageDescription: "T3 Code reads project files you open in the desktop app.",
+      "Prismux captures the active window when you use the snapshot shortcut.",
+    NSDocumentsFolderUsageDescription: "Prismux reads project files you open in the desktop app.",
   };
 }
 

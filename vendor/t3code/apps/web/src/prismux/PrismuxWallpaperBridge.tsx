@@ -18,7 +18,7 @@ import { usePrismuxRuntime } from "./PrismuxRuntimeProvider";
 
 /**
  * Z-0 Fullscreen Wallpaper Stage (0 Token visual layer).
- * Mounts behind the T3 Code shell, obeys window occlusion / visibility for 0 FPS suspension,
+ * Mounts behind the Prismux shell, obeys window occlusion / visibility for 0 FPS suspension,
  * and resolves authenticated Daemon URLs for Steam/local web runtimes.
  */
 export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop() {
@@ -106,7 +106,7 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
  * Bespoke RGB prism-gradient Sparkles icon for the topbar Wallpaper toggle button.
  * - Uses a unique `useId()` `<linearGradient>` with seamless multi-stop RGB spectrum
  *   (`#38bdf8 -> #6366f1 -> #ec4899 -> #f59e0b -> #22c55e -> #38bdf8`).
- * - Pure CSS GPU-friendly hue-flow animation (`t3-glass-bridge.css`) keeps it silky across
+ * - Pure CSS GPU-friendly hue-flow animation (`prismux-glass-bridge.css`) keeps it silky across
  *   Light / Dark / Glass while gracefully settling on the static RGB gradient under
  *   `prefers-reduced-motion: reduce`.
  */

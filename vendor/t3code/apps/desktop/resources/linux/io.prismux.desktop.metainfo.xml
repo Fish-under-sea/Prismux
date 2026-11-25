@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.prismux.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Prismux</name>
+  <summary>Liquid-glass AI super workbench and 24h chief-agent desktop</summary>
+  <developer id="io.prismux">
+    <name>Prismux Contributors</name>
+  </developer>
+  <description>
+    <p>
+      Prismux is an open-source desktop super workbench for coding agents. Work with your
+      existing agents, review code changes, and run commands in your projects.
+    </p>
+    <p>
+      Connect from desktop, web, or local LAN/QR remote access to continue working seamlessly.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.prismux.desktop.desktop</launchable>
+  <icon type="stock">prismux</icon>
+  <provides>
+    <binary>prismux</binary>
+  </provides>
+  <categories>
+    <category>Development</category>
+  </categories>
+  <url type="homepage">https://prismux.app</url>
+  <url type="bugtracker">https://github.com/Fish-under-sea/Prismux/issues</url>
+  <url type="vcs-browser">https://github.com/Fish-under-sea/Prismux</url>
+</component>

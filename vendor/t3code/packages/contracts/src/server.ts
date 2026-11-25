@@ -72,6 +72,10 @@ export const ServerProviderAuth = Schema.Struct({
   workspaceId: Schema.optional(TrimmedNonEmptyString),
   /** Origin of the custom endpoint the instance sends its requests to. */
   endpoint: Schema.optional(TrimmedNonEmptyString),
+  /** Explicit first-party vendor subscription tier/type when reported by an OAuth probe. */
+  subscriptionType: Schema.optional(TrimmedNonEmptyString),
+  /** Whether the provider backend reports that native OpenAI auth is required (false = custom/proxy/local provider). */
+  requiresOpenaiAuth: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderAuth = typeof ServerProviderAuth.Type;
 
@@ -700,7 +704,7 @@ export const ServerEventLoopStall = Schema.Struct({
 });
 export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
 
-/** The boolean `T3CODE_FEATURE_FLAGS` a server started with. Unset flags are off. */
+/** The boolean `PRISMUX_FEATURE_FLAGS` a server started with. Unset flags are off. */
 export const ServerFeatureFlags = Schema.Struct({
   secretProviders: Schema.optionalKey(Schema.Boolean),
   tanstackSource: Schema.optionalKey(Schema.Boolean),

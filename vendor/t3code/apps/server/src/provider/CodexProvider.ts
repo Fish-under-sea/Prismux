@@ -140,7 +140,7 @@ const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_CATALOG_REFRESH_TIMEOUT_MS = 3_000;
 const CODEX_CONFIG_PROBE_TIMEOUT_MS = 3_000;
 const CODEX_CATALOG_REFRESH_POLL = "100 millis" as const;
-const CODEX_CLIENT_NAME = "T3 Code";
+const CODEX_CLIENT_NAME = "Prismux";
 // Handshake plus account/models/skills requests can exceed the shared 10s probe budget.
 const CODEX_AUTH_PROBE_TIMEOUT_MS = 20_000;
 const CODEX_DISCOVERY_MARGIN_MS = 250;
@@ -1038,7 +1038,7 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in T3 Code settings.",
+        message: "Codex is disabled in Prismux settings.",
       },
     });
   }
@@ -1062,26 +1062,35 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
 function accountProbeStatus(
-  { account, rateLimits }: CodexAppServerProviderSnapshot,
+  { account, endpoint, rateLimits }: CodexAppServerProviderSnapshot,
   codexHome: string | undefined,
 ): {
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProvider["auth"];
   readonly message?: string;
 } {
-  const authLabel = codexAccountAuthLabel(
-    account.account,
-    rateLimits && "snapshot" in rateLimits ? rateLimits.snapshot.planType : undefined,
-  );
+  const usagePlanType =
+    rateLimits && "snapshot" in rateLimits ? rateLimits.snapshot.planType : undefined;
+  const authLabel = codexAccountAuthLabel(account.account, usagePlanType);
   const authEmail = codexAccountEmail(account.account);
   const workspaceId =
     rateLimits && "accountId" in rateLimits ? rateLimits.accountId?.trim() : undefined;
+  const subscriptionType =
+    !endpoint && account.account?.type === "chatgpt"
+      ? usagePlanType && usagePlanType !== "unknown"
+        ? usagePlanType
+        : account.account.planType && account.account.planType !== "unknown"
+          ? account.account.planType
+          : undefined
+      : undefined;
   const auth = {
     status: account.account ? ("authenticated" as const) : ("unknown" as const),
     ...(account.account?.type ? { type: account.account?.type } : {}),
     ...(authLabel ? { label: authLabel } : {}),
     ...(authEmail ? { email: authEmail } : {}),
     ...(workspaceId ? { workspaceId } : {}),
+    ...(subscriptionType ? { subscriptionType } : {}),
+    requiresOpenaiAuth: account.requiresOpenaiAuth,
   } satisfies ServerProvider["auth"];
 
   if (account.account) {
@@ -1091,7 +1100,7 @@ function accountProbeStatus(
   if (account.requiresOpenaiAuth) {
     return {
       status: "error",
-      auth: { status: "unauthenticated" },
+      auth: { status: "unauthenticated", requiresOpenaiAuth: true },
       message: codexHome
         ? `Codex CLI is not authenticated. Run \`codex login\` with CODEX_HOME set to ${quotePath(codexHome)} and try again.`
         : "Codex CLI is not authenticated. Run `codex login` and try again.",
@@ -1139,7 +1148,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in T3 Code settings.",
+        message: "Codex is disabled in Prismux settings.",
       },
     });
   }

@@ -1,0 +1,3747 @@
+/* ============================================================================
+ * Prismux Core Tailwind v4 Liquid Glass, 6-Zone Unified Shell Frame Bridge,
+ * Inner Stage Concave Rounded Corners, Work Panels Zone, Wallpaper Veil & Typography Bridge
+ *
+ * CONTRACT:
+ * 1. Without a wallpaper (`data-pmx-wallpaper` absent or `'0'`) and with glass OFF
+ *    (`data-pmx-glass="0"`), ZERO canvas/glass selectors match and Prismux stays
+ *    100% native opaque solid (only default inner-stage radius applies cleanly).
+ * 2. With a wallpaper active (`data-pmx-wallpaper="1"` or `data-pmx-wallpaper-visible="1"`):
+ *    - In Light / Dark non-glass mode (`data-pmx-glass="0"`): opens root & center canvas
+ *      with a crisp unblurred readability veil (`>= 4.5:1` contrast) so static, video,
+ *      and WebWallGL wallpapers are immediately visible without forcing blur.
+ *    - In Liquid Glass mode (`data-pmx-glass="1"`): applies 6 unified single-pass
+ *      frosted glass zones (`shellFrame` [Left Sidebar + Top Bar + Bottom Status Bar +
+ *      Right Frame Edge + 4 Concave Corners], `rightSidebar`, `mainCanvas`, `workPanels`
+ *      [Tasks, Workspace Board & Scheduled Tasks], `composer`, `overlays`) without Chromium
+ *      Backdrop-Root double compositing on outer `main[data-slot='sidebar-inset']` and with
+ *      ZERO internal frame seams.
+ * 3. In `data-pmx-gpu="0"`, `prefers-reduced-transparency: reduce`, or `@supports not`,
+ *    all translucent surfaces revert cleanly to opaque solid with zero blur/sheen.
+ *
+ * SPECIFICITY CONTRACT:
+ * Prismux's Tailwind v4 `:root { @variant dark { ... } }` compiles to
+ * `:root:is(.dark, .dark *)` (specificity 0,2,0) and built-in themes use
+ * `html[data-theme-id]:not([data-theme-id=""])` (0,2,1). Every root override below
+ * qualifies `html.dark` / `html:not(.dark)` (>= 0,2,1) and `[data-theme-id]` (0,3,1).
+ * ========================================================================== */
+
+/* ── 0. Windows Frameless Edge Alignment & Monolithic Arc / AGY 2.0 Outer Frame
+ *       with 4 Seamless Concave Inner Corners (`[data-pmx-stage-frame='1']`) ─── */
+:root.electron-windows,
+html.electron-windows,
+body.electron-windows {
+  --desktop-window-right-resize-inset: 0px;
+}
+
+html.electron-windows #root {
+  padding-right: 0;
+}
+
+/* Default outer-frame & concave-corner material tokens (Light / Dark solid baseline). */
+:root {
+  --pmx-stage-frame-bg: var(--sidebar, #fafafa);
+  --pmx-stage-frame-backdrop: none;
+  --pmx-stage-frame-sheen: none;
+  --pmx-stage-frame-ring: color-mix(in srgb, var(--foreground, #0f172a) 11%, transparent);
+}
+
+html.dark,
+html[data-pmx-theme='dark'] {
+  --pmx-stage-frame-bg: var(--sidebar, #0c0d11);
+  --pmx-stage-frame-ring: rgba(255, 255, 255, 0.11);
+}
+
+/* Zero-seam monolithic outer chrome (Left Sidebar + Top Tab Bar + Bottom Status Bar + Right Edge / Right Sidebar):
+ * Eliminates ALL internal vertical/horizontal T-seams, cross-seams, and box-shadow hairlines between outer frame bars.
+ * ONLY `[data-pmx-stage-frame='1']::after` draws the continuous 1px rounded inner frame ring around the center canvas. */
+html:has([data-pmx-stage-frame='1'])
+  :is(
+    [data-slot='sidebar'][data-side='left']:not([data-variant='floating']) [data-slot='sidebar-container'],
+    [data-slot='sidebar'][data-side='left']:not([data-variant='floating']) [data-slot='sidebar-inner'],
+    [data-app-sidebar],
+    [data-app-sidebar] [data-slot='sidebar-inner']
+  ) {
+  border-right: 0 !important;
+  border-right-width: 0 !important;
+  border-right-color: transparent !important;
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
+}
+
+html:has([data-pmx-stage-frame='1'])
+  :is(
+    [data-workspace-tabbar],
+    [data-chat-header],
+    [data-pmx-titlebar],
+    header[data-pmx-glass-zone='shellFrame']
+  ) {
+  border-bottom: 0 !important;
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+  box-shadow: none !important;
+}
+
+html:has([data-pmx-stage-frame='1'])
+  :is([data-prismux-status-bar='true'], [data-prismux-status-bar], [data-pmx-status-bar]) {
+  border-top: 0 !important;
+  border-top-width: 0 !important;
+  border-top-color: transparent !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+  box-shadow: none !important;
+}
+
+html:has([data-pmx-stage-frame='1']) [data-pmx-right-frame-edge='1'] {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+html:has([data-pmx-stage-frame='1'])
+  :is([data-preview-panel-mode='inline'], [data-pmx-right-sidebar]) {
+  border-left: 0 !important;
+  border-left-width: 0 !important;
+  border-left-color: transparent !important;
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
+}
+
+html:has([data-pmx-stage-frame='1']) main[data-slot='sidebar-inset'] {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* In native non-glass solid modes (no wallpaper), unify Left Sidebar, Top Tab Bar, Bottom Status Bar,
+ * Right Frame Edge, Inline Right Sidebar, and all 4 concave corners onto one unbroken frame tone (`--pmx-native-frame-bg`). */
+html:not([data-pmx-glass='1']):not([data-pmx-wallpaper='1']):not([data-pmx-wallpaper-visible='1']):has(
+    [data-pmx-stage-frame='1']
+  ) {
+  --pmx-native-frame-bg: var(--sidebar);
+  --pmx-stage-frame-bg: var(--pmx-native-frame-bg);
+}
+
+html:not([data-pmx-glass='1']):not([data-pmx-wallpaper='1']):not([data-pmx-wallpaper-visible='1']):has(
+    [data-pmx-stage-frame='1']
+  )
+  :is(
+    [data-app-sidebar] [data-slot='sidebar-inner'],
+    [data-pmx-glass-zone='shellFrame']:not(:has([data-slot='sidebar-inner'])),
+    [data-workspace-tabbar],
+    [data-prismux-status-bar='true'],
+    [data-pmx-status-bar],
+    [data-pmx-right-frame-edge='1'],
+    [data-preview-panel-mode='inline']
+  ) {
+  background-color: var(--pmx-native-frame-bg, var(--sidebar));
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Stage frame wrapper: 0px margin/padding, zero Backdrop Root (`isolation` untouched, no filter). */
+[data-pmx-stage-frame='1'] {
+  position: relative;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Framed inner workspace stage: flush (`margin: 0`) against all 4 outer bezel bars,
+ * clipped cleanly to `var(--pmx-inner-stage-radius, 14px)`. */
+[data-pmx-inner-stage='1'] {
+  border-radius: var(--pmx-inner-stage-radius, 14px);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--border, rgba(148, 163, 184, 0.14));
+}
+
+html[data-pmx-glass='1'] [data-pmx-inner-stage='1'] {
+  box-shadow: inset 0 0 0 1px
+    var(--pmx-glass-zone-main-canvas-border, var(--pmx-glass-border, rgba(255, 255, 255, 0.14)));
+}
+
+/* When wrapped by `[data-pmx-stage-frame='1']`, strip legacy floating margins/borders/box-shadow
+ * so `[data-pmx-stage-frame='1']::after` owns the single continuous 1px rounded inner frame line. */
+[data-pmx-stage-frame='1'] > [data-pmx-inner-stage='1'] {
+  position: relative;
+  z-index: 1;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: var(--pmx-inner-stage-radius, 14px);
+  overflow: hidden;
+  box-shadow: none !important;
+}
+
+/* 4 tiny 14x14 inverted-radius concave corner fillets (z-index: 0, beneath inner stage):
+ * Samples ONLY the Z-0 wallpaper (never chat content) with exact outer-frame glass/solid fill,
+ * tucked 0.5px beneath the 1px `::after` ring so 100%/125%/150%/200% DPI renders zero bright seam. */
+[data-pmx-stage-frame='1'] > [data-pmx-stage-corner] {
+  position: absolute;
+  z-index: 0;
+  width: var(--pmx-inner-stage-radius, 14px);
+  height: var(--pmx-inner-stage-radius, 14px);
+  pointer-events: none;
+  background-color: var(--pmx-stage-frame-bg, var(--sidebar));
+  background-image: var(--pmx-stage-frame-sheen, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(--pmx-stage-frame-backdrop, none);
+  backdrop-filter: var(--pmx-stage-frame-backdrop, none);
+}
+
+[data-pmx-stage-frame='1'] > [data-pmx-stage-corner='tl'] {
+  top: 0;
+  left: 0;
+  clip-path: path('M 0 0 L 14 0 L 14 0.5 A 13.5 13.5 0 0 0 0.5 14 L 0 14 Z');
+}
+
+[data-pmx-stage-frame='1'] > [data-pmx-stage-corner='tr'] {
+  top: 0;
+  right: 0;
+  clip-path: path('M 0 0 L 14 0 L 14 14 L 13.5 14 A 13.5 13.5 0 0 0 0 0.5 Z');
+}
+
+[data-pmx-stage-frame='1'] > [data-pmx-stage-corner='bl'] {
+  bottom: 0;
+  left: 0;
+  clip-path: path('M 0 0 L 0.5 0 A 13.5 13.5 0 0 0 14 13.5 L 14 14 L 0 14 Z');
+}
+
+[data-pmx-stage-frame='1'] > [data-pmx-stage-corner='br'] {
+  bottom: 0;
+  right: 0;
+  clip-path: path('M 14 0 L 14 14 L 0 14 L 0 13.5 A 13.5 13.5 0 0 0 13.5 0 Z');
+}
+
+/* Pure-CSS automatic fallback when a `[data-pmx-stage-frame='1']` omits explicit corner spans. */
+[data-pmx-stage-frame='1']:not(:has(> [data-pmx-stage-corner]))::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: var(--pmx-stage-frame-bg, var(--sidebar));
+  background-image: var(--pmx-stage-frame-sheen, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(--pmx-stage-frame-backdrop, none);
+  backdrop-filter: var(--pmx-stage-frame-backdrop, none);
+  --_r: var(--pmx-inner-stage-radius, 14px);
+  --_ri: calc(var(--_r) - 0.5px);
+  -webkit-mask-image:
+    radial-gradient(circle var(--_r) at var(--_r) var(--_r), transparent var(--_ri), #000 var(--_r)),
+    radial-gradient(circle var(--_r) at 0 var(--_r), transparent var(--_ri), #000 var(--_r)),
+    radial-gradient(circle var(--_r) at var(--_r) 0, transparent var(--_ri), #000 var(--_r)),
+    radial-gradient(circle var(--_r) at 0 0, transparent var(--_ri), #000 var(--_r));
+  -webkit-mask-position: top left, top right, bottom left, bottom right;
+  -webkit-mask-size: var(--_r) var(--_r);
+  -webkit-mask-repeat: no-repeat;
+  mask-image:
+    radial-gradient(circle var(--_r) at var(--_r) var(--_r), transparent var(--_ri), #000 var(--_r)),
+    radial-gradient(circle var(--_r) at 0 var(--_r), transparent var(--_ri), #000 var(--_r)),
+    radial-gradient(circle var(--_r) at var(--_r) 0, transparent var(--_ri), #000 var(--_r)),
+    radial-gradient(circle var(--_r) at 0 0, transparent var(--_ri), #000 var(--_r));
+  mask-position: top left, top right, bottom left, bottom right;
+  mask-size: var(--_r) var(--_r);
+  mask-repeat: no-repeat;
+}
+
+/* Continuous 1px rounded inner frame ring hugging all 4 straight edges & 4 concave corners. */
+[data-pmx-stage-frame='1']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+  border-radius: var(--pmx-inner-stage-radius, 14px);
+  box-shadow: inset 0 0 0 1px var(--pmx-stage-frame-ring, var(--border, rgba(148, 163, 184, 0.18)));
+}
+
+/* Seamless right-edge continuity whether right sidebar is collapsed (`0`) or open inline (`1`). */
+[data-pmx-stage-frame='1'][data-pmx-right-open='1'] > [data-pmx-stage-corner='tr'],
+[data-pmx-stage-frame='1'][data-pmx-right-open='1'] > [data-pmx-stage-corner='br'] {
+  background-color: var(
+    --pmx-stage-frame-right-bg,
+    var(--pmx-stage-frame-bg, var(--sidebar))
+  );
+  background-image: var(
+    --pmx-stage-frame-right-sheen,
+    var(--pmx-stage-frame-sheen, none)
+  );
+  -webkit-backdrop-filter: var(
+    --pmx-stage-frame-right-backdrop,
+    var(--pmx-stage-frame-backdrop, none)
+  );
+  backdrop-filter: var(
+    --pmx-stage-frame-right-backdrop,
+    var(--pmx-stage-frame-backdrop, none)
+  );
+}
+
+/* ── 0.5. Non-Glass Wallpaper Reveal (Light / Dark + Active Wallpaper, Zero Blur) */
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  body,
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  #root {
+  background-color: transparent !important;
+  background-image: none;
+}
+
+html.dark:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+html[data-pmx-theme='dark']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+html.dark:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0'][data-theme-id]:not(
+    [data-theme-id='']
+  ):not([data-pmx-gpu='0']):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']) {
+  --pmx-wallpaper-veil: rgba(10, 14, 22, calc(0.42 + var(--pmx-wallpaper-dim, 0.58) * 0.2));
+  --pmx-wallpaper-chrome-veil: rgba(12, 16, 24, 0.82);
+  --pmx-wallpaper-card-veil: rgba(16, 20, 30, 0.86);
+  --pmx-stage-frame-bg: var(--pmx-wallpaper-chrome-veil);
+  --pmx-stage-frame-backdrop: none;
+  --pmx-stage-frame-sheen: none;
+  --pmx-stage-frame-ring: rgba(255, 255, 255, 0.14);
+  --background: var(--pmx-wallpaper-veil);
+  --app-chrome-background: var(--pmx-wallpaper-veil);
+  --toolbar-background: transparent;
+  --card: var(--pmx-wallpaper-card-veil);
+  --surface-raised: var(--pmx-wallpaper-card-veil);
+  --message-surface: rgba(18, 22, 32, 0.86);
+  --sidebar: var(--pmx-wallpaper-chrome-veil);
+  --sidebar-stage-fade: transparent;
+}
+
+html:not(.dark):is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+html[data-pmx-theme='light']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+html:not(.dark):is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0'][data-theme-id]:not(
+    [data-theme-id='']
+  ):not([data-pmx-gpu='0']):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']) {
+  --pmx-wallpaper-veil: rgba(248, 250, 255, calc(0.5 + var(--pmx-wallpaper-dim, 0.58) * 0.18));
+  --pmx-wallpaper-chrome-veil: rgba(248, 250, 255, 0.84);
+  --pmx-wallpaper-card-veil: rgba(255, 255, 255, 0.88);
+  --pmx-stage-frame-bg: var(--pmx-wallpaper-chrome-veil);
+  --pmx-stage-frame-backdrop: none;
+  --pmx-stage-frame-sheen: none;
+  --pmx-stage-frame-ring: rgba(15, 23, 42, 0.14);
+  --background: var(--pmx-wallpaper-veil);
+  --app-chrome-background: var(--pmx-wallpaper-veil);
+  --toolbar-background: transparent;
+  --card: var(--pmx-wallpaper-card-veil);
+  --surface-raised: var(--pmx-wallpaper-card-veil);
+  --message-surface: rgba(255, 255, 255, 0.88);
+  --sidebar: var(--pmx-wallpaper-chrome-veil);
+  --sidebar-stage-fade: transparent;
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  main[data-slot='sidebar-inset']:has(
+    [data-pmx-glass-zone='mainCanvas'],
+    [data-pmx-glass-zone='workPanels']
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  :is(
+    main[data-slot='sidebar-inset']:not(:has([data-pmx-glass-zone='mainCanvas'])):not(
+        :has([data-pmx-glass-zone='workPanels'])
+      ),
+    [data-pmx-glass-zone='mainCanvas']
+  ) {
+  background-color: var(--pmx-wallpaper-veil);
+  background-image: none;
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
+  background-color: var(--pmx-wallpaper-chrome-veil);
+  background-image: none;
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  [data-pmx-work-panel-card='1'] {
+  background-color: var(--pmx-wallpaper-card-veil);
+  background-image: none;
+}
+
+/* Remove opaque/nested `.bg-background` layout wrappers inside SidebarInset
+   so the center workspace carries one clean unblurred readability veil over Z-0. */
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  :is(
+    main[data-slot='sidebar-inset'] > .bg-background:not([data-pmx-glass-zone]),
+    main[data-slot='sidebar-inset']
+      [data-chat-column]
+      .bg-background:not([data-pmx-glass-zone]):not(button):not(input):not(textarea):not(
+        [role='dialog']
+      ):not([data-slot='popover-popup']),
+    [data-chat-header]
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  [data-app-sidebar]:has([data-slot='sidebar-inner']) {
+  background-color: transparent;
+  background-image: none;
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  :is(
+    [data-app-sidebar] [data-slot='sidebar-inner'],
+    [data-app-sidebar]:not(:has([data-slot='sidebar-inner'])),
+    [data-pmx-glass-zone='shellFrame']:not(:has([data-slot='sidebar-inner'])),
+    [data-pmx-right-frame-edge='1'],
+    [data-preview-panel-mode='inline'],
+    [data-pmx-glass-zone='rightSidebar'],
+    [data-workspace-tabbar],
+    [data-prismux-status-bar='true'],
+    [data-pmx-status-bar]
+  ) {
+  background-color: var(--pmx-wallpaper-chrome-veil);
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ── 1. Active Liquid Glass Semantic Token Bridge (Prismux Tailwind v4) ──── */
+html.dark[data-pmx-glass='1'],
+html:not(.dark)[data-pmx-glass='1'],
+html[data-pmx-glass='1'][data-pmx-theme],
+html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']) {
+  /* Legacy global region tokens preserved for backward compatibility */
+  --pmx-surface-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-glass-surface-fill, 38%),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  --pmx-canvas-bg: var(
+    --pmx-glass-zone-main-canvas-bg,
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 72%),
+      color-mix(
+        in srgb,
+        var(--pmx-glass-tint, #0d1524) calc(var(--pmx-glass-surface-fill, 38%) * 0.28),
+        transparent
+      ) calc((1 - var(--pmx-readability-floor, 0.59) * 0.72) * 100%)
+    )
+  );
+  --pmx-card-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-glass-card-fill, 22%),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  --pmx-overlay-bg: var(
+    --pmx-glass-zone-overlays-bg,
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+      color-mix(
+        in srgb,
+        var(--pmx-glass-tint, #0d1524) var(--pmx-glass-overlay-fill, 45%),
+        transparent
+      ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+    )
+  );
+  --pmx-control-bg: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-glass-control-fill, 28%),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+
+  --pmx-fresnel-edge: rgba(255, 255, 255, calc(0.2 * var(--pmx-fresnel-strength, 1)));
+  --pmx-glass-border: color-mix(
+    in srgb,
+    var(--pmx-accent, #5e9bff) var(--dock-glass-tint-rim, 18%),
+    var(--pmx-fresnel-edge)
+  );
+  --prismux-glass-border: var(--pmx-glass-border);
+
+  /* Prismux core Tailwind v4 semantic tokens */
+  --background: var(--pmx-canvas-bg);
+  --app-chrome-background: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  --card: var(--pmx-card-bg);
+  --surface-raised: var(--pmx-card-bg);
+  --popover: var(--pmx-overlay-bg);
+  --sidebar: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  --sidebar-control-surface: var(--pmx-control-bg);
+  --sidebar-stage-fade: transparent;
+  --toolbar-background: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  --toolbar-control: var(--pmx-control-bg);
+  --message-surface: color-mix(
+    in srgb,
+    var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524))
+      calc(var(--pmx-conversation-floor, var(--pmx-readability-floor, 0.59)) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524)) var(--pmx-glass-card-fill, 22%),
+      transparent
+    ) calc((1 - var(--pmx-conversation-floor, var(--pmx-readability-floor, 0.59))) * 100%)
+  );
+  --code-background: var(--pmx-card-bg);
+  --border: var(--pmx-glass-border);
+  --sidebar-border: var(--pmx-glass-zone-shell-frame-border, var(--pmx-glass-border));
+  --primary: var(--pmx-accent, #5e9bff);
+  --primary-foreground: var(--pmx-accent-ink, #ffffff);
+  --ring: var(--pmx-accent, #5e9bff);
+
+  /* Native Prismux @utility surface-glass / dialog-glass / dropdown-glass hooks */
+  --glass-blur: var(--pmx-glass-zone-overlays-blur, var(--pmx-glass-overlay-blur, 16px));
+  --glass-opacity: 100%;
+  --glass-saturation: var(--pmx-glass-zone-overlays-saturation, 1.08);
+
+  /* Monolithic closed picture-frame shell & all 4 concave corners bind to ONE unified `shellFrame` token set. */
+  --pmx-stage-frame-bg: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  --pmx-stage-frame-backdrop: var(--pmx-glass-zone-shell-frame-backdrop, none);
+  --pmx-stage-frame-sheen: var(--pmx-glass-zone-shell-frame-sheen, none);
+  --pmx-stage-frame-right-bg: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  --pmx-stage-frame-right-backdrop: var(--pmx-glass-zone-shell-frame-backdrop, none);
+  --pmx-stage-frame-right-sheen: var(--pmx-glass-zone-shell-frame-sheen, none);
+  --pmx-stage-frame-ring: var(
+    --pmx-glass-zone-main-canvas-border,
+    var(--pmx-glass-border, rgba(255, 255, 255, 0.16))
+  );
+}
+
+/* High-contrast luminance & subtle shadow lift over bright/warm wallpapers in Dark Glass mode
+   (defers cleanly whenever the user configures explicit custom typography colors). */
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
+html.dark[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not([data-pmx-custom-muted='1']),
+html[data-pmx-theme='dark'][data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
+    [data-pmx-custom-muted='1']
+  ) {
+  --muted-foreground: rgba(255, 255, 255, 0.86);
+  --contrast-muted-foreground: rgba(255, 255, 255, 0.86);
+  --sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
+  --contrast-sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
+  --secondary-label: rgba(255, 255, 255, 0.88);
+  --contrast-secondary-label: rgba(255, 255, 255, 0.88);
+  --placeholder: rgba(255, 255, 255, 0.78);
+  --contrast-placeholder: rgba(255, 255, 255, 0.78);
+  --icon-muted: rgba(255, 255, 255, 0.9);
+  --contrast-icon-muted: rgba(255, 255, 255, 0.9);
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ) {
+  --sidebar-foreground: rgba(255, 255, 255, 0.94);
+  --contrast-sidebar-foreground: rgba(255, 255, 255, 0.94);
+  --foreground: rgba(255, 255, 255, 0.94);
+  --contrast-foreground: rgba(255, 255, 255, 0.94);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ) {
+  --secondary-label: rgba(255, 255, 255, 0.88);
+  --contrast-secondary-label: rgba(255, 255, 255, 0.88);
+  --icon-muted: rgba(255, 255, 255, 0.9);
+  --contrast-icon-muted: rgba(255, 255, 255, 0.9);
+  --sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
+  --contrast-sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
+  --muted-foreground: rgba(255, 255, 255, 0.86);
+  --contrast-muted-foreground: rgba(255, 255, 255, 0.86);
+}
+
+html.dark[data-pmx-glass='1']
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1'],
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-pmx-glass-zone='chromeBars']
+  )
+  svg,
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1'],
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-pmx-glass-zone='chromeBars']
+  )
+  svg {
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.38));
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ) {
+  --foreground: rgba(255, 255, 255, 0.94);
+  --contrast-foreground: rgba(255, 255, 255, 0.94);
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.48);
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ) {
+  --muted-foreground: rgba(255, 255, 255, 0.86);
+  --contrast-muted-foreground: rgba(255, 255, 255, 0.86);
+  --secondary-label: rgba(255, 255, 255, 0.88);
+  --contrast-secondary-label: rgba(255, 255, 255, 0.88);
+}
+
+/* Crisp deep-ink readability tokens for Light Glass mode (root + sidebar/chrome subtrees) */
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
+html:not(.dark)[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
+    [data-pmx-custom-muted='1']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
+    [data-pmx-custom-muted='1']
+  ) {
+  --muted-foreground: rgba(15, 23, 42, 0.82);
+  --contrast-muted-foreground: rgba(15, 23, 42, 0.82);
+  --sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
+  --contrast-sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
+  --secondary-label: rgba(15, 23, 42, 0.84);
+  --contrast-secondary-label: rgba(15, 23, 42, 0.84);
+  --placeholder: rgba(15, 23, 42, 0.72);
+  --contrast-placeholder: rgba(15, 23, 42, 0.72);
+  --icon-muted: rgba(15, 23, 42, 0.86);
+  --contrast-icon-muted: rgba(15, 23, 42, 0.86);
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ) {
+  --sidebar-foreground: rgba(15, 23, 42, 0.94);
+  --contrast-sidebar-foreground: rgba(15, 23, 42, 0.94);
+  --foreground: rgba(15, 23, 42, 0.94);
+  --contrast-foreground: rgba(15, 23, 42, 0.94);
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-app-sidebar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='leftSidebar'],
+    [data-pmx-sidebar-peek='1']
+  ) {
+  --secondary-label: rgba(15, 23, 42, 0.84);
+  --contrast-secondary-label: rgba(15, 23, 42, 0.84);
+  --icon-muted: rgba(15, 23, 42, 0.86);
+  --contrast-icon-muted: rgba(15, 23, 42, 0.86);
+  --sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
+  --contrast-sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
+  --muted-foreground: rgba(15, 23, 42, 0.82);
+  --contrast-muted-foreground: rgba(15, 23, 42, 0.82);
+}
+
+/* Global Glass Mode safety guard for `.text-background`:
+ * Because `--background` maps to translucent canvas in Glass mode, any inverted pill/button
+ * using `bg-foreground text-background` would otherwise render near-invisible text over
+ * solid bright `bg-foreground`. Force crisp opaque inverted ink in both Dark & Light Glass. */
+html.dark[data-pmx-glass='1'] .text-background,
+html[data-pmx-theme='dark'][data-pmx-glass='1'] .text-background {
+  color: #0b0f17;
+}
+
+html:not(.dark)[data-pmx-glass='1'] .text-background,
+html[data-pmx-theme='light'][data-pmx-glass='1'] .text-background {
+  color: #ffffff;
+}
+
+/* Open document root, body, and #root straight to Z-0 wallpaper in Glass mode */
+html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']):not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']):not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  body,
+html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']):not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  #root {
+  background-color: transparent !important;
+  background-image: none;
+}
+
+/* CRITICAL BACKDROP-ROOT FIX:
+ * `main[data-slot='sidebar-inset']` wraps top chrome, center canvas/work-panel, AND right sidebar.
+ * When a dedicated `[data-pmx-glass-zone='mainCanvas']` or `[data-pmx-glass-zone='workPanels']` child
+ * exists inside it, keep outer `main[data-slot='sidebar-inset']` completely transparent with zero
+ * backdrop-filter so it NEVER creates a Chromium Backdrop Root that darkens or blurs siblings! */
+html[data-pmx-glass='1'] main[data-slot='sidebar-inset']:has([data-pmx-glass-zone='mainCanvas']),
+html[data-pmx-glass='1'] main[data-slot='sidebar-inset']:has([data-pmx-glass-zone='workPanels']),
+html[data-pmx-glass='1'][data-theme-id]
+  main[data-slot='sidebar-inset']:has([data-pmx-glass-zone='mainCanvas']),
+html[data-pmx-glass='1'][data-theme-id]
+  main[data-slot='sidebar-inset']:has([data-pmx-glass-zone='workPanels']) {
+  background-color: transparent !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* ── 2. Eight Unified Workbench Liquid Glass Zones ────────────────────────── */
+
+/* ── Zone 2.1: mainCanvas (`[data-pmx-glass-zone='mainCanvas']` & bare SidebarInset fallback)
+ * Default fallback backdrop is `none` so the inner stage opens crystal-clear onto Z-0 wallpaper;
+ * users can still dial custom blur/opacity or solid in 8-zone settings (`--pmx-glass-zone-main-canvas-backdrop`). */
+html[data-pmx-glass='1'] [data-pmx-glass-zone='mainCanvas'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='mainCanvas'],
+html[data-pmx-glass='1']
+  main[data-slot='sidebar-inset']:not(:has([data-pmx-glass-zone='mainCanvas'])):not(
+    :has([data-pmx-glass-zone='workPanels'])
+  ),
+html[data-pmx-glass='1'][data-theme-id]
+  main[data-slot='sidebar-inset']:not(:has([data-pmx-glass-zone='mainCanvas'])):not(
+    :has([data-pmx-glass-zone='workPanels'])
+  ) {
+  background-color: var(--pmx-glass-zone-main-canvas-bg, var(--pmx-canvas-bg));
+  background-image: var(--pmx-glass-zone-main-canvas-sheen, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(--pmx-glass-zone-main-canvas-backdrop, none);
+  backdrop-filter: var(--pmx-glass-zone-main-canvas-backdrop, none);
+}
+
+/* Remove redundant nested `.bg-background` wash inside mainCanvas / SidebarInset
+   while NEVER stripping backgrounds from other glass zones (composer, shellFrame, rightSidebar, overlays). */
+html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])
+  main[data-slot='sidebar-inset']
+  > .bg-background:not([data-pmx-glass-zone]):not([data-preview-panel-mode='inline']),
+html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])
+  main[data-slot='sidebar-inset']
+  [data-chat-column]
+  .bg-background:not([data-pmx-glass-zone]):not([data-chat-header]):not([data-slot='composer-shell']):not(
+    [data-slot='composer-host']
+  ):not([data-chat-composer-main-surface='true']):not(button):not(input):not(textarea):not(
+    [role='dialog']
+  ):not([data-slot='popover-popup']),
+html[data-pmx-glass='1']
+  [data-pmx-glass-zone='mainCanvas']
+  .bg-background:not([data-pmx-glass-zone]):not([data-chat-header]):not([data-slot='composer-shell']):not(
+    [data-slot='composer-host']
+  ):not([data-chat-composer-main-surface='true']):not(button):not(input):not(textarea):not(
+    [role='dialog']
+  ):not([data-slot='popover-popup']) {
+  background-color: transparent;
+}
+
+/* ── Zone 2.2: shellFrame (Monolithic Window Outer Frame: Left Sidebar + Top Bar +
+ * Bottom Status Bar + Right Frame Edge + Legacy `leftSidebar` & `chromeBars` aliases) ── */
+html[data-pmx-glass='1'] [data-app-sidebar],
+html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar],
+html[data-pmx-glass='1'] [data-pmx-glass-zone='shellFrame'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='shellFrame'],
+html[data-pmx-glass='1'] [data-pmx-glass-zone='leftSidebar'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='leftSidebar'],
+html[data-pmx-glass='1'] [data-pmx-glass-zone='chromeBars'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='chromeBars'],
+html[data-pmx-glass='1'] [data-pmx-right-frame-edge='1'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-right-frame-edge='1'] {
+  --pmx-shell-frame-bg: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  --pmx-left-sidebar-bg: var(--pmx-shell-frame-bg);
+  --pmx-titlebar-bg: var(--pmx-shell-frame-bg);
+  --background: var(--pmx-shell-frame-bg);
+  --sidebar: var(--pmx-shell-frame-bg);
+  --sidebar-stage-fade: transparent;
+  --sidebar-border: var(--pmx-glass-zone-shell-frame-border, var(--pmx-glass-border));
+}
+
+/* Keep outer [data-app-sidebar] transparent when an inner glass layer owns the single blur pass */
+html[data-pmx-glass='1'] [data-app-sidebar]:has([data-slot='sidebar-inner']),
+html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar]:has([data-slot='sidebar-inner']),
+html[data-pmx-glass='1'] [data-app-sidebar]:has([data-pmx-glass-zone='shellFrame']),
+html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar]:has([data-pmx-glass-zone='shellFrame']),
+html[data-pmx-glass='1'] [data-app-sidebar]:has([data-pmx-glass-zone='leftSidebar']),
+html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar]:has([data-pmx-glass-zone='leftSidebar']) {
+  background-color: transparent;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-pmx-glass='1'] [data-pmx-glass-zone='shellFrame']:not(:has([data-slot='sidebar-inner'])),
+html[data-pmx-glass='1'][data-theme-id]
+  [data-pmx-glass-zone='shellFrame']:not(:has([data-slot='sidebar-inner'])),
+html[data-pmx-glass='1'] [data-pmx-glass-zone='leftSidebar']:not(:has([data-slot='sidebar-inner'])),
+html[data-pmx-glass='1'][data-theme-id]
+  [data-pmx-glass-zone='leftSidebar']:not(:has([data-slot='sidebar-inner'])),
+html[data-pmx-glass='1'] [data-app-sidebar] [data-slot='sidebar-inner'],
+html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar] [data-slot='sidebar-inner'],
+html[data-pmx-glass='1']
+  [data-app-sidebar]:not(:has([data-slot='sidebar-inner'])):not(
+    :has([data-pmx-glass-zone='shellFrame'])
+  ):not(:has([data-pmx-glass-zone='leftSidebar'])),
+html[data-pmx-glass='1'][data-theme-id]
+  [data-app-sidebar]:not(:has([data-slot='sidebar-inner'])):not(
+    :has([data-pmx-glass-zone='shellFrame'])
+  ):not(:has([data-pmx-glass-zone='leftSidebar'])),
+html[data-pmx-glass='1'] [data-pmx-glass-zone='chromeBars'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='chromeBars'],
+html[data-pmx-glass='1'] [data-pmx-right-frame-edge='1'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-right-frame-edge='1'],
+html[data-pmx-glass='1'] [data-workspace-tabbar],
+html[data-pmx-glass='1'][data-theme-id] [data-workspace-tabbar],
+html[data-pmx-glass='1'] [data-chat-header],
+html[data-pmx-glass='1'][data-theme-id] [data-chat-header],
+html[data-pmx-glass='1'] [data-pmx-titlebar],
+html[data-pmx-glass='1'] [data-prismux-status-bar],
+html[data-pmx-glass='1'] [data-pmx-status-bar] {
+  background-color: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  background-image: var(--pmx-glass-zone-shell-frame-sheen, none);
+  /* Override `.surface-grain` (256px 256px repeat) so specular sheen spans seamlessly edge-to-edge */
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border-color: var(--pmx-glass-zone-shell-frame-border, var(--pmx-glass-border));
+  -webkit-backdrop-filter: var(
+    --pmx-glass-zone-shell-frame-backdrop,
+    blur(var(--pmx-glass-surface-blur, 18px)) saturate(1.1)
+  );
+  backdrop-filter: var(
+    --pmx-glass-zone-shell-frame-backdrop,
+    blur(var(--pmx-glass-surface-blur, 18px)) saturate(1.1)
+  );
+}
+
+/* Keep left-sidebar child regions transparent so the sidebar reads as one unbroken pane */
+html[data-pmx-glass='1']
+  :is([data-app-sidebar], [data-pmx-glass-zone='shellFrame'], [data-pmx-glass-zone='leftSidebar'])
+  :is(
+    [data-slot='sidebar-header'],
+    [data-slot='sidebar-content'],
+    [data-slot='sidebar-footer'],
+    [data-slot='sidebar-group'],
+    [data-slot='scroll-area'],
+    [data-slot='scroll-area-viewport']
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* ── Zone 2.3: composer (`[data-pmx-glass-zone='composer']` & `ComposerSurface`) */
+html[data-pmx-glass='1'] [data-pmx-glass-zone='composer'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='composer'],
+html.dark[data-pmx-glass='1'] [data-pmx-glass-zone='composer'],
+html[data-pmx-glass='1'] [data-slot='composer-shell'],
+html[data-pmx-glass='1'][data-theme-id] [data-slot='composer-shell'],
+html.dark[data-pmx-glass='1'] [data-slot='composer-shell'] {
+  --chat-composer-glass-surface: var(--pmx-glass-zone-composer-bg, var(--pmx-card-bg));
+  --chat-composer-outline: var(--pmx-glass-zone-composer-border, var(--pmx-glass-border));
+  --glass-blur: var(--pmx-glass-zone-composer-blur, var(--pmx-glass-card-blur, 12px));
+  --glass-opacity: 100%;
+  --glass-saturation: var(--pmx-glass-zone-composer-saturation, 1.08);
+}
+
+html[data-pmx-glass='1']
+  :is([data-pmx-glass-zone='composer'], [data-slot='composer-shell']):not([data-context-row]):not(
+    :has([data-composer-banner-surface='attached'])
+  ):not(:has([data-pmx-composer-layout='agy']))::before,
+html[data-pmx-glass='1']
+  :is([data-pmx-glass-zone='composer'], [data-slot='composer-shell'])[data-context-row]:not(
+    :has([data-composer-banner-surface='attached'])
+  ):not(:has([data-pmx-composer-layout='agy']))
+  [data-slot='composer-host']::before,
+html[data-pmx-glass='1']
+  :is([data-pmx-glass-zone='composer'], [data-slot='composer-shell']):has(
+    [data-composer-banner-surface='attached']
+  )
+  [data-chat-composer-main-surface='true']:not([data-pmx-composer-layout='agy']),
+html[data-pmx-glass='1']
+  [data-pmx-glass-zone='composer']:not([data-slot='composer-shell']):not([data-pmx-composer-layout='agy']):not(
+    :has([data-pmx-composer-layout='agy'])
+  ) {
+  background-color: var(--pmx-glass-zone-composer-bg, var(--pmx-card-bg)) !important;
+  background-image: var(--pmx-glass-zone-composer-sheen, none) !important;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border-color: var(--pmx-glass-zone-composer-border, var(--pmx-glass-border));
+  -webkit-backdrop-filter: var(
+    --pmx-glass-zone-composer-backdrop,
+    blur(var(--pmx-glass-card-blur, 12px)) saturate(1.08)
+  ) !important;
+  backdrop-filter: var(
+    --pmx-glass-zone-composer-backdrop,
+    blur(var(--pmx-glass-card-blur, 12px)) saturate(1.08)
+  ) !important;
+}
+
+/* ── Zone 2.4: workPanels (Unified Tasks / Workspace Board / Scheduled Tasks main panels)
+ * Provides crisp Light / Dark solid elevation AND single-pass frosted liquid glass driven
+ * live by `--pmx-glass-work-panels-*` / `--pmx-glass-zone-work-panels-*`, with zero double-blur
+ * whitish wash and guaranteed >= 4.5:1 contrast across all 3 theme modes. ── */
+[data-pmx-work-panel='1'] {
+  background-color: var(--background, #ffffff);
+  color: var(--foreground, #0f172a);
+}
+
+[data-pmx-work-panel-card='1'] {
+  background-color: var(--card, #ffffff);
+  border-color: var(--border, rgba(15, 23, 42, 0.1));
+}
+
+[data-pmx-work-panel-control='1']:not([data-slot='input']) {
+  background-color: color-mix(in srgb, var(--card, #ffffff) 92%, var(--muted, #f1f5f9));
+  border-color: color-mix(in srgb, var(--border, rgba(15, 23, 42, 0.14)) 90%, transparent);
+}
+
+html.dark [data-pmx-work-panel-card='1'],
+html[data-pmx-theme='dark'] [data-pmx-work-panel-card='1'] {
+  background-color: color-mix(in srgb, var(--card, #141720) 94%, #ffffff 4%);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+html.dark [data-pmx-work-panel-control='1']:not([data-slot='input']),
+html[data-pmx-theme='dark'] [data-pmx-work-panel-control='1']:not([data-slot='input']) {
+  background-color: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+html[data-pmx-glass='1'] [data-pmx-glass-zone='workPanels'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='workPanels'],
+html[data-pmx-glass='1'] [data-pmx-work-panel='1'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-work-panel='1'] {
+  --card: var(--pmx-glass-work-panels-card-bg, var(--pmx-card-bg));
+  --border: var(
+    --pmx-glass-work-panels-border,
+    var(--pmx-glass-zone-work-panels-border, var(--pmx-glass-border))
+  );
+  background-color: var(
+    --pmx-glass-work-panels-bg,
+    var(--pmx-glass-zone-work-panels-bg, var(--pmx-surface-bg))
+  ) !important;
+  background-image: var(
+    --pmx-glass-work-panels-sheen,
+    var(--pmx-glass-zone-work-panels-sheen, none)
+  );
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border-color: var(
+    --pmx-glass-work-panels-border,
+    var(--pmx-glass-zone-work-panels-border, var(--pmx-glass-border))
+  );
+  -webkit-backdrop-filter: var(
+    --pmx-glass-work-panels-backdrop,
+    var(--pmx-glass-zone-work-panels-backdrop, blur(18px) saturate(1.08))
+  ) !important;
+  backdrop-filter: var(
+    --pmx-glass-work-panels-backdrop,
+    var(--pmx-glass-zone-work-panels-backdrop, blur(18px) saturate(1.08))
+  ) !important;
+}
+
+/* Dark Glass polarity inside workPanels: deep rich dark surfaces, crisp bright ink, zero white wash */
+html.dark[data-pmx-glass='1'] [data-pmx-glass-zone='workPanels'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-glass-zone='workPanels'],
+html.dark[data-pmx-glass='1'] [data-pmx-work-panel='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-work-panel='1'] {
+  --muted: rgba(255, 255, 255, 0.085);
+  --accent: rgba(255, 255, 255, 0.13);
+  --input: rgba(12, 18, 30, 0.56);
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
+  --foreground: rgba(248, 250, 252, 0.96);
+  --card-foreground: rgba(248, 250, 252, 0.96);
+  color: rgba(248, 250, 252, 0.96);
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
+  --muted-foreground: rgba(226, 232, 240, 0.8);
+  --placeholder: rgba(203, 213, 225, 0.68);
+}
+
+/* Light Glass polarity inside workPanels: airy frosted light glass + sharp dark charcoal ink */
+html:not(.dark)[data-pmx-glass='1'] [data-pmx-glass-zone='workPanels'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-glass-zone='workPanels'],
+html:not(.dark)[data-pmx-glass='1'] [data-pmx-work-panel='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-work-panel='1'] {
+  --muted: rgba(15, 23, 42, 0.065);
+  --accent: rgba(15, 23, 42, 0.095);
+  --input: rgba(255, 255, 255, 0.78);
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
+  --foreground: rgba(15, 23, 42, 0.95);
+  --card-foreground: rgba(15, 23, 42, 0.95);
+  color: rgba(15, 23, 42, 0.95);
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
+  --muted-foreground: rgba(30, 41, 59, 0.76);
+  --placeholder: rgba(51, 65, 85, 0.68);
+}
+
+/* Inner work-panel cards & lanes: crisp layered tint driven by `--pmx-glass-work-panels-card-bg`,
+   strictly NO nested `backdrop-filter` (the parent `[data-pmx-work-panel='1']` owns the single blur pass). */
+html[data-pmx-glass='1'] [data-pmx-work-panel-card='1'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-work-panel-card='1'] {
+  background-color: var(--pmx-glass-work-panels-card-bg, var(--pmx-card-bg));
+  border-color: var(
+    --pmx-glass-work-panels-border,
+    var(--pmx-glass-zone-work-panels-border, var(--pmx-glass-border))
+  );
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html.dark[data-pmx-glass='1'] [data-pmx-work-panel-control='1']:not([data-slot='input']),
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-work-panel-control='1']:not([data-slot='input']),
+html.dark[data-pmx-glass='1'] [data-pmx-work-panel='1'] [data-slot='input-control'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-work-panel='1'] [data-slot='input-control'] {
+  background-color: rgba(11, 17, 29, 0.54);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+html:not(.dark)[data-pmx-glass='1'] [data-pmx-work-panel-control='1']:not([data-slot='input']),
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-work-panel-control='1']:not([data-slot='input']),
+html:not(.dark)[data-pmx-glass='1'] [data-pmx-work-panel='1'] [data-slot='input-control'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-work-panel='1'] [data-slot='input-control'] {
+  background-color: rgba(255, 255, 255, 0.8);
+  border-color: rgba(15, 23, 42, 0.15);
+}
+
+[data-pmx-work-panel='1'] [data-slot='input'][data-pmx-work-panel-control='1'] {
+  background-color: transparent;
+  border-color: transparent;
+}
+
+/* Shared 3-state (Light / Dark / Glass) Segmented Control, ToggleGroup & Tabs Active Highlighting:
+ * Ensures every selected item pops cleanly from its recessed track across Light, Dark & Glass
+ * without ever blending into the trough or washing out to white-on-white. */
+[data-slot='toggle-group'][data-variant='segmented'],
+[data-slot='tabs-list'] {
+  border: 1px solid rgba(15, 23, 42, 0.13);
+  background-color: rgba(15, 23, 42, 0.065);
+}
+
+html.dark [data-slot='toggle-group'][data-variant='segmented'],
+html[data-pmx-theme='dark'] [data-slot='toggle-group'][data-variant='segmented'],
+html.dark [data-slot='tabs-list'],
+html[data-pmx-theme='dark'] [data-slot='tabs-list'] {
+  border-color: rgba(255, 255, 255, 0.13);
+  background-color: rgba(0, 0, 0, 0.34);
+}
+
+[data-slot='toggle'][data-variant='segmented'][data-pressed],
+[data-slot='tabs-trigger'][data-active],
+[data-slot='tabs-trigger'][aria-selected='true'] {
+  background-color: color-mix(in srgb, var(--primary, #005fb8) 14%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--primary, #005fb8) 54%, rgba(15, 23, 42, 0.15));
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+html.dark [data-slot='toggle'][data-variant='segmented'][data-pressed],
+html[data-pmx-theme='dark'] [data-slot='toggle'][data-variant='segmented'][data-pressed],
+html.dark [data-slot='tabs-trigger'][data-active],
+html[data-pmx-theme='dark'] [data-slot='tabs-trigger'][data-active],
+html.dark [data-slot='tabs-trigger'][aria-selected='true'],
+html[data-pmx-theme='dark'] [data-slot='tabs-trigger'][aria-selected='true'] {
+  background-color: color-mix(in srgb, var(--primary, #5e9bff) 28%, rgba(255, 255, 255, 0.14));
+  border-color: color-mix(in srgb, var(--primary, #5e9bff) 68%, rgba(255, 255, 255, 0.28));
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+html.dark[data-pmx-glass='1'] [data-slot='toggle-group'][data-variant='segmented'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-slot='toggle-group'][data-variant='segmented'],
+html.dark[data-pmx-glass='1'] [data-slot='tabs-list'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-slot='tabs-list'] {
+  background-color: rgba(8, 12, 22, 0.56);
+  border-color: rgba(255, 255, 255, 0.17);
+}
+
+html:not(.dark)[data-pmx-glass='1'] [data-slot='toggle-group'][data-variant='segmented'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-slot='toggle-group'][data-variant='segmented'],
+html:not(.dark)[data-pmx-glass='1'] [data-slot='tabs-list'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-slot='tabs-list'] {
+  background-color: rgba(15, 23, 42, 0.095);
+  border-color: rgba(15, 23, 42, 0.17);
+}
+
+/* Pressed toggle buttons & active tabs in Glass mode (e.g. Scheduled Tasks editor schedule/weekday toggles):
+   prevent collapse to translucent `--background` so active state stays unmistakable in Dark & Light Glass. */
+html.dark[data-pmx-glass='1'] [data-slot='toggle'][data-pressed],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-slot='toggle'][data-pressed],
+html.dark[data-pmx-glass='1'] [data-slot='tabs-trigger'][data-active],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-slot='tabs-trigger'][data-active],
+html.dark[data-pmx-glass='1'] [data-slot='tabs-trigger'][aria-selected='true'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-slot='tabs-trigger'][aria-selected='true'] {
+  background-color: color-mix(in srgb, var(--primary, #5e9bff) 36%, rgba(20, 30, 52, 0.88));
+  border-color: color-mix(in srgb, var(--primary, #5e9bff) 78%, rgba(255, 255, 255, 0.36));
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow:
+    0 1px 5px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.26);
+}
+
+html:not(.dark)[data-pmx-glass='1'] [data-slot='toggle'][data-pressed],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-slot='toggle'][data-pressed],
+html:not(.dark)[data-pmx-glass='1'] [data-slot='tabs-trigger'][data-active],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-slot='tabs-trigger'][data-active],
+html:not(.dark)[data-pmx-glass='1'] [data-slot='tabs-trigger'][aria-selected='true'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-slot='tabs-trigger'][aria-selected='true'] {
+  background-color: color-mix(in srgb, var(--primary, #005fb8) 18%, rgba(255, 255, 255, 0.96));
+  border-color: color-mix(in srgb, var(--primary, #005fb8) 64%, rgba(15, 23, 42, 0.2));
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow:
+    0 1px 4px rgba(15, 23, 42, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.98);
+}
+
+/* Unified Top-Right Toolbar Icon Toggles (`壁纸 → 概览 → 下侧栏 → 右侧栏`):
+ * Replaces harsh solid-blue square borders with Apple Liquid Glass / Linear-grade frosted pill
+ * relief, 1px specular top rim, sharp 100% icon contrast, and a centered 12px x 2px bottom micro-bar.
+ * Only the Wallpaper Sparkles SVG carries the animated RGB prism gradient; all sibling icons stay
+ * crisp monochrome neutral foreground for clear visual hierarchy. */
+@keyframes pmx-wallpaper-rgb-flow {
+  0% {
+    filter: hue-rotate(0deg) saturate(1.18) brightness(1.04);
+  }
+  100% {
+    filter: hue-rotate(360deg) saturate(1.18) brightness(1.04);
+  }
+}
+
+@keyframes pmx-wallpaper-rgb-flow-light {
+  0% {
+    filter: hue-rotate(0deg) saturate(1.24) brightness(0.92);
+  }
+  100% {
+    filter: hue-rotate(360deg) saturate(1.24) brightness(0.92);
+  }
+}
+
+html [data-pmx-topbar-icon-toggle='1'],
+html[data-theme-id] [data-pmx-topbar-icon-toggle='1'] {
+  position: relative;
+  border-radius: 7px;
+  border: 1px solid transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  color: rgba(15, 23, 42, 0.62) !important;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 180ms ease,
+    color 150ms ease,
+    transform 110ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html [data-pmx-topbar-icon-toggle='1']::before {
+  display: none !important;
+  content: none !important;
+}
+
+/* Centered 12px x 2px luminous bottom indicator capsule (hidden until active) */
+html [data-pmx-topbar-icon-toggle='1']::after {
+  content: '' !important;
+  position: absolute !important;
+  left: 50% !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: 2px !important;
+  width: 12px !important;
+  height: 2px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border-radius: 9999px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%) scaleX(0.35);
+  background: rgba(15, 23, 42, 0.62);
+  box-shadow: 0 0 4px rgba(15, 23, 42, 0.16);
+  transition:
+    opacity 160ms ease,
+    transform 190ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 160ms ease,
+    box-shadow 180ms ease;
+}
+
+html [data-pmx-topbar-icon-toggle='1']:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+html [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]) {
+  background-color: rgba(15, 23, 42, 0.065) !important;
+  color: rgba(15, 23, 42, 0.92) !important;
+}
+
+html [data-pmx-topbar-icon-toggle='1'] svg:not([data-pmx-wallpaper-icon='1']) {
+  opacity: 0.88;
+  transition: opacity 150ms ease;
+}
+
+html [data-pmx-topbar-icon-toggle='1']:hover svg:not([data-pmx-wallpaper-icon='1']) {
+  opacity: 1;
+}
+
+/* Light & Light Glass active state: warm porcelain float + subtle shadow + hairline slate rim */
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html:not(.dark)[data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html:not(.dark)[data-theme-id] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) {
+  background-color: rgba(255, 255, 255, 0.88) !important;
+  border-color: rgba(15, 23, 42, 0.11) !important;
+  color: #0f172a !important;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96) !important;
+}
+
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg,
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg {
+  opacity: 1 !important;
+}
+
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after,
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after {
+  opacity: 1;
+  transform: translateX(-50%) scaleX(1);
+}
+
+/* Dark & Dark Glass rest/hover/active states: frosted translucent white relief + 1px specular top rim */
+html.dark [data-pmx-topbar-icon-toggle='1'],
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1'],
+html.dark[data-theme-id] [data-pmx-topbar-icon-toggle='1'] {
+  color: rgba(248, 250, 252, 0.68) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]),
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]),
+html.dark[data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]),
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:hover:not(:disabled):not([data-pressed]):not([aria-pressed='true']):not([data-popup-open]) {
+  background-color: rgba(255, 255, 255, 0.085) !important;
+  color: rgba(255, 255, 255, 0.94) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled),
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.17) !important;
+}
+
+html:not(.dark) [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled),
+html[data-pmx-theme='light'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]):hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html.dark[data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]),
+html.dark[data-theme-id] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) {
+  background-color: rgba(255, 255, 255, 0.13) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  color: #ffffff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 4px rgba(0, 0, 0, 0.24) !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg,
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open]) svg {
+  opacity: 1 !important;
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']::after,
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']::after {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.55);
+}
+
+html.dark [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after,
+html[data-pmx-theme='dark'] [data-pmx-topbar-icon-toggle='1']:is([data-pressed], [aria-pressed='true'], [data-popup-open])::after {
+  opacity: 1;
+  transform: translateX(-50%) scaleX(1);
+}
+
+/* Wallpaper Sparkles button: RGB prism dynamic gradient SVG + soft prism aura on hover/active */
+html [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'] {
+  opacity: 1 !important;
+  will-change: filter;
+  animation: pmx-wallpaper-rgb-flow-light 5.5s linear infinite;
+  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.dark [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'],
+html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'] {
+  animation: pmx-wallpaper-rgb-flow 5.5s linear infinite;
+}
+
+html [data-pmx-topbar-toggle-kind='wallpaper']:hover:not(:disabled) [data-pmx-wallpaper-icon='1'] {
+  transform: scale(1.06);
+}
+
+html [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']) [data-pmx-wallpaper-icon='1'] {
+  transform: scale(1.04);
+}
+
+html.dark [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html.dark[data-pmx-glass='1'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 0 12px -2px rgba(129, 140, 248, 0.32),
+    0 1px 4px rgba(0, 0, 0, 0.24) !important;
+}
+
+html:not(.dark) [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']),
+html[data-pmx-theme='light'] [data-pmx-topbar-toggle-kind='wallpaper']:is([data-pressed], [aria-pressed='true']) {
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.09),
+    0 0 10px -2px rgba(99, 102, 241, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96) !important;
+}
+
+html [data-pmx-topbar-toggle-kind='wallpaper']::after {
+  background: linear-gradient(90deg, #0284c7, #6366f1, #db2777, #d97706);
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.36);
+}
+
+html.dark [data-pmx-topbar-toggle-kind='wallpaper']::after,
+html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper']::after {
+  background: linear-gradient(90deg, #38bdf8, #818cf8, #ec4899, #f59e0b);
+  box-shadow: 0 0 7px rgba(236, 72, 153, 0.52);
+}
+
+/* Explicit solid mode for workPanels zone: crisp opaque surface with zero blur & zero sheen */
+html[data-pmx-glass='1'][data-pmx-zone-work-panels-mode='solid'] [data-pmx-glass-zone='workPanels'],
+html[data-pmx-glass='1'][data-pmx-zone-work-panels-mode='solid'] [data-pmx-work-panel='1'] {
+  background-color: var(--pmx-glass-work-panels-bg, var(--pmx-glass-tint, #0d1524)) !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1'][data-pmx-zone-work-panels-mode='solid'] [data-pmx-work-panel-card='1'] {
+  background-color: var(--pmx-glass-work-panels-card-bg, var(--card, #181c26));
+}
+
+/* ── Zone 2.5: overlays (Modals, Menus, Popovers, Select, Combobox, Tooltip, Status Popovers;
+ * built-in >= 68% readability safety floor + strict zero corner-bleed clipping!) ── */
+
+/* Outer positioners, backdrop wrappers & transparent/inner overlay shells must NEVER carry
+   background, blur, border, or shadow so rounded popup corners never exhibit square corner
+   protrusions ("圆角周边突出"). */
+html[data-pmx-glass='1']
+  :is(
+    [data-slot='popover-positioner'],
+    [data-slot='menu-positioner'],
+    [data-slot='select-positioner'],
+    [data-slot='combobox-positioner'],
+    [data-slot='autocomplete-positioner'],
+    [data-slot='preview-card-positioner'],
+    [data-slot='tooltip-positioner'],
+    [data-slot='dialog-viewport'],
+    [data-slot='alert-dialog-viewport'],
+    [data-pmx-overlay-shell],
+    [data-slot='select-popup']:has([data-pmx-glass-zone='overlays']),
+    [data-slot='popover-popup']:has([data-pmx-status-popover='1']),
+    [data-slot='popover-popup']:has([data-pmx-glass-zone='overlays']),
+    [data-slot='popover-popup']:has([data-pmx-glass-zone='overviewPanel'])
+  ) {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+}
+
+html[data-pmx-glass='1']
+  :is(
+    [data-pmx-overlay-shell='transparent'],
+    [data-slot='popover-popup']:has([data-pmx-status-popover='1']),
+    [data-slot='popover-popup']:has([data-pmx-glass-zone='overlays']),
+    [data-slot='popover-popup']:has([data-pmx-glass-zone='overviewPanel'])
+  )::before {
+  display: none !important;
+}
+
+/* Unified single-pass overlays glass on every visible popup, dropdown, combobox, autocomplete,
+   preview card, tooltip, modal, and status-bar popover — strictly clipping background & blur to
+   padding-box rounded corners and excluding `[data-pmx-overlay-shell]` proxies. */
+html[data-pmx-glass='1'] [data-pmx-glass-zone='overlays']:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='overlays']:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-pmx-status-popover='1']:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-app-modal]:not([data-pmx-glass-zone='rightSidebar']):not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-slot='dialog-popup']:not([data-pmx-glass-zone='rightSidebar']):not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-slot='alert-dialog-popup']:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1']
+  [data-slot='popover-popup']:not([data-pmx-overlay-shell]):not(:has([data-pmx-status-popover='1'])):not(
+    :has([data-pmx-glass-zone='overlays'])
+  ):not(:has([data-pmx-glass-zone='overviewPanel'])),
+html[data-pmx-glass='1'] [data-slot='menu-popup']:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-slot='select-popup']:not([data-pmx-overlay-shell]):not(:has([data-pmx-glass-zone='overlays'])),
+html[data-pmx-glass='1'] [data-slot='combobox-positioner'] > .dropdown-glass:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-slot='combobox-popup']:not([data-pmx-overlay-shell]):not(.dropdown-glass *),
+html[data-pmx-glass='1'] [data-slot='autocomplete-positioner'] > .dropdown-glass:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-slot='preview-card-popup']:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-slot='tooltip-popup']:not([data-pmx-overlay-shell]),
+html[data-pmx-glass='1'] [data-slot='sheet-popup']:not([data-pmx-glass-zone='rightSidebar']):not([data-pmx-overlay-shell]) {
+  --popover: var(--pmx-glass-zone-overlays-bg, var(--pmx-overlay-bg));
+  background: var(--pmx-glass-zone-overlays-bg, var(--pmx-overlay-bg)) !important;
+  background-color: var(--pmx-glass-zone-overlays-bg, var(--pmx-overlay-bg)) !important;
+  background-image: var(--pmx-glass-zone-overlays-sheen, none) !important;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-clip: padding-box;
+  overflow: hidden;
+  border-color: var(--pmx-glass-zone-overlays-border, var(--pmx-glass-border));
+  -webkit-backdrop-filter: var(
+    --pmx-glass-zone-overlays-backdrop,
+    blur(var(--pmx-glass-overlay-blur, 16px)) saturate(1.08)
+  ) !important;
+  backdrop-filter: var(
+    --pmx-glass-zone-overlays-backdrop,
+    blur(var(--pmx-glass-overlay-blur, 16px)) saturate(1.08)
+  ) !important;
+}
+
+/* Keep combobox inner popup transparent when wrapped by its `.dropdown-glass` rounded shell */
+html[data-pmx-glass='1'] [data-slot='combobox-positioner'] > .dropdown-glass [data-slot='combobox-popup'] {
+  background: transparent !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Ensure Popover/Menu/Tooltip/Status popovers always retain explicit rounded corners without square bleed */
+html[data-pmx-glass='1'] [data-pmx-status-popover='1'] {
+  border-radius: 12px;
+  border: 1px solid var(--pmx-glass-zone-overlays-border, var(--pmx-glass-border));
+}
+
+html[data-pmx-glass='1'] [data-slot='tooltip-popup'] {
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--pmx-glass-zone-overlays-border, var(--pmx-glass-border));
+}
+
+/* Strip redundant structural `.bg-background` / `.bg-popover` inside overlays so glass is never occluded */
+html[data-pmx-glass='1']
+  :is([data-app-modal], [data-pmx-glass-zone='overlays'], [data-pmx-status-popover='1'])
+  :is(.bg-background, .bg-popover):not([data-pmx-glass-zone]):not([data-pmx-status-popover='1']):not(
+    button
+  ):not(input):not(textarea):not(select):not([data-slot='popover-popup']):not(
+    [data-slot='menu-popup']
+  ):not([data-slot='tooltip-popup']) {
+  background-color: transparent;
+}
+
+/* ── Zone 2.6: rightSidebar (100% decoupled from leftSidebar; placed after overlays so
+ * SheetPopup[data-pmx-glass-zone='rightSidebar'] overrides overlays cleanly!) ── */
+html[data-pmx-glass='1'] [data-preview-panel-mode='inline']:has([data-pmx-glass-zone='rightSidebar']),
+html[data-pmx-glass='1'][data-theme-id]
+  [data-preview-panel-mode='inline']:has([data-pmx-glass-zone='rightSidebar']) {
+  background-color: transparent;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-pmx-glass='1'] [data-pmx-glass-zone='rightSidebar'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-glass-zone='rightSidebar'],
+html[data-pmx-glass='1'] [data-pmx-glass-zone='rightSidebar'].bg-background,
+html[data-pmx-glass='1']
+  [data-preview-panel-mode='inline']:not(:has([data-pmx-glass-zone='rightSidebar'])),
+html[data-pmx-glass='1'][data-theme-id]
+  [data-preview-panel-mode='inline']:not(:has([data-pmx-glass-zone='rightSidebar'])),
+html[data-pmx-glass='1']
+  [data-preview-panel-mode='inline'].bg-background:not(:has([data-pmx-glass-zone='rightSidebar'])),
+html[data-pmx-glass='1']
+  :not([data-preview-panel-mode='inline']):not([data-pmx-glass-zone='rightSidebar'])
+  > [data-right-panel-surface-content]:not([data-pmx-glass-zone]),
+html[data-pmx-glass='1']
+  :not([data-preview-panel-mode='inline']):not([data-pmx-glass-zone='rightSidebar'])
+  > [data-pmx-right-sidebar]:not([data-pmx-glass-zone]) {
+  --pmx-right-sidebar-bg: var(--pmx-glass-zone-right-sidebar-bg, var(--pmx-surface-bg));
+  --background: var(--pmx-right-sidebar-bg);
+  --sidebar: var(--pmx-right-sidebar-bg);
+  background-color: var(--pmx-glass-zone-right-sidebar-bg, var(--pmx-right-sidebar-bg));
+  background-image: var(--pmx-glass-zone-right-sidebar-sheen, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border-color: var(--pmx-glass-zone-right-sidebar-border, var(--pmx-glass-border));
+  -webkit-backdrop-filter: var(
+    --pmx-glass-zone-right-sidebar-backdrop,
+    blur(var(--pmx-right-sidebar-blur, var(--pmx-glass-surface-blur, 18px))) saturate(1.1)
+  );
+  backdrop-filter: var(
+    --pmx-glass-zone-right-sidebar-backdrop,
+    blur(var(--pmx-right-sidebar-blur, var(--pmx-glass-surface-blur, 18px))) saturate(1.1)
+  );
+}
+
+/* Guard against double-compositing if a rightSidebar glass container wraps a rightSidebar child */
+html[data-pmx-glass='1'] [data-pmx-glass-zone='rightSidebar'] [data-pmx-glass-zone='rightSidebar'] {
+  background-color: transparent;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Keep right-sidebar inner containers transparent so Z-0 wallpaper shines crisply in one pass */
+html[data-pmx-glass='1']
+  :is([data-pmx-glass-zone='rightSidebar'], [data-preview-panel-mode='inline'])
+  :is(
+    [data-right-panel-surface-content]:not([data-pmx-glass-zone='rightSidebar']),
+    [data-pmx-right-sidebar]:not([data-pmx-glass-zone='rightSidebar']),
+    .pmx-wp-qp:not([data-pmx-glass-zone='rightSidebar']),
+    .bg-background:not([data-pmx-glass-zone]):not(button):not(input):not(textarea):not(select):not(
+        [role='dialog']
+      ):not([data-slot='popover-popup']):not([data-slot='menu-popup'])
+  ) {
+  background-color: transparent;
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Legacy right-sidebar full-clear opt-in (active only when rightSidebar zone is in 'inherit' mode) */
+html[data-pmx-glass='1'][data-pmx-right-sidebar-fullclear='1'][data-pmx-zone-right-sidebar-mode='inherit']
+  :is(
+    [data-pmx-glass-zone='rightSidebar'],
+    [data-preview-panel-mode='inline'],
+    [data-right-panel-surface-content],
+    [data-pmx-right-sidebar]
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* ── Zone 2.6b: overviewPanel (`[data-pmx-glass-zone='overviewPanel']` & `[data-thread-details-card]`)
+ * Single-pass airy translucent liquid glass completely decoupled from `rightSidebar` and `overlays`:
+ * - When wrapped by `[data-thread-details-card]`, the outer card owns the single backdrop blur pass
+ *   (avoiding `contain: paint` backdrop-root isolation and `.dropdown-glass` + `overlays` double stacking),
+ *   while the inner `[data-pmx-glass-zone='overviewPanel']` stays cleanly transparent.
+ * - Standalone `[data-pmx-glass-zone='overviewPanel']` directly binds the identical zone variables. ── */
+html[data-pmx-glass='1'] [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+html[data-pmx-glass='1'][data-theme-id]
+  [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+html[data-pmx-glass='1'] [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *),
+html[data-pmx-glass='1'][data-theme-id]
+  [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *) {
+  --popover: var(--pmx-glass-zone-overview-panel-bg, rgba(13, 21, 36, 0.35));
+  background: var(--pmx-glass-zone-overview-panel-bg, rgba(13, 21, 36, 0.35)) !important;
+  background-color: var(--pmx-glass-zone-overview-panel-bg, rgba(13, 21, 36, 0.35)) !important;
+  background-image: var(--pmx-glass-zone-overview-panel-sheen, none) !important;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-clip: padding-box;
+  border: 1px solid var(--pmx-glass-zone-overview-panel-border, var(--pmx-glass-border));
+  -webkit-backdrop-filter: var(
+    --pmx-glass-zone-overview-panel-backdrop,
+    blur(16px) saturate(1.1)
+  ) !important;
+  backdrop-filter: var(
+    --pmx-glass-zone-overview-panel-backdrop,
+    blur(16px) saturate(1.1)
+  ) !important;
+}
+
+/* Inner overview panel inside `[data-thread-details-card]` stays transparent so glass renders in ONE pass */
+html[data-pmx-glass='1'] [data-thread-details-card] [data-pmx-glass-zone='overviewPanel'],
+html[data-pmx-glass='1'][data-theme-id]
+  [data-thread-details-card]
+  [data-pmx-glass-zone='overviewPanel'] {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  border-color: transparent;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Dark Glass polarity on overviewPanel: airy frosted glass + crisp high-contrast white ink */
+html.dark[data-pmx-glass='1']
+  :is(
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *)
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  :is(
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *)
+  ) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.2 * var(--pmx-fresnel-strength, 1))),
+    0 12px 32px -10px rgba(0, 0, 0, 0.36);
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])) {
+  --foreground: rgba(255, 255, 255, 0.96);
+  --contrast-foreground: rgba(255, 255, 255, 0.96);
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])) {
+  --muted-foreground: rgba(226, 232, 240, 0.86);
+  --contrast-muted-foreground: rgba(226, 232, 240, 0.86);
+}
+
+/* Light Glass polarity on overviewPanel: bright airy frosted glass + deep slate ink */
+html:not(.dark)[data-pmx-glass='1']
+  :is(
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *)
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  :is(
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *)
+  ) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 10px 28px -10px rgba(15, 23, 42, 0.16);
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])) {
+  --foreground: rgba(15, 23, 42, 0.96);
+  --contrast-foreground: rgba(15, 23, 42, 0.96);
+  color: rgba(15, 23, 42, 0.96);
+  text-shadow: none;
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])) {
+  --muted-foreground: rgba(30, 41, 59, 0.82);
+  --contrast-muted-foreground: rgba(30, 41, 59, 0.82);
+}
+
+/* Explicit solid mode for overviewPanel zone: crisp opaque surface with zero blur & zero sheen */
+html[data-pmx-glass='1'][data-pmx-zone-overview-panel-mode='solid']
+  :is(
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *)
+  ),
+html[data-pmx-glass='1'][data-theme-id][data-pmx-zone-overview-panel-mode='solid']
+  :is(
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-glass-zone='overviewPanel']:not([data-thread-details-card] *)
+  ) {
+  background: var(--pmx-glass-zone-overview-panel-bg, var(--pmx-glass-tint, #0d1524)) !important;
+  background-color: var(--pmx-glass-zone-overview-panel-bg, var(--pmx-glass-tint, #0d1524)) !important;
+  background-image: none !important;
+  border-color: var(--pmx-glass-zone-overview-panel-border, var(--pmx-glass-border));
+  text-shadow: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* ── 2.7. Single-Layer Continuous Viewport Shell Cutout (`[data-pmx-shell-backdrop='1']`) ──
+ * Eliminates 100% of multi-surface `backdrop-filter` blur-kernel corner color mismatch and
+ * 0.5px subpixel seams by rendering ONE continuous full-window backdrop layer above Z-0 wallpaper
+ * (`z-index: 0` after `#root`) and beneath `appShell` (`z-index: 1`), punching out the rounded
+ * central stage via an inline SVG `<mask>` (`#pmx-shell-cutout-mask`). */
+[data-pmx-shell-backdrop='1'] {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  display: none;
+  background-color: var(--pmx-native-frame-bg, var(--sidebar, #fafafa));
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  mask-mode: luminance;
+}
+
+[data-pmx-shell-backdrop='1'][data-pmx-cutout-active='1'] {
+  display: block;
+}
+
+html.dark [data-pmx-shell-backdrop='1'],
+html[data-pmx-theme='dark'] [data-pmx-shell-backdrop='1'] {
+  background-color: var(--pmx-native-frame-bg, var(--sidebar, #0c0d11));
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  [data-pmx-shell-backdrop='1'] {
+  background-color: var(--pmx-wallpaper-chrome-veil, var(--sidebar));
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-pmx-glass='1'] [data-pmx-shell-backdrop='1'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-shell-backdrop='1'] {
+  background-color: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-surface-bg));
+  background-image: var(--pmx-glass-zone-shell-frame-sheen, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-backdrop-filter: var(
+    --pmx-glass-zone-shell-frame-backdrop,
+    blur(var(--pmx-glass-surface-blur, 18px)) saturate(1.1)
+  );
+  backdrop-filter: var(
+    --pmx-glass-zone-shell-frame-backdrop,
+    blur(var(--pmx-glass-surface-blur, 18px)) saturate(1.1)
+  );
+}
+
+/* While single-layer shell cutout is active, keep outer layout wrappers and all 4 outer chrome
+ * bars strictly transparent with zero backdrop-filter/border/shadow so the single continuous
+ * backdrop sheet owns 100% of shell fill & blur (preserving floating peek drawer & mobile sheet). */
+html[data-pmx-shell-cutout='1']
+  :is(
+    main[data-slot='sidebar-inset']:has([data-pmx-stage-frame='1']),
+    [data-workspace-split-container='true']:has([data-pmx-stage-frame='1']),
+    [data-slot='sidebar'][data-side='left']:not([data-variant='floating']) [data-slot='sidebar-container'],
+    [data-slot='sidebar'][data-side='left']:not([data-variant='floating']) [data-slot='sidebar-inner'],
+    [data-app-sidebar]:not([data-mobile='true']):not([data-pmx-sidebar-peek='1']),
+    [data-app-sidebar]:not([data-mobile='true']) [data-slot='sidebar-inner'],
+    [data-pmx-glass-zone='shellFrame']:not([data-pmx-sidebar-peek='1']):not([data-mobile='true']),
+    [data-pmx-glass-zone='leftSidebar']:not([data-pmx-sidebar-peek='1']):not([data-mobile='true']),
+    [data-pmx-glass-zone='chromeBars'],
+    [data-workspace-tabbar],
+    [data-chat-header],
+    [data-pmx-titlebar],
+    [data-prismux-status-bar='true'],
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-pmx-right-frame-edge='1']
+  ) {
+  background-color: transparent !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  border-width: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Hide legacy stitched 14x14 corner fillets & radial fallback; only `::after` 1px ring remains. */
+html[data-pmx-shell-cutout='1'] [data-pmx-stage-frame='1'] > [data-pmx-stage-corner],
+html[data-pmx-shell-cutout='1'] [data-pmx-stage-frame='1']:not(:has(> [data-pmx-stage-corner]))::before {
+  display: none !important;
+}
+
+/* Inline right sidebar shares the exact same continuous shell backdrop (0 vertical seam, 0 tint
+ * difference) whenever it inherits `shellFrame` or when Liquid Glass is OFF. When `rightSidebar`
+ * is `custom`, `solid`, or `rightSidebarFullClear='1'` in Glass mode, the SVG mask punches out its
+ * region cleanly and Section 2.6 renders its independent single-pass glass/solid fill instead. */
+html[data-pmx-shell-cutout='1'][data-pmx-glass='1']:is(
+    [data-pmx-zone-right-sidebar-mode='inherit'],
+    :not([data-pmx-zone-right-sidebar-mode])
+  ):not([data-pmx-right-sidebar-fullclear='1'])
+  :is(
+    [data-preview-panel-mode='inline'],
+    [data-preview-panel-mode='inline'] [data-pmx-glass-zone='rightSidebar'],
+    [data-preview-panel-mode='inline'] [data-right-panel-surface-content],
+    [data-preview-panel-mode='inline'] [data-pmx-right-sidebar]
+  ),
+html[data-pmx-shell-cutout='1']:not([data-pmx-glass='1'])
+  :is(
+    [data-preview-panel-mode='inline'],
+    [data-preview-panel-mode='inline'] [data-pmx-glass-zone='rightSidebar'],
+    [data-preview-panel-mode='inline'] [data-right-panel-surface-content],
+    [data-preview-panel-mode='inline'] [data-pmx-right-sidebar]
+  ) {
+  background-color: transparent !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  border-left: 0 !important;
+  box-shadow: none !important;
+}
+
+/* ── 3. Thinking Block & Prose Mode (off / glass / native) ───────────────── */
+html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-pmx-thinking-block],
+html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-turn-trigger] {
+  background-color: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) calc(var(--pmx-readability-floor, 0.59) * 100%),
+    color-mix(
+      in srgb,
+      var(--pmx-glass-tint, #0d1524) var(--pmx-thinking-trigger-fill, var(--pmx-glass-card-fill, 22%)),
+      transparent
+    ) calc((1 - var(--pmx-readability-floor, 0.59)) * 100%)
+  );
+  -webkit-backdrop-filter: blur(var(--pmx-thinking-trigger-blur, var(--pmx-glass-card-blur, 12px)))
+    saturate(1.08);
+  backdrop-filter: blur(var(--pmx-thinking-trigger-blur, var(--pmx-glass-card-blur, 12px)))
+    saturate(1.08);
+}
+
+/* Native prose gate: restore opaque cards/code inside chat stream while keeping composer glass */
+html[data-pmx-glass='1'][data-pmx-thinking-mode='native'] .chat-markdown {
+  --message-surface: #edf3fe;
+  --code-background: #f9fafb;
+}
+
+html[data-pmx-theme='dark'][data-pmx-glass='1'][data-pmx-thinking-mode='native'] .chat-markdown {
+  --message-surface: #24262b;
+  --code-background: #17181c;
+}
+
+/* ── 4. Legacy Sidebar Corner Radius Compatibility Hooks ─────────────────── */
+html[data-pmx-corner-radius] [data-app-sidebar] {
+  border-radius: var(--pmx-sidebar-radius);
+  overflow: hidden;
+}
+
+html[data-pmx-corner-square~='tl'] [data-app-sidebar] { border-top-left-radius: 0; }
+html[data-pmx-corner-square~='tr'] [data-app-sidebar] { border-top-right-radius: 0; }
+html[data-pmx-corner-square~='br'] [data-app-sidebar] { border-bottom-right-radius: 0; }
+html[data-pmx-corner-square~='bl'] [data-app-sidebar] { border-bottom-left-radius: 0; }
+
+html[data-pmx-right-corner-radius] [data-right-panel-surface-content],
+html[data-pmx-right-corner-radius] [data-pmx-right-sidebar] {
+  border-radius: var(--pmx-right-sidebar-radius);
+  overflow: hidden;
+}
+
+html[data-pmx-right-corner-square~='tl'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='tl'] [data-pmx-right-sidebar] { border-top-left-radius: 0; }
+html[data-pmx-right-corner-square~='tr'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='tr'] [data-pmx-right-sidebar] { border-top-right-radius: 0; }
+html[data-pmx-right-corner-square~='br'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='br'] [data-pmx-right-sidebar] { border-bottom-right-radius: 0; }
+html[data-pmx-right-corner-square~='bl'] [data-right-panel-surface-content],
+html[data-pmx-right-corner-square~='bl'] [data-pmx-right-sidebar] { border-bottom-left-radius: 0; }
+
+/* ── 5. Independent Typography, Fonts, Caret & 5-Item UI Custom Colors ───── */
+/* Qualify .dark / :not(.dark) and [data-theme-id]:not([data-theme-id='']) so user
+   overrides always outrank Prismux's :root @variant dark (0,2,0) & theme blocks. */
+html.dark[data-pmx-custom-text='1'],
+html:not(.dark)[data-pmx-custom-text='1'],
+html[data-pmx-custom-text='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-custom-text='1'] [data-app-sidebar],
+html[data-pmx-custom-text='1'][data-theme-id] [data-app-sidebar] {
+  --foreground: var(--pmx-text-color);
+  --contrast-foreground: var(--pmx-text-color);
+  --card-foreground: var(--pmx-text-color);
+  --contrast-card-foreground: var(--pmx-text-color);
+  --popover-foreground: var(--pmx-text-color);
+  --contrast-popover-foreground: var(--pmx-text-color);
+  --sidebar-foreground: var(--pmx-text-color);
+  --contrast-sidebar-foreground: var(--pmx-text-color);
+  --message-foreground: var(--pmx-text-color);
+  --contrast-message-foreground: var(--pmx-text-color);
+}
+
+html.dark[data-pmx-custom-muted='1'],
+html:not(.dark)[data-pmx-custom-muted='1'],
+html[data-pmx-custom-muted='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-custom-muted='1'] [data-app-sidebar],
+html[data-pmx-custom-muted='1'][data-theme-id] [data-app-sidebar] {
+  --muted-foreground: var(--pmx-muted-color);
+  --contrast-muted-foreground: var(--pmx-muted-color);
+  --sidebar-muted-foreground: var(--pmx-muted-color);
+  --contrast-sidebar-muted-foreground: var(--pmx-muted-color);
+  --placeholder: var(--pmx-muted-color);
+  --contrast-placeholder: var(--pmx-muted-color);
+  --secondary-label: var(--pmx-muted-color);
+  --contrast-secondary-label: var(--pmx-muted-color);
+  --icon-muted: var(--pmx-muted-color);
+  --contrast-icon-muted: var(--pmx-muted-color);
+}
+
+html[data-pmx-custom-heading='1'] :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]),
+html[data-pmx-custom-heading='1'][data-theme-id]:not([data-theme-id=''])
+  :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]) {
+  color: var(--pmx-heading-color);
+}
+
+html.dark[data-pmx-custom-font-sans='1'],
+html:not(.dark)[data-pmx-custom-font-sans='1'],
+html[data-pmx-custom-font-sans='1'][data-theme-id]:not([data-theme-id='']) {
+  --font-sans: var(--pmx-font-sans);
+}
+
+html.dark[data-pmx-custom-font-mono='1'],
+html:not(.dark)[data-pmx-custom-font-mono='1'],
+html[data-pmx-custom-font-mono='1'][data-theme-id]:not([data-theme-id='']) {
+  --font-mono: var(--pmx-font-mono);
+}
+
+html[data-pmx-caret='1'] :is(textarea, input, [contenteditable='true'], [contenteditable='plaintext-only']) {
+  caret-color: var(--pmx-caret-color) !important;
+}
+
+/* Accent-following inline file links, context chips & link foreground */
+html[data-pmx-theme],
+html.dark[data-pmx-theme],
+html:not(.dark)[data-pmx-theme],
+html[data-pmx-theme][data-theme-id]:not([data-theme-id='']) {
+  --context-chip-mention: var(--pmx-accent, #5e9bff);
+  --context-chip-file: var(--pmx-accent, #5e9bff);
+  --context-chip-citation: var(--pmx-accent, #5e9bff);
+  --info-foreground: var(--pmx-accent, #5e9bff);
+}
+
+html[data-pmx-theme] .chat-markdown-file-link,
+html[data-pmx-theme] [data-slot="context-chip"].chat-markdown-file-link {
+  --context-chip-accent: var(--pmx-accent, #5e9bff);
+  --context-chip-ink: var(--context-chip-message-ink, var(--pmx-accent, #5e9bff));
+  color: var(--context-chip-ink);
+}
+
+html.dark[data-pmx-ui-colors='1'],
+html:not(.dark)[data-pmx-ui-colors='1'],
+html[data-pmx-ui-colors='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-theme][data-pmx-ui-colors='1'][data-theme-id]:not([data-theme-id='']) {
+  --message-action: var(--pmx-ui-send, var(--pmx-accent, #5e9bff));
+  --info-foreground: var(--pmx-ui-link, var(--pmx-accent, #5e9bff));
+  --context-chip-mention: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+  --context-chip-file: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+  --context-chip-citation: var(--pmx-ui-link, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] [data-pmx-file-icon] {
+  color: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] .chat-markdown-file-link,
+html[data-pmx-theme][data-pmx-ui-colors='1'] .chat-markdown-file-link,
+html[data-pmx-theme][data-pmx-ui-colors='1'] [data-slot="context-chip"].chat-markdown-file-link {
+  --context-chip-accent: var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff));
+  --context-chip-ink: var(
+    --context-chip-message-ink,
+    var(--pmx-ui-file-icon, var(--pmx-accent, #5e9bff))
+  );
+  color: var(--context-chip-ink);
+}
+
+html[data-pmx-theme] [data-slot="context-chip"].chat-markdown-file-link[data-state='unresolved'] {
+  --context-chip-accent: currentColor;
+  --context-chip-ink: var(--context-chip-message-ink, currentColor);
+}
+
+html[data-pmx-theme] [data-slot="context-chip"].chat-markdown-file-link[data-state='invalid'] {
+  --context-chip-accent: var(--context-chip-invalid, var(--destructive-foreground));
+  --context-chip-ink: var(--context-chip-message-ink, var(--context-chip-accent));
+}
+
+html[data-pmx-ui-colors='1'] [data-pmx-active-tab],
+html[data-pmx-ui-colors='1'] [role='tab'][aria-selected='true'] {
+  color: var(--pmx-ui-tab, var(--pmx-accent, #5e9bff));
+  border-bottom-color: var(--pmx-ui-tab, var(--pmx-accent, #5e9bff));
+}
+
+html[data-pmx-ui-colors='1'] [data-pmx-deep-diving],
+html[data-pmx-ui-colors='1'] [data-pmx-reasoning-accent] {
+  color: var(--pmx-ui-deep-diving, #6cb6ff);
+}
+
+/* ── 6. Reusable 360° Fresnel Liquid Glass Utility Surface ───────────────── */
+.pmx-glass-surface,
+.prismux-glass-surface {
+  background: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, var(--card, #181a24)) var(--pmx-glass-card-fill, 100%),
+    transparent
+  );
+  -webkit-backdrop-filter: blur(var(--pmx-glass-card-blur, 0px)) saturate(1.1);
+  backdrop-filter: blur(var(--pmx-glass-card-blur, 0px)) saturate(1.1);
+  border: 1px solid var(--pmx-glass-border, var(--border, rgba(255, 255, 255, 0.14)));
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.24 * var(--pmx-fresnel-strength, 1))),
+    inset 0 -1px 0 rgba(255, 255, 255, calc(0.08 * var(--pmx-fresnel-strength, 1)));
+}
+
+/* ── 6.5. AGY 2.0 Dual-Layer Elongated Composer, Sidebar Peek Drawer & Chat Width Handles */
+
+/* 6.5a. AGY 2.0 Dual-Layer Elongated Composer (`[data-pmx-composer-layout='agy']`):
+ * Outer tray keeps `overflow: visible` so slash/mention popovers never clip, while
+ * `[data-pmx-composer-top-tray='1']` sits above the concentric rounded nested card
+ * `[data-pmx-composer-inner-card='1']`. Supports Light, Dark, and live `composer` zone glass. */
+[data-pmx-composer-layout='agy'] {
+  position: relative;
+  width: 100%;
+  max-width: var(--pmx-chat-content-max-width, var(--chat-content-max-width, 960px));
+  border-radius: 20px;
+  overflow: visible;
+  padding: 4px;
+  background-color: color-mix(in srgb, var(--muted, #f3f4f8) 88%, #ffffff);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow:
+    0 10px 28px -12px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  transition: border-color 180ms ease, box-shadow 200ms ease, background-color 180ms ease;
+}
+
+html.dark [data-pmx-composer-layout='agy'],
+html[data-pmx-theme='dark'] [data-pmx-composer-layout='agy'] {
+  background-color: color-mix(in srgb, var(--surface-raised, #181a22) 86%, #0c0e14);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 16px 38px -16px rgba(0, 0, 0, 0.56),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+[data-pmx-composer-layout='agy'] [data-pmx-composer-top-tray='1'] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 10px 6px;
+  border-radius: 16px 16px 0 0;
+  background: transparent;
+  background-image: none;
+  color: var(--muted-foreground, #94a3b8);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+[data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'] {
+  position: relative;
+  border-radius: 16px;
+  background-color: var(--card, #ffffff);
+  background-clip: padding-box;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow:
+    0 2px 10px -4px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition: border-color 180ms ease, box-shadow 200ms ease, background-color 180ms ease;
+}
+
+html.dark [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
+html[data-pmx-theme='dark'] [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'] {
+  background-color: color-mix(in srgb, var(--card, #1d2029) 95%, #ffffff 5%);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 4px 16px -6px rgba(0, 0, 0, 0.44),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Liquid Glass mode: drive BOTH outer tray & nested inner card live from `composer` zone tokens,
+   applying single-pass backdrop blur on the outer tray to avoid Chromium double-blur compositing. */
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-composer-layout='agy'] {
+  background-color: color-mix(
+    in srgb,
+    var(--pmx-glass-zone-composer-bg, var(--pmx-card-bg)) 76%,
+    transparent
+  ) !important;
+  background-image: var(--pmx-glass-zone-composer-sheen, none) !important;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border: 1px solid var(--pmx-glass-zone-composer-border, var(--pmx-glass-border)) !important;
+  -webkit-backdrop-filter: var(
+    --pmx-glass-zone-composer-backdrop,
+    blur(var(--pmx-glass-card-blur, 12px)) saturate(1.08)
+  ) !important;
+  backdrop-filter: var(
+    --pmx-glass-zone-composer-backdrop,
+    blur(var(--pmx-glass-card-blur, 12px)) saturate(1.08)
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.22 * var(--pmx-fresnel-strength, 1))),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    0 18px 44px -18px rgba(0, 0, 0, 0.44) !important;
+}
+
+/* Suppress duplicate T3 ComposerSurface pseudo layers both inside AND wrapping AGY dual-layer shell */
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy']::before,
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy']::after,
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'] [data-slot='composer-host']::before,
+html[data-pmx-glass='1'] [data-slot='composer-shell']:has([data-pmx-composer-layout='agy'])::before,
+html[data-pmx-glass='1'] [data-slot='composer-shell']:has([data-pmx-composer-layout='agy']) [data-slot='composer-host']::before,
+html[data-pmx-glass='1'] [data-slot='composer-shell']:has([data-pmx-composer-layout='agy']) [data-slot='composer-host']::after {
+  display: none !important;
+  content: none !important;
+}
+
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
+html[data-pmx-glass='1'][data-theme-id]
+  [data-pmx-composer-layout='agy']
+  [data-pmx-composer-inner-card='1'] {
+  background-color: var(--pmx-glass-zone-composer-bg, var(--pmx-card-bg)) !important;
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, calc(0.08 * var(--pmx-fresnel-strength, 1))) 0%,
+    rgba(255, 255, 255, 0) 64%
+  ) !important;
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--pmx-glass-zone-composer-border, var(--pmx-glass-border)) 82%,
+      rgba(255, 255, 255, 0.22)
+    ) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.26 * var(--pmx-fresnel-strength, 1))),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.16),
+    0 4px 16px -8px rgba(0, 0, 0, 0.26) !important;
+}
+
+/* Composer zone solid mode: crisp opaque double-layer card with zero blur & zero sheen */
+html[data-pmx-glass='1'][data-pmx-zone-composer-mode='solid'] [data-pmx-composer-layout='agy'],
+html[data-pmx-glass='1'][data-pmx-zone-composer-mode='solid']
+  [data-pmx-composer-layout='agy']
+  [data-pmx-composer-inner-card='1'] {
+  background-color: var(--pmx-glass-zone-composer-bg, var(--pmx-glass-tint, #0d1524)) !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Keep editor & inner footer bars transparent inside nested AGY input card */
+[data-pmx-composer-layout='agy']
+  [data-pmx-composer-inner-card='1']
+  :is([data-lexical-editor='true'], [contenteditable='true'], textarea) {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* 6.5b. Claude Code Desktop Style Collapsed Sidebar Floating Peek Drawer (`[data-pmx-sidebar-peek='1']`) */
+[data-pmx-sidebar-peek='1'] {
+  isolation: isolate;
+  border-radius: var(--pmx-inner-stage-radius, 14px);
+  overflow: hidden;
+  background-clip: padding-box;
+  background-color: var(--sidebar, #fafafa);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow:
+    0 18px 46px -12px rgba(15, 23, 42, 0.18),
+    0 4px 14px -4px rgba(15, 23, 42, 0.08);
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.dark [data-pmx-sidebar-peek='1'],
+html[data-pmx-theme='dark'] [data-pmx-sidebar-peek='1'] {
+  background-color: var(--sidebar, #141720);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 22px 54px -14px rgba(0, 0, 0, 0.62),
+    0 6px 18px -6px rgba(0, 0, 0, 0.36);
+}
+
+/* Floating peek drawer sits directly over tab bar & conversation text: enforce high frost blur
+   `blur(22px) saturate(1.1)` and high readability floor (dark alpha >= 0.80, light alpha >= 0.86)
+   so underlying headers & tab labels NEVER bleed through into overlapping gibberish. */
+html[data-pmx-glass='1']:where(
+    :not([data-pmx-zone-shell-frame-mode='solid']):not([data-pmx-zone-left-sidebar-mode='solid']):not(
+        [data-pmx-gpu='0']
+      ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  )
+  [data-pmx-sidebar-peek='1'],
+html[data-pmx-glass='1'][data-theme-id]:where(
+    :not([data-pmx-zone-shell-frame-mode='solid']):not([data-pmx-zone-left-sidebar-mode='solid']):not(
+        [data-pmx-gpu='0']
+      ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  )
+  [data-pmx-sidebar-peek='1'] {
+  background-color: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #0d1524) 80%,
+    var(--pmx-glass-zone-shell-frame-bg, rgba(13, 21, 36, 0.82))
+  ) !important;
+  background-image: var(--pmx-glass-zone-shell-frame-sheen, none) !important;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-clip: padding-box;
+  overflow: hidden;
+  border: 1px solid var(--pmx-glass-zone-shell-frame-border, var(--pmx-glass-border)) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.1) !important;
+  backdrop-filter: blur(22px) saturate(1.1) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.24 * var(--pmx-fresnel-strength, 1))),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    0 24px 56px -14px rgba(0, 0, 0, 0.56) !important;
+}
+
+html:not(.dark)[data-pmx-glass='1']:where(
+    :not([data-pmx-zone-shell-frame-mode='solid']):not([data-pmx-zone-left-sidebar-mode='solid']):not(
+        [data-pmx-gpu='0']
+      ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  )
+  [data-pmx-sidebar-peek='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1']:where(
+    :not([data-pmx-zone-shell-frame-mode='solid']):not([data-pmx-zone-left-sidebar-mode='solid']):not(
+        [data-pmx-gpu='0']
+      ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  )
+  [data-pmx-sidebar-peek='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1'][data-theme-id]:where(
+    :not([data-pmx-zone-shell-frame-mode='solid']):not([data-pmx-zone-left-sidebar-mode='solid']):not(
+        [data-pmx-gpu='0']
+      ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1'])
+  )
+  [data-pmx-sidebar-peek='1'] {
+  background-color: color-mix(
+    in srgb,
+    var(--pmx-glass-tint, #ffffff) 86%,
+    var(--pmx-glass-zone-shell-frame-bg, rgba(255, 255, 255, 0.88))
+  ) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.1) !important;
+  backdrop-filter: blur(22px) saturate(1.1) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 20px 48px -14px rgba(15, 23, 42, 0.24) !important;
+}
+
+html[data-pmx-glass='1']:is(
+    [data-pmx-zone-shell-frame-mode='solid'],
+    [data-pmx-zone-left-sidebar-mode='solid']
+  )
+  [data-pmx-sidebar-peek='1'] {
+  background-color: var(--pmx-glass-zone-shell-frame-bg, var(--pmx-glass-tint, #0d1524)) !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Keep inner scroll/group slots transparent inside floating sidebar peek drawer */
+html[data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  :is(
+    [data-slot='sidebar-header'],
+    [data-slot='sidebar-content'],
+    [data-slot='sidebar-footer'],
+    [data-slot='sidebar-group'],
+    [data-slot='scroll-area'],
+    [data-slot='scroll-area-viewport'],
+    .bg-background:not(button):not(input):not(textarea):not([role='dialog'])
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* 6.5c. Conversation Dual-Side Drag-to-Resize Width Handles (`[data-pmx-chat-width-handle]`) */
+[data-pmx-chat-width-handle] {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  width: 12px;
+  z-index: 30;
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+
+[data-pmx-chat-width-handle][data-side='left'] {
+  left: -6px;
+}
+
+[data-pmx-chat-width-handle][data-side='right'] {
+  right: -6px;
+}
+
+[data-pmx-chat-width-handle][data-mode='rail'] {
+  top: 12px;
+  bottom: 12px;
+  width: 14px;
+  z-index: 25;
+}
+
+[data-pmx-chat-width-handle]::after {
+  content: '';
+  width: 2.5px;
+  height: 48px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--pmx-accent, var(--primary, #5e9bff)) 45%, rgba(255, 255, 255, 0.45)) 22%,
+    color-mix(in srgb, var(--pmx-accent, var(--primary, #5e9bff)) 88%, rgba(255, 255, 255, 0.94)) 50%,
+    color-mix(in srgb, var(--pmx-accent, var(--primary, #5e9bff)) 45%, rgba(255, 255, 255, 0.45)) 78%,
+    transparent 100%
+  );
+  box-shadow: 0 0 10px color-mix(in srgb, var(--pmx-accent, var(--primary, #5e9bff)) 48%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease, width 120ms ease, box-shadow 150ms ease;
+}
+
+[data-pmx-chat-width-handle][data-mode='rail']::after {
+  position: absolute;
+  left: 50%;
+  top: var(--pmx-rail-y, 50%);
+  height: 132px;
+  transform: translate(-50%, -50%);
+}
+
+[data-pmx-chat-width-handle]:is(:hover, :focus-visible, [data-dragging='1'], [data-dragging='true'])::after {
+  opacity: 1;
+}
+
+[data-pmx-chat-width-handle]:is([data-dragging='1'], [data-dragging='true'])::after {
+  width: 3px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--pmx-accent, var(--primary, #5e9bff)) 68%, transparent);
+}
+
+[data-pmx-chat-width-handle]:focus-visible::after {
+  outline: 2px solid var(--pmx-accent, var(--primary, #5e9bff));
+  outline-offset: 2px;
+}
+
+[data-pmx-chat-width-badge='1'] {
+  position: fixed;
+  z-index: 9999;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #ffffff;
+  background: rgba(15, 18, 28, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ── 6.5d. Sidebar Session Cards (4-Edge Liquid Glass), Active RGB Border Ring & Breathing Logo,
+ *          and AGY Flat Pill User Message Bubbles (Light / Dark / Liquid Glass) ── */
+
+/* Single-pass sidebar session cards: crisp 4-edge enclosure (incl. bottom border) with ZERO nested
+   `backdrop-filter` (the outer shellFrame / leftSidebar owns the single blur pass). */
+html.dark[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+html.dark[data-pmx-glass='1'][data-theme-id] [data-app-sidebar] [data-sidebar-card='1'],
+html.dark[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'] {
+  background: rgba(16, 20, 32, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 1px 4px rgba(0, 0, 0, 0.16);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html.dark[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1']:is(:hover, :focus-visible),
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  [data-app-sidebar]
+  [data-sidebar-card='1']:is(:hover, :focus-visible),
+html.dark[data-pmx-glass='1'][data-theme-id]
+  [data-app-sidebar]
+  [data-sidebar-card='1']:is(:hover, :focus-visible),
+html.dark[data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1']:is(:hover, :focus-visible),
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1']:is(:hover, :focus-visible) {
+  background: rgba(24, 30, 46, 0.48);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.22);
+}
+
+html.dark[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  [data-app-sidebar]
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html.dark[data-pmx-glass='1'][data-theme-id]
+  [data-app-sidebar]
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html.dark[data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+  background: color-mix(in srgb, var(--pmx-accent, #5e9bff) 18%, rgba(20, 26, 40, 0.56));
+  border-color: color-mix(in srgb, var(--pmx-accent, #5e9bff) 55%, rgba(255, 255, 255, 0.32));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+html:not(.dark)[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+html:not(.dark)[data-pmx-glass='1'][data-theme-id] [data-app-sidebar] [data-sidebar-card='1'],
+html:not(.dark)[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'] {
+  background: rgba(255, 255, 255, 0.52);
+  border: 1px solid rgba(15, 23, 42, 0.13);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 1px 3px rgba(15, 23, 42, 0.06);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html:not(.dark)[data-pmx-glass='1']
+  [data-app-sidebar]
+  [data-sidebar-card='1']:is(:hover, :focus-visible),
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  [data-app-sidebar]
+  [data-sidebar-card='1']:is(:hover, :focus-visible),
+html:not(.dark)[data-pmx-glass='1'][data-theme-id]
+  [data-app-sidebar]
+  [data-sidebar-card='1']:is(:hover, :focus-visible),
+html:not(.dark)[data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1']:is(:hover, :focus-visible),
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1']:is(:hover, :focus-visible) {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(15, 23, 42, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 6px rgba(15, 23, 42, 0.09);
+}
+
+html:not(.dark)[data-pmx-glass='1']
+  [data-app-sidebar]
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  [data-app-sidebar]
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html:not(.dark)[data-pmx-glass='1'][data-theme-id]
+  [data-app-sidebar]
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html:not(.dark)[data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  [data-pmx-sidebar-peek='1']
+  [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+  background: color-mix(in srgb, var(--pmx-accent, #3b82f6) 14%, rgba(255, 255, 255, 0.82));
+  border-color: color-mix(in srgb, var(--pmx-accent, #3b82f6) 52%, rgba(15, 23, 42, 0.2));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.94),
+    0 2px 8px rgba(15, 23, 42, 0.1);
+}
+
+/* Active agent session RGB border marquee & breathing logo (works in Light, Dark, and Liquid Glass) */
+@property --pmx-rgb-border-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes pmx-rgb-border-spin {
+  from {
+    --pmx-rgb-border-angle: 0deg;
+  }
+  to {
+    --pmx-rgb-border-angle: 360deg;
+  }
+}
+
+@keyframes pmx-agent-logo-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.82;
+    filter: drop-shadow(0 0 2px rgba(56, 189, 248, 0.36));
+  }
+  50% {
+    transform: scale(1.14);
+    opacity: 1;
+    filter: drop-shadow(0 0 7px rgba(129, 140, 248, 0.78))
+      drop-shadow(0 0 3px rgba(255, 59, 127, 0.48));
+  }
+}
+
+[data-sidebar-card='1'][data-sidebar-agent-active='1'],
+[data-sidebar-row][data-sidebar-agent-active='1'],
+html[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-agent-active='1'],
+html[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'][data-sidebar-agent-active='1'] {
+  position: relative;
+  border-color: transparent;
+  box-shadow:
+    0 0 12px -3px rgba(56, 189, 248, 0.3),
+    0 0 8px -3px rgba(192, 132, 252, 0.24);
+}
+
+[data-sidebar-card='1'][data-sidebar-agent-active='1']::before,
+[data-sidebar-row][data-sidebar-agent-active='1']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  z-index: 20;
+  background: conic-gradient(
+    from var(--pmx-rgb-border-angle),
+    #ff3b7f,
+    #ff9f1c,
+    #34d399,
+    #38bdf8,
+    #818cf8,
+    #c084fc,
+    #ff3b7f
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: pmx-rgb-border-spin 3.2s linear infinite;
+}
+
+[data-agent-logo-breathing='1'] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center;
+  will-change: transform, opacity, filter;
+  animation: pmx-agent-logo-breathe 2.2s ease-in-out infinite;
+}
+
+/* AGY flat large-radius user message capsule bubbles: distinct solid & Light/Dark Liquid Glass */
+html:not(.dark):not([data-pmx-glass='1'])
+  [data-user-message-bubble][data-user-message-bubble-surface='1'],
+html[data-pmx-theme='light'][data-pmx-glass='0']
+  [data-user-message-bubble][data-user-message-bubble-surface='1'] {
+  background-color: #edf3fe;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background-clip: padding-box;
+}
+
+html:not(.dark):not([data-pmx-glass='1']):not([data-pmx-custom-text='1'])
+  [data-user-message-bubble][data-user-message-bubble-surface='1'],
+html[data-pmx-theme='light'][data-pmx-glass='0']:not([data-pmx-custom-text='1'])
+  [data-user-message-bubble][data-user-message-bubble-surface='1'] {
+  color: #0f172a;
+}
+
+html.dark:not([data-pmx-glass='1'])
+  [data-user-message-bubble][data-user-message-bubble-surface='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='0']
+  [data-user-message-bubble][data-user-message-bubble-surface='1'] {
+  background-color: #24262b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-clip: padding-box;
+}
+
+html.dark:not([data-pmx-glass='1']):not([data-pmx-custom-text='1'])
+  [data-user-message-bubble][data-user-message-bubble-surface='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='0']:not([data-pmx-custom-text='1'])
+  [data-user-message-bubble][data-user-message-bubble-surface='1'] {
+  color: rgba(248, 250, 252, 0.96);
+}
+
+/* ── Zone 6b: userBubble (`[data-pmx-glass-zone='userBubble']` & `[data-user-message-bubble-surface='1']`)
+ * Airy frosted liquid-glass interior driven live by `--pmx-glass-zone-user-bubble-*` + precision
+ * directional top-left Fresnel specular rim (`::before` + `linear-gradient(135deg, ...)` +
+ * `mask-composite: exclude` / `-webkit-mask-composite: xor`), calibrated for Dark & Light Glass. ── */
+html.dark[data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html.dark[data-pmx-glass='1'][data-theme-id]
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ) {
+  position: relative;
+  --message-surface: var(--pmx-glass-zone-user-bubble-bg, rgba(13, 21, 36, 0.24));
+  background-color: var(--pmx-glass-zone-user-bubble-bg, rgba(13, 21, 36, 0.24));
+  background-image: var(--pmx-glass-zone-user-bubble-sheen, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-clip: padding-box;
+  -webkit-backdrop-filter: var(--pmx-glass-zone-user-bubble-backdrop, blur(14px) saturate(1.1));
+  backdrop-filter: var(--pmx-glass-zone-user-bubble-backdrop, blur(14px) saturate(1.1));
+  border: 1px solid transparent;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.16 * var(--pmx-fresnel-strength, 1))),
+    0 4px 16px rgba(0, 0, 0, 0.14);
+}
+
+html.dark[data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before,
+html[data-pmx-theme='dark'][data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before,
+html.dark[data-pmx-glass='1'][data-theme-id]
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, calc(0.76 * var(--pmx-fresnel-strength, 1))) 0%,
+    rgba(232, 240, 255, calc(0.52 * var(--pmx-fresnel-strength, 1))) 18%,
+    rgba(255, 255, 255, calc(0.22 * var(--pmx-fresnel-strength, 1))) 46%,
+    rgba(255, 255, 255, calc(0.09 * var(--pmx-fresnel-strength, 1))) 76%,
+    rgba(255, 255, 255, calc(0.18 * var(--pmx-fresnel-strength, 1))) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ) {
+  --contrast-message-foreground: rgba(255, 255, 255, 0.98);
+  color: rgba(255, 255, 255, 0.98);
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.48),
+    0 0 8px rgba(0, 0, 0, 0.22);
+}
+
+/* Light Liquid Glass user capsule bubble: airy snow-mist pearl glass + directional Fresnel rim + slate ink */
+html:not(.dark)[data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html:not(.dark)[data-pmx-glass='1'][data-theme-id]
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ) {
+  position: relative;
+  --message-surface: var(--pmx-glass-zone-user-bubble-bg, rgba(255, 255, 255, 0.37));
+  background-color: var(--pmx-glass-zone-user-bubble-bg, rgba(255, 255, 255, 0.37));
+  background-image: var(--pmx-glass-zone-user-bubble-sheen, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-clip: padding-box;
+  -webkit-backdrop-filter: var(--pmx-glass-zone-user-bubble-backdrop, blur(14px) saturate(1.1));
+  backdrop-filter: var(--pmx-glass-zone-user-bubble-backdrop, blur(14px) saturate(1.1));
+  border: 1px solid transparent;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.82 * var(--pmx-fresnel-strength, 1))),
+    0 2px 12px rgba(15, 23, 42, 0.08),
+    0 0 0 0.5px rgba(15, 23, 42, 0.09);
+}
+
+html:not(.dark)[data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before,
+html[data-pmx-theme='light'][data-pmx-glass='1']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before,
+html:not(.dark)[data-pmx-glass='1'][data-theme-id]
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, calc(0.96 * var(--pmx-fresnel-strength, 1))) 0%,
+    rgba(255, 255, 255, calc(0.76 * var(--pmx-fresnel-strength, 1))) 24%,
+    rgba(15, 23, 42, calc(0.14 * var(--pmx-fresnel-strength, 1))) 62%,
+    rgba(15, 23, 42, calc(0.2 * var(--pmx-fresnel-strength, 1))) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ) {
+  --contrast-message-foreground: rgba(15, 23, 42, 0.96);
+  color: rgba(15, 23, 42, 0.96);
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.45);
+}
+
+/* Explicit solid mode for userBubble zone: crisp opaque fill, standard hairline border, zero blur/rim */
+html.dark[data-pmx-glass='1'][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html:not(.dark)[data-pmx-glass='1'][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html.dark[data-pmx-glass='1'][data-theme-id][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ),
+html:not(.dark)[data-pmx-glass='1'][data-theme-id][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  ) {
+  background-color: var(--pmx-glass-zone-user-bubble-bg, var(--pmx-glass-tint, #1c2230));
+  background-image: none;
+  border-color: var(--pmx-glass-zone-user-bubble-border, rgba(255, 255, 255, 0.16));
+  box-shadow: none;
+  text-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html.dark[data-pmx-glass='1'][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before,
+html:not(.dark)[data-pmx-glass='1'][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before,
+html.dark[data-pmx-glass='1'][data-theme-id][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before,
+html:not(.dark)[data-pmx-glass='1'][data-theme-id][data-pmx-zone-user-bubble-mode='solid']
+  :is(
+    [data-pmx-glass-zone='userBubble'],
+    [data-user-message-bubble][data-user-message-bubble-surface='1']
+  )::before {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-pmx-composer-layout='agy'],
+  [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
+  [data-pmx-sidebar-peek='1'],
+  [data-pmx-chat-width-handle]::after,
+  [data-pmx-topbar-icon-toggle='1'],
+  [data-pmx-topbar-icon-toggle='1']::after {
+    transition-duration: 0.01ms !important;
+  }
+
+  html [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'],
+  html.dark [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'],
+  html[data-pmx-theme='dark'] [data-pmx-topbar-toggle-kind='wallpaper'] [data-pmx-wallpaper-icon='1'] {
+    animation: none !important;
+    filter: saturate(1.16);
+  }
+
+  [data-sidebar-card='1'][data-sidebar-agent-active='1']::before,
+  [data-sidebar-row][data-sidebar-agent-active='1']::before {
+    animation: none !important;
+  }
+
+  [data-agent-logo-breathing='1'] {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+    filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.45));
+  }
+}
+
+/* ── 7. Three Mandatory Solid Fallbacks (No Blur / Reduced Transparency / No GPU / HC) */
+/* Every fallback selector matches or exceeds the specificity of sections 0.5–6
+   (including .dark / :not(.dark) and [data-theme-id]:not([data-theme-id=''])) and
+   reverts root, canvas, all 8 decoupled zones, thinking blocks, and utility surfaces
+   to opaque solid tint with zero sheen gradient or backdrop blur. */
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html.dark[data-pmx-glass='1'],
+  html:not(.dark)[data-pmx-glass='1'],
+  html[data-pmx-glass='1'][data-pmx-theme],
+  html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']) {
+    --pmx-surface-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-canvas-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-card-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-overlay-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-control-bg: var(--pmx-glass-tint, #0d1524);
+    --message-surface: var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524));
+    --glass-blur: 0px;
+    --glass-opacity: 100%;
+    --pmx-glass-zone-shell-frame-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-shell-frame-backdrop: none;
+    --pmx-glass-zone-shell-frame-sheen: none;
+    --pmx-glass-zone-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-left-sidebar-backdrop: none;
+    --pmx-glass-zone-left-sidebar-sheen: none;
+    --pmx-glass-zone-right-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-right-sidebar-backdrop: none;
+    --pmx-glass-zone-right-sidebar-sheen: none;
+    --pmx-glass-zone-main-canvas-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-main-canvas-backdrop: none;
+    --pmx-glass-zone-main-canvas-sheen: none;
+    --pmx-glass-zone-work-panels-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-work-panels-backdrop: none;
+    --pmx-glass-zone-work-panels-sheen: none;
+    --pmx-glass-work-panels-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-work-panels-card-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-work-panels-blur: 0px;
+    --pmx-glass-work-panels-backdrop: none;
+    --pmx-glass-work-panels-sheen: none;
+    --pmx-glass-zone-composer-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-composer-backdrop: none;
+    --pmx-glass-zone-composer-sheen: none;
+    --pmx-glass-zone-chrome-bars-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-chrome-bars-backdrop: none;
+    --pmx-glass-zone-chrome-bars-sheen: none;
+    --pmx-glass-zone-overlays-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-overlays-backdrop: none;
+    --pmx-glass-zone-overlays-sheen: none;
+    --pmx-glass-zone-user-bubble-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-user-bubble-backdrop: none;
+    --pmx-glass-zone-user-bubble-sheen: none;
+    --pmx-glass-zone-overview-panel-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-overview-panel-backdrop: none;
+    --pmx-glass-zone-overview-panel-sheen: none;
+    --pmx-stage-frame-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-stage-frame-backdrop: none;
+    --pmx-stage-frame-sheen: none;
+    --pmx-stage-frame-right-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-stage-frame-right-backdrop: none;
+    --pmx-stage-frame-right-sheen: none;
+  }
+
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']),
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']) body,
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']) #root,
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])
+    main[data-slot='sidebar-inset'],
+  html[data-pmx-glass='1'] [data-pmx-glass-zone]:not([data-pmx-overlay-shell]),
+  html[data-pmx-glass='1'] [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+  html[data-pmx-glass='1'] [data-pmx-work-panel='1'],
+  html[data-pmx-glass='1'] [data-pmx-shell-backdrop='1'],
+  html[data-pmx-glass='1'] [data-pmx-right-frame-edge='1'],
+  html[data-pmx-glass='1'] [data-pmx-stage-frame='1'] > [data-pmx-stage-corner],
+  html[data-pmx-glass='1'] [data-pmx-stage-frame='1']:not(:has(> [data-pmx-stage-corner]))::before {
+    background-color: var(--pmx-glass-tint, #0d1524) !important;
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-app-sidebar],
+  html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar],
+  html[data-pmx-glass='1'] [data-app-sidebar] [data-slot='sidebar-inner'],
+  html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar] [data-slot='sidebar-inner'] {
+    --pmx-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-left-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-chat-header],
+  html[data-pmx-glass='1'] [data-pmx-titlebar],
+  html[data-pmx-glass='1'] [data-prismux-status-bar],
+  html[data-pmx-glass='1'] [data-pmx-status-bar] {
+    --pmx-titlebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-titlebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-preview-panel-mode='inline'],
+  html[data-pmx-glass='1'] [data-right-panel-surface-content],
+  html[data-pmx-glass='1'] [data-pmx-right-sidebar] {
+    --pmx-right-sidebar-bg: var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524));
+    background-color: var(--pmx-right-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-pmx-thinking-block],
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-turn-trigger],
+  html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'],
+  html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
+  html[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'],
+  html[data-pmx-theme][data-pmx-glass='1'][data-theme-id] [data-pmx-sidebar-peek='1'],
+  .pmx-glass-surface,
+  .prismux-glass-surface {
+    background: var(--pmx-glass-tint, var(--card, #0d1524)) !important;
+    background-image: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html.dark[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html.dark[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'] {
+    background: #1b202d !important;
+    border-color: rgba(255, 255, 255, 0.16) !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html.dark[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+    background: #243047 !important;
+    border-color: color-mix(in srgb, var(--pmx-accent, #5e9bff) 60%, rgba(255, 255, 255, 0.25)) !important;
+  }
+
+  html:not(.dark)[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html:not(.dark)[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'] {
+    background: #f4f7fc !important;
+    border-color: rgba(15, 23, 42, 0.14) !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html:not(.dark)[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+    background: #e8f1ff !important;
+    border-color: color-mix(in srgb, var(--pmx-accent, #3b82f6) 55%, rgba(15, 23, 42, 0.18)) !important;
+  }
+
+  html.dark[data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html.dark[data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'] {
+    background: #1c2230 !important;
+    background-image: none !important;
+    border-color: rgba(255, 255, 255, 0.18) !important;
+    color: #f8fafc;
+    text-shadow: none;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html:not(.dark)[data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html:not(.dark)[data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'] {
+    background: #eef4ff !important;
+    background-image: none !important;
+    border-color: rgba(15, 23, 42, 0.14) !important;
+    color: #0f172a;
+    text-shadow: none;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1']::before,
+  html[data-pmx-glass='1'] [data-pmx-glass-zone='userBubble']::before {
+    display: none !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html.dark[data-pmx-glass='1'],
+  html:not(.dark)[data-pmx-glass='1'],
+  html[data-pmx-glass='1'][data-pmx-theme],
+  html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']) {
+    --pmx-surface-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-canvas-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-card-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-overlay-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-control-bg: var(--pmx-glass-tint, #0d1524);
+    --message-surface: var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524));
+    --glass-blur: 0px;
+    --glass-opacity: 100%;
+    --pmx-glass-zone-shell-frame-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-shell-frame-backdrop: none;
+    --pmx-glass-zone-shell-frame-sheen: none;
+    --pmx-glass-zone-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-left-sidebar-backdrop: none;
+    --pmx-glass-zone-left-sidebar-sheen: none;
+    --pmx-glass-zone-right-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-right-sidebar-backdrop: none;
+    --pmx-glass-zone-right-sidebar-sheen: none;
+    --pmx-glass-zone-main-canvas-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-main-canvas-backdrop: none;
+    --pmx-glass-zone-main-canvas-sheen: none;
+    --pmx-glass-zone-work-panels-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-work-panels-backdrop: none;
+    --pmx-glass-zone-work-panels-sheen: none;
+    --pmx-glass-work-panels-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-work-panels-card-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-work-panels-blur: 0px;
+    --pmx-glass-work-panels-backdrop: none;
+    --pmx-glass-work-panels-sheen: none;
+    --pmx-glass-zone-composer-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-composer-backdrop: none;
+    --pmx-glass-zone-composer-sheen: none;
+    --pmx-glass-zone-chrome-bars-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-chrome-bars-backdrop: none;
+    --pmx-glass-zone-chrome-bars-sheen: none;
+    --pmx-glass-zone-overlays-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-overlays-backdrop: none;
+    --pmx-glass-zone-overlays-sheen: none;
+    --pmx-glass-zone-user-bubble-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-user-bubble-backdrop: none;
+    --pmx-glass-zone-user-bubble-sheen: none;
+    --pmx-glass-zone-overview-panel-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-glass-zone-overview-panel-backdrop: none;
+    --pmx-glass-zone-overview-panel-sheen: none;
+    --pmx-stage-frame-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-stage-frame-backdrop: none;
+    --pmx-stage-frame-sheen: none;
+    --pmx-stage-frame-right-bg: var(--pmx-glass-tint, #0d1524);
+    --pmx-stage-frame-right-backdrop: none;
+    --pmx-stage-frame-right-sheen: none;
+  }
+
+  html.dark:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+      [data-pmx-gpu='0']
+    ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+  html[data-pmx-theme='dark']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+      [data-pmx-gpu='0']
+    ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+  html.dark:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0'][data-theme-id]:not(
+      [data-theme-id='']
+    ):not([data-pmx-gpu='0']):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']) {
+    --pmx-wallpaper-veil: #000000;
+    --pmx-wallpaper-chrome-veil: #0f1117;
+    --pmx-wallpaper-card-veil: #181a24;
+    --background: #000000;
+    --app-chrome-background: #000000;
+    --card: #181a24;
+    --surface-raised: #181a24;
+    --message-surface: #181a24;
+    --sidebar: #0f1117;
+  }
+
+  html:not(.dark):is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+      [data-pmx-gpu='0']
+    ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+  html[data-pmx-theme='light']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:not(
+      [data-pmx-gpu='0']
+    ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']),
+  html:not(.dark):is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0'][data-theme-id]:not(
+      [data-theme-id='']
+    ):not([data-pmx-gpu='0']):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']) {
+    --pmx-wallpaper-veil: #ffffff;
+    --pmx-wallpaper-chrome-veil: #fafafa;
+    --pmx-wallpaper-card-veil: #ffffff;
+    --background: #ffffff;
+    --app-chrome-background: #ffffff;
+    --card: #ffffff;
+    --surface-raised: #ffffff;
+    --message-surface: #ffffff;
+    --sidebar: #fafafa;
+  }
+
+  html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0'],
+  html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']
+    :is(
+      body,
+      #root,
+      main[data-slot='sidebar-inset'],
+      [data-pmx-glass-zone='mainCanvas'],
+      [data-pmx-glass-zone='workPanels'],
+      [data-pmx-work-panel='1'],
+      [data-app-sidebar] [data-slot='sidebar-inner'],
+      [data-preview-panel-mode='inline'],
+      [data-pmx-glass-zone='rightSidebar'],
+      [data-workspace-tabbar],
+      [data-prismux-status-bar='true'],
+      [data-pmx-status-bar],
+      [data-pmx-shell-backdrop='1'],
+      [data-pmx-right-frame-edge='1'],
+      [data-pmx-stage-frame='1'] > [data-pmx-stage-corner]
+    ) {
+    background-color: var(--pmx-wallpaper-veil) !important;
+    background-image: none;
+  }
+
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']),
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']) body,
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']) #root,
+  html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])
+    main[data-slot='sidebar-inset'],
+  html[data-pmx-glass='1'] [data-pmx-glass-zone]:not([data-pmx-overlay-shell]),
+  html[data-pmx-glass='1'] [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+  html[data-pmx-glass='1'] [data-pmx-work-panel='1'],
+  html[data-pmx-glass='1'] [data-pmx-shell-backdrop='1'],
+  html[data-pmx-glass='1'] [data-pmx-right-frame-edge='1'],
+  html[data-pmx-glass='1'] [data-pmx-stage-frame='1'] > [data-pmx-stage-corner],
+  html[data-pmx-glass='1'] [data-pmx-stage-frame='1']:not(:has(> [data-pmx-stage-corner]))::before {
+    background-color: var(--pmx-glass-tint, #0d1524) !important;
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-app-sidebar],
+  html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar],
+  html[data-pmx-glass='1'] [data-app-sidebar] [data-slot='sidebar-inner'],
+  html[data-pmx-glass='1'][data-theme-id] [data-app-sidebar] [data-slot='sidebar-inner'] {
+    --pmx-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-left-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-chat-header],
+  html[data-pmx-glass='1'] [data-pmx-titlebar],
+  html[data-pmx-glass='1'] [data-prismux-status-bar],
+  html[data-pmx-glass='1'] [data-pmx-status-bar] {
+    --pmx-titlebar-bg: var(--pmx-glass-tint, #0d1524);
+    background-color: var(--pmx-titlebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-preview-panel-mode='inline'],
+  html[data-pmx-glass='1'] [data-right-panel-surface-content],
+  html[data-pmx-glass='1'] [data-pmx-right-sidebar] {
+    --pmx-right-sidebar-bg: var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524));
+    background-color: var(--pmx-right-sidebar-bg);
+    background-image: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-pmx-thinking-block],
+  html[data-pmx-glass='1'][data-pmx-thinking-mode='glass'] [data-turn-trigger],
+  html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'],
+  html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
+  html[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'],
+  html[data-pmx-theme][data-pmx-glass='1'][data-theme-id] [data-pmx-sidebar-peek='1'],
+  .pmx-glass-surface,
+  .prismux-glass-surface {
+    background: var(--pmx-glass-tint, var(--card, #0d1524)) !important;
+    background-image: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html.dark[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html.dark[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'] {
+    background: #1b202d !important;
+    border-color: rgba(255, 255, 255, 0.16) !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html.dark[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+    background: #243047 !important;
+    border-color: color-mix(in srgb, var(--pmx-accent, #5e9bff) 60%, rgba(255, 255, 255, 0.25)) !important;
+  }
+
+  html:not(.dark)[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'],
+  html:not(.dark)[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'] {
+    background: #f4f7fc !important;
+    border-color: rgba(15, 23, 42, 0.14) !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html:not(.dark)[data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-app-sidebar] [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+    background: #e8f1ff !important;
+    border-color: color-mix(in srgb, var(--pmx-accent, #3b82f6) 55%, rgba(15, 23, 42, 0.18)) !important;
+  }
+
+  html.dark[data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html.dark[data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'],
+  html[data-pmx-theme='dark'][data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'] {
+    background: #1c2230 !important;
+    background-image: none !important;
+    border-color: rgba(255, 255, 255, 0.18) !important;
+    color: #f8fafc;
+    text-shadow: none;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html:not(.dark)[data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  html:not(.dark)[data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'],
+  html[data-pmx-theme='light'][data-pmx-glass='1'] [data-pmx-glass-zone='userBubble'] {
+    background: #eef4ff !important;
+    background-image: none !important;
+    border-color: rgba(15, 23, 42, 0.14) !important;
+    color: #0f172a;
+    text-shadow: none;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  html[data-pmx-glass='1'] [data-user-message-bubble][data-user-message-bubble-surface='1']::before,
+  html[data-pmx-glass='1'] [data-pmx-glass-zone='userBubble']::before {
+    display: none !important;
+  }
+}
+
+html.dark[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1']),
+html:not(.dark)[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1']),
+html[data-pmx-glass='1'][data-pmx-theme]:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1']),
+html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  ) {
+  --pmx-surface-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-canvas-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-card-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-overlay-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-control-bg: var(--pmx-glass-tint, #0d1524);
+  --message-surface: var(--pmx-conversation-tint, var(--pmx-glass-tint, #0d1524));
+  --glass-blur: 0px;
+  --glass-opacity: 100%;
+  --pmx-glass-zone-shell-frame-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-shell-frame-backdrop: none;
+  --pmx-glass-zone-shell-frame-sheen: none;
+  --pmx-glass-zone-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-left-sidebar-backdrop: none;
+  --pmx-glass-zone-left-sidebar-sheen: none;
+  --pmx-glass-zone-right-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-right-sidebar-backdrop: none;
+  --pmx-glass-zone-right-sidebar-sheen: none;
+  --pmx-glass-zone-main-canvas-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-main-canvas-backdrop: none;
+  --pmx-glass-zone-main-canvas-sheen: none;
+  --pmx-glass-zone-work-panels-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-work-panels-backdrop: none;
+  --pmx-glass-zone-work-panels-sheen: none;
+  --pmx-glass-work-panels-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-work-panels-card-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-work-panels-blur: 0px;
+  --pmx-glass-work-panels-backdrop: none;
+  --pmx-glass-work-panels-sheen: none;
+  --pmx-glass-zone-composer-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-composer-backdrop: none;
+  --pmx-glass-zone-composer-sheen: none;
+  --pmx-glass-zone-chrome-bars-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-chrome-bars-backdrop: none;
+  --pmx-glass-zone-chrome-bars-sheen: none;
+  --pmx-glass-zone-overlays-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-overlays-backdrop: none;
+  --pmx-glass-zone-overlays-sheen: none;
+  --pmx-glass-zone-user-bubble-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-user-bubble-backdrop: none;
+  --pmx-glass-zone-user-bubble-sheen: none;
+  --pmx-glass-zone-overview-panel-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-glass-zone-overview-panel-backdrop: none;
+  --pmx-glass-zone-overview-panel-sheen: none;
+  --pmx-stage-frame-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-stage-frame-backdrop: none;
+  --pmx-stage-frame-sheen: none;
+  --pmx-stage-frame-right-bg: var(--pmx-glass-tint, #0d1524);
+  --pmx-stage-frame-right-backdrop: none;
+  --pmx-stage-frame-right-sheen: none;
+}
+
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  ),
+html:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1'])[data-pmx-glass='0']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(
+    body,
+    #root,
+    main[data-slot='sidebar-inset'],
+    [data-pmx-glass-zone='mainCanvas'],
+    [data-pmx-glass-zone='workPanels'],
+    [data-pmx-work-panel='1'],
+    [data-app-sidebar] [data-slot='sidebar-inner'],
+    [data-preview-panel-mode='inline'],
+    [data-pmx-glass-zone='rightSidebar'],
+    [data-workspace-tabbar],
+    [data-prismux-status-bar='true'],
+    [data-pmx-status-bar],
+    [data-pmx-shell-backdrop='1'],
+    [data-pmx-right-frame-edge='1'],
+    [data-pmx-stage-frame='1'] > [data-pmx-stage-corner]
+  ) {
+  --pmx-wallpaper-veil: var(--background);
+  --pmx-wallpaper-chrome-veil: var(--sidebar, var(--background));
+  --pmx-stage-frame-bg: var(--sidebar, var(--background));
+  background-color: var(--background) !important;
+  background-image: none;
+}
+
+html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']):is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  ),
+html[data-pmx-glass='1']:is([data-pmx-wallpaper='1'], [data-pmx-wallpaper-visible='1']):is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(body, #root, main[data-slot='sidebar-inset']),
+html[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  :is(
+    [data-pmx-glass-zone]:not([data-pmx-overlay-shell]),
+    [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+    [data-pmx-work-panel='1'],
+    [data-pmx-shell-backdrop='1'],
+    [data-pmx-right-frame-edge='1'],
+    [data-pmx-stage-frame='1'] > [data-pmx-stage-corner],
+    [data-pmx-stage-frame='1']:not(:has(> [data-pmx-stage-corner]))::before
+  ) {
+  background-color: var(--pmx-glass-tint, #0d1524) !important;
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  :is([data-app-sidebar], [data-app-sidebar] [data-slot='sidebar-inner']),
+html[data-pmx-glass='1'][data-theme-id]:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-app-sidebar] [data-slot='sidebar-inner']) {
+  --pmx-left-sidebar-bg: var(--pmx-glass-tint, #0d1524);
+  background-color: var(--pmx-left-sidebar-bg);
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  :is([data-chat-header], [data-pmx-titlebar], [data-prismux-status-bar], [data-pmx-status-bar]) {
+  --pmx-titlebar-bg: var(--pmx-glass-tint, #0d1524);
+  background-color: var(--pmx-titlebar-bg);
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  :is([data-preview-panel-mode='inline'], [data-right-panel-surface-content], [data-pmx-right-sidebar]) {
+  --pmx-right-sidebar-bg: var(--pmx-right-sidebar-tint, var(--pmx-glass-tint, #0d1524));
+  background-color: var(--pmx-right-sidebar-bg);
+  background-image: none;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1'][data-pmx-thinking-mode='glass']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-pmx-thinking-block], [data-turn-trigger]),
+html[data-pmx-glass='1']:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  :is(
+    [data-pmx-composer-layout='agy'],
+    [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
+    [data-pmx-sidebar-peek='1']
+  ),
+html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparency='1'])
+  :is(.pmx-glass-surface, .prismux-glass-surface) {
+  background: var(--pmx-glass-tint, var(--card, #0d1524)) !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.dark[data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'] {
+  background: #1b202d !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.dark[data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html[data-pmx-theme='dark'][data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+  background: #243047 !important;
+  border-color: color-mix(in srgb, var(--pmx-accent, #5e9bff) 60%, rgba(255, 255, 255, 0.25)) !important;
+}
+
+html:not(.dark)[data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'] {
+  background: #f4f7fc !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html:not(.dark)[data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'][data-sidebar-card-active='1'],
+html[data-pmx-theme='light'][data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is([data-app-sidebar], [data-pmx-sidebar-peek='1'])
+  [data-sidebar-card='1'][data-sidebar-card-active='1'] {
+  background: #e8f1ff !important;
+  border-color: color-mix(in srgb, var(--pmx-accent, #3b82f6) 55%, rgba(15, 23, 42, 0.18)) !important;
+}
+
+html.dark[data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(
+    [data-user-message-bubble][data-user-message-bubble-surface='1'],
+    [data-pmx-glass-zone='userBubble']
+  ),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(
+    [data-user-message-bubble][data-user-message-bubble-surface='1'],
+    [data-pmx-glass-zone='userBubble']
+  ) {
+  background: #1c2230 !important;
+  background-image: none !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: #f8fafc;
+  text-shadow: none;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html:not(.dark)[data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(
+    [data-user-message-bubble][data-user-message-bubble-surface='1'],
+    [data-pmx-glass-zone='userBubble']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(
+    [data-user-message-bubble][data-user-message-bubble-surface='1'],
+    [data-pmx-glass-zone='userBubble']
+  ) {
+  background: #eef4ff !important;
+  background-image: none !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+  color: #0f172a;
+  text-shadow: none;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-pmx-glass='1']:is(
+    [data-pmx-gpu='0'],
+    [data-prismux-gpu='0'],
+    [data-pmx-reduced-transparency='1']
+  )
+  :is(
+    [data-user-message-bubble][data-user-message-bubble-surface='1'],
+    [data-pmx-glass-zone='userBubble']
+  )::before {
+  display: none !important;
+}
+
+@media (forced-colors: active) {
+  .pmx-glass-surface,
+  .prismux-glass-surface,
+  [data-pmx-sidebar-peek='1'],
+  [data-sidebar-card='1'],
+  [data-user-message-bubble][data-user-message-bubble-surface='1'],
+  [data-pmx-glass-zone='userBubble'],
+  [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel']),
+  [data-pmx-composer-layout='agy'],
+  [data-pmx-composer-layout='agy'] [data-pmx-composer-inner-card='1'],
+  [data-pmx-work-panel='1'],
+  [data-pmx-work-panel-card='1'],
+  html[data-pmx-glass='1'] [data-pmx-glass-zone]:not([data-pmx-overlay-shell]) {
+    background: Canvas !important;
+    color: CanvasText !important;
+    border: 1px solid CanvasText !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  [data-sidebar-card='1'][data-sidebar-agent-active='1'],
+  [data-sidebar-row][data-sidebar-agent-active='1'] {
+    border-color: Highlight !important;
+  }
+
+  [data-sidebar-card='1'][data-sidebar-agent-active='1']::before,
+  [data-sidebar-row][data-sidebar-agent-active='1']::before,
+  [data-user-message-bubble][data-user-message-bubble-surface='1']::before,
+  [data-pmx-glass-zone='userBubble']::before {
+    display: none !important;
+  }
+
+  [data-pmx-shell-backdrop='1'],
+  [data-pmx-right-frame-edge='1'],
+  [data-pmx-stage-frame='1'] > [data-pmx-stage-corner],
+  [data-pmx-stage-frame='1']:not(:has(> [data-pmx-stage-corner]))::before {
+    background: Canvas !important;
+    background-image: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  [data-pmx-stage-frame='1']::after {
+    box-shadow: inset 0 0 0 1px CanvasText !important;
+  }
+
+  [data-pmx-chat-width-handle]::after {
+    background: Highlight !important;
+  }
+}

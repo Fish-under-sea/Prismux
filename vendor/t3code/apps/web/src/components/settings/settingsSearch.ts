@@ -1086,13 +1086,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     textGeneratorsOnly: true,
   },
   {
-    id: "antigravity-controlled-lock",
-    title: msg("Antigravity controlled-agent lock"),
+    id: "subscription-risk-waiver",
+    title: msg("Personal subscription risk waiver"),
     to: "/settings/providers",
-    targetId: "antigravity-controlled-lock",
+    targetId: "subscription-risk-waiver",
     searchTerms: [
       msg(
-        "antigravity agy controlled agent lock commander disclaimer cross-agent compliance 403",
+        "subscription risk waiver disclaimer antigravity agy codex claude oauth swarm controlled agent lock 403 ccs api",
       ),
     ],
   },
@@ -1592,6 +1592,7 @@ const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
 ]);
 // Section anchors that moved but are not search results themselves.
 const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
+  "antigravity-controlled-lock": "/settings/providers",
   "authorized-clients": "/settings/connections",
   "mobile-app": "/settings/connections",
   "remote-access": "/settings/connections",

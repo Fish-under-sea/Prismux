@@ -13,7 +13,7 @@ import {
   type PermissionMode,
   type RiskLevel
 } from "@prismux/protocol";
-import { sanitizeChildEnv } from "../t3/T3ServerSupervisor.js";
+import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 
 export const DEFAULT_HOOK_TIMEOUT_MS = 5_000;
 const MAX_HOOK_STDIO_BYTES = 1024 * 1024;

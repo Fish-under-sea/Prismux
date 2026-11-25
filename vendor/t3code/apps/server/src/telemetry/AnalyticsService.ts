@@ -14,18 +14,18 @@ import type { TelemetryOwner } from "./Identify.ts";
 /**
  * Prismux hard-disables all upstream PostHog / T3 ingest product analytics at
  * both configuration defaults and runtime transport layers. Even if legacy
- * `T3CODE_TELEMETRY_ENABLED=true` or `T3CODE_POSTHOG_HOST` values exist in the
+ * `PRISMUX_TELEMETRY_ENABLED=true` or `PRISMUX_POSTHOG_HOST` values exist in the
  * environment or managed policy, zero events are buffered and zero HTTP requests
  * are ever sent.
  */
 export const PRISMUX_TELEMETRY_HARD_DISABLED = true as const;
 
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.withDefault("")),
-  posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(Config.withDefault("")),
-  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
-  flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
-  maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
+  posthogKey: Config.String("PRISMUX_POSTHOG_KEY").pipe(Config.withDefault("")),
+  posthogHost: Config.String("PRISMUX_POSTHOG_HOST").pipe(Config.withDefault("")),
+  enabled: Config.Boolean("PRISMUX_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
+  flushBatchSize: Config.Number("PRISMUX_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
+  maxBufferedEvents: Config.Number("PRISMUX_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
   ),
   wslDistroName: Config.String("WSL_DISTRO_NAME").pipe(Config.option),

@@ -240,7 +240,7 @@ const makePackagedAppFixture = Effect.fn("test.makePackagedAppFixture")(function
   const stageDistDir = path.join(tempDir, "dist");
   const resourcesDir = path.join(
     stageDistDir,
-    input.resourcesPath ?? "mac-arm64/T3 Code.app/Contents/Resources",
+    input.resourcesPath ?? "mac-arm64/Prismux.app/Contents/Resources",
   );
   yield* fs.makeDirectory(resourcesDir, { recursive: true });
   yield* Effect.promise(() =>
@@ -573,7 +573,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
       );
 
-      assert.nestedPropertyVal(linux, "linux.desktop.entry.StartupWMClass", "com.t3tools.T3Code");
+      assert.nestedPropertyVal(linux, "linux.desktop.entry.StartupWMClass", "io.prismux.desktop");
     }),
   );
 
@@ -902,7 +902,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
                 ConfigProvider.fromEnv({
                   env: {
                     npm_config_python: pythonPath,
-                    T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true",
+                    PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR: "true",
                   },
                 }),
               ),
@@ -948,7 +948,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               spawner,
               ConfigProvider.layer(
                 ConfigProvider.fromEnv({
-                  env: { T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
+                  env: { PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
                 }),
               ),
             ),
@@ -1453,7 +1453,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ).pipe(
       Effect.provide(
         ConfigProvider.layer(
-          ConfigProvider.fromEnv({ env: { T3CODE_DESKTOP_UNTRUSTED_BUNDLE: "true" } }),
+          ConfigProvider.fromEnv({ env: { PRISMUX_DESKTOP_UNTRUSTED_BUNDLE: "true" } }),
         ),
       ),
     ),
@@ -1506,7 +1506,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const stageDistDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mac-payload-test-" });
-        yield* fs.makeDirectory(`${stageDistDir}/mac-arm64/T3 Code.app/Contents/Resources`, {
+        yield* fs.makeDirectory(`${stageDistDir}/mac-arm64/Prismux.app/Contents/Resources`, {
           recursive: true,
         });
         const error = yield* validateMacPackagedPayload({ stageDistDir }).pipe(Effect.flip);
@@ -1565,9 +1565,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("derives macOS passkey signing configuration from the Clerk publishable key", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
-      T3CODE_APPLE_TEAM_ID: "abc1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
+      PRISMUX_APPLE_TEAM_ID: "abc1234567",
+      PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      PRISMUX_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
     });
 
     assert.deepStrictEqual(configuration, {
@@ -1580,9 +1580,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS:
+      PRISMUX_APPLE_TEAM_ID: "ABC1234567",
+      PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      PRISMUX_CLERK_PASSKEY_RP_DOMAINS:
         " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
     });
     const entitlements = renderMacPasskeyEntitlements(configuration, {
@@ -1605,7 +1605,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("grants in-app browser passkey entitlements only when the provisioning profile does", () => {
-    const configuration = { appId: "com.t3tools.t3code", teamId: "ABC1234567" };
+    const configuration = { appId: "io.prismux.desktop", teamId: "ABC1234567" };
     const profile = (entitlements: string, outside = "") =>
       `0\x82\x1f\x9a\x06\t*\x86H<?xml version="1.0"?><plist version="1.0"><dict>${outside}<key>Entitlements</key><dict>${entitlements}</dict></dict></plist>\x00\x01`;
     const teamWildcardGroups = `<key>keychain-access-groups</key>
@@ -1647,7 +1647,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         configuration,
       ),
       {
-        touchIdKeychainAccessGroup: "ABC1234567.com.t3tools.t3code.webauthn",
+        touchIdKeychainAccessGroup: "ABC1234567.io.prismux.desktop.webauthn",
         browserPasskeys: true,
       },
     );
@@ -1663,7 +1663,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
     assert.match(
       entitlements,
-      /<key>keychain-access-groups<\/key>\s*<array>\s*<string>ABC1234567\.com\.t3tools\.t3code\.webauthn<\/string>\s*<\/array>/u,
+      /<key>keychain-access-groups<\/key>\s*<array>\s*<string>ABC1234567\.io\.prismux\.desktop\.webauthn<\/string>\s*<\/array>/u,
     );
     assert.match(
       entitlements,
@@ -1682,21 +1682,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     };
 
     const missingProfileError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+      PRISMUX_APPLE_TEAM_ID: "ABC1234567",
+      PRISMUX_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
     });
     assert.instanceOf(missingProfileError, MissingMacPasskeyProvisioningProfileError);
     assert.equal(
       missingProfileError.message,
-      "T3CODE_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
+      "PRISMUX_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
     );
 
     const unsafeDomain =
       "https://domain-user:domain-secret@example.clerk.accounts.dev/path?token=query-secret";
     const invalidDomainError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
+      PRISMUX_APPLE_TEAM_ID: "ABC1234567",
+      PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      PRISMUX_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
     });
     assert.instanceOf(invalidDomainError, InvalidMacPasskeyRpDomainError);
     assert.equal(invalidDomainError.reason, "scheme-not-allowed");
@@ -1712,20 +1712,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.throws(
       () =>
         resolveMacPasskeySigningConfiguration({
-          T3CODE_APPLE_TEAM_ID: "ABC1234567",
-          T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-          T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
+          PRISMUX_APPLE_TEAM_ID: "ABC1234567",
+          PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+          PRISMUX_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
         }),
       /Invalid passkey RP domain/u,
     );
     const invalidPublishableKeyError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: "pk_test_%",
+      PRISMUX_APPLE_TEAM_ID: "ABC1234567",
+      PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_test_%",
     });
     assert.instanceOf(invalidPublishableKeyError, InvalidMacPasskeyPublishableKeyError);
     assert.ok(invalidPublishableKeyError.cause);
-    assert.equal(invalidPublishableKeyError.message, "T3CODE_CLERK_PUBLISHABLE_KEY is invalid.");
+    assert.equal(invalidPublishableKeyError.message, "PRISMUX_CLERK_PUBLISHABLE_KEY is invalid.");
     assert.notProperty(invalidPublishableKeyError, "publishableKey");
     assert.notInclude(invalidPublishableKeyError.message, "pk_test_%");
   });
@@ -1855,11 +1855,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_SKIP_BUILD: "true",
-                T3CODE_DESKTOP_KEEP_STAGE: "true",
-                T3CODE_DESKTOP_SIGNED: "true",
-                T3CODE_DESKTOP_VERBOSE: "true",
-                T3CODE_DESKTOP_MOCK_UPDATES: "true",
+                PRISMUX_DESKTOP_SKIP_BUILD: "true",
+                PRISMUX_DESKTOP_KEEP_STAGE: "true",
+                PRISMUX_DESKTOP_SIGNED: "true",
+                PRISMUX_DESKTOP_VERBOSE: "true",
+                PRISMUX_DESKTOP_MOCK_UPDATES: "true",
               },
             }),
           ),
@@ -1935,7 +1935,7 @@ it.effect("preserves packaged app directories from the dir target", () =>
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-dir-artifact-" });
     const stage = path.join(root, "stage");
     const output = path.join(root, "output");
-    const app = path.join("mac-arm64", "T3 Code.app", "Contents");
+    const app = path.join("mac-arm64", "Prismux.app", "Contents");
     yield* fs.makeDirectory(path.join(stage, app), { recursive: true });
     yield* fs.writeFileString(path.join(stage, app, "Info.plist"), "built-app");
     yield* fs.writeFileString(path.join(stage, "builder-debug.yml"), "debug");
@@ -1965,7 +1965,7 @@ it.effect.skipIf(!symlinksSupported)("preserves relative links when replacing di
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-dir-artifact-links-" });
     const stage = path.join(root, "stage");
     const output = path.join(root, "output");
-    const app = path.join("mac-arm64", "T3 Code.app", "Contents");
+    const app = path.join("mac-arm64", "Prismux.app", "Contents");
     yield* fs.makeDirectory(path.join(stage, app), { recursive: true });
     yield* fs.writeFileString(path.join(stage, app, "Info.plist"), "built-app");
     yield* fs.symlink("Info.plist", path.join(stage, app, "Current"));

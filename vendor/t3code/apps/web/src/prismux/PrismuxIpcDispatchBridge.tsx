@@ -62,6 +62,15 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
 import { formatAgentBrandName, resolveAgentBrandId } from "./agentBrand";
 import { prismuxDaemonClient } from "./daemonClient";
+import {
+  PRISMUX_SUBSCRIPTION_BLOCKED_EVENT,
+  SubscriptionOrchestrationBlockedDialog,
+  emitSubscriptionOrchestrationBlocked,
+  extractSubscriptionOrchestrationBlockedError,
+  resolveBlockedProviderInstanceId,
+  type SubscriptionOrchestrationBlockedDetail,
+} from "./SubscriptionOrchestrationBlockedDialog";
+import { SUBSCRIPTION_WAIVER_ANCHOR_ID } from "./SubscriptionRiskWaiverSection";
 
 export const PRISMUX_DISPATCH_WINDOW_EVENT = "prismux:dispatch-thread";
 
@@ -317,6 +326,7 @@ export interface DispatchExecutionDeps {
   }) => Promise<{ readonly ok: boolean; readonly error?: string }>;
   readonly onStagedForConfirmation: (staged: StagedPrismuxDispatch) => void;
   readonly onAutoSent?: (envelope: PrismuxDispatchEnvelope, threadId: ThreadId) => void;
+  readonly onSubscriptionBlocked?: (detail: SubscriptionOrchestrationBlockedDetail) => void;
   readonly onError?: (message: string) => void;
 }
 
@@ -446,6 +456,11 @@ export async function handlePrismuxDispatchEnvelope(
   const sendResult = await dispatchStagedThreadTurn(staged, deps);
   if (!sendResult.ok) {
     const error = sendResult.error ?? "调度任务发送失败。";
+    const blocked = extractSubscriptionOrchestrationBlockedError(error, envelope.provider);
+    if (blocked) {
+      deps.onSubscriptionBlocked?.(blocked);
+      return { outcome: "failed", error };
+    }
     deps.onError?.(error);
     return { outcome: "failed", error };
   }
@@ -455,12 +470,20 @@ export async function handlePrismuxDispatchEnvelope(
 
 export async function confirmPrismuxDispatchViaHost(
   taskId: string,
+  providerHint?: string,
 ): Promise<PrismuxDispatchActionResult> {
   if (
     typeof window !== "undefined" &&
     typeof window.desktopBridge?.confirmPrismuxDispatch === "function"
   ) {
-    return window.desktopBridge.confirmPrismuxDispatch(taskId);
+    const result = await window.desktopBridge.confirmPrismuxDispatch(taskId);
+    if (!result.ok) {
+      const blocked = extractSubscriptionOrchestrationBlockedError(result, providerHint);
+      if (blocked) {
+        emitSubscriptionOrchestrationBlocked(blocked);
+      }
+    }
+    return result;
   }
   try {
     await prismuxDaemonClient.requestJson(`/v1/dispatch/${encodeURIComponent(taskId)}/confirm`, {
@@ -469,6 +492,10 @@ export async function confirmPrismuxDispatchViaHost(
     });
     return { ok: true };
   } catch (error) {
+    const blocked = extractSubscriptionOrchestrationBlockedError(error, providerHint);
+    if (blocked) {
+      emitSubscriptionOrchestrationBlocked(blocked);
+    }
     return {
       ok: false,
       error: error instanceof Error ? error.message : "确认放行请求失败。",
@@ -668,6 +695,9 @@ export function PrismuxIpcDispatchBridge() {
   const [stagedQueue, setStagedQueue] = useState<ReadonlyArray<StagedPrismuxDispatch>>([]);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [blockedDetail, setBlockedDetail] = useState<SubscriptionOrchestrationBlockedDetail | null>(
+    null,
+  );
   const queuePromiseRef = useRef<Promise<void>>(Promise.resolve());
 
   const buildExecutionDeps = (): DispatchExecutionDeps => {
@@ -827,6 +857,9 @@ export function PrismuxIpcDispatchBridge() {
           description: `${envelope.modelId} · ${envelope.reasoningEffort}`,
         });
       },
+      onSubscriptionBlocked: (detail) => {
+        setBlockedDetail(detail);
+      },
       onError: (message) => {
         toastManager.add({
           type: "error",
@@ -859,7 +892,15 @@ export function PrismuxIpcDispatchBridge() {
         enqueueIncomingEnvelope(detail);
       }
     };
+    const handleBlockedEvent = (event: Event) => {
+      const rawDetail = (event as CustomEvent<unknown>).detail;
+      const extracted = extractSubscriptionOrchestrationBlockedError(rawDetail);
+      if (extracted) {
+        setBlockedDetail(extracted);
+      }
+    };
     window.addEventListener(PRISMUX_DISPATCH_WINDOW_EVENT, handleWindowEvent);
+    window.addEventListener(PRISMUX_SUBSCRIPTION_BLOCKED_EVENT, handleBlockedEvent);
     window.__prismuxDispatchThreadForTest = (envelope: PrismuxDispatchEnvelope) => {
       if (isValidDispatchEnvelope(envelope)) {
         enqueueIncomingEnvelope(envelope);
@@ -869,6 +910,7 @@ export function PrismuxIpcDispatchBridge() {
     return () => {
       unsubscribeDesktop?.();
       window.removeEventListener(PRISMUX_DISPATCH_WINDOW_EVENT, handleWindowEvent);
+      window.removeEventListener(PRISMUX_SUBSCRIPTION_BLOCKED_EVENT, handleBlockedEvent);
       if (window.__prismuxDispatchThreadForTest) {
         delete window.__prismuxDispatchThreadForTest;
       }
@@ -881,13 +923,30 @@ export function PrismuxIpcDispatchBridge() {
     setErrorMessage(null);
     void (async () => {
       try {
-        const confirmed = await confirmPrismuxDispatchViaHost(staged.envelope.taskId);
+        const confirmed = await confirmPrismuxDispatchViaHost(
+          staged.envelope.taskId,
+          staged.envelope.provider,
+        );
         if (!confirmed.ok) {
+          const blocked = extractSubscriptionOrchestrationBlockedError(
+            confirmed,
+            staged.envelope.provider,
+          );
+          if (blocked) {
+            setBlockedDetail(blocked);
+          }
           setErrorMessage(confirmed.error ?? "服务端未批准本次放行，请稍后重试。");
           return;
         }
         const sendResult = await dispatchStagedThreadTurn(staged, buildExecutionDeps());
         if (!sendResult.ok) {
+          const blocked = extractSubscriptionOrchestrationBlockedError(
+            sendResult.error,
+            staged.envelope.provider,
+          );
+          if (blocked) {
+            setBlockedDetail(blocked);
+          }
           setErrorMessage(sendResult.error ?? "放行后发送消息失败，草稿仍已保留。");
           return;
         }
@@ -930,13 +989,43 @@ export function PrismuxIpcDispatchBridge() {
     })();
   };
 
+  const handleConfigureApiMode = useStableCallback(
+    (detail: SubscriptionOrchestrationBlockedDetail) => {
+      setBlockedDetail(null);
+      const instanceId = resolveBlockedProviderInstanceId(detail.providerId);
+      void router.navigate({
+        to: "/settings/providers",
+        search: instanceId ? { instanceId } : {},
+      });
+    },
+  );
+
+  const handleOpenRiskWaiver = useStableCallback(
+    (_detail: SubscriptionOrchestrationBlockedDetail) => {
+      setBlockedDetail(null);
+      void router.navigate({
+        to: "/settings/providers",
+        search: {},
+        hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
+      });
+    },
+  );
+
   return (
-    <PrismuxDispatchConfirmationBanner
-      items={stagedQueue}
-      busyTaskId={busyTaskId}
-      errorMessage={errorMessage}
-      onConfirm={handleConfirmStaged}
-      onCancel={handleCancelStaged}
-    />
+    <>
+      <PrismuxDispatchConfirmationBanner
+        items={stagedQueue}
+        busyTaskId={busyTaskId}
+        errorMessage={errorMessage}
+        onConfirm={handleConfirmStaged}
+        onCancel={handleCancelStaged}
+      />
+      <SubscriptionOrchestrationBlockedDialog
+        detail={blockedDetail}
+        onClose={() => setBlockedDetail(null)}
+        onConfigureApi={handleConfigureApiMode}
+        onOpenWaiver={handleOpenRiskWaiver}
+      />
+    </>
   );
 }

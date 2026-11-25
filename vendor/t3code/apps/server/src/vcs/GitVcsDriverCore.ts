@@ -27,7 +27,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   GitCommandError,
   type GitCommandFailureReason,
-  T3_PROJECT_FILE_NAME,
+  LEGACY_T3_PROJECT_FILE_NAME,
+  PRISMUX_PROJECT_FILE_NAME,
   type ReviewBranchCommitsInput,
   type ReviewDiffChangeType,
   type ReviewDiffFileContentsInput,
@@ -1873,7 +1874,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     const repository = yield* resolveRepositoryPaths(cwd);
     if (repository?.worktreeRoot == null) return null;
-    // The cached branch outlives a checkout made outside T3 Code, so it is read fresh.
+    // The cached branch outlives a checkout made outside Prismux, so it is read fresh.
     const currentBranch = needsCurrentBranch
       ? yield* readCurrentBranch("GitVcsDriver.review.currentBranch", cwd)
       : null;
@@ -1911,7 +1912,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     {
       capacity: 2_048,
-      // A remote added outside T3 Code must show on the next status read, so only a hit is kept.
+      // A remote added outside Prismux must show on the next status read, so only a hit is kept.
       timeToLive: Exit.match({
         onSuccess: (exists) => (exists ? STATUS_ORIGIN_EXISTS_CACHE_TTL : Duration.zero),
         onFailure: () => Duration.zero,
@@ -5637,7 +5638,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         };
       }
 
-      // Both caches outlive a checkout made outside T3 Code, so this checkout's branch is read
+      // Both caches outlive a checkout made outside Prismux, so this checkout's branch is read
       // on every call and replaces whatever the cached snapshot claims for it.
       const [snapshot, currentBranch] = yield* Effect.all(
         [
@@ -5649,7 +5650,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         { concurrency: 2 },
       );
       const { worktreeRoot } = repositoryPaths;
-      // The snapshot misses a branch created outside T3 Code until it refreshes. An unborn HEAD
+      // The snapshot misses a branch created outside Prismux until it refreshes. An unborn HEAD
       // names a branch with no ref yet, so the ref must exist before it is listed.
       const currentBranchUnlisted =
         currentBranch !== null && !snapshot.localBranches.some((ref) => ref.name === currentBranch);
@@ -5715,23 +5716,50 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
-  // A new worktree has no files yet, so t3.json and its pattern file come from the ref itself.
+  // A new worktree has no files yet, so prismux.json (or legacy t3.json) and its pattern file come from the ref itself.
+  const readProjectFileFromRef = Effect.fn("readProjectFileFromRef")(function* (
+    cwd: string,
+    ref: string,
+  ) {
+    const primary = yield* executeGit(
+      "GitVcsDriver.createWorktree.readProjectFile",
+      cwd,
+      ["show", `${ref}:${PRISMUX_PROJECT_FILE_NAME}`],
+      { allowNonZeroExit: true },
+    );
+    if (primary.exitCode === 0) {
+      return { fileName: PRISMUX_PROJECT_FILE_NAME, stdout: primary.stdout } as const;
+    }
+    const legacy = yield* executeGit(
+      "GitVcsDriver.createWorktree.readProjectFile",
+      cwd,
+      ["show", `${ref}:${LEGACY_T3_PROJECT_FILE_NAME}`],
+      { allowNonZeroExit: true },
+    );
+    if (legacy.exitCode === 0) {
+      yield* Effect.logWarning(
+        `Loaded legacy ${LEGACY_T3_PROJECT_FILE_NAME} read-only from ${ref}; migrate this file to ${PRISMUX_PROJECT_FILE_NAME}.`,
+        { cwd, ref },
+      );
+      return { fileName: LEGACY_T3_PROJECT_FILE_NAME, stdout: legacy.stdout } as const;
+    }
+    return null;
+  });
+
   const readWorktreeSparsePatterns = Effect.fn("readWorktreeSparsePatterns")(function* (
     cwd: string,
     refName: string,
   ) {
     // `git show` does not read a lone - as the previous checkout either.
     const ref = refName === "-" ? "@{-1}" : refName;
-    const projectFile = yield* executeGit(
-      "GitVcsDriver.createWorktree.readProjectFile",
-      cwd,
-      ["show", `${ref}:${T3_PROJECT_FILE_NAME}`],
-      { allowNonZeroExit: true },
-    );
-    if (projectFile.exitCode !== 0) return null;
+    const projectFile = yield* readProjectFileFromRef(cwd, ref);
+    if (projectFile === null) return null;
     const file = parseT3ProjectFile(projectFile.stdout);
     if (file === null) {
-      yield* Effect.logWarning("t3.json is invalid; checking out the full worktree", { cwd, ref });
+      yield* Effect.logWarning(`${projectFile.fileName} is invalid; checking out the full worktree`, {
+        cwd,
+        ref,
+      });
       return null;
     }
     if (file.worktreeSparsePatternsPath === undefined) return null;
@@ -5750,7 +5778,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         operation: "GitVcsDriver.createWorktree",
         command: "git worktree add",
         cwd,
-        detail: `t3.json names the sparse-checkout pattern file "${file.worktreeSparsePatternsPath}", which is not a file in ${refName}.`,
+        detail: `${projectFile.fileName} names the sparse-checkout pattern file "${file.worktreeSparsePatternsPath}", which is not a file in ${refName}.`,
       });
     }
     return patterns.stdout;
@@ -6075,20 +6103,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           options?.submodules ?? null,
           options?.submodules != null
             ? null
-            : // Read HEAD for the same reason: sparse patterns can leave t3.json out too.
-              yield* executeGit(
-                "GitVcsDriver.createWorktree.readProjectFile",
-                worktreePath,
-                ["show", `HEAD:${T3_PROJECT_FILE_NAME}`],
-                { allowNonZeroExit: true },
-              ).pipe(
-                Effect.flatMap((result) => {
-                  if (result.exitCode !== 0) return Effect.succeed(null);
-                  const file = parseT3ProjectFile(result.stdout);
+            : // Read HEAD for the same reason: sparse patterns can leave prismux.json (or legacy t3.json) out too.
+              yield* readProjectFileFromRef(worktreePath, "HEAD").pipe(
+                Effect.flatMap((projectFile) => {
+                  if (projectFile === null) return Effect.succeed(null);
+                  const file = parseT3ProjectFile(projectFile.stdout);
                   return file === null
-                    ? Effect.logWarning("t3.json is invalid; initializing submodules recursively", {
-                        worktreePath,
-                      }).pipe(Effect.as(null))
+                    ? Effect.logWarning(
+                        `${projectFile.fileName} is invalid; initializing submodules recursively`,
+                        {
+                          worktreePath,
+                        },
+                      ).pipe(Effect.as(null))
                     : Effect.succeed(file);
                 }),
                 Effect.orElseSucceed(() => null),

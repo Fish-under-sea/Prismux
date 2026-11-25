@@ -149,9 +149,9 @@ function makeLayer(input: {
       ConfigProvider.layer(
         ConfigProvider.fromEnv({
           env: input.env ?? {
-            T3CODE_BITBUCKET_API_BASE_URL: "https://api.test.local/2.0",
-            T3CODE_BITBUCKET_EMAIL: "user@example.com",
-            T3CODE_BITBUCKET_API_TOKEN: "token",
+            PRISMUX_BITBUCKET_API_BASE_URL: "https://api.test.local/2.0",
+            PRISMUX_BITBUCKET_EMAIL: "user@example.com",
+            PRISMUX_BITBUCKET_API_TOKEN: "token",
           },
         }),
       ),
@@ -510,8 +510,8 @@ it.effect("sends a self-hosted Bitbucket remote nowhere unless an API base url i
       remoteUrl,
     };
     const cloudEnv = {
-      T3CODE_BITBUCKET_EMAIL: "user@example.com",
-      T3CODE_BITBUCKET_API_TOKEN: "t",
+      PRISMUX_BITBUCKET_EMAIL: "user@example.com",
+      PRISMUX_BITBUCKET_API_TOKEN: "t",
     };
     const response = (request: HttpClientRequest.HttpClientRequest) =>
       Response.json(request.url.endsWith("/branching-model") ? {} : repositoryJson);
@@ -765,7 +765,7 @@ it.effect("never puts a saved token that is unsafe for an HTTP header on the wir
 it.effect("reports saved credentials as configured when Bitbucket cannot confirm them", () => {
   const { execute, layer } = makeLayer({
     response: () => new Response(null, { status: 401 }),
-    env: { T3CODE_BITBUCKET_API_BASE_URL: "https://api.test.local/2.0" },
+    env: { PRISMUX_BITBUCKET_API_BASE_URL: "https://api.test.local/2.0" },
   });
 
   return Effect.gen(function* () {

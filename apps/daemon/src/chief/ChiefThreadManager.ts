@@ -25,7 +25,7 @@ import {
   type ChiefSystemContext,
   type ChiefThreadSlotState
 } from "@prismux/protocol";
-import type { T3RpcClient } from "../t3/T3RpcClient.js";
+import type { CoreRpcClient } from "../core/CoreRpcClient.js";
 
 export const DEFAULT_CHIEF_MCP_SERVERS = [
   `${BRAND.appSlug}-memory`,
@@ -45,7 +45,7 @@ export interface ChiefThreadManagerOptions {
   defaultModel?: string;
   defaultReasoningEffort?: string;
   defaultSecretaryName?: string;
-  rpcClient?: T3RpcClient;
+  rpcClient?: CoreRpcClient;
 }
 
 export interface ChiefSwitchOptions {
@@ -297,7 +297,7 @@ export class ChiefThreadManager {
   private readonly defaultModel: string | undefined;
   private readonly defaultReasoningEffort: string | undefined;
   private readonly defaultSecretaryName: string;
-  private readonly rpcClient: T3RpcClient | undefined;
+  private readonly rpcClient: CoreRpcClient | undefined;
   private slot: ChiefThreadSlotState | undefined;
 
   constructor(options: ChiefThreadManagerOptions) {

@@ -125,7 +125,8 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
       ["Prismux Updates", "prismux-updates"],
       ["入门引导", "welcome-page"],
       ["欢迎页", "welcome-page"],
-      ["被控代理", "antigravity-controlled-lock"],
+      ["被控代理", "subscription-risk-waiver"],
+      ["个人订阅", "subscription-risk-waiver"],
     ];
 
     for (const [query, expectedId] of cases) {

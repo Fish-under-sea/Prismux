@@ -184,8 +184,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
               ConfigProvider.layer(
                 ConfigProvider.fromEnv({
                   env: {
-                    T3CODE_ENVIRONMENT_LABEL: " MacBook ",
-                    T3CODE_ENVIRONMENT_MACHINE_KIND: "laptop",
+                    PRISMUX_ENVIRONMENT_LABEL: " MacBook ",
+                    PRISMUX_ENVIRONMENT_MACHINE_KIND: "laptop",
                   },
                 }),
               ),

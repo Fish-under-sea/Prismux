@@ -11,7 +11,7 @@ import path from "node:path";
 import process from "node:process";
 import type { Duplex } from "node:stream";
 import { URL } from "node:url";
-import { sanitizeChildEnv } from "../t3/T3ServerSupervisor.js";
+import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 
 export type SandboxPlatformBackend =
   | "bwrap"

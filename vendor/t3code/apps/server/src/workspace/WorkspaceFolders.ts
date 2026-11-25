@@ -13,8 +13,8 @@ import {
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
-import { T3_PROJECT_FILE_NAME } from "@t3tools/contracts";
-import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
+import { LEGACY_T3_PROJECT_FILE_NAME, PRISMUX_PROJECT_FILE_NAME } from "@t3tools/contracts";
+import { parsePrismuxProjectFile } from "@t3tools/shared/prismuxProjectFile";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -279,13 +279,23 @@ export const discoverFolders = Effect.fn("WorkspaceFolders.discover")(function* 
   const path = yield* Path.Path;
   const { realPath, ownsHistory } = yield* folderProbes;
   const root = path.resolve(expandHomePath(workspaceRoot.trim(), yield* HostProcess.HomeDirectory));
-  const ignored = (
-    parseT3ProjectFile(
-      yield* fileSystem
-        .readFileString(path.join(root, T3_PROJECT_FILE_NAME))
-        .pipe(Effect.orElseSucceed(() => "")),
-    )?.ignoreRepositories ?? []
-  ).map((entry) => path.resolve(root, entry));
+  const primaryProjectFile = yield* fileSystem
+    .readFileString(path.join(root, PRISMUX_PROJECT_FILE_NAME))
+    .pipe(Effect.option);
+  const projectFileRaw = Option.isSome(primaryProjectFile)
+    ? primaryProjectFile.value
+    : yield* fileSystem.readFileString(path.join(root, LEGACY_T3_PROJECT_FILE_NAME)).pipe(
+        Effect.tap(() =>
+          Effect.logWarning(
+            `Loaded legacy ${LEGACY_T3_PROJECT_FILE_NAME} read-only; migrate this file to ${PRISMUX_PROJECT_FILE_NAME}.`,
+            { workspaceRoot: root },
+          ),
+        ),
+        Effect.orElseSucceed(() => ""),
+      );
+  const ignored = (parsePrismuxProjectFile(projectFileRaw)?.ignoreRepositories ?? []).map((entry) =>
+    path.resolve(root, entry),
+  );
   // Everything the scan could find would be dropped, so skip the walk.
   if (ignored.some((entry) => isWithinRoot(path, root, entry))) return [];
   // Uncapped: the folders outside the project are dropped below, and must not use up the room.

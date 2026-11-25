@@ -68,30 +68,6 @@ vi.mock(import("../../cloud/publicConfig"), async (original) => ({
   ...(await original()),
   hasCloudPublicConfig: () => state.cloud,
 }));
-vi.mock(import("@clerk/react"), async (original) => ({
-  ...(await original()),
-  useAuth: (() => state.auth) as never,
-}));
-vi.mock(import("../clerk/clerkLoadFailure"), async (original) => ({
-  ...(await original()),
-  useClerkLoadFailed: () => false,
-}));
-vi.mock(import("../clerk/useT3ConnectAuthPrompt"), async (original) => ({
-  ...(await original()),
-  useT3ConnectAuthPrompt: (() => ({ openAuthPrompt: () => {} })) as never,
-}));
-vi.mock(import("../../cloud/cloudLinkState"), async (original) => {
-  const { useAtomValue } = await import("@effect/atom-react");
-  return {
-    ...(await original()),
-    useCloudLinkState: (() => ({
-      data: useAtomValue(state.linkState as Atom.Atom<EnvironmentCloudLinkStateResult | null>),
-      error: state.linkError,
-      isPending: false,
-      refresh: state.refreshLinkState,
-    })) as never,
-  };
-});
 vi.mock(import("../../onboarding/firstRun"), async (original) => ({
   ...(await original()),
   completeOnboarding: state.completeOnboarding,
@@ -570,7 +546,7 @@ it("stays busy while setup saves after an import with nothing to open", async ()
   expect(state.createProject).toHaveBeenCalledOnce();
 });
 
-it("leaves projects already in T3 Code out of the default import, unless the box is checked", async () => {
+it("leaves projects already in Prismux out of the default import, unless the box is checked", async () => {
   using _now = setup();
   const existing = ProjectId.make("existing");
   const justAdded = ProjectId.make("just-added");
@@ -589,7 +565,7 @@ it("leaves projects already in T3 Code out of the default import, unless the box
     await vi.waitFor(() => expect(pageText()).toContain("Import 1 project and their threads"));
   }
 
-  // With every project already in T3 Code, checking the box still picks them.
+  // With every project already in Prismux, checking the box still picks them.
   appAtomRegistry.set(candidatesAtom(), appAtomRegistry.get(candidatesAtom()).slice(0, 2));
   await using _screen = await mountWelcome();
   const importProjects = document.querySelector<HTMLElement>('[role="checkbox"]');
@@ -609,7 +585,7 @@ it("keeps the started projects checked when the page opens again after a quit", 
     await click("Import 2 projects and start");
     await vi.waitFor(() => expect(state.importThreads).toHaveBeenCalledOnce());
   }
-  // The app quit during the first project's history; it now exists in T3 Code.
+  // The app quit during the first project's history; it now exists in Prismux.
   const [first] = appAtomRegistry.get(projectsAtom());
   appAtomRegistry.set(candidatesAtom(), [
     candidate("/projects/first", { alreadyImported: true, projectId: first!.id }),

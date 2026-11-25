@@ -154,7 +154,11 @@ import {
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
 import { supportsDualLaunchMode } from "./prismuxProviderMeta";
-import { AntigravityControlledLockSection } from "../../prismux/AntigravityControlledLockSection";
+import {
+  LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID,
+  SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  SubscriptionRiskWaiverSection,
+} from "../../prismux/SubscriptionRiskWaiverSection";
 import { formatAgentBrandName } from "../../prismux/agentBrand";
 import {
   resolveEffectiveLaunchMode,
@@ -400,7 +404,8 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
   {
     if (
       !target.scoped &&
-      (searchTargetId === searchableSetting("antigravity-controlled-lock").id ||
+      (searchTargetId === searchableSetting("subscription-risk-waiver").id ||
+        searchTargetId === LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID ||
         searchTargetId === searchableSetting("usage-providers").id) &&
       !selectedEnvironmentCanRenderSettings &&
       searchableEnvironmentId !== undefined
@@ -595,8 +600,6 @@ export function EnvironmentProviderSettings({
 }) {
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
-  const searchTargetId = useSettingsSearchTargetId();
-  const antigravityLockTargetId = searchableSetting("antigravity-controlled-lock").id;
   const settings = useEnvironmentSettings(environmentId);
   const {
     state: launchModeState,
@@ -641,9 +644,6 @@ export function EnvironmentProviderSettings({
   >(() => new Set());
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
     targetInstanceId ?? null,
-  );
-  const [seenAntigravityLockTarget, setSeenAntigravityLockTarget] = useState<boolean>(
-    () => searchTargetId === antigravityLockTargetId,
   );
   const [updatingProviderInstanceIds, setUpdatingProviderInstanceIds] = useState<
     ReadonlySet<ProviderInstanceId>
@@ -820,7 +820,6 @@ export function EnvironmentProviderSettings({
     updateSettings({ providerOrder: nextOrder });
   };
 
-  const antigravityRow = rows.find((row) => row.driver === "antigravity") ?? null;
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
     selectedInstanceId === targetInstanceId &&
@@ -828,19 +827,7 @@ export function EnvironmentProviderSettings({
     !rows.some((row) => row.instanceId === targetInstanceId);
   const selectedRow =
     rows.find((row) => row.instanceId === selectedInstanceId) ??
-    (targetInstanceMissing
-      ? null
-      : searchTargetId === antigravityLockTargetId && antigravityRow
-        ? antigravityRow
-        : (rows[0] ?? null));
-  if (searchTargetId === antigravityLockTargetId && !seenAntigravityLockTarget) {
-    setSeenAntigravityLockTarget(true);
-    if (antigravityRow && selectedRow?.instanceId !== antigravityRow.instanceId) {
-      setSelectedInstanceId(antigravityRow.instanceId);
-    }
-  } else if (searchTargetId !== antigravityLockTargetId && seenAntigravityLockTarget) {
-    setSeenAntigravityLockTarget(false);
-  }
+    (targetInstanceMissing ? null : (rows[0] ?? null));
 
   const persistInstance = async (
     instanceId: ProviderInstanceId,
@@ -1374,12 +1361,10 @@ export function EnvironmentProviderSettings({
         />
       ) : null}
 
-      {selectedRow?.driver !== "antigravity" &&
-      (antigravityRow !== null || searchTargetId === antigravityLockTargetId) ? (
-        <div id={antigravityLockTargetId} tabIndex={-1}>
-          <AntigravityControlledLockSection readOnly={readOnly} />
-        </div>
-      ) : null}
+      <SubscriptionRiskWaiverSection
+        key={`subscription-waiver:${SUBSCRIPTION_WAIVER_ANCHOR_ID}`}
+        readOnly={readOnly}
+      />
 
       <SettingsSection title={gt("Advanced")}>
         <CompactIdleThreadsRow />
@@ -1645,21 +1630,16 @@ function ProviderInstanceRow({
       canWriteSettings={canWriteSettings}
       setup={
         mode === "editor" && driver === "antigravity" ? (
-          <div className="divide-y divide-border/50">
-            <ProviderSetupSection
-              environmentId={environmentId}
-              environmentLabel={environmentLabel}
-              instanceId={instanceId}
-              provider={liveProvider}
-              binaryPath={configuredBinaryPath(instance.config)}
-              enabled={resolveProviderInstanceEnabled(instance)}
-              readOnly={readOnly}
-              onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
-            />
-            <div id="antigravity-controlled-lock" tabIndex={-1} className="px-3 py-3 sm:px-4">
-              <AntigravityControlledLockSection readOnly={readOnly} />
-            </div>
-          </div>
+          <ProviderSetupSection
+            environmentId={environmentId}
+            environmentLabel={environmentLabel}
+            instanceId={instanceId}
+            provider={liveProvider}
+            binaryPath={configuredBinaryPath(instance.config)}
+            enabled={resolveProviderInstanceEnabled(instance)}
+            readOnly={readOnly}
+            onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
+          />
         ) : mode === "editor" && codexSetupMode === "managed" ? (
           <CodexSetupSection
             environmentId={environmentId}

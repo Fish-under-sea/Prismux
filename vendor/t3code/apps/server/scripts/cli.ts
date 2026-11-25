@@ -135,9 +135,9 @@ const buildExeCmd = Command.make(
             cwd: serverDir,
             env: {
               ...process.env,
-              T3CODE_PACK_EXE: packMode,
-              T3CODE_CLI_ASSET_DIR: cliAssetDir,
-              T3CODE_PACK_EXE_TARGET: target ?? "",
+              PRISMUX_PACK_EXE: packMode,
+              PRISMUX_CLI_ASSET_DIR: cliAssetDir,
+              PRISMUX_PACK_EXE_TARGET: target ?? "",
             },
             stdout: config.verbose ? "inherit" : "ignore",
             stderr: "inherit",

@@ -86,7 +86,9 @@ export interface ApplyAppearanceOptions {
   reducedTransparency?: boolean;
   /** Whether an active Z-0 wallpaper is rendered behind the workbench. */
   wallpaperActive?: boolean;
-  /** Optional sync of T3 Code's `.dark` class on `documentElement` (defaults to false). */
+  /** Optional sync of the host `.dark` class on `documentElement` (defaults to false). */
+  syncDarkClass?: boolean;
+  /** @deprecated Use `syncDarkClass`. */
   syncT3DarkClass?: boolean;
 }
 
@@ -1592,12 +1594,12 @@ const MANAGED_CSS_VARS: readonly string[] = [
 
 /**
  * Applies the complete Prismux appearance state onto `document.documentElement` and `document.body`:
- * - Data attributes for T3 Code glass bridge & UI plugin sync (`data-pmx-*`, `data-prismux-*`)
+ * - Data attributes for Prismux glass bridge & UI plugin sync (`data-pmx-*`, `data-prismux-*`)
  * - Clamped readability-floor tints, 4-region glass coordinates, and unconditional per-surface variables
  * - Independent light/dark typography colors, custom font families, caret color, and 5 UI accent overrides
  *
  * When glass is off (`themeMode !== 'glass'` or preset `'off'`), `data-pmx-glass="0"` guarantees
- * 100% lossless fallback to native T3 Code appearance.
+ * 100% lossless fallback to native Prismux appearance.
  */
 export function applyPrismuxAppearanceToDocument(
   state: AppearanceConfig,
@@ -1712,7 +1714,7 @@ export function applyPrismuxAppearanceToDocument(
     el.classList.toggle('pmx-glass', runtime.glassActive);
   }
 
-  if (opts.syncT3DarkClass) {
+  if (opts.syncDarkClass ?? opts.syncT3DarkClass) {
     html.classList.toggle('dark', runtime.isDark);
   }
 

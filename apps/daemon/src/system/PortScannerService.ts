@@ -12,7 +12,7 @@ import type {
   SystemPortsResponse
 } from "@prismux/protocol";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
-import type { T3ServerSupervisor } from "../t3/T3ServerSupervisor.js";
+import type { CoreServerSupervisor } from "../core/CoreServerSupervisor.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,7 +100,7 @@ export interface KillProtectionCheck {
 
 export interface PortScannerServiceOptions {
   ptyPool?: PersistentPtyPool;
-  t3Supervisor?: T3ServerSupervisor;
+  t3Supervisor?: CoreServerSupervisor;
   getProtectedPids?: () => number[];
   /** Injectable scanner for deterministic tests. */
   scanListeningSockets?: () => Promise<RawListeningSocket[]>;
@@ -556,7 +556,7 @@ async function defaultKillProcess(
  */
 export class PortScannerService {
   private readonly ptyPool: PersistentPtyPool | undefined;
-  private readonly t3Supervisor: T3ServerSupervisor | undefined;
+  private readonly t3Supervisor: CoreServerSupervisor | undefined;
   private readonly getProtectedPids: (() => number[]) | undefined;
   private readonly scanListeningSocketsFn: () => Promise<RawListeningSocket[]>;
   private readonly inspectProcessesFn: (

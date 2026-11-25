@@ -284,11 +284,11 @@ describe("installRelayTelemetryEnabled", () => {
           organization: "Example Corp",
           limits,
         });
-        assert.deepEqual(yield* relayTelemetryEnabled({ T3CODE_TELEMETRY_ENABLED: "false" }), {
+        assert.deepEqual(yield* relayTelemetryEnabled({ PRISMUX_TELEMETRY_ENABLED: "false" }), {
           beforeDiscovery: false,
           afterDiscovery: false,
         });
-        assert.deepEqual(yield* relayTelemetryEnabled({ T3CODE_TELEMETRY_ENABLED: "true" }), {
+        assert.deepEqual(yield* relayTelemetryEnabled({ PRISMUX_TELEMETRY_ENABLED: "true" }), {
           beforeDiscovery: false,
           afterDiscovery: false,
         });
@@ -298,7 +298,7 @@ describe("installRelayTelemetryEnabled", () => {
         });
         assert.deepEqual(
           yield* relayTelemetryEnabled({}, policy({ telemetry: true }), {
-            T3CODE_TELEMETRY_ENABLED: "true",
+            PRISMUX_TELEMETRY_ENABLED: "true",
           }),
           { beforeDiscovery: false, afterDiscovery: false },
         );

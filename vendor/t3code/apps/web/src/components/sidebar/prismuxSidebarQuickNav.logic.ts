@@ -52,7 +52,7 @@ export const PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS = {
 } as const;
 
 /**
- * Official Prismux external Help links — zero `orca.dev` / `t3.codes` / `pingdotgg` links.
+ * Official Prismux external Help links — zero third-party upstream links.
  * Every URL must pass strict `https:` validation before opening.
  */
 export const PRISMUX_HELP_EXTERNAL_LINKS = {

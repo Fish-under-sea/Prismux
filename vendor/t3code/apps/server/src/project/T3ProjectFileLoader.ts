@@ -6,10 +6,14 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { T3_PROJECT_FILE_NAME, type T3ProjectFile } from "@t3tools/contracts";
-import { T3ProjectFileFromJson } from "@t3tools/shared/t3ProjectFile";
+import {
+  LEGACY_T3_PROJECT_FILE_NAME,
+  PRISMUX_PROJECT_FILE_NAME,
+  type PrismuxProjectFile,
+} from "@t3tools/contracts";
+import { PrismuxProjectFileFromJson } from "@t3tools/shared/prismuxProjectFile";
 
-const decodeT3ProjectFileJson = Schema.decodeEffect(T3ProjectFileFromJson);
+const decodePrismuxProjectFileJson = Schema.decodeEffect(PrismuxProjectFileFromJson);
 
 export class T3ProjectFileLoadError extends Schema.TaggedError<T3ProjectFileLoadError>()(
   "T3ProjectFileLoadError",
@@ -21,7 +25,7 @@ export class T3ProjectFileLoadError extends Schema.TaggedError<T3ProjectFileLoad
   },
 ) {
   override get message(): string {
-    return `Failed to ${this.operation} ${T3_PROJECT_FILE_NAME} at ${this.filePath}.`;
+    return `Failed to ${this.operation} ${PRISMUX_PROJECT_FILE_NAME} at ${this.filePath}.`;
   }
 }
 
@@ -29,7 +33,7 @@ export class T3ProjectFileLoader extends Context.Service<
   T3ProjectFileLoader,
   {
     /** Never fails; missing/unreadable/invalid files return none, with warnings for invalid files. */
-    readonly load: (workspaceRoot: string) => Effect.Effect<Option.Option<T3ProjectFile>>;
+    readonly load: (workspaceRoot: string) => Effect.Effect<Option.Option<PrismuxProjectFile>>;
   }
 >()("t3/project/T3ProjectFileLoader") {}
 
@@ -48,29 +52,61 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
+  const readProjectFileCandidate = Effect.fn("T3ProjectFileLoader.readCandidate")(function* (
+    workspaceRoot: string,
+    fileName: string,
+  ): Effect.fn.Return<
+    | { readonly _tag: "found"; readonly filePath: string; readonly raw: string }
+    | { readonly _tag: "not-found" }
+    | { readonly _tag: "read-error" }
+  > {
+    const filePath = path.join(workspaceRoot, fileName);
+    return yield* fileSystem.readFileString(filePath).pipe(
+      Effect.map((raw) => ({ _tag: "found" as const, filePath, raw })),
+      Effect.catchTags({
+        PlatformError: (error) =>
+          error.reason._tag === "NotFound"
+            ? Effect.succeed({ _tag: "not-found" as const })
+            : logT3ProjectFileLoadError(
+                new T3ProjectFileLoadError({
+                  operation: "read",
+                  workspaceRoot,
+                  filePath,
+                  cause: error,
+                }),
+              ).pipe(Effect.as({ _tag: "read-error" as const })),
+      }),
+    );
+  });
+
   const load: T3ProjectFileLoader["Service"]["load"] = Effect.fn("T3ProjectFileLoader.load")(
     function* (workspaceRoot) {
-      const filePath = path.join(workspaceRoot, T3_PROJECT_FILE_NAME);
-      const raw = yield* fileSystem.readFileString(filePath).pipe(
-        Effect.asSome,
-        Effect.catchTags({
-          PlatformError: (error) =>
-            error.reason._tag === "NotFound"
-              ? Effect.succeed(Option.none<string>())
-              : logT3ProjectFileLoadError(
-                  new T3ProjectFileLoadError({
-                    operation: "read",
-                    workspaceRoot,
-                    filePath,
-                    cause: error,
-                  }),
-                ).pipe(Effect.as(Option.none<string>())),
-        }),
-      );
-      if (Option.isNone(raw)) {
-        return Option.none<T3ProjectFile>();
+      const primary = yield* readProjectFileCandidate(workspaceRoot, PRISMUX_PROJECT_FILE_NAME);
+      let loaded: { readonly filePath: string; readonly raw: string; readonly isLegacy: boolean };
+
+      if (primary._tag === "found") {
+        loaded = { filePath: primary.filePath, raw: primary.raw, isLegacy: false };
+      } else if (primary._tag === "read-error") {
+        return Option.none<PrismuxProjectFile>();
+      } else {
+        const legacy = yield* readProjectFileCandidate(workspaceRoot, LEGACY_T3_PROJECT_FILE_NAME);
+        if (legacy._tag !== "found") {
+          return Option.none<PrismuxProjectFile>();
+        }
+        yield* Effect.logWarning(
+          `Loaded legacy ${LEGACY_T3_PROJECT_FILE_NAME} read-only; migrate this file to ${PRISMUX_PROJECT_FILE_NAME}.`,
+        ).pipe(
+          Effect.annotateLogs({
+            workspaceRoot,
+            filePath: legacy.filePath,
+            recommendedFileName: PRISMUX_PROJECT_FILE_NAME,
+            migrationFallback: "read-only",
+          }),
+        );
+        loaded = { filePath: legacy.filePath, raw: legacy.raw, isLegacy: true };
       }
-      return yield* decodeT3ProjectFileJson(raw.value).pipe(
+
+      return yield* decodePrismuxProjectFileJson(loaded.raw).pipe(
         Effect.asSome,
         Effect.catchTags({
           SchemaError: (error) =>
@@ -78,10 +114,10 @@ export const make = Effect.gen(function* () {
               new T3ProjectFileLoadError({
                 operation: "decode",
                 workspaceRoot,
-                filePath,
+                filePath: loaded.filePath,
                 cause: error,
               }),
-            ).pipe(Effect.as(Option.none<T3ProjectFile>())),
+            ).pipe(Effect.as(Option.none<PrismuxProjectFile>())),
         }),
       );
     },

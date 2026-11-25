@@ -124,7 +124,7 @@ export function buildPrismuxDaemonChildEnv(input: {
     ...(normalizedHttpUrl
       ? {
           PRISMUX_T3_SERVER_URL: normalizedHttpUrl,
-          T3CODE_SERVER_URL: normalizedHttpUrl,
+          PRISMUX_SERVER_URL: normalizedHttpUrl,
         }
       : {}),
     ...(normalizedWsUrl ? { PRISMUX_T3_WS_URL: normalizedWsUrl } : {}),

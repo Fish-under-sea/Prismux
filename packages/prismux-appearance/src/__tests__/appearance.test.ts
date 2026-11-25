@@ -525,7 +525,7 @@ describe('Default/custom merge boundaries & document application', () => {
     const body = createMockElement();
     const doc: DocumentLike = { documentElement: html, body };
 
-    // 1. Dark native mode: glass gate MUST be '0' for 100% T3 Code native fallback.
+    // 1. Dark native mode: glass gate MUST be '0' for 100% Prismux native fallback.
     const nativeState = normalizeAppearanceConfig({
       themeMode: 'dark',
       typography: {
@@ -618,9 +618,9 @@ describe('Default/custom merge boundaries & document application', () => {
 });
 
 describe('T3 glass bridge CSS specificity & solid fallback invariants', () => {
-  it('outranks T3 Code [data-theme-id] blocks for typography/UI overrides and reverts all glass surfaces to solid in all 3 fallbacks', () => {
+  it('outranks Prismux [data-theme-id] blocks for typography/UI overrides and reverts all glass surfaces to solid in all 3 fallbacks', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const cssPath = path.resolve(here, '../styles/t3-glass-bridge.css');
+    const cssPath = path.resolve(here, '../styles/prismux-glass-bridge.css');
     const css = fs.readFileSync(cssPath, 'utf8');
 
     // Balanced braces sanity check.
@@ -654,7 +654,7 @@ describe('T3 glass bridge CSS specificity & solid fallback invariants', () => {
 
   it('beats Tailwind v4 dark specificity, avoids double-compositing, clears Windows 6px seam, and protects color popover', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
     const popoverCss = fs.readFileSync(path.resolve(here, '../styles/color-popover.css'), 'utf8');
 
     // Root token bridge must beat :root:is(.dark, .dark *) (0,2,0) via html.dark[data-pmx-glass='1'] (0,2,1).
@@ -1465,7 +1465,7 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     assert.match(indexSource, /GlassZoneConfigurator/);
     assert.match(studioBuilt, /export function InlineAppearanceStudio/);
 
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
     const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
     const heroBuilt = fs.readFileSync(path.resolve(here, '../AppearanceHeroAndCards.js'), 'utf8');
 
@@ -1474,11 +1474,11 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     for (const id of GLASS_ZONE_IDS) {
       assert.ok(
         bridgeCss.includes(`[data-pmx-glass-zone='${id}']`),
-        `t3-glass-bridge.css must bind [data-pmx-glass-zone='${id}']`,
+        `prismux-glass-bridge.css must bind [data-pmx-glass-zone='${id}']`,
       );
       assert.ok(
         bridgeCss.includes(`--pmx-glass-zone-${GLASS_ZONE_CSS_NAMES[id]}-bg`),
-        `t3-glass-bridge.css must consume --pmx-glass-zone-${GLASS_ZONE_CSS_NAMES[id]}-bg`,
+        `prismux-glass-bridge.css must consume --pmx-glass-zone-${GLASS_ZONE_CSS_NAMES[id]}-bg`,
       );
     }
     assert.ok(bridgeCss.includes("[data-pmx-glass-zone='leftSidebar']"));
@@ -1614,7 +1614,7 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
 
     // 3. Warm-wallpaper dark-glass contrast lift & anti-bleed-through floating peek drawer CSS contract.
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
     assert.match(bridgeCss, /--sidebar-muted-foreground:\s*rgba\(255,\s*255,\s*255,\s*0\.8[68]\)/);
     assert.match(bridgeCss, /text-shadow:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.4[58]\)/);
     assert.match(bridgeCss, /filter:\s*drop-shadow\(0 1px 1\.5px rgba\(0,\s*0,\s*0,\s*0\.38\)\)/);
@@ -1667,9 +1667,9 @@ describe('Arc / AGY 2.0 monolithic outer frame, 4 concave corners & clear mainCa
     assert.equal(rtSolid.zones.mainCanvas.backdropCss, 'none');
   });
 
-  it('defines zero-seam outer chrome, 4 concave corner fillets, radial fallback, 1px inner ring & solid fallbacks in t3-glass-bridge.css', () => {
+  it('defines zero-seam outer chrome, 4 concave corner fillets, radial fallback, 1px inner ring & solid fallbacks in prismux-glass-bridge.css', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
 
     // Monolithic zero-seam chrome border removal (eliminating ALL internal T-seams & cross-seams in Figs 3–6)
     assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame='1'\]\)[\s\S]*?\[data-slot='sidebar-container'\][\s\S]*?border-right-width:\s*0 !important/);
@@ -2116,12 +2116,12 @@ describe('Wallpaper color fidelity & natural frosted glass saturation (#454)', (
 
   it('removes oversaturated 1.4-1.65 and brightness() backdrop fallbacks from all appearance stylesheets', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
     const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
     const popoverCss = fs.readFileSync(path.resolve(here, '../styles/color-popover.css'), 'utf8');
 
     for (const [name, css] of [
-      ['t3-glass-bridge.css', bridgeCss],
+      ['prismux-glass-bridge.css', bridgeCss],
       ['appearance-cards.css', cardsCss],
       ['color-popover.css', popoverCss],
     ] as const) {
@@ -2628,12 +2628,12 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
 
   it('defines single-layer continuous cutout CSS rules, hides legacy 4 corners, preserves peek drawer & all 3 solid fallbacks', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
 
     // Balanced braces & zero prefers-color-scheme
     const opens = (bridgeCss.match(/\{/g) ?? []).length;
     const closes = (bridgeCss.match(/\}/g) ?? []).length;
-    assert.equal(opens, closes, 't3-glass-bridge.css braces must stay balanced');
+    assert.equal(opens, closes, 'prismux-glass-bridge.css braces must stay balanced');
     assert.doesNotMatch(bridgeCss, /prefers-color-scheme/);
 
     // Section 2.7 single-layer continuous backdrop & active cutout rules
@@ -2760,9 +2760,9 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     assert.equal(html.styles.get('--pmx-glass-work-panels-border'), undefined);
   });
 
-  it('wires [data-pmx-work-panel="1"], [data-pmx-work-panel-card="1"], and global .text-background glass safety guard in t3-glass-bridge.css', () => {
+  it('wires [data-pmx-work-panel="1"], [data-pmx-work-panel-card="1"], and global .text-background glass safety guard in prismux-glass-bridge.css', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
 
     assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\]\s+\.text-background[\s\S]*?color:\s*#0b0f17;/);
     assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\]\s+\.text-background[\s\S]*?color:\s*#ffffff;/);
@@ -2788,12 +2788,12 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
 
   it('enforces high-contrast 3-state (Light / Dark / Glass) active highlighting on shared segmented controls, ToggleGroup & Tabs (#505)', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
     const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
 
     // Balanced braces & zero prefers-color-scheme in both stylesheets
     for (const [name, css] of [
-      ['t3-glass-bridge.css', bridgeCss],
+      ['prismux-glass-bridge.css', bridgeCss],
       ['appearance-cards.css', cardsCss],
     ] as const) {
       const noComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -2805,7 +2805,7 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
       );
     }
 
-    // 1. t3-glass-bridge.css covers ToggleGroup segmented, Toggle [data-pressed], TabsList & TabsTrigger across Light / Dark / Glass
+    // 1. prismux-glass-bridge.css covers ToggleGroup segmented, Toggle [data-pressed], TabsList & TabsTrigger across Light / Dark / Glass
     assert.match(bridgeCss, /\[data-slot='toggle-group'\]\[data-variant='segmented'\],\s*\[data-slot='tabs-list'\]/);
     assert.match(bridgeCss, /html\.dark \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
     assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\] \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
@@ -2825,7 +2825,7 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
   });
 
   it('replaces harsh blue active boxes on topbar icon toggles with Liquid Glass relief + micro-bar and animates RGB Wallpaper Sparkles with reduced-motion fallback', () => {
-    const bridgeCss = fs.readFileSync(new URL('../../src/styles/t3-glass-bridge.css', import.meta.url), 'utf8');
+    const bridgeCss = fs.readFileSync(new URL('../../src/styles/prismux-glass-bridge.css', import.meta.url), 'utf8');
 
     assert.match(bridgeCss, /@keyframes pmx-wallpaper-rgb-flow\b/);
     assert.match(bridgeCss, /@keyframes pmx-wallpaper-rgb-flow-light\b/);
@@ -2845,7 +2845,7 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
   });
 
   it('enforces sharp sidebar --contrast-secondary-label tokens, 4-edge sidebar glass cards, active RGB border marquee & breathing logo, and AGY Light/Dark liquid glass user message pills', () => {
-    const bridgeCss = fs.readFileSync(new URL('../../src/styles/t3-glass-bridge.css', import.meta.url), 'utf8');
+    const bridgeCss = fs.readFileSync(new URL('../../src/styles/prismux-glass-bridge.css', import.meta.url), 'utf8');
 
     // Balanced braces & zero prefers-color-scheme
     const noComments = bridgeCss.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -2853,7 +2853,7 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     assert.equal(
       (noComments.match(/\{/g) ?? []).length,
       (noComments.match(/\}/g) ?? []).length,
-      't3-glass-bridge.css braces must stay balanced',
+      'prismux-glass-bridge.css braces must stay balanced',
     );
 
     // 1. Sidebar Dark & Light Glass contrast token overrides + custom-muted binding
@@ -3088,7 +3088,7 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
       new URL('../../src/AppearanceHeroAndCards.tsx', import.meta.url),
       'utf8',
     );
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
     const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
 
     assert.ok(configuratorSrc.includes('工作台 8 分区精细玻璃控制'));
@@ -3166,7 +3166,7 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
 
   it('RC.2 #705 binds inline markdown file links and mention/file/citation context chips to --pmx-accent while preserving custom UI colors and bubble ink', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/t3-glass-bridge.css'), 'utf8');
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
 
     // Global Prismux theme accent binding for context chips & info-foreground
     assert.match(

@@ -34,8 +34,8 @@ const layerEnvironment = (input: {
       Layer.mergeAll(
         NodeServices.layer,
         DesktopConfig.layerTest({
-          T3CODE_HOME: input.baseDir,
-          T3CODE_MODE: "desktop",
+          PRISMUX_HOME: input.baseDir,
+          PRISMUX_MODE: "desktop",
         }),
       ),
     ),

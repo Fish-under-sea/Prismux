@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
-import { sanitizeChildEnv } from "../t3/T3ServerSupervisor.js";
+import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 
 const execFileAsync = promisify(execFile);
 

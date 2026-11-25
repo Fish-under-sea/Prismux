@@ -2595,7 +2595,7 @@ it.effect("steers a promoted scheduled delivery with the thread's current select
 
         const projection = yield* orchestrator.getThreadProjection(threadId);
         assert.deepEqual(steered, [
-          '[T3 Code: scheduled task "task:scheduled" sent this prompt, not the user typing in this chat.]\n\nscheduled',
+          '[Prismux: scheduled task "task:scheduled" sent this prompt, not the user typing in this chat.]\n\nscheduled',
         ]);
         assert.deepEqual(projection.thread.modelSelection, composerSelection);
       }).pipe(Effect.provide(layer));
@@ -3420,7 +3420,7 @@ it.effect("starts a restart that stops the running turn ahead of an older held q
             "first",
             ...["second", "do this instead"].map(
               (text) =>
-                `[T3 Code: this message came through T3 Code's tools, not from the user typing in this chat.]\n\n${text}`,
+                `[Prismux: this message came through Prismux's tools, not from the user typing in this chat.]\n\n${text}`,
             ),
           ],
         },
@@ -3544,7 +3544,7 @@ it.effect("replays an accepted steer after its target turn completes", () =>
       assert.equal(fresh._tag, "ThreadManagementNoSteerableRunError");
       yield* worker.drain();
       assert.deepEqual(steered, [
-        `[T3 Code: this message came through T3 Code's tools, not from the user typing in this chat.]\n\n${input.text}`,
+        `[Prismux: this message came through Prismux's tools, not from the user typing in this chat.]\n\n${input.text}`,
       ]);
       assert.lengthOf(started, 1);
     }).pipe(

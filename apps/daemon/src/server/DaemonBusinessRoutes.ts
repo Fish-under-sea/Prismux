@@ -77,7 +77,7 @@ import {
   type HostMetricsIngestResult,
   type ResourceMonitorService
 } from "../system/ResourceMonitorService.js";
-import type { T3RpcClient } from "../t3/T3RpcClient.js";
+import type { CoreRpcClient } from "../core/CoreRpcClient.js";
 import type { AppUpdater } from "../updater/AppUpdater.js";
 import { isPathStrictlyInsideDir } from "../wallpapers/WallpaperMediaService.js";
 import {
@@ -158,7 +158,7 @@ export interface DaemonBusinessContext {
   officialCatalogPath?: string;
   chiefManager?: ChiefThreadManager;
   handoffEngine?: HandoffEngine;
-  t3RpcClient?: T3RpcClient;
+  t3RpcClient?: CoreRpcClient;
   memoryStore?: SqliteMemoryStore;
   memoryDbPath?: string;
   obsidianAgentCurator?: ObsidianAgentCurator;

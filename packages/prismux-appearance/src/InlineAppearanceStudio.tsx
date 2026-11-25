@@ -19,7 +19,7 @@ export interface InlineAppearanceStudioProps {
   config: AppearanceConfig;
   onChange: (next: AppearanceConfig) => void;
   /**
-   * Optional explicit theme mode handler (e.g. host runtime sync with T3 Code's theme store).
+   * Optional explicit theme mode handler (e.g. host runtime sync with Prismux's theme store).
    * Falls back to `onChange(setThemeModeWithGlassAutoWake(config, mode))` when omitted.
    */
   onThemeModeChange?: (mode: ThemeMode) => void;

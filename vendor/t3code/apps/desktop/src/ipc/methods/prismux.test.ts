@@ -311,7 +311,7 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
     });
   });
 
-  it("injects PRISMUX_T3_SERVER_URL, T3CODE_SERVER_URL, PRISMUX_T3_WS_URL and PRISMUX_MAIN_PID into daemon child env", () => {
+  it("injects PRISMUX_T3_SERVER_URL, PRISMUX_SERVER_URL, PRISMUX_T3_WS_URL and PRISMUX_MAIN_PID into daemon child env", () => {
     assert.equal(normalizeT3HttpUrl("ws://127.0.0.1:3773/ws"), "http://127.0.0.1:3773");
     assert.equal(normalizeT3HttpUrl("http://127.0.0.1:3773/"), "http://127.0.0.1:3773");
     assert.equal(normalizeT3WebSocketUrl("http://127.0.0.1:3773/"), "ws://127.0.0.1:3773/ws");
@@ -328,7 +328,7 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
     assert.equal(env.PRISMUX_CATALOG_PATH, "C:\\Prismux\\catalog\\official.json");
     assert.equal(env.PRISMUX_MAIN_PID, "4242");
     assert.equal(env.PRISMUX_T3_SERVER_URL, "http://127.0.0.1:3773");
-    assert.equal(env.T3CODE_SERVER_URL, "http://127.0.0.1:3773");
+    assert.equal(env.PRISMUX_SERVER_URL, "http://127.0.0.1:3773");
     assert.equal(env.PRISMUX_T3_WS_URL, "ws://127.0.0.1:3773/ws");
   });
 

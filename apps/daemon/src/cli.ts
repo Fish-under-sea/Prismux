@@ -86,23 +86,23 @@ export function parseDaemonCliArgs(
       }
       port = parsedPort;
       i += 1;
-    } else if (arg === "--t3-url") {
-      t3Url = readNextArg(argv, i, "--t3-url");
+    } else if (arg === "--core-url" || arg === "--t3-url") {
+      t3Url = readNextArg(argv, i, arg);
       i += 1;
-    } else if (arg === "--t3-token") {
-      t3Token = readNextArg(argv, i, "--t3-token");
+    } else if (arg === "--core-token" || arg === "--t3-token") {
+      t3Token = readNextArg(argv, i, arg);
       i += 1;
-    } else if (arg === "--t3-command") {
-      t3Command = readNextArg(argv, i, "--t3-command");
+    } else if (arg === "--core-command" || arg === "--t3-command") {
+      t3Command = readNextArg(argv, i, arg);
       i += 1;
-    } else if (arg === "--t3-args") {
-      const rawJson = readNextArg(argv, i, "--t3-args");
+    } else if (arg === "--core-args" || arg === "--t3-args") {
+      const rawJson = readNextArg(argv, i, arg);
       const parsed: unknown = JSON.parse(rawJson);
       if (
         !Array.isArray(parsed) ||
         parsed.some((entry) => typeof entry !== "string")
       ) {
-        throw new Error("--t3-args must be a JSON array of strings.");
+        throw new Error(`${arg} must be a JSON array of strings.`);
       }
       t3Args = parsed;
       i += 1;
@@ -163,8 +163,8 @@ export async function runDaemonCli(
         "",
         "Usage:",
         `  ${BRAND.appSlug} start [--headless] [--port <n>] [--host <h>] [--data-dir <dir>]`,
-        "                 [--portable-root <dir>] [--t3-url <url>] [--t3-token <tok>]",
-        "                 [--t3-command <cmd>] [--t3-args <json>] [--auth-token <tok>]",
+        "                 [--portable-root <dir>] [--core-url <url>] [--core-token <tok>]",
+        "                 [--core-command <cmd>] [--core-args <json>] [--auth-token <tok>]",
         `  ${BRAND.appSlug} --help`,
         `  ${BRAND.appSlug} --version`,
         ""

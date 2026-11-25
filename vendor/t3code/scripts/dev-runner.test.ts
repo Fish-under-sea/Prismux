@@ -75,7 +75,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("forwards the reusable auth token to web dev and removes it for desktop", () =>
       Effect.gen(function* () {
         const input = {
-          baseEnv: { T3CODE_DEV_AUTH_TOKEN: "reusable-dev-auth-token-that-is-long-enough" },
+          baseEnv: { PRISMUX_DEV_AUTH_TOKEN: "reusable-dev-auth-token-that-is-long-enough" },
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
@@ -89,8 +89,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const web = yield* createDevRunnerEnv({ ...input, mode: "dev" });
         const desktop = yield* createDevRunnerEnv({ ...input, mode: "dev:desktop" });
 
-        assert.equal(web.T3CODE_DEV_AUTH_TOKEN, input.baseEnv.T3CODE_DEV_AUTH_TOKEN);
-        assert.equal(desktop.T3CODE_DEV_AUTH_TOKEN, undefined);
+        assert.equal(web.PRISMUX_DEV_AUTH_TOKEN, input.baseEnv.PRISMUX_DEV_AUTH_TOKEN);
+        assert.equal(desktop.PRISMUX_DEV_AUTH_TOKEN, undefined);
       }),
     );
 
@@ -111,11 +111,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const byDefault = yield* createDevRunnerEnv({ ...input, baseEnv: {} });
         const optedIn = yield* createDevRunnerEnv({
           ...input,
-          baseEnv: { T3CODE_TELEMETRY_ENABLED: "true" },
+          baseEnv: { PRISMUX_TELEMETRY_ENABLED: "true" },
         });
 
-        assert.equal(byDefault.T3CODE_TELEMETRY_ENABLED, "false");
-        assert.equal(optedIn.T3CODE_TELEMETRY_ENABLED, "true");
+        assert.equal(byDefault.PRISMUX_TELEMETRY_ENABLED, "false");
+        assert.equal(optedIn.PRISMUX_TELEMETRY_ENABLED, "true");
       }),
     );
 
@@ -166,8 +166,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
           assert.equal(env.VITE_HTTP_URL, undefined);
           assert.equal(env.VITE_WS_URL, undefined);
-          assert.equal(env.T3CODE_PORT, "13773");
-          assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, "1");
+          assert.equal(env.PRISMUX_PORT, "13773");
+          assert.equal(env.PRISMUX_SINGLE_ORIGIN_DEV, "1");
         }),
     );
 
@@ -191,11 +191,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("drops an inherited T3CODE_HOST and T3CODE_LAN from a parent T3 server", () =>
+    it.effect("drops an inherited PRISMUX_HOST and PRISMUX_LAN from a parent T3 server", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
-          baseEnv: { T3CODE_PORT: "3773", T3CODE_HOST: "0.0.0.0", T3CODE_LAN: "true" },
+          baseEnv: { PRISMUX_PORT: "3773", PRISMUX_HOST: "0.0.0.0", PRISMUX_LAN: "true" },
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
@@ -207,15 +207,15 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_PORT, "13773");
-        assert.equal(env.T3CODE_HOST, undefined);
-        assert.equal(env.T3CODE_LAN, undefined);
+        assert.equal(env.PRISMUX_PORT, "13773");
+        assert.equal(env.PRISMUX_HOST, undefined);
+        assert.equal(env.PRISMUX_LAN, undefined);
       }),
     );
   });
 
   describe("cli", () => {
-    it("ignores the parent T3 server's T3CODE_PORT and T3CODE_HOST", () => {
+    it("ignores the parent T3 server's PRISMUX_PORT and PRISMUX_HOST", () => {
       const result = NodeChildProcess.spawnSync(
         process.execPath,
         ["scripts/dev-runner.ts", "dev:server", "--dry-run"],
@@ -224,8 +224,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           encoding: "utf8",
           env: {
             ...process.env,
-            T3CODE_PORT: "3773",
-            T3CODE_HOST: "0.0.0.0",
+            PRISMUX_PORT: "3773",
+            PRISMUX_HOST: "0.0.0.0",
           },
         },
       );
@@ -501,11 +501,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         }),
     );
 
-    it.effect("ignores an ambient T3CODE_HOME when no home is resolved", () =>
+    it.effect("ignores an ambient PRISMUX_HOME when no home is resolved", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
-          baseEnv: { T3CODE_HOME: "/home/user/.t3" },
+          baseEnv: { PRISMUX_HOME: "/home/user/.t3" },
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
@@ -517,7 +517,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, undefined);
+        assert.equal(env.PRISMUX_HOME, undefined);
       }),
     );
 
@@ -539,7 +539,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             devUrl: undefined,
           }).pipe(
             Effect.provideService(HostProcess.HomeDirectory, "/home/dev"),
-            Effect.map((env) => env.T3CODE_HOME),
+            Effect.map((env) => env.PRISMUX_HOME),
           );
 
         assert.equal(yield* homeFor("~/t3-dev"), path.join("/home/dev", "t3-dev"));
@@ -586,7 +586,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     // A shared origin means a remote browser, where unbundled dev's
     // per-module waterfall pays a tailnet round trip per import level. The
     // runner defaults bundled dev on for the spawned stack, but only
-    // defaults: an explicit T3CODE_BUNDLED_DEV (even "0") must pass through.
+    // defaults: an explicit PRISMUX_BUNDLED_DEV (even "0") must pass through.
     describe("--share spawn wiring", () => {
       const shareSpawned = (input: {
         readonly ambientBundledDev?: string | undefined;
@@ -649,17 +649,17 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
               HostProcess.Environment,
               input.ambientBundledDev === undefined
                 ? {}
-                : { T3CODE_BUNDLED_DEV: input.ambientBundledDev },
+                : { PRISMUX_BUNDLED_DEV: input.ambientBundledDev },
             ),
           );
 
           return { env: captured, vpArgs, tailscaleCalls };
         });
 
-      it.effect("keeps an explicit T3CODE_BUNDLED_DEV=0 opt-out", () =>
+      it.effect("keeps an explicit PRISMUX_BUNDLED_DEV=0 opt-out", () =>
         Effect.gen(function* () {
           const { env } = yield* shareSpawned({ ambientBundledDev: "0" });
-          assert.equal(env?.T3CODE_BUNDLED_DEV, "0");
+          assert.equal(env?.PRISMUX_BUNDLED_DEV, "0");
         }),
       );
 
@@ -667,13 +667,13 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         Effect.gen(function* () {
           const { env, vpArgs, tailscaleCalls } = yield* shareSpawned({ built: true });
           assert.include(vpArgs, "dev:built");
-          assert.equal(env?.T3CODE_BUILT_DEV, "1");
-          assert.equal(env?.T3CODE_BUNDLED_DEV, undefined);
+          assert.equal(env?.PRISMUX_BUILT_DEV, "1");
+          assert.equal(env?.PRISMUX_BUNDLED_DEV, undefined);
           assert.equal(env?.VITE_DEV_SERVER_URL, `https://host.example.ts.net:${env?.PORT}/`);
           const serve = tailscaleCalls.find((args) => args.includes("--bg"));
           assert.deepEqual(serve?.slice(-2), [
             `--https=${env?.PORT}`,
-            `http://127.0.0.1:${env?.T3CODE_PORT}`,
+            `http://127.0.0.1:${env?.PRISMUX_PORT}`,
           ]);
         }),
       );
@@ -682,7 +682,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         Effect.gen(function* () {
           const { env, tailscaleCalls } = yield* shareSpawned({ built: true, host: "::1" });
           const serve = tailscaleCalls.find((args) => args.includes("--bg"));
-          assert.equal(serve?.at(-1), `http://[::1]:${env?.T3CODE_PORT}`);
+          assert.equal(serve?.at(-1), `http://[::1]:${env?.PRISMUX_PORT}`);
         }),
       );
 
@@ -691,7 +691,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         Effect.gen(function* () {
           const { env, tailscaleCalls } = yield* shareSpawned({ built: true, host: "localhost" });
           const serve = tailscaleCalls.find((args) => args.includes("--bg"));
-          assert.equal(serve?.at(-1), `http://localhost:${env?.T3CODE_PORT}`);
+          assert.equal(serve?.at(-1), `http://localhost:${env?.PRISMUX_PORT}`);
         }),
       );
 
@@ -700,7 +700,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const { env, vpArgs, tailscaleCalls } = yield* shareSpawned({});
           assert.include(vpArgs, "dev");
           assert.notInclude(vpArgs, "dev:built");
-          assert.equal(env?.T3CODE_BUNDLED_DEV, "1");
+          assert.equal(env?.PRISMUX_BUNDLED_DEV, "1");
           const serve = tailscaleCalls.find((args) => args.includes("--bg"));
           assert.equal(serve?.at(-1), `http://localhost:${env?.PORT}`);
         }),
@@ -801,11 +801,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             Effect.provideService(HostProcess.HomeDirectory, NodePath.join(input.cwd, "home")),
             Effect.provideService(
               HostProcess.Environment,
-              input.ambientHome === undefined ? {} : { T3CODE_HOME: input.ambientHome },
+              input.ambientHome === undefined ? {} : { PRISMUX_HOME: input.ambientHome },
             ),
           );
 
-          return captured?.T3CODE_HOME;
+          return captured?.PRISMUX_HOME;
         });
 
       it.effect("prefers an explicit --home-dir over the worktree default", () =>
@@ -834,7 +834,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         }).pipe(Effect.scoped),
       );
 
-      it.effect("prefers the worktree .t3 over an ambient T3CODE_HOME", () =>
+      it.effect("prefers the worktree .t3 over an ambient PRISMUX_HOME", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
@@ -968,7 +968,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           }).pipe(Effect.scoped),
       );
 
-      it.effect("falls back to an ambient T3CODE_HOME outside a worktree", () =>
+      it.effect("falls back to an ambient PRISMUX_HOME outside a worktree", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const home = yield* spawnedHome({

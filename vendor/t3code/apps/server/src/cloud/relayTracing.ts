@@ -7,7 +7,7 @@ import { resolveRelayClientTracingConfig } from "./publicConfig.ts";
 
 const relayClientTracingConfig = resolveRelayClientTracingConfig();
 
-/** Prismux hard-disables relay OTLP tracing to upstream T3 Connect collectors. */
+/** Prismux hard-disables relay OTLP tracing to upstream Prismux Connect collectors. */
 export const relayLayer = (
   _resource: Omit<RelayTracing.RelayClientTracingResource, "serviceInstanceId">,
   _tracingConfig: RelayTracing.RelayClientTracingConfig | null = relayClientTracingConfig,

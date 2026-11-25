@@ -924,7 +924,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
             },
           )
         : undefined;
-    // Its own entry, so the folder list reaches the model without T3 Code's MCP tools too.
+    // Its own entry, so the folder list reaches the model without Prismux's MCP tools too.
     const workspaceInstructions = buildWorkspaceInstructions(input.runtimePolicy);
     const workspaceContext =
       workspaceInstructions === ""
@@ -1921,7 +1921,7 @@ export const layerAppServerClientFactory: Layer.Layer<
               }),
           ),
         );
-        // Its shells carry each thread's T3CODE_THREAD_ID, so port discovery reads listeners' threads.
+        // Its shells carry each thread's PRISMUX_THREAD_ID, so port discovery reads listeners' threads.
         yield* Effect.acquireRelease(Effect.sync(portDiscovery.trackAgent), (release) =>
           Effect.sync(release),
         );
@@ -9095,7 +9095,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   catch: () =>
                     new ProviderMcpSignInError({
                       server,
-                      detail: `Codex returned a sign-in page for ${server} that T3 Code can't open.`,
+                      detail: `Codex returned a sign-in page for ${server} that Prismux can't open.`,
                     }),
                 });
                 const redirectUri = params.get("redirect_uri");

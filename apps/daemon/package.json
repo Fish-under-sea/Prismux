@@ -3,7 +3,7 @@
   "version": "0.2.0-rc.1",
   "private": true,
   "type": "module",
-  "description": "24h headless supervisor daemon hosting t3code server bridge, Chief Supervisor slot, hook bus, PTY pool, sandbox, and overnight factory.",
+  "description": "24h headless supervisor daemon hosting Prismux core server bridge, Chief Supervisor slot, hook bus, PTY pool, sandbox, and overnight factory.",
   "bin": {
     "prismux": "./dist/cli.js"
   },

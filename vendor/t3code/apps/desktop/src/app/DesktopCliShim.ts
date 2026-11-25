@@ -11,10 +11,8 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 const { logInfo, logWarning } = makeComponentLogger("desktop-cli-shim");
 
 export const MARKER = "Written by Prismux: runs the desktop app's bundled prismux CLI.";
-export const LEGACY_MARKER = "Written by T3 Code: runs the desktop app's bundled t3 CLI.";
 
-export const isManagedCliShimContent = (content: string): boolean =>
-  content.includes(MARKER) || content.includes(LEGACY_MARKER);
+export const isManagedCliShimContent = (content: string): boolean => content.includes(MARKER);
 
 const SERVER_ENTRY = "apps/server/dist/bin.mjs";
 
@@ -41,7 +39,7 @@ export const renderCliShim = (input: {
     const utf8 = [target.executable, target.entry, input.shimPath, input.t3Home].some((value) =>
       [...value].some((character) => character.codePointAt(0)! > 0x7f),
     );
-    const restore = utf8 ? ["chcp %t3_codepage% >nul"] : [];
+    const restore = utf8 ? ["chcp %prismux_codepage% >nul"] : [];
     return [
       "@echo off",
       `rem ${MARKER}`,
@@ -50,15 +48,15 @@ export const renderCliShim = (input: {
       // Ctrl-C skips codepage restoration, so switch to UTF-8 only for non-ASCII install paths.
       ...(utf8
         ? [
-            `for /f "tokens=2 delims=:." %%c in ('chcp') do set "t3_codepage=%%c"`,
+            `for /f "tokens=2 delims=:." %%c in ('chcp') do set "prismux_codepage=%%c"`,
             "chcp 65001 >nul",
           ]
         : []),
-      `set "T3CODE_CLI_PATH=${cmdText(input.shimPath)}"`,
-      `if not defined T3CODE_HOME set "T3CODE_HOME=${cmdText(input.t3Home)}"`,
+      `set "PRISMUX_CLI_PATH=${cmdText(input.shimPath)}"`,
+      `if not defined PRISMUX_HOME set "PRISMUX_HOME=${cmdText(input.t3Home)}"`,
       'set "ELECTRON_RUN_AS_NODE=1"',
       // Electron's Windows executable starts without stdin; this tells the CLI to reopen the console.
-      'set "T3CODE_DESKTOP_CLI_LAUNCHER=1"',
+      'set "PRISMUX_DESKTOP_CLI_LAUNCHER=1"',
       // A goto, not a parenthesized block: "Program Files (x86)" would close the block early.
       `if exist ${cmdWord(target.executable)} goto run`,
       ...restore,
@@ -66,18 +64,18 @@ export const renderCliShim = (input: {
       "exit /b 127",
       ":run",
       `${cmdWord(target.executable)} ${cmdWord(target.entry)} %*`,
-      'set "t3_exit=%ERRORLEVEL%"',
+      'set "prismux_exit=%ERRORLEVEL%"',
       ...restore,
-      "exit /b %t3_exit%",
+      "exit /b %prismux_exit%",
       "",
     ].join("\r\n");
   }
   const header = [
     "#!/bin/sh",
     `# ${MARKER}`,
-    `export T3CODE_CLI_PATH=${shellWord(input.shimPath)}`,
+    `export PRISMUX_CLI_PATH=${shellWord(input.shimPath)}`,
     `home=${shellWord(input.t3Home)}`,
-    'export T3CODE_HOME="${T3CODE_HOME:-$home}"',
+    'export PRISMUX_HOME="${PRISMUX_HOME:-$home}"',
     "export ELECTRON_RUN_AS_NODE=1",
     `app=${shellWord(target.kind === "appimage" ? target.appImage : target.executable)}`,
     'if [ ! -x "$app" ]; then',

@@ -1412,11 +1412,11 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
   const catRes = await fetch(`${ready.httpUrl}/v1/plugins/catalog`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
-      Origin: "t3code://app"
+      Origin: "prismux://app"
     }
   });
   assert.equal(catRes.status, 200);
-  assert.equal(catRes.headers.get("access-control-allow-origin"), "t3code://app");
+  assert.equal(catRes.headers.get("access-control-allow-origin"), "prismux://app");
   const catPayload = (await catRes.json()) as {
     officialCatalogPath: string;
     installedCount: number;
@@ -1434,8 +1434,6 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
 
   // 3. Verify Electron desktop custom protocol CORS allowlist & untrusted rejection
   for (const allowedOrigin of [
-    "t3code://app",
-    "t3code-dev://app",
     "prismux://app",
     "prismux-dev://app"
   ]) {

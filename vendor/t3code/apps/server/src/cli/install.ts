@@ -67,7 +67,7 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   }
   // Absolute, so the PATH hint never adds a folder that changes with the working directory.
   const binDir = path.resolve(
-    environment.T3CODE_INSTALL_BIN_DIR?.trim() || path.join(home, ".local", "bin"),
+    environment.PRISMUX_INSTALL_BIN_DIR?.trim() || path.join(home, ".local", "bin"),
   );
   const name = windows ? "t3.cmd" : "t3";
   const link = path.join(binDir, name);
@@ -188,30 +188,30 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
 const reportInstalled = Effect.fn("cli.install.report")(function* (
   installed: Effect.Success<ReturnType<typeof installCli>>,
 ) {
-  yield* Console.log(`Installed t3 ${packageJson.version} at ${installed.link}.`);
+  yield* Console.log(`Installed prismux ${packageJson.version} at ${installed.link}.`);
   if (installed.shadowedBy !== undefined) {
     return yield* Console.log(
-      `Another t3 at ${installed.shadowedBy} runs first, so run ${installed.link} to use this one.`,
+      `Another prismux launcher at ${installed.shadowedBy} runs first, so run ${installed.link} to use this one.`,
     );
   }
-  if (installed.onPath) return yield* Console.log("Run `t3` to get started.");
+  if (installed.onPath) return yield* Console.log("Run `prismux` to get started.");
   if (installed.pathCommand === undefined) {
-    return yield* Console.log(`Add ${installed.binDir} to your PATH, then run \`t3\`.`);
+    return yield* Console.log(`Add ${installed.binDir} to your PATH, then run \`prismux\`.`);
   }
   if ((yield* HostProcess.Platform) === "win32") {
     yield* Console.log(
       `${installed.binDir} is not on your PATH yet. In this PowerShell window, run:`,
     );
     yield* Console.log(`  ${installed.pathCommand}`);
-    return yield* Console.log("Then run `t3`. For new windows, add the folder to your PATH.");
+    return yield* Console.log("Then run `prismux`. For new windows, add the folder to your PATH.");
   }
   yield* Console.log(`${installed.binDir} is not on your PATH yet. Add it with:`);
   yield* Console.log(`  ${installed.pathCommand}`);
-  yield* Console.log("Then open a new terminal and run `t3`.");
+  yield* Console.log("Then open a new terminal and run `prismux`.");
 });
 
 export const installCommand = Command.make("install").pipe(
-  Command.withDescription("Install this version as the `t3` command."),
+  Command.withDescription("Install this version as the `prismux` command."),
   Command.withHandler(() => installCli().pipe(Effect.flatMap(reportInstalled))),
 );
 
@@ -344,7 +344,7 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
   const answer = yield* input.confirm.pipe(Effect.timeoutOption(PROMPT_TIMEOUT));
   if (Option.isNone(answer)) {
     yield* saveDecline;
-    yield* Console.log(`\nNo answer, so t3 was not installed. ${installHint}\n`);
+    yield* Console.log(`\nNo answer, so prismux was not installed. ${installHint}\n`);
     return true;
   }
   if (answer.value === undefined) return false;
@@ -356,7 +356,7 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
   yield* installCli().pipe(
     Effect.flatMap(reportInstalled),
     Effect.catch((error) =>
-      Effect.andThen(saveDecline, Console.error(`Could not install t3: ${error.message}`)),
+      Effect.andThen(saveDecline, Console.error(`Could not install prismux: ${error.message}`)),
     ),
   );
   yield* Console.log("");
@@ -365,7 +365,7 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
 
 export const confirmCliInstall = Prompt.run(
   Prompt.Confirm({
-    message: "Install the t3 command? Then you can run `t3` directly.",
+    message: "Install the prismux command? Then you can run `prismux` directly.",
     initial: true,
   }),
 ).pipe(Effect.catchTags({ QuitError: () => Effect.void }));

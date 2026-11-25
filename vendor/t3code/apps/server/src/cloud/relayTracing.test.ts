@@ -30,7 +30,7 @@ const tracesTo = (policy?: ManagedPolicyDocument) =>
     Effect.map(Option.isSome),
   );
 
-it.effect("always disables relay tracing to T3 Connect regardless of managed policy", () =>
+it.effect("always disables relay tracing to Prismux Connect regardless of managed policy", () =>
   Effect.gen(function* () {
     assert.isFalse(yield* tracesTo());
     assert.isFalse(

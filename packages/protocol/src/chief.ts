@@ -174,15 +174,18 @@ export interface ChiefThreadSlotState {
   switchHistory: ChiefSwitchRecord[];
 }
 
-export type T3SupervisorState =
+export type CoreSupervisorState =
   | "stopped"
   | "starting"
   | "running"
   | "restarting"
   | "failed";
 
-export interface T3BridgeStatus {
-  supervisorState: T3SupervisorState;
+/** @deprecated Use CoreSupervisorState */
+export type T3SupervisorState = CoreSupervisorState;
+
+export interface CoreBridgeStatus {
+  supervisorState: CoreSupervisorState;
   rpcConnected: boolean;
   wsUrl: string;
   protocolVersion: string;
@@ -190,6 +193,9 @@ export interface T3BridgeStatus {
   restartCount: number;
   lastError?: string;
 }
+
+/** @deprecated Use CoreBridgeStatus */
+export type T3BridgeStatus = CoreBridgeStatus;
 
 export interface DaemonPairingInfo {
   pairingCode: string;
@@ -202,7 +208,8 @@ export interface DaemonHealthResponse {
   headless: boolean;
   version: string;
   t3Connected: boolean;
-  supervisorState: T3SupervisorState;
+  coreConnected?: boolean;
+  supervisorState: CoreSupervisorState;
   activeProvider: ChiefProviderKind;
   ptyCount: number;
   uptimeMs: number;

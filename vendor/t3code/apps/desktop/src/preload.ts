@@ -11,7 +11,6 @@ import type {
   PrismuxTrayActionPayload,
   PrismuxWindowOcclusion,
 } from "@t3tools/contracts";
-import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
@@ -86,8 +85,6 @@ ipcRenderer.on(
     }
   },
 );
-
-exposeClerkBridge({ passkeys: true });
 
 // Runs before any app script reads localStorage. See DesktopLegacyLocalStorage.
 try {

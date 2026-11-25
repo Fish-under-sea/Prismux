@@ -250,7 +250,7 @@ export function resolvePrismuxUpgradeMigrationPaths(
   const isDevelopment =
     options.isDevelopment ?? Boolean(env["VITE_DEV_SERVER_URL"]?.trim());
 
-  const t3Home = env["T3CODE_HOME"]?.trim();
+  const t3Home = env["PRISMUX_HOME"]?.trim();
   const t3HomeOption = t3Home && t3Home.length > 0 ? Option.some(t3Home) : Option.none<string>();
 
   const baseDir =

@@ -4,7 +4,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
-export interface T3CodePublicConfig {
+export interface PrismuxPublicConfig {
   readonly clerkPublishableKey: string | undefined;
   readonly clerkJwtTemplate: string | undefined;
   readonly clerkCliOAuthClientId: string | undefined;
@@ -22,18 +22,11 @@ type Environment = Readonly<Record<string, string | undefined>>;
 const REPO_ROOT = NodePath.resolve(NodeURL.fileURLToPath(import.meta.url), "../../..");
 
 /**
- * Upstream T3 Connect public identifiers (identical to `vendor/t3code/.env.example`,
- * NOT secrets). Baked into official T3 Code & Prismux builds so users can sign in
- * with their T3 Code account and remotely control their workbench via T3 Connect
- * out of the box. Override via `.env`, `.env.local`, or process env, or disable
- * explicitly with `T3CODE_DISABLE_CLOUD=1`.
+ * Prismux defaults to pure local-first execution with zero baked-in external cloud
+ * or relay endpoints. Explicit overrides may still be supplied via `.env`, `.env.local`,
+ * or process environment, and disabled explicitly with `PRISMUX_DISABLE_CLOUD=1`.
  */
-export const DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG: Readonly<Record<string, string>> = {
-  T3CODE_CLERK_PUBLISHABLE_KEY: "pk_live_Y2xlcmsudDMuY29kZXMk",
-  T3CODE_CLERK_JWT_TEMPLATE: "t3-relay",
-  T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "hzxSgY2cH10sDU2r",
-  T3CODE_RELAY_URL: "https://relay.t3.codes",
-};
+export const DEFAULT_PRISMUX_PUBLIC_CONFIG: Readonly<Record<string, string>> = {};
 
 export function loadRepoEnv({
   baseEnv = process.env,
@@ -47,15 +40,26 @@ export function loadRepoEnv({
   const rootEnv = readEnvFile(NodePath.join(repoRoot, ".env"));
   const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
   const cloudExplicitlyDisabled =
-    firstNonEmpty([baseEnv, localEnv, rootEnv], "T3CODE_DISABLE_CLOUD") === "1";
+    firstNonEmpty([baseEnv, localEnv, rootEnv], "PRISMUX_DISABLE_CLOUD") === "1";
   const applyOfficialDefaults =
     useOfficialDefaults !== undefined
       ? useOfficialDefaults && !cloudExplicitlyDisabled
       : !cloudExplicitlyDisabled;
-  const fallbackDefaults: Environment = applyOfficialDefaults
-    ? DEFAULT_OFFICIAL_T3_CONNECT_PUBLIC_CONFIG
-    : {};
-  const config = resolvePublicConfig(baseEnv, localEnv, rootEnv, fallbackDefaults);
+  const fallbackDefaults: Environment = applyOfficialDefaults ? DEFAULT_PRISMUX_PUBLIC_CONFIG : {};
+  const config = cloudExplicitlyDisabled
+    ? {
+        clerkPublishableKey: undefined,
+        clerkJwtTemplate: undefined,
+        clerkCliOAuthClientId: undefined,
+        relayUrl: undefined,
+        mobileOtlpTracesUrl: undefined,
+        mobileOtlpTracesDataset: undefined,
+        mobileOtlpTracesToken: undefined,
+        relayClientOtlpTracesUrl: undefined,
+        relayClientOtlpTracesDataset: undefined,
+        relayClientOtlpTracesToken: undefined,
+      }
+    : resolvePublicConfig(baseEnv, localEnv, rootEnv, fallbackDefaults);
 
   const merged: Record<string, string | undefined> = {
     ...rootEnv,
@@ -63,44 +67,61 @@ export function loadRepoEnv({
     ...baseEnv,
     ...(config.clerkPublishableKey
       ? {
-          T3CODE_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
+          PRISMUX_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
           VITE_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
           EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
         }
       : {}),
     ...(config.clerkJwtTemplate
       ? {
-          T3CODE_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
+          PRISMUX_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
           VITE_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
           EXPO_PUBLIC_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
         }
       : {}),
     ...(config.clerkCliOAuthClientId
       ? {
-          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: config.clerkCliOAuthClientId,
+          PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID: config.clerkCliOAuthClientId,
           VITE_CLERK_CLI_OAUTH_CLIENT_ID: config.clerkCliOAuthClientId,
         }
       : {}),
     ...(config.relayUrl
       ? {
-          T3CODE_RELAY_URL: config.relayUrl,
-          VITE_T3CODE_RELAY_URL: config.relayUrl,
+          PRISMUX_RELAY_URL: config.relayUrl,
+          VITE_PRISMUX_RELAY_URL: config.relayUrl,
         }
       : {}),
   };
 
+  if (cloudExplicitlyDisabled) {
+    for (const cloudKey of [
+      "PRISMUX_CLERK_PUBLISHABLE_KEY",
+      "VITE_CLERK_PUBLISHABLE_KEY",
+      "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY",
+      "PRISMUX_CLERK_JWT_TEMPLATE",
+      "VITE_CLERK_JWT_TEMPLATE",
+      "EXPO_PUBLIC_CLERK_JWT_TEMPLATE",
+      "PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID",
+      "VITE_CLERK_CLI_OAUTH_CLIENT_ID",
+      "PRISMUX_RELAY_URL",
+      "VITE_PRISMUX_RELAY_URL",
+    ]) {
+      delete merged[cloudKey];
+    }
+  }
+
   // Prismux hard-strips built-in upstream Axiom/OTLP relay trace keys so builds
   // never embed or propagate third-party relay trace endpoints or bearer tokens.
   for (const blockedKey of [
-    "T3CODE_MOBILE_OTLP_TRACES_URL",
-    "T3CODE_MOBILE_OTLP_TRACES_DATASET",
-    "T3CODE_MOBILE_OTLP_TRACES_TOKEN",
+    "PRISMUX_MOBILE_OTLP_TRACES_URL",
+    "PRISMUX_MOBILE_OTLP_TRACES_DATASET",
+    "PRISMUX_MOBILE_OTLP_TRACES_TOKEN",
     "EXPO_PUBLIC_OTLP_TRACES_URL",
     "EXPO_PUBLIC_OTLP_TRACES_DATASET",
     "EXPO_PUBLIC_OTLP_TRACES_TOKEN",
-    "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL",
-    "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET",
-    "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN",
+    "PRISMUX_RELAY_CLIENT_OTLP_TRACES_URL",
+    "PRISMUX_RELAY_CLIENT_OTLP_TRACES_DATASET",
+    "PRISMUX_RELAY_CLIENT_OTLP_TRACES_TOKEN",
     "VITE_RELAY_OTLP_TRACES_URL",
     "VITE_RELAY_OTLP_TRACES_DATASET",
     "VITE_RELAY_OTLP_TRACES_TOKEN",
@@ -111,26 +132,26 @@ export function loadRepoEnv({
   return merged;
 }
 
-function resolvePublicConfig(...sources: readonly Environment[]): T3CodePublicConfig {
+function resolvePublicConfig(...sources: readonly Environment[]): PrismuxPublicConfig {
   return {
     clerkPublishableKey: firstNonEmpty(
       sources,
-      "T3CODE_CLERK_PUBLISHABLE_KEY",
+      "PRISMUX_CLERK_PUBLISHABLE_KEY",
       "VITE_CLERK_PUBLISHABLE_KEY",
       "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY",
     ),
     clerkJwtTemplate: firstNonEmpty(
       sources,
-      "T3CODE_CLERK_JWT_TEMPLATE",
+      "PRISMUX_CLERK_JWT_TEMPLATE",
       "VITE_CLERK_JWT_TEMPLATE",
       "EXPO_PUBLIC_CLERK_JWT_TEMPLATE",
     ),
     clerkCliOAuthClientId: firstNonEmpty(
       sources,
-      "T3CODE_CLERK_CLI_OAUTH_CLIENT_ID",
+      "PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID",
       "VITE_CLERK_CLI_OAUTH_CLIENT_ID",
     ),
-    relayUrl: firstNonEmpty(sources, "T3CODE_RELAY_URL", "VITE_T3CODE_RELAY_URL"),
+    relayUrl: firstNonEmpty(sources, "PRISMUX_RELAY_URL", "VITE_PRISMUX_RELAY_URL"),
     mobileOtlpTracesUrl: undefined,
     mobileOtlpTracesDataset: undefined,
     mobileOtlpTracesToken: undefined,

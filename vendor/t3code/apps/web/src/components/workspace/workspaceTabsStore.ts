@@ -67,7 +67,7 @@ export interface WorkspaceTab {
   readonly title: string;
   /** Canonical provider/agent identifier (e.g. "codex", "claudeAgent", "antigravity"). */
   readonly providerId?: string | null | undefined;
-  /** Bound T3 Code provider instance ID when applicable. */
+  /** Bound Prismux provider instance ID when applicable. */
   readonly instanceId?: ProviderInstanceId | null | undefined;
   /** Preferred default model slug for quick-launched agent tabs. */
   readonly model?: string | null | undefined;

@@ -15,7 +15,7 @@ const provideEnv = (env: Readonly<Record<string, string>>) =>
 
 it.effect("rejects an insecure runtime relay URL override", () =>
   makeRelayUrlConfig("https://embedded.example.test").pipe(
-    provideEnv({ T3CODE_RELAY_URL: "http://runtime.example.test" }),
+    provideEnv({ PRISMUX_RELAY_URL: "http://runtime.example.test" }),
     Effect.flip,
   ),
 );
@@ -23,13 +23,13 @@ it.effect("rejects an insecure runtime relay URL override", () =>
 it.effect("rejects malformed or insecure hosted app URLs", () =>
   Effect.gen(function* () {
     for (const value of [
-      "app.t3.codes",
-      "http://app.t3.codes",
-      "https://app.t3.codes/nested",
-      "https://app.t3.codes?alias=true",
+      "prismux.app",
+      "http://prismux.app",
+      "https://prismux.app/nested",
+      "https://prismux.app?alias=true",
     ]) {
       const result = yield* hostedAppUrlConfig.pipe(
-        provideEnv({ T3CODE_HOSTED_APP_URL: value }),
+        provideEnv({ PRISMUX_HOSTED_APP_URL: value }),
         Effect.result,
       );
       assert.isTrue(Result.isFailure(result), value);
@@ -37,7 +37,7 @@ it.effect("rejects malformed or insecure hosted app URLs", () =>
   }),
 );
 
-it.effect("derives direct Clerk OAuth endpoints from statically injected public config", () =>
+it.effect("derives direct OAuth endpoints from statically injected public config", () =>
   Effect.gen(function* () {
     const config = yield* makeCloudCliOAuthConfig({
       clerkPublishableKeyFallback: "pk_test_Y2xlcmsuZXhhbXBsZS50ZXN0JA==",
@@ -66,11 +66,11 @@ it("always disables relay tracing even when telemetry and runtime/fallback OTLP 
   assert.equal(
     resolveRelayClientTracingConfig(
       {
-        T3CODE_TELEMETRY_ENABLED: "true",
-        T3CODE_OTEL_SDK_DISABLED: "false",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://runtime.example.test/v1/traces",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "runtime-dataset",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "runtime-token",
+        PRISMUX_TELEMETRY_ENABLED: "true",
+        PRISMUX_OTEL_SDK_DISABLED: "false",
+        PRISMUX_RELAY_CLIENT_OTLP_TRACES_URL: "https://runtime.example.test/v1/traces",
+        PRISMUX_RELAY_CLIENT_OTLP_TRACES_DATASET: "runtime-dataset",
+        PRISMUX_RELAY_CLIENT_OTLP_TRACES_TOKEN: "runtime-token",
       },
       fallback,
     ),

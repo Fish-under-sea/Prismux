@@ -225,7 +225,7 @@ export const TasksPage = memo(function TasksPage() {
   );
   const debouncedText = useDebouncedValue(parsedQuery.text, 260);
 
-  // Real T3 Code Issue list query targets (only when tab is Issues and >=1 project selected).
+  // Real Prismux Issue list query targets (only when tab is Issues and >=1 project selected).
   const issueCapableEnvs = useMemo(
     () =>
       environments.filter(
@@ -314,7 +314,7 @@ export const TasksPage = memo(function TasksPage() {
       );
   }, [activeProjects, debouncedText, heldIssues, selectedProjectKeySet, selectedProjects.length, sortOrder]);
 
-  // Real T3 Code Pull Request host query targets (only when tab is PRs and >=1 project selected).
+  // Real Prismux Pull Request host query targets (only when tab is PRs and >=1 project selected).
   const prCapableEnvs = useMemo(
     () =>
       environments.filter(

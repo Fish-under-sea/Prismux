@@ -453,6 +453,6 @@ it("strips ELECTRON_RUN_AS_NODE from codexAppServerEnvironment while preserving 
   });
   assert.strictEqual(env.ELECTRON_RUN_AS_NODE, undefined);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(env, "ELECTRON_RUN_AS_NODE"), true);
-  assert.strictEqual(env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, "T3 Code");
+  assert.strictEqual(env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, "Prismux");
   assert.strictEqual(env.CUSTOM_FLAG, "yes");
 });

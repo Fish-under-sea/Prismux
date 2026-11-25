@@ -91,7 +91,7 @@ export interface PrismuxStageFrameProps {
 }
 
 /**
- * Monolithic stage frame matching `t3-glass-bridge.css` (`data-pmx-stage-frame="1"`, 4 inverted corners,
+ * Monolithic stage frame matching `prismux-glass-bridge.css` (`data-pmx-stage-frame="1"`, 4 inverted corners,
  * 7px right edge when sidebar closed). Inside multi-pane splits (`inSplit`), renders flat `rounded-none border-0`.
  */
 export function PrismuxStageFrame(props: PrismuxStageFrameProps) {

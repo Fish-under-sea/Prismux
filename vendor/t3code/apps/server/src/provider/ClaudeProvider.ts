@@ -187,7 +187,11 @@ function claudeAuthMetadata(input: {
   readonly subscriptionType: string | undefined;
   readonly authMethod: string | undefined;
   readonly apiKeySource: string | undefined;
-}): { readonly type: string; readonly label: string } | undefined {
+}): {
+  readonly type: string;
+  readonly label: string;
+  readonly subscriptionType?: string;
+} | undefined {
   if (normalizeClaudeAuthMethod(input.authMethod) === "apiKey" || hasApiKey(input.apiKeySource)) {
     return {
       type: "apiKey",
@@ -199,6 +203,7 @@ function claudeAuthMetadata(input: {
     return {
       type: input.subscriptionType,
       label: formatClaudeSubscriptionAuthLabel(input.subscriptionType),
+      subscriptionType: input.subscriptionType,
     };
   }
 
@@ -208,7 +213,16 @@ function claudeAuthMetadata(input: {
 function apiProviderAuthMetadata(
   apiProvider: string | undefined,
 ): { readonly type: string; readonly label: string } | undefined {
-  return apiProvider === "bedrock" ? { type: "bedrock", label: "Amazon Bedrock" } : undefined;
+  switch (apiProvider) {
+    case "bedrock":
+      return { type: "bedrock", label: "Amazon Bedrock" };
+    case "vertex":
+      return { type: "vertex", label: "Google Vertex AI" };
+    case "foundry":
+      return { type: "foundry", label: "Microsoft Foundry" };
+    default:
+      return undefined;
+  }
 }
 
 /** Probe completion only proves Claude started. Only tokenSource: "none" disproves auth. */
@@ -699,7 +713,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Claude is disabled in T3 Code settings.",
+        message: "Claude is disabled in Prismux settings.",
       },
     });
   }
@@ -938,7 +952,7 @@ export const makePendingClaudeProvider = Effect.fn("ClaudeProvider.makePendingCl
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Claude is disabled in T3 Code settings.",
+          message: "Claude is disabled in Prismux settings.",
         },
       });
     }

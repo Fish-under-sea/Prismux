@@ -11,7 +11,7 @@ import { APP_DIR, MOBILE, MOBILE_T3_HOME } from "../e2e.config.ts";
 import { run, ScenarioError } from "./shell.ts";
 import { makeState, runPromise, type T3State } from "./t3.ts";
 
-const APP_ID = "com.t3tools.t3code.dev";
+const APP_ID = "io.prismux.desktop.dev";
 const SCHEME = "t3code-dev";
 
 export interface MobileT3 extends T3State {
@@ -47,7 +47,7 @@ let paired = false;
 export const test = base.extend<{ t3: MobileT3 }>({
   t3: async ({ device, screen }, use) => {
     const { state, cli, cleanup } = makeState(MOBILE_T3_HOME, {
-      T3CODE_PORT: String(MOBILE.serverPort),
+      PRISMUX_PORT: String(MOBILE.serverPort),
     });
     const pairingUrl = Effect.gen(function* () {
       const origin = `http://${MOBILE.host}:${MOBILE.serverPort}`;

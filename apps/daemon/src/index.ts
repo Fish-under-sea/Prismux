@@ -22,6 +22,11 @@ import {
 import { SyncVaultEngine } from "@prismux/sync-vault";
 import { AppearanceConfigStore } from "./appearance/AppearanceConfigStore.js";
 import { ChiefThreadManager } from "./chief/ChiefThreadManager.js";
+import { CoreRpcClient } from "./core/CoreRpcClient.js";
+import {
+  CoreServerSupervisor,
+  sanitizeChildEnv
+} from "./core/CoreServerSupervisor.js";
 import { ArtifactResultBackdoor } from "./dispatch/ArtifactResultBackdoor.js";
 import { DesktopIpcDispatchHub } from "./dispatch/DesktopIpcDispatchHub.js";
 import { TaskDispatchRouter } from "./dispatch/TaskDispatchRouter.js";
@@ -29,8 +34,8 @@ import { HandoffEngine } from "./handoff/HandoffEngine.js";
 import { LifecycleHookBus } from "./hooks/LifecycleHookBus.js";
 import { PersistentPtyPool } from "./pty/PersistentPtyPool.js";
 import { WorktreeSandbox } from "./sandbox/WorktreeSandbox.js";
-import { AntigravityPolicyGuard } from "./security/AntigravityPolicyGuard.js";
-import { AntigravityPolicyStore } from "./security/AntigravityPolicyStore.js";
+import { SubscriptionOrchestrationGuard } from "./security/AntigravityPolicyGuard.js";
+import { SubscriptionWaiverStore } from "./security/AntigravityPolicyStore.js";
 import { DaemonBusinessService } from "./server/DaemonBusinessRoutes.js";
 import { DaemonRpcServer } from "./server/DaemonRpcServer.js";
 import type { OfficialPluginSourceConfig } from "./server/OfficialPluginDownloader.js";
@@ -39,19 +44,17 @@ import { PairingManager } from "./server/PairingManager.js";
 import { CliUpdateService } from "./system/CliUpdateService.js";
 import { OfficialQuotaService } from "./system/OfficialQuotaService.js";
 import { PortScannerService } from "./system/PortScannerService.js";
+import { PrismuxProviderProbeService } from "./system/PrismuxProviderProbeService.js";
 import { ResourceMonitorService } from "./system/ResourceMonitorService.js";
 import { ServiceDiagnosticsService } from "./system/ServiceDiagnosticsService.js";
 import { SystemFontService } from "./system/SystemFontService.js";
-import { T3RpcClient } from "./t3/T3RpcClient.js";
-import {
-  sanitizeChildEnv,
-  T3ServerSupervisor
-} from "./t3/T3ServerSupervisor.js";
 import { AppUpdater } from "./updater/AppUpdater.js";
 import { WallpaperMediaService } from "./wallpapers/WallpaperMediaService.js";
 import { OvernightFactory } from "./workflows/OvernightFactory.js";
 
 export * from "./appearance/AppearanceConfigStore.js";
+export * from "./core/CoreServerSupervisor.js";
+export * from "./core/CoreRpcClient.js";
 export * from "./dispatch/ArtifactResultBackdoor.js";
 export * from "./dispatch/DesktopIpcDispatchHub.js";
 export * from "./dispatch/TaskDispatchRouter.js";
@@ -62,8 +65,6 @@ export * from "./sandbox/WorktreeSandbox.js";
 export * from "./security/AntigravityPolicyGuard.js";
 export * from "./security/AntigravityPolicyStore.js";
 export * from "./workflows/OvernightFactory.js";
-export * from "./t3/T3ServerSupervisor.js";
-export * from "./t3/T3RpcClient.js";
 export * from "./chief/ChiefObsidianCurator.js";
 export * from "./chief/ChiefThreadManager.js";
 export * from "./server/PairingManager.js";
@@ -77,6 +78,7 @@ export * from "./server/DaemonRpcServer.js";
 export * from "./system/CliUpdateService.js";
 export * from "./system/OfficialQuotaService.js";
 export * from "./system/PortScannerService.js";
+export * from "./system/PrismuxProviderProbeService.js";
 export * from "./system/ResourceMonitorService.js";
 export * from "./system/ServiceDiagnosticsService.js";
 export * from "./system/SystemFontService.js";
@@ -167,10 +169,20 @@ export interface DaemonStartOptions {
   host?: string;
   port?: number;
   authToken?: string;
+  coreUrl?: string;
+  coreToken?: string;
+  coreCommand?: string;
+  coreArgs?: string[];
+  coreHealthUrl?: string;
+  /** @deprecated Use coreUrl */
   t3Url?: string;
+  /** @deprecated Use coreToken */
   t3Token?: string;
+  /** @deprecated Use coreCommand */
   t3Command?: string;
+  /** @deprecated Use coreArgs */
   t3Args?: string[];
+  /** @deprecated Use coreHealthUrl */
   t3HealthUrl?: string;
   defaultChiefProvider?: ChiefProviderKind;
   defaultChiefModel?: string;
@@ -189,6 +201,7 @@ export interface DaemonReadyInfo {
   pairingCode: string;
   pairingExpiresAt: number;
   t3Connected: boolean;
+  coreConnected?: boolean;
   headless: boolean;
   dataDir: string;
   chiefThreadId: string;
@@ -201,8 +214,19 @@ export class PrismuxDaemon {
   readonly handoffEngine: HandoffEngine;
   readonly hookBus: LifecycleHookBus;
   readonly sandbox: WorktreeSandbox;
-  readonly antigravityPolicyStore: AntigravityPolicyStore;
-  readonly antigravityPolicyGuard: AntigravityPolicyGuard;
+  readonly coreSupervisor: CoreServerSupervisor | undefined;
+  readonly coreRpcClient: CoreRpcClient | undefined;
+  /** @deprecated Use coreSupervisor */
+  readonly t3Supervisor: CoreServerSupervisor | undefined;
+  /** @deprecated Use coreRpcClient */
+  readonly t3RpcClient: CoreRpcClient | undefined;
+  readonly providerProbeService: PrismuxProviderProbeService;
+  readonly subscriptionWaiverStore: SubscriptionWaiverStore;
+  readonly subscriptionOrchestrationGuard: SubscriptionOrchestrationGuard;
+  /** @deprecated Use subscriptionWaiverStore */
+  readonly antigravityPolicyStore: SubscriptionWaiverStore;
+  /** @deprecated Use subscriptionOrchestrationGuard */
+  readonly antigravityPolicyGuard: SubscriptionOrchestrationGuard;
   readonly taskDispatchRouter: TaskDispatchRouter;
   readonly artifactBackdoor: ArtifactResultBackdoor;
   readonly dispatchHub: DesktopIpcDispatchHub;
@@ -224,8 +248,6 @@ export class PrismuxDaemon {
   readonly diagnosticsService: ServiceDiagnosticsService;
   readonly cliUpdateService: CliUpdateService;
   readonly quotaService: OfficialQuotaService;
-  readonly t3Supervisor: T3ServerSupervisor | undefined;
-  readonly t3RpcClient: T3RpcClient | undefined;
   readonly chiefManager: ChiefThreadManager;
   readonly pairingManager: PairingManager;
   readonly rpcServer: DaemonRpcServer;
@@ -239,9 +261,9 @@ export class PrismuxDaemon {
   private readyInfo: DaemonReadyInfo | undefined;
   private activeStartPromise: Promise<DaemonReadyInfo> | undefined;
   private activeStopPromise: Promise<void> | undefined;
-  private t3ConnectRetryTimer: NodeJS.Timeout | undefined;
-  private t3ConnectStopped = false;
-  private t3StateUnsubscribe: (() => void) | undefined;
+  private coreConnectRetryTimer: NodeJS.Timeout | undefined;
+  private coreConnectStopped = false;
+  private coreStateUnsubscribe: (() => void) | undefined;
 
   constructor(options: DaemonStartOptions) {
     this.options = options;
@@ -249,24 +271,59 @@ export class PrismuxDaemon {
     this.ptyPool = new PersistentPtyPool();
     this.hookBus = new LifecycleHookBus();
     this.sandbox = new WorktreeSandbox();
-    this.antigravityPolicyStore = new AntigravityPolicyStore({
+
+    const resolvedCoreCommand = options.coreCommand ?? options.t3Command;
+    const resolvedCoreArgs = options.coreArgs ?? options.t3Args;
+    const resolvedCoreHealthUrl = options.coreHealthUrl ?? options.t3HealthUrl;
+    const resolvedCoreUrl = options.coreUrl ?? options.t3Url;
+    const resolvedCoreToken = options.coreToken ?? options.t3Token;
+
+    if (
+      resolvedCoreCommand !== undefined ||
+      resolvedCoreArgs !== undefined ||
+      resolvedCoreHealthUrl !== undefined
+    ) {
+      this.coreSupervisor = new CoreServerSupervisor({
+        command: resolvedCoreCommand,
+        args: resolvedCoreArgs,
+        healthUrl: resolvedCoreHealthUrl
+      });
+    }
+    this.t3Supervisor = this.coreSupervisor;
+
+    if (resolvedCoreUrl !== undefined && resolvedCoreUrl.trim().length > 0) {
+      this.coreRpcClient = new CoreRpcClient({
+        url: resolvedCoreUrl,
+        token: resolvedCoreToken
+      });
+    }
+    this.t3RpcClient = this.coreRpcClient;
+
+    this.providerProbeService = new PrismuxProviderProbeService({
+      coreRpcClient: this.coreRpcClient
+    });
+
+    this.subscriptionWaiverStore = new SubscriptionWaiverStore({
       dataDir: options.dataDir
     });
-    this.antigravityPolicyGuard = new AntigravityPolicyGuard(
-      this.antigravityPolicyStore
+    this.antigravityPolicyStore = this.subscriptionWaiverStore;
+    this.subscriptionOrchestrationGuard = new SubscriptionOrchestrationGuard(
+      this.subscriptionWaiverStore,
+      { probeService: this.providerProbeService }
     );
+    this.antigravityPolicyGuard = this.subscriptionOrchestrationGuard;
     this.taskDispatchRouter = new TaskDispatchRouter();
     this.artifactBackdoor = new ArtifactResultBackdoor({
-      policyGuard: this.antigravityPolicyGuard
+      policyGuard: this.subscriptionOrchestrationGuard
     });
     this.dispatchHub = new DesktopIpcDispatchHub({
       dataDir: options.dataDir,
       router: this.taskDispatchRouter,
-      policyGuard: this.antigravityPolicyGuard,
+      policyGuard: this.subscriptionOrchestrationGuard,
       artifactBackdoor: this.artifactBackdoor
     });
     this.overnightFactory = new OvernightFactory({
-      policyGuard: this.antigravityPolicyGuard,
+      policyGuard: this.subscriptionOrchestrationGuard,
       dispatchRouter: this.taskDispatchRouter,
       artifactBackdoor: this.artifactBackdoor,
       dispatchHub: this.dispatchHub
@@ -338,30 +395,11 @@ export class PrismuxDaemon {
         : {})
     });
 
-    if (
-      options.t3Command !== undefined ||
-      options.t3Args !== undefined ||
-      options.t3HealthUrl !== undefined
-    ) {
-      this.t3Supervisor = new T3ServerSupervisor({
-        command: options.t3Command,
-        args: options.t3Args,
-        healthUrl: options.t3HealthUrl
-      });
-    }
-
-    if (options.t3Url !== undefined && options.t3Url.trim().length > 0) {
-      this.t3RpcClient = new T3RpcClient({
-        url: options.t3Url,
-        token: options.t3Token
-      });
-    }
-
     this.chiefManager = new ChiefThreadManager({
       dataDir: options.dataDir,
       defaultProvider: options.defaultChiefProvider,
       defaultModel: options.defaultChiefModel,
-      rpcClient: this.t3RpcClient
+      rpcClient: this.coreRpcClient
     });
 
     this.pairingManager = new PairingManager({
@@ -384,14 +422,14 @@ export class PrismuxDaemon {
     const daemonStartedAt = Date.now();
     this.portScannerService = new PortScannerService({
       ptyPool: this.ptyPool,
-      t3Supervisor: this.t3Supervisor
+      t3Supervisor: this.coreSupervisor
     });
     this.resourceMonitorService = new ResourceMonitorService({
       ptyPool: this.ptyPool,
-      t3Supervisor: this.t3Supervisor,
-      t3RpcClient: this.t3RpcClient,
-      ...(options.t3HealthUrl !== undefined || options.t3Url !== undefined
-        ? { t3ServerUrl: options.t3HealthUrl ?? options.t3Url }
+      t3Supervisor: this.coreSupervisor,
+      t3RpcClient: this.coreRpcClient,
+      ...(resolvedCoreHealthUrl !== undefined || resolvedCoreUrl !== undefined
+        ? { t3ServerUrl: resolvedCoreHealthUrl ?? resolvedCoreUrl }
         : {})
     });
     this.diagnosticsService = new ServiceDiagnosticsService({
@@ -402,10 +440,11 @@ export class PrismuxDaemon {
       memoryStore: this.memoryStore,
       memoryDbPath: join(options.dataDir, "data", "memory.db"),
       syncVault: this.syncVault,
-      t3Supervisor: this.t3Supervisor,
-      t3RpcClient: this.t3RpcClient,
-      t3ServerUrl: options.t3HealthUrl ?? options.t3Url,
-      t3Token: options.t3Token,
+      coreSupervisor: this.coreSupervisor,
+      coreRpcClient: this.coreRpcClient,
+      coreServerUrl: resolvedCoreHealthUrl ?? resolvedCoreUrl,
+      coreToken: resolvedCoreToken,
+      providerProbeService: this.providerProbeService,
       ptyPool: this.ptyPool,
       resourceMonitor: this.resourceMonitorService,
       appUpdater: this.appUpdater,
@@ -418,7 +457,9 @@ export class PrismuxDaemon {
       appUpdater: this.appUpdater,
       onAfterUpdate: () => this.diagnosticsService.clearCache()
     });
-    this.quotaService = new OfficialQuotaService();
+    this.quotaService = new OfficialQuotaService({
+      providerProbeService: this.providerProbeService
+    });
     this.businessService = new DaemonBusinessService({
       dataDir: options.dataDir,
       hostVersion: resolvedHostVersion,
@@ -426,7 +467,7 @@ export class PrismuxDaemon {
       officialCatalogPath: options.officialCatalogPath,
       chiefManager: this.chiefManager,
       handoffEngine: this.handoffEngine,
-      t3RpcClient: this.t3RpcClient,
+      t3RpcClient: this.coreRpcClient,
       memoryStore: this.memoryStore,
       memoryDbPath: join(options.dataDir, "data", "memory.db"),
       syncVault: this.syncVault,
@@ -448,7 +489,7 @@ export class PrismuxDaemon {
       overnightFactory: this.overnightFactory,
       credentialStore: this.pluginCredentialStore,
       memoryStore: this.memoryStore,
-      policyGuard: this.antigravityPolicyGuard,
+      policyGuard: this.subscriptionOrchestrationGuard,
       dispatchHub: this.dispatchHub,
       onConfigChanged: () => this.diagnosticsService.clearCache()
     });
@@ -469,19 +510,20 @@ export class PrismuxDaemon {
       obsidianImporter: this.obsidianImporter,
       handoffEngine: this.handoffEngine,
       hookBus: this.hookBus,
-      t3Supervisor: this.t3Supervisor,
-      t3RpcClient: this.t3RpcClient,
+      coreSupervisor: this.coreSupervisor,
+      coreRpcClient: this.coreRpcClient,
       wallpaperService: this.wallpaperService,
       fontService: this.fontService,
       appearanceStore: this.appearanceStore,
       businessService: this.businessService,
       overnightService: this.overnightRouteService,
       diagnosticsService: this.diagnosticsService,
+      providerProbeService: this.providerProbeService,
       cliUpdateService: this.cliUpdateService,
       quotaService: this.quotaService,
       portScannerService: this.portScannerService,
       resourceMonitorService: this.resourceMonitorService,
-      antigravityPolicyStore: this.antigravityPolicyStore,
+      subscriptionWaiverStore: this.subscriptionWaiverStore,
       dispatchHub: this.dispatchHub,
       startedAt: daemonStartedAt,
       onRequestShutdown: options.onShutdownRequested
@@ -604,14 +646,14 @@ export class PrismuxDaemon {
     }
   }
 
-  private clearT3ConnectLoop(): void {
-    this.t3ConnectStopped = true;
-    if (this.t3ConnectRetryTimer !== undefined) {
-      clearTimeout(this.t3ConnectRetryTimer);
-      this.t3ConnectRetryTimer = undefined;
+  private clearCoreConnectLoop(): void {
+    this.coreConnectStopped = true;
+    if (this.coreConnectRetryTimer !== undefined) {
+      clearTimeout(this.coreConnectRetryTimer);
+      this.coreConnectRetryTimer = undefined;
     }
-    this.t3StateUnsubscribe?.();
-    this.t3StateUnsubscribe = undefined;
+    this.coreStateUnsubscribe?.();
+    this.coreStateUnsubscribe = undefined;
   }
 
   private async tryEnsureChiefThread(slot: {
@@ -619,11 +661,11 @@ export class PrismuxDaemon {
     activeProvider: ChiefProviderKind;
     model?: string;
   }): Promise<void> {
-    if (!this.t3RpcClient || !this.t3RpcClient.isConnected()) {
+    if (!this.coreRpcClient || !this.coreRpcClient.isConnected()) {
       return;
     }
     try {
-      await this.t3RpcClient.ensureChiefThread(
+      await this.coreRpcClient.ensureChiefThread(
         slot.workspacePath,
         slot.activeProvider,
         slot.model
@@ -633,26 +675,27 @@ export class PrismuxDaemon {
     }
   }
 
-  private startT3ConnectLoop(slot: {
+  private startCoreConnectLoop(slot: {
     workspacePath: string;
     activeProvider: ChiefProviderKind;
     model?: string;
   }): void {
-    const client = this.t3RpcClient;
+    const client = this.coreRpcClient;
     if (!client) {
       return;
     }
 
-    this.t3ConnectStopped = false;
-    this.t3StateUnsubscribe?.();
-    this.t3StateUnsubscribe = client.onStateChange((connected) => {
+    this.coreConnectStopped = false;
+    this.coreStateUnsubscribe?.();
+    this.coreStateUnsubscribe = client.onStateChange((connected) => {
       if (this.readyInfo !== undefined) {
         this.readyInfo = {
           ...this.readyInfo,
-          t3Connected: connected
+          t3Connected: connected,
+          coreConnected: connected
         };
       }
-      if (connected && !this.t3ConnectStopped) {
+      if (connected && !this.coreConnectStopped) {
         void this.tryEnsureChiefThread(slot);
       }
     });
@@ -661,32 +704,33 @@ export class PrismuxDaemon {
     let attempt = 0;
 
     const scheduleNext = () => {
-      if (this.t3ConnectStopped || client.isConnected()) {
+      if (this.coreConnectStopped || client.isConnected()) {
         return;
       }
       const delayMs =
         backoffDelays[Math.min(attempt, backoffDelays.length - 1)] ?? 5_000;
       attempt += 1;
-      this.t3ConnectRetryTimer = setTimeout(() => {
-        this.t3ConnectRetryTimer = undefined;
+      this.coreConnectRetryTimer = setTimeout(() => {
+        this.coreConnectRetryTimer = undefined;
         void attemptConnect();
       }, delayMs);
     };
 
     const attemptConnect = async () => {
-      if (this.t3ConnectStopped || client.isConnected()) {
+      if (this.coreConnectStopped || client.isConnected()) {
         return;
       }
       try {
         await client.connect();
-        if (this.t3ConnectStopped) {
+        if (this.coreConnectStopped) {
           return;
         }
         attempt = 0;
         if (this.readyInfo !== undefined) {
           this.readyInfo = {
             ...this.readyInfo,
-            t3Connected: true
+            t3Connected: true,
+            coreConnected: true
           };
         }
         await this.tryEnsureChiefThread(slot);
@@ -705,8 +749,8 @@ export class PrismuxDaemon {
       await this.businessService.hydrateInstalledPlugins();
       const slot = await this.chiefManager.init();
 
-      if (this.t3Supervisor !== undefined) {
-        await this.t3Supervisor.start();
+      if (this.coreSupervisor !== undefined) {
+        await this.coreSupervisor.start();
       }
 
       // Bind HTTP & WebSocket RPC server first so /health and API routes are ready in <150ms.
@@ -715,15 +759,15 @@ export class PrismuxDaemon {
       const wsUrl = this.rpcServer.getWsUrl();
       const pairing = this.pairingManager.createPairingCode(undefined, httpUrl);
 
-      this.t3ConnectStopped = false;
-      if (this.t3RpcClient !== undefined) {
-        // Fast bounded probe: succeeds immediately if T3 Server is already listening
+      this.coreConnectStopped = false;
+      if (this.coreRpcClient !== undefined) {
+        // Fast bounded probe: succeeds immediately if Core Server is already listening
         // (preserving deterministic readiness), or falls back to non-blocking background backoff.
         let initialTimer: NodeJS.Timeout | undefined;
-        const initialAttempt = this.t3RpcClient
+        const initialAttempt = this.coreRpcClient
           .connect()
           .then(async () => {
-            if (!this.t3ConnectStopped) {
+            if (!this.coreConnectStopped) {
               await this.tryEnsureChiefThread(slot);
             }
           })
@@ -743,24 +787,26 @@ export class PrismuxDaemon {
           }
         }
 
-        if (!this.t3RpcClient.isConnected()) {
-          this.startT3ConnectLoop(slot);
+        if (!this.coreRpcClient.isConnected()) {
+          this.startCoreConnectLoop(slot);
         } else {
-          this.t3StateUnsubscribe?.();
-          this.t3StateUnsubscribe = this.t3RpcClient.onStateChange((connected) => {
+          this.coreStateUnsubscribe?.();
+          this.coreStateUnsubscribe = this.coreRpcClient.onStateChange((connected) => {
             if (this.readyInfo !== undefined) {
               this.readyInfo = {
                 ...this.readyInfo,
-                t3Connected: connected
+                t3Connected: connected,
+                coreConnected: connected
               };
             }
-            if (connected && !this.t3ConnectStopped) {
+            if (connected && !this.coreConnectStopped) {
               void this.tryEnsureChiefThread(slot);
             }
           });
         }
       }
 
+      const connected = this.coreRpcClient?.isConnected() ?? false;
       const info: DaemonReadyInfo = {
         port: this.rpcServer.getPort(),
         host: this.options.host ?? "127.0.0.1",
@@ -768,7 +814,8 @@ export class PrismuxDaemon {
         wsUrl,
         pairingCode: pairing.pairingCode,
         pairingExpiresAt: pairing.expiresAt,
-        t3Connected: this.t3RpcClient?.isConnected() ?? false,
+        t3Connected: connected,
+        coreConnected: connected,
         headless: this.options.headless,
         dataDir: this.options.dataDir,
         chiefThreadId: slot.threadId
@@ -795,7 +842,7 @@ export class PrismuxDaemon {
     this.overnightRouteService.stop();
     this.resourceMonitorService.stop();
     this.appUpdater.stopAutoCheck();
-    this.clearT3ConnectLoop();
+    this.clearCoreConnectLoop();
     try {
       await this.rpcServer.stop();
     } finally {
@@ -803,13 +850,13 @@ export class PrismuxDaemon {
         await this.unmountAllActivePlugins();
       } finally {
         try {
-          if (this.t3RpcClient !== undefined) {
-            await this.t3RpcClient.close();
+          if (this.coreRpcClient !== undefined) {
+            await this.coreRpcClient.close();
           }
         } finally {
           try {
-            if (this.t3Supervisor !== undefined) {
-              await this.t3Supervisor.stop();
+            if (this.coreSupervisor !== undefined) {
+              await this.coreSupervisor.stop();
             }
           } finally {
             try {

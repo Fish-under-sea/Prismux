@@ -251,7 +251,7 @@ function sameChiefSummary(a: ChiefCommittedSummary, b: ChiefCommittedSummary): b
 }
 
 /**
- * Merges live T3 Code server providers, custom model catalogs, built-in fallbacks
+ * Merges live Prismux server providers, custom model catalogs, built-in fallbacks
  * (`codex / claude-code / antigravity / omp`), and Daemon availableProviders into
  * canonical, de-duplicated Provider dropdown options with official brand names.
  */
@@ -438,7 +438,7 @@ export function buildChiefModelDropdownItems(input: {
 
 /**
  * Resolves supported reasoning effort stops for the selected Chief Provider + Model,
- * preferring live T3 Code model capabilities and falling back to `@prismux/appearance`'s
+ * preferring live Prismux model capabilities and falling back to `@prismux/appearance`'s
  * model-aware family presets (Codex minimal..max, Claude low..ultracode, Gemini off..max, etc.).
  * Effort stop labels always use clear English tier names (Minimal / Low / Medium / High / XHigh / Max / Ultracode).
  */

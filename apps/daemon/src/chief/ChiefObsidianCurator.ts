@@ -10,7 +10,7 @@ import {
   normalizeChiefProviderKind,
   type ChiefProviderKind
 } from "@prismux/protocol";
-import { sanitizeChildEnv } from "../t3/T3ServerSupervisor.js";
+import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 import type { ChiefThreadManager } from "./ChiefThreadManager.js";
 
 interface CliCommandPlan {

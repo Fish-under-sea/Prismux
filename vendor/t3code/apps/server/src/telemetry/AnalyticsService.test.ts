@@ -80,18 +80,18 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
     );
 
     it.effect(
-      "performs zero HTTP requests even when legacy T3CODE_TELEMETRY_ENABLED=true, PostHog host/key, and permissive managed policy are set",
+      "performs zero HTTP requests even when legacy PRISMUX_TELEMETRY_ENABLED=true, PostHog host/key, and permissive managed policy are set",
       () =>
         Effect.gen(function* () {
           const { requests, layer } = makeRecordingRuntime({
             env: {
-              T3CODE_TELEMETRY_ENABLED: true,
-              T3CODE_POSTHOG_KEY: "phc_legacy_test_key",
-              T3CODE_POSTHOG_HOST: "https://ingest.t3.codes",
-              T3CODE_TELEMETRY_FLUSH_BATCH_SIZE: 1,
+              PRISMUX_TELEMETRY_ENABLED: true,
+              PRISMUX_POSTHOG_KEY: "phc_legacy_test_key",
+              PRISMUX_POSTHOG_HOST: "https://ingest.prismux.test",
+              PRISMUX_TELEMETRY_FLUSH_BATCH_SIZE: 1,
             },
             hostEnv: {
-              T3CODE_TELEMETRY_ENABLED: "true",
+              PRISMUX_TELEMETRY_ENABLED: "true",
             },
             policy: {
               schemaVersion: 1,

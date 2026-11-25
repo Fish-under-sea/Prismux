@@ -148,7 +148,7 @@ const ClientIdPayload = Schema.Struct({
   v: Schema.Literal(1),
   n: Schema.String,
   r: Schema.Array(Schema.String),
-  /** Registered as another T3 Code environment's peer link. */
+  /** Registered as another Prismux environment's peer link. */
   p: Schema.optionalKey(Schema.Literal(1)),
 });
 const decodeClientIdPayload = Schema.decodeUnknownOption(Schema.fromJsonString(ClientIdPayload));
@@ -212,7 +212,7 @@ export class McpOAuth extends Context.Service<
       readonly urls: McpOAuthUrls;
       readonly request: AuthMcpAuthorizationRequest;
     }) => Effect.Effect<AuthorizationRequest, McpOAuthPageError | McpOAuthRedirectError>;
-    /** A browser cookie session, or a T3 Connect session from the hosted app, that may approve. */
+    /** A browser cookie session, or a Prismux Connect session from the hosted app, that may approve. */
     readonly approvingSession: (
       request: HttpServerRequest.HttpServerRequest,
       authorization: AuthorizationRequest,
@@ -611,7 +611,7 @@ export const layerMcpClientAuthenticator = Layer.effect(
     const environmentId = yield* environment.getEnvironmentId;
     const hostedAppUrl = yield* hostedAppUrlConfig.pipe(
       Effect.catch((cause) =>
-        Effect.logWarning("Outside MCP clients get app.t3.codes thread links", { cause }).pipe(
+        Effect.logWarning("Outside MCP clients get default Prismux thread links", { cause }).pipe(
           Effect.as(DEFAULT_HOSTED_APP_URL),
         ),
       ),

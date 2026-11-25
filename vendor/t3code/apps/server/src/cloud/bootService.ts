@@ -107,17 +107,17 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
   // The user manager has no reliable network-online target; server networking retries itself.
   return [
     "[Unit]",
-    "Description=T3 Code server",
+    "Description=Prismux server",
     "StartLimitIntervalSec=300",
     "StartLimitBurst=5",
     "",
     "[Service]",
     "Type=simple",
     "WorkingDirectory=%h",
-    `Environment=T3CODE_HOME=${quoteSystemdValue(plan.baseDir)}`,
+    `Environment=PRISMUX_HOME=${quoteSystemdValue(plan.baseDir)}`,
     ...(plan.installBinDir === undefined
       ? []
-      : [`Environment=T3CODE_INSTALL_BIN_DIR=${quoteSystemdValue(plan.installBinDir)}`]),
+      : [`Environment=PRISMUX_INSTALL_BIN_DIR=${quoteSystemdValue(plan.installBinDir)}`]),
     `Environment=${SERVICE_UNIT_ENV}=${BOOT_SERVICE_UNIT_FILE}`,
     `ExecStart=${plan.program.map(quoteSystemdValue).join(" ")}`,
     // Let the launcher mark an explicit stop before it signals the server.
@@ -174,12 +174,12 @@ export function renderBootServicePlist(
     `  <dict>`,
     `    <key>PATH</key>`,
     `    <string>${escapeXmlText(options.environmentPath)}</string>`,
-    `    <key>T3CODE_HOME</key>`,
+    `    <key>PRISMUX_HOME</key>`,
     `    <string>${escapeXmlText(plan.baseDir)}</string>`,
     ...(plan.installBinDir === undefined
       ? []
       : [
-          `    <key>T3CODE_INSTALL_BIN_DIR</key>`,
+          `    <key>PRISMUX_INSTALL_BIN_DIR</key>`,
           `    <string>${escapeXmlText(plan.installBinDir)}</string>`,
         ]),
     `    <key>${SERVICE_UNIT_ENV}</key>`,
@@ -233,7 +233,7 @@ export function renderBootServiceTask(
   return [
     `<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`,
     `  <RegistrationInfo>`,
-    `    <Description>T3 Code server</Description>`,
+    `    <Description>Prismux server</Description>`,
     `  </RegistrationInfo>`,
     `  <Triggers>`,
     `    <LogonTrigger>`,
@@ -650,7 +650,7 @@ export class BootServiceInstallError extends Schema.TaggedError<BootServiceInsta
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not set up the T3 Code background service.";
+    return "Could not set up the Prismux background service.";
   }
 }
 
@@ -677,7 +677,7 @@ export function formatBootServiceProblem(
     case "linger-unavailable":
       return 'Cannot check whether this user can run services after logout. Run `loginctl show-user "$(id -un)" --property=Linger` and check that systemd-logind is available.';
     case "linger-disabled":
-      return 'Lingering is disabled. T3 Code will stop when your last login session ends and will not start at boot. Run `sudo loginctl enable-linger "$(id -un)"` on this machine, then retry the service command as your normal user.';
+      return 'Lingering is disabled. Prismux will stop when your last login session ends and will not start at boot. Run `sudo loginctl enable-linger "$(id -un)"` on this machine, then retry the service command as your normal user.';
     case "service-disabled":
       return `The service is not enabled to start automatically. Run \`${commands.install}\` to repair it.`;
     case "service-stopped":
@@ -731,7 +731,7 @@ export class BootServiceOtherBaseDirError extends Schema.TaggedError<BootService
   },
 ) {
   override get message(): string {
-    return `The T3 Code service on this machine serves ${this.installedBaseDir}, not ${this.baseDir}. Pass ${formatBootServiceBaseDirOption(this.installedBaseDir)} to manage it, or run \`t3 service uninstall ${formatBootServiceBaseDirOption(this.installedBaseDir)}\` first to move it; both data directories are kept.`;
+    return `The Prismux service on this machine serves ${this.installedBaseDir}, not ${this.baseDir}. Pass ${formatBootServiceBaseDirOption(this.installedBaseDir)} to manage it, or run \`t3 service uninstall ${formatBootServiceBaseDirOption(this.installedBaseDir)}\` first to move it; both data directories are kept.`;
   }
 
   // A refusal the user fixes by rerunning, so the CLI prints the message, not a stack trace.
@@ -745,7 +745,7 @@ export class BootServiceBaseDirUnsupportedError extends Schema.TaggedError<BootS
   { baseDir: Schema.String },
 ) {
   override get message(): string {
-    return `systemd cannot run T3 Code from ${JSON.stringify(this.baseDir)}: the path contains a quote, backslash or control character. Choose another T3 home with --base-dir.`;
+    return `systemd cannot run Prismux from ${JSON.stringify(this.baseDir)}: the path contains a quote, backslash or control character. Choose another T3 home with --base-dir.`;
   }
 
   override get [CliError.userMessage]() {
@@ -827,7 +827,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const xdgConfigHome = yield* Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault(""));
   const installerPath = yield* Config.String("PATH").pipe(Config.withDefault(""));
   const installBinDir = Option.getOrUndefined(
-    yield* Config.String("T3CODE_INSTALL_BIN_DIR").pipe(Config.option),
+    yield* Config.String("PRISMUX_INSTALL_BIN_DIR").pipe(Config.option),
   );
   const xdgRuntimeDir = yield* Config.String("XDG_RUNTIME_DIR").pipe(Config.withDefault(""));
   // Root under sudo must not reach or start a separate root service.
@@ -1050,7 +1050,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     ).pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
   const planForUnit = (unit: string): BootServicePlan => {
     const effectiveInstallBinDir =
-      installBinDir || serviceUnitEnvironmentValueOf(unit, "T3CODE_INSTALL_BIN_DIR");
+      installBinDir || serviceUnitEnvironmentValueOf(unit, "PRISMUX_INSTALL_BIN_DIR");
     return effectiveInstallBinDir ? { ...plan, installBinDir: effectiveInstallBinDir } : plan;
   };
   const requireManager = Effect.suspend(() =>
@@ -1397,7 +1397,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
                       // PowerShell has no inline variable assignment; the launcher takes a flag.
                       recoveryCommand: windows
                         ? `& ${launcher(installedVersion)} __service-launcher --base-dir ${quote(input.baseDir)}`
-                        : `T3CODE_HOME=${quote(input.baseDir)} ${launcher(installedVersion)} __service-launcher`,
+                        : `PRISMUX_HOME=${quote(input.baseDir)} ${launcher(installedVersion)} __service-launcher`,
                     }
                   : {},
               );

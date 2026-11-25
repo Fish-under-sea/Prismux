@@ -1,3 +1,8 @@
+import type {
+  PrismuxProviderProbeSnapshot,
+  ProviderAuthMode
+} from "./providerProbe.js";
+
 export const DISPATCH_CALLER_KINDS = [
   "human_desktop",
   "antigravity_commander",
@@ -6,6 +11,7 @@ export const DISPATCH_CALLER_KINDS = [
   "overnight_factory",
   "cron",
   "agent_subtask",
+  "swarm",
   "internal_script",
   "post_stop_loop"
 ] as const;
@@ -52,17 +58,60 @@ export const DISPATCH_TASK_STATUSES = [
 export type DispatchTaskStatus = (typeof DISPATCH_TASK_STATUSES)[number];
 
 export const ANTIGRAVITY_DISCLAIMER_VERSION = "v3-2026" as const;
+export const SUBSCRIPTION_WAIVER_VERSION = "v3-unified-2026" as const;
+export const SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE =
+  "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED" as const;
+export const SUBSCRIPTION_WAIVER_SETTINGS_ROUTE =
+  "/settings/providers#subscription-risk-waiver" as const;
+
+export type SubscriptionOrchestrationBlockedReasonCode =
+  | "AGY_UNATTENDED_FORBIDDEN"
+  | "AGY_CONTROLLED_AGENT_LOCKED"
+  | "AGY_HUMAN_CONFIRMATION_REQUIRED"
+  | "EXTERNAL_SUBSCRIPTION_SWARM_LOCKED";
 
 export type AntigravityGuardErrorCode =
   | "AGY_DISCLAIMER_REQUIRED"
   | "AGY_UNATTENDED_FORBIDDEN"
   | "AGY_CONTROLLED_AGENT_LOCKED"
-  | "AGY_HUMAN_CONFIRMATION_REQUIRED";
+  | "AGY_HUMAN_CONFIRMATION_REQUIRED"
+  | "EXTERNAL_SUBSCRIPTION_SWARM_LOCKED"
+  | typeof SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE;
 
 export type AntigravityGuardDecisionKind =
   | "allow"
   | "stage_draft_only"
   | "deny";
+
+export interface SubscriptionWaiverRecord {
+  signed: boolean;
+  waiverVersion: string | null;
+  signedAt: string | null;
+  allowAntigravityAsControlledAgent: boolean;
+  allowExternalSubscriptionAgentsInSwarm: boolean;
+}
+
+export interface SubscriptionWaiverResponse extends SubscriptionWaiverRecord {
+  defaultLocked: true;
+}
+
+export interface SubscriptionWaiverUpdateRequest {
+  signed?: boolean;
+  waiverVersion?: string;
+  allowAntigravityAsControlledAgent?: boolean;
+  allowExternalSubscriptionAgentsInSwarm?: boolean;
+}
+
+export interface SubscriptionOrchestrationBlockedPayload {
+  ok: false;
+  code: typeof SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE;
+  reasonCode: SubscriptionOrchestrationBlockedReasonCode;
+  providerId: string;
+  authMode: "subscription_oauth";
+  authLabel: string;
+  settingsRoute: typeof SUBSCRIPTION_WAIVER_SETTINGS_ROUTE;
+  message: string;
+}
 
 export interface AntigravityPolicyRecord {
   allowAntigravityAsControlledAgent: boolean;
@@ -88,6 +137,11 @@ export interface AntigravityGuardDecision {
   requiresHumanConfirmation: boolean;
   httpStatus: 200 | 202 | 403;
   code?: AntigravityGuardErrorCode;
+  reasonCode?: SubscriptionOrchestrationBlockedReasonCode;
+  providerId?: string;
+  authMode?: ProviderAuthMode;
+  authLabel?: string;
+  settingsRoute?: typeof SUBSCRIPTION_WAIVER_SETTINGS_ROUTE;
   reason: string;
   targetIsAntigravity: boolean;
 }
@@ -165,6 +219,12 @@ export interface DispatchThreadRequest {
   memoryContextSummary?: string;
   replyChannel?: DispatchReplyChannel;
   threadId?: string;
+  probeSnapshot?: Partial<
+    Pick<
+      PrismuxProviderProbeSnapshot,
+      "providerId" | "authMode" | "authSource" | "authLabel" | "endpoint"
+    >
+  >;
   metadata?: Record<string, unknown>;
 }
 

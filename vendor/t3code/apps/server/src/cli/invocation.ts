@@ -46,11 +46,11 @@ const InstallManifest = Schema.Struct({
 const decodeInstallManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(InstallManifest));
 
 /**
- * `T3CODE_NPM_LAUNCHER_PATH` is inherited by child shells, so accept it only for this package
+ * `PRISMUX_NPM_LAUNCHER_PATH` is inherited by child shells, so accept it only for this package
  * version to avoid claiming another `t3` invocation is the npm install.
  */
 export const resolveEntryPath = Effect.gen(function* () {
-  const npmLauncher = (yield* HostProcess.Environment).T3CODE_NPM_LAUNCHER_PATH?.trim();
+  const npmLauncher = (yield* HostProcess.Environment).PRISMUX_NPM_LAUNCHER_PATH?.trim();
   if (npmLauncher) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -130,7 +130,7 @@ export const resolveServerInstallation = Effect.gen(function* () {
 /** The original package spec is unavailable at startup; infer its channel from the version. */
 function suggestedPackageSpec(version: string): string {
   const channel = /^[^-+]+-(nightly|preview)\./.exec(version)?.[1];
-  return channel === undefined ? "t3" : `t3@${channel}`;
+  return channel === undefined ? "prismux" : `prismux@${channel}`;
 }
 
 function formatCliCommand(input: {
@@ -140,7 +140,7 @@ function formatCliCommand(input: {
 }): string {
   const runner = detectCliRunner(input.entryPath);
   if (runner === null) {
-    return `t3 ${input.subcommand}`;
+    return `prismux ${input.subcommand}`;
   }
   return `${runner} ${suggestedPackageSpec(input.version)} ${input.subcommand}`;
 }
@@ -166,7 +166,7 @@ export const hostShellWord = (platform: NodeJS.Platform, value: string) =>
 /** Script installs have no single launcher; desktop shims and standalone binaries do. */
 const resolveInstallLauncher = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
+  const shim = (yield* HostProcess.Environment).PRISMUX_CLI_PATH?.trim();
   if (shim && (yield* fs.exists(shim).pipe(Effect.orElseSucceed(() => false)))) {
     return Option.some(shim);
   }
@@ -188,10 +188,10 @@ export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand
     // An empty subcommand names the root `t3` command.
     [prefix.trimEnd(), ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
   const command = yield* resolveCliCommand(subcommand);
-  if (command !== `t3 ${subcommand}`) return { command: withArgs(command), launcher: false };
-  const onPath = yield* resolveCommandPath("t3");
+  if (command !== `prismux ${subcommand}`) return { command: withArgs(command), launcher: false };
+  const onPath = (yield* resolveCommandPath("prismux")) ?? (yield* resolveCommandPath("t3"));
   if (onPath !== null) {
-    const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
+    const shim = (yield* HostProcess.Environment).PRISMUX_CLI_PATH?.trim();
     const fs = yield* FileSystem.FileSystem;
     const real = (file: string) => fs.realPath(file).pipe(Effect.orElseSucceed(() => null));
     // Windows `t3.cmd` shims are text files that never realpath to the executable they run.

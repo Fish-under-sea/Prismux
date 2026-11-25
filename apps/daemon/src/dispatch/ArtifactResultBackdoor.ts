@@ -10,7 +10,7 @@ import {
   AntigravityGuardDeniedError,
   AntigravityPolicyGuard
 } from "../security/AntigravityPolicyGuard.js";
-import { sanitizeChildEnv } from "../t3/T3ServerSupervisor.js";
+import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 
 export interface ArtifactExtractionInput {
   taskId: string;
