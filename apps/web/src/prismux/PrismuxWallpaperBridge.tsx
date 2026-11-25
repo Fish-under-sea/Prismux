@@ -6,7 +6,7 @@ import {
   type InlineAppearanceRenderContext,
   type WallpaperItem,
 } from "@prismux/wallpaper";
-import { memo, useCallback, useId } from "react";
+import { memo, useId } from "react";
 
 import { PopoverCreateHandle, PopoverTrigger } from "../components/ui/popover";
 import { Toggle } from "../components/ui/toggle";
@@ -14,29 +14,42 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip"
 import { cn } from "../lib/utils";
 import type { ThreadPanelPresentation } from "../rightPanelLayout";
 import { PrismuxChiefStatusPill } from "./PrismuxChiefStatusPill";
+import type { PrismuxDaemonClient } from "./daemonClient";
 import { usePrismuxRuntime } from "./PrismuxRuntimeProvider";
+
+/**
+ * Resolves the authenticated live runtime iframe URL for Web and live-supported Steam Scene wallpapers.
+ */
+export function resolveWallpaperLiveRuntimeUrl(
+  daemon: Pick<PrismuxDaemonClient, "resolveMediaUrl" | "buildMediaUrl">,
+  wallpaper: WallpaperItem,
+): string | null {
+  if (wallpaper.type === "web") {
+    return (
+      (wallpaper.mediaUrl ? daemon.resolveMediaUrl(wallpaper.mediaUrl) : null) ??
+      daemon.buildMediaUrl("web", wallpaper.id, "index.html")
+    );
+  }
+  if (wallpaper.type === "scene" && wallpaper.source === "steam" && wallpaper.sceneLiveSupported) {
+    return (
+      (wallpaper.mediaUrl ? daemon.resolveMediaUrl(wallpaper.mediaUrl) : null) ??
+      daemon.buildMediaUrl("scene", wallpaper.id, "index.html")
+    );
+  }
+  return null;
+}
 
 /**
  * Z-0 Fullscreen Wallpaper Stage (0 Token visual layer).
  * Mounts behind the Prismux shell, obeys window occlusion / visibility for 0 FPS suspension,
- * and resolves authenticated Daemon URLs for Steam/local web runtimes.
+ * and resolves authenticated Daemon URLs for Steam/local web & live scene runtimes.
  */
 export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop() {
   const { daemon, wallpaperStore, occluded } = usePrismuxRuntime();
   const snapshot = useWallpaperStore(wallpaperStore);
 
-  const resolveLiveRuntimeUrl = useCallback(
-    (wallpaper: WallpaperItem): string | null => {
-      if (wallpaper.type !== "web") {
-        return null;
-      }
-      if (wallpaper.mediaUrl) {
-        return daemon.resolveMediaUrl(wallpaper.mediaUrl);
-      }
-      return daemon.buildMediaUrl("web", wallpaper.id, "index.html");
-    },
-    [daemon],
-  );
+  const resolveLiveRuntimeUrl = (wallpaper: WallpaperItem): string | null =>
+    resolveWallpaperLiveRuntimeUrl(daemon, wallpaper);
 
   if (!snapshot.settings.selectedId) {
     return null;
@@ -72,18 +85,17 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
   const { appearance, setAppearance, setThemeMode, wallpaperStore, wallpaperHost } =
     usePrismuxRuntime();
 
-  const renderInlineAppearance = useCallback(
-    ({ onBack }: InlineAppearanceRenderContext) => (
-      <InlineAppearanceStudio
-        config={appearance}
-        onChange={setAppearance}
-        onThemeModeChange={setThemeMode}
-        onBack={onBack}
-        backLabel="返回壁纸"
-        title="外观与玻璃"
-      />
-    ),
-    [appearance, setAppearance, setThemeMode],
+  const renderInlineAppearance = ({ onBack }: InlineAppearanceRenderContext) => (
+    <InlineAppearanceStudio
+      config={appearance}
+      onChange={setAppearance}
+      onThemeModeChange={setThemeMode}
+      onBack={onBack}
+      // oxlint-disable-next-line prismux/no-untranslated-copy -- Prismux Chinese workbench copy verified by PrismuxWallpaperBridge.test.tsx
+      backLabel="返回壁纸"
+      // oxlint-disable-next-line prismux/no-untranslated-copy -- Prismux Chinese workbench copy verified by PrismuxWallpaperBridge.test.tsx
+      title="外观与玻璃"
+    />
   );
 
   return (
@@ -103,12 +115,8 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
 });
 
 /**
- * Bespoke RGB prism-gradient Sparkles icon for the topbar Wallpaper toggle button.
- * - Uses a unique `useId()` `<linearGradient>` with seamless multi-stop RGB spectrum
- *   (`#38bdf8 -> #6366f1 -> #ec4899 -> #f59e0b -> #22c55e -> #38bdf8`).
- * - Pure CSS GPU-friendly hue-flow animation (`prismux-glass-bridge.css`) keeps it silky across
- *   Light / Dark / Glass while gracefully settling on the static RGB gradient under
- *   `prefers-reduced-motion: reduce`.
+ * Bespoke 6-stop RGB prism-gradient Sparkles icon for the topbar Wallpaper toggle button.
+ * Uses a unique `useId()` `<linearGradient>` and settles statically under `prefers-reduced-motion`.
  */
 export const PrismuxWallpaperSparklesIcon = memo(function PrismuxWallpaperSparklesIcon({
   className,
@@ -133,6 +141,7 @@ export const PrismuxWallpaperSparklesIcon = memo(function PrismuxWallpaperSparkl
       data-pmx-wallpaper-icon="1"
       data-pmx-rgb-gradient="1"
       data-active={active ? "1" : "0"}
+      // oxlint-disable-next-line shadcn/no-unknown-classes -- custom bridge CSS animation class and Lucide selector hook
       className={cn("lucide lucide-sparkles pmx-wallpaper-rgb-sparkles", className)}
     >
       <defs>
@@ -144,12 +153,14 @@ export const PrismuxWallpaperSparklesIcon = memo(function PrismuxWallpaperSparkl
           y2="22"
           gradientUnits="userSpaceOnUse"
         >
+          {/* oxlint-disable shadcn/no-raw-colors -- fixed 6-stop RGB prism brand gradient */}
           <stop offset="0%" stopColor="#38bdf8" />
           <stop offset="22%" stopColor="#6366f1" />
           <stop offset="46%" stopColor="#ec4899" />
           <stop offset="70%" stopColor="#f59e0b" />
           <stop offset="88%" stopColor="#22c55e" />
           <stop offset="100%" stopColor="#38bdf8" />
+          {/* oxlint-enable shadcn/no-raw-colors */}
         </linearGradient>
       </defs>
       <path
@@ -216,14 +227,8 @@ export interface PrismuxTopbarControlsProps {
 }
 
 /**
- * Unified single-topbar Prismux controls (strict left-to-right order before Bottom & Right Panel):
- * 1. Minimalist Chief Thread Slot breathing brand pill (`<PrismuxChiefStatusPill />`)
- * 2. Wallpaper quick-toggle button (`PrismuxWallpaperSparklesIcon`, dynamic RGB prism gradient)
- * 3. AGY + Codex Overview panel (`ThreadDetailsPanel`) toggle button (rounded list-box SVG, `Ctrl+Shift+B`)
- * Followed in `ChatView` by Bottom Panel (下侧栏) and Right Panel (右侧栏), producing:
- *   壁纸 → 概览 → 下侧栏 → 右侧栏
- * Strictly marks interactive controls `[-webkit-app-region:no-drag]` and opts into the refined
- * Apple Liquid Glass frosted active state (`data-pmx-topbar-icon-toggle="1"`).
+ * Unified single-topbar Prismux controls (Chief pill -> Wallpaper -> Overview) placed before
+ * ChatView's Bottom and Right Panel toggles; marks interactive buttons `[-webkit-app-region:no-drag]`.
  */
 export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
   overviewOpen = false,
@@ -246,6 +251,7 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
       className="size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
       pressed={overviewOpen}
       onPressedChange={overviewPresentation === "popover" ? undefined : onToggleOverview}
+      // oxlint-disable-next-line prismux/no-untranslated-copy -- Prismux Chinese workbench aria-label verified by unit test
       aria-label="概览"
       data-pmx-overview-toggle="1"
       data-pmx-topbar-icon-toggle="1"
@@ -265,7 +271,7 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
       <PrismuxChiefStatusPill
         onClick={onOpenChiefSettings}
         isGlassActive={isGlassActive}
-        className="h-6.5 px-2 text-[11px]"
+        className="h-6.5 px-2 text-2xs"
       />
 
       {onToggleWallpaper ? (
@@ -275,6 +281,7 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
               className="size-7 min-w-7 shrink-0 [-webkit-app-region:no-drag]"
               pressed={wallpaperOpen}
               onPressedChange={onToggleWallpaper}
+              // oxlint-disable-next-line prismux/no-untranslated-copy -- Prismux Chinese workbench aria-label verified by unit test
               aria-label="壁纸快速开启"
               data-pmx-wallpaper-toggle="1"
               data-pmx-topbar-icon-toggle="1"
@@ -287,6 +294,7 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
+            {/* oxlint-disable-next-line prismux/no-untranslated-copy -- Prismux Chinese workbench tooltip copy */}
             {wallpaperAvailable ? "壁纸快速开启" : "打开会话后可使用壁纸边栏"}
           </TooltipPopup>
         </Tooltip>
@@ -302,6 +310,7 @@ export const PrismuxTopbarControls = memo(function PrismuxTopbarControls({
             )}
           </TooltipTrigger>
           <TooltipPopup side="bottom">
+            {/* oxlint-disable-next-line prismux/no-untranslated-copy -- Prismux Chinese workbench tooltip copy */}
             {overviewShortcutLabel ? `概览 (${overviewShortcutLabel})` : "概览"}
           </TooltipPopup>
         </Tooltip>

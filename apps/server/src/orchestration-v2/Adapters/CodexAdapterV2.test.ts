@@ -773,7 +773,7 @@ function codexReplayPreamble(input: {
         id: 1,
         method: "initialize",
         params: {
-          clientInfo: { name: "Prismux", title: "Prismux", version: packageJson.version },
+          clientInfo: { name: "codex_cli_rs", title: "Codex CLI", version: packageJson.version },
           capabilities: {
             experimentalApi: true,
             optOutNotificationMethods: ["turn/diff/updated"],

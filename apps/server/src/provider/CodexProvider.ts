@@ -140,7 +140,8 @@ const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_CATALOG_REFRESH_TIMEOUT_MS = 3_000;
 const CODEX_CONFIG_PROBE_TIMEOUT_MS = 3_000;
 const CODEX_CATALOG_REFRESH_POLL = "100 millis" as const;
-const CODEX_CLIENT_NAME = "Prismux";
+const CODEX_CLIENT_NAME = "codex_cli_rs";
+const CODEX_CLIENT_TITLE = "Codex CLI";
 // Handshake plus account/models/skills requests can exceed the shared 10s probe budget.
 const CODEX_AUTH_PROBE_TIMEOUT_MS = 20_000;
 const CODEX_DISCOVERY_MARGIN_MS = 250;
@@ -686,7 +687,8 @@ const requestCodexChatGptModels = Effect.fn("requestCodexChatGptModels")(functio
 });
 
 /**
- * Set originator at spawn; the pre-initialize refresh otherwise overwrites shared cache with plain-CLI models.
+ * Preserve caller env without forcing `CODEX_INTERNAL_ORIGINATOR_OVERRIDE`, so `codex app-server`
+ * and `codex exec` keep Codex CLI's native default originator unless the user explicitly overrides it.
  * Also explicitly clear ELECTRON_RUN_AS_NODE so Codex (and any tool/browser it launches) never inherits
  * Electron's Node-only runtime flag from the embedded desktop server process.
  */
@@ -694,7 +696,6 @@ export const codexAppServerEnvironment = (
   environment: NodeJS.ProcessEnv | undefined,
 ): NodeJS.ProcessEnv => {
   const next: NodeJS.ProcessEnv = {
-    CODEX_INTERNAL_ORIGINATOR_OVERRIDE: CODEX_CLIENT_NAME,
     ...environment,
   };
   next.ELECTRON_RUN_AS_NODE = undefined;
@@ -705,7 +706,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
       name: CODEX_CLIENT_NAME,
-      title: CODEX_CLIENT_NAME,
+      title: CODEX_CLIENT_TITLE,
       version: packageJson.version,
     },
     capabilities: {

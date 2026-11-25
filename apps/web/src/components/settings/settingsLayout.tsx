@@ -667,7 +667,10 @@ export function SettingResetButton({
 export function SettingsPageContainer({
   children,
   className,
-  width = "readable",
+  // All `/settings/*` pages are unified to full-width edge-to-edge fill inside
+  // `[data-settings-page-scroll]` with consistent `px-6 pt-6 pb-14` padding; legacy
+  // width props (`readable` / `wide` / `expanded`) are intentionally overridden.
+  width: _width = "full",
   searchTargetFallbacks,
 }: {
   children: ReactNode;
@@ -701,7 +704,10 @@ export function SettingsPageContainer({
         className="topbar-scroll-fade scrollbar-gutter-both flex-1 overflow-y-auto"
         data-settings-page-scroll
       >
-        <WorkspacePageContainer width={width} className={cn("gap-7", className)}>
+        <WorkspacePageContainer
+          width="full"
+          className={cn("mx-0 gap-7 pt-6", className, "max-w-none")}
+        >
           {children}
         </WorkspacePageContainer>
       </div>

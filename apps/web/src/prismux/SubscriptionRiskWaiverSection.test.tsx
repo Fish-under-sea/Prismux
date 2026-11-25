@@ -102,11 +102,13 @@ import {
   LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID,
   PROVIDERS_PROBE_ENDPOINT,
   SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  SUBSCRIPTION_WAIVER_CONFIRM_TEXT,
   SUBSCRIPTION_WAIVER_ENDPOINT,
   SUBSCRIPTION_WAIVER_ROUTE,
   SUBSCRIPTION_WAIVER_VERSION,
   SubscriptionRiskWaiverSection,
   UNIFORM_API_CUSTOM_AUTH_LABEL,
+  WAIVER_READ_WAIT_SECONDS,
   isAntigravityControlledAutomationAllowed,
   isAntigravityProviderLike,
   normalizeSubscriptionWaiverResponse,
@@ -138,6 +140,8 @@ function installMinimalDom() {
     };
     listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     textContentVal = "";
+    className = "";
+    type = "";
     value = "";
     checked = false;
     disabled = false;
@@ -209,10 +213,12 @@ function installMinimalDom() {
     }
     setAttribute(name: string, val: string): void {
       this.attributes.set(name, String(val));
+      if (name === "class") this.className = String(val);
       if (name === "disabled") this.disabled = true;
     }
     removeAttribute(name: string): void {
       this.attributes.delete(name);
+      if (name === "class") this.className = "";
       if (name === "disabled") this.disabled = false;
     }
     getAttribute(name: string): string | null {
@@ -252,6 +258,17 @@ function installMinimalDom() {
       }
       for (const child of this.childNodes) {
         const hit = child.findByAttr(attrName, attrValue);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    findByTag(tagName: string): MiniNode | null {
+      const normalized = tagName.toUpperCase();
+      if (this.tagName === normalized) {
+        return this;
+      }
+      for (const child of this.childNodes) {
+        const hit = child.findByTag(normalized);
         if (hit) return hit;
       }
       return null;
@@ -409,6 +426,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -541,6 +559,7 @@ describe("SubscriptionRiskWaiverSection", () => {
       expect(switchHandlers.get("external-swarm")?.checked).toBe(false);
 
       // 3. Open unified signing modal covering Google Antigravity, Anthropic Claude, and OpenAI Codex
+      vi.useFakeTimers();
       await act(async () => {
         buttonHandlers.get("open-modal")?.onClick();
       });
@@ -550,19 +569,34 @@ describe("SubscriptionRiskWaiverSection", () => {
       expect(modal?.textContent).toContain("Anthropic Claude");
       expect(modal?.textContent).toContain("OpenAI Codex");
       expect(modal?.textContent).toContain(SUBSCRIPTION_WAIVER_VERSION);
+      expect(modal?.textContent).toContain(
+        "Prismux 仅作为纯本地开源编排工具，不介入账号鉴权且不承担任何平台风控或订阅损失连带责任",
+      );
+      expect(container.findByAttr("data-waiver-countdown", String(WAIVER_READ_WAIT_SECONDS))).not.toBeNull();
+      expect(container.findByAttr("data-waiver-confirm-input", "1")).toBeNull();
       expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
 
-      // 4. Tick mandatory checkbox to enable confirm button, then sign
-      const checkboxNode = container.findByAttr("data-pmx-waiver-checkbox");
-      const onCheckboxChange = getReactProps(checkboxNode)?.onChange as
+      // 4. Wait full 5-second reading gate, type full waiver disclaimer into single-line input, then sign
+      await act(async () => {
+        vi.advanceTimersByTime(WAIVER_READ_WAIT_SECONDS * 1000);
+      });
+      expect(container.findByAttr("data-waiver-countdown")).toBeNull();
+      const inputNode = container.findByAttr("data-waiver-confirm-input", "1");
+      expect(inputNode).not.toBeNull();
+      expect(inputNode?.tagName).toBe("INPUT");
+      expect(inputNode?.type).toBe("text");
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
+
+      const onInputChange = getReactProps(inputNode)?.onChange as
         | ((event: ChangeEvent<HTMLInputElement>) => void)
         | undefined;
       await act(async () => {
-        onCheckboxChange?.({
-          target: { checked: true },
+        onInputChange?.({
+          target: { value: SUBSCRIPTION_WAIVER_CONFIRM_TEXT },
         } as ChangeEvent<HTMLInputElement>);
       });
       expect(buttonHandlers.get("confirm")?.disabled).toBe(false);
+      vi.useRealTimers();
 
       await act(async () => {
         buttonHandlers.get("confirm")?.onClick();
@@ -970,6 +1004,194 @@ describe("SubscriptionRiskWaiverSection", () => {
       expect(providerNodes[1]?.textContent).toContain("我的 AGY");
       expect(providerNodes[2]?.textContent).toContain("备用 Codex");
     } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("enforces dual-layer frosted glass blur, 5s countdown gate, single-line full disclaimer confirmation without copy button/copy hints, and resets on close", async () => {
+    expect(WAIVER_READ_WAIT_SECONDS).toBe(5);
+    expect(SUBSCRIPTION_WAIVER_CONFIRM_TEXT).toBe(
+      "我已完整阅读并充分知晓：将 Google Antigravity、Anthropic Claude 或 OpenAI Codex 的官方个人订阅 OAuth 账号用于蜂群或跨代理自动化调用，存在违反厂商服务条款、触发限流、账号冻结及 403 封号等高风险；签署本免责不代表免疫任何平台风控，Prismux 作为纯本地工具不承担由此引发的账号或订阅损失责任，本人自愿承担全部后果。",
+    );
+
+    const { container } = installMinimalDom();
+    const requestJson = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.startsWith(PROVIDERS_PROBE_ENDPOINT)) {
+        return SAMPLE_PROBE_RESPONSE;
+      }
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body ?? "{}")) as Partial<SubscriptionWaiverState>;
+        return {
+          signed: body.signed ?? true,
+          waiverVersion: body.waiverVersion ?? SUBSCRIPTION_WAIVER_VERSION,
+          signedAt: body.signedAt ?? "2026-11-25T21:00:00.000Z",
+          allowAntigravityAsControlledAgent: false,
+          allowExternalSubscriptionAgentsInSwarm: false,
+          defaultLocked: true as const,
+        };
+      }
+      return {
+        signed: false,
+        waiverVersion: null,
+        signedAt: null,
+        allowAntigravityAsControlledAgent: false,
+        allowExternalSubscriptionAgentsInSwarm: false,
+        defaultLocked: true as const,
+      };
+    });
+
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(
+          <SubscriptionRiskWaiverSection daemon={{ requestJson: requestJson as never }} />,
+        );
+      });
+      await flushMicrotasks();
+
+      vi.useFakeTimers();
+
+      // Open modal -> starts 5s countdown, hides input, applies dual-layer frosted blur
+      await act(async () => {
+        buttonHandlers.get("open-modal")?.onClick();
+      });
+
+      const backdrop = container.findByAttr("data-pmx-waiver-modal-backdrop", "true");
+      const modal = container.findByAttr("data-pmx-waiver-modal", "true");
+      expect(backdrop).not.toBeNull();
+      expect(modal).not.toBeNull();
+
+      // Dual-layer frosted glass & backdropFilter fallback assertions
+      expect(backdrop?.className).toContain("bg-black/60");
+      expect(backdrop?.className).toContain("backdrop-blur-md");
+      expect(backdrop?.style.backdropFilter).toBe("blur(12px)");
+      expect(backdrop?.style.WebkitBackdropFilter).toBe("blur(12px)");
+
+      expect(modal?.getAttribute("data-pmx-glass-zone")).toBe("overlays");
+      expect(modal?.className).toContain("backdrop-blur-2xl");
+      expect(modal?.className).toContain("rgba(255,255,255,0.92)");
+      expect(modal?.className).toContain("rgba(18,22,32,0.88)");
+      expect(modal?.style.backdropFilter).toBe("blur(24px) saturate(160%)");
+      expect(modal?.style.WebkitBackdropFilter).toBe("blur(24px) saturate(160%)");
+
+      // Countdown steps 5 -> 4 -> 3 -> 2 -> 1 while input remains hidden and confirm stays disabled
+      expect(container.findByAttr("data-waiver-countdown", "5")).not.toBeNull();
+      expect(container.findByAttr("data-waiver-confirm-input", "1")).toBeNull();
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
+
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(container.findByAttr("data-waiver-countdown", "2")).not.toBeNull();
+      expect(container.findByAttr("data-waiver-confirm-input", "1")).toBeNull();
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
+
+      // Closing early cancels timer and resets countdown back to 5 on next open
+      await act(async () => {
+        buttonHandlers.get("cancel")?.onClick();
+      });
+      expect(container.findByAttr("data-pmx-waiver-modal")).toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      await act(async () => {
+        buttonHandlers.get("open-modal")?.onClick();
+      });
+      expect(container.findByAttr("data-waiver-countdown", "5")).not.toBeNull();
+      expect(container.findByAttr("data-waiver-confirm-input", "1")).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(container.findByAttr("data-waiver-countdown", "1")).not.toBeNull();
+      expect(container.findByAttr("data-waiver-confirm-input", "1")).toBeNull();
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
+
+      // Final 1s completes countdown -> single-line input confirmation replaces checkbox
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(container.findByAttr("data-waiver-countdown")).toBeNull();
+
+      const activeModal = container.findByAttr("data-pmx-waiver-modal", "true");
+      expect(activeModal).not.toBeNull();
+      expect(activeModal?.findByTag("TEXTAREA")).toBeNull();
+      expect(activeModal?.findByAttr("data-pmx-waiver-checkbox")).toBeNull();
+      expect(activeModal?.textContent).toContain("请完整输入以下免责声明以确认签署：");
+      expect(activeModal?.textContent).not.toContain("可复制");
+      expect(activeModal?.textContent).not.toContain("支持复制");
+      expect(activeModal?.textContent).not.toContain("复制声明");
+      expect(activeModal?.textContent).not.toContain("粘贴");
+
+      // Selectable disclaimer display card uses natural select-text / user-select: text
+      const confirmTextCard = container.findByAttr("data-pmx-waiver-confirm-text", "true");
+      expect(confirmTextCard).not.toBeNull();
+      expect(confirmTextCard?.textContent).toBe(SUBSCRIPTION_WAIVER_CONFIRM_TEXT);
+      expect(confirmTextCard?.className).toContain("select-text");
+      expect(confirmTextCard?.style.userSelect).toBe("text");
+
+      // Single-line text input verification
+      const confirmInput = container.findByAttr("data-waiver-confirm-input", "1");
+      expect(confirmInput).not.toBeNull();
+      expect(confirmInput?.tagName).toBe("INPUT");
+      expect(confirmInput?.type).toBe("text");
+      expect(confirmInput?.getAttribute("aria-label")).toBe("输入完整免责声明");
+      expect(confirmInput?.getAttribute("placeholder")).toBe("请完整输入上方免责声明…");
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
+
+      const triggerInput = async (value: string) => {
+        const onChange = getReactProps(container.findByAttr("data-waiver-confirm-input", "1"))
+          ?.onChange as ((event: ChangeEvent<HTMLInputElement>) => void) | undefined;
+        await act(async () => {
+          onChange?.({ target: { value } } as ChangeEvent<HTMLInputElement>);
+        });
+      };
+
+      // Partial / mismatched input keeps confirm disabled
+      await triggerInput(SUBSCRIPTION_WAIVER_CONFIRM_TEXT.slice(0, 24));
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
+      expect(container.findByAttr("data-waiver-confirm-status", "mismatch")).not.toBeNull();
+
+      // Closing clears typed text and resets countdown to 5
+      await act(async () => {
+        buttonHandlers.get("cancel")?.onClick();
+      });
+      await act(async () => {
+        buttonHandlers.get("open-modal")?.onClick();
+      });
+      expect(container.findByAttr("data-waiver-countdown", "5")).not.toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(WAIVER_READ_WAIT_SECONDS * 1000);
+      });
+      expect(container.findByAttr("data-waiver-confirm-input", "1")?.value ?? "").toBe("");
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
+
+      // Exact disclaimer with leading/trailing whitespace matches and unlocks signing
+      await triggerInput(`  \n${SUBSCRIPTION_WAIVER_CONFIRM_TEXT}\n  `);
+      expect(container.findByAttr("data-waiver-confirm-status", "matched")?.textContent).toContain(
+        "已匹配完整免责声明，可点击签署",
+      );
+      expect(buttonHandlers.get("confirm")?.disabled).toBe(false);
+
+      vi.useRealTimers();
+      await act(async () => {
+        buttonHandlers.get("confirm")?.onClick();
+      });
+      await flushMicrotasks();
+
+      const putCall = requestJson.mock.calls.find(
+        ([path, init]) => path === SUBSCRIPTION_WAIVER_ENDPOINT && init?.method === "PUT",
+      );
+      expect(putCall).toBeDefined();
+      const putBody = JSON.parse(String(putCall?.[1]?.body)) as Record<string, unknown>;
+      expect(putBody.signed).toBe(true);
+      expect(putBody.waiverVersion).toBe("v3-unified-2026");
+      expect(container.findByAttr("data-pmx-waiver-modal")).toBeNull();
+    } finally {
+      vi.useRealTimers();
       await act(async () => {
         root.unmount();
       });

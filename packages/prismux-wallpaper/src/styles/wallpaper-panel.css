@@ -28,6 +28,11 @@
   overflow: hidden;
 }
 
+.pmx-wp-stage__viewport {
+  z-index: 0;
+  isolation: isolate;
+}
+
 .pmx-wp-stage__media {
   position: absolute;
   inset: 0;
@@ -75,7 +80,12 @@
   mix-blend-mode: normal;
 }
 
+.pmx-wp-stage__fade {
+  z-index: 10;
+}
+
 .pmx-wp-stage__scrim {
+  z-index: 11;
   background: #000000;
 }
 
@@ -1062,10 +1072,11 @@ html[data-pmx-theme='light'] .pmx-wp-card-divider {
 
 .pmx-wp-qp--official.pmx-wp-qp--appearance {
   padding: 10px 0;
-  gap: 6px;
+  gap: 8px;
   overflow: hidden;
 }
 
+.pmx-wp-qp--official.pmx-wp-qp--appearance > .pmx-wp-qp__current,
 .pmx-wp-qp--official.pmx-wp-qp--appearance > .pmx-wp-qp__tabs {
   margin-inline: 12px;
   width: auto;
@@ -1466,8 +1477,10 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
 .pmx-wp-qp__list--cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 8px;
+  grid-auto-rows: max-content;
+  align-items: start;
   align-content: start;
+  gap: 8px;
 }
 
 .pmx-wp-qp__list--cards .pmx-wp-hint {
@@ -1488,19 +1501,31 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
   position: relative;
   overflow: hidden;
   cursor: pointer;
+  align-self: start;
+  width: 100%;
+  box-sizing: border-box;
   aspect-ratio: 16 / 9;
   height: auto;
   border-radius: 9px;
   border: 1px solid var(--pmx-wp-border);
   background: var(--pmx-wp-surface-1);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 84px;
   transition:
-    transform 150ms var(--pmx-wp-ease),
     border-color 150ms var(--pmx-wp-ease),
     box-shadow 150ms var(--pmx-wp-ease);
 }
 
+.pmx-wp-qp__card::before,
+.pmx-wp-card::before {
+  content: "";
+  display: block;
+  width: 100%;
+  padding-top: 56.25%;
+  pointer-events: none;
+}
+
 .pmx-wp-qp__card:hover {
-  transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--pmx-wp-accent) 48%, var(--pmx-wp-border));
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
 }
@@ -1523,6 +1548,8 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
 
 .pmx-wp-qp__card--current {
   border-color: color-mix(in srgb, var(--pmx-wp-accent) 70%, transparent);
+  outline: 1.5px solid color-mix(in srgb, var(--pmx-wp-accent) 70%, transparent);
+  outline-offset: -1.5px;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--pmx-wp-accent) 65%, transparent);
 }
 
@@ -1586,6 +1613,8 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
   cursor: pointer;
   border: 1px solid transparent;
   box-sizing: border-box;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 34px;
   transition: background-color var(--pmx-wp-dur-fast) var(--pmx-wp-ease);
 }
 
@@ -1815,12 +1844,18 @@ html:is([data-pmx-gpu='0'], [data-prismux-gpu='0'], [data-pmx-reduced-transparen
 .pmx-wp-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  grid-auto-rows: max-content;
+  align-items: start;
+  align-content: start;
   gap: 10px;
   overflow-x: clip;
 }
 
 .pmx-wp-card {
   position: relative;
+  align-self: start;
+  width: 100%;
+  box-sizing: border-box;
   aspect-ratio: 16 / 9;
   height: auto;
   cursor: pointer;

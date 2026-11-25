@@ -120,16 +120,26 @@ prismux/
 3. **内生单文件 SQLite 记忆中枢与物理防泄密**
    - 记忆引擎固定为单文件 `~/.prismux/data/memory.db`（`SQLite WAL + FTS5 + sqlite-vec`），**零 PostgreSQL、零 Qdrant、零 MinIO、零本地 Obsidian 客户端运行依赖**（仅在 `apps/daemon` 暴露 `POST /v1/memory/import-obsidian` 接口承接历史笔记迁移）。
    - 查询层强制在传输层通过 `forwardIdentity` 注入并覆写 `_callerScope`，**绝不信任模型自报参数**；当 `_callerScope` 为 `qq_group:<gid>` 时，SQL 构造器底层硬编码绑定 `WHERE namespace = 'social/qq-group-' || :gid AND deleted_at IS NULL`，物理杜绝读取 `private/chief` 与 `workspace/*`。
-4. **Antigravity 纯官方合规、统一探针（`PrismuxProviderProbeService`）与订阅编排风控门禁**
-   - **纯官方 CLI / ACP 接入**：Antigravity 全部对话调用与额度查询严格且唯一走用户本机官方 `agy` CLI / `agy acp`；严禁任何非官方 OAuth 登录通道、第三方伪装 Client ID/Secret、窃读 `state.vscdb` / Keyring / Cookie 或调用私密端点（`cloudcode-pa`、`v1internal` 等）。
+4. **全代理原生 CLI 身份、Antigravity 纯官方合规、统一探针（`PrismuxProviderProbeService`）与订阅编排风控门禁**
+   - **全代理原生 CLI 身份保持**：严禁将上游 CLI / SDK 的原生身份请求头或环境变量覆写为 `"Prismux"` 或 `"t3-code"`——例如 Codex 必须保持原生 `codex_cli_rs` / `Codex CLI` 身份（严禁注入 `CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "Prismux"`），Claude Code 必须保持原生 CLI / SDK 入口（严禁注入 `CLAUDE_CODE_ENTRYPOINT: "t3-code"`），Antigravity 严格保持官方 `agy` / `agy acp` 通道。
+   - **纯官方 CLI / ACP 接入**：Antigravity 全部对话调用与额度查询严格且唯一走用户本机官方 `agy` CLI / `agy acp`；严禁任何非官方 OAuth 登录通道、第三方伪装 Client ID / Secret、窃读 `state.vscdb` / Keyring / Cookie 或调用私密端点（`cloudcode-pa`、`v1internal` 等）。
    - **统一鉴权模式探针**：通过 `apps/daemon/src/system/PrismuxProviderProbeService.ts`（`GET /v1/providers/probe`）无侵入识别各 Provider 鉴权模式（`api_or_custom` / `local` / `subscription_oauth` / `unknown`），严禁将 CCS / Magpie / 自定义端点 / API Key / Cloud IAM / `unknown` 误判为 `subscription_oauth`，且零读取 OAuth 令牌正文或系统密钥链。
    - **统一订阅风控免责护栏**：通过 `SubscriptionWaiverStore` + `SubscriptionOrchestrationGuard` 对个人 AGY 及外部 `subscription_oauth` 的跨代理 / Swarm 编排统一返回 HTTP 403 `ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED`（需用户在 `/settings/providers#subscription-risk-waiver` 明确签署免责后方可手动解锁）；`cron` / `overnight_factory` 无人值守路径对个人 AGY 永久硬拦截（`AGY_UNATTENDED_FORBIDDEN`），`api_or_custom` 与 `local` 100% 免签直通。
+   - **统一订阅风控免责弹窗交互红线**：免责签署弹窗须提供双层磨砂模糊（遮罩层 + 弹窗卡片）、5 秒强制阅读倒计时门禁，倒计时结束后展示单行完整文本确认输入框（须完整匹配免责声明原文方可解锁签署按钮）；严禁提供一键复制按钮，严禁出现「可复制」「粘贴」等提示文案，仅保留自然文本选中（`select-text`）。
 5. **官方独立插件默认绝不预装（活跃 2 款；`pet` / `ssh` 已停用）**
    - 活跃官方插件 `qq` 与 `fishdock-hook` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序、Electron 安装包与默认守护进程启动链路保持极简，严禁捆绑预装。
    - 原 `pet`（桌宠联动）与 `ssh`（SSH 远程主机终端）插件已彻底移除并标注为「已停用：已被 Prismux 内置功能取代」，不再打包或上架安装。
-6. **视觉层对模型 0 Token 开销与强制设计规范**
-   - `WebWallGL` 动态壁纸、8 分区 360° Fresnel 液态玻璃、24 小时动态天穹、字体调色、系统音频律动、思考强度滑条与安装包向导属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
-   - `@prismux/appearance`、`@prismux/wallpaper`、桌面端/前端界面、安装包向导与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、≥ 4.5:1 无障碍对比度及降级兜底红线。
+6. **视觉层对模型 0 Token 开销、液态玻璃一致性与动态壁纸引擎红线**
+   - **纯宿主 0 Token 开销**：`WebWallGL` 动态壁纸、8 分区 360° Fresnel 液态玻璃、24 小时动态天穹、6 款诗意液态玻璃主题基底、字体调色、系统音频律动、思考强度滑条与安装包向导均属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
+   - **设计宪法与无障碍基线**：`@prismux/appearance`、`@prismux/wallpaper`、桌面端 / 前端界面、安装包向导与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、≥ 4.5:1 无障碍对比度及降级兜底红线。
+   - **6 款诗意液态玻璃主题基底（`主题基底`）**：固定提供 `纯净官方`（`pure`）、`星语紫夜`（`starry-violet`）、`翠星漫野`（`emerald-stars`）、`樱雪浮岚`（`sakura-drift`）、`沧海浮光`（`ocean-caustics`）、`鎏金织月`（`gilded-lunar`），在右侧外观边栏（`InlineAppearanceStudio`）与完整设置页（`/settings/appearance`）间保持双向一致同步，严格维持 0 Token 宿主视觉层隔离。
+   - **内圆角画框、文件树配色与全宽设置页一致性**：
+     - 整体式 `<PrismuxStageFrame>`（`14px` 四角内凹圆角画框 + `shellCutout` 单层 SVG 遮罩）必须覆盖全部主工作区表面，**包含最大化后的右侧边栏面板**（`mode="inline" maximized={true}`，并从 `rightSidebar` 镂空挖洞集合中排除，杜绝双重模糊叠加或直角退化）。
+     - 文件树（`@pierre/trees` Shadow DOM，经由 `pierre-tree-theme.ts` 与 `FileBrowserPanel` / `FileExplorerPane`）必须将 `--trees-accent-override`、`--trees-focus-ring-color-override`、`--trees-selected-focused-border-color-override` 与 `--trees-selected-bg-override` 绑定至 `--pmx-accent` 及 `--pmx-glass-base-*`（严禁硬编码 `#009fff` 蓝色焦框），继承自定义字体配色，并采用圆角液态玻璃卡片框体呈现。
+     - 全部 `/settings/*` 设置页面必须统一使用全宽铺满布局（`SettingsPageContainer` `width="full"`、`max-w-none`、统一 `px-6` 内边距，严禁左右留白居中容器）。
+   - **Steam 创意工坊 Web 与 Scene（`scene.pkg`）实时引擎及静音红线**：
+     - Web 壁纸必须执行零 Referer 的 `../` 越界 URL 钳制、`:where(body > canvas#canvas)` 尺寸约束与布局就绪投放守卫（layout-ready delivery guard），并接入 `HTMLMediaElement` + `AudioContext` 全局主静音控制器（默认严格静音，仅在开启壁纸音频后发声）。
+     - Steam Scene（`scene.pkg`）内置 MP4 视频纹理与 4K / 8K 高清图像必须走零拷贝字节范围流（zero-copy byte-range streaming），并以视口缩放百分比舞台布局渲染（严禁直接生成原始 8K 尺寸 CSS 合成层盒模型）配合 `img.decoding="sync"` / `decode()`；针对骨骼偶动画（Puppet / Bone-Mesh，即 `models/*.json` 含 `"puppet"`）及 GPU 压缩 DXT 背景的 Scene，必须完整回退至 `preview.gif` / `preview.jpg`（严禁渲染拆散的人体部件 UV 图集）。
 
 ## 三、M1–M5 演进基线与自动化验收门禁（DoD）
 
@@ -196,7 +206,8 @@ prismux/
 
 每次 Prismux 发版（预发布或正式版）必须严格按以下顺序完成**四端同步与清理**，全部验真通过后方可宣告交付完成：
 
-1. **版本同步与 README 资产重绘**：
+1. **RC / SemVer 命名约定、版本同步与 README 资产重绘**：
+   - **RC / SemVer 命名约定**：Release 标题、UI 展示与文档统一使用大写 `RC`（如 `Prismux v0.2.2-RC.1`，GitHub 发布使用 `--latest` 且 `isPrerelease: false`，Gitee 发布设置 `prerelease: false`）；SemVer 版本号、Git Tag、`package.json` 与 npm 包版本统一使用小写 `rc`（如 `0.2.2-rc.1`、`v0.2.2-rc.1`，npm RC 通道使用 `--tag rc`，预览构建使用 `--tag preview`）。
    - 全仓统一升级版本号（根 `package.json`、`apps/{daemon,desktop,server,web}/package.json`、`packages/*/package.json`、`packages/protocol/src/brand.ts`、活跃官方插件 `plugins-official/plugin-{qq,fishdock-hook}/{package.json,plugin.manifest.json,src/index.ts}`、`plugins-official/catalog/official.json`、`README.md` 与 `README.en.md`）。
    - 执行 `node scripts/render-readme.mjs` 全量重绘 `assets/readme/*.png` 与 `header-metadata.json`，并肉眼核验版本仪表卡图片。
 2. **全量质量门禁与实机截屏自审**：
@@ -207,9 +218,10 @@ prismux/
    - Windows NSIS 必须为 `perMachine: false`、默认安装至 `$LOCALAPPDATA\Programs\Prismux`、提供双语可选桌面快捷方式页、非 `.asar` 解包 `vec0.dll` 与随包 `7za.exe`，且严格零预装任何官方插件。
    - 仅打包活跃官方插件 `qq` 与 `fishdock-hook`（严禁打包已停用的 `pet` 与 `ssh`）。
 4. **原子提交、打 Annotated Tag 并双远端推送**：
-   - 按职责拆分中文 Conventional Commits，打 Annotated Tag `v<version>`，推送 `main` 与 `v<version>` 至 `origin`（GitHub）与 `gitee`。
+   - 按职责拆分中文 Conventional Commits 并严格使用精确路径暂存；遵循 [`docs/agents/README.md`](./docs/agents/README.md)，个人本机环境档案（`docs/agents/local/<规范化用户名>.md`）的提交须与功能 / 发版提交严格分离（按精确路径单独提交）。
+   - 打 Annotated Tag `v<version>`（如 `v0.2.2-rc.1`），推送 `main` 与 `v<version>` 至 `origin`（GitHub）与 `gitee`。
 5. **四端发布与自动清理核验**：
-   - **GitHub Release**：发布为 `--latest`（非 prerelease 标记按发版策略对齐），上传全部完整安装包与活跃插件归档并校验服务器 SHA-256 摘要；**严禁删除 GitHub 历史 Release 或历史附件**。
-   - **Gitee Release**：创建新版本 Release 并上传 80 MB 分卷压缩包与活跃插件附件，校验匿名 `HEAD 200` 字节数与匿名下载 SHA-256；**自动清理旧版本 Gitee Release 附件（保留历史 Release 说明页），仅保留最新版本的 Gitee 附件以节约配额**。
+   - **GitHub Release**：标题使用大写 `RC`（如 `Prismux v0.2.2-RC.1`），发布为 `--latest`（`isPrerelease: false`），上传全部完整安装包与活跃插件归档并校验服务器 SHA-256 摘要；**严禁删除 GitHub 历史 Release 或历史附件**。
+   - **Gitee Release**：通过 `scripts/publish-gitee-release.ts` 创建新版本 Release（标题使用大写 `RC`，`prerelease: false`），上传 80 MB `.7z.001..003` 分卷压缩包与活跃插件附件，校验匿名 `HEAD 200` 字节数与匿名下载 SHA-256；**自动清理旧版本 Gitee Release 附件（保留历史 Release 说明页），仅保留最新版本的 Gitee 附件以节约配额**。
    - **GitHub Packages（`@fish-under-sea/prismux-plugin-*`）**：确认 `.github/workflows/publish-github-packages.yml` 自动发布活跃插件 `prismux-plugin-qq` 与 `prismux-plugin-fishdock-hook` 成功，并**确保已停用的废弃包（如 `prismux-plugin-ssh`、`prismux-plugin-pet`）已从 GitHub Packages 彻底清理（仅保留活跃官方插件包）**；如 `GITHUB_TOKEN` 权限受限于个人包删除作用域，须使用含 `delete:packages` 权限的 `gh` / 网页端完成清理并复核仓库右侧 `Packages` 计数严格等于活跃插件数。
-   - **npm（`npmjs.org`）**：切换至本机档案记录的 Node 22 LTS（避开 Node 24 zlib 大包异常），发布 `prismux-plugin-qq` 与 `prismux-plugin-fishdock-hook`（预发布带 `--tag preview`），并确保已停用的 `prismux-plugin-ssh` / `prismux-plugin-pet` 已标注废弃（`npm deprecate`），最后通过 `npm view` 核验线上最新版本号。
+   - **npm（`npmjs.org`）**：切换至本机档案记录的 Node 22 LTS（避开 Node 24 zlib 大包异常），发布 `prismux-plugin-qq` 与 `prismux-plugin-fishdock-hook`（RC 通道带 `--tag rc`，预览构建带 `--tag preview`），并确保已停用的 `prismux-plugin-ssh` / `prismux-plugin-pet` 已标注废弃（`npm deprecate`），最后通过 `npm view` 核验线上最新版本号。

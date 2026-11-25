@@ -4,13 +4,14 @@ import type { ServerProvider } from "@prismux/core-contracts";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
+  ClockIcon,
   LockIcon,
   RefreshCwIcon,
   RotateCcwIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useId, useState, type MouseEvent } from "react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -33,6 +34,9 @@ import { prismuxDaemonClient, type PrismuxDaemonClient } from "./daemonClient";
 export const SUBSCRIPTION_WAIVER_ENDPOINT = "/v1/security/subscription-waiver" as const;
 export const PROVIDERS_PROBE_ENDPOINT = "/v1/providers/probe" as const;
 export const SUBSCRIPTION_WAIVER_VERSION = "v3-unified-2026" as const;
+export const WAIVER_READ_WAIT_SECONDS = 5 as const;
+export const SUBSCRIPTION_WAIVER_CONFIRM_TEXT =
+  "我已完整阅读并充分知晓：将 Google Antigravity、Anthropic Claude 或 OpenAI Codex 的官方个人订阅 OAuth 账号用于蜂群或跨代理自动化调用，存在违反厂商服务条款、触发限流、账号冻结及 403 封号等高风险；签署本免责不代表免疫任何平台风控，Prismux 作为纯本地工具不承担由此引发的账号或订阅损失责任，本人自愿承担全部后果。" as const;
 export const SUBSCRIPTION_WAIVER_ANCHOR_ID = "subscription-risk-waiver" as const;
 export const SUBSCRIPTION_WAIVER_ROUTE = "/settings/providers#subscription-risk-waiver" as const;
 export const LEGACY_ANTIGRAVITY_LOCK_ANCHOR_ID = "antigravity-controlled-lock" as const;
@@ -405,6 +409,16 @@ function normalizeProbeResponse(raw: unknown): ReadonlyArray<ProviderProbeSnapsh
   return results;
 }
 
+function matchesWaiverConfirmText(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed === SUBSCRIPTION_WAIVER_CONFIRM_TEXT) return true;
+  if (!/[\r\n]/.test(trimmed)) return false;
+  return (
+    trimmed.replace(/\r?\n/g, "") === SUBSCRIPTION_WAIVER_CONFIRM_TEXT ||
+    trimmed.replace(/\s*\r?\n\s*/g, " ") === SUBSCRIPTION_WAIVER_CONFIRM_TEXT
+  );
+}
+
 export function SubscriptionRiskWaiverSection({
   daemon = prismuxDaemonClient,
   readOnly = false,
@@ -418,15 +432,13 @@ export function SubscriptionRiskWaiverSection({
   const effectiveProviders = serverProvidersOverride ?? liveServerProviders;
   const effectiveSettings =
     settingsOverride !== undefined ? settingsOverride : liveServerSettings;
-  const configuredEntries = useMemo(() => {
-    const derived = deriveProviderInstanceEntries(effectiveProviders);
-    const branded = effectiveSettings
-      ? brandProviderInstanceEntries(derived, effectiveSettings)
-      : derived;
-    return disambiguateProviderInstanceDisplayNames(
-      orderProviderInstanceEntries(branded, effectiveSettings?.providerOrder),
-    );
-  }, [effectiveProviders, effectiveSettings]);
+  const derivedProviderEntries = deriveProviderInstanceEntries(effectiveProviders);
+  const brandedProviderEntries = effectiveSettings
+    ? brandProviderInstanceEntries(derivedProviderEntries, effectiveSettings)
+    : derivedProviderEntries;
+  const configuredEntries = disambiguateProviderInstanceDisplayNames(
+    orderProviderInstanceEntries(brandedProviderEntries, effectiveSettings?.providerOrder),
+  );
 
   const [waiver, setWaiver] = useState<SubscriptionWaiverState>(DEFAULT_WAIVER_STATE);
   const [probes, setProbes] = useState<ReadonlyArray<ProviderProbeSnapshot>>([]);
@@ -434,10 +446,17 @@ export function SubscriptionRiskWaiverSection({
   const [probeLoading, setProbeLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [modalOpen, setModalOpen] = useState<boolean>(false);
-  const [waiverChecked, setWaiverChecked] = useState<boolean>(false);
+  const [secondsLeft, setSecondsLeft] = useState<number>(WAIVER_READ_WAIT_SECONDS);
+  const [typedText, setTypedText] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const checkboxId = useId();
+  const confirmInputId = useId();
   const modalTitleId = useId();
+  const isConfirmTextMatched = matchesWaiverConfirmText(typedText);
+  const waiverChecked = secondsLeft === 0 && isConfirmTextMatched;
+  const compactTypedText = typedText.trim().replace(/\r?\n/g, "");
+  const compactTypedLength = compactTypedText.length;
+  const isConfirmTextPrefix =
+    compactTypedLength > 0 && SUBSCRIPTION_WAIVER_CONFIRM_TEXT.startsWith(compactTypedText);
 
   const loadProbeSnapshot = async (refresh = false) => {
     setProbeLoading(true);
@@ -497,9 +516,26 @@ export function SubscriptionRiskWaiverSection({
   const closeModal = useStableCallback(() => {
     if (saving) return;
     setModalOpen(false);
-    setWaiverChecked(false);
+    setTypedText("");
+    setSecondsLeft(WAIVER_READ_WAIT_SECONDS);
     setErrorMessage(null);
   });
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- drives mandatory 5-second reading countdown while unified risk waiver modal is open
+  useEffect(() => {
+    if (!modalOpen) return;
+    let remaining: number = WAIVER_READ_WAIT_SECONDS;
+    const timer = setInterval(() => {
+      remaining = Math.max(0, remaining - 1);
+      setSecondsLeft(remaining);
+      if (remaining <= 0) {
+        clearInterval(timer);
+      }
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [modalOpen]);
 
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- binds Escape dismissal while unified risk waiver modal is open
   useEffect(() => {
@@ -518,7 +554,8 @@ export function SubscriptionRiskWaiverSection({
   const handleOpenSignModal = () => {
     if (readOnly || saving || loading) return;
     setErrorMessage(null);
-    setWaiverChecked(false);
+    setTypedText("");
+    setSecondsLeft(WAIVER_READ_WAIT_SECONDS);
     setModalOpen(true);
   };
 
@@ -542,7 +579,8 @@ export function SubscriptionRiskWaiverSection({
       const normalized = normalizeSubscriptionWaiverResponse(response);
       setWaiver(normalized);
       setModalOpen(false);
-      setWaiverChecked(false);
+      setTypedText("");
+      setSecondsLeft(WAIVER_READ_WAIT_SECONDS);
       publishSubscriptionWaiverState(normalized);
       onWaiverChange?.(normalized);
     } catch (error) {
@@ -568,7 +606,8 @@ export function SubscriptionRiskWaiverSection({
       const normalized = normalizeSubscriptionWaiverResponse(response);
       setWaiver(normalized);
       setModalOpen(false);
-      setWaiverChecked(false);
+      setTypedText("");
+      setSecondsLeft(WAIVER_READ_WAIT_SECONDS);
       publishSubscriptionWaiverState(normalized);
       onWaiverChange?.(normalized);
     } catch (error) {
@@ -615,15 +654,11 @@ export function SubscriptionRiskWaiverSection({
     isSigned &&
     (waiver.allowAntigravityAsControlledAgent || waiver.allowExternalSubscriptionAgentsInSwarm);
   const switchesDisabled = !isSigned || readOnly || saving || loading;
-  const visibleProbes = useMemo(
-    () =>
-      orderItemsByConfiguredProviderOrder(
-        probes.filter((entry) => entry.installed || entry.status !== "not_installed"),
-        (entry) => entry.providerId,
-        configuredEntries,
-        effectiveSettings?.providerOrder,
-      ),
-    [configuredEntries, effectiveSettings?.providerOrder, probes],
+  const visibleProbes = orderItemsByConfiguredProviderOrder(
+    probes.filter((entry) => entry.installed || entry.status !== "not_installed"),
+    (entry) => entry.providerId,
+    configuredEntries,
+    effectiveSettings?.providerOrder,
   );
 
   return (
@@ -909,7 +944,11 @@ export function SubscriptionRiskWaiverSection({
       {/* Unified Signing Modal covering AGY + Claude + Codex personal subscription OAuth terms */}
       {modalOpen ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/72 p-4 backdrop-blur-sm [-webkit-app-region:no-drag]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-md [-webkit-app-region:no-drag]"
+          style={{
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+          }}
           data-pmx-waiver-modal-backdrop="true"
           onClick={(event) => {
             if (event.target === event.currentTarget) {
@@ -923,105 +962,195 @@ export function SubscriptionRiskWaiverSection({
             aria-labelledby={modalTitleId}
             data-pmx-waiver-modal="true"
             data-pmx-glass-zone="overlays"
-            className="w-full max-w-xl rounded-2xl border border-warning/45 bg-popover/95 p-6 text-popover-foreground shadow-2xl backdrop-blur-xl"
+            className={cn(
+              "relative flex max-h-[min(90dvh,780px)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-warning/45 bg-popover/95 text-popover-foreground shadow-2xl backdrop-blur-2xl",
+              "[--waiver-modal-bg:rgba(255,255,255,0.92)] dark:[--waiver-modal-bg:rgba(18,22,32,0.88)]",
+              "[--pmx-glass-zone-overlays-bg:rgba(255,255,255,0.92)] dark:[--pmx-glass-zone-overlays-bg:rgba(18,22,32,0.88)]",
+              "[--pmx-glass-zone-overlays-backdrop:blur(24px)_saturate(160%)]",
+            )}
+            style={{
+              backgroundColor: "var(--waiver-modal-bg)",
+              backdropFilter: "blur(24px) saturate(160%)",
+              WebkitBackdropFilter: "blur(24px) saturate(160%)",
+            }}
           >
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/16 text-warning-foreground">
-                <AlertTriangleIcon className="size-5" aria-hidden />
-              </span>
-              <div className="space-y-1">
-                <h4
-                  id={modalTitleId}
-                  className="text-base leading-snug font-semibold text-foreground"
-                >
-                  统一高风险免责确认：个人订阅跨代理编排与自动化调用
-                </h4>
-                <p className="text-xs text-muted-foreground">
-                  版本 {SUBSCRIPTION_WAIVER_VERSION} · 覆盖 Google Antigravity、Anthropic Claude 与
-                  OpenAI Codex 个人订阅 OAuth 条款
-                </p>
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/16 text-warning-foreground">
+                  <AlertTriangleIcon className="size-5" aria-hidden />
+                </span>
+                <div className="space-y-1">
+                  <h4
+                    id={modalTitleId}
+                    className="text-base leading-snug font-semibold text-foreground"
+                  >
+                    统一高风险免责确认：个人订阅跨代理编排与自动化调用
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    版本 {SUBSCRIPTION_WAIVER_VERSION} · 覆盖 Google Antigravity、Anthropic Claude 与
+                    OpenAI Codex 个人订阅 OAuth 条款
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <div className="mt-4 space-y-2.5 rounded-xl border border-warning/40 bg-warning/10 p-3.5 text-xs leading-relaxed text-foreground">
-              <p className="font-semibold text-warning-foreground">
-                通过跨代理调度或蜂群自动化调用官方个人订阅 OAuth 账号可能违反各厂商服务条款，存在服务端 403
-                限流、账号冻结与订阅封号风险；签署本免责声明不代表免疫平台风控，建议优先使用企业版、付费 API Key
-                或 CCS / Magpie 注入 API 模式，后果自负！
-              </p>
-              <ul className="list-disc space-y-1.5 pl-4 text-muted-foreground">
-                <li>
-                  <strong className="font-medium text-foreground">Google Antigravity (AGY)</strong>
-                  ：个人订阅仅限本人主动交互，反向自动化调用存在 Google 服务端 403 封号风险；且 24h
-                  无人值守 Cron / 夜间工场永久禁止自动唤醒个人版 AGY。
-                </li>
-                <li>
-                  <strong className="font-medium text-foreground">Anthropic Claude (Claude Code)</strong>
-                  ：官方个人订阅 OAuth（Free / Pro / Max）用于多代理并发编排可能违反 Anthropic
-                  个人订阅条款并触发账号风控封禁。
-                </li>
-                <li>
-                  <strong className="font-medium text-foreground">OpenAI Codex (ChatGPT)</strong>
-                  ：官方 ChatGPT 个人订阅 OAuth 态拉入蜂群或脚本化调度可能违反 OpenAI
-                  个人订阅条款并导致限流或封号。
-                </li>
-                <li>
-                  <strong className="font-medium text-foreground">随时一键回退</strong>
-                  ：签署后两项开关仍默认保持关闭，需您手动逐项开启；您可随时点击「撤销免责并恢复硬锁」立即清空授权。
-                </li>
-              </ul>
-            </div>
+              <div className="mt-4 space-y-2.5 rounded-xl border border-warning/45 bg-warning/12 p-3.5 text-xs leading-relaxed text-foreground dark:bg-warning/14">
+                <p className="font-semibold text-warning-foreground">
+                  通过跨代理调度或蜂群自动化调用官方个人订阅 OAuth 账号可能违反各厂商服务条款，存在服务端 403
+                  限流、账号冻结与订阅封号风险；签署本免责声明不代表免疫平台风控，建议优先使用企业版、付费 API Key
+                  或 CCS / Magpie 注入 API 模式，后果自负！
+                </p>
+                <ul className="list-disc space-y-1.5 pl-4 text-foreground/85">
+                  <li>
+                    <strong className="font-medium text-foreground">Google Antigravity (AGY)</strong>
+                    ：个人订阅仅限本人主动交互，反向自动化调用存在 Google 服务端 403 封号风险；且 24h
+                    无人值守 Cron / 夜间工场永久禁止自动唤醒个人版 AGY。
+                  </li>
+                  <li>
+                    <strong className="font-medium text-foreground">Anthropic Claude (Claude Code)</strong>
+                    ：官方个人订阅 OAuth（Free / Pro / Max）用于多代理并发编排可能违反 Anthropic
+                    个人订阅条款并触发账号风控封禁。
+                  </li>
+                  <li>
+                    <strong className="font-medium text-foreground">OpenAI Codex (ChatGPT)</strong>
+                    ：官方 ChatGPT 个人订阅 OAuth 态拉入蜂群或脚本化调度可能违反 OpenAI
+                    个人订阅条款并导致限流或封号。
+                  </li>
+                  <li>
+                    <strong className="font-medium text-foreground">本地工具责任边界</strong>
+                    ：Prismux 仅作为纯本地开源编排工具，不介入账号鉴权且不承担任何平台风控或订阅损失连带责任。
+                  </li>
+                  <li>
+                    <strong className="font-medium text-foreground">随时一键回退</strong>
+                    ：签署后两项开关仍默认保持关闭，需您手动逐项开启；您可随时点击「撤销免责并恢复硬锁」立即清空授权。
+                  </li>
+                </ul>
+              </div>
 
-            <label
-              htmlFor={checkboxId}
-              className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-xl border border-border/70 bg-background/60 p-3 text-xs leading-relaxed text-foreground transition-colors hover:bg-accent/40"
-            >
-              <input
-                id={checkboxId}
-                type="checkbox"
-                data-pmx-waiver-checkbox="true"
-                checked={waiverChecked}
-                disabled={saving}
-                onChange={(event) => setWaiverChecked(event.target.checked)}
-                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-warning"
-              />
-              <span>
-                我已完整阅读并充分知晓：将 Google Antigravity、Anthropic Claude 或 OpenAI Codex
-                的官方个人订阅 OAuth 账号用于蜂群或跨代理自动化调用，存在违反厂商服务条款及 403
-                封号风险，签署免责不免疫平台风控，本人自愿承担全部后果。
-              </span>
-            </label>
+              {secondsLeft > 0 ? (
+                <div
+                  data-waiver-countdown={secondsLeft}
+                  className="mt-4 space-y-2.5 rounded-xl border border-warning/40 bg-warning/10 p-3.5 text-xs text-foreground dark:bg-warning/14"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-2 font-medium text-warning-foreground">
+                      <ClockIcon className="size-3.5 shrink-0" aria-hidden />
+                      <span>请仔细阅读上方高风险免责条款，停留 {secondsLeft} 秒后显示确认输入框…</span>
+                    </span>
+                    <span className="shrink-0 font-mono text-2xs font-semibold tabular-nums text-warning-foreground">
+                      {secondsLeft}s
+                    </span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label="强制阅读等待倒计时"
+                    aria-valuemin={0}
+                    aria-valuemax={WAIVER_READ_WAIT_SECONDS}
+                    aria-valuenow={WAIVER_READ_WAIT_SECONDS - secondsLeft}
+                    className="h-1.5 w-full overflow-hidden rounded-full bg-warning/20"
+                  >
+                    <div
+                      className="h-full rounded-full bg-warning transition-[width] duration-700 ease-out motion-reduce:transition-none"
+                      style={{
+                        width: `${((WAIVER_READ_WAIT_SECONDS - secondsLeft) / WAIVER_READ_WAIT_SECONDS) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div
+                  data-pmx-waiver-confirm-panel="true"
+                  className="mt-4 space-y-2.5 rounded-xl border border-border/75 bg-muted/45 p-3.5 text-xs text-foreground dark:bg-white/[0.04]"
+                >
+                  <label
+                    htmlFor={confirmInputId}
+                    className="block font-medium text-foreground"
+                  >
+                    请完整输入以下免责声明以确认签署：
+                  </label>
+                  <div
+                    data-pmx-waiver-confirm-text="true"
+                    className="select-text rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs leading-relaxed font-medium text-foreground dark:bg-warning/14"
+                    style={{
+                      userSelect: "text",
+                      WebkitUserSelect: "text",
+                    }}
+                  >
+                    {SUBSCRIPTION_WAIVER_CONFIRM_TEXT}
+                  </div>
+                  <input
+                    id={confirmInputId}
+                    type="text"
+                    aria-label="输入完整免责声明"
+                    data-waiver-confirm-input="1"
+                    value={typedText}
+                    disabled={saving}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="请完整输入上方免责声明…"
+                    onChange={(event) => setTypedText(event.target.value)}
+                    className={cn(
+                      "w-full rounded-lg border bg-card/90 px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset",
+                      isConfirmTextMatched
+                        ? "border-success/70 focus-visible:ring-success/35"
+                        : compactTypedLength > 0
+                          ? "border-warning/65 focus-visible:ring-warning/35"
+                          : "border-border/80 focus-visible:ring-primary/35",
+                    )}
+                  />
+                  {isConfirmTextMatched ? (
+                    <p
+                      data-waiver-confirm-status="matched"
+                      className="flex items-center gap-1.5 text-2xs font-medium text-success-foreground"
+                    >
+                      <CheckCircle2Icon className="size-3.5 shrink-0" aria-hidden />
+                      <span>已匹配完整免责声明，可点击签署</span>
+                    </p>
+                  ) : (
+                    <p
+                      data-waiver-confirm-status="mismatch"
+                      className="text-2xs leading-relaxed text-muted-foreground"
+                    >
+                      {compactTypedLength === 0
+                        ? `需与上方免责声明完全一致（已输入 0 / ${SUBSCRIPTION_WAIVER_CONFIRM_TEXT.length} 字，忽略首尾空白差异）`
+                        : isConfirmTextPrefix
+                          ? `还差 ${Math.max(1, SUBSCRIPTION_WAIVER_CONFIRM_TEXT.length - compactTypedLength)} 字，请继续完整输入上方免责声明`
+                          : `输入内容与上方免责声明尚未完全一致（已输入 ${compactTypedLength} / ${SUBSCRIPTION_WAIVER_CONFIRM_TEXT.length} 字，请逐字核对错漏）`}
+                    </p>
+                  )}
+                </div>
+              )}
 
-            {errorMessage ? (
-              <p
-                role="alert"
-                className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              >
-                {errorMessage}
-              </p>
-            ) : null}
+              {errorMessage ? (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                >
+                  {errorMessage}
+                </p>
+              ) : null}
 
-            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={saving}
-                data-pmx-waiver-cancel="true"
-                onClick={closeModal}
-              >
-                取消（保持锁定）
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                disabled={!waiverChecked || saving}
-                data-pmx-waiver-confirm="true"
-                onClick={() => void handleSignWaiver()}
-              >
-                {saving ? "正在保存…" : "确认签署统一免责"}
-              </Button>
+              <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={saving}
+                  data-pmx-waiver-cancel="true"
+                  onClick={closeModal}
+                >
+                  取消（保持锁定）
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="default"
+                  disabled={!waiverChecked || saving}
+                  data-pmx-waiver-confirm="true"
+                  onClick={() => void handleSignWaiver()}
+                >
+                  {saving ? "正在保存…" : "确认签署统一免责"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>

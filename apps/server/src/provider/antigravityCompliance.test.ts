@@ -256,7 +256,9 @@ describe("Antigravity (agy) ban-proof compliance static guard", () => {
       expect(contents).toContain("企业版");
       expect(contents).toContain("API Key");
       expect(contents).toContain("后果自负");
-      expect(contents).toContain('type="checkbox"');
+      expect(contents).toContain("WAIVER_READ_WAIT_SECONDS = 5");
+      expect(contents).toContain("SUBSCRIPTION_WAIVER_CONFIRM_TEXT");
+      expect(contents).toContain('data-waiver-confirm-input="1"');
       expect(contents).toContain("disabled={!waiverChecked || saving}");
       expect(contents).toContain("signed: true");
       expect(contents).toContain("if (!waiver.signed");

@@ -64,7 +64,8 @@ const CLAUDE_HOST_SESSION_VARIABLES = [
 
 /**
  * Base env for the Claude processes Prismux runs, before `makeClaudeEnvironment`.
- * Claude Code reads its entrypoint from the process env, not its settings `env`, so Prismux applies that override itself.
+ * Leave `CLAUDE_CODE_ENTRYPOINT` unset by default so Claude Code keeps its native identity,
+ * while honoring any explicit value from the host env, instance env, or Claude's settings `env`.
  */
 export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnvironment")(function* (
   config: Pick<ClaudeSettings, "homePath">,
@@ -73,7 +74,6 @@ export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnviro
 ) {
   const baseEnvironment: NodeJS.ProcessEnv = {
     ...hostEnvironment,
-    CLAUDE_CODE_ENTRYPOINT: "t3-code",
   };
   for (const name of CLAUDE_HOST_SESSION_VARIABLES) delete baseEnvironment[name];
   // The desktop runs the server as Node through Electron. Commands Claude runs inherit its env, so

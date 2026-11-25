@@ -1,16 +1,35 @@
-import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeHttp from "node:http";
+import type * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeTest from "node:test";
+import * as NodeURL from "node:url";
+
+const assert: typeof NodeAssert = NodeAssert;
+const { mkdtemp, mkdir, readFile, rm, writeFile } = NodeFSP;
+const { createServer } = NodeHttp;
+type AddressInfo = NodeNet.AddressInfo;
+const { tmpdir } = NodeOS;
+const { dirname, join } = NodePath;
+const { describe, it } = NodeTest;
+const { fileURLToPath } = NodeURL;
 import {
   closeInlineAppearanceInStore,
   openInlineAppearanceInStore,
+  QP_VIRTUALIZE_THRESHOLD,
   resolveQuickPanelTab,
 } from "../WallpaperQuickPanel.js";
+import {
+  applyVideoAudio,
+  buildWebWallpaperAudioPayload,
+  buildWebWallpaperListenerPayload,
+  computeWallpaperStageStyles,
+  dispatchWebWallpaperRuntimeState,
+  disposeVideoElement,
+  silenceAndBlankIframe,
+} from "../WallpaperStage.js";
 import {
   importLocalWallpaperFile,
   isPathInsideDir,
@@ -856,10 +875,14 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       stageSrc,
       /filter:\s*filterParts\.length > 0 \? filterParts\.join\(" "\) : "none"/,
     );
-    // Native fade color must stay strictly achromatic (#ffffff / #000000) with zero warm/blue cast
+    // Native fade color must stay strictly achromatic (#ffffff / #000000) and adapt to Light / Dark / Glass polarity
     assert.match(
       stageSrc,
-      /const nativeFadeColor = settings\.themeMode === "light" \? "#ffffff" : "#000000";/,
+      /const isLightSurface =\s*settings\.themeMode === "light" \|\| \(settings\.themeMode === "glass" && docIsLight\);/,
+    );
+    assert.match(
+      stageSrc,
+      /const nativeFadeColor = isLightSurface \? "#ffffff" : "#000000";/,
     );
     // Stage media & scrim enforce normal blend mode, filter: none default, pure black scrim, and natural 1.1 menu saturation
     assert.match(panelCss, /\.pmx-wp-stage__media\s*\{[^}]*filter:\s*none;[^}]*mix-blend-mode:\s*normal;/s);
@@ -1005,5 +1028,353 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       assert.match(playbackSrc, new RegExp(`data-pmx-playback-card="${card}"`));
     }
     assert.doesNotMatch(playbackSrc, /0 Token/);
+  });
+
+  it("isolates stage viewport stacking for scrim/fade, unifies viewport filters & pan framing, fixes 16:9 card overlap/jitter, and refactors sidebar layout (RC.3)", async () => {
+    // 1. Unified viewport filter + anti-bleed blur scale + pan/scale framing math
+    const defaults = computeWallpaperStageStyles({
+      objectFit: "cover",
+      layerScale: 100,
+      flipX: false,
+      flipY: false,
+      layerPositionX: 50,
+      layerPositionY: 50,
+      wallpaperBlur: 0,
+      backgroundBrightness: 100,
+      backgroundContrast: 100,
+      backgroundSaturate: 100,
+    });
+    assert.equal(defaults.viewportStyle.filter, "none");
+    assert.equal(defaults.viewportStyle.transform, undefined);
+    assert.equal(defaults.mediaStyle.filter, undefined);
+    assert.equal(defaults.frameMediaStyle.filter, undefined);
+    assert.equal(defaults.mediaStyle.transform, "none");
+    assert.equal(defaults.showAmbientBackdrop, false);
+
+    // Non-default filters apply once on viewportStyle (never duplicated on mediaStyle) + blur anti-bleed scale
+    const filtered = computeWallpaperStageStyles({
+      objectFit: "cover",
+      layerScale: 100,
+      flipX: false,
+      flipY: false,
+      layerPositionX: 50,
+      layerPositionY: 50,
+      wallpaperBlur: 20,
+      backgroundBrightness: 80,
+      backgroundContrast: 120,
+      backgroundSaturate: 140,
+    });
+    assert.equal(
+      filtered.viewportStyle.filter,
+      "blur(20px) brightness(80%) contrast(120%) saturate(140%)",
+    );
+    assert.equal(filtered.viewportStyle.transform, "scale(1.080)");
+    assert.equal(filtered.mediaStyle.filter, undefined);
+    assert.equal(filtered.frameMediaStyle.filter, undefined);
+
+    // Pan at layerScale <= 100% produces clear translate3d + enables soft ambient backdrop
+    const pannedAt100 = computeWallpaperStageStyles({
+      objectFit: "cover",
+      layerScale: 100,
+      flipX: false,
+      flipY: false,
+      layerPositionX: 100,
+      layerPositionY: 0,
+      wallpaperBlur: 0,
+      backgroundBrightness: 100,
+      backgroundContrast: 100,
+      backgroundSaturate: 100,
+    });
+    assert.equal(pannedAt100.mediaStyle.transform, "translate3d(22.50%, -22.50%, 0)");
+    assert.equal(pannedAt100.frameMediaStyle.transform, "translate3d(22.50%, -22.50%, 0)");
+    assert.equal(pannedAt100.showAmbientBackdrop, true);
+
+    // Pan at zoomed layerScale = 150% stays smoothly within zoomShiftBound (16.67%) + flips cleanly
+    const zoomedPanned = computeWallpaperStageStyles({
+      objectFit: "cover",
+      layerScale: 150,
+      flipX: true,
+      flipY: false,
+      layerPositionX: 100,
+      layerPositionY: 50,
+      wallpaperBlur: 0,
+      backgroundBrightness: 100,
+      backgroundContrast: 100,
+      backgroundSaturate: 100,
+    });
+    assert.equal(zoomedPanned.mediaStyle.transform, "translate3d(16.67%, 0.00%, 0) scale(-1.5, 1.5)");
+    assert.equal(zoomedPanned.showAmbientBackdrop, true);
+
+    // Scaled down (< 100%) activates ambient backdrop even at center
+    const scaledDown = computeWallpaperStageStyles({
+      objectFit: "cover",
+      layerScale: 75,
+      flipX: false,
+      flipY: true,
+      layerPositionX: 50,
+      layerPositionY: 50,
+      wallpaperBlur: 0,
+      backgroundBrightness: 100,
+      backgroundContrast: 100,
+      backgroundSaturate: 100,
+    });
+    assert.equal(scaledDown.mediaStyle.transform, "scale(0.75, -0.75)");
+    assert.equal(scaledDown.showAmbientBackdrop, true);
+
+    // 2. CSS z-index isolation, 16:9 flow-height cards & sidebar layout assertions
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const [stageSrc, panelSrc, panelCss] = await Promise.all([
+      readFile(join(pkgRoot, "src", "WallpaperStage.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "WallpaperQuickPanel.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8"),
+    ]);
+
+    assert.match(panelCss, /\.pmx-wp-stage__viewport\s*\{[^}]*z-index:\s*0;[^}]*isolation:\s*isolate;/s);
+    assert.match(panelCss, /\.pmx-wp-stage__fade\s*\{[^}]*z-index:\s*10;/s);
+    assert.match(panelCss, /\.pmx-wp-stage__scrim\s*\{[^}]*z-index:\s*11;[^}]*background:\s*#000000;/s);
+    assert.match(stageSrc, /className="pmx-wp-stage__viewport"\s+style=\{viewportStyle\}/);
+
+    // Card grid row height & zero hover jitter
+    assert.match(
+      panelCss,
+      /\.pmx-wp-qp__list--cards\s*\{[^}]*grid-auto-rows:\s*max-content;[^}]*align-items:\s*start;[^}]*align-content:\s*start;/s,
+    );
+    assert.match(
+      panelCss,
+      /\.pmx-wp-grid\s*\{[^}]*grid-auto-rows:\s*max-content;[^}]*align-items:\s*start;[^}]*align-content:\s*start;/s,
+    );
+    assert.match(
+      panelCss,
+      /\.pmx-wp-qp__card::before,\s*\.pmx-wp-card::before\s*\{[^}]*padding-top:\s*56\.25%;/s,
+    );
+    assert.doesNotMatch(panelCss, /\.pmx-wp-qp__card:hover\s*\{[^}]*translateY\(/s);
+    assert.match(panelCss, /\.pmx-wp-qp__card\s*\{[^}]*content-visibility:\s*auto;/s);
+
+    // Virtualization bypass <= 160 items & no firstCard.offsetHeight ResizeObserver feedback loop
+    assert.equal(QP_VIRTUALIZE_THRESHOLD, 160);
+    assert.doesNotMatch(panelSrc, /firstCard\.offsetHeight/);
+    assert.match(panelSrc, /Math\.abs\(nextWidth - lastObservedWidth\) < 2/);
+
+    // Sidebar layout: permanent top current card (no !isAppearanceView gate) & rotation card moved inside playback tab
+    assert.doesNotMatch(panelSrc, /\{!isAppearanceView \?/);
+    assert.match(
+      panelCss,
+      /\.pmx-wp-qp--official\.pmx-wp-qp--appearance > \.pmx-wp-qp__current,\s*\.pmx-wp-qp--official\.pmx-wp-qp--appearance > \.pmx-wp-qp__tabs\s*\{[^}]*margin-inline:\s*12px;/s,
+    );
+    const idxCurrent = panelSrc.indexOf("pmx-wp-glass-card pmx-wp-qp__current");
+    const idxTabs = panelSrc.indexOf("pmx-wp-tabs pmx-wp-qp__tabs");
+    const idxPlayback = panelSrc.indexOf('effectiveTab === "playback" ?');
+    const idxRotation = panelSrc.indexOf("pmx-wp-glass-card pmx-wp-qp__rotation");
+    assert.ok(idxCurrent > -1 && idxTabs > idxCurrent, "current wallpaper card must stay above tab bar");
+    assert.ok(
+      idxPlayback > idxTabs && idxRotation > idxPlayback,
+      "auto-rotation card must live inside the playback tab instead of above tabs",
+    );
+    assert.match(panelSrc, /<SectionHead label="自动轮播" \/>/);
+  });
+
+  it("enforces iron-law video audio muting/zeroing, setVideoVolume(0) switch sync, and WebWallpaperStage master audio + cleanup (RC.3)", async () => {
+    // 1. Store volume <-> videoAudioEnabled linkage
+    const store = createWallpaperStore({
+      wallpapers: sampleWallpapers,
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+    });
+    assert.equal(store.getSnapshot().settings.videoAudioEnabled, false);
+    assert.equal(store.getSnapshot().settings.videoVolume, 0.35);
+
+    store.setVideoVolume(0.75);
+    assert.equal(store.getSnapshot().settings.videoVolume, 0.75);
+    assert.equal(store.getSnapshot().settings.videoAudioEnabled, true);
+
+    // Dragging volume to 0% must turn off videoAudioEnabled and silence audio completely
+    store.setVideoVolume(0);
+    assert.equal(store.getSnapshot().settings.videoVolume, 0);
+    assert.equal(store.getSnapshot().settings.videoAudioEnabled, false);
+
+    // Negative / NaN values clamp cleanly to 0 and keep switch off
+    store.setVideoVolume(-0.4);
+    assert.equal(store.getSnapshot().settings.videoVolume, 0);
+    assert.equal(store.getSnapshot().settings.videoAudioEnabled, false);
+    store.setVideoVolume(Number.NaN);
+    assert.equal(store.getSnapshot().settings.videoVolume, 0);
+    assert.equal(store.getSnapshot().settings.videoAudioEnabled, false);
+
+    // toggleAudio() restores 0.5 when enabling from 0, and preserves volume when muting
+    store.toggleAudio();
+    assert.equal(store.getSnapshot().settings.videoAudioEnabled, true);
+    assert.equal(store.getSnapshot().settings.videoVolume, 0.5);
+    store.toggleAudio();
+    assert.equal(store.getSnapshot().settings.videoAudioEnabled, false);
+    assert.equal(store.getSnapshot().settings.videoVolume, 0.5);
+    store.dispose();
+
+    // 2. VideoStage applyVideoAudio & unconditional disposeVideoElement
+    const attrs = new Map<string, string>();
+    let pauseCalls = 0;
+    let loadCalls = 0;
+    let replaceChildrenCalls = 0;
+    const mockVideo = {
+      defaultMuted: false,
+      muted: false,
+      volume: 0.9,
+      setAttribute(name: string, value: string) {
+        attrs.set(name, value);
+      },
+      removeAttribute(name: string) {
+        attrs.delete(name);
+      },
+      pause() {
+        pauseCalls += 1;
+      },
+      load() {
+        loadCalls += 1;
+      },
+    };
+    const mockContainer = {
+      replaceChildren() {
+        replaceChildrenCalls += 1;
+      },
+    };
+
+    // videoAudioEnabled: false (muted = true) forces muted === true AND volume === 0
+    applyVideoAudio(mockVideo, true, 0.8);
+    assert.equal(mockVideo.defaultMuted, true);
+    assert.equal(mockVideo.muted, true);
+    assert.equal(mockVideo.volume, 0);
+    assert.equal(attrs.has("muted"), true);
+
+    // Unmuted with positive volume restores exact clamped volume and removes muted attribute
+    applyVideoAudio(mockVideo, false, 0.65);
+    assert.equal(mockVideo.defaultMuted, false);
+    assert.equal(mockVideo.muted, false);
+    assert.equal(mockVideo.volume, 0.65);
+    assert.equal(attrs.has("muted"), false);
+
+    // Unmuted with volume === 0 still forces muted === true and volume === 0
+    applyVideoAudio(mockVideo, false, 0);
+    assert.equal(mockVideo.defaultMuted, true);
+    assert.equal(mockVideo.muted, true);
+    assert.equal(mockVideo.volume, 0);
+    assert.equal(attrs.has("muted"), true);
+
+    // Cleanup unconditionally silences, pauses, strips src, reloads, and empties host container
+    attrs.set("src", "http://127.0.0.1:47910/v1/wallpapers/media/demo");
+    mockVideo.muted = false;
+    mockVideo.volume = 0.7;
+    disposeVideoElement(mockVideo, mockContainer);
+    assert.equal(mockVideo.defaultMuted, true);
+    assert.equal(mockVideo.muted, true);
+    assert.equal(mockVideo.volume, 0);
+    assert.equal(attrs.has("muted"), true);
+    assert.equal(attrs.has("src"), false);
+    assert.equal(pauseCalls, 1);
+    assert.equal(loadCalls, 1);
+    assert.equal(replaceChildrenCalls, 1);
+
+    // 3. WebWallpaperStage audio + listener postMessage dispatch & unmount silence
+    assert.deepEqual(buildWebWallpaperAudioPayload(true, 0.7), {
+      type: "prismuxWallpaperAudio",
+      muted: true,
+      volume: 0,
+    });
+    assert.deepEqual(buildWebWallpaperAudioPayload(false, 0), {
+      type: "prismuxWallpaperAudio",
+      muted: true,
+      volume: 0,
+    });
+    assert.deepEqual(buildWebWallpaperAudioPayload(false, 0.45), {
+      type: "prismuxWallpaperAudio",
+      muted: false,
+      volume: 0.45,
+    });
+
+    const posted: Array<{ msg: unknown; origin: string }> = [];
+    const mockIframeWin = {
+      postMessage(msg: unknown, targetOrigin: string) {
+        posted.push({ msg, origin: targetOrigin });
+      },
+    };
+    const sampleProps = [
+      {
+        name: "speed",
+        ptype: "slider" as const,
+        text: "速度",
+        order: 1,
+        value: 1.5,
+        defaultValue: 1,
+        overridden: true,
+      },
+    ];
+    dispatchWebWallpaperRuntimeState(mockIframeWin, {
+      userProps: sampleProps,
+      fpsLimit: 30,
+      paused: false,
+      muted: true,
+      volume: 0.8,
+      objectFit: "contain",
+    });
+    assert.equal(posted.length, 2);
+    assert.deepEqual(posted[0], {
+      msg: { type: "prismuxWallpaperAudio", muted: true, volume: 0 },
+      origin: "*",
+    });
+    assert.deepEqual(posted[1], {
+      msg: buildWebWallpaperListenerPayload({
+        userProps: sampleProps,
+        fpsLimit: 30,
+        paused: false,
+        muted: true,
+        volume: 0.8,
+        objectFit: "contain",
+      }),
+      origin: "*",
+    });
+    assert.deepEqual(posted[1]?.msg, {
+      type: "wallpaperPropertyListener",
+      applyUserProperties: { speed: { value: 1.5 } },
+      applyGeneralProperties: { fps: 30, paused: false },
+      audio: { muted: true, volume: 0 },
+      objectFit: "contain",
+    });
+
+    // Unmount / src switch immediately sends muted audio message and navigates iframe to about:blank
+    const cleanupPosted: unknown[] = [];
+    const mockIframe = {
+      src: "http://127.0.0.1:47910/v1/wallpapers/web-t/tok/3650874083/index.html",
+      contentWindow: {
+        postMessage(msg: unknown) {
+          cleanupPosted.push(msg);
+        },
+      },
+    };
+    silenceAndBlankIframe(mockIframe);
+    assert.deepEqual(cleanupPosted, [
+      { type: "prismuxWallpaperAudio", muted: true, volume: 0 },
+    ]);
+    assert.equal(mockIframe.src, "about:blank");
+
+    // 4. Verify all 5 VideoStage timings, WebWallpaperStage bridge readiness, and WallpaperStage prop wiring
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const stageSrc = await readFile(join(pkgRoot, "src", "WallpaperStage.tsx"), "utf8");
+    assert.match(stageSrc, /addEventListener\("loadedmetadata",\s*handleLoadedMetadata\)/);
+    assert.match(stageSrc, /addEventListener\("volumechange",\s*handleVolumeChange\)/);
+    assert.match(stageSrc, /isDisposed\?:\s*\(\)\s*=>\s*boolean/);
+    assert.match(stageSrc, /data\.type === "prismuxWeBridgeReady"/);
+    assert.match(stageSrc, /data\.type === "prismuxWebReady"/);
+    assert.match(stageSrc, /setRenderReadySrc\(src\);[\s\S]*?2500/);
+    assert.match(stageSrc, /paused=\{effectivePaused \|\| !settings\.sceneLive\}/);
+    assert.equal(
+      (stageSrc.match(/muted=\{!settings\.videoAudioEnabled\}/g) ?? []).length,
+      3,
+      "VideoStage + web WebWallpaperStage + scene WebWallpaperStage must all receive muted={!settings.videoAudioEnabled}",
+    );
+    assert.equal(
+      (stageSrc.match(/objectFit=\{settings\.objectFit\}/g) ?? []).length,
+      3,
+      "both WebWallpaperStage sites and SteamSceneFallback must receive objectFit={settings.objectFit}",
+    );
   });
 });

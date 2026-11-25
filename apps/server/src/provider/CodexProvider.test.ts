@@ -13,6 +13,7 @@ import * as HostProcess from "@prismux/core-shared/HostProcess";
 
 import {
   applyPreferredCodexDefaultModel,
+  buildCodexInitializeParams,
   codexAppServerEnvironment,
   codexCustomEndpoint,
   codexRoutesSpendNativeQuota,
@@ -446,13 +447,32 @@ it("restores Fast and Ultra Fast speed tiers for flagship GPT models when Codex 
   );
 });
 
-it("strips ELECTRON_RUN_AS_NODE from codexAppServerEnvironment while preserving originator and caller env", () => {
+it("strips ELECTRON_RUN_AS_NODE from codexAppServerEnvironment without injecting an originator override", () => {
   const env = codexAppServerEnvironment({
     ELECTRON_RUN_AS_NODE: "1",
     CUSTOM_FLAG: "yes",
   });
   assert.strictEqual(env.ELECTRON_RUN_AS_NODE, undefined);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(env, "ELECTRON_RUN_AS_NODE"), true);
-  assert.strictEqual(env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, "Prismux");
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(env, "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"),
+    false,
+  );
+  assert.strictEqual(env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, undefined);
   assert.strictEqual(env.CUSTOM_FLAG, "yes");
+
+  const withExplicitOriginator = codexAppServerEnvironment({
+    CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "custom_originator",
+    ELECTRON_RUN_AS_NODE: "1",
+  });
+  assert.strictEqual(withExplicitOriginator.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, "custom_originator");
+  assert.strictEqual(withExplicitOriginator.ELECTRON_RUN_AS_NODE, undefined);
+});
+
+it("identifies Codex app-server initialize handshake with native Codex CLI clientInfo", () => {
+  const params = buildCodexInitializeParams();
+  assert.strictEqual(params.clientInfo.name, "codex_cli_rs");
+  assert.strictEqual(params.clientInfo.title, "Codex CLI");
+  assert.strictEqual(typeof params.clientInfo.version, "string");
+  assert.ok(params.clientInfo.version.length > 0);
 });

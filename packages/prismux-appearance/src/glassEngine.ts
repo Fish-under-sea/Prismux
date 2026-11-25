@@ -4,6 +4,7 @@ import {
   DEFAULT_TYPOGRAPHY_FALLBACKS,
   GLASS_PRESETS,
   GLASS_REGION_LIMITS,
+  GLASS_THEME_BASE_IDS,
   GLASS_ZONE_CSS_NAMES,
   GLASS_ZONE_IDS,
   GLASS_ZONE_LIMITS,
@@ -18,6 +19,7 @@ import {
   type GlassRegionsConfig,
   type GlassSurfaceId,
   type GlassSurfaceOverride,
+  type GlassThemeBase,
   type GlassZoneConfig,
   type GlassZoneDescriptor,
   type GlassZoneId,
@@ -146,6 +148,7 @@ const VALID_THEME_MODES = new Set<ThemeMode>(['light', 'dark', 'glass']);
 const VALID_POLARITIES = new Set<BaseThemePolarity>(['light', 'dark']);
 const VALID_ACCENT_MODES = new Set<AccentMode>(['system', 'custom']);
 const VALID_GLASS_PRESETS = new Set<GlassPreset>(['off', 'light', 'balanced', 'clear', 'custom']);
+const VALID_GLASS_THEME_BASES = new Set<GlassThemeBase>(GLASS_THEME_BASE_IDS);
 const VALID_THINKING_MODES = new Set<ThinkingGlassMode>(['off', 'glass', 'native']);
 const VALID_CORNER_RADII = new Set<SidebarCornerRadius>(['native', 6, 12, 20]);
 const VALID_SURFACE_IDS: readonly GlassSurfaceId[] = [
@@ -168,13 +171,8 @@ const ZONE_META_BY_ID: Readonly<Record<GlassZoneId, GlassZoneDescriptor>> = Obje
 ) as Record<GlassZoneId, GlassZoneDescriptor>;
 
 /**
- * Pure brightness-clamping algorithm ensuring that when `fidelity === 100`,
- * compositing the returned surface tint at the readability floor over the worst-case
- * wallpaper backdrop (#000000 in light mode, #ffffff in dark mode) retains >= 4.5:1
- * WCAG contrast against body text (#000000 in light, #ffffff in dark) at ANY surface opacity.
- *
- * When `fidelity` decreases from 100 -> 0, the clamped tint monotonically lerps
- * back toward the raw user color (0 = raw user color, 100 = full readability red line).
+ * Clamps surface tint brightness so `fidelity === 100` retains >= 4.5:1 WCAG contrast
+ * over worst-case wallpaper pixels (#000 light, #fff dark) at any opacity; lerps to raw hex as fidelity -> 0.
  */
 export function clampSurfaceColorForContrast(
   hex: string,
@@ -470,6 +468,17 @@ export function normalizeAppearanceConfig(
       ? src.glassPreset
       : base.glassPreset;
 
+  const fallbackGlassThemeBase: GlassThemeBase =
+    base.glassThemeBase && VALID_GLASS_THEME_BASES.has(base.glassThemeBase)
+      ? base.glassThemeBase
+      : 'pure';
+  const glassThemeBase: GlassThemeBase =
+    src.glassThemeBase !== undefined
+      ? VALID_GLASS_THEME_BASES.has(src.glassThemeBase)
+        ? src.glassThemeBase
+        : 'pure'
+      : fallbackGlassThemeBase;
+
   const isNamedActivePreset =
     glassPreset === 'light' || glassPreset === 'balanced' || glassPreset === 'clear';
   const presetFallbackRegions =
@@ -681,6 +690,7 @@ export function normalizeAppearanceConfig(
     accentMode,
     accent,
     glassPreset,
+    glassThemeBase,
     glassRegions,
     glassColor,
     glassDarkSeparate,
@@ -744,11 +754,8 @@ export function updateGlassRegion(
 }
 
 /**
- * Updates a single unified workbench glass zone (`shellFrame`, `rightSidebar`,
- * `mainCanvas`, `composer`, `overlays`), seamlessly migrating legacy `leftSidebar`/`chromeBars`
- * callers onto `shellFrame`.
- * When switching into `'custom'` without explicit opacity/blur values, seeds them from
- * the zone's current effective inherited values so there is zero visual jump.
+ * Updates one workbench glass zone (migrating legacy `leftSidebar`/`chromeBars` onto `shellFrame`).
+ * Seeds missing custom opacity/blur from effective inherited values to avoid visual jumps.
  */
 export function updateGlassZone(
   config: AppearanceConfig,
@@ -905,6 +912,25 @@ export function setThemeModeWithGlassAutoWake(
     };
   }
   return { ...config, themeMode: mode };
+}
+
+/**
+ * Selects a liquid-glass theme substrate; choosing any non-`pure` substrate while glass mode is
+ * inactive (or preset is `'off'`) smoothly wakes Liquid Glass so the substrate is immediately visible.
+ */
+export function setGlassThemeBaseWithAutoWake(
+  config: AppearanceConfig,
+  base: GlassThemeBase,
+): AppearanceConfig {
+  const safeBase: GlassThemeBase = VALID_GLASS_THEME_BASES.has(base) ? base : 'pure';
+  const woken =
+    safeBase !== 'pure' && (config.themeMode !== 'glass' || config.glassPreset === 'off')
+      ? setThemeModeWithGlassAutoWake(config, 'glass')
+      : config;
+  return {
+    ...woken,
+    glassThemeBase: safeBase,
+  };
 }
 
 export function resolveBasePolarity(config: AppearanceConfig): BaseThemePolarity {
@@ -1462,6 +1488,8 @@ const MANAGED_ROOT_ATTRS: readonly string[] = [
   'data-pmx-theme',
   'data-pmx-mode',
   'data-pmx-glass',
+  'data-pmx-glass-base',
+  'data-pmx-glass-base-selected',
   'data-pmx-sidebar-glass',
   'data-pmx-right-sidebar-glass',
   'data-pmx-right-sidebar-fullclear',
@@ -1593,13 +1621,8 @@ const MANAGED_CSS_VARS: readonly string[] = [
 ] as const;
 
 /**
- * Applies the complete Prismux appearance state onto `document.documentElement` and `document.body`:
- * - Data attributes for Prismux glass bridge & UI plugin sync (`data-pmx-*`, `data-prismux-*`)
- * - Clamped readability-floor tints, 4-region glass coordinates, and unconditional per-surface variables
- * - Independent light/dark typography colors, custom font families, caret color, and 5 UI accent overrides
- *
- * When glass is off (`themeMode !== 'glass'` or preset `'off'`), `data-pmx-glass="0"` guarantees
- * 100% lossless fallback to native Prismux appearance.
+ * Applies appearance attributes, clamped glass/zone tokens, typography, and UI overrides to `document`.
+ * Sets `data-pmx-glass="0"` when glass is inactive for lossless fallback to native Prismux styles.
  */
 export function applyPrismuxAppearanceToDocument(
   state: AppearanceConfig,
@@ -1635,11 +1658,14 @@ export function applyPrismuxAppearanceToDocument(
 
   const forceSolidZones =
     !runtime.glassActive || opts.gpuAvailable === false || opts.reducedTransparency === true;
+  const effectiveGlassBase: GlassThemeBase = forceSolidZones ? 'pure' : cfg.glassThemeBase;
 
   for (const el of targets) {
     syncAttr(el, 'data-pmx-theme', runtime.polarity);
     syncAttr(el, 'data-pmx-mode', cfg.themeMode);
     syncAttr(el, 'data-pmx-glass', glassFlag);
+    syncAttr(el, 'data-pmx-glass-base', effectiveGlassBase);
+    syncAttr(el, 'data-pmx-glass-base-selected', cfg.glassThemeBase);
     syncAttr(
       el,
       'data-pmx-sidebar-glass',

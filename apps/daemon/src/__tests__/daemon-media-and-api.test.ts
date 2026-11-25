@@ -1,6 +1,17 @@
-import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
-import {
+import * as NodeAssert from "node:assert/strict";
+import * as NodeBuffer from "node:buffer";
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeTest from "node:test";
+import * as NodeVM from "node:vm";
+import * as NodeZlib from "node:zlib";
+
+const assert: typeof NodeAssert = NodeAssert;
+const { Buffer } = NodeBuffer;
+const {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -8,13 +19,14 @@ import {
   readFileSync,
   rmSync,
   writeFileSync
-} from "node:fs";
-import { createServer, request as httpRequest } from "node:http";
-import { createServer as createNetServer, type AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { after, test } from "node:test";
-import { gzipSync } from "node:zlib";
+} = NodeFS;
+const { createServer, request: httpRequest } = NodeHttp;
+const { createServer: createNetServer } = NodeNet;
+type AddressInfo = NodeNet.AddressInfo;
+const { tmpdir } = NodeOS;
+const { join } = NodePath;
+const { after, test } = NodeTest;
+const { gzipSync } = NodeZlib;
 import { CHIEF_PROVIDER_KINDS, OFFICIAL_PLUGIN_IDS } from "@prismux/protocol";
 import { WebSocketServer } from "ws";
 import {
@@ -899,6 +911,120 @@ test("AppearanceConfigStore aligns v0.2.0-rc.2 defaults, persists all 8 glass zo
   assert.equal(modern.wallpaper.scrim, 0.25);
 });
 
+test("AppearanceConfigStore persists full wallpaper filter, framing, transition, power, layout, and filter-state fields across reload (RC.3)", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-appearance-wp-full-"));
+  tempDirs.push(dataDir);
+
+  const store = new AppearanceConfigStore({ dataDir });
+  const initial = store.get().config.wallpaper;
+  assert.equal(initial.backgroundBrightness, 100);
+  assert.equal(initial.backgroundContrast, 100);
+  assert.equal(initial.backgroundSaturate, 100);
+  assert.equal(initial.layerPositionX, 50);
+  assert.equal(initial.layerPositionY, 50);
+  assert.equal(initial.layerScale, 100);
+  assert.equal(initial.switchTransition, "fade");
+  assert.equal(initial.liveBootDelay, 3);
+  assert.equal(initial.sceneAutoQuality, true);
+  assert.equal(initial.sceneSoftRenderPause, true);
+  assert.equal(initial.startPaused, false);
+  assert.equal(initial.audioReactive, true);
+  assert.equal(initial.pickerLayout, "fixed");
+  assert.deepEqual(initial.contentRatingFilter, ["everyone", "pg13", "mature", "unrated"]);
+  assert.deepEqual(initial.typeFilter, ["scene", "web", "video", "image"]);
+  assert.equal(initial.orientationFilter, "all");
+  assert.equal(initial.customWallpaperDir, "");
+
+  // Save rich wallpaper filter, framing, power, layout & library filter settings
+  store.update({
+    wallpaper: {
+      selectedId: "steam:424242",
+      objectFit: "contain",
+      flipX: true,
+      flipY: true,
+      wallpaperBlur: 18,
+      wallpaperOpacity: 30,
+      scrim: 0.55,
+      backgroundBrightness: 85,
+      backgroundContrast: 135,
+      backgroundSaturate: 165,
+      layerPositionX: 72,
+      layerPositionY: 28,
+      layerScale: 128,
+      switchTransition: "cut",
+      liveBootDelay: 10,
+      sceneAutoQuality: false,
+      sceneSoftRenderPause: false,
+      startPaused: true,
+      audioReactive: false,
+      pickerLayout: "classic",
+      contentRatingFilter: ["everyone", "pg13"],
+      typeFilter: ["video", "image"],
+      orientationFilter: "landscape",
+      steamRootOverride: "D:\\SteamLibrary",
+      customWallpaperDir: "D:\\Wallpapers\\Custom"
+    }
+  });
+
+  // Reload from disk in a brand-new AppearanceConfigStore instance
+  const reloaded = new AppearanceConfigStore({ dataDir }).get().config.wallpaper;
+  assert.equal(reloaded.selectedId, "steam:424242");
+  assert.equal(reloaded.objectFit, "contain");
+  assert.equal(reloaded.flipX, true);
+  assert.equal(reloaded.flipY, true);
+  assert.equal(reloaded.wallpaperBlur, 18);
+  assert.equal(reloaded.wallpaperOpacity, 30);
+  assert.equal(reloaded.scrim, 0.55);
+  assert.equal(reloaded.backgroundBrightness, 85);
+  assert.equal(reloaded.backgroundContrast, 135);
+  assert.equal(reloaded.backgroundSaturate, 165);
+  assert.equal(reloaded.layerPositionX, 72);
+  assert.equal(reloaded.layerPositionY, 28);
+  assert.equal(reloaded.layerScale, 128);
+  assert.equal(reloaded.switchTransition, "cut");
+  assert.equal(reloaded.liveBootDelay, 10);
+  assert.equal(reloaded.sceneAutoQuality, false);
+  assert.equal(reloaded.sceneSoftRenderPause, false);
+  assert.equal(reloaded.startPaused, true);
+  assert.equal(reloaded.audioReactive, false);
+  assert.equal(reloaded.pickerLayout, "classic");
+  assert.deepEqual(reloaded.contentRatingFilter, ["everyone", "pg13"]);
+  assert.deepEqual(reloaded.typeFilter, ["video", "image"]);
+  assert.equal(reloaded.orientationFilter, "landscape");
+  assert.equal(reloaded.steamRootOverride, "D:\\SteamLibrary");
+  assert.equal(reloaded.customWallpaperDir, "D:\\Wallpapers\\Custom");
+
+  // Out-of-range filter/framing values are strictly clamped and invalid enums preserve prior valid values
+  const clamped = store.update({
+    wallpaper: {
+      backgroundBrightness: 999,
+      backgroundContrast: 5,
+      backgroundSaturate: -20,
+      layerPositionX: -15,
+      layerPositionY: 250,
+      layerScale: 500,
+      switchTransition: "invalid-mode",
+      liveBootDelay: 99,
+      pickerLayout: "unknown",
+      orientationFilter: "diagonal",
+      contentRatingFilter: ["bogus"],
+      typeFilter: ["audio-only"]
+    }
+  }).wallpaper;
+  assert.equal(clamped.backgroundBrightness, 160);
+  assert.equal(clamped.backgroundContrast, 40);
+  assert.equal(clamped.backgroundSaturate, 0);
+  assert.equal(clamped.layerPositionX, 0);
+  assert.equal(clamped.layerPositionY, 100);
+  assert.equal(clamped.layerScale, 150);
+  assert.equal(clamped.switchTransition, "cut");
+  assert.equal(clamped.liveBootDelay, 10);
+  assert.equal(clamped.pickerLayout, "classic");
+  assert.equal(clamped.orientationFilter, "landscape");
+  assert.deepEqual(clamped.contentRatingFilter, ["everyone", "pg13"]);
+  assert.deepEqual(clamped.typeFilter, ["video", "image"]);
+});
+
 test("Real business HTTP APIs: chief, memory stats/search with qq_group isolation, secret-free sync config, scriptless plugins, and PUT /v1/updater/policy", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "prismux-business-data-"));
   tempDirs.push(dataDir);
@@ -1382,8 +1508,10 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
     t3Url: `http://127.0.0.1:${delayedT3Port}/?token=t3-late-boot-token`
   });
 
+  // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies daemon.start() returns promptly without blocking on absent T3 server
   const startedAt = Date.now();
   const ready = await daemon.start();
+  // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies daemon.start() returns promptly without blocking on absent T3 server
   const startupElapsedMs = Date.now() - startedAt;
   cleanups.push(async () => {
     await daemon.stop();
@@ -1497,8 +1625,10 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
     });
   });
 
+  // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- real network reconnect deadline for delayed mock T3 WebSocket server
   const deadline = Date.now() + 6_000;
   let reconnected = false;
+  // oxlint-disable-next-line prismux/no-polling-loop-in-tests, prismux/no-wall-clock-in-tests -- polls real HTTP /health until background WS reconnect completes
   while (Date.now() < deadline) {
     const hRes = await fetch(`${ready.httpUrl}/health`);
     const hJson = (await hRes.json()) as { t3Connected: boolean };
@@ -1506,6 +1636,7 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
       reconnected = true;
       break;
     }
+    // oxlint-disable-next-line prismux/no-real-time-wait-in-tests -- backoff interval between real HTTP /health reconnect probes
     await new Promise((r) => setTimeout(r, 80));
   }
 
@@ -1976,4 +2107,787 @@ test("RC.2 Web wallpaper URL-path token (/web-t/), Referer fallback, Spine/video
     }
   });
   assert.equal(refererCrossId.status, 401);
+});
+
+function buildScenePkgFixture(
+  magic: string,
+  entries: ReadonlyArray<{ name: string; data: Buffer }>
+): Buffer {
+  const magicBuf = Buffer.from(magic, "utf8");
+  const magicLen = Buffer.alloc(4);
+  magicLen.writeInt32LE(magicBuf.byteLength, 0);
+  const countBuf = Buffer.alloc(4);
+  countBuf.writeInt32LE(entries.length, 0);
+
+  const headerParts: Buffer[] = [magicLen, magicBuf, countBuf];
+  const dataParts: Buffer[] = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.name, "utf8");
+    const nameLen = Buffer.alloc(4);
+    nameLen.writeInt32LE(nameBuf.byteLength, 0);
+    const meta = Buffer.alloc(8);
+    meta.writeUInt32LE(offset, 0);
+    meta.writeUInt32LE(e.data.byteLength, 4);
+    headerParts.push(nameLen, nameBuf, meta);
+    dataParts.push(e.data);
+    offset += e.data.byteLength;
+  }
+  return Buffer.concat([...headerParts, ...dataParts]);
+}
+
+function buildTexB3Fixture(
+  width: number,
+  height: number,
+  flags: number,
+  payload: Buffer
+): Buffer {
+  const texi = Buffer.alloc(28);
+  texi.writeInt32LE(0, 0);
+  texi.writeInt32LE(flags, 4);
+  texi.writeInt32LE(width, 8);
+  texi.writeInt32LE(height, 12);
+  texi.writeInt32LE(width, 16);
+  texi.writeInt32LE(height, 20);
+  texi.writeInt32LE(0, 24);
+  const counts = Buffer.alloc(12);
+  counts.writeInt32LE(1, 0);
+  counts.writeInt32LE(-1, 4);
+  counts.writeInt32LE(1, 8);
+  const mip = Buffer.alloc(20);
+  mip.writeInt32LE(width, 0);
+  mip.writeInt32LE(height, 4);
+  mip.writeInt32LE(0, 8);
+  mip.writeInt32LE(0, 12);
+  mip.writeInt32LE(payload.byteLength, 16);
+  return Buffer.concat([
+    Buffer.from("TEXV0005\0", "ascii"),
+    Buffer.from("TEXI0001\0", "ascii"),
+    texi,
+    Buffer.from("TEXB0003\0", "ascii"),
+    counts,
+    mip,
+    payload
+  ]);
+}
+
+test("RC.3 Steam scene.pkg /scene-t/ streaming (206), Web 404 vs 403, token fallback, and bridgeScript audio/path/reloadModel controls", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-wp-rc3-data-"));
+  const steamRoot = mkdtempSync(join(tmpdir(), "prismux-wp-rc3-steam-"));
+  tempDirs.push(dataDir, steamRoot);
+
+  const wsRoot = join(steamRoot, "steamapps", "workshop", "content", "431960");
+
+  // 1. Steam Scene wallpaper with embedded MP4 video inside scene.pkg + 512x512 square preview
+  const sceneDir = join(wsRoot, "2966081148");
+  mkdirSync(sceneDir, { recursive: true });
+  const embeddedMp4 = Buffer.concat([
+    Buffer.from([0x00, 0x00, 0x00, 0x18]),
+    Buffer.from("ftypmp42\x00\x00\x00\x00mp42isom", "latin1"),
+    Buffer.from("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-SCENE-VIDEO-STREAM", "ascii")
+  ]);
+  const scenePkg = buildScenePkgFixture("PKGV0018", [
+    {
+      name: "scene.json",
+      data: Buffer.from(
+        JSON.stringify({
+          general: { orthogonalprojection: { width: 2560, height: 1798 } },
+          objects: [
+            {
+              name: "shiroko",
+              image: "models/shiroko.json",
+              visible: true,
+              origin: "1280 899 0",
+              size: "2560 1798"
+            }
+          ]
+        }),
+        "utf8"
+      )
+    },
+    {
+      name: "models/shiroko.json",
+      data: Buffer.from(JSON.stringify({ material: "materials/shiroko.json" }), "utf8")
+    },
+    {
+      name: "materials/shiroko.json",
+      data: Buffer.from(JSON.stringify({ passes: [{ textures: ["shiroko"] }] }), "utf8")
+    },
+    {
+      name: "materials/shiroko.tex",
+      data: buildTexB3Fixture(2560, 1798, 34, embeddedMp4)
+    }
+  ]);
+  writeFileSync(join(sceneDir, "scene.pkg"), scenePkg);
+  writeFileSync(join(sceneDir, "preview.png"), createMinimalPngBuffer(512, 512));
+  writeFileSync(
+    join(sceneDir, "project.json"),
+    JSON.stringify({
+      title: "Shiroko 2K Scene",
+      type: "Scene",
+      file: "scene.json",
+      preview: "preview.png",
+      contentrating: "Everyone"
+    }),
+    "utf8"
+  );
+
+  // 2. Steam Web wallpaper (Spine 8k default + missing audio file check)
+  const webDir = join(wsRoot, "3650874083");
+  mkdirSync(join(webDir, "assets", "8k"), { recursive: true });
+  mkdirSync(join(webDir, "assets", "audio"), { recursive: true });
+  writeFileSync(
+    join(webDir, "index.html"),
+    "<!doctype html><html><head><title>Aris</title></head><body><canvas id='canvas'></canvas></body></html>",
+    "utf8"
+  );
+  writeFileSync(join(webDir, "assets", "8k", "CH0334_home.skel"), Buffer.from([9, 8, 7, 6]));
+  writeFileSync(join(webDir, "assets", "8k", "CH0334_home.atlas"), "CH0334_home.png\n", "utf8");
+  writeFileSync(
+    join(webDir, "project.json"),
+    JSON.stringify({
+      title: "Tendou Aris Spine",
+      type: "Web",
+      file: "index.html",
+      contentrating: "Everyone",
+      general: {
+        properties: {
+          modelresolution: { type: "combo", value: "8k", order: 1, text: "Resolution" },
+          bgmvolume: { type: "slider", value: 20, order: 2, text: "BGM" }
+        }
+      }
+    }),
+    "utf8"
+  );
+
+  const authToken = "rc3-scene-web-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    host: "127.0.0.1",
+    port: 0,
+    dataDir,
+    authToken,
+    steamRootsDiscoverer: async () => [steamRoot]
+  });
+  const ready = await daemon.start();
+  cleanups.push(async () => {
+    await daemon.stop();
+  });
+
+  // Inventory reports sceneLiveSupported: true, /v1/wallpapers/scene/<id>/index.html, and true 2560x1798 landscape
+  const invRes = await fetch(`${ready.httpUrl}/v1/wallpapers/inventory`, {
+    headers: { Authorization: `Bearer ${authToken}` }
+  });
+  assert.equal(invRes.status, 200);
+  const inv = (await invRes.json()) as {
+    items: Array<{
+      id: string;
+      sceneLiveSupported: boolean;
+      mediaUrl: string | null;
+      webEntryUrl?: string | null;
+      width: number | null;
+      height: number | null;
+      orientation: string;
+    }>;
+  };
+  const sceneItem = inv.items.find((x) => x.id === "2966081148");
+  assert.ok(sceneItem);
+  assert.equal(sceneItem.sceneLiveSupported, true);
+  assert.equal(sceneItem.mediaUrl, "/v1/wallpapers/scene/2966081148/index.html");
+  assert.equal(sceneItem.webEntryUrl, "/v1/wallpapers/scene/2966081148/index.html");
+  assert.equal(sceneItem.width, 2560);
+  assert.equal(sceneItem.height, 1798);
+  assert.equal(sceneItem.orientation, "landscape");
+
+  // /v1/wallpapers/scene-t/<token>/<id>/index.html serves live player HTML
+  const sceneHtmlRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/index.html`
+  );
+  assert.equal(sceneHtmlRes.status, 200);
+  assert.equal(sceneHtmlRes.headers.get("access-control-allow-origin"), "*");
+  const sceneHtml = await sceneHtmlRes.text();
+  assert.match(sceneHtml, /data-pmx-scene-player="1"/);
+  assert.match(sceneHtml, /\.\/asset\/0/);
+
+  // Zero-copy HTTP 206 Partial Content streaming directly from scene.pkg slice
+  const sceneRangeRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/asset/0`,
+    { headers: { Range: "bytes=4-19" } }
+  );
+  assert.equal(sceneRangeRes.status, 206);
+  assert.equal(sceneRangeRes.headers.get("content-type"), "video/mp4");
+  assert.equal(sceneRangeRes.headers.get("accept-ranges"), "bytes");
+  assert.equal(sceneRangeRes.headers.get("access-control-allow-origin"), "*");
+  assert.equal(sceneRangeRes.headers.get("cross-origin-resource-policy"), "cross-origin");
+  assert.equal(
+    sceneRangeRes.headers.get("content-range"),
+    `bytes 4-19/${embeddedMp4.byteLength}`
+  );
+  const rangeBytes = Buffer.from(await sceneRangeRes.arrayBuffer());
+  assert.deepEqual(rangeBytes, embeddedMp4.subarray(4, 20));
+
+  // HEAD request on scene asset succeeds with exact total content-length
+  const sceneHeadRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/asset/0`,
+    { method: "HEAD" }
+  );
+  assert.equal(sceneHeadRes.status, 200);
+  assert.equal(sceneHeadRes.headers.get("content-length"), String(embeddedMp4.byteLength));
+
+  // Unsatisfiable range returns 416; wrong token returns 401; traversal returns 403
+  const scene416Res = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/asset/0`,
+    { headers: { Range: "bytes=999999-1000010" } }
+  );
+  assert.equal(scene416Res.status, 416);
+
+  const sceneBadTokRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/scene-t/bad-token/2966081148/index.html`
+  );
+  assert.equal(sceneBadTokRes.status, 401);
+
+  const sceneTraversalStatus = await new Promise<number>((resolveStatus, rejectStatus) => {
+    const req = httpRequest(
+      {
+        host: ready.host,
+        port: ready.port,
+        method: "GET",
+        path: `/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/../../project.json`
+      },
+      (res) => {
+        res.resume();
+        resolveStatus(res.statusCode ?? 0);
+      }
+    );
+    req.once("error", rejectStatus);
+    req.end();
+  });
+  assert.equal(sceneTraversalStatus, 403);
+
+  // Web wallpaper entry + missing audio returns 404 (NOT 403) + CORS header + lastWebWallpaperIdByToken fallback
+  const webHtmlRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/index.html`
+  );
+  assert.equal(webHtmlRes.status, 200);
+  const webHtml = await webHtmlRes.text();
+  assert.match(webHtml, /data-pmx-we-style="1"/);
+  assert.match(
+    webHtml,
+    /:where\(body > canvas#canvas\)\{display:block;width:100%;height:100%;\}/
+  );
+  assert.match(webHtml, /data-pmx-we-bridge="1"/);
+
+  const missingAudioRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/assets/audio/CH0334_memoriallobby_0.ogg`
+  );
+  assert.equal(missingAudioRes.status, 404);
+  const missingBody = (await missingAudioRes.json()) as { error?: { code?: string } };
+  assert.equal(missingBody.error?.code, "ASSET_NOT_FOUND");
+
+  // Same-token request without Referer still resolves escaped `assets/...` via lastWebWallpaperIdByToken
+  const noRefererFallbackRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/assets/8k/CH0334_home.atlas`
+  );
+  assert.equal(noRefererFallbackRes.status, 200);
+  assert.equal(noRefererFallbackRes.headers.get("access-control-allow-origin"), "*");
+  assert.match(await noRefererFallbackRes.text(), /CH0334_home\.png/);
+
+  // Execute the injected bridgeScript in a minimal VM harness to verify audio master mute,
+  // "../" URL clamping, AudioContext gain routing, and initial modelresolution reload guard.
+  const scriptMatch = /<script data-pmx-we-bridge="1">([\s\S]*?)<\/script>/.exec(webHtml);
+  assert.ok(scriptMatch && scriptMatch[1], "bridgeScript must be present in Web wallpaper HTML");
+  const bridgeScriptSource = scriptMatch[1];
+
+  const openedXhrUrls: string[] = [];
+  const fetchedUrls: string[] = [];
+  const postedToParent: unknown[] = [];
+  const windowListeners = new Map<string, Array<(ev: unknown) => void>>();
+
+  class FakeMediaElement {
+    _vol = 1;
+    _muted = false;
+    _src = "";
+    paused = true;
+    loop = false;
+    isConnected = false;
+    playCount = 0;
+    pauseCount = 0;
+    get volume(): number {
+      return this._vol;
+    }
+    set volume(v: number) {
+      this._vol = v;
+    }
+    get muted(): boolean {
+      return this._muted;
+    }
+    set muted(v: boolean) {
+      this._muted = v;
+    }
+    get src(): string {
+      return this._src;
+    }
+    set src(v: string) {
+      this._src = v;
+    }
+    setAttribute(name: string, val: string): void {
+      if (name.toLowerCase() === "src") {
+        this._src = val;
+      }
+    }
+    play(): Promise<void> {
+      this.paused = false;
+      this.playCount += 1;
+      return Promise.resolve();
+    }
+    pause(): void {
+      this.paused = true;
+      this.pauseCount += 1;
+    }
+    addEventListener(): void {
+      // noop
+    }
+  }
+  class FakeAudio extends FakeMediaElement {
+    constructor(src?: string) {
+      super();
+      if (typeof src === "string") {
+        this._src = src;
+      }
+    }
+  }
+  class FakeImage {
+    _src = "";
+    get src(): string {
+      return this._src;
+    }
+    set src(v: string) {
+      this._src = v;
+    }
+    setAttribute(name: string, val: string): void {
+      if (name.toLowerCase() === "src") {
+        this._src = val;
+      }
+    }
+  }
+  class FakeXHR {
+    open(_method: string, url: string): void {
+      openedXhrUrls.push(url);
+    }
+  }
+  class FakeAudioNode {
+    context: FakeAudioContext;
+    connectedTo: unknown = null;
+    constructor(ctx: FakeAudioContext) {
+      this.context = ctx;
+    }
+    connect(dest: unknown): unknown {
+      this.connectedTo = dest;
+      return dest;
+    }
+  }
+  class FakeGainNode extends FakeAudioNode {
+    gain = { value: 1 };
+  }
+  class FakeAudioContext {
+    destination = { isDestination: true };
+    state: "running" | "suspended" = "running";
+    createdGains: FakeGainNode[] = [];
+    createGain(): FakeGainNode {
+      const g = new FakeGainNode(this);
+      this.createdGains.push(g);
+      return g;
+    }
+    suspend(): Promise<void> {
+      this.state = "suspended";
+      return Promise.resolve();
+    }
+    resume(): Promise<void> {
+      this.state = "running";
+      return Promise.resolve();
+    }
+  }
+  class FakeWebGL {
+    drawElements(_mode: number, _count: number): void {
+      // noop
+    }
+    drawArrays(_mode: number, _count: number): void {
+      // noop
+    }
+  }
+  class FakeDocument {
+    readyState = "complete";
+    documentElement = { clientWidth: 1920, clientHeight: 1080 };
+    createElement(tag: string): unknown {
+      if (tag.toLowerCase() === "audio" || tag.toLowerCase() === "video") {
+        return new FakeMediaElement();
+      }
+      return {};
+    }
+    createElementNS(_ns: string, tag: string): unknown {
+      return this.createElement(tag);
+    }
+    querySelector(): unknown {
+      return { tagName: "CANVAS" };
+    }
+    querySelectorAll(): unknown[] {
+      return [];
+    }
+    addEventListener(): void {
+      // noop
+    }
+  }
+
+  const fakeWindow: Record<string, unknown> = {
+    location: {
+      href: `http://127.0.0.1:41999/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/index.html`
+    },
+    parent: {
+      postMessage: (msg: unknown) => {
+        postedToParent.push(msg);
+      }
+    },
+    fetch: (input: string) => {
+      fetchedUrls.push(input);
+      return Promise.resolve({ ok: true });
+    },
+    addEventListener: (type: string, cb: (ev: unknown) => void) => {
+      const list = windowListeners.get(type) ?? [];
+      list.push(cb);
+      windowListeners.set(type, list);
+    },
+    dispatchEvent: () => true,
+    Audio: FakeAudio,
+    AudioContext: FakeAudioContext,
+    WebGLRenderingContext: FakeWebGL
+  };
+  fakeWindow["window"] = fakeWindow;
+
+  const sandbox = {
+    window: fakeWindow,
+    document: new FakeDocument(),
+    Document: FakeDocument,
+    XMLHttpRequest: FakeXHR,
+    HTMLImageElement: FakeImage,
+    HTMLMediaElement: FakeMediaElement,
+    AudioNode: FakeAudioNode,
+    URL,
+    Event: class {
+      type: string;
+      constructor(type: string) {
+        this.type = type;
+      }
+    },
+    queueMicrotask,
+    setTimeout: () => 1,
+    clearTimeout: () => undefined
+  };
+
+  NodeVM.runInNewContext(scriptMatch[1], sandbox);
+
+  // 1) Relative "../" URL rewriting for XHR, fetch, and Image
+  const xhr = new FakeXHR();
+  xhr.open("GET", "../assets/8k/CH0334_home.skel");
+  assert.equal(
+    openedXhrUrls[0],
+    `http://127.0.0.1:41999/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/assets/8k/CH0334_home.skel`
+  );
+
+  await (fakeWindow["fetch"] as (u: string) => Promise<unknown>)("../assets/8k/CH0334_home.atlas");
+  assert.equal(
+    fetchedUrls[0],
+    `http://127.0.0.1:41999/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/assets/8k/CH0334_home.atlas`
+  );
+
+  const img = new FakeImage();
+  img.src = "../assets/8k/CH0334_home.png";
+  assert.equal(
+    img._src,
+    `http://127.0.0.1:41999/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/assets/8k/CH0334_home.png`
+  );
+
+  // 2) Master Audio Controller: starts muted/0, scales volume on unmute, mutes again cleanly, routes AudioContext
+  const PatchedAudio = fakeWindow["Audio"] as typeof FakeAudio;
+  const bgm = new PatchedAudio("../assets/audio/Theme_298.ogg");
+  assert.equal(
+    bgm._src,
+    `http://127.0.0.1:41999/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/assets/audio/Theme_298.ogg`
+  );
+  bgm.volume = 0.4;
+  await bgm.play();
+  assert.equal(bgm._muted, true, "Audio must remain strictly muted before host unmutes");
+  assert.equal(bgm._vol, 0, "Underlying volume must be 0 while master muted");
+  assert.equal(bgm.volume, 0.4, "Getter should preserve wallpaper base volume");
+
+  const PatchedAudioCtx = fakeWindow["AudioContext"] as typeof FakeAudioContext;
+  const ctx = new PatchedAudioCtx();
+  const osc = new FakeAudioNode(ctx);
+  osc.connect(ctx.destination);
+  assert.equal(ctx.state, "suspended");
+  assert.equal(ctx.createdGains.length, 1);
+  assert.equal(osc.connectedTo, ctx.createdGains[0]);
+  assert.equal(ctx.createdGains[0]!.gain.value, 0);
+
+  const emitMessage = (data: unknown) => {
+    for (const cb of windowListeners.get("message") ?? []) {
+      cb({ data });
+    }
+  };
+
+  emitMessage({ type: "prismuxWallpaperAudio", muted: false, volume: 0.5 });
+  assert.equal(bgm._muted, false);
+  assert.ok(Math.abs(bgm._vol - 0.2) < 1e-6);
+  assert.equal(ctx.state, "running");
+  assert.equal(ctx.createdGains[0]!.gain.value, 0.5);
+
+  emitMessage({ type: "prismuxWallpaperAudio", muted: true, volume: 0 });
+  assert.equal(bgm._muted, true);
+  assert.equal(bgm._vol, 0);
+  assert.equal(ctx.state, "suspended");
+
+  // 3) Duplicate initial modelresolution guard: skips initial "8k" because 8k was already requested,
+  //    but delivers manual user switches to "4k" and back to "8k"
+  const receivedPropCalls: Array<Record<string, { value: unknown }>> = [];
+  fakeWindow["wallpaperPropertyListener"] = {
+    applyUserProperties: (props: Record<string, { value: unknown }>) => {
+      receivedPropCalls.push(props);
+    }
+  };
+
+  emitMessage({
+    type: "wallpaperPropertyListener",
+    applyUserProperties: { modelresolution: { value: "8k" }, bgmvolume: { value: 20 } },
+    applyGeneralProperties: { paused: true },
+    audio: { muted: true, volume: 0 }
+  });
+  assert.equal(receivedPropCalls.length, 1);
+  assert.equal("modelresolution" in receivedPropCalls[0]!, false);
+  assert.equal(receivedPropCalls[0]!["bgmvolume"]?.value, 20);
+  assert.equal(bgm.paused, true, "paused: true must pause active playback");
+
+  // Unpause resumes media and user switching resolution to 4k -> 8k delivers normally
+  emitMessage({
+    type: "wallpaperPropertyListener",
+    applyUserProperties: { modelresolution: { value: "4k" } },
+    applyGeneralProperties: { paused: false }
+  });
+  assert.equal(receivedPropCalls.length, 2);
+  assert.equal(receivedPropCalls[1]!["modelresolution"]?.value, "4k");
+  assert.equal(bgm.paused, false, "paused: false must resume host-paused playback");
+
+  emitMessage({
+    type: "wallpaperPropertyListener",
+    applyUserProperties: { modelresolution: { value: "8k" } }
+  });
+  assert.equal(receivedPropCalls.length, 3);
+  assert.equal(receivedPropCalls[2]!["modelresolution"]?.value, "8k");
+
+  // 4) Readiness signals: bridge ready already posted, WebGL drawElements triggers prismuxWebReady
+  assert.equal(
+    postedToParent.some((m) => (m as { type?: string }).type === "prismuxWeBridgeReady"),
+    true
+  );
+  const gl = new FakeWebGL();
+  gl.drawElements(4, 12);
+  await Promise.resolve();
+  assert.equal(
+    postedToParent.some((m) => (m as { type?: string }).type === "prismuxWebReady"),
+    true
+  );
+
+  // 5) 0x0 viewport layout guard: defers initial applyUserProperties until non-zero layout (rAF / ResizeObserver)
+  //    while applying master audio mute & paused IMMEDIATELY, with bounded 300ms fallback for headless 0x0 viewports.
+  const runLayoutGuardHarness = (mode: "raf" | "resizeObserver" | "fallback300ms") => {
+    const listeners = new Map<string, Array<(ev: unknown) => void>>();
+    const docEl = { clientWidth: 0, clientHeight: 0 };
+    const timers: Array<{ id: number; delay: number; fn: () => void; cleared: boolean }> = [];
+    const rafCbs: Array<() => void> = [];
+    const roCbs: Array<() => void> = [];
+    const propDeliveries: Array<Record<string, { value: unknown }>> = [];
+    let nextTimerId = 1;
+
+    class GuardMediaElement {
+      _vol = 1;
+      _muted = false;
+      _src = "";
+      paused = true;
+      loop = false;
+      isConnected = false;
+      get volume(): number {
+        return this._vol;
+      }
+      set volume(v: number) {
+        this._vol = v;
+      }
+      get muted(): boolean {
+        return this._muted;
+      }
+      set muted(v: boolean) {
+        this._muted = v;
+      }
+      get src(): string {
+        return this._src;
+      }
+      set src(v: string) {
+        this._src = v;
+      }
+      setAttribute(name: string, val: string): void {
+        if (name.toLowerCase() === "src") {
+          this._src = val;
+        }
+      }
+      play(): Promise<void> {
+        this.paused = false;
+        return Promise.resolve();
+      }
+      pause(): void {
+        this.paused = true;
+      }
+      addEventListener(): void {
+        // noop
+      }
+    }
+    class GuardAudioCtor extends GuardMediaElement {
+      constructor(src?: string) {
+        super();
+        if (typeof src === "string") {
+          this._src = src;
+        }
+      }
+    }
+    class GuardResizeObserver {
+      private cb: () => void;
+      constructor(cb: () => void) {
+        this.cb = cb;
+      }
+      observe(): void {
+        roCbs.push(this.cb);
+      }
+    }
+
+    const guardWin: Record<string, unknown> = {
+      location: {
+        href: `http://127.0.0.1:41999/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/index.html`
+      },
+      parent: { postMessage: () => undefined },
+      fetch: () => Promise.resolve({ ok: true }),
+      addEventListener: (type: string, cb: (ev: unknown) => void) => {
+        const list = listeners.get(type) ?? [];
+        list.push(cb);
+        listeners.set(type, list);
+      },
+      dispatchEvent: () => true,
+      Audio: GuardAudioCtor
+    };
+    guardWin["window"] = guardWin;
+
+    NodeVM.runInNewContext(bridgeScriptSource, {
+      window: guardWin,
+      document: {
+        readyState: "complete",
+        documentElement: docEl,
+        createElement: (tag: string) =>
+          tag.toLowerCase() === "audio" || tag.toLowerCase() === "video"
+            ? new GuardMediaElement()
+            : {},
+        createElementNS: (_ns: string, tag: string) =>
+          tag.toLowerCase() === "audio" || tag.toLowerCase() === "video"
+            ? new GuardMediaElement()
+            : {},
+        querySelector: () => ({ tagName: "CANVAS" }),
+        querySelectorAll: () => [],
+        addEventListener: () => undefined
+      },
+      HTMLMediaElement: GuardMediaElement,
+      ResizeObserver: GuardResizeObserver,
+      URL,
+      Event: class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+      queueMicrotask,
+      requestAnimationFrame: (cb: () => void) => {
+        rafCbs.push(cb);
+        return rafCbs.length;
+      },
+      cancelAnimationFrame: () => undefined,
+      setTimeout: (fn: () => void, delay: number) => {
+        const id = nextTimerId++;
+        timers.push({ id, delay, fn, cleared: false });
+        return id;
+      },
+      clearTimeout: (id: number) => {
+        const t = timers.find((x) => x.id === id);
+        if (t) {
+          t.cleared = true;
+        }
+      }
+    });
+
+    const GuardAudio = guardWin["Audio"] as typeof GuardAudioCtor;
+    const track = new GuardAudio("../assets/audio/Theme_298.ogg");
+    track.volume = 0.8;
+    void track.play();
+    assert.equal(track.paused, false);
+    assert.equal(track._muted, true);
+
+    guardWin["wallpaperPropertyListener"] = {
+      applyUserProperties: (props: Record<string, { value: unknown }>) => {
+        propDeliveries.push(props);
+      }
+    };
+
+    for (const cb of listeners.get("message") ?? []) {
+      cb({
+        data: {
+          type: "wallpaperPropertyListener",
+          applyUserProperties: { scale: { value: 1.25 } },
+          applyGeneralProperties: { paused: true },
+          audio: { muted: true, volume: 0 }
+        }
+      });
+    }
+
+    // Audio & paused take effect IMMEDIATELY even at 0x0, while applyUserProperties is deferred
+    assert.equal(track._muted, true);
+    assert.equal(track.paused, true, "paused: true must apply immediately at 0x0 viewport");
+    assert.equal(
+      propDeliveries.length,
+      0,
+      `initial applyUserProperties must be deferred while clientWidth/Height === 0 (${mode})`
+    );
+
+    if (mode === "raf") {
+      // First rAF tick while still 0x0 keeps deferring
+      assert.ok(rafCbs.length >= 1);
+      rafCbs.shift()!();
+      assert.equal(propDeliveries.length, 0);
+
+      // Once layout becomes non-zero, next rAF tick delivers immediately
+      docEl.clientWidth = 1280;
+      docEl.clientHeight = 720;
+      assert.ok(rafCbs.length >= 1);
+      rafCbs.shift()!();
+    } else if (mode === "resizeObserver") {
+      docEl.clientWidth = 1440;
+      docEl.clientHeight = 900;
+      assert.ok(roCbs.length >= 1);
+      roCbs[0]!();
+    } else {
+      // Bounded 300ms fallback delivers even if headless/jsdom viewport stays 0x0
+      const fallbackTimer = timers.find((t) => !t.cleared && t.delay === 300);
+      assert.ok(fallbackTimer, "Expected a bounded 300ms fallback timer for 0x0 layout guard");
+      fallbackTimer.fn();
+    }
+
+    assert.equal(propDeliveries.length, 1);
+    assert.equal(propDeliveries[0]!["scale"]?.value, 1.25);
+    assert.equal(propDeliveries[0]!["modelresolution"]?.value, "8k");
+  };
+
+  runLayoutGuardHarness("raf");
+  runLayoutGuardHarness("resizeObserver");
+  runLayoutGuardHarness("fallback300ms");
 });

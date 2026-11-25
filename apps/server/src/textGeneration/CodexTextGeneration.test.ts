@@ -61,6 +61,7 @@ interface FakeCodexInput {
   requireInstructions?: string;
   requireMcpServersOff?: ReadonlyArray<string>;
   requireOriginator?: string;
+  forbidOriginator?: boolean;
 }
 
 function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
@@ -78,6 +79,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     requireInstructions: input.requireInstructions ?? null,
     requireMcpServersOff: input.requireMcpServersOff ?? [],
     requireOriginator: input.requireOriginator ?? null,
+    forbidOriginator: input.forbidOriginator ?? false,
     stderr: input.stderr ?? null,
     output: input.output,
     exitCode: input.exitCode ?? 0,
@@ -160,6 +162,9 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "}",
         "for (const name of check.requireMcpServersOff) {",
         '  if (!offServers.has(name)) fail("MCP server left on: " + name, 13);',
+        "}",
+        "if (check.forbidOriginator && process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE !== undefined) {",
+        '  fail("unexpected originator override: " + process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, 14);',
         "}",
         "if (check.requireOriginator !== null && process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE !== check.requireOriginator) {",
         '  fail("unexpected originator: " + process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, 14);',
@@ -526,19 +531,43 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 
-  it.effect("identifies codex exec as Prismux", () =>
-    withFakeCodexEnv(
-      { output: JSON.stringify({ title: "Live title" }), requireOriginator: "Prismux" },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const result = yield* textGeneration.generateThreadTitle({
-            cwd: process.cwd(),
-            message: "Name this thread",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-          expect(result.title).toBe("Live title");
-        }),
-    ),
+  it.effect(
+    "keeps codex exec on native Codex CLI originator unless caller sets an override",
+    () =>
+      Effect.gen(function* () {
+        yield* withFakeCodexEnv(
+          {
+            output: JSON.stringify({ title: "Live title" }),
+            environment: { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: undefined },
+            forbidOriginator: true,
+          },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const result = yield* textGeneration.generateThreadTitle({
+                cwd: process.cwd(),
+                message: "Name this thread",
+                modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+              });
+              expect(result.title).toBe("Live title");
+            }),
+        );
+        yield* withFakeCodexEnv(
+          {
+            output: JSON.stringify({ title: "Custom title" }),
+            environment: { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "custom_originator" },
+            requireOriginator: "custom_originator",
+          },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const result = yield* textGeneration.generateThreadTitle({
+                cwd: process.cwd(),
+                message: "Name this thread",
+                modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+              });
+              expect(result.title).toBe("Custom title");
+            }),
+        );
+      }),
   );
 
   it.effect("passes exec-safe launch args into codex exec", () =>

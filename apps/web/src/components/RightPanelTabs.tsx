@@ -170,7 +170,10 @@ import {
   writeSplitDragDataTransfer,
   type SplitDragPayload,
 } from "./workspace/splitAnything.logic";
-import { useWorkspaceTopbarPortal } from "./workspace/WorkspaceTopbarPortalContext";
+import {
+  PrismuxStageFrame,
+  useWorkspaceTopbarPortal,
+} from "./workspace/WorkspaceTopbarPortalContext";
 
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -2529,6 +2532,300 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     };
   };
 
+  const isMaximizedInline = props.mode === "inline" && props.maximized === true;
+  const tabBarNode = (
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-1 pl-2",
+        topbarPortal.managed && props.mode === "inline"
+          ? cn(
+              "h-8 min-h-8 border-b border-border/50 pr-2",
+              isMaximizedInline &&
+                "bg-transparent [[data-pmx-glass='1']_&]:border-white/12 light:[[data-pmx-glass='1']_&]:border-foreground/10",
+            )
+          : cn(
+              "h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)]",
+              props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
+              ownsDesktopTitleBar && "drag-region",
+              ownsDesktopTitleBar && "wco:pr-(--workspace-native-controls-inset)",
+              props.mode === "inline" &&
+                props.maximized &&
+                COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+            ),
+      )}
+      data-pmx-glass-zone={isMaximizedInline && !topbarPortal.managed ? "shellFrame" : undefined}
+      data-right-panel-tabbar
+    >
+      <ScrollArea
+        radius="none"
+        ref={attachTabList}
+        hideScrollbars
+        scrollFade
+        className={cn(
+          "min-w-0 flex-1",
+          ownsDesktopTitleBar && tabScrollState.hasOverflow && "[-webkit-app-region:no-drag]",
+        )}
+        data-right-panel-tab-list
+      >
+        <div className="flex h-full w-max min-w-full items-center gap-1">
+          <SortableTabList surfaces={props.surfaces} onMove={props.onMoveSurface}>
+            {props.surfaces.map((surface, surfaceIndex) => {
+              const hostThreadRef = resolveRightPanelHostThreadRef(props.widthStorageKey);
+              const previewTabId = previewTabIdOf(surface, props.previewSessions);
+              const previewProfileId =
+                surface.kind === "preview" && surface.resourceId
+                  ? props.previewSessions[surface.resourceId]?.profileId
+                  : undefined;
+              const previewProfileBadge =
+                surface.kind === "preview"
+                  ? resolveBrowserProfileBadgeLabel(previewProfileId, browserProfiles, locale)
+                  : null;
+              const favicon = previewFaviconOf(
+                surface,
+                props.previewSessions,
+                props.desktopByTabId,
+              );
+              return (
+                <RightPanelTab
+                  key={surface.id}
+                  surface={surface}
+                  surfaceIndex={surfaceIndex}
+                  hostThreadRef={hostThreadRef}
+                  onMoveSurface={props.onMoveSurface}
+                  dragDisabled={!props.onMoveSurface || renamingDevice === surface.id}
+                  active={surface.id === props.activeSurfaceId}
+                  pending={props.pendingSurfaceIds.has(surface.id)}
+                  title={surfaceTitle(
+                    surface,
+                    props.previewSessions,
+                    props.terminalLabelsById,
+                    messages,
+                    locale,
+                  )}
+                  audio={tabAudioState(
+                    previewTabId ? (props.desktopByTabId[previewTabId] ?? null) : null,
+                  )}
+                  audioRuntimeTabId={
+                    previewTabId ? (props.previewRuntimeTabId?.(previewTabId) ?? null) : null
+                  }
+                  previewUrl={favicon.url}
+                  previewCapturedUrl={favicon.capturedUrl}
+                  previewProfileId={previewProfileId}
+                  previewProfileBadge={previewProfileBadge}
+                  theme={resolvedTheme}
+                  environmentId={props.environmentId}
+                  pullRequestStatusSeed={props.pullRequestStatusSeeds?.[surface.id]}
+                  renaming={renamingDevice === surface.id}
+                  canRename={props.onRenameDevice !== undefined}
+                  ownsDesktopTitleBar={ownsDesktopTitleBar}
+                  onActivate={onActivateTab}
+                  onClose={onCloseTab}
+                  onAuxClick={onTabAuxClick}
+                  onContextMenu={onTabContextMenu}
+                  onStartRename={onStartRenameTab}
+                  onFinishRename={onFinishRenameTab}
+                />
+              );
+            })}
+          </SortableTabList>
+          {props.open !== false ? (
+            <Menu open={addSurfaceMenuOpen} onOpenChange={setAddSurfaceMenuOpen}>
+              <MenuTrigger
+                ref={addSurfaceTriggerRef}
+                render={
+                  <Button
+                    aria-label={gt("Add panel surface")}
+                    className="shrink-0"
+                    size="icon-xs"
+                    variant="ghost-muted"
+                  />
+                }
+              >
+                <Plus className="size-3.5" />
+              </MenuTrigger>
+              <MenuPopup
+                align="start"
+                side="bottom"
+                sideOffset={6}
+                onKeyDownCapture={handleAddSurfaceMenuKeyDown}
+              >
+                {addSurfaceActions.map((action) => {
+                  const Icon = action.icon;
+                  if (action.id === "preview" && action.available) {
+                    return (
+                      <MenuSub key={action.id}>
+                        <MenuSubTrigger
+                          data-surface-menu-item={action.id}
+                          className="[&>svg:last-child]:ms-0"
+                          aria-keyshortcuts={action.shortcut}
+                          onClick={(event) => {
+                            const pointerType =
+                              "pointerType" in event.nativeEvent &&
+                              typeof event.nativeEvent.pointerType === "string"
+                                ? event.nativeEvent.pointerType
+                                : undefined;
+                            if (!shouldOpenDefaultBrowserProfileFromMenuClick(pointerType))
+                              return;
+                            setAddSurfaceMenuOpen(false);
+                            action.onClick();
+                          }}
+                        >
+                          <Icon />
+                          {action.label}
+                          <MenuShortcut>{action.shortcut}</MenuShortcut>
+                        </MenuSubTrigger>
+                        <MenuSubPopup className="max-w-56">
+                          {browserProfiles.map((profile) => (
+                            <MenuItem
+                              key={profile.id}
+                              onClick={() => props.onAddBrowserInProfile(profile.id)}
+                            >
+                              <span className="min-w-0 truncate">
+                                {formatBrowserProfileLabel(profile, locale)}
+                              </span>
+                            </MenuItem>
+                          ))}
+                        </MenuSubPopup>
+                      </MenuSub>
+                    );
+                  }
+                  return (
+                    <SurfaceMenuItem
+                      key={action.id}
+                      itemId={action.id}
+                      available={action.available}
+                      disabledReason={action.disabledReason}
+                      shortcut={action.shortcut}
+                      onClick={action.onClick}
+                    >
+                      <Icon />
+                      {action.label}
+                    </SurfaceMenuItem>
+                  );
+                })}
+              </MenuPopup>
+            </Menu>
+          ) : null}
+        </div>
+      </ScrollArea>
+      {tabScrollState.hasOverflow ? (
+        <div
+          className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]"
+          role="group"
+          aria-label={gt("Scroll panel tabs")}
+        >
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="inline-flex">
+                  <Button
+                    aria-label={gt("Scroll tabs left")}
+                    disabled={!tabScrollState.canScrollLeft}
+                    onClick={() => scrollTabs(-1)}
+                    size="icon-xs"
+                    variant="ghost"
+                  >
+                    <ChevronLeft />
+                  </Button>
+                </span>
+              }
+            />
+            <TooltipPopup>
+              <T>Scroll tabs left</T>
+            </TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="inline-flex">
+                  <Button
+                    aria-label={gt("Scroll tabs right")}
+                    disabled={!tabScrollState.canScrollRight}
+                    onClick={() => scrollTabs(1)}
+                    size="icon-xs"
+                    variant="ghost"
+                  >
+                    <ChevronRight />
+                  </Button>
+                </span>
+              }
+            />
+            <TooltipPopup>
+              <T>Scroll tabs right</T>
+            </TooltipPopup>
+          </Tooltip>
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  aria-label="全部已打开标签"
+                  data-testid="right-panel-tabs-overflow-menu"
+                  size="icon-xs"
+                  variant="ghost"
+                />
+              }
+            >
+              <ChevronDown className="size-3.5" />
+            </MenuTrigger>
+            <MenuPopup align="end" side="bottom" sideOffset={4} className="max-w-56">
+              {props.surfaces.map((surface) => (
+                <MenuItem
+                  key={surface.id}
+                  onClick={() => props.onActivate(surface)}
+                >
+                  <span className="min-w-0 truncate">
+                    {surfaceTitle(
+                      surface,
+                      props.previewSessions,
+                      props.terminalLabelsById,
+                      messages,
+                      locale,
+                    )}
+                  </span>
+                </MenuItem>
+              ))}
+            </MenuPopup>
+          </Menu>
+        </div>
+      ) : null}
+      {props.layoutControls}
+      {ownsDesktopTitleBar && !props.layoutControls ? (
+        <span aria-hidden className="hidden w-24 shrink-0 wco:block" />
+      ) : null}
+      {ownsDesktopTitleBar ? (
+        <span
+          aria-hidden
+          className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
+        />
+      ) : null}
+    </div>
+  );
+
+  const surfaceContentNode = (
+    <div
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+      data-right-panel-surface-content
+    >
+      {props.activeSurfaceId === null ? (
+        <RightPanelEmptyState
+          actions={emptyLauncherActions}
+          browserProfiles={browserProfiles}
+          onAddBrowserInProfile={props.onAddBrowserInProfile}
+          isCustomOrder={isCustomActivityBarOrder}
+          onReorder={reorderActivityBar}
+          onResetOrder={resetActivityBarOrder}
+        />
+      ) : (
+        <>
+          {props.children}
+          {isFocusedPreviewBlank && mobileSimulatorIdleActive ? (
+            <PhoneSimulatorBlankStage />
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <PreviewPanelShell
       workspaceArea
@@ -2560,288 +2857,34 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         )
       }
     >
-      <div
-        className={cn(
-          "flex shrink-0 items-center gap-1 pl-2",
-          topbarPortal.managed && props.mode === "inline"
-            ? "h-8 min-h-8 border-b border-border/50 pr-2"
-            : cn(
-                "h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)]",
-                props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
-                ownsDesktopTitleBar && "drag-region",
-                ownsDesktopTitleBar && "wco:pr-(--workspace-native-controls-inset)",
-                props.mode === "inline" &&
-                  props.maximized &&
-                  COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-              ),
-        )}
-        data-right-panel-tabbar
-      >
-        <ScrollArea
-          radius="none"
-          ref={attachTabList}
-          hideScrollbars
-          scrollFade
-          className={cn(
-            "min-w-0 flex-1",
-            ownsDesktopTitleBar && tabScrollState.hasOverflow && "[-webkit-app-region:no-drag]",
-          )}
-          data-right-panel-tab-list
-        >
-          <div className="flex h-full w-max min-w-full items-center gap-1">
-            <SortableTabList surfaces={props.surfaces} onMove={props.onMoveSurface}>
-              {props.surfaces.map((surface, surfaceIndex) => {
-                const hostThreadRef = resolveRightPanelHostThreadRef(props.widthStorageKey);
-                const previewTabId = previewTabIdOf(surface, props.previewSessions);
-                const previewProfileId =
-                  surface.kind === "preview" && surface.resourceId
-                    ? props.previewSessions[surface.resourceId]?.profileId
-                    : undefined;
-                const previewProfileBadge =
-                  surface.kind === "preview"
-                    ? resolveBrowserProfileBadgeLabel(previewProfileId, browserProfiles, locale)
-                    : null;
-                const favicon = previewFaviconOf(
-                  surface,
-                  props.previewSessions,
-                  props.desktopByTabId,
-                );
-                return (
-                  <RightPanelTab
-                    key={surface.id}
-                    surface={surface}
-                    surfaceIndex={surfaceIndex}
-                    hostThreadRef={hostThreadRef}
-                    onMoveSurface={props.onMoveSurface}
-                    dragDisabled={!props.onMoveSurface || renamingDevice === surface.id}
-                    active={surface.id === props.activeSurfaceId}
-                    pending={props.pendingSurfaceIds.has(surface.id)}
-                    title={surfaceTitle(
-                      surface,
-                      props.previewSessions,
-                      props.terminalLabelsById,
-                      messages,
-                      locale,
-                    )}
-                    audio={tabAudioState(
-                      previewTabId ? (props.desktopByTabId[previewTabId] ?? null) : null,
-                    )}
-                    audioRuntimeTabId={
-                      previewTabId ? (props.previewRuntimeTabId?.(previewTabId) ?? null) : null
-                    }
-                    previewUrl={favicon.url}
-                    previewCapturedUrl={favicon.capturedUrl}
-                    previewProfileId={previewProfileId}
-                    previewProfileBadge={previewProfileBadge}
-                    theme={resolvedTheme}
-                    environmentId={props.environmentId}
-                    pullRequestStatusSeed={props.pullRequestStatusSeeds?.[surface.id]}
-                    renaming={renamingDevice === surface.id}
-                    canRename={props.onRenameDevice !== undefined}
-                    ownsDesktopTitleBar={ownsDesktopTitleBar}
-                    onActivate={onActivateTab}
-                    onClose={onCloseTab}
-                    onAuxClick={onTabAuxClick}
-                    onContextMenu={onTabContextMenu}
-                    onStartRename={onStartRenameTab}
-                    onFinishRename={onFinishRenameTab}
-                  />
-                );
-              })}
-            </SortableTabList>
-            {props.open !== false ? (
-              <Menu open={addSurfaceMenuOpen} onOpenChange={setAddSurfaceMenuOpen}>
-                <MenuTrigger
-                  ref={addSurfaceTriggerRef}
-                  render={
-                    <Button
-                      aria-label={gt("Add panel surface")}
-                      className="shrink-0"
-                      size="icon-xs"
-                      variant="ghost-muted"
-                    />
-                  }
-                >
-                  <Plus className="size-3.5" />
-                </MenuTrigger>
-                <MenuPopup
-                  align="start"
-                  side="bottom"
-                  sideOffset={6}
-                  onKeyDownCapture={handleAddSurfaceMenuKeyDown}
-                >
-                  {addSurfaceActions.map((action) => {
-                    const Icon = action.icon;
-                    if (action.id === "preview" && action.available) {
-                      return (
-                        <MenuSub key={action.id}>
-                          <MenuSubTrigger
-                            data-surface-menu-item={action.id}
-                            className="[&>svg:last-child]:ms-0"
-                            aria-keyshortcuts={action.shortcut}
-                            onClick={(event) => {
-                              const pointerType =
-                                "pointerType" in event.nativeEvent &&
-                                typeof event.nativeEvent.pointerType === "string"
-                                  ? event.nativeEvent.pointerType
-                                  : undefined;
-                              if (!shouldOpenDefaultBrowserProfileFromMenuClick(pointerType))
-                                return;
-                              setAddSurfaceMenuOpen(false);
-                              action.onClick();
-                            }}
-                          >
-                            <Icon />
-                            {action.label}
-                            <MenuShortcut>{action.shortcut}</MenuShortcut>
-                          </MenuSubTrigger>
-                          <MenuSubPopup className="max-w-56">
-                            {browserProfiles.map((profile) => (
-                              <MenuItem
-                                key={profile.id}
-                                onClick={() => props.onAddBrowserInProfile(profile.id)}
-                              >
-                                <span className="min-w-0 truncate">
-                                  {formatBrowserProfileLabel(profile, locale)}
-                                </span>
-                              </MenuItem>
-                            ))}
-                          </MenuSubPopup>
-                        </MenuSub>
-                      );
-                    }
-                    return (
-                      <SurfaceMenuItem
-                        key={action.id}
-                        itemId={action.id}
-                        available={action.available}
-                        disabledReason={action.disabledReason}
-                        shortcut={action.shortcut}
-                        onClick={action.onClick}
-                      >
-                        <Icon />
-                        {action.label}
-                      </SurfaceMenuItem>
-                    );
-                  })}
-                </MenuPopup>
-              </Menu>
-            ) : null}
-          </div>
-        </ScrollArea>
-        {tabScrollState.hasOverflow ? (
-          <div
-            className="flex shrink-0 items-center gap-0.5 [-webkit-app-region:no-drag]"
-            role="group"
-            aria-label={gt("Scroll panel tabs")}
+      {isMaximizedInline ? (
+        topbarPortal.managed ? (
+          <PrismuxStageFrame
+            rightPanelOpen={false}
+            glassZone="mainCanvas"
+            innerDataAttributes={{ "data-right-panel-maximized-stage": "1" }}
           >
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className="inline-flex">
-                    <Button
-                      aria-label={gt("Scroll tabs left")}
-                      disabled={!tabScrollState.canScrollLeft}
-                      onClick={() => scrollTabs(-1)}
-                      size="icon-xs"
-                      variant="ghost"
-                    >
-                      <ChevronLeft />
-                    </Button>
-                  </span>
-                }
-              />
-              <TooltipPopup>
-                <T>Scroll tabs left</T>
-              </TooltipPopup>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className="inline-flex">
-                    <Button
-                      aria-label={gt("Scroll tabs right")}
-                      disabled={!tabScrollState.canScrollRight}
-                      onClick={() => scrollTabs(1)}
-                      size="icon-xs"
-                      variant="ghost"
-                    >
-                      <ChevronRight />
-                    </Button>
-                  </span>
-                }
-              />
-              <TooltipPopup>
-                <T>Scroll tabs right</T>
-              </TooltipPopup>
-            </Tooltip>
-            <Menu>
-              <MenuTrigger
-                render={
-                  <Button
-                    aria-label="全部已打开标签"
-                    data-testid="right-panel-tabs-overflow-menu"
-                    size="icon-xs"
-                    variant="ghost"
-                  />
-                }
-              >
-                <ChevronDown className="size-3.5" />
-              </MenuTrigger>
-              <MenuPopup align="end" side="bottom" sideOffset={4} className="max-w-56">
-                {props.surfaces.map((surface) => (
-                  <MenuItem
-                    key={surface.id}
-                    onClick={() => props.onActivate(surface)}
-                  >
-                    <span className="min-w-0 truncate">
-                      {surfaceTitle(
-                        surface,
-                        props.previewSessions,
-                        props.terminalLabelsById,
-                        messages,
-                        locale,
-                      )}
-                    </span>
-                  </MenuItem>
-                ))}
-              </MenuPopup>
-            </Menu>
-          </div>
-        ) : null}
-        {props.layoutControls}
-        {ownsDesktopTitleBar && !props.layoutControls ? (
-          <span aria-hidden className="hidden w-24 shrink-0 wco:block" />
-        ) : null}
-        {ownsDesktopTitleBar ? (
-          <span
-            aria-hidden
-            className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
-          />
-        ) : null}
-      </div>
-      <div
-        className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
-        data-right-panel-surface-content
-      >
-        {props.activeSurfaceId === null ? (
-          <RightPanelEmptyState
-            actions={emptyLauncherActions}
-            browserProfiles={browserProfiles}
-            onAddBrowserInProfile={props.onAddBrowserInProfile}
-            isCustomOrder={isCustomActivityBarOrder}
-            onReorder={reorderActivityBar}
-            onResetOrder={resetActivityBarOrder}
-          />
+            {tabBarNode}
+            {surfaceContentNode}
+          </PrismuxStageFrame>
         ) : (
           <>
-            {props.children}
-            {isFocusedPreviewBlank && mobileSimulatorIdleActive ? (
-              <PhoneSimulatorBlankStage />
-            ) : null}
+            {tabBarNode}
+            <PrismuxStageFrame
+              rightPanelOpen={false}
+              glassZone="mainCanvas"
+              innerDataAttributes={{ "data-right-panel-maximized-stage": "1" }}
+            >
+              {surfaceContentNode}
+            </PrismuxStageFrame>
           </>
-        )}
-      </div>
+        )
+      ) : (
+        <>
+          {tabBarNode}
+          {surfaceContentNode}
+        </>
+      )}
     </PreviewPanelShell>
   );
 }

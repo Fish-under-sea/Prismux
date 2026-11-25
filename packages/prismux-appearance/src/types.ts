@@ -6,6 +6,21 @@ export type AccentMode = 'system' | 'custom';
 
 export type GlassPreset = 'off' | 'light' | 'balanced' | 'clear' | 'custom';
 
+export type GlassThemeBase =
+  | 'pure'
+  | 'starry-violet'
+  | 'emerald-stars'
+  | 'sakura-drift'
+  | 'ocean-caustics'
+  | 'gilded-lunar';
+
+export interface GlassThemeBaseDescriptor {
+  readonly id: GlassThemeBase;
+  readonly label: string;
+  readonly note: string;
+  readonly swatchCss: string;
+}
+
 export type GlassRegionId = 'surface' | 'card' | 'overlay' | 'control';
 
 export type ThinkingGlassMode = 'off' | 'glass' | 'native';
@@ -25,15 +40,8 @@ export type GlassSurfaceId =
   | 'sidebarContent';
 
 /**
- * Eight unified workbench liquid-glass zones exposed for real-time per-zone customization:
- * - `shellFrame`: Monolithic closed picture-frame shell (Left Sidebar + Top Bar + Bottom Status Bar + Right Edge)
- * - `rightSidebar`: Expandable right feature sidebar (defaults to following `shellFrame`, independently tunable)
- * - `mainCanvas`: Central rounded inner workspace canvas (defaults crystal-clear with 0px blur & zero tint shift)
- * - `workPanels`: Unified frosted-glass zone for Tasks, Workspace Board & Scheduled Tasks main panels
- * - `composer`: Message composer & cards
- * - `overlays`: Modals, popovers, dropdowns & settings panels
- * - `userBubble`: Chat timeline user message capsule bubbles with directional Fresnel specular rim
- * - `overviewPanel`: Floating session overview card decoupled from `rightSidebar`
+ * Eight unified workbench liquid-glass zones for real-time per-zone customization:
+ * shellFrame, rightSidebar, mainCanvas, workPanels, composer, overlays, userBubble, overviewPanel.
  */
 export type GlassZoneId =
   | 'shellFrame'
@@ -156,6 +164,8 @@ export interface AppearanceConfig {
   accentMode: AccentMode;
   accent: string;
   glassPreset: GlassPreset;
+  /** Pure CSS / inline SVG liquid-glass theme substrate ('pure' by default for zero visual surprise). */
+  glassThemeBase: GlassThemeBase;
   glassRegions: GlassRegionsConfig;
   /** Light (or unified) glass tint hex (#rrggbb). */
   glassColor: string;
@@ -449,12 +459,67 @@ export const DEFAULT_QUICK_SWATCHES: readonly string[] = [
   '#0d1524',
 ] as const;
 
+export const GLASS_THEME_BASE_IDS: readonly GlassThemeBase[] = [
+  'pure',
+  'starry-violet',
+  'emerald-stars',
+  'sakura-drift',
+  'ocean-caustics',
+  'gilded-lunar',
+] as const;
+
+export const GLASS_THEME_BASE_META: readonly GlassThemeBaseDescriptor[] = [
+  {
+    id: 'pure',
+    label: '纯净官方',
+    note: '仅叠加纯净液态玻璃，保留最通透的原版无纹理质感',
+    swatchCss:
+      'linear-gradient(135deg, rgba(255, 255, 255, 0.42) 0%, rgba(148, 163, 184, 0.22) 48%, rgba(255, 255, 255, 0.32) 100%), linear-gradient(180deg, #273244 0%, #1a2232 100%)',
+  },
+  {
+    id: 'starry-violet',
+    label: '星语紫夜',
+    note: '斜竖紫夜流光光纹 + 星紫/靛蓝双焦星晕 + 细碎微星点阵，复刻猫猫壁纸经典',
+    swatchCss:
+      'radial-gradient(circle at 80% 24%, rgba(240, 197, 255, 0.88) 0 1.4px, transparent 2.4px), radial-gradient(circle at 26% 74%, rgba(196, 181, 253, 0.76) 0 1px, transparent 2px), repeating-linear-gradient(135deg, transparent 0 5px, rgba(185, 148, 238, 0.36) 5px 6.5px), radial-gradient(ellipse at 12% 10%, rgba(168, 142, 229, 0.72), transparent 64%), radial-gradient(ellipse at 90% 96%, rgba(236, 120, 184, 0.48), transparent 62%), linear-gradient(135deg, #17102c 0%, #241948 54%, #151c3a 100%)',
+  },
+  {
+    id: 'emerald-stars',
+    label: '翠星漫野',
+    note: '翡翠森系柔光光晕 + 错落散布的大小与倾角各异实心/轻描边绿色五角星点阵',
+    swatchCss:
+      'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 36 22\'%3E%3Cpolygon points=\'10,3 11.1,6.1 14.4,6.2 11.8,8.2 12.7,11.3 10,9.5 7.3,11.3 8.2,8.2 5.6,6.2 8.9,6.1\' fill=\'%2334d399\' fill-opacity=\'0.95\'/%3E%3Cpolygon points=\'25,8 25.8,10.3 28.2,10.4 26.3,11.9 27,14.2 25,12.8 23,14.2 23.7,11.9 21.8,10.4 24.2,10.3\' fill=\'none\' stroke=\'%236ee7b7\' stroke-width=\'1.1\' stroke-opacity=\'0.95\'/%3E%3Cpolygon points=\'18,14 18.6,15.6 20.3,15.7 19,16.7 19.4,18.3 18,17.4 16.6,18.3 17,16.7 15.7,15.7 17.4,15.6\' fill=\'%2310b981\' fill-opacity=\'0.9\'/%3E%3C/svg%3E"), radial-gradient(circle at 18% 22%, rgba(52, 211, 153, 0.54), transparent 60%), radial-gradient(circle at 86% 84%, rgba(16, 185, 129, 0.44), transparent 62%), linear-gradient(135deg, #092119 0%, #0f3528 52%, #0a2520 100%)',
+  },
+  {
+    id: 'sakura-drift',
+    label: '樱雪浮岚',
+    note: '绯樱暖霞柔晕 + 斜飘半透明五瓣樱影与冰晶菱光点，浅色温润治愈、深色宛如夜樱飘雪',
+    swatchCss:
+      'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 36 22\'%3E%3Cg fill=\'%23f9a8d4\' fill-opacity=\'0.92\' transform=\'translate(11 9) rotate(-18)\'%3E%3Cellipse cx=\'0\' cy=\'-3.2\' rx=\'1.5\' ry=\'2.7\'/%3E%3Cellipse cx=\'3\' cy=\'-1\' rx=\'1.5\' ry=\'2.7\' transform=\'rotate(72 3 -1)\'/%3E%3Cellipse cx=\'1.9\' cy=\'2.5\' rx=\'1.5\' ry=\'2.7\' transform=\'rotate(144 1.9 2.5)\'/%3E%3Cellipse cx=\'-1.9\' cy=\'2.5\' rx=\'1.5\' ry=\'2.7\' transform=\'rotate(216 -1.9 2.5)\'/%3E%3Cellipse cx=\'-3\' cy=\'-1\' rx=\'1.5\' ry=\'2.7\' transform=\'rotate(288 -3 -1)\'/%3E%3C/g%3E%3Cpolygon points=\'26,5 27.1,7.9 30,9 27.1,10.1 26,13 24.9,10.1 22,9 24.9,7.9\' fill=\'%23fce7f3\' fill-opacity=\'0.92\'/%3E%3Ccircle cx=\'20\' cy=\'16.5\' r=\'1.2\' fill=\'%23fbcfe8\' fill-opacity=\'0.82\'/%3E%3C/svg%3E"), radial-gradient(circle at 18% 20%, rgba(244, 114, 182, 0.56), transparent 62%), radial-gradient(circle at 84% 82%, rgba(251, 113, 133, 0.44), transparent 62%), linear-gradient(135deg, #2b1325 0%, #3d1c34 52%, #241830 100%)',
+  },
+  {
+    id: 'ocean-caustics',
+    label: '沧海浮光',
+    note: '冰川青与深海蓝极光晕 + 细腻水波焦散交错涟漪弧纹与浮光气泡，与液态玻璃折射绝配',
+    swatchCss:
+      'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 36 22\'%3E%3Cpath d=\'M-2 15 Q9 6 19 13 T38 9\' fill=\'none\' stroke=\'%237dd3fc\' stroke-width=\'1.35\' stroke-opacity=\'0.88\'/%3E%3Cpath d=\'M-2 19 Q11 11 22 17 T38 14\' fill=\'none\' stroke=\'%2322d3ee\' stroke-width=\'1.05\' stroke-opacity=\'0.72\'/%3E%3Ccircle cx=\'12\' cy=\'7\' r=\'1.3\' fill=\'none\' stroke=\'%23bae6fd\' stroke-width=\'0.9\' stroke-opacity=\'0.85\'/%3E%3Ccircle cx=\'28\' cy=\'6\' r=\'0.9\' fill=\'%23e0f2fe\' fill-opacity=\'0.82\'/%3E%3C/svg%3E"), radial-gradient(circle at 18% 20%, rgba(56, 189, 248, 0.54), transparent 62%), radial-gradient(circle at 86% 84%, rgba(6, 182, 212, 0.48), transparent 64%), linear-gradient(135deg, #071e32 0%, #0b334f 52%, #082338 100%)',
+  },
+  {
+    id: 'gilded-lunar',
+    label: '鎏金织月',
+    note: '琥珀暖金与玄夜紫月晕 + 纤细鎏金同心星轨弧、新月微影与金砂星尘，夜间护眼高雅质感',
+    swatchCss:
+      'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 36 22\'%3E%3Cpath d=\'M-2 21 A24 24 0 0 1 28 2\' fill=\'none\' stroke=\'%23fbbf24\' stroke-width=\'1\' stroke-opacity=\'0.8\'/%3E%3Cpath d=\'M4 22 A18 18 0 0 1 33 7\' fill=\'none\' stroke=\'%23f59e0b\' stroke-width=\'0.8\' stroke-opacity=\'0.6\'/%3E%3Cpath d=\'M25.5 5.2 A4.3 4.3 0 1 0 28.8 12.1 A3.3 3.3 0 1 1 25.5 5.2 Z\' fill=\'%23fde68a\' fill-opacity=\'0.95\'/%3E%3Ccircle cx=\'11\' cy=\'8\' r=\'1\' fill=\'%23fde68a\' fill-opacity=\'0.88\'/%3E%3Ccircle cx=\'17\' cy=\'15\' r=\'0.8\' fill=\'%23fcd34d\' fill-opacity=\'0.78\'/%3E%3C/svg%3E"), radial-gradient(circle at 82% 22%, rgba(251, 191, 36, 0.48), transparent 58%), radial-gradient(circle at 18% 82%, rgba(139, 92, 246, 0.42), transparent 62%), linear-gradient(135deg, #1b1328 0%, #2b1e30 52%, #191421 100%)',
+  },
+] as const;
+
 export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig = {
   themeMode: 'glass',
   glassBasePolarity: 'dark',
   accentMode: 'system',
   accent: '#0078d4',
   glassPreset: 'clear',
+  glassThemeBase: 'pure',
   glassRegions: {
     surface: { ...GLASS_PRESETS.clear.surface },
     card: { ...GLASS_PRESETS.clear.card },

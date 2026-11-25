@@ -64,9 +64,13 @@ export function FileExplorerPane({
         return observeResize(row, measure);
       }}
       aria-label={gt("File explorer")}
+      data-pmx-file-explorer-pane="1"
+      data-pmx-file-explorer-resizable={resizable ? "1" : "0"}
       className={cn(
         "relative flex min-h-0 min-w-0 shrink-0 bg-background",
-        resizable ? "border-l border-border/60" : "flex-1",
+        resizable
+          ? "m-1.5 overflow-hidden rounded-xl border border-border/55"
+          : "flex-1 [[data-pmx-glass='1']_&]:bg-transparent [[data-pmx-wallpaper='1']_&]:bg-transparent [[data-pmx-wallpaper-visible='1']_&]:bg-transparent",
       )}
       style={
         resizable

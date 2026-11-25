@@ -8,7 +8,8 @@ export const PMX_SHELL_CUTOUT_MASK_ID = 'pmx-shell-cutout-mask';
 
 export const DEFAULT_SHELL_CUTOUT_INSET_PX = 0.5;
 export const DEFAULT_STAGE_FRAME_SELECTOR = '[data-pmx-stage-frame="1"]';
-export const DEFAULT_RIGHT_SIDEBAR_SELECTOR = '[data-preview-panel-mode="inline"]';
+export const DEFAULT_RIGHT_SIDEBAR_SELECTOR =
+  '[data-preview-panel-mode="inline"]:not([data-preview-panel-maximized="true"])';
 const SIDEBAR_GAP_SELECTOR = '[data-slot="sidebar-gap"], [data-slot="sidebar-container"]';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -153,7 +154,7 @@ export interface ShellCutoutOptions {
   maskId?: string;
   /** CSS selector for central workspace stage frame(s) (default: `[data-pmx-stage-frame="1"]`). */
   stageFrameSelector?: string;
-  /** CSS selector for inline right feature sidebar(s) (default: `[data-preview-panel-mode="inline"]`). */
+  /** CSS selector for inline right feature sidebar(s) (default: `[data-preview-panel-mode="inline"]:not([data-preview-panel-maximized="true"])`). */
   rightSidebarSelector?: string;
   /** Subpixel inset tucking the cutout edge dead-center under the 1px `::after` ring (default: `0.5`). */
   insetPx?: number;
@@ -681,6 +682,7 @@ export function installPrismuxShellCutout(
 
     const rightSidebarRects: ShellCutoutRect[] = [];
     for (const el of rightEls) {
+      if (el.getAttribute?.('data-preview-panel-maximized') === 'true') continue;
       if (!isElementVisiblyRendered(el, resolveStyle)) continue;
       const box = el.getBoundingClientRect();
       rightSidebarRects.push({
@@ -746,10 +748,11 @@ export function installPrismuxShellCutout(
     }
     const target = evt.target as Partial<ShellCutoutElementLike> | null | undefined;
     if (!target || typeof target.closest !== 'function') return true;
-    // Track sidebar, right panel, and stage frame layout transitions; skip unrelated inner micro-animations.
+    // Track sidebar, right panel (normal or maximized), and stage frame layout transitions;
+    // skip unrelated inner micro-animations.
     return Boolean(
       target.closest(
-        `[data-slot="sidebar-gap"], [data-slot="sidebar-container"], [data-slot="sidebar"], ${rightSelector}, ${stageSelector}, [data-pmx-stage-shell="1"]`,
+        `[data-slot="sidebar-gap"], [data-slot="sidebar-container"], [data-slot="sidebar"], [data-preview-panel-mode="inline"], ${rightSelector}, ${stageSelector}, [data-pmx-stage-shell="1"]`,
       ),
     );
   };
@@ -820,6 +823,10 @@ export function installPrismuxShellCutout(
         if (target === svgEl || target === defsEl || target === maskEl || target === backdropEl) {
           continue;
         }
+        if (mutation.type === 'attributes') {
+          shouldRescan = true;
+          break;
+        }
         // Fast-path skip streaming text/markdown mutations inside inner stage content.
         const targetEl = target as Partial<ShellCutoutElementLike> | null;
         const insideInnerStage =
@@ -875,6 +882,8 @@ export function installPrismuxShellCutout(
       bodyTreeObserver.observe(body as unknown as Node, {
         childList: true,
         subtree: true,
+        attributes: true,
+        attributeFilter: ['data-preview-panel-maximized', 'data-workspace-unavailable'],
       });
     } catch {
       // Ignore non-Node mock body.

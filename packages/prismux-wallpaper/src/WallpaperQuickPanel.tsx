@@ -13,7 +13,7 @@ import {
   RATING_TIER_VALUES,
   TYPE_TIER_VALUES,
 } from "./defaults.js";
-import { cardKeyDown, SwitchRow } from "./renderers/controls.js";
+import { cardKeyDown, SectionHead, SwitchRow } from "./renderers/controls.js";
 import {
   PlaybackAudioSection,
   PlaybackEffectsSection,
@@ -95,6 +95,9 @@ function findScrollContainer(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
+/** Render all filtered items directly up to this threshold to avoid ResizeObserver spacer feedback jitter. */
+export const QP_VIRTUALIZE_THRESHOLD = 160;
+
 function useQuickPanelVirtualWindow(
   listRef: RefObject<HTMLDivElement | null>,
   count: number,
@@ -114,9 +117,7 @@ function useQuickPanelVirtualWindow(
     bottomSpacerHeight: 0,
   }));
 
-  const metaRef = useRef({ count, itemHeight, gap, cardsView });
-  metaRef.current = { count, itemHeight, gap, cardsView };
-
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- tracks ResizeObserver and DOM scroll offsets for large-library virtual windowing
   useEffect(() => {
     if (!active) return;
     const el = listRef.current;
@@ -124,26 +125,20 @@ function useQuickPanelVirtualWindow(
 
     let rafId = 0;
     let boundScroller: HTMLElement | null = null;
+    let lastObservedWidth = -1;
+    let lastObservedViewportH = -1;
 
     const measure = () => {
       rafId = 0;
-      const meta = metaRef.current;
+      const width = el.clientWidth;
+      lastObservedWidth = width;
       let cols = 1;
-      let measuredItemH = meta.itemHeight;
-      if (meta.cardsView) {
-        const width = el.clientWidth;
-        const firstCard = el.querySelector<HTMLElement>(".pmx-wp-qp__card");
-        const cw = firstCard ? firstCard.offsetWidth : 0;
-        const ch = firstCard ? firstCard.offsetHeight : 0;
-        cols =
-          cw > 0
-            ? Math.max(1, Math.round((width + meta.gap) / (cw + meta.gap)))
-            : Math.max(1, Math.floor((width + meta.gap) / (QP_CARD_MIN + meta.gap)));
-        if (ch > 0) {
-          measuredItemH = ch;
-        } else if (width > 0 && cols > 0) {
-          const estW = Math.max(QP_CARD_MIN, (width - meta.gap * (cols - 1)) / cols);
-          measuredItemH = Math.round((estW * 9) / 16);
+      let measuredItemH = itemHeight;
+      if (cardsView) {
+        cols = Math.max(1, Math.floor((width + gap) / (QP_CARD_MIN + gap)));
+        if (width > 0 && cols > 0) {
+          const colW = Math.max(QP_CARD_MIN, (width - gap * (cols - 1)) / cols);
+          measuredItemH = Math.max(1, Math.round((colW * 9) / 16));
         }
       }
 
@@ -169,11 +164,12 @@ function useQuickPanelVirtualWindow(
         scrollTop = Math.max(0, scRect.top - elRect.top);
         viewportHeight = scRect.height;
       }
+      lastObservedViewportH = Number.isFinite(viewportHeight) ? viewportHeight : el.clientHeight;
 
       const computed = computeVirtualWindow({
-        count: meta.count,
+        count,
         itemHeight: measuredItemH,
-        gap: meta.gap,
+        gap,
         cols,
         scrollTop,
         viewportHeight,
@@ -184,7 +180,7 @@ function useQuickPanelVirtualWindow(
         prev.start === computed.start &&
         prev.end === computed.end &&
         prev.cols === computed.cols &&
-        prev.cards === meta.cardsView &&
+        prev.cards === cardsView &&
         prev.measured &&
         prev.topSpacerHeight === computed.topSpacerHeight &&
         prev.bottomSpacerHeight === computed.bottomSpacerHeight
@@ -193,7 +189,7 @@ function useQuickPanelVirtualWindow(
               start: computed.start,
               end: computed.end,
               cols: computed.cols,
-              cards: meta.cardsView,
+              cards: cardsView,
               measured: true,
               topSpacerHeight: computed.topSpacerHeight,
               bottomSpacerHeight: computed.bottomSpacerHeight,
@@ -205,7 +201,22 @@ function useQuickPanelVirtualWindow(
       if (!rafId) rafId = requestAnimationFrame(measure);
     };
 
-    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    const handleResize = () => {
+      const nextWidth = el.clientWidth;
+      const nextViewportH = boundScroller ? boundScroller.clientHeight : el.clientHeight;
+      if (
+        lastObservedWidth >= 0 &&
+        Math.abs(nextWidth - lastObservedWidth) < 2 &&
+        Math.abs(nextViewportH - lastObservedViewportH) < 2
+      ) {
+        return;
+      }
+      lastObservedWidth = nextWidth;
+      lastObservedViewportH = nextViewportH;
+      schedule();
+    };
+
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(handleResize) : null;
     const savedTop = restoreScrollTopRef?.current ?? 0;
     if (savedTop > 0) {
       el.scrollTop = savedTop;
@@ -220,13 +231,13 @@ function useQuickPanelVirtualWindow(
       measure();
     }
     ro?.observe(el);
-    window.addEventListener("resize", schedule);
+    window.addEventListener("resize", handleResize);
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
       if (boundScroller) boundScroller.removeEventListener("scroll", schedule);
       ro?.disconnect();
-      window.removeEventListener("resize", schedule);
+      window.removeEventListener("resize", handleResize);
     };
   }, [listRef, count, itemHeight, gap, cardsView, active, restoreScrollTopRef]);
 
@@ -241,13 +252,8 @@ function formatTypeMeta(w: WallpaperItem, settings: WallpaperSettingsState): str
 }
 
 /**
- * Right-sidebar QuickPanel with in-place real-time Appearance & Liquid Glass Studio:
- *   - Top rotating 40px vinyl card (`clip-path: circle(50%)` + `::after` central ring hole)
- *   - Rotation bar (group select + next + auto-rotation toggle)
- *   - Sliding-pill 3-tab bar (`壁纸 / 播放 / 外观与玻璃`)
- *   - Clicking the top `外观与玻璃` tab switches in-place (NEVER navigates away to /settings/appearance)
- *   - Virtual-scrolled Cards/List library with deterministic 2-row filter bar & scroll preservation
- *   - Shared PlaybackSections (`surface="sidebar"`) with audio controls solely on the `播放` tab
+ * Right-sidebar QuickPanel (壁纸 / 播放 / 外观与玻璃) with permanent current-wallpaper header
+ * and in-place Appearance & Liquid Glass Studio (never navigates away on tab switch).
  */
 export function WallpaperQuickPanel({
   store,
@@ -265,9 +271,6 @@ export function WallpaperQuickPanel({
 
   const effectiveTab: QuickPanelTabId = resolveQuickPanelTab(ui.qpTab);
   const isAppearanceView = effectiveTab === "appearance";
-  if (effectiveTab === "wallpaper" || effectiveTab === "playback") {
-    lastMediaTabRef.current = effectiveTab;
-  }
 
   const current = useMemo(
     () => findWallpaperById(wallpapers, settings.selectedId),
@@ -276,21 +279,21 @@ export function WallpaperQuickPanel({
 
   const playbackLive = Boolean(current && settings.playing && !snap.occluded);
 
+  const { hiddenIds, contentRatingFilter, typeFilter, orientationFilter } = settings;
+
   const playable = useMemo(
-    () => filterPlayableWallpapers(wallpapers, settings),
-    [wallpapers, settings.hiddenIds, settings.contentRatingFilter],
+    () => filterPlayableWallpapers(wallpapers, { hiddenIds, contentRatingFilter }),
+    [wallpapers, hiddenIds, contentRatingFilter],
   );
 
   const filtered = useMemo(
-    () => filterVisibleWallpapers(wallpapers, settings, snap.qpSearch),
-    [
-      wallpapers,
-      settings.hiddenIds,
-      settings.contentRatingFilter,
-      settings.typeFilter,
-      settings.orientationFilter,
-      snap.qpSearch,
-    ],
+    () =>
+      filterVisibleWallpapers(
+        wallpapers,
+        { hiddenIds, contentRatingFilter, typeFilter, orientationFilter },
+        snap.qpSearch,
+      ),
+    [wallpapers, hiddenIds, contentRatingFilter, typeFilter, orientationFilter, snap.qpSearch],
   );
 
   const rotationCandidates = useMemo(
@@ -302,22 +305,42 @@ export function WallpaperQuickPanel({
   const vItemH = cardsView ? QP_CARD_H : QP_ROW_H;
   const vGap = cardsView ? QP_CARD_GAP : QP_ROW_GAP;
   const listActive = effectiveTab === "wallpaper";
+  const shouldVirtualize = filtered.length > QP_VIRTUALIZE_THRESHOLD;
   const vwin = useQuickPanelVirtualWindow(
     listRef,
     filtered.length,
     vItemH,
     vGap,
     cardsView,
-    listActive,
+    listActive && shouldVirtualize,
     savedScrollTopRef,
   );
 
-  const isMeasured = vwin.measured && vwin.cards === cardsView && vwin.cols > 0;
-  const vStart = isMeasured ? Math.min(vwin.start, filtered.length) : 0;
-  const vEnd = isMeasured
-    ? Math.max(vStart, Math.min(vwin.end, filtered.length))
-    : Math.min(QP_VP_FIRST, filtered.length);
-  const visibleRows = filtered.slice(vStart, vEnd);
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- restores imperative DOM scrollTop on listRef when returning to the wallpaper tab
+  useEffect(() => {
+    if (!listActive || shouldVirtualize) return;
+    const el = listRef.current;
+    if (!el) return;
+    const savedTop = savedScrollTopRef.current;
+    if (savedTop > 0) {
+      el.scrollTop = savedTop;
+      savedScrollTopRef.current = 0;
+    }
+  }, [listActive, shouldVirtualize]);
+
+  const isMeasured =
+    shouldVirtualize && vwin.measured && vwin.cards === cardsView && vwin.cols > 0;
+  const vStart = shouldVirtualize
+    ? isMeasured
+      ? Math.min(vwin.start, filtered.length)
+      : 0
+    : 0;
+  const vEnd = shouldVirtualize
+    ? isMeasured
+      ? Math.max(vStart, Math.min(vwin.end, filtered.length))
+      : Math.min(QP_VP_FIRST, filtered.length)
+    : filtered.length;
+  const visibleRows = shouldVirtualize ? filtered.slice(vStart, vEnd) : filtered;
   const vTopH = isMeasured ? vwin.topSpacerHeight : 0;
   const vBtmH = isMeasured ? vwin.bottomSpacerHeight : 0;
 
@@ -363,6 +386,7 @@ export function WallpaperQuickPanel({
         role="option"
         tabIndex={0}
         aria-selected={isCurrent}
+        // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
         title={w.title}
         onPointerDown={() => handleCardPointerDown(w)}
         onClick={() => store.selectWallpaper(w.id)}
@@ -398,6 +422,7 @@ export function WallpaperQuickPanel({
         role="option"
         tabIndex={0}
         aria-selected={isCurrent}
+        // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
         title={w.title}
         onPointerDown={() => handleCardPointerDown(w)}
         onClick={() => store.selectWallpaper(w.id)}
@@ -439,15 +464,13 @@ export function WallpaperQuickPanel({
       data-pmx-quick-panel="1"
       data-pmx-qp-view={effectiveTab}
     >
-      {/* ① 当前壁纸顶卡与轮播条（外观与玻璃就地视图下收起以释放实时调节空间） */}
-      {!isAppearanceView ? (
-        <>
-          <div
-            className={
-              "pmx-wp-glass-card pmx-wp-qp__current" +
-              (playbackLive ? " pmx-wp-qp__current--playing" : "")
-            }
-          >
+      {/* ① 当前壁纸顶卡（常驻于 壁纸 / 播放 / 外观与玻璃 全部 3 个页签上方） */}
+      <div
+        className={
+          "pmx-wp-glass-card pmx-wp-qp__current" +
+          (playbackLive ? " pmx-wp-qp__current--playing" : "")
+        }
+      >
         <span className="pmx-wp-qp__thumb">
           {current?.previewUrl ? (
             <img
@@ -459,6 +482,7 @@ export function WallpaperQuickPanel({
           ) : null}
         </span>
         <div className="pmx-wp-qp__current-info">
+          {/* oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component */}
           <div className="pmx-wp-qp__title" title={current?.title ?? ""}>
             {current ? current.title : "未选择壁纸"}
           </div>
@@ -484,6 +508,7 @@ export function WallpaperQuickPanel({
             type="button"
             className="pmx-wp-btn"
             disabled={snap.loading}
+            // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
             title="重新扫描 Steam Workshop 431960 与本地自定义壁纸库"
             onClick={() => void store.refreshLibrary(adapter, true)}
           >
@@ -493,6 +518,7 @@ export function WallpaperQuickPanel({
             type="button"
             className="pmx-wp-btn"
             disabled={!current}
+            // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
             title="清除当前壁纸，回到无壁纸状态"
             onClick={() => store.clearWallpaper()}
           >
@@ -501,50 +527,7 @@ export function WallpaperQuickPanel({
         </div>
       </div>
 
-      {/* ② 轮播条（常驻：分组下拉 + 下一张 + 自动轮播） */}
-      <div className="pmx-wp-glass-card pmx-wp-qp__rotation">
-        <div className="pmx-wp-qp__row">
-          <select
-            className="pmx-wp-select pmx-wp-qp__group"
-            value={settings.rotationGroupId}
-            disabled={settings.rotationGroups.length === 0}
-            aria-label="轮播列表"
-            onChange={(e) => store.setSetting("rotationGroupId", e.target.value)}
-          >
-            <option value="">
-              {settings.rotationGroups.length > 0 ? "— 选择轮播列表 —" : "— 暂无轮播列表 —"}
-            </option>
-            {settings.rotationGroups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {`${g.name}（${g.wallpaperIds.length} 张 · ${g.intervalMinutes} 分钟）`}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="pmx-wp-btn"
-            disabled={rotationCandidates.length < 2}
-            title="切到下一张壁纸"
-            onClick={() => store.nextWallpaper()}
-          >
-            下一张
-          </button>
-        </div>
-        <SwitchRow
-          label="自动轮播"
-          checked={settings.rotationEnabled}
-          hint={
-            settings.rotationGroups.length > 0
-              ? "按所选列表定时自动切换"
-              : "先到设置页新建一个轮播列表"
-          }
-          onChange={(on) => store.setSetting("rotationEnabled", on)}
-        />
-      </div>
-        </>
-      ) : null}
-
-      {/* ③ 滑动胶囊三档页签（壁纸 / 播放 / 外观与玻璃） */}
+      {/* ② 滑动胶囊三档页签（壁纸 / 播放 / 外观与玻璃） */}
       <div className="pmx-wp-tabs pmx-wp-qp__tabs" role="tablist" aria-label="壁纸面板分区">
         <span
           className="pmx-wp-tabs__pill"
@@ -565,9 +548,13 @@ export function WallpaperQuickPanel({
               "pmx-wp-tabs__tab" + (effectiveTab === t.id ? " pmx-wp-tabs__tab--active" : "")
             }
             onClick={() => {
+              if (effectiveTab === "wallpaper" && t.id !== "wallpaper" && listRef.current) {
+                savedScrollTopRef.current = listRef.current.scrollTop;
+              }
               if (t.id === "appearance") {
                 handleOpenInlineAppearance();
               } else {
+                lastMediaTabRef.current = t.id;
                 store.setUiState("qpTab", t.id);
               }
             }}
@@ -577,7 +564,7 @@ export function WallpaperQuickPanel({
         ))}
       </div>
 
-      {/* ④ 主内容区（含滚动链隔离 overscroll-behavior: contain） */}
+      {/* ③ 主内容区（含滚动链隔离 overscroll-behavior: contain） */}
       <div
         className={
           "pmx-wp-qp__tabbody" +
@@ -622,6 +609,51 @@ export function WallpaperQuickPanel({
               onPickWallpaper={() => store.setUiState("qpTab", "wallpaper")}
             />
             <PlaybackAudioSection store={store} />
+            <section
+              className="pmx-wp-glass-card pmx-wp-qp__rotation"
+              data-pmx-section="rotation"
+              data-pmx-playback-card="rotation"
+            >
+              <SectionHead label="自动轮播" />
+              <div className="pmx-wp-qp__row">
+                <select
+                  className="pmx-wp-select pmx-wp-qp__group"
+                  value={settings.rotationGroupId}
+                  disabled={settings.rotationGroups.length === 0}
+                  aria-label="轮播列表"
+                  onChange={(e) => store.setSetting("rotationGroupId", e.target.value)}
+                >
+                  <option value="">
+                    {settings.rotationGroups.length > 0 ? "请选择轮播列表" : "暂无轮播列表"}
+                  </option>
+                  {settings.rotationGroups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {`${g.name}（${g.wallpaperIds.length} 张 · ${g.intervalMinutes} 分钟）`}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="pmx-wp-btn"
+                  disabled={rotationCandidates.length < 2}
+                  // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
+                  title="切到下一张壁纸"
+                  onClick={() => store.nextWallpaper()}
+                >
+                  下一张
+                </button>
+              </div>
+              <SwitchRow
+                label="自动轮播"
+                checked={settings.rotationEnabled}
+                hint={
+                  settings.rotationGroups.length > 0
+                    ? "按所选列表定时自动切换"
+                    : "先到设置页新建一个轮播列表"
+                }
+                onChange={(on) => store.setSetting("rotationEnabled", on)}
+              />
+            </section>
           </>
         ) : (
           /* 壁纸库（搜索 + 分级/类型/方向筛选 + 列表/卡片切换 + 虚拟滚动列表） */
@@ -818,6 +850,7 @@ export function WallpaperQuickPanel({
             type="button"
             className="pmx-wp-btn pmx-wp-qp__settings"
             data-pmx-open-full-appearance="1"
+            // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
             title="打开完整外观设置页（字体、配色与主题快照）"
             onClick={() => adapter?.openSettingsSection?.("appearance")}
           >
@@ -828,6 +861,7 @@ export function WallpaperQuickPanel({
           type="button"
           className="pmx-wp-btn pmx-wp-qp__settings"
           data-pmx-open-wallpaper-settings="1"
+          // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
           title="打开完整壁纸引擎设置页（本地导入 / 画面播放 / 轮播分组 / Steam 目录）"
           onClick={() =>
             adapter?.openSettingsSection?.(effectiveTab === "playback" ? "playback" : "")

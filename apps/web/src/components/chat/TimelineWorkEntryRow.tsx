@@ -671,11 +671,7 @@ function DshReasoningWorkEntryRow({
       <div
         data-disclosure-header="true"
         data-open={expanded ? "true" : undefined}
-        className={cn(
-          "flex min-w-0 items-center",
-          expanded &&
-            "sticky top-0 z-10 bg-background/95 [[data-pmx-glass='1']_&]:bg-card/85 [[data-pmx-glass='1']_&]:backdrop-blur-md",
-        )}
+        className={cn("flex min-w-0 items-center bg-transparent", expanded && "sticky top-0 z-10")}
       >
         <div
           data-disclosure-row="true"

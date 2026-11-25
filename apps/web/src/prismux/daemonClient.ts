@@ -1128,16 +1128,20 @@ export class PrismuxDaemonClient {
     return parsed as T;
   }
 
-  buildMediaUrl(kind: "media" | "preview" | "web", id: string, subPath?: string): string {
+  buildMediaUrl(
+    kind: "media" | "preview" | "web" | "scene",
+    id: string,
+    subPath?: string,
+  ): string {
     const encodedId = encodeURIComponent(id);
     const tail = subPath && subPath.trim().length > 0 ? `/${encodeSubPath(subPath)}` : "";
     const base = this.cachedInfo.baseUrl ? normalizeBaseUrl(this.cachedInfo.baseUrl) : "";
     const token = this.cachedInfo.token;
-    if (kind === "web" && token) {
+    if ((kind === "web" || kind === "scene") && token) {
       // Embed token in URL path so Chromium iframes hosted on cross-site `prismux://`
-      // authenticate every relative subresource (JS/CSS/Spine/WebGL/audio) without cookies.
-      const webTail = tail || "/index.html";
-      return `${base}/v1/wallpapers/web-t/${encodeURIComponent(token)}/${encodedId}${webTail}`;
+      // authenticate every relative subresource (JS/CSS/Spine/WebGL/video/audio) without cookies.
+      const entryTail = tail || "/index.html";
+      return `${base}/v1/wallpapers/${kind}-t/${encodeURIComponent(token)}/${encodedId}${entryTail}`;
     }
     const route = `/v1/wallpapers/${kind}/${encodedId}${tail}`;
     const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : "";
@@ -1158,7 +1162,7 @@ export class PrismuxDaemonClient {
     const base = this.cachedInfo.baseUrl ? normalizeBaseUrl(this.cachedInfo.baseUrl) : "";
     const token = this.cachedInfo.token;
 
-    const rewriteWebToTokenPath = (relPathWithQuery: string): string => {
+    const rewriteKindToTokenPath = (kind: "web" | "scene", relPathWithQuery: string): string => {
       const qIdx = relPathWithQuery.indexOf("?");
       const pathPart = qIdx >= 0 ? relPathWithQuery.slice(0, qIdx) : relPathWithQuery;
       const queryPart = qIdx >= 0 ? relPathWithQuery.slice(qIdx + 1) : "";
@@ -1166,24 +1170,26 @@ export class PrismuxDaemonClient {
       params.delete("token");
       const remainingQuery = params.toString();
       const suffix = remainingQuery ? `?${remainingQuery}` : "";
-      const rest = pathPart.slice("/v1/wallpapers/web/".length);
+      const rest = pathPart.slice(`/v1/wallpapers/${kind}/`.length);
       if (!token) {
         return `${base}${pathPart}${suffix}`;
       }
-      return `${base}/v1/wallpapers/web-t/${encodeURIComponent(token)}/${rest}${suffix}`;
+      return `${base}/v1/wallpapers/${kind}-t/${encodeURIComponent(token)}/${rest}${suffix}`;
     };
 
-    if (trimmed.startsWith("/v1/wallpapers/web-t/")) {
-      return base ? `${base}${trimmed}` : trimmed;
-    }
-    if (base && trimmed.startsWith(`${base}/v1/wallpapers/web-t/`)) {
-      return trimmed;
-    }
-    if (trimmed.startsWith("/v1/wallpapers/web/")) {
-      return rewriteWebToTokenPath(trimmed);
-    }
-    if (base && trimmed.startsWith(`${base}/v1/wallpapers/web/`)) {
-      return rewriteWebToTokenPath(trimmed.slice(base.length));
+    for (const kind of ["web", "scene"] as const) {
+      if (trimmed.startsWith(`/v1/wallpapers/${kind}-t/`)) {
+        return base ? `${base}${trimmed}` : trimmed;
+      }
+      if (base && trimmed.startsWith(`${base}/v1/wallpapers/${kind}-t/`)) {
+        return trimmed;
+      }
+      if (trimmed.startsWith(`/v1/wallpapers/${kind}/`)) {
+        return rewriteKindToTokenPath(kind, trimmed);
+      }
+      if (base && trimmed.startsWith(`${base}/v1/wallpapers/${kind}/`)) {
+        return rewriteKindToTokenPath(kind, trimmed.slice(base.length));
+      }
     }
 
     if (trimmed.startsWith("/v1/wallpapers/")) {
@@ -1737,7 +1743,10 @@ export class PrismuxDaemonClient {
         const decoder = new TextDecoder();
         let buffer = "";
 
-        while (!disposed) {
+        for (;;) {
+          if (disposed) {
+            break;
+          }
           const { done, value } = await reader.read();
           if (done) {
             break;
@@ -1834,9 +1843,7 @@ export const fetchQuotaSummary = (
   force = false,
 ): Promise<DaemonOfficialQuotaSummaryResponse> => prismuxDaemonClient.fetchQuotaSummary(force);
 
-// ---------------------------------------------------------------------------
 // Read-only Multi-Agent Native Auxiliary Runtime Inspector (AGY / CC / Codex)
-// ---------------------------------------------------------------------------
 
 export type DaemonAgentAuxKind =
   | "agy-swarm"

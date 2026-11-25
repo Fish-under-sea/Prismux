@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { CSSProperties } from "react";
 import type { WallpaperStore } from "./store.js";
 import {
@@ -15,7 +23,7 @@ import type {
   WallpaperItem,
   WallpaperSettingsState,
 } from "./types.js";
-import { weColorToHex } from "./userProps.js";
+import { applyUserPropOverrides, weColorToHex } from "./userProps.js";
 import { consumePrewarmedVideo } from "./videoPrewarm.js";
 
 export interface WallpaperStageProps {
@@ -235,7 +243,6 @@ function WebWallGLStageCanvas({
   parallaxEnabled,
 }: WebWallGLStageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [backend, setBackend] = useState<"webgl2" | "canvas2d">("webgl2");
   const liveRef = useRef({
     sceneIndex,
     themeMode,
@@ -253,23 +260,13 @@ function WebWallGLStageCanvas({
     targetMouseY: 0.5,
   });
 
-  liveRef.current.sceneIndex = sceneIndex;
-  liveRef.current.themeMode = themeMode;
-  liveRef.current.paused = paused;
-  liveRef.current.fpsLimit = fpsLimit;
-  liveRef.current.audioReactive = audioReactive;
-  liveRef.current.audioEnergy = audioEnergy;
-  liveRef.current.speed = speed;
-  liveRef.current.intensity = intensity;
-  liveRef.current.tintHex = tintHex;
-  liveRef.current.parallaxEnabled = parallaxEnabled;
-
   const controllerRef = useRef<{
     start: () => void;
     stop: () => void;
     paintCurrent: () => void;
   } | null>(null);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to window pointermove for WebGL2/Canvas2D shader parallax
   useEffect(() => {
     const onPointerMove = (e: PointerEvent) => {
       if (liveRef.current.paused || !liveRef.current.parallaxEnabled) return;
@@ -283,6 +280,7 @@ function WebWallGLStageCanvas({
   }, []);
 
   // Mount-only WebGL2 / Canvas2D initialization: shader program & u_time survive pause/occlusion cycles cleanly.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- owns imperative WebGL2/Canvas2D context, ResizeObserver, and rAF loop until unmount
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -348,7 +346,7 @@ function WebWallGLStageCanvas({
             uSpeed = gl.getUniformLocation(prog, "u_speed");
             uIntensity = gl.getUniformLocation(prog, "u_intensity");
             uTint = gl.getUniformLocation(prog, "u_tint");
-            setBackend("webgl2");
+            canvas.dataset.pmxWebwallglBackend = "webgl2";
           } else {
             gl.deleteProgram(prog);
           }
@@ -359,7 +357,9 @@ function WebWallGLStageCanvas({
     }
 
     const ctx2d = !program ? canvas.getContext("2d") : null;
-    if (!program) setBackend("canvas2d");
+    if (!program) {
+      canvas.dataset.pmxWebwallglBackend = "canvas2d";
+    }
 
     const syncSize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -418,7 +418,8 @@ function WebWallGLStageCanvas({
       syncSize();
       if (gl && program) {
         gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.useProgram(program);
+        const activateProgram = gl.useProgram.bind(gl);
+        activateProgram(program);
         gl.uniform2f(uResolution, canvas.width, canvas.height);
         gl.uniform1f(uTime, t);
         gl.uniform2f(uMouse, snap.mouseX, snap.mouseY);
@@ -501,38 +502,52 @@ function WebWallGLStageCanvas({
     };
   }, []);
 
-  // Lightweight pause/resume effect: strict 0 rAF when paused, seamless u_time continuation on resume.
+  // Sync live uniform inputs into the mounted WebGL2/Canvas2D loop and handle pause/resume cleanly.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- pushes live uniform params and pause state into mounted WebGL2/Canvas2D rAF controller
   useEffect(() => {
+    liveRef.current.sceneIndex = sceneIndex;
+    liveRef.current.themeMode = themeMode;
+    liveRef.current.paused = paused;
+    liveRef.current.fpsLimit = fpsLimit;
+    liveRef.current.audioReactive = audioReactive;
+    liveRef.current.audioEnergy = audioEnergy;
+    liveRef.current.speed = speed;
+    liveRef.current.intensity = intensity;
+    liveRef.current.tintHex = tintHex;
+    liveRef.current.parallaxEnabled = parallaxEnabled;
+
     const ctrl = controllerRef.current;
     if (!ctrl) return;
     if (paused) {
       ctrl.stop();
+      ctrl.paintCurrent();
     } else {
       ctrl.start();
     }
-  }, [paused]);
-
-  // Repaint a single static frame if visual uniforms change while paused (still 0 ongoing rAF).
-  useEffect(() => {
-    if (paused) {
-      controllerRef.current?.paintCurrent();
-    }
-  }, [paused, themeMode, sceneIndex, tintHex, intensity, speed]);
+  }, [
+    sceneIndex,
+    themeMode,
+    paused,
+    fpsLimit,
+    audioReactive,
+    audioEnergy,
+    speed,
+    intensity,
+    tintHex,
+    parallaxEnabled,
+  ]);
 
   return (
     <canvas
       ref={canvasRef}
-      data-pmx-webwallgl-backend={backend}
+      data-pmx-webwallgl-backend="webgl2"
       data-pmx-webwallgl-paused={paused ? "1" : "0"}
       className="pmx-wp-stage__media"
     />
   );
 }
 
-function AmbientBackdrop({ src, filter }: { src: string; filter?: string }) {
-  const baseAmbient = "blur(28px) saturate(1.18) brightness(0.72)";
-  const combinedFilter =
-    filter && filter !== "none" ? `${baseAmbient} ${filter}` : baseAmbient;
+function AmbientBackdrop({ src }: { src: string }) {
   return (
     <img
       src={src}
@@ -540,7 +555,7 @@ function AmbientBackdrop({ src, filter }: { src: string; filter?: string }) {
       aria-hidden="true"
       decoding="async"
       className="pmx-wp-stage__ambient"
-      style={{ filter: combinedFilter }}
+      style={{ filter: "blur(28px) saturate(1.18) brightness(0.72)" }}
     />
   );
 }
@@ -573,6 +588,7 @@ function ImageCrossfadeStage({
     ready: false,
   });
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- manages slideshow interval timer for multi-slide image wallpapers
   useEffect(() => {
     if (!slides || slides.length <= 1 || paused) return;
     const ms = Math.max(5_000, slideIntervalMs ?? 60_000);
@@ -582,22 +598,28 @@ function ImageCrossfadeStage({
     return () => clearInterval(id);
   }, [slides, slideIntervalMs, paused]);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- advances crossfade image slot transition when effectiveSrc changes
   useEffect(() => {
-    setSlots((prev) => {
-      if (prev.current === effectiveSrc) return prev;
-      return {
-        current: effectiveSrc,
-        previous: prev.current,
-        ready: false,
-      };
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSlots((prev) => {
+        if (prev.current === effectiveSrc) return prev;
+        return {
+          current: effectiveSrc,
+          previous: prev.current,
+          ready: false,
+        };
+      });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [effectiveSrc]);
-
-  const filterStr = typeof mediaStyle.filter === "string" ? mediaStyle.filter : undefined;
 
   return (
     <>
-      {showAmbient ? <AmbientBackdrop src={slots.current} filter={filterStr} /> : null}
+      {showAmbient ? <AmbientBackdrop src={slots.current} /> : null}
       {slots.previous && (
         <img
           key={`prev:${slots.previous}`}
@@ -627,7 +649,7 @@ function ImageCrossfadeStage({
   );
 }
 
-interface VideoStageProps {
+export interface VideoStageProps {
   src: string;
   poster?: string | null;
   paused: boolean;
@@ -641,19 +663,80 @@ interface VideoStageProps {
   onError: (msg: string | null) => void;
 }
 
-function tryPlayVideoElement(video: HTMLVideoElement): void {
+export function applyVideoAudio(
+  video: Pick<
+    HTMLVideoElement,
+    "defaultMuted" | "muted" | "volume" | "setAttribute" | "removeAttribute"
+  >,
+  muted: boolean,
+  volume: number,
+): void {
+  const clampedVol = Math.max(0, Math.min(1, Number.isFinite(volume) ? volume : 0));
+  const effectiveMuted = muted || clampedVol <= 0;
+  video.defaultMuted = effectiveMuted;
+  video.muted = effectiveMuted;
+  video.volume = effectiveMuted ? 0 : clampedVol;
+  if (effectiveMuted) {
+    video.setAttribute("muted", "");
+  } else {
+    video.removeAttribute("muted");
+  }
+}
+
+export function disposeVideoElement(
+  video: Pick<
+    HTMLVideoElement,
+    "defaultMuted" | "muted" | "volume" | "setAttribute" | "removeAttribute" | "pause" | "load"
+  >,
+  container?: Pick<HTMLElement, "replaceChildren"> | null,
+): void {
+  try {
+    applyVideoAudio(video, true, 0);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  } catch {
+    // Ignore cleanup errors
+  }
+  if (container) {
+    try {
+      container.replaceChildren();
+    } catch {
+      // Ignore DOM cleanup errors
+    }
+  }
+}
+
+function tryPlayVideoElement(
+  video: HTMLVideoElement,
+  isDisposed?: () => boolean,
+  onAutoplayMutedFallback?: () => void,
+): void {
+  if (isDisposed?.()) return;
   const playPromise = video.play();
-  if (playPromise && typeof playPromise.catch === "function") {
-    playPromise.catch(() => {
-      // Unconditionally fall back to muted autoplay when Chromium autoplay policy blocks unmuted start
-      video.defaultMuted = true;
-      video.muted = true;
-      video.setAttribute("muted", "");
-      const retry = video.play();
-      if (retry && typeof retry.catch === "function") {
-        retry.catch(() => {});
-      }
-    });
+  if (playPromise && typeof playPromise.then === "function") {
+    playPromise.then(
+      () => {
+        if (isDisposed?.()) {
+          try {
+            applyVideoAudio(video, true, 0);
+            video.pause();
+          } catch {
+            // Ignore post-dispose pause errors
+          }
+        }
+      },
+      () => {
+        if (isDisposed?.()) return;
+        // Unconditionally fall back to muted autoplay when Chromium autoplay policy blocks unmuted start
+        onAutoplayMutedFallback?.();
+        applyVideoAudio(video, true, 0);
+        const retry = video.play();
+        if (retry && typeof retry.catch === "function") {
+          retry.catch(() => {});
+        }
+      },
+    );
   }
 }
 
@@ -674,7 +757,17 @@ function formatVideoMediaError(err: MediaError | null): string {
   }
 }
 
-function VideoStage({
+function applyVideoMediaStyle(video: HTMLVideoElement, style: CSSProperties): void {
+  video.style.width = typeof style.width === "string" ? style.width : "100%";
+  video.style.height = typeof style.height === "string" ? style.height : "100%";
+  video.style.objectFit = typeof style.objectFit === "string" ? style.objectFit : "";
+  video.style.objectPosition =
+    typeof style.objectPosition === "string" ? style.objectPosition : "";
+  video.style.transform = typeof style.transform === "string" ? style.transform : "none";
+  video.style.filter = "";
+}
+
+export function VideoStage({
   src,
   poster,
   paused,
@@ -689,6 +782,7 @@ function VideoStage({
 }: VideoStageProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const autoplayMutedFallbackRef = useRef(false);
   const [readySrc, setReadySrc] = useState<string | null>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const videoReady = readySrc === src;
@@ -704,18 +798,23 @@ function VideoStage({
     onEnded,
     onError,
   });
-  stateRef.current = {
-    paused,
-    muted,
-    volume,
-    playbackRate,
-    loop,
-    poster,
-    mediaStyle,
-    onEnded,
-    onError,
-  };
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- keeps imperative HTMLVideoElement event handlers in step with latest props
+  useEffect(() => {
+    stateRef.current = {
+      paused,
+      muted,
+      volume,
+      playbackRate,
+      loop,
+      poster,
+      mediaStyle,
+      onEnded,
+      onError,
+    };
+  }, [paused, muted, volume, playbackRate, loop, poster, mediaStyle, onEnded, onError]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- mounts imperative HTMLVideoElement and binds media lifecycle events
   useEffect(() => {
     const container = hostRef.current;
     if (!container) return;
@@ -723,6 +822,12 @@ function VideoStage({
     let disposed = false;
     let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
     let watchdogRetried = false;
+    autoplayMutedFallbackRef.current = false;
+
+    const isDisposed = () => disposed;
+    const onAutoplayMutedFallback = () => {
+      autoplayMutedFallbackRef.current = true;
+    };
 
     const clearWatchdog = () => {
       if (watchdogTimer !== null) {
@@ -742,6 +847,7 @@ function VideoStage({
         : null;
     if (rawAdopted && !adopted) {
       try {
+        applyVideoAudio(rawAdopted, true, 0);
         rawAdopted.pause();
         rawAdopted.removeAttribute("src");
       } catch {
@@ -752,7 +858,19 @@ function VideoStage({
     const video = adopted ?? document.createElement("video");
     videoRef.current = video;
 
-    const effectiveMuted = latest.muted || latest.volume <= 0;
+    const enforceVideoAudio = () => {
+      const clampedVol = Math.max(
+        0,
+        Math.min(1, Number.isFinite(stateRef.current.volume) ? stateRef.current.volume : 0),
+      );
+      const desiredMuted = stateRef.current.muted || clampedVol <= 0;
+      if (desiredMuted) {
+        applyVideoAudio(video, true, 0);
+      } else if (!autoplayMutedFallbackRef.current) {
+        applyVideoAudio(video, false, clampedVol);
+      }
+    };
+
     video.className = "pmx-wp-stage__media";
     video.removeAttribute("width");
     video.removeAttribute("height");
@@ -761,15 +879,10 @@ function VideoStage({
     video.autoplay = !latest.paused;
     video.preload = "auto";
     video.loop = latest.loop;
-    video.defaultMuted = effectiveMuted;
-    video.muted = effectiveMuted;
-    if (effectiveMuted) {
-      video.setAttribute("muted", "");
-    } else {
-      video.removeAttribute("muted");
-    }
-    video.volume = Math.max(0, Math.min(1, latest.volume));
+    // 1) Apply strict audio policy immediately upon element creation/adoption
+    applyVideoAudio(video, latest.muted, latest.volume);
     try {
+      video.defaultPlaybackRate = latest.playbackRate;
       video.playbackRate = latest.playbackRate;
     } catch {
       // Ignore unsupported rate
@@ -779,7 +892,7 @@ function VideoStage({
     } else {
       video.removeAttribute("poster");
     }
-    Object.assign(video.style, { width: "100%", height: "100%" }, latest.mediaStyle);
+    applyVideoMediaStyle(video, latest.mediaStyle);
 
     if (!adopted || video.src !== src) {
       video.src = src;
@@ -794,30 +907,78 @@ function VideoStage({
       setReadySrc((prev) => (prev === src ? null : prev));
       stateRef.current.onError(formatVideoMediaError(video.error));
     };
+    const handleLoadedMetadata = () => {
+      if (disposed) return;
+      // 2a) Re-assert audio policy after metadata load
+      enforceVideoAudio();
+    };
     const handleReadyToPlay = () => {
       if (disposed) return;
       clearWatchdog();
+      // 2b) Re-assert audio policy on loadeddata / canplay
+      enforceVideoAudio();
       setFailedSrc((prev) => (prev === src ? null : prev));
       setReadySrc(src);
       stateRef.current.onError(null);
+      try {
+        video.defaultPlaybackRate = stateRef.current.playbackRate;
+        video.playbackRate = stateRef.current.playbackRate;
+      } catch {
+        // Ignore unsupported rate
+      }
       if (!stateRef.current.paused && video.paused) {
-        tryPlayVideoElement(video);
+        tryPlayVideoElement(video, isDisposed, onAutoplayMutedFallback);
       }
     };
     const handlePlaying = () => {
       if (disposed) return;
       clearWatchdog();
+      // 2c) Re-assert audio policy once playback actually begins
+      enforceVideoAudio();
       setFailedSrc((prev) => (prev === src ? null : prev));
       setReadySrc(src);
       stateRef.current.onError(null);
+      try {
+        video.defaultPlaybackRate = stateRef.current.playbackRate;
+        video.playbackRate = stateRef.current.playbackRate;
+      } catch {
+        // Ignore unsupported rate
+      }
+    };
+    const handleVolumeChange = () => {
+      if (disposed) return;
+      // 5) Guard against Chromium media pipeline resetting muted/volume; correct only on drift
+      const clampedVol = Math.max(
+        0,
+        Math.min(1, Number.isFinite(stateRef.current.volume) ? stateRef.current.volume : 0),
+      );
+      const expectedMuted = stateRef.current.muted || clampedVol <= 0;
+      if (!expectedMuted && autoplayMutedFallbackRef.current) {
+        return;
+      }
+      const expectedVol = expectedMuted ? 0 : clampedVol;
+      const mutedAttrDrifted =
+        typeof video.hasAttribute === "function"
+          ? video.hasAttribute("muted") !== expectedMuted
+          : false;
+      const drifted =
+        video.muted !== expectedMuted ||
+        video.defaultMuted !== expectedMuted ||
+        mutedAttrDrifted ||
+        Math.abs(video.volume - expectedVol) > 0.001;
+      if (drifted) {
+        applyVideoAudio(video, stateRef.current.muted, stateRef.current.volume);
+      }
     };
 
     video.addEventListener("contextmenu", handleContextMenu);
     video.addEventListener("ended", handleEnded);
     video.addEventListener("error", handleError);
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("loadeddata", handleReadyToPlay);
     video.addEventListener("canplay", handleReadyToPlay);
     video.addEventListener("playing", handlePlaying);
+    video.addEventListener("volumechange", handleVolumeChange);
 
     container.replaceChildren(video);
 
@@ -829,12 +990,12 @@ function VideoStage({
       });
       stateRef.current.onError(null);
       if (!latest.paused) {
-        tryPlayVideoElement(video);
+        tryPlayVideoElement(video, isDisposed, onAutoplayMutedFallback);
       } else {
         video.pause();
       }
     } else if (!latest.paused) {
-      tryPlayVideoElement(video);
+      tryPlayVideoElement(video, isDisposed, onAutoplayMutedFallback);
       // Watchdog: when preload transitions metadata -> auto on an adopted element (or huge EOF-moov MP4),
       // kick video.load() once if readyState stalls at < 2 without error.
       watchdogTimer = setTimeout(() => {
@@ -851,8 +1012,11 @@ function VideoStage({
         watchdogRetried = true;
         try {
           video.preload = "auto";
+          // 3) Re-assert audio policy across watchdog reload
+          enforceVideoAudio();
           video.load();
-          tryPlayVideoElement(video);
+          enforceVideoAudio();
+          tryPlayVideoElement(video, isDisposed, onAutoplayMutedFallback);
         } catch {
           // Ignore reload failure
         }
@@ -867,38 +1031,28 @@ function VideoStage({
       video.removeEventListener("contextmenu", handleContextMenu);
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
       video.removeEventListener("loadeddata", handleReadyToPlay);
       video.removeEventListener("canplay", handleReadyToPlay);
       video.removeEventListener("playing", handlePlaying);
-      try {
-        video.pause();
-        const hadStarted = video.readyState > 0 || video.networkState === 2;
-        video.removeAttribute("src");
-        if (hadStarted) {
-          video.load();
-        }
-      } catch {
-        // Ignore cleanup errors
-      }
+      video.removeEventListener("volumechange", handleVolumeChange);
+      disposeVideoElement(video, container);
       if (videoRef.current === video) videoRef.current = null;
     };
   }, [src]);
 
   // Sync live playback parameters & immediate occlusion pause without rebuilding <video>
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- applies live muted, volume, playbackRate, loop, and pause state to imperative HTMLVideoElement
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const effectiveMuted = muted || volume <= 0;
+    let cancelled = false;
+    autoplayMutedFallbackRef.current = false;
     video.loop = loop;
-    video.defaultMuted = effectiveMuted;
-    video.muted = effectiveMuted;
-    if (effectiveMuted) {
-      video.setAttribute("muted", "");
-    } else {
-      video.removeAttribute("muted");
-    }
-    video.volume = Math.max(0, Math.min(1, volume));
+    // 4) Reactive prop sync
+    applyVideoAudio(video, muted, volume);
     try {
+      video.defaultPlaybackRate = playbackRate;
       video.playbackRate = playbackRate;
     } catch {
       // Ignore
@@ -906,26 +1060,32 @@ function VideoStage({
     if (paused) {
       video.pause();
     } else if (video.paused && !videoFailed) {
-      tryPlayVideoElement(video);
+      tryPlayVideoElement(
+        video,
+        () => cancelled || videoRef.current !== video,
+        () => {
+          autoplayMutedFallbackRef.current = true;
+        },
+      );
     }
+    return () => {
+      cancelled = true;
+    };
   }, [paused, muted, volume, playbackRate, loop, videoFailed]);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- updates imperative HTMLVideoElement CSS framing styles in place
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    Object.assign(video.style, { width: "100%", height: "100%" }, mediaStyle);
+    applyVideoMediaStyle(video, mediaStyle);
   }, [mediaStyle]);
-
-  const filterStr = typeof mediaStyle.filter === "string" ? mediaStyle.filter : undefined;
 
   return (
     <div className="pmx-wp-stage__slot">
       {/* Underlying poster + ambient backdrop prevents solid black flashes during load or decode error */}
       {poster ? (
         <>
-          {showAmbient || videoFailed ? (
-            <AmbientBackdrop src={poster} filter={filterStr} />
-          ) : null}
+          {showAmbient || videoFailed ? <AmbientBackdrop src={poster} /> : null}
           <img
             src={poster}
             alt=""
@@ -934,7 +1094,12 @@ function VideoStage({
             className="pmx-wp-stage__media pmx-wp-stage__poster"
             style={{
               ...mediaStyle,
-              objectFit: videoFailed && mediaStyle.objectFit === "cover" ? "contain" : mediaStyle.objectFit,
+              objectFit:
+                videoFailed && mediaStyle.objectFit === "cover"
+                  ? "contain"
+                  : mediaStyle.objectFit,
+              opacity: videoReady && !videoFailed ? 0 : 1,
+              transition: "opacity 240ms ease",
             }}
           />
         </>
@@ -951,57 +1116,185 @@ function VideoStage({
   );
 }
 
-interface WebWallpaperStageProps {
+export interface WebWallpaperStageProps {
   src: string;
   poster?: string | null;
   userProps: UserPropDef[];
   paused: boolean;
   fpsLimit: number;
+  muted: boolean;
+  volume: number;
+  objectFit?: ObjectFitMode;
   mediaStyle: CSSProperties;
 }
 
-function WebWallpaperStage({
+export function buildWebWallpaperAudioPayload(
+  muted: boolean,
+  volume: number,
+): { type: "prismuxWallpaperAudio"; muted: boolean; volume: number } {
+  const clampedVol = Math.max(0, Math.min(1, Number.isFinite(volume) ? volume : 0));
+  const effectiveMuted = muted || clampedVol <= 0;
+  return {
+    type: "prismuxWallpaperAudio",
+    muted: effectiveMuted,
+    volume: effectiveMuted ? 0 : clampedVol,
+  };
+}
+
+export function buildWebWallpaperListenerPayload(input: {
+  userProps: UserPropDef[];
+  fpsLimit: number;
+  paused: boolean;
+  muted: boolean;
+  volume: number;
+  objectFit: ObjectFitMode;
+}): {
+  type: "wallpaperPropertyListener";
+  applyUserProperties: Record<string, { value: unknown }>;
+  applyGeneralProperties: { fps: number; paused: boolean };
+  audio: { muted: boolean; volume: number };
+  objectFit: ObjectFitMode;
+} {
+  const properties: Record<string, { value: unknown }> = {};
+  for (const p of input.userProps) {
+    properties[p.name] = { value: p.value };
+  }
+  const audioPayload = buildWebWallpaperAudioPayload(input.muted, input.volume);
+  return {
+    type: "wallpaperPropertyListener",
+    applyUserProperties: properties,
+    applyGeneralProperties: { fps: input.fpsLimit, paused: input.paused },
+    audio: { muted: audioPayload.muted, volume: audioPayload.volume },
+    objectFit: input.objectFit,
+  };
+}
+
+export interface PostMessageTarget {
+  postMessage(message: unknown, targetOrigin: string): void;
+}
+
+export function dispatchWebWallpaperRuntimeState(
+  win: PostMessageTarget | null | undefined,
+  input: {
+    userProps: UserPropDef[];
+    fpsLimit: number;
+    paused: boolean;
+    muted: boolean;
+    volume: number;
+    objectFit: ObjectFitMode;
+  },
+): void {
+  if (!win) return;
+  const audioMsg = buildWebWallpaperAudioPayload(input.muted, input.volume);
+  const listenerMsg = buildWebWallpaperListenerPayload(input);
+  try {
+    win.postMessage(audioMsg, "*");
+    win.postMessage(listenerMsg, "*");
+  } catch {
+    // Sandboxed iframe origin
+  }
+}
+
+export function silenceAndBlankIframe(
+  iframe:
+    | {
+        contentWindow?: PostMessageTarget | null;
+        src: string;
+      }
+    | null
+    | undefined,
+): void {
+  if (!iframe) return;
+  try {
+    iframe.contentWindow?.postMessage(
+      { type: "prismuxWallpaperAudio", muted: true, volume: 0 },
+      "*",
+    );
+  } catch {
+    // Ignore sandboxed / detached iframe postMessage errors
+  }
+  try {
+    iframe.src = "about:blank";
+  } catch {
+    // Ignore detached iframe cleanup errors
+  }
+}
+
+export function WebWallpaperStage({
   src,
   poster,
   userProps,
   paused,
   fpsLimit,
+  muted,
+  volume,
+  objectFit = "cover",
   mediaStyle,
 }: WebWallpaperStageProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [renderReadySrc, setRenderReadySrc] = useState<string | null>(null);
   const iframeLoaded = loadedSrc === src;
+  const iframeRenderReady = renderReadySrc === src;
+  const iframeVisible = !poster || iframeRenderReady;
 
-  const postProps = () => {
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    const properties: Record<string, { value: unknown }> = {};
-    for (const p of userProps) {
-      properties[p.name] = { value: p.value };
-    }
-    try {
-      win.postMessage(
-        {
-          type: "wallpaperPropertyListener",
-          applyUserProperties: properties,
-          applyGeneralProperties: { fps: fpsLimit, paused },
-        },
-        "*",
-      );
-    } catch {
-      // Sandboxed iframe origin
-    }
-  };
+  const postRuntimeState = useCallback(() => {
+    dispatchWebWallpaperRuntimeState(iframeRef.current?.contentWindow, {
+      userProps,
+      fpsLimit,
+      paused,
+      muted,
+      volume,
+      objectFit,
+    });
+  }, [userProps, paused, fpsLimit, muted, volume, objectFit]);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- forwards audio, user properties, objectFit, and playback state to sandboxed iframe via postMessage
   useEffect(() => {
-    postProps();
-  }, [userProps, paused, fpsLimit]);
+    postRuntimeState();
+  }, [postRuntimeState]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to iframe bridge ready and first-frame ready messages
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleMessage = (e: MessageEvent) => {
+      const frameWin = iframeRef.current?.contentWindow;
+      if (!frameWin || e.source !== frameWin) return;
+      const data = e.data as { type?: unknown } | null;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "prismuxWeBridgeReady") {
+        postRuntimeState();
+      } else if (data.type === "prismuxWebReady") {
+        setRenderReadySrc(src);
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [src, postRuntimeState]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- bounds poster hold to 2500ms after iframe load when prismuxWebReady is absent
+  useEffect(() => {
+    if (!poster || !iframeLoaded || iframeRenderReady) return;
+    const timer = setTimeout(() => {
+      setRenderReadySrc(src);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [src, poster, iframeLoaded, iframeRenderReady]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- mutes and blanks the outgoing iframe synchronously before DOM detachment on src switch or unmount
+  useLayoutEffect(() => {
+    if (!src) return;
+    const iframe = iframeRef.current;
+    return () => {
+      silenceAndBlankIframe(iframe);
+    };
+  }, [src]);
 
   const isLoopbackHttp = /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(src);
 
   return (
     <div className="pmx-wp-stage__slot">
-      {poster && !iframeLoaded ? (
+      {poster ? (
         <img
           src={poster}
           alt=""
@@ -1009,12 +1302,16 @@ function WebWallpaperStage({
           decoding="async"
           className="pmx-wp-stage__media pmx-wp-stage__poster"
           style={{
-            objectFit: "cover",
-            filter: mediaStyle.filter,
+            ...mediaStyle,
+            objectFit: objectFit === "center" ? "none" : objectFit,
+            opacity: iframeVisible ? 0 : 1,
+            transition: "opacity 260ms ease",
+            pointerEvents: "none",
           }}
         />
       ) : null}
       <iframe
+        key={src}
         ref={iframeRef}
         src={src}
         title="Prismux Web Wallpaper"
@@ -1022,12 +1319,12 @@ function WebWallpaperStage({
         className="pmx-wp-stage__media pmx-wp-stage__iframe"
         style={{
           ...mediaStyle,
-          opacity: iframeLoaded || !poster ? 1 : 0,
+          opacity: iframeVisible ? 1 : 0,
           transition: "opacity 260ms ease",
         }}
         onLoad={() => {
           setLoadedSrc(src);
-          postProps();
+          postRuntimeState();
         }}
       />
     </div>
@@ -1060,6 +1357,7 @@ interface SteamSceneFallbackProps {
   objectFit: ObjectFitMode;
   layerPositionX: number;
   layerPositionY: number;
+  showAmbient: boolean;
   mediaStyle: CSSProperties;
 }
 
@@ -1077,6 +1375,7 @@ function SteamSceneFallback({
   objectFit,
   layerPositionX,
   layerPositionY,
+  showAmbient,
   mediaStyle,
 }: SteamSceneFallbackProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -1104,11 +1403,13 @@ function SteamSceneFallback({
     Math.max(viewportRatio / imgRatio, imgRatio / viewportRatio) > 1.35;
 
   const needsAmbient =
+    showAmbient ||
     objectFit === "contain" ||
     objectFit === "center" ||
     (objectFit === "cover" && ratioMismatch);
   const parallaxEnabled = !paused && !previewFailed && Boolean(previewUrl) && !needsAmbient;
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to window pointermove and rAF smoothing for scene preview parallax
   useEffect(() => {
     if (!parallaxEnabled) return;
     let rafId: number | null = null;
@@ -1148,7 +1449,6 @@ function SteamSceneFallback({
   if (previewUrl && !previewFailed) {
     const activeParallax = parallaxEnabled ? parallax : { x: 0, y: 0 };
     const [bass] = normalizeAudioTriple(audioReactive, audioEnergy);
-    const filterStr = typeof mediaStyle.filter === "string" ? mediaStyle.filter : undefined;
     const baseTransform =
       typeof mediaStyle.transform === "string" && mediaStyle.transform !== "none"
         ? mediaStyle.transform
@@ -1167,9 +1467,7 @@ function SteamSceneFallback({
 
     return (
       <div className="pmx-wp-stage__slot">
-        {needsAmbient ? (
-          <AmbientBackdrop src={previewUrl} filter={filterStr} />
-        ) : null}
+        {needsAmbient ? <AmbientBackdrop src={previewUrl} /> : null}
         <img
           src={previewUrl}
           alt=""
@@ -1210,6 +1508,154 @@ function SteamSceneFallback({
   );
 }
 
+export interface WallpaperStageStyleInput {
+  objectFit: ObjectFitMode;
+  layerScale: number;
+  flipX: boolean;
+  flipY: boolean;
+  layerPositionX: number;
+  layerPositionY: number;
+  wallpaperBlur: number;
+  backgroundBrightness: number;
+  backgroundContrast: number;
+  backgroundSaturate: number;
+}
+
+function readDocumentIsLight(): boolean {
+  if (typeof document === "undefined") return false;
+  const root = document.documentElement;
+  return !root.classList.contains("dark") && root.getAttribute("data-pmx-theme") !== "dark";
+}
+
+function subscribeDocumentIsLight(cb: () => void): () => void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+    return () => {};
+  }
+  const observer = new MutationObserver(cb);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "data-pmx-theme"],
+  });
+  return () => observer.disconnect();
+}
+
+function getServerFalse(): boolean {
+  return false;
+}
+
+function readDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
+}
+
+function subscribeDocumentVisibility(cb: () => void): () => void {
+  if (typeof document === "undefined") return () => {};
+  document.addEventListener("visibilitychange", cb);
+  return () => document.removeEventListener("visibilitychange", cb);
+}
+
+let trackedWindowBlurred = false;
+
+function readWindowBlurred(): boolean {
+  return trackedWindowBlurred;
+}
+
+function subscribeWindowBlur(cb: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onBlur = () => {
+    trackedWindowBlurred = true;
+    cb();
+  };
+  const onFocus = () => {
+    trackedWindowBlurred = false;
+    cb();
+  };
+  window.addEventListener("blur", onBlur);
+  window.addEventListener("focus", onFocus);
+  return () => {
+    window.removeEventListener("blur", onBlur);
+    window.removeEventListener("focus", onFocus);
+  };
+}
+
+function computePanPercent(position: number, scaleFactor: number): number {
+  if (position === 50) return 0;
+  const basePan = (position - 50) * 0.45;
+  if (scaleFactor <= 1) return basePan;
+  const zoomShiftBound = ((scaleFactor - 1) / (2 * scaleFactor)) * 100;
+  const zoomPan = ((position - 50) / 50) * zoomShiftBound;
+  const blend = Math.min(1, Math.max(0, (scaleFactor - 1) / 0.15));
+  return basePan + (zoomPan - basePan) * blend;
+}
+
+export function computeWallpaperStageStyles(settings: WallpaperStageStyleInput): {
+  viewportStyle: CSSProperties;
+  mediaStyle: CSSProperties;
+  frameMediaStyle: CSSProperties;
+  showAmbientBackdrop: boolean;
+} {
+  const objectFit: CSSProperties["objectFit"] =
+    settings.objectFit === "center" ? "none" : settings.objectFit;
+  const scaleFactor = settings.layerScale / 100;
+  const sx = (settings.flipX ? -1 : 1) * scaleFactor;
+  const sy = (settings.flipY ? -1 : 1) * scaleFactor;
+
+  const mediaTx = computePanPercent(settings.layerPositionX, scaleFactor);
+  const mediaTy = computePanPercent(settings.layerPositionY, scaleFactor);
+
+  const transformParts: string[] = [];
+  if (Math.abs(mediaTx) > 0.001 || Math.abs(mediaTy) > 0.001) {
+    transformParts.push(`translate3d(${mediaTx.toFixed(2)}%, ${mediaTy.toFixed(2)}%, 0)`);
+  }
+  if (sx !== 1 || sy !== 1) {
+    transformParts.push(`scale(${sx}, ${sy})`);
+  }
+  const transformStr = transformParts.length > 0 ? transformParts.join(" ") : "none";
+
+  const filterParts: string[] = [];
+  if (settings.wallpaperBlur > 0) filterParts.push(`blur(${settings.wallpaperBlur}px)`);
+  if (settings.backgroundBrightness !== 100) {
+    filterParts.push(`brightness(${settings.backgroundBrightness}%)`);
+  }
+  if (settings.backgroundContrast !== 100) {
+    filterParts.push(`contrast(${settings.backgroundContrast}%)`);
+  }
+  if (settings.backgroundSaturate !== 100) {
+    filterParts.push(`saturate(${settings.backgroundSaturate}%)`);
+  }
+
+  const blurBleedScale =
+    settings.wallpaperBlur > 0 ? (1 + settings.wallpaperBlur * 0.004).toFixed(3) : null;
+
+  const viewportStyle: CSSProperties = {
+    filter: filterParts.length > 0 ? filterParts.join(" ") : "none",
+    ...(blurBleedScale ? { transform: `scale(${blurBleedScale})` } : {}),
+  };
+
+  const showAmbientBackdrop =
+    settings.objectFit === "contain" ||
+    settings.objectFit === "center" ||
+    settings.layerScale < 100 ||
+    settings.layerPositionX !== 50 ||
+    settings.layerPositionY !== 50;
+
+  return {
+    viewportStyle,
+    mediaStyle: {
+      width: "100%",
+      height: "100%",
+      objectFit,
+      objectPosition: `${settings.layerPositionX}% ${settings.layerPositionY}%`,
+      transform: transformStr,
+    },
+    frameMediaStyle: {
+      width: "100%",
+      height: "100%",
+      transform: transformStr,
+    },
+    showAmbientBackdrop,
+  };
+}
+
 /**
  * Z-0 Fullscreen Wallpaper Stage (strictly zero-token visual host layer).
  */
@@ -1222,27 +1668,21 @@ export function WallpaperStage({
 }: WallpaperStageProps) {
   const snap = useWallpaperStore(store);
   const { settings, wallpapers } = snap;
-  const [docHidden, setDocHidden] = useState(
-    () => typeof document !== "undefined" && document.hidden,
+  const docHidden = useSyncExternalStore(
+    subscribeDocumentVisibility,
+    readDocumentHidden,
+    getServerFalse,
   );
-  const [winBlurred, setWinBlurred] = useState(false);
-
-  // Respect page visibility & optional blur-pause power settings
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    setDocHidden(document.hidden);
-    const onVis = () => setDocHidden(document.hidden);
-    const onBlur = () => setWinBlurred(true);
-    const onFocus = () => setWinBlurred(false);
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("focus", onFocus);
-    return () => {
-      document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, []);
+  const winBlurred = useSyncExternalStore(
+    subscribeWindowBlur,
+    readWindowBlurred,
+    getServerFalse,
+  );
+  const docIsLight = useSyncExternalStore(
+    subscribeDocumentIsLight,
+    readDocumentIsLight,
+    getServerFalse,
+  );
 
   const currentWallpaper = useMemo(
     () => findWallpaperById(wallpapers, settings.selectedId),
@@ -1258,95 +1698,40 @@ export function WallpaperStage({
   const effectivePaused = occluded || !settings.playing;
   const effectiveAudioEnergy = audioEnergyProp ?? snap.audioEnergy;
 
-  const resolvedProps = useMemo(
-    () => (currentWallpaper ? store.getResolvedUserProps(currentWallpaper.id) : []),
-    [currentWallpaper, settings.userPropOverrides, snap.propsMap, store],
+  const resolvedProps = useMemo(() => {
+    if (!currentWallpaper) return [];
+    const base = snap.propsMap[currentWallpaper.id] ?? currentWallpaper.userProperties ?? [];
+    const overrides = settings.userPropOverrides[currentWallpaper.id];
+    return applyUserPropOverrides(base, overrides);
+  }, [currentWallpaper, settings.userPropOverrides, snap.propsMap]);
+
+  const { viewportStyle, mediaStyle, frameMediaStyle, showAmbientBackdrop } = useMemo(
+    () =>
+      computeWallpaperStageStyles({
+        objectFit: settings.objectFit,
+        layerScale: settings.layerScale,
+        flipX: settings.flipX,
+        flipY: settings.flipY,
+        layerPositionX: settings.layerPositionX,
+        layerPositionY: settings.layerPositionY,
+        wallpaperBlur: settings.wallpaperBlur,
+        backgroundBrightness: settings.backgroundBrightness,
+        backgroundContrast: settings.backgroundContrast,
+        backgroundSaturate: settings.backgroundSaturate,
+      }),
+    [
+      settings.objectFit,
+      settings.layerScale,
+      settings.flipX,
+      settings.flipY,
+      settings.layerPositionX,
+      settings.layerPositionY,
+      settings.wallpaperBlur,
+      settings.backgroundBrightness,
+      settings.backgroundContrast,
+      settings.backgroundSaturate,
+    ],
   );
-
-  const { mediaStyle, frameMediaStyle } = useMemo<{
-    mediaStyle: CSSProperties;
-    frameMediaStyle: CSSProperties;
-  }>(() => {
-    const objectFit: CSSProperties["objectFit"] =
-      settings.objectFit === "center" ? "none" : settings.objectFit;
-    const scaleFactor = settings.layerScale / 100;
-    const sx = (settings.flipX ? -1 : 1) * scaleFactor;
-    const sy = (settings.flipY ? -1 : 1) * scaleFactor;
-
-    // For <img> / <video>, CSS object-position already pans cleanly within the media without
-    // pulling edges off the viewport. Only add bounded translate3d when zoomed in (layerScale > 100).
-    const zoomShiftBound = scaleFactor > 1 ? ((scaleFactor - 1) / (2 * scaleFactor)) * 100 : 0;
-    const mediaTx =
-      zoomShiftBound > 0 ? ((50 - settings.layerPositionX) / 50) * zoomShiftBound : 0;
-    const mediaTy =
-      zoomShiftBound > 0 ? ((50 - settings.layerPositionY) / 50) * zoomShiftBound : 0;
-
-    const mediaTransformParts: string[] = [];
-    if (Math.abs(mediaTx) > 0.001 || Math.abs(mediaTy) > 0.001) {
-      mediaTransformParts.push(`translate3d(${mediaTx.toFixed(3)}%, ${mediaTy.toFixed(3)}%, 0)`);
-    }
-    if (sx !== 1 || sy !== 1) {
-      mediaTransformParts.push(`scale(${sx}, ${sy})`);
-    }
-
-    // For <iframe> / built-in WebGL containers where object-position does not apply:
-    const frameTx =
-      scaleFactor > 1
-        ? ((50 - settings.layerPositionX) / 50) * zoomShiftBound
-        : (settings.layerPositionX - 50) * 0.5;
-    const frameTy =
-      scaleFactor > 1
-        ? ((50 - settings.layerPositionY) / 50) * zoomShiftBound
-        : (settings.layerPositionY - 50) * 0.5;
-
-    const frameTransformParts: string[] = [];
-    if (Math.abs(frameTx) > 0.001 || Math.abs(frameTy) > 0.001) {
-      frameTransformParts.push(`translate3d(${frameTx.toFixed(3)}%, ${frameTy.toFixed(3)}%, 0)`);
-    }
-    if (sx !== 1 || sy !== 1) {
-      frameTransformParts.push(`scale(${sx}, ${sy})`);
-    }
-
-    const filterParts: string[] = [];
-    if (settings.wallpaperBlur > 0) filterParts.push(`blur(${settings.wallpaperBlur}px)`);
-    if (settings.backgroundBrightness !== 100) {
-      filterParts.push(`brightness(${settings.backgroundBrightness}%)`);
-    }
-    if (settings.backgroundContrast !== 100) {
-      filterParts.push(`contrast(${settings.backgroundContrast}%)`);
-    }
-    if (settings.backgroundSaturate !== 100) {
-      filterParts.push(`saturate(${settings.backgroundSaturate}%)`);
-    }
-
-    return {
-      mediaStyle: {
-        width: "100%",
-        height: "100%",
-        objectFit,
-        objectPosition: `${settings.layerPositionX}% ${settings.layerPositionY}%`,
-        transform: mediaTransformParts.length > 0 ? mediaTransformParts.join(" ") : "none",
-        filter: filterParts.length > 0 ? filterParts.join(" ") : "none",
-      },
-      frameMediaStyle: {
-        width: "100%",
-        height: "100%",
-        transform: frameTransformParts.length > 0 ? frameTransformParts.join(" ") : "none",
-        filter: filterParts.length > 0 ? filterParts.join(" ") : "none",
-      },
-    };
-  }, [
-    settings.objectFit,
-    settings.layerScale,
-    settings.flipX,
-    settings.flipY,
-    settings.layerPositionX,
-    settings.layerPositionY,
-    settings.wallpaperBlur,
-    settings.backgroundBrightness,
-    settings.backgroundContrast,
-    settings.backgroundSaturate,
-  ]);
 
   if (!currentWallpaper) {
     return null;
@@ -1357,8 +1742,9 @@ export function WallpaperStage({
   const transitionMs = settings.switchTransition === "cut" ? 0 : 420;
   const nativeFadeOpacity = normalizeWallpaperFadeOpacity(settings.wallpaperOpacity, 0) / 100;
   const scrimOpacity = normalizeWallpaperScrim(settings.scrim, 0.15);
-  const nativeFadeColor = settings.themeMode === "light" ? "#ffffff" : "#000000";
-  const showAmbientBackdrop = settings.objectFit === "contain" || settings.objectFit === "center";
+  const isLightSurface =
+    settings.themeMode === "light" || (settings.themeMode === "glass" && docIsLight);
+  const nativeFadeColor = isLightSurface ? "#ffffff" : "#000000";
 
   // Extract shader user properties if present
   const propMap = new Map(resolvedProps.map((p) => [p.name, p.value]));
@@ -1370,10 +1756,11 @@ export function WallpaperStage({
       : currentWallpaper.schemeColor || "#38bdf8";
   const shaderParallax = propMap.get("parallax") !== false;
 
-  const liveRuntimeUrl =
-    resolveLiveRuntimeUrl && settings.sceneLive
-      ? resolveLiveRuntimeUrl(currentWallpaper, settings)
-      : null;
+  const resolvedLiveUrl = resolveLiveRuntimeUrl
+    ? resolveLiveRuntimeUrl(currentWallpaper, settings)
+    : null;
+  const liveRuntimeUrl = settings.sceneLive ? resolvedLiveUrl : null;
+  const webRuntimeUrl = resolvedLiveUrl || currentWallpaper.mediaUrl;
 
   return (
     <div
@@ -1385,7 +1772,7 @@ export function WallpaperStage({
       data-pmx-wallpaper-occluded={occluded ? "1" : "0"}
       className={className ? `pmx-wp-stage ${className}` : "pmx-wp-stage"}
     >
-      <div className="pmx-wp-stage__viewport">
+      <div className="pmx-wp-stage__viewport" style={viewportStyle}>
         {currentWallpaper.type === "image" && currentWallpaper.mediaUrl && (
           <ImageCrossfadeStage
             src={currentWallpaper.mediaUrl}
@@ -1414,13 +1801,16 @@ export function WallpaperStage({
           />
         )}
 
-        {currentWallpaper.type === "web" && (liveRuntimeUrl || currentWallpaper.mediaUrl) && (
+        {currentWallpaper.type === "web" && webRuntimeUrl && (
           <WebWallpaperStage
-            src={liveRuntimeUrl || currentWallpaper.mediaUrl!}
+            src={webRuntimeUrl}
             poster={currentWallpaper.previewUrl}
             userProps={resolvedProps}
-            paused={effectivePaused}
+            paused={effectivePaused || !settings.sceneLive}
             fpsLimit={settings.sceneLiveFps}
+            muted={!settings.videoAudioEnabled}
+            volume={settings.videoVolume}
+            objectFit={settings.objectFit}
             mediaStyle={frameMediaStyle}
           />
         )}
@@ -1451,6 +1841,9 @@ export function WallpaperStage({
               userProps={resolvedProps}
               paused={effectivePaused}
               fpsLimit={settings.sceneLiveFps}
+              muted={!settings.videoAudioEnabled}
+              volume={settings.videoVolume}
+              objectFit={settings.objectFit}
               mediaStyle={frameMediaStyle}
             />
           ) : (
@@ -1464,6 +1857,7 @@ export function WallpaperStage({
               objectFit={settings.objectFit}
               layerPositionX={settings.layerPositionX}
               layerPositionY={settings.layerPositionY}
+              showAmbient={showAmbientBackdrop}
               mediaStyle={mediaStyle}
             />
           ))}

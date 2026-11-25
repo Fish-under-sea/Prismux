@@ -6,6 +6,7 @@ import {
 } from "@prismux/appearance";
 import {
   WallpaperQuickPanel,
+  WallpaperStage,
   closeInlineAppearanceInStore,
   createWallpaperStore,
   openInlineAppearanceInStore,
@@ -20,7 +21,11 @@ import {
   RightPanelMaximizeControl,
 } from "../components/chat/PanelLayoutControls";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { PrismuxWallpaperQuickPanel, PrismuxTopbarControls } from "./PrismuxWallpaperBridge";
+import {
+  PrismuxTopbarControls,
+  PrismuxWallpaperQuickPanel,
+  resolveWallpaperLiveRuntimeUrl,
+} from "./PrismuxWallpaperBridge";
 import { PrismuxDaemonClient } from "./daemonClient";
 import { PrismuxRuntimeProvider } from "./PrismuxRuntimeProvider";
 import { PrismuxAppearanceIntegration } from "./settings/PrismuxAppearanceIntegration";
@@ -106,7 +111,9 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
       expect(wallpaperHtml).not.toContain('data-pmx-open-full-appearance="1"');
       expect(wallpaperHtml).toContain('data-pmx-open-wallpaper-settings="1"');
       expect(wallpaperHtml).toContain("壁纸引擎设置 ›");
-      // Wallpaper tab omits 壁纸属性 button and duplicate audio section (音量 / 壁纸音轨)
+      // Wallpaper tab keeps top current card, moves rotation into playback tab, and omits 壁纸属性 / audio
+      expect(wallpaperHtml).toContain("pmx-wp-qp__current");
+      expect(wallpaperHtml).not.toContain("pmx-wp-qp__rotation");
       expect(wallpaperHtml).not.toContain("壁纸属性");
       expect(wallpaperHtml).not.toContain('data-pmx-section="audio"');
       expect(wallpaperHtml).not.toContain("音量");
@@ -114,10 +121,13 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
       expect(wallpaperHtml).not.toContain('data-pmx-inline-appearance="1"');
       expect(openSettingsSection).not.toHaveBeenCalled();
 
-      // Playback tab retains audio controls (声音 / 音量 / 壁纸音轨) and single footer button
+      // Playback tab keeps top current card, houses auto-rotation card + audio controls (声音 / 音量 / 壁纸音轨)
       store.setUiState("qpTab", "playback");
       const playbackHtml = renderQuickPanelWithInlineStudio(store, adapter);
       expect(playbackHtml).toContain('data-pmx-qp-view="playback"');
+      expect(playbackHtml).toContain("pmx-wp-qp__current");
+      expect(playbackHtml).toContain("pmx-wp-qp__rotation");
+      expect(playbackHtml).toContain("自动轮播");
       expect(playbackHtml).toContain('data-pmx-section="audio"');
       expect(playbackHtml).toContain("音量");
       expect(playbackHtml).toContain("壁纸音轨");
@@ -131,6 +141,14 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
 
       const inlineHtml = renderQuickPanelWithInlineStudio(store, adapter);
       expect(inlineHtml).toContain('data-pmx-qp-view="appearance"');
+      // Top current wallpaper card stays permanently visible above tabs & InlineAppearanceStudio
+      const currentIdx = inlineHtml.indexOf("pmx-wp-qp__current");
+      const tabsIdx = inlineHtml.indexOf("pmx-wp-qp__tabs");
+      const studioIdx = inlineHtml.indexOf('data-pmx-inline-appearance="1"');
+      expect(currentIdx).toBeGreaterThan(-1);
+      expect(tabsIdx).toBeGreaterThan(currentIdx);
+      expect(studioIdx).toBeGreaterThan(tabsIdx);
+      expect(inlineHtml).not.toContain("pmx-wp-qp__rotation");
       expect(inlineHtml).toContain('data-pmx-inline-appearance="1"');
       expect(inlineHtml).toContain('data-pmx-inline-appearance-studio="1"');
       expect(inlineHtml).toContain('data-pmx-inline-back="1"');
@@ -345,6 +363,138 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
       expect(client.resolveMediaUrl("/v1/wallpapers/media/3839308585")).toBe(
         "http://127.0.0.1:47910/v1/wallpapers/media/3839308585?token=secret-wp-token",
       );
+
+      // Steam Scene live runtime routes rewrite /v1/wallpapers/scene/... -> /v1/wallpapers/scene-t/<token>/...
+      expect(client.resolveMediaUrl("/v1/wallpapers/scene/2966081148/index.html")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
+      );
+      expect(
+        client.resolveMediaUrl(
+          "http://127.0.0.1:47910/v1/wallpapers/scene/2966081148/index.html?token=stale&v=2",
+        ),
+      ).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html?v=2",
+      );
+      // Idempotent when already tokenized in path
+      expect(
+        client.resolveMediaUrl("/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html"),
+      ).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
+      );
+      expect(
+        client.resolveMediaUrl(
+          "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
+        ),
+      ).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
+      );
+      expect(client.buildMediaUrl("scene", "2966081148")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
+      );
+      expect(client.buildMediaUrl("scene", "2966081148", "assets/loop.mp4")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/assets/loop.mp4",
+      );
+
+      // Without token, scene buildMediaUrl omits -t segment cleanly
+      (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ = "";
+      const tokenlessClient = new PrismuxDaemonClient();
+      await tokenlessClient.getConnectionInfo(true);
+      expect(tokenlessClient.buildMediaUrl("scene", "2966081148", "index.html")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene/2966081148/index.html",
+      );
+      expect(tokenlessClient.buildMediaUrl("scene", "2966081148")).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene/2966081148",
+      );
+    } finally {
+      (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ = prevUrl;
+      (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ = prevToken;
+    }
+  });
+
+  it("maps sceneLiveSupported Steam Scene wallpapers to /v1/wallpapers/scene-t/<token>/... and mounts WebWallpaperStage", async () => {
+    const prevUrl = (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__;
+    const prevToken = (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__;
+    (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ =
+      "http://127.0.0.1:47910";
+    (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ =
+      "scene-tok-123";
+    try {
+      const client = new PrismuxDaemonClient();
+      await client.getConnectionInfo(true);
+
+      const sceneWallpaper = {
+        id: "steam:2966081148",
+        title: "Shiroko 2K Live Scene",
+        type: "scene" as const,
+        source: "steam" as const,
+        previewUrl: client.resolveMediaUrl("/v1/wallpapers/preview/steam%3A2966081148"),
+        mediaUrl: client.resolveMediaUrl("/v1/wallpapers/scene/steam%3A2966081148/index.html"),
+        filePath: null,
+        width: 2560,
+        height: 1440,
+        orientation: "landscape" as const,
+        contentRating: "everyone" as const,
+        sceneLiveSupported: true,
+        webLiveSupported: false,
+      };
+
+      expect(sceneWallpaper.mediaUrl).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/scene-tok-123/steam%3A2966081148/index.html",
+      );
+      expect(sceneWallpaper.previewUrl).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/preview/steam%3A2966081148?token=scene-tok-123",
+      );
+
+      // resolveWallpaperLiveRuntimeUrl yields scene-t URL for live-supported Steam scene (with or without mediaUrl)
+      expect(resolveWallpaperLiveRuntimeUrl(client, sceneWallpaper)).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/scene-tok-123/steam%3A2966081148/index.html",
+      );
+      expect(resolveWallpaperLiveRuntimeUrl(client, { ...sceneWallpaper, mediaUrl: null })).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/scene-tok-123/steam%3A2966081148/index.html",
+      );
+      // Unsupported Steam scenes still return null so SteamSceneFallback handles them cleanly
+      expect(
+        resolveWallpaperLiveRuntimeUrl(client, { ...sceneWallpaper, sceneLiveSupported: false }),
+      ).toBeNull();
+
+      // Mount WallpaperStage with sceneLive: true -> renders WebWallpaperStage iframe pointing at scene-t URL
+      const store = createWallpaperStore({
+        includeBuiltins: false,
+        wallpapers: [sceneWallpaper],
+        settings: {
+          selectedId: sceneWallpaper.id,
+          sceneLive: true,
+          videoAudioEnabled: false,
+          videoVolume: 0.6,
+          objectFit: "contain",
+        },
+      });
+      try {
+        const liveHtml = renderToStaticMarkup(
+          <WallpaperStage
+            store={store}
+            resolveLiveRuntimeUrl={(wp) => resolveWallpaperLiveRuntimeUrl(client, wp)}
+          />,
+        );
+        expect(liveHtml).toContain("pmx-wp-stage__iframe");
+        expect(liveHtml).toContain(
+          'src="http://127.0.0.1:47910/v1/wallpapers/scene-t/scene-tok-123/steam%3A2966081148/index.html"',
+        );
+        expect(liveHtml).toContain("pmx-wp-stage__poster");
+        expect(liveHtml).toContain("object-fit:contain");
+
+        // Toggling sceneLive off gracefully falls back from live iframe to SteamSceneFallback
+        store.setSetting("sceneLive", false);
+        const fallbackHtml = renderToStaticMarkup(
+          <WallpaperStage
+            store={store}
+            resolveLiveRuntimeUrl={(wp) => resolveWallpaperLiveRuntimeUrl(client, wp)}
+          />,
+        );
+        expect(fallbackHtml).not.toContain("pmx-wp-stage__iframe");
+      } finally {
+        store.dispose();
+      }
     } finally {
       (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ = prevUrl;
       (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ = prevToken;

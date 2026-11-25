@@ -1,13 +1,16 @@
 import { useCallback, useMemo, useState } from 'react';
 import {
   GLASS_REGION_LIMITS,
+  GLASS_THEME_BASE_META,
   type AppearanceConfig,
   type GlassPreset,
+  type GlassThemeBase,
   type ThemeMode,
 } from './types.js';
 import {
   applyGlassPreset,
   resolveBasePolarity,
+  setGlassThemeBaseWithAutoWake,
   setThemeModeWithGlassAutoWake,
 } from './glassEngine.js';
 import { normalizeHex } from './colorUtils.js';
@@ -137,6 +140,23 @@ export function InlineAppearanceStudio({
     },
     [config, onChange, onThemeModeChange],
   );
+
+  const handleSelectThemeBase = useCallback(
+    (base: GlassThemeBase) => {
+      const next = setGlassThemeBaseWithAutoWake(config, base);
+      if (base !== 'pure' && config.themeMode !== 'glass' && onThemeModeChange) {
+        onChange(next);
+        onThemeModeChange('glass');
+        return;
+      }
+      onChange(next);
+    },
+    [config, onChange, onThemeModeChange],
+  );
+
+  const activeThemeBase: GlassThemeBase = config.glassThemeBase ?? 'pure';
+  const activeThemeBaseMeta =
+    GLASS_THEME_BASE_META.find((item) => item.id === activeThemeBase) ?? GLASS_THEME_BASE_META[0]!;
 
   const togglePicker = (
     slot: InlineColorSlot,
@@ -301,7 +321,6 @@ export function InlineAppearanceStudio({
                     type="button"
                     className={`pmx-inline-dot${active ? ' on' : ''}`}
                     style={{ backgroundColor: sw.hex }}
-                    title={sw.label}
                     aria-label={`选择强调色 ${sw.label}`}
                     aria-pressed={active}
                     onClick={() => onChange({ ...config, accentMode: 'custom', accent: sw.hex })}
@@ -312,7 +331,7 @@ export function InlineAppearanceStudio({
                 type="button"
                 className={`typo-pill-btn pmx-inline-color-pill${picker?.slot === 'accent' ? ' on' : ''}`}
                 aria-expanded={picker?.slot === 'accent'}
-                title="自定义强调色"
+                aria-label="自定义强调色"
                 onClick={(e) =>
                   togglePicker('accent', '强调色', effectiveAccent, e.currentTarget)
                 }
@@ -341,7 +360,7 @@ export function InlineAppearanceStudio({
                 type="button"
                 className={`typo-pill-btn pmx-inline-color-pill${picker?.slot === 'glassColor' ? ' on' : ''}`}
                 aria-expanded={picker?.slot === 'glassColor'}
-                title={config.glassDarkSeparate ? '浅色玻璃底色' : '玻璃底色'}
+                aria-label={config.glassDarkSeparate ? '浅色玻璃底色' : '玻璃底色'}
                 onClick={(e) =>
                   togglePicker(
                     'glassColor',
@@ -359,7 +378,7 @@ export function InlineAppearanceStudio({
                   type="button"
                   className={`typo-pill-btn pmx-inline-color-pill${picker?.slot === 'glassDarkColor' ? ' on' : ''}`}
                   aria-expanded={picker?.slot === 'glassDarkColor'}
-                  title="深色玻璃底色"
+                  aria-label="深色玻璃底色"
                   onClick={(e) =>
                     togglePicker('glassDarkColor', '深色玻璃底色', '#0d1524', e.currentTarget)
                   }
@@ -369,6 +388,46 @@ export function InlineAppearanceStudio({
                 </button>
               ) : null}
             </div>
+          </div>
+        </section>
+
+        {/* Section 2.5: Liquid Glass Theme Substrate (2x3 compact visual cards) */}
+        <section className="pmx-inline-section" data-pmx-theme-base-section="1">
+          <div className="pmx-inline-section__head">
+            <span className="pmx-inline-section__title">主题基底</span>
+            <span className="pmx-inline-section__hint">{activeThemeBaseMeta.label}</span>
+          </div>
+          <div className="pmx-theme-base-note" data-pmx-theme-base-note="1">
+            {activeThemeBaseMeta.note}
+          </div>
+          <div
+            className="pmx-theme-base-grid is-compact"
+            role="group"
+            aria-label="液态玻璃主题基底"
+          >
+            {GLASS_THEME_BASE_META.map((item) => {
+              const active = activeThemeBase === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`pmx-theme-base-pill${active ? ' on' : ''}`}
+                  data-glass-theme-base={item.id}
+                  aria-pressed={active}
+                  aria-label={`${item.label}：${item.note}`}
+                  onClick={() => handleSelectThemeBase(item.id)}
+                >
+                  <span
+                    className="pmx-theme-base-swatch"
+                    data-theme-base-swatch={item.id}
+                    style={{ background: item.swatchCss }}
+                    aria-hidden="true"
+                  />
+                  <span className="pmx-theme-base-label">{item.label}</span>
+                  <span className="pmx-theme-base-check" aria-hidden="true" />
+                </button>
+              );
+            })}
           </div>
         </section>
 

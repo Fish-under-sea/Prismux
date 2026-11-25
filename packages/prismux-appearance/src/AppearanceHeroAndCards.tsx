@@ -11,11 +11,13 @@ import {
   DEFAULT_GLASS_ZONES,
   DEFAULT_TYPOGRAPHY_FALLBACKS,
   GLASS_REGION_LIMITS,
+  GLASS_THEME_BASE_META,
   type AppearanceConfig,
   type BaseThemePolarity,
   type GlassPreset,
   type GlassRegionId,
   type GlassSurfaceId,
+  type GlassThemeBase,
   type SidebarCornerRadius,
   type SidebarSquareCorners,
   type ThemeMode,
@@ -25,6 +27,7 @@ import {
 import {
   applyGlassPreset,
   resolveBasePolarity,
+  setGlassThemeBaseWithAutoWake,
   setThemeModeWithGlassAutoWake,
   updateGlassRegion,
 } from './glassEngine.js';
@@ -265,6 +268,9 @@ export function LiquidGlassCard({
   const glassDarkOpen = isSameSlot(activeSlot, { kind: 'glassDarkColor' });
 
   const presets: readonly GlassPreset[] = ['off', 'light', 'balanced', 'clear', 'custom'];
+  const activeThemeBase: GlassThemeBase = config.glassThemeBase ?? 'pure';
+  const activeThemeBaseMeta =
+    GLASS_THEME_BASE_META.find((item) => item.id === activeThemeBase) ?? GLASS_THEME_BASE_META[0]!;
   const thinkingOptions: ReadonlyArray<{ id: ThinkingGlassMode; label: string }> = [
     { id: 'off', label: '关闭' },
     { id: 'glass', label: '液态玻璃' },
@@ -299,6 +305,45 @@ export function LiquidGlassCard({
         ))}
       </div>
 
+      {/* 6-substrate Theme Base selector */}
+      <div className="pmx-theme-base-zone" data-pmx-theme-base-section="1">
+        <div className="glass-reg-head">
+          <span className="glass-reg-t">主题基底</span>
+          <span className="glass-reg-d" data-pmx-theme-base-note="1">
+            {activeThemeBaseMeta.note}
+          </span>
+        </div>
+        <div
+          className={`pmx-theme-base-grid${compact ? ' is-compact' : ''}`}
+          role="group"
+          aria-label="液态玻璃主题基底"
+        >
+          {GLASS_THEME_BASE_META.map((item) => {
+            const active = activeThemeBase === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={`pmx-theme-base-pill${active ? ' on' : ''}`}
+                data-glass-theme-base={item.id}
+                aria-pressed={active}
+                aria-label={`${item.label}：${item.note}`}
+                onClick={() => onChange(setGlassThemeBaseWithAutoWake(config, item.id))}
+              >
+                <span
+                  className="pmx-theme-base-swatch"
+                  data-theme-base-swatch={item.id}
+                  style={{ background: item.swatchCss }}
+                  aria-hidden="true"
+                />
+                <span className="pmx-theme-base-label">{item.label}</span>
+                <span className="pmx-theme-base-check" aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Accent & Glass Tint Zone */}
       <div className="glass-accent-zone">
         {showAccentRow ? (
@@ -328,7 +373,7 @@ export function LiquidGlassCard({
                 type="button"
                 className={`typo-pill-btn${accentOpen ? ' on' : ''}`}
                 aria-expanded={accentOpen}
-                title="打开浮窗调色盘自定义强调色"
+                aria-label="打开浮窗调色盘自定义强调色"
                 onClick={(e) =>
                   onOpenColorPicker({
                     slot: { kind: 'accent' },
@@ -367,7 +412,7 @@ export function LiquidGlassCard({
               type="button"
               className={`typo-pill-btn${glassColorOpen ? ' on' : ''}`}
               aria-expanded={glassColorOpen}
-              title={config.glassDarkSeparate ? '浅色玻璃底色' : '全局玻璃底色'}
+              aria-label={config.glassDarkSeparate ? '浅色玻璃底色' : '全局玻璃底色'}
               onClick={(e) =>
                 onOpenColorPicker({
                   slot: { kind: 'glassColor' },
@@ -386,7 +431,7 @@ export function LiquidGlassCard({
                 type="button"
                 className={`typo-pill-btn${glassDarkOpen ? ' on' : ''}`}
                 aria-expanded={glassDarkOpen}
-                title="深色玻璃底色"
+                aria-label="深色玻璃底色"
                 onClick={(e) =>
                   onOpenColorPicker({
                     slot: { kind: 'glassDarkColor' },
@@ -859,7 +904,7 @@ export function ThemePaletteCard({
               type="button"
               className={`typo-pill-btn${accentOpen ? ' on' : ''}`}
               aria-expanded={accentOpen}
-              title="打开浮窗调色盘自定义强调色"
+              aria-label="打开浮窗调色盘自定义强调色"
               onClick={(e) =>
                 onOpenColorPicker({
                   slot: { kind: 'accent' },
@@ -1934,13 +1979,8 @@ export interface AppearanceHeroAndCardsProps {
 }
 
 /**
- * Complete 6-card FISH-Dock-inspired Prismux Appearance stack coordinating a single shared FloatingColorPopover:
- * 1. ThemeHeroCard (Celestial 3-state capsule + wallpaper shortcut slot)
- * 2. LiquidGlassCard (5 presets + tint/fidelity + 4-region sliders + chrome/thinking gates + per-surface fold)
- * 3. SidebarCornersCard (left/right radius + 4-corner square overrides)
- * 4. UiColorsCard (5 UI custom element accents + caret color)
- * 5. TypographyCard (system/preset font families + independent light/dark heading/text/muted colors)
- * 6. ThemeSnapshotCard (.wb-theme export/import/reset)
+ * Composable Prismux Appearance stack coordinating a single shared FloatingColorPopover across
+ * ThemeHeroCard, LiquidGlassCard, UiColorsCard, TypographyCard, and ThemeSnapshotCard.
  */
 export function AppearanceHeroAndCards({
   config,

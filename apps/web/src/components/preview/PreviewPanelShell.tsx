@@ -164,8 +164,10 @@ function PreviewPanelShellFrame(
         "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch",
         isInline
           ? maximized
-            ? // Maximizing meets the sidebar border or window edge; omit any outer border.
-              "flex-1 bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent"
+            ? // Maximizing meets the sidebar border or window edge; omit any outer border and
+              // keep the outer shell transparent in glass/wallpaper modes so the inner
+              // PrismuxStageFrame owns the single-pass canvas fill & 4 concave corners.
+              "flex-1 bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent [[data-pmx-wallpaper='1']_&]:bg-transparent [[data-pmx-wallpaper-visible='1']_&]:bg-transparent"
             : "shrink-0 bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent"
           : "w-full bg-background",
         collapsible &&
@@ -186,7 +188,7 @@ function PreviewPanelShellFrame(
             } as CSSProperties)
           : undefined
       }
-      data-pmx-glass-zone={isInline ? "rightSidebar" : undefined}
+      data-pmx-glass-zone={isInline && !maximized ? "rightSidebar" : undefined}
       data-preview-panel-mode={props.mode}
       data-preview-panel-maximized={maximized ? "true" : "false"}
     >

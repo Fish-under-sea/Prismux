@@ -592,17 +592,17 @@ export function createWallpaperStore(
     ...normalizedInputSettings,
     glassColor: {
       ...defaults.glassColor,
-      ...(options.settings?.glassColor ?? {}),
+      ...options.settings?.glassColor,
     },
     glassSurfacePolicy: {
       ...defaults.glassSurfacePolicy,
-      ...(options.settings?.glassSurfacePolicy ?? {}),
+      ...options.settings?.glassSurfacePolicy,
     },
     themeColors: {
-      primary: { ...defaults.themeColors.primary, ...(options.settings?.themeColors?.primary ?? {}) },
-      secondary: { ...defaults.themeColors.secondary, ...(options.settings?.themeColors?.secondary ?? {}) },
-      tertiary: { ...defaults.themeColors.tertiary, ...(options.settings?.themeColors?.tertiary ?? {}) },
-      muted: { ...defaults.themeColors.muted, ...(options.settings?.themeColors?.muted ?? {}) },
+      primary: { ...defaults.themeColors.primary, ...options.settings?.themeColors?.primary },
+      secondary: { ...defaults.themeColors.secondary, ...options.settings?.themeColors?.secondary },
+      tertiary: { ...defaults.themeColors.tertiary, ...options.settings?.themeColors?.tertiary },
+      muted: { ...defaults.themeColors.muted, ...options.settings?.themeColors?.muted },
     },
   };
   if (isLegacyBuiltinWallpaperId(initialSettings.selectedId)) {
@@ -792,10 +792,11 @@ export function createWallpaperStore(
     },
 
     setVideoVolume(volume) {
-      const clamped = Math.max(0, Math.min(1, Number(volume) || 0));
+      const numeric = Number(volume);
+      const clamped = Math.max(0, Math.min(1, Number.isFinite(numeric) ? numeric : 0));
       store.updateSettings({
         videoVolume: clamped,
-        videoAudioEnabled: clamped > 0 ? true : snapshot.settings.videoAudioEnabled,
+        videoAudioEnabled: clamped > 0,
       });
     },
 

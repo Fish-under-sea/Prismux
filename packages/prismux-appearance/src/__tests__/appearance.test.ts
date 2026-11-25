@@ -1,13 +1,23 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import * as NodeTest from 'node:test';
+import * as NodeAssert from 'node:assert/strict';
+import * as NodeFS from 'node:fs';
+import * as NodePath from 'node:path';
+import * as NodeURL from 'node:url';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+
+const { describe, it } = NodeTest;
+const assert: typeof NodeAssert = NodeAssert;
+const fs = NodeFS;
+const path = NodePath;
+const { fileURLToPath } = NodeURL;
 
 import {
   DEFAULT_APPEARANCE_CONFIG,
   DEFAULT_TYPOGRAPHY_FALLBACKS,
   GLASS_PRESETS,
+  GLASS_THEME_BASE_IDS,
+  GLASS_THEME_BASE_META,
   GLASS_ZONE_CSS_NAMES,
   GLASS_ZONE_IDS,
   GLASS_ZONE_LIMITS,
@@ -16,6 +26,7 @@ import {
   WB_THEME_VERSION,
   type AppearanceConfig,
   type GlassRegionId,
+  type GlassThemeBase,
 } from '../types.js';
 import {
   contrastRatioHex,
@@ -53,6 +64,7 @@ import {
   resetAllGlassZones,
   resetGlassZone,
   resolveAppearanceRuntime,
+  setGlassThemeBaseWithAutoWake,
   setThemeModeWithGlassAutoWake,
   updateGlassRegion,
   updateGlassZone,
@@ -60,7 +72,11 @@ import {
   type ElementLike,
 } from '../glassEngine.js';
 import { GlassZoneConfigurator } from '../GlassZoneConfigurator.js';
-import type { InlineAppearanceStudioProps } from '../InlineAppearanceStudio.js';
+import {
+  InlineAppearanceStudio,
+  type InlineAppearanceStudioProps,
+} from '../InlineAppearanceStudio.js';
+import { LiquidGlassCard } from '../AppearanceHeroAndCards.js';
 import {
   exportWbThemeSnapshot,
   importWbThemeSnapshot,
@@ -97,6 +113,7 @@ import {
   type ScrollableElementLike,
 } from '../floatingScrollbar.js';
 import {
+  DEFAULT_RIGHT_SIDEBAR_SELECTOR,
   PMX_CUTOUT_ACTIVE_ATTR,
   PMX_SHELL_BACKDROP_ATTR,
   PMX_SHELL_CUTOUT_MASK_ID,
@@ -1603,7 +1620,7 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     assert.match(bridgeCss, /\[data-pmx-inner-stage='1'\]/);
     assert.match(bridgeCss, /--pmx-inner-stage-radius,\s*14px/);
 
-    // #383 AGY 2.0 dual-layer composer, Claude Code Desktop sidebar peek drawer & chat width handles.
+    // AGY 2.0 dual-layer composer, Claude Code Desktop sidebar peek drawer & chat width handles.
     assert.match(bridgeCss, /\[data-pmx-composer-layout='agy'\]/);
     assert.match(bridgeCss, /\[data-pmx-composer-top-tray='1'\]/);
     assert.match(bridgeCss, /\[data-pmx-composer-inner-card='1'\]/);
@@ -1622,7 +1639,7 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     assert.match(cardsCss, /\.pmx-gz-root/);
     assert.match(cardsCss, /\.pmx-inline-studio/);
 
-    // Corner radius UI removed from AppearanceHeroAndCards stack (#362).
+    // Corner radius UI removed from AppearanceHeroAndCards stack.
     const stackFnStart = heroBuilt.indexOf('export function AppearanceHeroAndCards');
     assert.ok(stackFnStart > 0);
     const stackFnBody = heroBuilt.slice(stackFnStart);
@@ -2031,7 +2048,8 @@ describe('Global floating non-layout-shifting pointer-aware auto-hide scrollbars
     assert.equal(findNearestScrollableContainer(hiddenStrip, undefined, getStyle), null);
   });
 
-  it('isolates pointer illumination to the active pane, auto-hides after hover/scroll delays, guards drags, and disposes cleanly', async () => {
+  it('isolates pointer illumination to the active pane, auto-hides after hover/scroll delays, guards drags, and disposes cleanly', (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     // SSR-safe null document guard
     const noopHandle = installPrismuxFloatingScrollbars(null);
     assert.equal(noopHandle.getActiveElement(), null);
@@ -2074,23 +2092,23 @@ describe('Global floating non-layout-shifting pointer-aware auto-hide scrollbars
     env.dispatchDoc('pointermove', header);
     assert.equal(handle.getActiveElement(), null);
     assert.equal(paneRight.attrs.get(PMX_SCROLL_ACTIVE_ATTR), '1');
-    await new Promise((r) => setTimeout(r, 60));
+    t.mock.timers.tick(60);
     assert.equal(paneRight.attrs.has(PMX_SCROLL_ACTIVE_ATTR), false);
 
     // 4. Dragging scrollbar thumb keeps pane active even if pointer drifts outside until pointerup
     env.dispatchDoc('pointerdown', paneLeft);
     assert.equal(paneLeft.attrs.get(PMX_SCROLL_ACTIVE_ATTR), '1');
     env.dispatchDoc('pointermove', header);
-    await new Promise((r) => setTimeout(r, 55));
+    t.mock.timers.tick(55);
     assert.equal(paneLeft.attrs.get(PMX_SCROLL_ACTIVE_ATTR), '1');
     env.dispatchDoc('pointerup', header);
-    await new Promise((r) => setTimeout(r, 55));
+    t.mock.timers.tick(55);
     assert.equal(paneLeft.attrs.has(PMX_SCROLL_ACTIVE_ATTR), false);
 
     // 5. Scroll event sets data-pmx-scroll-scrolling="1" and auto-hides after scrollHideDelayMs
     env.dispatchDoc('scroll', paneRight);
     assert.equal(paneRight.attrs.get(PMX_SCROLL_SCROLLING_ATTR), '1');
-    await new Promise((r) => setTimeout(r, 70));
+    t.mock.timers.tick(70);
     assert.equal(paneRight.attrs.has(PMX_SCROLL_SCROLLING_ATTR), false);
 
     // 6. Dispose cleans up active/scrolling attributes, root attribute, and all listeners (idempotent)
@@ -2374,6 +2392,7 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
     const resizeCallbacks: Array<() => void> = [];
     const observedResize = new Set<unknown>();
     const mutationCallbacks: Array<(records: MutationRecord[]) => void> = [];
+    const mutationObserveOptions: MutationObserverInit[] = [];
     let resizeDisconnected = false;
     let mutationDisconnectedCount = 0;
 
@@ -2403,7 +2422,9 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
         this.cb = cb;
         mutationCallbacks.push(cb);
       }
-      observe() {}
+      observe(_target: Node, options?: MutationObserverInit) {
+        if (options) mutationObserveOptions.push(options);
+      }
       disconnect() {
         mutationDisconnectedCount += 1;
         const idx = mutationCallbacks.indexOf(this.cb);
@@ -2494,6 +2515,9 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
       createElementNS: (_ns: string, tag: string) => createMockCutoutNode(tag),
       querySelectorAll: (selector: string) => {
         if (selector === '[data-pmx-stage-frame="1"]') return stageNodes;
+        if (selector === DEFAULT_RIGHT_SIDEBAR_SELECTOR) {
+          return rightNodes.filter((n) => n.getAttribute?.('data-preview-panel-maximized') !== 'true');
+        }
         if (selector === '[data-preview-panel-mode="inline"]') return rightNodes;
         if (selector.includes('sidebar-gap')) return sidebarNodes;
         return [];
@@ -2527,16 +2551,27 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
       observedResize,
       flushRaf,
       triggerResize: () => {
-        for (const cb of [...resizeCallbacks]) cb();
+        for (const cb of Array.from(resizeCallbacks)) cb();
       },
       triggerRootAttrMutation: () => {
-        for (const cb of [...mutationCallbacks]) cb([]);
+        for (const cb of Array.from(mutationCallbacks)) cb([]);
       },
+      triggerBodyAttrMutation: (target: unknown, attributeName: string) => {
+        const record = {
+          type: 'attributes',
+          target,
+          attributeName,
+          addedNodes: [],
+          removedNodes: [],
+        } as unknown as MutationRecord;
+        for (const cb of Array.from(mutationCallbacks)) cb([record]);
+      },
+      mutationObserveOptions,
       dispatchDoc: (type: string, event: unknown) => {
-        for (const fn of [...(docListeners.get(type) ?? [])]) fn(event);
+        for (const fn of Array.from(docListeners.get(type) ?? [])) fn(event);
       },
       dispatchWin: (type: string, event: unknown) => {
-        for (const fn of [...(winListeners.get(type) ?? [])]) fn(event);
+        for (const fn of Array.from(winListeners.get(type) ?? [])) fn(event);
       },
       setStageRadiusCss: (val: string) => {
         stageRadiusCss = val;
@@ -2779,6 +2814,139 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
     assert.ok(
       (fallbackSection.match(/\[data-pmx-shell-backdrop='1'\]/g) ?? []).length >= 6,
       'every solid fallback path + forced-colors must cover [data-pmx-shell-backdrop="1"]',
+    );
+  });
+
+  it('ignores maximized inline right panels as rightSidebar cutout holes while punching out their inner stage frame cleanly (RC.3)', () => {
+    assert.equal(
+      DEFAULT_RIGHT_SIDEBAR_SELECTOR,
+      '[data-preview-panel-mode="inline"]:not([data-preview-panel-maximized="true"])',
+    );
+
+    const env = createMockCutoutEnv({ width: 1440, height: 900 });
+    env.htmlAttrs.set('data-pmx-glass', '1');
+    env.htmlAttrs.set('data-pmx-zone-right-sidebar-mode', 'custom');
+
+    const chatStageEl = createMockCutoutNode('div', { left: 240, top: 38, width: 840, height: 842 });
+    chatStageEl.setAttribute('data-pmx-stage-frame', '1');
+    env.stageNodes.push(chatStageEl);
+
+    const rightPanelEl = createMockCutoutNode('div', { left: 1080, top: 38, width: 360, height: 842 });
+    rightPanelEl.setAttribute('data-preview-panel-mode', 'inline');
+    rightPanelEl.setAttribute('data-preview-panel-maximized', 'false');
+    env.rightNodes.push(rightPanelEl);
+
+    const handle = installPrismuxShellCutout(env.doc, { now: env.getNow });
+
+    // Body observer watches data-preview-panel-maximized attribute changes for instant mask updates
+    const bodyObserverOpts = env.mutationObserveOptions.find(
+      (opt) => opt.childList === true && opt.subtree === true,
+    );
+    assert.ok(bodyObserverOpts, 'must register body MutationObserver');
+    assert.equal(bodyObserverOpts.attributes, true);
+    assert.ok(
+      bodyObserverOpts.attributeFilter?.includes('data-preview-panel-maximized'),
+      'body observer must track data-preview-panel-maximized transitions',
+    );
+
+    // Non-maximized + custom rightSidebar -> 1 stage hole + 1 square rightSidebar hole
+    const gBefore = handle.getGeometry();
+    assert.equal(gBefore.active, true);
+    assert.equal(gBefore.stageHoles.length, 1);
+    assert.equal(gBefore.rightSidebarHoles.length, 1);
+
+    // Maximize the right panel: chat stage unmounts, maximized panel renders its own inner
+    // [data-pmx-stage-frame="1"] (leaving 7px right bezel), and sets data-preview-panel-maximized="true".
+    rightPanelEl.setAttribute('data-preview-panel-maximized', 'true');
+    rightPanelEl.rect = { left: 240, top: 38, width: 1200, height: 842 };
+    const maximizedStageEl = createMockCutoutNode('div', {
+      left: 240,
+      top: 38,
+      width: 1193,
+      height: 842,
+    });
+    maximizedStageEl.setAttribute('data-pmx-stage-frame', '1');
+    env.stageNodes.splice(0, env.stageNodes.length, maximizedStageEl);
+
+    // Even across custom, solid, and fullclear modes, maximized right panel MUST yield 0 rightSidebar holes
+    for (const [mode, fullClear] of [
+      ['custom', '0'],
+      ['solid', '0'],
+      ['inherit', '1'],
+    ] as const) {
+      env.htmlAttrs.set('data-pmx-zone-right-sidebar-mode', mode);
+      env.htmlAttrs.set('data-pmx-right-sidebar-fullclear', fullClear);
+      env.triggerBodyAttrMutation(rightPanelEl, 'data-preview-panel-maximized');
+      env.flushRaf();
+
+      const geom = handle.getGeometry();
+      assert.equal(geom.active, true);
+      assert.equal(geom.stageHoles.length, 1, `maximized stage hole must remain active (${mode})`);
+      assert.deepEqual(geom.stageHoles[0], {
+        x: 240.5,
+        y: 38.5,
+        width: 1192,
+        height: 841,
+        rx: 13.5,
+        ry: 13.5,
+      });
+      assert.equal(
+        geom.rightSidebarHoles.length,
+        0,
+        `maximized right panel must never punch a square rightSidebar hole (${mode}, fullclear=${fullClear})`,
+      );
+    }
+
+    // Restoring from maximized brings the rightSidebar hole back immediately on attribute mutation
+    env.htmlAttrs.set('data-pmx-zone-right-sidebar-mode', 'custom');
+    env.htmlAttrs.set('data-pmx-right-sidebar-fullclear', '0');
+    rightPanelEl.setAttribute('data-preview-panel-maximized', 'false');
+    rightPanelEl.rect = { left: 1080, top: 38, width: 360, height: 842 };
+    env.stageNodes.splice(0, env.stageNodes.length, chatStageEl);
+    env.triggerBodyAttrMutation(rightPanelEl, 'data-preview-panel-maximized');
+    env.flushRaf();
+
+    const gRestored = handle.getGeometry();
+    assert.equal(gRestored.stageHoles.length, 1);
+    assert.equal(gRestored.rightSidebarHoles.length, 1);
+
+    handle.dispose();
+
+    // CSS bridge contract: maximized exclusion + File Tree / FileExplorerPane adaptation & fallbacks
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
+    const noComments = bridgeCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.equal(
+      (noComments.match(/\{/g) ?? []).length,
+      (noComments.match(/\}/g) ?? []).length,
+      'prismux-glass-bridge.css braces must stay balanced',
+    );
+    assert.equal(noComments.includes('prefers-color-scheme'), false);
+
+    // Maximized right panel excluded from rightSidebar fill/backdrop/cutout/substrate rules
+    assert.ok(bridgeCss.includes("[data-preview-panel-mode='inline']:not([data-preview-panel-maximized='true'])"));
+    assert.ok(
+      bridgeCss.includes("[data-preview-panel-mode='inline'][data-preview-panel-maximized='true']:has("),
+    );
+    assert.ok(bridgeCss.includes("[data-right-panel-maximized-stage='1']"));
+
+    // File tree / FileExplorerPane glass stripping & custom typography propagation
+    assert.ok(bridgeCss.includes("[data-pmx-glass-zone='mainCanvas'] [data-file-browser-panel]"));
+    assert.ok(bridgeCss.includes("[data-pmx-glass-zone='mainCanvas'] [data-surface-subheader]"));
+    assert.ok(bridgeCss.includes("[data-pmx-file-tree='1']"));
+    assert.ok(bridgeCss.includes("[data-pmx-file-explorer-pane='1'][data-pmx-file-explorer-resizable='1']"));
+    assert.ok(
+      (bridgeCss.match(/\[data-pmx-file-tree='1'\]/g) ?? []).length >= 4,
+      'custom-text & custom-muted (regular + [data-theme-id]) must include [data-pmx-file-tree="1"]',
+    );
+
+    const cssFallbacks = bridgeCss.slice(
+      bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
+    );
+    assert.ok(
+      (cssFallbacks.match(/\[data-pmx-file-explorer-pane='1'\]\[data-pmx-file-explorer-resizable='1'\]/g) ?? [])
+        .length >= 7,
+      'all 3 solid fallbacks (Dark + Light) + forced-colors must cover resizable FileExplorerPane',
     );
   });
 });
@@ -3346,5 +3514,316 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
     assert.ok(cardsCss.includes('.pmx-typo-preview'));
     const cardsCssNoComments = cardsCss.replace(/\/\*[\s\S]*?\*\//g, '');
     assert.ok(!cardsCssNoComments.includes('prefers-color-scheme'));
+  });
+});
+
+describe('RC.3 Liquid Glass Theme Substrates (`GlassThemeBase` 6-substrate system)', () => {
+  it('defines all 6 GlassThemeBase enums with 4-character Chinese labels, defaults to pure, and falls back invalid values to pure', () => {
+    assert.deepEqual(GLASS_THEME_BASE_IDS, [
+      'pure',
+      'starry-violet',
+      'emerald-stars',
+      'sakura-drift',
+      'ocean-caustics',
+      'gilded-lunar',
+    ]);
+    assert.equal(GLASS_THEME_BASE_META.length, 6);
+    assert.deepEqual(
+      GLASS_THEME_BASE_META.map((item) => [item.id, item.label]),
+      [
+        ['pure', '纯净官方'],
+        ['starry-violet', '星语紫夜'],
+        ['emerald-stars', '翠星漫野'],
+        ['sakura-drift', '樱雪浮岚'],
+        ['ocean-caustics', '沧海浮光'],
+        ['gilded-lunar', '鎏金织月'],
+      ],
+    );
+    for (const item of GLASS_THEME_BASE_META) {
+      assert.equal(item.label.length, 4, `${item.id} label must be a 4-char Chinese name`);
+      assert.ok(item.note.trim().length >= 12, `${item.id} must have a descriptive poetic note`);
+      assert.ok(item.swatchCss.trim().length > 20, `${item.id} must provide miniature swatch CSS`);
+      assert.equal(
+        /url\(\s*['"]?https?:\/\//i.test(item.swatchCss),
+        false,
+        `${item.id} swatchCss must make zero external network requests`,
+      );
+    }
+
+    assert.equal(DEFAULT_APPEARANCE_CONFIG.glassThemeBase, 'pure');
+    assert.equal(normalizeAppearanceConfig({}).glassThemeBase, 'pure');
+
+    // All 6 valid enum values normalize cleanly
+    for (const base of GLASS_THEME_BASE_IDS) {
+      assert.equal(normalizeAppearanceConfig({ glassThemeBase: base }).glassThemeBase, base);
+    }
+
+    // Invalid value falls back safely to 'pure', even when overriding a non-pure base config
+    const nonPureBase = normalizeAppearanceConfig({ glassThemeBase: 'starry-violet' });
+    assert.equal(
+      normalizeAppearanceConfig(
+        { glassThemeBase: 'unknown-substrate' as unknown as GlassThemeBase },
+        nonPureBase,
+      ).glassThemeBase,
+      'pure',
+    );
+    // Omitted glassThemeBase preserves base config's existing glassThemeBase
+    assert.equal(
+      normalizeAppearanceConfig({ wallpaperDim: 40 }, nonPureBase).glassThemeBase,
+      'starry-violet',
+    );
+  });
+
+  it('switches data-pmx-glass-base accurately under active glass, non-glass, GPU=0, reduced-transparency, and auto-wakes glass on selection', () => {
+    const html = createMockElement();
+    const body = createMockElement();
+    const doc: DocumentLike = { documentElement: html, body };
+
+    const violetGlass = normalizeAppearanceConfig({
+      themeMode: 'glass',
+      glassPreset: 'clear',
+      glassThemeBase: 'starry-violet',
+    });
+
+    // 1. Active Liquid Glass -> selected substrate applies live
+    applyPrismuxAppearanceToDocument(violetGlass, { document: doc });
+    assert.equal(html.attrs.get('data-pmx-glass'), '1');
+    assert.equal(html.attrs.get('data-pmx-glass-base'), 'starry-violet');
+    assert.equal(html.attrs.get('data-pmx-glass-base-selected'), 'starry-violet');
+    assert.equal(body.attrs.get('data-pmx-glass-base'), 'starry-violet');
+    assert.equal(body.attrs.get('data-pmx-glass-base-selected'), 'starry-violet');
+
+    // 2. Non-glass mode -> effective data-pmx-glass-base falls back to 'pure' while preserving diagnostic selected attr
+    const darkNative = normalizeAppearanceConfig({
+      themeMode: 'dark',
+      glassThemeBase: 'emerald-stars',
+    });
+    applyPrismuxAppearanceToDocument(darkNative, { document: doc });
+    assert.equal(html.attrs.get('data-pmx-glass'), '0');
+    assert.equal(html.attrs.get('data-pmx-glass-base'), 'pure');
+    assert.equal(html.attrs.get('data-pmx-glass-base-selected'), 'emerald-stars');
+
+    // 3. Glass mode with preset 'off' -> glassActive is false -> falls back to 'pure'
+    const offPreset = applyGlassPreset(violetGlass, 'off');
+    applyPrismuxAppearanceToDocument(offPreset, { document: doc });
+    assert.equal(html.attrs.get('data-pmx-glass'), '0');
+    assert.equal(html.attrs.get('data-pmx-glass-base'), 'pure');
+    assert.equal(html.attrs.get('data-pmx-glass-base-selected'), 'starry-violet');
+
+    // 4. GPU disabled -> falls back to 'pure'
+    applyPrismuxAppearanceToDocument(violetGlass, { document: doc, gpuAvailable: false });
+    assert.equal(html.attrs.get('data-pmx-gpu'), '0');
+    assert.equal(html.attrs.get('data-pmx-glass-base'), 'pure');
+    assert.equal(html.attrs.get('data-pmx-glass-base-selected'), 'starry-violet');
+
+    // 5. Reduced transparency -> falls back to 'pure'
+    applyPrismuxAppearanceToDocument(violetGlass, { document: doc, reducedTransparency: true });
+    assert.equal(html.attrs.get('data-pmx-reduced-transparency'), '1');
+    assert.equal(html.attrs.get('data-pmx-glass-base'), 'pure');
+    assert.equal(html.attrs.get('data-pmx-glass-base-selected'), 'starry-violet');
+
+    // 6. Auto-wake helper wakes glass from dark mode or preset 'off' when selecting non-pure base
+    const wokeFromDark = setGlassThemeBaseWithAutoWake(darkNative, 'sakura-drift');
+    assert.equal(wokeFromDark.themeMode, 'glass');
+    assert.equal(wokeFromDark.glassThemeBase, 'sakura-drift');
+    assert.equal(resolveAppearanceRuntime(wokeFromDark).glassActive, true);
+
+    const wokeFromOff = setGlassThemeBaseWithAutoWake(offPreset, 'ocean-caustics');
+    assert.equal(wokeFromOff.themeMode, 'glass');
+    assert.equal(wokeFromOff.glassPreset, 'balanced');
+    assert.equal(wokeFromOff.glassThemeBase, 'ocean-caustics');
+
+    // Selecting 'pure' in non-glass mode does not force glass mode on
+    const stayedDark = setGlassThemeBaseWithAutoWake(darkNative, 'pure');
+    assert.equal(stayedDark.themeMode, 'dark');
+    assert.equal(stayedDark.glassThemeBase, 'pure');
+
+    // 7. Clear removes both managed attributes cleanly
+    clearPrismuxAppearanceFromDocument(doc);
+    assert.equal(html.attrs.has('data-pmx-glass-base'), false);
+    assert.equal(html.attrs.has('data-pmx-glass-base-selected'), false);
+    assert.equal(body.attrs.has('data-pmx-glass-base'), false);
+    assert.equal(body.attrs.has('data-pmx-glass-base-selected'), false);
+  });
+
+  it('roundtrips glassThemeBase through .wb-theme export/import and safely defaults legacy or invalid snapshots', () => {
+    for (const base of GLASS_THEME_BASE_IDS) {
+      const cfg = normalizeAppearanceConfig({ themeMode: 'glass', glassThemeBase: base });
+      const json = serializeWbThemeSnapshot(cfg, {
+        name: `Theme ${base}`,
+        exportedAt: '2026-11-26T00:00:00.000Z',
+      });
+      const res = importWbThemeSnapshot(json);
+      assert.equal(res.ok, true);
+      if (!res.ok) continue;
+      assert.equal(res.strippedFields.length, 0);
+      assert.equal(res.snapshot.appearance.glassThemeBase, base);
+      assert.deepEqual(res.snapshot.appearance, cfg);
+    }
+
+    // Legacy snapshot without glassThemeBase defaults cleanly to 'pure'
+    const legacy = importWbThemeSnapshot(
+      JSON.stringify({
+        format: WB_THEME_FORMAT,
+        version: WB_THEME_VERSION,
+        name: 'Pre-RC3 Theme',
+        appearance: { themeMode: 'glass', glassPreset: 'balanced' },
+      }),
+    );
+    assert.equal(legacy.ok, true);
+    if (legacy.ok) {
+      assert.equal(legacy.strippedFields.length, 0);
+      assert.equal(legacy.snapshot.appearance.glassThemeBase, 'pure');
+    }
+
+    // Invalid glassThemeBase in snapshot falls back to 'pure'
+    const invalid = importWbThemeSnapshot(
+      JSON.stringify({
+        format: WB_THEME_FORMAT,
+        version: WB_THEME_VERSION,
+        name: 'Bad Substrate',
+        appearance: { themeMode: 'glass', glassThemeBase: 'not-real' },
+      }),
+    );
+    assert.equal(invalid.ok, true);
+    if (invalid.ok) {
+      assert.equal(invalid.snapshot.appearance.glassThemeBase, 'pure');
+    }
+  });
+
+  it('renders all 6 theme substrate pills with live notes in both InlineAppearanceStudio and LiquidGlassCard and wires CSS layers & fallbacks', () => {
+    const selectedCfg = normalizeAppearanceConfig({
+      themeMode: 'glass',
+      glassPreset: 'clear',
+      glassThemeBase: 'emerald-stars',
+    });
+    const noop = () => undefined;
+
+    const inlineHtml = renderToStaticMarkup(
+      createElement(InlineAppearanceStudio, {
+        config: selectedCfg,
+        onChange: noop,
+      }),
+    );
+    const cardHtml = renderToStaticMarkup(
+      createElement(LiquidGlassCard, {
+        config: selectedCfg,
+        onChange: noop,
+        onOpenColorPicker: noop,
+      }),
+    );
+
+    for (const [name, markup] of [
+      ['InlineAppearanceStudio', inlineHtml],
+      ['LiquidGlassCard', cardHtml],
+    ] as const) {
+      assert.ok(markup.includes('主题基底'), `${name} must render 主题基底 heading`);
+      assert.ok(
+        markup.includes(GLASS_THEME_BASE_META[2]!.note),
+        `${name} must display dynamic poetic note for active substrate`,
+      );
+      for (const item of GLASS_THEME_BASE_META) {
+        assert.ok(
+          markup.includes(`data-glass-theme-base="${item.id}"`),
+          `${name} must render button for ${item.id}`,
+        );
+        assert.ok(markup.includes(item.label), `${name} must render Chinese label ${item.label}`);
+        assert.ok(
+          markup.includes(`data-theme-base-swatch="${item.id}"`),
+          `${name} must render miniature swatch for ${item.id}`,
+        );
+      }
+      assert.match(
+        markup,
+        /data-glass-theme-base="emerald-stars"[^>]*aria-pressed="true"/,
+        `${name} must mark selected substrate button aria-pressed="true"`,
+      );
+      assert.match(
+        markup,
+        /data-glass-theme-base="pure"[^>]*aria-pressed="false"/,
+        `${name} must mark unselected substrate button aria-pressed="false"`,
+      );
+    }
+
+    // Verify source/built switching callbacks and complete CSS substrate + fallback coverage
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const inlineSrc = fs.readFileSync(
+      new URL('../../src/InlineAppearanceStudio.tsx', import.meta.url),
+      'utf8',
+    );
+    const heroSrc = fs.readFileSync(
+      new URL('../../src/AppearanceHeroAndCards.tsx', import.meta.url),
+      'utf8',
+    );
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
+    const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
+
+    assert.ok(inlineSrc.includes('handleSelectThemeBase(item.id)'));
+    assert.ok(inlineSrc.includes('setGlassThemeBaseWithAutoWake'));
+    assert.ok(heroSrc.includes('setGlassThemeBaseWithAutoWake(config, item.id)'));
+
+    // Balanced braces & zero prefers-color-scheme & zero external http(s) URLs in substrate styles
+    for (const [name, css] of [
+      ['prismux-glass-bridge.css', bridgeCss],
+      ['appearance-cards.css', cardsCss],
+    ] as const) {
+      const noComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+      assert.equal(noComments.includes('prefers-color-scheme'), false, `${name} must never use prefers-color-scheme`);
+      assert.equal(
+        (noComments.match(/\{/g) ?? []).length,
+        (noComments.match(/\}/g) ?? []).length,
+        `${name} must keep balanced braces`,
+      );
+      assert.equal(
+        /url\(\s*['"]?https?:\/\//i.test(noComments),
+        false,
+        `${name} must never reference external http(s) URLs`,
+      );
+    }
+
+    // All 5 patterned substrates defined for both Dark & Light Glass, including exact 1:1 star-neko recipe & SVG patterns
+    for (const base of [
+      'starry-violet',
+      'emerald-stars',
+      'sakura-drift',
+      'ocean-caustics',
+      'gilded-lunar',
+    ] as const) {
+      assert.ok(
+        bridgeCss.includes(`html.dark[data-pmx-glass='1'][data-pmx-glass-base='${base}']`),
+        `bridge CSS must define Dark Glass rules for ${base}`,
+      );
+      assert.ok(
+        bridgeCss.includes(`html:not(.dark)[data-pmx-glass='1'][data-pmx-glass-base='${base}']`),
+        `bridge CSS must define Light Glass rules for ${base}`,
+      );
+    }
+    assert.ok(bridgeCss.includes('repeating-linear-gradient(135deg, transparent 0 38px, #b994ee12 38px 39.5px)'));
+    assert.ok(bridgeCss.includes('rgba(68, 55, 84, 0.42)'));
+    assert.ok(bridgeCss.includes('inset 3px 0 #bda2f2'));
+    assert.ok(bridgeCss.includes('inset 0 -2px #b99bea'));
+    assert.ok(bridgeCss.includes("data:image/svg+xml"));
+    assert.ok(bridgeCss.includes("[data-pmx-shell-backdrop='1']::before"));
+    assert.ok(bridgeCss.includes("body::before"));
+    assert.ok(bridgeCss.includes('--pmx-glass-base-rim'));
+    assert.ok(bridgeCss.includes('--pmx-glass-base-glow'));
+
+    // Section 7 fallbacks tear down substrate pseudo-layers cleanly
+    const fallbackSection = bridgeCss.slice(
+      bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
+    );
+    assert.ok(
+      (fallbackSection.match(/\[data-pmx-shell-backdrop='1'\]::before/g) ?? []).length >= 3,
+      'solid fallbacks must hide [data-pmx-shell-backdrop="1"]::before',
+    );
+    assert.ok(
+      (fallbackSection.match(/body::before/g) ?? []).length >= 3,
+      'solid fallbacks must hide no-wallpaper body::before substrate canvas',
+    );
+
+    // Theme base picker styles present in appearance-cards.css
+    assert.ok(cardsCss.includes('.pmx-theme-base-grid'));
+    assert.ok(cardsCss.includes('.pmx-theme-base-pill'));
+    assert.ok(cardsCss.includes('.pmx-theme-base-swatch'));
   });
 });

@@ -1,12 +1,15 @@
-import { Buffer } from "node:buffer";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse
-} from "node:http";
-import type { AddressInfo } from "node:net";
-import type { Duplex } from "node:stream";
+import * as NodeBuffer from "node:buffer";
+import * as NodeHttp from "node:http";
+import type * as NodeNet from "node:net";
+import type * as NodeStream from "node:stream";
+
+const { Buffer } = NodeBuffer;
+const { createServer } = NodeHttp;
+type IncomingMessage = NodeHttp.IncomingMessage;
+type Server = NodeHttp.Server;
+type ServerResponse = NodeHttp.ServerResponse;
+type AddressInfo = NodeNet.AddressInfo;
+type Duplex = NodeStream.Duplex;
 import type { CordisPluginHost } from "@prismux/cordis-kernel";
 import {
   ForwardIdentityGuard,
@@ -185,7 +188,9 @@ function extractBearerToken(req: IncomingMessage): string | null {
 }
 
 const WEB_WALLPAPER_AUTH_COOKIE = "prismux_wp_token";
+const SCENE_WALLPAPER_AUTH_COOKIE = "prismux_scene_token";
 const WEB_TOKEN_ROUTE_PREFIX = "/v1/wallpapers/web-t/";
+const SCENE_TOKEN_ROUTE_PREFIX = "/v1/wallpapers/scene-t/";
 
 interface ParsedWebTokenRoute {
   token: string;
@@ -193,11 +198,14 @@ interface ParsedWebTokenRoute {
   relPath: string;
 }
 
-function parseWebTokenRoutePath(pathname: string): ParsedWebTokenRoute | null {
-  if (!pathname.startsWith(WEB_TOKEN_ROUTE_PREFIX)) {
+function parsePrefixedTokenRoutePath(
+  pathname: string,
+  prefix: string
+): ParsedWebTokenRoute | null {
+  if (!pathname.startsWith(prefix)) {
     return null;
   }
-  const rest = pathname.slice(WEB_TOKEN_ROUTE_PREFIX.length);
+  const rest = pathname.slice(prefix.length);
   const tokenSlash = rest.indexOf("/");
   if (tokenSlash <= 0) {
     return null;
@@ -219,6 +227,14 @@ function parseWebTokenRoutePath(pathname: string): ParsedWebTokenRoute | null {
   return { token, rawId, relPath };
 }
 
+function parseWebTokenRoutePath(pathname: string): ParsedWebTokenRoute | null {
+  return parsePrefixedTokenRoutePath(pathname, WEB_TOKEN_ROUTE_PREFIX);
+}
+
+function parseSceneTokenRoutePath(pathname: string): ParsedWebTokenRoute | null {
+  return parsePrefixedTokenRoutePath(pathname, SCENE_TOKEN_ROUTE_PREFIX);
+}
+
 function isLoopbackSameHostReferer(req: IncomingMessage, refererUrl: URL): boolean {
   if (refererUrl.protocol !== "http:" && refererUrl.protocol !== "https:") {
     return false;
@@ -231,11 +247,12 @@ function isLoopbackSameHostReferer(req: IncomingMessage, refererUrl: URL): boole
   return reqHost.length > 0 && refererUrl.host.toLowerCase() === reqHost;
 }
 
-function extractWebRefererQueryToken(
+function extractPrefixedRefererQueryToken(
   req: IncomingMessage,
-  requestUrl: URL
+  requestUrl: URL,
+  routePrefix: string
 ): string | null {
-  if (!requestUrl.pathname.startsWith("/v1/wallpapers/web/")) {
+  if (!requestUrl.pathname.startsWith(routePrefix)) {
     return null;
   }
   const rawReferer = req.headers.referer;
@@ -251,13 +268,13 @@ function extractWebRefererQueryToken(
   if (!isLoopbackSameHostReferer(req, refUrl)) {
     return null;
   }
-  const suffix = requestUrl.pathname.slice("/v1/wallpapers/web/".length);
+  const suffix = requestUrl.pathname.slice(routePrefix.length);
   const slashIdx = suffix.indexOf("/");
   const rawId = slashIdx >= 0 ? suffix.slice(0, slashIdx) : suffix;
   if (rawId.length === 0) {
     return null;
   }
-  const expectedPrefix = `/v1/wallpapers/web/${rawId}`;
+  const expectedPrefix = `${routePrefix}${rawId}`;
   if (
     refUrl.pathname !== expectedPrefix &&
     !refUrl.pathname.startsWith(`${expectedPrefix}/`)
@@ -266,6 +283,20 @@ function extractWebRefererQueryToken(
   }
   const refToken = refUrl.searchParams.get("token")?.trim();
   return refToken && refToken.length > 0 ? refToken : null;
+}
+
+function extractWebRefererQueryToken(
+  req: IncomingMessage,
+  requestUrl: URL
+): string | null {
+  return extractPrefixedRefererQueryToken(req, requestUrl, "/v1/wallpapers/web/");
+}
+
+function extractSceneRefererQueryToken(
+  req: IncomingMessage,
+  requestUrl: URL
+): string | null {
+  return extractPrefixedRefererQueryToken(req, requestUrl, "/v1/wallpapers/scene/");
 }
 
 function extractWebTokenRefererWallpaperId(
@@ -333,6 +364,10 @@ function extractRequestToken(
     if (webPathParsed !== null) {
       return webPathParsed.token;
     }
+    const scenePathParsed = parseSceneTokenRoutePath(requestUrl.pathname);
+    if (scenePathParsed !== null) {
+      return scenePathParsed.token;
+    }
     const queryToken = requestUrl.searchParams.get("token")?.trim();
     if (queryToken !== undefined && queryToken.length > 0) {
       return queryToken;
@@ -343,6 +378,16 @@ function extractRequestToken(
         return cookieToken;
       }
       const refererToken = extractWebRefererQueryToken(req, requestUrl);
+      if (refererToken !== null) {
+        return refererToken;
+      }
+    }
+    if (requestUrl.pathname.startsWith("/v1/wallpapers/scene/")) {
+      const cookieToken = extractCookieValue(req, SCENE_WALLPAPER_AUTH_COOKIE);
+      if (cookieToken !== null) {
+        return cookieToken;
+      }
+      const refererToken = extractSceneRefererQueryToken(req, requestUrl);
       if (refererToken !== null) {
         return refererToken;
       }
@@ -587,6 +632,7 @@ export class DaemonRpcServer {
   private readonly activeSockets = new Set<WebSocket>();
   private readonly socketCleanups = new Map<WebSocket, () => void>();
   private readonly activeSseCleanups = new Set<() => void>();
+  private readonly lastWebWallpaperIdByToken = new Map<string, string>();
 
   constructor(options: DaemonRpcServerOptions) {
     this.host = options.host ?? "127.0.0.1";
@@ -771,6 +817,7 @@ export class DaemonRpcServer {
       }
     }
     this.activeSseCleanups.clear();
+    this.lastWebWallpaperIdByToken.clear();
 
     for (const ws of Array.from(this.activeSockets)) {
       const cleanup = this.socketCleanups.get(ws);
@@ -1129,12 +1176,14 @@ export class DaemonRpcServer {
       rawPathPart.startsWith("/v1/wallpapers/") &&
       /(?:^|[\\/])\.\.(?:[\\/]|$)|%2e%2e|\0/i.test(rawPathPart)
     ) {
-      const parsedRawWebToken = rawPathPart.startsWith(WEB_TOKEN_ROUTE_PREFIX)
+      const parsedRawPathToken = rawPathPart.startsWith(WEB_TOKEN_ROUTE_PREFIX)
         ? parseWebTokenRoutePath(rawPathPart)
-        : null;
+        : rawPathPart.startsWith(SCENE_TOKEN_ROUTE_PREFIX)
+          ? parseSceneTokenRoutePath(rawPathPart)
+          : null;
       const pathTokenScope =
-        parsedRawWebToken !== null
-          ? this.pairingManager.resolveTokenScope(parsedRawWebToken.token)
+        parsedRawPathToken !== null
+          ? this.pairingManager.resolveTokenScope(parsedRawPathToken.token)
           : null;
       if (
         pathTokenScope === null &&
@@ -1313,7 +1362,13 @@ export class DaemonRpcServer {
         });
         return true;
       }
-      const refererWallpaperId = extractWebTokenRefererWallpaperId(req, parsed.token);
+      if (await this.wallpaperService.isWebWallpaperId(parsed.rawId)) {
+        this.lastWebWallpaperIdByToken.set(parsed.token, parsed.rawId);
+      }
+      const refererWallpaperId =
+        extractWebTokenRefererWallpaperId(req, parsed.token) ??
+        this.lastWebWallpaperIdByToken.get(parsed.token) ??
+        null;
       await this.wallpaperService.serveWebAsset(
         parsed.rawId,
         parsed.relPath,
@@ -1321,6 +1376,88 @@ export class DaemonRpcServer {
         res,
         { refererWallpaperId }
       );
+      return true;
+    }
+
+    if (
+      (method === "GET" || method === "HEAD") &&
+      (pathname === "/v1/wallpapers/scene-t" ||
+        pathname.startsWith(SCENE_TOKEN_ROUTE_PREFIX))
+    ) {
+      const parsed = parseSceneTokenRoutePath(pathname);
+      const trustedScope =
+        parsed !== null ? this.pairingManager.resolveTokenScope(parsed.token) : null;
+      if (parsed === null || trustedScope === null) {
+        writeJsonResponse(res, 401, {
+          ok: false,
+          error: {
+            code: "unauthorized",
+            message: "Missing or invalid Bearer token."
+          }
+        });
+        return true;
+      }
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      req.socket?.setTimeout?.(0);
+      res.setTimeout?.(0);
+      if (parsed.rawId.length === 0) {
+        writeJsonResponse(res, 404, {
+          ok: false,
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+        });
+        return true;
+      }
+      await this.wallpaperService.serveSceneAsset(
+        parsed.rawId,
+        parsed.relPath,
+        req,
+        res
+      );
+      return true;
+    }
+
+    if (
+      (method === "GET" || method === "HEAD") &&
+      (pathname === "/v1/wallpapers/scene" ||
+        pathname.startsWith("/v1/wallpapers/scene/"))
+    ) {
+      if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
+        return true;
+      }
+      const sceneQueryToken = requestUrl.searchParams.get("token")?.trim();
+      if (sceneQueryToken && sceneQueryToken.length > 0) {
+        res.setHeader(
+          "set-cookie",
+          `${SCENE_WALLPAPER_AUTH_COOKIE}=${encodeURIComponent(sceneQueryToken)}; HttpOnly; SameSite=Lax; Path=/v1/wallpapers/scene/`
+        );
+      }
+      if (!this.wallpaperService) {
+        throw new BusinessRouteError(
+          503,
+          "WALLPAPER_UNAVAILABLE",
+          "WallpaperMediaService is not configured."
+        );
+      }
+      req.socket?.setTimeout?.(0);
+      res.setTimeout?.(0);
+      const suffix = pathname.slice("/v1/wallpapers/scene/".length);
+      const slashIdx = suffix.indexOf("/");
+      const rawId = slashIdx >= 0 ? suffix.slice(0, slashIdx) : suffix;
+      const relPath = slashIdx >= 0 ? suffix.slice(slashIdx + 1) : "";
+      if (rawId.length === 0) {
+        writeJsonResponse(res, 404, {
+          ok: false,
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+        });
+        return true;
+      }
+      await this.wallpaperService.serveSceneAsset(rawId, relPath, req, res);
       return true;
     }
 

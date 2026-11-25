@@ -32,6 +32,7 @@ const ALLOWED_APPEARANCE_KEYS = new Set<keyof AppearanceConfig>([
   'accentMode',
   'accent',
   'glassPreset',
+  'glassThemeBase',
   'glassRegions',
   'glassColor',
   'glassDarkSeparate',

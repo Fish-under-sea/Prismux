@@ -574,6 +574,9 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
     expect(expandedHtml).toContain('data-reasoning-expanded="true"');
     expect(expandedHtml).toContain('data-disclosure-state="open"');
     expect(expandedHtml).toContain("sticky top-0");
+    expect(expandedHtml).toContain("bg-transparent");
+    expect(expandedHtml).not.toContain("bg-background/95");
+    expect(expandedHtml).not.toContain("bg-card/85");
     expect(expandedHtml).not.toContain('data-reasoning-separator="true"');
     expect(expandedHtml).not.toContain('data-reasoning-summary-preview="true"');
     expect(expandedHtml).toContain('data-reasoning-body="true"');

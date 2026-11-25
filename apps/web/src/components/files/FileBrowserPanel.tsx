@@ -103,25 +103,30 @@ function FileSearchField({
 }) {
   const gt = useGT();
   return (
-    <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
-      <InputGroupInput
-        ref={ref}
-        type="search"
-        name={props.name}
-        size="sm"
-        value={props.value}
-        aria-label={props.ariaLabel}
-        placeholder={gt("Search files")}
-        data-workspace-focus-default
-        spellCheck={false}
-        onChange={(event) => props.onValueChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Escape") return;
-          props.onClose();
-          event.currentTarget.blur();
-        }}
-      />
-    </InputGroup>
+    <div
+      data-pmx-file-search-pill="1"
+      className="flex h-7 min-w-0 flex-1 items-center rounded-lg border border-border/50 bg-background/45 px-1.5 transition-colors focus-within:border-primary/60 [[data-pmx-glass='1']_&]:border-white/15 [[data-pmx-glass='1']_&]:bg-white/6 light:[[data-pmx-glass='1']_&]:border-foreground/12 light:[[data-pmx-glass='1']_&]:bg-white/55"
+    >
+      <InputGroup variant="ghost" className="h-full min-w-0 flex-1">
+        <InputGroupInput
+          ref={ref}
+          type="search"
+          name={props.name}
+          size="sm"
+          value={props.value}
+          aria-label={props.ariaLabel}
+          placeholder={gt("Search files")}
+          data-workspace-focus-default
+          spellCheck={false}
+          onChange={(event) => props.onValueChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            props.onClose();
+            event.currentTarget.blur();
+          }}
+        />
+      </InputGroup>
+    </div>
   );
 }
 
@@ -547,8 +552,9 @@ export default function FileBrowserPanel({
 
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col bg-background"
+      className="flex min-h-0 flex-1 flex-col bg-background [[data-pmx-glass='1']_&]:bg-transparent [[data-pmx-wallpaper='1']_&]:bg-transparent [[data-pmx-wallpaper-visible='1']_&]:bg-transparent"
       data-file-browser-panel={`${environmentId}:${cwd}`}
+      data-pmx-file-tree="1"
       // Capture runs before the tree's shadow-internal row handler opens the menu.
       onContextMenuCapture={(event) => {
         contextMenuPointerRef.current = { x: event.clientX, y: event.clientY, at: event.timeStamp };
@@ -569,7 +575,7 @@ export default function FileBrowserPanel({
       }}
     >
       <div
-        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
+        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 [[data-pmx-glass='1']_&]:bg-transparent [[data-pmx-wallpaper='1']_&]:bg-transparent [[data-pmx-wallpaper-visible='1']_&]:bg-transparent in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
         data-surface-subheader
       >
         <RefreshFilesButton isPending={isPending} onRefresh={handleRefresh} />

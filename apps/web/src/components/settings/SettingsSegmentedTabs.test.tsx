@@ -17,6 +17,7 @@ import {
   SETTINGS_CONTROL_LG,
   SETTINGS_CONTROL_MD,
   SETTINGS_CONTROL_SM,
+  SettingsPageContainer,
   scrollToSettingsTarget,
 } from "./settingsLayout";
 import {
@@ -204,6 +205,9 @@ describe("Low-density Settings foundation tokens, container widths, and dark col
     const expandedHtml = renderToStaticMarkup(
       <WorkspacePageContainer width="expanded">Expanded</WorkspacePageContainer>,
     );
+    const fullHtml = renderToStaticMarkup(
+      <WorkspacePageContainer width="full">Full</WorkspacePageContainer>,
+    );
 
     expect(readableHtml).toContain("max-w-[820px]");
     expect(readableHtml).toContain("px-6");
@@ -212,6 +216,37 @@ describe("Low-density Settings foundation tokens, container widths, and dark col
     expect(readableHtml).toContain("gap-7");
     expect(wideHtml).toContain("max-w-[1040px]");
     expect(expandedHtml).toContain("max-w-[1040px]");
+    expect(fullHtml).toContain("max-w-none");
+  });
+
+  it("unifies SettingsPageContainer to full-width edge-to-edge fill regardless of legacy width props", () => {
+    const cases = [
+      renderToStaticMarkup(<SettingsPageContainer>Default</SettingsPageContainer>),
+      renderToStaticMarkup(
+        <SettingsPageContainer width="readable">Legacy Readable</SettingsPageContainer>,
+      ),
+      renderToStaticMarkup(<SettingsPageContainer width="wide">Legacy Wide</SettingsPageContainer>),
+      renderToStaticMarkup(
+        <SettingsPageContainer width="expanded">Legacy Expanded</SettingsPageContainer>,
+      ),
+      renderToStaticMarkup(
+        <SettingsPageContainer width="full" className="gap-8">
+          Explicit Full
+        </SettingsPageContainer>,
+      ),
+    ];
+
+    for (const html of cases) {
+      expect(html).toContain("data-settings-page-scroll");
+      expect(html).toContain("max-w-none");
+      expect(html).toContain("px-6");
+      expect(html).toContain("pt-6");
+      expect(html).toContain("pb-14");
+      expect(html).not.toContain("max-w-[820px]");
+      expect(html).not.toContain("max-w-[1040px]");
+      expect(html).not.toContain("mx-auto");
+    }
+    expect(cases[4]).toContain("gap-8");
   });
 
   it("defaults cold-start theme snapshot polarity to dark to eliminate white flash", () => {

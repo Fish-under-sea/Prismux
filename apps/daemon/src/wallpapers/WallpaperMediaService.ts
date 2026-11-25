@@ -1,6 +1,19 @@
-import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import type * as NodeHttp from "node:http";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import {
+  inspectSteamScenePackage,
+  renderSteamScenePlayerHtml,
+  type SteamScenePackageManifest
+} from "./SteamScenePackage.js";
+
+const { execFile } = NodeChildProcess;
+const { createHash, randomUUID } = NodeCrypto;
+const {
   closeSync,
   copyFileSync,
   createReadStream,
@@ -15,19 +28,21 @@ import {
   rmSync,
   statSync,
   writeFileSync
-} from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import {
+} = NodeFS;
+type IncomingMessage = NodeHttp.IncomingMessage;
+type ServerResponse = NodeHttp.ServerResponse;
+const {
   basename,
   dirname,
   extname,
   isAbsolute,
   join,
   relative,
-  resolve,
-  sep
-} from "node:path";
-import { promisify } from "node:util";
+  resolve
+} = NodePath;
+const { promisify } = NodeUtil;
+// oxlint-disable-next-line prismux/no-global-process-runtime -- @prismux/daemon is a standalone Node service outside the Effect HostProcess runtime
+const HOST_PLATFORM = NodeOS.platform();
 
 const execFileAsync = promisify(execFile);
 
@@ -131,6 +146,8 @@ interface IndexedWallpaperEntry {
   previewFile: string | null;
   webRootDir: string | null;
   webEntryRelPath: string | null;
+  scenePkgPath: string | null;
+  sceneManifest: SteamScenePackageManifest | null;
 }
 
 interface ByteRangeSuccess {
@@ -276,7 +293,7 @@ export function isPathStrictlyInsideDir(
   const resolvedCandidate = resolve(candidatePath);
   if (
     resolvedCandidate.toLowerCase() === resolvedRoot.toLowerCase() &&
-    process.platform === "win32"
+    HOST_PLATFORM === "win32"
   ) {
     return true;
   }
@@ -296,7 +313,7 @@ export function isPathStrictlyInsideDir(
       return true;
     }
     if (
-      process.platform === "win32" &&
+      HOST_PLATFORM === "win32" &&
       realCandidate.toLowerCase() === realRoot.toLowerCase()
     ) {
       return true;
@@ -363,6 +380,67 @@ export function safeResolveInsideDir(
   return candidate;
 }
 
+type WebAssetResolveOutcome =
+  | { ok: true; path: string }
+  | { ok: false; kind: "traversal" | "not_found" };
+
+function resolveWebAssetPath(
+  rootDir: string,
+  rawRelativePath: string
+): WebAssetResolveOutcome {
+  if (hasRawTraversal(rawRelativePath)) {
+    return { ok: false, kind: "traversal" };
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawRelativePath);
+  } catch {
+    return { ok: false, kind: "traversal" };
+  }
+  if (hasRawTraversal(decoded)) {
+    return { ok: false, kind: "traversal" };
+  }
+  const cleanRel = decoded.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (cleanRel.length === 0) {
+    return { ok: false, kind: "traversal" };
+  }
+
+  const resolvedRoot = resolve(rootDir);
+  const candidate = resolve(resolvedRoot, cleanRel);
+  const lexicalRel = relative(resolvedRoot, candidate);
+  if (lexicalRel.startsWith("..") || isAbsolute(lexicalRel)) {
+    return { ok: false, kind: "traversal" };
+  }
+
+  if (existsSync(candidate)) {
+    if (!isPathStrictlyInsideDir(candidate, resolvedRoot)) {
+      return { ok: false, kind: "traversal" };
+    }
+    return { ok: true, path: candidate };
+  }
+
+  // Verify the deepest existing parent directory does not escape via symlink before returning 404.
+  let ancestor = dirname(candidate);
+  while (ancestor !== resolvedRoot) {
+    const parentRel = relative(resolvedRoot, ancestor);
+    if (parentRel.startsWith("..") || isAbsolute(parentRel)) {
+      return { ok: false, kind: "traversal" };
+    }
+    if (existsSync(ancestor)) {
+      if (!isPathStrictlyInsideDir(ancestor, resolvedRoot)) {
+        return { ok: false, kind: "traversal" };
+      }
+      break;
+    }
+    const nextParent = dirname(ancestor);
+    if (nextParent === ancestor) {
+      break;
+    }
+    ancestor = nextParent;
+  }
+  return { ok: false, kind: "not_found" };
+}
+
 export function parseLibraryFoldersVdf(vdfText: string): string[] {
   const libraries: string[] = [];
   const seen = new Set<string>();
@@ -375,7 +453,7 @@ export function parseLibraryFoldersVdf(vdfText: string): string[] {
     }
     const normalized = resolve(rawPath);
     const key =
-      process.platform === "win32" ? normalized.toLowerCase() : normalized;
+      HOST_PLATFORM === "win32" ? normalized.toLowerCase() : normalized;
     if (!seen.has(key)) {
       seen.add(key);
       libraries.push(normalized);
@@ -1213,7 +1291,7 @@ async function queryWindowsRegistryValue(
   keyPath: string,
   valueName: string
 ): Promise<string | null> {
-  if (process.platform !== "win32") {
+  if (HOST_PLATFORM !== "win32") {
     return null;
   }
   try {
@@ -1245,7 +1323,7 @@ export async function discoverDefaultSteamRoots(): Promise<string[]> {
       return;
     }
     const resolved = resolve(dirPath.trim());
-    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    const key = HOST_PLATFORM === "win32" ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) {
       return;
     }
@@ -1255,7 +1333,7 @@ export async function discoverDefaultSteamRoots(): Promise<string[]> {
     }
   };
 
-  if (process.platform === "win32") {
+  if (HOST_PLATFORM === "win32") {
     const [hkcuSteam, hklmSteam] = await Promise.all([
       queryWindowsRegistryValue("HKCU\\SOFTWARE\\Valve\\Steam", "SteamPath"),
       queryWindowsRegistryValue(
@@ -1271,7 +1349,7 @@ export async function discoverDefaultSteamRoots(): Promise<string[]> {
     addCandidate("D:\\SteamLibrary");
     addCandidate("E:\\Steam");
     addCandidate("E:\\SteamLibrary");
-  } else if (process.platform === "darwin") {
+  } else if (HOST_PLATFORM === "darwin") {
     const home = process.env.HOME;
     if (home) {
       addCandidate(join(home, "Library", "Application Support", "Steam"));
@@ -1535,6 +1613,113 @@ export class WallpaperMediaService {
     this.streamValidatedFile(target, entry.allowedRoot, req, res, "private, max-age=300");
   }
 
+  async isWebWallpaperId(rawId: string): Promise<boolean> {
+    try {
+      const entry = await this.resolveIndexedEntry(rawId);
+      return Boolean(entry && entry.webRootDir);
+    } catch {
+      return false;
+    }
+  }
+
+  async serveSceneAsset(
+    rawId: string,
+    rawRelPath: string,
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<void> {
+    if (hasRawTraversal(rawRelPath)) {
+      this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Path traversal is forbidden.");
+      return;
+    }
+
+    const entry = await this.resolveIndexedEntry(rawId);
+    if (!entry || !entry.scenePkgPath) {
+      this.writeError(res, 404, "SCENE_WALLPAPER_NOT_FOUND", "Steam scene wallpaper not found.");
+      return;
+    }
+
+    if (!isPathStrictlyInsideDir(entry.scenePkgPath, entry.allowedRoot)) {
+      this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Scene package escapes allowed directory.");
+      return;
+    }
+
+    let manifest = entry.sceneManifest;
+    try {
+      const pkgStats = statSync(entry.scenePkgPath);
+      if (
+        !manifest ||
+        manifest.pkgFileSize !== pkgStats.size ||
+        manifest.pkgMtimeMs !== pkgStats.mtimeMs
+      ) {
+        manifest = inspectSteamScenePackage(entry.scenePkgPath);
+        entry.sceneManifest = manifest;
+      }
+    } catch {
+      this.writeError(res, 404, "SCENE_PACKAGE_MISSING", "Scene package file missing.");
+      return;
+    }
+
+    if (!manifest || manifest.layers.length === 0) {
+      this.writeError(res, 404, "SCENE_UNSUPPORTED", "Scene package has no renderable assets.");
+      return;
+    }
+
+    let decodedRel: string;
+    try {
+      decodedRel = decodeURIComponent(rawRelPath);
+    } catch {
+      this.writeError(res, 400, "INVALID_ASSET_PATH", "Malformed scene asset path.");
+      return;
+    }
+    if (hasRawTraversal(decodedRel)) {
+      this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Path traversal is forbidden.");
+      return;
+    }
+    const cleanRel = decodedRel.replace(/\\/g, "/").replace(/^\/+/, "");
+
+    if (cleanRel.length === 0 || cleanRel === "index.html") {
+      const html = renderSteamScenePlayerHtml(manifest, entry.item.title);
+      const body = Buffer.from(html, "utf8");
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": String(body.byteLength),
+        "cache-control": "no-cache",
+        "access-control-allow-origin": "*",
+        "cross-origin-resource-policy": "cross-origin"
+      });
+      if (req.method?.toUpperCase() === "HEAD") {
+        res.end();
+        return;
+      }
+      res.end(body);
+      return;
+    }
+
+    const assetMatch = /^asset\/(\d+)$/.exec(cleanRel);
+    if (!assetMatch) {
+      this.writeError(res, 404, "ASSET_NOT_FOUND", "Scene asset not found.");
+      return;
+    }
+    const assetIdx = Number.parseInt(assetMatch[1]!, 10);
+    const slice = Number.isInteger(assetIdx) ? manifest.assets[assetIdx] : undefined;
+    if (!slice) {
+      this.writeError(res, 404, "ASSET_NOT_FOUND", "Scene asset index not found.");
+      return;
+    }
+
+    this.streamValidatedFileSlice(
+      entry.scenePkgPath,
+      entry.allowedRoot,
+      slice.byteStart,
+      slice.byteLength,
+      slice.mimeType,
+      req,
+      res,
+      "private, max-age=300"
+    );
+  }
+
   async serveWebAsset(
     rawId: string,
     rawRelPath: string,
@@ -1575,17 +1760,17 @@ export class WallpaperMediaService {
         ? (entry.webEntryRelPath ?? "index.html")
         : effectiveRelPath;
 
-    const resolvedAsset = safeResolveInsideDir(entry.webRootDir, requestedRel);
-    if (resolvedAsset === null) {
+    const resolvedOutcome = resolveWebAssetPath(entry.webRootDir, requestedRel);
+    if (!resolvedOutcome.ok) {
+      if (resolvedOutcome.kind === "not_found") {
+        this.writeError(res, 404, "ASSET_NOT_FOUND", "Web wallpaper asset not found.");
+        return;
+      }
       this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Asset path escapes wallpaper directory.");
       return;
     }
 
-    if (!existsSync(resolvedAsset)) {
-      this.writeError(res, 404, "ASSET_NOT_FOUND", "Web wallpaper asset not found.");
-      return;
-    }
-
+    const resolvedAsset = resolvedOutcome.path;
     const ext = extname(resolvedAsset).toLowerCase();
     if ((ext === ".html" || ext === ".htm") && !req.headers.range) {
       this.serveWebHtmlWithBridge(resolvedAsset, entry, req, res);
@@ -1593,6 +1778,579 @@ export class WallpaperMediaService {
     }
 
     this.streamValidatedFile(resolvedAsset, entry.webRootDir, req, res, "no-cache");
+  }
+
+  /** Early `<head>` bridge script for master audio, `../` URL clamping, and init reload guards. */
+  private buildWebBridgeScript(
+    defaultProps: Record<string, { value: string | number | boolean | null }>
+  ): string {
+    const serializedDefaults = JSON.stringify(defaultProps).replace(/</g, "\\u003c");
+    return `<style data-pmx-we-style="1">html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000;}:where(body > canvas#canvas){display:block;width:100%;height:100%;}</style><script data-pmx-we-bridge="1">(()=>{
+const d=${serializedDefaults};
+let delivered=false,lastVals=Object.create(null),timer=null;
+let pendingInit=null,layoutRafId=0,layoutFallbackTimer=null;
+let masterMuted=true,masterVol=0,isPaused=false;
+let webReadySent=false;
+const seenInitUrls=[];
+
+const wpRootUrl=(()=>{try{return new URL("./",window.location.href);}catch{return null;}})();
+const wpRootHref=wpRootUrl?wpRootUrl.href:"";
+const wpRootOrigin=wpRootUrl?wpRootUrl.origin:"";
+const wpRootPath=wpRootUrl?wpRootUrl.pathname:"";
+const prefixMatch=/^(\\/v1\\/wallpapers\\/web-t\\/[^/]+\\/|\\/v1\\/wallpapers\\/web\\/)/.exec(wpRootPath);
+const tokenPrefix=prefixMatch?prefixMatch[1]:null;
+const wpIdSeg=tokenPrefix?wpRootPath.slice(tokenPrefix.length).split("/")[0]:"";
+
+function recordInitUrl(u){
+  if(delivered||seenInitUrls.length>=200||typeof u!=="string")return;
+  seenInitUrls.push(u.toLowerCase());
+}
+
+function rewriteEscapedUrl(raw){
+  if(typeof raw!=="string")return raw;
+  const trimmed=raw.trim();
+  if(!trimmed||/^(?:data:|blob:|javascript:|about:|#)/i.test(trimmed))return raw;
+  recordInitUrl(trimmed);
+  if(!tokenPrefix||!wpRootHref)return raw;
+  try{
+    const resolved=new URL(trimmed,window.location.href);
+    if(resolved.origin===wpRootOrigin&&resolved.pathname.startsWith(tokenPrefix)&&!resolved.pathname.startsWith(wpRootPath)){
+      const overflow=resolved.pathname.slice(tokenPrefix.length).replace(/^\\/+/, "");
+      if(overflow.length>0&&overflow.split("/")[0]!==wpIdSeg){
+        const rewritten=wpRootHref+overflow+resolved.search+resolved.hash;
+        recordInitUrl(rewritten);
+        return rewritten;
+      }
+    }
+  }catch{}
+  return raw;
+}
+
+// 1. Clamp escaped relative "../" asset fetches without altering caller asset keys
+if(typeof XMLHttpRequest==="function"&&XMLHttpRequest.prototype&&typeof XMLHttpRequest.prototype.open==="function"){
+  const origXhrOpen=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(method,url){
+    const args=Array.prototype.slice.call(arguments);
+    if(typeof url==="string"){args[1]=rewriteEscapedUrl(url);}
+    else if(url&&typeof url.href==="string"){args[1]=rewriteEscapedUrl(url.href);}
+    return origXhrOpen.apply(this,args);
+  };
+}
+if(typeof window.fetch==="function"){
+  const origFetch=window.fetch.bind(window);
+  window.fetch=function(input,init){
+    if(typeof input==="string"){
+      return origFetch(rewriteEscapedUrl(input),init);
+    }
+    if(input&&typeof input==="object"){
+      if(typeof URL==="function"&&input instanceof URL){
+        return origFetch(rewriteEscapedUrl(input.href),init);
+      }
+      if(typeof Request==="function"&&input instanceof Request){
+        const nextUrl=rewriteEscapedUrl(input.url);
+        if(nextUrl!==input.url){
+          return origFetch(new Request(nextUrl,input),init);
+        }
+      }
+    }
+    return origFetch(input,init);
+  };
+}
+if(typeof HTMLImageElement==="function"&&HTMLImageElement.prototype){
+  const imgSrcDesc=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src");
+  if(imgSrcDesc&&imgSrcDesc.set){
+    Object.defineProperty(HTMLImageElement.prototype,"src",{
+      configurable:true,
+      enumerable:imgSrcDesc.enumerable!==false,
+      get:function(){return imgSrcDesc.get?imgSrcDesc.get.call(this):"";},
+      set:function(v){imgSrcDesc.set.call(this,typeof v==="string"?rewriteEscapedUrl(v):v);}
+    });
+  }
+  const origImgSetAttr=HTMLImageElement.prototype.setAttribute;
+  if(typeof origImgSetAttr==="function"){
+    HTMLImageElement.prototype.setAttribute=function(name,val){
+      if(typeof name==="string"&&name.toLowerCase()==="src"&&typeof val==="string"){
+        return origImgSetAttr.call(this,name,rewriteEscapedUrl(val));
+      }
+      return origImgSetAttr.call(this,name,val);
+    };
+  }
+}
+
+// 2. Master Audio Controller (starts strictly muted at volume 0 until host sends audio state)
+const mediaState=new WeakMap();
+const trackedMedia=new Set();
+const audioCtxSet=new Set();
+const ctxGainMap=new WeakMap();
+const masterGainNodes=new WeakSet();
+
+const mediaProto=typeof HTMLMediaElement==="function"?HTMLMediaElement.prototype:null;
+const origVolDesc=mediaProto?Object.getOwnPropertyDescriptor(mediaProto,"volume"):null;
+const origMutedDesc=mediaProto?Object.getOwnPropertyDescriptor(mediaProto,"muted"):null;
+const origMediaSrcDesc=mediaProto?Object.getOwnPropertyDescriptor(mediaProto,"src"):null;
+const origPlay=mediaProto&&typeof mediaProto.play==="function"?mediaProto.play:null;
+const origPause=mediaProto&&typeof mediaProto.pause==="function"?mediaProto.pause:null;
+
+function getMediaInfo(el){
+  let info=mediaState.get(el);
+  if(!info){
+    const initialVol=origVolDesc&&origVolDesc.get?origVolDesc.get.call(el):1;
+    const initialMuted=origMutedDesc&&origMutedDesc.get?origMutedDesc.get.call(el):false;
+    info={
+      baseVol:typeof initialVol==="number"&&Number.isFinite(initialVol)?Math.max(0,Math.min(1,initialVol)):1,
+      baseMuted:Boolean(initialMuted),
+      pausedByHost:false
+    };
+    mediaState.set(el,info);
+  }
+  return info;
+}
+
+function syncMediaElement(el){
+  if(!el)return;
+  const info=getMediaInfo(el);
+  const effMuted=masterMuted||masterVol<=0||info.baseMuted;
+  const effVol=effMuted?0:Math.max(0,Math.min(1,info.baseVol*masterVol));
+  try{if(origMutedDesc&&origMutedDesc.set)origMutedDesc.set.call(el,effMuted);}catch{}
+  try{if(origVolDesc&&origVolDesc.set)origVolDesc.set.call(el,effVol);}catch{}
+}
+
+function trackMediaElement(el){
+  if(!el||trackedMedia.has(el))return;
+  trackedMedia.add(el);
+  getMediaInfo(el);
+  syncMediaElement(el);
+  try{
+    if(typeof el.addEventListener==="function"){
+      el.addEventListener("ended",()=>{
+        if(!el.loop&&!el.isConnected){trackedMedia.delete(el);}
+      });
+    }
+  }catch{}
+}
+
+if(mediaProto){
+  if(origVolDesc&&origVolDesc.set){
+    Object.defineProperty(mediaProto,"volume",{
+      configurable:true,
+      enumerable:origVolDesc.enumerable!==false,
+      get:function(){return getMediaInfo(this).baseVol;},
+      set:function(v){
+        const n=Number(v);
+        const info=getMediaInfo(this);
+        info.baseVol=Number.isFinite(n)?Math.max(0,Math.min(1,n)):1;
+        trackMediaElement(this);
+        syncMediaElement(this);
+      }
+    });
+  }
+  if(origMutedDesc&&origMutedDesc.set){
+    Object.defineProperty(mediaProto,"muted",{
+      configurable:true,
+      enumerable:origMutedDesc.enumerable!==false,
+      get:function(){return getMediaInfo(this).baseMuted;},
+      set:function(v){
+        const info=getMediaInfo(this);
+        info.baseMuted=Boolean(v);
+        trackMediaElement(this);
+        syncMediaElement(this);
+      }
+    });
+  }
+  if(origMediaSrcDesc&&origMediaSrcDesc.set){
+    Object.defineProperty(mediaProto,"src",{
+      configurable:true,
+      enumerable:origMediaSrcDesc.enumerable!==false,
+      get:function(){return origMediaSrcDesc.get?origMediaSrcDesc.get.call(this):"";},
+      set:function(v){
+        trackMediaElement(this);
+        origMediaSrcDesc.set.call(this,typeof v==="string"?rewriteEscapedUrl(v):v);
+      }
+    });
+  }
+  const origMediaSetAttr=mediaProto.setAttribute;
+  if(typeof origMediaSetAttr==="function"){
+    mediaProto.setAttribute=function(name,val){
+      if(typeof name==="string"&&name.toLowerCase()==="src"&&typeof val==="string"){
+        trackMediaElement(this);
+        return origMediaSetAttr.call(this,name,rewriteEscapedUrl(val));
+      }
+      return origMediaSetAttr.call(this,name,val);
+    };
+  }
+  if(origPlay){
+    mediaProto.play=function(){
+      trackMediaElement(this);
+      const info=getMediaInfo(this);
+      syncMediaElement(this);
+      if(isPaused){
+        info.pausedByHost=true;
+        if(origPause){try{origPause.call(this);}catch{}}
+        return Promise.resolve();
+      }
+      info.pausedByHost=false;
+      return origPlay.call(this);
+    };
+  }
+  if(origPause){
+    mediaProto.pause=function(){
+      const info=getMediaInfo(this);
+      info.pausedByHost=false;
+      return origPause.call(this);
+    };
+  }
+}
+
+if(typeof window.Audio==="function"){
+  const OrigAudio=window.Audio;
+  const PatchedAudio=function(src){
+    const el=arguments.length>0?new OrigAudio(typeof src==="string"?rewriteEscapedUrl(src):src):new OrigAudio();
+    trackMediaElement(el);
+    return el;
+  };
+  PatchedAudio.prototype=OrigAudio.prototype;
+  try{Object.setPrototypeOf(PatchedAudio,OrigAudio);}catch{}
+  window.Audio=PatchedAudio;
+}
+
+if(typeof Document==="function"&&Document.prototype){
+  if(typeof Document.prototype.createElement==="function"){
+    const origCreate=Document.prototype.createElement;
+    Document.prototype.createElement=function(tagName){
+      const el=origCreate.apply(this,arguments);
+      if(typeof tagName==="string"){
+        const lower=tagName.toLowerCase();
+        if(lower==="audio"||lower==="video"){trackMediaElement(el);}
+      }
+      return el;
+    };
+  }
+  if(typeof Document.prototype.createElementNS==="function"){
+    const origCreateNS=Document.prototype.createElementNS;
+    Document.prototype.createElementNS=function(ns,tagName){
+      const el=origCreateNS.apply(this,arguments);
+      if(typeof tagName==="string"){
+        const lower=tagName.toLowerCase();
+        if(lower==="audio"||lower==="video"){trackMediaElement(el);}
+      }
+      return el;
+    };
+  }
+}
+
+const origAudioNodeConnect=typeof AudioNode==="function"&&AudioNode.prototype&&typeof AudioNode.prototype.connect==="function"?AudioNode.prototype.connect:null;
+
+function ensureCtxGain(ctx){
+  if(!ctx)return null;
+  let gain=ctxGainMap.get(ctx);
+  if(!gain&&typeof ctx.createGain==="function"&&origAudioNodeConnect){
+    try{
+      gain=ctx.createGain();
+      gain.gain.value=(masterMuted||masterVol<=0)?0:masterVol;
+      masterGainNodes.add(gain);
+      origAudioNodeConnect.call(gain,ctx.destination);
+      ctxGainMap.set(ctx,gain);
+      audioCtxSet.add(ctx);
+    }catch{
+      return null;
+    }
+  }
+  return gain||null;
+}
+
+if(origAudioNodeConnect){
+  AudioNode.prototype.connect=function(dest){
+    if(this&&!masterGainNodes.has(this)&&this.context&&dest===this.context.destination){
+      const gain=ensureCtxGain(this.context);
+      if(gain){
+        const args=Array.prototype.slice.call(arguments);
+        args[0]=gain;
+        return origAudioNodeConnect.apply(this,args);
+      }
+    }
+    return origAudioNodeConnect.apply(this,arguments);
+  };
+}
+
+function syncAudioContext(ctx){
+  const gain=ensureCtxGain(ctx);
+  const silent=isPaused||masterMuted||masterVol<=0;
+  if(gain&&gain.gain){
+    try{gain.gain.value=silent?0:masterVol;}catch{}
+  }
+  try{
+    if(silent){
+      if(typeof ctx.suspend==="function"&&ctx.state!=="closed"){ctx.suspend().catch(()=>{});}
+    }else{
+      if(typeof ctx.resume==="function"&&ctx.state==="suspended"){ctx.resume().catch(()=>{});}
+    }
+  }catch{}
+}
+
+function wrapAudioContextCtor(propName){
+  const OrigCtx=window[propName];
+  if(typeof OrigCtx!=="function")return;
+  const WrappedCtx=function(){
+    const ctx=Reflect.construct(OrigCtx,arguments,new.target||OrigCtx);
+    audioCtxSet.add(ctx);
+    syncAudioContext(ctx);
+    return ctx;
+  };
+  WrappedCtx.prototype=OrigCtx.prototype;
+  try{Object.setPrototypeOf(WrappedCtx,OrigCtx);}catch{}
+  window[propName]=WrappedCtx;
+}
+wrapAudioContextCtor("AudioContext");
+wrapAudioContextCtor("webkitAudioContext");
+
+function applyMasterAudio(nextMuted,nextVol){
+  const clamped=typeof nextVol==="number"&&Number.isFinite(nextVol)?Math.max(0,Math.min(1,nextVol)):masterVol;
+  const effMuted=Boolean(nextMuted)||clamped<=0;
+  masterMuted=effMuted;
+  masterVol=effMuted?0:clamped;
+  try{
+    if(document&&typeof document.querySelectorAll==="function"){
+      const nodes=document.querySelectorAll("audio,video");
+      for(let i=0;i<nodes.length;i++){trackMediaElement(nodes[i]);}
+    }
+  }catch{}
+  trackedMedia.forEach((el)=>{syncMediaElement(el);});
+  audioCtxSet.forEach((ctx)=>{syncAudioContext(ctx);});
+}
+
+function applyMasterPaused(nextPaused){
+  const norm=Boolean(nextPaused);
+  if(isPaused===norm)return;
+  isPaused=norm;
+  try{
+    if(document&&typeof document.querySelectorAll==="function"){
+      const nodes=document.querySelectorAll("audio,video");
+      for(let i=0;i<nodes.length;i++){trackMediaElement(nodes[i]);}
+    }
+  }catch{}
+  trackedMedia.forEach((el)=>{
+    const info=getMediaInfo(el);
+    if(isPaused){
+      if(!el.paused){
+        info.pausedByHost=true;
+        if(origPause){try{origPause.call(el);}catch{}}
+      }
+    }else{
+      syncMediaElement(el);
+      if(info.pausedByHost){
+        info.pausedByHost=false;
+        if(origPlay){try{origPlay.call(el).catch(()=>{});}catch{}}
+      }
+    }
+  });
+  audioCtxSet.forEach((ctx)=>{syncAudioContext(ctx);});
+}
+
+// 3. Wallpaper Engine property bridge + duplicate initial modelresolution reload guard
+if(typeof window.wallpaperRegisterAudioListener!=="function"){
+  window.wallpaperRegisterAudioListener=function(cb){window.__pmxWeAudioListener=cb;};
+}
+
+function hasInitResolutionDownload(resVal){
+  const token=String(resVal||"").trim().toLowerCase();
+  if(!token)return false;
+  const escaped=token.replace(/[.*+?^$()|[\\]\\\\]/g,"\\\\$&");
+  const re=new RegExp("(?:^|[\\\\/_.-])"+escaped+"(?:[\\\\/_.-]|$)");
+  for(let i=0;i<seenInitUrls.length;i++){
+    if(re.test(seenInitUrls[i]))return true;
+  }
+  return false;
+}
+
+function applyProps(raw,isInitial,rawOverrides){
+  const l=window.wallpaperPropertyListener;
+  if(!l||typeof l.applyUserProperties!=="function")return false;
+  const out={};
+  let n=0;
+  for(const k of Object.keys(raw)){
+    const item=raw[k];
+    if(!item||typeof item!=="object"||!("value" in item))continue;
+    if(isInitial&&k==="modelresolution"){
+      const defVal=d&&d.modelresolution?d.modelresolution.value:undefined;
+      const userChanged=Boolean(rawOverrides&&rawOverrides.modelresolution&&typeof rawOverrides.modelresolution==="object"&&rawOverrides.modelresolution.value!==defVal);
+      if(!userChanged&&item.value===defVal&&hasInitResolutionDownload(item.value)){
+        lastVals[k]=item.value;
+        continue;
+      }
+    }
+    if(!isInitial&&Object.prototype.hasOwnProperty.call(lastVals,k)&&lastVals[k]===item.value)continue;
+    lastVals[k]=item.value;
+    out[k]=item;
+    n++;
+  }
+  if(n>0||isInitial){try{l.applyUserProperties(out);}catch{}}
+  return true;
+}
+
+function hasViewportLayout(){
+  const de=document&&document.documentElement;
+  if(!de)return true;
+  return de.clientWidth>0&&de.clientHeight>0;
+}
+
+function clearLayoutDefer(){
+  if(layoutRafId&&typeof cancelAnimationFrame==="function"){cancelAnimationFrame(layoutRafId);}
+  layoutRafId=0;
+  if(layoutFallbackTimer){clearTimeout(layoutFallbackTimer);layoutFallbackTimer=null;}
+}
+
+function flushPendingInit(force){
+  if(delivered||!pendingInit)return;
+  if(!force&&!hasViewportLayout())return;
+  const next=pendingInit;
+  pendingInit=null;
+  clearLayoutDefer();
+  deliver(next.raw,next.gen,null,true);
+}
+
+function scheduleLayoutDefer(){
+  if(delivered||!pendingInit)return;
+  if(!layoutFallbackTimer){
+    layoutFallbackTimer=setTimeout(()=>{
+      layoutFallbackTimer=null;
+      flushPendingInit(true);
+    },300);
+  }
+  if(!layoutRafId&&typeof requestAnimationFrame==="function"){
+    const step=()=>{
+      layoutRafId=0;
+      if(delivered||!pendingInit)return;
+      if(hasViewportLayout()){
+        flushPendingInit(false);
+      }else{
+        layoutRafId=requestAnimationFrame(step);
+      }
+    };
+    layoutRafId=requestAnimationFrame(step);
+  }
+}
+
+function deliver(raw,gen,audio,forceInit){
+  if(audio&&typeof audio==="object"){
+    applyMasterAudio(audio.muted,audio.volume);
+  }
+  if(gen&&typeof gen.paused==="boolean"){
+    applyMasterPaused(gen.paused);
+  }
+  const isInit=!delivered;
+  if(isInit&&!forceInit&&!hasViewportLayout()){
+    if(!pendingInit){
+      pendingInit={
+        raw:raw&&typeof raw==="object"?Object.assign({},raw):{},
+        gen:gen&&typeof gen==="object"?Object.assign({},gen):null
+      };
+    }else{
+      if(raw&&typeof raw==="object"){Object.assign(pendingInit.raw,raw);}
+      if(gen&&typeof gen==="object"){pendingInit.gen=Object.assign({},pendingInit.gen||{},gen);}
+    }
+    if(timer){clearTimeout(timer);timer=null;}
+    scheduleLayoutDefer();
+    return;
+  }
+  const merged=isInit?Object.assign({},d,raw||{}):(raw||{});
+  if(applyProps(merged,isInit,raw||null)){
+    delivered=true;
+    pendingInit=null;
+    clearLayoutDefer();
+    if(timer){clearTimeout(timer);timer=null;}
+  }
+  const l=window.wallpaperPropertyListener;
+  if(gen&&l){
+    if(typeof l.applyGeneralProperties==="function"){try{l.applyGeneralProperties(gen);}catch{}}
+    if(typeof gen.paused==="boolean"&&typeof l.setPaused==="function"){try{l.setPaused(gen.paused);}catch{}}
+  }
+}
+
+window.addEventListener("message",(e)=>{
+  const m=e&&e.data;
+  if(!m||typeof m!=="object")return;
+  if(m.type==="prismuxWallpaperAudio"){
+    applyMasterAudio(m.muted,m.volume);
+    return;
+  }
+  if(m.type==="wallpaperPropertyListener"){
+    deliver(m.applyUserProperties,m.applyGeneralProperties,m.audio);
+  }
+});
+
+// 4. Readiness signals (prismuxWeBridgeReady + prismuxWebReady) & container resize sync
+function postParent(msg){
+  try{if(window.parent&&window.parent!==window){window.parent.postMessage(msg,"*");}}catch{}
+}
+function notifyBridgeReady(){postParent({type:"prismuxWeBridgeReady"});}
+function markWebReady(){
+  if(webReadySent)return;
+  webReadySent=true;
+  postParent({type:"prismuxWebReady"});
+}
+
+function patchWebGlReady(ctorName){
+  const Ctor=window[ctorName];
+  if(typeof Ctor!=="function"||!Ctor.prototype)return;
+  for(const fnName of ["drawElements","drawArrays"]){
+    const orig=Ctor.prototype[fnName];
+    if(typeof orig!=="function")continue;
+    Ctor.prototype[fnName]=function(mode,count){
+      const res=orig.apply(this,arguments);
+      if(!webReadySent&&typeof count==="number"&&count>0){
+        queueMicrotask(markWebReady);
+      }
+      return res;
+    };
+  }
+}
+patchWebGlReady("WebGLRenderingContext");
+patchWebGlReady("WebGL2RenderingContext");
+
+function scheduleFallback(){
+  if(delivered||timer||pendingInit)return;
+  timer=setTimeout(()=>{timer=null;if(!delivered&&!pendingInit)deliver({},null,null);},80);
+}
+
+function onDomReady(){
+  notifyBridgeReady();
+  scheduleFallback();
+  if(pendingInit&&!delivered&&hasViewportLayout()){flushPendingInit(false);}
+  try{
+    if(typeof ResizeObserver==="function"&&document.documentElement){
+      let lastW=document.documentElement.clientWidth,lastH=document.documentElement.clientHeight;
+      let rzTimer=null;
+      const ro=new ResizeObserver(()=>{
+        const w=document.documentElement.clientWidth,h=document.documentElement.clientHeight;
+        if(w>0&&h>0&&pendingInit&&!delivered){
+          flushPendingInit(false);
+        }
+        if(w===lastW&&h===lastH)return;
+        lastW=w;lastH=h;
+        if(rzTimer)clearTimeout(rzTimer);
+        rzTimer=setTimeout(()=>{rzTimer=null;try{window.dispatchEvent(new Event("resize"));}catch{}},32);
+      });
+      ro.observe(document.documentElement);
+    }
+  }catch{}
+}
+
+if(document.readyState==="loading"){
+  document.addEventListener("DOMContentLoaded",onDomReady,{once:true});
+}else{
+  onDomReady();
+}
+window.addEventListener("load",()=>{
+  notifyBridgeReady();
+  scheduleFallback();
+  const hasCanvas=Boolean(document&&document.querySelector&&document.querySelector("canvas"));
+  if(!hasCanvas){
+    if(typeof requestAnimationFrame==="function"){requestAnimationFrame(markWebReady);}else{markWebReady();}
+  }else{
+    setTimeout(markWebReady,1200);
+  }
+},{once:true});
+})();</script>`;
   }
 
   /**
@@ -1624,8 +2382,7 @@ export class WallpaperMediaService {
     for (const prop of entry.item.userProperties ?? []) {
       defaultProps[prop.name] = { value: prop.defaultValue };
     }
-    const serializedDefaults = JSON.stringify(defaultProps).replace(/</g, "\\u003c");
-    const bridgeScript = `<script data-pmx-we-bridge="1">(()=>{const d=${serializedDefaults};let delivered=false,lastVals=Object.create(null),timer=null;if(typeof window.wallpaperRegisterAudioListener!=="function"){window.wallpaperRegisterAudioListener=function(cb){window.__pmxWeAudioListener=cb;};}function applyProps(raw,isInitial){const l=window.wallpaperPropertyListener;if(!l||typeof l.applyUserProperties!=="function")return false;const out={};let n=0;for(const k of Object.keys(raw)){const item=raw[k];if(!item||typeof item!=="object"||!("value" in item))continue;if(!isInitial&&Object.prototype.hasOwnProperty.call(lastVals,k)&&lastVals[k]===item.value)continue;lastVals[k]=item.value;out[k]=item;n++;}if(n>0||isInitial){try{l.applyUserProperties(out);}catch{}}return true;}function deliver(raw,gen){const isInit=!delivered;const merged=isInit?Object.assign({},d,raw||{}):(raw||{});if(applyProps(merged,isInit)){delivered=true;if(timer){clearTimeout(timer);timer=null;}}const l=window.wallpaperPropertyListener;if(gen&&l){if(typeof l.applyGeneralProperties==="function"){try{l.applyGeneralProperties(gen);}catch{}}if(typeof gen.paused==="boolean"&&typeof l.setPaused==="function"){try{l.setPaused(gen.paused);}catch{}}}}window.addEventListener("message",(e)=>{const m=e&&e.data;if(!m||typeof m!=="object")return;if(m.type==="wallpaperPropertyListener"){deliver(m.applyUserProperties,m.applyGeneralProperties);}});function scheduleFallback(){if(delivered||timer)return;timer=setTimeout(()=>{timer=null;if(!delivered)deliver({},null);},80);}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",scheduleFallback,{once:true});}else{scheduleFallback();}window.addEventListener("load",scheduleFallback,{once:true});})();</script>`;
+    const bridgeScript = this.buildWebBridgeScript(defaultProps);
 
     const headOpenMatch = /<head\b[^>]*>/i.exec(htmlText);
     const injectedHtml = headOpenMatch
@@ -1637,6 +2394,7 @@ export class WallpaperMediaService {
       "content-type": "text/html; charset=utf-8",
       "content-length": String(body.byteLength),
       "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
       "cross-origin-resource-policy": "cross-origin"
     });
     if (req.method?.toUpperCase() === "HEAD") {
@@ -1683,7 +2441,7 @@ export class WallpaperMediaService {
     const addRoot = (candidate: string) => {
       const normalized = resolve(candidate);
       const key =
-        process.platform === "win32" ? normalized.toLowerCase() : normalized;
+        HOST_PLATFORM === "win32" ? normalized.toLowerCase() : normalized;
       if (!seen.has(key) && existsSync(normalized)) {
         seen.add(key);
         roots.push(normalized);
@@ -1735,7 +2493,7 @@ export class WallpaperMediaService {
         continue;
       }
       const key =
-        process.platform === "win32" ? candidate.toLowerCase() : candidate;
+        HOST_PLATFORM === "win32" ? candidate.toLowerCase() : candidate;
       if (!seen.has(key)) {
         seen.add(key);
         dirs.push(candidate);
@@ -1831,10 +2589,25 @@ export class WallpaperMediaService {
         : [];
 
       let dimensions: { width: number; height: number } | null = null;
+      let scenePkgPath: string | null = null;
+      let sceneManifest: SteamScenePackageManifest | null = null;
+
       if (type === "video" && resolvedMedia) {
         dimensions = readVideoDimensions(resolvedMedia);
       } else if (type === "image" && resolvedMedia) {
         dimensions = readImageDimensions(resolvedMedia);
+      } else if (type === "scene") {
+        const candidatePkg = safeResolveLocalPath(itemDir, "scene.pkg");
+        if (candidatePkg && existsSync(candidatePkg)) {
+          scenePkgPath = candidatePkg;
+          sceneManifest = inspectSteamScenePackage(candidatePkg);
+          if (sceneManifest && sceneManifest.layers.length > 0) {
+            dimensions = {
+              width: sceneManifest.width,
+              height: sceneManifest.height
+            };
+          }
+        }
       }
       if (!dimensions && resolvedPreview) {
         dimensions = readImageDimensions(resolvedPreview);
@@ -1842,7 +2615,7 @@ export class WallpaperMediaService {
 
       let fileSize: number | undefined;
       let mtimeMs: number | undefined;
-      const statTarget = resolvedMedia ?? resolvedPreview;
+      const statTarget = resolvedMedia ?? scenePkgPath ?? resolvedPreview;
       if (statTarget) {
         try {
           const st = statSync(statTarget);
@@ -1861,12 +2634,20 @@ export class WallpaperMediaService {
       let mediaUrl: string | null = null;
       let webEntryUrl: string | null = null;
       let webEntryRelPath: string | null = null;
+      const sceneLiveSupported =
+        type === "scene" &&
+        sceneManifest !== null &&
+        sceneManifest.layers.length > 0;
 
       if (type === "web" && rawFile && resolvedMedia) {
         const rel = relative(itemDir, resolvedMedia).replace(/\\/g, "/");
         webEntryRelPath = rel;
         webEntryUrl = `/v1/wallpapers/web/${encodedId}/${encodeWebPathSegments(rel)}`;
         mediaUrl = webEntryUrl;
+      } else if (sceneLiveSupported) {
+        const sceneUrl = `/v1/wallpapers/scene/${encodedId}/index.html`;
+        webEntryUrl = sceneUrl;
+        mediaUrl = sceneUrl;
       } else if ((type === "video" || type === "image") && resolvedMedia) {
         mediaUrl = `/v1/wallpapers/media/${encodedId}`;
       } else if (resolvedPreview) {
@@ -1881,7 +2662,7 @@ export class WallpaperMediaService {
         previewUrl,
         mediaUrl,
         ...(webEntryUrl !== null ? { webEntryUrl } : {}),
-        filePath: resolvedMedia ?? resolvedPreview,
+        filePath: resolvedMedia ?? scenePkgPath ?? resolvedPreview,
         dirPath: itemDir,
         width: dimensions?.width ?? null,
         height: dimensions?.height ?? null,
@@ -1893,7 +2674,7 @@ export class WallpaperMediaService {
         ...(props.length > 0 ? { userProperties: props } : {}),
         ...(tags.length > 0 ? { tags } : {}),
         ...(schemeColor !== null ? { schemeColor } : {}),
-        sceneLiveSupported: false,
+        sceneLiveSupported,
         webLiveSupported: type === "web" && resolvedMedia !== null,
         ...(fileSize !== undefined ? { fileSize } : {}),
         ...(mtimeMs !== undefined ? { mtimeMs } : {})
@@ -1906,7 +2687,9 @@ export class WallpaperMediaService {
         mediaFile: resolvedMedia,
         previewFile: resolvedPreview,
         webRootDir: type === "web" ? itemDir : null,
-        webEntryRelPath
+        webEntryRelPath,
+        scenePkgPath,
+        sceneManifest
       });
     }
   }
@@ -2067,9 +2850,134 @@ export class WallpaperMediaService {
         mediaFile: fullPath,
         previewFile: isVideo ? null : fullPath,
         webRootDir: null,
-        webEntryRelPath: null
+        webEntryRelPath: null,
+        scenePkgPath: null,
+        sceneManifest: null
       });
     }
+  }
+
+  private streamValidatedFileSlice(
+    filePath: string,
+    allowedRoot: string,
+    sliceStart: number,
+    sliceLength: number,
+    contentType: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+    cacheControl: string
+  ): void {
+    if (!isPathStrictlyInsideDir(filePath, allowedRoot)) {
+      this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "File is outside allowed directory.");
+      return;
+    }
+
+    let stats;
+    try {
+      stats = statSync(filePath);
+    } catch {
+      this.writeError(res, 404, "FILE_NOT_FOUND", "Scene package file missing.");
+      return;
+    }
+
+    if (
+      !stats.isFile() ||
+      sliceStart < 0 ||
+      sliceLength < 0 ||
+      sliceStart + sliceLength > stats.size
+    ) {
+      this.writeError(res, 404, "ASSET_OUT_OF_RANGE", "Scene asset byte range is invalid.");
+      return;
+    }
+
+    const totalSize = sliceLength;
+    const etag = `"${sliceStart.toString(16)}-${totalSize.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
+    const parsedRange = parseByteRangeHeader(req.headers.range, totalSize);
+
+    if (!parsedRange.ok) {
+      res.writeHead(416, {
+        "accept-ranges": "bytes",
+        "content-range": `bytes */${totalSize}`,
+        "cache-control": cacheControl,
+        "access-control-allow-origin": "*",
+        "cross-origin-resource-policy": "cross-origin"
+      });
+      res.end();
+      return;
+    }
+
+    const commonHeaders: Record<string, string> = {
+      "accept-ranges": "bytes",
+      "content-type": contentType,
+      "cache-control": cacheControl,
+      "access-control-allow-origin": "*",
+      "cross-origin-resource-policy": "cross-origin",
+      etag
+    };
+
+    if (req.method?.toUpperCase() === "HEAD") {
+      if (parsedRange.isPartial) {
+        const chunkLength = parsedRange.end - parsedRange.start + 1;
+        res.writeHead(206, {
+          ...commonHeaders,
+          "content-range": `bytes ${parsedRange.start}-${parsedRange.end}/${totalSize}`,
+          "content-length": String(chunkLength)
+        });
+      } else {
+        res.writeHead(200, {
+          ...commonHeaders,
+          "content-length": String(totalSize)
+        });
+      }
+      res.end();
+      return;
+    }
+
+    if (totalSize === 0) {
+      res.writeHead(200, {
+        ...commonHeaders,
+        "content-length": "0"
+      });
+      res.end();
+      return;
+    }
+
+    const chunkLength = parsedRange.end - parsedRange.start + 1;
+    if (parsedRange.isPartial) {
+      res.writeHead(206, {
+        ...commonHeaders,
+        "content-range": `bytes ${parsedRange.start}-${parsedRange.end}/${totalSize}`,
+        "content-length": String(chunkLength)
+      });
+    } else {
+      res.writeHead(200, {
+        ...commonHeaders,
+        "content-length": String(totalSize)
+      });
+    }
+
+    const stream = createReadStream(filePath, {
+      start: sliceStart + parsedRange.start,
+      end: sliceStart + parsedRange.end,
+      highWaterMark: Math.min(256 * 1024, DEFAULT_CHUNK_BYTES)
+    });
+
+    const cleanup = () => {
+      if (!stream.destroyed) {
+        stream.destroy();
+      }
+    };
+
+    req.once("close", cleanup);
+    res.once("close", cleanup);
+    stream.once("error", () => {
+      if (!res.headersSent) {
+        this.writeError(res, 500, "STREAM_READ_FAILED", "Failed to read scene asset stream.");
+      } else if (!res.writableEnded) {
+        res.destroy();
+      }
+    });
+    stream.pipe(res);
   }
 
   private streamValidatedFile(
@@ -2107,7 +3015,9 @@ export class WallpaperMediaService {
       res.writeHead(416, {
         "accept-ranges": "bytes",
         "content-range": `bytes */${totalSize}`,
-        "cache-control": cacheControl
+        "cache-control": cacheControl,
+        "access-control-allow-origin": "*",
+        "cross-origin-resource-policy": "cross-origin"
       });
       res.end();
       return;
@@ -2117,6 +3027,7 @@ export class WallpaperMediaService {
       "accept-ranges": "bytes",
       "content-type": contentType,
       "cache-control": cacheControl,
+      "access-control-allow-origin": "*",
       "cross-origin-resource-policy": "cross-origin",
       etag
     };

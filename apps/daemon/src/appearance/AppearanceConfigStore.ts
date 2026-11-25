@@ -1,19 +1,18 @@
-import { randomUUID } from "node:crypto";
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync
-} from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 export type AppearanceThemeMode = "light" | "dark" | "glass";
 export type BaseThemePolarity = "light" | "dark";
 export type AccentMode = "system" | "custom";
 export type GlassPreset = "off" | "light" | "balanced" | "clear" | "custom";
+export type GlassThemeBase =
+  | "pure"
+  | "starry-violet"
+  | "emerald-stars"
+  | "sakura-drift"
+  | "ocean-caustics"
+  | "gilded-lunar";
 export type ThinkingGlassMode = "off" | "glass" | "native";
 export type SidebarCornerRadius = "native" | 6 | 12 | 20;
 
@@ -97,6 +96,13 @@ export interface WallpaperRotationGroup {
   trigger: "timer" | "videoEnd";
 }
 
+export type WallpaperSwitchTransition = "fade" | "cut";
+export type WallpaperLiveBootDelay = 0 | 3 | 5 | 10;
+export type WallpaperPickerLayout = "fixed" | "classic";
+export type PersistedWallpaperContentRating = "everyone" | "pg13" | "mature" | "unrated";
+export type PersistedWallpaperType = "scene" | "web" | "video" | "image";
+export type WallpaperOrientationFilter = "all" | "landscape" | "portrait";
+
 export interface PersistedWallpaperState {
   selectedId: string | null;
   playing: boolean;
@@ -107,20 +113,37 @@ export interface PersistedWallpaperState {
   objectFit: "cover" | "contain" | "center" | "fill";
   flipX: boolean;
   flipY: boolean;
+  layerPositionX: number;
+  layerPositionY: number;
+  layerScale: number;
   wallpaperBlur: number;
   wallpaperOpacity: number;
   scrim: number;
+  backgroundBrightness: number;
+  backgroundContrast: number;
+  backgroundSaturate: number;
+  switchTransition: WallpaperSwitchTransition;
   sceneLive: boolean;
+  liveBootDelay: WallpaperLiveBootDelay;
   sceneLiveFps: 15 | 30 | 60;
+  sceneAutoQuality: boolean;
+  sceneSoftRenderPause: boolean;
   pauseOnHidden: boolean;
   pauseOnBlur: boolean;
   pauseOnBattery: boolean;
+  startPaused: boolean;
+  audioReactive: boolean;
+  contentRatingFilter: PersistedWallpaperContentRating[];
+  typeFilter: PersistedWallpaperType[];
+  orientationFilter: WallpaperOrientationFilter;
   hiddenIds: string[];
   rotationEnabled: boolean;
   rotationGroupId: string;
   rotationGroups: WallpaperRotationGroup[];
+  pickerLayout: WallpaperPickerLayout;
   customDirs: string[];
   steamRootOverride: string;
+  customWallpaperDir: string;
   userPropOverrides: Record<string, Record<string, string | number | boolean>>;
 }
 
@@ -132,6 +155,7 @@ export interface PersistedAppearanceConfig {
   accentMode: AccentMode;
   accent: string;
   glassPreset: GlassPreset;
+  glassThemeBase: GlassThemeBase;
   glassRegions: GlassRegionsConfig;
   glassColor: string;
   glassDarkSeparate: boolean;
@@ -224,6 +248,21 @@ function normalizeGlassPreset(value: unknown, fallback: GlassPreset): GlassPrese
     : fallback;
 }
 
+const VALID_GLASS_THEME_BASES = new Set<GlassThemeBase>([
+  "pure",
+  "starry-violet",
+  "emerald-stars",
+  "sakura-drift",
+  "ocean-caustics",
+  "gilded-lunar"
+]);
+
+function normalizeGlassThemeBase(value: unknown, fallback: GlassThemeBase): GlassThemeBase {
+  return typeof value === "string" && VALID_GLASS_THEME_BASES.has(value as GlassThemeBase)
+    ? (value as GlassThemeBase)
+    : fallback;
+}
+
 function normalizeThinkingMode(value: unknown, fallback: ThinkingGlassMode): ThinkingGlassMode {
   return value === "off" || value === "glass" || value === "native" ? value : fallback;
 }
@@ -252,6 +291,70 @@ function normalizeObjectFit(
   return value === "cover" || value === "contain" || value === "center" || value === "fill"
     ? value
     : fallback;
+}
+
+function normalizeSwitchTransition(
+  value: unknown,
+  fallback: WallpaperSwitchTransition
+): WallpaperSwitchTransition {
+  return value === "fade" || value === "cut" ? value : fallback;
+}
+
+function normalizeLiveBootDelay(
+  value: unknown,
+  fallback: WallpaperLiveBootDelay
+): WallpaperLiveBootDelay {
+  return value === 0 || value === 3 || value === 5 || value === 10 ? value : fallback;
+}
+
+function normalizePickerLayout(
+  value: unknown,
+  fallback: WallpaperPickerLayout
+): WallpaperPickerLayout {
+  return value === "fixed" || value === "classic" ? value : fallback;
+}
+
+function normalizeOrientationFilter(
+  value: unknown,
+  fallback: WallpaperOrientationFilter
+): WallpaperOrientationFilter {
+  return value === "all" || value === "landscape" || value === "portrait" ? value : fallback;
+}
+
+const VALID_CONTENT_RATINGS = new Set<PersistedWallpaperContentRating>([
+  "everyone",
+  "pg13",
+  "mature",
+  "unrated"
+]);
+
+const VALID_WALLPAPER_TYPES = new Set<PersistedWallpaperType>([
+  "scene",
+  "web",
+  "video",
+  "image"
+]);
+
+function normalizeEnumArray<T extends string>(
+  value: unknown,
+  allowed: ReadonlySet<T>,
+  fallback: T[]
+): T[] {
+  if (!Array.isArray(value)) {
+    return [...fallback];
+  }
+  const seen = new Set<T>();
+  const out: T[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && allowed.has(item as T)) {
+      const typed = item as T;
+      if (!seen.has(typed)) {
+        seen.add(typed);
+        out.push(typed);
+      }
+    }
+  }
+  return out.length > 0 ? out : [...fallback];
 }
 
 function normalizeWallpaperOpacity(value: unknown, fallback: number): number {
@@ -291,6 +394,7 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
     accentMode: "system",
     accent: "#0078d4",
     glassPreset: "clear",
+    glassThemeBase: "pure",
     glassRegions: {
       surface: { op: 18, blur: 24 },
       card: { op: 12, blur: 16 },
@@ -359,14 +463,29 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
       objectFit: "cover",
       flipX: false,
       flipY: false,
+      layerPositionX: 50,
+      layerPositionY: 50,
+      layerScale: 100,
       wallpaperBlur: 0,
       wallpaperOpacity: 0,
       scrim: 0.4,
+      backgroundBrightness: 100,
+      backgroundContrast: 100,
+      backgroundSaturate: 100,
+      switchTransition: "fade",
       sceneLive: true,
+      liveBootDelay: 3,
       sceneLiveFps: 30,
+      sceneAutoQuality: true,
+      sceneSoftRenderPause: true,
       pauseOnHidden: true,
       pauseOnBlur: false,
       pauseOnBattery: true,
+      startPaused: false,
+      audioReactive: true,
+      contentRatingFilter: ["everyone", "pg13", "mature", "unrated"],
+      typeFilter: ["scene", "web", "video", "image"],
+      orientationFilter: "all",
       hiddenIds: [],
       rotationEnabled: false,
       rotationGroupId: "default",
@@ -380,8 +499,10 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
           trigger: "timer"
         }
       ],
+      pickerLayout: "fixed",
       customDirs: [],
       steamRootOverride: "",
+      customWallpaperDir: "",
       userPropOverrides: {}
     }
   };
@@ -597,6 +718,9 @@ export function mergeAppearanceConfig(
   if ("steamRootOverride" in rawPatch && !("steamRootOverride" in wallpaperPatch)) {
     wallpaperPatch["steamRootOverride"] = rawPatch["steamRootOverride"];
   }
+  if ("customWallpaperDir" in rawPatch && !("customWallpaperDir" in wallpaperPatch)) {
+    wallpaperPatch["customWallpaperDir"] = rawPatch["customWallpaperDir"];
+  }
 
   const nextSelectedId =
     wallpaperPatch["selectedId"] === null
@@ -631,6 +755,10 @@ export function mergeAppearanceConfig(
     accentMode: normalizeAccentMode(rawPatch["accentMode"], base.accentMode),
     accent: readString(rawPatch["accent"], base.accent),
     glassPreset: normalizeGlassPreset(rawPatch["glassPreset"], base.glassPreset),
+    glassThemeBase:
+      "glassThemeBase" in rawPatch && rawPatch["glassThemeBase"] !== undefined
+        ? normalizeGlassThemeBase(rawPatch["glassThemeBase"], "pure")
+        : normalizeGlassThemeBase(base.glassThemeBase, "pure"),
     glassRegions: {
       surface: normalizeGlassRegion(
         glassRegionsRaw["surface"],
@@ -806,6 +934,24 @@ export function mergeAppearanceConfig(
       ),
       flipX: readBoolean(wallpaperPatch["flipX"], base.wallpaper.flipX),
       flipY: readBoolean(wallpaperPatch["flipY"], base.wallpaper.flipY),
+      layerPositionX: clampNumber(
+        wallpaperPatch["layerPositionX"],
+        0,
+        100,
+        base.wallpaper.layerPositionX
+      ),
+      layerPositionY: clampNumber(
+        wallpaperPatch["layerPositionY"],
+        0,
+        100,
+        base.wallpaper.layerPositionY
+      ),
+      layerScale: clampNumber(
+        wallpaperPatch["layerScale"],
+        50,
+        150,
+        base.wallpaper.layerScale
+      ),
       wallpaperBlur: clampNumber(
         wallpaperPatch["wallpaperBlur"],
         0,
@@ -817,13 +963,47 @@ export function mergeAppearanceConfig(
         base.wallpaper.wallpaperOpacity
       ),
       scrim: normalizeWallpaperScrim(wallpaperPatch["scrim"], base.wallpaper.scrim),
+      backgroundBrightness: clampNumber(
+        wallpaperPatch["backgroundBrightness"],
+        40,
+        160,
+        base.wallpaper.backgroundBrightness
+      ),
+      backgroundContrast: clampNumber(
+        wallpaperPatch["backgroundContrast"],
+        40,
+        200,
+        base.wallpaper.backgroundContrast
+      ),
+      backgroundSaturate: clampNumber(
+        wallpaperPatch["backgroundSaturate"],
+        0,
+        200,
+        base.wallpaper.backgroundSaturate
+      ),
+      switchTransition: normalizeSwitchTransition(
+        wallpaperPatch["switchTransition"],
+        base.wallpaper.switchTransition
+      ),
       sceneLive: readBoolean(
         wallpaperPatch["sceneLive"],
         base.wallpaper.sceneLive
       ),
+      liveBootDelay: normalizeLiveBootDelay(
+        wallpaperPatch["liveBootDelay"],
+        base.wallpaper.liveBootDelay
+      ),
       sceneLiveFps: normalizeSceneLiveFps(
         wallpaperPatch["sceneLiveFps"],
         base.wallpaper.sceneLiveFps
+      ),
+      sceneAutoQuality: readBoolean(
+        wallpaperPatch["sceneAutoQuality"],
+        base.wallpaper.sceneAutoQuality
+      ),
+      sceneSoftRenderPause: readBoolean(
+        wallpaperPatch["sceneSoftRenderPause"],
+        base.wallpaper.sceneSoftRenderPause
       ),
       pauseOnHidden: readBoolean(
         wallpaperPatch["pauseOnHidden"],
@@ -836,6 +1016,34 @@ export function mergeAppearanceConfig(
       pauseOnBattery: readBoolean(
         wallpaperPatch["pauseOnBattery"],
         base.wallpaper.pauseOnBattery
+      ),
+      startPaused: readBoolean(
+        wallpaperPatch["startPaused"],
+        base.wallpaper.startPaused
+      ),
+      audioReactive: readBoolean(
+        wallpaperPatch["audioReactive"],
+        base.wallpaper.audioReactive
+      ),
+      contentRatingFilter:
+        "contentRatingFilter" in wallpaperPatch
+          ? normalizeEnumArray(
+              wallpaperPatch["contentRatingFilter"],
+              VALID_CONTENT_RATINGS,
+              base.wallpaper.contentRatingFilter
+            )
+          : base.wallpaper.contentRatingFilter,
+      typeFilter:
+        "typeFilter" in wallpaperPatch
+          ? normalizeEnumArray(
+              wallpaperPatch["typeFilter"],
+              VALID_WALLPAPER_TYPES,
+              base.wallpaper.typeFilter
+            )
+          : base.wallpaper.typeFilter,
+      orientationFilter: normalizeOrientationFilter(
+        wallpaperPatch["orientationFilter"],
+        base.wallpaper.orientationFilter
       ),
       hiddenIds:
         "hiddenIds" in wallpaperPatch
@@ -856,6 +1064,10 @@ export function mergeAppearanceConfig(
               base.wallpaper.rotationGroups
             )
           : base.wallpaper.rotationGroups,
+      pickerLayout: normalizePickerLayout(
+        wallpaperPatch["pickerLayout"],
+        base.wallpaper.pickerLayout
+      ),
       customDirs:
         "customDirs" in wallpaperPatch
           ? readStringArray(
@@ -866,6 +1078,10 @@ export function mergeAppearanceConfig(
       steamRootOverride: readString(
         wallpaperPatch["steamRootOverride"],
         base.wallpaper.steamRootOverride
+      ),
+      customWallpaperDir: readString(
+        wallpaperPatch["customWallpaperDir"],
+        base.wallpaper.customWallpaperDir
       ),
       userPropOverrides:
         "userPropOverrides" in wallpaperPatch
@@ -879,18 +1095,18 @@ export function mergeAppearanceConfig(
 }
 
 function writeJsonAtomic(filePath: string, payload: unknown): void {
-  const dir = dirname(filePath);
-  mkdirSync(dir, { recursive: true });
-  const tmpPath = join(
+  const dir = NodePath.dirname(filePath);
+  NodeFS.mkdirSync(dir, { recursive: true });
+  const tmpPath = NodePath.join(
     dir,
-    `.tmp-${basename(filePath)}-${process.pid}-${randomUUID()}`
+    `.tmp-${NodePath.basename(filePath)}-${process.pid}-${NodeCrypto.randomUUID()}`
   );
   try {
-    writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    renameSync(tmpPath, filePath);
+    NodeFS.writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    NodeFS.renameSync(tmpPath, filePath);
   } catch (err) {
     try {
-      rmSync(tmpPath, { force: true });
+      NodeFS.rmSync(tmpPath, { force: true });
     } catch {
       // ignore cleanup error
     }
@@ -907,7 +1123,7 @@ export class AppearanceConfigStore {
   private recoveredAtLoad = false;
 
   constructor(options: AppearanceConfigStoreOptions) {
-    this.filePath = join(resolve(options.dataDir), "appearance.json");
+    this.filePath = NodePath.join(NodePath.resolve(options.dataDir), "appearance.json");
   }
 
   get(): AppearanceLoadResult {
@@ -917,7 +1133,7 @@ export class AppearanceConfigStore {
         recoveredFromCorruption: this.recoveredAtLoad
       };
     }
-    if (!existsSync(this.filePath)) {
+    if (!NodeFS.existsSync(this.filePath)) {
       const defaults = createDefaultAppearanceConfig();
       this.cached = defaults;
       this.recoveredAtLoad = false;
@@ -925,7 +1141,7 @@ export class AppearanceConfigStore {
     }
 
     try {
-      const rawText = readFileSync(this.filePath, "utf8");
+      const rawText = NodeFS.readFileSync(this.filePath, "utf8");
       const parsed: unknown = JSON.parse(rawText);
       if (!isPlainRecord(parsed)) {
         throw new Error("Appearance config JSON must be an object.");
@@ -940,7 +1156,7 @@ export class AppearanceConfigStore {
     } catch {
       // Preserve corrupt file for diagnostics before recovering cleanly
       try {
-        copyFileSync(
+        NodeFS.copyFileSync(
           this.filePath,
           `${this.filePath}.corrupt-${Date.now()}`
         );
