@@ -9,7 +9,9 @@
 | 项 | 值 | 备注 |
 | :--- | :--- | :--- |
 | 本仓路径 | `D:\Fish-code\AGY\Prismux` | 主开发工作区 |
-| 数据与运行目录 | `C:\Users\Fish\.prismux`（即 `~/.prismux`） | 默认运行态数据、SQLite 记忆库与插件凭据根目录 |
+| 数据与运行目录 | `C:\Users\Fish\.prismux`（即 `%USERPROFILE%\.prismux` / `~/.prismux`） | 默认运行态数据、SQLite 记忆库与插件凭据根目录；开发与测试期间保持原样、严禁触碰或覆盖 |
+| 已安装实机桌面端目录 | `%LOCALAPPDATA%\Programs\Prismux` | 严格只读保护：开发与测试期间严禁触碰、修改或覆盖实机安装的 Prismux 二进制 |
+| Steam 创意工坊壁纸库（431960） | `D:\Steam\steamapps\workshop\content\431960` | 用于 Electron 44 实机 Web / Scene（`scene.pkg`）壁纸 E2E 验证；Windows 下等待 GUI `electron.exe` 须使用 `Start-Process -Wait` |
 | 一次性产物目录 | `D:\Fish-code\AGY\Prismux\.work` | 临时输出与实验目录，收尾按精确路径清理 |
 | 可复用脚本根 | `D:\Fish-code\工具\可复用脚本与经验\` | 本机跨项目可复用脚本与排障经验沉淀目录 |
 
@@ -21,7 +23,7 @@
 | Node（常规 / TS 脚本 / 测试） | `C:\Program Files\nodejs\node.exe`（`v24.14.0`） | 默认 `PATH` 入口，直接运行 `scripts/*.ts` 与 `node --test` |
 | Node（大包发布备用版） | `D:\Fish-code\工具\可复用工具集\Node22`（`v22.23.4`） | 发布 npm 大包或避开 Node 24 zlib 异常时前置入 `PATH` |
 | pnpm | `12.3.4` | Workspace 包管理与全局任务执行 |
-| Rust / Cargo（M4 Tauri v2 构建） | `D:\Fish-code\工具\可复用工具集\Rust\1.99.1`（`rustc` / `cargo` `1.99.1`） | 运行 `cargo test` / `cargo check` 固定传入 `-j 1` |
+| Rust / Cargo（Electron 44 桌面端 + Rust `native/resource-monitor`） | `D:\Fish-code\工具\可复用工具集\Rust\1.99.1`（`rustc` / `cargo` `1.99.1`） | 构建 `native/resource-monitor` 与运行 `cargo test` / `cargo check` 固定传入 `-j 1` |
 | Git / GitHub CLI | `git 2.52.0.windows.1`、`gh 2.89.0` | `gh` 已登录账号 `Fish-under-sea` |
 
 ## 三、环境变量与包缓存目录
@@ -32,10 +34,10 @@
 | `npm_config_cache` | `D:\Fish-code\工具\可复用工具集\npm-cache` | npm 可复用缓存目录 |
 | `RUSTUP_HOME` | `D:\Fish-code\工具\可复用工具集\Rust\1.99.1\rustup` | 自定义 Rustup 工具链目录 |
 | `CARGO_HOME` | `D:\Fish-code\工具\可复用工具集\Rust\1.99.1\cargo` | 自定义 Cargo 缓存与二进制目录 |
-| Rust `PATH` 前置 | `D:\Fish-code\工具\可复用工具集\Rust\1.99.1\cargo\bin` | 执行 M4 Tauri / Cargo 命令前将此目录前置到 `PATH` |
+| Rust `PATH` 前置 | `D:\Fish-code\工具\可复用工具集\Rust\1.99.1\cargo\bin` | 执行 Electron 44 桌面端 Rust `native/resource-monitor` / Cargo 命令前将此目录前置到 `PATH` |
 
 ```powershell
-# M4 Tauri v2 / Cargo 构建环境快速激活示例（pwsh）
+# Electron 44 桌面端 + Rust native/resource-monitor 构建环境快速激活示例（pwsh）
 $env:RUSTUP_HOME = 'D:\Fish-code\工具\可复用工具集\Rust\1.99.1\rustup'
 $env:CARGO_HOME  = 'D:\Fish-code\工具\可复用工具集\Rust\1.99.1\cargo'
 $env:PATH        = "D:\Fish-code\工具\可复用工具集\Rust\1.99.1\cargo\bin;$env:PATH"
@@ -47,8 +49,9 @@ cargo test -j 1
 | 凭据类型 | 磁盘文件路径 | 备注 |
 | :--- | :--- | :--- |
 | npm 凭据 | `C:\Users\Fish\.npmrc` | 仅记录磁盘路径；认证失效时由本机用户刷新 |
-| Git 凭据 | `C:\Users\Fish\.git-credentials` | 本机 Git HTTPS 凭据文件 |
+| Git 凭据 | `C:\Users\Fish\.git-credentials` | 本机 Git HTTPS 凭据文件（同时由 `scripts/publish-gitee-release.ts` 读取以执行 Gitee Release 上传） |
 | GitHub CLI | `C:\Users\Fish\AppData\Roaming\GitHub CLI\hosts.yml` | `gh` 登录状态文件（对应账号 `Fish-under-sea`） |
+| GitHub SSH 密钥 | `C:\Users\Fish\.ssh\id_rsa` | 供命令级 GitHub SSH 推送通道使用（仅记录磁盘路径） |
 
 ## 五、本机特有现象与处置
 
@@ -58,8 +61,9 @@ cargo test -j 1
 | 克隆或推送 GitHub 大仓（如 `Prismux`）遇 `127.0.0.1:7895` 代理引起 OpenSSL EOF 断流 | 使用命令级 `GIT_CONFIG_COUNT` 注入 `url.git@github.com:.insteadOf=https://github.com/` 改走已认证 SSH 通道，保持 `.git/config` 为公开 HTTPS 地址且严禁修改 `~/.gitconfig` |
 | Clash 开启 TUN 模式时命令行同时残留 `HTTP_PROXY` / `HTTPS_PROXY` 导致请求抖动 | 在当前 `pwsh` 会话清空 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`（及小写变量）后直走原生 TUN |
 | Rust MSVC 链接阶段偶发 `0xC0000005` 访问冲突 | 执行 `cargo check -j 1` / `cargo test -j 1` / `cargo build -j 1` 强制单线程链接，偶发失败时直接重试 |
+| Windows 下直接运行 GUI 版 `electron.exe` 立即返回导致无法等待实机 E2E 完成 | 在 `pwsh` 中使用 `Start-Process -Wait` 拉起并等待实机验证进程退出；验证期间严禁修改 `%LOCALAPPDATA%\Programs\Prismux` 与 `%USERPROFILE%\.prismux`，结束后确认零残留 `electron.exe` |
 
 ## 六、最近一次核对
 
-- 日期：2026-11-22
+- 日期：2026-11-26
 - 核对人：Fish
