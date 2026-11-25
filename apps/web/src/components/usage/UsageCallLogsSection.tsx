@@ -1,4 +1,4 @@
-import { type UsageProviderKind } from "@prismux/core-contracts";
+import { type ProviderInstanceId, type UsageProviderKind } from "@prismux/core-contracts";
 import { formatTokens } from "@prismux/core-shared/usageFormat";
 import { msg, useLocale, useMessages } from "gt-react";
 import {
@@ -10,6 +10,7 @@ import {
 import { Fragment, useMemo, useState } from "react";
 
 import { cn } from "../../lib/utils";
+import type { ProviderInstanceEntry } from "../../providerInstances";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { Button } from "../ui/button";
 import {
@@ -20,7 +21,11 @@ import {
   type UsageCallLogRecord,
   type UsageCallStatus,
 } from "./usageCallTelemetryStore";
-import { PROVIDER_PRESENTATION } from "./usageProviders";
+import {
+  PROVIDER_PRESENTATION,
+  resolveUsageProviderLabel,
+  useConfiguredUsageProviders,
+} from "./usageProviders";
 
 export type CallLogsSortField = "timestamp" | "ttftMs" | "tps" | "cacheHitRate";
 export type CallLogsSortDirection = "asc" | "desc";
@@ -106,15 +111,21 @@ export function filterAndSortCallLogs(
   });
 }
 
-function resolveProviderDisplay(provider: string): {
+function resolveProviderDisplay(
+  provider: string,
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+): {
   readonly label: string;
   readonly driverKind: (typeof PROVIDER_PRESENTATION)[UsageProviderKind]["driverKind"] | null;
 } {
   if (provider in PROVIDER_PRESENTATION) {
     const info = PROVIDER_PRESENTATION[provider as UsageProviderKind];
-    return { label: info.label, driverKind: info.driverKind };
+    return {
+      label: resolveUsageProviderLabel(provider, entries),
+      driverKind: info.driverKind,
+    };
   }
-  return { label: provider, driverKind: null };
+  return { label: resolveUsageProviderLabel(provider, entries), driverKind: null };
 }
 
 const callTimeFormatters = new Map<string, Intl.DateTimeFormat>();
@@ -170,15 +181,23 @@ export interface UsageCallLogsSectionProps {
   readonly logs: readonly UsageCallLogRecord[];
   readonly timeZone: string;
   readonly hour12: boolean;
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  readonly providerOrder?: ReadonlyArray<ProviderInstanceId> | null | undefined;
 }
 
 export function UsageCallLogsSection({
   logs,
   timeZone,
   hour12,
+  providerEntries,
+  providerOrder,
 }: UsageCallLogsSectionProps) {
   const m = useMessages();
   const locale = useLocale();
+  const { entries: configuredEntries, orderProviders } = useConfiguredUsageProviders({
+    providerEntries,
+    providerOrder,
+  });
   const [providerFilter, setProviderFilter] = useState<string>("all");
   const [modelFilter, setModelFilter] = useState<string>("all");
   const [sortField, setSortField] = useState<CallLogsSortField>("timestamp");
@@ -188,8 +207,8 @@ export function UsageCallLogsSection({
   const availableProviders = useMemo(() => {
     const set = new Set<string>();
     for (const log of logs) set.add(log.provider);
-    return Array.from(set).toSorted();
-  }, [logs]);
+    return orderProviders(Array.from(set).toSorted());
+  }, [logs, orderProviders]);
 
   const availableModels = useMemo(() => {
     const set = new Set<string>();
@@ -256,7 +275,7 @@ export function UsageCallLogsSection({
             <option value="all">{m(USAGE_CALL_LOG_MESSAGES.filterAllProviders)}</option>
             {availableProviders.map((provider) => (
               <option key={provider} value={provider}>
-                {resolveProviderDisplay(provider).label}
+                {resolveProviderDisplay(provider, configuredEntries).label}
               </option>
             ))}
           </select>
@@ -357,7 +376,7 @@ export function UsageCallLogsSection({
             ) : (
               visibleLogs.map((log) => {
                 const isExpanded = expandedId === log.id;
-                const providerInfo = resolveProviderDisplay(log.provider);
+                const providerInfo = resolveProviderDisplay(log.provider, configuredEntries);
                 return (
                   <Fragment key={log.id}>
                     <tr

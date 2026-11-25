@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { ServerProvider } from "@prismux/core-contracts";
 import {
   useCallback,
   useEffect,
@@ -7,8 +9,8 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
-import { Link } from "@tanstack/react-router";
-import { T, useGT } from "gt-react";
+import { Link, useLocation } from "@tanstack/react-router";
+import { T, useGT, useLocale } from "gt-react";
 import {
   ActivityIcon,
   AlertTriangleIcon,
@@ -25,6 +27,7 @@ import {
   RefreshCwIcon,
   WrenchIcon,
   XCircleIcon,
+  XIcon,
 } from "lucide-react";
 
 import { Badge } from "../../components/ui/badge";
@@ -34,17 +37,38 @@ import {
   CollapsiblePanel,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
+import { SidebarInset } from "../../components/ui/sidebar";
 import { toastManager } from "../../components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../../components/ui/tooltip";
 import { SettingsSection } from "../../components/settings/settingsLayout";
+import { useNavigateToMainApp } from "../../components/sidebar/mainAppLocation";
+import {
+  PrismuxStageFrame,
+  useWorkspaceTopbarPortal,
+} from "../../components/workspace/WorkspaceTopbarPortalContext";
 import { cn } from "../../lib/utils";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderItemsByConfiguredProviderOrder,
+  orderProviderInstanceEntries,
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
+  type ProviderInstanceOrderSettings,
+} from "../../providerInstances";
+import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../../state/server";
+import { formatAgentBrandName } from "../agentBrand";
 import { prismuxDaemonClient, type DaemonDiagnosticsStatus } from "../daemonClient";
 import {
   createDiagnosticsRefreshController,
   DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
   filterDiagnosticsReport,
   formatDiagnosticsTimestamp,
+  getDiagnosticsStandaloneCopy,
   getLatestNormalizedDiagnosticsReport,
+  isDiagnosticsEscapeTarget,
+  isDiagnosticsStandalonePathname,
   publishDiagnosticsReport,
   subscribeDiagnosticsRefreshRequest,
   subscribeDiagnosticsReport,
@@ -476,21 +500,261 @@ function kpiTileSurfaceClasses(
   }
 }
 
+function extractDiagnosticProviderKey(
+  item: Pick<NormalizedDiagnosticItem, "id" | "name">,
+): string {
+  const trimmedId = item.id.trim();
+  if (/^provider[.:_-]/i.test(trimmedId)) {
+    return trimmedId.replace(/^provider[.:_-]+/i, "");
+  }
+  return trimmedId || item.name;
+}
+
+function applyConfiguredProviderBrandingToDiagnosticItem(
+  item: NormalizedDiagnosticItem,
+  configuredEntries: ReadonlyArray<ProviderInstanceEntry>,
+): NormalizedDiagnosticItem {
+  if (item.category !== "ai_providers" || configuredEntries.length === 0) {
+    return item;
+  }
+  const providerKey = extractDiagnosticProviderKey(item);
+  const defaultBrand = formatAgentBrandName(providerKey);
+  const resolvedLabel = resolveConfiguredProviderLabel(providerKey, configuredEntries, item.name);
+  const normalizedResolved = resolvedLabel.trim().toLowerCase();
+  const isCustomized =
+    normalizedResolved.length > 0 &&
+    normalizedResolved !== item.name.trim().toLowerCase() &&
+    normalizedResolved !== defaultBrand.trim().toLowerCase();
+  if (!isCustomized) {
+    return item;
+  }
+  const detailParts = [item.name, item.detail].filter(
+    (part): part is string => typeof part === "string" && part.trim().length > 0,
+  );
+  return {
+    ...item,
+    name: resolvedLabel,
+    detail: detailParts.join(" · "),
+  };
+}
+
+export interface PrismuxDiagnosticsSectionProps {
+  readonly variant?: "full" | "compact";
+  /** Render inside the standalone full-width workbench stage frame (auto-enabled on `/diagnostics`). */
+  readonly standalone?: boolean | undefined;
+  readonly initialReportOverride?: NormalizedDiagnosticsReport | null | undefined;
+  readonly initialStatusFilter?: DiagnosticStatusFilter;
+  readonly serverProvidersOverride?: ReadonlyArray<ServerProvider>;
+  readonly settingsOverride?: ProviderInstanceOrderSettings | null;
+}
+
+function PrismuxDiagnosticsStandaloneFrame({
+  report,
+  loading,
+  onRerun,
+  children,
+}: {
+  readonly report: NormalizedDiagnosticsReport | null;
+  readonly loading: boolean;
+  readonly onRerun: () => void;
+  readonly children: ReactNode;
+}) {
+  const gt = useGT();
+  const locale = useLocale();
+  const standaloneCopy = getDiagnosticsStandaloneCopy(locale);
+  const navigateToMainApp = useNavigateToMainApp();
+  const topbarPortal = useWorkspaceTopbarPortal();
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- window Escape key listener closes standalone panel when no modal/input owns focus
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isDiagnosticsEscapeTarget(event.target)) return;
+      event.preventDefault();
+      void navigateToMainApp();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [navigateToMainApp]);
+
+  return (
+    <SidebarInset className="h-dvh min-w-0 flex-1 overflow-hidden">
+      <PrismuxStageFrame
+        glassZone="workPanels"
+        rightPanelOpen={topbarPortal.standaloneRightPanelOpen}
+      >
+        <div
+          id="prismux-diagnostics"
+          data-testid="prismux-diagnostics-page"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+        >
+          {/* Unified Full-Bleed Top Header Bar — aligned 1:1 with Tasks / Workspace Board / Scheduled Tasks */}
+          <header
+            data-testid="diagnostics-page-header"
+            className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5"
+          >
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+                <ActivityIcon className="size-4" aria-hidden="true" />
+              </span>
+
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                  {gt("Prismux Service Diagnostics")}
+                </h1>
+
+                {report ? (
+                  <div
+                    data-testid="diagnostics-header-summary"
+                    className="flex flex-wrap items-center gap-1.5"
+                  >
+                    <span
+                      data-testid="diagnostics-summary-pill"
+                      className={cn(
+                        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-2xs font-medium tabular-nums",
+                        report.summary.error === 0 && report.summary.degraded === 0
+                          ? "border-emerald-500/35 bg-emerald-500/12 text-success-foreground dark:border-emerald-400/35 dark:bg-emerald-400/14"
+                          : "border-border/65 bg-muted/75 text-foreground/85",
+                      )}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "size-1.5 rounded-full",
+                          report.summary.error > 0
+                            ? "bg-destructive"
+                            : report.summary.degraded > 0
+                              ? "bg-amber-500"
+                              : "bg-emerald-500",
+                        )}
+                      />
+                      {standaloneCopy.summaryHealthyPill(report.summary.ok, report.summary.total)}
+                    </span>
+
+                    {report.summary.degraded > 0 ? (
+                      <span
+                        data-testid="diagnostics-degraded-pill"
+                        className="inline-flex shrink-0 items-center rounded-full border border-amber-500/35 bg-amber-500/12 px-2 py-0.5 font-mono text-2xs font-medium text-warning-foreground tabular-nums dark:border-amber-400/35 dark:bg-amber-400/16"
+                      >
+                        {standaloneCopy.summaryDegradedPill(report.summary.degraded)}
+                      </span>
+                    ) : null}
+
+                    {report.summary.error > 0 ? (
+                      <span
+                        data-testid="diagnostics-error-pill"
+                        className="inline-flex shrink-0 items-center rounded-full border border-destructive/35 bg-destructive/12 px-2 py-0.5 font-mono text-2xs font-medium text-destructive-foreground tabular-nums dark:border-destructive/40 dark:bg-destructive/18"
+                      >
+                        {standaloneCopy.summaryErrorPill(report.summary.error)}
+                      </span>
+                    ) : null}
+
+                    <span
+                      data-testid="diagnostics-last-checked"
+                      className="text-2xs text-muted-foreground tabular-nums"
+                    >
+                      {formatDiagnosticsTimestamp(report.checkedAt)}
+                      {report.durationMs !== null ? ` · ${report.durationMs} ms` : ""}
+                    </span>
+
+                    {report.cached ? (
+                      <Badge variant="outline" size="sm">
+                        {gt("Cached")}
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                data-testid="diagnostics-rerun-button"
+                data-pmx-work-panel-control="1"
+                disabled={loading}
+                onClick={onRerun}
+              >
+                <RefreshCwIcon
+                  className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")}
+                />
+                {loading ? gt("Running diagnostics…") : gt("Re-run diagnostics")}
+              </Button>
+
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost-muted"
+                      size="icon-sm"
+                      data-testid="diagnostics-close-button"
+                      onClick={() => void navigateToMainApp()}
+                      aria-label={standaloneCopy.closeLabel}
+                    />
+                  }
+                >
+                  <XIcon className="size-4" />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom" sideOffset={6}>
+                  {standaloneCopy.closeTooltip}
+                </TooltipPopup>
+              </Tooltip>
+            </div>
+          </header>
+
+          {/* Full-Bleed Edge-to-Edge Body (no narrow centered max-w-* container) */}
+          <div
+            data-testid="diagnostics-page-body"
+            className="min-h-0 flex-1 overflow-y-auto px-4 py-4 scrollbar-gutter-both"
+          >
+            <div className="flex w-full flex-col gap-5" aria-busy={loading}>
+              {children}
+            </div>
+          </div>
+        </div>
+      </PrismuxStageFrame>
+    </SidebarInset>
+  );
+}
+
 /**
  * Prismux Service Diagnostics Center (`GET /v1/diagnostics/services`).
- * `full` mounts on `/settings/maintenance#diagnostics`; `compact` mounts on `/welcome` and hides if Daemon is unreachable.
+ * `full` mounts as a standalone full-width workbench panel at `/diagnostics`; `compact` mounts on `/welcome` and hides if Daemon is unreachable.
  */
-export function PrismuxDiagnosticsSection({
+function PrismuxDiagnosticsContent({
   variant = "full",
+  standalone = false,
   initialReportOverride,
   initialStatusFilter = "all",
+  serverProvidersOverride,
+  settingsOverride,
 }: {
-  readonly variant?: "full" | "compact";
-  readonly initialReportOverride?: NormalizedDiagnosticsReport | null;
-  readonly initialStatusFilter?: DiagnosticStatusFilter;
+  readonly variant: "full" | "compact";
+  readonly standalone: boolean;
+  readonly initialReportOverride?: NormalizedDiagnosticsReport | null | undefined;
+  readonly initialStatusFilter: DiagnosticStatusFilter;
+  readonly serverProvidersOverride?: ReadonlyArray<ServerProvider> | undefined;
+  readonly settingsOverride?: ProviderInstanceOrderSettings | null | undefined;
 }) {
   const gt = useGT();
   const { copiedId, copyCommand } = useCopyFixCommand();
+  const liveServerProviders = useAtomValue(primaryServerProvidersAtom);
+  const liveServerSettings = useAtomValue(primaryServerSettingsAtom);
+  const effectiveProviders = serverProvidersOverride ?? liveServerProviders;
+  const effectiveSettings =
+    settingsOverride !== undefined ? settingsOverride : liveServerSettings;
+  const configuredProviderEntries = useMemo(() => {
+    const derived = deriveProviderInstanceEntries(effectiveProviders);
+    const branded = effectiveSettings
+      ? brandProviderInstanceEntries(derived, effectiveSettings)
+      : derived;
+    return disambiguateProviderInstanceDisplayNames(
+      orderProviderInstanceEntries(branded, effectiveSettings?.providerOrder),
+    );
+  }, [effectiveProviders, effectiveSettings]);
   const [report, setReport] = useState<NormalizedDiagnosticsReport | null>(() =>
     initialReportOverride !== undefined
       ? initialReportOverride
@@ -618,16 +882,46 @@ export function PrismuxDiagnosticsSection({
     };
   }, [initialReportOverride, variant]);
 
-  const filteredView = useMemo(
-    () => (report ? filterDiagnosticsReport(report, statusFilter) : null),
-    [report, statusFilter],
-  );
+  const filteredView = useMemo(() => {
+    if (!report) return null;
+    const base = filterDiagnosticsReport(report, statusFilter);
+    const providerOrder = effectiveSettings?.providerOrder;
+    const hasConfiguredOrdering =
+      configuredProviderEntries.length > 0 || Boolean(providerOrder && providerOrder.length > 0);
+    if (!hasConfiguredOrdering) {
+      return base;
+    }
+    return {
+      ...base,
+      activeGroups: base.activeGroups.map((group) => {
+        if (group.id !== "ai_providers") {
+          return group;
+        }
+        const ordered = orderItemsByConfiguredProviderOrder(
+          group.items,
+          extractDiagnosticProviderKey,
+          configuredProviderEntries,
+          providerOrder,
+        );
+        return {
+          ...group,
+          items: ordered.map((item) =>
+            applyConfiguredProviderBrandingToDiagnosticItem(item, configuredProviderEntries),
+          ),
+        };
+      }),
+    };
+  }, [configuredProviderEntries, effectiveSettings?.providerOrder, report, statusFilter]);
 
   if (variant === "compact") {
     if (!report) {
       return null;
     }
-    const attentionItems = report.items.filter((item) => item.status !== "ok");
+    const attentionItems = report.items
+      .filter((item) => item.status !== "ok")
+      .map((item) =>
+        applyConfiguredProviderBrandingToDiagnosticItem(item, configuredProviderEntries),
+      );
     const compactStatus: DaemonDiagnosticsStatus =
       report.summary.error > 0 ? "error" : report.summary.degraded > 0 ? "degraded" : "ok";
     const compactTone = statusToneClasses(compactStatus);
@@ -792,6 +1086,350 @@ export function PrismuxDiagnosticsSection({
     },
   ];
 
+  const diagnosticsBody = (
+    <>
+      {/* Layer 1a: Interactive Liquid Glass KPI Overview & Status Filter Bar */}
+      <div
+        role="group"
+        aria-label={gt("Filter by state")}
+        className={
+          standalone
+            ? "grid grid-cols-2 gap-3 lg:grid-cols-4"
+            : "grid grid-cols-2 gap-2.5 sm:grid-cols-4"
+        }
+      >
+        {kpiTiles.map((tile) => {
+          const selected = statusFilter === tile.key;
+          const style = kpiTileSurfaceClasses(tile.key, selected, tile.hasCount);
+          const TileIcon = tile.icon;
+
+          return (
+            <button
+              key={tile.key}
+              type="button"
+              aria-pressed={selected}
+              data-diagnostic-filter={tile.key}
+              onClick={() =>
+                setStatusFilter((current) => toggleDiagnosticStatusFilter(current, tile.key))
+              }
+              className={cn(
+                "relative flex cursor-pointer flex-col justify-between overflow-hidden rounded-xl border px-3.5 py-3 text-left transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:translate-y-px motion-reduce:transition-none motion-reduce:transform-none",
+                style.container,
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "inline-flex size-6 shrink-0 items-center justify-center rounded-lg border",
+                      style.iconTray,
+                    )}
+                  >
+                    <TileIcon className="size-3.5" />
+                  </span>
+                  <span className="truncate text-[11.5px] font-medium text-muted-foreground">
+                    {tile.label}
+                  </span>
+                </span>
+              </div>
+              <div
+                className={cn(
+                  "mt-2.5 font-mono text-xl font-semibold leading-none tracking-tight tabular-nums",
+                  style.valueText,
+                )}
+              >
+                {tile.value}
+              </div>
+              {selected ? (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none absolute inset-x-4 bottom-0 h-[2px] rounded-full",
+                    style.indicatorBar,
+                  )}
+                />
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {errorMsg ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-xs text-destructive-foreground"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <AlertTriangleIcon className="size-4 shrink-0" aria-hidden="true" />
+            <span className="break-words">
+              {gt("Could not load Prismux Daemon diagnostics: {error}", { error: errorMsg })}
+            </span>
+          </div>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => void loadDiagnostics(true)}
+          >
+            {gt("Retry")}
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Single-line Memory Retrieval Status Strip */}
+      {report ? (
+        <div
+          data-diagnostic-memory-banner="true"
+          className={cn(
+            "flex flex-wrap items-center justify-between gap-2.5 rounded-xl border px-3.5 py-2 text-xs",
+            memoryBannerSurface,
+          )}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <DatabaseIcon
+              className={cn(
+                "size-3.5 shrink-0",
+                memoryState === "fts5+sqlite-vec"
+                  ? "text-success-foreground"
+                  : memoryState === "fts5-only"
+                    ? "text-warning-foreground"
+                    : "text-muted-foreground",
+              )}
+              aria-hidden="true"
+            />
+            <span className="shrink-0 font-medium text-foreground">
+              <T>Memory retrieval engine</T>
+            </span>
+            <Badge
+              size="sm"
+              className="shrink-0"
+              variant={
+                memoryState === "fts5+sqlite-vec"
+                  ? "success"
+                  : memoryState === "fts5-only"
+                    ? "warning"
+                    : "secondary"
+              }
+            >
+              {memoryState === "fts5+sqlite-vec"
+                ? gt("FTS5 + sqlite-vec hybrid")
+                : memoryState === "fts5-only"
+                  ? gt("FTS5 degraded mode")
+                  : gt("Unknown")}
+            </Badge>
+            {report.memoryRetrievalDetail ? (
+              <span
+                className="min-w-0 truncate text-muted-foreground"
+                title={report.memoryRetrievalDetail}
+              >
+                {report.memoryRetrievalDetail}
+              </span>
+            ) : null}
+          </div>
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0"
+            render={<Link to="/settings/memory" />}
+          >
+            <span>{gt("Chief & memory", { $context: "settings navigation item" })}</span>
+            <ArrowRightIcon className="size-3" />
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Active status filter summary bar with one-click reset (shown when filtered cards are visible) */}
+      {report && filteredView && statusFilter !== "all" && filteredView.totalVisibleCount > 0 ? (
+        <div
+          data-diagnostic-active-filter={statusFilter}
+          className={cn(
+            "flex flex-wrap items-center justify-between gap-2 border-border/60 bg-foreground/[0.025] px-3.5 py-2 text-xs dark:bg-white/[0.035]",
+            GLASS_SURFACE_RIM,
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+            <span>{gt("Filtered")}</span>
+            <Badge variant={statusToneClasses(statusFilter).badgeVariant} size="sm">
+              {statusLabel(statusFilter, gt)}
+            </Badge>
+            <span className="font-mono text-[11px] tabular-nums text-foreground/85">
+              {filteredView.totalVisibleCount} / {report.summary.total}
+            </span>
+          </div>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            data-diagnostic-filter-reset="true"
+            onClick={() => setStatusFilter("all")}
+          >
+            <T>Show all</T>
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Initial loading state */}
+      {loading && !report ? (
+        <div
+          className={cn(
+            "border-border/50 bg-foreground/[0.02] px-4 py-8 text-center text-xs text-muted-foreground dark:bg-white/[0.025]",
+            GLASS_SURFACE_RIM,
+          )}
+        >
+          <T>Probing Prismux services, tools, and mirrors…</T>
+        </div>
+      ) : null}
+
+      {/* Layer 2 & 3: Active Category Groups + Single Deduplicated Dormant Engines Summary */}
+      {report && filteredView ? (
+        filteredView.totalVisibleCount === 0 ? (
+          <div
+            data-diagnostic-empty-state="true"
+            className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/65 bg-foreground/[0.02] px-5 py-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-white/[0.025] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+          >
+            <span
+              aria-hidden="true"
+              className="inline-flex size-9 items-center justify-center rounded-xl border border-border/60 bg-foreground/[0.04] text-muted-foreground dark:bg-white/[0.06]"
+            >
+              <CheckCircle2Icon className="size-4" />
+            </span>
+            <div className="space-y-1">
+              <p className="text-[13px] font-semibold text-foreground">
+                <T>Nothing matches that.</T>
+              </p>
+              {statusFilter !== "all" ? (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                  <Badge variant={statusToneClasses(statusFilter).badgeVariant} size="sm">
+                    {statusLabel(statusFilter, gt)}
+                  </Badge>
+                  <span className="font-mono text-[11px] tabular-nums">0</span>
+                </div>
+              ) : null}
+            </div>
+            {statusFilter !== "all" ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                data-diagnostic-filter-reset="true"
+                onClick={() => setStatusFilter("all")}
+              >
+                {gt("Reset filters")}
+              </Button>
+            ) : null}
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {filteredView.activeGroups.map((group) => {
+              const groupTone = statusToneClasses(group.status);
+              const GroupIcon = categoryIconComponent(group.id);
+              return (
+                <section
+                  key={group.id}
+                  data-diagnostic-group={group.id}
+                  className="space-y-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "inline-flex size-7 shrink-0 items-center justify-center rounded-lg border",
+                          groupTone.groupIconTray,
+                        )}
+                      >
+                        <GroupIcon className="size-3.5" />
+                      </span>
+                      <h4 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
+                        {categoryHeadingLabel(group, gt)}
+                      </h4>
+                      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-[10.5px] font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
+                        {group.items.length}
+                      </span>
+                    </div>
+                    <GroupStatusPills group={group} />
+                  </div>
+
+                  <div
+                    data-diagnostic-group-grid={group.id}
+                    className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+                  >
+                    {group.items.map((item) => (
+                      <DiagnosticItemCard
+                        key={item.id}
+                        item={item}
+                        copied={copiedId === item.id}
+                        onCopyCommand={(id, cmd) => void copyCommand(id, cmd)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+
+            {/* Single deduplicated Dormant Engines Read-Only Summary (flattened <= 2 card layers) */}
+            {filteredView.dormantGroup ? (
+              <section
+                data-diagnostic-group={filteredView.dormantGroup.id}
+                data-diagnostic-dormant-summary="true"
+                aria-label={categoryHeadingLabel(filteredView.dormantGroup, gt)}
+                className="space-y-3 border-t border-border/50 pt-5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "inline-flex size-7 shrink-0 items-center justify-center rounded-lg border",
+                        statusToneClasses(filteredView.dormantGroup.status).groupIconTray,
+                      )}
+                    >
+                      <LayersIcon className="size-3.5" />
+                    </span>
+                    <h4 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
+                      <T>Dormant Engines Read-Only Summary</T>
+                    </h4>
+                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-[10.5px] font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
+                      {filteredView.dormantGroup.items.length}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <GroupStatusPills group={filteredView.dormantGroup} />
+                    <Badge variant="outline" size="sm">
+                      {gt("Read-only")}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div
+                  data-diagnostic-group-grid={filteredView.dormantGroup.id}
+                  className="grid items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {filteredView.dormantGroup.items.map((engine) => (
+                    <DormantEngineReadOnlyCard key={engine.id} engine={engine} />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        )
+      ) : null}
+    </>
+  );
+
+  if (standalone) {
+    return (
+      <PrismuxDiagnosticsStandaloneFrame
+        report={report}
+        loading={loading}
+        onRerun={() => void loadDiagnostics(true)}
+      >
+        {diagnosticsBody}
+      </PrismuxDiagnosticsStandaloneFrame>
+    );
+  }
+
   return (
     <div id="prismux-diagnostics" className="space-y-6">
       <SettingsSection
@@ -826,331 +1464,75 @@ export function PrismuxDiagnosticsSection({
         }
       >
         <div className="space-y-5 p-4 sm:p-5" aria-busy={loading}>
-          {/* Layer 1a: Interactive Liquid Glass KPI Overview & Status Filter Bar */}
-          <div
-            role="group"
-            aria-label={gt("Filter by state")}
-            className="grid grid-cols-2 gap-2.5 sm:grid-cols-4"
-          >
-            {kpiTiles.map((tile) => {
-              const selected = statusFilter === tile.key;
-              const style = kpiTileSurfaceClasses(tile.key, selected, tile.hasCount);
-              const TileIcon = tile.icon;
-
-              return (
-                <button
-                  key={tile.key}
-                  type="button"
-                  aria-pressed={selected}
-                  data-diagnostic-filter={tile.key}
-                  onClick={() =>
-                    setStatusFilter((current) => toggleDiagnosticStatusFilter(current, tile.key))
-                  }
-                  className={cn(
-                    "relative flex cursor-pointer flex-col justify-between overflow-hidden rounded-xl border px-3.5 py-3 text-left transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:translate-y-px motion-reduce:transition-none motion-reduce:transform-none",
-                    style.container,
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          "inline-flex size-6 shrink-0 items-center justify-center rounded-lg border",
-                          style.iconTray,
-                        )}
-                      >
-                        <TileIcon className="size-3.5" />
-                      </span>
-                      <span className="truncate text-[11.5px] font-medium text-muted-foreground">
-                        {tile.label}
-                      </span>
-                    </span>
-                  </div>
-                  <div
-                    className={cn(
-                      "mt-2.5 font-mono text-xl font-semibold leading-none tracking-tight tabular-nums",
-                      style.valueText,
-                    )}
-                  >
-                    {tile.value}
-                  </div>
-                  {selected ? (
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "pointer-events-none absolute inset-x-4 bottom-0 h-[2px] rounded-full",
-                        style.indicatorBar,
-                      )}
-                    />
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-
-          {errorMsg ? (
-            <div
-              role="alert"
-              className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-xs text-destructive-foreground"
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <AlertTriangleIcon className="size-4 shrink-0" aria-hidden="true" />
-                <span className="break-words">
-                  {gt("Could not load Prismux Daemon diagnostics: {error}", { error: errorMsg })}
-                </span>
-              </div>
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={() => void loadDiagnostics(true)}
-              >
-                {gt("Retry")}
-              </Button>
-            </div>
-          ) : null}
-
-          {/* Single-line Memory Retrieval Status Strip */}
-          {report ? (
-            <div
-              data-diagnostic-memory-banner="true"
-              className={cn(
-                "flex flex-wrap items-center justify-between gap-2.5 rounded-xl border px-3.5 py-2 text-xs",
-                memoryBannerSurface,
-              )}
-            >
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <DatabaseIcon
-                  className={cn(
-                    "size-3.5 shrink-0",
-                    memoryState === "fts5+sqlite-vec"
-                      ? "text-success-foreground"
-                      : memoryState === "fts5-only"
-                        ? "text-warning-foreground"
-                        : "text-muted-foreground",
-                  )}
-                  aria-hidden="true"
-                />
-                <span className="shrink-0 font-medium text-foreground">
-                  <T>Memory retrieval engine</T>
-                </span>
-                <Badge
-                  size="sm"
-                  className="shrink-0"
-                  variant={
-                    memoryState === "fts5+sqlite-vec"
-                      ? "success"
-                      : memoryState === "fts5-only"
-                        ? "warning"
-                        : "secondary"
-                  }
-                >
-                  {memoryState === "fts5+sqlite-vec"
-                    ? gt("FTS5 + sqlite-vec hybrid")
-                    : memoryState === "fts5-only"
-                      ? gt("FTS5 degraded mode")
-                      : gt("Unknown")}
-                </Badge>
-                {report.memoryRetrievalDetail ? (
-                  <span
-                    className="min-w-0 truncate text-muted-foreground"
-                    title={report.memoryRetrievalDetail}
-                  >
-                    {report.memoryRetrievalDetail}
-                  </span>
-                ) : null}
-              </div>
-              <Button
-                size="xs"
-                variant="outline"
-                className="shrink-0"
-                render={<Link to="/settings/memory" />}
-              >
-                <span>{gt("Chief & memory", { $context: "settings navigation item" })}</span>
-                <ArrowRightIcon className="size-3" />
-              </Button>
-            </div>
-          ) : null}
-
-          {/* Active status filter summary bar with one-click reset (shown when filtered cards are visible) */}
-          {report && filteredView && statusFilter !== "all" && filteredView.totalVisibleCount > 0 ? (
-            <div
-              data-diagnostic-active-filter={statusFilter}
-              className={cn(
-                "flex flex-wrap items-center justify-between gap-2 border-border/60 bg-foreground/[0.025] px-3.5 py-2 text-xs dark:bg-white/[0.035]",
-                GLASS_SURFACE_RIM,
-              )}
-            >
-              <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-                <span>{gt("Filtered")}</span>
-                <Badge variant={statusToneClasses(statusFilter).badgeVariant} size="sm">
-                  {statusLabel(statusFilter, gt)}
-                </Badge>
-                <span className="font-mono text-[11px] tabular-nums text-foreground/85">
-                  {filteredView.totalVisibleCount} / {report.summary.total}
-                </span>
-              </div>
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                data-diagnostic-filter-reset="true"
-                onClick={() => setStatusFilter("all")}
-              >
-                <T>Show all</T>
-              </Button>
-            </div>
-          ) : null}
-
-          {/* Initial loading state */}
-          {loading && !report ? (
-            <div
-              className={cn(
-                "border-border/50 bg-foreground/[0.02] px-4 py-8 text-center text-xs text-muted-foreground dark:bg-white/[0.025]",
-                GLASS_SURFACE_RIM,
-              )}
-            >
-              <T>Probing Prismux services, tools, and mirrors…</T>
-            </div>
-          ) : null}
-
-          {/* Layer 2 & 3: Active Category Groups + Single Deduplicated Dormant Engines Summary */}
-          {report && filteredView ? (
-            filteredView.totalVisibleCount === 0 ? (
-              <div
-                data-diagnostic-empty-state="true"
-                className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/65 bg-foreground/[0.02] px-5 py-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-white/[0.025] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
-              >
-                <span
-                  aria-hidden="true"
-                  className="inline-flex size-9 items-center justify-center rounded-xl border border-border/60 bg-foreground/[0.04] text-muted-foreground dark:bg-white/[0.06]"
-                >
-                  <CheckCircle2Icon className="size-4" />
-                </span>
-                <div className="space-y-1">
-                  <p className="text-[13px] font-semibold text-foreground">
-                    <T>Nothing matches that.</T>
-                  </p>
-                  {statusFilter !== "all" ? (
-                    <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                      <Badge variant={statusToneClasses(statusFilter).badgeVariant} size="sm">
-                        {statusLabel(statusFilter, gt)}
-                      </Badge>
-                      <span className="font-mono text-[11px] tabular-nums">0</span>
-                    </div>
-                  ) : null}
-                </div>
-                {statusFilter !== "all" ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    data-diagnostic-filter-reset="true"
-                    onClick={() => setStatusFilter("all")}
-                  >
-                    {gt("Reset filters")}
-                  </Button>
-                ) : null}
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {filteredView.activeGroups.map((group) => {
-                  const groupTone = statusToneClasses(group.status);
-                  const GroupIcon = categoryIconComponent(group.id);
-                  return (
-                    <section
-                      key={group.id}
-                      data-diagnostic-group={group.id}
-                      className="space-y-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          <span
-                            aria-hidden="true"
-                            className={cn(
-                              "inline-flex size-7 shrink-0 items-center justify-center rounded-lg border",
-                              groupTone.groupIconTray,
-                            )}
-                          >
-                            <GroupIcon className="size-3.5" />
-                          </span>
-                          <h4 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
-                            {categoryHeadingLabel(group, gt)}
-                          </h4>
-                          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-[10.5px] font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
-                            {group.items.length}
-                          </span>
-                        </div>
-                        <GroupStatusPills group={group} />
-                      </div>
-
-                      <div
-                        data-diagnostic-group-grid={group.id}
-                        className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3"
-                      >
-                        {group.items.map((item) => (
-                          <DiagnosticItemCard
-                            key={item.id}
-                            item={item}
-                            copied={copiedId === item.id}
-                            onCopyCommand={(id, cmd) => void copyCommand(id, cmd)}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  );
-                })}
-
-                {/* Single deduplicated Dormant Engines Read-Only Summary (flattened <= 2 card layers) */}
-                {filteredView.dormantGroup ? (
-                  <section
-                    data-diagnostic-group={filteredView.dormantGroup.id}
-                    data-diagnostic-dormant-summary="true"
-                    aria-label={categoryHeadingLabel(filteredView.dormantGroup, gt)}
-                    className="space-y-3 border-t border-border/50 pt-5"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <span
-                          aria-hidden="true"
-                          className={cn(
-                            "inline-flex size-7 shrink-0 items-center justify-center rounded-lg border",
-                            statusToneClasses(filteredView.dormantGroup.status).groupIconTray,
-                          )}
-                        >
-                          <LayersIcon className="size-3.5" />
-                        </span>
-                        <h4 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
-                          <T>Dormant Engines Read-Only Summary</T>
-                        </h4>
-                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border/60 bg-foreground/[0.04] px-1.5 font-mono text-[10.5px] font-medium tabular-nums text-muted-foreground dark:bg-white/[0.06]">
-                          {filteredView.dormantGroup.items.length}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <GroupStatusPills group={filteredView.dormantGroup} />
-                        <Badge variant="outline" size="sm">
-                          {gt("Read-only")}
-                        </Badge>
-                      </div>
-                    </div>
-
-                    <div
-                      data-diagnostic-group-grid={filteredView.dormantGroup.id}
-                      className="grid items-stretch gap-2.5 sm:grid-cols-3"
-                    >
-                      {filteredView.dormantGroup.items.map((engine) => (
-                        <DormantEngineReadOnlyCard key={engine.id} engine={engine} />
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
-              </div>
-            )
-          ) : null}
+          {diagnosticsBody}
         </div>
       </SettingsSection>
     </div>
+  );
+}
+
+function PrismuxDiagnosticsAutoStandalone({
+  initialReportOverride,
+  initialStatusFilter,
+  serverProvidersOverride,
+  settingsOverride,
+}: {
+  readonly initialReportOverride?: NormalizedDiagnosticsReport | null | undefined;
+  readonly initialStatusFilter: DiagnosticStatusFilter;
+  readonly serverProvidersOverride?: ReadonlyArray<ServerProvider> | undefined;
+  readonly settingsOverride?: ProviderInstanceOrderSettings | null | undefined;
+}) {
+  const pathname = useLocation({ select: (loc) => loc.pathname });
+  return (
+    <PrismuxDiagnosticsContent
+      variant="full"
+      standalone={isDiagnosticsStandalonePathname(pathname)}
+      initialReportOverride={initialReportOverride}
+      initialStatusFilter={initialStatusFilter}
+      serverProvidersOverride={serverProvidersOverride}
+      settingsOverride={settingsOverride}
+    />
+  );
+}
+
+export function PrismuxDiagnosticsSection({
+  variant = "full",
+  standalone,
+  initialReportOverride,
+  initialStatusFilter = "all",
+  serverProvidersOverride,
+  settingsOverride,
+}: PrismuxDiagnosticsSectionProps = {}) {
+  if (variant === "compact") {
+    return (
+      <PrismuxDiagnosticsContent
+        variant="compact"
+        standalone={false}
+        initialReportOverride={initialReportOverride}
+        initialStatusFilter={initialStatusFilter}
+        serverProvidersOverride={serverProvidersOverride}
+        settingsOverride={settingsOverride}
+      />
+    );
+  }
+  if (standalone !== undefined) {
+    return (
+      <PrismuxDiagnosticsContent
+        variant="full"
+        standalone={standalone}
+        initialReportOverride={initialReportOverride}
+        initialStatusFilter={initialStatusFilter}
+        serverProvidersOverride={serverProvidersOverride}
+        settingsOverride={settingsOverride}
+      />
+    );
+  }
+  return (
+    <PrismuxDiagnosticsAutoStandalone
+      initialReportOverride={initialReportOverride}
+      initialStatusFilter={initialStatusFilter}
+      serverProvidersOverride={serverProvidersOverride}
+      settingsOverride={settingsOverride}
+    />
   );
 }

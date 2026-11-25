@@ -4,6 +4,7 @@ import { refreshUsageLimits } from "@prismux/client-runtime/state/usage";
 import {
   isListedThreadLineage,
   type PrismuxKeepAwakeState,
+  type ProviderInstanceId,
   type ServerProvider,
 } from "@prismux/core-contracts";
 import { makeWindow } from "@prismux/core-shared/usageFormat";
@@ -30,6 +31,13 @@ import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { getClientSettings, subscribeClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { ensureLocalApi } from "~/localApi";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderProviderInstanceEntries,
+  type ProviderInstanceEntry,
+} from "~/providerInstances";
 import { useProject, useQuietThreadProjection, useQuietThreadShells } from "~/state/entities";
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
@@ -233,17 +241,42 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   // Quiet thread shells across environments (held through streaming ticks) to detect interactive AGY turn completion.
   const threadShells = useQuietThreadShells();
 
-  // Collect providers across connected environments (read-only from existing client atoms).
+  // Collect providers & configured SSOT branding/order across connected environments.
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
-  const allProviders = useMemo<readonly ServerProvider[]>(() => {
-    const list: ServerProvider[] = [];
+  const { allProviders, statusBarProviderDisplayOptions } = useMemo(() => {
+    const providersList: ServerProvider[] = [];
+    const configuredEntries: ProviderInstanceEntry[] = [];
+    const mergedOrder: ProviderInstanceId[] = [];
+    const seenOrderIds = new Set<ProviderInstanceId>();
     for (const presentation of presentations.values()) {
-      const providers = presentation.serverConfig?.providers;
+      const config = presentation.serverConfig;
+      const providers = config?.providers;
+      const providerOrder = config?.settings?.providerOrder;
+      if (Array.isArray(providerOrder)) {
+        for (const id of providerOrder) {
+          if (!seenOrderIds.has(id)) {
+            seenOrderIds.add(id);
+            mergedOrder.push(id);
+          }
+        }
+      }
       if (Array.isArray(providers)) {
-        list.push(...providers);
+        providersList.push(...providers);
+        const derived = deriveProviderInstanceEntries(providers);
+        const branded = config?.settings
+          ? brandProviderInstanceEntries(derived, config.settings)
+          : derived;
+        const ordered = orderProviderInstanceEntries(branded, providerOrder);
+        configuredEntries.push(...disambiguateProviderInstanceDisplayNames(ordered));
       }
     }
-    return list;
+    return {
+      allProviders: providersList,
+      statusBarProviderDisplayOptions: {
+        entries: configuredEntries,
+        providerOrder: mergedOrder,
+      },
+    };
   }, [presentations]);
 
   // 7-day local usage summary (also exposes today's bucket) for custom-endpoint & all providers.
@@ -353,12 +386,27 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         mergedUsage,
         usageWindow.untilDay,
         providerProbeSnapshots,
+        statusBarProviderDisplayOptions,
       ),
-    [allProviders, mergedUsage, providerProbeSnapshots, quotaNow, usageWindow.untilDay],
+    [
+      allProviders,
+      mergedUsage,
+      providerProbeSnapshots,
+      quotaNow,
+      statusBarProviderDisplayOptions,
+      usageWindow.untilDay,
+    ],
   );
   const quotaSummary = useMemo(
-    () => aggregateQuotaSummary(daemonQuota, allProviders, quotaNow, agyCredits),
-    [agyCredits, allProviders, daemonQuota, quotaNow],
+    () =>
+      aggregateQuotaSummary(
+        daemonQuota,
+        allProviders,
+        quotaNow,
+        agyCredits,
+        statusBarProviderDisplayOptions,
+      ),
+    [agyCredits, allProviders, daemonQuota, quotaNow, statusBarProviderDisplayOptions],
   );
   const quotaDisplay = useMemo(
     () => buildQuotaStatusBarDisplay(quotaSummary, quotaPrefs),

@@ -5184,3 +5184,372 @@ describe("workEntryReadOutput", () => {
     ).toBe("/workspace/prismux/src/app.ts\n~/.claude/CLAUDE.md\n~/.gitconfig");
   });
 });
+
+describe("DSH strict Thinking & Command/Tool hierarchy", () => {
+  const runId = RunId.make("dsh-hierarchy-run");
+  const at = (second: number) => `2026-11-25T10:00:${String(second).padStart(2, "0")}.000Z`;
+
+  const makeTurnEntries = (options?: {
+    readonly commandStatus?: "completed" | "inProgress";
+    readonly reasoningStatus?: "completed" | "inProgress";
+    readonly includeFinalAnswer?: boolean;
+  }): ReadonlyArray<TimelineEntry> => {
+    const commandStatus = options?.commandStatus ?? "completed";
+    const reasoningStatus = options?.reasoningStatus ?? "completed";
+    const includeFinalAnswer = options?.includeFinalAnswer ?? true;
+    return [
+      {
+        id: "user-1",
+        kind: "message",
+        createdAt: at(0),
+        message: {
+          id: MessageId.make("user-1"),
+          role: "user",
+          text: "Check PowerShell version",
+          runId: null,
+          createdAt: at(0),
+          updatedAt: at(0),
+          streaming: false,
+        },
+      },
+      {
+        id: "reason-1",
+        kind: "work",
+        createdAt: at(1),
+        entry: {
+          id: "reason-1",
+          runId,
+          createdAt: at(1),
+          label: "Thinking",
+          tone: "thinking",
+          itemType: "reasoning",
+          detail: "User wants me to think and call pwsh to inspect $PSVersionTable.",
+          toolLifecycleStatus: reasoningStatus,
+        },
+      },
+      {
+        id: "cmd-1",
+        kind: "work",
+        createdAt: at(6),
+        entry: {
+          id: "cmd-1",
+          runId,
+          createdAt: at(6),
+          label: "Ran command",
+          tone: "tool",
+          itemType: "command_execution",
+          command: "$PSVersionTable | Format-List",
+          toolLifecycleStatus: commandStatus,
+        },
+      },
+      ...(includeFinalAnswer
+        ? [
+            {
+              id: "answer-1",
+              kind: "message" as const,
+              createdAt: at(9),
+              message: {
+                id: MessageId.make("answer-1"),
+                role: "assistant" as const,
+                text: "PowerShell 7.5 is installed.",
+                runId,
+                createdAt: at(9),
+                updatedAt: at(9),
+                streaming: false,
+              },
+            },
+          ]
+        : []),
+    ];
+  };
+
+  it.each(["concise", "standard", "detailed", "expanded"] as const)(
+    "NEVER groups reasoning inside 已执行命令 (`work-toggle`) in %s mode when turn is unfolded",
+    (workStepsDisplay) => {
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: makeTurnEntries(),
+        latestRun: {
+          runId,
+          status: "completed",
+          startedAt: at(0),
+          completedAt: at(9),
+        },
+        expandedRunIds: new Set([runId]),
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        workStepsDisplay,
+        workStepsCollapseTiming: "after-turn",
+        locale: "zh-CN",
+      });
+
+      // Reasoning MUST always emit as its own independent top-level `work` row (`isExpandedToolGroup: false`)
+      const reasoningRow = rows.find(
+        (row) => row.kind === "work" && row.groupedEntries.some((entry) => entry.id === "reason-1"),
+      );
+      expect(reasoningRow).toBeDefined();
+      expect(reasoningRow?.kind === "work" && reasoningRow.isExpandedToolGroup).toBe(false);
+      expect(
+        reasoningRow?.kind === "work" && reasoningRow.groupedEntries.map((entry) => entry.id),
+      ).toEqual(["reason-1"]);
+      expect(reasoningRow?.kind === "work" ? reasoningRow.autoExpandReasoning : undefined).toBe(
+        workStepsDisplay === "expanded" ? true : undefined,
+      );
+
+      // In concise/standard, the command emits its OWN `work-toggle` ("已执行命令")
+      // completely separate from reasoning, and expanding it contains ONLY the command!
+      // In detailed/expanded, steps stay transparent and flat (no `work-toggle` hiding them).
+      if (workStepsDisplay === "concise" || workStepsDisplay === "standard") {
+        const toggleRow = rows.find((row) => row.kind === "work-toggle");
+        expect(toggleRow).toMatchObject({
+          kind: "work-toggle",
+          summary: "已执行命令",
+          dshPrimaryCategory: "commands",
+          hiddenCount: 1,
+          expanded: false,
+        });
+
+        const withExpandedToolGroup = deriveMessagesTimelineRows({
+          timelineEntries: makeTurnEntries(),
+          latestRun: {
+            runId,
+            status: "completed",
+            startedAt: at(0),
+            completedAt: at(9),
+          },
+          expandedRunIds: new Set([runId]),
+          expandedWorkGroupIds: new Set([toggleRow!.groupId]),
+          isWorking: false,
+          activeTurnStartedAt: null,
+          turnDiffSummaries: [],
+          supportsConversationRollback: false,
+          workStepsDisplay,
+          workStepsCollapseTiming: "after-turn",
+          locale: "zh-CN",
+        });
+
+        const expandedChildrenRow = withExpandedToolGroup.find(
+          (row) => row.kind === "work" && row.isExpandedToolGroup,
+        );
+        expect(expandedChildrenRow).toBeDefined();
+        expect(
+          expandedChildrenRow?.kind === "work" &&
+            expandedChildrenRow.groupedEntries.map((entry) => entry.id),
+        ).toEqual(["cmd-1"]);
+        expect(
+          expandedChildrenRow?.kind === "work" &&
+            expandedChildrenRow.groupedEntries.some((entry) => entry.itemType === "reasoning"),
+        ).toBe(false);
+      } else {
+        expect(rows.some((row) => row.kind === "work-toggle")).toBe(false);
+        const cmdRow = rows.find(
+          (row) => row.kind === "work" && row.groupedEntries.some((entry) => entry.id === "cmd-1"),
+        );
+        expect(cmdRow?.kind === "work" && cmdRow.groupedEntries.map((e) => e.id)).toEqual(["cmd-1"]);
+        expect(cmdRow?.kind === "work" ? cmdRow.autoExpandDetails : undefined).toBe(
+          workStepsDisplay === "expanded" ? true : undefined,
+        );
+      }
+    },
+  );
+
+  it.each(["concise", "standard"] as const)(
+    "keeps reasoning independent from active `work-live` tool group in %s mode",
+    (workStepsDisplay) => {
+      const entries = makeTurnEntries({
+        reasoningStatus: "completed",
+        commandStatus: "inProgress",
+        includeFinalAnswer: false,
+      });
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: entries,
+        latestRun: {
+          runId,
+          status: "running",
+          startedAt: at(0),
+          completedAt: null,
+        },
+        runningRunId: runId,
+        isWorking: true,
+        activeTurnStartedAt: at(0),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        workStepsDisplay,
+        locale: "zh-CN",
+      });
+
+      const reasoningRow = rows.find(
+        (row) => row.kind === "work" && row.groupedEntries.some((e) => e.id === "reason-1"),
+      );
+      expect(reasoningRow).toMatchObject({
+        kind: "work",
+        isExpandedToolGroup: false,
+        groupedEntries: [expect.objectContaining({ id: "reason-1" })],
+      });
+
+      const liveRow = rows.find((row) => row.kind === "work-live");
+      expect(liveRow).toBeDefined();
+      expect(liveRow?.kind === "work-live" && liveRow.entry.id).toBe("cmd-1");
+      expect(
+        liveRow?.kind === "work-live" && liveRow.groupedEntries.map((entry) => entry.id),
+      ).toEqual(["cmd-1"]);
+      expect(liveRow?.kind === "work-live" ? liveRow.thought : undefined).toBeUndefined();
+    },
+  );
+
+  it("breaks tool groups cleanly around interleaved reasoning blocks in standard mode", () => {
+    const entries: ReadonlyArray<TimelineEntry> = [
+      ...makeTurnEntries({ includeFinalAnswer: false }),
+      {
+        id: "cmd-2",
+        kind: "work",
+        createdAt: at(7),
+        entry: {
+          id: "cmd-2",
+          runId,
+          createdAt: at(7),
+          label: "Ran command",
+          tone: "tool",
+          itemType: "command_execution",
+          command: "git status",
+          toolLifecycleStatus: "completed",
+        },
+      },
+      {
+        id: "reason-2",
+        kind: "work",
+        createdAt: at(8),
+        entry: {
+          id: "reason-2",
+          runId,
+          createdAt: at(8),
+          label: "Thinking",
+          tone: "thinking",
+          itemType: "reasoning",
+          detail: "Now I should update the file.",
+          toolLifecycleStatus: "completed",
+        },
+      },
+      {
+        id: "edit-1",
+        kind: "work",
+        createdAt: at(9),
+        entry: {
+          id: "edit-1",
+          runId,
+          createdAt: at(9),
+          label: "Edit file",
+          tone: "tool",
+          itemType: "file_change",
+          changedFiles: ["src/index.ts"],
+          toolLifecycleStatus: "completed",
+        },
+      },
+      {
+        id: "answer-1",
+        kind: "message",
+        createdAt: at(10),
+        message: {
+          id: MessageId.make("answer-1"),
+          role: "assistant",
+          text: "Updated.",
+          runId,
+          createdAt: at(10),
+          updatedAt: at(10),
+          streaming: false,
+        },
+      },
+    ];
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: entries,
+      latestRun: { runId, status: "completed", startedAt: at(0), completedAt: at(10) },
+      expandedRunIds: new Set([runId]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      workStepsDisplay: "standard",
+      locale: "zh-CN",
+    });
+
+    expect(
+      rows.map((row) =>
+        row.kind === "work-toggle"
+          ? `toggle:${row.summary}:${row.hiddenCount}`
+          : row.kind === "work"
+            ? `work:${row.groupedEntries.map((e) => e.id).join(",")}`
+            : row.kind,
+      ),
+    ).toEqual([
+      "message",
+      "turn-fold",
+      "work:reason-1",
+      "toggle:已执行命令:2",
+      "work:reason-2",
+      "toggle:已修改文件:1",
+      "message",
+    ]);
+  });
+
+  it("streams live reasoning as its own top-level row in standard mode with incremental parity", () => {
+    const source = makeStreamingWorkTimelineFixture("reasoning");
+    const rowsInput = (timelineEntries: ReadonlyArray<TimelineEntry>) => ({
+      timelineEntries,
+      latestRun: {
+        runId: source.runId,
+        status: "running" as const,
+        startedAt: source.time(5),
+        completedAt: null,
+      },
+      runningRunId: source.runId,
+      isWorking: true,
+      activeTurnStartedAt: source.time(5),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      workStepsDisplay: "standard" as const,
+      locale: "zh-CN",
+    });
+
+    let timelineInput = {
+      visibleTurnItems: withStreamedText(
+        source.visibleTurnItems,
+        source.streamingItemId,
+        "First paragraph\n",
+        source.time(20),
+      ),
+      optimisticMessages: [],
+    };
+    let timeline = deriveTimelineEntriesFromVisibleTurnItemsWithState(timelineInput);
+    let projection = deriveMessagesTimelineRowsWithState(rowsInput(timeline.entries));
+
+    const liveReason = projection.rows.find(
+      (row) => row.kind === "work" && row.groupedEntries.some((e) => e.id === source.streamingItemId),
+    );
+    expect(liveReason).toMatchObject({
+      kind: "work",
+      isExpandedToolGroup: false,
+      isLive: true,
+    });
+    expect(projection.rows.some((row) => row.kind === "thinking")).toBe(false);
+
+    timelineInput = {
+      visibleTurnItems: withStreamedText(
+        timelineInput.visibleTurnItems,
+        source.streamingItemId,
+        "First paragraph\n\nSecond paragraph\nstill writing",
+        source.time(22),
+      ),
+      optimisticMessages: [],
+    };
+    const previous = projection;
+    timeline = deriveTimelineEntriesFromVisibleTurnItemsWithState(timelineInput, timeline);
+    projection = deriveMessagesTimelineRowsWithState(rowsInput(timeline.entries), previous);
+    expect(projection.rows).toEqual(
+      deriveMessagesTimelineRows(
+        rowsInput(deriveTimelineEntriesFromVisibleTurnItems(timelineInput)),
+      ),
+    );
+  });
+});

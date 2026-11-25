@@ -14,10 +14,10 @@ import {
   RotateCwIcon,
   SaveIcon,
   ShieldCheckIcon,
-  SparklesIcon,
 } from "lucide-react";
 
 import { APP_VERSION } from "../../branding";
+import { T3AppIcon } from "../../components/T3AppIcon";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -92,7 +92,7 @@ const ROUTE_PREFERENCE_LABELS: Readonly<Record<RoutePreference, string>> = {
 
 const CHANNEL_LABELS: Readonly<Record<DaemonUpdateChannel, string>> = {
   stable: "稳定正式版（Stable）",
-  prerelease: "Preview（Alpha / Beta）",
+  prerelease: "Preview（Alpha / Beta / RC）",
 };
 
 function formatSize(bytes: number | null): string {
@@ -571,7 +571,7 @@ export function PrismuxUpdatesSettingsPage({
         headerAction={
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant="info" size="sm">
-              {updateChannel === "stable" ? "稳定正式版" : "Preview"}
+              {updateChannel === "stable" ? "稳定正式版" : "Preview / RC"}
             </Badge>
             <Badge
               variant={portableMode ? "outline" : daemonInfo.ready ? "success" : "warning"}
@@ -588,12 +588,7 @@ export function PrismuxUpdatesSettingsPage({
           className="flex flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-5"
         >
           <div className="flex min-w-0 items-center gap-3.5">
-            <span
-              aria-hidden="true"
-              className="inline-flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary"
-            >
-              <SparklesIcon className="size-5" />
-            </span>
+            <T3AppIcon className="size-10 shrink-0 rounded-xl object-contain shadow-sm ring-1 ring-border/40 [[data-pmx-glass='1']_&]:ring-foreground/15" />
             <div className="min-w-0 space-y-0.5">
               <div className="flex flex-wrap items-baseline gap-2">
                 <span className="text-base font-semibold tracking-tight text-foreground">
@@ -1042,7 +1037,7 @@ export function PrismuxUpdatesSettingsPage({
         <SettingsRow
           id="update-track"
           title="软件更新通道"
-          description="选择接收正式稳定版或包含抢先特性的 Preview 通道。"
+          description="选择接收正式稳定版，或包含 Alpha / Beta / RC 抢先特性的 Preview 通道。"
           control={
             <div className={`${SETTINGS_CONTROL_LG} max-w-full`}>
               <Select

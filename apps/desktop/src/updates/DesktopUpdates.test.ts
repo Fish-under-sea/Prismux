@@ -1,5 +1,7 @@
 import * as NodeModule from "node:module";
+import * as NodeOS from "node:os";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { DESKTOP_UPDATE_RESTART_MARKER_FILE, DesktopUpdateStateSchema } from "@prismux/core-contracts";
 import { computeReleaseNotes } from "electron-updater/out/providers/GitHubProvider.js";
@@ -8,9 +10,11 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -1041,6 +1045,36 @@ describe("DesktopUpdates", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
+
+  it.effect("isolates persisted desktop settings under os.tmpdir() and cleans up on teardown", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tmpRoot = path.resolve(NodeOS.tmpdir());
+      const harness = makeHarness();
+
+      const { homeDirectory, baseDir, desktopSettingsPath } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          yield* updates.setChannel("nightly");
+          assert.isTrue(yield* fileSystem.exists(environment.desktopSettingsPath));
+          return {
+            homeDirectory: environment.homeDirectory,
+            baseDir: environment.baseDir,
+            desktopSettingsPath: environment.desktopSettingsPath,
+          };
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+
+      assert.isTrue(path.resolve(homeDirectory).startsWith(tmpRoot));
+      assert.isTrue(path.resolve(baseDir).startsWith(tmpRoot));
+      assert.isFalse(yield* fileSystem.exists(desktopSettingsPath));
+      assert.isFalse(yield* fileSystem.exists(baseDir));
+      assert.isFalse(yield* fileSystem.exists(path.dirname(baseDir)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("ignores a finished download from a track it no longer follows", () => {
     const harness = makeHarness();

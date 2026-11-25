@@ -145,6 +145,14 @@ describe("searchSettings", () => {
       id: "work-steps-display",
       to: "/settings/chat",
     });
+    expect(searchSettings("reasoning translation")[0]).toMatchObject({
+      id: "reasoning-translation",
+      to: "/settings/chat",
+    });
+    expect(searchSettings("思考过程汉化")[0]).toMatchObject({
+      id: "reasoning-translation",
+      to: "/settings/chat",
+    });
     expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "color-scheme")?.targetId).toBe(
       "prismux-appearance",
     );
@@ -163,6 +171,7 @@ describe("searchSettings", () => {
       "work-steps-collapse-timing",
       "collapsed-assistant-reply-mode",
       "effort-display",
+      "reasoning-translation",
       "math-rendering",
       "thread-details-items",
       "composer-context",
@@ -175,6 +184,7 @@ describe("searchSettings", () => {
     for (const id of [
       "default-model",
       "fallback-model",
+      "default-reasoning-effort",
       "text-generation-model",
       "thread-title-instructions",
       "default-launch-mode",
@@ -182,6 +192,16 @@ describe("searchSettings", () => {
     ]) {
       expect(byId.get(id)?.to, id).toBe("/settings/providers");
     }
+    expect(searchSettings("default reasoning effort")[0]).toMatchObject({
+      id: "default-reasoning-effort",
+      to: "/settings/providers",
+      scope: "project-defaults",
+    });
+    expect(searchSettings("默认思考强度")[0]).toMatchObject({
+      id: "default-reasoning-effort",
+      to: "/settings/providers",
+      scope: "project-defaults",
+    });
     // Moved from /settings/chat and /settings/archived -> /settings/projects
     for (const id of ["add-project-starts-in", "ghq-clone-layout", "archive"]) {
       expect(byId.get(id)?.to, id).toBe("/settings/projects");
@@ -549,6 +569,19 @@ describe("source control host search items", () => {
     ).toBe(false);
     expect(
       searchSettings("Overnight Factory").some((item) => item.to === "/settings/overnight-factory"),
+    ).toBe(false);
+  });
+
+  it("omits removed Service Diagnostics tab entry (prismux-diagnostics) from Settings Maintenance search", () => {
+    const allItems: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS;
+    expect(allItems.some((item) => item.id === "prismux-diagnostics")).toBe(false);
+    expect(
+      allItems.some(
+        (item) => item.to === "/settings/maintenance" && item.targetId === "diagnostics",
+      ),
+    ).toBe(false);
+    expect(
+      searchSettings("Service Diagnostics").some((item) => item.id === "prismux-diagnostics"),
     ).toBe(false);
   });
 });

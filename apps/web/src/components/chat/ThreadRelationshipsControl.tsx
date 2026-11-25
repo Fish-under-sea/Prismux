@@ -76,9 +76,10 @@ import {
 import { useEnvironment, useEnvironmentProviders } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import {
-  applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
   hasInstanceBadge,
+  providerInstanceEntriesFor,
 } from "../../providerInstances";
 import { threadEnvironment } from "../../state/threads";
 import { orchestrationEnvironment, threadTitlesRead } from "../../state/orchestration";
@@ -523,14 +524,9 @@ export function ThreadRelationshipsPanel(props: {
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   // Derive graphs after hooks to preserve their compiler cache.
   const providers = providersByEnvironment.get(props.environmentId);
-  const derivedProviderEntries = deriveProviderInstanceEntries(providers ?? []);
   const providerEntries = settings
-    ? applyProviderInstanceSettings(
-        derivedProviderEntries,
-        settings,
-        currentThread?.projectId ?? null,
-      )
-    : derivedProviderEntries;
+    ? providerInstanceEntriesFor(providers ?? [], settings, currentThread?.projectId ?? null)
+    : disambiguateProviderInstanceDisplayNames(deriveProviderInstanceEntries(providers ?? []));
   const projects = allProjects.filter((project) => project.environmentId === props.environmentId);
   const parentNativeStatus = parentProjection
     ? deriveProviderSubagentStatus(parentProjection)?.status
@@ -865,6 +861,7 @@ export function ThreadRelationshipsPanel(props: {
         modelSelection={agent.modelSelection}
         provider={provider}
         providers={providers}
+        providerEntries={providerEntries}
         driver={providerDriver}
         elapsed={<AgentElapsed agent={agent} />}
         status={agent.status}

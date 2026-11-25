@@ -51,7 +51,6 @@ import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
-import { PrismuxDiagnosticsSection } from "../../prismux/settings/PrismuxDiagnosticsSection";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
 
@@ -995,16 +994,13 @@ function DiagnosticsSettingsBody({ embedded }: { readonly embedded: boolean }) {
 
   if (!canReadDiagnostics) {
     const content = (
-      <>
-        <PrismuxDiagnosticsSection variant="full" />
-        <p className="text-sm text-muted-foreground">
-          {environmentId === null
-            ? gt("Connect an environment to see diagnostics.")
-            : diagnosticsAccess.isPending
-              ? gt("Checking diagnostics access…")
-              : diagnosticsAccess.error}
-        </p>
-      </>
+      <p className="text-sm text-muted-foreground">
+        {environmentId === null
+          ? gt("Connect an environment to see diagnostics.")
+          : diagnosticsAccess.isPending
+            ? gt("Checking diagnostics access…")
+            : diagnosticsAccess.error}
+      </p>
     );
     return embedded ? (
       <div className="space-y-8">{content}</div>
@@ -1017,7 +1013,6 @@ function DiagnosticsSettingsBody({ embedded }: { readonly embedded: boolean }) {
 
   const fullContent = (
     <>
-      <PrismuxDiagnosticsSection variant="full" />
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
       <SettingsSection

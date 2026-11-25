@@ -3,6 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@prismux/core-contracts";
+import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as TestProviderHost from "@prismux/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -20,8 +21,12 @@ import {
   findDeepSeekCliArgStart,
   hasAsarEntrySync,
   isDeepSeekHarnessSpawn,
+  isPlaceholderDshVersion,
+  readAsarTextEntrySync,
+  resolveDshInstalledVersion,
   resolveLocalAcpSpawn,
   resolvePackagedDshDesktopSpawn,
+  selectPreferredDshVersion,
   unwrapWindowsLocalCmdShim,
   type LocalAcpResolutionFs,
 } from "./dshLocal.ts";
@@ -62,6 +67,40 @@ function writeMinimalAsar(asarPath: string, headerJson: Record<string, unknown>)
   header.writeUInt32LE(jsonBytes.length, 12);
   jsonBytes.copy(header, 16);
   NodeFS.writeFileSync(asarPath, header);
+}
+
+function writeAsarWithPayloads(
+  asarPath: string,
+  entries: Readonly<Record<string, string>>,
+): void {
+  const root: { files: Record<string, unknown> } = { files: {} };
+  const chunks: Array<Buffer> = [];
+  let offset = 0;
+  for (const [relativePath, content] of Object.entries(entries)) {
+    const buf = Buffer.from(content, "utf8");
+    const segments = relativePath.split("/");
+    let cursor = root.files;
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      const seg = segments[index]!;
+      if (!cursor[seg] || typeof cursor[seg] !== "object") {
+        cursor[seg] = { files: {} };
+      }
+      cursor = (cursor[seg] as { files: Record<string, unknown> }).files;
+    }
+    cursor[segments.at(-1)!] = { size: buf.length, offset: String(offset) };
+    chunks.push(buf);
+    offset += buf.length;
+  }
+  const jsonBytes = Buffer.from(JSON.stringify(root), "utf8");
+  const alignedJsonSize = Math.ceil(jsonBytes.length / 4) * 4;
+  const headerSize = alignedJsonSize + 8;
+  const header = Buffer.alloc(16 + alignedJsonSize);
+  header.writeUInt32LE(4, 0);
+  header.writeUInt32LE(headerSize, 4);
+  header.writeUInt32LE(headerSize - 4, 8);
+  header.writeUInt32LE(jsonBytes.length, 12);
+  jsonBytes.copy(header, 16);
+  NodeFS.writeFileSync(asarPath, Buffer.concat([header, ...chunks]));
 }
 
 describe("dshLocal", () => {
@@ -324,6 +363,97 @@ describe("dshLocal", () => {
     }
   });
 
+  it("resolves real installed DSH version from Electron ASAR, sibling app dir, npm package.json, and dsh --version fallback", () => {
+    const tmpDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "dsh-version-test-"));
+    try {
+      // 1. Real Electron DSH NEXT ASAR layout: prefer @deepseek-ai/dsh CLI version over shell version
+      const desktopDir = NodePath.join(tmpDir, "DSH NEXT");
+      const resourcesDir = NodePath.join(desktopDir, "resources");
+      NodeFS.mkdirSync(resourcesDir, { recursive: true });
+      const exePath = NodePath.join(desktopDir, "DSH NEXT.exe");
+      NodeFS.writeFileSync(exePath, "");
+      const asarPath = NodePath.join(resourcesDir, "app.asar");
+      writeAsarWithPayloads(asarPath, {
+        "package.json": JSON.stringify({ name: "dsh-desktop-next", version: "2.0.24-next" }),
+        "node_modules/@deepseek-ai/dsh/package.json": JSON.stringify({
+          name: "@deepseek-ai/dsh",
+          version: "0.2.2-rc.4",
+        }),
+        "lib/desktop-cli.js": "export {};",
+      });
+      expect(readAsarTextEntrySync(asarPath, "node_modules/@deepseek-ai/dsh/package.json")).toContain(
+        "0.2.2-rc.4",
+      );
+      expect(
+        resolveDshInstalledVersion({
+          command: exePath,
+          args: ["--expose-internals", NodePath.join(asarPath, "lib", "desktop-cli.js"), "acp"],
+          platform: "win32",
+        }),
+      ).toBe("0.2.2-rc.4");
+      expect(
+        resolveDshInstalledVersion({
+          command: exePath,
+          args: ["acp"],
+          platform: "win32",
+        }),
+      ).toBe("0.2.2-rc.4");
+
+      // 2. Minimal ASAR containing only root package.json
+      const minimalAsar = NodePath.join(tmpDir, "minimal", "resources", "app.asar");
+      NodeFS.mkdirSync(NodePath.dirname(minimalAsar), { recursive: true });
+      writeAsarWithPayloads(minimalAsar, {
+        "package.json": JSON.stringify({ name: "@deepseek-ai/dsh", version: "0.3.1" }),
+      });
+      expect(
+        resolveDshInstalledVersion({
+          command: NodePath.join(tmpDir, "minimal", "DSH.exe"),
+          args: [NodePath.join(minimalAsar, "lib", "desktop-cli.js"), "acp"],
+          platform: "win32",
+        }),
+      ).toBe("0.3.1");
+
+      // 3. Standalone npm package layout (`node .../node_modules/@deepseek-ai/dsh/lib/bin.js`)
+      const npmDshRoot = NodePath.join(tmpDir, "npm", "node_modules", "@deepseek-ai", "dsh");
+      NodeFS.mkdirSync(NodePath.join(npmDshRoot, "lib"), { recursive: true });
+      NodeFS.writeFileSync(
+        NodePath.join(npmDshRoot, "package.json"),
+        JSON.stringify({ name: "@deepseek-ai/dsh", version: "0.2.5-beta.1" }),
+        "utf8",
+      );
+      expect(
+        resolveDshInstalledVersion({
+          command: process.execPath,
+          args: [NodePath.join(npmDshRoot, "lib", "bin.js"), "acp"],
+          platform: HostProcess.Platform.defaultValue(),
+        }),
+      ).toBe("0.2.5-beta.1");
+
+      // 4. Standalone `dsh` binary falls back to `dsh --version` and rejects hardcoded 0.0.1
+      expect(
+        resolveDshInstalledVersion({
+          command: "dsh",
+          args: ["acp"],
+          runVersionCommand: () => "dsh v0.2.4-rc.1\n",
+        }),
+      ).toBe("0.2.4-rc.1");
+      expect(
+        resolveDshInstalledVersion({
+          command: "dsh",
+          args: ["acp"],
+          runVersionCommand: () => "0.0.1\n",
+        }),
+      ).toBeUndefined();
+
+      expect(isPlaceholderDshVersion("0.0.1")).toBe(true);
+      expect(isPlaceholderDshVersion("0.2.2-rc.4")).toBe(false);
+      expect(selectPreferredDshVersion("0.2.2-rc.4", "0.0.1")).toBe("0.2.2-rc.4");
+      expect(selectPreferredDshVersion(undefined, "0.0.1")).toBe("0.0.1");
+    } finally {
+      NodeFS.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects DeepSeek Harness spawns and CLI arg offsets for wrapped Electron/Node launchers", () => {
     const desktopArgs = [
       "--expose-internals",
@@ -358,6 +488,10 @@ describe("dshLocal", () => {
         const fakeDshScript = NodePath.join(binDir, "bin.js");
         const argvLogPath = NodePath.join(tempDir, "argv.json");
         yield* fs.makeDirectory(binDir, { recursive: true });
+        yield* fs.writeFileString(
+          NodePath.join(tempDir, "node_modules", "@deepseek-ai", "dsh", "package.json"),
+          JSON.stringify({ name: "@deepseek-ai/dsh", version: "0.2.2-rc.4" }),
+        );
         yield* fs.writeFileString(
           fakeDshScript,
           `
@@ -466,6 +600,7 @@ rl.on("line", (line) => {
         }).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
 
         expect(probed.probe.ready).toBe(true);
+        expect(probed.probe.agentVersion).toBe("0.2.2-rc.4");
         expect(probed.slashCommands.map((cmd) => cmd.name)).toEqual([
           "plan",
           "goal",
@@ -590,6 +725,17 @@ rl.on("line", (line) => {
           })}`,
         );
         expect(probed.probe.ready).toBe(true);
+        expect(probed.probe.agentVersion).toBeTruthy();
+        expect(probed.probe.agentVersion).not.toBe("0.0.1");
+        expect(probed.probe.agentVersion).toMatch(/^\d+\.\d+\.\d+/u);
+        expect(probed.probe.agentVersion).toBe(
+          resolveDshInstalledVersion({
+            command: resolved.spawn.command,
+            args: resolved.spawn.args,
+            env: resolved.spawn.env,
+            platform: HostProcess.Platform.defaultValue(),
+          }),
+        );
         expect(probed.probe.models.length).toBeGreaterThan(0);
         expect(probed.probe.currentModelId).toBeTruthy();
         expect(probed.slashCommands.length).toBeGreaterThan(0);

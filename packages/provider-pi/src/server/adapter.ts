@@ -10,6 +10,8 @@ import {
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ExecutionNode,
+  type OrchestrationV2PlanArtifact,
+  type OrchestrationV2PlanStep,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderRef,
@@ -157,8 +159,8 @@ const PiProviderCapabilitiesV2 = {
     approvalsCanOriginateFromSubagents: false,
   },
   planning: {
-    emitsPlanUpdated: false,
-    emitsTodoList: false,
+    emitsPlanUpdated: true,
+    emitsTodoList: true,
     emitsProposedPlan: false,
     supportsStructuredQuestions: true,
     planDeltasHaveItemIds: false,
@@ -464,6 +466,166 @@ interface PiWake {
   readonly events: Array<PiRpcRecord>;
 }
 
+const PI_TODO_TOOL_NAMES = new Set([
+  "todo",
+  "todos",
+  "todowrite",
+  "todo_write",
+  "update_plan",
+  "updateplan",
+  "update_steps",
+  "updatesteps",
+  "write_todos",
+  "writetodos",
+]);
+
+function normalizePiTodoToolName(raw: string): string {
+  const tail = raw.trim().split(/(?:__|[./:])/u).at(-1) ?? raw;
+  return tail
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/gu, "_");
+}
+
+function normalizePiPlanStepStatus(
+  raw: unknown,
+): "pending" | "running" | "completed" | "cancelled" {
+  if (typeof raw !== "string") return "pending";
+  const normalized = raw.trim().toLowerCase().replace(/[\s-]+/gu, "_");
+  switch (normalized) {
+    case "completed":
+    case "complete":
+    case "done":
+    case "finished":
+    case "success":
+    case "succeeded":
+      return "completed";
+    case "running":
+    case "in_progress":
+    case "inprogress":
+    case "active":
+    case "working":
+    case "started":
+      return "running";
+    case "cancelled":
+    case "canceled":
+    case "skipped":
+    case "omitted":
+      return "cancelled";
+    default:
+      return "pending";
+  }
+}
+
+function parsePiTodoStep(entry: unknown, index: number): OrchestrationV2PlanStep | undefined {
+  if (typeof entry === "string") {
+    const trimmed = entry.trim();
+    if (!trimmed) return undefined;
+    const checkbox = /^(?:[-*+]\s+)?\[([ xX~/-])\]\s+(.+)$/u.exec(trimmed);
+    if (checkbox) {
+      const marker = checkbox[1]?.toLowerCase() ?? " ";
+      const text = checkbox[2]?.trim() ?? "";
+      if (!text || marker === "-") return undefined;
+      return {
+        id: `pi-step-${index + 1}`,
+        text,
+        status: marker === "x" ? "completed" : marker === "/" || marker === "~" ? "running" : "pending",
+      };
+    }
+    return { id: `pi-step-${index + 1}`, text: trimmed, status: "pending" };
+  }
+  if (!Predicate.isObject(entry)) return undefined;
+  const text =
+    recordString(entry, "title") ??
+    recordString(entry, "content") ??
+    recordString(entry, "step") ??
+    recordString(entry, "text") ??
+    recordString(entry, "task") ??
+    recordString(entry, "description") ??
+    recordString(entry, "subject") ??
+    recordString(entry, "label") ??
+    recordString(entry, "activeForm");
+  if (text === undefined || text.trim().length === 0) return undefined;
+  const rawStatus =
+    recordString(entry, "status") ??
+    recordString(entry, "state") ??
+    (recordField(entry, "completed") === true || recordField(entry, "done") === true
+      ? "completed"
+      : "pending");
+  const status = normalizePiPlanStepStatus(rawStatus);
+  if (status === "cancelled") return undefined;
+  const rawId = recordString(entry, "id")?.trim();
+  return {
+    id: rawId && rawId.length > 0 ? rawId : `pi-step-${index + 1}`,
+    text: text.trim(),
+    status,
+  };
+}
+
+function extractPiTodoContainer(container: unknown): {
+  readonly items: ReadonlyArray<unknown>;
+  readonly explanation?: string;
+} | undefined {
+  if (Array.isArray(container)) {
+    return container.length > 0 ? { items: container } : undefined;
+  }
+  if (typeof container === "string") {
+    const trimmed = container.trim();
+    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+      const parsed = Option.getOrUndefined(decodePiJson(trimmed));
+      if (parsed !== undefined) return extractPiTodoContainer(parsed);
+    }
+    return undefined;
+  }
+  if (!Predicate.isObject(container)) return undefined;
+  const explanation =
+    recordString(container, "explanation")?.trim() ||
+    recordString(container, "summary")?.trim() ||
+    recordString(container, "note")?.trim() ||
+    undefined;
+  for (const key of ["todos", "steps", "plan", "items", "tasks", "entries"] as const) {
+    const field = recordField(container, key);
+    if (Array.isArray(field) && field.length > 0) {
+      return explanation ? { items: field, explanation } : { items: field };
+    }
+    if (typeof field === "string") {
+      const nested = extractPiTodoContainer(field);
+      if (nested) {
+        return explanation && !nested.explanation ? { ...nested, explanation } : nested;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extracts normalized `todo_list` steps from Pi todo/plan tool invocations
+ * (`todo`, `TodoWrite`, `todowrite`, `update_plan`, `update_steps`, `write_todos`).
+ */
+export function extractPiTodoPlan(
+  toolName: string,
+  args: unknown,
+  resultRecord?: unknown,
+): { readonly steps: ReadonlyArray<OrchestrationV2PlanStep>; readonly explanation?: string } | undefined {
+  if (!PI_TODO_TOOL_NAMES.has(normalizePiTodoToolName(toolName))) {
+    return undefined;
+  }
+  const extracted =
+    extractPiTodoContainer(args) ??
+    extractPiTodoContainer(recordField(resultRecord, "structuredContent")) ??
+    extractPiTodoContainer(recordField(resultRecord, "details")) ??
+    extractPiTodoContainer(contentText(recordField(resultRecord, "content")));
+  if (!extracted) return undefined;
+  const steps = extracted.items.flatMap((entry, index) => {
+    const parsed = parsePiTodoStep(entry, index);
+    return parsed ? [parsed] : [];
+  });
+  if (steps.length === 0) return undefined;
+  return extracted.explanation === undefined
+    ? { steps }
+    : { steps, explanation: extracted.explanation };
+}
+
 export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   options: PiAdapterV2Options,
 ) {
@@ -642,6 +804,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       >();
       // The launch snapshot arrives before the tool result that names its run.
       let latestAsyncSnapshotRuns: ReadonlyArray<unknown> = [];
+      const todoPlansByTurn = new Map<
+        string,
+        {
+          readonly id: OrchestrationV2PlanArtifact["id"];
+          readonly nativeItemId: string;
+          readonly startedAt: DateTime.Utc;
+        }
+      >();
+      let latestTodoPlan: OrchestrationV2PlanArtifact | null = null;
       // Pi can settle immediately after dialog response; serialize so terminal cannot overtake request resolution.
       const sessionEventPermit = yield* Semaphore.make(1);
       let threadState: PiThreadState | null = null;
@@ -1412,6 +1583,81 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               : "failed"
             : "completed"
           : "running";
+        const todoPlan =
+          parentToolCallId === undefined && !isError
+            ? extractPiTodoPlan(toolName, args, resultRecord)
+            : undefined;
+        if (todoPlan !== undefined && todoPlan.steps.length > 0) {
+          const turnKey = String(turn.providerTurn.id);
+          let planState = todoPlansByTurn.get(turnKey);
+          if (planState === undefined) {
+            planState = {
+              id: yield* idAllocator.allocate.plan({
+                threadId: turn.turnInput.threadId,
+                runId: turn.turnInput.runId,
+                driver: PI_PROVIDER,
+              }),
+              nativeItemId: `${turn.providerTurn.id}:todo_list`,
+              startedAt,
+            };
+            todoPlansByTurn.set(turnKey, planState);
+          }
+          const planNodeId = idAllocator.derive.nodeFromProviderItem({
+            driver: PI_PROVIDER,
+            nativeItemId: planState.nativeItemId,
+          });
+          const allCompleted = todoPlan.steps.every((step) => step.status === "completed");
+          const plan: OrchestrationV2PlanArtifact = {
+            id: planState.id,
+            threadId: turn.turnInput.threadId,
+            runId: turn.turnInput.runId,
+            nodeId: planNodeId,
+            kind: "todo_list",
+            status: allCompleted ? "completed" : "active",
+            steps: todoPlan.steps,
+            ...(todoPlan.explanation === undefined ? {} : { explanation: todoPlan.explanation }),
+          };
+          if (
+            latestTodoPlan !== null &&
+            latestTodoPlan.id !== plan.id &&
+            latestTodoPlan.status !== "superseded"
+          ) {
+            yield* emit({
+              type: "plan.updated",
+              driver: PI_PROVIDER,
+              plan: { ...latestTodoPlan, status: "superseded" },
+            });
+          }
+          latestTodoPlan = plan;
+          yield* emitItemNode(
+            turn,
+            planState.nativeItemId,
+            "todo_list",
+            allCompleted ? "completed" : "running",
+            planState.startedAt,
+            allCompleted ? emittedAt : null,
+          );
+          yield* emit({
+            type: "plan.updated",
+            driver: PI_PROVIDER,
+            plan,
+          });
+          yield* emit({
+            type: "turn_item.updated",
+            driver: PI_PROVIDER,
+            turnItem: {
+              ...baseItemFields(turn, planState.nativeItemId, planState.startedAt, emittedAt),
+              status: allCompleted ? "completed" : "running",
+              title: null,
+              completedAt: allCompleted ? emittedAt : null,
+              type: "todo_list",
+              planId: planState.id,
+              steps: plan.steps,
+              ...(plan.explanation === undefined ? {} : { explanation: plan.explanation }),
+            },
+          });
+          return;
+        }
         const base = baseItemFields(turn, toolCallId, startedAt, emittedAt, parentToolCallId);
         yield* emitItemNode(
           turn,

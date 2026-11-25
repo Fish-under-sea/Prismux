@@ -356,6 +356,21 @@ export type ChatWidth = typeof ChatWidth.Type;
 export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
+/** Real-time Chinese translation provider for model reasoning / chain-of-thought. */
+export const ReasoningTranslationProvider = Schema.Literals([
+  "off",
+  "bing",
+  "google",
+  "text_model",
+]);
+export type ReasoningTranslationProvider = typeof ReasoningTranslationProvider.Type;
+export const DEFAULT_REASONING_TRANSLATION_PROVIDER: ReasoningTranslationProvider = "bing";
+
+export const DEFAULT_REASONING_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
+export const ReasoningEffortLevel = Schema.Literals(DEFAULT_REASONING_EFFORT_LEVELS);
+export type ReasoningEffortLevel = typeof ReasoningEffortLevel.Type;
+export const DEFAULT_REASONING_EFFORT: ReasoningEffortLevel = "high";
+
 export const ToolCallVisibility = Schema.Literals(["showAll", "hideSuccessful", "hideAll", "zen"]);
 export type ToolCallVisibility = typeof ToolCallVisibility.Type;
 
@@ -431,6 +446,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
   effortDisplay: EffortDisplay.pipe(Schema.withDecodingDefault(Effect.succeed("bars" as const))),
+  reasoningTranslationProvider: ReasoningTranslationProvider.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_REASONING_TRANSLATION_PROVIDER)),
+  ),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   appearanceContrast: AppearanceContrast.pipe(
@@ -1188,6 +1206,7 @@ export type WorktreeCleanup = typeof WorktreeCleanup.Type;
 export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "worktreeCleanup",
   "defaultModelSelection",
+  "defaultReasoningEffort",
   "defaultRuntimeMode",
   "defaultThreadEnvMode",
   "newWorktreesStartFromOrigin",
@@ -1226,6 +1245,7 @@ export type ProjectProviderInstanceOverride = typeof ProjectProviderInstanceOver
 export const ProjectSettingsOverrides = Schema.Struct({
   worktreeCleanup: Schema.optionalKey(WorktreeCleanup),
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  defaultReasoningEffort: Schema.optionalKey(ReasoningEffortLevel),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
@@ -1449,6 +1469,9 @@ export const ServerSettings = Schema.Struct({
   ),
   fallbackModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  defaultReasoningEffort: ReasoningEffortLevel.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_REASONING_EFFORT)),
   ),
   defaultRuntimeMode: RuntimeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE)),
@@ -1922,6 +1945,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  defaultReasoningEffort: Schema.optionalKey(ReasoningEffortLevel),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
   fallbackModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   /** Replaces each project's override set; null removes it. Omitted providerInstances retains its stored value. */
@@ -2095,6 +2119,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   chatWidth: Schema.optionalKey(ChatWidth),
   effortDisplay: Schema.optionalKey(EffortDisplay),
+  reasoningTranslationProvider: Schema.optionalKey(ReasoningTranslationProvider),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),

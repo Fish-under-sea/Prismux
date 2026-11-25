@@ -379,6 +379,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     environmentOnly: true,
   },
   {
+    id: "default-reasoning-effort",
+    title: msg("Default reasoning effort"),
+    to: "/settings/providers",
+    scope: "project-defaults",
+    searchTerms: [
+      msg("default thinking reasoning effort level low medium high max model"),
+      "默认思考强度 思考强度 推理强度",
+    ],
+  },
+  {
     id: "default-permissions",
     title: msg("Permissions"),
     to: "/settings/chat",
@@ -424,6 +434,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Effort display"),
     to: "/settings/chat",
     searchTerms: [msg("reasoning effort thinking bars graph word label level composer")],
+  },
+  {
+    id: "reasoning-translation",
+    title: msg("Reasoning translation"),
+    to: "/settings/chat",
+    searchTerms: [
+      msg("reasoning thinking cot chain of thought translate chinese bing google text model"),
+      "思考过程汉化 思考汉化 思维链翻译 思考翻译 汉化",
+    ],
   },
   {
     id: "math-rendering",
@@ -1528,17 +1547,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/about",
     searchTerms: [
       msg("updates upgrade dual source gitee github npmmirror mirror release probe speed test"),
-    ],
-  },
-  {
-    id: "prismux-diagnostics",
-    title: msg("Service Diagnostics"),
-    to: "/settings/maintenance",
-    targetId: "diagnostics",
-    searchTerms: [
-      msg(
-        "diagnostics health check services sqlite-vec fts5 7za adb steam agy claude codex dsh overnight factory hooks sandbox",
-      ),
     ],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;

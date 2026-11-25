@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   DEFAULT_APPEARANCE_CONFIG,
+  DEFAULT_TYPOGRAPHY_FALLBACKS,
   GLASS_PRESETS,
   GLASS_ZONE_CSS_NAMES,
   GLASS_ZONE_IDS,
@@ -1718,10 +1719,10 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     });
     assert.deepEqual(customZero.glassRegions.surface, { op: 0, blur: 0 });
 
-    // 3. Warm-wallpaper dark-glass contrast lift & anti-bleed-through floating peek drawer CSS contract.
+    // 3. Calibrated 3-tier dark-glass contrast separation & anti-bleed-through floating peek drawer CSS contract.
     const here = path.dirname(fileURLToPath(import.meta.url));
     const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
-    assert.match(bridgeCss, /--sidebar-muted-foreground:\s*rgba\(255,\s*255,\s*255,\s*0\.8[68]\)/);
+    assert.match(bridgeCss, /--sidebar-muted-foreground:\s*rgba\(203,\s*213,\s*225,\s*0\.66\)/);
     assert.match(bridgeCss, /text-shadow:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.4[58]\)/);
     assert.match(bridgeCss, /filter:\s*drop-shadow\(0 1px 1\.5px rgba\(0,\s*0,\s*0,\s*0\.38\)\)/);
     assert.match(bridgeCss, /\[data-pmx-sidebar-peek='1'\][\s\S]*?isolation:\s*isolate;/);
@@ -2962,14 +2963,14 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
       'prismux-glass-bridge.css braces must stay balanced',
     );
 
-    // 1. Sidebar Dark & Light Glass contrast token overrides + custom-muted binding
+    // 1. Sidebar Dark & Light Glass calibrated 3-tier contrast token overrides + custom-muted binding
     assert.match(
       bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(255,\s*255,\s*255,\s*0\.88\);[\s\S]*?--contrast-secondary-label:\s*rgba\(255,\s*255,\s*255,\s*0\.88\);[\s\S]*?--contrast-icon-muted:\s*rgba\(255,\s*255,\s*255,\s*0\.9\);/,
+      /html\.dark\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);[\s\S]*?--contrast-secondary-label:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);[\s\S]*?--contrast-icon-muted:\s*rgba\(203,\s*213,\s*225,\s*0\.72\);/,
     );
     assert.match(
       bridgeCss,
-      /html:not\(\.dark\)\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(15,\s*23,\s*42,\s*0\.84\);[\s\S]*?--contrast-secondary-label:\s*rgba\(15,\s*23,\s*42,\s*0\.84\);[\s\S]*?--contrast-icon-muted:\s*rgba\(15,\s*23,\s*42,\s*0\.86\);/,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(51,\s*65,\s*85,\s*0\.70\);[\s\S]*?--contrast-secondary-label:\s*rgba\(51,\s*65,\s*85,\s*0\.70\);[\s\S]*?--contrast-icon-muted:\s*rgba\(51,\s*65,\s*85,\s*0\.72\);/,
     );
     assert.match(
       bridgeCss,
@@ -3300,5 +3301,50 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
       bridgeCss.slice(customIdx),
       /--context-chip-ink:\s*var\(\s*--context-chip-message-ink,\s*var\(--pmx-ui-file-icon,\s*var\(--pmx-accent,\s*#5e9bff\)\)\s*\);/,
     );
+  });
+
+  it('RC.3 restores unmistakable 3-tier Level-1/Level-2 text hierarchy in glass & solid modes and upgrades TypographyCard with live hierarchy preview', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
+    const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
+    const heroSrc = fs.readFileSync(
+      new URL('../../src/AppearanceHeroAndCards.tsx', import.meta.url),
+      'utf8',
+    );
+
+    // 1. Solid typography fallbacks preserve crisp step-down for Level-2 muted copy
+    assert.equal(DEFAULT_TYPOGRAPHY_FALLBACKS.light.mutedColor, '#5c6470');
+    assert.equal(DEFAULT_TYPOGRAPHY_FALLBACKS.dark.mutedColor, '#98a1b2');
+
+    // 2. Dark & Light Glass 3-tier separation (Primary vs cool/slate Secondary vs Placeholder)
+    assert.match(bridgeCss, /--foreground:\s*rgba\(255,\s*255,\s*255,\s*0\.96\);/);
+    assert.match(bridgeCss, /--muted-foreground:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);/);
+    assert.match(bridgeCss, /--placeholder:\s*rgba\(203,\s*213,\s*225,\s*0\.50\);/);
+    assert.match(bridgeCss, /--icon-muted:\s*rgba\(203,\s*213,\s*225,\s*0\.72\);/);
+
+    assert.match(bridgeCss, /--foreground:\s*rgba\(15,\s*23,\s*42,\s*0\.95\);/);
+    assert.match(bridgeCss, /--muted-foreground:\s*rgba\(51,\s*65,\s*85,\s*0\.70\);/);
+    assert.match(bridgeCss, /--placeholder:\s*rgba\(51,\s*65,\s*85,\s*0\.54\);/);
+    assert.match(bridgeCss, /--icon-muted:\s*rgba\(51,\s*65,\s*85,\s*0\.72\);/);
+
+    // 3. Custom typography color overrides scope cleanly across Settings, Work Panels, Sidebar & Status Bar
+    assert.ok(bridgeCss.includes("[data-slot='settings-row']"));
+    assert.ok(bridgeCss.includes("[data-pmx-work-panel='1']"));
+    assert.ok(bridgeCss.includes(":not([data-pmx-setting-title='1'])"));
+
+    // 4. TypographyCard renders clear 3-role labels, subtitles & compact live hierarchy preview
+    assert.ok(heroSrc.includes('一级标题字色'));
+    assert.ok(heroSrc.includes('正文与设置项名'));
+    assert.ok(heroSrc.includes('二级说明与辅助字'));
+    assert.ok(heroSrc.includes('设置分区标题、面板大标题与卡片主标题'));
+    assert.ok(heroSrc.includes('设置项名称、按钮标签与对话正文'));
+    assert.ok(heroSrc.includes('设置项说明、副标题、占位提示与时间戳'));
+    assert.ok(heroSrc.includes('主次层级实时预览'));
+    assert.ok(heroSrc.includes('data-pmx-typography-preview="1"'));
+
+    // 5. Cards stylesheet defines preview rules & zero @media (prefers-color-scheme) rules
+    assert.ok(cardsCss.includes('.pmx-typo-preview'));
+    const cardsCssNoComments = cardsCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(!cardsCssNoComments.includes('prefers-color-scheme'));
   });
 });

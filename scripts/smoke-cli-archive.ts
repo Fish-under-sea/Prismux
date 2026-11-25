@@ -41,13 +41,22 @@ const runExecutable = Effect.fn("runExecutable")(function* (
   executable: string,
   args: ReadonlyArray<string>,
   cwd: string,
+  home: string,
+  localAppData: string,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(
     ChildProcess.make(executable, args, {
       cwd,
       // Isolate system Node and inherited launcher context from the archive smoke check.
-      env: { PATH: "", HOME: cwd, USERPROFILE: cwd, TMPDIR: cwd, TEMP: cwd },
+      env: {
+        PATH: "",
+        HOME: home,
+        USERPROFILE: home,
+        LOCALAPPDATA: localAppData,
+        TMPDIR: cwd,
+        TEMP: cwd,
+      },
       extendEnv: false,
     }),
   );
@@ -127,7 +136,11 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     }
   }
 
-  const version = yield* runExecutable(executable, ["--version"], contentDir);
+  const home = path.join(scratch, "home");
+  const localAppData = path.join(home, "AppData", "Local");
+  yield* fs.makeDirectory(localAppData, { recursive: true });
+
+  const version = yield* runExecutable(executable, ["--version"], contentDir, home, localAppData);
   if (version.exitCode !== 0 || !version.stdout.includes(input.expectVersion)) {
     return yield* new CliArchiveSmokeError({
       step: "running --version",
@@ -136,7 +149,13 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
   }
 
   // The service launcher loads outside the embedded CLI; without PRISMUX_HOME it exits right away.
-  const launcher = yield* runExecutable(executable, ["__service-launcher"], contentDir);
+  const launcher = yield* runExecutable(
+    executable,
+    ["__service-launcher"],
+    contentDir,
+    home,
+    localAppData,
+  );
   if (launcher.exitCode !== 1 || !launcher.stderr.includes("PRISMUX_HOME is required")) {
     return yield* new CliArchiveSmokeError({
       step: "running __service-launcher",
@@ -146,7 +165,6 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
 
   const net = yield* NetService.NetService;
   const port = yield* net.findAvailablePort(47700);
-  const home = path.join(scratch, "home");
   const server = yield* spawner.spawn(
     ChildProcess.make(
       executable,
@@ -157,6 +175,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
           PATH: "",
           HOME: home,
           USERPROFILE: home,
+          LOCALAPPDATA: localAppData,
           TMPDIR: scratch,
           TEMP: scratch,
           PRISMUX_HOME: home,

@@ -8,6 +8,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import type { MessageResolver } from "../../i18n/messages";
 import { resolveProviderEntryDisplayName } from "../../prismux/agentBrand";
+import type { ProviderComplianceBlock } from "../../prismux/SubscriptionRiskWaiverSection";
 import {
   isProviderInstancePickerReady,
   shouldShowInstanceBadge,
@@ -61,6 +62,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   disabledInstanceIds?: ReadonlySet<ProviderInstanceId>;
   selectableUnavailableInstanceIds?: ReadonlySet<ProviderInstanceId>;
   getDisabledInstanceTooltip?: (entry: ProviderInstanceEntry) => string;
+  getProviderComplianceBlock?: (entry: ProviderInstanceEntry) => ProviderComplianceBlock | null;
 }) {
   const m = useMessages();
   const handleSelect = (instanceId: ProviderInstanceId | "favorites") => {
@@ -150,6 +152,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
           {props.instanceEntries.map((entry) => {
             const isUnavailable = !isProviderInstancePickerReady(entry);
             const isContextDisabled = props.disabledInstanceIds?.has(entry.instanceId) ?? false;
+            const complianceBlock = props.getProviderComplianceBlock?.(entry) ?? null;
+            const isComplianceBlocked = complianceBlock !== null;
             const unavailableSelectionIsReachable =
               props.selectableUnavailableInstanceIds?.has(entry.instanceId) ?? false;
             const isDisabled =
@@ -159,19 +163,25 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
             const showInstanceBadge = shouldShowInstanceBadge(entry, props.instanceEntries);
 
             const canonicalLabel = resolveCanonicalEntryLabel(entry);
-            const tooltip = isUnavailable
-              ? describeUnavailableInstance(entry, m)
-              : isContextDisabled
-                ? (props.getDisabledInstanceTooltip?.(entry) ?? canonicalLabel)
-                : canonicalLabel;
+            const tooltip = isComplianceBlocked
+              ? (complianceBlock.tooltip ?? `${canonicalLabel} · ${complianceBlock.badgeText}`)
+              : isUnavailable
+                ? describeUnavailableInstance(entry, m)
+                : isContextDisabled
+                  ? (props.getDisabledInstanceTooltip?.(entry) ?? canonicalLabel)
+                  : canonicalLabel;
 
             const button = (
               <Toolbar.Button
                 className={cn(
                   "relative isolate flex w-full cursor-pointer aspect-square items-center justify-center rounded-md transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none",
                   isDisabled && "opacity-50 cursor-not-allowed hover:bg-transparent",
+                  !isDisabled &&
+                    isComplianceBlocked &&
+                    "opacity-55 ring-1 ring-inset ring-destructive/80 hover:bg-destructive/10 hover:opacity-85",
                 )}
                 data-provider-accent-color={entry.accentColor}
+                data-model-picker-provider-blocked={isComplianceBlocked ? "true" : undefined}
                 onClick={() => !isDisabled && handleSelect(entry.instanceId)}
                 onMouseEnter={() => setHoveredInstanceId(entry.instanceId)}
                 onMouseLeave={() =>
@@ -185,7 +195,11 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                 focusableWhenDisabled={!isDisabled}
                 aria-pressed={isSelected}
                 type="button"
-                aria-label={isUnavailable || isContextDisabled ? tooltip : canonicalLabel}
+                aria-label={
+                  isComplianceBlocked || isUnavailable || isContextDisabled
+                    ? tooltip
+                    : canonicalLabel
+                }
               >
                 <ProviderInstanceIcon
                   driverKind={entry.driverKind}
@@ -195,7 +209,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   acpRegistryAgentId={entry.acpRegistryAgentId}
                   acpRegistryIconUrl={entry.acpRegistryIconUrl}
                   showBadge={showInstanceBadge}
-                  className="size-6 z-30"
+                  className={cn("size-6 z-30", isComplianceBlocked && "grayscale")}
                   iconClassName="size-5"
                   indicatorBackground={
                     isHovered && !isDisabled
@@ -206,6 +220,13 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   }
                   {...(entry.accentColor ? { badgeClassName: "h-3 min-w-3 px-0.5 text-5xs" } : {})}
                 />
+                {isComplianceBlocked ? (
+                  <span
+                    aria-hidden="true"
+                    data-model-picker-provider-blocked-dot="true"
+                    className="pointer-events-none absolute top-0.5 right-0.5 z-40 size-2 rounded-full bg-destructive ring-2 ring-background"
+                  />
+                ) : null}
               </Toolbar.Button>
             );
 

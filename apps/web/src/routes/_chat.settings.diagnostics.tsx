@@ -1,12 +1,9 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_chat/settings/diagnostics")({
-  beforeLoad: ({ location }) => {
-    const cleanHash = location.hash.replace(/^#/, "").trim();
+  beforeLoad: () => {
     throw redirect({
-      to: "/settings/maintenance",
-      search: true,
-      hash: cleanHash || "diagnostics",
+      to: "/diagnostics",
       replace: true,
     });
   },

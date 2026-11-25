@@ -16,6 +16,12 @@ import {
   describeComposerEffort,
 } from "./ComposerModelEffort";
 import { ModelListRow } from "./ModelListRow";
+import { ModelPickerSidebar } from "./ModelPickerSidebar";
+import {
+  AGY_WAIVER_REQUIRED_BADGE_TEXT,
+  resolveAntigravityComplianceBlock,
+} from "../../prismux/SubscriptionRiskWaiverSection";
+import type { ProviderInstanceEntry } from "../../providerInstances";
 import {
   COMPOSER_PICKER_ANCHOR_CARD_SELECTORS,
   DockedPickerContext,
@@ -518,5 +524,81 @@ describe("ProviderModelPicker.logic (Orca agent-scoped picker)", () => {
       { id: "high", label: "High" },
     ];
     expect(filterConcreteReasoningChoices(agyLevels)).toEqual(agyLevels);
+  });
+
+  it("renders grayed-out red-ringed blocked Antigravity indicator in ModelPickerSidebar when getProviderComplianceBlock blocks it", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const agyId = ProviderInstanceId.make("antigravity");
+    const makeEntry = (instanceId: ProviderInstanceId, driver: string, displayName: string): ProviderInstanceEntry => ({
+      instanceId,
+      driverKind: ProviderDriverKind.make(driver),
+      displayName,
+      enabled: true,
+      installed: true,
+      status: "ready",
+      isDefault: true,
+      isAvailable: true,
+      models: [],
+      snapshot: {
+        instanceId,
+        driver: ProviderDriverKind.make(driver),
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-25T16:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      } as unknown as ProviderInstanceEntry["snapshot"],
+    });
+    const entries = [
+      makeEntry(codexId, "codex", "Codex"),
+      makeEntry(agyId, "antigravity", "Antigravity"),
+    ];
+    const onOpenWaiver = vi.fn();
+
+    const blockedHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <TooltipProvider>
+          <ModelPickerSidebar
+            selectedInstanceId={codexId}
+            onSelectInstance={vi.fn()}
+            onFocusSearch={vi.fn()}
+            instanceEntries={entries}
+            getProviderComplianceBlock={(entry) =>
+              resolveAntigravityComplianceBlock({
+                entry,
+                waiver: { signed: false, allowAntigravityAsControlledAgent: false },
+                mode: "controlled",
+                onOpenWaiver,
+              })
+            }
+          />
+        </TooltipProvider>
+      </GTProvider>,
+    );
+
+    expect(blockedHtml).toContain('data-model-picker-provider-blocked="true"');
+    expect(blockedHtml).toContain('data-model-picker-provider-blocked-dot="true"');
+    expect(blockedHtml).toContain("opacity-55");
+    expect(blockedHtml).toContain("ring-destructive/80");
+    expect(blockedHtml).toContain(AGY_WAIVER_REQUIRED_BADGE_TEXT);
+
+    // Direct chat picker (no compliance block prop) keeps Antigravity completely unrestricted
+    const unrestrictedHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <TooltipProvider>
+          <ModelPickerSidebar
+            selectedInstanceId={codexId}
+            onSelectInstance={vi.fn()}
+            onFocusSearch={vi.fn()}
+            instanceEntries={entries}
+          />
+        </TooltipProvider>
+      </GTProvider>,
+    );
+    expect(unrestrictedHtml).not.toContain('data-model-picker-provider-blocked="true"');
+    expect(unrestrictedHtml).not.toContain(AGY_WAIVER_REQUIRED_BADGE_TEXT);
   });
 });

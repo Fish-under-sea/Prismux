@@ -362,6 +362,8 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(modalHtml).toContain("更新亮点");
     expect(modalHtml).toContain("软件内一键更新");
     expect(modalHtml).toContain("稍后提醒");
+    expect(modalHtml).toContain("<img ");
+    expect(modalHtml).not.toContain("lucide-sparkles");
   });
 
   it("renders rich sanitized Markdown (headings, blockquotes, bold, inline/block code, GFM tables, hr, safe https links) across settings and update modal without raw syntax leakage", () => {

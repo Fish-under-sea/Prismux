@@ -4,10 +4,12 @@ import type { WorkLogEntry } from "../../session-logic";
 import type { ChatMessage } from "../../types";
 import { deriveMessagesTimelineRows } from "./MessagesTimeline.logic";
 import {
+  classifyPrimaryStepGroupActivity,
   classifyWorkEntryActivity,
   extractReadLineRangeLabel,
   extractReasoningSummaryLine,
   extractWorkEntryLiveDetail,
+  extractWorkStepCollapsedPreview,
   formatDshDurationCompact,
   formatDshLiveActivityLabel,
   formatDshStepGroupSummary,
@@ -15,6 +17,8 @@ import {
   formatFileChangeAction,
   formatThinkingHeaderLabel,
   formatWorkStepElapsedMs,
+  latestCompletedParagraphFirstLine,
+  localizeWorkStepLabel,
   parseCompactDiffPreview,
   resolveTurnFoldExpanded,
   resolveWorkStepsPolicy,
@@ -62,30 +66,38 @@ describe("dshWorkSteps.logic", () => {
     expect(resolveWorkStepsPolicy("concise")).toEqual({
       mode: "concise",
       foldCompletedTurns: true,
+      defaultTurnFoldOpen: false,
       stepGrouping: "collapsed",
       liveProcessDetail: false,
       settledReasoningPreview: false,
+      defaultExpandLongItems: false,
     });
     expect(resolveWorkStepsPolicy("standard")).toEqual({
       mode: "standard",
       foldCompletedTurns: true,
+      defaultTurnFoldOpen: false,
       stepGrouping: "collapsed",
       liveProcessDetail: true,
       settledReasoningPreview: true,
+      defaultExpandLongItems: false,
     });
     expect(resolveWorkStepsPolicy("detailed")).toEqual({
       mode: "detailed",
       foldCompletedTurns: true,
-      stepGrouping: "history",
+      defaultTurnFoldOpen: true,
+      stepGrouping: "none",
       liveProcessDetail: true,
       settledReasoningPreview: true,
+      defaultExpandLongItems: false,
     });
     expect(resolveWorkStepsPolicy("expanded")).toEqual({
       mode: "expanded",
       foldCompletedTurns: false,
+      defaultTurnFoldOpen: true,
       stepGrouping: "none",
       liveProcessDetail: false,
       settledReasoningPreview: true,
+      defaultExpandLongItems: true,
     });
   });
 
@@ -94,7 +106,7 @@ describe("dshWorkSteps.logic", () => {
     const expanded = resolveWorkStepsPolicy("expanded");
     const standard = resolveWorkStepsPolicy("standard");
 
-    // detailed: ungrouped on active turn & bottom completed turn when next-message; grouped on history
+    // detailed: transparent & flat on ALL turns (never buries steps in collapsed buckets)
     expect(
       shouldGroupWorkStepsForTurn(detailed, {
         isActiveTurn: true,
@@ -115,7 +127,14 @@ describe("dshWorkSteps.logic", () => {
         isBottomCompletedTurn: true,
         collapseTiming: "after-turn",
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      shouldGroupWorkStepsForTurn(detailed, {
+        isActiveTurn: false,
+        isBottomCompletedTurn: false,
+        collapseTiming: "after-turn",
+      }),
+    ).toBe(false);
     expect(
       shouldGroupWorkStepsForTurn(expanded, {
         isActiveTurn: false,
@@ -139,6 +158,13 @@ describe("dshWorkSteps.logic", () => {
       shouldTurnFoldDefaultOpen({ isBottomCompletedTurn: true, collapseTiming: "after-turn" }),
     ).toBe(false);
     expect(
+      shouldTurnFoldDefaultOpen({
+        isBottomCompletedTurn: false,
+        collapseTiming: "after-turn",
+        defaultTurnFoldOpen: true,
+      }),
+    ).toBe(true);
+    expect(
       resolveTurnFoldExpanded({
         runId,
         isBottomCompletedTurn: true,
@@ -151,6 +177,15 @@ describe("dshWorkSteps.logic", () => {
         runId,
         isBottomCompletedTurn: true,
         collapseTiming: "next-message",
+        collapsedRunIds: new Set([runId]),
+      }),
+    ).toBe(false);
+    expect(
+      resolveTurnFoldExpanded({
+        runId,
+        isBottomCompletedTurn: false,
+        collapseTiming: "after-turn",
+        defaultTurnFoldOpen: true,
         collapsedRunIds: new Set([runId]),
       }),
     ).toBe(false);
@@ -420,32 +455,46 @@ describe("dshWorkSteps.logic", () => {
       standardFinalOnly.some((r) => r.kind === "message" && r.message.text === "First final answer"),
     ).toBe(true);
 
-    // 3. detailed + next-message: historical turn 1 folds, latest completed turn 2 stays open & flat un-grouped
-    const detailedNextMsg = deriveMessagesTimelineRows({
+    // 3. detailed: ALL turns default open & flat un-grouped (zero work-toggle) while still manually collapsible
+    const detailedRows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: buildTwoTurnTimeline(),
       workStepsDisplay: "detailed",
-      workStepsCollapseTiming: "next-message",
+      workStepsCollapseTiming: "after-turn",
       collapsedAssistantReplyMode: "all",
     });
-    const detailedFolds = detailedNextMsg.filter((r) => r.kind === "turn-fold");
+    const detailedFolds = detailedRows.filter((r) => r.kind === "turn-fold");
     const detailedFold1 = detailedFolds.find((r) => r.runId === run1);
     const detailedFold2 = detailedFolds.find((r) => r.runId === run2);
-    expect(detailedFold1?.expanded).toBe(false);
+    expect(detailedFold1?.expanded).toBe(true);
     expect(detailedFold2?.expanded).toBe(true);
-    // Turn 2's thinking + file edit render flat un-grouped as standalone `work` rows!
-    expect(
-      detailedNextMsg.some(
-        (r) => r.kind === "work" && r.groupedEntries.some((entry) => entry.id === "r2-think"),
-      ),
-    ).toBe(true);
-    expect(
-      detailedNextMsg.some(
-        (r) => r.kind === "work" && r.groupedEntries.some((entry) => entry.id === "r2-edit"),
-      ),
-    ).toBe(true);
+    expect(detailedRows.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
+    // Every step across both turns renders transparently as flat `work` rows with long items still folded by default
+    const detailedFlatWorkRows = detailedRows.filter((r) => r.kind === "work");
+    expect(detailedFlatWorkRows.flatMap((r) => r.groupedEntries.map((entry) => entry.id))).toEqual([
+      "r1-think",
+      "r1-read",
+      "r1-cmd",
+      "r2-think",
+      "r2-edit",
+    ]);
+    expect(detailedFlatWorkRows.every((r) => r.autoExpandDetails === undefined)).toBe(true);
+    expect(detailedFlatWorkRows.every((r) => r.autoExpandReasoning === undefined)).toBe(true);
 
-    // 4. expanded: NEVER folds turns or groups steps; all reasoning rows have autoExpandReasoning: true
+    // Manually collapsing turn 1 in detailed mode still folds it cleanly
+    const detailedCollapsedTurn1 = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: buildTwoTurnTimeline(),
+      collapsedRunIds: new Set([run1]),
+      workStepsDisplay: "detailed",
+      workStepsCollapseTiming: "after-turn",
+      collapsedAssistantReplyMode: "all",
+    });
+    const detailedCollapsedFolds = detailedCollapsedTurn1.filter((r) => r.kind === "turn-fold");
+    expect(detailedCollapsedFolds.find((r) => r.runId === run1)?.expanded).toBe(false);
+    expect(detailedCollapsedFolds.find((r) => r.runId === run2)?.expanded).toBe(true);
+
+    // 4. expanded: NEVER folds turns or groups steps; ALL work rows default open inline (`autoExpandDetails: true` & `autoExpandReasoning: true`)
     const expandedRows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: buildTwoTurnTimeline(),
@@ -463,6 +512,7 @@ describe("dshWorkSteps.logic", () => {
       "r2-think",
       "r2-edit",
     ]);
+    expect(flatWorkRows.every((r) => r.autoExpandDetails === true)).toBe(true);
     const reasoningRows = flatWorkRows.filter((r) =>
       r.groupedEntries.some((entry) => entry.itemType === "reasoning"),
     );
@@ -630,8 +680,226 @@ describe("dshWorkSteps.logic", () => {
       detail: "**Inspecting reasoning chain**\nVerifying output.",
     });
     expect(workEntryIsVisibleInGroup(thinkToneOnly, false)).toBe(true);
-    expect(extractReasoningSummaryLine(thinkToneOnly.detail, { live: false, settledReasoningPreview: true })).toBe(
-      "Inspecting reasoning chain",
+    expect(
+      extractReasoningSummaryLine(thinkToneOnly.detail, { live: false, settledReasoningPreview: true }),
+    ).toBe("Inspecting reasoning chain");
+  });
+
+  it("tracks latest completed paragraph first line while streaming reasoning and picks primary group activity", () => {
+    expect(
+      latestCompletedParagraphFirstLine(
+        "**Step 1: Read files**\nReading index.ts\n\n**Step 2: Run pwsh**\nChecking $PSVersionTable",
+      ),
+    ).toBe("Step 2: Run pwsh");
+
+    // Incomplete second paragraph without newline keeps the first completed paragraph heading
+    expect(
+      latestCompletedParagraphFirstLine(
+        "**Step 1: Read files**\nReading index.ts\n\nStep 2 still typing without newline",
+      ),
+    ).toBe("Step 1: Read files");
+
+    // Live summary uses latest completed paragraph first line, and falls back to first line before first newline
+    expect(
+      extractReasoningSummaryLine(
+        "**Step 1: Read files**\nReading index.ts\n\n**Step 2: Run pwsh**\nChecking output",
+        { live: true, settledReasoningPreview: false },
+      ),
+    ).toBe("Step 2: Run pwsh");
+    expect(
+      extractReasoningSummaryLine("Initial streaming thought without newline", {
+        live: true,
+        settledReasoningPreview: false,
+      }),
+    ).toBe("Initial streaming thought without newline");
+
+    const think = makeWorkEntry({ id: "t", itemType: "reasoning", tone: "thinking", detail: "hi" });
+    const cmd1 = makeWorkEntry({ id: "c1", itemType: "command_execution", command: "ls" });
+    const cmd2 = makeWorkEntry({ id: "c2", itemType: "command_execution", command: "pwd" });
+    const read = makeWorkEntry({
+      id: "r1",
+      toolTitle: "read_file",
+      toolData: { input: { file_path: "a.ts" } },
+    });
+    expect(classifyPrimaryStepGroupActivity([think, cmd1])).toBe("commands");
+    expect(classifyPrimaryStepGroupActivity([read, cmd1, cmd2])).toBe("commands");
+    expect(classifyPrimaryStepGroupActivity([read])).toBe("read");
+  });
+
+  it("keeps reasoning separate from tool groups when expanding a standard or concise turn", () => {
+    const runId = RunId.make("run-sep");
+    const entries: ReadonlyArray<TimelineEntry> = [
+      {
+        id: "u1",
+        kind: "message",
+        createdAt: "2026-11-25T10:00:00.000Z",
+        message: makeMessage("u1", "user", "Check version", "2026-11-25T10:00:00.000Z"),
+      },
+      {
+        id: "t1",
+        kind: "work",
+        createdAt: "2026-11-25T10:00:01.000Z",
+        entry: makeWorkEntry({
+          id: "t1",
+          runId,
+          itemType: "reasoning",
+          tone: "thinking",
+          label: "Thinking",
+          detail: "User wants me to inspect pwsh.",
+        }),
+      },
+      {
+        id: "c1",
+        kind: "work",
+        createdAt: "2026-11-25T10:00:03.000Z",
+        entry: makeWorkEntry({
+          id: "c1",
+          runId,
+          itemType: "command_execution",
+          label: "Ran command",
+          command: "$PSVersionTable | Format-List",
+        }),
+      },
+      {
+        id: "a1",
+        kind: "message",
+        createdAt: "2026-11-25T10:00:09.000Z",
+        message: makeMessage("a1", "assistant", "Done", "2026-11-25T10:00:09.000Z", runId),
+      },
+    ];
+
+    for (const mode of ["concise", "standard"] as const) {
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: entries,
+        expandedRunIds: new Set([runId]),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        workStepsDisplay: mode,
+        locale: "zh-CN",
+      });
+      expect(rows.map((r) => r.kind)).toEqual(["message", "turn-fold", "work", "work-toggle", "message"]);
+      const reasonRow = rows[2]!;
+      const toggleRow = rows[3]!;
+      expect(reasonRow.kind === "work" && reasonRow.groupedEntries.map((e) => e.id)).toEqual(["t1"]);
+      expect(reasonRow.kind === "work" && reasonRow.autoExpandReasoning).toBeUndefined();
+      expect(toggleRow).toMatchObject({
+        kind: "work-toggle",
+        summary: "已执行命令",
+        dshPrimaryCategory: "commands",
+        hiddenCount: 1,
+      });
+    }
+  });
+
+  it("localizes every English work-step verb and action header in zh-CN while preserving en-US", () => {
+    const zhCases: ReadonlyArray<readonly [string, string]> = [
+      ["Worked for 12s", "已完成，用时 12s"],
+      ["Thought for 3.2s", "思考了 3.2s"],
+      ["Ran command", "已执行命令"],
+      ["Run command", "执行命令"],
+      ["Running command", "正在执行命令"],
+      ["Edited file", "已修改文件"],
+      ["Read file", "已读取文件"],
+      ["Searched", "已搜索代码"],
+      ["File change", "文件修改"],
+      ["Web search", "网页搜索"],
+      ["Web fetch", "网页抓取"],
+      ["Command", "执行命令"],
+      ["Reasoning", "思考过程"],
+      ["Output", "输出"],
+      ["Input", "输入"],
+      ["Arguments", "参数"],
+      ["Result", "结果"],
+      ["Subagent", "子智能体"],
+      ["MCP tool", "MCP 工具"],
+      ["Tool call", "工具调用"],
+      ["Todo list", "任务清单"],
+      ["Plan", "执行计划"],
+      ["Edited app.ts", "已修改 app.ts"],
+      ["Created foo.ts", "已写入 foo.ts"],
+      ["Deleted old.ts", "已删除 old.ts"],
+      ["Read src/a.ts", "已读取 src/a.ts"],
+      ["Fetched https://example.com", "网页抓取：https://example.com"],
+      ["Searched workStepsDisplay", "已搜索 workStepsDisplay"],
+    ];
+
+    for (const [input, expected] of zhCases) {
+      expect(localizeWorkStepLabel(input, "zh-CN"), input).toBe(expected);
+      expect(localizeWorkStepLabel(input, "en-US"), input).toBe(input);
+    }
+  });
+
+  it("extracts crisp 1-line truncated collapsed previews for long work steps in detailed mode", () => {
+    const cmdEntry = makeWorkEntry({
+      id: "p-cmd",
+      itemType: "command_execution",
+      command: "vp test run",
+      detail: "PASS  apps/web/src/components/chat/dshWorkSteps.logic.test.ts\nAll 12 tests passed.",
+    });
+    expect(extractWorkStepCollapsedPreview(cmdEntry, { locale: "zh-CN" })).toBe(
+      "PASS apps/web/src/components/chat/dshWorkSteps.logic.test.ts",
+    );
+
+    const searchEntry = makeWorkEntry({
+      id: "p-search",
+      itemType: "file_search",
+      label: "Searched",
+      toolData: {
+        input: { query: "workStepsDisplay" },
+        output: "src/a.ts:10:const workStepsDisplay = 'detailed';\nsrc/b.ts:22:workStepsDisplay",
+      },
+    });
+    expect(
+      extractWorkStepCollapsedPreview(searchEntry, { workspaceRoot: "/repo", locale: "zh-CN" }),
+    ).toContain("2 条匹配");
+
+    const webEntry = makeWorkEntry({
+      id: "p-web",
+      itemType: "web_search",
+      label: "Web search",
+      toolData: {
+        input: { query: "Prismux liquid glass" },
+        output: {
+          results: [
+            { title: "Prismux Design Guide", url: "https://prismux.dev/design" },
+            { title: "Glass Spec", url: "https://prismux.dev/glass" },
+          ],
+        },
+      },
+    });
+    expect(extractWorkStepCollapsedPreview(webEntry, { locale: "zh-CN" })).toContain("2 个来源");
+
+    const todoEntry = makeWorkEntry({
+      id: "p-todo",
+      label: "Updated plan",
+      toolTitle: "update_steps",
+      toolData: {
+        input: {
+          steps: [
+            { title: "扫描源码", status: "completed" },
+            { title: "接入组件", status: "in_progress" },
+            { title: "运行测试", status: "pending" },
+          ],
+        },
+      },
+    });
+    expect(extractWorkStepCollapsedPreview(todoEntry, { locale: "zh-CN" })).toBe(
+      "进行中 · 1/3 步 · 接入组件",
+    );
+
+    const dynamicEntry = makeWorkEntry({
+      id: "p-dyn",
+      itemType: "dynamic_tool",
+      label: "mcp.inspect",
+      toolData: {
+        input: { target: "daemon" },
+        output: "healthy: all 4 services online",
+      },
+    });
+    expect(extractWorkStepCollapsedPreview(dynamicEntry, { locale: "zh-CN" })).toBe(
+      "healthy: all 4 services online",
     );
   });
 });

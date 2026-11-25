@@ -1,5 +1,5 @@
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import type { UsageProviderKind } from "@prismux/core-contracts";
+import type { ProviderInstanceId, UsageProviderKind } from "@prismux/core-contracts";
 import { T, useGT, useLocale, useMessages } from "gt-react";
 import { useLayoutEffect, useRef, useState } from "react";
 
@@ -12,7 +12,12 @@ import {
 } from "@prismux/core-shared/usageFormat";
 import { formatRelativeHourShort } from "@prismux/core-shared/usageFormatCopy";
 import { cn } from "~/lib/utils";
-import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
+import type { ProviderInstanceEntry } from "../../providerInstances";
+import {
+  PROVIDER_ORDER,
+  PROVIDER_PRESENTATION,
+  useConfiguredUsageProviders,
+} from "./usageProviders";
 import { observeResize } from "~/lib/observeResize";
 
 const VIEW_WIDTH = 960;
@@ -35,6 +40,8 @@ interface UsageProviderChartProps {
   readonly resolution: "day" | "hour";
   readonly timeZone: string;
   readonly hour12: boolean;
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  readonly providerOrder?: ReadonlyArray<ProviderInstanceId> | null | undefined;
 }
 
 export interface DayColumn {
@@ -227,6 +234,7 @@ function UsageChartTooltip({
   label,
   column,
   providers,
+  getProviderLabel,
   loadingProviders,
   format,
 }: {
@@ -234,6 +242,7 @@ function UsageChartTooltip({
   readonly label: string;
   readonly column: DayColumn | undefined;
   readonly providers: readonly UsageProviderKind[];
+  readonly getProviderLabel: (provider: UsageProviderKind) => string;
   readonly loadingProviders: ReadonlySet<UsageProviderKind>;
   readonly format: (value: number) => string;
 }) {
@@ -249,7 +258,8 @@ function UsageChartTooltip({
     >
       <div className="mb-1 text-muted-foreground">{label}</div>
       {providers.map((provider) => {
-        const { label: providerLabel, driverKind } = PROVIDER_PRESENTATION[provider];
+        const { driverKind } = PROVIDER_PRESENTATION[provider];
+        const providerLabel = getProviderLabel(provider);
         return (
           <div key={provider} className="flex items-center justify-between gap-3">
             <span className="flex items-center gap-1.5 text-muted-foreground">
@@ -288,6 +298,7 @@ function UsageChartPlot({
   columns,
   stepX,
   providers,
+  getProviderLabel,
   loadingProviders,
   format,
   formatTooltipPeriod,
@@ -297,6 +308,7 @@ function UsageChartPlot({
   readonly columns: readonly DayColumn[];
   readonly stepX: number;
   readonly providers: readonly UsageProviderKind[];
+  readonly getProviderLabel: (provider: UsageProviderKind) => string;
   readonly loadingProviders: ReadonlySet<UsageProviderKind>;
   readonly format: (value: number) => string;
   readonly formatTooltipPeriod: (period: string) => string;
@@ -397,6 +409,7 @@ function UsageChartPlot({
           label={formatTooltipPeriod(hoveredPeriod)}
           column={columns[hoverIndex]}
           providers={providers}
+          getProviderLabel={getProviderLabel}
           loadingProviders={loadingProviders}
           format={format}
         />
@@ -417,10 +430,17 @@ export function UsageProviderChart({
   resolution,
   timeZone,
   hour12,
+  providerEntries,
+  providerOrder,
 }: UsageProviderChartProps) {
   const gt = useGT();
   const locale = useLocale();
   const m = useMessages();
+  const { getLabel, orderProviders } = useConfiguredUsageProviders({
+    providerEntries,
+    providerOrder,
+  });
+  const displayProviders = orderProviders(providers);
   const periods = resolution === "hour" ? hours : days;
   const totals: readonly (DailyTotals | HourlyTotals)[] = resolution === "hour" ? hourly : daily;
   const byPeriod = new Map(
@@ -430,7 +450,7 @@ export function UsageProviderChart({
     periods,
     byPeriod,
     metric,
-    providers,
+    displayProviders,
     loadingProviders,
   );
 
@@ -468,7 +488,8 @@ export function UsageProviderChart({
           periods={periods}
           columns={columns}
           stepX={stepX}
-          providers={providers}
+          providers={displayProviders}
+          getProviderLabel={getLabel}
           loadingProviders={loadingProviders}
           format={format}
           formatTooltipPeriod={formatTooltipPeriod}
@@ -546,12 +567,12 @@ export function UsageProviderChart({
           <thead>
             <tr>
               <th scope="col">{resolution === "hour" ? gt("Hour") : gt("Day")}</th>
-              {providers.map((provider) => (
+              {displayProviders.map((provider) => (
                 <th key={provider} scope="col">
-                  {PROVIDER_PRESENTATION[provider].label}
+                  {getLabel(provider)}
                 </th>
               ))}
-              {providers.length > 1 ? (
+              {displayProviders.length > 1 ? (
                 <th scope="col">
                   <T>Total</T>
                 </th>
@@ -564,12 +585,12 @@ export function UsageProviderChart({
               return (
                 <tr key={period}>
                   <th scope="row">{formatTooltipPeriod(period)}</th>
-                  {providers.map((provider) => (
+                  {displayProviders.map((provider) => (
                     <td key={provider}>
                       {format(column?.bands.find((band) => band.provider === provider)?.value ?? 0)}
                     </td>
                   ))}
-                  {providers.length > 1 ? <td>{format(column?.total ?? 0)}</td> : null}
+                  {displayProviders.length > 1 ? <td>{format(column?.total ?? 0)}</td> : null}
                 </tr>
               );
             })}

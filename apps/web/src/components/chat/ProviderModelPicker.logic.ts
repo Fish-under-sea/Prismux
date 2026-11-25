@@ -1,43 +1,15 @@
 import type { ProviderDriverKind, ProviderInstanceId } from "@prismux/core-contracts";
 
-import { formatAgentBrandName } from "../../prismux/agentBrand";
+import {
+  formatAgentBrandName,
+  resolveProviderEntryDisplayName,
+} from "../../prismux/agentBrand";
+import { orderProviderInstanceEntries } from "../../providerInstances";
 import type { ModelEsque } from "./providerIconUtils";
 
-export const DEFAULT_AGENT_SCOPED_VISIBLE_MODELS = 6;
+export { orderProviderInstanceEntries };
 
-/**
- * Orders provider instance entries according to the user's persisted `providerOrder`,
- * preserving original relative order for any unlisted or newly discovered instances.
- */
-export function orderProviderInstanceEntries<
-  T extends { readonly instanceId: ProviderInstanceId },
->(
-  entries: ReadonlyArray<T>,
-  providerOrder: ReadonlyArray<ProviderInstanceId> | null | undefined,
-): ReadonlyArray<T> {
-  if (!providerOrder || providerOrder.length === 0 || entries.length <= 1) {
-    return entries;
-  }
-  const rankById = new Map<ProviderInstanceId, number>();
-  for (const [index, instanceId] of providerOrder.entries()) {
-    if (!rankById.has(instanceId)) {
-      rankById.set(instanceId, index);
-    }
-  }
-  if (rankById.size === 0) {
-    return entries;
-  }
-  return entries
-    .map((entry, originalIndex) => ({
-      entry,
-      rank: rankById.get(entry.instanceId) ?? Number.POSITIVE_INFINITY,
-      originalIndex,
-    }))
-    .toSorted((left, right) =>
-      left.rank !== right.rank ? left.rank - right.rank : left.originalIndex - right.originalIndex,
-    )
-    .map((item) => item.entry);
-}
+export const DEFAULT_AGENT_SCOPED_VISIBLE_MODELS = 6;
 
 /**
  * Orders a single provider instance's models according to `providerModelPreferences[instanceId].modelOrder`,
@@ -109,10 +81,15 @@ export function shouldScopeModelPickerToActiveAgent(input: {
 export function formatModelSourceSubtitle(input: {
   readonly driverKind: ProviderDriverKind;
   readonly instanceDisplayName: string;
+  readonly hasCustomDisplayName?: boolean | undefined;
   readonly subProvider?: string | undefined;
   readonly isDefaultInstance?: boolean | undefined;
 }): string {
-  const resolvedName = formatAgentBrandName(input.driverKind, input.instanceDisplayName);
+  const resolvedName = resolveProviderEntryDisplayName({
+    driverKind: input.driverKind,
+    displayName: input.instanceDisplayName,
+    hasCustomDisplayName: input.hasCustomDisplayName,
+  });
   const canonicalBrand = formatAgentBrandName(
     input.driverKind,
     input.driverKind === "acpRegistry" || input.driverKind === "openaiCompatible"

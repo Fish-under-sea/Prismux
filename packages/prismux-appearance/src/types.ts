@@ -427,12 +427,12 @@ export const DEFAULT_TYPOGRAPHY_FALLBACKS: Record<BaseThemePolarity, ThemeTypogr
   light: {
     headingColor: '#111113',
     textColor: '#1b1b1f',
-    mutedColor: '#5d5d5d',
+    mutedColor: '#5c6470',
   },
   dark: {
     headingColor: '#ffffff',
     textColor: '#f5f5f7',
-    mutedColor: '#a1a1a6',
+    mutedColor: '#98a1b2',
   },
 };
 

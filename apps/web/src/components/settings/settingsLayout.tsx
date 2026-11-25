@@ -235,6 +235,7 @@ export function PolicyTooltip({ children }: { readonly children: string }) {
 
 export function SettingsSection({
   title,
+  description,
   hideTitle = false,
   icon,
   titleAction,
@@ -245,6 +246,7 @@ export function SettingsSection({
   ...sectionProps
 }: ComponentPropsWithoutRef<"section"> & {
   title: string;
+  description?: ReactNode;
   hideTitle?: boolean;
   icon?: ReactNode;
   titleAction?: ReactNode;
@@ -268,12 +270,22 @@ export function SettingsSection({
           data-settings-scroll-target
           className="mb-3 flex min-h-6 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1"
         >
-          <div className="flex min-w-0 items-center gap-1.5">
-            <h2 className="flex min-h-6 items-center gap-2 text-[13px] font-semibold tracking-tight text-foreground/90">
-              {icon}
-              {title}
-            </h2>
-            {titleAction}
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h2
+                data-pmx-heading="1"
+                className="flex min-h-6 items-center gap-2 text-[13px] font-semibold tracking-tight text-foreground/95"
+              >
+                {icon}
+                {title}
+              </h2>
+              {titleAction}
+            </div>
+            {description ? (
+              <p className="mt-0.5 text-[11.5px] font-normal leading-[1.45] text-muted-foreground">
+                {description}
+              </p>
+            ) : null}
           </div>
           {headerAction ? (
             <div className="flex min-h-6 min-w-6 items-center justify-end">{headerAction}</div>
@@ -298,7 +310,7 @@ export function SettingsUnavailableGroup({
 
   return (
     <div className="border-border/60 bg-muted/20 py-1.5">
-      <div className="flex items-start gap-2 px-3 py-2 text-xs leading-relaxed text-muted-foreground sm:px-4">
+      <div className="flex items-start gap-2 px-3 py-2 text-[11.5px] leading-[1.5] text-muted-foreground sm:px-4">
         <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
         <p>{message}</p>
       </div>
@@ -561,7 +573,12 @@ export function SettingsRow({
       <div className="flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_auto] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-6">
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className="text-sm font-medium text-foreground">{title}</h3>
+            <h3
+              data-pmx-setting-title="1"
+              className="text-[13.5px] font-semibold leading-snug tracking-tight text-foreground"
+            >
+              {title}
+            </h3>
             {renderedInheritance ? (
               <span
                 className={cn(
@@ -580,12 +597,14 @@ export function SettingsRow({
             </span>
           </div>
           {description ? (
-            <p className="max-w-2xl text-pretty text-xs leading-normal text-muted-foreground">
+            <p className="max-w-2xl text-pretty text-[11.5px] font-normal leading-[1.5] text-muted-foreground">
               {description}
             </p>
           ) : null}
           {renderedStatus ? (
-            <div className="pt-0.5 text-xs text-muted-foreground">{renderedStatus}</div>
+            <div className="pt-0.5 text-[11px] font-normal leading-[1.45] text-muted-foreground">
+              {renderedStatus}
+            </div>
           ) : null}
         </div>
         {renderedControl ? (

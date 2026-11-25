@@ -33,6 +33,7 @@ import { ChatGptSharingControl } from "./ChatGptSharingControl";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { ModelEsque, getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
+import type { ProviderComplianceBlock } from "../../prismux/SubscriptionRiskWaiverSection";
 import { ComposerControl, type ComposerControlSize } from "./ComposerControl";
 import { takeOpenTarget, useComposerMenuProps } from "./composerEventScope";
 import { shortcutLabelForCommand } from "../../keybindings";
@@ -155,6 +156,24 @@ export function computeComposerPickerAlignOffset(input: {
   return rawOffset > 0 ? 0 : rawOffset;
 }
 
+export function resolveModelPickerTriggerTitle(input: {
+  readonly selectedModel: ModelEsque | undefined;
+  readonly driverKind: ProviderDriverKind | null | undefined;
+  readonly model: string;
+  readonly displayFullModelName?: boolean | undefined;
+  readonly chooseModelLabel: string;
+}): string {
+  if (input.selectedModel) {
+    return input.displayFullModelName
+      ? getDisplayModelName(input.selectedModel)
+      : getTriggerDisplayModelName(input.selectedModel, input.driverKind);
+  }
+  if (input.model === ANTIGRAVITY_DEFAULT_MODEL) {
+    return input.chooseModelLabel;
+  }
+  return formatModelSlugName(input.model) || input.model || input.chooseModelLabel;
+}
+
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   environmentId: EnvironmentId | null;
   workspaceCwd?: string | null;
@@ -182,6 +201,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   onOpenChange?: (open: boolean) => void;
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
+  getProviderComplianceBlock?: (entry: ProviderInstanceEntry) => ProviderComplianceBlock | null;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
   /** Shown after the model name inside the same trigger, such as the effort level. */
   triggerSuffix?: ReactNode;
@@ -205,6 +225,12 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    * is present (Chat Composer) and `false` for multi-provider pickers in settings.
    */
   scopeToActiveAgent?: boolean;
+  /**
+   * When `true`, displays the model's full canonical name (`model.name`, e.g. `Gemini 4 Neon`,
+   * `GPT 6.2 Astra`, `Claude Opus 5.5`, `DeepSeek-V4.1-Flash`) on the trigger button instead
+   * of the abbreviated `shortName`.
+   */
+  displayFullModelName?: boolean;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
@@ -261,11 +287,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     (activeEntry?.driverKind === "opencode" || activeEntry?.driverKind === "antigravity"
       ? undefined
       : selectedInstanceOptions[0]);
-  const triggerTitle = selectedModel
-    ? getTriggerDisplayModelName(selectedModel, activeEntry?.driverKind)
-    : props.model === ANTIGRAVITY_DEFAULT_MODEL
-      ? gt("Choose model")
-      : formatModelSlugName(props.model) || props.model || gt("Choose model");
+  const triggerTitle = resolveModelPickerTriggerTitle({
+    selectedModel,
+    driverKind: activeEntry?.driverKind,
+    model: props.model,
+    displayFullModelName: props.displayFullModelName,
+    chooseModelLabel: gt("Choose model"),
+  });
   const withUnavailable = (model: string, isUnavailable: boolean | undefined) =>
     isUnavailable ? gt("{model} (Unavailable)", { model }) : model;
   const triggerLabel = selectedModel
@@ -316,6 +344,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 
   const handleInstanceModelChange = (instanceId: ProviderInstanceId, model: string) => {
     if (props.disabled) return;
+    const targetEntry = props.instanceEntries.find((entry) => entry.instanceId === instanceId);
+    const complianceBlock = targetEntry
+      ? (props.getProviderComplianceBlock?.(targetEntry) ?? null)
+      : null;
+    if (complianceBlock) {
+      setIsMenuOpen(false);
+      complianceBlock.onOpenWaiver();
+      return;
+    }
     props.onInstanceModelChange(instanceId, model);
     if (!docked) {
       setIsMenuOpen(false);
@@ -341,7 +378,12 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       ...selection,
       entry,
       label: model
-        ? withUnavailable(getTriggerDisplayModelName(model, entry?.driverKind), model.isUnavailable)
+        ? withUnavailable(
+            props.displayFullModelName
+              ? getDisplayModelName(model)
+              : getTriggerDisplayModelName(model, entry?.driverKind),
+            model.isUnavailable,
+          )
         : formatModelSlugName(selection.model) || selection.model,
       fullLabel: model
         ? withUnavailable(getDisplayModelName(model), model.isUnavailable)
@@ -393,7 +435,19 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       {...(props.onToggleModel
         ? {
             onToggleModel: (instanceId: ProviderInstanceId, model: string) => {
-              if (!props.disabled) props.onToggleModel?.(instanceId, model);
+              if (props.disabled) return;
+              const targetEntry = props.instanceEntries.find(
+                (entry) => entry.instanceId === instanceId,
+              );
+              const complianceBlock = targetEntry
+                ? (props.getProviderComplianceBlock?.(targetEntry) ?? null)
+                : null;
+              if (complianceBlock) {
+                setIsMenuOpen(false);
+                complianceBlock.onOpenWaiver();
+                return;
+              }
+              props.onToggleModel?.(instanceId, model);
             },
           }
         : {})}
@@ -405,6 +459,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       terminalOpen={props.terminalOpen ?? false}
       onRequestClose={() => setIsMenuOpen(false)}
       {...(props.onOpenProviderSetup ? { onOpenProviderSetup: props.onOpenProviderSetup } : {})}
+      {...(props.getProviderComplianceBlock
+        ? { getProviderComplianceBlock: props.getProviderComplianceBlock }
+        : {})}
       getModelDisabledReason={(instanceId, model) =>
         props.disabled
           ? gt("Model picker is disabled")
@@ -468,7 +525,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               "min-w-0 shrink justify-between whitespace-nowrap",
               props.compact
                 ? "max-w-42 shrink-0"
-                : !props.isComposerOwned && "max-w-48 sm:max-w-56",
+                : !props.isComposerOwned && !props.displayFullModelName && "max-w-48 sm:max-w-56",
               props.triggerClassName,
             )}
             disabled={props.disabled}

@@ -57,7 +57,7 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("bots");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_IDS).not.toContain("plugins");
     expect(PRISMUX_SIDEBAR_QUICK_NAV_ROUTES).toEqual({
-      diagnostics: "/settings/diagnostics",
+      diagnostics: "/diagnostics",
       tasks: "/tasks",
       workspaceBoard: "/workspace-board",
       automations: "/scheduled-tasks",
@@ -79,6 +79,7 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
     });
 
     for (const panelPath of [
+      "/diagnostics",
       "/tasks",
       "/workspace-board",
       "/scheduled-tasks",
@@ -93,9 +94,14 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
     expect(isSidebarUtilityPage("/projects/demo")).toBe(true);
     expect(isSidebarToggleablePanelPage("/projects/demo")).toBe(false);
 
-    // Toggle-close logic for all 4 work panels + Issue & PR icons
+    // Toggle-close logic for all standalone work panels + Issue & PR icons
     const priorThread = "/env-local/thread-42";
     const cases = [
+      {
+        paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.diagnostics,
+        targetHref: "/diagnostics",
+        activePath: "/diagnostics",
+      },
       {
         paths: PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks,
         targetHref: "/tasks",

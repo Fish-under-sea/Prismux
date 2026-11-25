@@ -666,7 +666,7 @@ describe("acpRegistrySnapshotReadiness", () => {
     });
 
     expect(snapshot.auth).toEqual({ status: "unknown", canLogout: false });
-    expect(snapshot.supportsTextGeneration).toBe(false);
+    expect(snapshot.supportsTextGeneration).toBe(true);
     expect(
       snapshot.models.map(({ slug, name, isCustom, isDefault }) => ({
         slug,
@@ -1728,6 +1728,272 @@ rl.on("line", (line) => {
             enabled: true,
           },
         ]);
+      }),
+  );
+
+  it.effect(
+    "runs real text generation for ACP Registry / DeepSeek Harness instances and isolates DSH history",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-dsh-textgen-" });
+        const dshBinDir = path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib");
+        const fakeDshScript = path.join(dshBinDir, "bin.js");
+        const recordPath = path.join(root, "textgen-record.json");
+        yield* fileSystem.makeDirectory(dshBinDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(root, "node_modules", "@deepseek-ai", "dsh", "package.json"),
+          JSON.stringify({ name: "@deepseek-ai/dsh", version: "0.2.2-rc.4" }),
+        );
+        yield* fileSystem.writeFileString(
+          fakeDshScript,
+          `import * as fs from "node:fs";
+import * as readline from "node:readline";
+const record = { argv: process.argv.slice(2), selectedModels: [], closed: false };
+const flush = () => fs.writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify(record));
+flush();
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+let currentModel = "deepseek-v4-flash";
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const { id, method, params } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") {
+    send({
+      id,
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { close: {} } },
+        authMethods: [],
+        agentInfo: { name: "deepseek-harness-acp", version: "0.0.1" },
+      },
+    });
+  } else if (method === "session/new") {
+    send({
+      id,
+      result: {
+        sessionId: "dsh-textgen-session",
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: currentModel,
+            options: [
+              { value: "deepseek-v4-flash", name: "deepseek-v4-flash" },
+              { value: "deepseek-v4-pro", name: "deepseek-v4-pro" },
+            ],
+          },
+        ],
+      },
+    });
+  } else if (method === "session/set_config_option") {
+    if (params?.configId === "model" && typeof params?.value === "string") {
+      currentModel = params.value;
+      record.selectedModels.push(currentModel);
+      flush();
+    }
+    send({ id, result: { configOptions: [] } });
+  } else if (method === "session/prompt") {
+    send({
+      method: "session/update",
+      params: {
+        sessionId: "dsh-textgen-session",
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "thinking..." },
+        },
+      },
+    });
+    send({
+      method: "session/update",
+      params: {
+        sessionId: "dsh-textgen-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: '{"title":"Fix DSH version badge"}' },
+        },
+      },
+    });
+    send({ id, result: { stopReason: "end_turn" } });
+  } else if (method === "session/close") {
+    record.closed = true;
+    flush();
+    send({ id, result: {} });
+  } else {
+    send({ id, result: {} });
+  }
+});
+`,
+        );
+
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId: ProviderInstanceId.make("dsh-textgen"),
+          displayName: "DeepSeek Harness",
+          enabled: true,
+          environment: [],
+          config: decodeSettings({
+            source: "local",
+            commandPath: process.execPath,
+            commandArgs: [fakeDshScript, "acp"],
+          }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "dsh",
+              version: null,
+              distribution: "local",
+            }),
+            resolve: () =>
+              Effect.succeed({
+                distribution: "local" as const,
+                spawn: { command: process.execPath, args: [fakeDshScript, "acp"] },
+              }),
+          }),
+        );
+
+        yield* instance.snapshot.refresh;
+        const snapshot = yield* instance.snapshot.getSnapshot;
+        expect(snapshot.supportsTextGeneration).toBe(true);
+        expect(snapshot.version).toBe("0.2.2-rc.4");
+
+        const generated = yield* instance.textGeneration.generateThreadTitle({
+          cwd: root,
+          message: "Show real DSH version instead of v0.0.1",
+          modelSelection: {
+            instanceId: instance.instanceId,
+            model: "deepseek-v4-pro",
+          },
+        });
+        expect(generated).toEqual({ title: "Fix DSH version badge" });
+
+        const recorded = JSON.parse(yield* fileSystem.readFileString(recordPath)) as {
+          argv: string[];
+          selectedModels: string[];
+          closed: boolean;
+        };
+        expect(recorded.argv).toContain("--patch");
+        expect(recorded.selectedModels).toEqual(["deepseek-v4-pro"]);
+        expect(recorded.closed).toBe(true);
+      }),
+  );
+
+  it.effect(
+    "gates local Antigravity (agy) ACP Registry text generation behind persisted subscription waiver",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-agy-waiver-" });
+        const dataDir = path.join(root, "prismux-data");
+        const waiverPath = path.join(dataDir, "config", "subscription-waiver.json");
+        const promptLogPath = path.join(root, "agy-prompts.json");
+        const fakeAgyScript = path.join(root, "fake-agy.mjs");
+        yield* fileSystem.writeFileString(promptLogPath, "0");
+        yield* fileSystem.writeFileString(
+          fakeAgyScript,
+          `import * as fs from "node:fs";
+import * as readline from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const { id, method } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") {
+    send({
+      id,
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { close: {} } },
+        authMethods: [],
+        agentInfo: { name: "antigravity-acp", version: "1.6.0" },
+      },
+    });
+  } else if (method === "session/new") {
+    send({ id, result: { sessionId: "agy-text-session" } });
+  } else if (method === "session/prompt") {
+    const count = Number(fs.readFileSync(${JSON.stringify(promptLogPath)}, "utf8")) + 1;
+    fs.writeFileSync(${JSON.stringify(promptLogPath)}, String(count));
+    send({
+      method: "session/update",
+      params: {
+        sessionId: "agy-text-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: '{"title":"Waiver signed title"}' },
+        },
+      },
+    });
+    send({ id, result: { stopReason: "end_turn" } });
+  } else {
+    send({ id, result: {} });
+  }
+});
+`,
+        );
+
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId: ProviderInstanceId.make("agy-local-acp"),
+          displayName: "Local AGY",
+          enabled: true,
+          environment: [{ name: "PRISMUX_DATA_DIR", value: dataDir, sensitive: false }],
+          config: decodeSettings({
+            source: "local",
+            commandPath: "agy",
+            commandArgs: ["acp"],
+          }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "agy",
+              version: null,
+              distribution: "local",
+            }),
+            resolve: () =>
+              Effect.succeed({
+                distribution: "local" as const,
+                spawn: { command: process.execPath, args: [fakeAgyScript] },
+              }),
+          }),
+        );
+
+        yield* instance.snapshot.refresh;
+        expect((yield* instance.snapshot.getSnapshot).supportsTextGeneration).toBe(false);
+        const denied = yield* instance.textGeneration
+          .generateThreadTitle({
+            cwd: root,
+            message: "test",
+            modelSelection: { instanceId: instance.instanceId, model: "default" },
+          })
+          .pipe(Effect.flip);
+        expect(denied.detail).toContain("ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED");
+        expect(yield* fileSystem.readFileString(promptLogPath)).toBe("0");
+
+        yield* fileSystem.makeDirectory(path.dirname(waiverPath), { recursive: true });
+        yield* fileSystem.writeFileString(
+          waiverPath,
+          JSON.stringify({
+            signed: true,
+            waiverVersion: "v3-2026",
+            signedAt: "2026-11-25T00:00:00.000Z",
+            allowAntigravityAsControlledAgent: true,
+            allowExternalSubscriptionAgentsInSwarm: false,
+          }),
+        );
+        yield* instance.snapshot.refresh;
+        expect((yield* instance.snapshot.getSnapshot).supportsTextGeneration).toBe(true);
+        expect(
+          yield* instance.textGeneration.generateThreadTitle({
+            cwd: root,
+            message: "test",
+            modelSelection: { instanceId: instance.instanceId, model: "default" },
+          }),
+        ).toEqual({ title: "Waiver signed title" });
+        expect(yield* fileSystem.readFileString(promptLogPath)).toBe("1");
       }),
   );
 });

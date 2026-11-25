@@ -7,6 +7,7 @@ import {
   applyAcpAgentTerminalUpdate,
   acpContentBlockDisplayText,
   embeddedTerminalIdsFromSessionUpdate,
+  extractAcpTodoToolPlanUpdate,
   extractMcpToolCallIdentity,
   mergeToolCallState,
   parsePermissionRequest,
@@ -1779,5 +1780,126 @@ describe("embeddedTerminalIdsFromSessionUpdate", () => {
         },
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("extractAcpTodoToolPlanUpdate", () => {
+  it("normalizes ACP native plan statuses across Antigravity and DSH conventions", () => {
+    const parsed = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "plan",
+        entries: [
+          { content: "Inspect repository", status: "done" as never, priority: "medium" },
+          { content: "Implement checklist", status: "running" as never, priority: "high" },
+          { content: "Skip legacy check", status: "skipped" as never, priority: "low" },
+          { content: "Verify tests", status: "pending", priority: "medium" },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(parsed.events).toHaveLength(1);
+    expect(parsed.events[0]).toMatchObject({
+      _tag: "PlanUpdated",
+      payload: {
+        nativePlanId: "legacy",
+        kind: "items",
+        plan: [
+          { step: "Inspect repository", status: "completed" },
+          { step: "Implement checklist", status: "inProgress" },
+          { step: "Skip legacy check", status: "cancelled" },
+          { step: "Verify tests", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  it("extracts todo_list steps from Antigravity update_steps, DSH todo_write, and TodoWrite calls", () => {
+    const agyTool: AcpToolCallState = {
+      toolCallId: "agy-steps-1",
+      kind: "other",
+      title: "Running update_steps",
+      status: "inProgress",
+      data: {
+        title: "Running update_steps",
+        rawInput: {
+          steps: [
+            { title: "Read specs", status: "done" },
+            { title: "Build UI", status: "in_progress" },
+            { title: "Run tests", status: "pending" },
+          ],
+        },
+      },
+    };
+    expect(extractAcpTodoToolPlanUpdate(agyTool)).toEqual({
+      nativePlanId: "legacy",
+      kind: "items",
+      plan: [
+        { step: "Read specs", status: "completed" },
+        { step: "Build UI", status: "inProgress" },
+        { step: "Run tests", status: "pending" },
+      ],
+    });
+
+    const dshTool: AcpToolCallState = {
+      toolCallId: "dsh-todo-1",
+      kind: "think",
+      title: "Update plan",
+      status: "completed",
+      data: {
+        title: "Update plan",
+        meta: { dshToolName: "todo_write" },
+        rawInput: {
+          explanation: "Tracking refactor progress",
+          todos: [
+            { id: "1", content: "Normalize backend", status: "completed" },
+            { id: "2", content: "Wire frontend dock", status: "in_progress" },
+          ],
+        },
+      },
+    };
+    expect(extractAcpTodoToolPlanUpdate(dshTool)).toEqual({
+      nativePlanId: "legacy",
+      kind: "items",
+      explanation: "Tracking refactor progress",
+      plan: [
+        { step: "Normalize backend", status: "completed" },
+        { step: "Wire frontend dock", status: "inProgress" },
+      ],
+    });
+
+    const writeTodosTool: AcpToolCallState = {
+      toolCallId: "wt-1",
+      kind: "other",
+      title: "write_todos",
+      status: "completed",
+      data: {
+        title: "write_todos",
+        rawInput: {
+          todos: ["[x] Done item", "[/] Active item", "[ ] Queued item"],
+        },
+      },
+    };
+    expect(extractAcpTodoToolPlanUpdate(writeTodosTool)).toEqual({
+      nativePlanId: "legacy",
+      kind: "items",
+      plan: [
+        { step: "Done item", status: "completed" },
+        { step: "Active item", status: "inProgress" },
+        { step: "Queued item", status: "pending" },
+      ],
+    });
+
+    const unrelatedTool: AcpToolCallState = {
+      toolCallId: "grep-1",
+      kind: "search",
+      title: "grep",
+      status: "completed",
+      data: {
+        title: "grep",
+        rawInput: { pattern: "todo_list", items: [{ title: "not a todo", status: "pending" }] },
+      },
+    };
+    expect(extractAcpTodoToolPlanUpdate(unrelatedTool)).toBeUndefined();
   });
 });

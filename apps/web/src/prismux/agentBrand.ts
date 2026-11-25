@@ -374,6 +374,7 @@ export interface ProviderEntryDisplayInput {
   readonly driverKind: string;
   readonly displayName?: string | null | undefined;
   readonly instanceId?: string | null | undefined;
+  readonly hasCustomDisplayName?: boolean | undefined;
 }
 
 /**
@@ -382,6 +383,12 @@ export interface ProviderEntryDisplayInput {
  * Always honors the user's custom display name (even on default instances) and never leaks UUIDs.
  */
 export function resolveProviderEntryDisplayName(entry: ProviderEntryDisplayInput): string {
+  if (entry.hasCustomDisplayName === true) {
+    const trimmedCustom = typeof entry.displayName === "string" ? entry.displayName.trim() : "";
+    if (trimmedCustom.length > 0 && !containsUuidNoise(trimmedCustom)) {
+      return trimmedCustom;
+    }
+  }
   return formatAgentBrandName(entry.driverKind || entry.instanceId, entry.displayName);
 }
 

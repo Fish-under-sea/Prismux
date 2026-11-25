@@ -13,6 +13,10 @@ import {
   deriveProviderInstanceEntries,
   getDefaultProviderInstanceModel,
   isProviderInstancePickerReady,
+  orderItemsByConfiguredProviderOrder,
+  orderProviderInstanceEntries,
+  providerInstanceEntriesFor,
+  resolveConfiguredProviderLabel,
   resolveDefaultProviderModelSelection,
   resolveSelectableProviderInstance,
   shouldShowInstanceBadge,
@@ -696,5 +700,154 @@ describe("provider icon metadata", () => {
       null,
     );
     expect(cleared[0]?.displayName).toBe("Codex");
+  });
+});
+
+describe("global provider SSOT ordering & custom naming helpers", () => {
+  it("orders providerInstanceEntriesFor and deriveProviderEntriesByEnvironment by settings.providerOrder", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const dshId = ProviderInstanceId.make("acpRegistry_dsh");
+    const snapshots: ServerProvider[] = [
+      provider({ provider: ProviderDriverKind.make("codex"), instanceId: codexId }),
+      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: claudeId }),
+      provider({ provider: ProviderDriverKind.make("acpRegistry"), instanceId: dshId }),
+    ];
+    const settings = {
+      providerOrder: [dshId, claudeId, codexId],
+      providerInstances: {
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          displayName: "主力 Codex",
+        },
+        [claudeId]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+          displayName: "Claude",
+        },
+        [dshId]: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          enabled: true,
+          displayName: "深度求索",
+          config: { agentId: "dsh" },
+        },
+      },
+      projectSettingsOverrides: {},
+    };
+
+    const pickerEntries = providerInstanceEntriesFor(snapshots, settings, null);
+    expect(pickerEntries.map((entry) => entry.instanceId)).toEqual([dshId, claudeId, codexId]);
+    expect(pickerEntries.map((entry) => entry.displayName)).toEqual([
+      "深度求索",
+      "Claude",
+      "主力 Codex",
+    ]);
+
+    // Map insertion order in deriveProviderEntriesByEnvironment matches providerOrder
+    const byEnv = deriveProviderEntriesByEnvironment([["local", snapshots, settings]]);
+    expect([...(byEnv.get("local")?.keys() ?? [])]).toEqual([dshId, claudeId, codexId]);
+
+    // orderProviderInstanceEntries preserves relative order for unlisted instances
+    const partial = orderProviderInstanceEntries(pickerEntries, [codexId]);
+    expect(partial.map((entry) => entry.instanceId)).toEqual([codexId, dshId, claudeId]);
+  });
+
+  it("resolves configured custom labels via instanceId, acpRegistryAgentId, or canonical brand ID", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const claudeDisabledId = ProviderInstanceId.make("claude_old");
+    const dshId = ProviderInstanceId.make("acp_custom_1");
+    const entries = providerInstanceEntriesFor(
+      [
+        provider({ provider: ProviderDriverKind.make("codex"), instanceId: codexId }),
+        provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: claudeDisabledId }),
+        provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: claudeId }),
+        provider({ provider: ProviderDriverKind.make("acpRegistry"), instanceId: dshId }),
+      ],
+      {
+        providerOrder: [dshId, claudeId, codexId],
+        providerInstances: {
+          [codexId]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: "主力 Codex",
+          },
+          [claudeDisabledId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: false,
+            displayName: "禁用 Claude",
+          },
+          [claudeId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            displayName: "Claude",
+          },
+          [dshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "我的 DSH",
+            config: { agentId: "dsh" },
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+
+    expect(resolveConfiguredProviderLabel("codex", entries)).toBe("主力 Codex");
+    expect(resolveConfiguredProviderLabel("claude-code", entries)).toBe("Claude");
+    expect(resolveConfiguredProviderLabel("dsh", entries)).toBe("我的 DSH");
+    expect(resolveConfiguredProviderLabel("deepseek-harness", entries)).toBe("我的 DSH");
+    expect(resolveConfiguredProviderLabel("acp_custom_1", entries)).toBe("我的 DSH");
+    expect(resolveConfiguredProviderLabel("cursor", entries, "Cursor CLI")).toBe("Cursor");
+    expect(resolveConfiguredProviderLabel("cursor", entries, "My Cursor")).toBe("My Cursor");
+  });
+
+  it("orders arbitrary provider-keyed items by configured providerOrder and keeps unconfigured items stable", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const dshId = ProviderInstanceId.make("acp_dsh_slot");
+    const entries = providerInstanceEntriesFor(
+      [
+        provider({ provider: ProviderDriverKind.make("codex"), instanceId: codexId }),
+        provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: claudeId }),
+        provider({ provider: ProviderDriverKind.make("acpRegistry"), instanceId: dshId }),
+      ],
+      {
+        providerOrder: [dshId, claudeId, codexId],
+        providerInstances: {
+          [dshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "极速 DSH",
+            config: { agentId: "dsh" },
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+
+    const items = [
+      { id: "cursor", label: "Cursor" },
+      { id: "codex", label: "Codex" },
+      { id: "gemini", label: "Gemini" },
+      { id: "claude-code", label: "Claude" },
+      { id: "dsh", label: "DSH" },
+    ];
+    const ordered = orderItemsByConfiguredProviderOrder(
+      items,
+      (item) => item.id,
+      entries,
+      [dshId, claudeId, codexId],
+    );
+    expect(ordered.map((item) => item.id)).toEqual([
+      "dsh",
+      "claude-code",
+      "codex",
+      "cursor",
+      "gemini",
+    ]);
   });
 });

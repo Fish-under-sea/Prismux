@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpIcon, SparklesIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, XIcon } from "lucide-react";
 
 import { APP_VERSION } from "../../branding";
+import { T3AppIcon } from "../../components/T3AppIcon";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
@@ -283,12 +284,7 @@ function PrismuxUpdateToastCard() {
       )}
     >
       <div className="flex items-start gap-2.5">
-        <span
-          aria-hidden="true"
-          className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/25"
-        >
-          <SparklesIcon className="size-3.5" />
-        </span>
+        <T3AppIcon className="mt-0.5 size-7 shrink-0 rounded-lg object-contain ring-1 ring-border/35 [[data-pmx-glass='1']_&]:ring-foreground/15" />
 
         <div
           className="min-w-0 flex-1 cursor-pointer space-y-1"

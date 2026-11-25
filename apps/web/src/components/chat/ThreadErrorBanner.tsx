@@ -14,7 +14,7 @@ import { toastManager } from "../ui/toast";
 import { CircleAlertIcon, XIcon } from "lucide-react";
 import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
-import { ExpandableText } from "../settings/ExpandableText";
+import { LocalizedErrorCard } from "../../prismux/LocalizedErrorCard";
 
 export function copyAdminRequest() {
   void writeTextToClipboard(CHATGPT_WORKSPACE_ADMIN_REQUEST, {
@@ -84,10 +84,12 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   onDismiss,
   errorClass,
   errorCode,
+  providerName,
 }: {
   error: string | null;
   errorClass?: OrchestrationV2ProviderFailureClass | null;
   errorCode?: string | null;
+  providerName?: string | null;
   onDismiss?: () => void;
 }) {
   const gt = useGT();
@@ -118,7 +120,13 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
               ) : null}
             </div>
           ) : (
-            <ExpandableText text={error} collapsedText={getThreadErrorBannerMessage(error)} />
+            <LocalizedErrorCard
+              error={error}
+              errorClass={errorClass}
+              errorCode={errorCode}
+              providerName={providerName}
+              variant={variant}
+            />
           )}
         </AlertDescription>
         {(chatGptLimit || onDismiss) && (

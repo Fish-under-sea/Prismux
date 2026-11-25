@@ -17,6 +17,14 @@ import {
 import { collectToolFilePaths, isJavaScriptReplTool } from "@prismux/core-shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import type { WorkLogEntry } from "../../session-logic";
+import { extractTodoChecklistFromWorkEntry } from "./AgyTodoChecklist.logic";
+import {
+  isSearchWorkEntry,
+  isWebWorkEntry,
+  normalizeSearchWorkEntry,
+  normalizeWebWorkEntry,
+} from "./DshSearchBlocks.logic";
+import { diagnoseModelError } from "../../prismux/errorDiagnostics";
 import type { WorkEntryIconName } from "./TimelineToolActivityIcon";
 
 /** Minimum duration (ms) a live step header holds before swapping on rapid bursts (matches DSH). */
@@ -29,19 +37,23 @@ export type WorkStepsStepGrouping = "collapsed" | "history" | "none";
 
 export interface WorkStepsPresentationPolicy {
   readonly mode: WorkStepsDisplay;
-  /** Whether completed turns fold behind an outer whole-turn process bar. */
+  /** Whether completed turns emit an outer whole-turn collapsible bar. */
   readonly foldCompletedTurns: boolean;
+  /** Whether outer completed turn bars start open by default (`detailed` shows all steps flat while remaining collapsible). */
+  readonly defaultTurnFoldOpen: boolean;
   /**
-   * How contiguous reasoning + tool calls between assistant replies are grouped:
+   * How contiguous tool calls between assistant replies are grouped:
    * - `"collapsed"`: step groups always collapsed by default (`concise` / `standard`)
-   * - `"history"`: active turn & latest completed turn (when `next-message`) render flat un-grouped; historical turns collapse (`detailed`)
-   * - `"none"`: never group steps; all thinking blocks & every tool call stay flat inline (`expanded`)
+   * - `"history"`: active turn & latest completed turn (when `next-message`) render flat un-grouped; historical turns collapse
+   * - `"none"`: never group steps; all thinking blocks & every tool call stay transparently flat (`detailed` / `expanded`)
    */
   readonly stepGrouping: WorkStepsStepGrouping;
   /** Whether live step-process headers append ` · <detail>` after the activity verb. */
   readonly liveProcessDetail: boolean;
   /** Whether settled (collapsed) reasoning rows preview their first line. */
   readonly settledReasoningPreview: boolean;
+  /** Whether long step items (thinking body, command output, search/web blocks, file diffs, tool I/O, inline todos) default to expanded inline. */
+  readonly defaultExpandLongItems: boolean;
 }
 
 const PRESENTATION_POLICY_BY_MODE: Readonly<Record<WorkStepsDisplay, WorkStepsPresentationPolicy>> =
@@ -49,30 +61,38 @@ const PRESENTATION_POLICY_BY_MODE: Readonly<Record<WorkStepsDisplay, WorkStepsPr
     concise: {
       mode: "concise",
       foldCompletedTurns: true,
+      defaultTurnFoldOpen: false,
       stepGrouping: "collapsed",
       liveProcessDetail: false,
       settledReasoningPreview: false,
+      defaultExpandLongItems: false,
     },
     standard: {
       mode: "standard",
       foldCompletedTurns: true,
+      defaultTurnFoldOpen: false,
       stepGrouping: "collapsed",
       liveProcessDetail: true,
       settledReasoningPreview: true,
+      defaultExpandLongItems: false,
     },
     detailed: {
       mode: "detailed",
       foldCompletedTurns: true,
-      stepGrouping: "history",
+      defaultTurnFoldOpen: true,
+      stepGrouping: "none",
       liveProcessDetail: true,
       settledReasoningPreview: true,
+      defaultExpandLongItems: false,
     },
     expanded: {
       mode: "expanded",
       foldCompletedTurns: false,
+      defaultTurnFoldOpen: true,
       stepGrouping: "none",
       liveProcessDetail: false,
       settledReasoningPreview: true,
+      defaultExpandLongItems: true,
     },
   };
 
@@ -100,7 +120,9 @@ export function shouldGroupWorkStepsForTurn(
 export function shouldTurnFoldDefaultOpen(options: {
   readonly isBottomCompletedTurn: boolean;
   readonly collapseTiming: WorkStepsCollapseTiming;
+  readonly defaultTurnFoldOpen?: boolean | undefined;
 }): boolean {
+  if (options.defaultTurnFoldOpen === true) return true;
   return options.isBottomCompletedTurn && options.collapseTiming === "next-message";
 }
 
@@ -108,6 +130,7 @@ export function resolveTurnFoldExpanded(options: {
   readonly runId: RunId;
   readonly isBottomCompletedTurn: boolean;
   readonly collapseTiming: WorkStepsCollapseTiming;
+  readonly defaultTurnFoldOpen?: boolean | undefined;
   readonly expandedRunIds?: ReadonlySet<RunId> | undefined;
   readonly collapsedRunIds?: ReadonlySet<RunId> | undefined;
 }): boolean {
@@ -115,6 +138,7 @@ export function resolveTurnFoldExpanded(options: {
     shouldTurnFoldDefaultOpen({
       isBottomCompletedTurn: options.isBottomCompletedTurn,
       collapseTiming: options.collapseTiming,
+      defaultTurnFoldOpen: options.defaultTurnFoldOpen,
     })
   ) {
     return !(options.collapsedRunIds?.has(options.runId) ?? false);
@@ -310,10 +334,42 @@ function sanitizeInlineLine(raw: string): string {
     .trim();
 }
 
+function firstNonEmptyLine(text: string): string {
+  for (const line of text.split(/\r?\n/u)) {
+    const cleaned = sanitizeInlineLine(line);
+    if (cleaned.length > 0) return cleaned;
+  }
+  return "";
+}
+
+/**
+ * Matches DSH NEXT `ReasoningRow.tsx`'s `latestCompletedParagraphFirstLine`:
+ * advances to the first line of the latest paragraph whose first line has terminated with `\n`.
+ */
+export function latestCompletedParagraphFirstLine(text: string): string {
+  let summary = "";
+  let paragraphStart = 0;
+  const separator = /\r?\n(?:[\t ]*\r?\n)+/gu;
+  while (true) {
+    const nextParagraph = separator.exec(text);
+    const paragraphEnd =
+      nextParagraph === null
+        ? text.length
+        : nextParagraph.index + nextParagraph[0].indexOf("\n");
+    const newline = text.indexOf("\n", paragraphStart);
+    if (newline !== -1 && newline <= paragraphEnd) {
+      const candidate = sanitizeInlineLine(text.slice(paragraphStart, newline));
+      if (candidate !== "") summary = candidate;
+    }
+    if (nextParagraph === null) return summary;
+    paragraphStart = nextParagraph.index + nextParagraph[0].length;
+  }
+}
+
 /**
  * Extracts a single-line reasoning summary matching DSH's ReasoningRow rules:
  * - Strips `**` markdown bold markers
- * - Live: latest completed paragraph's first line (falling back to current line)
+ * - Live: latest completed paragraph's first line (falling back to current line when no newline yet)
  * - Settled: first non-empty line, or `null` when `!settledReasoningPreview` (`concise`)
  */
 export function extractReasoningSummaryLine(
@@ -330,28 +386,19 @@ export function extractReasoningSummaryLine(
   if (!trimmed) return null;
 
   if (options.live) {
-    const liveLine = liveThoughtLine(trimmed);
-    const cleanedLive = sanitizeInlineLine(liveLine);
-    if (cleanedLive) {
-      return truncateGraphemes(cleanedLive);
+    const completedParaLine = latestCompletedParagraphFirstLine(trimmed);
+    if (completedParaLine) {
+      return truncateGraphemes(completedParaLine);
     }
-    const paragraphs = trimmed
-      .split(/\n{2,}/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-    const targetParagraph =
-      paragraphs.length >= 2 ? paragraphs[paragraphs.length - 2]! : paragraphs[0]!;
-    const firstLine = targetParagraph
-      .split(/\r?\n/)
-      .map(sanitizeInlineLine)
-      .find((line) => line.length > 0);
-    return firstLine ? truncateGraphemes(firstLine) : null;
+    const fallbackFirst = firstNonEmptyLine(trimmed);
+    if (fallbackFirst) {
+      return truncateGraphemes(fallbackFirst);
+    }
+    const cleanedLive = sanitizeInlineLine(liveThoughtLine(trimmed));
+    return cleanedLive ? truncateGraphemes(cleanedLive) : null;
   }
 
-  const firstLine = trimmed
-    .split(/\r?\n/)
-    .map(sanitizeInlineLine)
-    .find((line) => line.length > 0);
+  const firstLine = firstNonEmptyLine(trimmed);
   return firstLine ? truncateGraphemes(firstLine) : null;
 }
 
@@ -560,6 +607,27 @@ const DSH_TURN_FOLD_COPY = {
     completed: "Completed",
   },
 } as const;
+
+/** Resolves the dominant non-thinking DSH activity category for a step group header icon. */
+export function classifyPrimaryStepGroupActivity(
+  entries: ReadonlyArray<WorkLogEntry>,
+): DshActivityCategory {
+  const counts = new Map<DshActivityCategory, number>();
+  for (const entry of entries) {
+    const category = classifyWorkEntryActivity(entry);
+    if (category === "thinking") continue;
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  let best: DshActivityCategory | null = null;
+  let bestCount = -1;
+  for (const [category, count] of counts) {
+    if (count > bestCount) {
+      best = category;
+      bestCount = count;
+    }
+  }
+  return best ?? (entries.length > 0 ? classifyWorkEntryActivity(entries[0]!) : "tools");
+}
 
 /** Formats DSH count-free step-group category summaries (up to 3 categories plus ellipsis). */
 export function formatDshStepGroupSummary(
@@ -999,6 +1067,8 @@ const WORK_STEP_CARD_COPY = {
     searchPattern: "搜索模式",
     arguments: "调用参数",
     returnValue: "返回结果",
+    ioIn: "输入",
+    ioOut: "输出",
     contentPreview: "文件内容预览",
     openDiffNote: " · 点击右上角「打开差异」查看完整内容",
   },
@@ -1035,6 +1105,8 @@ const WORK_STEP_CARD_COPY = {
     searchPattern: "Pattern",
     arguments: "Arguments",
     returnValue: "Output",
+    ioIn: "IN",
+    ioOut: "OUT",
     contentPreview: "Content preview",
     openDiffNote: "",
   },
@@ -1211,4 +1283,327 @@ export function extractReadLineRangeLabel(entry: WorkLogEntry): string | null {
     return `L${start}+`;
   }
   return null;
+}
+
+const EXACT_WORK_STEP_LABELS_ZH: Readonly<Record<string, string>> = {
+  worked: "已完成",
+  "ran command": "已执行命令",
+  "run command": "执行命令",
+  "running command": "正在执行命令",
+  "executed command": "已执行命令",
+  "executing command": "正在执行命令",
+  "failed command": "命令执行失败",
+  "declined command": "已拒绝命令",
+  "stopped command": "已停止命令",
+  command: "执行命令",
+  shell: "执行命令",
+  terminal: "执行命令",
+  "edited file": "已修改文件",
+  "edit file": "修改文件",
+  "editing file": "正在修改文件",
+  "changed file": "已修改文件",
+  "changing file": "正在修改文件",
+  "modified file": "已修改文件",
+  "file change": "文件修改",
+  "file edit": "文件修改",
+  "wrote file": "已写入文件",
+  "write file": "写入文件",
+  "writing file": "正在写入文件",
+  "created file": "已创建文件",
+  "create file": "创建文件",
+  "creating file": "正在创建文件",
+  "deleted file": "已删除文件",
+  "delete file": "删除文件",
+  "read file": "已读取文件",
+  "reading file": "正在读取文件",
+  "view file": "查看文件",
+  "viewed file": "已查看文件",
+  read: "已读取文件",
+  searched: "已搜索代码",
+  search: "搜索代码",
+  searching: "正在搜索代码",
+  "searched files": "已搜索文件",
+  "searched code": "已搜索代码",
+  "file search": "文件搜索",
+  "code search": "代码搜索",
+  grep: "搜索代码",
+  glob: "查找文件",
+  "web search": "网页搜索",
+  "searched the web": "已搜索网页",
+  "search web": "网页搜索",
+  "search the web": "网页搜索",
+  "searching web": "正在搜索网页",
+  "searching the web": "正在搜索网页",
+  "web fetch": "网页抓取",
+  "fetched web page": "已抓取网页",
+  "fetch url": "网页抓取",
+  "read url": "网页抓取",
+  "fetching web page": "正在抓取网页",
+  "fetching url": "正在抓取网页",
+  fetch: "网页抓取",
+  thinking: "正在思考",
+  thought: "已思考",
+  reasoning: "思考过程",
+  output: "输出",
+  input: "输入",
+  arguments: "参数",
+  args: "参数",
+  result: "结果",
+  subagent: "子智能体",
+  delegate: "调度子智能体",
+  "delegated task": "子智能体任务",
+  "mcp tool": "MCP 工具",
+  "tool call": "工具调用",
+  tool: "工具调用",
+  "used tool": "已调用工具",
+  "running tool": "正在调用工具",
+  "calling tool": "正在调用工具",
+  "todo list": "任务清单",
+  todo: "任务清单",
+  todos: "任务清单",
+  todowrite: "更新任务清单",
+  "todo write": "更新任务清单",
+  "update steps": "更新任务清单",
+  plan: "执行计划",
+  "update plan": "更新计划",
+  "updated plan": "已更新计划",
+  "updating plan": "正在更新计划",
+  "approval requested": "已请求批准",
+  "input requested": "已请求输入",
+  "answered questions": "已回答问题",
+  "provider error": "模型服务错误",
+  "usage limit reached": "已达到用量上限",
+  "created thread": "已创建会话",
+  "checkpoint captured": "已保存检查点",
+};
+
+function localizeMoreCountSuffixZh(text: string): string {
+  return text.replace(/\s+\+(\d+)\s+more$/iu, "，另有 $1 个");
+}
+
+/**
+ * Ensures NO raw English provider/tool action labels leak into Chinese (`zh-CN`) work-step rows,
+ * while leaving file paths, queries, URLs, durations, and English locales intact.
+ */
+export function localizeWorkStepLabel(rawLabel: string, locale?: string): string {
+  const trimmed = rawLabel.trim();
+  if (!trimmed || !isZhLocale(locale)) return rawLabel;
+
+  const exact = EXACT_WORK_STEP_LABELS_ZH[trimmed.toLowerCase()];
+  if (exact) return exact;
+
+  const patterns: ReadonlyArray<readonly [RegExp, (...args: string[]) => string]> = [
+    [/^Worked for\s+(.+)$/iu, (_m, duration) => `已完成，用时 ${duration}`],
+    [/^Thought for\s+(.+)$/iu, (_m, duration) => `思考了 ${duration}`],
+    [/^Continued for\s+(.+)$/iu, (_m, duration) => `继续处理，用时 ${duration}`],
+    [/^Running\s+(.+)$/iu, (_m, target) => `正在运行 ${target}`],
+    [/^Ran\s+(.+)$/iu, (_m, target) => `已运行 ${target}`],
+    [/^Failed to\s+(.+)$/iu, (_m, target) => `执行失败：${target}`],
+    [/^Failed\s+(.+)$/iu, (_m, target) => `${target} 失败`],
+    [/^Declined\s+(.+)$/iu, (_m, target) => `已拒绝 ${target}`],
+    [/^Stopped\s+(.+)$/iu, (_m, target) => `已停止 ${target}`],
+    [/^Reading\s+(.+)$/iu, (_m, target) => `正在读取 ${localizeMoreCountSuffixZh(target!)}`],
+    [/^Read\s+(.+)$/iu, (_m, target) => `已读取 ${localizeMoreCountSuffixZh(target!)}`],
+    [
+      /^(?:Edited|Changed|Modified)\s+(.+)$/iu,
+      (_m, target) => `已修改 ${localizeMoreCountSuffixZh(target!)}`,
+    ],
+    [
+      /^(?:Editing|Changing)\s+(.+)$/iu,
+      (_m, target) => `正在修改 ${localizeMoreCountSuffixZh(target!)}`,
+    ],
+    [
+      /^(?:Wrote|Created)\s+(.+)$/iu,
+      (_m, target) => `已写入 ${localizeMoreCountSuffixZh(target!)}`,
+    ],
+    [
+      /^(?:Writing|Creating)\s+(.+)$/iu,
+      (_m, target) => `正在写入 ${localizeMoreCountSuffixZh(target!)}`,
+    ],
+    [/^Deleted\s+(.+)$/iu, (_m, target) => `已删除 ${localizeMoreCountSuffixZh(target!)}`],
+    [
+      /^Searched files\s+(.+)\s+in\s+(.+)$/iu,
+      (_m, glob, target) => `已在 ${target} 中搜索文件 ${glob}`,
+    ],
+    [/^Searched files\s+(.+)$/iu, (_m, glob) => `已搜索文件 ${glob}`],
+    [
+      /^Searched\s+(.+)\s+in\s+(.+)$/iu,
+      (_m, query, target) => `已在 ${target} 中搜索 ${query}`,
+    ],
+    [/^Searched in\s+(.+)$/iu, (_m, target) => `已在 ${target} 中搜索`],
+    [/^Searched\s+(.+)$/iu, (_m, query) => `已搜索 ${query}`],
+    [/^Web search(?:\s*[:·-]\s*|\s+)(.+)$/iu, (_m, query) => `网页搜索：${query}`],
+    [/^(?:Web fetch|Fetched|Fetch)(?:\s*[:·-]\s*|\s+)(.+)$/iu, (_m, target) => `网页抓取：${target}`],
+    [
+      /^Tasks\s+(\d+\/\d+)(?:\s*·\s*(.+))?$/iu,
+      (_m, progress, current) => (current ? `任务 ${progress} · ${current}` : `任务 ${progress}`),
+    ],
+    [/^MCP(?:\s+tool)?(?:\s*[:·-]\s*|\s+)(.+)$/iu, (_m, name) => `MCP 工具：${name}`],
+    [/^Tool(?:\s+call)?(?:\s*[:·-]\s*|\s+)(.+)$/iu, (_m, name) => `工具调用：${name}`],
+    [/^Subagent(?:\s*[:·-]\s*|\s+)(.+)$/iu, (_m, name) => `子智能体：${name}`],
+  ];
+
+  for (const [pattern, formatter] of patterns) {
+    const match = pattern.exec(trimmed);
+    if (match) {
+      return formatter(...match);
+    }
+  }
+  return rawLabel;
+}
+
+function summarizeUnknownInline(value: unknown): string | null {
+  if (typeof value === "string") {
+    const line = firstNonEmptyLine(value);
+    return line ? truncateGraphemes(line, 120) : null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const candidate = summarizeUnknownInline(item);
+      if (candidate) return candidate;
+    }
+    return null;
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of [
+      "text",
+      "output",
+      "stdout",
+      "summary",
+      "message",
+      "content",
+      "query",
+      "pattern",
+      "url",
+      "file_path",
+      "filePath",
+      "path",
+      "command",
+    ] as const) {
+      const candidate = summarizeUnknownInline(record[key]);
+      if (candidate) return candidate;
+    }
+    try {
+      const compact = sanitizeInlineLine(JSON.stringify(value));
+      if (compact && compact !== "{}" && compact !== "[]") {
+        return truncateGraphemes(compact, 120);
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extracts a crisp 1-line truncated preview for folded long work-step items in `detailed` mode
+ * (command stdout/stderr, search results, web blocks, file diffs, tool I/O, inline todos, errors).
+ */
+export function extractWorkStepCollapsedPreview(
+  entry: WorkLogEntry,
+  options: {
+    readonly workspaceRoot?: string | undefined;
+    readonly locale?: string | undefined;
+    readonly headingText?: string | undefined;
+  } = {},
+): string | null {
+  if (entry.itemType === "reasoning" || entry.tone === "thinking") {
+    return null;
+  }
+  const headingNorm = options.headingText?.trim().toLowerCase() ?? "";
+  const accept = (candidate: string | null | undefined): string | null => {
+    if (!candidate) return null;
+    const cleaned = truncateGraphemes(sanitizeInlineLine(candidate), 120);
+    if (!cleaned) return null;
+    if (headingNorm && cleaned.toLowerCase() === headingNorm) return null;
+    return cleaned;
+  };
+
+  const payload = entry.projectedItem?.item ?? entry.structuredPayload;
+
+  if (payload?.type === "error") {
+    return accept(
+      diagnoseModelError(payload.failure.message, {
+        errorClass: payload.failure.class,
+        errorCode: payload.failure.code,
+      }).titleZh,
+    );
+  }
+
+  if (payload?.type === "command_execution" || entry.itemType === "command_execution") {
+    const rawOutput =
+      payload?.type === "command_execution" ? (payload.output ?? entry.detail) : entry.detail;
+    return accept(rawOutput ? firstNonEmptyLine(rawOutput) : null);
+  }
+
+  if (isSearchWorkEntry(entry)) {
+    const searchData = normalizeSearchWorkEntry(entry, options.workspaceRoot, entry.detail);
+    if (searchData) {
+      if (searchData.kind === "matches") {
+        const firstGroup = searchData.groups[0];
+        const firstMatch = firstGroup?.matches[0];
+        const snippet = firstGroup
+          ? `${firstGroup.displayPath}${firstMatch?.lineNumber !== undefined ? `:${firstMatch.lineNumber}` : ""}${firstMatch?.text ? ` ${firstMatch.text.trim()}` : ""}`
+          : "";
+        return accept(snippet ? `${searchData.summaryZh} · ${snippet}` : searchData.summaryZh);
+      }
+      const firstPath = searchData.paths[0]?.displayPath;
+      return accept(firstPath ? `${searchData.summaryZh} · ${firstPath}` : searchData.summaryZh);
+    }
+  }
+
+  if (isWebWorkEntry(entry)) {
+    const webData = normalizeWebWorkEntry(entry, entry.detail);
+    if (webData) {
+      if (webData.kind === "fetch") {
+        const detail = webData.title || (webData.excerpt ? firstNonEmptyLine(webData.excerpt) : "");
+        return accept(detail ? `${webData.summaryZh} · ${detail}` : webData.summaryZh);
+      }
+      const lead =
+        webData.sources[0]?.title ??
+        (webData.answerMarkdown ? firstNonEmptyLine(webData.answerMarkdown) : "");
+      return accept(lead ? `${webData.summaryZh} · ${lead}` : webData.summaryZh);
+    }
+  }
+
+  const todoSnapshot = extractTodoChecklistFromWorkEntry(entry);
+  if (todoSnapshot) {
+    const activeStep = todoSnapshot.steps.find((step) => step.status === "in_progress");
+    return accept(
+      activeStep ? `${todoSnapshot.summaryPillZh} · ${activeStep.title}` : todoSnapshot.summaryPillZh,
+    );
+  }
+
+  if (payload?.type === "file_change") {
+    if (payload.status === "failed" && payload.diffStr?.trim()) {
+      return accept(diagnoseModelError(payload.diffStr).titleZh);
+    }
+    const parsedDiff = parseCompactDiffPreview({
+      diffStr: payload.diffStr,
+      oldStr: payload.oldStr,
+      newStr: payload.newStr,
+    });
+    const highlightLine =
+      parsedDiff?.lines.find((line) => (line.kind === "add" || line.kind === "del") && line.text.trim()) ??
+      parsedDiff?.lines.find((line) => line.kind === "context" && line.text.trim());
+    if (highlightLine) {
+      return accept(`${highlightLine.prefix}${highlightLine.text.trim()}`);
+    }
+    return null;
+  }
+
+  if (payload?.type === "dynamic_tool") {
+    const fromOutput = summarizeUnknownInline(payload.output);
+    if (fromOutput) return accept(fromOutput);
+    const fromInput = summarizeUnknownInline(payload.input);
+    if (fromInput) return accept(fromInput);
+  }
+
+  if (entry.toolData !== undefined) {
+    const fromToolData = summarizeUnknownInline(entry.toolData);
+    if (fromToolData) return accept(fromToolData);
+  }
+
+  return accept(entry.detail ? firstNonEmptyLine(entry.detail) : null);
 }

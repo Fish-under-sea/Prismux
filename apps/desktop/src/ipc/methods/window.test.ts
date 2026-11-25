@@ -560,6 +560,8 @@ describe("probeRemoteEditors PATH scan", () => {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-probe-path-" });
+    const localAppData = path.join(root, "AppData", "Local");
+    yield* fs.makeDirectory(localAppData, { recursive: true });
     const dirs = ["a", "b", "c", "d"].map((name) => path.join(root, name));
     for (const dir of dirs) yield* fs.makeDirectory(dir, { recursive: true });
     // Launchers in different PATH directories, deliberately not in REMOTE_CAPABLE_EDITOR_IDS order.
@@ -581,6 +583,7 @@ describe("probeRemoteEditors PATH scan", () => {
       env: {
         HOME: root,
         USERPROFILE: root,
+        LOCALAPPDATA: localAppData,
         PATH: dirs.join(platform === "win32" ? ";" : ":"),
         PATHEXT: ".COM;.EXE;.BAT;.CMD",
       },

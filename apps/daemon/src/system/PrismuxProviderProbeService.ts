@@ -13,6 +13,8 @@ import type { CoreRpcClient, CoreProviderSummary } from "../core/CoreRpcClient.j
 import {
   defaultCliProbe,
   findPackagedDshDesktopCli,
+  isPlaceholderDshVersion,
+  resolveDshInstalledVersionFastSync,
   type CliProbeResult
 } from "./ServiceDiagnosticsService.js";
 import {
@@ -25,7 +27,7 @@ const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_CLI_TIMEOUT_MS = 1_100;
 
 export const AUTH_LABEL_API_CUSTOM = "API / 自定义端点注入（已放行）" as const;
-export const AUTH_LABEL_CCS_MAGPIE = "CCS / Magpie API 注入（已放行）" as const;
+export const AUTH_LABEL_CCS_MAGPIE = AUTH_LABEL_API_CUSTOM;
 export const AUTH_LABEL_API_KEY = "API Key（已放行）" as const;
 export const AUTH_LABEL_CLOUD_IAM = "云厂商 API / IAM（已放行）" as const;
 export const AUTH_LABEL_LOCAL_RUNTIME = "本地运行时（已放行）" as const;
@@ -1709,8 +1711,26 @@ export class PrismuxProviderProbeService {
     );
     const installed = cliResult.found;
     const binaryPath = cliResult.path ?? null;
-    const version = cliResult.version ?? null;
-    const cliError = cliResult.error ?? null;
+    let version = cliResult.version ?? null;
+    let cliError = cliResult.error ?? null;
+    if (
+      spec.providerId === "dsh" &&
+      installed &&
+      (!version || isPlaceholderDshVersion(version))
+    ) {
+      const resolvedDshVersion = resolveDshInstalledVersionFastSync({
+        binaryPath,
+        env: this.env,
+        platform: this.platform,
+        homeDir: this.homeDir
+      });
+      if (resolvedDshVersion) {
+        version = resolvedDshVersion;
+        if (!cliResult.version && cliError) {
+          cliError = null;
+        }
+      }
+    }
 
     const classification = classifyProviderAuth({
       providerId: spec.providerId,

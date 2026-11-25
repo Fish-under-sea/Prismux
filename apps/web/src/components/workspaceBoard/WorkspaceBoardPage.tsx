@@ -285,10 +285,10 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                 <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
                   <Columns3Icon className="size-4" aria-hidden="true" />
                 </span>
-                <h1 className="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
+                <h1 className="flex shrink-0 items-center gap-2 text-[14px] font-semibold tracking-tight text-foreground">
                   <span>{copy.title}</span>
                   {projection.totalCount > 0 ? (
-                    <span className="rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-foreground/85 tabular-nums">
+                    <span className="rounded-full border border-border/65 bg-muted/75 px-2 py-0.5 text-[11px] font-medium text-muted-foreground tabular-nums">
                       {projection.isFiltering
                         ? `${projection.matchCount} / ${projection.totalCount}`
                         : projection.totalCount}
@@ -407,7 +407,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                             "flex w-full cursor-pointer items-center justify-between rounded px-2 py-1 text-left transition-colors",
                             filters.projectKey === null
                               ? "bg-primary text-primary-foreground font-medium"
-                              : "text-foreground/85 hover:bg-accent hover:text-foreground",
+                              : "text-muted-foreground hover:bg-accent hover:text-foreground",
                           )}
                         >
                           <span className="truncate">{copy.filterAllProjects}</span>
@@ -423,7 +423,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                               "flex w-full cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-left transition-colors",
                               filters.projectKey === project.key
                                 ? "bg-primary text-primary-foreground font-medium"
-                                : "text-foreground/85 hover:bg-accent hover:text-foreground",
+                                : "text-muted-foreground hover:bg-accent hover:text-foreground",
                             )}
                           >
                             <FolderGit2Icon className="size-3 shrink-0 opacity-75" />
@@ -545,13 +545,13 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                   "border-primary bg-primary/15 text-foreground ring-1 ring-primary/35",
               )}
             >
-              <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-foreground">
+              <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-foreground">
                 <PinIcon className="size-3.5" />
                 <span>{copy.pinnedTitle}</span>
               </span>
 
               {projection.pinnedCards.length === 0 ? (
-                <span className="truncate">
+                <span className="truncate text-[11.5px] font-normal text-muted-foreground">
                   {isDragOverPinTarget ? copy.pinnedDropActiveHint : copy.pinnedDropHint}
                 </span>
               ) : (
@@ -639,7 +639,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                             </span>
                           ) : null}
                         </div>
-                        <span className="shrink-0 rounded-full border border-border/65 bg-muted/85 px-1.5 py-0.5 text-[10px] leading-none font-semibold text-foreground/85 tabular-nums">
+                        <span className="shrink-0 rounded-full border border-border/65 bg-muted/85 px-1.5 py-0.5 text-[10.5px] leading-none font-medium text-muted-foreground tabular-nums">
                           {projection.isFiltering
                             ? `${cards.length} / ${totalInLane}`
                             : cards.length}
@@ -713,11 +713,11 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                                           className="size-1.5 shrink-0 rounded-full bg-rose-500"
                                         />
                                       ) : null}
-                                      <span className="truncate text-xs font-medium text-foreground">
+                                      <span className="truncate text-[13px] font-semibold leading-snug text-foreground">
                                         {card.title}
                                       </span>
                                     </div>
-                                    <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                    <div className="mt-0.5 flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
                                       <span className="truncate">{card.projectTitle}</span>
                                       {boardState.showBranchBadge && card.branch ? (
                                         <span className="inline-flex max-w-[110px] items-center gap-0.5 truncate rounded bg-muted/70 px-1 py-px font-mono text-[10px]">
@@ -754,7 +754,7 @@ export const WorkspaceBoardPage = memo(function WorkspaceBoardPage() {
                                 </div>
 
                                 {!boardState.compactMode ? (
-                                  <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground/85">
+                                  <div className="flex items-center justify-between gap-2 text-[10.5px] font-normal text-muted-foreground">
                                     <span className="truncate">
                                       {card.isRunning
                                         ? copy.statusRunning

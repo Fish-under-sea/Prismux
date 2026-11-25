@@ -29,11 +29,12 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ChevronRightIcon } from "lucide-react";
+import { AlertTriangleIcon, ChevronRightIcon } from "lucide-react";
 import {
   AgentBrandLogo,
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
+import type { ProviderComplianceBlock } from "../../prismux/SubscriptionRiskWaiverSection";
 import {
   formatModelSourceSubtitle,
   orderModelOptionsByPreference,
@@ -42,7 +43,7 @@ import {
 } from "./ProviderModelPicker.logic";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
-import { isDshProviderInstance } from "./ProviderInstanceIcon";
+import { ProviderInstanceIcon, isDshProviderInstance } from "./ProviderInstanceIcon";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
 import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";
 import {
@@ -60,7 +61,7 @@ import {
   ComboboxItem,
   ComboboxListVirtualized,
 } from "../ui/combobox";
-import { ModelEsque } from "./providerIconUtils";
+import { ModelEsque, getDisplayModelName } from "./providerIconUtils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { registerModelPickerContent } from "../../modelPickerVisibility";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
@@ -379,6 +380,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   onRequestClose?: () => void;
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
+  getProviderComplianceBlock?: (entry: ProviderInstanceEntry) => ProviderComplianceBlock | null;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
   /** The owning popup moves focus here when it opens (its `initialFocus`). */
   searchInputRef: RefObject<HTMLInputElement | null>;
@@ -406,6 +408,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     modelOptionsByInstance,
     instanceEntries: rawInstanceEntries,
     getModelDisabledReason,
+    getProviderComplianceBlock,
     onInstanceModelChange,
     onToggleModel,
     onRequestClose,
@@ -567,11 +570,27 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     });
   };
 
+  const complianceBlockByInstance = new Map<ProviderInstanceId, ProviderComplianceBlock>();
+  if (getProviderComplianceBlock) {
+    for (const entry of instanceEntries) {
+      const block = getProviderComplianceBlock(entry);
+      if (block) {
+        complianceBlockByInstance.set(entry.instanceId, block);
+      }
+    }
+  }
+
   const handleModelSelect = (
     modelSlug: string,
     instanceId: ProviderInstanceId,
     additive = false,
   ): string | null => {
+    const complianceBlock = complianceBlockByInstance.get(instanceId);
+    if (complianceBlock) {
+      onRequestClose?.();
+      complianceBlock.onOpenWaiver();
+      return null;
+    }
     if (getModelDisabledReason?.(instanceId, modelSlug)) {
       return null;
     }
@@ -920,8 +939,17 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       : [];
   });
 
+  const selectedComplianceBlock =
+    !isSearching && effectiveSelectedInstanceId !== "favorites"
+      ? (complianceBlockByInstance.get(effectiveSelectedInstanceId) ?? null)
+      : null;
+
   const modelJumpModelKeys = visibleModels
-    .filter((model) => !getModelDisabledReason?.(model.instanceId, model.slug))
+    .filter(
+      (model) =>
+        !complianceBlockByInstance.has(model.instanceId) &&
+        !getModelDisabledReason?.(model.instanceId, model.slug),
+    )
     .slice(0, MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.length)
     .map((model) => modelPickerModelKey(model.instanceId, model.slug));
   const allItemKeys = ((): string[] => [
@@ -976,6 +1004,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     modelJumpLabelByKey,
     activeModelKey,
     selectedModelKeySet,
+    complianceBlockByInstance,
   };
 
   const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -1075,6 +1104,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             instanceEntries={sidebarInstanceEntries}
             showFavorites
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
+            {...(getProviderComplianceBlock
+              ? { getProviderComplianceBlock }
+              : {})}
             {...(lockedDisabledInstanceIds
               ? {
                   disabledInstanceIds: lockedDisabledInstanceIds,
@@ -1248,6 +1280,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   {switchableScopedEntries.map((entry) => {
                     const active = entry.instanceId === effectiveSelectedInstanceId;
                     const brandLabel = resolveProviderEntryDisplayName(entry);
+                    const chipComplianceBlock = complianceBlockByInstance.get(entry.instanceId) ?? null;
                     return (
                       <Tooltip key={entry.instanceId}>
                         <TooltipTrigger
@@ -1255,16 +1288,26 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                             <button
                               type="button"
                               data-model-picker-agent-chip={entry.instanceId}
-                              aria-label={brandLabel}
+                              data-model-picker-provider-blocked={
+                                chipComplianceBlock ? "true" : undefined
+                              }
+                              aria-label={
+                                chipComplianceBlock
+                                  ? (chipComplianceBlock.tooltip ??
+                                    `${brandLabel} · ${chipComplianceBlock.badgeText}`)
+                                  : brandLabel
+                              }
                               aria-pressed={active}
                               onClick={() => {
                                 handleSelectInstance(entry.instanceId);
                               }}
                               className={cn(
-                                "inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border outline-none transition-all focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-                                active
-                                  ? "border-primary/55 bg-primary/14 opacity-100 ring-1 ring-inset ring-primary/25"
-                                  : "border-transparent bg-transparent opacity-70 hover:border-border/65 hover:bg-foreground/[0.07] hover:opacity-100",
+                                "relative inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border outline-none transition-all focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+                                chipComplianceBlock
+                                  ? "border-destructive/80 bg-destructive/8 opacity-55 ring-1 ring-inset ring-destructive/40 hover:bg-destructive/15 hover:opacity-85"
+                                  : active
+                                    ? "border-primary/55 bg-primary/14 opacity-100 ring-1 ring-inset ring-primary/25"
+                                    : "border-transparent bg-transparent opacity-70 hover:border-border/65 hover:bg-foreground/[0.07] hover:opacity-100",
                               )}
                             />
                           }
@@ -1283,13 +1326,44 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                                   : entry.driverKind
                             }
                             size={16}
+                            {...(chipComplianceBlock ? { className: "grayscale" } : {})}
                           />
                         </TooltipTrigger>
-                        <TooltipPopup side="top">{brandLabel}</TooltipPopup>
+                        <TooltipPopup side="top">
+                          {chipComplianceBlock
+                            ? (chipComplianceBlock.tooltip ??
+                              `${brandLabel} · ${chipComplianceBlock.badgeText}`)
+                            : brandLabel}
+                        </TooltipPopup>
                       </Tooltip>
                     );
                   })}
                 </div>
+              </div>
+            ) : null}
+
+            {selectedComplianceBlock ? (
+              <div
+                data-model-picker-compliance-banner="true"
+                className="shrink-0 border-b border-destructive/45 bg-destructive/10 px-2.5 py-2"
+              >
+                <button
+                  type="button"
+                  data-pmx-agy-waiver-badge="true"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onRequestClose?.();
+                    selectedComplianceBlock.onOpenWaiver();
+                  }}
+                  className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-destructive bg-background/95 px-2.5 py-1.5 text-left text-xs font-semibold text-destructive shadow-xs transition-colors hover:bg-destructive/10"
+                >
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <AlertTriangleIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{selectedComplianceBlock.badgeText}</span>
+                  </span>
+                  <ChevronRightIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                </button>
               </div>
             ) : null}
 
@@ -1378,14 +1452,97 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                 const disabledReason =
                   getModelDisabledReason?.(model.instanceId, model.slug) ?? null;
                 const modelEntry = entryByInstanceId.get(model.instanceId);
+                const complianceBlock = complianceBlockByInstance.get(model.instanceId) ?? null;
                 const sourceSubtitle = agentScoped
                   ? formatModelSourceSubtitle({
                       driverKind: model.driverKind,
                       instanceDisplayName: model.instanceDisplayName,
+                      hasCustomDisplayName: modelEntry?.hasCustomDisplayName,
                       subProvider: model.subProvider,
                       isDefaultInstance: modelEntry?.isDefault,
                     })
                   : undefined;
+                if (complianceBlock) {
+                  const blockedSubtitle =
+                    sourceSubtitle ??
+                    (model.subProvider
+                      ? `${model.instanceDisplayName} · ${model.subProvider}`
+                      : model.instanceDisplayName);
+                  const blockedRow = (
+                    <ComboboxItem
+                      key={modelKey}
+                      hideIndicator
+                      selectedFill={false}
+                      index={index}
+                      value={modelKey}
+                      aria-disabled="true"
+                      data-model-row-blocked="true"
+                      data-model-row-scoped={agentScoped ? "true" : undefined}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onRequestClose?.();
+                        complianceBlock.onOpenWaiver();
+                      }}
+                      className="group relative w-full !min-w-0 max-w-full cursor-not-allowed"
+                    >
+                      <div
+                        className={cn(
+                          "flex min-w-0 flex-1 items-center gap-2 opacity-60",
+                          agentScoped && "py-1",
+                        )}
+                      >
+                        {agentScoped ? null : (
+                          <ProviderInstanceIcon
+                            driverKind={model.driverKind}
+                            displayName={model.instanceDisplayName}
+                            instanceId={model.instanceId}
+                            accentColor={model.instanceAccentColor}
+                            acpRegistryAgentId={model.acpRegistryAgentId}
+                            acpRegistryIconUrl={model.acpRegistryIconUrl}
+                            showBadge={badgedInstanceIds.has(model.instanceId)}
+                            className="size-4 grayscale"
+                            iconClassName="size-4"
+                            indicatorBackground="var(--popover)"
+                            badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs"
+                          />
+                        )}
+                        <div className="flex min-w-0 flex-1 flex-col text-left">
+                          <div className="min-w-0 truncate text-sm font-medium leading-snug text-muted-foreground">
+                            {getDisplayModelName(model)}
+                          </div>
+                          {blockedSubtitle ? (
+                            <span
+                              className={cn(
+                                "min-w-0 truncate leading-4 text-muted-foreground/75",
+                                agentScoped ? "mt-0.5 text-2xs" : "text-xs",
+                              )}
+                            >
+                              {blockedSubtitle}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <span
+                        data-pmx-agy-waiver-badge="true"
+                        className="ms-auto inline-flex shrink-0 cursor-pointer items-center rounded border border-destructive bg-background/95 px-1.5 py-0.5 text-2xs font-semibold leading-tight text-destructive shadow-xs"
+                      >
+                        {complianceBlock.badgeText}
+                      </span>
+                    </ComboboxItem>
+                  );
+                  if (!complianceBlock.tooltip) {
+                    return blockedRow;
+                  }
+                  return (
+                    <Tooltip key={modelKey}>
+                      <TooltipTrigger render={blockedRow} />
+                      <TooltipPopup side="left" align="center">
+                        {complianceBlock.tooltip}
+                      </TooltipPopup>
+                    </Tooltip>
+                  );
+                }
                 return (
                   <ModelListRow
                     key={modelKey}

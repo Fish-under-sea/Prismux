@@ -47,7 +47,7 @@ const OVERNIGHT_RUNS_FILENAME = "overnight-factory-runs.json" as const;
 const MAX_PERSISTED_RUNS = 100;
 const OAUTH_STATE_TTL_MS = 10 * 60_000;
 
-export type OvernightMailPresetId = "qq" | "163" | "outlook" | "custom";
+export type OvernightMailPresetId = "qq" | "163" | "gmail" | "outlook" | "custom";
 export type OvernightWindowMode = "scheduled" | "always";
 export type OvernightRunStatus =
   | "completed"
@@ -91,6 +91,16 @@ export const OVERNIGHT_MAIL_PRESETS: Readonly<
     smtpPort: 465,
     smtpSecure: true
   },
+  gmail: {
+    id: "gmail",
+    label: "谷歌邮箱 (Gmail)",
+    imapHost: "imap.gmail.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.gmail.com",
+    smtpPort: 465,
+    smtpSecure: true
+  },
   outlook: {
     id: "outlook",
     label: "Outlook / Exchange",
@@ -112,6 +122,16 @@ export const OVERNIGHT_MAIL_PRESETS: Readonly<
     smtpSecure: true
   }
 };
+
+function isOvernightMailPresetId(value: unknown): value is OvernightMailPresetId {
+  return (
+    value === "qq" ||
+    value === "163" ||
+    value === "gmail" ||
+    value === "outlook" ||
+    value === "custom"
+  );
+}
 
 export interface OvernightGmailConfig {
   clientId: string;
@@ -559,13 +579,9 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
 
   const imapRaw = isPlainRecord(raw["imapSmtp"]) ? raw["imapSmtp"] : {};
   const presetRaw = imapRaw["preset"];
-  const preset: OvernightMailPresetId =
-    presetRaw === "qq" ||
-    presetRaw === "163" ||
-    presetRaw === "outlook" ||
-    presetRaw === "custom"
-      ? presetRaw
-      : base.imapSmtp.preset;
+  const preset: OvernightMailPresetId = isOvernightMailPresetId(presetRaw)
+    ? presetRaw
+    : base.imapSmtp.preset;
   const presetSpec = OVERNIGHT_MAIL_PRESETS[preset];
 
   const imapSmtp: OvernightImapSmtpConfig = {
@@ -575,7 +591,7 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
         ? imapRaw["email"].trim()
         : base.imapSmtp.email,
     imapHost:
-      typeof imapRaw["imapHost"] === "string"
+      typeof imapRaw["imapHost"] === "string" && imapRaw["imapHost"].trim().length > 0
         ? imapRaw["imapHost"].trim()
         : presetSpec.imapHost,
     imapPort: clampPort(imapRaw["imapPort"], presetSpec.imapPort),
@@ -592,7 +608,7 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
         ? imapRaw["mailbox"].trim()
         : "INBOX",
     smtpHost:
-      typeof imapRaw["smtpHost"] === "string"
+      typeof imapRaw["smtpHost"] === "string" && imapRaw["smtpHost"].trim().length > 0
         ? imapRaw["smtpHost"].trim()
         : presetSpec.smtpHost,
     smtpPort: clampPort(imapRaw["smtpPort"], presetSpec.smtpPort),
@@ -1427,16 +1443,34 @@ export class OvernightRouteService {
 
     if (isPlainRecord(rawBody["imapSmtp"])) {
       const im = rawBody["imapSmtp"];
-      if (
-        im["preset"] === "qq" ||
-        im["preset"] === "163" ||
-        im["preset"] === "outlook" ||
-        im["preset"] === "custom"
-      ) {
+      if (isOvernightMailPresetId(im["preset"])) {
         next.imapSmtp.preset = im["preset"];
+        if (im["preset"] !== "custom") {
+          const presetSpec = OVERNIGHT_MAIL_PRESETS[im["preset"]];
+          if (typeof im["imapHost"] !== "string" || im["imapHost"].trim().length === 0) {
+            next.imapSmtp.imapHost = presetSpec.imapHost;
+          }
+          if (im["imapPort"] === undefined) {
+            next.imapSmtp.imapPort = presetSpec.imapPort;
+          }
+          if (typeof im["imapSecure"] !== "boolean") {
+            next.imapSmtp.imapSecure = presetSpec.imapSecure;
+          }
+          if (typeof im["smtpHost"] !== "string" || im["smtpHost"].trim().length === 0) {
+            next.imapSmtp.smtpHost = presetSpec.smtpHost;
+          }
+          if (im["smtpPort"] === undefined) {
+            next.imapSmtp.smtpPort = presetSpec.smtpPort;
+          }
+          if (typeof im["smtpSecure"] !== "boolean") {
+            next.imapSmtp.smtpSecure = presetSpec.smtpSecure;
+          }
+        }
       }
       if (typeof im["email"] === "string") next.imapSmtp.email = im["email"].trim();
-      if (typeof im["imapHost"] === "string") next.imapSmtp.imapHost = im["imapHost"].trim();
+      if (typeof im["imapHost"] === "string" && (next.imapSmtp.preset === "custom" || im["imapHost"].trim().length > 0)) {
+        next.imapSmtp.imapHost = im["imapHost"].trim();
+      }
       if (im["imapPort"] !== undefined) {
         next.imapSmtp.imapPort = clampPort(im["imapPort"], next.imapSmtp.imapPort);
       }
@@ -1447,7 +1481,9 @@ export class OvernightRouteService {
       if (typeof im["mailbox"] === "string" && im["mailbox"].trim().length > 0) {
         next.imapSmtp.mailbox = im["mailbox"].trim();
       }
-      if (typeof im["smtpHost"] === "string") next.imapSmtp.smtpHost = im["smtpHost"].trim();
+      if (typeof im["smtpHost"] === "string" && (next.imapSmtp.preset === "custom" || im["smtpHost"].trim().length > 0)) {
+        next.imapSmtp.smtpHost = im["smtpHost"].trim();
+      }
       if (im["smtpPort"] !== undefined) {
         next.imapSmtp.smtpPort = clampPort(im["smtpPort"], next.imapSmtp.smtpPort);
       }
@@ -1907,8 +1943,34 @@ export class OvernightRouteService {
     }
     if (isPlainRecord(rawOverride["imapSmtp"])) {
       const im = rawOverride["imapSmtp"];
+      if (isOvernightMailPresetId(im["preset"])) {
+        merged.imapSmtp.preset = im["preset"];
+        if (im["preset"] !== "custom") {
+          const presetSpec = OVERNIGHT_MAIL_PRESETS[im["preset"]];
+          if (typeof im["imapHost"] !== "string" || im["imapHost"].trim().length === 0) {
+            merged.imapSmtp.imapHost = presetSpec.imapHost;
+          }
+          if (im["imapPort"] === undefined) {
+            merged.imapSmtp.imapPort = presetSpec.imapPort;
+          }
+          if (typeof im["imapSecure"] !== "boolean") {
+            merged.imapSmtp.imapSecure = presetSpec.imapSecure;
+          }
+          if (typeof im["smtpHost"] !== "string" || im["smtpHost"].trim().length === 0) {
+            merged.imapSmtp.smtpHost = presetSpec.smtpHost;
+          }
+          if (im["smtpPort"] === undefined) {
+            merged.imapSmtp.smtpPort = presetSpec.smtpPort;
+          }
+          if (typeof im["smtpSecure"] !== "boolean") {
+            merged.imapSmtp.smtpSecure = presetSpec.smtpSecure;
+          }
+        }
+      }
       if (typeof im["email"] === "string") merged.imapSmtp.email = im["email"].trim();
-      if (typeof im["imapHost"] === "string") merged.imapSmtp.imapHost = im["imapHost"].trim();
+      if (typeof im["imapHost"] === "string" && (merged.imapSmtp.preset === "custom" || im["imapHost"].trim().length > 0)) {
+        merged.imapSmtp.imapHost = im["imapHost"].trim();
+      }
       if (im["imapPort"] !== undefined) {
         merged.imapSmtp.imapPort = clampPort(im["imapPort"], merged.imapSmtp.imapPort);
       }
@@ -1919,7 +1981,9 @@ export class OvernightRouteService {
       if (typeof im["mailbox"] === "string" && im["mailbox"].trim().length > 0) {
         merged.imapSmtp.mailbox = im["mailbox"].trim();
       }
-      if (typeof im["smtpHost"] === "string") merged.imapSmtp.smtpHost = im["smtpHost"].trim();
+      if (typeof im["smtpHost"] === "string" && (merged.imapSmtp.preset === "custom" || im["smtpHost"].trim().length > 0)) {
+        merged.imapSmtp.smtpHost = im["smtpHost"].trim();
+      }
       if (im["smtpPort"] !== undefined) {
         merged.imapSmtp.smtpPort = clampPort(im["smtpPort"], merged.imapSmtp.smtpPort);
       }

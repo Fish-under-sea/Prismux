@@ -2,12 +2,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { GTProvider, initializeGT } from "gt-react";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
+let mockedPathname = "/settings/maintenance";
+
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to, ...props }: { children?: unknown; to?: string; [key: string]: unknown }) => (
     <a href={to} {...props}>
       {children as never}
     </a>
   ),
+  useLocation: (opts?: { select?: (loc: { pathname: string }) => unknown }) =>
+    opts?.select ? opts.select({ pathname: mockedPathname }) : { pathname: mockedPathname },
+  useNavigate: () => vi.fn(),
 }));
 
 import {
@@ -17,8 +22,10 @@ import {
   DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
   DORMANT_ENGINES_GROUP_ID,
   filterDiagnosticsReport,
+  getDiagnosticsStandaloneCopy,
   getLatestNormalizedDiagnosticsReport,
   isDiagnosticsAutoRefreshSettingsPath,
+  isDiagnosticsStandalonePathname,
   isDiagnosticsViewPathname,
   isOmittedAiProviderDiagnosticItem,
   normalizeDiagnosticsResponse,
@@ -320,11 +327,13 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(hybrid.state).toBe("fts5+sqlite-vec");
   });
 
-  it("sanitizes settings routes to internal /settings/* paths only and maps legacy routes precisely", () => {
+  it("sanitizes settings routes to internal /settings/* or standalone paths only and maps legacy routes precisely", () => {
     expect(sanitizeDiagnosticsSettingsRoute("/settings/updates")).toBe("/settings/updates");
     expect(sanitizeDiagnosticsSettingsRoute("/settings/memory")).toBe("/settings/memory");
     expect(sanitizeDiagnosticsSettingsRoute("/settings/sync")).toBe("/settings/sync");
     expect(sanitizeDiagnosticsSettingsRoute("/settings/memory-sync")).toBe("/settings/memory-sync");
+    expect(sanitizeDiagnosticsSettingsRoute("/diagnostics")).toBe("/diagnostics");
+    expect(sanitizeDiagnosticsSettingsRoute("/overnight-factory")).toBe("/overnight-factory");
     expect(sanitizeDiagnosticsSettingsRoute("https://evil.example/settings/updates")).toBeNull();
     expect(sanitizeDiagnosticsSettingsRoute("javascript:alert(1)")).toBeNull();
     expect(sanitizeDiagnosticsSettingsRoute("/settings/../etc/passwd")).toBeNull();
@@ -340,8 +349,9 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
       "/settings/sync",
     );
     expect(resolveDiagnosticsSettingsRoute("/settings/diagnostics", "host.daemon")).toBe(
-      "/settings/maintenance",
+      "/diagnostics",
     );
+    expect(resolveDiagnosticsSettingsRoute("/diagnostics", "host.daemon")).toBe("/diagnostics");
     expect(resolveDiagnosticsSettingsRoute("/settings/sync", "sync.vault")).toBe("/settings/sync");
     expect(resolveDiagnosticsSettingsRoute("/settings/memory", "memory.sqlite_vec")).toBe(
       "/settings/memory",
@@ -531,7 +541,86 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
     expect(fullHtml.match(/data-diagnostic-id="engine\.worktree_sandbox"/g)).toHaveLength(1);
     expect(fullHtml).toContain("Dormant Engines Read-Only Summary");
     expect(fullHtml).toContain("Read-only");
-    expect(fullHtml).toContain("sm:grid-cols-3");
+    expect(fullHtml).toContain("sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4");
+  });
+
+  it("renders standalone full-width workbench panel at /diagnostics inside workPanels PrismuxStageFrame without max-w container", () => {
+    const report = normalizeDiagnosticsResponse({
+      ok: true,
+      checkedAt: 1_763_000_000_000,
+      durationMs: 148,
+      cached: false,
+      summary: { total: 26, ok: 25, degraded: 1, error: 0 },
+      items: [
+        {
+          id: "host.daemon",
+          category: "host_core",
+          name: "Prismux Daemon",
+          status: "ok",
+          summary: "Running",
+          latencyMs: 3,
+        },
+        {
+          id: "memory.sqlite_vec",
+          category: "memory_sync",
+          name: "sqlite-vec",
+          status: "degraded",
+          summary: "FTS5 degraded mode",
+          settingsRoute: "/settings/memory",
+        },
+        {
+          id: "engine.overnight_factory",
+          category: "dormant_engines",
+          name: "OvernightFactory",
+          status: "ok",
+          summary: "Standby",
+        },
+      ],
+    });
+
+    const prevPath = mockedPathname;
+    mockedPathname = "/diagnostics";
+    try {
+      // Auto-enables standalone workbench mode when pathname === "/diagnostics"
+      const autoHtml = renderToStaticMarkup(
+        <GTProvider locale="en" translations={{}}>
+          <PrismuxDiagnosticsSection variant="full" initialReportOverride={report} />
+        </GTProvider>,
+      );
+
+      expect(autoHtml).toContain('data-pmx-glass-zone="workPanels"');
+      expect(autoHtml).toContain('data-pmx-work-panel="1"');
+      expect(autoHtml).toContain('data-testid="prismux-diagnostics-page"');
+      expect(autoHtml).toContain('data-testid="diagnostics-page-header"');
+      expect(autoHtml).toContain('data-testid="diagnostics-summary-pill"');
+      expect(autoHtml).toContain('data-testid="diagnostics-degraded-pill"');
+      expect(autoHtml).toContain('data-testid="diagnostics-last-checked"');
+      expect(autoHtml).toContain("148 ms");
+      expect(autoHtml).toContain('data-testid="diagnostics-rerun-button"');
+      expect(autoHtml).toContain('data-pmx-work-panel-control="1"');
+      expect(autoHtml).toContain('data-testid="diagnostics-close-button"');
+      expect(autoHtml).toContain("grid-cols-2 gap-3 lg:grid-cols-4");
+      expect(autoHtml).toContain("grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4");
+      expect(autoHtml).toContain("grid items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4");
+      // Full-bleed edge-to-edge body must NEVER wrap in narrow centered max-w-* containers
+      expect(autoHtml).not.toMatch(/\bmax-w-(?:3xl|4xl|5xl|6xl|7xl)\b/);
+    } finally {
+      mockedPathname = prevPath;
+    }
+
+    const zhCopy = getDiagnosticsStandaloneCopy("zh-CN");
+    expect(zhCopy.closeTooltip).toBe("返回主会话 (Esc)");
+    expect(zhCopy.summaryHealthyPill(25, 26)).toBe("25/26 正常");
+    expect(zhCopy.summaryDegradedPill(1)).toBe("1 降级");
+    expect(zhCopy.summaryErrorPill(2)).toBe("2 异常");
+
+    const enCopy = getDiagnosticsStandaloneCopy("en-US");
+    expect(enCopy.closeTooltip).toBe("Return to main session (Esc)");
+    expect(enCopy.summaryHealthyPill(25, 26)).toBe("25/26 healthy");
+
+    expect(isDiagnosticsStandalonePathname("/diagnostics")).toBe(true);
+    expect(isDiagnosticsStandalonePathname("/diagnostics/")).toBe(true);
+    expect(isDiagnosticsStandalonePathname("/settings/maintenance")).toBe(false);
   });
 
   it("supports interactive KPI status filtering, hides empty groups, and renders friendly empty state with reset", () => {
@@ -828,8 +917,10 @@ describe("prismuxDiagnostics.logic & PrismuxDiagnosticsSection", () => {
       requestDiagnosticsRefresh("plugin-mutated");
       expect(reasons).toEqual(["plugin-mutated"]);
 
-      expect(isDiagnosticsViewPathname("/settings/maintenance")).toBe(true);
+      expect(isDiagnosticsViewPathname("/diagnostics")).toBe(true);
+      expect(isDiagnosticsViewPathname("/diagnostics/")).toBe(true);
       expect(isDiagnosticsViewPathname("/settings/diagnostics")).toBe(true);
+      expect(isDiagnosticsViewPathname("/settings/maintenance")).toBe(false);
       expect(isDiagnosticsViewPathname("/settings/memory")).toBe(false);
 
       expect(isDiagnosticsAutoRefreshSettingsPath("/settings/providers")).toBe(true);

@@ -61,7 +61,13 @@ import { m, type MessageResolver } from "../../i18n/messages";
 import { formatRelativeTime } from "../../timestampFormat";
 import { useClientSettings, useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
-import { providerInstanceEntriesFor } from "../../providerInstances";
+import { providerInstanceEntriesFor, type ProviderInstanceEntry } from "../../providerInstances";
+import {
+  AgyWaiverRequiredBadge,
+  SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  resolveAntigravityComplianceBlock,
+  useSubscriptionWaiverState,
+} from "../../prismux/SubscriptionRiskWaiverSection";
 import { usePrimaryCloudLinkState } from "../../cloud/cloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@prismux/client-runtime/webhook-address";
@@ -1815,6 +1821,8 @@ function ScheduledTaskEditorForm({
   const messages = useMessages();
   const locale = useLocale();
   const gt = useGT();
+  const navigate = useNavigate();
+  const waiver = useSubscriptionWaiverState();
   const { scope, connectedEnvironments } = useSettingsScope();
   const [environmentId, setEnvironmentId] = useState(initialEnvironmentId);
   const environment = useEnvironment(environmentId);
@@ -1908,14 +1916,35 @@ function ScheduledTaskEditorForm({
     settings,
     selectedProject?.id ?? null,
   );
+  const openSubscriptionWaiver = () => {
+    onClose();
+    void navigate({
+      to: "/settings/providers",
+      hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
+    });
+  };
+  const getProviderComplianceBlock = (entry: ProviderInstanceEntry) =>
+    resolveAntigravityComplianceBlock({
+      entry,
+      waiver,
+      mode: "unattended",
+      onOpenWaiver: openSubscriptionWaiver,
+    });
 
-  const firstInstance = instanceEntries[0];
+  const nonBlockedEntries = instanceEntries.filter(
+    (entry) => getProviderComplianceBlock(entry) === null,
+  );
+  const firstInstance = nonBlockedEntries[0] ?? instanceEntries[0];
   const draftSelection = draft.modelKey ? splitModelKey(draft.modelKey) : null;
   const activeSelection =
     draftSelection &&
     instanceEntries.some((entry) => entry.instanceId === draftSelection.instanceId && entry.enabled)
       ? draftSelection
-      : scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries);
+      : scheduledTaskDefaultModel(
+          settings,
+          selectedProject ?? null,
+          nonBlockedEntries.length > 0 ? nonBlockedEntries : instanceEntries,
+        );
   const activeInstanceId =
     activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
@@ -1929,6 +1958,11 @@ function ScheduledTaskEditorForm({
     : { instanceId: activeInstanceId, model: activeModel };
   const shownInstanceId = shownSelection?.instanceId ?? activeInstanceId;
   const shownModel = shownSelection?.model ?? "";
+  const shownInstanceEntry = instanceEntries.find((entry) => entry.instanceId === shownInstanceId);
+  const activeComplianceBlock =
+    draft.threadId === "" && shownInstanceEntry
+      ? getProviderComplianceBlock(shownInstanceEntry)
+      : null;
   const modelOptionsByInstance = getCustomModelOptionsByInstance(
     settings,
     providers,
@@ -1958,6 +1992,13 @@ function ScheduledTaskEditorForm({
       automaticBaseRefLoading
     )
       return;
+    if (activeComplianceBlock) {
+      reportFailure(
+        activeComplianceBlock.badgeText,
+        activeComplianceBlock.tooltip ?? activeComplianceBlock.badgeText,
+      );
+      return;
+    }
     const selection = activeSelection;
     if (
       !draft.title.trim() ||
@@ -2298,7 +2339,7 @@ function ScheduledTaskEditorForm({
           </Field>
 
           <Field label={gt("Model")}>
-            <div>
+            <div className="flex flex-wrap items-center gap-2">
               <ProviderModelPicker
                 environmentId={environmentId}
                 // The saved selection only seeds new threads; bound runs ignore it.
@@ -2309,11 +2350,29 @@ function ScheduledTaskEditorForm({
                 instanceEntries={instanceEntries}
                 modelOptionsByInstance={modelOptionsByInstance}
                 isComposerOwned={false}
+                getProviderComplianceBlock={getProviderComplianceBlock}
                 triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                }
+                onInstanceModelChange={(instanceId, model) => {
+                  const targetEntry = instanceEntries.find(
+                    (entry) => entry.instanceId === instanceId,
+                  );
+                  const complianceBlock = targetEntry
+                    ? getProviderComplianceBlock(targetEntry)
+                    : null;
+                  if (complianceBlock) {
+                    complianceBlock.onOpenWaiver();
+                    return;
+                  }
+                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }));
+                }}
               />
+              {activeComplianceBlock ? (
+                <AgyWaiverRequiredBadge
+                  label={activeComplianceBlock.badgeText}
+                  title={activeComplianceBlock.tooltip}
+                  onClick={activeComplianceBlock.onOpenWaiver}
+                />
+              ) : null}
             </div>
           </Field>
 
@@ -2707,6 +2766,7 @@ function ScheduledTaskEditorForm({
             !connected ||
             !tasksQuery.data ||
             automaticBaseRefLoading ||
+            activeComplianceBlock !== null ||
             (draft.enabled && draft.scheduleMode === "webhook" && webhookDenial !== undefined)
           }
           onClick={() => void submit()}

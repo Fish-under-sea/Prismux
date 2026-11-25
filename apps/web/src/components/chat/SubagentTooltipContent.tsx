@@ -29,7 +29,16 @@ import { ThreadHoverCard } from "../ThreadHoverCard";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { cn } from "~/lib/utils";
-import { deriveProviderInstanceEntries, shouldShowInstanceBadge } from "../../providerInstances";
+import { resolveProviderEntryDisplayName } from "../../prismux/agentBrand";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  disambiguateProviderInstanceDisplayNames,
+  orderProviderInstanceEntries,
+  shouldShowInstanceBadge,
+  type ProviderInstanceEntry,
+  type ProviderInstanceOrderSettings,
+} from "../../providerInstances";
 
 export function SubagentTooltipContent(props: {
   title: string;
@@ -39,6 +48,8 @@ export function SubagentTooltipContent(props: {
   modelSelection?: OrchestrationV2Subagent["modelSelection"];
   provider?: ServerProvider | undefined;
   providers?: ReadonlyArray<ServerProvider> | undefined;
+  providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  settings?: ProviderInstanceOrderSettings | undefined;
   driver?: ProviderDriverKind | undefined;
   elapsed?: ReactNode;
   parentThread?: Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath"> | undefined;
@@ -119,8 +130,23 @@ export function SubagentTooltipContent(props: {
         .find(Boolean)
     : undefined;
   const driver = props.provider?.driver ?? props.driver;
-  const entries = deriveProviderInstanceEntries(props.providers ?? []);
-  const entry = entries.find((candidate) => candidate.instanceId === props.provider?.instanceId);
+  const entries =
+    props.providerEntries ??
+    (() => {
+      const derived = deriveProviderInstanceEntries(props.providers ?? []);
+      const branded = props.settings
+        ? brandProviderInstanceEntries(derived, props.settings)
+        : derived;
+      return disambiguateProviderInstanceDisplayNames(
+        orderProviderInstanceEntries(branded, props.settings?.providerOrder),
+      );
+    })();
+  const entry = entries.find(
+    (candidate) => candidate.instanceId === (props.provider?.instanceId ?? props.providerInstanceId),
+  );
+  const entryDisplayName = entry
+    ? resolveProviderEntryDisplayName(entry)
+    : (props.provider?.displayName ?? driver ?? props.providerInstanceId);
   const showInstanceBadge = entry !== undefined && shouldShowInstanceBadge(entry, entries);
   const working = ["running", "in_progress", "pending", "waiting"].includes(props.status);
   const failed = ["failed", "error"].includes(props.status);
@@ -137,9 +163,11 @@ export function SubagentTooltipContent(props: {
         {driver ? (
           <ProviderInstanceIcon
             driverKind={driver}
-            displayName={entry?.displayName ?? props.provider?.displayName ?? driver}
+            displayName={entryDisplayName}
+            instanceId={entry?.instanceId ?? props.providerInstanceId}
             accentColor={entry?.accentColor}
-            acpRegistryIconUrl={props.provider?.iconUrl}
+            acpRegistryAgentId={entry?.acpRegistryAgentId}
+            acpRegistryIconUrl={entry?.acpRegistryIconUrl ?? props.provider?.iconUrl}
             showBadge={showInstanceBadge && entry?.accentColor !== undefined}
             badgeContent="none"
             badgeClassName="h-2 min-w-2 px-0"
@@ -150,7 +178,7 @@ export function SubagentTooltipContent(props: {
         )}
         <span className="inline-flex min-w-0 items-center gap-1 text-foreground/75">
           <span className="min-w-0 truncate">
-            {showInstanceBadge ? `${modelLabel} · ${entry.displayName}` : modelLabel}
+            {showInstanceBadge ? `${modelLabel} · ${entryDisplayName}` : modelLabel}
           </span>
           {effort || speed?.speedIcon ? (
             <span className="inline-flex shrink-0 items-center gap-1">

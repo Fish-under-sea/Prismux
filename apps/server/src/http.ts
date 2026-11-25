@@ -54,6 +54,7 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as ReasoningTranslation from "./reasoningTranslation/ReasoningTranslation.ts";
 import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
@@ -63,6 +64,11 @@ import {
 import { requestUrl } from "./requestUrl.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
+export const REASONING_TRANSLATE_PATH = "/api/reasoning/translate";
+const REASONING_TRANSLATE_MAX_REQUEST_BYTES = 64 * 1024;
+const decodeReasoningTranslationRequest = Schema.decodeUnknownEffect(
+  ReasoningTranslation.ReasoningTranslationRequest,
+);
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 // Opaque origin blocks cookies, storage and API access while allowing scripts.
@@ -343,6 +349,7 @@ const authenticateRawRouteWithScope =
     if (!session.scopes.includes(scope)) {
       return yield* failEnvironmentScopeRequired(scope);
     }
+    return session;
   });
 
 export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
@@ -419,6 +426,80 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
     }),
     Effect.withTracerEnabled(false),
   ),
+);
+
+const jsonResponse = (payload: unknown, status = 200) =>
+  HttpServerResponse.text(JSON.stringify(payload), {
+    status,
+    contentType: "application/json; charset=utf-8",
+    headers: {
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+
+export const layerReasoningTranslationRoute = Layer.unwrap(
+  Effect.gen(function* () {
+    const service = yield* ReasoningTranslation.ReasoningTranslation;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    return HttpRouter.add(
+      "POST",
+      REASONING_TRANSLATE_PATH,
+      Effect.gen(function* () {
+        const session = yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const rawBody = yield* request.json.pipe(
+          Effect.provideService(
+            HttpServerRequest.MaxBodySize,
+            ByteSize.bytes(REASONING_TRANSLATE_MAX_REQUEST_BYTES),
+          ),
+          Effect.mapError(
+            () =>
+              new ReasoningTranslation.ReasoningTranslationError({
+                status: 400,
+                code: "INVALID_REQUEST",
+                detail: "Request body must be valid JSON.",
+              }),
+          ),
+        );
+        const payload = yield* decodeReasoningTranslationRequest(rawBody).pipe(
+          Effect.mapError(
+            () =>
+              new ReasoningTranslation.ReasoningTranslationError({
+                status: 400,
+                code: "INVALID_REQUEST",
+                detail: `Invalid reasoning translation request. Provider must be bing, google, or text_model and text length must be 1..${ReasoningTranslation.REASONING_TRANSLATION_MAX_TEXT_CHARS}.`,
+              }),
+          ),
+        );
+        if (
+          payload.provider === "text_model" &&
+          !session.scopes.includes(AuthOrchestrationOperateScope)
+        ) {
+          return yield* failEnvironmentScopeRequired(AuthOrchestrationOperateScope);
+        }
+        const result = yield* service.translate(payload);
+        return jsonResponse(result, 200);
+      }).pipe(
+        Effect.provideService(EnvironmentAuth.EnvironmentAuth, serverAuth),
+        Effect.catchTags({
+          ReasoningTranslationError: (error) =>
+            Effect.succeed(
+              jsonResponse(
+                {
+                  error: error.detail,
+                  code: error.code,
+                },
+                error.status,
+              ),
+            ),
+          EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+          EnvironmentInternalError: HttpServerRespondable.toResponse,
+          EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+        }),
+      ),
+    );
+  }),
 );
 
 const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);

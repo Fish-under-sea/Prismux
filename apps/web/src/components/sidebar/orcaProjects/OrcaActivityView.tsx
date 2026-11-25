@@ -4,7 +4,11 @@ import { CheckIcon, SearchIcon, XIcon } from "lucide-react";
 import { memo, useMemo, type RefObject } from "react";
 
 import { cn } from "~/lib/utils";
-import { AgentBrandLogo, formatAgentBrandName } from "../../../prismux/agentBrand";
+import {
+  AgentBrandLogo,
+  containsUuidNoise,
+  formatAgentBrandName,
+} from "../../../prismux/agentBrand";
 import { resolveAgentRuntimeLamp } from "../sidebarMicroIndicators";
 import { Button } from "../../ui/button";
 import { SidebarInput } from "../../ui/sidebar";
@@ -176,7 +180,11 @@ export const OrcaActivityView = memo(function OrcaActivityView({
                 {group.items.map((item) => {
                   const isActive = activeThreadKey === item.key;
                   const lamp = resolveAgentRuntimeLamp(item.rowStatus);
-                  const brandName = formatAgentBrandName(item.providerId, item.providerLabel);
+                  const trimmedProviderLabel = item.providerLabel.trim();
+                  const brandName =
+                    trimmedProviderLabel.length > 0 && !containsUuidNoise(trimmedProviderLabel)
+                      ? trimmedProviderLabel
+                      : formatAgentBrandName(item.providerId, item.providerLabel);
                   const ageLabel = formatCompactAge(item.activityTimestampMs, copy.isZh);
                   return (
                     <li key={item.key} className="group/activity-row relative list-none">

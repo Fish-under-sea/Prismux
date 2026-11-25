@@ -51,6 +51,7 @@ export const APPEARANCE_TAB_HASH_ANCHORS = {
   glass: ["liquid-glass", "glass-zones", "sidebar-corners"] as const,
   typography: [
     "typography",
+    "typography-colors",
     "interface-font",
     "prompt-font",
     "code-font",
@@ -255,16 +256,18 @@ export function PrismuxAppearanceIntegration({
       hashAnchors: APPEARANCE_TAB_HASH_ANCHORS.typography,
       content: (
         <div className="flex flex-col gap-5">
-          <TypographySection onClearAppearanceFontOverride={handleClearAppearanceFontOverride} />
+          <div id="typography-colors">
+            <TypographyCard
+              config={appearance}
+              onChange={handleAppearanceChange}
+              activeSlot={pickerReq?.slot ?? null}
+              onOpenColorPicker={handleOpenColorPicker}
+              showFontFamilySelectors={false}
+              showUiColorsAndCaret={false}
+            />
+          </div>
 
-          <TypographyCard
-            config={appearance}
-            onChange={handleAppearanceChange}
-            activeSlot={pickerReq?.slot ?? null}
-            onOpenColorPicker={handleOpenColorPicker}
-            showFontFamilySelectors={false}
-            showUiColorsAndCaret={false}
-          />
+          <TypographySection onClearAppearanceFontOverride={handleClearAppearanceFontOverride} />
         </div>
       ),
     },

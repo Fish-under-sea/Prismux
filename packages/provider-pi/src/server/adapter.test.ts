@@ -3388,6 +3388,86 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("normalizes Pi TodoWrite and update_plan tool calls into todo_list plans and turn items", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "todo-call-1",
+        toolName: "TodoWrite",
+        args: {
+          todos: [
+            { id: "s1", content: "Inspect adapter", status: "completed" },
+            { id: "s2", content: "Emit todo_list", status: "in_progress" },
+            { id: "s3", content: "Verify tests", status: "pending" },
+          ],
+        },
+      });
+
+      const firstPlan = yield* takeEvent((event) => event.type === "plan.updated");
+      const firstItem = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+      );
+      if (firstPlan.type !== "plan.updated" || firstPlan.plan.kind !== "todo_list") {
+        return yield* Effect.die("Expected todo_list plan.updated event");
+      }
+      if (firstItem.type !== "turn_item.updated" || firstItem.turnItem.type !== "todo_list") {
+        return yield* Effect.die("Expected todo_list turn_item.updated event");
+      }
+      assert.equal(firstPlan.plan.status, "active");
+      assert.deepEqual(firstPlan.plan.steps, [
+        { id: "s1", text: "Inspect adapter", status: "completed" },
+        { id: "s2", text: "Emit todo_list", status: "running" },
+        { id: "s3", text: "Verify tests", status: "pending" },
+      ]);
+      assert.equal(firstItem.turnItem.planId, firstPlan.plan.id);
+      assert.equal(firstItem.turnItem.status, "running");
+
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "todo-call-2",
+        toolName: "update_plan",
+        args: {
+          steps: [
+            { id: "s1", step: "Inspect adapter", status: "done" },
+            { id: "s2", step: "Emit todo_list", status: "completed" },
+            { id: "s3", step: "Verify tests", status: "completed" },
+          ],
+        },
+        result: { content: [{ type: "text", text: "ok" }] },
+        isError: false,
+      });
+
+      const completedPlan = yield* takeEvent((event) => event.type === "plan.updated");
+      const completedItem = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+      );
+      if (completedPlan.type !== "plan.updated" || completedPlan.plan.kind !== "todo_list") {
+        return yield* Effect.die("Expected completed todo_list plan");
+      }
+      if (completedItem.type !== "turn_item.updated" || completedItem.turnItem.type !== "todo_list") {
+        return yield* Effect.die("Expected completed todo_list item");
+      }
+      assert.equal(completedPlan.plan.id, firstPlan.plan.id);
+      assert.equal(completedPlan.plan.status, "completed");
+      assert.equal(completedItem.turnItem.status, "completed");
+      assert.deepEqual(
+        completedPlan.plan.steps.map((step) => step.status),
+        ["completed", "completed", "completed"],
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect(
     "keeps native and MCP images available to the shared asset reader with typed results",
     () =>

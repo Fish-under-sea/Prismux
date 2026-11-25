@@ -15,6 +15,7 @@ import {
   type ServerSettings,
   type SessionGrantInput,
 } from "@prismux/core-contracts";
+import { orderProviderInstanceEntries } from "../../providerInstances";
 
 export interface ProviderEnvironmentOptionLike {
   readonly environmentId: EnvironmentId;
@@ -182,25 +183,7 @@ export function orderProviderInstanceRows<T extends { readonly instanceId: Provi
   rows: ReadonlyArray<T>,
   providerOrder: ReadonlyArray<ProviderInstanceId> | undefined,
 ): ReadonlyArray<T> {
-  if (!providerOrder || providerOrder.length === 0 || rows.length <= 1) {
-    return rows;
-  }
-  const rankById = new Map<ProviderInstanceId, number>();
-  for (let index = 0; index < providerOrder.length; index += 1) {
-    const id = providerOrder[index]!;
-    if (!rankById.has(id)) {
-      rankById.set(id, index);
-    }
-  }
-  if (rankById.size === 0) return rows;
-  return rows
-    .map((row, index) => ({
-      row,
-      index,
-      rank: rankById.get(row.instanceId) ?? Number.MAX_SAFE_INTEGER,
-    }))
-    .toSorted((left, right) => left.rank - right.rank || left.index - right.index)
-    .map((entry) => entry.row);
+  return orderProviderInstanceEntries(rows, providerOrder);
 }
 
 export function reorderProviderInstanceIds(

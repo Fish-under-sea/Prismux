@@ -37,6 +37,7 @@ import type { TerminalContextSelection } from "../../lib/terminalContext";
 import {
   AgentBrandLogo,
   formatAgentBrandName,
+  resolveAgentBrandId,
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
 import type { ProviderInstanceEntry } from "../../providerInstances";
@@ -55,7 +56,11 @@ import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel"
 import { PhoneSimulatorBlankStage } from "../RightPanelTabs";
 import { useThreadTerminalActions } from "../terminal/useThreadTerminalActions";
 import { Button } from "../ui/button";
-import { classifyQuickLaunchUrl, type QuickLaunchHistoryThread } from "./workspaceQuickLaunch.logic";
+import {
+  classifyQuickLaunchUrl,
+  resolveProviderBrandIdForEntry,
+  type QuickLaunchHistoryThread,
+} from "./workspaceQuickLaunch.logic";
 import { PrismuxStageFrame } from "./WorkspaceTopbarPortalContext";
 import type { WorkspaceTab } from "./workspaceTabsStore";
 
@@ -79,23 +84,42 @@ const GENERIC_SESSION_LABELS = new Set([
   "untitled",
 ]);
 
+function resolveConversationEntry(
+  tab: WorkspaceTab,
+  instanceEntries: ReadonlyArray<ProviderInstanceEntry>,
+): ProviderInstanceEntry | null {
+  if (tab.instanceId) {
+    const exact = instanceEntries.find((entry) => entry.instanceId === tab.instanceId);
+    if (exact) return exact;
+  }
+  const rawProvider = tab.providerId?.trim() ?? "";
+  if (rawProvider.length > 0 && !GENERIC_SESSION_LABELS.has(rawProvider.toLowerCase())) {
+    const targetBrand = resolveAgentBrandId(rawProvider);
+    const formatted = formatAgentBrandName(rawProvider).toLowerCase();
+    const matched = instanceEntries.find(
+      (entry) =>
+        entry.enabled &&
+        (resolveProviderBrandIdForEntry(entry) === rawProvider ||
+          (targetBrand !== "custom" &&
+            resolveAgentBrandId(resolveProviderBrandIdForEntry(entry)) === targetBrand) ||
+          resolveProviderEntryDisplayName(entry).toLowerCase() === formatted),
+    );
+    if (matched) return matched;
+  }
+  return null;
+}
+
 function resolveConversationBrandName(
   tab: WorkspaceTab,
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>,
 ): string {
-  if (tab.instanceId) {
-    const exact = instanceEntries.find((entry) => entry.instanceId === tab.instanceId);
-    if (exact) return resolveProviderEntryDisplayName(exact);
+  const matchedEntry = resolveConversationEntry(tab, instanceEntries);
+  if (matchedEntry) {
+    return resolveProviderEntryDisplayName(matchedEntry);
   }
   const rawProvider = tab.providerId?.trim() ?? "";
   if (rawProvider.length > 0 && !GENERIC_SESSION_LABELS.has(rawProvider.toLowerCase())) {
-    const formatted = formatAgentBrandName(rawProvider);
-    const matched = instanceEntries.find(
-      (entry) =>
-        entry.enabled &&
-        resolveProviderEntryDisplayName(entry).toLowerCase() === formatted.toLowerCase(),
-    );
-    return matched ? resolveProviderEntryDisplayName(matched) : formatted;
+    return formatAgentBrandName(rawProvider);
   }
   const rawTitle = tab.title?.trim() ?? "";
   if (rawTitle.length > 0 && !GENERIC_SESSION_LABELS.has(rawTitle.toLowerCase())) {
@@ -643,7 +667,11 @@ function ConversationMainChatHandoffView(props: {
   readonly onOpenConversationInMainChat?: ((paneId: string, tab: WorkspaceTab) => void) | undefined;
 }) {
   const { paneId, tab, instanceEntries, onOpenConversationInMainChat } = props;
+  const matchedEntry = resolveConversationEntry(tab, instanceEntries);
   const brandName = resolveConversationBrandName(tab, instanceEntries);
+  const brandProviderId = matchedEntry
+    ? resolveProviderBrandIdForEntry(matchedEntry)
+    : (tab.providerId ?? brandName);
 
   return (
     <PrismuxStageFrame
@@ -651,7 +679,7 @@ function ConversationMainChatHandoffView(props: {
       innerClassName="items-center justify-center gap-3 p-6 text-center"
     >
       <div className="flex size-11 items-center justify-center rounded-xl border border-border/70 bg-muted/40 [[data-pmx-glass='1']_&]:border-white/20 [[data-pmx-glass='1']_&]:bg-background/50">
-        <AgentBrandLogo provider={tab.providerId ?? brandName} size={22} />
+        <AgentBrandLogo provider={brandProviderId} size={22} />
       </div>
       <div className="space-y-1">
         <p className={cn("text-sm font-medium", STAGE_TITLE_GLASS_CLASS)}>{brandName}</p>

@@ -33,7 +33,7 @@ export const PRISMUX_SIDEBAR_QUICK_NAV_IDS = [
 export type PrismuxSidebarQuickNavId = (typeof PRISMUX_SIDEBAR_QUICK_NAV_IDS)[number];
 
 export const PRISMUX_SIDEBAR_QUICK_NAV_ROUTES = {
-  diagnostics: "/settings/diagnostics",
+  diagnostics: "/diagnostics",
   tasks: "/tasks",
   workspaceBoard: "/workspace-board",
   automations: "/scheduled-tasks",
@@ -42,6 +42,7 @@ export const PRISMUX_SIDEBAR_QUICK_NAV_ROUTES = {
 } as const;
 
 export const PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS = {
+  diagnostics: ["/diagnostics"],
   tasks: ["/tasks"],
   workspaceBoard: ["/workspace-board"],
   automations: ["/scheduled-tasks", "/automations"],

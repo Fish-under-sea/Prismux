@@ -30,6 +30,8 @@ import { TooltipProvider } from "../ui/tooltip";
 import { shouldPreservePopoverOnSubmenuDismiss } from "./WorkspaceNewTabPopover";
 import {
   launchPrimaryAgentDraft,
+  resolvePendingDraftBindingForSync,
+  resolveProviderBrandIdForEntry,
   resolveWorkspaceRouteProviderMetadata,
   type PendingDraftTabBinding,
 } from "./WorkspaceSplitContainer";
@@ -379,8 +381,9 @@ describe("workspaceQuickLaunch.logic", () => {
       "Claude Code",
       "Codex",
       "Antigravity",
-      "DeepSeek Harness",
+      "DeepSeek Harness (dsh)",
     ]);
+    expect(agents[3]?.brandId).toBe("dsh");
     expect(agents[0]?.recentThreads.map((t) => t.title)).toEqual(["优化液态玻璃模糊度"]);
     expect(agents[1]?.recentThreads.map((t) => t.title)).toEqual(["实现 PTY 环形缓冲"]);
 
@@ -1901,5 +1904,305 @@ describe("single unused draft tab invariant", () => {
     // Zero omp / oh-my-pi references in workspace quick launch & tab store.
     expect(quickLaunchSource).not.toMatch(/\bomp\b|oh-my-pi/i);
     expect(tabsStoreSource).not.toMatch(/\bomp\b|oh-my-pi/i);
+  });
+
+  it("applies providerOrder and custom displayName in + quick launch while keeping DSH blue whale brand", () => {
+    const DSH_ID = ProviderInstanceId.make("dsh");
+    const CODEX_ID = ProviderInstanceId.make("codex");
+    const CLAUDE_ID = ProviderInstanceId.make("claudeAgent");
+    const AGY_ID = ProviderInstanceId.make("antigravity");
+
+    const entries = deriveProviderInstanceEntries([
+      makeProvider({ instanceId: "codex", driver: "codex", displayName: "主力 Codex" }),
+      makeProvider({ instanceId: "claudeAgent", driver: "claudeAgent", displayName: "架构师 Claude" }),
+      makeProvider({ instanceId: "antigravity", driver: "antigravity", displayName: "小反重" }),
+      makeProvider({ instanceId: "dsh", driver: "acpRegistry", displayName: "深海鲸鱼" }),
+    ]);
+
+    const ordered = buildQuickLaunchAgentOptions({
+      instanceEntries: entries,
+      historyThreads: [],
+      providerOrder: [DSH_ID, AGY_ID, CLAUDE_ID, CODEX_ID],
+    });
+
+    expect(ordered.map((a) => a.instanceId)).toEqual([DSH_ID, AGY_ID, CLAUDE_ID, CODEX_ID]);
+    expect(ordered.map((a) => a.displayName)).toEqual([
+      "深海鲸鱼",
+      "小反重",
+      "架构师 Claude",
+      "主力 Codex",
+    ]);
+    // Custom-renamed acpRegistry DSH entry MUST still resolve brandId === "dsh" (blue whale icon)!
+    expect(ordered[0]?.brandId).toBe("dsh");
+    expect(resolveProviderBrandIdForEntry(entries[3]!)).toBe("dsh");
+  });
+
+  it("consumes pendingDraftTabBinding once applied and NEVER reverts composer provider/model switches", () => {
+    const CODEX_ID = ProviderInstanceId.make("codex");
+    const DSH_ID = ProviderInstanceId.make("dsh");
+    const token = {};
+    const binding: PendingDraftTabBinding = {
+      token,
+      tabId: "tab-1",
+      originRouteKey: "server:env-local:thread-old",
+      title: "Codex",
+      providerId: "codex",
+      instanceId: CODEX_ID,
+      model: "gpt-5.4",
+    };
+
+    // 1. While still on server route awaiting navigation, binding stays intact and unapplied.
+    const whileOnServer = resolvePendingDraftBindingForSync({
+      shownTarget: { kind: "server", threadRef: { environmentId: ENV_LOCAL, threadId: THREAD_A } },
+      routeKey: `server:${ENV_LOCAL}:${THREAD_A}`,
+      pendingBinding: binding,
+      routeComposerDraft: null,
+    });
+    expect(whileOnServer).toEqual({ applied: null, shouldClear: false });
+
+    // 2. Upon landing on target draft, binding applies ONCE and signals shouldClear: true so it cannot stick.
+    const firstDraftSync = resolvePendingDraftBindingForSync({
+      shownTarget: { kind: "draft", draftId: DRAFT_A },
+      routeKey: `draft:${DRAFT_A}`,
+      pendingBinding: binding,
+      routeComposerDraft: null,
+    });
+    expect(firstDraftSync).toEqual({ applied: binding, shouldClear: true });
+
+    // 3. If user switches provider/model explicitly in composer while a stale binding is present,
+    //    it MUST be ignored AND cleared immediately instead of reverting the tab!
+    const afterComposerSwitch = resolvePendingDraftBindingForSync({
+      shownTarget: { kind: "draft", draftId: DRAFT_A },
+      routeKey: `draft:${DRAFT_A}`,
+      pendingBinding: binding,
+      routeComposerDraft: {
+        activeProvider: DSH_ID,
+        modelSelectionByProvider: {
+          [DSH_ID]: { instanceId: DSH_ID, model: "deepseek-reasoner" },
+        },
+        modelSelectionExplicit: true,
+      },
+    });
+    expect(afterComposerSwitch).toEqual({ applied: null, shouldClear: true });
+
+    // 4. Even switching only the model on the same provider invalidates the stale pending binding.
+    const afterModelSwitch = resolvePendingDraftBindingForSync({
+      shownTarget: { kind: "draft", draftId: DRAFT_A },
+      routeKey: `draft:${DRAFT_A}`,
+      pendingBinding: binding,
+      routeComposerDraft: {
+        activeProvider: CODEX_ID,
+        modelSelectionByProvider: {
+          [CODEX_ID]: { instanceId: CODEX_ID, model: "o3-pro" },
+        },
+        modelSelectionExplicit: true,
+      },
+    });
+    expect(afterModelSwitch).toEqual({ applied: null, shouldClear: true });
+  });
+
+  it("trusts real server thread live harness (including acpRegistry DSH) and preserves instanceId/model in promoteDraftTab", () => {
+    const CODEX_ID = ProviderInstanceId.make("codex");
+    const DSH_ID = ProviderInstanceId.make("dsh");
+
+    const serverProviders: ReadonlyArray<ServerProvider> = [
+      makeProvider({ instanceId: "codex", driver: "codex" }),
+      makeProvider({
+        instanceId: "dsh",
+        driver: "acpRegistry",
+        displayName: "我的深海鲸",
+        status: "error",
+        models: [
+          {
+            slug: "deepseek-reasoner",
+            name: "DeepSeek Reasoner",
+            isDefault: true,
+            isCustom: false,
+            capabilities: {},
+          },
+        ],
+      }),
+    ];
+    const settings: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      defaultModelSelection: { instanceId: CODEX_ID, model: "codex-default" },
+      providerInstances: {
+        ...DEFAULT_SERVER_SETTINGS.providerInstances,
+        [DSH_ID]: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          displayName: "我的深海鲸",
+          enabled: true,
+          config: { agentId: "dsh" },
+        },
+      },
+    };
+    const entries = providerInstanceEntriesFor(serverProviders, settings, null);
+
+    // Server thread running on DSH (even while provider status is "error" and stickyActiveProvider is Codex)
+    // MUST resolve DSH ("dsh") instead of falling back to Codex!
+    const dshServerMeta = resolveWorkspaceRouteProviderMetadata({
+      shownTarget: { kind: "server", threadRef: { environmentId: ENV_LOCAL, threadId: THREAD_A } },
+      routeKey: `server:${ENV_LOCAL}:${THREAD_A}`,
+      routeThreadShell: {
+        title: "排查 DSH 思考层级",
+        modelSelection: { instanceId: DSH_ID, model: "deepseek-reasoner" },
+        runtime: { providerInstanceId: DSH_ID },
+      },
+      routeComposerDraft: {
+        activeProvider: CODEX_ID,
+        modelSelectionByProvider: {
+          [CODEX_ID]: { instanceId: CODEX_ID, model: "codex-default" },
+        },
+        modelSelectionExplicit: false,
+      },
+      stickyActiveProvider: CODEX_ID,
+      stickyModelSelectionByProvider: {
+        [CODEX_ID]: { instanceId: CODEX_ID, model: "codex-default" },
+      },
+      providers: serverProviders,
+      settings,
+      instanceEntries: entries,
+      activeProject: null,
+      activeProjectId: null,
+    });
+    expect(dshServerMeta).toMatchObject({
+      instanceId: DSH_ID,
+      providerId: "dsh",
+      model: "deepseek-reasoner",
+      title: "排查 DSH 思考层级",
+    });
+
+    // promoteDraftTab MUST preserve & apply instanceId, model, providerId, and title!
+    const store = useWorkspaceTabsStore.getState();
+    const tabId = store.openTab({
+      kind: "draft",
+      title: "Codex",
+      providerId: "codex",
+      instanceId: CODEX_ID,
+      model: "codex-default",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_A,
+      draftId: DRAFT_A,
+    });
+    store.promoteDraftTab(
+      DRAFT_A,
+      { environmentId: ENV_LOCAL, threadId: THREAD_A },
+      {
+        title: "排查 DSH 思考层级",
+        providerId: "dsh",
+        instanceId: DSH_ID,
+        model: "deepseek-reasoner",
+      },
+    );
+    expect(useWorkspaceTabsStore.getState().tabs[tabId]).toMatchObject({
+      kind: "thread",
+      draftId: null,
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_A,
+      title: "排查 DSH 思考层级",
+      providerId: "dsh",
+      instanceId: DSH_ID,
+      model: "deepseek-reasoner",
+    });
+  });
+
+  it("promotes matching draft tab in-place during syncRouteTarget and reconciles phantom 新会话 tabs on model error", () => {
+    const store = useWorkspaceTabsStore.getState();
+    const DSH_ID = ProviderInstanceId.make("dsh");
+    const CODEX_ID = ProviderInstanceId.make("codex");
+    const DRAFT_ZOMBIE = "draft-zombie-promoted" as DraftId;
+    const DRAFT_ORPHAN = "draft-orphan-failed" as DraftId;
+    const DRAFT_LIVE = "draft-live-keep" as DraftId;
+
+    // 1. Draft tab D1 has threadId T1. Model errors AFTER server creates T1 and router jumps straight
+    //    to /env/T1 before promoteDraftTab runs -> syncRouteTarget MUST promote D1 in-place (ZERO duplicate tab!).
+    const d1TabId = store.openTab({
+      kind: "draft",
+      title: "新会话",
+      providerId: "dsh",
+      instanceId: DSH_ID,
+      model: "deepseek-reasoner",
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_A,
+      draftId: DRAFT_A,
+    });
+
+    const syncedServerTabId = store.syncRouteTarget({
+      target: { kind: "server", threadRef: { environmentId: ENV_LOCAL, threadId: THREAD_A } },
+      title: "首轮报错但已建线程",
+      providerId: "dsh",
+      instanceId: DSH_ID,
+      model: "deepseek-reasoner",
+      draftLookup: {
+        getDraftSession: () => null,
+        getComposerDraft: () => null,
+        getPromotedDraftRedirect: (id) =>
+          id === DRAFT_A ? { environmentId: ENV_LOCAL, threadId: THREAD_A } : null,
+      },
+    });
+    expect(syncedServerTabId).toBe(d1TabId);
+    let state = useWorkspaceTabsStore.getState();
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([d1TabId]);
+    expect(state.tabs[d1TabId]).toMatchObject({
+      kind: "thread",
+      draftId: null,
+      environmentId: ENV_LOCAL,
+      threadId: THREAD_A,
+      title: "首轮报错但已建线程",
+      providerId: "dsh",
+      instanceId: DSH_ID,
+      model: "deepseek-reasoner",
+    });
+
+    // 2. Even if a zombie draft tab whose draftId already promoted via promotedTo/redirect exists alongside
+    //    an existing server tab (or an orphan draft tab whose draft session vanished after error),
+    //    reconcileDraftTabs immediately merges/prunes them without needing a click!
+    const zombieDraftTabId = store.openTab({
+      kind: "draft",
+      title: "新会话",
+      providerId: "codex",
+      instanceId: CODEX_ID,
+      draftId: DRAFT_ZOMBIE,
+      reuseExisting: false,
+    });
+    const orphanDraftTabId = store.openTab({
+      kind: "draft",
+      title: "新会话",
+      providerId: "codex",
+      instanceId: CODEX_ID,
+      draftId: DRAFT_ORPHAN,
+      reuseExisting: false,
+    });
+    const liveDraftTabId = store.openTab({
+      kind: "draft",
+      title: "Codex",
+      providerId: "codex",
+      instanceId: CODEX_ID,
+      draftId: DRAFT_LIVE,
+      reuseExisting: false,
+    });
+    // Switch active tab back to the real server thread T1.
+    store.activateTab(DEFAULT_PRIMARY_PANE_ID, d1TabId);
+
+    store.reconcileDraftTabs({
+      activeRouteTarget: {
+        kind: "server",
+        threadRef: { environmentId: ENV_LOCAL, threadId: THREAD_A },
+      },
+      lookup: {
+        getDraftSession: (id) => (id === DRAFT_LIVE ? { promotedTo: null } : null),
+        getComposerDraft: () => null,
+        getPromotedDraftRedirect: (id) =>
+          id === DRAFT_ZOMBIE ? { environmentId: ENV_LOCAL, threadId: THREAD_A } : null,
+      },
+    });
+
+    state = useWorkspaceTabsStore.getState();
+    // Zombie promoted draft & orphan vanished draft are BOTH eliminated immediately;
+    // real server thread tab & legitimate live draft tab stay intact!
+    expect(state.tabs[zombieDraftTabId]).toBeUndefined();
+    expect(state.tabs[orphanDraftTabId]).toBeUndefined();
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([d1TabId, liveDraftTabId]);
+    expect(state.panes[DEFAULT_PRIMARY_PANE_ID]?.activeTabId).toBe(d1TabId);
   });
 });

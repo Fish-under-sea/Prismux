@@ -1,5 +1,13 @@
 import { execFile } from "node:child_process";
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync
+} from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 import { homedir } from "node:os";
@@ -212,6 +220,243 @@ const MACOS_DSH_DESKTOP_CANDIDATES = [
   { bundle: "DeepSeek Harness.app", executable: "DeepSeek Harness" }
 ] as const;
 
+const DSH_ASAR_PACKAGE_JSON_CANDIDATES = [
+  "node_modules/@deepseek-ai/dsh/package.json",
+  "node_modules/@deepseek-ai/dsh-acp/package.json",
+  "package.json"
+] as const;
+
+const MAX_ASAR_PACKAGE_JSON_BYTES = 4 * 1024 * 1024;
+const DSH_SEMVER_RE = /\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\b/;
+const DSH_PACKAGE_NAME_RE = /^(?:@deepseek-ai\/dsh(?:-[a-z0-9-]+)?|dsh|deepseek-harness)$/i;
+
+export function isPlaceholderDshVersion(version: string | null | undefined): boolean {
+  if (typeof version !== "string") return true;
+  const normalized = version.trim().replace(/^v/i, "");
+  return normalized.length === 0 || normalized === "0.0.0" || normalized === "0.0.1";
+}
+
+function parseDshSemver(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const match = DSH_SEMVER_RE.exec(raw.trim());
+  const version = match?.[1]?.trim();
+  if (!version || isPlaceholderDshVersion(version)) {
+    return null;
+  }
+  return version;
+}
+
+interface AsarFileLeaf {
+  readonly size: number;
+  readonly offset?: string | number;
+  readonly unpacked?: boolean;
+}
+
+function lookupAsarEntryInHeader(
+  header: { readonly files?: Record<string, unknown> },
+  relativeEntry: string
+): AsarFileLeaf | null {
+  let cursor: unknown = header;
+  for (const segment of relativeEntry.split("/")) {
+    if (cursor === null || typeof cursor !== "object" || !("files" in cursor)) {
+      return null;
+    }
+    const files = (cursor as { readonly files?: Record<string, unknown> }).files;
+    if (!files || !Object.hasOwn(files, segment)) {
+      return null;
+    }
+    cursor = files[segment];
+  }
+  if (cursor === null || typeof cursor !== "object" || "files" in cursor) {
+    return null;
+  }
+  const leaf = cursor as { size?: unknown; offset?: unknown; unpacked?: unknown };
+  if (typeof leaf.size !== "number" || !Number.isFinite(leaf.size) || leaf.size < 0) {
+    return null;
+  }
+  return {
+    size: leaf.size,
+    ...(typeof leaf.offset === "string" || typeof leaf.offset === "number"
+      ? { offset: leaf.offset }
+      : {}),
+    ...(leaf.unpacked === true ? { unpacked: true } : {})
+  };
+}
+
+export function readAsarTextEntrySync(
+  asarPath: string,
+  relativeEntry: string
+): string | null {
+  const directPath = join(asarPath, ...relativeEntry.split("/"));
+  if (isExistingFile(directPath)) {
+    try {
+      return readFileSync(directPath, "utf8");
+    } catch {
+      return null;
+    }
+  }
+  if (!isExistingFile(asarPath)) {
+    return null;
+  }
+  let fd: number | undefined;
+  try {
+    fd = openSync(asarPath, "r");
+    const prefix = Buffer.alloc(16);
+    if (readSync(fd, prefix, 0, 16, 0) < 16) return null;
+    const headerSize = prefix.readUInt32LE(4);
+    const jsonSize = prefix.readUInt32LE(12);
+    if (
+      headerSize === 0 ||
+      jsonSize === 0 ||
+      jsonSize > 64 * 1024 * 1024 ||
+      headerSize < jsonSize
+    ) {
+      return null;
+    }
+    const jsonBuffer = Buffer.alloc(jsonSize);
+    if (readSync(fd, jsonBuffer, 0, jsonSize, 16) < jsonSize) return null;
+    const parsed = JSON.parse(jsonBuffer.toString("utf8")) as {
+      files?: Record<string, unknown>;
+    };
+    const entry = lookupAsarEntryInHeader(parsed, relativeEntry);
+    if (!entry) return null;
+    if (entry.unpacked === true) {
+      const unpackedPath = join(`${asarPath}.unpacked`, ...relativeEntry.split("/"));
+      return isExistingFile(unpackedPath) ? readFileSync(unpackedPath, "utf8") : null;
+    }
+    if (entry.size > MAX_ASAR_PACKAGE_JSON_BYTES || entry.offset === undefined) {
+      return null;
+    }
+    const relOffset = Number(entry.offset);
+    if (!Number.isSafeInteger(relOffset) || relOffset < 0) return null;
+    const dataOffset = 8 + headerSize + relOffset;
+    const payload = Buffer.alloc(entry.size);
+    if (readSync(fd, payload, 0, entry.size, dataOffset) < entry.size) return null;
+    return payload.toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore close failure
+      }
+    }
+  }
+}
+
+function readPackageVersionFromText(
+  rawJson: string | null | undefined,
+  options: { requireDshName?: boolean } = {}
+): string | null {
+  if (!rawJson) return null;
+  try {
+    const parsed = JSON.parse(rawJson) as { name?: unknown; version?: unknown };
+    if (
+      options.requireDshName &&
+      (typeof parsed.name !== "string" || !DSH_PACKAGE_NAME_RE.test(parsed.name.trim()))
+    ) {
+      return null;
+    }
+    return parseDshSemver(typeof parsed.version === "string" ? parsed.version : null);
+  } catch {
+    return null;
+  }
+}
+
+function readDshVersionFromAsarOrAppDirSync(asarPath: string): string | null {
+  for (const candidate of DSH_ASAR_PACKAGE_JSON_CANDIDATES) {
+    const version = readPackageVersionFromText(readAsarTextEntrySync(asarPath, candidate));
+    if (version) return version;
+  }
+  const siblingAppDir = join(dirname(asarPath), "app");
+  for (const candidate of DSH_ASAR_PACKAGE_JSON_CANDIDATES) {
+    const filePath = join(siblingAppDir, ...candidate.split("/"));
+    if (isExistingFile(filePath)) {
+      try {
+        const version = readPackageVersionFromText(readFileSync(filePath, "utf8"));
+        if (version) return version;
+      } catch {
+        // ignore unreadable package.json
+      }
+    }
+  }
+  return null;
+}
+
+export function resolveDshInstalledVersionFastSync(options: {
+  binaryPath?: string | null;
+  bootstrapPath?: string | null;
+  env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+} = {}): string | null {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? homedir();
+
+  // 1. Direct ASAR path from bootstrapPath
+  if (options.bootstrapPath) {
+    const asarMatch = /^(.*?[\\/]app\.asar)(?:[\\/]|$)/i.exec(options.bootstrapPath.trim());
+    if (asarMatch?.[1]) {
+      const version = readDshVersionFromAsarOrAppDirSync(asarMatch[1]);
+      if (version) return version;
+    }
+  }
+
+  // 2. Binary path -> Electron resources/app.asar or adjacent package.json
+  if (options.binaryPath) {
+    const binPath = options.binaryPath.trim();
+    const binDir = dirname(binPath);
+    const candidateAsars =
+      platform === "darwin"
+        ? [resolve(binDir, "..", "Resources", "app.asar"), join(binDir, "resources", "app.asar")]
+        : [join(binDir, "resources", "app.asar")];
+    for (const asarPath of candidateAsars) {
+      const version = readDshVersionFromAsarOrAppDirSync(asarPath);
+      if (version) return version;
+    }
+
+    // Walk up 0..3 parent dirs for standalone npm / node package layouts
+    let cursor = binDir;
+    for (let depth = 0; depth <= 3; depth += 1) {
+      for (const relPkg of [
+        "package.json",
+        join("node_modules", "@deepseek-ai", "dsh", "package.json"),
+        join("node_modules", "@deepseek-ai", "dsh-acp", "package.json")
+      ]) {
+        const pkgPath = join(cursor, relPkg);
+        if (isExistingFile(pkgPath)) {
+          try {
+            const version = readPackageVersionFromText(readFileSync(pkgPath, "utf8"), {
+              requireDshName: relPkg === "package.json"
+            });
+            if (version) return version;
+          } catch {
+            // continue walking
+          }
+        }
+      }
+      const parent = dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+  }
+
+  // 3. Packaged DSH Desktop auto-discovery fallback
+  const packaged = findPackagedDshDesktopCli(env, platform, homeDir);
+  if (packaged) {
+    const asarMatch = /^(.*?[\\/]app\.asar)(?:[\\/]|$)/i.exec(packaged.bootstrapPath);
+    if (asarMatch?.[1]) {
+      const version = readDshVersionFromAsarOrAppDirSync(asarMatch[1]);
+      if (version) return version;
+    }
+  }
+
+  return null;
+}
+
 function hasAsarEntrySync(asarPath: string, relativeEntry: string): boolean {
   const directPath = join(asarPath, ...relativeEntry.split("/"));
   if (isExistingFile(directPath)) {
@@ -353,6 +598,20 @@ export async function defaultCliProbe(
     if (command.trim().toLowerCase() === "dsh" && options.includeFallbackDirs !== false) {
       const packagedDsh = findPackagedDshDesktopCli(env, platform);
       if (packagedDsh) {
+        const fastVersion = resolveDshInstalledVersionFastSync({
+          binaryPath: packagedDsh.executablePath,
+          bootstrapPath: packagedDsh.bootstrapPath,
+          env,
+          platform
+        });
+        if (fastVersion) {
+          return {
+            found: true,
+            path: packagedDsh.executablePath,
+            version: fastVersion,
+            latencyMs: Math.max(0, Math.round(performance.now() - started))
+          };
+        }
         const dshEnv: Record<string, string | undefined> = {};
         for (const [key, value] of Object.entries(env)) {
           const upper = key.toUpperCase();
@@ -406,13 +665,39 @@ export async function defaultCliProbe(
       platform
     });
     const combined = `${stdout}\n${stderr}`;
+    let version = extractFirstVersionLine(combined);
+    if (command.trim().toLowerCase() === "dsh" && isPlaceholderDshVersion(version)) {
+      const fastVersion = resolveDshInstalledVersionFastSync({
+        binaryPath: located,
+        env,
+        platform
+      });
+      if (fastVersion) {
+        version = fastVersion;
+      }
+    }
     return {
       found: true,
       path: located,
-      version: extractFirstVersionLine(combined),
+      version,
       latencyMs: Math.max(0, Math.round(performance.now() - started))
     };
   } catch (err) {
+    if (command.trim().toLowerCase() === "dsh") {
+      const fastVersion = resolveDshInstalledVersionFastSync({
+        binaryPath: located,
+        env,
+        platform
+      });
+      if (fastVersion) {
+        return {
+          found: true,
+          path: located,
+          version: fastVersion,
+          latencyMs: Math.max(0, Math.round(performance.now() - started))
+        };
+      }
+    }
     return {
       found: true,
       path: located,

@@ -1,67 +1,18 @@
-# Brand icons
+# Prismux 品牌与视觉资产
 
-The three Icon Composer projects are the source of truth for full application icons:
+本目录仅存放 **Prismux 一方原创品牌与文档视觉资产**，不再保留任何历史过渡或第三方渠道图标工程。
 
-- `dev/app-icon.icon`
-- `nightly/app-icon.icon`
-- `prod/app-icon.icon`
+## 目录结构
 
-Each project uses `text.svg` for the T3 mark and `background.svg` when the background is a vector layer. Additional layers use semantic names that describe their role and placement.
+| 路径 | 用途说明 |
+| :--- | :--- |
+| [`logo.png`](./logo.png) | Prismux 官方主形象原图（`1024 × 1024` PNG，吉祥物 `Ciallo~(∠・ω< )`），用于派生桌面图标与 README 主视觉 |
+| [`prismux/`](./prismux/) | Prismux 官方多尺寸图标源（`prismux-32.png`、`prismux-128.png`、`prismux-256.png`、`prismux-512.png`、`prismux-1024.png`、`prismux-windows.ico`） |
+| [`readme/`](./readme/) | 中英双语 README 立体像素头图、分栏横幅、仪表卡、8 秒实机动态演示与高清截图（详见 [`readme/MAINTAINING.md`](./readme/MAINTAINING.md)） |
 
-Run `vp run icons:export` from the repository root to regenerate the tracked iOS, Linux, Windows, and web assets. The development web exports are also copied to `apps/web/public` for the browser favicon, web app manifest icons, and splash screen. Run `vp run icons:check` to verify that the generated assets and public copies match their sources without changing files.
+## 图标引用与同步约定
 
-Exporting requires Icon Composer 2 or newer on macOS. The script selects the newest compatible exporter from Xcode or a standalone Icon Composer installation and pins design generation 26. Set `ICON_COMPOSER_TOOL` to the full path of `Icon Composer.app/Contents/Executables/ictool` to override automatic discovery.
-
-## macOS exports
-
-Icon Composer's command-line exporter does not expose the `macOS pre-Tahoe` preset. A plain command-line `macOS` export is full bleed and is not suitable for the desktop app, so the export script intentionally leaves the tracked macOS PNGs unchanged and prints a reminder after every run.
-
-After changing an Icon Composer project, open it in Icon Composer and export the macOS PNG with exactly these settings:
-
-- Platform: `macOS pre-Tahoe`
-- Appearance: `Default`
-- Size: `1024pt`
-- Scale: `1×`
-
-Save the three exports to:
-
-- `dev/app-icon.icon` -> `dev/blueprint-macos-1024.png`
-- `nightly/app-icon.icon` -> `nightly/nightly-macos-1024.png`
-- `prod/app-icon.icon` -> `prod/black-macos-1024.png`
-
-The result must be a 1024×1024 PNG with the classic macOS safe area: the opaque icon body is 824×824, inset 100 pixels on every side, with only the native Icon Composer shadow extending into the surrounding transparent canvas.
-
-To have Codex perform the native exports, paste this prompt into a task opened at the repository root:
-
-```text
-Use [@Computer](plugin://computer-use@openai-bundled) and the Icon Composer app to export the three macOS app icons in this repository.
-
-For each project below, use Platform: macOS pre-Tahoe, Appearance: Default, Size: 1024pt, and Scale: 1×, then save the PNG to the exact destination:
-
-- assets/dev/app-icon.icon -> assets/dev/blueprint-macos-1024.png
-- assets/nightly/app-icon.icon -> assets/nightly/nightly-macos-1024.png
-- assets/prod/app-icon.icon -> assets/prod/black-macos-1024.png
-
-Do not resize, composite, or otherwise post-process the exported PNGs.
-
-Verify every result is 1024×1024 and has the classic macOS safe area: an 824×824 opaque body inset 100px on every side, with only Icon Composer's native shadow extending beyond it.
-```
-
-Do not edit the generated PNG or ICO files directly.
-
-## Android launcher and splash artwork
-
-Android masks the central 72dp of a 108dp adaptive canvas, and the Android 12+ splash screen masks
-the central two thirds of a 288dp canvas, so the Icon Composer exports cannot be used directly:
-their rounded-square silhouette gets framed again and the wordmark is cropped. The Android artwork
-is instead rendered from the same Icon Composer SVG sources by `vp run icons:export:android`:
-
-- `apps/mobile/assets/android-icon-foreground.png`: the shared transparent wordmark, sized to stay
-  inside the safe zone
-- `apps/mobile/assets/android-icon-background-dev.png` and `-nightly.png`: full-bleed variant
-  artwork (blueprint grid and annotations; night sky and clouds). Production uses a solid color.
-- `apps/mobile/assets/android-splash-icon-*.png`: the two layers composed into one 288dp image, so
-  the splash mask reproduces the launcher icon's framing.
-
-Rerun the export after changing a layer SVG. `android-icon-mark.png` remains a flat silhouette for
-Android's monochrome themed icon.
+- **权威路径映射**：[`scripts/lib/brand-assets.ts`](../scripts/lib/brand-assets.ts) 中的 `BRAND_ASSET_PATHS` 统一指向 `assets/prismux/*`，供桌面打包（`scripts/build-desktop-artifact.ts`）、服务端 CLI（`apps/server/scripts/cli.ts`）与 Web 静态资产分发共同消费。
+- **项目配置与桌面启动器**：仓库根 [`prismux.json`](../prismux.json) 的 `iconPath` 指向 `assets/prismux/prismux-256.png`，[`apps/desktop/scripts/electron-launcher.mjs`](../apps/desktop/scripts/electron-launcher.mjs) 指向 `assets/prismux/prismux-1024.png`。
+- **Web 静态图标同步**：运行 `node scripts/apply-web-brand-assets.ts [brand] [target-directory]` 可将 `assets/prismux/*` 图标复制到构建产物目录（默认 `apps/web/dist`）；[`apps/web/public/`](../apps/web/public/) 下跟踪的 `favicon.ico`、`favicon-16x16.png`、`favicon-32x32.png`、`apple-touch-icon.png`、`icon-192x192.png`、`icon-512x512.png` 与 `prismux-logo.png` 均为 Prismux 官方图标。
+- **README 视觉资产重出**：修改文案或版本号后，在仓库根目录执行 `node scripts/render-readme.mjs` 全量重出 `assets/readme/` 像素横幅与卡片，维护规范见 [`assets/readme/MAINTAINING.md`](./readme/MAINTAINING.md)。

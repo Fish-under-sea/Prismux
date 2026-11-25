@@ -23,14 +23,18 @@ import {
   providerInstanceEntriesFor,
 } from "./providerInstances";
 import {
+  applyDefaultReasoningEffortToSelection,
   defaultModelSelectionsAreMixed,
   getAppModelOptionsForInstance,
   getCustomModelOptionsByInstance,
   getTextGenerationModelOptionsByInstance,
   resolveAppModelSelectionForInstance,
   resolveAppModelSelectionState,
+  resolveClosestReasoningEffortOption,
   resolveEffectiveDefaultModelSelection,
+  resolveTextGenerationProviders,
 } from "./modelSelection";
+import { resolveModelPickerTriggerTitle } from "./components/chat/ProviderModelPicker";
 
 function provider(input: {
   provider?: ProviderDriverKind;
@@ -1484,5 +1488,413 @@ describe("composer fallback to another instance of the same driver", () => {
 
     expect(selectedInstanceId).toBe(ProviderInstanceId.make("codex"));
     expect(state.modelOptions?.[selectedInstanceId]).toBeUndefined();
+  });
+});
+
+describe("text generation provider eligibility, AGY waiver gating, and multi-agent coverage", () => {
+  const agy = provider({
+    provider: ProviderDriverKind.make("antigravity"),
+    instanceId: "antigravity",
+    models: ["gemini-4-neon"],
+    supportsTextGeneration: true,
+  });
+  const dsh = provider({
+    provider: ProviderDriverKind.make("acpRegistry"),
+    instanceId: "dsh",
+    models: ["deepseek-v4.1-flash", "deepseek-v4-pro"],
+    supportsTextGeneration: true,
+  });
+  const opencode = provider({
+    provider: ProviderDriverKind.make("opencode"),
+    instanceId: "opencode",
+    models: ["opencode/big-pickle"],
+    supportsTextGeneration: true,
+  });
+  const pi = provider({
+    provider: ProviderDriverKind.make("pi"),
+    instanceId: "pi",
+    models: ["default"],
+    supportsTextGeneration: true,
+  });
+  const codex = provider({
+    provider: ProviderDriverKind.make("codex"),
+    instanceId: "codex",
+    models: ["gpt-6.2-astra", "gpt-6-luna"],
+    supportsTextGeneration: true,
+  });
+  const claude = provider({
+    provider: ProviderDriverKind.make("claudeAgent"),
+    instanceId: "claudeAgent",
+    models: ["claude-haiku-5-5"],
+    supportsTextGeneration: true,
+  });
+  const allEnabled = [agy, dsh, opencode, pi, codex, claude];
+
+  it("excludes antigravity by default until waiver is signed while keeping DSH and all other enabled agents", () => {
+    const unsignedProviders = resolveTextGenerationProviders(allEnabled);
+    expect(unsignedProviders.map((entry) => entry.instanceId)).toEqual([
+      dsh.instanceId,
+      opencode.instanceId,
+      pi.instanceId,
+      codex.instanceId,
+      claude.instanceId,
+    ]);
+
+    const optionsByInstance = getTextGenerationModelOptionsByInstance(
+      DEFAULT_UNIFIED_SETTINGS,
+      allEnabled,
+      null,
+      null,
+      { allowAntigravityTextGeneration: false },
+    );
+    expect(optionsByInstance.has(agy.instanceId)).toBe(false);
+    expect(optionsByInstance.get(dsh.instanceId)?.map((model) => model.slug)).toEqual([
+      "deepseek-v4.1-flash",
+      "deepseek-v4-pro",
+    ]);
+    expect(optionsByInstance.get(opencode.instanceId)?.map((model) => model.slug)).toEqual([
+      "opencode/big-pickle",
+    ]);
+    expect(optionsByInstance.get(pi.instanceId)?.map((model) => model.slug)).toEqual(["default"]);
+    expect(optionsByInstance.has(codex.instanceId)).toBe(true);
+    expect(optionsByInstance.has(claude.instanceId)).toBe(true);
+  });
+
+  it("gracefully falls back from a previously selected AGY text-gen model when waiver is unsigned, and restores AGY when signed", () => {
+    const agySelectedSettings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerOrder: [],
+      textGenerationModelSelection: createModelSelection(agy.instanceId, "gemini-4-neon"),
+    };
+
+    const unsignedResolved = resolveAppModelSelectionState(agySelectedSettings, allEnabled, {
+      allowAntigravityTextGeneration: false,
+    });
+    expect(unsignedResolved.instanceId).toBe(dsh.instanceId);
+    expect(unsignedResolved.model).toBe("deepseek-v4.1-flash");
+
+    // When only AGY exists and waiver is unsigned, falls back safely to NO_PROVIDER_MODEL_SELECTION without crashing.
+    expect(
+      resolveAppModelSelectionState(agySelectedSettings, [agy], {
+        allowAntigravityTextGeneration: false,
+      }),
+    ).toEqual(NO_PROVIDER_MODEL_SELECTION);
+
+    // Once waiver is signed & allowAntigravityAsControlledAgent is enabled, AGY is included and selectable.
+    const signedProviders = resolveTextGenerationProviders(allEnabled, {
+      allowAntigravityTextGeneration: true,
+    });
+    expect(signedProviders.map((entry) => entry.instanceId)).toContain(agy.instanceId);
+    const signedResolved = resolveAppModelSelectionState(agySelectedSettings, allEnabled, {
+      allowAntigravityTextGeneration: true,
+    });
+    expect(signedResolved.instanceId).toBe(agy.instanceId);
+    expect(signedResolved.model).toBe("gemini-4-neon");
+  });
+
+  it("selects DSH / ACP Registry cleanly as a text generation provider", () => {
+    const dshSelected: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      textGenerationModelSelection: createModelSelection(dsh.instanceId, "deepseek-v4.1-flash"),
+    };
+    expect(resolveAppModelSelectionState(dshSelected, allEnabled)).toEqual(
+      createModelSelection(dsh.instanceId, "deepseek-v4.1-flash"),
+    );
+  });
+});
+
+describe("defaultReasoningEffort resolution and clamping across providers", () => {
+  const codexProvider: ServerProvider = {
+    ...provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
+    models: [
+      {
+        slug: "gpt-6.2-astra",
+        name: "GPT 6.2 Astra",
+        isCustom: false,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "reasoningEffort",
+              label: "Reasoning effort",
+              type: "select",
+              role: "reasoning",
+              options: ["minimal", "low", "medium", "high", "xhigh"].map((id) => ({
+                id,
+                label: id,
+                isDefault: id === "medium",
+              })),
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const dshProvider: ServerProvider = {
+    ...provider({ provider: ProviderDriverKind.make("acpRegistry"), instanceId: "dsh" }),
+    models: [
+      {
+        slug: "deepseek-v4.1-flash",
+        name: "DeepSeek-V4.1-Flash",
+        isCustom: false,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "reasoning_effort",
+              label: "Reasoning effort",
+              type: "select",
+              role: "reasoning",
+              currentValue: "_t3/empty",
+              options: [
+                { id: "_t3/empty", label: "Provider default" },
+                { id: "low", label: "Low" },
+                { id: "high", label: "High" },
+                { id: "max", label: "Max" },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const agyProvider: ServerProvider = {
+    ...provider({ provider: ProviderDriverKind.make("antigravity"), instanceId: "antigravity" }),
+    models: [
+      {
+        slug: "gemini-4-neon",
+        name: "Gemini 4 Neon",
+        isCustom: false,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "thought_level",
+              label: "Thinking",
+              type: "select",
+              role: "reasoning",
+              options: [
+                { id: "off", label: "Off" },
+                { id: "low", label: "Low" },
+                { id: "medium", label: "Medium", isDefault: true },
+                { id: "high", label: "High" },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const claudeTwoTierProvider: ServerProvider = {
+    ...provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
+    models: [
+      {
+        slug: "claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        isCustom: false,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Effort",
+              type: "select",
+              options: [
+                { id: "medium", label: "Medium", isDefault: true },
+                { id: "high", label: "High" },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const providers = [codexProvider, dshProvider, agyProvider, claudeTwoTierProvider];
+
+  it("maps defaultReasoningEffort cleanly to each provider's closest supported concrete level", () => {
+    // Codex: exact match for low/medium/high, clamps max -> xhigh
+    expect(resolveClosestReasoningEffortOption(codexProvider.models[0]!.capabilities, "high")).toEqual({
+      id: "reasoningEffort",
+      value: "high",
+    });
+    expect(resolveClosestReasoningEffortOption(codexProvider.models[0]!.capabilities, "max")).toEqual({
+      id: "reasoningEffort",
+      value: "xhigh",
+    });
+
+    // DSH: strips phantom _t3/empty, maps medium -> high, high -> high, max -> max
+    expect(resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "medium")).toEqual({
+      id: "reasoning_effort",
+      value: "high",
+    });
+    expect(resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "high")).toEqual({
+      id: "reasoning_effort",
+      value: "high",
+    });
+    expect(resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "max")).toEqual({
+      id: "reasoning_effort",
+      value: "max",
+    });
+
+    // Antigravity: clamps max -> high, keeps low -> low (never turns off)
+    expect(resolveClosestReasoningEffortOption(agyProvider.models[0]!.capabilities, "max")).toEqual({
+      id: "thought_level",
+      value: "high",
+    });
+    expect(resolveClosestReasoningEffortOption(agyProvider.models[0]!.capabilities, "low")).toEqual({
+      id: "thought_level",
+      value: "low",
+    });
+
+    // Two-tier Claude: clamps low -> medium and max -> high
+    expect(
+      resolveClosestReasoningEffortOption(claudeTwoTierProvider.models[0]!.capabilities, "low"),
+    ).toEqual({ id: "effort", value: "medium" });
+    expect(
+      resolveClosestReasoningEffortOption(claudeTwoTierProvider.models[0]!.capabilities, "max"),
+    ).toEqual({ id: "effort", value: "high" });
+  });
+
+  it("applies settings.defaultReasoningEffort (default high) when no explicit per-model override exists and preserves explicit overrides", () => {
+    const bareCodex = createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.2-astra");
+    expect(
+      resolveEffectiveDefaultModelSelection(DEFAULT_UNIFIED_SETTINGS, providers, bareCodex),
+    ).toEqual(
+      createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.2-astra", [
+        { id: "reasoningEffort", value: "high" },
+      ]),
+    );
+
+    const maxSettings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      defaultReasoningEffort: "max",
+    };
+    expect(resolveEffectiveDefaultModelSelection(maxSettings, providers, bareCodex)).toEqual(
+      createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.2-astra", [
+        { id: "reasoningEffort", value: "xhigh" },
+      ]),
+    );
+
+    // Explicit per-model effort override always wins over defaultReasoningEffort.
+    const explicitLow = createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.2-astra", [
+      { id: "reasoningEffort", value: "low" },
+    ]);
+    expect(resolveEffectiveDefaultModelSelection(maxSettings, providers, explicitLow)).toEqual(
+      explicitLow,
+    );
+
+    // Phantom sentinel on DSH is replaced by configured defaultReasoningEffort ("high").
+    const phantomDsh = createModelSelection(ProviderInstanceId.make("dsh"), "deepseek-v4.1-flash", [
+      { id: "reasoning_effort", value: "_t3/empty" },
+    ]);
+    expect(
+      applyDefaultReasoningEffortToSelection(phantomDsh, providers, "high"),
+    ).toEqual(
+      createModelSelection(ProviderInstanceId.make("dsh"), "deepseek-v4.1-flash", [
+        { id: "reasoning_effort", value: "high" },
+      ]),
+    );
+  });
+
+  it("displays full canonical model names on ProviderModelPicker when displayFullModelName is enabled", () => {
+    const samples = [
+      {
+        driverKind: ProviderDriverKind.make("antigravity"),
+        model: { slug: "gemini-4-neon", name: "Gemini 4 Neon", shortName: "4 Neon" },
+        shortTitle: "4 Neon",
+        fullTitle: "Gemini 4 Neon",
+      },
+      {
+        driverKind: ProviderDriverKind.make("codex"),
+        model: { slug: "gpt-6.2-astra", name: "GPT 6.2 Astra", shortName: "6.2 Astra" },
+        shortTitle: "6.2 Astra",
+        fullTitle: "GPT 6.2 Astra",
+      },
+      {
+        driverKind: ProviderDriverKind.make("claudeAgent"),
+        model: { slug: "claude-opus-5-5", name: "Claude Opus 5.5", shortName: "Opus 5.5" },
+        shortTitle: "Opus 5.5",
+        fullTitle: "Claude Opus 5.5",
+      },
+      {
+        driverKind: ProviderDriverKind.make("acpRegistry"),
+        model: { slug: "deepseek-v4.1-flash", name: "DeepSeek-V4.1-Flash" },
+        shortTitle: "DeepSeek V4.1 Flash",
+        fullTitle: "DeepSeek-V4.1-Flash",
+      },
+    ];
+
+    for (const sample of samples) {
+      expect(
+        resolveModelPickerTriggerTitle({
+          selectedModel: sample.model,
+          driverKind: sample.driverKind,
+          model: sample.model.slug,
+          displayFullModelName: true,
+          chooseModelLabel: "Choose model",
+        }),
+      ).toBe(sample.fullTitle);
+      expect(
+        resolveModelPickerTriggerTitle({
+          selectedModel: sample.model,
+          driverKind: sample.driverKind,
+          model: sample.model.slug,
+          displayFullModelName: false,
+          chooseModelLabel: "Choose model",
+        }),
+      ).toBe(sample.shortTitle);
+    }
+  });
+
+  it("orders custom & text-generation model maps and fallback selection by settings.providerOrder", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const dshId = ProviderInstanceId.make("acpRegistry_dsh");
+    const providers: ServerProvider[] = [
+      provider({ instanceId: codexId, provider: ProviderDriverKind.make("codex"), models: ["gpt-5.4"] }),
+      provider({
+        instanceId: claudeId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        models: ["claude-sonnet-4-6"],
+      }),
+      provider({
+        instanceId: dshId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        models: ["deepseek-chat"],
+      }),
+    ];
+    const orderedSettings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerOrder: [dshId, claudeId, codexId],
+      providerInstances: {
+        [dshId]: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          enabled: true,
+          displayName: "我的深度求索",
+          config: { agentId: "dsh" },
+        },
+        [claudeId]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+          displayName: "主力 Claude",
+        },
+      },
+      textGenerationModelSelection: {
+        instanceId: ProviderInstanceId.make("removed_instance"),
+        model: "missing",
+      },
+    };
+
+    expect([...getCustomModelOptionsByInstance(orderedSettings, providers).keys()]).toEqual([
+      dshId,
+      claudeId,
+      codexId,
+    ]);
+    expect([...getTextGenerationModelOptionsByInstance(orderedSettings, providers).keys()]).toEqual([
+      dshId,
+      claudeId,
+      codexId,
+    ]);
+    expect(resolveAppModelSelectionState(orderedSettings, providers).instanceId).toBe(dshId);
   });
 });

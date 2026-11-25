@@ -5,6 +5,10 @@ import type {
 } from "@prismux/core-contracts";
 import { formatSubagentDisplayTitle } from "@prismux/client-runtime/state/subagent-display";
 
+import {
+  resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
+} from "../../providerInstances";
 import { formatAgentBrandName, resolveAgentBrandId, type AgentBrandId } from "../agentBrand";
 import type {
   DaemonAgentAuxInspectResponse,
@@ -1152,12 +1156,21 @@ export interface BuildAgentAuxViewModelInput {
   readonly projection?: AgentAuxProjectionLike | null | undefined;
   readonly relationshipShells?: ReadonlyArray<AgentAuxThreadShellLike> | undefined;
   readonly nativeChildWork?: ReadonlyArray<OrchestrationV2NativeChildWork> | undefined;
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  readonly providerDisplayName?: string | null | undefined;
 }
 
 export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): AgentAuxViewModel {
   const provider = input.provider ?? null;
   const brand = resolveAgentBrandId(provider);
-  const brandDisplayName = formatAgentBrandName(provider);
+  const defaultBrandName = formatAgentBrandName(provider);
+  const brandDisplayName =
+    input.providerEntries && input.providerEntries.length > 0
+      ? resolveConfiguredProviderLabel(provider, input.providerEntries, input.providerDisplayName)
+      : formatAgentBrandName(provider, input.providerDisplayName);
+  const hasCustomBrandName =
+    brandDisplayName.trim().length > 0 &&
+    brandDisplayName.trim().toLowerCase() !== defaultBrandName.trim().toLowerCase();
   const snap = input.daemonSnapshot;
   const updatedAt = snap?.updatedAt ?? Date.now();
 
@@ -1907,20 +1920,23 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   let title: string;
 
   if (brand === "antigravity" || snap?.kind === "agy-subagents") {
+    const labelPrefix = hasCustomBrandName ? brandDisplayName : "Antigravity";
     kind = "agy-subagents";
-    badgeLabel = "Antigravity 子智能体";
+    badgeLabel = `${labelPrefix} 子智能体`;
     entryLabel = "子智能体面板";
-    title = "Antigravity 子智能体";
+    title = `${labelPrefix} 子智能体`;
   } else if (brand === "claude-code") {
+    const labelPrefix = hasCustomBrandName ? brandDisplayName : "Claude";
     kind = "claude-subagents";
-    badgeLabel = "Claude 子代理协作";
-    entryLabel = "Claude 协同面板";
-    title = "Claude 子代理协作";
+    badgeLabel = `${labelPrefix} 子代理协作`;
+    entryLabel = `${labelPrefix} 协同面板`;
+    title = `${labelPrefix} 子代理协作`;
   } else if (brand === "codex" || snap?.kind === "codex-collab") {
+    const labelPrefix = hasCustomBrandName ? brandDisplayName : "Codex";
     kind = "codex-collab";
-    badgeLabel = "Codex 协同子代理";
-    entryLabel = "Codex 协同面板";
-    title = "Codex 协同子代理";
+    badgeLabel = `${labelPrefix} 协同子代理`;
+    entryLabel = `${labelPrefix} 协同面板`;
+    title = `${labelPrefix} 协同子代理`;
   } else {
     kind = "provider-subagents";
     badgeLabel = `${brandDisplayName} 协同侧边栏`;

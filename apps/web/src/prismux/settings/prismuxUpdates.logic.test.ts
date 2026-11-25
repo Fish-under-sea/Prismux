@@ -1,7 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import fs from "node:fs";
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import path from "node:path";
+import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -66,7 +66,7 @@ describe("prismuxUpdates.logic", () => {
         },
       },
       rawData: "",
-      receivedAt: Date.now(),
+      receivedAt: 1_764_000_001_000,
     });
     expect(part2?.downloading).toBe(true);
     expect(describeUpdaterProgressStage(part2?.progress ?? null)).toContain("2/3");
@@ -79,7 +79,7 @@ describe("prismuxUpdates.logic", () => {
         progress: { stage: "extracting", percent: 90 },
       },
       rawData: "",
-      receivedAt: Date.now(),
+      receivedAt: 1_764_000_002_000,
     });
     expect(describeUpdaterProgressStage(extracting?.progress ?? null)).toContain("解压合并");
 
@@ -92,7 +92,7 @@ describe("prismuxUpdates.logic", () => {
         progress: { stage: "ready", percent: 100 },
       },
       rawData: "",
-      receivedAt: Date.now(),
+      receivedAt: 1_764_000_003_000,
     });
     expect(ready?.downloading).toBe(false);
     expect(ready?.installState).toBe("ready");
@@ -148,13 +148,15 @@ describe("prismuxUpdates.logic", () => {
   });
 
   it("removes hardcoded 0.1.0-alpha.1 fallback, nightly channel, and legacy 公测版/内测版 copy from PrismuxUpdatesSettingsPage", () => {
-    const pagePath = path.resolve(import.meta.dirname, "PrismuxUpdatesSettingsPage.tsx");
-    const source = fs.readFileSync(pagePath, "utf8");
+    const pagePath = NodePath.resolve(import.meta.dirname, "PrismuxUpdatesSettingsPage.tsx");
+    const source = NodeFS.readFileSync(pagePath, "utf8");
     expect(source).not.toContain("0.1.0-alpha.1");
     expect(source.toLowerCase()).not.toContain('"nightly"');
     expect(source).not.toContain("公测版");
     expect(source).not.toContain("内测版");
-    expect(source).toContain("Preview");
+    expect(source).toContain("Preview（Alpha / Beta / RC）");
+    expect(source).toContain("Preview / RC");
+    expect(source).toContain("选择接收正式稳定版，或包含 Alpha / Beta / RC 抢先特性的 Preview 通道。");
     expect(source).toContain("prismux-auto-check-updates-switch");
     expect(source).toContain("自动检查更新");
     expect(source).toContain("installDownloadedUpdate");
@@ -247,24 +249,34 @@ describe("prismuxUpdates.logic", () => {
     ]);
   });
 
-  it("enforces zero hardcoded 14%/15% fake widths, infinite SSE reconnect, polling fallback, and glass contrast across updater UI files", () => {
-    const prismuxDir = path.resolve(import.meta.dirname, "..");
-    const settingsSrc = fs.readFileSync(
-      path.join(prismuxDir, "settings/PrismuxUpdatesSettingsPage.tsx"),
+  it("enforces zero hardcoded 14%/15% fake widths, infinite SSE reconnect, polling fallback, real Prismux logo, and glass contrast across updater UI files", () => {
+    const prismuxDir = NodePath.resolve(import.meta.dirname, "..");
+    const settingsSrc = NodeFS.readFileSync(
+      NodePath.join(prismuxDir, "settings/PrismuxUpdatesSettingsPage.tsx"),
       "utf8",
     );
-    const modalSrc = fs.readFileSync(
-      path.join(prismuxDir, "updates/PrismuxUpdateReleaseModal.tsx"),
+    const modalSrc = NodeFS.readFileSync(
+      NodePath.join(prismuxDir, "updates/PrismuxUpdateReleaseModal.tsx"),
       "utf8",
     );
-    const hostSrc = fs.readFileSync(
-      path.join(prismuxDir, "updates/PrismuxAutoUpdateHost.tsx"),
+    const hostSrc = NodeFS.readFileSync(
+      NodePath.join(prismuxDir, "updates/PrismuxAutoUpdateHost.tsx"),
       "utf8",
     );
-    const capsuleSrc = fs.readFileSync(
-      path.join(prismuxDir, "updates/PrismuxSidebarUpdateCapsule.tsx"),
+    const capsuleSrc = NodeFS.readFileSync(
+      NodePath.join(prismuxDir, "updates/PrismuxSidebarUpdateCapsule.tsx"),
       "utf8",
     );
+
+    // Real Prismux brand logo (<T3AppIcon />) across all 3 app-update surfaces, zero SparklesIcon
+    for (const [label, src] of [
+      ["PrismuxUpdatesSettingsPage", settingsSrc],
+      ["PrismuxUpdateReleaseModal", modalSrc],
+      ["PrismuxAutoUpdateHost", hostSrc],
+    ] as const) {
+      expect(src, `${label} must render <T3AppIcon />`).toContain("<T3AppIcon");
+      expect(src, `${label} must not reference SparklesIcon`).not.toContain("SparklesIcon");
+    }
 
     // Zero hardcoded 14% / 15% fake widths anywhere
     expect(modalSrc).not.toMatch(/\?\?\s*14\b/);

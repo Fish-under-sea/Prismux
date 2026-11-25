@@ -387,12 +387,16 @@ import {
   isThreadErrorBannerDismissedForSession,
   shouldShowThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
+import { orderProviderInstanceEntries } from "./chat/ProviderModelPicker.logic";
+import { resolveProviderBrandIdForEntry } from "./workspace/workspaceQuickLaunch.logic";
+import { diagnoseModelError } from "../prismux/errorDiagnostics";
 import { QueuedRunsControl, type QueuedRunsControlHandle } from "./chat/QueuedRunsControl";
 import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullRequest";
 import { useProactivePanels } from "../hooks/useProactivePanels";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { AgyTodoChecklist } from "./chat/AgyTodoChecklist";
 import { modelFallbackBannerItem } from "./chat/ComposerUsageLimits";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { ComposerLiveTelemetryStrip } from "./chat/ComposerLiveTelemetryStrip";
@@ -1438,10 +1442,9 @@ export default function ChatView(props: ChatViewProps) {
     automaticEnvironment,
     autoUpdateEnvironments,
   });
-  const providerInstanceEntries = providerInstanceEntriesFor(
-    providerStatuses,
-    settings,
-    activeProject?.id ?? null,
+  const providerInstanceEntries = orderProviderInstanceEntries(
+    providerInstanceEntriesFor(providerStatuses, settings, activeProject?.id ?? null),
+    settings.providerOrder,
   );
   const activeThreadModelInstanceId = activeThread?.modelSelection.instanceId;
   const { selectedProviderEntry, requestedDriverKind } = resolveComposerProviderSelection({
@@ -1628,7 +1631,12 @@ export default function ChatView(props: ChatViewProps) {
   const downloadFileAttachment = async (attachment: ChatFileAttachment) => {
     const connection = readPreparedConnection(environmentId);
     if (!connection) {
-      toastManager.add({ type: "error", title: gt("The environment is not connected.") });
+      const diagnosed = diagnoseModelError("The environment is not connected.");
+      toastManager.add({
+        type: "error",
+        title: diagnosed.titleZh,
+        description: diagnosed.diagnosisZh,
+      });
       return;
     }
 
@@ -1644,10 +1652,20 @@ export default function ChatView(props: ChatViewProps) {
       anchor.download = attachment.name;
       anchor.click();
     } catch (error) {
+      const rawError = thrownErrorMessage(error, m) ?? gt("The attachment is unavailable.");
+      const diagnosed = diagnoseModelError(rawError);
       toastManager.add({
         type: "error",
-        title: gt("Could not download {name}", { name: attachment.name }),
-        description: thrownErrorMessage(error, m) ?? gt("The attachment is unavailable."),
+        title: `无法下载 ${attachment.name}：${diagnosed.titleZh}`,
+        description: diagnosed.diagnosisZh,
+        data: {
+          expandableLabels: { expand: "查看原始报错", collapse: "收起原始报错" },
+          expandableContent: (
+            <pre className="whitespace-pre-wrap break-words font-mono text-2xs leading-relaxed">
+              {diagnosed.formattedRawError}
+            </pre>
+          ),
+        },
       });
     }
   };
@@ -3689,17 +3707,28 @@ export default function ChatView(props: ChatViewProps) {
   const { setActiveChatProvider } = topbarPortal;
   const chatRouteKey =
     routeKind === "server" ? `server:${environmentId}:${threadId}` : `draft:${props.draftId}`;
-  const activeChatProviderId = selectedProviderEntry
-    ? selectedProviderEntry.driverKind === "acpRegistry"
-      ? selectedProviderEntry.acpRegistryAgentId ||
-        selectedProviderEntry.displayName ||
-        selectedProviderEntry.instanceId
-      : selectedProviderEntry.driverKind
+  const effectiveTabInstanceId =
+    activeProviderInstanceId ??
+    (isServerThread
+      ? (activeRuntime?.providerInstanceId ??
+          (activeThreadModelInstanceId &&
+          activeThreadModelInstanceId !== NO_PROVIDER_MODEL_SELECTION.instanceId
+            ? activeThreadModelInstanceId
+            : null))
+      : null);
+  const effectiveTabProviderEntry =
+    selectedProviderEntry ??
+    (effectiveTabInstanceId
+      ? (providerInstanceEntries.find((entry) => entry.instanceId === effectiveTabInstanceId) ??
+        null)
+      : null);
+  const activeChatProviderId = effectiveTabProviderEntry
+    ? resolveProviderBrandIdForEntry(effectiveTabProviderEntry)
     : selectedProvider && selectedProvider !== "unconfigured"
       ? selectedProvider
-      : null;
-  const activeChatDisplayName = selectedProviderEntry
-    ? resolveProviderEntryDisplayName(selectedProviderEntry)
+      : effectiveTabInstanceId;
+  const activeChatDisplayName = effectiveTabProviderEntry
+    ? resolveProviderEntryDisplayName(effectiveTabProviderEntry)
     : activeChatProviderId
       ? formatAgentBrandName(activeChatProviderId)
       : null;
@@ -3720,7 +3749,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     setActiveChatProvider({
       routeKey: chatRouteKey,
-      instanceId: activeProviderInstanceId,
+      instanceId: effectiveTabInstanceId,
       providerId: activeChatProviderId,
       model: activeUsageModel,
       displayName: activeChatDisplayName,
@@ -3728,9 +3757,9 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeChatDisplayName,
     activeChatProviderId,
-    activeProviderInstanceId,
     activeUsageModel,
     chatRouteKey,
+    effectiveTabInstanceId,
     hasActiveThreadForTopbar,
     setActiveChatProvider,
     topbarManaged,
@@ -4198,6 +4227,21 @@ export default function ChatView(props: ChatViewProps) {
                     }
                   >
                     <ChildThreadApprovals threadRef={activeThreadRef} />
+                    {!isDraftHeroState && !embedded ? (
+                      <AgyTodoChecklist
+                        variant="dock"
+                        plans={serverProjection?.plans}
+                        turnItems={serverProjection?.turnItems}
+                        turnStartedAtMs={
+                          activeWorkStartedAt && Number.isFinite(Date.parse(activeWorkStartedAt))
+                            ? Date.parse(activeWorkStartedAt)
+                            : null
+                        }
+                        isTurnWorking={isWorking}
+                        threadKey={activeThreadKey ?? threadId}
+                        className="mb-2"
+                      />
+                    ) : null}
                     <div className="relative">
                       <ComposerSurface.Shell
                         contextRow={!composerMounted && (showComposerContextStrip || !embedded)}

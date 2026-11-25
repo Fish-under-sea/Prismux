@@ -549,24 +549,40 @@ html[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']) {
   );
 }
 
-/* High-contrast luminance & subtle shadow lift over bright/warm wallpapers in Dark Glass mode
-   (defers cleanly whenever the user configures explicit custom typography colors). */
+/* Calibrated 3-tier text hierarchy over Dark Glass (Level-1 crisp white, Level-2 cool slate secondary >= 5.3:1,
+   Level-3 placeholder) — defers cleanly whenever the user configures explicit custom typography colors. */
+html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1']),
+html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1']),
+html.dark[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not([data-pmx-custom-text='1']),
+html[data-pmx-theme='dark'][data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
+    [data-pmx-custom-text='1']
+  ) {
+  --foreground: rgba(255, 255, 255, 0.96);
+  --contrast-foreground: rgba(255, 255, 255, 0.96);
+  --card-foreground: rgba(255, 255, 255, 0.96);
+  --contrast-card-foreground: rgba(255, 255, 255, 0.96);
+  --popover-foreground: rgba(255, 255, 255, 0.96);
+  --contrast-popover-foreground: rgba(255, 255, 255, 0.96);
+  --sidebar-foreground: rgba(255, 255, 255, 0.96);
+  --contrast-sidebar-foreground: rgba(255, 255, 255, 0.96);
+}
+
 html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
 html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
 html.dark[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not([data-pmx-custom-muted='1']),
 html[data-pmx-theme='dark'][data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
     [data-pmx-custom-muted='1']
   ) {
-  --muted-foreground: rgba(255, 255, 255, 0.86);
-  --contrast-muted-foreground: rgba(255, 255, 255, 0.86);
-  --sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
-  --contrast-sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
-  --secondary-label: rgba(255, 255, 255, 0.88);
-  --contrast-secondary-label: rgba(255, 255, 255, 0.88);
-  --placeholder: rgba(255, 255, 255, 0.78);
-  --contrast-placeholder: rgba(255, 255, 255, 0.78);
-  --icon-muted: rgba(255, 255, 255, 0.9);
-  --contrast-icon-muted: rgba(255, 255, 255, 0.9);
+  --muted-foreground: rgba(203, 213, 225, 0.66);
+  --contrast-muted-foreground: rgba(203, 213, 225, 0.66);
+  --sidebar-muted-foreground: rgba(203, 213, 225, 0.66);
+  --contrast-sidebar-muted-foreground: rgba(203, 213, 225, 0.66);
+  --secondary-label: rgba(203, 213, 225, 0.66);
+  --contrast-secondary-label: rgba(203, 213, 225, 0.66);
+  --placeholder: rgba(203, 213, 225, 0.50);
+  --contrast-placeholder: rgba(203, 213, 225, 0.50);
+  --icon-muted: rgba(203, 213, 225, 0.72);
+  --contrast-icon-muted: rgba(203, 213, 225, 0.72);
 }
 
 html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
@@ -583,10 +599,10 @@ html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
     [data-pmx-glass-zone='leftSidebar'],
     [data-pmx-sidebar-peek='1']
   ) {
-  --sidebar-foreground: rgba(255, 255, 255, 0.94);
-  --contrast-sidebar-foreground: rgba(255, 255, 255, 0.94);
-  --foreground: rgba(255, 255, 255, 0.94);
-  --contrast-foreground: rgba(255, 255, 255, 0.94);
+  --sidebar-foreground: rgba(255, 255, 255, 0.96);
+  --contrast-sidebar-foreground: rgba(255, 255, 255, 0.96);
+  --foreground: rgba(255, 255, 255, 0.96);
+  --contrast-foreground: rgba(255, 255, 255, 0.96);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
@@ -604,14 +620,16 @@ html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
     [data-pmx-glass-zone='leftSidebar'],
     [data-pmx-sidebar-peek='1']
   ) {
-  --secondary-label: rgba(255, 255, 255, 0.88);
-  --contrast-secondary-label: rgba(255, 255, 255, 0.88);
-  --icon-muted: rgba(255, 255, 255, 0.9);
-  --contrast-icon-muted: rgba(255, 255, 255, 0.9);
-  --sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
-  --contrast-sidebar-muted-foreground: rgba(255, 255, 255, 0.88);
-  --muted-foreground: rgba(255, 255, 255, 0.86);
-  --contrast-muted-foreground: rgba(255, 255, 255, 0.86);
+  --secondary-label: rgba(203, 213, 225, 0.66);
+  --contrast-secondary-label: rgba(203, 213, 225, 0.66);
+  --icon-muted: rgba(203, 213, 225, 0.72);
+  --contrast-icon-muted: rgba(203, 213, 225, 0.72);
+  --sidebar-muted-foreground: rgba(203, 213, 225, 0.66);
+  --contrast-sidebar-muted-foreground: rgba(203, 213, 225, 0.66);
+  --muted-foreground: rgba(203, 213, 225, 0.66);
+  --contrast-muted-foreground: rgba(203, 213, 225, 0.66);
+  --placeholder: rgba(203, 213, 225, 0.50);
+  --contrast-placeholder: rgba(203, 213, 225, 0.50);
 }
 
 html.dark[data-pmx-glass='1']
@@ -655,9 +673,9 @@ html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
     [data-pmx-glass-zone='shellFrame'],
     [data-pmx-glass-zone='chromeBars']
   ) {
-  --foreground: rgba(255, 255, 255, 0.94);
-  --contrast-foreground: rgba(255, 255, 255, 0.94);
-  color: rgba(255, 255, 255, 0.92);
+  --foreground: rgba(255, 255, 255, 0.96);
+  --contrast-foreground: rgba(255, 255, 255, 0.96);
+  color: rgba(255, 255, 255, 0.96);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.48);
 }
 
@@ -677,13 +695,35 @@ html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
     [data-pmx-glass-zone='shellFrame'],
     [data-pmx-glass-zone='chromeBars']
   ) {
-  --muted-foreground: rgba(255, 255, 255, 0.86);
-  --contrast-muted-foreground: rgba(255, 255, 255, 0.86);
-  --secondary-label: rgba(255, 255, 255, 0.88);
-  --contrast-secondary-label: rgba(255, 255, 255, 0.88);
+  --muted-foreground: rgba(203, 213, 225, 0.66);
+  --contrast-muted-foreground: rgba(203, 213, 225, 0.66);
+  --secondary-label: rgba(203, 213, 225, 0.66);
+  --contrast-secondary-label: rgba(203, 213, 225, 0.66);
+  --placeholder: rgba(203, 213, 225, 0.50);
+  --contrast-placeholder: rgba(203, 213, 225, 0.50);
+  --icon-muted: rgba(203, 213, 225, 0.72);
+  --contrast-icon-muted: rgba(203, 213, 225, 0.72);
 }
 
-/* Crisp deep-ink readability tokens for Light Glass mode (root + sidebar/chrome subtrees) */
+/* Calibrated 3-tier deep-ink readability tokens for Light Glass mode (root + sidebar/chrome subtrees) */
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1']),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1']),
+html:not(.dark)[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
+    [data-pmx-custom-text='1']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
+    [data-pmx-custom-text='1']
+  ) {
+  --foreground: rgba(15, 23, 42, 0.95);
+  --contrast-foreground: rgba(15, 23, 42, 0.95);
+  --card-foreground: rgba(15, 23, 42, 0.95);
+  --contrast-card-foreground: rgba(15, 23, 42, 0.95);
+  --popover-foreground: rgba(15, 23, 42, 0.95);
+  --contrast-popover-foreground: rgba(15, 23, 42, 0.95);
+  --sidebar-foreground: rgba(15, 23, 42, 0.95);
+  --contrast-sidebar-foreground: rgba(15, 23, 42, 0.95);
+}
+
 html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
 html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1']),
 html:not(.dark)[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
@@ -692,16 +732,16 @@ html:not(.dark)[data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
 html[data-pmx-theme='light'][data-pmx-glass='1'][data-theme-id]:not([data-theme-id='']):not(
     [data-pmx-custom-muted='1']
   ) {
-  --muted-foreground: rgba(15, 23, 42, 0.82);
-  --contrast-muted-foreground: rgba(15, 23, 42, 0.82);
-  --sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
-  --contrast-sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
-  --secondary-label: rgba(15, 23, 42, 0.84);
-  --contrast-secondary-label: rgba(15, 23, 42, 0.84);
-  --placeholder: rgba(15, 23, 42, 0.72);
-  --contrast-placeholder: rgba(15, 23, 42, 0.72);
-  --icon-muted: rgba(15, 23, 42, 0.86);
-  --contrast-icon-muted: rgba(15, 23, 42, 0.86);
+  --muted-foreground: rgba(51, 65, 85, 0.70);
+  --contrast-muted-foreground: rgba(51, 65, 85, 0.70);
+  --sidebar-muted-foreground: rgba(51, 65, 85, 0.70);
+  --contrast-sidebar-muted-foreground: rgba(51, 65, 85, 0.70);
+  --secondary-label: rgba(51, 65, 85, 0.70);
+  --contrast-secondary-label: rgba(51, 65, 85, 0.70);
+  --placeholder: rgba(51, 65, 85, 0.54);
+  --contrast-placeholder: rgba(51, 65, 85, 0.54);
+  --icon-muted: rgba(51, 65, 85, 0.72);
+  --contrast-icon-muted: rgba(51, 65, 85, 0.72);
 }
 
 html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
@@ -718,10 +758,10 @@ html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
     [data-pmx-glass-zone='leftSidebar'],
     [data-pmx-sidebar-peek='1']
   ) {
-  --sidebar-foreground: rgba(15, 23, 42, 0.94);
-  --contrast-sidebar-foreground: rgba(15, 23, 42, 0.94);
-  --foreground: rgba(15, 23, 42, 0.94);
-  --contrast-foreground: rgba(15, 23, 42, 0.94);
+  --sidebar-foreground: rgba(15, 23, 42, 0.95);
+  --contrast-sidebar-foreground: rgba(15, 23, 42, 0.95);
+  --foreground: rgba(15, 23, 42, 0.95);
+  --contrast-foreground: rgba(15, 23, 42, 0.95);
 }
 
 html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
@@ -738,14 +778,63 @@ html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1']
     [data-pmx-glass-zone='leftSidebar'],
     [data-pmx-sidebar-peek='1']
   ) {
-  --secondary-label: rgba(15, 23, 42, 0.84);
-  --contrast-secondary-label: rgba(15, 23, 42, 0.84);
-  --icon-muted: rgba(15, 23, 42, 0.86);
-  --contrast-icon-muted: rgba(15, 23, 42, 0.86);
-  --sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
-  --contrast-sidebar-muted-foreground: rgba(15, 23, 42, 0.84);
-  --muted-foreground: rgba(15, 23, 42, 0.82);
-  --contrast-muted-foreground: rgba(15, 23, 42, 0.82);
+  --secondary-label: rgba(51, 65, 85, 0.70);
+  --contrast-secondary-label: rgba(51, 65, 85, 0.70);
+  --icon-muted: rgba(51, 65, 85, 0.72);
+  --contrast-icon-muted: rgba(51, 65, 85, 0.72);
+  --sidebar-muted-foreground: rgba(51, 65, 85, 0.70);
+  --contrast-sidebar-muted-foreground: rgba(51, 65, 85, 0.70);
+  --muted-foreground: rgba(51, 65, 85, 0.70);
+  --contrast-muted-foreground: rgba(51, 65, 85, 0.70);
+  --placeholder: rgba(51, 65, 85, 0.54);
+  --contrast-placeholder: rgba(51, 65, 85, 0.54);
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ) {
+  --foreground: rgba(15, 23, 42, 0.95);
+  --contrast-foreground: rgba(15, 23, 42, 0.95);
+  color: rgba(15, 23, 42, 0.95);
+}
+
+html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ),
+html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
+  :is(
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-glass-zone='shellFrame'],
+    [data-pmx-glass-zone='chromeBars']
+  ) {
+  --muted-foreground: rgba(51, 65, 85, 0.70);
+  --contrast-muted-foreground: rgba(51, 65, 85, 0.70);
+  --secondary-label: rgba(51, 65, 85, 0.70);
+  --contrast-secondary-label: rgba(51, 65, 85, 0.70);
+  --placeholder: rgba(51, 65, 85, 0.54);
+  --contrast-placeholder: rgba(51, 65, 85, 0.54);
+  --icon-muted: rgba(51, 65, 85, 0.72);
+  --contrast-icon-muted: rgba(51, 65, 85, 0.72);
 }
 
 /* Global Glass Mode safety guard for `.text-background`:
@@ -1058,17 +1147,25 @@ html.dark[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
   :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']),
 html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
   :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
-  --foreground: rgba(248, 250, 252, 0.96);
-  --card-foreground: rgba(248, 250, 252, 0.96);
-  color: rgba(248, 250, 252, 0.96);
+  --foreground: rgba(255, 255, 255, 0.96);
+  --contrast-foreground: rgba(255, 255, 255, 0.96);
+  --card-foreground: rgba(255, 255, 255, 0.96);
+  --contrast-card-foreground: rgba(255, 255, 255, 0.96);
+  color: rgba(255, 255, 255, 0.96);
 }
 
 html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']),
 html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
-  --muted-foreground: rgba(226, 232, 240, 0.8);
-  --placeholder: rgba(203, 213, 225, 0.68);
+  --muted-foreground: rgba(203, 213, 225, 0.66);
+  --contrast-muted-foreground: rgba(203, 213, 225, 0.66);
+  --secondary-label: rgba(203, 213, 225, 0.66);
+  --contrast-secondary-label: rgba(203, 213, 225, 0.66);
+  --placeholder: rgba(203, 213, 225, 0.50);
+  --contrast-placeholder: rgba(203, 213, 225, 0.50);
+  --icon-muted: rgba(203, 213, 225, 0.72);
+  --contrast-icon-muted: rgba(203, 213, 225, 0.72);
 }
 
 /* Light Glass polarity inside workPanels: airy frosted light glass + sharp dark charcoal ink */
@@ -1086,7 +1183,9 @@ html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
 html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
   :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
   --foreground: rgba(15, 23, 42, 0.95);
+  --contrast-foreground: rgba(15, 23, 42, 0.95);
   --card-foreground: rgba(15, 23, 42, 0.95);
+  --contrast-card-foreground: rgba(15, 23, 42, 0.95);
   color: rgba(15, 23, 42, 0.95);
 }
 
@@ -1094,8 +1193,14 @@ html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']),
 html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='workPanels'], [data-pmx-work-panel='1']) {
-  --muted-foreground: rgba(30, 41, 59, 0.76);
-  --placeholder: rgba(51, 65, 85, 0.68);
+  --muted-foreground: rgba(51, 65, 85, 0.70);
+  --contrast-muted-foreground: rgba(51, 65, 85, 0.70);
+  --secondary-label: rgba(51, 65, 85, 0.70);
+  --contrast-secondary-label: rgba(51, 65, 85, 0.70);
+  --placeholder: rgba(51, 65, 85, 0.54);
+  --contrast-placeholder: rgba(51, 65, 85, 0.54);
+  --icon-muted: rgba(51, 65, 85, 0.72);
+  --contrast-icon-muted: rgba(51, 65, 85, 0.72);
 }
 
 /* Inner work-panel cards & lanes: crisp layered tint driven by `--pmx-glass-work-panels-card-bg`,
@@ -1739,8 +1844,14 @@ html.dark[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])),
 html[data-pmx-theme='dark'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])) {
-  --muted-foreground: rgba(226, 232, 240, 0.86);
-  --contrast-muted-foreground: rgba(226, 232, 240, 0.86);
+  --muted-foreground: rgba(203, 213, 225, 0.66);
+  --contrast-muted-foreground: rgba(203, 213, 225, 0.66);
+  --secondary-label: rgba(203, 213, 225, 0.66);
+  --contrast-secondary-label: rgba(203, 213, 225, 0.66);
+  --placeholder: rgba(203, 213, 225, 0.50);
+  --contrast-placeholder: rgba(203, 213, 225, 0.50);
+  --icon-muted: rgba(203, 213, 225, 0.72);
+  --contrast-icon-muted: rgba(203, 213, 225, 0.72);
 }
 
 /* Light Glass polarity on overviewPanel: bright airy frosted glass + deep slate ink */
@@ -1785,9 +1896,9 @@ html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-text='1'])
   :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])),
 html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-text='1'])
   :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])) {
-  --foreground: rgba(15, 23, 42, 0.96);
-  --contrast-foreground: rgba(15, 23, 42, 0.96);
-  color: rgba(15, 23, 42, 0.96);
+  --foreground: rgba(15, 23, 42, 0.95);
+  --contrast-foreground: rgba(15, 23, 42, 0.95);
+  color: rgba(15, 23, 42, 0.95);
   text-shadow: none;
 }
 
@@ -1795,8 +1906,14 @@ html:not(.dark)[data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])),
 html[data-pmx-theme='light'][data-pmx-glass='1']:not([data-pmx-custom-muted='1'])
   :is([data-pmx-glass-zone='overviewPanel'], [data-thread-details-card]:has([data-pmx-glass-zone='overviewPanel'])) {
-  --muted-foreground: rgba(30, 41, 59, 0.82);
-  --contrast-muted-foreground: rgba(30, 41, 59, 0.82);
+  --muted-foreground: rgba(51, 65, 85, 0.70);
+  --contrast-muted-foreground: rgba(51, 65, 85, 0.70);
+  --secondary-label: rgba(51, 65, 85, 0.70);
+  --contrast-secondary-label: rgba(51, 65, 85, 0.70);
+  --placeholder: rgba(51, 65, 85, 0.54);
+  --contrast-placeholder: rgba(51, 65, 85, 0.54);
+  --icon-muted: rgba(51, 65, 85, 0.72);
+  --contrast-icon-muted: rgba(51, 65, 85, 0.72);
 }
 
 /* Explicit solid mode for overviewPanel zone: crisp opaque surface with zero blur & zero sheen */
@@ -1996,10 +2113,41 @@ html[data-pmx-right-corner-square~='bl'] [data-pmx-right-sidebar] { border-botto
 
 /* ── 5. Independent Typography, Fonts, Caret & 5-Item UI Custom Colors ───── */
 /* Qualify .dark / :not(.dark) and [data-theme-id]:not([data-theme-id='']) so user
-   overrides always outrank Prismux's :root @variant dark (0,2,0) & theme blocks. */
+   overrides always outrank Prismux's :root @variant dark (0,2,0) & theme blocks
+   across Settings modals, Work Panels, Sidebar, Status Bar, and Overlays. */
 html.dark[data-pmx-custom-text='1'],
 html:not(.dark)[data-pmx-custom-text='1'],
 html[data-pmx-custom-text='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-custom-text='1']
+  :is(
+    [data-app-sidebar],
+    [data-pmx-sidebar-peek='1'],
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-work-panel='1'],
+    [data-pmx-glass-zone='workPanels'],
+    [data-pmx-glass-zone='overviewPanel'],
+    [data-app-modal],
+    [data-slot='dialog-popup'],
+    [data-slot='settings-group'],
+    [data-slot='settings-row']
+  ),
+html[data-pmx-custom-text='1'][data-theme-id]
+  :is(
+    [data-app-sidebar],
+    [data-pmx-sidebar-peek='1'],
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-work-panel='1'],
+    [data-pmx-glass-zone='workPanels'],
+    [data-pmx-glass-zone='overviewPanel'],
+    [data-app-modal],
+    [data-slot='dialog-popup'],
+    [data-slot='settings-group'],
+    [data-slot='settings-row']
+  ),
 html[data-pmx-custom-text='1'] [data-app-sidebar],
 html[data-pmx-custom-text='1'][data-theme-id] [data-app-sidebar] {
   --foreground: var(--pmx-text-color);
@@ -2012,11 +2160,45 @@ html[data-pmx-custom-text='1'][data-theme-id] [data-app-sidebar] {
   --contrast-sidebar-foreground: var(--pmx-text-color);
   --message-foreground: var(--pmx-text-color);
   --contrast-message-foreground: var(--pmx-text-color);
+  --toolbar-foreground: var(--pmx-text-color);
+  --contrast-toolbar-foreground: var(--pmx-text-color);
+  --secondary-foreground: var(--pmx-text-color);
+  --contrast-secondary-foreground: var(--pmx-text-color);
 }
 
 html.dark[data-pmx-custom-muted='1'],
 html:not(.dark)[data-pmx-custom-muted='1'],
 html[data-pmx-custom-muted='1'][data-theme-id]:not([data-theme-id='']),
+html[data-pmx-custom-muted='1']
+  :is(
+    [data-app-sidebar],
+    [data-pmx-sidebar-peek='1'],
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-work-panel='1'],
+    [data-pmx-glass-zone='workPanels'],
+    [data-pmx-glass-zone='overviewPanel'],
+    [data-app-modal],
+    [data-slot='dialog-popup'],
+    [data-slot='settings-group'],
+    [data-slot='settings-row']
+  ),
+html[data-pmx-custom-muted='1'][data-theme-id]
+  :is(
+    [data-app-sidebar],
+    [data-pmx-sidebar-peek='1'],
+    [data-prismux-status-bar],
+    [data-pmx-status-bar],
+    [data-workspace-tabbar],
+    [data-pmx-work-panel='1'],
+    [data-pmx-glass-zone='workPanels'],
+    [data-pmx-glass-zone='overviewPanel'],
+    [data-app-modal],
+    [data-slot='dialog-popup'],
+    [data-slot='settings-group'],
+    [data-slot='settings-row']
+  ),
 html[data-pmx-custom-muted='1'] [data-app-sidebar],
 html[data-pmx-custom-muted='1'][data-theme-id] [data-app-sidebar] {
   --muted-foreground: var(--pmx-muted-color);
@@ -2031,10 +2213,21 @@ html[data-pmx-custom-muted='1'][data-theme-id] [data-app-sidebar] {
   --contrast-icon-muted: var(--pmx-muted-color);
 }
 
-html[data-pmx-custom-heading='1'] :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]),
+/* Level-1 Heading color applies cleanly to section headers, panel titles & card headers,
+   while preserving setting-row item titles (`[data-slot='settings-row'] h3` / `[data-pmx-setting-title='1']`)
+   under Level-1 Body/Setting-Label (`--pmx-text-color` / `--contrast-foreground`). */
+html[data-pmx-custom-heading='1']
+  :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]):not([data-pmx-setting-title='1']),
 html[data-pmx-custom-heading='1'][data-theme-id]:not([data-theme-id=''])
-  :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]) {
+  :is(h1, h2, h3, h4, h5, h6, [data-pmx-heading]):not([data-pmx-setting-title='1']) {
   color: var(--pmx-heading-color);
+}
+
+html[data-pmx-custom-heading='1'] [data-slot='settings-row']:not([aria-disabled='true']) h3,
+html[data-pmx-custom-heading='1'][data-theme-id]:not([data-theme-id=''])
+  [data-slot='settings-row']:not([aria-disabled='true'])
+  h3 {
+  color: var(--contrast-foreground, var(--foreground));
 }
 
 html.dark[data-pmx-custom-font-sans='1'],

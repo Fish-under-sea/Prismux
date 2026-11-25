@@ -21,7 +21,14 @@ import {
 } from "./useScopedSettings";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { providerInstanceEntriesFor } from "../../providerInstances";
+import { providerInstanceEntriesFor, type ProviderInstanceEntry } from "../../providerInstances";
+import {
+  AgyWaiverRequiredBadge,
+  SUBSCRIPTION_WAIVER_ANCHOR_ID,
+  isAntigravityControlledAutomationAllowed,
+  resolveAntigravityComplianceBlock,
+  useSubscriptionWaiverState,
+} from "../../prismux/SubscriptionRiskWaiverSection";
 import { useTextGenerationTargets } from "../../textGenerators";
 import {
   getTextGenerationModelOptionsByInstance,
@@ -114,6 +121,23 @@ export function SourceControlWritingSettingsSection() {
     style.mode !== defaults.mode ||
     style.customInstructions !== defaults.customInstructions;
 
+  const waiver = useSubscriptionWaiverState();
+  const allowAntigravityTextGeneration = isAntigravityControlledAutomationAllowed(waiver);
+  const textGenerationEligibility = { allowAntigravityTextGeneration } as const;
+  const openSubscriptionWaiver = () => {
+    void navigate({
+      to: "/settings/providers",
+      hash: SUBSCRIPTION_WAIVER_ANCHOR_ID,
+    });
+  };
+  const getProviderComplianceBlock = (entry: ProviderInstanceEntry) =>
+    resolveAntigravityComplianceBlock({
+      entry,
+      waiver,
+      mode: "controlled",
+      onOpenWaiver: openSubscriptionWaiver,
+    });
+
   const textGenerationProviders = serverProviders.filter(
     (provider) => provider.supportsTextGeneration !== false,
   );
@@ -142,6 +166,7 @@ export function SourceControlWritingSettingsSection() {
   const defaultModelSelection = resolveAppModelSelectionState(
     settings,
     projectEffectiveTextGenerationProviders,
+    textGenerationEligibility,
   );
   const usesDedicatedModel = settings.sourceControlWriterModelSelection !== null;
   const activeSelection = resolveAppModelSelectionState(
@@ -154,21 +179,27 @@ export function SourceControlWritingSettingsSection() {
       ),
     },
     projectEffectiveTextGenerationProviders,
+    textGenerationEligibility,
   );
   const canEnableDedicatedModel = writerEntries.some(
     (entry) =>
       entry.instanceId === defaultModelSelection.instanceId && entry.enabled && entry.isAvailable,
   );
+  // Include AGY models in the picker map so unsigned AGY renders grayed out with the red waiver overlay.
   const modelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,
     projectEffectiveTextGenerationProviders,
     activeSelection.instanceId,
     activeSelection.model,
+    { allowAntigravityTextGeneration: true },
   );
   const writerModelDisabledReason = useScopedModelDisabledReason(settings, writerEntries, true);
   const writerInstanceEntry = writerEntries.find(
     (entry) => entry.instanceId === activeSelection.instanceId,
   );
+  const writerComplianceBlock = writerInstanceEntry
+    ? getProviderComplianceBlock(writerInstanceEntry)
+    : null;
   const usesReviewGuideModel = settings.reviewGuideModelSelection !== null;
   // Resolve against agents this project can use, so the fallback never lands on one it turned off.
   const projectAgentProviders = textGenerationProviders.filter((provider) =>
@@ -186,12 +217,14 @@ export function SourceControlWritingSettingsSection() {
       ),
     },
     projectAgentProviders,
+    textGenerationEligibility,
   );
   const reviewGuideModelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,
     projectAgentProviders,
     reviewGuideSelection.instanceId,
     reviewGuideSelection.model,
+    { allowAntigravityTextGeneration: true },
   );
   const canEnableReviewGuideModel = instanceEntries.some(
     (entry) =>
@@ -200,6 +233,9 @@ export function SourceControlWritingSettingsSection() {
   const reviewGuideInstanceEntry = instanceEntries.find(
     (entry) => entry.instanceId === reviewGuideSelection.instanceId,
   );
+  const reviewGuideComplianceBlock = reviewGuideInstanceEntry
+    ? getProviderComplianceBlock(reviewGuideInstanceEntry)
+    : null;
 
   return (
     <SettingsSection id="source-control-text-generation" title={gt("Commits & pull requests")}>
@@ -370,7 +406,18 @@ export function SourceControlWritingSettingsSection() {
                       triggerAriaLabel={gt("Review guide model")}
                       {...(mixedReviewGuideModel ? { triggerLabel: gt("Mixed") } : {})}
                       getModelDisabledReason={writerModelDisabledReason}
+                      getProviderComplianceBlock={getProviderComplianceBlock}
                       onInstanceModelChange={(instanceId, model) => {
+                        const targetEntry = instanceEntries.find(
+                          (entry) => entry.instanceId === instanceId,
+                        );
+                        const complianceBlock = targetEntry
+                          ? getProviderComplianceBlock(targetEntry)
+                          : null;
+                        if (complianceBlock) {
+                          complianceBlock.onOpenWaiver();
+                          return;
+                        }
                         const reason = writerModelDisabledReason(instanceId, model);
                         if (reason) {
                           toastManager.add({
@@ -388,6 +435,13 @@ export function SourceControlWritingSettingsSection() {
                           ),
                         });
                       }}
+                    />
+                  ) : null}
+                  {usesReviewGuideModel && reviewGuideComplianceBlock ? (
+                    <AgyWaiverRequiredBadge
+                      label={reviewGuideComplianceBlock.badgeText}
+                      title={reviewGuideComplianceBlock.tooltip}
+                      onClick={reviewGuideComplianceBlock.onOpenWaiver}
                     />
                   ) : null}
                   {usesReviewGuideModel &&
@@ -579,7 +633,18 @@ export function SourceControlWritingSettingsSection() {
                         }
                       : {})}
                     getModelDisabledReason={writerModelDisabledReason}
+                    getProviderComplianceBlock={getProviderComplianceBlock}
                     onInstanceModelChange={(instanceId, model) => {
+                      const targetEntry = writerEntries.find(
+                        (entry) => entry.instanceId === instanceId,
+                      );
+                      const complianceBlock = targetEntry
+                        ? getProviderComplianceBlock(targetEntry)
+                        : null;
+                      if (complianceBlock) {
+                        complianceBlock.onOpenWaiver();
+                        return;
+                      }
                       const reason = writerModelDisabledReason(instanceId, model);
                       if (reason) {
                         toastManager.add({
@@ -597,6 +662,13 @@ export function SourceControlWritingSettingsSection() {
                         ),
                       });
                     }}
+                  />
+                ) : null}
+                {usesDedicatedModel && writerComplianceBlock ? (
+                  <AgyWaiverRequiredBadge
+                    label={writerComplianceBlock.badgeText}
+                    title={writerComplianceBlock.tooltip}
+                    onClick={writerComplianceBlock.onOpenWaiver}
                   />
                 ) : null}
                 {usesDedicatedModel &&

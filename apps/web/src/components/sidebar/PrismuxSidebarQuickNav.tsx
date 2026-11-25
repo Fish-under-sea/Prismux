@@ -76,7 +76,10 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     shortcutLabelForCommand(keybindings, "commandPalette.toggle") ??
     (typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
 
-  const diagnosticsActive = pathname === PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.diagnostics;
+  const diagnosticsActive = isSidebarPanelPathActive(
+    pathname,
+    PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.diagnostics,
+  );
   const automationsActive = isSidebarPanelPathActive(
     pathname,
     PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.automations,
@@ -91,11 +94,6 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     openCommandPalette({ query: "" });
   };
 
-  const handleOpenDiagnostics = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/settings/diagnostics" });
-  };
-
   const handleToggleWorkPanel = (
     panelPathnames: readonly string[],
     targetHref: string,
@@ -108,6 +106,13 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
       lastMainAppHref: getMainAppReturnHref(fallbackReturnHref),
     });
     void navigate({ href: decision.href });
+  };
+
+  const handleToggleDiagnostics = () => {
+    handleToggleWorkPanel(
+      PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.diagnostics,
+      PRISMUX_SIDEBAR_QUICK_NAV_ROUTES.diagnostics,
+    );
   };
 
   const handleToggleAutomations = () => {
@@ -208,7 +213,8 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
                 data-testid="prismux-nav-diagnostics"
                 aria-label={diagnosticsRailTooltip}
                 aria-current={diagnosticsActive ? "page" : undefined}
-                onClick={handleOpenDiagnostics}
+                aria-pressed={diagnosticsActive}
+                onClick={handleToggleDiagnostics}
                 className={railButtonClassName(diagnosticsActive)}
               />
             }
@@ -316,12 +322,13 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
         </button>
       ) : null}
 
-      {/* 1. Service diagnostics */}
+      {/* 1. Service diagnostics (standalone main work panel) */}
       <button
         type="button"
         data-testid="prismux-nav-diagnostics"
         aria-current={diagnosticsActive ? "page" : undefined}
-        onClick={handleOpenDiagnostics}
+        aria-pressed={diagnosticsActive}
+        onClick={handleToggleDiagnostics}
         className={navRowClassName(diagnosticsActive)}
       >
         <ActivityIcon aria-hidden className={navIconClassName(diagnosticsActive)} />
