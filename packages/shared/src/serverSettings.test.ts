@@ -111,12 +111,12 @@ describe("serverSettings helpers", () => {
       }).storageCleanup,
     ).toEqual({
       worktreeAfterDays: null,
-      worktreeSettledAfterDays: null,
+      worktreeSettledAfterDays: DEFAULT_SERVER_SETTINGS.storageCleanup.worktreeSettledAfterDays,
       worktreeOnMerge: true,
       worktreeOnDelete: true,
       worktreeUnchanged: true,
       worktreeKeepWhen: "uncommitted-changes",
-      browserArtifactsAfterDays: null,
+      browserArtifactsAfterDays: DEFAULT_SERVER_SETTINGS.storageCleanup.browserArtifactsAfterDays,
       logsAfterDays: 30,
     });
   });

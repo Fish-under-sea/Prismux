@@ -329,4 +329,14 @@ test("cli.ts portable mode detection converges to sibling data/ directory or fal
   assert.equal(standardParsed.isPortable, false);
   assert.equal(standardParsed.portableRoot, undefined);
   assert.equal(standardParsed.dataDir, resolveDefaultDataDir());
+
+  // 4. PRISMUX_HOME / PRISMUX_DATA_DIR override default dataDir when not using explicit portable root
+  const isolatedHomeDir = join(standardExecDir, "isolated-home");
+  const envHomeParsed = parseDaemonCliArgs(
+    ["start"],
+    { PRISMUX_HOME: isolatedHomeDir },
+    standardExecDir
+  );
+  assert.equal(envHomeParsed.isPortable, false);
+  assert.equal(envHomeParsed.dataDir, isolatedHomeDir);
 });

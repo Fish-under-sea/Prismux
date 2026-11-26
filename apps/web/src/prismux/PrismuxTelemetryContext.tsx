@@ -186,9 +186,9 @@ export function PrismuxTelemetryProvider({
       const res = await prismuxDaemonClient.fetchSystemResources();
       setSystemResources(res);
       setResourcesError(null);
+      setResourcesLoading(false);
     } catch (err) {
       setResourcesError(err instanceof Error ? err.message : String(err));
-    } finally {
       setResourcesLoading(false);
     }
   });

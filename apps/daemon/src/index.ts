@@ -424,6 +424,7 @@ export class PrismuxDaemon {
       dataDir: options.dataDir,
       customDirs: initialAppearance.wallpaper.customDirs,
       steamRootOverride: initialAppearance.wallpaper.steamRootOverride,
+      advancedEngineEnabled: initialAppearance.wallpaper.advancedEngineEnabled,
       ...(options.steamRootsDiscoverer !== undefined
         ? { steamRootsDiscoverer: options.steamRootsDiscoverer }
         : {})

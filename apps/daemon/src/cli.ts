@@ -113,6 +113,9 @@ export function parseDaemonCliArgs(
   }
 
   const envPortableDir = env.PRISMUX_PORTABLE_DIR?.trim();
+  const hasExplicitPortableRoot =
+    explicitPortableRoot !== undefined ||
+    (envPortableDir !== undefined && envPortableDir.length > 0);
   const probeExecutableDir =
     explicitPortableRoot ??
     (envPortableDir !== undefined && envPortableDir.length > 0
@@ -126,13 +129,22 @@ export function parseDaemonCliArgs(
   if (explicitDataDir !== undefined) {
     dataDir = explicitDataDir;
   } else {
+    const envDataDir = env.PRISMUX_DATA_DIR?.trim() || env.PRISMUX_HOME?.trim();
     const portable = resolvePortableDataDir({
       executableDir: probeExecutableDir,
       defaultDataDir: resolveDefaultDataDir()
     });
-    dataDir = portable.dataDir;
-    isPortable = portable.isPortable;
-    portableRoot = portable.isPortable ? probeExecutableDir : undefined;
+    if (portable.isPortable && (hasExplicitPortableRoot || !envDataDir)) {
+      dataDir = portable.dataDir;
+      isPortable = true;
+      portableRoot = probeExecutableDir;
+    } else if (envDataDir && envDataDir.length > 0) {
+      dataDir = resolve(envDataDir);
+    } else {
+      dataDir = portable.dataDir;
+      isPortable = portable.isPortable;
+      portableRoot = portable.isPortable ? probeExecutableDir : undefined;
+    }
   }
 
   return {
