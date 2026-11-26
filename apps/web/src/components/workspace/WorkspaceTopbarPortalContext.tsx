@@ -24,11 +24,23 @@ export interface WorkspaceSplitPaneContextValue {
   readonly inSplit: boolean;
   /** Which outer workspace boundaries this pane touches (`top`, `right`, `bottom`, `left`). */
   readonly edges: SplitPaneEdges;
+  /** Stable workspace pane ID (`pane-main`, `pane-...`), or null outside WorkspaceSplitContainer. */
+  readonly paneId?: string | null | undefined;
+  /** True when this pane is currently the focused workspace pane. */
+  readonly isFocused?: boolean | undefined;
+  /** True when this pane is the primary pane (`primaryPaneId`). */
+  readonly isPrimary?: boolean | undefined;
+  /** Focuses this workspace pane (used when interacting with per-pane overview or panel actions). */
+  readonly onFocusPane?: ((paneId: string) => void) | undefined;
 }
 
 const DEFAULT_WORKSPACE_SPLIT_PANE_VALUE: WorkspaceSplitPaneContextValue = {
   inSplit: false,
   edges: ROOT_SPLIT_PANE_EDGES,
+  paneId: null,
+  isFocused: true,
+  isPrimary: true,
+  onFocusPane: undefined,
 };
 
 export const WorkspaceSplitPaneContext = createContext<WorkspaceSplitPaneContextValue>(
@@ -52,6 +64,10 @@ export interface WorkspaceTopbarPortalContextValue {
   readonly setActiveChatProvider?:
     | ((snapshot: WorkspaceActiveChatProviderSnapshot | null) => void)
     | undefined;
+  /** Syncs a specific split pane's live resolved provider/model to its own active tab without colliding with other panes. */
+  readonly setPaneChatProvider?:
+    | ((paneId: string, snapshot: WorkspaceActiveChatProviderSnapshot | null) => void)
+    | undefined;
   /** True when the fallback standalone right sidebar drawer is open (empty workspace). */
   readonly standaloneRightPanelOpen: boolean;
 }
@@ -64,6 +80,7 @@ const DEFAULT_WORKSPACE_TOPBAR_PORTAL_VALUE: WorkspaceTopbarPortalContextValue =
   tabBarRef: FALLBACK_TAB_BAR_REF,
   setHasActiveChatControls: () => {},
   setActiveChatProvider: undefined,
+  setPaneChatProvider: undefined,
   standaloneRightPanelOpen: false,
 };
 

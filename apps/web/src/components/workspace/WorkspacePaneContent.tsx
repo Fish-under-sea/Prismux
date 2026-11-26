@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopeThreadRef } from "@prismux/client-runtime/environment";
+import {
+  parseScopedThreadKey,
+  scopedThreadKey,
+  scopeThreadRef,
+} from "@prismux/client-runtime/environment";
 import type {
   EnvironmentId,
   ProviderInstanceId,
@@ -23,6 +27,7 @@ import {
   memo,
   Suspense,
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type FormEvent,
@@ -30,9 +35,8 @@ import {
 
 import { cn } from "~/lib/utils";
 import { ComposerHandleContext } from "../../composerHandleContext";
-import { useComposerDraftStore } from "../../composerDraftStore";
+import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import { useScratchProject } from "../../hooks/useScratchProject";
-import type { SideChatParentPanel } from "../../lib/sideChatPane";
 import type { TerminalContextSelection } from "../../lib/terminalContext";
 import {
   AgentBrandLogo,
@@ -41,13 +45,17 @@ import {
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
 import type { ProviderInstanceEntry } from "../../providerInstances";
-import { useRightPanelStore, type RightPanelSurface } from "../../rightPanelStore";
+import type { RightPanelSurface } from "../../rightPanelStore";
 import { useProjects, useQuietThreadShell } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
   environmentServerConfigsAtom,
   primaryServerKeybindingsAtom,
 } from "../../state/server";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { useEnvironmentShellStatus } from "../../state/shell";
+import { threadFamilies, useEnvironmentThread } from "../../state/threads";
+import { isThreadRouteSnapshotAuthoritative } from "../../threadRoutes";
 import { BackgroundThreadContext } from "../chat/backgroundThread";
 import { LinkedItemsEmptySurface, SideChatEmptySurface } from "../chat/RightPanelEmptySurfaces";
 import type { ModelEsque } from "../chat/providerIconUtils";
@@ -132,6 +140,8 @@ function resolveConversationBrandName(
 export interface WorkspacePaneContentProps {
   readonly paneId: string;
   readonly tab: WorkspaceTab;
+  readonly isFocused?: boolean | undefined;
+  readonly onFocusPane?: ((paneId: string) => void) | undefined;
   readonly activeHostThreadRef: ScopedThreadRef | null;
   readonly environmentId: EnvironmentId | null;
   readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
@@ -160,47 +170,147 @@ const STAGE_TITLE_GLASS_CLASS =
 const STAGE_SUBTITLE_GLASS_CLASS =
   "text-muted-foreground [[data-pmx-glass='1']_&]:text-foreground/92 [[data-pmx-wallpaper='1']_&]:text-foreground/92 [[data-pmx-wallpaper-visible='1']_&]:text-foreground/95 dark:[[data-pmx-glass='1']_&]:text-white/92 dark:[[data-pmx-wallpaper='1']_&]:text-white/92 dark:[[data-pmx-wallpaper-visible='1']_&]:text-white/95 dark:[[data-pmx-glass='1']_&]:[text-shadow:0_1px_4px_rgba(0,0,0,0.58),0_0_12px_rgba(0,0,0,0.34)] dark:[[data-pmx-wallpaper-visible='1']_&]:[text-shadow:0_1px_5px_rgba(0,0,0,0.65),0_0_14px_rgba(0,0,0,0.38)] light:[[data-pmx-glass='1']_&]:text-foreground/90 light:[[data-pmx-glass='1']_&]:[text-shadow:0_1px_3px_rgba(255,255,255,0.76)]";
 
+function useSplitPaneThreadFamily(threadRef: ScopedThreadRef | null, missing: boolean) {
+  const key = threadRef === null ? null : scopedThreadKey(threadRef);
+  const [mountedKey, setMountedKey] = useState<string | null>(null);
+  const nextKey = missing || mountedKey === key ? key : null;
+  if (nextKey !== mountedKey) setMountedKey(nextKey);
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- holds an unlisted split-pane thread's family mounted until the pane switches away
+  useEffect(() => {
+    const ref = mountedKey === null ? null : parseScopedThreadKey(mountedKey);
+    if (ref === null) return;
+    return threadFamilies.mount(appAtomRegistry, ref.environmentId, ref.threadId);
+  }, [mountedKey]);
+}
+
 function EmbeddedThreadPaneView(props: {
+  readonly paneId: string;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
-  readonly hostRef: ScopedThreadRef;
+  readonly isFocused: boolean;
+  readonly onFocusPane: (() => void) | undefined;
 }) {
-  const { environmentId, threadId, hostRef } = props;
-  const parentPanel = useMemo<SideChatParentPanel>(
+  const { paneId, environmentId, threadId, isFocused, onFocusPane } = props;
+  const threadRef = scopeThreadRef(environmentId, threadId);
+  const shell = useQuietThreadShell(threadRef);
+  const bootstrapComplete = isThreadRouteSnapshotAuthoritative(
+    useEnvironmentShellStatus(environmentId),
+  );
+  // Load older settled or unlisted server threads cleanly inside secondary split panes.
+  useEnvironmentThread(shell === null ? environmentId : null, shell === null ? threadId : null);
+  useSplitPaneThreadFamily(threadRef, bootstrapComplete && shell === null);
+
+  const splitPane = useMemo(
     () => ({
-      hostRef,
-      openToolDiff: () => {
-        useRightPanelStore.getState().open(hostRef, "diff");
-      },
-      runShellCommand: () => {
-        useRightPanelStore.getState().openTerminal(hostRef, "default");
+      paneId,
+      isFocused,
+      onFocusPane: () => {
+        onFocusPane?.();
       },
     }),
-    [hostRef],
+    [isFocused, onFocusPane, paneId],
   );
 
   return (
-    <PrismuxStageFrame innerDataAttributes={{ "data-side-chat-pane": threadId }}>
-      <BackgroundThreadContext value>
-        <ComposerHandleContext value={null}>
-          <Suspense
-            fallback={
-              <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-                正在加载会话...
-              </div>
-            }
-          >
-            <ChatView
-              key={`${environmentId}:${threadId}`}
-              environmentId={environmentId}
-              threadId={threadId}
-              routeKind="server"
-              embedded={parentPanel}
-            />
-          </Suspense>
-        </ComposerHandleContext>
-      </BackgroundThreadContext>
-    </PrismuxStageFrame>
+    <BackgroundThreadContext value={!isFocused}>
+      <ComposerHandleContext value={null}>
+        <Suspense
+          fallback={
+            <PrismuxStageFrame innerClassName="items-center justify-center text-xs text-muted-foreground">
+              正在加载会话...
+            </PrismuxStageFrame>
+          }
+        >
+          <ChatView
+            key={`${environmentId}:${threadId}`}
+            environmentId={environmentId}
+            threadId={threadId}
+            routeKind="server"
+            splitPane={splitPane}
+          />
+        </Suspense>
+      </ComposerHandleContext>
+    </BackgroundThreadContext>
+  );
+}
+
+function EmbeddedDraftPaneView(props: {
+  readonly paneId: string;
+  readonly tab: WorkspaceTab;
+  readonly draftId: DraftId;
+  readonly isFocused: boolean;
+  readonly onFocusPane: (() => void) | undefined;
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly onOpenConversationInMainChat?: ((paneId: string, tab: WorkspaceTab) => void) | undefined;
+}) {
+  const {
+    paneId,
+    tab,
+    draftId,
+    isFocused,
+    onFocusPane,
+    instanceEntries,
+    onOpenConversationInMainChat,
+  } = props;
+  const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
+  const promotedRedirect = useComposerDraftStore((store) => store.getPromotedDraftRedirect(draftId));
+  const promotedRef = promotedRedirect ?? draftSession?.promotedTo ?? null;
+
+  const splitPane = useMemo(
+    () => ({
+      paneId,
+      isFocused,
+      onFocusPane: () => {
+        onFocusPane?.();
+      },
+    }),
+    [isFocused, onFocusPane, paneId],
+  );
+
+  if (promotedRef) {
+    return (
+      <EmbeddedThreadPaneView
+        paneId={paneId}
+        environmentId={promotedRef.environmentId}
+        threadId={promotedRef.threadId}
+        isFocused={isFocused}
+        onFocusPane={onFocusPane}
+      />
+    );
+  }
+
+  if (!draftSession) {
+    return (
+      <ConversationMainChatHandoffView
+        paneId={paneId}
+        tab={tab}
+        instanceEntries={instanceEntries}
+        onOpenConversationInMainChat={onOpenConversationInMainChat}
+      />
+    );
+  }
+
+  return (
+    <BackgroundThreadContext value={!isFocused}>
+      <ComposerHandleContext value={null}>
+        <Suspense
+          fallback={
+            <PrismuxStageFrame innerClassName="items-center justify-center text-xs text-muted-foreground">
+              正在加载新会话...
+            </PrismuxStageFrame>
+          }
+        >
+          <ChatView
+            key={`${draftSession.environmentId}:${draftSession.threadId}`}
+            environmentId={draftSession.environmentId}
+            threadId={draftSession.threadId}
+            routeKind="draft"
+            draftId={draftId}
+            splitPane={splitPane}
+          />
+        </Suspense>
+      </ComposerHandleContext>
+    </BackgroundThreadContext>
   );
 }
 
@@ -635,17 +745,21 @@ function EmbeddedDeviceTabView(props: {
 }
 
 function EmbeddedSideChatTabView(props: {
+  readonly paneId: string;
   readonly tab: WorkspaceTab;
   readonly threadRef: ScopedThreadRef | null;
+  readonly isFocused: boolean;
+  readonly onFocusPane: (() => void) | undefined;
 }) {
-  const { tab, threadRef } = props;
+  const { paneId, tab, threadRef, isFocused, onFocusPane } = props;
   if (tab.environmentId && tab.threadId) {
-    const ref = scopeThreadRef(tab.environmentId, tab.threadId);
     return (
       <EmbeddedThreadPaneView
+        paneId={paneId}
         environmentId={tab.environmentId}
         threadId={tab.threadId}
-        hostRef={threadRef ?? ref}
+        isFocused={isFocused}
+        onFocusPane={onFocusPane}
       />
     );
   }
@@ -709,6 +823,8 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
   const {
     paneId,
     tab,
+    isFocused = false,
+    onFocusPane,
     activeHostThreadRef,
     instanceEntries,
     onUpdateTab,
@@ -716,16 +832,42 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
   } = props;
 
   const resolvedHostRef = tab.hostThreadRef ?? activeHostThreadRef;
+  const focusThisPane = useCallback(() => {
+    onFocusPane?.(paneId);
+  }, [onFocusPane, paneId]);
 
   switch (tab.kind) {
     case "thread":
       if (tab.environmentId && tab.threadId) {
-        const ref = scopeThreadRef(tab.environmentId, tab.threadId);
         return (
           <EmbeddedThreadPaneView
+            paneId={paneId}
             environmentId={tab.environmentId}
             threadId={tab.threadId}
-            hostRef={resolvedHostRef ?? ref}
+            isFocused={isFocused}
+            onFocusPane={focusThisPane}
+          />
+        );
+      }
+      return (
+        <ConversationMainChatHandoffView
+          paneId={paneId}
+          tab={tab}
+          instanceEntries={instanceEntries}
+          onOpenConversationInMainChat={onOpenConversationInMainChat}
+        />
+      );
+    case "draft":
+      if (tab.draftId) {
+        return (
+          <EmbeddedDraftPaneView
+            paneId={paneId}
+            tab={tab}
+            draftId={tab.draftId}
+            isFocused={isFocused}
+            onFocusPane={focusThisPane}
+            instanceEntries={instanceEntries}
+            onOpenConversationInMainChat={onOpenConversationInMainChat}
           />
         );
       }
@@ -759,8 +901,15 @@ export const WorkspacePaneContent = memo(function WorkspacePaneContent(
     case "device":
       return <EmbeddedDeviceTabView tab={tab} threadRef={resolvedHostRef} />;
     case "side-chat":
-      return <EmbeddedSideChatTabView tab={tab} threadRef={resolvedHostRef} />;
-    case "draft":
+      return (
+        <EmbeddedSideChatTabView
+          paneId={paneId}
+          tab={tab}
+          threadRef={resolvedHostRef}
+          isFocused={isFocused}
+          onFocusPane={focusThisPane}
+        />
+      );
     case "agent":
     default:
       return (

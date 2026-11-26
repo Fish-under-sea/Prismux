@@ -27,6 +27,7 @@ import {
   MoreVerticalIcon,
   SlidersHorizontalIcon,
   TerminalIcon,
+  XIcon,
 } from "lucide-react";
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -209,6 +210,12 @@ export interface SessionOverviewPanelProps {
   readonly daemonPtysOverride?: ReadonlyArray<DaemonPtySessionItem>;
   readonly displayPrefsOverride?: Partial<OverviewDisplayPrefs>;
   readonly defaultMoreMenuOpen?: boolean;
+  /** Optional split-pane identifier for pane-scoped overview panels under split view. */
+  readonly paneId?: string | null | undefined;
+  /** Invoked before opening right-sidebar surfaces so split-pane overview actions focus their own pane first. */
+  readonly onBeforePanelAction?: (() => void) | undefined;
+  /** Optional collapse button handler rendered in split-pane headers for independent per-pane collapse/expand. */
+  readonly onCollapse?: (() => void) | undefined;
 }
 
 export function OverviewDisplayPrefsMenuSection(props: {
@@ -692,9 +699,14 @@ function SessionOverviewPanelContent(
 
   const usedSkills = useMemo(() => extractOverviewUsedSkills({ projection }), [projection]);
 
-  // Quick action handlers
+  // Quick action handlers (always focus owning split pane first so right-sidebar targets this threadRef)
+  const notifyBeforePanelAction = useCallback(() => {
+    props.onBeforePanelAction?.();
+  }, [props]);
+
   const handleOpenDiffReview = useCallback(
     (filePath?: string) => {
+      notifyBeforePanelAction();
       if (props.onOpenDiffReview) {
         props.onOpenDiffReview(filePath);
         return;
@@ -706,30 +718,33 @@ function SessionOverviewPanelContent(
       useDiffPanelStore.getState().selectGitScope(activeThreadRef, "branch");
       useRightPanelStore.getState().open(activeThreadRef, "diff");
     },
-    [activeThreadRef, props],
+    [activeThreadRef, notifyBeforePanelAction, props],
   );
 
   const handleOpenFiles = useCallback(() => {
+    notifyBeforePanelAction();
     if (props.onOpenFiles) {
       props.onOpenFiles();
       return;
     }
     useRightPanelStore.getState().open(activeThreadRef, "files");
-  }, [activeThreadRef, props]);
+  }, [activeThreadRef, notifyBeforePanelAction, props]);
 
   const handleOpenWorkspaceFile = useCallback(
     (relativePath: string, line?: number) => {
+      notifyBeforePanelAction();
       if (props.onOpenFile) {
         props.onOpenFile(relativePath, line);
         return;
       }
       useRightPanelStore.getState().openFile(activeThreadRef, relativePath, line);
     },
-    [activeThreadRef, props],
+    [activeThreadRef, notifyBeforePanelAction, props],
   );
 
   const handleContinueInTerminal = useCallback(() => {
     if (props.continueInTerminalDisabled) return;
+    notifyBeforePanelAction();
     if (props.onContinueInTerminal) {
       props.onContinueInTerminal();
       return;
@@ -746,11 +761,12 @@ function SessionOverviewPanelContent(
       );
     }
     useRightPanelStore.getState().openTerminal(activeThreadRef, DEFAULT_THREAD_TERMINAL_ID);
-  }, [activeThreadRef, props]);
+  }, [activeThreadRef, notifyBeforePanelAction, props]);
 
   const handleOpenSubagent = useCallback(
     (item: OverviewSubagentItem) => {
       if (!item.childThreadId) return;
+      notifyBeforePanelAction();
       openSideThread({
         threadRef: scopeThreadRef(props.environmentId, item.childThreadId),
         panelRef: activeThreadRef,
@@ -762,11 +778,12 @@ function SessionOverviewPanelContent(
           }),
       });
     },
-    [activeThreadRef, navigate, props.environmentId],
+    [activeThreadRef, navigate, notifyBeforePanelAction, props.environmentId],
   );
 
   const handleOpenBackgroundTask = useCallback(
     (task: OverviewBackgroundTaskItem) => {
+      notifyBeforePanelAction();
       if (task.kind === "automation" && task.taskId) {
         void navigate({
           to: "/settings/scheduled-tasks",
@@ -778,7 +795,7 @@ function SessionOverviewPanelContent(
         .getState()
         .openTerminal(activeThreadRef, task.terminalId ?? DEFAULT_THREAD_TERMINAL_ID);
     },
-    [activeThreadRef, navigate, props.environmentId],
+    [activeThreadRef, navigate, notifyBeforePanelAction, props.environmentId],
   );
 
   const handleOpenArtifact = useCallback(
@@ -798,6 +815,7 @@ function SessionOverviewPanelContent(
 
   const handleOpenFileDiff = useCallback(
     (file: OverviewModifiedFileItem) => {
+      notifyBeforePanelAction();
       if (props.onOpenDiffReview) {
         props.onOpenDiffReview(file.path);
         return;
@@ -813,7 +831,7 @@ function SessionOverviewPanelContent(
       }
       handleOpenWorkspaceFile(file.path);
     },
-    [activeThreadRef, folderIsRepo, handleOpenWorkspaceFile, props],
+    [activeThreadRef, folderIsRepo, handleOpenWorkspaceFile, notifyBeforePanelAction, props],
   );
 
   const handleOpenUpload = useCallback(
@@ -823,6 +841,7 @@ function SessionOverviewPanelContent(
         return;
       }
       if (item.attachment.type === "file") {
+        notifyBeforePanelAction();
         useRightPanelStore
           .getState()
           .openAttachment(activeThreadRef, item.attachment as ChatFileAttachment);
@@ -830,7 +849,7 @@ function SessionOverviewPanelContent(
       }
       setPreviewUpload({ item, url: previewUrl });
     },
-    [activeThreadRef],
+    [activeThreadRef, notifyBeforePanelAction],
   );
 
   const branchToolbarProps = {
@@ -921,6 +940,8 @@ function SessionOverviewPanelContent(
     <div
       data-pmx-glass-zone="overviewPanel"
       data-session-overview-panel="1"
+      data-overview-pane-id={props.paneId ?? undefined}
+      data-overview-thread-id={props.threadId}
       data-overview-floating={props.floating ? "true" : undefined}
       data-overview-composer-clearance={
         props.floating
@@ -940,6 +961,7 @@ function SessionOverviewPanelContent(
           概览
         </h2>
 
+        <div className="flex shrink-0 items-center gap-0.5">
         <Popover open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
           <PopoverTrigger
             render={
@@ -1120,6 +1142,21 @@ function SessionOverviewPanelContent(
             </div>
           </PopoverPopup>
         </Popover>
+        {props.onCollapse ? (
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="收起概览"
+            title="收起当前分屏概览"
+            data-overview-collapse-trigger="1"
+            onClick={props.onCollapse}
+            className="size-6.5 rounded-md text-muted-foreground hover:bg-black/[0.06] hover:text-foreground dark:hover:bg-white/[0.1]"
+          >
+            <XIcon className="size-3.5" aria-hidden />
+          </Button>
+        ) : null}
+        </div>
       </header>
 
       {/* Scrollable Overview Body: scrolls smoothly within floating max-height without touching composer */}
@@ -1201,7 +1238,14 @@ function SessionOverviewPanelContent(
 
         <AgentAuxOverviewEntryButton
           entry={props.agentAuxEntry}
-          onOpen={props.onOpenAgentAux}
+          onOpen={
+            props.onOpenAgentAux
+              ? () => {
+                  notifyBeforePanelAction();
+                  props.onOpenAgentAux?.();
+                }
+              : undefined
+          }
         />
       </nav>
 
@@ -1239,6 +1283,7 @@ function SessionOverviewPanelContent(
               onSelectItem={(item) => {
                 // Native / live BTW items open directly in the right-panel multi-turn SideThreadPane tab.
                 if (item.linkedSideThreadId) {
+                  notifyBeforePanelAction();
                   useRightPanelStore
                     .getState()
                     .openThread(activeThreadRef, item.linkedSideThreadId);
@@ -1257,6 +1302,7 @@ function SessionOverviewPanelContent(
                     const created = await sideQuestionController.ask(question);
                     setSideComposerOpen(false);
                     if (created?.linkedSideThreadId) {
+                      notifyBeforePanelAction();
                       useRightPanelStore
                         .getState()
                         .openThread(activeThreadRef, ThreadId.make(created.linkedSideThreadId));
@@ -1339,6 +1385,7 @@ function SessionOverviewPanelContent(
         onClose={() => setPreviewUpload(null)}
         onOpenAttachmentFile={(attachment) => {
           if (attachment.type === "file") {
+            notifyBeforePanelAction();
             useRightPanelStore
               .getState()
               .openAttachment(activeThreadRef, attachment as ChatFileAttachment);
@@ -1366,7 +1413,9 @@ function SessionOverviewPanelContent(
   return (
     <aside
       {...workspaceAreaProps("details", 3, gt("Thread details"))}
-      data-workspace-focus-key={`details:${props.environmentId}:${props.threadId}`}
+      data-workspace-focus-key={`details:${props.paneId ? `${props.paneId}:` : ""}${props.environmentId}:${props.threadId}`}
+      data-overview-pane-id={props.paneId ?? undefined}
+      data-overview-thread-id={props.threadId}
       data-overview-floating-shell="true"
       data-overview-max-height-css={floatingClearance.maxHeightCss}
       className={cn(

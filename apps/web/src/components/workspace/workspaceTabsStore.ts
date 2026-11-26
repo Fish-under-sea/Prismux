@@ -1239,13 +1239,16 @@ export const useWorkspaceTabsStore = create<WorkspaceTabsStore>()(
 
             const shouldActivate = input.activate !== false;
             const targetPane = current.panes[existing.paneId]!;
-            const needsActivation = shouldActivate && targetPane.activeTabId !== prevTab.id;
+            const needsActivation =
+              shouldActivate &&
+              (targetPane.activeTabId !== prevTab.id || current.focusedPaneId !== existing.paneId);
 
             const baseUpdated: WorkspaceTabsStateData =
               !metadataChanged && !needsActivation
                 ? current
                 : {
                     ...current,
+                    ...(shouldActivate ? { focusedPaneId: existing.paneId } : {}),
                     tabs: {
                       ...current.tabs,
                       [prevTab.id]: {

@@ -533,6 +533,19 @@ interface RightPanelStoreState {
   requestMaximize: (ref: ScopedThreadRef) => void;
   consumeMaximizeRequest: (ref: ScopedThreadRef) => boolean;
   threadPanelVisibilityByThreadKey: Record<string, ThreadPanelVisibility>;
+  /** Per-pane independent overview open/collapsed state under split view (keyed by paneId). */
+  paneOverviewOpenByPaneId: Record<string, boolean>;
+  setPaneOverviewOpen: (paneId: string, open: boolean) => void;
+  togglePaneOverview: (paneId: string, fallbackOpen?: boolean) => void;
+  clearPaneOverview: (paneId: string) => void;
+  /** Unified split-view right sidebar dock transient state (never affects single-pane mode). */
+  splitDockOpen: boolean;
+  splitDockMaximized: boolean;
+  splitGlobalWallpaperOpen: boolean;
+  setSplitDockOpen: (open: boolean) => void;
+  setSplitDockMaximized: (maximized: boolean) => void;
+  setSplitGlobalWallpaperOpen: (open: boolean) => void;
+  toggleSplitGlobalWallpaper: () => void;
   userActionRevisionByThreadKey: Record<string, number>;
   closeRevisionByThreadKey: Record<string, number>;
   getUserActionRevision: (ref: ScopedThreadRef) => number;
@@ -957,10 +970,11 @@ const userAction = (
   guestKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
   closesView = false,
+  revealsView = !closesView,
 ): Partial<RightPanelStoreState> => {
   const host = panelHosts.get(guestKey);
   const threadKey = host === undefined ? guestKey : scopedThreadKey(host);
-  return userActionOnThread(state, threadKey, updater, closesView);
+  return userActionOnThread(state, threadKey, updater, closesView, revealsView);
 };
 
 const userActionOnThread = (
@@ -968,8 +982,10 @@ const userActionOnThread = (
   threadKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
   closesView: boolean,
-): Partial<RightPanelStoreState> => ({
-  ...updateThread(state, threadKey, (current) => {
+  revealsView: boolean,
+): Partial<RightPanelStoreState> => {
+  const before = state.byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
+  const updated = updateThread(state, threadKey, (current) => {
     const next = updater(current);
     if (next === current) return current;
     const removedDevices = current.surfaces.filter(
@@ -986,20 +1002,43 @@ const userActionOnThread = (
         ]),
       ],
     };
-  }),
-  userActionRevisionByThreadKey: {
-    ...state.userActionRevisionByThreadKey,
-    [threadKey]: (state.userActionRevisionByThreadKey[threadKey] ?? 0) + 1,
-  },
-  ...(closesView
-    ? {
-        closeRevisionByThreadKey: {
-          ...state.closeRevisionByThreadKey,
-          [threadKey]: (state.closeRevisionByThreadKey[threadKey] ?? 0) + 1,
-        },
-      }
-    : {}),
-});
+  });
+  const after = updated.byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
+  const activeAfter = after.surfaces.find((surface) => surface.id === after.activeSurfaceId);
+  const hasThreadScopedSurfaceAfter =
+    after.isOpen && activeAfter !== undefined && activeAfter.kind !== "wallpaper";
+  const threadSurfaceChanged =
+    !before.isOpen ||
+    before.activeSurfaceId !== after.activeSurfaceId ||
+    before.surfaces.length !== after.surfaces.length;
+  const openedThreadScopedSurface =
+    !closesView &&
+    hasThreadScopedSurfaceAfter &&
+    (threadSurfaceChanged ||
+      (revealsView && (!state.splitDockOpen || state.splitGlobalWallpaperOpen)));
+  const closedThreadPanel = before.isOpen && !after.isOpen;
+
+  return {
+    ...updated,
+    ...(openedThreadScopedSurface
+      ? { splitDockOpen: true, splitGlobalWallpaperOpen: false }
+      : closedThreadPanel && !state.splitGlobalWallpaperOpen
+        ? { splitDockOpen: false, splitDockMaximized: false }
+        : {}),
+    userActionRevisionByThreadKey: {
+      ...state.userActionRevisionByThreadKey,
+      [threadKey]: (state.userActionRevisionByThreadKey[threadKey] ?? 0) + 1,
+    },
+    ...(closesView
+      ? {
+          closeRevisionByThreadKey: {
+            ...state.closeRevisionByThreadKey,
+            [threadKey]: (state.closeRevisionByThreadKey[threadKey] ?? 0) + 1,
+          },
+        }
+      : {}),
+  };
+};
 
 const activated = (current: ThreadRightPanelState, surfaceId: string): ThreadRightPanelState =>
   current.surfaces.some((surface) => surface.id === surfaceId)
@@ -1234,6 +1273,72 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         return true;
       },
       threadPanelVisibilityByThreadKey: {},
+      paneOverviewOpenByPaneId: {},
+      setPaneOverviewOpen: (paneId, open) =>
+        set((state) => {
+          if (state.paneOverviewOpenByPaneId[paneId] === open) return state;
+          return {
+            paneOverviewOpenByPaneId: {
+              ...state.paneOverviewOpenByPaneId,
+              [paneId]: open,
+            },
+          };
+        }),
+      togglePaneOverview: (paneId, fallbackOpen = true) =>
+        set((state) => {
+          const current = state.paneOverviewOpenByPaneId[paneId] ?? fallbackOpen;
+          return {
+            paneOverviewOpenByPaneId: {
+              ...state.paneOverviewOpenByPaneId,
+              [paneId]: !current,
+            },
+          };
+        }),
+      clearPaneOverview: (paneId) =>
+        set((state) => {
+          if (!(paneId in state.paneOverviewOpenByPaneId)) return state;
+          const { [paneId]: _removed, ...rest } = state.paneOverviewOpenByPaneId;
+          return { paneOverviewOpenByPaneId: rest };
+        }),
+      splitDockOpen: false,
+      splitDockMaximized: false,
+      splitGlobalWallpaperOpen: false,
+      setSplitDockOpen: (open) =>
+        set((state) =>
+          state.splitDockOpen === open && (open || !state.splitDockMaximized)
+            ? state
+            : {
+                splitDockOpen: open,
+                ...(open ? {} : { splitDockMaximized: false }),
+              },
+        ),
+      setSplitDockMaximized: (maximized) =>
+        set((state) =>
+          state.splitDockMaximized === maximized ? state : { splitDockMaximized: maximized },
+        ),
+      setSplitGlobalWallpaperOpen: (open) =>
+        set((state) =>
+          state.splitGlobalWallpaperOpen === open
+            ? state
+            : {
+                splitGlobalWallpaperOpen: open,
+                ...(open ? { splitDockOpen: true, splitDockMaximized: false } : {}),
+              },
+        ),
+      toggleSplitGlobalWallpaper: () =>
+        set((state) =>
+          state.splitGlobalWallpaperOpen
+            ? {
+                splitGlobalWallpaperOpen: false,
+                splitDockOpen: false,
+                splitDockMaximized: false,
+              }
+            : {
+                splitGlobalWallpaperOpen: true,
+                splitDockOpen: true,
+                splitDockMaximized: false,
+              },
+        ),
       userActionRevisionByThreadKey: {},
       closeRevisionByThreadKey: {},
       getUserActionRevision: (ref) =>
@@ -1350,27 +1455,33 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       },
       updateAgentSession: (ref, surfaceId, patch) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            let changed = false;
-            const surfaces = current.surfaces.map((surface) => {
-              if (surface.id !== surfaceId || surface.kind !== "agent-session") {
-                return surface;
-              }
-              changed = true;
-              return {
-                ...surface,
-                ...(patch.title !== undefined ? { title: patch.title } : {}),
-                ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
-                ...(patch.instanceId !== undefined ? { instanceId: patch.instanceId } : {}),
-                ...(patch.model !== undefined ? { model: patch.model } : {}),
-                ...(patch.environmentId !== undefined
-                  ? { environmentId: patch.environmentId }
-                  : {}),
-                ...(patch.threadId !== undefined ? { threadId: patch.threadId } : {}),
-              };
-            });
-            return changed ? { ...current, surfaces } : current;
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              let changed = false;
+              const surfaces = current.surfaces.map((surface) => {
+                if (surface.id !== surfaceId || surface.kind !== "agent-session") {
+                  return surface;
+                }
+                changed = true;
+                return {
+                  ...surface,
+                  ...(patch.title !== undefined ? { title: patch.title } : {}),
+                  ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+                  ...(patch.instanceId !== undefined ? { instanceId: patch.instanceId } : {}),
+                  ...(patch.model !== undefined ? { model: patch.model } : {}),
+                  ...(patch.environmentId !== undefined
+                    ? { environmentId: patch.environmentId }
+                    : {}),
+                  ...(patch.threadId !== undefined ? { threadId: patch.threadId } : {}),
+                };
+              });
+              return changed ? { ...current, surfaces } : current;
+            },
+            false,
+            false,
+          ),
         ),
       openAgentAux: (ref, input, automatic = false) =>
         set((state) =>
@@ -1501,20 +1612,26 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         }),
       renameDevice: (ref, surfaceId, title) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => ({
-            ...current,
-            surfaces: current.surfaces.map((surface) =>
-              surface.id === surfaceId && surface.kind === "device"
-                ? {
-                    ...surface,
-                    title:
-                      title.trim() ||
-                      surface.target?.name ||
-                      m(msg("Device", { $context: "a simulator or emulator" })),
-                  }
-                : surface,
-            ),
-          })),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => ({
+              ...current,
+              surfaces: current.surfaces.map((surface) =>
+                surface.id === surfaceId && surface.kind === "device"
+                  ? {
+                      ...surface,
+                      title:
+                        title.trim() ||
+                        surface.target?.name ||
+                        m(msg("Device", { $context: "a simulator or emulator" })),
+                    }
+                  : surface,
+              ),
+            }),
+            false,
+            false,
+          ),
         ),
       openBrowser: (ref, tabId) =>
         set((state) =>
@@ -2131,6 +2248,25 @@ export function selectThreadPanelOpen(
 ): boolean {
   const visibility = selectThreadPanelVisibility(byThreadKey, ref);
   return presentation === "inline" ? visibility.inlineOpen : visibility.popoverOpen;
+}
+
+/**
+ * Resolves overview panel visibility for either single-pane mode (keyed by threadRef) or
+ * split-pane mode (independently keyed by `paneId`, so collapsing Pane A never collapses Pane B).
+ */
+export function selectPaneOverviewOpen(
+  paneOverviewOpenByPaneId: Readonly<Record<string, boolean>>,
+  threadPanelVisibilityByThreadKey: Record<string, ThreadPanelVisibility>,
+  paneId: string | null | undefined,
+  ref: ScopedThreadRef | null | undefined,
+  inSplit: boolean,
+): boolean {
+  if (inSplit && paneId) {
+    const explicit = paneOverviewOpenByPaneId[paneId];
+    if (explicit !== undefined) return explicit;
+    return true;
+  }
+  return selectThreadPanelOpen(threadPanelVisibilityByThreadKey, ref, "inline");
 }
 
 export function selectActiveRightPanel(

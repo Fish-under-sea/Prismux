@@ -52,6 +52,12 @@ interface RightPanelActionsInput {
   readonly isServerThread: boolean;
   /** A side chat pane; the main view already answers preview bus actions. */
   readonly embedded: boolean;
+  /** Optional split-pane id when mounted inside a multi-pane workspace. */
+  readonly paneId?: string | null | undefined;
+  /** True when mounted inside a split workspace with a unified right sidebar dock. */
+  readonly inSplit?: boolean | undefined;
+  /** Invoked before opening/toggling a right-panel surface (e.g. focuses this split pane). */
+  readonly onBeforeRightPanelAction?: (() => void) | undefined;
   /** The thread has a diff to show: a Git folder, or turns that changed tracked repositories. */
   readonly diffAvailable: boolean;
   readonly browserAvailable: boolean;
@@ -86,6 +92,9 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     threadPanelPresentation,
     isServerThread,
     embedded,
+    paneId = null,
+    inSplit = false,
+    onBeforeRightPanelAction,
     diffAvailable,
     browserAvailable,
     canOperatePreview,
@@ -105,6 +114,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     if (!isServerThread) {
       return;
     }
+    onBeforeRightPanelAction?.();
     if (!diffOpen) {
       onDiffPanelOpen?.();
     }
@@ -115,6 +125,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const onToggleDiffStable = useStableCallback(onToggleDiff);
   const createBrowserSurface = (profileId?: string, duplicateFrom?: PreviewSessionSnapshot) => {
     if (!activeThreadRef || !canOperatePreview) return;
+    onBeforeRightPanelAction?.();
     void addBrowserSurface({
       threadRef: activeThreadRef,
       openPreview,
@@ -143,6 +154,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const createBrowserSurfaceStable = useStableCallback(createBrowserSurface);
   const addDiffSurface = () => {
     if (!activeThreadRef || !isServerThread || !diffAvailable) return;
+    onBeforeRightPanelAction?.();
     useDiffPanelStore.getState().selectGitScope(activeThreadRef, "branch");
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
@@ -154,16 +166,19 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const openChangesFromThreadPanelStable = useStableCallback(openChangesFromThreadPanel);
   const addFilesSurface = () => {
     if (!activeThreadRef || !activeProject) return;
+    onBeforeRightPanelAction?.();
     useRightPanelStore.getState().open(activeThreadRef, "files");
   };
   const addFilesSurfaceStable = useStableCallback(addFilesSurface);
   const addPullRequestsSurface = () => {
     if (!activeThreadRef) return;
+    onBeforeRightPanelAction?.();
     useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
   };
   const addPullRequestsSurfaceStable = useStableCallback(addPullRequestsSurface);
   const addDeviceSurface = () => {
     if (!activeThreadRef) return;
+    onBeforeRightPanelAction?.();
     if (!deviceState.onboardingCompleted || deviceState.hostStatus === "disabled") {
       openDeviceSetupDialog(scopedThreadKey(activeThreadRef));
       return;
@@ -172,11 +187,19 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const addDeviceSurfaceStable = useStableCallback(addDeviceSurface);
   const addWallpaperSurface = () => {
+    if (inSplit) {
+      useRightPanelStore.getState().setSplitGlobalWallpaperOpen(true);
+      return;
+    }
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "wallpaper");
   };
   const addWallpaperSurfaceStable = useStableCallback(addWallpaperSurface);
   const toggleWallpaperSurface = () => {
+    if (inSplit) {
+      useRightPanelStore.getState().toggleSplitGlobalWallpaper();
+      return;
+    }
     if (!activeThreadRef) return;
     if (rightPanelOpen && activeRightPanelSurface?.kind === "wallpaper") {
       useRightPanelStore.getState().setMaximized(activeThreadRef, false);
@@ -186,6 +209,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const toggleWallpaperSurfaceStable = useStableCallback(toggleWallpaperSurface);
   const openFileSurface = (relativePath: string) => {
     if (!activeThreadRef || !activeProject) return;
+    onBeforeRightPanelAction?.();
     useRightPanelStore.getState().openFile(activeThreadRef, relativePath);
   };
   const openFileSurfaceStable = useStableCallback(openFileSurface);
@@ -214,6 +238,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
       return;
     }
     if (!canOperatePreview) return;
+    onBeforeRightPanelAction?.();
     const activeTabId = activePreviewState.activeTabId;
     if (activeTabId) {
       useRightPanelStore.getState().openBrowser(activeThreadRef, activeTabId);
@@ -224,6 +249,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const togglePreviewPanelStable = useStableCallback(togglePreviewPanel);
   const activateRightPanelSurface = (surface: RightPanelSurface) => {
     if (!activeThreadRef) return;
+    onBeforeRightPanelAction?.();
     useRightPanelStore.getState().activateSurface(activeThreadRef, surface.id);
     if (surface.kind === "preview" && surface.resourceId) {
       setActivePreviewTab(activeThreadRef, surface.resourceId);
@@ -252,6 +278,20 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const activateRightPanelSurfaceStable = useStableCallback(activateRightPanelSurface);
   const toggleRightPanel = () => {
     if (!activeThreadRef) return;
+    if (inSplit) {
+      const store = useRightPanelStore.getState();
+      if (store.splitDockOpen && !store.splitGlobalWallpaperOpen) {
+        closePreviewPanel();
+        store.setSplitDockOpen(false);
+        return;
+      }
+      onBeforeRightPanelAction?.();
+      store.setSplitGlobalWallpaperOpen(false);
+      store.setSplitDockOpen(true);
+      store.show(activeThreadRef);
+      focusActivePanelTerminal(activeThreadRef);
+      return;
+    }
     if (rightPanelOpen) {
       closePreviewPanel();
       return;
@@ -261,6 +301,10 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const toggleRightPanelStable = useStableCallback(toggleRightPanel);
   const toggleThreadPanel = () => {
+    if (inSplit && paneId) {
+      useRightPanelStore.getState().togglePaneOverview(paneId, true);
+      return;
+    }
     if (!activeThreadRef) return;
     const store = useRightPanelStore.getState();
     if (threadPanelPresentation === "inline") {
@@ -277,6 +321,13 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const toggleThreadPanelStable = useStableCallback(toggleThreadPanel);
   const toggleRightPanelMaximized = () => {
+    if (inSplit) {
+      const store = useRightPanelStore.getState();
+      if (!store.splitDockOpen && !store.splitGlobalWallpaperOpen) return;
+      if (!store.splitDockMaximized) requestWorkspaceFocus({ area: "panel" });
+      store.setSplitDockMaximized(!store.splitDockMaximized);
+      return;
+    }
     if (!canMaximizeRightPanel || !activeThreadRef) return;
     if (!rightPanelMaximized) requestWorkspaceFocus({ area: "panel" });
     useRightPanelStore.getState().setMaximized(activeThreadRef, !rightPanelMaximized);
@@ -316,6 +367,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const copyRightPanelFilePathStable = useStableCallback(copyRightPanelFilePath);
   const addPullRequestSurface = () => {
     if (activeThreadRef === null) return;
+    onBeforeRightPanelAction?.();
     const store = useRightPanelStore.getState();
     if (supportsPullRequests && pullRequestPanelTarget !== null) {
       store.openPullRequest(activeThreadRef, pullRequestPanelTarget);
@@ -334,12 +386,14 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const addPullRequestSurfaceStable = useStableCallback(addPullRequestSurface);
   const onOpenTurnDiff = (runId: RunId, filePath?: string) => {
     if (!isServerThread || !activeThreadRef) return;
+    onBeforeRightPanelAction?.();
     useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   };
   const onOpenToolDiffStable = useStableCallback((target: ToolCallDiffTarget) => {
     if (!isServerThread || !activeThreadRef) return;
+    onBeforeRightPanelAction?.();
     useDiffPanelStore.getState().selectToolCall(activeThreadRef, target);
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();

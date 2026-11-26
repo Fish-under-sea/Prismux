@@ -20,6 +20,7 @@ import { memo, useState, type DragEvent as ReactDragEvent, type ReactNode, type 
 import { isElectron } from "../../env";
 import { cn } from "~/lib/utils";
 import { AgentBrandLogo } from "../../prismux/agentBrand";
+import { OverviewPanelIcon } from "../../prismux/PrismuxWallpaperBridge";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -58,6 +59,9 @@ export interface WorkspaceTabBarProps {
   readonly topbarRightSlotRef?: Ref<HTMLDivElement> | undefined;
   readonly fallbackRightControls?: ReactNode | undefined;
   readonly showSplitControls?: boolean | undefined;
+  readonly paneOverviewAvailable?: boolean | undefined;
+  readonly paneOverviewOpen?: boolean | undefined;
+  readonly onTogglePaneOverview?: ((paneId: string) => void) | undefined;
   readonly newTabPopover: Omit<WorkspaceNewTabPopoverProps, "paneId" | "canSplit">;
   readonly onActivateTab: (paneId: string, tabId: string) => void;
   readonly onCloseTab: (paneId: string, tabId: string) => void;
@@ -119,6 +123,9 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
     topbarRightSlotRef,
     fallbackRightControls,
     showSplitControls = true,
+    paneOverviewAvailable = false,
+    paneOverviewOpen = false,
+    onTogglePaneOverview,
     newTabPopover,
     onActivateTab,
     onCloseTab,
@@ -360,6 +367,36 @@ export const WorkspaceTabBar = memo(function WorkspaceTabBar(props: WorkspaceTab
             />
             {fallbackRightControls}
           </>
+        ) : null}
+
+        {isSplit && paneOverviewAvailable && onTogglePaneOverview ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  data-workspace-pane-overview-toggle={pane.id}
+                  aria-pressed={paneOverviewOpen}
+                  aria-label={paneOverviewOpen ? "收起当前分屏概览" : "展开当前分屏概览"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePaneOverview(pane.id);
+                  }}
+                  className={cn(
+                    "flex size-6.5 cursor-pointer items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                    paneOverviewOpen
+                      ? "bg-accent/70 text-foreground"
+                      : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+                  )}
+                >
+                  <OverviewPanelIcon className="size-3.5" />
+                </button>
+              }
+            />
+            <TooltipPopup side="bottom">
+              {paneOverviewOpen ? "收起当前分屏概览" : "展开当前分屏概览"}
+            </TooltipPopup>
+          </Tooltip>
         ) : null}
 
         {showSplitControls ? (

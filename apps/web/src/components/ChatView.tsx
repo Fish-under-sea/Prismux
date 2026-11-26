@@ -83,6 +83,7 @@ import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { RightPanelAgentSessionPane } from "./workspace/RightPanelAgentSessionPane";
 import {
   PrismuxStageFrame,
+  useWorkspaceSplitPane,
   useWorkspaceTopbarPortal,
 } from "./workspace/WorkspaceTopbarPortalContext";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
@@ -214,7 +215,7 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
-  selectThreadPanelOpen,
+  selectPaneOverviewOpen,
   selectThreadRightPanelState,
   useRightPanelStore,
 } from "../rightPanelStore";
@@ -475,6 +476,12 @@ const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 
+interface ChatViewSplitPaneProps {
+  readonly paneId: string;
+  readonly isFocused: boolean;
+  readonly onFocusPane: () => void;
+}
+
 type ChatViewProps =
   | {
       environmentId: EnvironmentId;
@@ -484,6 +491,8 @@ type ChatViewProps =
       forceExpandedMobileComposer?: boolean;
       /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
       embedded?: SideChatParentPanel;
+      /** Split-pane ownership metadata when rendered inside a multi-pane workspace split. */
+      splitPane?: ChatViewSplitPaneProps;
       routeKind: "server";
       draftId?: never;
     }
@@ -494,6 +503,8 @@ type ChatViewProps =
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       embedded?: never;
+      /** Split-pane ownership metadata when rendered inside a multi-pane workspace split. */
+      splitPane?: ChatViewSplitPaneProps;
       routeKind: "draft";
       draftId: DraftId;
     };
@@ -513,8 +524,28 @@ export default function ChatView(props: ChatViewProps) {
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
     embedded: parentPanel,
+    splitPane: splitPaneProp,
   } = props;
   const embedded = parentPanel !== undefined;
+  const splitPaneContext = useWorkspaceSplitPane();
+  const inSplitWorkspace = !embedded && (splitPaneProp !== undefined || splitPaneContext.inSplit);
+  const currentPaneId = embedded
+    ? null
+    : (splitPaneProp?.paneId ?? splitPaneContext.paneId ?? null);
+  const isPaneFocused = embedded
+    ? false
+    : (splitPaneProp?.isFocused ?? splitPaneContext.isFocused ?? true);
+  const focusOwnPaneStable = useStableCallback(() => {
+    if (splitPaneProp) {
+      splitPaneProp.onFocusPane();
+    } else if (currentPaneId) {
+      splitPaneContext.onFocusPane?.(currentPaneId);
+    }
+  });
+  // Single-pane views own ChatRightPanel + topbar controls directly; split panes delegate to the
+  // unified workspace-level split right sidebar dock while keeping per-pane overview & telemetry.
+  const ownsRightPanel = !embedded && !inSplitWorkspace;
+  const ownsGlobalSideEffects = !embedded && (!inSplitWorkspace || isPaneFocused);
   const panelHostShell = useQuietThreadShell(parentPanel?.hostRef ?? null);
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
@@ -673,7 +704,11 @@ export default function ChatView(props: ChatViewProps) {
       ? { citation: locationCitation, key: citationActivation }
       : null
   ) as AssistantCitationRequest | null;
-  useSideChatCitationReveal(embedded ? null : routeThreadRef, locationCitation, citationActivation);
+  useSideChatCitationReveal(
+    ownsGlobalSideEffects ? routeThreadRef : null,
+    locationCitation,
+    citationActivation,
+  );
   const citationHistory = useCitedHistory(citationRequest);
   const { resolvedTheme } = useTheme();
   const composerRuntimeMode = useComposerDraftStore(
@@ -1219,10 +1254,11 @@ export default function ChatView(props: ChatViewProps) {
     renderedRightPanelSurface,
   );
   const canMaximizeRightPanel = rightPanelOpen;
-  // An embedded side chat has no panel; a stale maximized flag would hide its own column.
+  // An embedded side chat or split pane has no per-view right panel; a stale maximized flag would hide its own column.
   const rightPanelMaximized =
-    !embedded && canMaximizeRightPanel && rightPanelState.maximized === true;
-  const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
+    ownsRightPanel && canMaximizeRightPanel && rightPanelState.maximized === true;
+  const inlineRightPanelOwnsTitleBar =
+    ownsRightPanel && rightPanelOpen && !shouldUsePlanSidebarSheet;
   const [chatCanvasStore] = useState(createChatCanvasStore);
 
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
@@ -1672,6 +1708,7 @@ export default function ChatView(props: ChatViewProps) {
   const downloadFileAttachmentStable = useStableCallback(downloadFileAttachment);
   const openFileAttachment = (attachment: ChatFileAttachment) => {
     if (activeThreadRef) {
+      if (inSplitWorkspace) focusOwnPaneStable();
       useRightPanelStore.getState().openAttachment(activeThreadRef, attachment);
       return;
     }
@@ -1841,7 +1878,7 @@ export default function ChatView(props: ChatViewProps) {
     remoteOpenMode: remoteOpenState.mode,
   });
   useOpenFavoriteEditorShortcut({
-    enabled: showOpenInPicker && !backgroundThread,
+    enabled: showOpenInPicker && !backgroundThread && ownsGlobalSideEffects,
     environmentId: openInEnvironmentId,
     keybindings,
     availableEditors,
@@ -2029,8 +2066,8 @@ export default function ChatView(props: ChatViewProps) {
   const onInterruptStable = useStableCallback(onInterrupt);
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- window listener for the desktop snapshot event that focuses the composer
   useEffect(
-    () => (embedded ? undefined : subscribeSnapShotComposerFocus(focusComposerStable)),
-    [embedded, focusComposerStable],
+    () => (ownsGlobalSideEffects ? subscribeSnapShotComposerFocus(focusComposerStable) : undefined),
+    [focusComposerStable, ownsGlobalSideEffects],
   );
   const insertArtifactTemplate = (template: CodexArtifactTemplate) => {
     const composer = composerRef.current;
@@ -2149,7 +2186,13 @@ export default function ChatView(props: ChatViewProps) {
       : null;
   const canvasPreview = useThreadPreviewCanvasSource(activeThreadRef, shownPreviewMiniPlayer);
   const threadPanelInlineOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, activeThreadRef, "inline"),
+    selectPaneOverviewOpen(
+      state.paneOverviewOpenByPaneId,
+      state.threadPanelVisibilityByThreadKey,
+      currentPaneId,
+      activeThreadRef,
+      inSplitWorkspace,
+    ),
   );
   // SessionOverviewPanel always mounts as a true floating top-right overlay inside the chat pane,
   // never displacing the timeline or degrading into an anchored popover.
@@ -2195,8 +2238,9 @@ export default function ChatView(props: ChatViewProps) {
     : linkedThreadPullRequestKey;
   const activeRunningTurnId = activeRuntime?.activeRunId ?? null;
   useProactivePanels({
-    threadRef: isServerThread && !embedded ? activeThreadRef : null,
-    enabled: settings.proactivePanelsEnabled && !shouldUsePlanSidebarSheet && !embedded,
+    threadRef: isServerThread && ownsGlobalSideEffects ? activeThreadRef : null,
+    enabled:
+      settings.proactivePanelsEnabled && !shouldUsePlanSidebarSheet && ownsGlobalSideEffects,
     settingsHydrated: clientSettingsHydrated,
     threadDetailLoading,
     runningTurnId: activeRunningTurnId,
@@ -2215,11 +2259,11 @@ export default function ChatView(props: ChatViewProps) {
   });
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- consumes a pending maximize request from the right panel store once the panel can maximize
   useEffect(() => {
-    if (!canMaximizeRightPanel) return;
+    if (!ownsRightPanel || !canMaximizeRightPanel) return;
     if (useRightPanelStore.getState().consumeMaximizeRequest(routeThreadRef)) {
       useRightPanelStore.getState().setMaximized(routeThreadRef, true);
     }
-  }, [canMaximizeRightPanel, routeThreadRef]);
+  }, [canMaximizeRightPanel, ownsRightPanel, routeThreadRef]);
   const {
     closeSurface: closeRightPanelSurface,
     closeOtherSurfaces: closeOtherRightPanelSurfacesStable,
@@ -2328,7 +2372,7 @@ export default function ChatView(props: ChatViewProps) {
   useFocusComposerOnThreadOpen(
     activeThreadRef,
     workspaceLayoutElement,
-    !embedded,
+    ownsGlobalSideEffects,
     terminalUiState.terminalOpen,
     isCoarsePointer ? ignoreComposerFocus : focusComposerStable,
   );
@@ -2336,7 +2380,7 @@ export default function ChatView(props: ChatViewProps) {
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- window focus listener that refocuses the composer after the window regains focus on a fine pointer
   useEffect(() => {
     if (
-      embedded ||
+      !ownsGlobalSideEffects ||
       !activeThread?.id ||
       terminalUiState.terminalOpen ||
       isMobileViewport ||
@@ -2368,10 +2412,10 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [
     activeThread?.id,
-    embedded,
     focusComposerStable,
     isCoarsePointer,
     isMobileViewport,
+    ownsGlobalSideEffects,
     terminalUiState.terminalOpen,
   ]);
 
@@ -2614,7 +2658,10 @@ export default function ChatView(props: ChatViewProps) {
     pullRequestPanelTarget,
     threadPanelPresentation,
     isServerThread,
-    embedded,
+    embedded: embedded || (inSplitWorkspace && !isPaneFocused),
+    paneId: currentPaneId,
+    inSplit: inSplitWorkspace,
+    onBeforeRightPanelAction: inSplitWorkspace ? focusOwnPaneStable : undefined,
     diffAvailable,
     browserAvailable,
     canOperatePreview,
@@ -2955,7 +3002,9 @@ export default function ChatView(props: ChatViewProps) {
     modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
     composerFocus:
       document.activeElement?.getAttribute("data-testid") === "composer-editor" &&
-      isInSideChatPane(document.activeElement) === embedded,
+      (workspaceLayoutElement
+        ? workspaceLayoutElement.contains(document.activeElement)
+        : isInSideChatPane(document.activeElement) === embedded),
     draftThreadRoute: routeKind === "draft",
     turnRunning: phase === "running" || phase === "connecting",
     // A queued-message edit or a question's answer owns the composer even when its text is empty.
@@ -2981,8 +3030,8 @@ export default function ChatView(props: ChatViewProps) {
   });
 
   useChatShortcuts({
-    enabled: activeThreadId !== null && !backgroundThread,
-    embedded,
+    enabled: activeThreadId !== null && !backgroundThread && ownsGlobalSideEffects,
+    embedded: embedded || (inSplitWorkspace && !isPaneFocused),
     composerElement: composerOverlayElement,
     keybindings,
     scriptKeybindings,
@@ -3042,21 +3091,21 @@ export default function ChatView(props: ChatViewProps) {
   // A focused desktop browser page forwards these chords as menu actions.
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to desktop bridge menu actions that toggle or close the right panel
   useEffect(() => {
-    if (embedded || backgroundThread) return;
+    if (!ownsGlobalSideEffects || backgroundThread) return;
     return window.desktopBridge?.onMenuAction((action) => {
       if (action === "rightPanel.toggle") toggleRightPanelStable();
       else if (action === "rightPanel.toggleMaximized") toggleRightPanelMaximizedStable();
       else if (action === "rightPanel.close") closeActiveRightPanelSurfaceStable();
     });
   }, [
-    embedded,
     backgroundThread,
-    toggleRightPanelStable,
-    toggleRightPanelMaximizedStable,
     closeActiveRightPanelSurfaceStable,
+    ownsGlobalSideEffects,
+    toggleRightPanelMaximizedStable,
+    toggleRightPanelStable,
   ]);
 
-  usePasteToFocusComposer(embedded ? null : activeThreadId, composerRef);
+  usePasteToFocusComposer(ownsGlobalSideEffects ? activeThreadId : null, composerRef);
   // A delegated task is a remote thread's subagent.
   const isSubagentThread =
     activeThread?.lineage.relationshipToParent === "subagent" || delegatedFrom !== null;
@@ -3120,6 +3169,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const openSideChatSurfaceStable = useStableCallback(() => {
     if (!activeThreadRef) return;
+    if (inSplitWorkspace) focusOwnPaneStable();
     const store = useRightPanelStore.getState();
     const existingSideChat = selectThreadRightPanelState(
       store.byThreadKey,
@@ -3703,9 +3753,9 @@ export default function ChatView(props: ChatViewProps) {
     }));
 
   const topbarPortal = useWorkspaceTopbarPortal();
-  const topbarManaged = topbarPortal.managed && !embedded;
+  const topbarManaged = topbarPortal.managed && ownsRightPanel;
   const hasActiveThreadForTopbar = activeThread !== null;
-  const { setActiveChatProvider } = topbarPortal;
+  const { setActiveChatProvider, setPaneChatProvider } = topbarPortal;
   const chatRouteKey =
     routeKind === "server" ? `server:${environmentId}:${threadId}` : `draft:${props.draftId}`;
   const effectiveTabInstanceId =
@@ -3772,6 +3822,39 @@ export default function ChatView(props: ChatViewProps) {
       setActiveChatProvider(null);
     };
   }, [setActiveChatProvider, topbarManaged]);
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- reports each split pane's isolated resolved provider/model to WorkspaceSplitContainer without affecting other panes
+  useEffect(() => {
+    if (!inSplitWorkspace || !currentPaneId || embedded || !setPaneChatProvider) return;
+    if (!hasActiveThreadForTopbar) {
+      setPaneChatProvider(currentPaneId, null);
+      return;
+    }
+    setPaneChatProvider(currentPaneId, {
+      routeKey: chatRouteKey,
+      instanceId: effectiveTabInstanceId,
+      providerId: activeChatProviderId,
+      model: activeUsageModel,
+      displayName: activeChatDisplayName,
+    });
+  }, [
+    activeChatDisplayName,
+    activeChatProviderId,
+    activeUsageModel,
+    chatRouteKey,
+    currentPaneId,
+    effectiveTabInstanceId,
+    embedded,
+    hasActiveThreadForTopbar,
+    inSplitWorkspace,
+    setPaneChatProvider,
+  ]);
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- clears per-pane provider snapshot when split pane ChatView unmounts
+  useEffect(() => {
+    if (!inSplitWorkspace || !currentPaneId || embedded || !setPaneChatProvider) return;
+    return () => {
+      setPaneChatProvider(currentPaneId, null);
+    };
+  }, [currentPaneId, embedded, inSplitWorkspace, setPaneChatProvider]);
 
   if (!activeThread) {
     return embedded ? null : <NoActiveThreadState />;
@@ -4543,10 +4626,13 @@ export default function ChatView(props: ChatViewProps) {
               </div>
             </div>
 
-            {canOperatePreview && activeThreadRef && activeEnvironmentServerBrowser && !embedded ? (
+            {canOperatePreview &&
+            activeThreadRef &&
+            activeEnvironmentServerBrowser &&
+            ownsRightPanel ? (
               <PreviewSessionSync threadRef={activeThreadRef} />
             ) : null}
-            {activeThreadRef && shownPreviewMiniPlayer && !embedded ? (
+            {activeThreadRef && shownPreviewMiniPlayer && ownsRightPanel ? (
               <ThreadPreviewMiniPlayer
                 key={`${activeThreadKey}:${previewMiniPlayerSourceKey(shownPreviewMiniPlayer.source)}`}
                 threadRef={activeThreadRef}
@@ -4566,6 +4652,15 @@ export default function ChatView(props: ChatViewProps) {
                 {threadPanelOpen && !rightPanelMaximized ? (
                   <SessionOverviewPanel
                     floating
+                    paneId={currentPaneId}
+                    onBeforePanelAction={inSplitWorkspace ? focusOwnPaneStable : undefined}
+                    onCollapse={
+                      inSplitWorkspace && currentPaneId
+                        ? () => {
+                            useRightPanelStore.getState().setPaneOverviewOpen(currentPaneId, false);
+                          }
+                        : undefined
+                    }
                     topInsetPx={isThreadFindActive ? THREAD_FIND_BAR_RESERVED_HEIGHT : 0}
                     bottomClearancePx={floatingOverviewComposerHeight}
                     containerHeightPx={floatingOverviewCanvasHeight}
@@ -4698,6 +4793,8 @@ export default function ChatView(props: ChatViewProps) {
   const content = (
     <div
       ref={setWorkspaceLayoutElement}
+      data-chat-view-thread-id={activeThread.id}
+      data-chat-view-pane-id={currentPaneId ?? undefined}
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 overflow-hidden",
         embedded
@@ -4708,11 +4805,13 @@ export default function ChatView(props: ChatViewProps) {
       {unifiedSingleTopbarControls}
       {embedded ? null : (
         <>
-          <DeviceSetupDialogHost
-            threadKey={activeThreadKey}
-            threadRef={activeThreadRef}
-            state={deviceState}
-          />
+          {ownsRightPanel ? (
+            <DeviceSetupDialogHost
+              threadKey={activeThreadKey}
+              threadRef={activeThreadRef}
+              state={deviceState}
+            />
+          ) : null}
           <AgentSessionContinuationDialog
             open={continuationDialogOpen}
             onOpenChange={setContinuationDialogOpen}
@@ -4724,7 +4823,9 @@ export default function ChatView(props: ChatViewProps) {
           />
         </>
       )}
-      {!topbarManaged && rightPanelControlsAtRoot && !embedded ? panelLayoutControls : null}
+      {!topbarPortal.managed && rightPanelControlsAtRoot && ownsRightPanel
+        ? panelLayoutControls
+        : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -4736,7 +4837,7 @@ export default function ChatView(props: ChatViewProps) {
         onMouseUp={preventMiddleClickPasteOutsideEditable}
       >
         {/* Only render standalone fallback header when ChatView is mounted outside WorkspaceSplitContainer (e.g. isolated tests). */}
-        {embedded || topbarManaged ? null : (
+        {embedded || topbarPortal.managed ? null : (
           <header
             data-chat-header
             data-pmx-glass-zone="shellFrame"
@@ -4827,7 +4928,7 @@ export default function ChatView(props: ChatViewProps) {
         )}
       </div>
 
-      {rightPanelPresent && activeThreadRef && !embedded ? (
+      {rightPanelPresent && activeThreadRef && ownsRightPanel ? (
         <ChatRightPanel
           sheet={shouldUsePlanSidebarSheet}
           workspaceLayoutElement={workspaceLayoutElement}
@@ -4903,7 +5004,7 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath={activeThread?.worktreePath ?? null}
         onConfirm={onConfirmRevertStable}
       />
-      {embedded ? null : <LinkPullRequestDialogHost />}
+      {ownsRightPanel ? <LinkPullRequestDialogHost /> : null}
       <ThreadVisitWatermark threadRef={routeThreadRef} />
       <ExpandedImageDialogHost threadKey={routeThreadKey} />
     </div>
