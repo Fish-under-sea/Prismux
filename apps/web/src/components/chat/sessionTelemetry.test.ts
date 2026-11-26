@@ -319,22 +319,25 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(statsHtml).toContain("0轮 0步 · 0 次采样");
     expect(statsHtml).toContain("0 / 0 tok");
 
-    // Popover 2 empty session + global reference bottom
+    // Popover 2 empty session (strictly session-scoped — no Today/Month or View Usage footer)
     const tokensHtml = renderToStaticMarkup(
       createElement(SessionTokenUsagePopoverContent, {
         display,
         copy: zhCopy,
-        onOpenUsage: () => undefined,
       }),
     );
     expect(tokensHtml).toContain("Token 用量");
+    expect(tokensHtml).toContain("缓存命中");
+    expect(tokensHtml).toContain("未缓存输入");
+    expect(tokensHtml).toContain("缓存读取");
+    expect(tokensHtml).toContain("输出");
     expect(tokensHtml).toContain("当前会话暂无模型采样");
     expect(tokensHtml).toContain("0 个模型");
-    expect(tokensHtml).toContain("今日用量");
-    expect(tokensHtml).toContain("397.6M");
-    expect(tokensHtml).toContain("本月用量");
-    expect(tokensHtml).toContain("3.3B");
-    expect(tokensHtml).toContain("查看用量统计");
+    expect(tokensHtml).not.toContain("今日用量");
+    expect(tokensHtml).not.toContain("本月用量");
+    expect(tokensHtml).not.toContain("查看用量统计");
+    expect(tokensHtml).not.toContain("data-telemetry-global-usage");
+    expect(tokensHtml).not.toContain("data-telemetry-open-usage");
 
     // Popover 3 empty state (liquid vial + breakdown panel)
     const contextHtml = renderToStaticMarkup(
@@ -601,6 +604,9 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(tokensHtml).toContain("78% (189.9M)");
     expect(tokensHtml).toContain("Gemini 4 Hydrogen (XHigh)");
     expect(tokensHtml).toContain("22% (53.8M)");
+    expect(tokensHtml).not.toContain("今日用量");
+    expect(tokensHtml).not.toContain("本月用量");
+    expect(tokensHtml).not.toContain("查看用量统计");
 
     const contextHtml = renderToStaticMarkup(
       createElement(SessionContextWindowPopoverContent, { display, copy: zhCopy }),

@@ -7,7 +7,6 @@ import {
   type ServerProvider,
 } from "@prismux/core-contracts";
 import { GTProvider, initializeGT } from "gt-react";
-import { useEffect } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -139,9 +138,8 @@ function buildActiveMultiModelDisplay() {
 }
 
 describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
-  it("opens 3 independent portal popovers with mutual exclusion, Escape & click-outside dismiss, and usage navigation", async () => {
+  it("opens 3 independent portal popovers with mutual exclusion, Escape & click-outside dismiss, and clean session-only Token popover", async () => {
     initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
-    const onOpenUsage = vi.fn();
     const display = buildActiveMultiModelDisplay();
 
     // Mount inside an overflow-hidden bottom bar to verify Portal prevents clipping & keeps within viewport.
@@ -149,7 +147,7 @@ describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
       <GTProvider locale="zh" translations={{}}>
         <div data-testid="outside-area" className="flex h-screen w-screen flex-col justify-end p-4">
           <div className="flex w-full justify-end overflow-hidden rounded-lg border p-2">
-            <ComposerLiveTelemetryStripView display={display} compact onOpenUsage={onOpenUsage} />
+            <ComposerLiveTelemetryStripView display={display} compact />
           </div>
         </div>
       </GTProvider>,
@@ -192,13 +190,15 @@ describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
 
     const tokensPopup = document.querySelector<HTMLElement>('[data-telemetry-popover="tokens"]')!;
     expect(tokensPopup.textContent).toContain("Token 用量");
+    expect(tokensPopup.textContent).toContain("缓存命中");
     expect(tokensPopup.textContent).toContain("多模型分布");
     expect(tokensPopup.textContent).toContain("Gemini 4 Neon (XHigh)");
-    expect(tokensPopup.textContent).toContain("今日用量");
-    expect(tokensPopup.textContent).toContain("397.6M");
-    expect(tokensPopup.textContent).toContain("本月用量");
-    expect(tokensPopup.textContent).toContain("3.3B");
     expect(tokensPopup.querySelector('[data-telemetry-model-donut="true"]')).toBeTruthy();
+    expect(tokensPopup.textContent).not.toContain("今日用量");
+    expect(tokensPopup.textContent).not.toContain("本月用量");
+    expect(tokensPopup.textContent).not.toContain("查看用量统计");
+    expect(tokensPopup.querySelector('[data-telemetry-global-usage="true"]')).toBeNull();
+    expect(tokensPopup.querySelector('[data-telemetry-open-usage="true"]')).toBeNull();
 
     // 3. Click Trigger 3 while Popover 2 is open → mutually excludes Popover 2 & opens Popover 3
     await userEvent.click(contextTrigger!);
@@ -248,23 +248,18 @@ describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
       .toBeTruthy();
     await userEvent.click(screen.getByTestId("outside-area"), { position: { x: 10, y: 10 } });
     await expect.poll(() => document.querySelector('[data-telemetry-popover="tokens"]')).toBeNull();
-
-    // 6. Re-open Popover 2 and click "查看用量统计" → calls onOpenUsage & closes Popover 2
-    await userEvent.click(tokensTrigger!);
-    await expect
-      .poll(() => document.querySelector('[data-telemetry-open-usage="true"]'))
-      .toBeTruthy();
-    await userEvent.click(
-      document.querySelector<HTMLButtonElement>('[data-telemetry-open-usage="true"]')!,
-    );
-    expect(onOpenUsage).toHaveBeenCalledTimes(1);
-    await expect.poll(() => document.querySelector('[data-telemetry-popover="tokens"]')).toBeNull();
   });
 
   it("never triggers a render loop in useUsage when given a fresh equivalent window object each render (Defect 2.4)", async () => {
-    let renderCount = 0;
-    function FreshWindowProbe({ tick }: { readonly tick: number }) {
-      renderCount += 1;
+    const onRender = vi.fn();
+    function FreshWindowProbe({
+      tick,
+      onCommitRender,
+    }: {
+      readonly tick: number;
+      readonly onCommitRender: () => void;
+    }) {
+      onCommitRender();
       // Intentionally pass a brand-new UsageSummaryInput object literal on every render!
       const usage = useUsage({
         sinceDay: UsageDay.make("2026-11-01"),
@@ -279,13 +274,13 @@ describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
       );
     }
 
-    await using screen = await render(<FreshWindowProbe tick={1} />);
+    await using screen = await render(<FreshWindowProbe tick={1} onCommitRender={onRender} />);
     expect(screen.getByTestId("usage-probe")).toBeTruthy();
-    const initialRenders = renderCount;
+    const initialRenders = onRender.mock.calls.length;
     expect(initialRenders).toBeLessThan(8);
 
-    await screen.rerender(<FreshWindowProbe tick={2} />);
-    expect(renderCount - initialRenders).toBeLessThan(4);
+    await screen.rerender(<FreshWindowProbe tick={2} onCommitRender={onRender} />);
+    expect(onRender.mock.calls.length - initialRenders).toBeLessThan(4);
   });
 
   it("clears per-thread telemetry refs and releases publishedSessionDetails on thread switch and unmount (L10 + L12)", async () => {
@@ -316,7 +311,6 @@ describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
         isWorking: false,
         activeWorkStartedAt: null,
       });
-      useEffect(() => () => undefined, [threadId]);
       return <div data-testid="telemetry-harness">{threadId}</div>;
     }
 

@@ -2,8 +2,7 @@ import type { ContextWindowSnapshot } from "@prismux/client-runtime/state/contex
 import type { ServerProvider, UsageSummary } from "@prismux/core-contracts";
 import { makeWindow } from "@prismux/core-shared/usageFormat";
 import type { MergedUsage } from "@prismux/core-shared/usageMerge";
-import { useNavigate } from "@tanstack/react-router";
-import { ArrowRightIcon, DatabaseIcon, GaugeIcon } from "lucide-react";
+import { DatabaseIcon, GaugeIcon } from "lucide-react";
 import { memo, useEffect, useState, useSyncExternalStore } from "react";
 
 import { cn } from "~/lib/utils";
@@ -23,7 +22,6 @@ import { useSessionTelemetryCopy, type SessionTelemetryCopy } from "./sessionTel
 import {
   computeContextVialTicks,
   computeDonutSegments,
-  formatCompactPopoverTokens,
   formatContextBreakdownTokens,
   formatIntegerTokens,
   resolveContextBarTone,
@@ -313,11 +311,10 @@ export function SessionStatsPopoverContent({
 export function SessionTokenUsagePopoverContent({
   display,
   copy,
-  onOpenUsage,
 }: {
   readonly display: ResolvedTelemetryDisplay;
   readonly copy: SessionTelemetryCopy;
-  readonly onOpenUsage: () => void;
+  readonly onOpenUsage?: (() => void) | undefined;
 }) {
   const detailRows: ReadonlyArray<{
     readonly key: string;
@@ -385,7 +382,7 @@ export function SessionTokenUsagePopoverContent({
       </div>
 
       {/* Multi-model distribution */}
-      <div className="border-t border-border/65 py-3 dark:border-white/10">
+      <div className="border-t border-border/65 pt-3 dark:border-white/10">
         <div className="flex items-center justify-between gap-2 pb-2.5 text-xs text-muted-foreground">
           <span>{copy.modelDistribution}</span>
           <span className="tabular-nums">
@@ -423,44 +420,6 @@ export function SessionTokenUsagePopoverContent({
             {copy.noModelSamples}
           </div>
         )}
-      </div>
-
-      {/* Global Today / This Month reference */}
-      <div
-        data-telemetry-global-usage="true"
-        className="grid grid-cols-2 gap-4 border-t border-border/65 py-3.5 dark:border-white/10"
-      >
-        <div className="flex flex-col">
-          <span className="text-xs text-muted-foreground">{copy.todayUsage}</span>
-          <div className="mt-1 flex items-baseline gap-1.5 tabular-nums">
-            <span className="text-[22px] font-bold leading-none tracking-tight text-foreground">
-              {formatCompactPopoverTokens(display.globalTodayTokens)}
-            </span>
-            <span className="text-xs text-muted-foreground">{copy.tokenUnit}</span>
-          </div>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-xs text-muted-foreground">{copy.monthUsage}</span>
-          <div className="mt-1 flex items-baseline gap-1.5 tabular-nums">
-            <span className="text-[22px] font-bold leading-none tracking-tight text-foreground">
-              {formatCompactPopoverTokens(display.globalMonthTokens)}
-            </span>
-            <span className="text-xs text-muted-foreground">{copy.tokenUnit}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Footer link button */}
-      <div className="-mx-2 -mb-2 border-t border-border/65 pt-2 dark:border-white/10">
-        <button
-          type="button"
-          data-telemetry-open-usage="true"
-          onClick={onOpenUsage}
-          className="flex w-full cursor-pointer items-center justify-between rounded-lg px-2 py-2 text-[13px] font-medium text-foreground/90 transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring dark:hover:bg-white/8"
-        >
-          <span>{copy.viewUsageStats}</span>
-          <ArrowRightIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-        </button>
       </div>
     </div>
   );
@@ -646,7 +605,7 @@ const CONTEXT_TRIGGER_BUTTON_BASE_CLASS =
 
 export function ComposerLiveTelemetryStripView(props: {
   readonly display: ResolvedTelemetryDisplay;
-  readonly onOpenUsage: () => void;
+  readonly onOpenUsage?: (() => void) | undefined;
   readonly threadId?: string | null | undefined;
   readonly compact?: boolean | undefined;
   readonly className?: string | undefined;
@@ -654,7 +613,7 @@ export function ComposerLiveTelemetryStripView(props: {
   readonly onOpenPopoverChange?: ((next: TelemetryPopoverId | null) => void) | undefined;
 }) {
   const copy = useSessionTelemetryCopy();
-  const { display, onOpenUsage, compact = false, className } = props;
+  const { display, compact = false, className } = props;
   const scopeThreadId = props.threadId ?? null;
 
   const [uncontrolledState, setUncontrolledState] = useState<{
@@ -677,19 +636,6 @@ export function ComposerLiveTelemetryStripView(props: {
         popover: transitionTelemetryPopover(effective, target, nextOpen),
       };
     });
-  };
-
-  const closeActivePopover = () => {
-    if (props.onOpenPopoverChange) {
-      props.onOpenPopoverChange(null);
-      return;
-    }
-    setUncontrolledState({ threadId: scopeThreadId, popover: null });
-  };
-
-  const handleOpenUsageAndClose = () => {
-    closeActivePopover();
-    onOpenUsage();
   };
 
   const hasMeasuredTps = display.tps !== null && Number.isFinite(display.tps) && display.tps > 0;
@@ -797,11 +743,7 @@ export function ComposerLiveTelemetryStripView(props: {
           collisionAvoidance={{ side: "flip", align: "shift" }}
           className={TELEMETRY_POPOVER_POPUP_CLASS}
         >
-          <SessionTokenUsagePopoverContent
-            display={display}
-            copy={copy}
-            onOpenUsage={handleOpenUsageAndClose}
-          />
+          <SessionTokenUsagePopoverContent display={display} copy={copy} />
         </PopoverPopup>
       </Popover>
 
@@ -857,7 +799,6 @@ export const ComposerLiveTelemetryStrip = memo(function ComposerLiveTelemetryStr
   readonly className?: string | undefined;
 }) {
   const placement = props.placement ?? "below";
-  const navigate = useNavigate();
   const live = useSessionLiveTelemetry(props.threadId);
   const detail = useSessionTelemetryDetail(props.threadId);
   const publishedContextWindow = usePublishedComposerContextWindow(
@@ -894,20 +835,11 @@ export const ComposerLiveTelemetryStrip = memo(function ComposerLiveTelemetryStr
     selectedProvider: props.selectedProvider,
   });
 
-  const handleOpenUsage = () => {
-    if (props.onOpenUsage) {
-      props.onOpenUsage();
-      return;
-    }
-    void navigate({ to: "/usage" });
-  };
-
   if (placement === "inline") {
     return (
       <ComposerLiveTelemetryStripView
         display={display}
         threadId={props.threadId}
-        onOpenUsage={handleOpenUsage}
         compact
         className={props.className}
       />
@@ -923,7 +855,6 @@ export const ComposerLiveTelemetryStrip = memo(function ComposerLiveTelemetryStr
       <ComposerLiveTelemetryStripView
         display={display}
         threadId={props.threadId}
-        onOpenUsage={handleOpenUsage}
         className={cn(
           "[[data-slot=composer-shell]:has([data-pmx-composer-layout=agy])_&]:hidden",
           props.className,
