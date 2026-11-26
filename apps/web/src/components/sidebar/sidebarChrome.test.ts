@@ -15,9 +15,9 @@ import {
 } from "@tanstack/react-router";
 import { GTProvider, initializeGT, useGT } from "gt-react";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import fs from "node:fs";
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import path from "node:path";
+import * as NodePath from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -115,10 +115,10 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       "toggle-devtools",
     ]);
 
-    const sidebarDir = path.dirname(
+    const sidebarDir = NodePath.dirname(
       new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
     );
-    const source = fs.readFileSync(path.join(sidebarDir, "SidebarChrome.tsx"), "utf8");
+    const source = NodeFS.readFileSync(NodePath.join(sidebarDir, "SidebarChrome.tsx"), "utf8");
 
     // Confirm the removed footer buttons (help, wallpaper, toggle-sidebar, issues, pull-requests) are completely gone from SidebarChrome.tsx
     // and tasks + workspace-board live in the footer utility toolbar instead.
@@ -186,7 +186,9 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     // Confirm PrismuxSidebarUpdateCapsule sits directly above SidebarUtilityMenu and PrismuxAutoUpdateHost mounts in footer.
     const footerStart = source.indexOf("export const SidebarChromeFooter = memo(");
     const footerBody = source.slice(footerStart);
-    const capsuleIdx = footerBody.indexOf("<PrismuxSidebarUpdateCapsule railCompact={railCompact} />");
+    const capsuleIdx = footerBody.indexOf(
+      "<PrismuxSidebarUpdateCapsule railCompact={railCompact} />",
+    );
     const utilityIdx = footerBody.indexOf("<SidebarUtilityMenu />");
     expect(capsuleIdx).toBeGreaterThan(-1);
     expect(utilityIdx).toBeGreaterThan(capsuleIdx);
@@ -205,7 +207,11 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     }
 
     const html = renderToStaticMarkup(
-      createElement(GTProvider, { locale: "zh", translations: zhTranslations }, createElement(Probe)),
+      createElement(
+        GTProvider,
+        { locale: "zh", translations: zhTranslations },
+        createElement(Probe),
+      ),
     );
     expect(html).toContain("项目|最近会话");
   });
@@ -657,10 +663,13 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
       Parameters<typeof GTProvider>[0]["translations"]
     >;
 
-    const sidebarDir = path.dirname(
+    const sidebarDir = NodePath.dirname(
       new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
     );
-    const sidebarSource = fs.readFileSync(path.join(sidebarDir, "..", "Sidebar.tsx"), "utf8");
+    const sidebarSource = NodeFS.readFileSync(
+      NodePath.join(sidebarDir, "..", "Sidebar.tsx"),
+      "utf8",
+    );
 
     // Sidebar.tsx must wrap Header + Content + Footer in one shared TooltipProvider using rail timing constants.
     const providerIdx = sidebarSource.indexOf("<TooltipProvider");
@@ -791,13 +800,12 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
         readonly children?: React.ReactNode;
       }) =>
         render
-          ? createElement(
-              "span",
-              { "data-test-tooltip-trigger": "true" },
-              render,
-              children ?? null,
-            )
-          : createElement("button", { type: "button", "data-test-tooltip-trigger": "true" }, children),
+          ? createElement("span", { "data-test-tooltip-trigger": "true" }, render, children ?? null)
+          : createElement(
+              "button",
+              { type: "button", "data-test-tooltip-trigger": "true" },
+              children,
+            ),
       TooltipPopup: ({
         side = "top",
         sideOffset,
@@ -833,7 +841,11 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
         Parameters<typeof GTProvider>[0]["translations"]
       >;
 
-      const renderCollapsedRail = (locale: "zh" | "en", initialPath: string, activityViewActive = false) => {
+      const renderCollapsedRail = (
+        locale: "zh" | "en",
+        initialPath: string,
+        activityViewActive = false,
+      ) => {
         const rootRoute = createRootRoute();
         const router = createRouter({
           routeTree: rootRoute,
@@ -920,7 +932,10 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
           (match) => ({
             side: match[1]!,
             offset: Number(match[2]!),
-            text: match[3]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+            text: match[3]!
+              .replace(/<[^>]+>/g, " ")
+              .replace(/\s+/g, " ")
+              .trim(),
           }),
         );
 
@@ -1012,11 +1027,14 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
   });
 
   it("renders Settle, Archive, and Delete hover quick-actions on SidebarThreadRow across all 3 row variants", () => {
-    const sidebarDir = path.dirname(
+    const sidebarDir = NodePath.dirname(
       new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
     );
-    const threadRowSrc = fs.readFileSync(path.join(sidebarDir, "SidebarThreadRow.tsx"), "utf8");
-    const sidebarSrc = fs.readFileSync(path.join(sidebarDir, "..", "Sidebar.tsx"), "utf8");
+    const threadRowSrc = NodeFS.readFileSync(
+      NodePath.join(sidebarDir, "SidebarThreadRow.tsx"),
+      "utf8",
+    );
+    const sidebarSrc = NodeFS.readFileSync(NodePath.join(sidebarDir, "..", "Sidebar.tsx"), "utf8");
 
     expect(threadRowSrc).toContain("ArchiveIcon");
     expect(threadRowSrc).toContain("Trash2Icon");
@@ -1027,5 +1045,155 @@ describe("SidebarChrome Orca header order & footer utility cleanup", () => {
     expect(threadRowSrc).toContain('gt("Delete", { $context: "verb, delete the thread" })');
     expect(sidebarSrc).toContain("onArchive={attemptArchive}");
     expect(sidebarSrc).toContain("onDelete={attemptDelete}");
+  });
+
+  it("renders inline brand menu update check states (idle, checking, up-to-date, update-available, error) without navigating or opening the modal", () => {
+    initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+    const zhTranslations = { zh: zhCatalog } as unknown as NonNullable<
+      Parameters<typeof GTProvider>[0]["translations"]
+    >;
+
+    const sidebarDir = NodePath.dirname(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    );
+    const source = NodeFS.readFileSync(NodePath.join(sidebarDir, "SidebarChrome.tsx"), "utf8");
+
+    // Brand menu Check for updates must stay inline (closeOnClick={false}) and never navigate to settings or open modal directly.
+    expect(source).toContain('data-sidebar-app-menu-item="check-updates"');
+    expect(source).toContain("closeOnClick={false}");
+    expect(source).toContain("runPrismuxManualUpdateCheck");
+    expect(source).not.toContain('navigate({ to: "/settings/about" })');
+    expect(source).not.toContain('navigate({ to: "/settings/updates" })');
+    expect(source).not.toContain("openReleaseModal()");
+
+    const winShortcuts = resolveBrandMenuDeveloperShortcuts("Win32");
+    const renderState = (
+      locale: "zh" | "en",
+      updateCheckState: Parameters<typeof SidebarBrandMenuItems>[0]["updateCheckState"],
+    ) =>
+      renderToStaticMarkup(
+        createElement(
+          GTProvider,
+          { locale, translations: zhTranslations },
+          createElement(
+            Menu,
+            null,
+            createElement(SidebarBrandMenuItems, {
+              commandPaletteShortcut: "Ctrl+K",
+              developerShortcuts: winShortcuts,
+              showDevToolsItem: true,
+              updateCheckState,
+              onNewThread: vi.fn(),
+              onAddProject: vi.fn(),
+              onOpenCommandPalette: vi.fn(),
+              onOpenSettings: vi.fn(),
+              onOpenKeybindings: vi.fn(),
+              onCheckUpdates: vi.fn(),
+              onReload: vi.fn(),
+              onForceReload: vi.fn(),
+              onToggleDevTools: vi.fn(),
+            }),
+          ),
+        ),
+      );
+
+    // 1. Idle state
+    const idleZh = renderState("zh", {
+      phase: "idle",
+      currentVersion: null,
+      latestVersion: null,
+      errorMessage: null,
+    });
+    expect(idleZh).toContain('data-check-updates-state="idle"');
+    expect(idleZh).toContain("检查更新");
+    expect(idleZh).not.toContain("animate-spin");
+
+    const idleEn = renderState("en", {
+      phase: "idle",
+      currentVersion: null,
+      latestVersion: null,
+      errorMessage: null,
+    });
+    expect(idleEn).toContain("Check for updates");
+
+    // 2. Checking state: spinning icon with reduced-motion fallback & aria-busy
+    const checkingZh = renderState("zh", {
+      phase: "checking",
+      currentVersion: "0.2.2-rc.2",
+      latestVersion: null,
+      errorMessage: null,
+    });
+    expect(checkingZh).toContain('data-check-updates-state="checking"');
+    expect(checkingZh).toContain('aria-busy="true"');
+    expect(checkingZh).toContain("animate-spin");
+    expect(checkingZh).toContain("motion-reduce:animate-none");
+    expect(checkingZh).toContain("正在检查更新…");
+
+    const checkingEn = renderState("en", {
+      phase: "checking",
+      currentVersion: "0.2.2-rc.2",
+      latestVersion: null,
+      errorMessage: null,
+    });
+    expect(checkingEn).toContain("Checking for updates…");
+
+    // 3. Up-to-date state: emerald success tone + subtle version pill
+    const upToDateZh = renderState("zh", {
+      phase: "up-to-date",
+      currentVersion: "0.2.2-rc.2",
+      latestVersion: null,
+      errorMessage: null,
+    });
+    expect(upToDateZh).toContain('data-check-updates-state="up-to-date"');
+    expect(upToDateZh).toContain("已是最新版本");
+    expect(upToDateZh).toContain('data-testid="sidebar-check-updates-version"');
+    expect(upToDateZh).toContain("v0.2.2-rc.2");
+    expect(upToDateZh).toContain("text-success-foreground");
+
+    const upToDateEn = renderState("en", {
+      phase: "up-to-date",
+      currentVersion: "0.2.2-rc.2",
+      latestVersion: null,
+      errorMessage: null,
+    });
+    expect(upToDateEn).toContain("Up to date");
+    expect(upToDateEn).toContain("v0.2.2-rc.2");
+
+    // 4. Update-available brief inline confirmation
+    const availableZh = renderState("zh", {
+      phase: "update-available",
+      currentVersion: "0.2.2-rc.2",
+      latestVersion: "0.2.3-rc.1",
+      errorMessage: null,
+    });
+    expect(availableZh).toContain('data-check-updates-state="update-available"');
+    expect(availableZh).toContain("发现新版本 v0.2.3-rc.1");
+
+    const availableEn = renderState("en", {
+      phase: "update-available",
+      currentVersion: "0.2.2-rc.2",
+      latestVersion: "0.2.3-rc.1",
+      errorMessage: null,
+    });
+    expect(availableEn).toContain("New version v0.2.3-rc.1");
+
+    // 5. Error state with retry prompt
+    const errorZh = renderState("zh", {
+      phase: "error",
+      currentVersion: null,
+      latestVersion: null,
+      errorMessage: "timeout",
+    });
+    expect(errorZh).toContain('data-check-updates-state="error"');
+    expect(errorZh).toContain("检查失败，点击重试");
+    expect(errorZh).toContain("text-destructive-foreground");
+
+    const errorEn = renderState("en", {
+      phase: "error",
+      currentVersion: null,
+      latestVersion: null,
+      errorMessage: "timeout",
+    });
+    expect(errorEn).toContain("Check failed, click to retry");
   });
 });

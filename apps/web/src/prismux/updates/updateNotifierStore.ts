@@ -13,8 +13,51 @@ export const COLLAPSED_UPDATE_VERSIONS_STORAGE_KEY = "prismux.updater.collapsedV
 export const PRISMUX_UPDATE_AVAILABLE_EVENT = "prismux:update-available";
 export const UPDATER_SSE_STALE_FALLBACK_MS = 700;
 export const UPDATER_STATUS_POLL_INTERVAL_MS = 500;
+export const INLINE_UPDATE_UP_TO_DATE_RESET_MS = 5_000;
+export const INLINE_UPDATE_FOUND_CLOSE_DELAY_MS = 450;
 
 export type UpdatePresentationMode = "hidden" | "toast" | "modal" | "capsule";
+
+export type InlineUpdateCheckPhase =
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "update-available"
+  | "error";
+
+export interface InlineUpdateCheckState {
+  readonly phase: InlineUpdateCheckPhase;
+  readonly currentVersion: string | null;
+  readonly latestVersion: string | null;
+  readonly errorMessage: string | null;
+}
+
+export const INITIAL_INLINE_UPDATE_CHECK_STATE: InlineUpdateCheckState = {
+  phase: "idle",
+  currentVersion: null,
+  latestVersion: null,
+  errorMessage: null,
+};
+
+export interface InlineUpdateMenuCopy {
+  readonly foundPrefix: string;
+  readonly retryPrompt: string;
+}
+
+const ZH_INLINE_UPDATE_MENU_COPY: InlineUpdateMenuCopy = {
+  foundPrefix: "发现新版本",
+  retryPrompt: "检查失败，点击重试",
+};
+
+const EN_INLINE_UPDATE_MENU_COPY: InlineUpdateMenuCopy = {
+  foundPrefix: "New version",
+  retryPrompt: "Check failed, click to retry",
+};
+
+export function getInlineUpdateMenuCopy(locale: string | null | undefined): InlineUpdateMenuCopy {
+  const normalized = (locale ?? "en").toLowerCase();
+  return normalized.startsWith("zh") ? ZH_INLINE_UPDATE_MENU_COPY : EN_INLINE_UPDATE_MENU_COPY;
+}
 
 export interface RectSnapshot {
   readonly left: number;
@@ -77,7 +120,9 @@ export function formatVersionBadge(raw: string | null | undefined): string {
   return normalized ? `v${normalized}` : "";
 }
 
-export function readAutoCheckPreference(storage: StorageLike | null = getDefaultStorage()): boolean {
+export function readAutoCheckPreference(
+  storage: StorageLike | null = getDefaultStorage(),
+): boolean {
   if (!storage) return true;
   try {
     const raw = storage.getItem(AUTO_CHECK_UPDATES_STORAGE_KEY);
@@ -205,7 +250,9 @@ export function extractReleaseNotesPreview(
     const bulletMatch = /^(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$/.exec(cleanLine);
     const candidate = stripInlineMarkdown(bulletMatch ? (bulletMatch[1] ?? "") : cleanLine);
     if (!candidate) continue;
-    return candidate.length > maxLength ? `${candidate.slice(0, maxLength - 1).trimEnd()}…` : candidate;
+    return candidate.length > maxLength
+      ? `${candidate.slice(0, maxLength - 1).trimEnd()}…`
+      : candidate;
   }
 
   if (fallbackHeading) {
@@ -359,10 +406,8 @@ export interface UpdateNotifierStore {
   setDownloading(downloading: boolean): void;
   setInstalling(installing: boolean): void;
   setMessages(messages: { readonly error?: string | null; readonly status?: string | null }): void;
-  reportUpdateAvailable(
-    check: UpdateCheckView,
-    options?: { readonly forceToast?: boolean },
-  ): void;
+  reportUpdateAvailable(check: UpdateCheckView, options?: { readonly forceToast?: boolean }): void;
+  openToastForAvailableUpdate(check?: UpdateCheckView | null): boolean;
   hydrateFromDaemonStatus(
     status: UpdaterStatusView,
     options?: { readonly syncAutoCheck?: boolean; readonly fromPoll?: boolean },
@@ -548,6 +593,25 @@ export function createUpdateNotifierStore(
 
     reportUpdateAvailable,
 
+    openToastForAvailableUpdate: (check) => {
+      const target = check !== undefined ? check : state.availableUpdate;
+      const latestNorm = normalizeVersionString(target?.latestVersion);
+      if (!target || !target.hasUpdate || !latestNorm) {
+        if (check) {
+          reportUpdateAvailable(check);
+        }
+        return false;
+      }
+      setState({
+        ...state,
+        availableUpdate: target,
+        presentation: "toast",
+        flyTransition: null,
+        errorMessage: null,
+      });
+      return true;
+    },
+
     hydrateFromDaemonStatus: (status, opts) => {
       const shouldSyncAutoCheck = opts?.syncAutoCheck !== false && !localAutoCheckDirty;
       const nextAutoCheck = shouldSyncAutoCheck
@@ -686,8 +750,7 @@ export function createUpdateNotifierStore(
         writeCollapsedUpdateVersions(nextCollapsed, storage);
       }
 
-      const validFromRect =
-        fromRect && fromRect.width > 0 && fromRect.height > 0 ? fromRect : null;
+      const validFromRect = fromRect && fromRect.width > 0 && fromRect.height > 0 ? fromRect : null;
       const flyTransition: UpdateFlyTransition | null =
         validFromRect && !reducedMotion
           ? {
