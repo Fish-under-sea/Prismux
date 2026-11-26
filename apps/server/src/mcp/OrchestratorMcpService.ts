@@ -50,6 +50,8 @@ import {
   type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
+  type ProviderInstanceConfig,
+  type ProviderInstanceId,
   type ProviderInteractionMode,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
@@ -66,7 +68,10 @@ import {
   resolveProjectProviderInstanceEnabled,
   SECRET_REQUEST_UNSAVED_NOTE,
 } from "@prismux/core-contracts";
-import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@prismux/core-shared/model";
+import {
+  getProviderOptionCurrentValue,
+  withLegacyUltracodeEffort,
+} from "@prismux/core-shared/model";
 import { backgroundWorkHoldsCompletion } from "@prismux/core-shared/orchestrationV2PendingBackgroundWork";
 import { runRanAfter } from "@prismux/core-shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
@@ -140,6 +145,16 @@ import { assertTargetWithinLimits, isLiveCallerShell, threadNotFound } from "./t
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
+import {
+  canonicalizeProviderAlias,
+  DelegationSubscriptionGuardConfig,
+  detectProviderFamily,
+  evaluateDelegationSubscriptionGuard,
+  isAntigravityTargetProvider,
+  normalizeProviderLookupKey,
+  providerSearchMetadata,
+  stripAcpPrefix,
+} from "./DelegationSubscriptionGuard.ts";
 
 // Return recoverable handles before common MCP client timeouts expire.
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -166,6 +181,7 @@ const THREAD_READ_RESULT_MAX_BYTES = 30_000;
 interface ResolvedTarget {
   readonly modelSelection: ModelSelection;
   readonly supportedRuntimeModes: ReadonlyArray<RuntimeMode> | undefined;
+  readonly provider: ServerProvider;
 }
 
 type TerminalTaskStatus = Extract<
@@ -315,12 +331,124 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
 const FULL_CATALOG_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent", "muse", "grok"]);
 const LISTED_MODEL_LIMIT = 8;
 
+function acpRegistryAgentId(config: ProviderInstanceConfig | undefined): string | undefined {
+  if (
+    config?.config === null ||
+    typeof config?.config !== "object" ||
+    Array.isArray(config?.config)
+  ) {
+    return undefined;
+  }
+  const raw = (config.config as Record<string, unknown>).agentId;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
+}
+
+function acpRegistryCommandBasename(
+  config: ProviderInstanceConfig | undefined,
+): string | undefined {
+  if (
+    config?.config === null ||
+    typeof config?.config !== "object" ||
+    Array.isArray(config?.config)
+  ) {
+    return undefined;
+  }
+  const raw = (config.config as Record<string, unknown>).commandPath;
+  if (typeof raw !== "string" || raw.trim().length === 0) return undefined;
+  const base = (raw.trim().split(/[\\/]/u).at(-1) ?? "").replace(/\.(?:exe|cmd|bat)$/iu, "");
+  return base.length > 0 ? base : undefined;
+}
+
+function isCompatibleDriverSelector(
+  provider: ServerProvider,
+  requestedDriver: string,
+  instanceConfig: ProviderInstanceConfig | undefined,
+): boolean {
+  if (provider.driver === requestedDriver) return true;
+  if (normalizeProviderLookupKey(provider.driver) === normalizeProviderLookupKey(requestedDriver)) {
+    return true;
+  }
+  const requestedFamily = canonicalizeProviderAlias(requestedDriver);
+  const providerFamily = detectProviderFamily(provider, instanceConfig);
+  return requestedFamily !== null && providerFamily !== null && requestedFamily === providerFamily;
+}
+
+/**
+ * Matches a raw provider selector (`providerInstanceId` or `driverKind`) against
+ * registered providers using exact IDs first, then case-insensitive / `acp:`-stripped
+ * IDs, `acpRegistry` agentIds, display names, local command basenames, and canonical
+ * aliases (`dsh` / `deepseek` / `deepseek-harness` / `claude` / `codex` / `agy` / ...).
+ */
+function matchProviderCandidatesByAlias(input: {
+  readonly selector: string;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly providerInstances: Readonly<Record<string, ProviderInstanceConfig>> | undefined;
+}): ReadonlyArray<ServerProvider> {
+  const raw = input.selector.trim();
+  if (raw.length === 0) return [];
+
+  const exact = input.providers.find((candidate) => candidate.instanceId === raw);
+  if (exact !== undefined) return [exact];
+
+  const lower = raw.toLowerCase();
+  const stripped = stripAcpPrefix(raw).toLowerCase();
+  const normalized = normalizeProviderLookupKey(raw);
+  const requestedFamily = canonicalizeProviderAlias(raw);
+
+  const tier1 = input.providers.filter((candidate) => {
+    const instLower = candidate.instanceId.toLowerCase();
+    const instNormalized = normalizeProviderLookupKey(candidate.instanceId);
+    const agentId = acpRegistryAgentId(input.providerInstances?.[candidate.instanceId]);
+    const agentLower = agentId?.toLowerCase();
+    const agentNormalized = agentId ? normalizeProviderLookupKey(agentId) : undefined;
+    return (
+      instLower === lower ||
+      instLower === stripped ||
+      instNormalized === normalized ||
+      agentLower === lower ||
+      agentLower === stripped ||
+      agentNormalized === normalized
+    );
+  });
+  if (tier1.length > 0) return tier1;
+
+  const tier2 = input.providers.filter((candidate) => {
+    const display = candidate.displayName?.trim();
+    const displayMatches =
+      display !== undefined &&
+      display.length > 0 &&
+      (display.toLowerCase() === lower ||
+        display.toLowerCase() === stripped ||
+        normalizeProviderLookupKey(display) === normalized);
+    const commandBase = acpRegistryCommandBasename(input.providerInstances?.[candidate.instanceId]);
+    const commandMatches =
+      commandBase !== undefined &&
+      (commandBase.toLowerCase() === lower ||
+        commandBase.toLowerCase() === stripped ||
+        normalizeProviderLookupKey(commandBase) === normalized);
+    return displayMatches || commandMatches;
+  });
+  if (tier2.length > 0) return tier2;
+
+  if (requestedFamily !== null) {
+    const tier3 = input.providers.filter(
+      (candidate) =>
+        detectProviderFamily(candidate, input.providerInstances?.[candidate.instanceId]) ===
+        requestedFamily,
+    );
+    if (tier3.length > 0) return tier3;
+  }
+
+  return [];
+}
+
 /**
  * Lists visible models, keeping pinned models and limiting large catalogs by default.
- * Whole provider words select the provider; partial words filter models when any match.
+ * Whole provider words and aliases select the provider; partial words filter models when any match.
  */
 function listCapabilityModels(input: {
   readonly provider: ServerProvider;
+  readonly instanceConfig?: ProviderInstanceConfig | undefined;
   readonly preferences:
     | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
     | undefined;
@@ -332,20 +460,33 @@ function listCapabilityModels(input: {
     .filter((model) => model.isCustom || !input.preferences?.hiddenModels.includes(model.slug))
     .toSorted((a, b) => (rank.get(a.slug) ?? rank.size) - (rank.get(b.slug) ?? rank.size));
   const { instanceId, driver, displayName } = input.provider;
+  const { aliases, phrases } = providerSearchMetadata(input.provider, input.instanceConfig);
   const providerText = `${instanceId} ${driver} ${displayName ?? ""}`.toLowerCase();
-  // Whole ids like "codex-work" and their parts both name the provider.
+  // Whole ids like "codex-work", their parts, and known provider aliases all name the provider.
   const providerWords = new Set([
-    ...providerText.split(/\s+/),
+    ...providerText.split(/\s+/u),
     ...providerText.split(/[^\p{L}\p{N}]+/u),
+    ...aliases,
   ]);
+  const termSet = new Set(input.searchTerms);
+  for (const phrase of phrases) {
+    if (phrase.every((word) => termSet.has(word))) {
+      for (const word of phrase) providerWords.add(word);
+    }
+  }
+  const fullProviderText =
+    aliases.length > 0 ? `${providerText} ${aliases.join(" ")}` : providerText;
   const modelText = (model: ServerProviderModel) =>
     `${model.slug} ${model.name} ${model.subProvider ?? ""}`.toLowerCase();
   // Part of a provider word ("agent" in "claudeAgent") names the provider unless a model matches it.
-  const modelTerms = input.searchTerms.filter(
-    (term) =>
+  const modelTerms = input.searchTerms.filter((term) => {
+    const normalizedTerm = normalizeProviderLookupKey(term);
+    return (
       !providerWords.has(term) &&
-      (!providerText.includes(term) || visible.some((model) => modelText(model).includes(term))),
-  );
+      !providerWords.has(normalizedTerm) &&
+      (!fullProviderText.includes(term) || visible.some((model) => modelText(model).includes(term)))
+    );
+  });
   if (modelTerms.length > 0) {
     const matches = visible.filter((model) => {
       const text = modelText(model);
@@ -1354,6 +1495,11 @@ const make = Effect.gen(function* () {
     return selection;
   });
   const secretRequests = yield* SecretRequests.SecretRequests;
+  const layerGuardConfig = yield* DelegationSubscriptionGuardConfig;
+  const resolveGuardConfig = Effect.map(DelegationSubscriptionGuardConfig, (fiberConfig) => ({
+    ...layerGuardConfig,
+    ...fiberConfig,
+  }));
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -1629,36 +1775,86 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(threadManagementFailure));
 
-  const resolveTargetRechecking = (
-    input: Parameters<typeof resolveTarget>[0] & { readonly cwd: string | undefined },
-  ) => {
-    const instanceId =
-      input.target?.providerInstanceId ??
-      (input.target?.driverKind === undefined
-        ? input.parent.thread.modelSelection.instanceId
-        : undefined);
-    const resolved = resolveTarget({
-      ...input,
-      providers: withWorkspaceModels(input.providers, input.cwd),
-    });
-    if (instanceId === undefined) return resolved;
-    return resolved.pipe(
-      Effect.catchIf(
-        (error) => error.code === "provider_unavailable" || error.code === "model_unavailable",
-        () =>
-          (input.cwd === undefined
-            ? providerRegistry.refreshInstance(instanceId)
-            : providerRegistry
-                .refreshInstance(instanceId)
-                .pipe(Effect.andThen(scanWorkspace(instanceId, input.cwd)))
-          ).pipe(
-            Effect.flatMap((providers) =>
-              resolveTarget({ ...input, providers: withWorkspaceModels(providers, input.cwd) }),
-            ),
-          ),
-      ),
+  const loadProviderInstanceConfigs = () =>
+    serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.providerInstances),
+      Effect.orElseSucceed(() => undefined),
     );
-  };
+
+  const selectBestMatchingProvider = Effect.fn("OrchestratorMcpService.selectBestMatchingProvider")(
+    function* (input: {
+      readonly candidates: ReadonlyArray<ServerProvider>;
+      readonly orchestrationCapableInstanceIds: ReadonlySet<ProviderInstanceId>;
+      readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
+      readonly skipProjectEnablementFilter?: boolean;
+    }): Effect.fn.Return<ServerProvider | undefined> {
+      if (input.candidates.length === 0) return undefined;
+      if (input.candidates.length === 1) return input.candidates[0];
+      const capable = input.candidates.filter((candidate) =>
+        input.orchestrationCapableInstanceIds.has(candidate.instanceId),
+      );
+      const healthy = capable.filter(
+        (candidate) => providerConstraints(candidate, true).length === 0,
+      );
+      const inherited = healthy.find(
+        (candidate) => candidate.instanceId === input.parent.thread.modelSelection.instanceId,
+      );
+      const orderedHealthy = [
+        ...(inherited === undefined ? [] : [inherited]),
+        ...healthy.filter((candidate) => candidate !== inherited),
+      ];
+      for (const candidate of orderedHealthy) {
+        const enabledForProject =
+          input.skipProjectEnablementFilter === true ||
+          (yield* threadManagement.isProviderInstanceEnabledForProject({
+            projectId: input.parent.thread.projectId,
+            instanceId: candidate.instanceId,
+          }));
+        if (enabledForProject) return candidate;
+      }
+      return orderedHealthy[0] ?? capable[0] ?? input.candidates[0];
+    },
+  );
+
+  const resolveTargetRechecking = Effect.fn("OrchestratorMcpService.resolveTargetRechecking")(
+    function* (input: Parameters<typeof resolveTarget>[0] & { readonly cwd: string | undefined }) {
+      const providerInstances = yield* loadProviderInstanceConfigs();
+      const refreshInstanceId = ((): ProviderInstanceId | undefined => {
+        if (input.target?.providerInstanceId !== undefined) {
+          const matched = matchProviderCandidatesByAlias({
+            selector: input.target.providerInstanceId,
+            providers: input.providers,
+            providerInstances,
+          });
+          return (matched.find((candidate) => candidate.enabled) ?? matched[0])?.instanceId;
+        }
+        return input.target?.driverKind === undefined
+          ? input.parent.thread.modelSelection.instanceId
+          : undefined;
+      })();
+      const resolved = resolveTarget({
+        ...input,
+        providers: withWorkspaceModels(input.providers, input.cwd),
+      });
+      if (refreshInstanceId === undefined) return yield* resolved;
+      return yield* resolved.pipe(
+        Effect.catchIf(
+          (error) => error.code === "provider_unavailable" || error.code === "model_unavailable",
+          () =>
+            (input.cwd === undefined
+              ? providerRegistry.refreshInstance(refreshInstanceId)
+              : providerRegistry
+                  .refreshInstance(refreshInstanceId)
+                  .pipe(Effect.andThen(scanWorkspace(refreshInstanceId, input.cwd)))
+            ).pipe(
+              Effect.flatMap((providers) =>
+                resolveTarget({ ...input, providers: withWorkspaceModels(providers, input.cwd) }),
+              ),
+            ),
+        ),
+      );
+    },
+  );
 
   const resolveTarget = Effect.fn("OrchestratorMcpService.resolveTarget")(function* (input: {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
@@ -1667,17 +1863,63 @@ const make = Effect.gen(function* () {
     /** Receipt replays bypass current settings because they start no work. Dispatch must reuse the checked command ID. */
     readonly skipProjectEnablementFilter?: boolean;
   }): Effect.fn.Return<ResolvedTarget, OrchestratorMcpFailure> {
-    const requestedInstanceId = input.target?.providerInstanceId;
+    const requestedInstanceSelector = input.target?.providerInstanceId;
     const requestedDriver = input.target?.driverKind;
     const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
-    let instanceId = requestedInstanceId;
+    const providerInstances = yield* loadProviderInstanceConfigs();
+    let provider: ServerProvider | undefined;
 
-    if (instanceId === undefined && requestedDriver !== undefined) {
-      const candidates = input.providers.filter(
-        (provider) =>
-          provider.driver === requestedDriver &&
-          orchestrationCapableInstanceIds.has(provider.instanceId),
+    if (requestedInstanceSelector !== undefined) {
+      const exactMatch = input.providers.find(
+        (candidate) => candidate.instanceId === requestedInstanceSelector,
       );
+      if (exactMatch !== undefined) {
+        provider = exactMatch;
+      } else {
+        const aliasMatches = matchProviderCandidatesByAlias({
+          selector: requestedInstanceSelector,
+          providers: input.providers,
+          providerInstances,
+        });
+        const driverFiltered =
+          requestedDriver === undefined
+            ? aliasMatches
+            : aliasMatches.filter((candidate) =>
+                isCompatibleDriverSelector(
+                  candidate,
+                  requestedDriver,
+                  providerInstances?.[candidate.instanceId],
+                ),
+              );
+        provider = yield* selectBestMatchingProvider({
+          candidates: driverFiltered.length > 0 ? driverFiltered : aliasMatches,
+          orchestrationCapableInstanceIds,
+          parent: input.parent,
+          ...(input.skipProjectEnablementFilter === undefined
+            ? {}
+            : { skipProjectEnablementFilter: input.skipProjectEnablementFilter }),
+        });
+        if (provider === undefined) {
+          return yield* failure(
+            "provider_unavailable",
+            `Provider instance ${requestedInstanceSelector} is not registered.`,
+          );
+        }
+      }
+    } else if (requestedDriver !== undefined) {
+      const directDriverMatches = input.providers.filter(
+        (candidate) =>
+          candidate.driver === requestedDriver &&
+          orchestrationCapableInstanceIds.has(candidate.instanceId),
+      );
+      const candidates =
+        directDriverMatches.length > 0
+          ? directDriverMatches
+          : matchProviderCandidatesByAlias({
+              selector: requestedDriver,
+              providers: input.providers,
+              providerInstances,
+            }).filter((candidate) => orchestrationCapableInstanceIds.has(candidate.instanceId));
       if (candidates.length === 0) {
         return yield* failure(
           "provider_unavailable",
@@ -1702,11 +1944,11 @@ const make = Effect.gen(function* () {
             instanceId: candidate.instanceId,
           }));
         if (enabledForProject) {
-          instanceId = candidate.instanceId;
+          provider = candidate;
           break;
         }
       }
-      if (instanceId === undefined) {
+      if (provider === undefined) {
         return yield* failure(
           "provider_unavailable",
           healthyCandidates.length === 0
@@ -1714,17 +1956,22 @@ const make = Effect.gen(function* () {
             : `No instance of driver ${requestedDriver} is enabled for this project.`,
         );
       }
+    } else {
+      const inheritedInstanceId = input.parent.thread.modelSelection.instanceId;
+      provider = input.providers.find((candidate) => candidate.instanceId === inheritedInstanceId);
+      if (provider === undefined) {
+        return yield* failure(
+          "provider_unavailable",
+          `Provider instance ${inheritedInstanceId} is not registered.`,
+        );
+      }
     }
-    instanceId ??= input.parent.thread.modelSelection.instanceId;
 
-    const provider = input.providers.find((candidate) => candidate.instanceId === instanceId);
-    if (provider === undefined) {
-      return yield* failure(
-        "provider_unavailable",
-        `Provider instance ${instanceId} is not registered.`,
-      );
-    }
-    if (requestedDriver !== undefined && provider.driver !== requestedDriver) {
+    const instanceId = provider.instanceId;
+    if (
+      requestedDriver !== undefined &&
+      !isCompatibleDriverSelector(provider, requestedDriver, providerInstances?.[instanceId])
+    ) {
       return yield* failure(
         "invalid_request",
         `Provider instance ${instanceId} uses driver ${provider.driver}, not ${requestedDriver}.`,
@@ -1750,7 +1997,8 @@ const make = Effect.gen(function* () {
       requestedModel ??
       (instanceId === inheritedSelection.instanceId
         ? inheritedSelection.model
-        : provider.models[0]?.slug);
+        : (provider.models.find((candidate) => candidate.isDefault)?.slug ??
+          provider.models[0]?.slug));
     if (model === undefined) {
       return yield* failure(
         "model_unavailable",
@@ -1799,7 +2047,92 @@ const make = Effect.gen(function* () {
     return {
       modelSelection: { instanceId, model, ...(options === undefined ? {} : { options }) },
       supportedRuntimeModes: provider.supportedRuntimeModes,
+      provider,
     };
+  });
+
+  const resolveDelegationCallerContext = Effect.fn(
+    "OrchestratorMcpService.resolveDelegationCallerContext",
+  )(function* (input: {
+    readonly scope: McpInvocationScope;
+    readonly parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined;
+    readonly parentRun?: Pick<OrchestrationV2Run, "userMessageId"> | undefined;
+    readonly checkScheduledTaskMessage: boolean;
+  }) {
+    let scheduledTaskId: string | undefined;
+    let userMessageId = input.parentRun?.userMessageId;
+    if (
+      input.checkScheduledTaskMessage &&
+      input.parent !== undefined &&
+      userMessageId === undefined
+    ) {
+      const callerWithRuns = yield* loadCallerRecords(input.parent.thread.id, ["runs"]).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      userMessageId =
+        callerWithRuns === undefined
+          ? undefined
+          : ThreadManagementService.latestActiveRun(callerWithRuns)?.userMessageId;
+    }
+    if (
+      input.checkScheduledTaskMessage &&
+      input.parent !== undefined &&
+      userMessageId !== undefined &&
+      !String(userMessageId).startsWith("scheduled-task-message:")
+    ) {
+      const records = yield* loadThreadRecords(input.parent.thread.id, ["messages"], {
+        messageIds: [userMessageId],
+      }).pipe(Effect.orElseSucceed(() => ({ messages: [] })));
+      const message = records.messages.find((candidate) => candidate.id === userMessageId);
+      if (message?.scheduledTaskId !== undefined) {
+        scheduledTaskId = message.scheduledTaskId;
+      }
+    }
+    return {
+      createdBy: input.parent?.thread.createdBy,
+      creationSource: input.parent?.thread.creationSource,
+      threadTags: input.parent?.thread.tags,
+      userMessageId,
+      scheduledTaskId,
+      requestNamespace: input.scope.requestNamespace,
+      clientLabel: input.scope.client?.label,
+    };
+  });
+
+  const assertDelegationAllowedByPolicy = Effect.fn(
+    "OrchestratorMcpService.assertDelegationAllowedByPolicy",
+  )(function* (input: {
+    readonly scope: McpInvocationScope;
+    readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
+    readonly parentRun?: Pick<OrchestrationV2Run, "userMessageId"> | undefined;
+    readonly targetProvider: ServerProvider;
+    readonly cwd: string | undefined;
+  }): Effect.fn.Return<void, OrchestratorMcpFailure> {
+    const guardConfig = yield* resolveGuardConfig;
+    const providerInstances = yield* loadProviderInstanceConfigs();
+    const instanceConfig = providerInstances?.[input.targetProvider.instanceId];
+    const caller = yield* resolveDelegationCallerContext({
+      scope: input.scope,
+      parent: input.parent,
+      parentRun: input.parentRun,
+      checkScheduledTaskMessage: isAntigravityTargetProvider(input.targetProvider, instanceConfig),
+    });
+    const decision = evaluateDelegationSubscriptionGuard({
+      provider: input.targetProvider,
+      instanceConfig,
+      workspacePath: input.cwd,
+      caller,
+      config: guardConfig,
+    });
+    if (!decision.allowed) {
+      return yield* new OrchestratorMcpFailure({
+        code: decision.code,
+        message: decision.message,
+        reasonCode: decision.reasonCode,
+        settingsRoute: decision.settingsRoute,
+        providerId: decision.providerId,
+      });
+    }
   });
 
   const requestKey = (clientRequestId: string | undefined): Effect.Effect<string> =>
@@ -2745,8 +3078,17 @@ const make = Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
       );
+      const guardConfig = yield* resolveGuardConfig;
+      const hasAntigravityProvider = providers.some((provider) =>
+        isAntigravityTargetProvider(provider, settings.providerInstances?.[provider.instanceId]),
+      );
+      const callerContext = yield* resolveDelegationCallerContext({
+        scope,
+        parent,
+        checkScheduledTaskMessage: hasAntigravityProvider,
+      });
       const inherited = parent?.thread.modelSelection;
-      const searchTerms = input.search?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
+      const searchTerms = input.search?.toLowerCase().split(/\s+/u).filter(Boolean) ?? [];
       return {
         parentThreadId: parent?.thread.id ?? null,
         inheritedProviderInstanceId: inherited?.instanceId ?? null,
@@ -2770,12 +3112,25 @@ const make = Effect.gen(function* () {
               parent.thread.projectId,
               provider.instanceId,
             );
-          const constraints = providerConstraints(
+          const instanceConfig = settings.providerInstances?.[provider.instanceId];
+          const baseConstraints = providerConstraints(
             enabledForCaller ? provider : { ...provider, enabled: false },
             orchestrationCapableInstanceIds.has(provider.instanceId),
           );
+          const guardDecision = evaluateDelegationSubscriptionGuard({
+            provider,
+            instanceConfig,
+            workspacePath: cwd,
+            caller: callerContext,
+            config: guardConfig,
+          });
+          const constraints =
+            baseConstraints.length === 0 && !guardDecision.allowed
+              ? [...baseConstraints, guardDecision.constraint]
+              : [...baseConstraints];
           const { listed, omitted } = listCapabilityModels({
             provider,
+            instanceConfig,
             preferences: settings.providerModelPreferences?.[provider.instanceId],
             searchTerms,
             isPinned: (model) =>
@@ -2807,7 +3162,8 @@ const make = Effect.gen(function* () {
               : { runtimeModes: [...provider.supportedRuntimeModes] }),
             canRunChildTask: constraints.length === 0,
             canRunCrossProviderChildTask: constraints.length === 0,
-            constraints: [...constraints],
+            dispatchPolicy: guardDecision.dispatchPolicy,
+            constraints,
           };
         }),
         features: {
@@ -2870,13 +3226,23 @@ const make = Effect.gen(function* () {
         operation: "delegate-task",
       });
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+      const cwd = yield* parentWorkspaceCwd(parent);
       const target = yield* resolveTargetRechecking({
         parent,
         target: input.target,
         providers,
-        cwd: yield* parentWorkspaceCwd(parent),
+        cwd,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
+      if (!isRetryOfAcceptedDelegation) {
+        yield* assertDelegationAllowedByPolicy({
+          scope,
+          parent,
+          parentRun,
+          targetProvider: target.provider,
+          cwd,
+        });
+      }
       const runtimeMode = yield* resolveRuntimeMode(
         parent.thread.runtimeMode,
         input.runtimeMode,
@@ -3269,6 +3635,15 @@ const make = Effect.gen(function* () {
                 parent.thread.interactionMode,
                 request.interactionMode,
               );
+              if (request.prompt !== undefined && !isRetryOfAcceptedCreation) {
+                yield* assertDelegationAllowedByPolicy({
+                  scope,
+                  parent,
+                  parentRun,
+                  targetProvider: target.provider,
+                  cwd,
+                });
+              }
               yield* assertTargetEnabledForProject(parent, commandId, target);
               const title = threadTitle({
                 parentTitle: parent.thread.title,

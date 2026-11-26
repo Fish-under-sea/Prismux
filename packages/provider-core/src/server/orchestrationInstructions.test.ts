@@ -98,3 +98,20 @@ describe("T3 device instructions", () => {
     assert.notInclude(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "## Prismux devices");
   });
 });
+
+describe("Prismux cross-agent orchestration routing", () => {
+  it("routes cross-agent requests (dsh/deepseek/claude/codex/agy) through orchestrator_capabilities and delegate_task", () => {
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`dsh`/`deepseek`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`claude`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`codex`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`agy`");
+    assert.include(
+      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+      "call `orchestrator_capabilities` once then `delegate_task`; never run another agent's CLI in shell.",
+    );
+    assert.notInclude(
+      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+      "Ordinary coding tasks need no T3 tools.",
+    );
+  });
+});
