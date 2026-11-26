@@ -1,10 +1,11 @@
 import {
   ArrowLeftIcon,
   ArrowUpDownIcon,
+  CheckIcon,
   ChevronRightIcon,
   RefreshCwIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { AgentBrandLogo } from "../agentBrand";
@@ -96,11 +97,22 @@ export function QuotaStatusPopover({
 }: QuotaStatusPopoverProps) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(initialSelectedAgentId);
   const [refreshingLocal, setRefreshingLocal] = useState(false);
+  const [justRefreshed, setJustRefreshed] = useState(false);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- Clears the refresh-confirmation flash timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current !== null) {
+        clearTimeout(flashTimerRef.current);
+      }
+    };
+  }, []);
 
   // Sync if selected agent disappears after a refresh.
   const selectedAgent: QuotaAgentEntry | null =
     selectedAgentId !== null
-      ? summary.availableAgents.find((agent) => agent.id === selectedAgentId) ?? null
+      ? (summary.availableAgents.find((agent) => agent.id === selectedAgentId) ?? null)
       : null;
 
   useEffect(() => {
@@ -125,6 +137,14 @@ export function QuotaStatusPopover({
     setRefreshingLocal(true);
     try {
       await onRefresh(true);
+      setJustRefreshed(true);
+      if (flashTimerRef.current !== null) {
+        clearTimeout(flashTimerRef.current);
+      }
+      flashTimerRef.current = setTimeout(() => {
+        setJustRefreshed(false);
+        flashTimerRef.current = null;
+      }, 1_400);
     } finally {
       setRefreshingLocal(false);
     }
@@ -195,7 +215,11 @@ export function QuotaStatusPopover({
                 onClick={() => void handleRefresh()}
                 className={ICON_BUTTON_CLASS}
               >
-                <RefreshCwIcon aria-hidden className={cn("size-3.5", isBusy && "animate-spin")} />
+                {justRefreshed && !isBusy ? (
+                  <CheckIcon aria-hidden className="size-3.5 text-success" />
+                ) : (
+                  <RefreshCwIcon aria-hidden className={cn("size-3.5", isBusy && "animate-spin")} />
+                )}
               </button>
             ) : null}
             <button
@@ -308,7 +332,11 @@ export function QuotaStatusPopover({
               onClick={() => void handleRefresh()}
               className={ICON_BUTTON_CLASS}
             >
-              <RefreshCwIcon aria-hidden className={cn("size-3.5", isBusy && "animate-spin")} />
+              {justRefreshed && !isBusy ? (
+                <CheckIcon aria-hidden className="size-3.5 text-success" />
+              ) : (
+                <RefreshCwIcon aria-hidden className={cn("size-3.5", isBusy && "animate-spin")} />
+              )}
             </button>
           ) : null}
         </div>
@@ -364,7 +392,10 @@ export function QuotaStatusPopover({
 
       {/* Agent List or Graceful Fallback */}
       {summary.availableAgents.length > 0 ? (
-        <div data-testid="quota-agent-list" className="flex max-h-72 flex-col gap-1 overflow-y-auto">
+        <div
+          data-testid="quota-agent-list"
+          className="flex max-h-72 flex-col gap-1 overflow-y-auto"
+        >
           {summary.availableAgents.map((agent) => {
             if (prefs.viewMode === "compact") {
               const primary = agent.primaryWindow ?? agent.windows[0] ?? null;
@@ -463,9 +494,7 @@ export function QuotaStatusPopover({
                               style={{ width: `${barWidth}%` }}
                             />
                           </span>
-                          <span
-                            className={cn("font-semibold", percentTextToneClass(win.tone))}
-                          >
+                          <span className={cn("font-semibold", percentTextToneClass(win.tone))}>
                             {displayPercent}%
                           </span>
                         </span>

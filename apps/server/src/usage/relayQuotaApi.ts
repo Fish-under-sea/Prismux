@@ -133,7 +133,7 @@ const describeRelayFailure = (failure: JsonRequestFailure, withBillingHint: bool
     : "";
   switch (failure._tag) {
     case "Timeout":
-      return "The relay did not answer within 15 seconds.";
+      return "The relay did not answer within 8 seconds.";
     case "StatusCode":
       return `The relay answered with HTTP ${failure.status}.${hint}`;
     case "Transport": {
@@ -248,7 +248,7 @@ export const makeRelayQuotaApi = Effect.gen(function* () {
   const getJson = Effect.fn("RelayQuotaApi.getJson")(function* (
     url: string,
     headers: Record<string, string>,
-    timeout: "15 seconds" | "5 seconds" = "15 seconds",
+    timeout: "8 seconds" | "3 seconds" = "8 seconds",
   ): Effect.fn.Return<unknown, JsonRequestFailure> {
     let request = HttpClientRequest.get(url).pipe(
       HttpClientRequest.setHeader("Accept", "application/json"),
@@ -271,9 +271,9 @@ export const makeRelayQuotaApi = Effect.gen(function* () {
     const raw = yield* getJson(
       `${baseUrl}/v1/models`,
       { Authorization: `Bearer ${apiKey}` },
-      "5 seconds",
+      "3 seconds",
     ).pipe(
-      Effect.timeoutOption("5 seconds"),
+      Effect.timeoutOption("3 seconds"),
       Effect.orElseSucceed(() => Option.none<unknown>()),
     );
     return Option.isSome(raw) ? parseRelayModels(raw.value) : undefined;
@@ -409,7 +409,8 @@ export const makeRelayQuotaApi = Effect.gen(function* () {
     const normalized = normalizeRelayBaseUrl(target.url);
     if (!normalized) {
       return yield* new UsageLimitSourceError({
-        detail: "The relay URL is not valid. Use an http:// or https:// address without embedded credentials.",
+        detail:
+          "The relay URL is not valid. Use an http:// or https:// address without embedded credentials.",
       });
     }
     const now = yield* DateTime.now;

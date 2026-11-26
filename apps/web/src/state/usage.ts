@@ -8,7 +8,12 @@ import {
   type UsageProviderKind,
   type UsageSummaryInput,
 } from "@prismux/core-contracts";
-import { refreshUsage, usageSummaryInput } from "@prismux/client-runtime/state/usage";
+import {
+  normalizeUsageSummaryInput,
+  refreshUsage,
+  usageSummaryInput,
+  type UsagePricingRefreshMode,
+} from "@prismux/client-runtime/state/usage";
 import { resolveUsageAccess } from "@prismux/client-runtime/state/usage-access";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { msg } from "gt-react";
@@ -84,6 +89,10 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
   }).pipe(Atom.withLabel(`web-usage:window:${windowKey}`)),
 );
 
+export interface UsageRefreshOptions {
+  readonly pricingRefreshMode?: UsagePricingRefreshMode;
+}
+
 export interface UsageView {
   readonly merged: MergedUsage;
   readonly environments: readonly EnvironmentUsageStatus[];
@@ -91,7 +100,7 @@ export interface UsageView {
   readonly isPending: boolean;
   readonly shown: { readonly window: UsageSummaryInput; readonly merged: MergedUsage } | null;
   readonly isPartial: boolean;
-  readonly refresh: (input?: UsageSummaryInput) => Promise<void>;
+  readonly refresh: (input?: UsageSummaryInput, options?: UsageRefreshOptions) => Promise<void>;
 }
 
 export function mergeAnsweredUsage(
@@ -163,14 +172,8 @@ export function useUsage(
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
   hiddenProviders: ReadonlySet<UsageProviderKind> = NO_HIDDEN_PROVIDERS,
 ): UsageView {
-  const windowKey = JSON.stringify({
-    sinceDay: input.sinceDay,
-    untilDay: input.untilDay,
-    timeZone: input.timeZone,
-    resolution: input.resolution,
-    sinceTime: input.sinceTime,
-    untilTime: input.untilTime,
-  });
+  const normalizedInput = normalizeUsageSummaryInput(input);
+  const windowKey = JSON.stringify(normalizedInput);
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
   // Identity-based render sync needs a derivation retained by inputs across renders.
@@ -188,7 +191,7 @@ export function useUsage(
   }
   const { selectedEnvironments, merged } = current;
 
-  const refresh = (nextInput?: UsageSummaryInput) =>
+  const refresh = (nextInput?: UsageSummaryInput, options?: UsageRefreshOptions) =>
     refreshUsage({
       registry: appAtomRegistry,
       server: serverEnvironment,
@@ -200,7 +203,10 @@ export function useUsage(
             readEnvironmentScope(environment.environmentId, AuthDiagnosticsReadScope),
         )
         .map(({ environmentId }) => environmentId),
-      input: nextInput ?? (JSON.parse(windowKey) as UsageSummaryInput),
+      input: normalizeUsageSummaryInput(nextInput ?? normalizedInput),
+      ...(options?.pricingRefreshMode !== undefined
+        ? { pricingRefreshMode: options.pricingRefreshMode }
+        : {}),
     });
 
   const answeredCount = selectedEnvironments.filter(

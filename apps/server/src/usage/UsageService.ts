@@ -299,7 +299,7 @@ export const make = Effect.gen(function* () {
         const parsed = parseRateTable(document);
         return parsed.size > 0 ? { document, parsed } : null;
       }),
-      Effect.timeout(10_000),
+      Effect.timeout(4_000),
       Effect.catchCause(() => Effect.succeed(null)),
     );
 
@@ -400,7 +400,9 @@ export const make = Effect.gen(function* () {
     const entries: Array<
       readonly [ProviderInstanceId, Pick<ProviderInstanceConfig, "config" | "environment">, boolean]
     > = hasEnabledInstance
-      ? selectedEntries.map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const)
+      ? selectedEntries.map(
+          ([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const,
+        )
       : [];
 
     if (!hasEnabledInstance) {
@@ -875,9 +877,15 @@ export const make = Effect.gen(function* () {
       { concurrency: "unbounded" },
     );
 
-    // Scan independent sources together, directories sequentially to bound open files; keep order, since the first copy decides a duplicate's bucket.
+    // Scan independent sources and transcript directories with bounded concurrency;
+    // Effect.forEach preserves input order so the first copy still decides a duplicate's bucket.
     const [transcripts, scanDirs] = yield* Effect.all(
-      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs, fromMemory)), scans],
+      [
+        Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs, fromMemory), {
+          concurrency: 4,
+        }),
+        scans,
+      ],
       { concurrency: "unbounded" },
     );
     const scanned: readonly ScannedDir[] = [...transcripts, ...pending, ...scanDirs.flat()];

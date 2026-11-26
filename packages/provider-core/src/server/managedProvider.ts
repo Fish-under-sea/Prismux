@@ -298,8 +298,12 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   );
 
   const refreshSnapshot = Effect.fn("refreshSnapshot")(function* () {
-    const nextSettings = yield* input.getSettings;
-    return yield* applySnapshot(nextSettings, { forceRefresh: true });
+    return yield* refreshSemaphore.withPermits(1)(
+      (input.invalidateUsageCache ?? Effect.void).pipe(
+        Effect.andThen(input.getSettings),
+        Effect.flatMap((nextSettings) => applySnapshotBase(nextSettings, { forceRefresh: true })),
+      ),
+    );
   });
 
   const refreshUsage = Effect.fn("ManagedServerProvider.refreshUsage")(function* () {

@@ -11,7 +11,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
-import { refreshUsage, refreshUsageLimits } from "./usage.ts";
+import { normalizeUsageSummaryInput, refreshUsage, refreshUsageLimits } from "./usage.ts";
 
 const input = {
   sinceDay: UsageDay.make("2026-09-05"),
@@ -92,7 +92,13 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
       presentationAtom: (environmentId: EnvironmentId) => get(environmentId).presentation,
     },
   } satisfies Parameters<typeof refreshUsage>[0];
-  return { registry, environments, requested, refresh: () => refreshUsage(options) };
+  return {
+    registry,
+    environments,
+    requested,
+    refresh: (overrides?: Partial<Parameters<typeof refreshUsage>[0]>) =>
+      refreshUsage({ ...options, ...overrides }),
+  };
 }
 
 describe("manual usage refresh", () => {
@@ -194,6 +200,53 @@ describe("manual usage refresh", () => {
     await refreshing;
     expect(reads).toBe(2);
     unmount();
+  });
+
+  it("hot-reloads immediately in background pricing mode without stalling on slow pricing fetch", async () => {
+    const {
+      registry,
+      environments: [environment],
+      refresh,
+    } = harness();
+    const entry = environment!;
+    let reads = 0;
+    const query = Atom.make(
+      Effect.sync(() => {
+        reads += 1;
+        return { ...summary, scanDurationMs: reads * 10 };
+      }),
+    );
+    entry.query = query;
+    const unmount = registry.mount(query);
+    expect(reads).toBe(1);
+
+    // Keep entry.rates unresolved (simulating slow/offline GitHub pricing):
+    // background mode must still rescan and settle immediately on the first click!
+    await refresh({ pricingRefreshMode: "background" });
+    expect(reads).toBe(2);
+    expect(AsyncResult.getOrElse(registry.get(query), () => null)?.scanDurationMs).toBe(20);
+
+    // Skip mode rescans immediately without touching rates at all (30-min auto-refresh).
+    await refresh({ pricingRefreshMode: "skip" });
+    expect(reads).toBe(3);
+    expect(AsyncResult.getOrElse(registry.get(query), () => null)?.scanDurationMs).toBe(30);
+    unmount();
+  });
+
+  it("normalizes usage summary input key ordering so query and refresh target identical atom keys", () => {
+    const a = normalizeUsageSummaryInput({
+      timeZone: "Asia/Shanghai",
+      resolution: "day",
+      untilDay: UsageDay.make("2026-11-26"),
+      sinceDay: UsageDay.make("2026-11-20"),
+    });
+    const b = normalizeUsageSummaryInput({
+      sinceDay: UsageDay.make("2026-11-20"),
+      untilDay: UsageDay.make("2026-11-26"),
+      timeZone: "Asia/Shanghai",
+      resolution: "day",
+    });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
 

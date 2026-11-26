@@ -137,7 +137,7 @@ const nodeErrorCode = (cause: unknown) => {
 
 // Hub responses can contain credentials; expose only failure kind, HTTP status or Node code.
 const describeManagementFailure = (error: unknown) => {
-  if (Cause.isTimeoutError(error)) return "The hub did not answer within 15 seconds.";
+  if (Cause.isTimeoutError(error)) return "The hub did not answer within 8 seconds.";
   if (HttpClientError.isHttpClientError(error)) {
     const reason = error.reason;
     if (reason._tag === "StatusCodeError") {
@@ -236,7 +236,13 @@ const CODEX_HUB: HubProvider = {
       : {}),
   }),
   read: Effect.fnUntraced(function* ({ account, call, checkedAt }) {
-    const usage = yield* decodeCodexUsage(yield* call(`${CODEX_BASE}/usage`));
+    const [usage, available] = yield* Effect.all(
+      [
+        call(`${CODEX_BASE}/usage`).pipe(Effect.flatMap(decodeCodexUsage)),
+        credits(call).pipe(Effect.orElseSucceed(() => undefined)),
+      ],
+      { concurrency: 2 },
+    );
     const toWindow = (window: typeof CodexWindow.Type | null | undefined) =>
       window
         ? {
@@ -247,7 +253,6 @@ const CODEX_HUB: HubProvider = {
               : { windowDurationMins: window.limit_window_seconds / 60 }),
           }
         : null;
-    const available = yield* credits(call).pipe(Effect.orElseSucceed(() => undefined));
     const next = available?.[0];
     const planType =
       usage.plan_type ?? account.id_token?.plan_type ?? account.id_token?.chatgpt_plan_type;
@@ -357,7 +362,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
       .pipe(
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap((response) => response.json),
-        Effect.timeout("15 seconds"),
+        Effect.timeout("8 seconds"),
         Effect.mapError(
           (error) => new UsageLimitSourceError({ detail: describeManagementFailure(error) }),
         ),
@@ -453,7 +458,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
     const [readings, models] = yield* Effect.all(
       [
         Effect.forEach(readable, ({ account, provider }) => readAccount(hub, account, provider), {
-          concurrency: 4,
+          concurrency: 8,
         }),
         Effect.forEach(
           readable,

@@ -2,7 +2,7 @@ import type { CallerScope } from "@prismux/protocol";
 import type {
   OfficialQuotaCreditsResponse,
   OfficialQuotaService,
-  OfficialQuotaSummaryResponse
+  OfficialQuotaSummaryResponse,
 } from "../system/OfficialQuotaService.js";
 import { BusinessRouteError } from "./DaemonBusinessRoutes.js";
 
@@ -21,32 +21,24 @@ export interface QuotaInvalidateResponse {
 
 export interface QuotaRouteResponse {
   statusCode: number;
-  payload:
-    | OfficialQuotaSummaryResponse
-    | OfficialQuotaCreditsResponse
-    | QuotaInvalidateResponse;
+  payload: OfficialQuotaSummaryResponse | OfficialQuotaCreditsResponse | QuotaInvalidateResponse;
 }
 
 function isForceFlag(searchParams: URLSearchParams): boolean {
   const force = searchParams.get("force")?.trim().toLowerCase();
   const refresh = searchParams.get("refresh")?.trim().toLowerCase();
-  return (
-    force === "1" ||
-    force === "true" ||
-    refresh === "1" ||
-    refresh === "true"
-  );
+  return force === "1" || force === "true" || refresh === "1" || refresh === "true";
 }
 
 function isExplicitlyDisabledFlag(searchParams: URLSearchParams): boolean {
   const disabled = searchParams.get("disabled")?.trim().toLowerCase();
   const enabled = searchParams.get("enabled")?.trim().toLowerCase();
-  return (
-    disabled === "1" ||
-    disabled === "true" ||
-    enabled === "0" ||
-    enabled === "false"
-  );
+  return disabled === "1" || disabled === "true" || enabled === "0" || enabled === "false";
+}
+
+function isSwrFlag(searchParams: URLSearchParams): boolean {
+  const swr = searchParams.get("swr")?.trim().toLowerCase();
+  return swr === "1" || swr === "true";
 }
 
 /**
@@ -60,16 +52,12 @@ function isExplicitlyDisabledFlag(searchParams: URLSearchParams): boolean {
  */
 export async function handleQuotaRoute(
   request: QuotaRouteRequest,
-  quotaService: OfficialQuotaService | undefined
+  quotaService: OfficialQuotaService | undefined,
 ): Promise<QuotaRouteResponse | null> {
-  const isSummaryGet =
-    request.method === "GET" && request.pathname === "/v1/quota/summary";
-  const isRefreshPost =
-    request.method === "POST" && request.pathname === "/v1/quota/refresh";
-  const isCreditsGet =
-    request.method === "GET" && request.pathname === "/v1/quota/credits";
-  const isInvalidatePost =
-    request.method === "POST" && request.pathname === "/v1/quota/invalidate";
+  const isSummaryGet = request.method === "GET" && request.pathname === "/v1/quota/summary";
+  const isRefreshPost = request.method === "POST" && request.pathname === "/v1/quota/refresh";
+  const isCreditsGet = request.method === "GET" && request.pathname === "/v1/quota/credits";
+  const isInvalidatePost = request.method === "POST" && request.pathname === "/v1/quota/invalidate";
 
   if (!isSummaryGet && !isRefreshPost && !isCreditsGet && !isInvalidatePost) {
     return null;
@@ -79,7 +67,7 @@ export async function handleQuotaRoute(
     throw new BusinessRouteError(
       403,
       "FORBIDDEN_SCOPE",
-      `Scope "${request.callerScope}" is not permitted to access ${request.pathname}.`
+      `Scope "${request.callerScope}" is not permitted to access ${request.pathname}.`,
     );
   }
 
@@ -87,7 +75,7 @@ export async function handleQuotaRoute(
     throw new BusinessRouteError(
       503,
       "QUOTA_SERVICE_UNAVAILABLE",
-      "OfficialQuotaService is not configured."
+      "OfficialQuotaService is not configured.",
     );
   }
 
@@ -98,39 +86,40 @@ export async function handleQuotaRoute(
       payload: {
         ok: true,
         cleared: true,
-        cacheGeneration: quotaService.getCacheGeneration()
-      }
+        cacheGeneration: quotaService.getCacheGeneration(),
+      },
     };
   }
 
   const explicitlyDisabled = isExplicitlyDisabledFlag(request.searchParams);
+  const allowStale = isSwrFlag(request.searchParams);
 
   if (isCreditsGet) {
     if (explicitlyDisabled) {
       return {
         statusCode: 200,
-        payload: quotaService.buildDisabledCreditsResponse()
+        payload: quotaService.buildDisabledCreditsResponse(),
       };
     }
     const force = isForceFlag(request.searchParams);
-    const credits = await quotaService.getCredits(force);
+    const credits = await quotaService.getCredits(force, { allowStale });
     return {
       statusCode: 200,
-      payload: credits
+      payload: credits,
     };
   }
 
   if (explicitlyDisabled) {
     return {
       statusCode: 200,
-      payload: quotaService.buildDisabledSummaryResponse()
+      payload: quotaService.buildDisabledSummaryResponse(),
     };
   }
 
   const force = isRefreshPost || isForceFlag(request.searchParams);
-  const summary = await quotaService.getSummary(force);
+  const summary = await quotaService.getSummary(force, { allowStale });
   return {
     statusCode: 200,
-    payload: summary
+    payload: summary,
   };
 }
