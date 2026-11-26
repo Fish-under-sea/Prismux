@@ -70,6 +70,15 @@ export function boundFileChangeForStorage(item: OrchestrationV2TurnItem): Orches
     : bounded;
 }
 
+/** Bound stored context injection content to the on-demand detail budget so SQLite stays lean. */
+export function boundContextInjectionForStorage(
+  item: OrchestrationV2TurnItem,
+): OrchestrationV2TurnItem {
+  if (item.type !== "context_injection" || typeof item.content !== "string") return item;
+  const boundedContent = truncateDetail(item.content, MAX_ON_DEMAND_BYTES);
+  return boundedContent === item.content ? item : { ...item, content: boundedContent };
+}
+
 function summarizeDynamicValue(value: unknown): unknown {
   let serialized: string;
   try {
@@ -191,6 +200,21 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
         progress: truncateDetail(item.progress),
         result: item.result === null ? null : (truncateDetail(item.result) ?? null),
       };
+    case "context_injection": {
+      const { content, ...projected } = item;
+      if (
+        typeof content === "string" &&
+        (content.length > MAX_DETAIL_STRING_BYTES ||
+          Buffer.byteLength(content, "utf8") > MAX_DETAIL_STRING_BYTES)
+      ) {
+        return {
+          ...projected,
+          content: null,
+          contentOmitted: true,
+        };
+      }
+      return item;
+    }
     case "dynamic_tool": {
       const { output: rawOutput, ...projected } = item;
       const output = compactDynamicToolOutput(rawOutput);
@@ -295,6 +319,15 @@ export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): Orchest
           ? { newStr: truncateDetail(item.newStr, MAX_ON_DEMAND_BYTES) }
           : {}),
       };
+    case "context_injection": {
+      const { contentOmitted: _omitted, ...rest } = item;
+      return {
+        ...rest,
+        ...(typeof item.content === "string"
+          ? { content: truncateDetail(item.content, MAX_ON_DEMAND_BYTES) ?? "" }
+          : {}),
+      };
+    }
     case "handoff":
       return projectTurnItemForWire(item);
     default:

@@ -1059,4 +1059,211 @@ describe("dshSessionUsage", () => {
       }
     });
   });
+
+  describe("native DSH context_injection projection", () => {
+    it("extracts agent-instructions, runtime-context, skill-catalog, and time-context while skipping user/tool-jobs", async () => {
+      const root = createTempDir("prismux-dsh-ctx-");
+      const cwd = "D:\\Fish-code\\Prismux";
+      const sessionId = "sess-ctx-1";
+      const sessionDir = NodePath.join(root, "sessions", encodeDshProjectKey(cwd), sessionId);
+      NodeFS.mkdirSync(sessionDir, { recursive: true });
+      const filePath = NodePath.join(sessionDir, "session.v4.jsonl.zstd");
+
+      // Baseline prior turn (seq <= 2) must not be re-emitted
+      const baselineFrame = compressFrame([
+        { type: "session", version: 4, id: sessionId, createdAt: 1_794_083_200_000 },
+        {
+          seq: 2,
+          type: "user/message",
+          time: 1_794_083_201_000,
+          data: {
+            id: "old-ctx",
+            role: "user",
+            source: {
+              kind: "time-context",
+              form: "snapshot",
+              sections: [{ name: "t", text: "old" }],
+            },
+            content: [{ type: "text", text: "old time" }],
+          },
+        },
+      ]);
+      NodeFS.writeFileSync(filePath, baselineFrame);
+
+      const watcher = makeDshTurnUsageWatcher({
+        dshHome: root,
+        sessionId,
+        cwd,
+        settleWaitMs: 0,
+      });
+      expect(watcher.baselineSeq).toBe(2);
+      expect(watcher.readContextInjections()).toEqual([]);
+
+      // New turn appends non-user context injections BEFORE any assistant/message step
+      const ctxFrame = compressFrame([
+        {
+          seq: 10,
+          type: "user/message",
+          time: 1_794_083_211_685,
+          data: {
+            id: "msg-inst",
+            role: "user",
+            source: {
+              kind: "agent-instructions",
+              form: "instructions",
+              baseline: true,
+              changes: [
+                {
+                  action: "set",
+                  scope: "user-global\u0000AGENTS.md",
+                  path: "~/.dsh/AGENTS.md",
+                  digest: "a367a9aa2ec0aab7d8214e62c04760cd811b9ce8",
+                },
+              ],
+            },
+            content: [
+              {
+                type: "text",
+                text: "<system-reminder>\nThe following workspace instructions apply.\n</system-reminder>",
+              },
+            ],
+          },
+        },
+        {
+          seq: 11,
+          type: "user/message",
+          time: 1_794_083_211_686,
+          data: {
+            id: "msg-runtime",
+            role: "user",
+            source: {
+              kind: "runtime-context",
+              form: "snapshot",
+              sections: [{ name: "working-directory:current", text: "C:\\workspace" }],
+            },
+            content: [{ type: "text", text: "Current runtime context." }],
+          },
+        },
+        {
+          seq: 12,
+          type: "user/message",
+          time: 1_794_083_211_687,
+          data: {
+            id: "msg-skills",
+            role: "user",
+            source: {
+              kind: "skill-catalog",
+              form: "catalog",
+              entries: [
+                { name: "core-rules", description: "Core baseline rules" },
+                { name: "tdd", description: "Test driven development" },
+              ],
+            },
+            content: [{ type: "text", text: "<system-reminder>\nSkills list\n</system-reminder>" }],
+          },
+        },
+        {
+          seq: 13,
+          type: "user/message",
+          time: 1_794_083_211_688,
+          data: {
+            id: "msg-time",
+            role: "user",
+            source: {
+              kind: "time-context",
+              form: "snapshot",
+              sections: [
+                { name: "time-context", text: "2026-11-26T01:00:00+08:00[Asia/Shanghai]" },
+              ],
+            },
+            content: [{ type: "text", text: "Time sampled while preparing turn 1" }],
+          },
+        },
+        {
+          seq: 14,
+          type: "user/message",
+          time: 1_794_083_211_689,
+          data: {
+            id: "msg-user",
+            role: "user",
+            source: { kind: "user" },
+            content: [{ type: "text", text: "Hello DSH" }],
+          },
+        },
+        {
+          seq: 15,
+          type: "user/message",
+          time: 1_794_083_211_690,
+          data: {
+            id: "msg-job",
+            role: "user",
+            source: { kind: "tool-jobs", form: "notice", summary: "bg job" },
+            content: [{ type: "text", text: "bg job output" }],
+          },
+        },
+      ]);
+      NodeFS.writeFileSync(filePath, Buffer.concat([baselineFrame, ctxFrame]));
+
+      // Works immediately before any assistant/message step commits
+      expect(watcher.readTurnDelta()).toBeUndefined();
+      const injected = watcher.readContextInjections();
+      expect(injected.map((item) => item.sourceKind)).toEqual([
+        "agent-instructions",
+        "runtime-context",
+        "skill-catalog",
+        "time-context",
+      ]);
+      expect(injected[0]).toMatchObject({
+        nativeId: "dsh-ctx:msg-inst:agent-instructions",
+        label: "~/.dsh/AGENTS.md",
+        sourcePath: "~/.dsh/AGENTS.md",
+        statusLabel: "已载入",
+        form: "instructions",
+        baseline: true,
+        files: [
+          {
+            action: "set",
+            path: "~/.dsh/AGENTS.md",
+            digest: "a367a9aa2ec0aab7d8214e62c04760cd811b9ce8",
+          },
+        ],
+      });
+      expect(injected[0]?.content).toContain("<system-reminder>");
+      expect(injected[2]?.entries).toEqual([
+        { name: "core-rules", description: "Core baseline rules" },
+        { name: "tdd", description: "Test driven development" },
+      ]);
+
+      // Appending assistant/message + turn/end exposes both usage and contextInjections on collectFinal
+      const stepFrame = compressFrame([
+        {
+          seq: 20,
+          type: "assistant/message",
+          time: 1_794_083_215_000,
+          data: {
+            turn: 1,
+            step: 1,
+            usage: {
+              inputTokens: 120,
+              cacheReadTokens: 800,
+              cacheWriteTokens: 0,
+              outputTokens: 50,
+            },
+            message: { source: { provider: "magpie", model: "group/deepseek" } },
+          },
+        },
+        { seq: 21, type: "turn/end", time: 1_794_083_215_100, data: { turn: 1 } },
+      ]);
+      NodeFS.writeFileSync(filePath, Buffer.concat([baselineFrame, ctxFrame, stepFrame]));
+
+      const finalDelta = await watcher.collectFinal();
+      expect(finalDelta?.usage.inputTokens).toBe(920);
+      expect(finalDelta?.contextInjections?.map((i) => i.sourceKind)).toEqual([
+        "agent-instructions",
+        "runtime-context",
+        "skill-catalog",
+        "time-context",
+      ]);
+    });
+  });
 });

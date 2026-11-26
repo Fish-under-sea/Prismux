@@ -62,6 +62,11 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
+import {
+  buildContextInjectionTurnItem,
+  createTurnContextInjectionTracker,
+} from "@prismux/provider-core/server/contextInjectionTracker";
+import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as OpenCode2Client from "./OpenCode2Client.ts";
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
@@ -833,6 +838,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const paths = yield* Path.Path;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
   const crypto = yield* Digest.Digest;
+  const hostHomeDir = yield* HostProcess.HomeDirectory;
+  const hostPlatform = yield* HostProcess.Platform;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const contextInjectionTracker = createTurnContextInjectionTracker();
   const driver = OPENCODE_PROVIDER;
   let nativeGoalSupport: boolean | undefined;
   const mcpServerNameFor = (threadId: string) =>
@@ -4504,6 +4513,49 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state.active = turn;
       state.sessionScopedBackground = false;
       yield* emitProviderTurn(state, turn, providerTurn);
+      if (!isContinuation(turnInput) && !turnInput.resume) {
+        const observedInjections = contextInjectionTracker.observeTurn({
+          providerThreadId: String(turnInput.providerThread.id),
+          agent: "opencode",
+          cwd: turnInput.runtimePolicy.cwd ?? state.directory,
+          homeDir: hostHomeDir,
+          env: hostEnvironment,
+          platform: hostPlatform,
+          branch: turnInput.appThread.branch,
+          runtimeMode: turnInput.runtimePolicy.runtimeMode,
+          interactionMode: turnInput.runtimePolicy.interactionMode,
+          model: turnInput.modelSelection.model,
+          ...(state.instructions ? { prismuxInstructions: state.instructions } : {}),
+        });
+        for (const injection of observedInjections) {
+          const nativeId = `context-injection:${providerTurn.id}:${injection.sourceKey}:${injection.digest.slice(0, 12)}`;
+          const base = itemBase(
+            state,
+            turn,
+            nativeId,
+            "completed",
+            startedAt,
+            startedAt,
+            startedAt,
+          );
+          yield* emit({
+            type: "turn_item.updated",
+            driver,
+            turnItem: buildContextInjectionTurnItem({
+              id: base.id,
+              threadId: base.threadId,
+              runId: base.runId,
+              nodeId: turnInput.rootNodeId,
+              providerThreadId: base.providerThreadId,
+              providerTurnId: base.providerTurnId,
+              nativeItemRef: ref(nativeId, "weak"),
+              ordinal: base.ordinal,
+              occurredAt: startedAt,
+              payload: injection,
+            }),
+          });
+        }
+      }
       state.providerThread = {
         ...state.providerThread,
         status: "active",

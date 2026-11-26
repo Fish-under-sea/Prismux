@@ -2605,3 +2605,77 @@ it.effect.each([
     assert.isEmpty(persisted);
   }).pipe(Effect.provide(layerFailingWrites(errors))),
 );
+
+layer("context_injection ingestion", (it) => {
+  it.effect("persists context_injection turn items and bounds oversized content for storage", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const threadEvent = yield* threadCreatedEvent(now);
+      yield* eventSink.write({ events: [threadEvent] });
+
+      const itemId = idAllocator.derive.turnItemFromProviderItem({
+        driver: CODEX_DRIVER,
+        nativeItemId: "ctx:agent-instructions:1",
+      });
+      const stored = yield* ingestor.ingestNormalized({
+        providerSessionId: yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId: threadEvent.threadId,
+        }),
+        providerInstanceId: modelSelection.instanceId,
+        threadId: threadEvent.threadId,
+        event: {
+          type: "turn_item.updated",
+          driver: CODEX_DRIVER,
+          turnItem: {
+            id: itemId,
+            threadId: threadEvent.threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: {
+              driver: CODEX_DRIVER,
+              nativeId: "ctx:agent-instructions:1",
+              strength: "weak",
+            },
+            parentItemId: null,
+            ordinal: 1,
+            status: "completed",
+            title: "AGENTS.md",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "context_injection",
+            sourceKind: "agent-instructions",
+            form: "instructions",
+            label: "AGENTS.md",
+            sourcePath: "AGENTS.md",
+            statusLabel: "已载入",
+            digest: "sha256-test",
+            baseline: true,
+            files: [{ action: "set", path: "AGENTS.md", digest: "sha256-test" }],
+            content: "X".repeat(320_000),
+          },
+        },
+      });
+      assert.lengthOf(stored, 1);
+      const projection = yield* projectionStore.getThreadProjection(threadEvent.threadId);
+      const persisted = projection.turnItems.find((item) => item.id === itemId);
+      assert.isDefined(persisted);
+      assert.equal(persisted?.type, "context_injection");
+      if (persisted?.type === "context_injection") {
+        assert.equal(persisted.sourceKind, "agent-instructions");
+        assert.equal(persisted.label, "AGENTS.md");
+        assert.equal(persisted.sourcePath, "AGENTS.md");
+        assert.equal(persisted.statusLabel, "已载入");
+        assert.equal(persisted.digest, "sha256-test");
+        assert.isAtMost(Buffer.byteLength(persisted.content ?? "", "utf8"), 256 * 1024);
+      }
+    }),
+  );
+});

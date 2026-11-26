@@ -27,6 +27,7 @@ import {
   type ProviderInstanceId,
   type MessageId,
   type OrchestrationV2ProviderTurnTokenUsage,
+  type TurnTokenUsage,
 } from "@prismux/core-contracts";
 import { PiSettings } from "../settings.ts";
 import * as Cause from "effect/Cause";
@@ -47,6 +48,10 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
+import {
+  buildContextInjectionTurnItem,
+  createTurnContextInjectionTracker,
+} from "@prismux/provider-core/server/contextInjectionTracker";
 import { providerMessageTextWithAttachmentPaths } from "@prismux/provider-core/server/attachmentPrompt";
 import { mcpToolPresentation } from "@prismux/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@prismux/provider-core/server/McpProviderSessions";
@@ -363,8 +368,30 @@ function compactionTitle(status: PiCompactionStatus): string {
 
 type PiMessageTokenUsage = Pick<
   OrchestrationV2ProviderTurnTokenUsage,
-  "inputTokens" | "cachedInputTokens" | "outputTokens"
+  | "inputTokens"
+  | "cachedInputTokens"
+  | "cacheCreationTokens"
+  | "outputTokens"
+  | "reasoningOutputTokens"
 >;
+
+interface PiStepTokenUsage {
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningTokens: number;
+}
+
+interface PiTurnUsageAccumulator {
+  steps: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  readonly models: Array<string>;
+}
 
 interface ActivePiTurn {
   readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
@@ -385,6 +412,8 @@ interface ActivePiTurn {
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
   lastMessageUsage: PiMessageTokenUsage | undefined;
+  currentMessageUsage: PiStepTokenUsage | undefined;
+  readonly turnUsageAccumulator: PiTurnUsageAccumulator;
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
@@ -480,7 +509,11 @@ const PI_TODO_TOOL_NAMES = new Set([
 ]);
 
 function normalizePiTodoToolName(raw: string): string {
-  const tail = raw.trim().split(/(?:__|[./:])/u).at(-1) ?? raw;
+  const tail =
+    raw
+      .trim()
+      .split(/(?:__|[./:])/u)
+      .at(-1) ?? raw;
   return tail
     .trim()
     .toLowerCase()
@@ -491,7 +524,10 @@ function normalizePiPlanStepStatus(
   raw: unknown,
 ): "pending" | "running" | "completed" | "cancelled" {
   if (typeof raw !== "string") return "pending";
-  const normalized = raw.trim().toLowerCase().replace(/[\s-]+/gu, "_");
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/gu, "_");
   switch (normalized) {
     case "completed":
     case "complete":
@@ -529,7 +565,8 @@ function parsePiTodoStep(entry: unknown, index: number): OrchestrationV2PlanStep
       return {
         id: `pi-step-${index + 1}`,
         text,
-        status: marker === "x" ? "completed" : marker === "/" || marker === "~" ? "running" : "pending",
+        status:
+          marker === "x" ? "completed" : marker === "/" || marker === "~" ? "running" : "pending",
       };
     }
     return { id: `pi-step-${index + 1}`, text: trimmed, status: "pending" };
@@ -562,10 +599,12 @@ function parsePiTodoStep(entry: unknown, index: number): OrchestrationV2PlanStep
   };
 }
 
-function extractPiTodoContainer(container: unknown): {
-  readonly items: ReadonlyArray<unknown>;
-  readonly explanation?: string;
-} | undefined {
+function extractPiTodoContainer(container: unknown):
+  | {
+      readonly items: ReadonlyArray<unknown>;
+      readonly explanation?: string;
+    }
+  | undefined {
   if (Array.isArray(container)) {
     return container.length > 0 ? { items: container } : undefined;
   }
@@ -606,7 +645,9 @@ export function extractPiTodoPlan(
   toolName: string,
   args: unknown,
   resultRecord?: unknown,
-): { readonly steps: ReadonlyArray<OrchestrationV2PlanStep>; readonly explanation?: string } | undefined {
+):
+  | { readonly steps: ReadonlyArray<OrchestrationV2PlanStep>; readonly explanation?: string }
+  | undefined {
   if (!PI_TODO_TOOL_NAMES.has(normalizePiTodoToolName(toolName))) {
     return undefined;
   }
@@ -636,6 +677,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const hostHomeDir = yield* HostProcess.HomeDirectory;
+  const hostPlatform = yield* HostProcess.Platform;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const contextInjectionTracker = createTurnContextInjectionTracker();
   const { continuationRequests } = options;
 
   const protocolError = (detail: string, payload?: unknown) =>
@@ -1085,19 +1130,85 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const piMessageTokenUsage = (usage: unknown): PiMessageTokenUsage => {
         const uncachedInputTokens = nonNegativeInteger(usage, "input");
         const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
+        const cacheCreationTokens = nonNegativeInteger(usage, "cacheWrite");
         const outputTokens = nonNegativeInteger(usage, "output");
+        const rawReasoningTokens =
+          nonNegativeInteger(usage, "reasoning") ??
+          nonNegativeInteger(usage, "reasoningTokens") ??
+          nonNegativeInteger(usage, "thinking");
+        const reasoningOutputTokens =
+          rawReasoningTokens === undefined
+            ? undefined
+            : outputTokens === undefined
+              ? rawReasoningTokens
+              : Math.min(outputTokens, rawReasoningTokens);
+        const hasInputComponent =
+          uncachedInputTokens !== undefined ||
+          cachedInputTokens !== undefined ||
+          cacheCreationTokens !== undefined;
         return {
-          ...(uncachedInputTokens === undefined
-            ? {}
-            : {
+          ...(hasInputComponent
+            ? {
                 inputTokens:
-                  uncachedInputTokens +
+                  (uncachedInputTokens ?? 0) +
                   (cachedInputTokens ?? 0) +
-                  (nonNegativeInteger(usage, "cacheWrite") ?? 0),
-              }),
+                  (cacheCreationTokens ?? 0),
+              }
+            : {}),
           ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+          ...(cacheCreationTokens === undefined ? {} : { cacheCreationTokens }),
           ...(outputTokens === undefined ? {} : { outputTokens }),
+          ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
         };
+      };
+
+      const extractPiStepTokenUsage = (usage: unknown): PiStepTokenUsage | undefined => {
+        const uncachedInputTokens = nonNegativeInteger(usage, "input");
+        const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
+        const cacheCreationTokens = nonNegativeInteger(usage, "cacheWrite");
+        const outputTokens = nonNegativeInteger(usage, "output");
+        const rawReasoningTokens =
+          nonNegativeInteger(usage, "reasoning") ??
+          nonNegativeInteger(usage, "reasoningTokens") ??
+          nonNegativeInteger(usage, "thinking");
+        if (
+          uncachedInputTokens === undefined &&
+          cachedInputTokens === undefined &&
+          cacheCreationTokens === undefined &&
+          outputTokens === undefined
+        ) {
+          return undefined;
+        }
+        const totalInput =
+          (uncachedInputTokens ?? 0) + (cachedInputTokens ?? 0) + (cacheCreationTokens ?? 0);
+        const totalOutput = outputTokens ?? 0;
+        if (totalInput === 0 && totalOutput === 0) return undefined;
+        return {
+          inputTokens: totalInput,
+          cachedInputTokens: cachedInputTokens ?? 0,
+          cacheCreationTokens: cacheCreationTokens ?? 0,
+          outputTokens: totalOutput,
+          reasoningTokens:
+            rawReasoningTokens === undefined ? 0 : Math.min(totalOutput, rawReasoningTokens),
+        };
+      };
+
+      const recordPiTurnStepUsage = (
+        turn: ActivePiTurn,
+        step: PiStepTokenUsage,
+        model?: string,
+      ): void => {
+        const acc = turn.turnUsageAccumulator;
+        acc.steps += 1;
+        acc.inputTokens += step.inputTokens;
+        acc.cachedInputTokens += step.cachedInputTokens;
+        acc.cacheCreationTokens += step.cacheCreationTokens;
+        acc.outputTokens += step.outputTokens;
+        acc.reasoningTokens += Math.min(step.outputTokens, step.reasoningTokens);
+        const trimmedModel = model?.trim();
+        if (trimmedModel && !acc.models.includes(trimmedModel)) {
+          acc.models.push(trimmedModel);
+        }
       };
 
       const rememberModelContextWindow = (model: unknown): number | null => {
@@ -1124,7 +1235,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return yield* Effect.gen(function* () {
             // RPC responses bypass the pump. Reset after all earlier native notifications.
             if (
-              !(yield* Queue.offer(connection.events, { type: "prismux.extension_status_reset", reset }))
+              !(yield* Queue.offer(connection.events, {
+                type: "prismux.extension_status_reset",
+                reset,
+              }))
             )
               return yield* protocolError("Pi transport closed during status reset");
             yield* Deferred.await(reset.ready);
@@ -1222,6 +1336,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const reportLiveUsage =
         /* Provider events include streaming deltas; avoid a span for each update. */
         Effect.fnUntraced(function* (turn: ActivePiTurn, usage: unknown) {
+          const step = extractPiStepTokenUsage(usage);
+          if (step !== undefined) {
+            turn.currentMessageUsage = step;
+          }
           const usedTokens = nonNegativeInteger(usage, "totalTokens");
           if (usedTokens !== undefined && usedTokens > 0) {
             turn.lastMessageUsage = piMessageTokenUsage(usage);
@@ -2343,6 +2461,32 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           turn.stopTreeRefs !== undefined ? turn.stopTreeRefs : yield* captureTurnTreeRefs();
         const tokenUsage = readUsage ? yield* readTokenUsage(turn, completedAt) : undefined;
         const failure = interrupted ? null : (turn.rejectedPromptFailure ?? turn.failure);
+        if (turn.currentMessageUsage !== undefined) {
+          recordPiTurnStepUsage(turn, turn.currentMessageUsage, turn.reportedModel);
+          turn.currentMessageUsage = undefined;
+        }
+        const acc = turn.turnUsageAccumulator;
+        const fallbackModel =
+          turn.reportedModel ??
+          (turn.turnInput.modelSelection.model && turn.turnInput.modelSelection.model !== "default"
+            ? turn.turnInput.modelSelection.model
+            : undefined);
+        const models =
+          acc.models.length > 0 ? acc.models : fallbackModel !== undefined ? [fallbackModel] : [];
+        const turnTokenUsage: TurnTokenUsage | undefined =
+          acc.steps > 0
+            ? {
+                usageScope: "main_agent",
+                usageStatus: interrupted || failure !== null ? "partial" : "complete",
+                hasSubagents: false,
+                inputTokens: acc.inputTokens,
+                cachedInputTokens: acc.cachedInputTokens,
+                cacheCreationTokens: acc.cacheCreationTokens,
+                outputTokens: acc.outputTokens,
+                ...(acc.reasoningTokens > 0 ? { reasoningTokens: acc.reasoningTokens } : {}),
+                ...(models.length > 0 ? { models } : {}),
+              }
+            : undefined;
         yield* emit({
           type: "provider_turn.updated",
           driver: PI_PROVIDER,
@@ -2358,6 +2502,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
+            ...(turnTokenUsage === undefined ? {} : { turnTokenUsage }),
             ...(turn.reportedModel === undefined ? {} : { model: turn.reportedModel }),
           },
         });
@@ -2577,6 +2722,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn !== null && role === "assistant") {
               turn.sawAgentActivity = true;
               turn.messageOrdinal += 1;
+              turn.currentMessageUsage = undefined;
             }
             const readSteer = role === "user" ? turn?.unreadSteers.shift() : undefined;
             if (turn !== null && readSteer !== undefined) {
@@ -2635,8 +2781,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             yield* completeOpenStreamItems(turn);
             const reportedProvider = recordString(message, "provider");
             const reportedModelId = recordString(message, "model");
+            const stepModel =
+              reportedProvider && reportedModelId
+                ? `${reportedProvider}/${reportedModelId}`
+                : (reportedModelId ?? turn.reportedModel);
             if (reportedProvider && reportedModelId) {
               turn.reportedModel = `${reportedProvider}/${reportedModelId}`;
+            }
+            const rawStepUsage = recordField(message, "usage") ?? event["usage"];
+            const parsedStepUsage = extractPiStepTokenUsage(rawStepUsage);
+            if (parsedStepUsage !== undefined) {
+              turn.lastMessageUsage = piMessageTokenUsage(rawStepUsage);
+            }
+            const committedStepUsage = parsedStepUsage ?? turn.currentMessageUsage;
+            turn.currentMessageUsage = undefined;
+            if (committedStepUsage !== undefined) {
+              recordPiTurnStepUsage(turn, committedStepUsage, stepModel);
             }
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               turn.failure = makeProviderFailure({
@@ -3739,6 +3899,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
               lastMessageUsage: undefined,
+              currentMessageUsage: undefined,
+              turnUsageAccumulator: {
+                steps: 0,
+                inputTokens: 0,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+                models: [],
+              },
               settleProbeGeneration: 0,
               settleWhenIdle: false,
               compactionCancelled: false,
@@ -3799,6 +3969,44 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   threadId: turnInput.threadId,
                   providerTurn,
                 });
+                if (!continuation) {
+                  const observedInjections = contextInjectionTracker.observeTurn({
+                    providerThreadId: String(turnInput.providerThread.id),
+                    agent: "pi",
+                    cwd: turnInput.runtimePolicy.cwd ?? cwd,
+                    homeDir: hostHomeDir,
+                    env: { ...hostEnvironment, ...options.environment },
+                    platform: hostPlatform,
+                    branch: turnInput.appThread.branch,
+                    runtimeMode: turnInput.runtimePolicy.runtimeMode,
+                    interactionMode: turnInput.runtimePolicy.interactionMode,
+                    model: turnInput.modelSelection.model,
+                  });
+                  for (const injection of observedInjections) {
+                    const nativeItemId = `context-injection:${providerTurn.id}:${injection.sourceKey}:${injection.digest.slice(0, 12)}`;
+                    const base = baseItemFields(activeTurn, nativeItemId, startedAt, startedAt);
+                    yield* emit({
+                      type: "turn_item.updated",
+                      driver: PI_PROVIDER,
+                      turnItem: buildContextInjectionTurnItem({
+                        id: base.id,
+                        threadId: base.threadId,
+                        runId: base.runId,
+                        nodeId: turnInput.rootNodeId,
+                        providerThreadId: base.providerThreadId,
+                        providerTurnId: base.providerTurnId,
+                        nativeItemRef: {
+                          driver: PI_PROVIDER,
+                          nativeId: nativeItemId,
+                          strength: "weak",
+                        },
+                        ordinal: base.ordinal,
+                        occurredAt: startedAt,
+                        payload: injection,
+                      }),
+                    });
+                  }
+                }
                 yield* updateProviderThread(state, {
                   status: "active",
                   firstRunOrdinal: state.providerThread.firstRunOrdinal ?? turnInput.runOrdinal,

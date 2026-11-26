@@ -31,6 +31,10 @@
       "types": "./src/server/collectStreamText.ts",
       "import": "./src/server/collectStreamText.ts"
     },
+    "./server/contextInjectionTracker": {
+      "types": "./src/server/contextInjectionTracker.ts",
+      "import": "./src/server/contextInjectionTracker.ts"
+    },
     "./server/driver": {
       "types": "./src/server/driver.ts",
       "import": "./src/server/driver.ts"

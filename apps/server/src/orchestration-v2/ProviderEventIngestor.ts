@@ -41,7 +41,7 @@ import * as ProviderAdapter from "@prismux/provider-core/server/ProviderAdapter"
 import { makeProviderFailureTurnItem } from "@prismux/provider-core/server/failure";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
-import { boundFileChangeForStorage } from "./WireProjection.ts";
+import { boundContextInjectionForStorage, boundFileChangeForStorage } from "./WireProjection.ts";
 
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
@@ -610,8 +610,10 @@ export const layer: Layer.Layer<
                 yield* makeDomainEvent(input, {
                   type: "turn-item.updated",
                   threadId: input.event.turnItem.threadId,
-                  payload: boundFileChangeForStorage(
-                    stripUnservedToolOutputImageBytes(input.event.turnItem),
+                  payload: boundContextInjectionForStorage(
+                    boundFileChangeForStorage(
+                      stripUnservedToolOutputImageBytes(input.event.turnItem),
+                    ),
                   ),
                   runId: input.event.turnItem.runId,
                   nodeId: input.event.turnItem.nodeId,

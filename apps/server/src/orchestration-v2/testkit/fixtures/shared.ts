@@ -1332,8 +1332,11 @@ export function assertTurnItemTypeSequence(
   projection: OrchestrationV2ThreadProjection,
   expectedTypes: ReadonlyArray<OrchestrationV2TurnItem["type"]>,
 ) {
+  const includeContextInjection = expectedTypes.includes("context_injection");
   assert.deepEqual(
-    projection.turnItems.map((item) => item.type),
+    projection.turnItems
+      .map((item) => item.type)
+      .filter((type) => includeContextInjection || type !== "context_injection"),
     expectedTypes,
   );
 }
@@ -1342,8 +1345,11 @@ export function assertVisibleTurnItemTypeSequence(
   projection: OrchestrationV2ThreadProjection,
   expectedTypes: ReadonlyArray<OrchestrationV2TurnItem["type"]>,
 ) {
+  const includeContextInjection = expectedTypes.includes("context_injection");
   assert.deepEqual(
-    projection.visibleTurnItems.map((row) => row.item.type),
+    projection.visibleTurnItems
+      .map((row) => row.item.type)
+      .filter((type) => includeContextInjection || type !== "context_injection"),
     expectedTypes,
   );
 }

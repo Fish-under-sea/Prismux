@@ -185,6 +185,8 @@ export function turnItemNeedsDetailFetch(item: OrchestrationV2TurnItem): boolean
       return item.outputOmitted === true;
     case "dynamic_tool":
       return item.outputOmitted === true || isSummarizedValue(item.input);
+    case "context_injection":
+      return item.contentOmitted === true;
     default:
       return false;
   }
@@ -241,6 +243,26 @@ export function turnItemOutputText(item: OrchestrationV2TurnItem): string | null
             )
             .join("\n\n")
         : null;
+    case "context_injection": {
+      if (item.contentOmitted === true) return null;
+      if (item.content?.trim()) return item.content;
+      if (item.sections?.length) {
+        return item.sections
+          .map((section) => `${section.name}\n${section.text}`)
+          .join("\n\n")
+          .trim();
+      }
+      if (item.entries?.length) {
+        return item.entries
+          .map((entry) => (entry.description ? `${entry.name}: ${entry.description}` : entry.name))
+          .join("\n")
+          .trim();
+      }
+      if (item.files?.length) {
+        return item.files.map((file) => `${file.path} (${file.action})`).join("\n");
+      }
+      return null;
+    }
     default:
       return null;
   }
@@ -294,6 +316,14 @@ export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {
       return item.markdown.trim().length > 0;
     case "todo_list":
       return item.steps.length > 0;
+    case "context_injection":
+      return (
+        item.contentOmitted === true ||
+        Boolean(item.content?.trim()) ||
+        (item.files?.length ?? 0) > 0 ||
+        (item.sections?.length ?? 0) > 0 ||
+        (item.entries?.length ?? 0) > 0
+      );
     case "subagent":
       return item.childThreadId !== null;
     default:

@@ -337,10 +337,15 @@ function workEntryIndicatesToolFailureFromOutput(
   ) {
     return true;
   }
-  // Reasoning detail is the model's own prose (often tens of KB), not tool
-  // output: scanning it is slow on long threads and misreads phrases like
-  // "that exit code 2 is expected" as a failed tool.
-  if (!workLogEntryIsToolLike(entry) || entry.itemType === "reasoning") return false;
+  // Reasoning and context injection carry instructions/prose (often mentioning exit codes or
+  // error rules), never tool failure output.
+  if (
+    !workLogEntryIsToolLike(entry) ||
+    entry.itemType === "reasoning" ||
+    entry.itemType === "context_injection"
+  ) {
+    return false;
+  }
   if (
     resolvePrismuxMcpToolDefinition(workEntryToolName(entry)) &&
     prismuxToolResultIndicatesFailure(workEntryToolOutput(entry))

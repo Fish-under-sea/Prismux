@@ -5,6 +5,11 @@ import {
   toolOutputImages,
 } from "@prismux/core-shared/toolOutput";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import {
+  buildContextInjectionTurnItem,
+  createTurnContextInjectionTracker,
+  type ContextInjectionSkillEntry,
+} from "@prismux/provider-core/server/contextInjectionTracker";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
 import {
   dynamicToolTitle,
@@ -2673,7 +2678,7 @@ export function claudeMcpQueryOverrides(input: {
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
-      "prismux": {
+      prismux: {
         type: "http",
         url: session.endpoint,
         headers: {
@@ -5827,6 +5832,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   ).pipe(Effect.provideService(Path.Path, path));
   const hostEnvironment = yield* HostProcess.Environment;
   const hostPlatform = yield* HostProcess.Platform;
+  const hostHomeDir = yield* HostProcess.HomeDirectory;
+  const contextInjectionTracker = createTurnContextInjectionTracker();
+  const sdkInitSkillsByNativeThread = new Map<string, ReadonlyArray<ContextInjectionSkillEntry>>();
   const customHome =
     adapterOptions.settings.homePath.trim().length > 0 ||
     adapterOptions.environment.CLAUDE_CONFIG_DIR !== hostEnvironment.CLAUDE_CONFIG_DIR;
@@ -13482,6 +13490,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.capabilities = new Set(message.capabilities ?? []);
                     context.claudeCodeVersion = message.claude_code_version;
                   }
+                  let sdkInitSkills: ReadonlyArray<ContextInjectionSkillEntry> | undefined;
                   if (message.type === "system" && message.subtype === "init") {
                     // Recorded frames from older CLIs can omit the list.
                     context.checkMcpSignIns = (message.mcp_servers ?? []).some(
@@ -13490,6 +13499,32 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                         // claude.ai connectors the user never connected need a sign-in too.
                         !server.name.startsWith("claude.ai "),
                     );
+                    const rawSkills = (message as { readonly skills?: unknown }).skills;
+                    if (Array.isArray(rawSkills) && rawSkills.length > 0) {
+                      const extracted: Array<ContextInjectionSkillEntry> = [];
+                      for (const entry of rawSkills) {
+                        if (typeof entry === "string" && entry.trim().length > 0) {
+                          extracted.push({ name: entry.trim() });
+                        } else if (typeof entry === "object" && entry !== null) {
+                          const rec = entry as Record<string, unknown>;
+                          const name = typeof rec.name === "string" ? rec.name.trim() : "";
+                          if (name.length > 0) {
+                            const description =
+                              typeof rec.description === "string"
+                                ? rec.description.trim()
+                                : undefined;
+                            extracted.push({
+                              name,
+                              ...(description ? { description } : {}),
+                            });
+                          }
+                        }
+                      }
+                      if (extracted.length > 0) {
+                        sdkInitSkills = extracted;
+                        sdkInitSkillsByNativeThread.set(context.nativeThreadId, extracted);
+                      }
+                    }
                   }
                   if (
                     message.type === "system" &&
@@ -13523,7 +13558,62 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       resultsReportingNewContextWindow.add(message);
                     }
                   }
-                  const handled = handleSdkMessage({ query: querySession, message });
+                  const emitInitContextInjections =
+                    sdkInitSkills === undefined
+                      ? Effect.void
+                      : Effect.gen(function* () {
+                          const current = yield* Ref.get(activeTurn);
+                          if (
+                            current === null ||
+                            current.nativeThreadId !== context.nativeThreadId
+                          ) {
+                            return;
+                          }
+                          const observed = contextInjectionTracker.observeTurn({
+                            providerThreadId: String(current.input.providerThread.id),
+                            agent: "claude",
+                            cwd: current.input.runtimePolicy.cwd,
+                            homeDir: hostHomeDir,
+                            env: { ...hostEnvironment, ...adapterOptions.environment },
+                            platform: hostPlatform,
+                            branch: current.input.appThread.branch,
+                            runtimeMode: current.input.runtimePolicy.runtimeMode,
+                            interactionMode: current.input.runtimePolicy.interactionMode,
+                            model: current.input.modelSelection.model,
+                            discoveredSkills: sdkInitSkills,
+                          });
+                          if (observed.length === 0) return;
+                          const now = yield* DateTime.now;
+                          for (const injection of observed) {
+                            const nativeItemId = `context-injection:${current.providerTurnId}:${injection.sourceKey}:${injection.digest.slice(0, 12)}`;
+                            yield* emitProviderEvent({
+                              type: "turn_item.updated",
+                              driver: CLAUDE_PROVIDER,
+                              turnItem: buildContextInjectionTurnItem({
+                                id: idAllocator.derive.turnItemFromProviderItem({
+                                  driver: CLAUDE_PROVIDER,
+                                  nativeItemId,
+                                }),
+                                threadId: current.input.threadId,
+                                runId: current.input.runId,
+                                nodeId: current.input.rootNodeId,
+                                providerThreadId: current.input.providerThread.id,
+                                providerTurnId: current.providerTurnId,
+                                nativeItemRef: {
+                                  driver: CLAUDE_PROVIDER,
+                                  nativeId: nativeItemId,
+                                  strength: "weak",
+                                },
+                                ordinal: yield* resolveItemOrdinal(current, nativeItemId),
+                                occurredAt: now,
+                                payload: injection,
+                              }),
+                            });
+                          }
+                        });
+                  const handled = emitInitContextInjections.pipe(
+                    Effect.andThen(handleSdkMessage({ query: querySession, message })),
+                  );
                   const reportedCwd = turnInput.runtimePolicy.cwd;
                   if (!firstInit || reportedCwd === null || !adapterOptions.onSessionInit) {
                     return handled;
@@ -13851,6 +13941,60 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   completedAt: null,
                 }),
               });
+              if (!isClaudeProviderContinuationTurn(turnInput) && !turnInput.resume) {
+                const discoveredSkills: Array<ContextInjectionSkillEntry> = [];
+                if (skills !== undefined) {
+                  for (const skill of skills.values()) {
+                    discoveredSkills.push({
+                      name: skill.name,
+                      ...(skill.description ? { description: skill.description } : {}),
+                    });
+                  }
+                }
+                const initSkills = sdkInitSkillsByNativeThread.get(nativeThreadId);
+                if (initSkills !== undefined) {
+                  discoveredSkills.push(...initSkills);
+                }
+                const observedInjections = contextInjectionTracker.observeTurn({
+                  providerThreadId: String(turnInput.providerThread.id),
+                  agent: "claude",
+                  cwd: turnInput.runtimePolicy.cwd,
+                  homeDir: hostHomeDir,
+                  env: { ...hostEnvironment, ...adapterOptions.environment },
+                  platform: hostPlatform,
+                  branch: turnInput.appThread.branch,
+                  runtimeMode: turnInput.runtimePolicy.runtimeMode,
+                  interactionMode: turnInput.runtimePolicy.interactionMode,
+                  model: turnInput.modelSelection.model,
+                  ...(discoveredSkills.length > 0 ? { discoveredSkills } : {}),
+                });
+                for (const injection of observedInjections) {
+                  const nativeItemId = `context-injection:${context.providerTurnId}:${injection.sourceKey}:${injection.digest.slice(0, 12)}`;
+                  yield* emitProviderEvent({
+                    type: "turn_item.updated",
+                    driver: CLAUDE_PROVIDER,
+                    turnItem: buildContextInjectionTurnItem({
+                      id: idAllocator.derive.turnItemFromProviderItem({
+                        driver: CLAUDE_PROVIDER,
+                        nativeItemId,
+                      }),
+                      threadId: turnInput.threadId,
+                      runId: turnInput.runId,
+                      nodeId: turnInput.rootNodeId,
+                      providerThreadId: turnInput.providerThread.id,
+                      providerTurnId: context.providerTurnId,
+                      nativeItemRef: {
+                        driver: CLAUDE_PROVIDER,
+                        nativeId: nativeItemId,
+                        strength: "weak",
+                      },
+                      ordinal: yield* resolveItemOrdinal(context, nativeItemId),
+                      occurredAt: startedAt,
+                      payload: injection,
+                    }),
+                  });
+                }
+              }
             });
             // `offer` may call this twice; a second call must not restore notes compaction cleared.
             let offerCommitted = false;

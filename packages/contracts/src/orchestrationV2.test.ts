@@ -707,7 +707,11 @@ describe("withMessageSenderNote", () => {
     senderThreadId: ThreadId.make("t"),
   } as const;
   it.each([
-    [thread, "Hi", '[Prismux: the agent in Prismux thread "t" sent this message, not the user.]\n\nHi'],
+    [
+      thread,
+      "Hi",
+      '[Prismux: the agent in Prismux thread "t" sent this message, not the user.]\n\nHi',
+    ],
     [thread, "", '[Prismux: the agent in Prismux thread "t" sent this message, not the user.]'],
     [thread, " /git/review staged", " /git/review staged"],
     [thread, "$deploy ship it", "$deploy ship it"],
@@ -743,5 +747,79 @@ describe("withMessageSenderNote", () => {
     [{ createdBy: "agent", creationSource: "server" }, "Hi", "Hi"],
   ] as const)("labels %j's message %j for the provider", (message, text, expected) => {
     expect(withMessageSenderNote(message, text)).toBe(expected);
+  });
+});
+
+describe("context_injection turn item contract", () => {
+  it("roundtrips minimal and rich context_injection items through OrchestrationV2TurnItemJson", () => {
+    const rich = decodeOrchestrationV2TurnItemJson({
+      id: "ctx-item-1",
+      type: "context_injection",
+      threadId: "thread-1",
+      runId: "run-1",
+      nodeId: "node-1",
+      providerThreadId: "pt-1",
+      providerTurnId: "turn-1",
+      nativeItemRef: {
+        driver: "acp",
+        nativeId: "dsh-ctx:10:agent-instructions",
+        strength: "strong",
+      },
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: "~/.dsh/AGENTS.md",
+      startedAt: DateTime.formatIso(now),
+      completedAt: DateTime.formatIso(now),
+      updatedAt: DateTime.formatIso(now),
+      sourceKind: "agent-instructions",
+      form: "instructions",
+      label: "~/.dsh/AGENTS.md",
+      sourcePath: "~/.dsh/AGENTS.md",
+      statusLabel: "已更新",
+      digest: "sha256:abc123",
+      baseline: false,
+      supersedesPrevious: true,
+      files: [{ action: "set", path: "~/.dsh/AGENTS.md", digest: "sha256:abc123" }],
+      sections: [{ name: "working-directory", text: "/repo" }],
+      entries: [{ name: "brainstorming", description: "Design gate", path: "/skills/bs/SKILL.md" }],
+      content: "# Rules\nAlways test.",
+      contentOmitted: false,
+    });
+    expect(rich.type).toBe("context_injection");
+    if (rich.type !== "context_injection") throw new Error("expected context_injection");
+    expect(rich.sourceKind).toBe("agent-instructions");
+    expect(rich.label).toBe("~/.dsh/AGENTS.md");
+    expect(rich.statusLabel).toBe("已更新");
+    expect(encodeOrchestrationV2TurnItemJson(rich)).toMatchObject({
+      type: "context_injection",
+      sourceKind: "agent-instructions",
+      label: "~/.dsh/AGENTS.md",
+      statusLabel: "已更新",
+    });
+
+    const minimal = decodeOrchestrationV2TurnItemJson({
+      id: "ctx-item-2",
+      type: "context_injection",
+      threadId: "thread-1",
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 2,
+      status: "completed",
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.formatIso(now),
+      sourceKind: "runtime-context",
+      label: "runtime-context",
+    });
+    expect(minimal.type).toBe("context_injection");
+    if (minimal.type !== "context_injection") throw new Error("expected context_injection");
+    expect(minimal.sourceKind).toBe("runtime-context");
+    expect(minimal.content).toBeUndefined();
   });
 });

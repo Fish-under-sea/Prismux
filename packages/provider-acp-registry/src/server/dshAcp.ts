@@ -64,12 +64,7 @@ const DSH_TODO_TOOLS = new Set([
   "update_plan",
   "update_steps",
 ]);
-const DSH_THINK_TOOLS = new Set([
-  ...DSH_TODO_TOOLS,
-  "exit_plan_mode",
-  "get_goal",
-  "update_goal",
-]);
+const DSH_THINK_TOOLS = new Set([...DSH_TODO_TOOLS, "exit_plan_mode", "get_goal", "update_goal"]);
 
 function extractDshFilePath(rawInput: Record<string, unknown> | undefined): string | undefined {
   return (
@@ -105,10 +100,7 @@ function extractDshDiffContent(
           ? rawInput.new_str
           : undefined;
     if (oldText !== undefined && newText !== undefined) {
-      return [
-        ...(existingContent ?? []),
-        { type: "diff", path: filePath, oldText, newText },
-      ];
+      return [...(existingContent ?? []), { type: "diff", path: filePath, oldText, newText }];
     }
   }
 
@@ -134,7 +126,7 @@ function mapDshToolKind(
   rawInput: Record<string, unknown> | undefined,
 ): AcpSchema.ToolKind | undefined {
   if (DSH_EXECUTE_TOOLS.has(toolName)) return "execute";
-  if (DSH_READ_TOOLS.has(toolName) || toolName === "skill") return "read";
+  if (DSH_READ_TOOLS.has(toolName)) return "read";
   if (DSH_EDIT_TOOLS.has(toolName)) return "edit";
   if (toolName === "str_replace_editor") {
     return asNonEmptyString(rawInput?.command)?.toLowerCase() === "view" ? "read" : "edit";
@@ -172,6 +164,7 @@ export function normalizeDshSessionUpdate(
   let nextRawInput: Record<string, unknown> | undefined;
   let nextLocations: ReadonlyArray<AcpSchema.ToolCallLocation> | undefined;
   let nextContent: ReadonlyArray<AcpSchema.ToolCallContent> | undefined;
+  let extraMeta: Record<string, unknown> | undefined;
 
   if (toolName === "pwsh" || toolName === "bash" || toolName === "shell") {
     const command = asNonEmptyString(rawInput?.command);
@@ -183,12 +176,13 @@ export function normalizeDshSessionUpdate(
     }
   } else if (toolName === "skill") {
     const skillName = asNonEmptyString(rawInput?.name);
-    if (skillName) {
-      nextTitle = `Skill: ${skillName}`;
-    }
+    nextTitle = skillName ? `Skill: ${skillName}` : "Skill";
+    extraMeta = skillName ? { skillName } : {};
   } else if (toolName === "web_search") {
     const queries = Array.isArray(rawInput?.queries)
-      ? rawInput.queries.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      ? rawInput.queries.filter(
+          (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+        )
       : [];
     if (queries.length > 0 && asNonEmptyString(rawInput?.query) === undefined) {
       nextRawInput = { ...rawInput, query: queries.join(" / ") };
@@ -213,9 +207,10 @@ export function normalizeDshSessionUpdate(
     (!update.locations || update.locations.length === 0) &&
     (inferredKind === "read" || inferredKind === "edit")
   ) {
-    const offset = typeof rawInput?.offset === "number" && Number.isFinite(rawInput.offset)
-      ? rawInput.offset
-      : undefined;
+    const offset =
+      typeof rawInput?.offset === "number" && Number.isFinite(rawInput.offset)
+        ? rawInput.offset
+        : undefined;
     nextLocations = [offset !== undefined ? { path: filePath, line: offset } : { path: filePath }];
   }
 
@@ -228,7 +223,8 @@ export function normalizeDshSessionUpdate(
     nextTitle === undefined &&
     nextRawInput === undefined &&
     nextLocations === undefined &&
-    nextContent === undefined
+    nextContent === undefined &&
+    extraMeta === undefined
   ) {
     return notification;
   }
@@ -244,6 +240,7 @@ export function normalizeDshSessionUpdate(
       ...(nextContent !== undefined ? { content: nextContent } : {}),
       _meta: {
         ...asRecord(update._meta),
+        ...extraMeta,
         dshToolName: toolName,
       },
     },
@@ -262,14 +259,23 @@ export function normalizeDshToolCall(toolCall: AcpToolCallState): AcpToolCallSta
   const rawInput = asRecord(toolCall.data.rawInput);
 
   if (dshToolName === "skill") {
-    const skillName = asNonEmptyString(rawInput?.name);
-    if (skillName) {
-      return {
-        ...toolCall,
-        kind: "read",
-        title: `Skill: ${skillName}`,
-      };
-    }
+    const skillName = asNonEmptyString(rawInput?.name) ?? asNonEmptyString(meta?.skillName);
+    const preservedKind =
+      toolCall.kind === undefined || toolCall.kind === "read" ? "other" : toolCall.kind;
+    return {
+      ...toolCall,
+      kind: preservedKind,
+      title: skillName ? `Skill: ${skillName}` : (toolCall.title ?? "Skill"),
+      data: {
+        ...toolCall.data,
+        kind: preservedKind,
+        meta: {
+          ...meta,
+          dshToolName: "skill",
+          ...(skillName ? { skillName } : {}),
+        },
+      },
+    };
   }
 
   if (dshToolName && (toolCall.kind === "edit" || DSH_EDIT_TOOLS.has(dshToolName))) {
