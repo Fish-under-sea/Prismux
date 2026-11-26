@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { RefreshCwIcon } from "lucide-react";
 import {
@@ -46,7 +46,11 @@ export function PrismuxWallpaperSettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const engineAwareHost = createEngineAwareWallpaperHost(wallpaperHost, daemon, wallpaperStore);
+  // oxlint-disable-next-line prismux/no-manual-memo -- preserves stable WallpaperHostAdapter identity for downstream @prismux/wallpaper effects across renders
+  const engineAwareHost = useMemo(
+    () => createEngineAwareWallpaperHost(wallpaperHost, daemon, wallpaperStore),
+    [wallpaperHost, daemon, wallpaperStore],
+  );
 
   const routeTab = resolveTabFromLocation(location.hash, location.searchStr);
   const routeKey = `${location.hash}|${location.searchStr}`;

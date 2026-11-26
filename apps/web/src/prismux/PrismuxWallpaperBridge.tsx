@@ -11,7 +11,7 @@ import {
   type WallpaperSettingsState,
   type WallpaperStore,
 } from "@prismux/wallpaper";
-import { memo, useId } from "react";
+import { memo, useId, useMemo } from "react";
 
 import { PopoverCreateHandle, PopoverTrigger } from "../components/ui/popover";
 import { Toggle } from "../components/ui/toggle";
@@ -129,7 +129,11 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
   const { appearance, setAppearance, setThemeMode, daemon, wallpaperStore, wallpaperHost } =
     usePrismuxRuntime();
 
-  const engineAwareHost = createEngineAwareWallpaperHost(wallpaperHost, daemon, wallpaperStore);
+  // oxlint-disable-next-line prismux/no-manual-memo -- preserves stable WallpaperHostAdapter identity for downstream @prismux/wallpaper effects across renders
+  const engineAwareHost = useMemo(
+    () => createEngineAwareWallpaperHost(wallpaperHost, daemon, wallpaperStore),
+    [wallpaperHost, daemon, wallpaperStore],
+  );
 
   const renderInlineAppearance = ({ onBack }: InlineAppearanceRenderContext) => (
     <InlineAppearanceStudio

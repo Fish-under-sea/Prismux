@@ -1411,6 +1411,20 @@ interface SteamSceneFallbackProps {
   mediaStyle: CSSProperties;
 }
 
+function formatSceneTransform(
+  cfg: { baseTransform: string; extraScale: number; needsAmbient: boolean },
+  x: number,
+  y: number,
+): string {
+  if (cfg.needsAmbient) {
+    return (
+      cfg.baseTransform ||
+      (cfg.extraScale > 1.0001 ? `scale(${cfg.extraScale.toFixed(3)})` : "none")
+    );
+  }
+  return `${cfg.baseTransform} translate3d(${(-x).toFixed(2)}px, ${(-y).toFixed(2)}px, 0) scale(${cfg.extraScale.toFixed(3)})`.trim();
+}
+
 /**
  * Steam Scene fallback: renders preview image / animated preview.gif with ambient backdrop
  * when aspect ratio mismatches (>1.35x) or contain/center fit, else falls back to WebWallGL.
@@ -1469,30 +1483,36 @@ function SteamSceneFallback({
     ? baseTransform || (bass > 0.01 ? `scale(${extraScale.toFixed(3)})` : "none")
     : `${baseTransform} translate3d(0.00px, 0.00px, 0) scale(${extraScale.toFixed(3)})`.trim();
 
+  const parallaxPosRef = useRef({ x: 0, y: 0 });
   const parallaxConfigRef = useRef({
     baseTransform,
     extraScale,
+    needsAmbient,
     fpsLimit,
   });
 
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- keeps imperative DOM transform config in sync with props without triggering re-renders during pointer parallax
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- keeps imperative DOM transform synced with audioEnergy/mediaStyle while preserving current parallax offset
   useEffect(() => {
-    parallaxConfigRef.current = { baseTransform, extraScale, fpsLimit };
-  }, [baseTransform, extraScale, fpsLimit]);
+    parallaxConfigRef.current = { baseTransform, extraScale, needsAmbient, fpsLimit };
+    const img = imgRef.current;
+    if (img) {
+      const pos = parallaxEnabled ? parallaxPosRef.current : { x: 0, y: 0 };
+      img.style.transform = formatSceneTransform(parallaxConfigRef.current, pos.x, pos.y);
+    }
+  }, [baseTransform, extraScale, needsAmbient, fpsLimit, parallaxEnabled]);
 
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- drives imperative DOM transform parallax directly via ref without React state re-renders
   useEffect(() => {
     if (!parallaxEnabled) {
+      parallaxPosRef.current = { x: 0, y: 0 };
       if (imgRef.current) {
-        imgRef.current.style.transform = staticTransform;
+        imgRef.current.style.transform = formatSceneTransform(parallaxConfigRef.current, 0, 0);
       }
       return;
     }
     let rafId: number | null = null;
-    let targetX = 0;
-    let targetY = 0;
-    let curX = 0;
-    let curY = 0;
+    let targetX = parallaxPosRef.current.x;
+    let targetY = parallaxPosRef.current.y;
     let lastFrameTs = 0;
 
     const onMove = (e: PointerEvent) => {
@@ -1507,17 +1527,18 @@ function SteamSceneFallback({
 
     const step = (ts: number) => {
       const cfg = parallaxConfigRef.current;
+      const pos = parallaxPosRef.current;
       const minInterval = 1000 / Math.max(1, cfg.fpsLimit || 30);
       if (lastFrameTs === 0 || ts - lastFrameTs >= minInterval - 0.5) {
         lastFrameTs = ts;
-        curX += (targetX - curX) * 0.12;
-        curY += (targetY - curY) * 0.12;
+        pos.x += (targetX - pos.x) * 0.12;
+        pos.y += (targetY - pos.y) * 0.12;
         const img = imgRef.current;
         if (img) {
-          img.style.transform = `${cfg.baseTransform} translate3d(${(-curX).toFixed(2)}px, ${(-curY).toFixed(2)}px, 0) scale(${cfg.extraScale.toFixed(3)})`.trim();
+          img.style.transform = formatSceneTransform(cfg, pos.x, pos.y);
         }
       }
-      if (Math.abs(targetX - curX) > 0.08 || Math.abs(targetY - curY) > 0.08) {
+      if (Math.abs(targetX - pos.x) > 0.08 || Math.abs(targetY - pos.y) > 0.08) {
         rafId = requestAnimationFrame(step);
       } else {
         rafId = null;
@@ -1530,7 +1551,7 @@ function SteamSceneFallback({
       window.removeEventListener("pointermove", onMove);
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [parallaxEnabled, staticTransform]);
+  }, [parallaxEnabled]);
 
   if (previewUrl && !previewFailed) {
     const smartPosY =
@@ -1540,6 +1561,7 @@ function SteamSceneFallback({
 
     const effectiveObjectFit: CSSProperties["objectFit"] =
       objectFit === "cover" && ratioMismatch ? "contain" : mediaStyle.objectFit;
+    const { transform: _baseTransform, ...mediaStyleWithoutTransform } = mediaStyle;
 
     return (
       <div className="pmx-wp-stage__slot">
@@ -1559,10 +1581,10 @@ function SteamSceneFallback({
           }}
           onError={() => setFailedUrl(previewUrl)}
           style={{
-            ...mediaStyle,
+            ...mediaStyleWithoutTransform,
             objectFit: effectiveObjectFit,
             objectPosition: `${layerPositionX}% ${smartPosY}%`,
-            transform: staticTransform,
+            ...(parallaxEnabled ? {} : { transform: staticTransform }),
           }}
         />
       </div>

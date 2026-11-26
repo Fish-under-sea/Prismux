@@ -1219,7 +1219,8 @@ export class DaemonRpcServer {
         advancedEngineEnabled
       });
       if (this.appearanceStore?.isLegacyAdvancedEngineMigrationPending()) {
-        const selectedId = this.appearanceStore.get().config.wallpaper.selectedId;
+        const pendingWallpaper = this.appearanceStore.get().config.wallpaper;
+        const selectedId = pendingWallpaper.selectedId;
         const matched = selectedId
           ? inventory.items.find(
               (item) =>
@@ -1232,6 +1233,8 @@ export class DaemonRpcServer {
           );
         if (migratedToTrue) {
           inventory = await this.wallpaperService.rescan({
+            customDirs: pendingWallpaper.customDirs,
+            steamRootOverride: pendingWallpaper.steamRootOverride,
             advancedEngineEnabled: true
           });
         }
@@ -1570,6 +1573,33 @@ export class DaemonRpcServer {
           "APPEARANCE_UNAVAILABLE",
           "AppearanceConfigStore is not configured."
         );
+      }
+      if (
+        this.wallpaperService &&
+        this.appearanceStore.isLegacyAdvancedEngineMigrationPending()
+      ) {
+        const pendingWallpaper = this.appearanceStore.get().config.wallpaper;
+        const selectedId = pendingWallpaper.selectedId;
+        let matchedType: "image" | "video" | "web" | "scene" | null = null;
+        if (selectedId) {
+          const probeInventory = await this.wallpaperService.getInventory({
+            advancedEngineEnabled: false
+          });
+          const matched = probeInventory.items.find(
+            (item) =>
+              item.id === selectedId || `steam:${item.id}` === selectedId
+          );
+          matchedType = matched?.type ?? null;
+        }
+        const migratedToTrue =
+          this.appearanceStore.resolveLegacyAdvancedEngineMigration(matchedType);
+        if (migratedToTrue) {
+          await this.wallpaperService.rescan({
+            customDirs: pendingWallpaper.customDirs,
+            steamRootOverride: pendingWallpaper.steamRootOverride,
+            advancedEngineEnabled: true
+          });
+        }
       }
       const loaded = this.appearanceStore.get();
       writeJsonResponse(res, 200, {

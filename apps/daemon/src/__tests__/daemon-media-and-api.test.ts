@@ -3291,7 +3291,23 @@ test("Wave 2: AppearanceConfigStore advancedEngineEnabled defaults false and smo
     await daemon.stop();
   });
 
-  // First inventory fetch detects active selectedId 2966081148 is a Steam Scene, auto-migrates advancedEngineEnabled: true, and rescans
+  // Real boot sequence: Web hydrates GET /v1/appearance FIRST (before /v1/wallpapers/inventory).
+  // GET /v1/appearance must resolve the pending legacy Steam Scene ID -> advancedEngineEnabled: true immediately!
+  const appResFirst = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    headers: { Authorization: `Bearer ${authToken}` }
+  });
+  assert.equal(appResFirst.status, 200);
+  const appJsonFirst = (await appResFirst.json()) as {
+    wallpaper?: { advancedEngineEnabled?: boolean; selectedWallpaperType?: string | null };
+  };
+  assert.equal(
+    appJsonFirst.wallpaper?.advancedEngineEnabled,
+    true,
+    "GET /v1/appearance on first boot must auto-migrate legacy bare Steam Scene selectedId to advancedEngineEnabled: true"
+  );
+  assert.equal(appJsonFirst.wallpaper?.selectedWallpaperType, "scene");
+
+  // Subsequent /v1/wallpapers/inventory returns sceneLiveSupported: true immediately
   const invRes = await fetch(`${ready.httpUrl}/v1/wallpapers/inventory`, {
     headers: { Authorization: `Bearer ${authToken}` }
   });
@@ -3300,13 +3316,6 @@ test("Wave 2: AppearanceConfigStore advancedEngineEnabled defaults false and smo
     items: Array<{ id: string; sceneLiveSupported: boolean }>;
   };
   assert.equal(inv.items.find((x) => x.id === "2966081148")?.sceneLiveSupported, true);
-
-  const appRes = await fetch(`${ready.httpUrl}/v1/appearance`, {
-    headers: { Authorization: `Bearer ${authToken}` }
-  });
-  assert.equal(appRes.status, 200);
-  const appJson = (await appRes.json()) as { wallpaper?: { advancedEngineEnabled?: boolean } };
-  assert.equal(appJson.wallpaper?.advancedEngineEnabled, true);
 });
 
 test("Wave 2: Web bridge intercepts requestAnimationFrame while paused and flushes on resume while preserving master mute", async () => {

@@ -1518,6 +1518,9 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     );
     assert.doesNotMatch(paintOnceBlock, /syncSize\(/, "paintOnce must not call syncSize() per frame");
     assert.doesNotMatch(stageSrc, /setParallax/, "SteamSceneFallback must update DOM ref directly without React setParallax");
+    assert.match(stageSrc, /parallaxPosRef = useRef\(\{ x: 0, y: 0 \}\)/);
+    assert.match(stageSrc, /\}, \[parallaxEnabled\]\);/);
+    assert.match(stageSrc, /\.\.\.\(parallaxEnabled \? \{\} : \{ transform: staticTransform \}\)/);
     assert.match(stageSrc, /if \(!currentWallpaper \|\| engineGated\)/);
     assert.match(stageSrc, /useBatteryDischarging/);
     assert.match(stageSrc, /useDeferredLiveBoot/);
