@@ -131,6 +131,8 @@ import {
 } from "~/browser/HostedBrowserWebview";
 import { openUrlInPreview } from "~/browser/openFileInPreview";
 import { AgentBrandLogo } from "~/prismux/agentBrand";
+import { getAuxStrings, normalizeAgentAuxLocale } from "~/prismux/agentAux/agentAux.i18n";
+import { SwarmMiniBeeGlyph } from "~/prismux/agentAux/SwarmBeeSprite";
 import { useOptionalPrismuxRuntime } from "~/prismux/PrismuxRuntimeProvider";
 import { resolvePortOpenUrl } from "~/prismux/statusBar/portsPolling";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -874,7 +876,7 @@ function surfaceTitle(
     case "agent-session":
       return surface.title;
     case "agent-aux":
-      return surface.title || "智能体协同";
+      return surface.title || getAuxStrings(normalizeAgentAuxLocale(locale)).panelEmptyHeader;
     case "thread":
       // Until the thread's own title loads.
       return resolve(msg("Thread"));
@@ -997,12 +999,7 @@ function SurfaceIcon({
       return <AgentBrandLogo provider={surface.providerId} size={12} className="shrink-0" />;
     case "agent-aux":
       return surface.auxKind === "agy-swarm" ? (
-        <span
-          aria-hidden
-          className="inline-flex size-3 shrink-0 items-center justify-center text-[11px] leading-none"
-        >
-          🐝
-        </span>
+        <SwarmMiniBeeGlyph size={14} />
       ) : (
         <AgentBrandLogo
           provider={surface.provider ?? "antigravity"}

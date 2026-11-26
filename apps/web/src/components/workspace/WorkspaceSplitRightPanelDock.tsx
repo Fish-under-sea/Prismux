@@ -696,6 +696,7 @@ function BoundSplitThreadRightPanel(props: {
     provider: focusedContext.providerId ?? null,
     cwd: activeWorkspaceRoot ?? gitCwd ?? null,
     projection: serverProjection,
+    threadShell: serverThreadShell,
     relationshipShells,
     isProviderNativeSubagent: isProviderSubagent && focusedContext.providerId === "antigravity",
   });

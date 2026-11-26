@@ -568,7 +568,7 @@ test("AgentAuxService rejects path traversal and serves HTTP GET /v1/agent-aux/i
       );
       assert.equal(badRes.status, 400);
 
-      // Valid swarm inspection returns HTTP 200
+      // Valid swarm inspection returns HTTP 200 with ETag
       const okRes = await fetch(
         `${base}/v1/agent-aux/inspect?provider=antigravity&sessionId=${coordId}`,
         { headers: { Authorization: "Bearer test-aux-token" } }
@@ -579,14 +579,323 @@ test("AgentAuxService rejects path traversal and serves HTTP GET /v1/agent-aux/i
         active: boolean;
         kind: string;
         title: string;
+        etag?: string;
+        unchanged?: boolean;
       };
       assert.equal(payload.ok, true);
       assert.equal(payload.active, true);
       assert.equal(payload.kind, "agy-swarm");
       assert.equal(payload.title, "HTTP 集成蜂群");
+      assert.ok(typeof payload.etag === "string" && payload.etag.startsWith("sw:"));
+
+      // ETag unchanged fast path returns lightweight unchanged: true
+      const unchangedRes = await fetch(
+        `${base}/v1/agent-aux/inspect?provider=antigravity&sessionId=${coordId}&etag=${encodeURIComponent(payload.etag)}`,
+        { headers: { Authorization: "Bearer test-aux-token" } }
+      );
+      assert.equal(unchangedRes.status, 200);
+      const unchangedPayload = (await unchangedRes.json()) as {
+        ok: boolean;
+        unchanged?: boolean;
+        etag?: string;
+        swarm?: unknown;
+      };
+      assert.equal(unchangedPayload.ok, true);
+      assert.equal(unchangedPayload.unchanged, true);
+      assert.equal(unchangedPayload.etag, payload.etag);
+      assert.equal(unchangedPayload.swarm, undefined);
     } finally {
       await server.stop();
+      service.dispose();
       ptyPool.dispose();
     }
+  });
+});
+
+test("AgentAuxService discovers antigravity-cli brain under acpRegistry provider and parses brief/channels/object tasks", async () => {
+  await withTempRoot(async (root) => {
+    const geminiRoot = join(root, ".gemini");
+    const cliRoot = join(geminiRoot, "antigravity-cli");
+    mkdirSync(cliRoot, { recursive: true });
+
+    const service = new AgentAuxService({
+      agyGeminiRootDir: geminiRoot,
+      claudeHomeDir: join(root, "no-claude"),
+      codexHomeDir: join(root, "no-codex")
+    });
+
+    const coordId = "c2baabf6-9331-40a5-a1ef-f84252a2918c";
+    // Prime cache BEFORE brain/ exists inside pre-existing antigravity-cli/
+    const before = await service.inspect({
+      provider: "acpRegistry",
+      sessionId: coordId
+    });
+    assert.equal(before.active, false);
+
+    // Now create brain/<uuid>/.system_generated/swarm/ inside pre-existing antigravity-cli/
+    // (simulating Windows NTFS where `~/.gemini` mtime does NOT change!)
+    const swarmDir = join(cliRoot, "brain", coordId, ".system_generated", "swarm");
+    mkdirSync(swarmDir, { recursive: true });
+    writeFileSync(
+      join(swarmDir, "swarm.json"),
+      JSON.stringify({
+        title: "Swarm UI test with cat helpers",
+        channels: ["main", "review"],
+        created_at: "2026-11-26T16:00:00Z"
+      }),
+      "utf8"
+    );
+    writeFileSync(
+      join(swarmDir, "members.json"),
+      JSON.stringify({
+        title: "",
+        members: {
+          coordinator: {
+            conversation_id: coordId,
+            role: "coordinator",
+            model: "gemini-4-hydrogen-high",
+            wake_mode: "mentions",
+            last_read_seq: 1,
+            killed: false,
+            created_at: "2026-11-26T16:00:00Z"
+          },
+          scout: {
+            conversation_id: "ac24eee4-e604-4472-9778-9410ece6017a",
+            role: "worker",
+            model: "gemini-4-hydrogen-high",
+            wake_mode: "mentions",
+            workspace_mode: "share",
+            workspace: "C:/worktrees/swarm-scout",
+            forked_from: "coordinator",
+            killed: false
+          }
+        }
+      }),
+      "utf8"
+    );
+    writeFileSync(
+      join(swarmDir, "plan.json"),
+      JSON.stringify({
+        goal: "Inspect workspace repo cleanly",
+        tasks: {
+          scout: { title: "List top-level files in workspace", owner: "scout" }
+        },
+        threads: [
+          {
+            id: "t-scan",
+            title: "Repository snapshot checks",
+            goal: "Collect top-level layout",
+            tasks: ["scout"]
+          }
+        ]
+      }),
+      "utf8"
+    );
+    writeFileSync(
+      join(swarmDir, "board.jsonl"),
+      `${JSON.stringify({
+        seq: 1,
+        agent: "coordinator",
+        kind: "brief",
+        channel: "review",
+        via_channel: ["scout"],
+        text: "@scout List top-level files and post [done].",
+        time: "2026-11-26 16:01:00"
+      })}\n`,
+      "utf8"
+    );
+
+    const after = await service.inspect({
+      provider: "acp-antigravity-custom",
+      sessionId: coordId
+    });
+    assert.equal(after.active, true);
+    assert.equal(after.kind, "agy-swarm");
+    assert.equal(after.title, "Swarm UI test with cat helpers");
+    assert.deepEqual(after.swarm?.channels, ["main", "review"]);
+    assert.equal(after.swarm?.plan?.goal?.title, "Inspect workspace repo cleanly");
+    assert.equal(after.swarm?.plan?.tasks?.scout, "List top-level files in workspace");
+    assert.equal(after.swarm?.messages[0]?.kind, "brief");
+    assert.equal(after.swarm?.messages[0]?.channel, "review");
+    assert.deepEqual(after.swarm?.messages[0]?.viaChannel, ["scout"]);
+    const scout = after.swarm?.members.find((m) => m.name === "scout");
+    assert.equal(scout?.workspaceMode, "share");
+    assert.equal(scout?.workspace, "C:/worktrees/swarm-scout");
+    assert.equal(scout?.forkedFrom, "coordinator");
+    service.dispose();
+  });
+});
+
+test("AgentAuxWatcher debounces rapid writes, streams SSE /v1/agent-aux/events, and cleans up with zero leaks", async () => {
+  await withTempRoot(async (root) => {
+    const appData = join(root, "antigravity-cli");
+    const coordId = "33333333-4444-5555-6666-777777777777";
+    const swarmDir = join(appData, "brain", coordId, ".system_generated", "swarm");
+    mkdirSync(swarmDir, { recursive: true });
+    writeFileSync(
+      join(swarmDir, "members.json"),
+      JSON.stringify({
+        title: "SSE 实时推送测试",
+        members: {
+          coordinator: {
+            conversation_id: coordId,
+            role: "coordinator",
+            model: "gemini-4-neon-xhigh",
+            wake_mode: "working",
+            killed: false
+          }
+        }
+      }),
+      "utf8"
+    );
+    writeFileSync(
+      join(swarmDir, "board.jsonl"),
+      `${JSON.stringify({
+        seq: 1,
+        agent: "coordinator",
+        text: "Initial post",
+        time: "2026-11-26 17:00:00"
+      })}\n`,
+      "utf8"
+    );
+
+    const service = new AgentAuxService({
+      agyAppDataDirs: [appData],
+      claudeHomeDir: join(root, "no-claude"),
+      codexHomeDir: join(root, "no-codex"),
+      watcherOptions: {
+        debounceMs: 60,
+        idleGraceMs: 0,
+        promotePollMs: 300
+      }
+    });
+
+    // 1. Direct watcher unit test: coalesces burst writes and releases watcher cleanly
+    const watcher = service.getWatcher();
+    const initial = await service.inspect({ provider: "antigravity", sessionId: coordId });
+    const received: Array<{ head: number }> = [];
+    const unsubscribe = watcher.subscribe(
+      { provider: "antigravity", sessionId: coordId },
+      (snap) => {
+        received.push({ head: snap.swarm?.head ?? 0 });
+      },
+      initial.etag ?? ""
+    );
+
+    // Wait briefly for async attachTargets to mount fs.watch
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(watcher.getActiveSubscriberCount(), 1);
+    assert.equal(watcher.getActiveWatcherCount(), 1);
+
+    // Burst 2 rapid writes -> should coalesce into 1 debounced callback with head=3
+    writeFileSync(
+      join(swarmDir, "board.jsonl"),
+      [
+        JSON.stringify({ seq: 1, agent: "coordinator", text: "Initial post", time: "2026-11-26 17:00:00" }),
+        JSON.stringify({ seq: 2, agent: "coordinator", text: "Second post", time: "2026-11-26 17:00:01" })
+      ].join("\n") + "\n",
+      "utf8"
+    );
+    writeFileSync(
+      join(swarmDir, "board.jsonl"),
+      [
+        JSON.stringify({ seq: 1, agent: "coordinator", text: "Initial post", time: "2026-11-26 17:00:00" }),
+        JSON.stringify({ seq: 2, agent: "coordinator", text: "Second post", time: "2026-11-26 17:00:01" }),
+        JSON.stringify({ seq: 3, agent: "coordinator", text: "Third post", time: "2026-11-26 17:00:02" })
+      ].join("\n") + "\n",
+      "utf8"
+    );
+
+    await new Promise((r) => setTimeout(r, 350));
+    assert.ok(received.length >= 1 && received.length <= 2, `expected coalesced events, got ${received.length}`);
+    assert.equal(received.at(-1)?.head, 3);
+
+    unsubscribe(true);
+    assert.equal(watcher.getActiveSubscriberCount(), 0);
+    assert.equal(watcher.getActiveWatcherCount(), 0);
+
+    // 2. HTTP SSE endpoint test
+    const ptyPool = new PersistentPtyPool();
+    const chiefManager = new ChiefThreadManager({
+      dataDir: join(root, "daemon-data"),
+      defaultProvider: "codex"
+    });
+    const pairingManager = new PairingManager({ initialAuthToken: "test-sse-token" });
+    const server = new DaemonRpcServer({
+      host: "127.0.0.1",
+      port: 0,
+      headless: true,
+      ptyPool,
+      chiefManager,
+      pairingManager,
+      agentAuxService: service
+    });
+    await server.start();
+    try {
+      const base = server.getHttpUrl();
+      const unauth = await fetch(`${base}/v1/agent-aux/events?sessionId=${coordId}`);
+      assert.equal(unauth.status, 401);
+
+      const abort = new AbortController();
+      const sseRes = await fetch(
+        `${base}/v1/agent-aux/events?provider=acpRegistry&sessionId=${coordId}&token=test-sse-token`,
+        { signal: abort.signal }
+      );
+      assert.equal(sseRes.status, 200);
+      assert.ok((sseRes.headers.get("content-type") ?? "").includes("text/event-stream"));
+      const reader = sseRes.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const events: Array<{ swarm?: { head?: number } }> = [];
+
+      const readUntilCount = async (targetCount: number): Promise<void> => {
+        const deadline = Date.now() + 2500;
+        while (events.length < targetCount && Date.now() < deadline) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          for (;;) {
+            const sepIdx = buffer.indexOf("\n\n");
+            if (sepIdx < 0) break;
+            const block = buffer.slice(0, sepIdx);
+            buffer = buffer.slice(sepIdx + 2);
+            const dataLine = block
+              .split(/\r?\n/)
+              .find((l) => l.startsWith("data:"));
+            if (dataLine) {
+              events.push(JSON.parse(dataLine.slice(5).trim()) as { swarm?: { head?: number } });
+            }
+          }
+        }
+      };
+
+      await readUntilCount(1);
+      assert.equal(events[0]?.swarm?.head, 3);
+
+      // Append seq 4 -> SSE pushes updated snapshot automatically
+      writeFileSync(
+        join(swarmDir, "board.jsonl"),
+        [
+          JSON.stringify({ seq: 1, agent: "coordinator", text: "Initial post", time: "2026-11-26 17:00:00" }),
+          JSON.stringify({ seq: 2, agent: "coordinator", text: "Second post", time: "2026-11-26 17:00:01" }),
+          JSON.stringify({ seq: 3, agent: "coordinator", text: "Third post", time: "2026-11-26 17:00:02" }),
+          JSON.stringify({ seq: 4, agent: "coordinator", text: "Live SSE post", time: "2026-11-26 17:00:03" })
+        ].join("\n") + "\n",
+        "utf8"
+      );
+
+      await readUntilCount(2);
+      assert.equal(events[1]?.swarm?.head, 4);
+
+      abort.abort();
+      await reader.cancel().catch(() => {});
+      await new Promise((r) => setTimeout(r, 80));
+    } finally {
+      await server.stop();
+      service.dispose();
+      ptyPool.dispose();
+    }
+    assert.equal(watcher.getActiveWatcherCount(), 0);
+    assert.equal(watcher.getActiveSubscriberCount(), 0);
   });
 });

@@ -2309,6 +2309,9 @@ export interface DaemonAgentAuxSwarmMemberDto {
   readonly lastPostTs: number | null;
   readonly workspace?: string;
   readonly workspaceMode?: string;
+  readonly forkedFrom?: string;
+  readonly spawnedAt?: number;
+  readonly killedAt?: number;
   readonly channels?: readonly string[];
 }
 
@@ -2320,7 +2323,10 @@ export interface DaemonAgentAuxSwarmMessageDto {
   readonly ts: number | null;
   readonly mentions: readonly string[];
   readonly all: boolean;
+  readonly kind?: string;
   readonly channel?: string;
+  readonly viaChannel?: readonly string[];
+  readonly channelMentions?: readonly string[];
   readonly control?: Record<string, unknown>;
 }
 
@@ -2404,6 +2410,8 @@ export interface DaemonAgentAuxSwarmSnapshotDto {
   readonly title: string;
   readonly selfMember: string | null;
   readonly head: number;
+  readonly channels?: readonly string[];
+  readonly createdAt?: number;
   readonly members: readonly DaemonAgentAuxSwarmMemberDto[];
   readonly messages: readonly DaemonAgentAuxSwarmMessageDto[];
   readonly edges: readonly DaemonAgentAuxEdgeDto[];
@@ -2524,6 +2532,8 @@ export interface DaemonAgentAuxInspectResponse {
   readonly kind: DaemonAgentAuxKind | null;
   readonly title: string;
   readonly activationKey: string | null;
+  readonly etag?: string;
+  readonly unchanged?: boolean;
   readonly swarm?: DaemonAgentAuxSwarmSnapshotDto;
   readonly agySubagents?: readonly DaemonAgentAuxNativeSubagentDto[];
   readonly claudeTeam?: DaemonAgentAuxClaudeTeamSnapshotDto;
@@ -2536,6 +2546,7 @@ export interface InspectAgentAuxParams {
   readonly provider?: string | null;
   readonly sessionId?: string | null;
   readonly cwd?: string | null;
+  readonly etag?: string | null;
   readonly signal?: AbortSignal;
 }
 
@@ -2552,6 +2563,9 @@ export const inspectAgentAux = (
   if (params.cwd && params.cwd.trim().length > 0) {
     query.set("cwd", params.cwd.trim());
   }
+  if (params.etag && params.etag.trim().length > 0) {
+    query.set("etag", params.etag.trim());
+  }
   const qs = query.toString();
   return prismuxDaemonClient.requestJson<DaemonAgentAuxInspectResponse>(
     `/v1/agent-aux/inspect${qs ? `?${qs}` : ""}`,
@@ -2560,4 +2574,139 @@ export const inspectAgentAux = (
       ...(params.signal ? { signal: params.signal } : {}),
     },
   );
+};
+
+export interface SubscribeAgentAuxEventsOptions {
+  readonly signal?: AbortSignal;
+  readonly onOpen?: () => void;
+  readonly onError?: (error: unknown) => void;
+}
+
+/**
+ * Opens a zero-preflight SSE stream against `GET /v1/agent-aux/events` for ~250ms live
+ * push updates when AGY swarm or local team artifacts change on disk.
+ * Returns a cleanup function that aborts the active fetch stream immediately.
+ */
+export const subscribeAgentAuxEvents = (
+  params: Omit<InspectAgentAuxParams, "etag" | "signal">,
+  onSnapshot: (snapshot: DaemonAgentAuxInspectResponse) => void,
+  options: SubscribeAgentAuxEventsOptions = {},
+): (() => void) => {
+  let disposed = false;
+  let activeAbort: AbortController | null = null;
+
+  const cleanup = () => {
+    if (disposed) return;
+    disposed = true;
+    options.signal?.removeEventListener("abort", cleanup);
+    activeAbort?.abort();
+    activeAbort = null;
+  };
+
+  if (options.signal) {
+    if (options.signal.aborted) {
+      disposed = true;
+      return cleanup;
+    }
+    options.signal.addEventListener("abort", cleanup, { once: true });
+  }
+
+  const run = async () => {
+    if (disposed) return;
+    let info = await prismuxDaemonClient.getConnectionInfo(false);
+    if (!info.ready || !info.baseUrl) {
+      info = await prismuxDaemonClient.getConnectionInfo(true);
+    }
+    if (disposed) return;
+
+    if (!info.ready || !info.baseUrl) {
+      options.onError?.(
+        new PrismuxDaemonError("Prismux Daemon is unavailable for agent-aux SSE stream.", {
+          status: 503,
+          code: "DAEMON_UNAVAILABLE",
+        }),
+      );
+      return;
+    }
+
+    const query = new URLSearchParams();
+    if (params.provider && params.provider.trim().length > 0) {
+      query.set("provider", params.provider.trim());
+    }
+    if (params.sessionId && params.sessionId.trim().length > 0) {
+      query.set("sessionId", params.sessionId.trim());
+    }
+    if (params.cwd && params.cwd.trim().length > 0) {
+      query.set("cwd", params.cwd.trim());
+    }
+    if (info.token) {
+      query.set("token", info.token);
+    }
+
+    const controller = new AbortController();
+    activeAbort = controller;
+    const url = `${info.baseUrl}/v1/agent-aux/events?${query.toString()}`;
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: new Headers({ Accept: "text/event-stream" }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        throw new PrismuxDaemonError(
+          `AgentAux SSE stream failed (${response.status} ${response.statusText})`,
+          { status: response.status, code: `HTTP_${response.status}` },
+        );
+      }
+
+      options.onOpen?.();
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      for (;;) {
+        if (disposed) break;
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        for (;;) {
+          const match = /\r?\n\r?\n/.exec(buffer);
+          if (!match || match.index === undefined) break;
+          const block = buffer.slice(0, match.index);
+          buffer = buffer.slice(match.index + match[0].length);
+          const lines = block.split(/\r?\n/);
+          const dataLines: string[] = [];
+          for (const line of lines) {
+            if (!line || line.startsWith(":")) continue;
+            if (line.startsWith("data:")) {
+              const val = line.slice(5);
+              dataLines.push(val.startsWith(" ") ? val.slice(1) : val);
+            }
+          }
+          if (dataLines.length === 0) continue;
+          try {
+            const parsed = JSON.parse(dataLines.join("\n")) as DaemonAgentAuxInspectResponse;
+            if (parsed && typeof parsed === "object" && "ok" in parsed) {
+              onSnapshot(parsed);
+            }
+          } catch {
+            // Skip malformed SSE payloads
+          }
+        }
+      }
+      if (!disposed) {
+        options.onError?.(new Error("AgentAux SSE stream closed"));
+      }
+    } catch (error) {
+      if (!disposed) {
+        options.onError?.(error);
+      }
+    }
+  };
+
+  void run();
+  return cleanup;
 };

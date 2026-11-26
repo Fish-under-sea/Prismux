@@ -9,11 +9,21 @@ import {
   resolveConfiguredProviderLabel,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { formatAgentBrandName, resolveAgentBrandId, type AgentBrandId } from "../agentBrand";
-import type {
-  DaemonAgentAuxInspectResponse,
-  DaemonAgentAuxNativeStepDto,
-} from "../daemonClient";
+import {
+  formatAgentBrandName,
+  inferAgentBrandFromModel,
+  resolveAgentBrandId,
+  type AgentBrandId,
+} from "../agentBrand";
+import type { DaemonAgentAuxInspectResponse, DaemonAgentAuxNativeStepDto } from "../daemonClient";
+import {
+  formatAuxCoordinatorSummary,
+  formatAuxDelegationWave,
+  formatAuxTasksDone,
+  formatAuxWaitingOn,
+  getAuxStrings,
+  type AgentAuxLocale,
+} from "./agentAux.i18n";
 
 export type AgentAuxViewKind =
   | "agy-swarm"
@@ -33,6 +43,21 @@ export type AgentAuxMemberVisualStatus =
   | "done"
   | "killed"
   | "error";
+
+export type AgentAuxMemberSourceKind =
+  | "swarm"
+  | "acp-delegated"
+  | "claude-team"
+  | "codex"
+  | "native-subagent";
+
+export type AgentAuxWorkstreamRawState =
+  | "queued"
+  | "active"
+  | "review"
+  | "blocked"
+  | "failed"
+  | "done";
 
 export interface AgentAuxTabDescriptor {
   readonly id: AgentAuxTabId;
@@ -62,11 +87,14 @@ export interface AgentAuxWorkstream {
   readonly id: string;
   readonly title: string;
   readonly state: "running" | "blocked" | "review" | "queued" | "done";
+  readonly rawState: AgentAuxWorkstreamRawState;
   readonly owners: readonly string[];
   readonly note: string;
   readonly progress: AgentAuxWorkstreamProgress | null;
   readonly blockedOn: string | null;
+  readonly waitingOn: string | null;
   readonly seq: number;
+  readonly sourceKind?: "swarm" | "acp-delegated";
 }
 
 export interface AgentAuxThreadGroup {
@@ -75,6 +103,8 @@ export interface AgentAuxThreadGroup {
   readonly goal: string;
   readonly now: string;
   readonly workstreams: readonly string[];
+  readonly attention?: readonly string[];
+  readonly sourceKind?: "swarm" | "acp-delegated";
 }
 
 export interface AgentAuxAttentionItem {
@@ -88,12 +118,24 @@ export interface AgentAuxAttentionItem {
   readonly wait: "you" | "coordinator" | "issue" | null;
 }
 
+export interface AgentAuxStallAlert {
+  readonly seq: number;
+  readonly agent: string;
+  readonly text: string;
+}
+
 export interface AgentAuxStepItem {
   readonly index: number;
   readonly type: string;
   readonly status: string | null;
   readonly text: string | null;
   readonly toolCalls: ReadonlyArray<{ readonly name: string; readonly summary: string }>;
+}
+
+export interface AgentAuxMemberMetrics {
+  readonly toolCalls?: number;
+  readonly totalTokens?: number;
+  readonly durationMs?: number;
 }
 
 export interface AgentAuxMember {
@@ -103,7 +145,10 @@ export interface AgentAuxMember {
   readonly role: string;
   readonly roleLabel: string;
   readonly title: string;
+  readonly brief: string;
   readonly model: string;
+  readonly providerBrand: AgentBrandId;
+  readonly sourceKind: AgentAuxMemberSourceKind;
   readonly status: AgentAuxMemberVisualStatus;
   readonly statusLabel: string;
   readonly waitingOn: string | null;
@@ -114,6 +159,7 @@ export interface AgentAuxMember {
   readonly activity: string;
   readonly activityKind: "tool" | "thinking" | "";
   readonly nowLine: string;
+  readonly lastPostSnippet: string;
   readonly lastSeq: number;
   readonly lastTime: string;
   readonly killed: boolean;
@@ -126,8 +172,18 @@ export interface AgentAuxMember {
   readonly backendType: string | null;
   readonly workspace: string | null;
   readonly workspaceMode: string | null;
+  readonly forkedFrom?: string | null;
+  readonly spawnedAt?: number | null;
+  readonly killedAt?: number | null;
+  readonly channels?: readonly string[];
+  readonly metrics?: AgentAuxMemberMetrics;
   readonly failureText: string | null;
   readonly nativeSteps?: readonly AgentAuxStepItem[];
+}
+
+export interface AgentAuxScreenshotRef {
+  readonly path: string;
+  readonly caption: string;
 }
 
 export interface AgentAuxBoardMessage {
@@ -140,7 +196,12 @@ export interface AgentAuxBoardMessage {
   readonly ts: number | null;
   readonly mentions: readonly string[];
   readonly all: boolean;
+  readonly kind?: string;
   readonly channel?: string;
+  readonly viaChannel?: readonly string[];
+  readonly sourceKind?: "swarm" | "acp-delegated" | "claude-team";
+  readonly providerBrand?: AgentBrandId;
+  readonly screenshots?: readonly AgentAuxScreenshotRef[];
   readonly isControl: boolean;
   readonly isDirectToYou: boolean;
   readonly isUnread: boolean;
@@ -170,6 +231,9 @@ export interface AgentAuxViewModel {
   readonly active: boolean;
   readonly hasLiveActivity: boolean;
   readonly kind: AgentAuxViewKind | null;
+  readonly locale: AgentAuxLocale;
+  readonly useBees: boolean;
+  readonly hasAbsorbedAcpAgents: boolean;
   readonly provider: string | null;
   readonly providerBrand: AgentBrandId;
   readonly title: string;
@@ -179,6 +243,7 @@ export interface AgentAuxViewModel {
   readonly selfMember: string | null;
   readonly headSeq: number;
   readonly unreadSeqBoundary: number | null;
+  readonly channels: readonly string[];
   readonly tabs: readonly AgentAuxTabDescriptor[];
   readonly defaultTab: AgentAuxTabId;
   readonly statusLine: string;
@@ -189,6 +254,8 @@ export interface AgentAuxViewModel {
   readonly goal: AgentAuxGoal | null;
   readonly headline: string;
   readonly phase: AgentAuxPhase | null;
+  readonly stall: AgentAuxStallAlert | null;
+  readonly starting: boolean;
   readonly workstreams: readonly AgentAuxWorkstream[];
   readonly threadGroups: readonly AgentAuxThreadGroup[];
   readonly attention: readonly AgentAuxAttentionItem[];
@@ -243,7 +310,11 @@ export function hsl2hex(h: number, s: number, l: number): string {
   return (
     "#" +
     [f(0), f(8), f(4)]
-      .map((x) => Math.round(x * 255).toString(16).padStart(2, "0"))
+      .map((x) =>
+        Math.round(x * 255)
+          .toString(16)
+          .padStart(2, "0"),
+      )
       .join("")
   );
 }
@@ -271,15 +342,79 @@ export function computeBeeRamp(name: string): BeeColorRamp {
   };
 }
 
-const HEX_PATTERN_URI = encodeURIComponent(
-  "<svg xmlns='http://www.w3.org/2000/svg' width='28' height='24.25' viewBox='0 0 28 24.25'><path d='M14 0l12.12 7v14l-12.12 7L1.88 21V7z' fill='none' stroke='rgba(255,255,255,0.08)' stroke-width='1.2'/></svg>",
-).replace(/'/g, "%27");
-
+/**
+ * Tri-theme safe tile background (zero hardcoded `#1C1B22` hex — coordinator honeycomb
+ * uses CSS theme token `--pmx-aux-coord-bg` across Light / Dark / Liquid Glass).
+ */
 export function buildBeeTileBackground(name: string): string {
   if (name === "coordinator") {
-    return `#1C1B22 url('data:image/svg+xml,${HEX_PATTERN_URI}')`;
+    return "var(--pmx-aux-coord-bg)";
   }
   return `color-mix(in srgb, ${computeBeeColor(name)} 22%, var(--pmx-aux-card, var(--card, #ffffff)))`;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace Path Shortening, Screenshot & Text Helpers (1:1 hive.js + app.js)
+// ---------------------------------------------------------------------------
+
+export function shortenWorkspacePath(raw: string | null | undefined): string {
+  const list = String(raw ?? "")
+    .split(/,\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (list.length === 0) return "";
+  const formatOne = (p: string): string => {
+    const norm = p.replace(/\\/g, "/");
+    const segs = norm.replace(/\/+$/, "").split("/").filter(Boolean);
+    if (segs.length === 0) return norm.startsWith("/") ? "/" : p;
+    const out =
+      segs.length > 2
+        ? `…/${segs.slice(-2).join("/")}`
+        : `${norm.startsWith("/") ? "/" : ""}${segs.join("/")}`;
+    return out.length > 42 ? `…${out.slice(-41)}` : out;
+  };
+  const first = formatOne(list[0] ?? "");
+  return list.length > 1 ? `${first} +${list.length - 1}` : first;
+}
+
+const SCREENSHOT_LINE_RE = /^\s*Screenshot:\s*(.+?)(?:\s*\|\s*(.+))?\s*$/gim;
+
+export function extractScreenshotsFromText(text: string): readonly AgentAuxScreenshotRef[] {
+  const out: AgentAuxScreenshotRef[] = [];
+  for (const match of text.matchAll(SCREENSHOT_LINE_RE)) {
+    const path = (match[1] ?? "").trim();
+    const caption = (match[2] ?? "").trim() || path.split(/[\\/]/).pop() || path;
+    if (path) {
+      out.push({ path, caption });
+    }
+  }
+  return out;
+}
+
+/**
+ * Strips leading `@recipient` tokens already displayed in the `@sender → @recipient` header
+ * (1:1 parity with AGY `app.js` board body display).
+ */
+export function stripLeadingMentionTokens(
+  text: string,
+  mentions: readonly string[],
+  all: boolean,
+): string {
+  if (!text) return "";
+  const allowed = new Set(mentions.map((m) => m.toLowerCase()));
+  if (all) allowed.add("all");
+  if (allowed.size === 0) return text;
+
+  let rest = text;
+  for (;;) {
+    const m = /^\s*@([\p{L}\p{Nd}][\p{L}\p{Nd}_-]{0,31})(?:[\s,:–—-]+|$)/u.exec(rest);
+    if (!m?.[1]) break;
+    const tok = m[1].toLowerCase();
+    const matchesTarget = allowed.has(tok) || [...allowed].some((n) => n.startsWith(`${tok}-`));
+    if (!matchesTarget) break;
+    rest = rest.slice(m[0].length);
+  }
+  return rest.trimStart() || text;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +427,7 @@ function hasNamedToken(lowerText: string, lowerName: string): boolean {
   if (!lowerName) return false;
   for (let i = lowerText.indexOf("@"); i >= 0; i = lowerText.indexOf("@", i + 1)) {
     if (i > 0) {
-      const before = [...lowerText.slice(Math.max(0, i - 2), i)].pop();
+      const before = Array.from(lowerText.slice(Math.max(0, i - 2), i)).at(-1);
       if (before && NAME_RUNE_RE.test(before)) continue;
     }
     if (!lowerText.startsWith(lowerName, i + 1)) continue;
@@ -322,12 +457,17 @@ export function parseBoardMentions(
 
 export type BoardBodyToken =
   | { readonly kind: "text"; readonly value: string }
-  | { readonly kind: "mention"; readonly value: string; readonly name: string; readonly isAll: boolean }
+  | {
+      readonly kind: "mention";
+      readonly value: string;
+      readonly name: string;
+      readonly isAll: boolean;
+    }
   | { readonly kind: "seq"; readonly value: string; readonly seq: number }
   | { readonly kind: "code"; readonly value: string };
 
 const BOARD_TOKEN_RE =
-  /(`[^`\n]+`)|((?<![\p{L}\p{Nd}_-])@[A-Za-z0-9][A-Za-z0-9_-]{0,31})|((?<![\p{L}\p{Nd}_/-])#(\d{1,6})\b)/gu;
+  /(`[^`\n]+`)|((?<![\p{L}\p{Nd}_-])@[\p{L}\p{Nd}][\p{L}\p{Nd}_-]{0,31})|((?<![\p{L}\p{Nd}_/-])#(\d{1,6})\b)/gu;
 
 export function tokenizeBoardText(
   text: string,
@@ -372,30 +512,37 @@ export function tokenizeBoardText(
 }
 
 // ---------------------------------------------------------------------------
-// Chinese Localization Helpers
+// Localized Role, Status & Time Helpers (100% zh / en parity)
 // ---------------------------------------------------------------------------
 
-export function formatAuxRoleLabel(role: string, isCoordinator = false): string {
-  if (isCoordinator) return "协调者";
+export function formatAuxRoleLabel(
+  role: string,
+  isCoordinator = false,
+  locale: AgentAuxLocale = "zh",
+): string {
+  const s = getAuxStrings(locale);
+  if (isCoordinator) return s.roleCoordinator;
   const lower = role.trim().toLowerCase();
   switch (lower) {
     case "coordinator":
     case "team-lead":
     case "lead":
-      return "协调者";
+      return s.roleCoordinator;
     case "worker":
     case "teammate":
-      return "工人";
+      return s.roleWorker;
     case "narrator":
-      return "播报员";
+      return s.roleNarrator;
     case "monitor":
-      return "监控";
+      return s.roleMonitor;
     case "reviewer":
     case "verifier":
-      return "审查员";
+      return s.roleVerifier;
+    case "acp-delegated":
+      return s.roleAcpDelegated;
     case "subagent":
     case "":
-      return "子代理";
+      return s.roleSubagent;
     default:
       return role;
   }
@@ -404,35 +551,41 @@ export function formatAuxRoleLabel(role: string, isCoordinator = false): string 
 export function formatAuxStatusLabel(
   status: AgentAuxMemberVisualStatus,
   waitingOn?: string | null,
+  locale: AgentAuxLocale = "zh",
 ): string {
+  const s = getAuxStrings(locale);
   switch (status) {
     case "working":
-      return "运行中";
+      return s.stateWorking;
     case "waiting_on":
-      return waitingOn ? `等待 @${waitingOn}` : "等待中";
+      return waitingOn ? formatAuxWaitingOn(waitingOn, locale) : s.stateWaitingGeneric;
     case "needs_you":
-      return "需你介入";
+      return s.stateNeedsYou;
     case "parked":
-      return "等待中";
+      return s.stateParked;
     case "done":
-      return "已完成";
+      return s.stateDone;
     case "killed":
-      return "已结束";
+      return s.stateKilled;
     case "error":
-      return "异常";
+      return s.stateError;
   }
 }
 
-export function formatAuxTaskStatusLabel(status: AgentAuxTask["status"]): string {
+export function formatAuxTaskStatusLabel(
+  status: AgentAuxTask["status"],
+  locale: AgentAuxLocale = "zh",
+): string {
+  const s = getAuxStrings(locale);
   switch (status) {
     case "in_progress":
-      return "进行中";
+      return s.overviewRunning;
     case "completed":
-      return "已完成";
+      return s.stateDone;
     case "blocked":
-      return "已阻塞";
+      return s.stateBlocked;
     case "pending":
-      return "待开始";
+      return s.stateQueued;
   }
 }
 
@@ -462,7 +615,219 @@ export function parseSidecarSwarmLink(href: string): { readonly swarmPath: strin
 }
 
 // ---------------------------------------------------------------------------
-// Honeycomb Hive & Mention Graph Layout (mirrors AGY hive.js + app.js)
+// 1:1 AGY Replay Engine (`computeHiveStateAtSeq` + `computeReplayDelayMs`)
+// ---------------------------------------------------------------------------
+
+const DONE_POST_RE = /^(@[A-Za-z0-9_-]+[\s,:–—-]*)*(?:\*\*|\*|`|_)?\[done\]/i;
+const WAITING_ASK_RE = /[?？]|等待|请确认|could you|can you|please|ping me|waiting on|blocker/i;
+const HV_BUSY_MS = 45 * 60 * 1000;
+const HV_ASK_MS = 6 * 3600 * 1000;
+
+export type HiveReplayMemberState =
+  | "working"
+  | "wait"
+  | "needs"
+  | "issue"
+  | "done"
+  | "idle"
+  | "retired"
+  | "unborn";
+
+export interface HiveMemberSnapshotAtSeq {
+  readonly st: HiveReplayMemberState;
+  readonly who: string | null;
+}
+
+export interface HiveStateAtSeqResult {
+  readonly states: Readonly<Record<string, HiveMemberSnapshotAtSeq>>;
+  readonly isDoneAtSeq: ((memberName: string) => boolean) | null;
+  readonly beam: AgentAuxBoardMessage | null;
+  readonly trailBeams: readonly AgentAuxBoardMessage[];
+}
+
+export type ReplayPacingMode = "even" | "real";
+
+/**
+ * Exact 1:1 port of AGY `app.js:1743–1750` `replayDelay(all, idx)`.
+ * - `even`: fixed `1400ms / speed`
+ * - `real`: `1 min wall time = 1s at 1x`, clamped to `[250ms, 4000ms]`
+ */
+export function computeReplayDelayMs(
+  messages: readonly AgentAuxBoardMessage[],
+  nextIndex: number,
+  pacing: ReplayPacingMode,
+  speed: number,
+): number {
+  const safeSpeed = Math.max(0.25, speed || 1);
+  if (pacing === "even" || nextIndex <= 0 || nextIndex >= messages.length) {
+    return Math.round(1400 / safeSpeed);
+  }
+  const prevTs = messages[nextIndex - 1]?.ts;
+  const curTs = messages[nextIndex]?.ts;
+  if (prevTs === null || prevTs === undefined || curTs === null || curTs === undefined) {
+    return Math.round(1400 / safeSpeed);
+  }
+  const gap = Math.max(0, curTs - prevTs);
+  return Math.round(Math.min(4000, Math.max(250, gap / 60 / safeSpeed)));
+}
+
+/**
+ * Exact 1:1 port of AGY `hive.js:1120–1151` `hiveStates(sc, seq)`.
+ * Computes each member's historical visual state (`unborn`, `working`, `wait`, `needs`,
+ * `issue`, `done`, `idle`, `retired`), waiting target, completion predicate, and active beams
+ * at any historical `replaySeq` (or live state when `replaySeq === null`).
+ */
+export function computeHiveStateAtSeq(
+  model: AgentAuxViewModel,
+  replaySeq: number | null,
+): HiveStateAtSeqResult {
+  const nonSystem = model.members.filter((m) => !m.isSystem);
+  const memberMap = new Map(nonSystem.map((m) => [m.name, m]));
+  const P = model.messages.filter((m) => !m.isControl);
+  const states: Record<string, HiveMemberSnapshotAtSeq> = {};
+
+  if (replaySeq === null) {
+    for (const m of nonSystem) {
+      const owned = model.workstreams.filter((w) => w.owners.includes(m.name));
+      let st: HiveReplayMemberState = "idle";
+      let who: string | null = null;
+      if (m.killed) {
+        st = "retired";
+      } else if (model.finished) {
+        st = m.isCoordinator ? "idle" : "done";
+      } else if (m.status === "error" || m.failureText) {
+        st = "issue";
+      } else if (m.status === "working") {
+        st = "working";
+      } else if (m.status === "waiting_on") {
+        st = "wait";
+        who = m.waitingOn;
+      } else if (m.status === "needs_you") {
+        st = "needs";
+      } else if (
+        !m.isCoordinator &&
+        (m.status === "done" || (owned.length > 0 && owned.every((w) => w.state === "done")))
+      ) {
+        st = "done";
+      }
+      states[m.name] = { st, who };
+    }
+    if (
+      !model.finished &&
+      states.coordinator &&
+      states.coordinator.st !== "retired" &&
+      model.attention.some((a) => a.wait === "you")
+    ) {
+      states.coordinator = { st: "needs", who: null };
+    }
+    const latest = P.at(-1) ?? null;
+    const trailBeams = P.length > 1 ? P.slice(Math.max(0, P.length - 3), P.length - 1) : [];
+    return {
+      states,
+      isDoneAtSeq: null,
+      beam: latest,
+      trailBeams,
+    };
+  }
+
+  // Historical replay: find index `i` of the last post up to replaySeq
+  // Note: messages may be chronologically interleaved when hybrid ACP agents are absorbed,
+  // so we match by exact seq position if found, else prefix by seq <= replaySeq.
+  let i = P.findIndex((p) => p.seq === replaySeq);
+  if (i < 0) {
+    for (let k = 0; k < P.length; k += 1) {
+      if ((P[k]?.seq ?? 0) <= replaySeq) i = k;
+    }
+  }
+
+  const fin = new Map<string, number>();
+  const lastPost = new Map<string, number>();
+  const lastIn = new Map<string, number>();
+  const born = new Set<string>(["coordinator"]);
+  const coordMember = nonSystem.find((m) => m.isCoordinator);
+  if (coordMember) born.add(coordMember.name);
+
+  P.forEach((p, k) => {
+    fin.set(p.agent, k);
+  });
+
+  const directTargetsOf = (p: AgentAuxBoardMessage): readonly string[] => {
+    if (p.all) return [];
+    const list = p.recipient ? [p.recipient, ...p.mentions] : [...p.mentions];
+    return [...new Set(list)].filter((n) => n !== p.agent && memberMap.has(n));
+  };
+
+  for (let k = 0; k <= i; k += 1) {
+    const p = P[k];
+    if (!p) continue;
+    born.add(p.agent);
+    lastPost.set(p.agent, k);
+    for (const target of directTargetsOf(p)) {
+      born.add(target);
+      lastIn.set(target, k);
+    }
+  }
+
+  const tsAt = (k: number): number => P[k]?.ts ?? k * 60_000;
+  const now = i >= 0 ? tsAt(i) : 0;
+
+  for (const m of nonSystem) {
+    const n = m.name;
+    const lp = lastPost.get(n) ?? -1;
+    const li = lastIn.get(n) ?? -1;
+    const finIdx = fin.get(n);
+    let st: HiveReplayMemberState = "idle";
+    let who: string | null = null;
+
+    if (!born.has(n)) {
+      st = "unborn";
+    } else if (
+      m.killed &&
+      (finIdx !== undefined
+        ? i >= finIdx && (i > finIdx + 8 || now - tsAt(finIdx) > HV_BUSY_MS)
+        : li >= 0 && i > li + 8)
+    ) {
+      st = "retired";
+    } else if (li > lp && now - tsAt(li) < HV_BUSY_MS) {
+      st = "working";
+      who = P[li]?.agent ?? null;
+    } else if (
+      lp >= 0 &&
+      WAITING_ASK_RE.test(P[lp]?.text ?? "") &&
+      directTargetsOf(P[lp]!).length > 0 &&
+      now - tsAt(lp) < HV_ASK_MS &&
+      (lastPost.get(directTargetsOf(P[lp]!)[0] ?? "") ?? -1) <= lp
+    ) {
+      st = "wait";
+      who = directTargetsOf(P[lp]!)[0] ?? null;
+    } else if (
+      lp >= 0 &&
+      !m.isCoordinator &&
+      (DONE_POST_RE.test(P[lp]?.text ?? "") || (finIdx !== undefined && finIdx <= i))
+    ) {
+      st = "done";
+    } else if (lp >= 0 && i - lp < 3 && now - tsAt(lp) < 4 * 60 * 1000) {
+      st = "working";
+    }
+    states[n] = { st, who: who === n ? null : who };
+  }
+
+  const isDoneAtSeq = (memberName: string): boolean => {
+    const entry = states[memberName];
+    if (!entry) return false;
+    if (entry.st === "retired" || entry.st === "done") return true;
+    const f = fin.get(memberName);
+    return f !== undefined && f <= i && DONE_POST_RE.test(P[f]?.text ?? "");
+  };
+
+  const beam = i >= 0 ? (P[i] ?? null) : null;
+  const trailBeams = i > 0 ? P.slice(Math.max(0, i - 2), i) : [];
+
+  return { states, isDoneAtSeq, beam, trailBeams };
+}
+
+// ---------------------------------------------------------------------------
+// Honeycomb Hive & Mention Graph Layout (1:1 AGY hive.js + app.js)
 // ---------------------------------------------------------------------------
 
 const HV_RING: ReadonlyArray<readonly [number, number]> = [
@@ -511,7 +876,12 @@ export function computeHiveHexSlots(count: number): ReadonlyArray<readonly [numb
   return out.slice(0, count);
 }
 
-export function buildHexPolygonPath(cx: number, cy: number, radius: number, startAngleDeg = 0): string {
+export function buildHexPolygonPath(
+  cx: number,
+  cy: number,
+  radius: number,
+  startAngleDeg = 0,
+): string {
   let d = "";
   for (let k = 0; k < 6; k += 1) {
     const rad = ((startAngleDeg + 60 * k) * Math.PI) / 180;
@@ -533,19 +903,31 @@ export interface HiveCellNode {
   readonly done: number;
   readonly total: number;
   readonly isHub: boolean;
+  readonly isAcpDelegated: boolean;
+  readonly aggregateState: "" | "busy" | "warn" | "bad";
   readonly members: readonly string[];
+  readonly overflowCount: number;
+  readonly overflowX: number;
+  readonly overflowY: number;
   readonly pathD: string;
   readonly progPathD: string;
+  readonly selPathD: string;
 }
 
 export interface HiveBeePlacement {
   readonly name: string;
+  readonly displayName: string;
+  readonly providerBrand: AgentBrandId;
+  readonly sourceKind: AgentAuxMemberSourceKind;
   readonly x: number;
   readonly y: number;
   readonly size: "xs" | "sm" | "lg";
   readonly state: AgentAuxMemberVisualStatus;
+  readonly replayState: HiveReplayMemberState;
+  readonly waitingOn: string | null;
   readonly isQueen: boolean;
   readonly killed: boolean;
+  readonly tucked: boolean;
 }
 
 export interface HiveBeamEdge {
@@ -555,17 +937,55 @@ export interface HiveBeamEdge {
   readonly pathD: string;
   readonly x2: number;
   readonly y2: number;
+  readonly arrowPathD?: string;
   readonly kind: "beam" | "wait";
+  readonly isTrail?: boolean;
+  readonly seq?: number;
 }
 
 export interface HiveLayoutResult {
   readonly width: number;
   readonly height: number;
   readonly radius: number;
+  readonly fitRadius: number;
+  readonly maxZoom: number;
   readonly mode: "full" | "mid" | "tiny";
+  readonly showNames: boolean;
   readonly cells: readonly HiveCellNode[];
   readonly bees: readonly HiveBeePlacement[];
   readonly beams: readonly HiveBeamEdge[];
+  readonly hubSubtitle: string;
+  readonly hubNeedsYou: boolean;
+  readonly activeMessage: AgentAuxBoardMessage | null;
+}
+
+function hiveStateToVisualStatus(st: HiveReplayMemberState): AgentAuxMemberVisualStatus {
+  switch (st) {
+    case "working":
+      return "working";
+    case "wait":
+      return "waiting_on";
+    case "needs":
+      return "needs_you";
+    case "issue":
+      return "error";
+    case "done":
+      return "done";
+    case "retired":
+      return "killed";
+    case "idle":
+    case "unborn":
+      return "parked";
+  }
+}
+
+function buildArrowheadPath(fx: number, fy: number, x: number, y: number): string {
+  const len = Math.hypot(x - fx, y - fy) || 1;
+  const tx = (x - fx) / len;
+  const ty = (y - fy) / len;
+  const bx = x - tx * 10;
+  const by = y - ty * 10;
+  return `M${x.toFixed(1)} ${y.toFixed(1)}L${(bx - ty * 3.8).toFixed(1)} ${(by + tx * 3.8).toFixed(1)}L${(bx + ty * 3.8).toFixed(1)} ${(by - tx * 3.8).toFixed(1)}Z`;
 }
 
 export function computeHiveLayout(input: {
@@ -573,31 +993,54 @@ export function computeHiveLayout(input: {
   readonly containerWidth: number;
   readonly replaySeq: number | null;
   readonly hideInactive: boolean;
+  readonly zoom?: number;
+  readonly selectedCellId?: string | null;
 }): HiveLayoutResult {
-  const { model, replaySeq, hideInactive } = input;
+  const { model, replaySeq, hideInactive, selectedCellId = null } = input;
+  const s = getAuxStrings(model.locale);
   const W = Math.max(280, Math.floor(input.containerWidth || 360));
   const nonSystem = model.members.filter((m) => !m.isSystem);
+  const hs = computeHiveStateAtSeq(model, replaySeq);
 
   const visibleMessages =
     replaySeq === null
       ? model.messages.filter((m) => !m.isControl)
-      : model.messages.filter((m) => !m.isControl && m.seq <= replaySeq);
+      : (() => {
+          const all = model.messages.filter((m) => !m.isControl);
+          const idx = all.findIndex((m) => m.seq === replaySeq);
+          return idx >= 0 ? all.slice(0, idx + 1) : all.filter((m) => m.seq <= replaySeq);
+        })();
 
   const activeNames = new Set<string>();
   for (const m of visibleMessages) {
     activeNames.add(m.agent);
+    if (m.recipient) activeNames.add(m.recipient);
     for (const t of m.mentions) activeNames.add(t);
   }
 
   const members = nonSystem.filter((m) => {
     if (!hideInactive) return true;
     if (m.isCoordinator) return true;
-    if (m.killed) return false;
-    return m.status === "working" || activeNames.has(m.name);
+    const st = hs.states[m.name]?.st;
+    if (st === "retired" || m.killed) return false;
+    return st === "working" || st === "wait" || st === "issue" || activeNames.has(m.name);
   });
 
   const coordinator = members.find((m) => m.isCoordinator) ?? members[0] ?? null;
   const workers = members.filter((m) => m.name !== coordinator?.name);
+  const memberByName = new Map(members.map((m) => [m.name, m]));
+
+  const wsDone = (w: AgentAuxWorkstream): boolean => {
+    if (hs.isDoneAtSeq) {
+      return w.owners.every((o) => o === "coordinator" || hs.isDoneAtSeq!(o));
+    }
+    return w.state === "done";
+  };
+
+  const settledAtSeq = (name: string): boolean => {
+    const st = hs.states[name]?.st;
+    return st === "done" || st === "retired";
+  };
 
   // Build cells around the coordinator hub
   const rawCells: Array<{
@@ -607,37 +1050,67 @@ export function computeHiveLayout(input: {
     members: string[];
     done: number;
     total: number;
+    isAcpDelegated: boolean;
   }> = [];
 
   if (model.threadGroups.length > 0) {
     const wsById = new Map(model.workstreams.map((w) => [w.id, w]));
-    const homed = new Set<string>();
+    const cellWorkstreams: Array<{
+      cell: (typeof rawCells)[number];
+      wsList: AgentAuxWorkstream[];
+    }> = [];
+
     for (const tg of model.threadGroups) {
       const wsList = tg.workstreams
         .map((id) => wsById.get(id))
         .filter((w): w is AgentAuxWorkstream => Boolean(w));
-      const cellMembers = workers
-        .filter((w) => wsList.some((ws) => ws.owners.includes(w.name)))
-        .map((w) => w.name);
-      for (const n of cellMembers) homed.add(n);
-      rawCells.push({
+      const entry = {
         id: tg.id,
         title: tg.title,
         goal: tg.goal,
-        members: cellMembers,
-        done: wsList.filter((w) => w.state === "done").length,
-        total: Math.max(wsList.length, cellMembers.length),
-      });
+        members: [] as string[],
+        done: wsList.filter(wsDone).length,
+        total: wsList.length,
+        isAcpDelegated: tg.sourceKind === "acp-delegated",
+      };
+      rawCells.push(entry);
+      cellWorkstreams.push({ cell: entry, wsList });
     }
+
+    const homed = new Set<string>();
+    // Each worker sits in the first thread where it still has open work, else its first thread
+    for (const w of workers) {
+      const mine = cellWorkstreams.filter((cw) =>
+        cw.wsList.some((ws) => ws.owners.includes(w.name)),
+      );
+      if (mine.length === 0) continue;
+      const openCell =
+        mine.find((cw) => cw.wsList.some((ws) => ws.owners.includes(w.name) && !wsDone(ws))) ??
+        mine[0];
+      if (openCell) {
+        openCell.cell.members.push(w.name);
+        homed.add(w.name);
+      }
+    }
+
+    // Ensure cells with members have total >= members.length if workstreams empty
+    for (const entry of rawCells) {
+      if (entry.total === 0 && entry.members.length > 0) {
+        entry.total = entry.members.length;
+        entry.done = entry.members.filter(settledAtSeq).length;
+      }
+    }
+
     const rest = workers.filter((w) => !homed.has(w.name));
     if (rest.length > 0) {
       rawCells.push({
         id: "_other",
-        title: "其他协同",
+        title: s.overviewOtherThread,
         goal: "",
         members: rest.map((w) => w.name),
-        done: rest.filter((w) => w.status === "done" || w.killed).length,
+        done: rest.filter((w) => settledAtSeq(w.name)).length,
         total: rest.length,
+        isAcpDelegated: false,
       });
     }
   } else {
@@ -647,14 +1120,17 @@ export function computeHiveLayout(input: {
       pick: (m: AgentAuxMember) => boolean;
       doneGroup?: boolean;
     }> = [
-      { id: "_working", title: "运行中", pick: (m) => m.status === "working" },
+      { id: "_working", title: s.stateWorking, pick: (m) => hs.states[m.name]?.st === "working" },
       {
         id: "_waiting",
-        title: "等待 / 阻塞",
-        pick: (m) => m.status === "waiting_on" || m.status === "needs_you" || m.status === "error",
+        title: s.stateWaitingGeneric,
+        pick: (m) => {
+          const st = hs.states[m.name]?.st;
+          return st === "wait" || st === "needs" || st === "issue";
+        },
       },
-      { id: "_resting", title: "待命", pick: (m) => m.status === "parked" },
-      { id: "_done", title: "已完成", pick: (m) => m.status === "done" || m.killed, doneGroup: true },
+      { id: "_resting", title: s.stateParked, pick: (m) => hs.states[m.name]?.st === "idle" },
+      { id: "_done", title: s.stateDone, pick: (m) => settledAtSeq(m.name), doneGroup: true },
     ];
     for (const g of groups) {
       const picked = workers.filter(g.pick);
@@ -666,6 +1142,7 @@ export function computeHiveLayout(input: {
           members: picked.map((m) => m.name),
           done: g.doneGroup ? picked.length : 0,
           total: picked.length,
+          isAcpDelegated: picked.every((m) => m.sourceKind === "acp-delegated"),
         });
       }
     }
@@ -682,24 +1159,46 @@ export function computeHiveLayout(input: {
   const spanY = Math.max(...ys) - Math.min(...ys) + 2 * K;
   const fit = (W - 12) / spanX;
   const gap = fit < 44 ? 4 : 8;
-  const R = Math.max(36, Math.min(96, fit - gap / 2));
+  const Rfit = Math.max(28, Math.min(104, fit - gap / 2));
+  const maxZoom = Math.max(1, Math.min(2.6, 108 / Rfit));
+  const effectiveZoom = Math.max(1, Math.min(maxZoom, input.zoom ?? 1));
+  const R = Math.min(108, Rfit * effectiveZoom);
   const G = R + gap / 2;
-  const mode: "full" | "mid" | "tiny" = R >= 72 ? "full" : R >= 46 ? "mid" : "tiny";
-  const CW = Math.max(W, Math.ceil(spanX * G + 12));
+  const mode: "full" | "mid" | "tiny" = R >= 72 ? "full" : R >= 42 ? "mid" : "tiny";
+  const showNames = R >= 84;
+  const CW = Math.max(W, Math.ceil(spanX * G + 16));
   const ox = CW / 2 - ((Math.max(...xs) + Math.min(...xs)) / 2) * G;
-  const oy = 8 + K * R - Math.min(...ys) * G;
-  const H = Math.max(210, Math.ceil(spanY * G + 16));
+  const oy = 10 + K * R - Math.min(...ys) * G;
+  const H = Math.max(220, Math.ceil(spanY * G + 20));
 
-  const memberByName = new Map(members.map((m) => [m.name, m]));
-  const totalDone = model.workstreams.filter((w) => w.state === "done").length;
-  const totalWs = Math.max(1, model.workstreams.length);
+  const allDone = hs.isDoneAtSeq
+    ? rawCells.reduce((acc, c) => acc + c.done, 0)
+    : model.workstreams.filter((w) => w.state === "done").length;
+  const allTotal = hs.isDoneAtSeq
+    ? rawCells.reduce((acc, c) => acc + c.total, 0)
+    : model.workstreams.length;
+
+  const coordState = coordinator ? (hs.states[coordinator.name]?.st ?? "idle") : "idle";
+  const hubNeedsYou = coordState === "needs";
+  const hubSubtitle = hubNeedsYou
+    ? s.stateNeedsYou
+    : allTotal > 0
+      ? formatAuxTasksDone(allDone, allTotal, model.locale)
+      : s.roleCoordinator;
 
   const cells: HiveCellNode[] = [];
   const bees: HiveBeePlacement[] = [];
-  const posByName = new Map<string, { x: number; y: number }>();
+  const posByName = new Map<
+    string,
+    { x: number; y: number; size: "lg" | "sm" | "xs"; cell?: boolean }
+  >();
 
-  // Center hub cell for coordinator
-  const hubTitle = coordinator ? (coordinator.isCoordinator ? "协调者" : coordinator.displayName) : "协调中枢";
+  const hubTitle = coordinator
+    ? coordinator.isCoordinator
+      ? s.roleCoordinator
+      : coordinator.displayName
+    : s.roleCoordinator;
+
   cells.push({
     id: "_hub",
     title: hubTitle,
@@ -707,35 +1206,244 @@ export function computeHiveLayout(input: {
     cx: ox,
     cy: oy,
     radius: R,
-    progressFraction: totalDone / totalWs,
-    done: totalDone,
-    total: model.workstreams.length,
+    progressFraction: allTotal > 0 ? allDone / allTotal : 0,
+    done: allDone,
+    total: allTotal,
     isHub: true,
+    isAcpDelegated: false,
+    aggregateState: "",
     members: coordinator ? [coordinator.name] : [],
+    overflowCount: 0,
+    overflowX: ox,
+    overflowY: oy,
     pathD: buildHexPolygonPath(ox, oy, R, 0),
-    progPathD: buildHexPolygonPath(ox, oy, R - 2.5, -120),
+    progPathD: buildHexPolygonPath(ox, oy, R - 2.2, -120),
+    selPathD: buildHexPolygonPath(ox, oy, R + 1.5, 0),
   });
 
   if (coordinator) {
-    const cx = ox;
-    const cy = mode === "full" ? oy - R * 0.14 : oy - 6;
-    posByName.set(coordinator.name, { x: cx, y: cy });
+    const bx = ox;
+    const by = mode === "full" ? oy - R * 0.14 : mode === "mid" ? oy - 6 : oy;
+    const beeSize: "lg" | "sm" | "xs" =
+      mode === "full" ? "lg" : mode === "mid" || R >= 32 ? "sm" : "xs";
+    posByName.set(coordinator.name, { x: bx, y: by, size: beeSize });
     bees.push({
       name: coordinator.name,
-      x: cx,
-      y: cy,
-      size: mode === "full" ? "lg" : "sm",
-      state: coordinator.status,
+      displayName: coordinator.displayName,
+      providerBrand: coordinator.providerBrand,
+      sourceKind: coordinator.sourceKind,
+      x: bx,
+      y: by,
+      size: beeSize,
+      state: hiveStateToVisualStatus(coordState),
+      replayState: coordState,
+      waitingOn: hs.states[coordinator.name]?.who ?? null,
       isQueen: coordinator.isCoordinator,
-      killed: coordinator.killed,
+      killed: coordState === "retired",
+      tucked: false,
     });
   }
+
+  const beePriority = (name: string): number => {
+    const st = hs.states[name]?.st ?? "idle";
+    switch (st) {
+      case "issue":
+        return 0;
+      case "needs":
+        return 1;
+      case "wait":
+        return 2;
+      case "working":
+        return 3;
+      case "idle":
+        return 4;
+      case "done":
+        return 5;
+      case "retired":
+        return 6;
+      case "unborn":
+        return 7;
+    }
+  };
 
   rawCells.forEach((cell, idx) => {
     const slot = slots[idx] ?? ([0, -1] as const);
     const cx = ox + ux(slot[0]) * G;
     const cy = oy + uy(slot[0], slot[1]) * G;
     const frac = cell.total > 0 ? cell.done / cell.total : 0;
+
+    const stList = cell.members.map((n) => hs.states[n]?.st ?? "idle");
+    const agg: "" | "busy" | "warn" | "bad" = stList.includes("issue")
+      ? "bad"
+      : stList.includes("wait") || stList.includes("needs")
+        ? "warn"
+        : stList.includes("working")
+          ? "busy"
+          : "";
+
+    const born = cell.members
+      .filter((n) => (hs.states[n]?.st ?? "idle") !== "unborn")
+      .sort((a, b) => beePriority(a) - beePriority(b));
+
+    let overflowCount = 0;
+    let overflowX = cx;
+    let overflowY = cy;
+
+    if (mode === "tiny") {
+      const pick =
+        R >= 24
+          ? (born.find((n) => hs.states[n]?.st === "issue") ??
+            born.find((n) => hs.states[n]?.st === "wait") ??
+            born.find((n) => hs.states[n]?.st === "working") ??
+            null)
+          : null;
+      for (const n of cell.members) {
+        const m = memberByName.get(n);
+        if (!m) continue;
+        const rState = hs.states[n]?.st ?? "idle";
+        posByName.set(n, { x: cx, y: cy, size: "xs", cell: n !== pick });
+        bees.push({
+          name: n,
+          displayName: m.displayName,
+          providerBrand: m.providerBrand,
+          sourceKind: m.sourceKind,
+          x: cx,
+          y: cy,
+          size: "xs",
+          state: hiveStateToVisualStatus(rState),
+          replayState: rState,
+          waitingOn: hs.states[n]?.who ?? null,
+          isQueen: false,
+          killed: rState === "retired",
+          tucked: n !== pick,
+        });
+      }
+    } else if (mode === "mid") {
+      const show = born.length > 3 ? born.slice(0, 2) : born;
+      overflowCount = Math.max(0, born.length - show.length);
+      const by = cy + R * 0.28;
+      const totalSlots = show.length + (overflowCount > 0 ? 1 : 0);
+      show.forEach((n, j) => {
+        const m = memberByName.get(n);
+        if (!m) return;
+        const rState = hs.states[n]?.st ?? "idle";
+        const bx = cx + (j - (totalSlots - 1) / 2) * 26;
+        posByName.set(n, { x: bx, y: by, size: "xs" });
+        bees.push({
+          name: n,
+          displayName: m.displayName,
+          providerBrand: m.providerBrand,
+          sourceKind: m.sourceKind,
+          x: bx,
+          y: by,
+          size: "xs",
+          state: hiveStateToVisualStatus(rState),
+          replayState: rState,
+          waitingOn: hs.states[n]?.who ?? null,
+          isQueen: false,
+          killed: rState === "retired",
+          tucked: false,
+        });
+      });
+      if (overflowCount > 0) {
+        overflowX = cx + ((totalSlots - 1) / 2) * 26;
+        overflowY = by;
+        for (const n of born.slice(show.length)) {
+          const m = memberByName.get(n);
+          if (!m) continue;
+          const rState = hs.states[n]?.st ?? "idle";
+          posByName.set(n, { x: overflowX, y: overflowY, size: "xs" });
+          bees.push({
+            name: n,
+            displayName: m.displayName,
+            providerBrand: m.providerBrand,
+            sourceKind: m.sourceKind,
+            x: overflowX,
+            y: overflowY,
+            size: "xs",
+            state: hiveStateToVisualStatus(rState),
+            replayState: rState,
+            waitingOn: hs.states[n]?.who ?? null,
+            isQueen: false,
+            killed: rState === "retired",
+            tucked: true,
+          });
+        }
+      }
+    } else {
+      // Full mode: 2-row grid (up to 3 per row = 6 slots; if > 6, render 5 bees + "+N" in slot 6, 1:1 Fig 3!)
+      const perRow = Math.max(2, Math.min(3, Math.floor((1.65 * R) / 46)));
+      const cap = perRow * 2;
+      const show = born.length > cap ? born.slice(0, cap - 1) : born;
+      overflowCount = Math.max(0, born.length - show.length);
+      const stepX = Math.min(54, (1.62 * R) / perRow);
+      const rows: string[][] =
+        show.length > perRow ? [show.slice(0, perRow), show.slice(perRow)] : [show];
+      const rowGap = showNames ? 42 : 30;
+      const topY = cy - K * R + 48;
+      const botY = cy + K * R - (showNames ? 18 : 10);
+      const y0 = (topY + botY) / 2 - ((rows.length - 1) * rowGap) / 2 - (showNames ? 4 : 0);
+
+      rows.forEach((rw, ri) => {
+        const isLastRow = ri === rows.length - 1;
+        const slotsInRow = rw.length + (isLastRow && overflowCount > 0 ? 1 : 0);
+        rw.forEach((n, j) => {
+          const m = memberByName.get(n);
+          if (!m) return;
+          const rState = hs.states[n]?.st ?? "idle";
+          const bx = cx + (j - (slotsInRow - 1) / 2) * stepX;
+          const by = y0 + ri * rowGap;
+          posByName.set(n, { x: bx, y: by, size: "sm" });
+          bees.push({
+            name: n,
+            displayName: m.displayName,
+            providerBrand: m.providerBrand,
+            sourceKind: m.sourceKind,
+            x: bx,
+            y: by,
+            size: "sm",
+            state: hiveStateToVisualStatus(rState),
+            replayState: rState,
+            waitingOn: hs.states[n]?.who ?? null,
+            isQueen: false,
+            killed: rState === "retired",
+            tucked: false,
+          });
+        });
+        if (isLastRow && overflowCount > 0) {
+          overflowX = cx + ((slotsInRow - 1) / 2) * stepX;
+          overflowY = y0 + ri * rowGap;
+          for (const n of born.slice(show.length)) {
+            const m = memberByName.get(n);
+            if (!m) continue;
+            const rState = hs.states[n]?.st ?? "idle";
+            posByName.set(n, { x: overflowX, y: overflowY, size: "xs" });
+            bees.push({
+              name: n,
+              displayName: m.displayName,
+              providerBrand: m.providerBrand,
+              sourceKind: m.sourceKind,
+              x: overflowX,
+              y: overflowY,
+              size: "xs",
+              state: hiveStateToVisualStatus(rState),
+              replayState: rState,
+              waitingOn: hs.states[n]?.who ?? null,
+              isQueen: false,
+              killed: rState === "retired",
+              tucked: true,
+            });
+          }
+        }
+      });
+    }
+
+    // Place unborn members invisibly at cell center so beams never fail
+    for (const n of cell.members) {
+      if (posByName.has(n)) continue;
+      posByName.set(n, { x: cx, y: cy, size: "xs" });
+    }
+
     cells.push({
       id: cell.id,
       title: cell.title,
@@ -747,69 +1455,145 @@ export function computeHiveLayout(input: {
       done: cell.done,
       total: cell.total,
       isHub: false,
+      isAcpDelegated: cell.isAcpDelegated,
+      aggregateState: agg,
       members: cell.members,
+      overflowCount,
+      overflowX,
+      overflowY,
       pathD: buildHexPolygonPath(cx, cy, R, 0),
-      progPathD: buildHexPolygonPath(cx, cy, R - 2.5, -120),
-    });
-
-    const visibleBees = cell.members.slice(0, mode === "full" ? 4 : 3);
-    const beeSize: "xs" | "sm" = mode === "full" ? "sm" : "xs";
-    const stepX = mode === "full" ? 46 : 26;
-    const by = cy + R * 0.22;
-    visibleBees.forEach((name, j) => {
-      const m = memberByName.get(name);
-      if (!m) return;
-      const bx = cx + (j - (visibleBees.length - 1) / 2) * stepX;
-      posByName.set(name, { x: bx, y: by });
-      bees.push({
-        name,
-        x: bx,
-        y: by,
-        size: beeSize,
-        state: m.status,
-        isQueen: m.isCoordinator,
-        killed: m.killed,
-      });
+      progPathD: buildHexPolygonPath(cx, cy, R - 2.2, -120),
+      selPathD: buildHexPolygonPath(cx, cy, R + 1.5, 0),
     });
   });
 
-  // Compute beam for the latest/replayed message
+  // Compute curved message beams (active + faded trail) AND dashed waiting_on arrows!
   const beams: HiveBeamEdge[] = [];
-  const activeMsg = visibleMessages.at(-1) ?? null;
-  if (activeMsg) {
-    const srcPos = posByName.get(activeMsg.agent);
-    if (srcPos) {
-      const targets = activeMsg.all
-        ? members.filter((m) => m.name !== activeMsg.agent).map((m) => m.name)
-        : [...activeMsg.mentions];
-      for (const target of targets) {
-        const dstPos = posByName.get(target);
-        if (!dstPos) continue;
-        const dx = dstPos.x - srcPos.x;
-        const dy = dstPos.y - srcPos.y;
-        const len = Math.hypot(dx, dy);
-        if (len < 24) continue;
-        const mx = (srcPos.x + dstPos.x) / 2 - (dy / len) * 18;
-        const my = (srcPos.y + dstPos.y) / 2 + (dx / len) * 18;
-        beams.push({
-          id: `beam:${activeMsg.seq}:${activeMsg.agent}->${target}`,
-          from: activeMsg.agent,
-          to: target,
-          pathD: `M${srcPos.x.toFixed(1)} ${srcPos.y.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${dstPos.x.toFixed(1)} ${dstPos.y.toFixed(1)}`,
-          x2: dstPos.x,
-          y2: dstPos.y,
-          kind: "beam",
-        });
+  const drawnKeys = new Set<string>();
+  const padOf = (p: { size: "lg" | "sm" | "xs"; cell?: boolean }): number =>
+    p.cell ? R * 0.45 : p.size === "lg" ? 32 : p.size === "sm" ? 20 : 12;
+
+  const pushLink = (
+    from: string,
+    to: string,
+    kind: "beam" | "wait",
+    options?: { readonly isTrail?: boolean; readonly seq?: number },
+  ) => {
+    const a = posByName.get(from);
+    const b = posByName.get(to);
+    if (!a || !b) return;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const pa = padOf(a);
+    const pb = padOf(b);
+    if (len < pa + pb + 6) return;
+    const key = `${kind}|${options?.isTrail ? "t" : "a"}|${Math.round(a.x)},${Math.round(a.y)}|${Math.round(b.x)},${Math.round(b.y)}`;
+    if (drawnKeys.has(key)) return;
+    drawnKeys.add(key);
+
+    const vx = dx / len;
+    const vy = dy / len;
+    const x1 = a.x + vx * pa;
+    const y1 = a.y + vy * pa;
+    const x2 = b.x - vx * pb;
+    const y2 = b.y - vy * pb;
+    const bend = Math.min(34, Math.max(16, (len - pa - pb) * 0.22));
+    const mx = (x1 + x2) / 2 - vy * bend;
+    const my = (y1 + y2) / 2 + vx * bend;
+    const isShort = len - pa - pb < 30;
+    const cut = kind === "wait" && !isShort ? 9 : 0;
+    const hl = Math.hypot(x2 - mx, y2 - my) || 1;
+    const ex = x2 - ((x2 - mx) / hl) * cut;
+    const ey = y2 - ((y2 - my) / hl) * cut;
+    const pathD = `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${ex.toFixed(1)} ${ey.toFixed(1)}`;
+    const arrowPathD =
+      kind === "wait"
+        ? isShort
+          ? buildArrowheadPath(a.x, a.y, x2, y2)
+          : buildArrowheadPath(mx, my, x2, y2)
+        : undefined;
+
+    beams.push({
+      id: `${kind}:${options?.seq ?? 0}:${options?.isTrail ? "trail:" : ""}${from}->${to}`,
+      from,
+      to,
+      pathD,
+      x2,
+      y2,
+      ...(arrowPathD ? { arrowPathD } : {}),
+      kind,
+      ...(options?.isTrail ? { isTrail: true } : {}),
+      ...(options?.seq !== undefined ? { seq: options.seq } : {}),
+    });
+  };
+
+  const selectedCell = cells.find((c) => c.id === selectedCellId) ?? null;
+
+  // Waiting-on dashed marching arrows
+  for (const [name, st] of Object.entries(hs.states)) {
+    if (st.st !== "wait" || !st.who) continue;
+    if (
+      selectedCell &&
+      !selectedCell.members.includes(name) &&
+      !selectedCell.members.includes(st.who)
+    ) {
+      continue;
+    }
+    if (!selectedCell && rawCells.length > 18) continue;
+    pushLink(name, st.who, "wait");
+  }
+
+  // Faded trail beams (previous 1-2 messages)
+  for (const trailMsg of hs.trailBeams) {
+    const targets = trailMsg.all
+      ? members.filter((m) => m.name !== trailMsg.agent).map((m) => m.name)
+      : trailMsg.recipient
+        ? [trailMsg.recipient, ...trailMsg.mentions]
+        : [...trailMsg.mentions];
+    for (const target of new Set(targets)) {
+      if (target !== trailMsg.agent) {
+        pushLink(trailMsg.agent, target, "beam", { isTrail: true, seq: trailMsg.seq });
       }
     }
   }
 
-  return { width: CW, height: H, radius: R, mode, cells, bees, beams };
+  // Active message beam
+  if (hs.beam) {
+    const targets = hs.beam.all
+      ? members.filter((m) => m.name !== hs.beam!.agent).map((m) => m.name)
+      : hs.beam.recipient
+        ? [hs.beam.recipient, ...hs.beam.mentions]
+        : [...hs.beam.mentions];
+    for (const target of new Set(targets)) {
+      if (target !== hs.beam.agent) {
+        pushLink(hs.beam.agent, target, "beam", { seq: hs.beam.seq });
+      }
+    }
+  }
+
+  return {
+    width: CW,
+    height: H,
+    radius: R,
+    fitRadius: Rfit,
+    maxZoom,
+    mode,
+    showNames,
+    cells,
+    bees,
+    beams,
+    hubSubtitle,
+    hubNeedsYou,
+    activeMessage: hs.beam,
+  };
 }
 
 export interface MentionGraphNode {
   readonly name: string;
   readonly displayName: string;
+  readonly providerBrand: AgentBrandId;
+  readonly sourceKind: AgentAuxMemberSourceKind;
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -818,7 +1602,9 @@ export interface MentionGraphNode {
   readonly killed: boolean;
   readonly isCoordinator: boolean;
   readonly isHot: boolean;
+  readonly isActiveInReplay: boolean;
   readonly broadcastCount: number;
+  readonly unaddressedCount: number;
 }
 
 export interface MentionGraphEdge {
@@ -826,8 +1612,11 @@ export interface MentionGraphEdge {
   readonly from: string;
   readonly to: string;
   readonly count: number;
+  readonly direct: number;
+  readonly viaAll: number;
   readonly viaAllOnly: boolean;
   readonly isCurrent: boolean;
+  readonly strokeWidth: number;
   readonly pathD: string;
   readonly labelX: number;
   readonly labelY: number;
@@ -853,29 +1642,42 @@ export function computeMentionGraphLayout(input: {
   const { model, replaySeq, hideInactive, expandAll } = input;
   const W = Math.max(300, Math.floor(input.width || 360));
   const nonSystem = model.members.filter((m) => !m.isSystem);
+  const replaying = replaySeq !== null;
 
-  const msgs = (
+  const allMsgs = model.messages.filter((m) => !m.isControl);
+  const msgs =
     replaySeq === null
-      ? model.messages
-      : model.messages.filter((m) => m.seq <= replaySeq)
-  ).filter((m) => !m.isControl);
+      ? allMsgs
+      : (() => {
+          const idx = allMsgs.findIndex((m) => m.seq === replaySeq);
+          return idx >= 0 ? allMsgs.slice(0, idx + 1) : allMsgs.filter((m) => m.seq <= replaySeq);
+        })();
 
   const currentMessage = msgs.at(-1) ?? null;
 
-  const participantSet = new Set<string>();
+  const participantSet = new Set<string>(["coordinator"]);
   const broadcastCounts = new Map<string, number>();
+  const unaddressedCounts = new Map<string, number>();
   for (const m of msgs) {
     participantSet.add(m.agent);
+    if (m.recipient) participantSet.add(m.recipient);
     for (const t of m.mentions) participantSet.add(t);
     if (m.all) {
       broadcastCounts.set(m.agent, (broadcastCounts.get(m.agent) ?? 0) + 1);
+    } else if (!m.recipient && !m.mentions.some((t) => t !== m.agent)) {
+      unaddressedCounts.set(m.agent, (unaddressedCounts.get(m.agent) ?? 0) + 1);
     }
   }
 
   const visibleMembers = nonSystem.filter((m) => {
     if (!hideInactive) return true;
     if (m.isCoordinator) return true;
-    if (currentMessage && (currentMessage.agent === m.name || currentMessage.mentions.includes(m.name))) {
+    if (
+      currentMessage &&
+      (currentMessage.agent === m.name ||
+        currentMessage.recipient === m.name ||
+        currentMessage.mentions.includes(m.name))
+    ) {
       return true;
     }
     if (m.killed) return false;
@@ -883,68 +1685,97 @@ export function computeMentionGraphLayout(input: {
   });
 
   const visibleNameSet = new Set(visibleMembers.map((m) => m.name));
-  const H = Math.max(240, Math.min(380, 170 + visibleMembers.length * 16));
-  const cx = W / 2;
-  const cy = H / 2;
-  const rx = Math.max(76, W / 2 - 72);
-  const ry = Math.max(66, H / 2 - 44);
-
-  const coordinator = visibleMembers.find((m) => m.isCoordinator);
+  const coordinator = visibleMembers.find((m) => m.isCoordinator) ?? null;
   const others = visibleMembers.filter((m) => m.name !== coordinator?.name);
+  const orderedMembers = coordinator ? [coordinator, ...others] : visibleMembers;
+
+  const nodeH = 28;
+  const pillWidth = (m: AgentAuxMember, maxW: number): number => {
+    const full = Math.max(78, 48 + Math.ceil(m.displayName.length * 7.2));
+    return m.isCoordinator ? Math.min(180, full) : Math.min(maxW, full);
+  };
 
   const nodes: MentionGraphNode[] = [];
   const posMap = new Map<string, { x: number; y: number; w: number; h: number }>();
+  let H = 260;
 
-  const makeNode = (m: AgentAuxMember, x: number, y: number): MentionGraphNode => {
-    const w = Math.min(136, Math.max(76, m.displayName.length * 7.5 + 34));
-    const h = 28;
-    posMap.set(m.name, { x, y, w, h });
+  const makeNode = (m: AgentAuxMember, x: number, y: number, maxW: number): MentionGraphNode => {
+    const w = pillWidth(m, maxW);
+    posMap.set(m.name, { x, y, w, h: nodeH });
     const isHot = Boolean(
       currentMessage &&
-        (currentMessage.agent === m.name ||
-          currentMessage.mentions.includes(m.name) ||
-          (expandAll && currentMessage.all && currentMessage.agent !== m.name)),
+      (currentMessage.agent === m.name ||
+        currentMessage.recipient === m.name ||
+        currentMessage.mentions.includes(m.name) ||
+        (expandAll && currentMessage.all && currentMessage.agent !== m.name)),
     );
     return {
       name: m.name,
       displayName: m.displayName,
+      providerBrand: m.providerBrand,
+      sourceKind: m.sourceKind,
       x,
       y,
       width: w,
-      height: h,
+      height: nodeH,
       status: m.status,
       killed: m.killed,
       isCoordinator: m.isCoordinator,
       isHot,
+      isActiveInReplay: !replaying || participantSet.has(m.name) || m.isCoordinator,
       broadcastCount: expandAll ? 0 : (broadcastCounts.get(m.name) ?? 0),
+      unaddressedCount: unaddressedCounts.get(m.name) ?? 0,
     };
   };
 
-  if (coordinator && others.length >= 2) {
-    nodes.push(makeNode(coordinator, cx, cy));
-    others.forEach((m, i) => {
-      const angle = -Math.PI / 2 + (2 * Math.PI * i) / others.length;
-      nodes.push(makeNode(m, cx + rx * Math.cos(angle), cy + ry * Math.sin(angle)));
-    });
-  } else {
-    const all = visibleMembers;
-    all.forEach((m, i) => {
-      const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, all.length);
-      const scale = all.length === 1 ? 0 : 1;
+  // Up to 16 nodes: clean ellipse with coordinator at top (-90°), exact match to AGY app.js:1396!
+  if (orderedMembers.length <= 16) {
+    const n = orderedMembers.length;
+    const maxW = Math.min(152, Math.max(104, W / Math.max(3, Math.ceil(n / 2) + 1) - 10));
+    const rx = Math.max(62, W / 2 - maxW / 2 - 14);
+    const ry = n <= 2 ? 58 : Math.min(180, Math.max(92, n * 18));
+    const cx = W / 2;
+    const cy = ry + nodeH / 2 + 22;
+    H = Math.ceil(cy + ry + nodeH / 2 + 22);
+    orderedMembers.forEach((m, i) => {
+      const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, n);
+      const scale = n === 1 ? 0 : 1;
       nodes.push(
-        makeNode(m, cx + rx * scale * Math.cos(angle), cy + ry * scale * Math.sin(angle)),
+        makeNode(m, cx + rx * scale * Math.cos(angle), cy + ry * scale * Math.sin(angle), maxW),
       );
     });
+  } else {
+    // Wrapped staggered rows for > 16 members
+    const minNodeW = 110;
+    const lineH = 56;
+    const perLine = Math.max(1, Math.floor(W / (minNodeW + 12)));
+    let y = 32;
+    const rowGroups = coordinator ? [[coordinator], others] : [orderedMembers];
+    for (const grp of rowGroups) {
+      for (let i = 0; i < grp.length; i += perLine) {
+        const line = grp.slice(i, i + perLine);
+        const gap = W / (line.length + 1);
+        const maxW = Math.min(150, Math.max(minNodeW, gap - 10));
+        line.forEach((m, j) => {
+          nodes.push(
+            makeNode(m, gap * (j + 1), y + (line.length > 3 && j % 2 === 1 ? 12 : 0), maxW),
+          );
+        });
+        y += lineH;
+      }
+      y += 24;
+    }
+    H = Math.max(240, y);
   }
 
   // Aggregate directed edges from msgs up to replaySeq
-  const edgeAcc = new Map<
-    string,
-    { from: string; to: string; direct: number; viaAll: number }
-  >();
+  const edgeAcc = new Map<string, { from: string; to: string; direct: number; viaAll: number }>();
   for (const m of msgs) {
     if (!visibleNameSet.has(m.agent)) continue;
-    const directTargets = new Set(m.mentions.filter((t) => t !== m.agent && visibleNameSet.has(t)));
+    const directCandidates = m.recipient ? [m.recipient, ...m.mentions] : [...m.mentions];
+    const directTargets = new Set(
+      directCandidates.filter((t) => t !== m.agent && visibleNameSet.has(t)),
+    );
     const allTargets = new Set<string>(directTargets);
     if (expandAll && m.all) {
       for (const name of visibleNameSet) {
@@ -960,6 +1791,29 @@ export function computeMentionGraphLayout(input: {
     }
   }
 
+  let maxCount = 1;
+  for (const e of edgeAcc.values()) {
+    const tot = e.direct + e.viaAll;
+    if (tot > maxCount) maxCount = tot;
+  }
+
+  const trimToBox = (
+    p: { x: number; y: number; w: number; h: number },
+    q: { x: number; y: number },
+  ): { x: number; y: number } => {
+    const tx = q.x - p.x;
+    const ty = q.y - p.y;
+    const l = Math.hypot(tx, ty) || 1;
+    const ux = tx / l;
+    const uy = ty / l;
+    const toBorder = Math.min(
+      ux !== 0 ? p.w / 2 / Math.abs(ux) : Number.POSITIVE_INFINITY,
+      uy !== 0 ? p.h / 2 / Math.abs(uy) : Number.POSITIVE_INFINITY,
+    );
+    const t = Math.min(0.45 * l, toBorder + 4);
+    return { x: p.x + ux * t, y: p.y + uy * t };
+  };
+
   const edges: MentionGraphEdge[] = [];
   for (const e of edgeAcc.values()) {
     const a = posMap.get(e.from);
@@ -968,35 +1822,38 @@ export function computeMentionGraphLayout(input: {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len;
-    const uy = dy / len;
-    const padA = Math.min(a.w / 2, 34);
-    const padB = Math.min(b.w / 2, 36);
-    const x1 = a.x + ux * padA;
-    const y1 = a.y + uy * padA;
-    const x2 = b.x - ux * padB;
-    const y2 = b.y - uy * padB;
+    const nx = -dy / len;
+    const ny = dx / len;
     const hasReverse = edgeAcc.has(`${e.to}\0${e.from}`);
-    const bend = hasReverse ? 22 : 12;
-    const mx = (x1 + x2) / 2 - uy * bend;
-    const my = (y1 + y2) / 2 + ux * bend;
+    const bend = hasReverse ? 24 : 16;
+    const mx = (a.x + b.x) / 2 + nx * bend;
+    const my = (a.y + b.y) / 2 + ny * bend;
+    const s1 = trimToBox(a, { x: mx, y: my });
+    const e1 = trimToBox(b, { x: mx, y: my });
+    const total = e.direct + e.viaAll;
+    const strokeWidth = Number((1.2 + (3.0 * total) / maxCount).toFixed(2));
     const isCurrent = Boolean(
       currentMessage &&
-        currentMessage.agent === e.from &&
-        (currentMessage.mentions.includes(e.to) || (expandAll && currentMessage.all)),
+      currentMessage.agent === e.from &&
+      (currentMessage.recipient === e.to ||
+        currentMessage.mentions.includes(e.to) ||
+        (expandAll && currentMessage.all)),
     );
     edges.push({
       id: `${e.from}->${e.to}`,
       from: e.from,
       to: e.to,
-      count: e.direct + e.viaAll,
+      count: total,
+      direct: e.direct,
+      viaAll: e.viaAll,
       viaAllOnly: e.direct === 0 && e.viaAll > 0,
       isCurrent,
-      pathD: `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`,
-      labelX: (x1 + 2 * mx + x2) / 4,
-      labelY: (y1 + 2 * my + y2) / 4,
-      endX: x2,
-      endY: y2,
+      strokeWidth,
+      pathD: `M${s1.x.toFixed(1)} ${s1.y.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${e1.x.toFixed(1)} ${e1.y.toFixed(1)}`,
+      labelX: (s1.x + 2 * mx + e1.x) / 4,
+      labelY: (s1.y + 2 * my + e1.y) / 4,
+      endX: e1.x,
+      endY: e1.y,
     });
   }
 
@@ -1013,9 +1870,19 @@ export function shouldAutoOpenAgentAux(input: {
   readonly threadKey: string | null;
   readonly model: AgentAuxViewModel;
   readonly autoOpenedKeys: ReadonlySet<string>;
+  readonly swarmSignalCount?: number;
 }): string | null {
   if (!input.isServerThread || input.embedded || !input.threadKey) return null;
-  if (!input.model.active || !input.model.hasLiveActivity || !input.model.activationKey) {
+  if (!input.model.active || !input.model.activationKey) {
+    return null;
+  }
+  const hasLiveOrInitializingSwarm =
+    input.model.hasLiveActivity ||
+    (input.model.kind === "agy-swarm" &&
+      (input.swarmSignalCount ?? 0) > 0 &&
+      !input.model.finished &&
+      input.model.members.length >= 1);
+  if (!hasLiveOrInitializingSwarm) {
     return null;
   }
   const compositeKey = `${input.threadKey}::${input.model.activationKey}`;
@@ -1024,7 +1891,7 @@ export function shouldAutoOpenAgentAux(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Unified Multi-Agent ViewModel Builder
+// Projection Contracts & Rich Multi-Agent Collector
 // ---------------------------------------------------------------------------
 
 const ACTIVE_SUBAGENT_STATUS_SET = new Set([
@@ -1035,23 +1902,34 @@ const ACTIVE_SUBAGENT_STATUS_SET = new Set([
   "waiting_input",
   "in_progress",
   "working",
+  "waiting",
 ]);
 
 function normalizeSubagentStatus(raw: string): AgentAuxMemberVisualStatus {
   const lower = raw.trim().toLowerCase();
-  if (lower === "running" || lower === "starting" || lower === "in_progress" || lower === "working") {
+  if (
+    lower === "running" ||
+    lower === "starting" ||
+    lower === "in_progress" ||
+    lower === "working"
+  ) {
     return "working";
   }
-  if (lower === "waiting_input" || lower === "waiting") return "needs_you";
+  if (lower === "waiting_input" || lower === "waiting") return "waiting_on";
   if (lower === "pending" || lower === "queued") return "parked";
   if (lower === "failed" || lower === "error") return "error";
-  if (lower === "cancelled" || lower === "killed" || lower === "stopped") return "killed";
+  if (
+    lower === "cancelled" ||
+    lower === "killed" ||
+    lower === "stopped" ||
+    lower === "interrupted"
+  ) {
+    return "killed";
+  }
   return "done";
 }
 
-function normalizeWorkstreamState(
-  raw: string | undefined,
-): AgentAuxWorkstream["state"] {
+function normalizeWorkstreamState(raw: string | undefined): AgentAuxWorkstream["state"] {
   switch ((raw ?? "").toLowerCase()) {
     case "done":
     case "completed":
@@ -1069,8 +1947,30 @@ function normalizeWorkstreamState(
   }
 }
 
+function normalizeWorkstreamRawState(raw: string | undefined): AgentAuxWorkstreamRawState {
+  switch ((raw ?? "").toLowerCase()) {
+    case "done":
+    case "completed":
+      return "done";
+    case "blocked":
+      return "blocked";
+    case "failed":
+      return "failed";
+    case "review":
+      return "review";
+    case "queued":
+    case "pending":
+      return "queued";
+    default:
+      return "active";
+  }
+}
+
 function mapNativeSteps(
-  steps: readonly (DaemonAgentAuxNativeStepDto | OrchestrationV2NativeChildStep)[] | null | undefined,
+  steps:
+    | readonly (DaemonAgentAuxNativeStepDto | OrchestrationV2NativeChildStep)[]
+    | null
+    | undefined,
 ): readonly AgentAuxStepItem[] {
   if (!steps || steps.length === 0) return [];
   return steps.map((s) => ({
@@ -1090,37 +1990,164 @@ export interface AgentAuxThreadShellLike {
   readonly title?: string | null | undefined;
   readonly status?: string | null | undefined;
   readonly activityRunStatus?: string | null | undefined;
+  readonly activeRunId?: string | null | undefined;
+  readonly provider?: string | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly worktreePath?: string | null | undefined;
+  readonly branch?: string | null | undefined;
+  readonly runtime?: { readonly status?: string | null | undefined } | null | undefined;
+  readonly latestRun?: { readonly status?: string | null | undefined } | null | undefined;
   readonly lineage: {
     readonly parentThreadId?: ThreadId | null | undefined;
     readonly sideChat?: boolean | undefined;
   };
 }
 
+export interface AgentAuxWorkflowPhaseLike {
+  readonly index: number;
+  readonly title: string;
+}
+
+export interface AgentAuxWorkflowAgentLike {
+  readonly index: number;
+  readonly label: string;
+  readonly agentId?: string | undefined;
+  readonly childThreadId?: ThreadId | undefined;
+  readonly state: string;
+  readonly phaseIndex?: number | undefined;
+  readonly phaseTitle?: string | undefined;
+  readonly model?: string | undefined;
+  readonly totalTokens?: number | undefined;
+  readonly toolCalls?: number | undefined;
+  readonly durationMs?: number | undefined;
+  readonly startedAt?: unknown;
+  readonly completedAt?: unknown;
+  readonly prompt?: string | undefined;
+  readonly result?: string | undefined;
+}
+
 export interface AgentAuxSubagentLike {
   readonly id: string;
+  readonly runId?: string | null | undefined;
+  readonly parentNodeId?: string | null | undefined;
   readonly title?: string | null | undefined;
   readonly status: string;
   readonly driver?: string | null | undefined;
+  readonly providerInstanceId?: string | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly executedModel?: string | null | undefined;
   readonly childThreadId: ThreadId | null;
   readonly prompt: string;
-  readonly remoteChild?: { readonly label: string } | null | undefined;
+  readonly progress?: string | null | undefined;
+  readonly result?: string | null | undefined;
+  readonly startedAt?: unknown;
+  readonly completedAt?: unknown;
+  readonly updatedAt?: unknown;
+  readonly remoteChild?:
+    | { readonly label: string; readonly title?: string | undefined }
+    | null
+    | undefined;
+  readonly workflow?:
+    | {
+        readonly name?: string | undefined;
+        readonly phases?: ReadonlyArray<AgentAuxWorkflowPhaseLike> | undefined;
+        readonly agents?: ReadonlyArray<AgentAuxWorkflowAgentLike> | undefined;
+        readonly durationMs?: number | undefined;
+      }
+    | null
+    | undefined;
 }
 
 export interface AgentAuxPlanLike {
   readonly kind?: string | undefined;
-  readonly steps?: ReadonlyArray<{
-    readonly id: string;
-    readonly text: string;
-    readonly status: string;
-  }> | null | undefined;
+  readonly steps?:
+    | ReadonlyArray<{
+        readonly id: string;
+        readonly text: string;
+        readonly status: string;
+      }>
+    | null
+    | undefined;
 }
 
 export interface AgentAuxProjectionLike {
+  readonly runs?: ReadonlyArray<Record<string, unknown>> | undefined;
+  readonly attempts?: ReadonlyArray<Record<string, unknown>> | undefined;
+  readonly providerTurns?: ReadonlyArray<Record<string, unknown>> | undefined;
   readonly subagents?: ReadonlyArray<AgentAuxSubagentLike> | undefined;
-  readonly turnItems?: ReadonlyArray<Record<string, unknown> & { readonly type: string }> | undefined;
+  readonly turnItems?:
+    | ReadonlyArray<Record<string, unknown> & { readonly type: string }>
+    | undefined;
   readonly plans?: ReadonlyArray<AgentAuxPlanLike> | undefined;
   readonly providerThreads?: ReadonlyArray<unknown> | undefined;
   readonly thread?: unknown;
+}
+
+function parseTimestampMs(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return raw;
+  if (raw instanceof Date) {
+    const ms = raw.getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  if (raw && typeof raw === "object" && "epochMillis" in raw) {
+    const em = (raw as { readonly epochMillis?: unknown }).epochMillis;
+    if (typeof em === "number" && Number.isFinite(em) && em > 0) return em;
+  }
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    const ms = Date.parse(raw.includes("T") ? raw : raw.replace(" ", "T"));
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
+
+function slugifyHandle(raw: string, fallback: string, used: Set<string>): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 28);
+  const base = cleaned || fallback;
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  for (let idx = 2; idx < 200; idx += 1) {
+    const candidate = `${base}-${idx}`;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+  }
+  return `${base}-${used.size + 1}`;
+}
+
+function resolveMemberBrand(
+  driver: string | null | undefined,
+  model: string | null | undefined,
+  fallbackBrand: AgentBrandId,
+): AgentBrandId {
+  if (driver && driver.trim().length > 0) {
+    const resolved = resolveAgentBrandId(driver);
+    if (resolved !== "acp" && resolved !== "custom") return resolved;
+  }
+  if (model && model.trim().length > 0) {
+    const inferred = inferAgentBrandFromModel(model);
+    if (inferred) return inferred;
+  }
+  if (driver && driver.trim().length > 0) {
+    return resolveAgentBrandId(driver);
+  }
+  return fallbackBrand;
+}
+
+function extractBriefLine(prompt: string, maxLen = 110): string {
+  const first =
+    prompt
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^[\s#*>-]+/, "").trim())
+      .find((line) => line.length > 0) ?? "";
+  return first.length > maxLen ? `${first.slice(0, maxLen - 1).trimEnd()}…` : first;
 }
 
 function extractPlanTasks(projection: AgentAuxProjectionLike | null | undefined): AgentAuxTask[] {
@@ -1149,18 +2176,1004 @@ function extractPlanTasks(projection: AgentAuxProjectionLike | null | undefined)
   return tasks;
 }
 
+function buildMentionEdges(
+  messages: readonly AgentAuxBoardMessage[],
+  memberNames: ReadonlySet<string>,
+): AgentAuxEdge[] {
+  const edgeMap = new Map<
+    string,
+    { from: string; to: string; count: number; direct: number; viaAll: number }
+  >();
+  for (const msg of messages) {
+    if (msg.isControl) continue;
+    const directTargets = new Set(
+      (msg.recipient ? [msg.recipient, ...msg.mentions] : [...msg.mentions]).filter(
+        (n) => n !== msg.agent && memberNames.has(n),
+      ),
+    );
+    const allTargets = new Set<string>(directTargets);
+    if (msg.all) {
+      for (const n of memberNames) {
+        if (n !== msg.agent) allTargets.add(n);
+      }
+    }
+    for (const to of allTargets) {
+      const key = `${msg.agent}\0${to}`;
+      const existing = edgeMap.get(key) ?? { from: msg.agent, to, count: 0, direct: 0, viaAll: 0 };
+      existing.count += 1;
+      if (directTargets.has(to)) existing.direct += 1;
+      else existing.viaAll += 1;
+      edgeMap.set(key, existing);
+    }
+  }
+  return [...edgeMap.values()];
+}
+
+interface CollectedDelegatedChild {
+  readonly member: AgentAuxMember;
+  readonly prompt: string;
+  readonly progress: string;
+  readonly result: string;
+  readonly startedAt: number | null;
+  readonly completedAt: number | null;
+  readonly phaseIndex?: number;
+  readonly phaseTitle?: string;
+  readonly runId?: string | null;
+  readonly driverLabel: string;
+  readonly parentName: string;
+}
+
+function collectDelegatedChildren(input: {
+  readonly parentProvider: string | null;
+  readonly parentBrand: AgentBrandId;
+  readonly threadId: ThreadId | null;
+  readonly projection?: AgentAuxProjectionLike | null | undefined;
+  readonly relationshipShells?: ReadonlyArray<AgentAuxThreadShellLike> | undefined;
+  readonly nativeChildWork?: ReadonlyArray<OrchestrationV2NativeChildWork> | undefined;
+  readonly daemonSnapshot: DaemonAgentAuxInspectResponse | null;
+  readonly locale: AgentAuxLocale;
+  readonly reservedHandles?: ReadonlySet<string>;
+  readonly asAbsorbedAcp?: boolean;
+}): {
+  readonly children: readonly CollectedDelegatedChild[];
+  readonly workflowPhases: readonly AgentAuxWorkflowPhaseLike[];
+} {
+  const s = getAuxStrings(input.locale);
+  const usedHandles = new Set<string>(["coordinator", ...(input.reservedHandles ?? [])]);
+  const seenIds = new Set<string>();
+  const shellById = new Map((input.relationshipShells ?? []).map((sh) => [sh.id, sh] as const));
+  const children: CollectedDelegatedChild[] = [];
+  const workflowPhases: AgentAuxWorkflowPhaseLike[] = [];
+  const seenPhaseIdx = new Set<number>();
+
+  const makeHandle = (
+    candidate: string,
+    driver: string | null | undefined,
+    idx: number,
+  ): string => {
+    const prefix = input.asAbsorbedAcp && usedHandles.has(candidate.toLowerCase()) ? "acp-" : "";
+    const fallback = driver ? `${prefix}${driver}-${idx + 1}` : `${prefix}agent-${idx + 1}`;
+    return slugifyHandle(`${prefix}${candidate}`, fallback, usedHandles);
+  };
+
+  // 1. Rich `projection.subagents` (including nested `workflow.agents` + `workflow.phases`)
+  for (const agent of input.projection?.subagents ?? []) {
+    const wf = agent.workflow;
+    if (wf && Array.isArray(wf.phases)) {
+      for (const ph of wf.phases) {
+        if (!seenPhaseIdx.has(ph.index)) {
+          seenPhaseIdx.add(ph.index);
+          workflowPhases.push(ph);
+        }
+      }
+    }
+
+    if (wf && Array.isArray(wf.agents) && wf.agents.length > 0) {
+      for (const wfa of wf.agents) {
+        const key = wfa.childThreadId ?? `${agent.id}:wf:${wfa.index}`;
+        if (seenIds.has(key)) continue;
+        seenIds.add(key);
+        const childShell = wfa.childThreadId ? shellById.get(wfa.childThreadId) : undefined;
+        const status = normalizeSubagentStatus(childShell?.activityRunStatus ?? wfa.state);
+        const modelStr = wfa.model || agent.executedModel || agent.model || "";
+        const memberBrand = resolveMemberBrand(
+          wfa.agentId ?? agent.driver,
+          modelStr,
+          input.parentBrand,
+        );
+        const displayName = formatSubagentDisplayTitle(wfa.label || agent.title || s.roleSubagent);
+        const handle = makeHandle(
+          wfa.label || wfa.agentId || displayName,
+          agent.driver,
+          children.length,
+        );
+        const prompt = wfa.prompt ?? agent.prompt ?? "";
+        const result = wfa.result ?? "";
+        const brief = extractBriefLine(prompt) || displayName;
+        const snippet =
+          result.trim() || (status === "working" ? agent.progress?.trim() || brief : brief);
+        const sourceKind: AgentAuxMemberSourceKind = input.asAbsorbedAcp
+          ? "acp-delegated"
+          : "acp-delegated";
+        const workspace = childShell?.worktreePath ?? null;
+        const workspaceMode = workspace ? "worktree" : agent.remoteChild ? "remote" : null;
+        children.push({
+          member: {
+            id: key,
+            name: handle,
+            displayName,
+            role: input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+            roleLabel: formatAuxRoleLabel(
+              input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+              false,
+              input.locale,
+            ),
+            title: brief,
+            brief,
+            model: modelStr || formatAgentBrandName(memberBrand),
+            providerBrand: memberBrand,
+            sourceKind,
+            status,
+            statusLabel: formatAuxStatusLabel(status, null, input.locale),
+            waitingOn: null,
+            wakeMode: "",
+            steps: wfa.toolCalls ?? 0,
+            posts: 0,
+            unread: 0,
+            activity: status === "working" ? agent.progress?.trim() || brief : "",
+            activityKind: status === "working" ? "tool" : "",
+            nowLine: snippet.slice(0, 160),
+            lastPostSnippet: snippet.slice(0, 180),
+            lastSeq: 0,
+            lastTime: "",
+            killed: status === "killed",
+            isCoordinator: false,
+            isSystem: false,
+            isYou: false,
+            childThreadId: wfa.childThreadId ?? agent.childThreadId,
+            conversationId: null,
+            color: computeBeeColor(handle),
+            backendType: agent.remoteChild?.label ?? null,
+            workspace: workspace ?? agent.remoteChild?.label ?? null,
+            workspaceMode,
+            metrics: {
+              ...(wfa.toolCalls !== undefined ? { toolCalls: wfa.toolCalls } : {}),
+              ...(wfa.totalTokens !== undefined ? { totalTokens: wfa.totalTokens } : {}),
+              ...(wfa.durationMs !== undefined ? { durationMs: wfa.durationMs } : {}),
+            },
+            failureText: status === "error" ? result || s.stateError : null,
+          },
+          prompt,
+          progress: agent.progress?.trim() ?? "",
+          result,
+          startedAt: parseTimestampMs(wfa.startedAt ?? agent.startedAt),
+          completedAt: parseTimestampMs(wfa.completedAt ?? agent.completedAt ?? agent.updatedAt),
+          ...(wfa.phaseIndex !== undefined ? { phaseIndex: wfa.phaseIndex } : {}),
+          ...(wfa.phaseTitle ? { phaseTitle: wfa.phaseTitle } : {}),
+          runId: agent.runId ?? null,
+          driverLabel: formatAgentBrandName(memberBrand),
+          parentName: "coordinator",
+        });
+      }
+      continue;
+    }
+
+    const key = agent.childThreadId ?? agent.id;
+    if (seenIds.has(key)) continue;
+    seenIds.add(key);
+    const childShell = agent.childThreadId ? shellById.get(agent.childThreadId) : undefined;
+    const rawStatus = childShell?.activityRunStatus ?? agent.status;
+    const status = normalizeSubagentStatus(rawStatus);
+    const modelStr = agent.executedModel ?? agent.model ?? childShell?.model ?? "";
+    const memberBrand = resolveMemberBrand(
+      agent.driver ?? childShell?.provider ?? agent.providerInstanceId,
+      modelStr,
+      input.parentBrand,
+    );
+    const rawTitle =
+      agent.title?.trim() ||
+      childShell?.title?.trim() ||
+      extractBriefLine(agent.prompt, 48) ||
+      formatAgentBrandName(memberBrand);
+    const displayName = formatSubagentDisplayTitle(rawTitle);
+    const driverPrefix = agent.driver?.trim() ?? "";
+    const handleCandidate =
+      driverPrefix && !rawTitle.toLowerCase().startsWith(driverPrefix.toLowerCase())
+        ? `${driverPrefix}-${rawTitle}`
+        : rawTitle;
+    const handle = makeHandle(handleCandidate, agent.driver, children.length);
+    const brief = extractBriefLine(agent.prompt) || displayName;
+    const progress = agent.progress?.trim() ?? "";
+    const result = agent.result?.trim() ?? "";
+    const startedAt = parseTimestampMs(agent.startedAt);
+    const completedAt = parseTimestampMs(agent.completedAt ?? agent.updatedAt);
+    const durationMs =
+      startedAt !== null && completedAt !== null && completedAt >= startedAt
+        ? completedAt - startedAt
+        : undefined;
+    const snippet = result || progress || brief;
+    const workspace = childShell?.worktreePath ?? agent.remoteChild?.label ?? null;
+    const workspaceMode = childShell?.worktreePath
+      ? "worktree"
+      : agent.remoteChild
+        ? "remote"
+        : null;
+
+    children.push({
+      member: {
+        id: agent.id,
+        name: handle,
+        displayName,
+        role: input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+        roleLabel: formatAuxRoleLabel(
+          input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+          false,
+          input.locale,
+        ),
+        title: brief,
+        brief,
+        model: modelStr || formatAgentBrandName(memberBrand),
+        providerBrand: memberBrand,
+        sourceKind: "acp-delegated",
+        status,
+        statusLabel: formatAuxStatusLabel(status, null, input.locale),
+        waitingOn: null,
+        wakeMode: "",
+        steps: 0,
+        posts: 0,
+        unread: 0,
+        activity: status === "working" ? progress || brief : "",
+        activityKind: status === "working" ? "tool" : "",
+        nowLine: snippet.slice(0, 160),
+        lastPostSnippet: snippet.slice(0, 180),
+        lastSeq: 0,
+        lastTime: "",
+        killed: status === "killed",
+        isCoordinator: false,
+        isSystem: false,
+        isYou: false,
+        childThreadId: agent.childThreadId,
+        conversationId: null,
+        color: computeBeeColor(handle),
+        backendType: agent.remoteChild?.label ?? null,
+        workspace,
+        workspaceMode,
+        ...(durationMs !== undefined ? { metrics: { durationMs } } : {}),
+        failureText: status === "error" ? result || s.stateError : null,
+      },
+      prompt: agent.prompt,
+      progress,
+      result,
+      startedAt,
+      completedAt,
+      runId: agent.runId ?? null,
+      driverLabel: formatAgentBrandName(memberBrand),
+      parentName: "coordinator",
+    });
+  }
+
+  // 2. `projection.turnItems` (`type === "subagent"`)
+  for (const rawItem of input.projection?.turnItems ?? []) {
+    if (rawItem.type !== "subagent") continue;
+    const subagentId = typeof rawItem.subagentId === "string" ? rawItem.subagentId : "";
+    const childThreadId =
+      typeof rawItem.childThreadId === "string" ? (rawItem.childThreadId as ThreadId) : null;
+    const key = childThreadId ?? subagentId;
+    if (!key || seenIds.has(key)) continue;
+    seenIds.add(key);
+
+    const childShell = childThreadId ? shellById.get(childThreadId) : undefined;
+    const itemStatus = typeof rawItem.status === "string" ? rawItem.status : "running";
+    const status = normalizeSubagentStatus(childShell?.activityRunStatus ?? itemStatus);
+    const itemPrompt = typeof rawItem.prompt === "string" ? rawItem.prompt : "";
+    const itemProgress = typeof rawItem.progress === "string" ? rawItem.progress : "";
+    const itemResult = typeof rawItem.result === "string" ? rawItem.result : "";
+    const itemDriver = typeof rawItem.driver === "string" ? rawItem.driver : "";
+    const itemModel =
+      typeof rawItem.executedModel === "string"
+        ? rawItem.executedModel
+        : typeof rawItem.model === "string"
+          ? rawItem.model
+          : (childShell?.model ?? "");
+    const remoteChild =
+      rawItem.remoteChild && typeof rawItem.remoteChild === "object"
+        ? (rawItem.remoteChild as { readonly label?: unknown })
+        : null;
+    const remoteLabel = typeof remoteChild?.label === "string" ? remoteChild.label : null;
+    const memberBrand = resolveMemberBrand(
+      itemDriver || childShell?.provider,
+      itemModel,
+      input.parentBrand,
+    );
+    const rawTitle =
+      (typeof rawItem.title === "string" && rawItem.title.trim()) ||
+      childShell?.title?.trim() ||
+      extractBriefLine(itemPrompt, 48) ||
+      formatAgentBrandName(memberBrand);
+    const displayName = formatSubagentDisplayTitle(rawTitle);
+    const handle = makeHandle(rawTitle, itemDriver, children.length);
+    const brief = extractBriefLine(itemPrompt) || displayName;
+    const snippet = itemResult.trim() || itemProgress.trim() || brief;
+
+    children.push({
+      member: {
+        id: subagentId || key,
+        name: handle,
+        displayName,
+        role: input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+        roleLabel: formatAuxRoleLabel(
+          input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+          false,
+          input.locale,
+        ),
+        title: brief,
+        brief,
+        model: itemModel || formatAgentBrandName(memberBrand),
+        providerBrand: memberBrand,
+        sourceKind: "acp-delegated",
+        status,
+        statusLabel: formatAuxStatusLabel(status, null, input.locale),
+        waitingOn: null,
+        wakeMode: "",
+        steps: 0,
+        posts: 0,
+        unread: 0,
+        activity: status === "working" ? itemProgress || brief : "",
+        activityKind: status === "working" ? "tool" : "",
+        nowLine: snippet.slice(0, 160),
+        lastPostSnippet: snippet.slice(0, 180),
+        lastSeq: 0,
+        lastTime: "",
+        killed: status === "killed",
+        isCoordinator: false,
+        isSystem: false,
+        isYou: false,
+        childThreadId,
+        conversationId: null,
+        color: computeBeeColor(handle),
+        backendType: remoteLabel,
+        workspace: childShell?.worktreePath ?? remoteLabel ?? null,
+        workspaceMode: childShell?.worktreePath ? "worktree" : remoteLabel ? "remote" : null,
+        failureText: status === "error" ? itemResult || s.stateError : null,
+      },
+      prompt: itemPrompt,
+      progress: itemProgress,
+      result: itemResult,
+      startedAt: parseTimestampMs(rawItem.startedAt ?? rawItem.createdAt),
+      completedAt: parseTimestampMs(rawItem.completedAt ?? rawItem.updatedAt),
+      runId: typeof rawItem.runId === "string" ? rawItem.runId : null,
+      driverLabel: formatAgentBrandName(memberBrand),
+      parentName: "coordinator",
+    });
+  }
+
+  // 3. Direct child `relationshipShells` (excluding BTW side chats)
+  for (const shell of input.relationshipShells ?? []) {
+    if (shell.id === input.threadId) continue;
+    if (shell.lineage.parentThreadId !== input.threadId) continue;
+    if (shell.lineage.sideChat === true) continue;
+    if (seenIds.has(shell.id)) continue;
+    seenIds.add(shell.id);
+    const rawStatus = shell.activityRunStatus ?? shell.status ?? "idle";
+    const status = normalizeSubagentStatus(rawStatus);
+    const memberBrand = resolveMemberBrand(shell.provider, shell.model, input.parentBrand);
+    const displayName = formatSubagentDisplayTitle(shell.title?.trim() || s.roleSubagent);
+    const handle = makeHandle(displayName, shell.provider, children.length);
+
+    children.push({
+      member: {
+        id: shell.id,
+        name: handle,
+        displayName,
+        role: input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+        roleLabel: formatAuxRoleLabel(
+          input.asAbsorbedAcp ? "acp-delegated" : "subagent",
+          false,
+          input.locale,
+        ),
+        title: displayName,
+        brief: displayName,
+        model: shell.model || formatAgentBrandName(memberBrand),
+        providerBrand: memberBrand,
+        sourceKind: "acp-delegated",
+        status,
+        statusLabel: formatAuxStatusLabel(status, null, input.locale),
+        waitingOn: null,
+        wakeMode: "",
+        steps: 0,
+        posts: 0,
+        unread: 0,
+        activity: status === "working" ? displayName : "",
+        activityKind: status === "working" ? "tool" : "",
+        nowLine: displayName,
+        lastPostSnippet: displayName,
+        lastSeq: 0,
+        lastTime: "",
+        killed: status === "killed",
+        isCoordinator: false,
+        isSystem: false,
+        isYou: false,
+        childThreadId: shell.id,
+        conversationId: null,
+        color: computeBeeColor(handle),
+        backendType: null,
+        workspace: shell.worktreePath ?? null,
+        workspaceMode: shell.worktreePath ? "worktree" : null,
+        failureText: null,
+      },
+      prompt: displayName,
+      progress: "",
+      result: status === "done" ? displayName : "",
+      startedAt: null,
+      completedAt: null,
+      runId: null,
+      driverLabel: formatAgentBrandName(memberBrand),
+      parentName: "coordinator",
+    });
+  }
+
+  // 4. AGY detached subagents from daemon (only for non-swarm mode)
+  if (!input.asAbsorbedAcp) {
+    for (const sub of input.daemonSnapshot?.agySubagents ?? []) {
+      if (seenIds.has(sub.conversationId)) continue;
+      seenIds.add(sub.conversationId);
+      const status: AgentAuxMemberVisualStatus =
+        sub.status === "working"
+          ? "working"
+          : sub.status === "killed"
+            ? "killed"
+            : sub.status === "done"
+              ? "done"
+              : "parked";
+      const handle = makeHandle(sub.role || sub.conversationId, "antigravity", children.length);
+      const steps = mapNativeSteps(sub.steps);
+      children.push({
+        member: {
+          id: sub.conversationId,
+          name: handle,
+          displayName: sub.role || handle,
+          role: sub.role || "subagent",
+          roleLabel: formatAuxRoleLabel(sub.role || "subagent", false, input.locale),
+          title: sub.role || handle,
+          brief: sub.activity || sub.role,
+          model: "Antigravity",
+          providerBrand: "antigravity",
+          sourceKind: "native-subagent",
+          status,
+          statusLabel: formatAuxStatusLabel(status, null, input.locale),
+          waitingOn: null,
+          wakeMode: "",
+          steps: sub.stepsCount,
+          posts: 0,
+          unread: 0,
+          activity: sub.activity,
+          activityKind: sub.activityKind,
+          nowLine: sub.activity || sub.state,
+          lastPostSnippet: sub.activity || sub.state,
+          lastSeq: 0,
+          lastTime: "",
+          killed: sub.status === "killed",
+          isCoordinator: false,
+          isSystem: false,
+          isYou: false,
+          childThreadId: null,
+          conversationId: sub.conversationId,
+          color: computeBeeColor(handle),
+          backendType: "AGY",
+          workspace: null,
+          workspaceMode: null,
+          failureText: null,
+          nativeSteps: steps,
+        },
+        prompt: sub.role,
+        progress: sub.activity,
+        result: status === "done" ? sub.activity || s.stateDone : "",
+        startedAt: sub.transcriptMtime > 0 ? sub.transcriptMtime - 30_000 : null,
+        completedAt: sub.transcriptMtime > 0 ? sub.transcriptMtime : null,
+        runId: null,
+        driverLabel: "Antigravity",
+        parentName: "coordinator",
+      });
+    }
+  }
+
+  // 5. Native child work (AGY native subagent batch)
+  for (const child of input.nativeChildWork ?? []) {
+    if (seenIds.has(child.conversationId)) continue;
+    seenIds.add(child.conversationId);
+    const steps = mapNativeSteps(child.steps);
+    const lastStep = steps.at(-1);
+    const working = lastStep?.status === "RUNNING" || lastStep?.status === "PENDING";
+    const status: AgentAuxMemberVisualStatus = working ? "working" : "done";
+    const displayName = child.role || s.roleSubagent;
+    const handle = makeHandle(displayName, "antigravity", children.length);
+    const brief = extractBriefLine(child.prompt) || displayName;
+    const progress = lastStep?.toolCalls.at(-1)?.summary ?? lastStep?.text ?? "";
+
+    children.push({
+      member: {
+        id: child.conversationId,
+        name: handle,
+        displayName,
+        role: child.role || "subagent",
+        roleLabel: formatAuxRoleLabel(child.role || "subagent", false, input.locale),
+        title: brief,
+        brief,
+        model: "Antigravity",
+        providerBrand: "antigravity",
+        sourceKind: input.asAbsorbedAcp ? "acp-delegated" : "native-subagent",
+        status,
+        statusLabel: formatAuxStatusLabel(status, null, input.locale),
+        waitingOn: null,
+        wakeMode: "",
+        steps: steps.length,
+        posts: 0,
+        unread: 0,
+        activity: working ? progress : "",
+        activityKind: working ? "tool" : "",
+        nowLine: brief,
+        lastPostSnippet: progress || brief,
+        lastSeq: 0,
+        lastTime: "",
+        killed: false,
+        isCoordinator: false,
+        isSystem: false,
+        isYou: false,
+        childThreadId: null,
+        conversationId: child.conversationId,
+        color: computeBeeColor(handle),
+        backendType: "AGY",
+        workspace: null,
+        workspaceMode: null,
+        failureText: null,
+        nativeSteps: steps,
+      },
+      prompt: child.prompt,
+      progress,
+      result: status === "done" ? lastStep?.text || s.stateDone : "",
+      startedAt: null,
+      completedAt: null,
+      runId: null,
+      driverLabel: "Antigravity",
+      parentName: "coordinator",
+    });
+  }
+
+  // 6. Codex spawned threads from daemon state_5.sqlite
+  if (!input.asAbsorbedAcp) {
+    for (const sp of input.daemonSnapshot?.codex?.spawnedThreads ?? []) {
+      if (seenIds.has(sp.threadId)) continue;
+      seenIds.add(sp.threadId);
+      const status = normalizeSubagentStatus(sp.status);
+      const displayName = sp.nickname || sp.title || sp.threadId.slice(0, 12);
+      const handle = makeHandle(displayName, "codex", children.length);
+      children.push({
+        member: {
+          id: sp.threadId,
+          name: handle,
+          displayName,
+          role: sp.role || "subagent",
+          roleLabel: formatAuxRoleLabel(sp.role || "subagent", false, input.locale),
+          title: sp.title || displayName,
+          brief: sp.title || displayName,
+          model: sp.model || "Codex",
+          providerBrand: "codex",
+          sourceKind: "codex",
+          status,
+          statusLabel: formatAuxStatusLabel(status, null, input.locale),
+          waitingOn: null,
+          wakeMode: "",
+          steps: 0,
+          posts: 0,
+          unread: 0,
+          activity: status === "working" ? sp.title : "",
+          activityKind: status === "working" ? "tool" : "",
+          nowLine: sp.title || displayName,
+          lastPostSnippet: sp.title || displayName,
+          lastSeq: 0,
+          lastTime: "",
+          killed: status === "killed",
+          isCoordinator: false,
+          isSystem: false,
+          isYou: false,
+          childThreadId: null,
+          conversationId: sp.threadId,
+          color: computeBeeColor(handle),
+          backendType: sp.reasoningEffort || null,
+          workspace: sp.cwd || null,
+          workspaceMode: sp.cwd ? "worktree" : null,
+          failureText: null,
+        },
+        prompt: sp.title || displayName,
+        progress: "",
+        result: status === "done" ? sp.title || s.stateDone : "",
+        startedAt: sp.updatedAtMs > 0 ? sp.updatedAtMs - 15_000 : null,
+        completedAt: sp.updatedAtMs > 0 ? sp.updatedAtMs : null,
+        runId: null,
+        driverLabel: "Codex",
+        parentName: "coordinator",
+      });
+    }
+  }
+
+  return { children, workflowPhases };
+}
+
+/**
+ * Synthesizes chronological Board messages (`prompt` dispatch → progress → completion/failure)
+ * from delegated ACP/MCP children so Board, Timeline Replay, Hive arcs & Mentions Graph
+ * work identically to native AGY Swarm.
+ */
+function synthesizeDelegatedMessages(
+  children: readonly CollectedDelegatedChild[],
+  startSeq: number,
+  baseTs: number,
+  locale: AgentAuxLocale,
+  parentBrand: AgentBrandId,
+): readonly AgentAuxBoardMessage[] {
+  const s = getAuxStrings(locale);
+  const rawEvents: Array<{
+    readonly ts: number;
+    readonly order: number;
+    readonly agent: string;
+    readonly recipient: string;
+    readonly text: string;
+    readonly kind?: string;
+    readonly providerBrand: AgentBrandId;
+  }> = [];
+
+  children.forEach((child, idx) => {
+    const startTs = child.startedAt ?? baseTs + idx * 5_000;
+    const endTs = child.completedAt ?? startTs + 15_000;
+    const dispatchBody = child.prompt.trim() || child.member.displayName;
+    const dispatchText =
+      child.member.displayName &&
+      !dispatchBody.toLowerCase().includes(child.member.displayName.toLowerCase())
+        ? `@${child.member.name} **${child.member.displayName}**\n\n${dispatchBody}`
+        : `@${child.member.name} ${dispatchBody}`;
+
+    rawEvents.push({
+      ts: startTs,
+      order: idx * 10,
+      agent: child.parentName,
+      recipient: child.member.name,
+      text: dispatchText,
+      kind: "brief",
+      providerBrand: parentBrand,
+    });
+
+    // Optional intermediate progress milestone (from progress text or nativeSteps, capped at 2)
+    if (child.progress.trim().length > 0 && child.progress.trim() !== child.result.trim()) {
+      rawEvents.push({
+        ts: Math.round((startTs + endTs) / 2),
+        order: idx * 10 + 1,
+        agent: child.member.name,
+        recipient: child.parentName,
+        text: `@${child.parentName} ${child.progress.trim()}`,
+        providerBrand: child.member.providerBrand,
+      });
+    } else if (child.member.nativeSteps && child.member.nativeSteps.length > 0) {
+      const milestones = child.member.nativeSteps
+        .filter((st) => st.toolCalls.length > 0 || (st.text && st.text.trim().length > 0))
+        .slice(-2);
+      milestones.forEach((st, mIdx) => {
+        const label =
+          st.toolCalls
+            .map((tc) => `${tc.name}${tc.summary ? ` (${tc.summary})` : ""}`)
+            .join(", ") ||
+          st.text?.trim() ||
+          "";
+        if (label) {
+          rawEvents.push({
+            ts: startTs + (mIdx + 1) * 3_000,
+            order: idx * 10 + 2 + mIdx,
+            agent: child.member.name,
+            recipient: child.parentName,
+            text: `@${child.parentName} ${label}`,
+            providerBrand: child.member.providerBrand,
+          });
+        }
+      });
+    }
+
+    // Completion or error report
+    if (
+      child.member.status === "done" ||
+      child.member.status === "error" ||
+      child.member.status === "killed"
+    ) {
+      const tag = child.member.status === "done" ? "[done]" : "[blocked]";
+      const body =
+        child.result.trim() ||
+        (child.member.status === "done" ? s.stateDone : child.member.failureText || s.stateKilled);
+      rawEvents.push({
+        ts: Math.max(endTs, startTs + 1000),
+        order: idx * 10 + 9,
+        agent: child.member.name,
+        recipient: child.parentName,
+        text: `@${child.parentName} ${tag} ${body}`,
+        providerBrand: child.member.providerBrand,
+      });
+    }
+  });
+
+  rawEvents.sort((a, b) => a.ts - b.ts || a.order - b.order);
+
+  return rawEvents.map((ev, idx) => {
+    const seq = startSeq + idx;
+    const screenshots = extractScreenshotsFromText(ev.text);
+    return {
+      seq,
+      agent: ev.agent,
+      recipient: ev.recipient,
+      text: ev.text,
+      time: formatAuxClockTime(ev.ts),
+      ts: ev.ts,
+      mentions: [ev.recipient],
+      all: false,
+      ...(ev.kind ? { kind: ev.kind } : {}),
+      sourceKind: "acp-delegated",
+      providerBrand: ev.providerBrand,
+      ...(screenshots.length > 0 ? { screenshots } : {}),
+      isControl: false,
+      isDirectToYou: false,
+      isUnread: false,
+    };
+  });
+}
+
+/**
+ * Unified Hybrid Swarm + ACP/MCP Absorption Merger (Board #129):
+ * When a thread has an active AGY Swarm AND simultaneously invokes ACP / Prismux MCP
+ * delegated subagents, absorbs those delegated agents directly INTO the active Swarm
+ * across Overview (`ACP 外部委派` workgroup), Board (chronologically interleaved messages),
+ * Members (vendor brand badges + click-to-open-thread), and Hive / Mentions Graph!
+ */
+export function mergeSwarmAndDelegatedAgents(input: {
+  readonly swarmMembers: readonly AgentAuxMember[];
+  readonly swarmMessages: readonly AgentAuxBoardMessage[];
+  readonly swarmWorkstreams: readonly AgentAuxWorkstream[];
+  readonly swarmThreadGroups: readonly AgentAuxThreadGroup[];
+  readonly swarmHeadSeq: number;
+  readonly delegatedChildren: readonly CollectedDelegatedChild[];
+  readonly locale: AgentAuxLocale;
+  readonly parentBrand: AgentBrandId;
+}): {
+  readonly members: readonly AgentAuxMember[];
+  readonly messages: readonly AgentAuxBoardMessage[];
+  readonly workstreams: readonly AgentAuxWorkstream[];
+  readonly threadGroups: readonly AgentAuxThreadGroup[];
+  readonly edges: readonly AgentAuxEdge[];
+  readonly headSeq: number;
+  readonly hasAbsorbedAcpAgents: boolean;
+} {
+  if (input.delegatedChildren.length === 0) {
+    const memberNames = new Set(input.swarmMembers.filter((m) => !m.isSystem).map((m) => m.name));
+    return {
+      members: input.swarmMembers,
+      messages: input.swarmMessages,
+      workstreams: input.swarmWorkstreams,
+      threadGroups: input.swarmThreadGroups,
+      edges: buildMentionEdges(input.swarmMessages, memberNames),
+      headSeq: input.swarmHeadSeq,
+      hasAbsorbedAcpAgents: false,
+    };
+  }
+
+  const s = getAuxStrings(input.locale);
+  const latestSwarmTs =
+    input.swarmMessages.reduce<number>((max, m) => (m.ts !== null && m.ts > max ? m.ts : max), 0) ||
+    Date.now();
+
+  const syntheticMessages = synthesizeDelegatedMessages(
+    input.delegatedChildren,
+    input.swarmHeadSeq + 1,
+    latestSwarmTs + 1_000,
+    input.locale,
+    input.parentBrand,
+  );
+
+  // Compute post stats for absorbed members
+  const postStatsByName = new Map<
+    string,
+    { posts: number; lastSeq: number; lastTime: string; snippet: string }
+  >();
+  for (const msg of syntheticMessages) {
+    const prev = postStatsByName.get(msg.agent) ?? {
+      posts: 0,
+      lastSeq: 0,
+      lastTime: "",
+      snippet: "",
+    };
+    postStatsByName.set(msg.agent, {
+      posts: prev.posts + 1,
+      lastSeq: msg.seq,
+      lastTime: msg.time,
+      snippet: msg.text.slice(0, 180),
+    });
+  }
+
+  const absorbedMembers: AgentAuxMember[] = input.delegatedChildren.map((child) => {
+    const stats = postStatsByName.get(child.member.name);
+    return {
+      ...child.member,
+      sourceKind: "acp-delegated",
+      posts: stats?.posts ?? 0,
+      lastSeq: stats?.lastSeq ?? 0,
+      lastTime: stats?.lastTime ?? "",
+      lastPostSnippet: stats?.snippet || child.member.lastPostSnippet,
+    };
+  });
+
+  const mergedMembers = [...input.swarmMembers, ...absorbedMembers];
+
+  // Interleave native board.jsonl messages + absorbed ACP messages chronologically by timestamp
+  // while keeping exact native `#seq` intact so every native citation `#106` remains accurate.
+  const mergedMessages = [...input.swarmMessages, ...syntheticMessages].sort((a, b) => {
+    const ta = a.ts ?? Number.MAX_SAFE_INTEGER;
+    const tb = b.ts ?? Number.MAX_SAFE_INTEGER;
+    if (ta !== tb) return ta - tb;
+    return a.seq - b.seq;
+  });
+
+  const headSeq = Math.max(input.swarmHeadSeq, ...syntheticMessages.map((m) => m.seq));
+
+  const absorbedWorkstreams: AgentAuxWorkstream[] = absorbedMembers.map((m, idx) => {
+    const rawState: AgentAuxWorkstreamRawState =
+      m.status === "working"
+        ? "active"
+        : m.status === "error" || m.status === "waiting_on" || m.status === "needs_you"
+          ? "blocked"
+          : m.status === "done" || m.killed
+            ? "done"
+            : "queued";
+    return {
+      id: `acp-ws-${m.id}`,
+      title: m.displayName,
+      state:
+        rawState === "active"
+          ? "running"
+          : rawState === "blocked"
+            ? "blocked"
+            : rawState === "done"
+              ? "done"
+              : "queued",
+      rawState,
+      owners: [m.name],
+      note: m.nowLine,
+      progress: null,
+      blockedOn: null,
+      waitingOn: m.waitingOn,
+      seq: m.lastSeq || input.swarmHeadSeq + idx + 1,
+      sourceKind: "acp-delegated",
+    };
+  });
+
+  const acpThreadGroup: AgentAuxThreadGroup = {
+    id: "t-acp-delegations",
+    title: s.overviewAcpAbsorbedThread,
+    goal: s.overviewAcpAbsorbedGoal,
+    now: absorbedMembers.find((m) => m.status === "working")?.activity ?? "",
+    workstreams: absorbedWorkstreams.map((w) => w.id),
+    sourceKind: "acp-delegated",
+  };
+
+  const mergedWorkstreams = [...input.swarmWorkstreams, ...absorbedWorkstreams];
+  const mergedThreadGroups = [...input.swarmThreadGroups, acpThreadGroup];
+  const memberNameSet = new Set(mergedMembers.filter((m) => !m.isSystem).map((m) => m.name));
+  const mergedEdges = buildMentionEdges(mergedMessages, memberNameSet);
+
+  return {
+    members: mergedMembers,
+    messages: mergedMessages,
+    workstreams: mergedWorkstreams,
+    threadGroups: mergedThreadGroups,
+    edges: mergedEdges,
+    headSeq,
+    hasAbsorbedAcpAgents: true,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Unified Multi-Agent ViewModel Builder
+// ---------------------------------------------------------------------------
+
+function extractParentModelFromProjection(
+  projection: AgentAuxProjectionLike | null | undefined,
+): string {
+  if (!projection || typeof projection !== "object") return "";
+  const rec = projection as unknown as Record<string, unknown>;
+  const thread =
+    rec.thread && typeof rec.thread === "object" ? (rec.thread as Record<string, unknown>) : null;
+  const sel =
+    thread?.modelSelection && typeof thread.modelSelection === "object"
+      ? (thread.modelSelection as Record<string, unknown>)
+      : null;
+  if (typeof sel?.model === "string" && sel.model.trim()) return sel.model.trim();
+  const runs = Array.isArray(rec.runs) ? rec.runs : [];
+  for (let i = runs.length - 1; i >= 0; i -= 1) {
+    const r = runs[i] as Record<string, unknown> | undefined;
+    if (typeof r?.model === "string" && r.model.trim()) return r.model.trim();
+  }
+  return "";
+}
+
+function isParentProjectionRunning(
+  projection: AgentAuxProjectionLike | null | undefined,
+  threadShell: AgentAuxThreadShellLike | null | undefined,
+): boolean {
+  if (threadShell) {
+    if (
+      Boolean(threadShell.activeRunId) ||
+      ACTIVE_SUBAGENT_STATUS_SET.has((threadShell.status ?? "").toLowerCase()) ||
+      ACTIVE_SUBAGENT_STATUS_SET.has((threadShell.activityRunStatus ?? "").toLowerCase())
+    ) {
+      return true;
+    }
+  }
+  const runs = Array.isArray(projection?.runs) ? projection.runs : [];
+  for (let i = runs.length - 1; i >= 0; i -= 1) {
+    const st = typeof runs[i]?.status === "string" ? String(runs[i]?.status).toLowerCase() : "";
+    if (ACTIVE_SUBAGENT_STATUS_SET.has(st)) return true;
+  }
+  return false;
+}
+
+function extractWorkerBriefFromMessages(
+  messages: readonly AgentAuxBoardMessage[],
+  workerName: string,
+  coordinatorName: string,
+): string {
+  const lowerWorker = workerName.toLowerCase();
+  const briefMsg =
+    messages.find(
+      (m) =>
+        !m.isControl &&
+        m.agent === coordinatorName &&
+        m.kind === "brief" &&
+        m.mentions.some((t) => t.toLowerCase() === lowerWorker),
+    ) ??
+    messages.find(
+      (m) =>
+        !m.isControl &&
+        m.agent === coordinatorName &&
+        new RegExp(`^@${workerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i").test(
+          m.text.trim(),
+        ),
+    );
+  if (!briefMsg) return "";
+  let line =
+    briefMsg.text
+      .replace(/^@\S+[\s,:]*/i, "")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .split(/(?<=[.!?。！？])\s|\n/)[0] ?? "";
+  line = line
+    .replace(
+      /^(?:you\s+(?:are|own|handle|drive|run|lead|manage)|your\s+(?:role|job|task|assignment|goal|focus)\s+is(?:\s+to)?|assignment\s*:|role\s*:|task\s*:)\s*/i,
+      "",
+    )
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return line.length > 110 ? `${line.slice(0, 109).trimEnd()}…` : line;
+}
+
 export interface BuildAgentAuxViewModelInput {
   readonly provider: string | null | undefined;
   readonly threadId: ThreadId | null;
   readonly daemonSnapshot: DaemonAgentAuxInspectResponse | null;
   readonly projection?: AgentAuxProjectionLike | null | undefined;
+  readonly threadShell?: AgentAuxThreadShellLike | null | undefined;
   readonly relationshipShells?: ReadonlyArray<AgentAuxThreadShellLike> | undefined;
   readonly nativeChildWork?: ReadonlyArray<OrchestrationV2NativeChildWork> | undefined;
   readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
   readonly providerDisplayName?: string | null | undefined;
+  readonly locale?: AgentAuxLocale;
 }
 
 export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): AgentAuxViewModel {
+  const locale: AgentAuxLocale = input.locale ?? "zh";
+  const s = getAuxStrings(locale);
   const provider = input.provider ?? null;
   const brand = resolveAgentBrandId(provider);
   const defaultBrandName = formatAgentBrandName(provider);
@@ -1174,40 +3187,153 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   const snap = input.daemonSnapshot;
   const updatedAt = snap?.updatedAt ?? Date.now();
 
-  // 1. AGY Native Swarm (highest priority, 1:1 AGY experience)
+  // =========================================================================
+  // 1. AGY Native Swarm (+ Hybrid ACP/MCP Absorption when both coexist!)
+  // =========================================================================
   if (snap?.active && snap.kind === "agy-swarm" && snap.swarm) {
     const sw = snap.swarm;
-    const members: AgentAuxMember[] = sw.members.map((m) => {
+    const coordRaw = sw.members.find((m) => m.role === "coordinator" || m.name === "coordinator");
+    const coordName = coordRaw?.name ?? "coordinator";
+    const systemNames = new Set(
+      sw.members.filter((m) => m.roleWorker || m.narrator).map((m) => m.name),
+    );
+    const isMonitorName = (name: string): boolean => {
+      const m = sw.members.find((x) => x.name === name);
+      return m?.role === "monitor" || /^monitor(?:-\d+)?$/i.test(name);
+    };
+
+    const selfMemberRaw = sw.members.find((m) => m.name === sw.selfMember) ?? null;
+    const unreadSeqBoundary =
+      selfMemberRaw && selfMemberRaw.lastReadSeq > 0 && selfMemberRaw.lastReadSeq < sw.head
+        ? selfMemberRaw.lastReadSeq
+        : null;
+
+    const nativeMessages: AgentAuxBoardMessage[] = sw.messages.map((msg) => {
+      const screenshots = extractScreenshotsFromText(msg.text);
+      return {
+        seq: msg.seq,
+        agent: msg.agent,
+        text: msg.text,
+        time: msg.time,
+        ts: msg.ts,
+        mentions: msg.mentions,
+        all: msg.all,
+        ...(msg.kind ? { kind: msg.kind } : {}),
+        ...(msg.channel ? { channel: msg.channel } : {}),
+        ...(msg.viaChannel ? { viaChannel: msg.viaChannel } : {}),
+        sourceKind: "swarm",
+        providerBrand: "antigravity",
+        ...(screenshots.length > 0 ? { screenshots } : {}),
+        isControl: Boolean(msg.control),
+        isDirectToYou: Boolean(sw.selfMember && msg.mentions.includes(sw.selfMember) && !msg.all),
+        isUnread: Boolean(
+          unreadSeqBoundary !== null &&
+          msg.seq > unreadSeqBoundary &&
+          msg.agent !== sw.selfMember &&
+          !msg.control,
+        ),
+      };
+    });
+
+    // Track last non-control post per team member & max seq per member for waiting_on detection
+    const lastPostByMember = new Map<string, AgentAuxBoardMessage>();
+    const maxSeqByMember = new Map<string, number>();
+    let lastTeamPost: AgentAuxBoardMessage | null = null;
+    let lastMonitorStallPost: AgentAuxBoardMessage | null = null;
+
+    for (const msg of nativeMessages) {
+      if (msg.isControl) continue;
+      if (isMonitorName(msg.agent) && /\[stall\]/i.test(msg.text)) {
+        lastMonitorStallPost = msg;
+      }
+      if (systemNames.has(msg.agent)) continue;
+      lastPostByMember.set(msg.agent, msg);
+      const prevMax = maxSeqByMember.get(msg.agent) ?? -1;
+      if (msg.seq > prevMax) maxSeqByMember.set(msg.agent, msg.seq);
+      lastTeamPost = msg;
+    }
+
+    const rawTeam = sw.members.filter((m) => !m.roleWorker && !m.narrator);
+    const hasSysAttention = sw.systemAttention.length > 0;
+    const closed =
+      !rawTeam.some((m) => !m.killed && m.status === "working") &&
+      !hasSysAttention &&
+      Boolean(
+        lastTeamPost && lastTeamPost.agent === coordName && DONE_POST_RE.test(lastTeamPost.text),
+      );
+
+    const nativeMembers: AgentAuxMember[] = sw.members.map((m) => {
       const isCoordinator = m.role === "coordinator" || m.name === "coordinator";
       const isSystem = m.roleWorker || m.narrator;
-      const visualStatus: AgentAuxMemberVisualStatus = m.killed
+      const lp = lastPostByMember.get(m.name) ?? null;
+
+      let visualStatus: AgentAuxMemberVisualStatus = m.killed
         ? "killed"
         : m.failure
           ? "error"
           : m.status === "working"
             ? "working"
-            : isCoordinator && m.replied && m.replyAsk
+            : isCoordinator && !closed && m.replied && m.replyAsk
               ? "needs_you"
               : "parked";
+      let waitingOn: string | null = null;
+
+      // Exact port of AGY hive.js:978 waiting_on inference
+      if (
+        visualStatus === "parked" &&
+        !closed &&
+        !m.killed &&
+        !isSystem &&
+        lp &&
+        !lp.all &&
+        lp.mentions.length > 0 &&
+        WAITING_ASK_RE.test(lp.text)
+      ) {
+        const target = lp.mentions.find((t) => t !== m.name && !systemNames.has(t));
+        if (target && (maxSeqByMember.get(target) ?? -1) <= lp.seq) {
+          visualStatus = "waiting_on";
+          waitingOn = target;
+        }
+      }
+
       const planTaskTitle = sw.plan?.tasks?.[m.name] ?? "";
+      const extractedBrief = isCoordinator
+        ? ""
+        : planTaskTitle || extractWorkerBriefFromMessages(nativeMessages, m.name, coordName);
+      const strippedLastPost = lp
+        ? stripLeadingMentionTokens(lp.text, lp.mentions, lp.all)
+            .replace(/^(?:\*\*|\*|`|_)*\[(?:done|stall)\](?:\*\*|\*|`|_)*[\s:,–—-]*/i, "")
+            .replace(/\*\*|__|`/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+        : "";
+      const nowLine =
+        m.activity ||
+        strippedLastPost.slice(0, 160) ||
+        (m.lastPostSeq > 0 ? `#${m.lastPostSeq}` : s.membersNoPostsYet);
+
       return {
         id: m.conversationId || m.name,
         name: m.name,
         displayName: isCoordinator ? "coordinator" : m.name,
         role: m.role,
-        roleLabel: formatAuxRoleLabel(m.role, isCoordinator),
-        title: isCoordinator ? "协调者" : planTaskTitle,
+        roleLabel: formatAuxRoleLabel(m.role, isCoordinator, locale),
+        title: isCoordinator ? s.roleCoordinator : extractedBrief,
+        brief: extractedBrief,
         model: m.model.replace(/-(?:dropdown|high|medium)$/i, ""),
+        providerBrand: "antigravity",
+        sourceKind: "swarm",
         status: visualStatus,
-        statusLabel: formatAuxStatusLabel(visualStatus),
-        waitingOn: null,
+        statusLabel: formatAuxStatusLabel(visualStatus, waitingOn, locale),
+        waitingOn,
         wakeMode: m.wakeMode,
         steps: m.steps,
         posts: m.posts,
         unread: m.unread,
         activity: m.activity,
         activityKind: m.activityKind,
-        nowLine: m.activity || (m.lastPostSeq > 0 ? `最近发言 #${m.lastPostSeq}` : "尚无动态"),
+        nowLine,
+        lastPostSnippet: strippedLastPost.slice(0, 180),
         lastSeq: m.lastPostSeq,
         lastTime: m.lastPostTime,
         killed: m.killed,
@@ -1220,47 +3346,19 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         backendType: null,
         workspace: m.workspace ?? null,
         workspaceMode: m.workspaceMode ?? null,
+        forkedFrom: m.forkedFrom ?? null,
+        spawnedAt: m.spawnedAt ?? null,
+        killedAt: m.killedAt ?? null,
+        ...(m.channels && m.channels.length > 0 ? { channels: m.channels } : {}),
         failureText: m.failure?.text ?? null,
       };
     });
-
-    const selfMemberObj = members.find((m) => m.isYou) ?? null;
-    const unreadSeqBoundary =
-      selfMemberObj && selfMemberObj.lastSeq < sw.head
-        ? (sw.members.find((m) => m.name === selfMemberObj.name)?.lastReadSeq ?? null)
-        : null;
-
-    const messages: AgentAuxBoardMessage[] = sw.messages.map((msg) => ({
-      seq: msg.seq,
-      agent: msg.agent,
-      text: msg.text,
-      time: msg.time,
-      ts: msg.ts,
-      mentions: msg.mentions,
-      all: msg.all,
-      ...(msg.channel ? { channel: msg.channel } : {}),
-      isControl: Boolean(msg.control),
-      isDirectToYou: Boolean(sw.selfMember && msg.mentions.includes(sw.selfMember) && !msg.all),
-      isUnread: Boolean(
-        unreadSeqBoundary !== null &&
-          msg.seq > unreadSeqBoundary &&
-          msg.agent !== sw.selfMember &&
-          !msg.control,
-      ),
-    }));
-
-    const team = members.filter((m) => !m.isSystem);
-    const activeCount = team.filter((m) => !m.killed && m.status === "working").length;
-    const waitingCount = team.filter(
-      (m) => !m.killed && (m.status === "parked" || m.status === "waiting_on" || m.status === "needs_you"),
-    ).length;
-    const retiredCount = team.filter((m) => m.killed).length;
 
     const attention: AgentAuxAttentionItem[] = [];
     for (const a of sw.view?.attention ?? []) {
       if (!a.title) continue;
       const seqRef = a.refs?.find((r) => typeof r.seq === "number")?.seq ?? null;
-      const memRef = a.refs?.find((r) => typeof r.member === "string")?.member ?? "coordinator";
+      const memRef = a.refs?.find((r) => typeof r.member === "string")?.member ?? coordName;
       const kind =
         a.kind === "decision" ||
         a.kind === "failure" ||
@@ -1270,8 +3368,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         a.kind === "error"
           ? a.kind
           : "fyi";
-      const severity =
-        a.severity === "high" || a.severity === "med" ? a.severity : "low";
+      const severity = a.severity === "high" || a.severity === "med" ? a.severity : "low";
       attention.push({
         id: a.id || `att-${attention.length}`,
         kind,
@@ -1285,7 +3382,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
             ? null
             : kind === "failure" || kind === "stuck" || kind === "error"
               ? "issue"
-              : memRef === "coordinator"
+              : memRef === coordName
                 ? "you"
                 : "coordinator",
       });
@@ -1299,16 +3396,22 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         why: sys.detail,
         from: sys.member,
         seq: null,
-        wait: sys.member === "coordinator" ? "you" : "issue",
+        wait: sys.member === coordName ? "you" : "issue",
       });
     }
 
-    let workstreams: AgentAuxWorkstream[] = (sw.view?.workstreams ?? [])
+    // Build native workstreams (with exact [done] vs review vs waiting_on inference!)
+    const memberByName = new Map(nativeMembers.map((m) => [m.name, m]));
+    let nativeWorkstreams: AgentAuxWorkstream[] = (sw.view?.workstreams ?? [])
       .filter((w) => Boolean(w.title))
       .map((w, idx) => {
         let progress: AgentAuxWorkstreamProgress | null = null;
         if (typeof w.progress === "number") {
-          progress = { done: Math.round(w.progress), total: 100, label: `${Math.round(w.progress)}%` };
+          progress = {
+            done: Math.round(w.progress),
+            total: 100,
+            label: `${Math.round(w.progress)}%`,
+          };
         } else if (w.progress && typeof w.progress.total === "number" && w.progress.total > 0) {
           const dn = w.progress.done ?? 0;
           progress = {
@@ -1317,73 +3420,174 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
             label: w.progress.label || `${dn}/${w.progress.total}`,
           };
         }
+        const owners = w.owners && w.owners.length > 0 ? w.owners : [coordName];
+        const primaryOwner = memberByName.get(owners[0] ?? "");
+        const raw0 = normalizeWorkstreamRawState(w.state);
+        const rawState: AgentAuxWorkstreamRawState = closed && raw0 !== "failed" ? "done" : raw0;
+        const waitingOn =
+          rawState !== "done" ? (w.blocked_on ?? primaryOwner?.waitingOn ?? null) : null;
         return {
           id: w.id || `ws-${idx}`,
-          title: w.title ?? "任务",
-          state: normalizeWorkstreamState(w.state),
-          owners: w.owners && w.owners.length > 0 ? w.owners : ["coordinator"],
+          title: w.title ?? s.overviewDelegatedThread,
+          state: waitingOn ? "blocked" : normalizeWorkstreamState(rawState),
+          rawState,
+          owners,
           note: w.note ?? "",
           progress,
           blockedOn: w.blocked_on ?? null,
+          waitingOn,
           seq: w.refs?.find((r) => typeof r.seq === "number")?.seq ?? sw.head,
+          sourceKind: "swarm",
         };
       });
 
-    if (workstreams.length === 0) {
-      workstreams = team
-        .filter((m) => !m.isCoordinator)
-        .map((m) => ({
-          id: m.name,
-          title: m.title || `@${m.name}`,
-          state: m.killed
-            ? "done"
-            : m.status === "error"
-              ? "blocked"
-              : m.status === "working"
+    if (nativeWorkstreams.length === 0) {
+      nativeWorkstreams = nativeMembers
+        .filter((m) => !m.isSystem && !m.isCoordinator)
+        .map((m) => {
+          const lp = lastPostByMember.get(m.name) ?? null;
+          let rawState: AgentAuxWorkstreamRawState;
+          if (m.killed) {
+            rawState = "done";
+          } else if (m.status === "error") {
+            rawState = "failed";
+          } else if (m.status === "waiting_on") {
+            rawState = "blocked";
+          } else if (m.status === "working" || m.status === "needs_you") {
+            rawState = "active";
+          } else if (lp) {
+            rawState = closed || DONE_POST_RE.test(lp.text) ? "done" : "review";
+          } else {
+            rawState = "queued";
+          }
+          return {
+            id: m.name,
+            title: m.title || m.brief || `@${m.name}`,
+            state:
+              rawState === "active"
                 ? "running"
-                : m.posts > 0
-                  ? "done"
-                  : "queued",
-          owners: [m.name],
-          note: m.nowLine,
-          progress: null,
-          blockedOn: m.waitingOn,
-          seq: m.lastSeq || sw.head,
-        }));
+                : rawState === "review"
+                  ? "review"
+                  : rawState === "blocked" || rawState === "failed"
+                    ? "blocked"
+                    : rawState === "done"
+                      ? "done"
+                      : "queued",
+            rawState,
+            owners: [m.name],
+            note: m.nowLine,
+            progress: null,
+            blockedOn: m.waitingOn,
+            waitingOn: m.waitingOn,
+            seq: m.lastSeq || sw.head,
+            sourceKind: "swarm",
+          };
+        });
     }
 
-    const threadGroups: AgentAuxThreadGroup[] = [];
+    const nativeThreadGroups: AgentAuxThreadGroup[] = [];
     if (sw.view?.threads && sw.view.threads.length > 0) {
       for (const [idx, t] of sw.view.threads.entries()) {
         if (!t.title) continue;
-        threadGroups.push({
+        nativeThreadGroups.push({
           id: t.id || `vt-${idx}`,
           title: t.title,
           goal: t.goal ?? "",
           now: t.now ?? "",
           workstreams: t.workstreams ?? [],
+          ...(t.attention ? { attention: t.attention } : {}),
+          sourceKind: "swarm",
         });
       }
     } else if (sw.plan?.threads && sw.plan.threads.length > 0) {
       for (const [idx, t] of sw.plan.threads.entries()) {
         if (!t.title) continue;
-        threadGroups.push({
+        const firstWorking = t.tasks
+          .map((id) => memberByName.get(id))
+          .find((m) => m && !m.killed && m.status === "working");
+        nativeThreadGroups.push({
           id: t.id || `pt-${idx}`,
           title: t.title,
           goal: t.goal ?? "",
-          now: "",
+          now: firstWorking?.activity || "",
           workstreams: t.tasks,
+          sourceKind: "swarm",
         });
       }
     }
 
+    // HYBRID ABSORPTION (Board #129): check if the thread ALSO has delegated ACP/MCP subagents!
+    const reservedHandles = new Set(nativeMembers.map((m) => m.name.toLowerCase()));
+    const { children: delegatedChildren } = collectDelegatedChildren({
+      parentProvider: provider ?? "antigravity",
+      parentBrand: "antigravity",
+      threadId: input.threadId,
+      projection: input.projection,
+      relationshipShells: input.relationshipShells,
+      nativeChildWork: input.nativeChildWork,
+      daemonSnapshot: null,
+      locale,
+      reservedHandles,
+      asAbsorbedAcp: true,
+    });
+
+    const merged = mergeSwarmAndDelegatedAgents({
+      swarmMembers: nativeMembers,
+      swarmMessages: nativeMessages,
+      swarmWorkstreams: nativeWorkstreams,
+      swarmThreadGroups: nativeThreadGroups,
+      swarmHeadSeq: sw.head,
+      delegatedChildren,
+      locale,
+      parentBrand: "antigravity",
+    });
+
+    const team = merged.members.filter((m) => !m.isSystem);
+    const liveTeamCount = team.filter((m) => !m.killed).length;
+    const activeCount = team.filter((m) => !m.killed && m.status === "working").length;
+    const waitingCount = team.filter(
+      (m) =>
+        !m.killed &&
+        (m.status === "parked" || m.status === "waiting_on" || m.status === "needs_you"),
+    ).length;
+    const retiredCount = team.filter((m) => m.killed).length;
+    const visibleMsgCount = merged.messages.filter((m) => !m.isControl).length;
+
+    // Stall banner detection (1:1 hive.js:1061-1078)
+    const coordHandledStall = Boolean(
+      coordRaw &&
+      !coordRaw.killed &&
+      coordRaw.status === "waiting" &&
+      coordRaw.replied &&
+      lastMonitorStallPost &&
+      coordRaw.lastReadSeq >= lastMonitorStallPost.seq,
+    );
+    const hasLiveWorkers = team.some((m) => !m.isCoordinator && !m.killed);
+    const stall: AgentAuxStallAlert | null =
+      !closed &&
+      activeCount === 0 &&
+      !attention.some((a) => a.wait === "you") &&
+      !coordHandledStall &&
+      hasLiveWorkers &&
+      lastMonitorStallPost &&
+      (!lastTeamPost || lastMonitorStallPost.seq >= lastTeamPost.seq)
+        ? {
+            seq: lastMonitorStallPost.seq,
+            agent: lastMonitorStallPost.agent,
+            text: lastMonitorStallPost.text
+              .replace(/[*`_]*\[stall\][*`_]*[\s:,–—-]*/gi, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 220),
+          }
+        : null;
+
     const goalSource = sw.view?.goal ?? sw.plan?.goal ?? null;
-    const goal: AgentAuxGoal | null =
-      goalSource?.title
-        ? { title: goalSource.title, line: goalSource.line ?? "" }
-        : sw.view?.headline
-          ? { title: sw.view.headline, line: sw.view.running_summary ?? "" }
-          : null;
+    const goal: AgentAuxGoal | null = goalSource?.title
+      ? { title: goalSource.title, line: goalSource.line ?? "" }
+      : sw.view?.headline
+        ? { title: sw.view.headline, line: sw.view.running_summary ?? "" }
+        : null;
 
     const phase: AgentAuxPhase | null = sw.view?.phase?.label
       ? {
@@ -1393,89 +3597,119 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         }
       : null;
 
-    const hasOverview = Boolean(goal || workstreams.length > 0 || attention.length > 0);
+    const starting =
+      !closed &&
+      !sw.view &&
+      attention.length === 0 &&
+      !stall &&
+      merged.workstreams.length === 0 &&
+      lastPostByMember.size <= 1;
+
+    const channels = [
+      ...new Set([
+        ...(sw.channels ?? []),
+        ...merged.messages
+          .map((m) => m.channel)
+          .filter((c): c is string => typeof c === "string" && c.length > 0 && c !== "main"),
+      ]),
+    ];
+
+    // ALWAYS render all 4 core tabs matching AGY Figs 3–6
     const tabs: AgentAuxTabDescriptor[] = [
-      ...(hasOverview
-        ? [
-            {
-              id: "overview" as const,
-              label: "总览",
-              ...(attention.length > 0 ? { badge: attention.length } : {}),
-            },
-          ]
-        : []),
-      { id: "board", label: "消息板", count: messages.length },
-      { id: "members", label: "成员", count: team.length },
-      { id: "graph", label: "图谱" },
+      {
+        id: "overview",
+        label: s.tabOverview,
+        ...(attention.length > 0 ? { badge: attention.length } : {}),
+      },
+      { id: "board", label: s.tabBoard, count: visibleMsgCount },
+      { id: "members", label: s.tabMembers, count: liveTeamCount },
+      { id: "graph", label: s.tabGraph },
     ];
 
     const statusParts: string[] = [];
-    if (activeCount > 0) statusParts.push(`${activeCount} 运行中`);
-    if (waitingCount > 0) statusParts.push(`${waitingCount} 等待中`);
-    if (retiredCount > 0) statusParts.push(`${retiredCount} 已结束`);
-    statusParts.push(`${messages.length} 条消息`);
+    if (activeCount > 0) statusParts.push(`${activeCount} ${s.stateWorking}`);
+    if (waitingCount > 0) statusParts.push(`${waitingCount} ${s.stateParked}`);
+    if (retiredCount > 0) statusParts.push(`${retiredCount} ${s.stateKilled}`);
+    statusParts.push(locale === "zh" ? `${visibleMsgCount} 条消息` : `${visibleMsgCount} posts`);
+
+    const hasLiveActivity =
+      snap.hasLiveWork || activeCount > 0 || attention.length > 0 || Boolean(stall);
 
     return {
       active: true,
-      hasLiveActivity: snap.hasLiveWork || activeCount > 0 || attention.length > 0,
+      hasLiveActivity,
       kind: "agy-swarm",
+      locale,
+      useBees: true,
+      hasAbsorbedAcpAgents: merged.hasAbsorbedAcpAgents,
       provider: provider ?? "antigravity",
       providerBrand: "antigravity",
-      title: sw.title || "蜂群协作",
-      badgeLabel: "🐝 蜂群协作",
-      entryLabel: "蜂群侧边栏",
+      title: sw.title || s.panelFallbackSwarm,
+      badgeLabel: s.panelFallbackSwarm,
+      entryLabel: s.entrySwarm,
       activationKey: snap.activationKey ?? `agy-swarm:${sw.id}`,
       selfMember: sw.selfMember,
-      headSeq: sw.head,
+      headSeq: merged.headSeq,
       unreadSeqBoundary,
+      channels,
       tabs,
-      defaultTab: hasOverview ? "overview" : "board",
+      defaultTab: "overview",
       statusLine: statusParts.join(" · "),
       activeCount,
       waitingCount,
       retiredCount,
-      messageCount: messages.length,
+      messageCount: visibleMsgCount,
       goal,
       headline: sw.view?.headline ?? "",
       phase,
-      workstreams,
-      threadGroups,
+      stall,
+      starting,
+      workstreams: merged.workstreams,
+      threadGroups: merged.threadGroups,
       attention,
-      members,
-      messages,
-      edges: sw.edges,
+      members: merged.members,
+      messages: merged.messages,
+      edges: merged.edges.length > 0 ? merged.edges : sw.edges,
       tasks: [],
-      finished: activeCount === 0 && attention.length === 0 && messages.length > 0,
+      finished: closed && activeCount === 0 && !merged.hasAbsorbedAcpAgents,
       updatedAt,
     };
   }
 
-  // 2. Claude Code Native Agent Team
+  // =========================================================================
+  // 2. Claude Code Native Agent Team — Unified 4 Tabs (+ optional Tasks)
+  // =========================================================================
   if (snap?.active && snap.kind === "claude-team" && snap.claudeTeam) {
     const team = snap.claudeTeam;
     const members: AgentAuxMember[] = team.members.map((m) => {
       const status: AgentAuxMemberVisualStatus =
         m.status === "working" ? "working" : m.status === "done" ? "done" : "parked";
+      const memberMsgs = team.messages.filter((msg) => msg.agent === m.name);
+      const lastMsg = memberMsgs.at(-1);
       return {
         id: m.agentId,
         name: m.name,
         displayName: m.name,
         role: m.agentType,
-        roleLabel: formatAuxRoleLabel(m.agentType, m.isLead),
+        roleLabel: formatAuxRoleLabel(m.agentType, m.isLead, locale),
         title: m.agentType,
+        brief: m.agentType,
         model: m.model,
+        providerBrand: "claude-code",
+        sourceKind: "claude-team",
         status,
-        statusLabel: formatAuxStatusLabel(status),
+        statusLabel: formatAuxStatusLabel(status, null, locale),
         waitingOn: null,
         wakeMode: "",
         steps: 0,
-        posts: team.messages.filter((msg) => msg.agent === m.name).length,
+        posts: memberMsgs.length,
         unread: team.messages.filter((msg) => msg.recipient === m.name && !msg.read).length,
-        activity: m.status === "working" ? "团队协作执行中…" : "",
+        activity: m.status === "working" ? s.stateWorking : "",
         activityKind: m.status === "working" ? "tool" : "",
-        nowLine: m.backendType ? `运行后端：${m.backendType}` : "团队成员",
-        lastSeq: 0,
-        lastTime: "",
+        nowLine: lastMsg?.summary || lastMsg?.text.slice(0, 140) || m.backendType || s.roleWorker,
+        lastPostSnippet: lastMsg?.text.slice(0, 180) || "",
+        lastSeq: lastMsg?.seq ?? 0,
+        lastTime: lastMsg?.time ?? "",
         killed: false,
         isCoordinator: m.isLead,
         isSystem: false,
@@ -1485,7 +3719,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         color: m.color || computeBeeColor(m.name),
         backendType: m.backendType || null,
         workspace: m.cwd || null,
-        workspaceMode: null,
+        workspaceMode: m.cwd ? "worktree" : null,
         failureText: null,
       };
     });
@@ -1500,6 +3734,8 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       ts: msg.ts,
       mentions: msg.mentions,
       all: msg.all,
+      sourceKind: "claude-team",
+      providerBrand: "claude-code",
       isControl: false,
       isDirectToYou: msg.recipient === "team-lead",
       isUnread: !msg.read,
@@ -1517,350 +3753,122 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       source: t.source,
     }));
 
-    const workstreams: AgentAuxWorkstream[] = tasks.map((t, idx) => ({
-      id: t.id,
-      title: t.subject,
-      state:
+    const workstreams: AgentAuxWorkstream[] = tasks.map((t, idx) => {
+      const rawState: AgentAuxWorkstreamRawState =
         t.status === "completed"
           ? "done"
           : t.status === "in_progress"
-            ? "running"
+            ? "active"
             : t.status === "blocked"
               ? "blocked"
-              : "queued",
-      owners: t.owner ? [t.owner] : [],
-      note: t.description,
-      progress: null,
-      blockedOn: t.blockedBy[0] ? `#${t.blockedBy[0]}` : null,
-      seq: idx + 1,
-    }));
+              : "queued";
+      return {
+        id: t.id,
+        title: t.subject,
+        state:
+          rawState === "done"
+            ? "done"
+            : rawState === "active"
+              ? "running"
+              : rawState === "blocked"
+                ? "blocked"
+                : "queued",
+        rawState,
+        owners: t.owner ? [t.owner] : [],
+        note: t.description,
+        progress: null,
+        blockedOn: t.blockedBy[0] ? `#${t.blockedBy[0]}` : null,
+        waitingOn: null,
+        seq: idx + 1,
+      };
+    });
+
+    const threadGroups: AgentAuxThreadGroup[] =
+      workstreams.length > 0
+        ? [
+            {
+              id: "t-claude-team",
+              title: team.teamName || s.overviewDelegatedThread,
+              goal: team.description,
+              now: "",
+              workstreams: workstreams.map((w) => w.id),
+            },
+          ]
+        : [];
 
     const activeCount = members.filter((m) => m.status === "working").length;
     const waitingCount = members.filter((m) => m.status === "parked").length;
     const tabs: AgentAuxTabDescriptor[] = [
-      { id: "overview", label: "总览" },
-      { id: "board", label: "消息板", count: messages.length },
-      { id: "members", label: "成员", count: members.length },
-      { id: "tasks", label: "任务清单", count: tasks.length },
+      { id: "overview", label: s.tabOverview },
+      { id: "board", label: s.tabBoard, count: messages.length },
+      { id: "members", label: s.tabMembers, count: members.length },
+      { id: "graph", label: s.tabGraph },
+      ...(tasks.length > 0
+        ? [{ id: "tasks" as const, label: s.tabTasks, count: tasks.length }]
+        : []),
     ];
 
     return {
       active: true,
-      hasLiveActivity: snap.hasLiveWork || activeCount > 0 || tasks.some((t) => t.status === "in_progress"),
+      hasLiveActivity:
+        snap.hasLiveWork || activeCount > 0 || tasks.some((t) => t.status === "in_progress"),
       kind: "claude-team",
+      locale,
+      useBees: false,
+      hasAbsorbedAcpAgents: false,
       provider: provider ?? "claudeAgent",
       providerBrand: "claude-code",
-      title: team.teamName || "Claude 智能体团队",
-      badgeLabel: "Claude 智能体团队",
-      entryLabel: "Claude 团队面板",
+      title: team.teamName || (locale === "zh" ? "Claude 智能体团队" : "Claude Agent Team"),
+      badgeLabel: locale === "zh" ? "Claude 智能体团队" : "Claude Agent Team",
+      entryLabel: s.entryClaudeTeam,
       activationKey: snap.activationKey ?? `claude-team:${team.teamName}`,
       selfMember: "team-lead",
       headSeq: messages.length,
       unreadSeqBoundary: null,
+      channels: [],
       tabs,
       defaultTab: "overview",
-      statusLine: `${activeCount} 运行中 · ${waitingCount} 等待中 · ${tasks.length} 项任务`,
+      statusLine:
+        locale === "zh"
+          ? `${activeCount} ${s.stateWorking} · ${waitingCount} ${s.stateParked} · ${tasks.length} 项任务`
+          : `${activeCount} working · ${waitingCount} standing by · ${tasks.length} tasks`,
       activeCount,
       waitingCount,
       retiredCount: 0,
       messageCount: messages.length,
-      goal: team.description ? { title: team.teamName, line: team.description } : { title: team.teamName, line: "" },
+      goal: { title: team.teamName, line: team.description },
       headline: team.description,
       phase: null,
+      stall: null,
+      starting: false,
       workstreams,
-      threadGroups: [],
+      threadGroups,
       attention: [],
       members,
       messages,
       edges: team.edges,
       tasks,
-      finished: activeCount === 0 && tasks.length > 0 && tasks.every((t) => t.status === "completed"),
+      finished:
+        activeCount === 0 && tasks.length > 0 && tasks.every((t) => t.status === "completed"),
       updatedAt,
     };
   }
 
-  // 3. Merge T3 live subagents + relationshipShells + AGY detached subagents + Codex spawned threads
-  const mergedMembers: AgentAuxMember[] = [];
-  const seenMemberIds = new Set<string>();
-  const shellById = new Map((input.relationshipShells ?? []).map((s) => [s.id, s] as const));
-
-  for (const agent of input.projection?.subagents ?? []) {
-    const key = agent.childThreadId ?? agent.id;
-    if (seenMemberIds.has(key)) continue;
-    seenMemberIds.add(key);
-    const childShell = agent.childThreadId ? shellById.get(agent.childThreadId) : undefined;
-    const rawStatus = childShell?.activityRunStatus ?? agent.status;
-    const status = normalizeSubagentStatus(rawStatus);
-    const rawTitle =
-      agent.title?.trim() ||
-      childShell?.title?.trim() ||
-      agent.prompt.split(/\r?\n/, 1)[0]?.slice(0, 48) ||
-      "子智能体";
-    const displayName = formatSubagentDisplayTitle(rawTitle);
-    mergedMembers.push({
-      id: agent.id,
-      name: displayName,
-      displayName,
-      role: "subagent",
-      roleLabel: "子代理",
-      title: displayName,
-      model: agent.driver ?? "",
-      status,
-      statusLabel: formatAuxStatusLabel(status),
-      waitingOn: null,
-      wakeMode: "",
-      steps: 0,
-      posts: 0,
-      unread: 0,
-      activity: status === "working" ? agent.prompt.trim().slice(0, 96) : "",
-      activityKind: status === "working" ? "tool" : "",
-      nowLine: agent.prompt.trim().slice(0, 140) || "子代理会话",
-      lastSeq: 0,
-      lastTime: "",
-      killed: status === "killed",
-      isCoordinator: false,
-      isSystem: false,
-      isYou: false,
-      childThreadId: agent.childThreadId,
-      conversationId: null,
-      color: computeBeeColor(displayName),
-      backendType: agent.remoteChild?.label ?? null,
-      workspace: null,
-      workspaceMode: null,
-      failureText: status === "error" ? "子代理执行失败" : null,
-    });
-  }
-
-  for (const rawItem of input.projection?.turnItems ?? []) {
-    if (rawItem.type !== "subagent") continue;
-    const subagentId = typeof rawItem.subagentId === "string" ? rawItem.subagentId : "";
-    const childThreadId =
-      typeof rawItem.childThreadId === "string" ? (rawItem.childThreadId as ThreadId) : null;
-    const itemStatus = typeof rawItem.status === "string" ? rawItem.status : "running";
-    const itemPrompt = typeof rawItem.prompt === "string" ? rawItem.prompt : "";
-    const itemDriver = typeof rawItem.driver === "string" ? rawItem.driver : "";
-    const remoteChild =
-      rawItem.remoteChild && typeof rawItem.remoteChild === "object"
-        ? (rawItem.remoteChild as { readonly label?: unknown })
-        : null;
-    const remoteLabel = typeof remoteChild?.label === "string" ? remoteChild.label : null;
-    const key = childThreadId ?? subagentId;
-    if (!key || seenMemberIds.has(key)) continue;
-    seenMemberIds.add(key);
-    const childShell = childThreadId ? shellById.get(childThreadId) : undefined;
-    const rawStatus = childShell?.activityRunStatus ?? itemStatus;
-    const status = normalizeSubagentStatus(rawStatus);
-    const rawTitle =
-      childShell?.title?.trim() ||
-      itemPrompt.split(/\r?\n/, 1)[0]?.trim().slice(0, 48) ||
-      "子智能体";
-    const displayName = formatSubagentDisplayTitle(rawTitle);
-    mergedMembers.push({
-      id: subagentId || key,
-      name: displayName,
-      displayName,
-      role: "subagent",
-      roleLabel: "子代理",
-      title: displayName,
-      model: itemDriver,
-      status,
-      statusLabel: formatAuxStatusLabel(status),
-      waitingOn: null,
-      wakeMode: "",
-      steps: 0,
-      posts: 0,
-      unread: 0,
-      activity: status === "working" ? itemPrompt.trim().slice(0, 96) : "",
-      activityKind: status === "working" ? "tool" : "",
-      nowLine: itemPrompt.trim().slice(0, 140) || "子代理会话",
-      lastSeq: 0,
-      lastTime: "",
-      killed: status === "killed",
-      isCoordinator: false,
-      isSystem: false,
-      isYou: false,
-      childThreadId,
-      conversationId: null,
-      color: computeBeeColor(displayName),
-      backendType: remoteLabel,
-      workspace: null,
-      workspaceMode: null,
-      failureText: status === "error" ? "子代理执行失败" : null,
-    });
-  }
-
-  for (const shell of input.relationshipShells ?? []) {
-    if (shell.id === input.threadId) continue;
-    if (shell.lineage.parentThreadId !== input.threadId) continue;
-    if (shell.lineage.sideChat === true) continue;
-    if (seenMemberIds.has(shell.id)) continue;
-    seenMemberIds.add(shell.id);
-    const rawStatus = shell.activityRunStatus ?? shell.status ?? "idle";
-    const status = normalizeSubagentStatus(rawStatus);
-    const displayName = formatSubagentDisplayTitle(shell.title?.trim() || "子智能体");
-    mergedMembers.push({
-      id: shell.id,
-      name: displayName,
-      displayName,
-      role: "subagent",
-      roleLabel: "子代理",
-      title: displayName,
-      model: "",
-      status,
-      statusLabel: formatAuxStatusLabel(status),
-      waitingOn: null,
-      wakeMode: "",
-      steps: 0,
-      posts: 0,
-      unread: 0,
-      activity: status === "working" ? "执行中…" : "",
-      activityKind: status === "working" ? "tool" : "",
-      nowLine: displayName,
-      lastSeq: 0,
-      lastTime: "",
-      killed: status === "killed",
-      isCoordinator: false,
-      isSystem: false,
-      isYou: false,
-      childThreadId: shell.id,
-      conversationId: null,
-      color: computeBeeColor(displayName),
-      backendType: null,
-      workspace: null,
-      workspaceMode: null,
-      failureText: null,
-    });
-  }
-
-  // AGY detached subagents from daemon
-  for (const sub of snap?.agySubagents ?? []) {
-    if (seenMemberIds.has(sub.conversationId)) continue;
-    seenMemberIds.add(sub.conversationId);
-    const status: AgentAuxMemberVisualStatus =
-      sub.status === "working"
-        ? "working"
-        : sub.status === "killed"
-          ? "killed"
-          : sub.status === "done"
-            ? "done"
-            : "parked";
-    mergedMembers.push({
-      id: sub.conversationId,
-      name: sub.role,
-      displayName: sub.role,
-      role: sub.role,
-      roleLabel: formatAuxRoleLabel(sub.role),
-      title: sub.role,
-      model: "Antigravity",
-      status,
-      statusLabel: formatAuxStatusLabel(status),
-      waitingOn: null,
-      wakeMode: "",
-      steps: sub.stepsCount,
-      posts: 0,
-      unread: 0,
-      activity: sub.activity,
-      activityKind: sub.activityKind,
-      nowLine: sub.activity || `状态：${sub.state}`,
-      lastSeq: 0,
-      lastTime: "",
-      killed: sub.status === "killed",
-      isCoordinator: false,
-      isSystem: false,
-      isYou: false,
-      childThreadId: null,
-      conversationId: sub.conversationId,
-      color: computeBeeColor(sub.role),
-      backendType: "AGY Native",
-      workspace: null,
-      workspaceMode: null,
-      failureText: null,
-      nativeSteps: mapNativeSteps(sub.steps),
-    });
-  }
-
-  // T3 nativeChildWork (AGY native subagent batch)
-  for (const child of input.nativeChildWork ?? []) {
-    if (seenMemberIds.has(child.conversationId)) continue;
-    seenMemberIds.add(child.conversationId);
-    const steps = mapNativeSteps(child.steps);
-    const lastStep = steps.at(-1);
-    const working = lastStep?.status === "RUNNING" || lastStep?.status === "PENDING";
-    const status: AgentAuxMemberVisualStatus = working ? "working" : "done";
-    mergedMembers.push({
-      id: child.conversationId,
-      name: child.role || child.conversationId,
-      displayName: child.role || "原生子智能体",
-      role: child.role || "subagent",
-      roleLabel: formatAuxRoleLabel(child.role || "subagent"),
-      title: child.role || "原生子智能体",
-      model: "Antigravity",
-      status,
-      statusLabel: formatAuxStatusLabel(status),
-      waitingOn: null,
-      wakeMode: "",
-      steps: steps.length,
-      posts: 0,
-      unread: 0,
-      activity: working ? (lastStep?.toolCalls.at(-1)?.summary ?? "执行中…") : "",
-      activityKind: working ? "tool" : "",
-      nowLine: child.prompt.trim().slice(0, 140),
-      lastSeq: 0,
-      lastTime: "",
-      killed: false,
-      isCoordinator: false,
-      isSystem: false,
-      isYou: false,
-      childThreadId: null,
-      conversationId: child.conversationId,
-      color: computeBeeColor(child.role || child.conversationId),
-      backendType: "AGY Native",
-      workspace: null,
-      workspaceMode: null,
-      failureText: null,
-      nativeSteps: steps,
-    });
-  }
-
-  // Codex spawned threads from daemon state_5.sqlite
-  for (const sp of snap?.codex?.spawnedThreads ?? []) {
-    if (seenMemberIds.has(sp.threadId)) continue;
-    seenMemberIds.add(sp.threadId);
-    const status = normalizeSubagentStatus(sp.status);
-    const displayName = sp.nickname || sp.title || sp.threadId.slice(0, 12);
-    mergedMembers.push({
-      id: sp.threadId,
-      name: displayName,
-      displayName,
-      role: sp.role || "subagent",
-      roleLabel: formatAuxRoleLabel(sp.role || "subagent"),
-      title: sp.title || displayName,
-      model: sp.model || "Codex",
-      status,
-      statusLabel: formatAuxStatusLabel(status),
-      waitingOn: null,
-      wakeMode: "",
-      steps: 0,
-      posts: 0,
-      unread: 0,
-      activity: status === "working" ? sp.title : "",
-      activityKind: status === "working" ? "tool" : "",
-      nowLine: sp.title || "Codex 协同会话",
-      lastSeq: 0,
-      lastTime: "",
-      killed: status === "killed",
-      isCoordinator: false,
-      isSystem: false,
-      isYou: false,
-      childThreadId: null,
-      conversationId: sp.threadId,
-      color: computeBeeColor(displayName),
-      backendType: sp.reasoningEffort ? `推理档位：${sp.reasoningEffort}` : null,
-      workspace: sp.cwd || null,
-      workspaceMode: null,
-      failureText: null,
-    });
-  }
+  // =========================================================================
+  // 3. ALL Other Multi-Agent Modes (ACP / Prismux MCP `delegate_task` /
+  //    Codex -> DSH / Claude -> Codex / Composer 邀请协作 / AGY Subagents)
+  //    -> 100% UNIFIED 4-TAB MODEL (Overview / Board / Members / Graph)!
+  // =========================================================================
+  const { children, workflowPhases } = collectDelegatedChildren({
+    parentProvider: provider,
+    parentBrand: brand,
+    threadId: input.threadId,
+    projection: input.projection,
+    relationshipShells: input.relationshipShells,
+    nativeChildWork: input.nativeChildWork,
+    daemonSnapshot: snap,
+    locale,
+  });
 
   const daemonTasks: AgentAuxTask[] = (snap?.tasks ?? []).map((t) => ({
     id: t.id,
@@ -1876,13 +3884,16 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   const allTasks = daemonTasks.length > 0 ? daemonTasks : planTasks;
 
   const hasCodexGoals = (snap?.codex?.goals.length ?? 0) > 0;
-  const hasAnySubagentOrCollab = mergedMembers.length > 0 || hasCodexGoals;
+  const hasAnySubagentOrCollab = children.length > 0 || hasCodexGoals;
 
   if (!hasAnySubagentOrCollab) {
     return {
       active: false,
       hasLiveActivity: false,
       kind: null,
+      locale,
+      useBees: false,
+      hasAbsorbedAcpAgents: false,
       provider,
       providerBrand: brand,
       title: "",
@@ -1892,6 +3903,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       selfMember: null,
       headSeq: 0,
       unreadSeqBoundary: null,
+      channels: [],
       tabs: [],
       defaultTab: "overview",
       statusLine: "",
@@ -1902,6 +3914,8 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       goal: null,
       headline: "",
       phase: null,
+      stall: null,
+      starting: false,
       workstreams: [],
       threadGroups: [],
       attention: [],
@@ -1922,104 +3936,305 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   if (brand === "antigravity" || snap?.kind === "agy-subagents") {
     const labelPrefix = hasCustomBrandName ? brandDisplayName : "Antigravity";
     kind = "agy-subagents";
-    badgeLabel = `${labelPrefix} 子智能体`;
-    entryLabel = "子智能体面板";
-    title = `${labelPrefix} 子智能体`;
+    badgeLabel = locale === "zh" ? `${labelPrefix} 子智能体` : `${labelPrefix} Subagents`;
+    entryLabel = s.entryAgySubagents;
+    title = badgeLabel;
   } else if (brand === "claude-code") {
     const labelPrefix = hasCustomBrandName ? brandDisplayName : "Claude";
     kind = "claude-subagents";
-    badgeLabel = `${labelPrefix} 子代理协作`;
-    entryLabel = `${labelPrefix} 协同面板`;
-    title = `${labelPrefix} 子代理协作`;
+    badgeLabel = locale === "zh" ? `${labelPrefix} 协同` : `${labelPrefix} Collaboration`;
+    entryLabel = s.entryCollab;
+    title = badgeLabel;
   } else if (brand === "codex" || snap?.kind === "codex-collab") {
     const labelPrefix = hasCustomBrandName ? brandDisplayName : "Codex";
     kind = "codex-collab";
-    badgeLabel = `${labelPrefix} 协同子代理`;
-    entryLabel = `${labelPrefix} 协同面板`;
-    title = `${labelPrefix} 协同子代理`;
+    badgeLabel = locale === "zh" ? `${labelPrefix} 协同` : `${labelPrefix} Collaboration`;
+    entryLabel = s.entryCollab;
+    title = badgeLabel;
   } else {
     kind = "provider-subagents";
-    badgeLabel = `${brandDisplayName} 协同侧边栏`;
-    entryLabel = `${brandDisplayName} 协同面板`;
-    title = `${brandDisplayName} 协同侧边栏`;
+    badgeLabel =
+      locale === "zh" ? `${brandDisplayName} 多智能体协同` : `${brandDisplayName} Collaboration`;
+    entryLabel = s.entryCollab;
+    title = badgeLabel;
   }
 
-  const activeCount = mergedMembers.filter((m) => m.status === "working" || m.status === "needs_you").length;
-  const waitingCount = mergedMembers.filter((m) => m.status === "parked" || m.status === "waiting_on").length;
-  const retiredCount = mergedMembers.filter((m) => m.killed || m.status === "done").length;
+  // Synthesize chronological Board messages from all delegated children
+  const earliestTs = children.reduce<number>(
+    (min, c) => (c.startedAt !== null && c.startedAt < min ? c.startedAt : min),
+    Number.POSITIVE_INFINITY,
+  );
+  const baseTs = Number.isFinite(earliestTs) ? earliestTs : updatedAt - children.length * 10_000;
+  const syntheticMessages = synthesizeDelegatedMessages(children, 1, baseTs, locale, brand);
+
+  // Backfill posts/lastSeq/lastTime onto child members from synthetic messages
+  const childMsgStats = new Map<
+    string,
+    { posts: number; lastSeq: number; lastTime: string; snippet: string }
+  >();
+  for (const msg of syntheticMessages) {
+    const prev = childMsgStats.get(msg.agent) ?? {
+      posts: 0,
+      lastSeq: 0,
+      lastTime: "",
+      snippet: "",
+    };
+    childMsgStats.set(msg.agent, {
+      posts: prev.posts + 1,
+      lastSeq: msg.seq,
+      lastTime: msg.time,
+      snippet: msg.text.slice(0, 180),
+    });
+  }
+
+  const enrichedChildren: AgentAuxMember[] = children.map((c) => {
+    const stats = childMsgStats.get(c.member.name);
+    return {
+      ...c.member,
+      posts: stats?.posts ?? 0,
+      lastSeq: stats?.lastSeq ?? 0,
+      lastTime: stats?.lastTime ?? "",
+      lastPostSnippet: stats?.snippet || c.member.lastPostSnippet,
+    };
+  });
+
+  // Synthesize Coordinator (parent thread)
+  const parentRunning = isParentProjectionRunning(input.projection, input.threadShell);
+  const anyChildActive = enrichedChildren.some(
+    (m) => m.status === "working" || m.status === "waiting_on" || m.status === "needs_you",
+  );
+  const allChildrenSettled =
+    enrichedChildren.length > 0 &&
+    enrichedChildren.every((m) => m.status === "done" || m.killed || m.status === "error");
+  const coordStatus: AgentAuxMemberVisualStatus = parentRunning
+    ? "working"
+    : allChildrenSettled
+      ? "done"
+      : anyChildActive
+        ? "working"
+        : "parked";
+  const parentModel = extractParentModelFromProjection(input.projection) || brandDisplayName;
+  const coordStats = childMsgStats.get("coordinator");
+  const coordDisplayName =
+    locale === "zh" ? `主线程 · ${brandDisplayName}` : `Main · ${brandDisplayName}`;
+
+  const coordinatorMember: AgentAuxMember = {
+    id: input.threadId ?? "coordinator",
+    name: "coordinator",
+    displayName: coordDisplayName,
+    role: "coordinator",
+    roleLabel: s.roleCoordinator,
+    title: s.roleCoordinator,
+    brief: formatAuxCoordinatorSummary(enrichedChildren.length, locale),
+    model: parentModel,
+    providerBrand: brand,
+    sourceKind: "acp-delegated",
+    status: coordStatus,
+    statusLabel: formatAuxStatusLabel(coordStatus, null, locale),
+    waitingOn: null,
+    wakeMode: "",
+    steps: 0,
+    posts: coordStats?.posts ?? 0,
+    unread: 0,
+    activity:
+      coordStatus === "working" ? formatAuxCoordinatorSummary(enrichedChildren.length, locale) : "",
+    activityKind: coordStatus === "working" ? "tool" : "",
+    nowLine: formatAuxCoordinatorSummary(enrichedChildren.length, locale),
+    lastPostSnippet:
+      coordStats?.snippet ?? formatAuxCoordinatorSummary(enrichedChildren.length, locale),
+    lastSeq: coordStats?.lastSeq ?? 0,
+    lastTime: coordStats?.lastTime ?? "",
+    killed: false,
+    isCoordinator: true,
+    isSystem: false,
+    isYou: true,
+    childThreadId: null,
+    conversationId: null,
+    color: computeBeeColor("coordinator"),
+    backendType: null,
+    workspace: input.threadShell?.worktreePath ?? null,
+    workspaceMode: input.threadShell?.worktreePath ? "worktree" : null,
+    failureText: null,
+  };
+
+  const allMembers: AgentAuxMember[] = [coordinatorMember, ...enrichedChildren];
+  const memberNameSet = new Set(allMembers.map((m) => m.name));
+  const edges = buildMentionEdges(syntheticMessages, memberNameSet);
+
+  // Build Workstreams from children
+  const workstreams: AgentAuxWorkstream[] = enrichedChildren.map((m, idx) => {
+    const rawState: AgentAuxWorkstreamRawState =
+      m.status === "working"
+        ? "active"
+        : m.status === "error" || m.status === "needs_you" || m.status === "waiting_on"
+          ? "blocked"
+          : m.status === "done" || m.killed
+            ? "done"
+            : "queued";
+    return {
+      id: m.id,
+      title: m.displayName,
+      state:
+        rawState === "active"
+          ? "running"
+          : rawState === "blocked"
+            ? "blocked"
+            : rawState === "done"
+              ? "done"
+              : "queued",
+      rawState,
+      owners: [m.name],
+      note: m.nowLine,
+      progress: null,
+      blockedOn: null,
+      waitingOn: m.waitingOn,
+      seq: m.lastSeq || idx + 1,
+      sourceKind: "acp-delegated",
+    };
+  });
+
+  // Synthesize Workgroups (`threadGroups`):
+  // Priority 1: workflow.phases -> Priority 2: multi-driver / multi-run -> Priority 3: primary Delegated Tasks
+  const threadGroups: AgentAuxThreadGroup[] = [];
+  if (workflowPhases.length > 0) {
+    for (const ph of [...workflowPhases].sort((a, b) => a.index - b.index)) {
+      const wsIds = children.filter((c) => c.phaseIndex === ph.index).map((c) => c.member.id);
+      if (wsIds.length > 0) {
+        threadGroups.push({
+          id: `t-phase-${ph.index}`,
+          title: ph.title,
+          goal: "",
+          now: "",
+          workstreams: wsIds,
+          sourceKind: "acp-delegated",
+        });
+      }
+    }
+  } else {
+    const distinctDrivers = [...new Set(children.map((c) => c.driverLabel))];
+    const distinctRuns = [
+      ...new Set(children.map((c) => c.runId).filter((r): r is string => Boolean(r))),
+    ];
+    if (distinctDrivers.length >= 2) {
+      for (const drv of distinctDrivers) {
+        const wsIds = children.filter((c) => c.driverLabel === drv).map((c) => c.member.id);
+        threadGroups.push({
+          id: `t-driver-${drv.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+          title: `${s.overviewDelegatedThread} · ${drv}`,
+          goal: "",
+          now: "",
+          workstreams: wsIds,
+          sourceKind: "acp-delegated",
+        });
+      }
+    } else if (distinctRuns.length >= 2) {
+      distinctRuns.forEach((runId, idx) => {
+        const wsIds = children.filter((c) => c.runId === runId).map((c) => c.member.id);
+        threadGroups.push({
+          id: `t-wave-${idx + 1}`,
+          title: formatAuxDelegationWave(idx + 1, locale),
+          goal: "",
+          now: "",
+          workstreams: wsIds,
+          sourceKind: "acp-delegated",
+        });
+      });
+    } else if (workstreams.length > 0) {
+      threadGroups.push({
+        id: "t-delegated",
+        title: s.overviewDelegatedThread,
+        goal: input.threadShell?.title?.trim() || "",
+        now: enrichedChildren.find((m) => m.status === "working")?.activity ?? "",
+        workstreams: workstreams.map((w) => w.id),
+        sourceKind: "acp-delegated",
+      });
+    }
+  }
+
+  const activeCount = enrichedChildren.filter(
+    (m) => m.status === "working" || m.status === "needs_you",
+  ).length;
+  const waitingCount = enrichedChildren.filter(
+    (m) => m.status === "parked" || m.status === "waiting_on",
+  ).length;
+  const retiredCount = enrichedChildren.filter((m) => m.killed).length;
+  const liveMemberCount = allMembers.filter((m) => !m.killed).length;
 
   const hasLiveActivity =
     activeCount > 0 ||
     Boolean(snap?.hasLiveWork) ||
-    mergedMembers.some((m) => ACTIVE_SUBAGENT_STATUS_SET.has(m.status));
+    enrichedChildren.some((m) => ACTIVE_SUBAGENT_STATUS_SET.has(m.status));
 
-  const workstreams: AgentAuxWorkstream[] = mergedMembers.map((m, idx) => ({
-    id: m.id,
-    title: m.displayName,
-    state:
-      m.status === "working"
-        ? "running"
-        : m.status === "error" || m.status === "needs_you"
-          ? "blocked"
-          : m.status === "done" || m.killed
-            ? "done"
-            : "queued",
-    owners: [m.name],
-    note: m.nowLine,
-    progress: null,
-    blockedOn: null,
-    seq: idx + 1,
-  }));
-
+  // ALWAYS render ALL 4 unified tabs (`概览`, `看板 N`, `成员 N`, `关系图`) + optional `任务 N`!
   const tabs: AgentAuxTabDescriptor[] = [
-    { id: "overview", label: "总览" },
-    { id: "members", label: "成员", count: mergedMembers.length },
-    ...(allTasks.length > 0 ? [{ id: "tasks" as const, label: "任务清单", count: allTasks.length }] : []),
+    { id: "overview", label: s.tabOverview },
+    { id: "board", label: s.tabBoard, count: syntheticMessages.length },
+    { id: "members", label: s.tabMembers, count: liveMemberCount },
+    { id: "graph", label: s.tabGraph },
+    ...(allTasks.length > 0
+      ? [{ id: "tasks" as const, label: s.tabTasks, count: allTasks.length }]
+      : []),
   ];
 
   const statusParts: string[] = [];
-  if (activeCount > 0) statusParts.push(`${activeCount} 运行中`);
-  if (waitingCount > 0) statusParts.push(`${waitingCount} 等待中`);
-  if (retiredCount > 0) statusParts.push(`${retiredCount} 已完成`);
-  if (allTasks.length > 0) statusParts.push(`${allTasks.length} 项任务`);
+  if (activeCount > 0) statusParts.push(`${activeCount} ${s.stateWorking}`);
+  if (waitingCount > 0) statusParts.push(`${waitingCount} ${s.stateParked}`);
+  const doneCount = enrichedChildren.filter((m) => m.status === "done").length;
+  if (doneCount > 0) statusParts.push(`${doneCount} ${s.stateDone}`);
+  if (allTasks.length > 0) {
+    statusParts.push(locale === "zh" ? `${allTasks.length} 项任务` : `${allTasks.length} tasks`);
+  }
 
-  const firstId = mergedMembers[0]?.id ?? allTasks[0]?.id ?? "session";
+  const firstId = enrichedChildren[0]?.id ?? allTasks[0]?.id ?? "session";
   const activationKey = snap?.activationKey ?? `${kind}:${input.threadId ?? "thread"}:${firstId}`;
+
+  const goalTitle =
+    snap?.codex?.goals[0]?.objective ||
+    input.threadShell?.title?.trim() ||
+    enrichedChildren[0]?.brief ||
+    title;
+  const goalLine = snap?.codex?.goals[0]
+    ? `${locale === "zh" ? "状态：" : "Status: "}${snap.codex.goals[0].status}`
+    : formatAuxCoordinatorSummary(enrichedChildren.length, locale);
 
   return {
     active: true,
     hasLiveActivity,
     kind,
+    locale,
+    useBees: false,
+    hasAbsorbedAcpAgents: false,
     provider,
     providerBrand: brand,
     title,
     badgeLabel,
     entryLabel,
     activationKey,
-    selfMember: null,
-    headSeq: 0,
+    selfMember: "coordinator",
+    headSeq: syntheticMessages.length,
     unreadSeqBoundary: null,
+    channels: [],
     tabs,
     defaultTab: "overview",
-    statusLine: statusParts.join(" · ") || `${mergedMembers.length} 个协同代理`,
+    statusLine:
+      statusParts.join(" · ") || formatAuxCoordinatorSummary(enrichedChildren.length, locale),
     activeCount,
     waitingCount,
     retiredCount,
-    messageCount: 0,
-    goal:
-      snap?.codex?.goals[0]
-        ? { title: snap.codex.goals[0].objective, line: `状态：${snap.codex.goals[0].status}` }
-        : null,
+    messageCount: syntheticMessages.length,
+    goal: goalTitle ? { title: goalTitle, line: goalLine } : null,
     headline: "",
     phase: null,
+    stall: null,
+    starting: false,
     workstreams,
-    threadGroups: [],
+    threadGroups,
     attention: [],
-    members: mergedMembers,
-    messages: [],
-    edges: [],
+    members: allMembers,
+    messages: syntheticMessages,
+    edges,
     tasks: allTasks,
-    finished: !hasLiveActivity && mergedMembers.length > 0,
+    finished: !hasLiveActivity && enrichedChildren.length > 0,
     updatedAt,
   };
 }
