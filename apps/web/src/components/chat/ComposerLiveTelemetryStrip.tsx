@@ -18,13 +18,13 @@ import {
   type UsageCallLogRecord,
 } from "../usage/usageCallTelemetryStore";
 import { ComposerWorkspaceLocationBar } from "./ComposerWorkspaceLocationBar";
+import { ContextLiquidVial, ContextWindowVialPopover } from "./ContextWindowVialPopover";
+import { useSessionTelemetryCopy, type SessionTelemetryCopy } from "./sessionTelemetry.copy";
 import {
-  useSessionTelemetryCopy,
-  type SessionTelemetryCopy,
-} from "./sessionTelemetry.copy";
-import {
+  computeContextVialTicks,
   computeDonutSegments,
   formatCompactPopoverTokens,
+  formatContextBreakdownTokens,
   formatIntegerTokens,
   resolveContextBarTone,
   resolveContextRingTone,
@@ -32,8 +32,10 @@ import {
   transitionTelemetryPopover,
   useSessionTelemetryDetail,
   type ContextBarTone,
+  type ContextBreakdownCategory,
   type ContextRingTone,
   type ResolvedTelemetryDisplay,
+  type SessionContextBreakdown,
   type SessionModelDistributionEntry,
   type SessionTelemetryDetailSnapshot,
   type TelemetryMetricScope,
@@ -41,12 +43,18 @@ import {
 } from "./sessionTelemetry.logic";
 
 export {
+  ContextLiquidVial,
+  ContextWindowVialPopover,
+  computeContextVialTicks,
+  formatContextBreakdownTokens,
   resolveContextBarTone,
   resolveContextRingTone,
   transitionTelemetryPopover,
   type ContextBarTone,
+  type ContextBreakdownCategory,
   type ContextRingTone,
   type ResolvedTelemetryDisplay,
+  type SessionContextBreakdown,
   type SessionModelDistributionEntry,
   type SessionTelemetryDetailSnapshot,
   type TelemetryMetricScope,
@@ -103,25 +111,23 @@ export function formatTelemetryPopoverTps(tps: number | null | undefined): strin
 
 const RING_STROKE_CLASS: Readonly<Record<ContextRingTone, string>> = {
   unknown: "stroke-foreground/35 dark:stroke-foreground/35",
-  normal: "stroke-[#22c55e] dark:stroke-[#22c55e]",
+  normal: "stroke-emerald-600 dark:stroke-emerald-400",
   warning: "stroke-amber-500 dark:stroke-amber-400",
-  compact: "stroke-orange-500 dark:stroke-orange-400",
-  overflow: "stroke-red-500 dark:stroke-red-400",
+  compact: "stroke-rose-600 dark:stroke-rose-400",
+  overflow: "stroke-rose-600 dark:stroke-rose-400",
 };
 
 const RING_TEXT_CLASS: Readonly<Record<ContextRingTone, string>> = {
-  unknown: "text-foreground/75 dark:text-foreground/75",
-  normal: "text-foreground/90 dark:text-foreground/85",
-  warning: "text-amber-700 dark:text-amber-400",
-  compact: "text-orange-700 dark:text-orange-400",
-  overflow: "text-red-700 dark:text-red-400 font-semibold",
-};
-
-const CONTEXT_BAR_FILL_CLASS: Readonly<Record<ContextBarTone, string>> = {
-  unknown: "bg-[#22c55e]",
-  normal: "bg-[#22c55e]",
-  warning: "bg-amber-500",
-  critical: "bg-red-500",
+  unknown:
+    "text-foreground/75 hover:text-foreground data-[open=true]:text-foreground dark:text-foreground/75 dark:hover:text-foreground dark:data-[open=true]:text-foreground",
+  normal:
+    "text-emerald-700 hover:text-emerald-800 data-[open=true]:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300 dark:data-[open=true]:text-emerald-300",
+  warning:
+    "text-amber-700 hover:text-amber-800 data-[open=true]:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 dark:data-[open=true]:text-amber-300",
+  compact:
+    "text-rose-700 hover:text-rose-800 data-[open=true]:text-rose-800 dark:text-rose-400 dark:hover:text-rose-300 dark:data-[open=true]:text-rose-300",
+  overflow:
+    "text-rose-700 hover:text-rose-800 data-[open=true]:text-rose-800 dark:text-rose-400 dark:hover:text-rose-300 dark:data-[open=true]:text-rose-300 font-semibold",
 };
 
 const RING_SIZE = 14;
@@ -158,7 +164,11 @@ export function ContextProgressRing({
         r={RING_RADIUS}
         fill="none"
         strokeWidth={RING_STROKE_WIDTH}
-        className="stroke-foreground/22 dark:stroke-foreground/28"
+        className={
+          tone === "unknown"
+            ? "stroke-foreground/22 dark:stroke-foreground/28"
+            : "stroke-current opacity-22 dark:opacity-28"
+        }
       />
       {tone !== "unknown" ? (
         <circle
@@ -176,29 +186,6 @@ export function ContextProgressRing({
           )}
         />
       ) : null}
-    </svg>
-  );
-}
-
-function ContextWindowPieGlyph({ className }: { readonly className?: string | undefined }) {
-  return (
-    <svg
-      width={16}
-      height={16}
-      viewBox="0 0 16 16"
-      fill="none"
-      aria-hidden="true"
-      className={cn("size-4 shrink-0", className)}
-    >
-      <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M8 1.75A6.25 6.25 0 0 1 13.7 10.6L8 8Z" fill="currentColor" opacity="0.24" />
-      <path
-        d="M8 1.75V8L12.4 12.4"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
     </svg>
   );
 }
@@ -257,7 +244,11 @@ export function SessionStatsPopoverContent({
   readonly display: ResolvedTelemetryDisplay;
   readonly copy: SessionTelemetryCopy;
 }) {
-  const rows: ReadonlyArray<{ readonly key: string; readonly label: string; readonly value: string }> = [
+  const rows: ReadonlyArray<{
+    readonly key: string;
+    readonly label: string;
+    readonly value: string;
+  }> = [
     {
       key: "model-duration",
       label: copy.modelCallDuration,
@@ -311,9 +302,7 @@ export function SessionStatsPopoverContent({
         {rows.map((row) => (
           <div key={row.key} className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">{row.label}</span>
-            <span className="text-right font-medium text-foreground tabular-nums">
-              {row.value}
-            </span>
+            <span className="text-right font-medium text-foreground tabular-nums">{row.value}</span>
           </div>
         ))}
       </div>
@@ -390,9 +379,7 @@ export function SessionTokenUsagePopoverContent({
         {detailRows.map((row) => (
           <div key={row.key} className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">{row.label}</span>
-            <span className="text-right font-medium text-foreground tabular-nums">
-              {row.value}
-            </span>
+            <span className="text-right font-medium text-foreground tabular-nums">{row.value}</span>
           </div>
         ))}
       </div>
@@ -432,10 +419,7 @@ export function SessionTokenUsagePopoverContent({
             </div>
           </div>
         ) : (
-          <div
-            data-telemetry-no-models="true"
-            className="py-1 text-xs text-muted-foreground"
-          >
+          <div data-telemetry-no-models="true" className="py-1 text-xs text-muted-foreground">
             {copy.noModelSamples}
           </div>
         )}
@@ -489,95 +473,7 @@ export function SessionContextWindowPopoverContent({
   readonly display: ResolvedTelemetryDisplay;
   readonly copy: SessionTelemetryCopy;
 }) {
-  const usedPercent =
-    display.contextPercent !== null && Number.isFinite(display.contextPercent)
-      ? Math.max(0, Math.round(display.contextPercent))
-      : 0;
-  const remainingPercent = Math.max(0, 100 - usedPercent);
-  const clampedBarPercent =
-    display.contextPercent !== null && Number.isFinite(display.contextPercent)
-      ? Math.max(0, Math.min(100, display.contextPercent))
-      : 0;
-
-  const usedFormatted =
-    display.contextUsedTokens !== null
-      ? formatCompactPopoverTokens(display.contextUsedTokens)
-      : "0";
-  const maxFormatted =
-    display.contextMaxTokens !== null
-      ? formatCompactPopoverTokens(display.contextMaxTokens)
-      : "—";
-  const sublineText = `${usedFormatted} / ${maxFormatted} tok`;
-
-  return (
-    <div
-      data-telemetry-popover="context"
-      className="flex w-[320px] max-w-[calc(100vw-1.5rem)] flex-col p-4 text-popover-foreground"
-    >
-      {/* Header */}
-      <div className="flex items-center gap-2 pb-3">
-        <ContextWindowPieGlyph className="text-foreground" />
-        <span className="truncate text-[15px] font-semibold tracking-tight text-foreground">
-          {copy.contextWindowTitle}
-        </span>
-      </div>
-
-      {/* Main readout + progress bar */}
-      <div className="border-t border-border/65 pt-3.5 pb-3 dark:border-white/10">
-        <div className="text-[19px] font-bold leading-snug tracking-tight text-foreground tabular-nums">
-          {copy.formatContextHeadline(usedPercent, remainingPercent)}
-        </div>
-        <div className="mt-1 text-[13px] text-muted-foreground tabular-nums">
-          {sublineText}
-        </div>
-        <div
-          role="progressbar"
-          aria-valuenow={Math.min(100, usedPercent)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          data-context-bar-tone={display.contextBarTone}
-          className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-foreground/15 dark:bg-white/15"
-        >
-          {clampedBarPercent > 0 ? (
-            <div
-              data-context-bar-fill="true"
-              className={cn(
-                "h-full rounded-full transition-[width,background-color] duration-200 ease-out motion-reduce:transition-none",
-                CONTEXT_BAR_FILL_CLASS[display.contextBarTone],
-              )}
-              style={{ width: `max(${clampedBarPercent}%, 4px)` }}
-            />
-          ) : null}
-        </div>
-      </div>
-
-      {/* Sampled model & primary entrypoint */}
-      <div className="flex flex-col gap-2.5 pt-2 text-[13px]">
-        <div className="flex items-center justify-between gap-4">
-          <span className="shrink-0 text-muted-foreground">{copy.sampledModel}</span>
-          <span className="truncate text-right text-foreground">
-            {display.sampledModelDisplayName ?? "—"}
-          </span>
-        </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="shrink-0 text-muted-foreground">{copy.primaryEntrypoint}</span>
-          <span className="truncate text-right font-semibold text-foreground">
-            {display.primaryEntrypointId ?? "—"}
-          </span>
-        </div>
-      </div>
-
-      {/* Conditional multi-model notice (only when >= 2 distinct models sampled in current session) */}
-      {display.hasMultipleSampledModels ? (
-        <div
-          data-telemetry-multi-model-note="true"
-          className="mt-2.5 text-xs text-muted-foreground"
-        >
-          {copy.multipleModelsSampled}
-        </div>
-      ) : null}
-    </div>
-  );
+  return <ContextWindowVialPopover display={display} copy={copy} />;
 }
 
 export interface ComposerTelemetryFallbackInput {
@@ -625,9 +521,18 @@ export function resolveComposerTelemetryDisplay(
   });
 }
 
+const EMPTY_BACKEND_CALL_LOGS: readonly BackendUsageCallLogLike[] = Object.freeze([]);
+const backendCallLogsByEnvironmentsCache = new WeakMap<
+  readonly EnvironmentUsageStatus[],
+  readonly BackendUsageCallLogLike[]
+>();
+
 function extractBackendCallLogsFromEnvironments(
   environments: readonly EnvironmentUsageStatus[],
 ): readonly BackendUsageCallLogLike[] {
+  const cached = backendCallLogsByEnvironmentsCache.get(environments);
+  if (cached !== undefined) return cached;
+
   const collected: BackendUsageCallLogLike[] = [];
   for (const env of environments) {
     const summary = env.summary as
@@ -639,12 +544,21 @@ function extractBackendCallLogsFromEnvironments(
       if (entry) collected.push(entry);
     }
   }
-  return collected;
+  const result = collected.length === 0 ? EMPTY_BACKEND_CALL_LOGS : collected;
+  backendCallLogsByEnvironmentsCache.set(environments, result);
+  return result;
+}
+
+function createInitialComposerUsageWindow() {
+  const base = makeWindow(30, undefined, "day");
+  const dayOfMonth = Number.parseInt(base.untilDay.slice(8, 10), 10);
+  return dayOfMonth >= 31 ? makeWindow(31, undefined, "day") : base;
 }
 
 export type ComposerTelemetryPlacement = "inline" | "below";
+export const MAX_PUBLISHED_CONTEXT_WINDOWS = 50;
 
-const publishedContextWindows = new Map<string, ContextWindowSnapshot | null>();
+const publishedContextWindows = new Map<string, ContextWindowSnapshot>();
 const publishedContextWindowListeners = new Set<() => void>();
 
 function notifyPublishedContextWindows(): void {
@@ -658,10 +572,44 @@ export function publishComposerContextWindow(
   contextWindow: ContextWindowSnapshot | null,
 ): void {
   if (!threadId) return;
+  if (contextWindow === null) {
+    if (!publishedContextWindows.has(threadId)) return;
+    publishedContextWindows.delete(threadId);
+    notifyPublishedContextWindows();
+    return;
+  }
   const previous = publishedContextWindows.get(threadId) ?? null;
-  if (previous === contextWindow) return;
+  if (previous === contextWindow) {
+    // Refresh LRU order without triggering redundant subscriber renders.
+    publishedContextWindows.delete(threadId);
+    publishedContextWindows.set(threadId, contextWindow);
+    return;
+  }
+  if (publishedContextWindows.has(threadId)) {
+    publishedContextWindows.delete(threadId);
+  }
   publishedContextWindows.set(threadId, contextWindow);
+  while (publishedContextWindows.size > MAX_PUBLISHED_CONTEXT_WINDOWS) {
+    const oldestKey = publishedContextWindows.keys().next().value;
+    if (oldestKey === undefined) break;
+    publishedContextWindows.delete(oldestKey);
+  }
   notifyPublishedContextWindows();
+}
+
+export function deletePublishedComposerContextWindow(threadId: string | null | undefined): void {
+  publishComposerContextWindow(threadId, null);
+}
+
+export function getPublishedComposerContextWindowCount(): number {
+  return publishedContextWindows.size;
+}
+
+export function getPublishedComposerContextWindow(
+  threadId: string | null | undefined,
+): ContextWindowSnapshot | null {
+  if (!threadId) return null;
+  return publishedContextWindows.get(threadId) ?? null;
 }
 
 export function clearPublishedComposerContextWindows(): void {
@@ -693,6 +641,9 @@ const TELEMETRY_POPOVER_POPUP_CLASS =
 const TRIGGER_BUTTON_BASE_CLASS =
   "inline-flex h-6 min-w-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-1.5 font-normal text-foreground/82 transition-colors outline-none hover:bg-accent/75 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[open=true]:bg-accent/85 data-[open=true]:text-foreground dark:text-foreground/78 dark:hover:bg-white/10 dark:hover:text-foreground dark:data-[open=true]:bg-white/12 dark:data-[open=true]:text-foreground";
 
+const CONTEXT_TRIGGER_BUTTON_BASE_CLASS =
+  "inline-flex h-6 min-w-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-1.5 font-normal transition-colors outline-none hover:bg-accent/75 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[open=true]:bg-accent/85 dark:hover:bg-white/10 dark:data-[open=true]:bg-white/12";
+
 export function ComposerLiveTelemetryStripView(props: {
   readonly display: ResolvedTelemetryDisplay;
   readonly onOpenUsage: () => void;
@@ -712,8 +663,7 @@ export function ComposerLiveTelemetryStripView(props: {
   }>({ threadId: scopeThreadId, popover: null });
   const uncontrolledOpen =
     uncontrolledState.threadId === scopeThreadId ? uncontrolledState.popover : null;
-  const activePopover =
-    props.openPopover !== undefined ? props.openPopover : uncontrolledOpen;
+  const activePopover = props.openPopover !== undefined ? props.openPopover : uncontrolledOpen;
 
   const handlePopoverOpenChange = (target: TelemetryPopoverId, nextOpen: boolean) => {
     if (props.onOpenPopoverChange) {
@@ -866,9 +816,13 @@ export function ComposerLiveTelemetryStripView(props: {
               type="button"
               data-telemetry-trigger="context"
               data-telemetry-context="true"
+              data-context-pill-tone={display.contextTone}
               data-open={activePopover === "context" ? "true" : "false"}
               aria-label={copy.contextTriggerAria(contextLabel)}
-              className={cn(TRIGGER_BUTTON_BASE_CLASS, RING_TEXT_CLASS[display.contextTone])}
+              className={cn(
+                CONTEXT_TRIGGER_BUTTON_BASE_CLASS,
+                RING_TEXT_CLASS[display.contextTone],
+              )}
             />
           }
         >
@@ -911,18 +865,20 @@ export const ComposerLiveTelemetryStrip = memo(function ComposerLiveTelemetryStr
   );
   const effectiveContextWindow = props.contextWindow ?? publishedContextWindow;
 
-  // Bridge contextWindow published by legacy below-composer mounts to the AGY inline strip.
+  // Bridge contextWindow published by legacy below-composer mounts to the AGY inline strip
+  // and clean up the published entry on thread change or unmount (L11).
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- mirrors parent ContextWindowSnapshot to inline composer strip without duplicating DOM
   useEffect(() => {
     if (placement !== "below") return;
-    publishComposerContextWindow(props.threadId, props.contextWindow);
+    const targetThreadId = props.threadId;
+    publishComposerContextWindow(targetThreadId, props.contextWindow);
+    return () => {
+      deletePublishedComposerContextWindow(targetThreadId);
+    };
   }, [placement, props.contextWindow, props.threadId]);
 
-  const usageWindow = (() => {
-    const base = makeWindow(30, undefined, "day");
-    const dayOfMonth = Number.parseInt(base.untilDay.slice(8, 10), 10);
-    return dayOfMonth >= 31 ? makeWindow(31, undefined, "day") : base;
-  })();
+  // Stabilize usageWindow across renders (matching PrismuxStatusBar) so useUsage never re-keys.
+  const [usageWindow] = useState(createInitialComposerUsageWindow);
   const usage = useUsage(usageWindow);
   const backendLogs = extractBackendCallLogsFromEnvironments(usage.environments);
   const mergedLogs = useUsageCallLogs(backendLogs);

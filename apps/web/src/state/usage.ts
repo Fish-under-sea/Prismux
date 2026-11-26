@@ -14,7 +14,11 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { msg } from "gt-react";
 import { useState } from "react";
 
-import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@prismux/core-shared/usageMerge";
+import {
+  mergeUsage,
+  type EnvironmentUsage,
+  type MergedUsage,
+} from "@prismux/core-shared/usageMerge";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
@@ -209,6 +213,7 @@ export function useUsage(
 
   const [lastAnswered, setLastAnswered] = useState<
     | (NonNullable<UsageView["shown"]> & {
+        readonly windowKey: string;
         readonly selection: typeof selectedEnvironmentIds;
         readonly hidden: typeof hiddenProviders;
       })
@@ -217,12 +222,13 @@ export function useUsage(
   if (
     answeredCount > 0 &&
     (lastAnswered?.merged !== merged ||
-      lastAnswered.window !== input ||
+      lastAnswered.windowKey !== windowKey ||
       lastAnswered.selection !== selectedEnvironmentIds ||
       lastAnswered.hidden !== hiddenProviders)
   ) {
     setLastAnswered({
       window: input,
+      windowKey,
       merged,
       selection: selectedEnvironmentIds,
       hidden: hiddenProviders,
@@ -230,7 +236,7 @@ export function useUsage(
   }
   const kept =
     lastAnswered?.selection === selectedEnvironmentIds && lastAnswered.hidden === hiddenProviders
-      ? lastAnswered
+      ? { window: lastAnswered.window, merged: lastAnswered.merged }
       : null;
   const shown =
     answeredCount > 0

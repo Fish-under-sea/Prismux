@@ -174,7 +174,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { BackgroundThreadContext } from "./chat/backgroundThread";
+import { BackgroundThreadContext, HiddenThreadContext } from "./chat/backgroundThread";
 import { WorkspaceMutationIdContext } from "./chat/ChatMarkdownMedia";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
@@ -1824,6 +1824,7 @@ export default function ChatView(props: ChatViewProps) {
   };
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const backgroundThread = use(BackgroundThreadContext);
+  const hiddenThread = use(HiddenThreadContext);
   const scriptKeybindings =
     useAtomValue(serverEnvironment.configValueAtom(environmentId))?.keybindings ??
     DEFAULT_RESOLVED_KEYBINDINGS;
@@ -4486,22 +4487,24 @@ export default function ChatView(props: ChatViewProps) {
                                     }
                                     availableEnvironments={logicalProjectEnvironments}
                                     trailing={
-                                      <ComposerLiveTelemetryStrip
-                                        threadId={activeThreadId ?? threadId}
-                                        contextWindow={activeContextWindow}
-                                        providerStatuses={providerStatuses}
-                                        selectedModelId={
-                                          reportedModelSelection?.model ??
-                                          activeThread?.modelSelection?.model ??
-                                          null
-                                        }
-                                        selectedProvider={selectedProvider ?? null}
-                                      />
+                                      !hiddenThread ? (
+                                        <ComposerLiveTelemetryStrip
+                                          threadId={activeThreadId ?? threadId}
+                                          contextWindow={activeContextWindow}
+                                          providerStatuses={providerStatuses}
+                                          selectedModelId={
+                                            reportedModelSelection?.model ??
+                                            activeThread?.modelSelection?.model ??
+                                            null
+                                          }
+                                          selectedProvider={selectedProvider ?? null}
+                                        />
+                                      ) : undefined
                                     }
                                   />
                                 </div>
                               )}
-                              {!showComposerContextStrip && !embedded ? (
+                              {!showComposerContextStrip && !embedded && !hiddenThread ? (
                                 <div className="pointer-events-auto">
                                   <ComposerSurface.ContextStrip className="justify-end text-xs">
                                     <ComposerLiveTelemetryStrip

@@ -26,6 +26,12 @@ export interface SessionTelemetryCopy {
   readonly tokenUnit: string;
   readonly viewUsageStats: string;
   readonly contextWindowTitle: string;
+  readonly contextBreakdownTitle: string;
+  readonly contextSummarySystem: string;
+  readonly contextSummaryConversation: string;
+  readonly contextSummaryTools: string;
+  readonly contextWaitingData: string;
+  readonly contextEstimatedFootnote: string;
   readonly sampledModel: string;
   readonly primaryEntrypoint: string;
   readonly multipleModelsSampled: string;
@@ -38,6 +44,8 @@ export interface SessionTelemetryCopy {
   readonly formatSubagentsLabel: (count: number) => string;
   readonly formatModelCount: (count: number) => string;
   readonly formatContextHeadline: (usedPercent: number, remainingPercent: number) => string;
+  readonly formatContextCompactionBadge: (compactionCount: number, rounds: number) => string;
+  readonly formatContextCategoryLabel: (key: string, rawLabel: string) => string;
   readonly formatDuration: (ms: number | null | undefined) => string;
   readonly formatTtft: (ms: number | null | undefined) => string;
 }
@@ -88,6 +96,70 @@ function formatEnTtft(ms: number | null | undefined): string {
   return `${(ms / 1_000).toFixed(2)} s`;
 }
 
+const ZH_CONTEXT_CATEGORY_LABELS: Readonly<Record<string, string>> = {
+  system: "系统与指令",
+  "system-prompt": "系统提示",
+  "System Prompt": "系统提示",
+  mcp: "MCP 工具",
+  "Mcp Tools": "MCP 工具",
+  MCP: "MCP 工具",
+  subagents: "子智能体",
+  Subagents: "子智能体",
+  skills: "技能定义",
+  Skills: "技能定义",
+  plugins: "插件",
+  Plugins: "插件",
+  rules: "规则",
+  Rules: "规则",
+  tools: "工具调用与结果",
+  Tools: "工具声明",
+  "Tool Outputs": "工具输出",
+  reasoning: "思考过程",
+  Thinking: "思考过程",
+  messages: "对话消息",
+  "Chat Messages": "对话消息",
+  Messages: "对话消息",
+  cached_context: "缓存上下文",
+  uncached_input: "新增输入",
+  output: "模型输出",
+  used: "已用上下文",
+  memory: "记忆与产物",
+  Media: "图像媒体",
+  Files: "引用文件",
+  Other: "其他上下文",
+  free: "剩余空间",
+  Free: "剩余空间",
+};
+
+const EN_CONTEXT_CATEGORY_LABELS: Readonly<Record<string, string>> = {
+  system: "System & instructions",
+  "system-prompt": "System prompt",
+  mcp: "MCP tools",
+  subagents: "Subagents",
+  skills: "Skills",
+  plugins: "Plugins",
+  rules: "Rules",
+  tools: "Tool calls & outputs",
+  reasoning: "Reasoning",
+  messages: "Messages",
+  cached_context: "Cached context",
+  uncached_input: "Uncached input",
+  output: "Model output",
+  used: "Used context",
+  memory: "Memory & artifacts",
+  free: "Remaining",
+};
+
+function formatZhContextCategoryLabel(key: string, rawLabel: string): string {
+  return (
+    ZH_CONTEXT_CATEGORY_LABELS[rawLabel] ?? ZH_CONTEXT_CATEGORY_LABELS[key] ?? (rawLabel || "其他")
+  );
+}
+
+function formatEnContextCategoryLabel(key: string, rawLabel: string): string {
+  return EN_CONTEXT_CATEGORY_LABELS[key] ?? (rawLabel || "Other");
+}
+
 const ZH_COPY: SessionTelemetryCopy = {
   locale: "zh",
   statsTitle: "会话统计",
@@ -110,6 +182,12 @@ const ZH_COPY: SessionTelemetryCopy = {
   tokenUnit: "Token",
   viewUsageStats: "查看用量统计",
   contextWindowTitle: "上下文窗口",
+  contextBreakdownTitle: "上下文拆解",
+  contextSummarySystem: "系统",
+  contextSummaryConversation: "对话",
+  contextSummaryTools: "工具",
+  contextWaitingData: "等待会话上下文数据…",
+  contextEstimatedFootnote: "拆解按当前会话内容估算",
   sampledModel: "采样模型",
   primaryEntrypoint: "主控入口",
   multipleModelsSampled: "当前会话采样了多个模型",
@@ -124,6 +202,9 @@ const ZH_COPY: SessionTelemetryCopy = {
   formatModelCount: (count) => `${count} 个模型`,
   formatContextHeadline: (usedPercent, remainingPercent) =>
     `${usedPercent}% 已用（剩余 ${remainingPercent}%）`,
+  formatContextCompactionBadge: (compactionCount, rounds) =>
+    compactionCount > 0 ? `已压缩 ${compactionCount} 次` : rounds > 0 ? `${rounds} 轮` : "未压缩",
+  formatContextCategoryLabel: formatZhContextCategoryLabel,
   formatDuration: formatZhDuration,
   formatTtft: formatZhTtft,
 };
@@ -150,6 +231,12 @@ const EN_COPY: SessionTelemetryCopy = {
   tokenUnit: "Token",
   viewUsageStats: "View usage statistics",
   contextWindowTitle: "Context window",
+  contextBreakdownTitle: "Context breakdown",
+  contextSummarySystem: "System",
+  contextSummaryConversation: "Chat",
+  contextSummaryTools: "Tools",
+  contextWaitingData: "Waiting for context data…",
+  contextEstimatedFootnote: "Breakdown estimated from active transcript",
   sampledModel: "Sampled model",
   primaryEntrypoint: "Primary entrypoint",
   multipleModelsSampled: "Multiple models sampled in this session",
@@ -164,20 +251,23 @@ const EN_COPY: SessionTelemetryCopy = {
   formatModelCount: (count) => `${count} ${count === 1 ? "model" : "models"}`,
   formatContextHeadline: (usedPercent, remainingPercent) =>
     `${usedPercent}% used (${remainingPercent}% left)`,
+  formatContextCompactionBadge: (compactionCount, rounds) =>
+    compactionCount > 0
+      ? `Compacted ${compactionCount}×`
+      : rounds > 0
+        ? `${rounds} ${rounds === 1 ? "turn" : "turns"}`
+        : "Not compacted",
+  formatContextCategoryLabel: formatEnContextCategoryLabel,
   formatDuration: formatEnDuration,
   formatTtft: formatEnTtft,
 };
 
-export function resolveSessionTelemetryLocale(
-  locale?: string | null,
-): SessionTelemetryLocale {
+export function resolveSessionTelemetryLocale(locale?: string | null): SessionTelemetryLocale {
   const normalized = (locale ?? getActiveLocale() ?? "en").toLowerCase();
   return normalized.startsWith("zh") ? "zh" : "en";
 }
 
-export function getSessionTelemetryCopy(
-  locale?: string | null,
-): SessionTelemetryCopy {
+export function getSessionTelemetryCopy(locale?: string | null): SessionTelemetryCopy {
   return resolveSessionTelemetryLocale(locale) === "zh" ? ZH_COPY : EN_COPY;
 }
 

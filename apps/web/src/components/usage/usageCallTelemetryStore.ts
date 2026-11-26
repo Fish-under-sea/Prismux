@@ -528,7 +528,9 @@ function loadFromStorage(): readonly UsageCallLogRecord[] {
         cachedInputTokens: nonNegativeFinite(item.cachedInputTokens),
         cacheCreationTokens: nonNegativeFinite(item.cacheCreationTokens),
         outputTokens: nonNegativeFinite(item.outputTokens),
-        ...(typeof item.reasoningTokens === "number" && Number.isFinite(item.reasoningTokens) && item.reasoningTokens > 0
+        ...(typeof item.reasoningTokens === "number" &&
+        Number.isFinite(item.reasoningTokens) &&
+        item.reasoningTokens > 0
           ? { reasoningTokens: nonNegativeFinite(item.reasoningTokens) }
           : {}),
         totalTokens: nonNegativeFinite(item.totalTokens),
@@ -578,7 +580,11 @@ export function flushUsageCallLogsPersistence(): void {
 }
 
 function ensureUnloadFlushInstalled(): void {
-  if (unloadFlushInstalled || typeof window === "undefined" || typeof window.addEventListener !== "function") {
+  if (
+    unloadFlushInstalled ||
+    typeof window === "undefined" ||
+    typeof window.addEventListener !== "function"
+  ) {
     return;
   }
   unloadFlushInstalled = true;
@@ -677,17 +683,14 @@ function sumThreadTokens(logs: readonly UsageCallLogRecord[], threadId: string):
  * Record (or upsert by `id` / `turnId`) a real model call telemetry entry into the
  * bounded 500-entry persistent store and refresh the thread's live telemetry snapshot.
  */
-export function recordModelCallTelemetry(
-  input: RecordModelCallTelemetryInput,
-): UsageCallLogRecord {
+export function recordModelCallTelemetry(input: RecordModelCallTelemetryInput): UsageCallLogRecord {
   ensureHydrated();
   const now = Date.now();
   const turnStartedAt = positiveNullable(input.turnStartedAt);
   const firstTokenAt = positiveNullable(input.firstTokenAt);
   const completedAt = positiveNullable(input.completedAt);
 
-  const timestamp =
-    positiveNullable(input.timestamp) ?? turnStartedAt ?? completedAt ?? now;
+  const timestamp = positiveNullable(input.timestamp) ?? turnStartedAt ?? completedAt ?? now;
 
   const derivedDurationMs =
     input.durationMs !== undefined
@@ -824,7 +827,9 @@ export function updateSessionLiveTelemetry(
     patch.firstTokenAt !== undefined ? patch.firstTokenAt : (prev?.firstTokenAt ?? null);
 
   const inputTokens =
-    patch.inputTokens !== undefined ? nonNegativeFinite(patch.inputTokens) : (prev?.inputTokens ?? 0);
+    patch.inputTokens !== undefined
+      ? nonNegativeFinite(patch.inputTokens)
+      : (prev?.inputTokens ?? 0);
   const cachedInputTokens =
     patch.cachedInputTokens !== undefined
       ? nonNegativeFinite(patch.cachedInputTokens)
@@ -855,8 +860,7 @@ export function updateSessionLiveTelemetry(
         ? firstTokenAt - turnStartedAt
         : (prev?.ttftMs ?? null);
 
-  const tps =
-    patch.tps !== undefined ? positiveNullable(patch.tps) : (prev?.tps ?? null);
+  const tps = patch.tps !== undefined ? positiveNullable(patch.tps) : (prev?.tps ?? null);
 
   const cacheHitRate =
     patch.cacheHitRate !== undefined
@@ -952,9 +956,7 @@ export function getSessionLiveTelemetry(
 }
 
 /** Normalize a backend Spec 4B `callLogs` item into a `UsageCallLogRecord`. */
-export function normalizeBackendUsageCallLog(
-  raw: BackendUsageCallLogLike,
-): UsageCallLogRecord {
+export function normalizeBackendUsageCallLog(raw: BackendUsageCallLogLike): UsageCallLogRecord {
   const timestamp = parseTimestampMs(raw.timestamp, Date.now());
   const inputTokens = nonNegativeFinite(raw.uncachedInputTokens ?? raw.inputTokens);
   const cachedInputTokens = nonNegativeFinite(raw.cachedInputTokens);
@@ -1000,15 +1002,28 @@ export function normalizeBackendUsageCallLog(
   };
 }
 
+const NULL_BACKEND_LOGS_CACHE_KEY: object = Object.freeze({});
+const mergedUsageCallLogsCache = new WeakMap<
+  readonly UsageCallLogRecord[],
+  WeakMap<object, readonly UsageCallLogRecord[]>
+>();
+
 /**
- * Merge local live-recorded call telemetry with backend-supplied transcript `callLogs`.
- * Deduplicates by `id` (or close timestamp + provider + model + outputTokens) and retains
- * whichever record carries richer real TTFT / TPS timing metrics.
+ * Merges live call logs with backend transcript logs, deduplicating matching calls and
+ * memoizing by `(localLogs, backendLogs)` reference identity via WeakMap.
  */
 export function mergeUsageCallLogs(
   localLogs: readonly UsageCallLogRecord[],
   backendLogs?: readonly BackendUsageCallLogLike[] | null,
 ): readonly UsageCallLogRecord[] {
+  const backendKey: object =
+    backendLogs && backendLogs.length > 0 ? backendLogs : NULL_BACKEND_LOGS_CACHE_KEY;
+  let byBackend = mergedUsageCallLogsCache.get(localLogs);
+  const cached = byBackend?.get(backendKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const byId = new Map<string, UsageCallLogRecord>();
   // Map-indexed bucket lookup keyed by `${provider}\0${outputTokens}` gives O(N + M) dedupe
   // instead of O(N * M) full-table scans on every render.
@@ -1117,9 +1132,16 @@ export function mergeUsageCallLogs(
       }
     }
   }
-  return Array.from(byId.values())
+  const merged = Array.from(byId.values())
     .toSorted((a, b) => b.timestamp - a.timestamp)
     .slice(0, MAX_USAGE_CALL_LOGS);
+
+  if (!byBackend) {
+    byBackend = new WeakMap<object, readonly UsageCallLogRecord[]>();
+    mergedUsageCallLogsCache.set(localLogs, byBackend);
+  }
+  byBackend.set(backendKey, merged);
+  return merged;
 }
 
 /**

@@ -14,10 +14,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  ComposerUnifiedOptionsFooter,
-  describeComposerEffort,
-} from "./ComposerModelEffort";
+import { ComposerUnifiedOptionsFooter, describeComposerEffort } from "./ComposerModelEffort";
 import { ComposerPermissionsSection } from "./ComposerFooterControls";
 import { DockedPickerContext } from "./ProviderModelPicker";
 import {
@@ -156,7 +153,7 @@ describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mo
     expect(html).toContain("Accept edits");
     expect(html).toContain("Approve for me");
     expect(html).toContain("Full access");
-    expect(html).toContain("data-permission-option=\"full-access\"");
+    expect(html).toContain('data-permission-option="full-access"');
     expect(html).toContain("text-amber-700");
   });
 
@@ -405,12 +402,16 @@ describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mo
     expect(source).toContain("--pmx-chat-content-max-width");
     expect(source).toContain("960px");
 
-    // 2. Dual-layer liquid-glass hooks: outer tray -> top tray -> nested inner card.
+    // 2. Dual-layer liquid-glass hooks: outer tray -> top tray -> nested inner card,
+    // plus active-turn RGB border hook (`data-pmx-composer-active`).
     const layoutIdx = source.indexOf('data-pmx-composer-layout="agy"');
+    const activeAttrIdx = source.indexOf("data-pmx-composer-active=", layoutIdx);
     const topTrayIdx = source.indexOf('data-pmx-composer-top-tray="1"');
     const topTrayBarIdx = source.indexOf('<ComposerWorkspaceLocationBar variant="top-tray" />');
     const innerCardIdx = source.indexOf('data-pmx-composer-inner-card="1"');
     expect(layoutIdx).toBeGreaterThan(-1);
+    expect(activeAttrIdx).toBeGreaterThan(layoutIdx);
+    expect(activeAttrIdx).toBeLessThan(topTrayIdx);
     expect(topTrayIdx).toBeGreaterThan(layoutIdx);
     expect(topTrayBarIdx).toBeGreaterThan(topTrayIdx);
     expect(innerCardIdx).toBeGreaterThan(topTrayBarIdx);
@@ -422,7 +423,10 @@ describe("Orca composer redesign, 4-tier permissions, reasoning slider & fast mo
     const leftControlsIdx = source.indexOf("{composerControls}", leftActionsIdx);
     const inlineTelemetryIdx = source.indexOf('placement="inline"', rightActionsIdx);
     const permissionsIdx = source.indexOf("<ComposerFooterModeControls", rightActionsIdx);
-    const primaryClusterIdx = source.indexOf('data-pmx-composer-primary-cluster="true"', rightActionsIdx);
+    const primaryClusterIdx = source.indexOf(
+      'data-pmx-composer-primary-cluster="true"',
+      rightActionsIdx,
+    );
     const wrapRowIdx = source.indexOf('data-composer-telemetry-wrap-row="true"', primaryClusterIdx);
     expect(leftActionsIdx).toBeGreaterThan(innerCardIdx);
     expect(leftControlsIdx).toBeGreaterThan(leftActionsIdx);

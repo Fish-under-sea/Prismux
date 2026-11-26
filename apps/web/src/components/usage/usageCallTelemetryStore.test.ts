@@ -132,38 +132,41 @@ describe("usageCallTelemetryStore", () => {
       status: "completed",
     });
 
-    const merged = mergeUsageCallLogs([liveLog], [
-      // Near-duplicate of liveLog from backend transcript (backend uses "claude" while live used "claudeAgent")
-      {
-        id: "backend-dup-1",
-        timestamp: new Date(101_500).toISOString(),
-        provider: "claude",
-        model: "claude-sonnet-4-6",
-        ttftMs: null,
-        durationMs: 2400,
-        tps: null,
-        inputTokens: 500,
-        cachedInputTokens: 1500,
-        cacheCreationTokens: 0,
-        outputTokens: 100,
-        cacheHitRate: 0.75,
-      },
-      // Distinct historical backend call
-      {
-        id: "backend-hist-2",
-        timestamp: 90_000,
-        provider: "codex",
-        model: "gpt-5.4-codex",
-        ttftMs: 620,
-        durationMs: 3620,
-        tps: 60,
-        inputTokens: 800,
-        cachedInputTokens: 1200,
-        cacheCreationTokens: 0,
-        outputTokens: 180,
-        cacheHitRate: 0.6,
-      },
-    ]);
+    const merged = mergeUsageCallLogs(
+      [liveLog],
+      [
+        // Near-duplicate of liveLog from backend transcript (backend uses "claude" while live used "claudeAgent")
+        {
+          id: "backend-dup-1",
+          timestamp: new Date(101_500).toISOString(),
+          provider: "claude",
+          model: "claude-sonnet-4-6",
+          ttftMs: null,
+          durationMs: 2400,
+          tps: null,
+          inputTokens: 500,
+          cachedInputTokens: 1500,
+          cacheCreationTokens: 0,
+          outputTokens: 100,
+          cacheHitRate: 0.75,
+        },
+        // Distinct historical backend call
+        {
+          id: "backend-hist-2",
+          timestamp: 90_000,
+          provider: "codex",
+          model: "gpt-5.4-codex",
+          ttftMs: 620,
+          durationMs: 3620,
+          tps: 60,
+          inputTokens: 800,
+          cachedInputTokens: 1200,
+          cacheCreationTokens: 0,
+          outputTokens: 180,
+          cacheHitRate: 0.6,
+        },
+      ],
+    );
 
     expect(merged.length).toBe(2);
     expect(merged[0]?.id).toBe("turn:101");
@@ -292,19 +295,22 @@ describe("usageCallTelemetryStore", () => {
       cachedInputTokens: 900,
       outputTokens: 50,
     });
-    const merged = mergeUsageCallLogs([liveWithoutDur], [
-      {
-        id: "turn:merge-clamp",
-        timestamp: 300_000,
-        provider: "dsh",
-        model: "group/deepseek",
-        ttftMs: null,
-        durationMs: 8_430,
-        inputTokens: 100,
-        cachedInputTokens: 900,
-        outputTokens: 50,
-      },
-    ]);
+    const merged = mergeUsageCallLogs(
+      [liveWithoutDur],
+      [
+        {
+          id: "turn:merge-clamp",
+          timestamp: 300_000,
+          provider: "dsh",
+          model: "group/deepseek",
+          ttftMs: null,
+          durationMs: 8_430,
+          inputTokens: 100,
+          cachedInputTokens: 900,
+          outputTokens: 50,
+        },
+      ],
+    );
     expect(merged[0]?.ttftMs).toBe(8_430);
     expect(merged[0]?.durationMs).toBe(8_430);
 
@@ -613,5 +619,47 @@ describe("usageCallTelemetryStore", () => {
         value: previousStorage,
       });
     }
+  });
+
+  it("memoizes mergeUsageCallLogs by (localLogs, backendLogs) reference identity without retaining stale arrays", () => {
+    const liveLog = recordModelCallTelemetry({
+      id: "turn:memo-1",
+      timestamp: 700_000,
+      provider: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      inputTokens: 1_000,
+      cachedInputTokens: 2_000,
+      outputTokens: 250,
+      status: "completed",
+    });
+    const localLogs = [liveLog] as const;
+    const backendLogs = [
+      {
+        id: "backend-memo-1",
+        timestamp: 690_000,
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        inputTokens: 400,
+        cachedInputTokens: 600,
+        outputTokens: 100,
+      },
+    ] as const;
+
+    const first = mergeUsageCallLogs(localLogs, backendLogs);
+    const second = mergeUsageCallLogs(localLogs, backendLogs);
+    expect(second).toBe(first);
+
+    // Also memoizes null / undefined / empty backendLogs cleanly.
+    const emptyA = mergeUsageCallLogs(localLogs, undefined);
+    const emptyB = mergeUsageCallLogs(localLogs, null);
+    const emptyC = mergeUsageCallLogs(localLogs, []);
+    expect(emptyB).toBe(emptyA);
+    expect(emptyC).toBe(emptyA);
+
+    // Changing either array reference recomputes cleanly.
+    const nextBackend = [...backendLogs];
+    const third = mergeUsageCallLogs(localLogs, nextBackend);
+    expect(third).not.toBe(first);
+    expect(third).toEqual(first);
   });
 });
