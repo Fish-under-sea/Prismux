@@ -3607,6 +3607,7 @@ export default function ChatView(props: ChatViewProps) {
     provider: selectedProvider,
     cwd: activeContinueCwd,
     projection: serverProjection,
+    threadShell: serverThreadShell,
     relationshipShells: agentAuxRelationshipShells,
     isProviderNativeSubagent:
       showProviderSubagentBar && selectedProviderEntry?.driverKind === "antigravity",

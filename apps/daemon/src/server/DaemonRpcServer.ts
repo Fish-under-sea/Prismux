@@ -2457,7 +2457,15 @@ export class DaemonRpcServer {
           provider: requestUrl.searchParams.get("provider") ?? undefined,
           sessionId: requestUrl.searchParams.get("sessionId") ?? undefined,
           cwd: requestUrl.searchParams.get("cwd") ?? undefined,
+          etag:
+            requestUrl.searchParams.get("etag") ??
+            (typeof req.headers["if-none-match"] === "string"
+              ? req.headers["if-none-match"].replace(/^W\/|^"|"$/g, "")
+              : undefined),
         });
+        if (result.etag) {
+          res.setHeader("ETag", result.etag);
+        }
         writeJsonResponse(res, 200, result);
       } catch (err) {
         if (err instanceof AgentAuxValidationError) {
@@ -2469,6 +2477,107 @@ export class DaemonRpcServer {
         }
         throw err;
       }
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/agent-aux/events") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res, requestUrl, true);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        writeJsonResponse(res, 403, {
+          ok: false,
+          error: {
+            code: "FORBIDDEN_SCOPE",
+            message: `Scope "${trustedCallerScope}" is not permitted to stream agent aux events.`,
+          },
+        });
+        return true;
+      }
+      const query = {
+        provider: requestUrl.searchParams.get("provider") ?? undefined,
+        sessionId: requestUrl.searchParams.get("sessionId") ?? undefined,
+        cwd: requestUrl.searchParams.get("cwd") ?? undefined,
+      };
+      let initialSnapshot;
+      try {
+        initialSnapshot = await this.agentAuxService.inspect(query);
+      } catch (err) {
+        if (err instanceof AgentAuxValidationError) {
+          writeJsonResponse(res, err.statusCode, {
+            ok: false,
+            error: { code: err.code, message: err.message },
+          });
+          return true;
+        }
+        throw err;
+      }
+
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders?.();
+
+      let closed = false;
+      let eventSeq = 0;
+      const sendSnapshot = (payload: unknown): void => {
+        if (closed || res.writableEnded || res.destroyed) return;
+        eventSeq += 1;
+        try {
+          res.write(`id: ${eventSeq}\nevent: snapshot\ndata: ${JSON.stringify(payload)}\n\n`);
+        } catch {
+          cleanup(false);
+        }
+      };
+
+      const watcher = this.agentAuxService.getWatcher();
+      const unsubscribe = watcher.subscribe(
+        query,
+        (snapshot) => {
+          sendSnapshot(snapshot);
+        },
+        initialSnapshot.etag ?? "",
+      );
+
+      const keepaliveTimer = setInterval(() => {
+        if (closed || res.writableEnded || res.destroyed) {
+          cleanup(false);
+          return;
+        }
+        try {
+          res.write(": ping\n\n");
+        } catch {
+          cleanup(false);
+        }
+      }, 25_000);
+      keepaliveTimer.unref?.();
+
+      const cleanup = (immediate: boolean): void => {
+        if (closed) return;
+        closed = true;
+        clearInterval(keepaliveTimer);
+        unsubscribe(immediate);
+        this.activeSseCleanups.delete(onServerShutdown);
+        try {
+          if (!res.writableEnded) {
+            res.end();
+          }
+        } catch {
+          // Ignore stream shutdown errors.
+        }
+      };
+      const onServerShutdown = (): void => {
+        cleanup(true);
+      };
+
+      this.activeSseCleanups.add(onServerShutdown);
+      req.once("close", () => cleanup(false));
+      req.once("aborted", () => cleanup(false));
+      res.once("close", () => cleanup(false));
+      res.once("error", () => cleanup(false));
+
+      sendSnapshot(initialSnapshot);
       return true;
     }
 

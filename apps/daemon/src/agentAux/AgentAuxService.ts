@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   open as openFileAsync,
   readdir as readdirAsync,
@@ -8,6 +9,7 @@ import {
 import { homedir } from "node:os";
 import { basename, join, normalize, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { AgentAuxWatcher, type AgentAuxWatcherOptions } from "./AgentAuxWatcher.js";
 
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const AGY_CONV_ID_RE = /^[0-9a-f-]{8,}$/i;
@@ -42,6 +44,7 @@ export interface AgentAuxInspectQuery {
   provider?: string;
   sessionId?: string;
   cwd?: string;
+  etag?: string;
 }
 
 export interface AgentAuxSwarmFailure {
@@ -75,6 +78,9 @@ export interface AgentAuxSwarmMember {
   lastPostTs: number | null;
   workspace?: string;
   workspaceMode?: string;
+  forkedFrom?: string;
+  spawnedAt?: number;
+  killedAt?: number;
   channels?: string[];
 }
 
@@ -86,7 +92,10 @@ export interface AgentAuxSwarmMessage {
   ts: number | null;
   mentions: string[];
   all: boolean;
+  kind?: string;
   channel?: string;
+  viaChannel?: string[];
+  channelMentions?: string[];
   control?: Record<string, unknown>;
 }
 
@@ -164,6 +173,8 @@ export interface AgentAuxSwarmSnapshot {
   title: string;
   selfMember: string | null;
   head: number;
+  channels?: string[];
+  createdAt?: number;
   members: AgentAuxSwarmMember[];
   messages: AgentAuxSwarmMessage[];
   edges: AgentAuxEdge[];
@@ -284,6 +295,8 @@ export interface AgentAuxInspectResponse {
   kind: AgentAuxKind | null;
   title: string;
   activationKey: string | null;
+  etag?: string;
+  unchanged?: boolean;
   swarm?: AgentAuxSwarmSnapshot;
   agySubagents?: AgentAuxNativeSubagent[];
   claudeTeam?: AgentAuxClaudeTeamSnapshot;
@@ -307,6 +320,8 @@ export class AgentAuxValidationError extends Error {
 export interface AgentAuxServiceOptions {
   /** Override Antigravity appData roots (primarily for deterministic tests). */
   agyAppDataDirs?: string[];
+  /** Override `~/.gemini` root (primarily for deterministic Windows/CLI discovery tests). */
+  agyGeminiRootDir?: string;
   /** Override ~/.claude root (primarily for deterministic tests). */
   claudeHomeDir?: string;
   /** Override ~/.codex root (primarily for deterministic tests). */
@@ -315,6 +330,8 @@ export interface AgentAuxServiceOptions {
   now?: () => number;
   /** Injectable read-only SQLite opener for deterministic cache hit verification tests. */
   openCodexDb?: (dbPath: string) => DatabaseSync;
+  /** Optional overrides for the internal file watcher pool. */
+  watcherOptions?: AgentAuxWatcherOptions;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -476,7 +493,13 @@ function pathsMatch(a: string | undefined, b: string | undefined): boolean {
 function normalizeProvider(raw: string | undefined): string {
   const lower = (raw ?? "").trim().toLowerCase();
   if (!lower) return "";
-  if (lower.startsWith("antigravity") || lower === "agy" || lower.startsWith("agy-")) {
+  if (
+    lower.startsWith("antigravity") ||
+    lower.includes("antigravity") ||
+    lower === "agy" ||
+    lower.startsWith("agy-") ||
+    /(?:^|[-_:/\s])agy(?:$|[-_:/\s])/.test(lower)
+  ) {
     return "antigravity";
   }
   if (lower.startsWith("claude")) {
@@ -486,6 +509,10 @@ function normalizeProvider(raw: string | undefined): string {
     return "codex";
   }
   return lower;
+}
+
+function hashShortHex(value: string): string {
+  return createHash("sha1").update(value).digest("hex").slice(0, 16);
 }
 
 function validateSessionId(raw: string | undefined): string | undefined {
@@ -916,10 +943,23 @@ function parseJsonObject(text: string | null): Record<string, unknown> | null {
 
 export class AgentAuxService {
   private readonly agyAppDataDirsOverride: string[] | undefined;
+  private readonly agyGeminiRootOverride: string | undefined;
   private readonly claudeHomeDirOverride: string | undefined;
   private readonly codexHomeDirOverride: string | undefined;
   private readonly nowFn: () => number;
   private readonly openCodexDbFn: (dbPath: string) => DatabaseSync;
+  private readonly watcherOptions: AgentAuxWatcherOptions | undefined;
+  private watcher: AgentAuxWatcher | null = null;
+
+  private readonly swarmEtagMetaCache = new Map<
+    string,
+    {
+      etag: string;
+      hasLiveWork: boolean;
+      title: string;
+      activationKey: string;
+    }
+  >();
 
   private agyAppDataCache: {
     builtAt: number;
@@ -964,12 +1004,124 @@ export class AgentAuxService {
 
   constructor(options: AgentAuxServiceOptions = {}) {
     this.agyAppDataDirsOverride = options.agyAppDataDirs;
+    this.agyGeminiRootOverride = options.agyGeminiRootDir;
     this.claudeHomeDirOverride = options.claudeHomeDir;
     this.codexHomeDirOverride = options.codexHomeDir;
     this.nowFn = options.now ?? (() => Date.now());
     this.openCodexDbFn =
       options.openCodexDb ??
       ((dbPath) => new DatabaseSync(dbPath, { readOnly: true }));
+    this.watcherOptions = options.watcherOptions;
+  }
+
+  getWatcher(options?: AgentAuxWatcherOptions): AgentAuxWatcher {
+    if (!this.watcher) {
+      this.watcher = new AgentAuxWatcher(this, options ?? this.watcherOptions);
+    }
+    return this.watcher;
+  }
+
+  dispose(): void {
+    if (this.watcher) {
+      this.watcher.dispose();
+      this.watcher = null;
+    }
+  }
+
+  /**
+   * Resolves local read-only directories to watch for live AgentAux updates.
+   * Strictly touches standard local swarm/team/codex directories only.
+   */
+  async resolveWatchTargets(
+    query: AgentAuxInspectQuery
+  ): Promise<{ dirs: string[]; resolvedExact: boolean }> {
+    const provider = normalizeProvider(query.provider);
+    const sessionId = validateSessionId(query.sessionId);
+    const cwd = validateCwd(query.cwd);
+    const tryAgy = this.shouldTryAgy(provider, sessionId);
+    const tryClaude = provider === "" || provider === "claude";
+    const tryCodex = provider === "" || provider === "codex";
+
+    const dirs: string[] = [];
+    const seen = new Set<string>();
+    const addExistingDir = async (dirPath: string): Promise<boolean> => {
+      const st = await safeStatAsync(dirPath);
+      if (!st?.isDirectory) return false;
+      const key = process.platform === "win32" ? dirPath.toLowerCase() : dirPath;
+      if (seen.has(key)) return true;
+      seen.add(key);
+      dirs.push(dirPath);
+      return true;
+    };
+
+    let resolvedExact = false;
+
+    if (tryAgy && sessionId && AGY_CONV_ID_RE.test(sessionId)) {
+      const appDataDirs = await this.resolveAgyAppDataDirs(true);
+      const loc = await this.locateAgySwarm(sessionId, appDataDirs);
+      if (loc) {
+        const swarmDir = join(
+          loc.appData,
+          "brain",
+          loc.swarmId,
+          ".system_generated",
+          "swarm"
+        );
+        if (await addExistingDir(swarmDir)) {
+          resolvedExact = true;
+        }
+      } else {
+        for (const appData of appDataDirs) {
+          const swarmDir = join(
+            appData,
+            "brain",
+            sessionId,
+            ".system_generated",
+            "swarm"
+          );
+          if (await addExistingDir(swarmDir)) {
+            resolvedExact = true;
+            continue;
+          }
+          const sysGenDir = join(appData, "brain", sessionId, ".system_generated");
+          if (await addExistingDir(sysGenDir)) continue;
+          const convDir = join(appData, "brain", sessionId);
+          if (await addExistingDir(convDir)) continue;
+          await addExistingDir(join(appData, "brain"));
+        }
+      }
+    }
+
+    if (tryClaude && (sessionId || cwd)) {
+      const claudeRoot = this.claudeHomeDirOverride ?? join(homedir(), ".claude");
+      const teamsDir = join(claudeRoot, "teams");
+      const tasksDir = join(claudeRoot, "tasks");
+      if (await addExistingDir(teamsDir)) {
+        resolvedExact = resolvedExact || provider === "claude";
+      }
+      await addExistingDir(tasksDir);
+    }
+
+    if (tryCodex && (sessionId || cwd)) {
+      const codexRoot = this.codexHomeDirOverride ?? join(homedir(), ".codex");
+      if (await addExistingDir(codexRoot)) {
+        resolvedExact = resolvedExact || provider === "codex";
+      }
+    }
+
+    return { dirs, resolvedExact };
+  }
+
+  private shouldTryAgy(provider: string, sessionId: string | undefined): boolean {
+    return (
+      provider === "" ||
+      provider === "antigravity" ||
+      provider === "acp" ||
+      provider.includes("antigravity") ||
+      provider.includes("acp") ||
+      /(?:^|[-_:/\s])agy(?:$|[-_:/\s])/.test(provider) ||
+      (sessionId !== undefined && AGY_CONV_ID_RE.test(sessionId))
+    );
   }
 
   private async readDirCached(dirPath: string): Promise<string[]> {
@@ -1015,18 +1167,42 @@ export class AgentAuxService {
     const provider = normalizeProvider(query.provider);
     const sessionId = validateSessionId(query.sessionId);
     const cwd = validateCwd(query.cwd);
+    const clientEtag =
+      typeof query.etag === "string" && query.etag.trim().length > 0
+        ? query.etag.trim()
+        : undefined;
     const updatedAt = this.nowFn();
 
-    const tryAgy =
-      provider === "" || provider === "antigravity" || provider === "acp";
+    const tryAgy = this.shouldTryAgy(provider, sessionId);
     const tryClaude = provider === "" || provider === "claude";
     const tryCodex = provider === "" || provider === "codex";
 
     let swarm: AgentAuxSwarmSnapshot | undefined;
+    let swarmEtag: string | undefined;
     let agySubagents: AgentAuxNativeSubagent[] | undefined;
     if (tryAgy && sessionId && AGY_CONV_ID_RE.test(sessionId)) {
-      swarm = (await this.inspectAgySwarm(sessionId, updatedAt)) ?? undefined;
-      if (!swarm) {
+      const agySwarmResult = await this.inspectAgySwarm(
+        sessionId,
+        updatedAt,
+        clientEtag
+      );
+      if (agySwarmResult?.unchanged) {
+        return {
+          ok: true,
+          unchanged: true,
+          etag: agySwarmResult.etag,
+          active: true,
+          hasLiveWork: agySwarmResult.hasLiveWork,
+          kind: "agy-swarm",
+          title: agySwarmResult.title,
+          activationKey: agySwarmResult.activationKey,
+          updatedAt
+        };
+      }
+      if (agySwarmResult?.snapshot) {
+        swarm = agySwarmResult.snapshot;
+        swarmEtag = agySwarmResult.etag;
+      } else {
         const subs = await this.inspectAgyDetachedSubagents(sessionId);
         if (subs.length > 0) {
           agySubagents = subs;
@@ -1085,28 +1261,74 @@ export class AgentAuxService {
 
     const allTasks = [...claudeTasks, ...codexTasks];
 
-    if (swarm) {
-      const hasLiveWork = swarm.members.some(
-        (m) => !m.killed && !m.roleWorker && !m.narrator && m.status === "working"
-      ) || swarm.systemAttention.length > 0;
+    const finalizeResponse = (
+      base: Omit<AgentAuxInspectResponse, "etag" | "unchanged" | "updatedAt">,
+      precomputedEtag?: string
+    ): AgentAuxInspectResponse => {
+      const etag = precomputedEtag ?? `aux:${hashShortHex(JSON.stringify(base))}`;
+      if (clientEtag && clientEtag === etag) {
+        return {
+          ok: true,
+          unchanged: true,
+          etag,
+          active: base.active,
+          hasLiveWork: base.hasLiveWork,
+          kind: base.kind,
+          title: base.title,
+          activationKey: base.activationKey,
+          updatedAt
+        };
+      }
       return {
-        ok: true,
-        active: true,
-        hasLiveWork,
-        kind: "agy-swarm",
-        title: swarm.title || "蜂群协作",
-        activationKey: `agy-swarm:${swarm.id}`,
-        swarm,
-        ...(allTasks.length > 0 ? { tasks: allTasks } : {}),
+        ...base,
+        etag,
         updatedAt
       };
+    };
+
+    if (swarm) {
+      const hasLiveWork =
+        swarm.members.some(
+          (m) => !m.killed && !m.roleWorker && !m.narrator && m.status === "working"
+        ) || swarm.systemAttention.length > 0;
+      const activationKey = `agy-swarm:${swarm.id}`;
+      const title = swarm.title || "蜂群协作";
+      const etag =
+        swarmEtag ??
+        `sw:${hashShortHex(
+          JSON.stringify({
+            swarm,
+            tasks: allTasks
+          })
+        )}`;
+      if (swarmEtag && allTasks.length === 0) {
+        setBoundedCache(this.swarmEtagMetaCache, `${sessionId ?? swarm.id}|${etag}`, {
+          etag,
+          hasLiveWork,
+          title,
+          activationKey
+        });
+      }
+      return finalizeResponse(
+        {
+          ok: true,
+          active: true,
+          hasLiveWork,
+          kind: "agy-swarm",
+          title,
+          activationKey,
+          swarm,
+          ...(allTasks.length > 0 ? { tasks: allTasks } : {})
+        },
+        allTasks.length === 0 ? etag : undefined
+      );
     }
 
     if (claudeTeam) {
       const hasLiveWork =
         claudeTeam.members.some((m) => m.status === "working") ||
         allTasks.some((t) => t.status === "in_progress");
-      return {
+      return finalizeResponse({
         ok: true,
         active: true,
         hasLiveWork,
@@ -1114,14 +1336,13 @@ export class AgentAuxService {
         title: claudeTeam.teamName || "Claude 智能体团队",
         activationKey: `claude-team:${claudeTeam.teamName}`,
         claudeTeam,
-        ...(allTasks.length > 0 ? { tasks: allTasks } : {}),
-        updatedAt
-      };
+        ...(allTasks.length > 0 ? { tasks: allTasks } : {})
+      });
     }
 
     if (agySubagents && agySubagents.length > 0) {
       const hasLiveWork = agySubagents.some((s) => s.status === "working");
-      return {
+      return finalizeResponse({
         ok: true,
         active: true,
         hasLiveWork,
@@ -1129,9 +1350,8 @@ export class AgentAuxService {
         title: "Antigravity 子智能体",
         activationKey: `agy-subagents:${sessionId ?? "local"}`,
         agySubagents,
-        ...(allTasks.length > 0 ? { tasks: allTasks } : {}),
-        updatedAt
-      };
+        ...(allTasks.length > 0 ? { tasks: allTasks } : {})
+      });
     }
 
     if (codex && (codex.spawnedThreads.length > 0 || codex.goals.length > 0)) {
@@ -1141,7 +1361,7 @@ export class AgentAuxService {
             t.status.toLowerCase()
           )
         ) || codex.goals.some((g) => g.status === "active");
-      return {
+      return finalizeResponse({
         ok: true,
         active: true,
         hasLiveWork,
@@ -1149,24 +1369,22 @@ export class AgentAuxService {
         title: "Codex 协同子代理",
         activationKey: `codex-collab:${sessionId ?? codex.spawnedThreads[0]?.parentThreadId ?? codex.goals[0]?.goalId ?? "session"}`,
         codex,
-        ...(allTasks.length > 0 ? { tasks: allTasks } : {}),
-        updatedAt
-      };
+        ...(allTasks.length > 0 ? { tasks: allTasks } : {})
+      });
     }
 
-    return {
+    return finalizeResponse({
       ok: true,
       active: false,
       hasLiveWork: false,
       kind: null,
       title: "",
       activationKey: null,
-      ...(allTasks.length > 0 ? { tasks: allTasks } : {}),
-      updatedAt
-    };
+      ...(allTasks.length > 0 ? { tasks: allTasks } : {})
+    });
   }
 
-  private async resolveAgyAppDataDirs(): Promise<string[]> {
+  private async resolveAgyAppDataDirs(forceRefresh = false): Promise<string[]> {
     if (this.agyAppDataDirsOverride) {
       const out: string[] = [];
       for (const dir of this.agyAppDataDirsOverride) {
@@ -1179,37 +1397,39 @@ export class AgentAuxService {
     }
 
     const nowMs = this.nowFn();
-    const geminiRoot = join(homedir(), ".gemini");
-    if (
-      this.agyAppDataCache.builtAt > 0 &&
-      nowMs - this.agyAppDataCache.builtAt < ROSTER_SCAN_TTL_MS
-    ) {
-      return this.agyAppDataCache.dirs;
-    }
+    const geminiRoot = this.agyGeminiRootOverride ?? join(homedir(), ".gemini");
+    const canonicalCandidates = [
+      join(geminiRoot, "antigravity"),
+      join(geminiRoot, "antigravity-cli"),
+      join(geminiRoot, "antigravity-acp")
+    ];
 
     const rootStat = await safeStatAsync(geminiRoot);
     if (!rootStat || !rootStat.isDirectory) {
       this.agyAppDataCache = { builtAt: nowMs, geminiRootMtime: -1, dirs: [] };
       return [];
     }
-    if (
+
+    const canUseCachedChildren =
+      !forceRefresh &&
       this.agyAppDataCache.builtAt > 0 &&
-      this.agyAppDataCache.geminiRootMtime === rootStat.mtime
-    ) {
-      this.agyAppDataCache.builtAt = nowMs;
-      return this.agyAppDataCache.dirs;
+      (nowMs - this.agyAppDataCache.builtAt < ROSTER_SCAN_TTL_MS ||
+        this.agyAppDataCache.geminiRootMtime === rootStat.mtime);
+
+    // On Windows NTFS, creating `antigravity-cli/brain` inside an already-existing
+    // `~/.gemini/antigravity-cli` folder does NOT update `~/.gemini`'s mtime.
+    // Always verify the 3 canonical roots directly alongside cached dynamic roots.
+    const candidates: string[] = [...canonicalCandidates];
+    if (canUseCachedChildren) {
+      candidates.push(...this.agyAppDataCache.dirs);
+    } else {
+      const children = (await safeReaddirAsync(geminiRoot)).sort();
+      for (const child of children) {
+        if (!SAFE_DIR_SEGMENT_RE.test(child)) continue;
+        candidates.push(join(geminiRoot, child));
+      }
     }
 
-    const candidates = [
-      join(geminiRoot, "antigravity"),
-      join(geminiRoot, "antigravity-acp"),
-      join(geminiRoot, "antigravity-cli")
-    ];
-    const children = (await safeReaddirAsync(geminiRoot)).sort();
-    for (const child of children) {
-      if (!SAFE_DIR_SEGMENT_RE.test(child)) continue;
-      candidates.push(join(geminiRoot, child));
-    }
     const seen = new Set<string>();
     const out: string[] = [];
     for (const dir of candidates) {
@@ -1331,58 +1551,125 @@ export class AgentAuxService {
     };
   }
 
-  private async inspectAgySwarm(
+  private async locateAgySwarm(
     sessionId: string,
-    nowMs: number
-  ): Promise<AgentAuxSwarmSnapshot | null> {
-    const appDataDirs = await this.resolveAgyAppDataDirs();
-    if (appDataDirs.length === 0) return null;
-
-    let matchedAppData: string | null = null;
-    let matchedSwarmId: string | null = null;
-    let matchedRoster: {
-      title: string;
-      members: Record<string, Record<string, unknown>>;
-    } | null = null;
-    let selfMember: string | null = null;
-
+    appDataDirs: readonly string[]
+  ): Promise<{
+    appData: string;
+    swarmId: string;
+    roster: { title: string; members: Record<string, Record<string, unknown>> };
+    selfMember: string | null;
+  } | null> {
     // 1. Direct coordinator check
     for (const appData of appDataDirs) {
       const roster = await this.readSwarmRoster(appData, sessionId);
       if (roster) {
-        matchedAppData = appData;
-        matchedSwarmId = sessionId;
-        matchedRoster = roster;
-        selfMember =
+        const selfMember =
           Object.entries(roster.members).find(
             ([, m]) => m.conversation_id === sessionId
           )?.[0] ?? "coordinator";
-        break;
+        return { appData, swarmId: sessionId, roster, selfMember };
       }
     }
 
     // 2. Worker reverse lookup
-    if (!matchedRoster) {
-      const swarmDirs = await this.listAgySwarmDirs(appDataDirs);
-      for (const { appData, convId } of swarmDirs) {
-        const roster = await this.readSwarmRoster(appData, convId);
-        if (!roster) continue;
-        const found = Object.entries(roster.members).find(
-          ([, m]) => m.conversation_id === sessionId
-        );
-        if (found) {
-          matchedAppData = appData;
-          matchedSwarmId = convId;
-          matchedRoster = roster;
-          selfMember = found[0];
-          break;
-        }
+    const swarmDirs = await this.listAgySwarmDirs(appDataDirs);
+    for (const { appData, convId } of swarmDirs) {
+      const roster = await this.readSwarmRoster(appData, convId);
+      if (!roster) continue;
+      const found = Object.entries(roster.members).find(
+        ([, m]) => m.conversation_id === sessionId
+      );
+      if (found) {
+        return { appData, swarmId: convId, roster, selfMember: found[0] };
       }
     }
 
-    if (!matchedAppData || !matchedSwarmId || !matchedRoster) {
+    return null;
+  }
+
+  private async computeSwarmStatEtag(
+    appData: string,
+    swarmDir: string,
+    roster: { members: Record<string, Record<string, unknown>> },
+    chosenNarrator: string | null
+  ): Promise<string> {
+    const statFiles = [
+      join(swarmDir, "swarm.json"),
+      join(swarmDir, "members.json"),
+      join(swarmDir, "plan.json"),
+      join(swarmDir, "board.jsonl"),
+      join(swarmDir, "view.json")
+    ];
+    if (chosenNarrator) {
+      const narratorConv = roster.members[chosenNarrator]?.conversation_id;
+      if (typeof narratorConv === "string" && AGY_CONV_ID_RE.test(narratorConv)) {
+        statFiles.push(
+          join(appData, "brain", narratorConv, "swarm_view", "view.json")
+        );
+      }
+    }
+    const transcriptFiles: string[] = [];
+    for (const [, raw] of Object.entries(roster.members)) {
+      const convId =
+        typeof raw.conversation_id === "string" ? raw.conversation_id : "";
+      if (convId && AGY_CONV_ID_RE.test(convId) && raw.killed !== true) {
+        transcriptFiles.push(
+          join(
+            appData,
+            "brain",
+            convId,
+            ".system_generated",
+            "logs",
+            "transcript.jsonl"
+          )
+        );
+      }
+    }
+    const allPaths = [...statFiles, ...transcriptFiles];
+    const stats = await Promise.all(allPaths.map((p) => safeStatAsync(p)));
+    const fingerprint = stats
+      .map((st, idx) => `${idx}:${st ? `${Math.trunc(st.mtime)}:${st.size}` : "-"}`)
+      .join("|");
+    return `sw:${hashShortHex(fingerprint)}`;
+  }
+
+  private async inspectAgySwarm(
+    sessionId: string,
+    nowMs: number,
+    clientEtag?: string
+  ): Promise<
+    | { snapshot: AgentAuxSwarmSnapshot; etag: string; unchanged?: false }
+    | {
+        unchanged: true;
+        etag: string;
+        hasLiveWork: boolean;
+        title: string;
+        activationKey: string;
+      }
+    | null
+  > {
+    let appDataDirs = await this.resolveAgyAppDataDirs(false);
+    let located =
+      appDataDirs.length > 0
+        ? await this.locateAgySwarm(sessionId, appDataDirs)
+        : null;
+    if (!located) {
+      appDataDirs = await this.resolveAgyAppDataDirs(true);
+      if (appDataDirs.length > 0) {
+        located = await this.locateAgySwarm(sessionId, appDataDirs);
+      }
+    }
+    if (!located) {
       return null;
     }
+
+    const {
+      appData: matchedAppData,
+      swarmId: matchedSwarmId,
+      roster: matchedRoster,
+      selfMember
+    } = located;
 
     const swarmDir = join(
       matchedAppData,
@@ -1392,6 +1679,60 @@ export class AgentAuxService {
       "swarm"
     );
     const names = Object.keys(matchedRoster.members);
+
+    // Determine narrator early so stat ETag covers narrator fallback view.json too
+    let narratorName: string | null = null;
+    let liveNarratorRank = -1;
+    let deadNarratorRank = -1;
+    let deadNarratorName: string | null = null;
+
+    for (const [name, raw] of Object.entries(matchedRoster.members)) {
+      const rank = narratorRank(name, raw);
+      if (rank < 0) continue;
+      if (raw.killed === true) {
+        if (rank > deadNarratorRank) {
+          deadNarratorRank = rank;
+          deadNarratorName = name;
+        }
+      } else if (rank > liveNarratorRank) {
+        liveNarratorRank = rank;
+        narratorName = name;
+      }
+    }
+    const chosenNarrator = narratorName ?? deadNarratorName;
+
+    // Lightweight stat-only ETag fast path: skip parsing board.jsonl/plan/view/transcripts if unchanged!
+    const statEtag = await this.computeSwarmStatEtag(
+      matchedAppData,
+      swarmDir,
+      matchedRoster,
+      chosenNarrator
+    );
+    if (clientEtag && clientEtag === statEtag) {
+      const cachedMeta = this.swarmEtagMetaCache.get(`${sessionId}|${statEtag}`);
+      if (cachedMeta) {
+        return {
+          unchanged: true,
+          etag: statEtag,
+          hasLiveWork: cachedMeta.hasLiveWork,
+          title: cachedMeta.title,
+          activationKey: cachedMeta.activationKey
+        };
+      }
+    }
+
+    // Optional swarm.json metadata (title fallback, channels, created_at)
+    const swarmMetaRaw = await this.readCachedJsonObject(
+      join(swarmDir, "swarm.json"),
+      matchedAppData,
+      MAX_VIEW_BYTES
+    );
+    const swarmChannels = Array.isArray(swarmMetaRaw?.channels)
+      ? swarmMetaRaw.channels.filter((c): c is string => typeof c === "string" && c.trim().length > 0)
+      : undefined;
+    const swarmCreatedAt = boardTimeMs(
+      swarmMetaRaw?.created_at ?? swarmMetaRaw?.createdAt
+    );
 
     // Parse board.jsonl (last 400 lines)
     const boardTail = await readTailTextFileAsync(
@@ -1430,11 +1771,21 @@ export class AgentAuxService {
       const agent = typeof raw.agent === "string" ? raw.agent : "";
       const text = typeof raw.text === "string" ? raw.text : "";
       const time = typeof raw.time === "string" ? raw.time : "";
-      const ts = boardTimeMs(time);
+      const ts = boardTimeMs(raw.ts ?? time);
+      const kind =
+        typeof raw.kind === "string" && raw.kind.trim().length > 0
+          ? raw.kind.trim()
+          : undefined;
       const channel =
         typeof raw.channel === "string" && raw.channel && raw.channel !== "main"
           ? raw.channel
           : undefined;
+      const viaChannel = Array.isArray(raw.via_channel)
+        ? raw.via_channel.filter((v): v is string => typeof v === "string" && v.length > 0)
+        : undefined;
+      const channelMentions = Array.isArray(raw.channel_mentions)
+        ? raw.channel_mentions.filter((v): v is string => typeof v === "string" && v.length > 0)
+        : undefined;
       const control = isRecord(raw.control) ? raw.control : undefined;
 
       if (control) {
@@ -1446,6 +1797,7 @@ export class AgentAuxService {
           ts,
           mentions: [],
           all: false,
+          ...(kind ? { kind } : {}),
           ...(channel ? { channel } : {}),
           control
         };
@@ -1496,30 +1848,12 @@ export class AgentAuxService {
         ts,
         mentions,
         all,
-        ...(channel ? { channel } : {})
+        ...(kind ? { kind } : {}),
+        ...(channel ? { channel } : {}),
+        ...(viaChannel && viaChannel.length > 0 ? { viaChannel } : {}),
+        ...(channelMentions && channelMentions.length > 0 ? { channelMentions } : {})
       };
     });
-
-    // Summarize member transcripts & pick narrator
-    let narratorName: string | null = null;
-    let liveNarratorRank = -1;
-    let deadNarratorRank = -1;
-    let deadNarratorName: string | null = null;
-
-    for (const [name, raw] of Object.entries(matchedRoster.members)) {
-      const rank = narratorRank(name, raw);
-      if (rank < 0) continue;
-      if (raw.killed === true) {
-        if (rank > deadNarratorRank) {
-          deadNarratorRank = rank;
-          deadNarratorName = name;
-        }
-      } else if (rank > liveNarratorRank) {
-        liveNarratorRank = rank;
-        narratorName = name;
-      }
-    }
-    const chosenNarrator = narratorName ?? deadNarratorName;
 
     const members: AgentAuxSwarmMember[] = await Promise.all(
       names.map(async (name) => {
@@ -1555,6 +1889,12 @@ export class AgentAuxService {
         const channels = Array.isArray(raw.channels)
           ? raw.channels.filter((c): c is string => typeof c === "string")
           : undefined;
+        const spawnedAt = boardTimeMs(raw.created_at ?? raw.spawned_at);
+        const killedAt = boardTimeMs(raw.killed_at ?? raw.ended_at);
+        const forkedFrom =
+          typeof raw.forked_from === "string" && raw.forked_from.trim()
+            ? raw.forked_from.trim()
+            : undefined;
         return {
           name,
           conversationId: convId,
@@ -1588,6 +1928,9 @@ export class AgentAuxService {
           ...(typeof raw.workspace_mode === "string" && raw.workspace_mode
             ? { workspaceMode: raw.workspace_mode }
             : {}),
+          ...(forkedFrom ? { forkedFrom } : {}),
+          ...(spawnedAt !== null ? { spawnedAt } : {}),
+          ...(killedAt !== null ? { killedAt } : {}),
           ...(channels && channels.length > 0 ? { channels } : {})
         };
       })
@@ -1631,13 +1974,52 @@ export class AgentAuxService {
       }
     }
 
-    // Read plan.json (capped 64 KB)
+    // Read plan.json (capped 64 KB) and normalize both string and object task entries
     const planRaw = await this.readCachedJsonObject(
       join(swarmDir, "plan.json"),
       matchedAppData,
       MAX_VIEW_BYTES
     );
-    const plan = planRaw ? (planRaw as unknown as AgentAuxSwarmPlan) : null;
+    let plan: AgentAuxSwarmPlan | null = null;
+    if (planRaw) {
+      const normalizedTasks: Record<string, string> = {};
+      if (isRecord(planRaw.tasks)) {
+        for (const [taskKey, taskVal] of Object.entries(planRaw.tasks)) {
+          if (typeof taskVal === "string" && taskVal.trim()) {
+            normalizedTasks[taskKey] = taskVal.trim();
+          } else if (isRecord(taskVal) && typeof taskVal.title === "string" && taskVal.title.trim()) {
+            normalizedTasks[taskKey] = taskVal.title.trim();
+          }
+        }
+      }
+      const rawGoal = planRaw.goal;
+      const goal =
+        typeof rawGoal === "string" && rawGoal.trim()
+          ? { title: rawGoal.trim() }
+          : isRecord(rawGoal)
+            ? {
+                ...(typeof rawGoal.title === "string" ? { title: rawGoal.title } : {}),
+                ...(typeof rawGoal.line === "string" ? { line: rawGoal.line } : {})
+              }
+            : null;
+      const threads = Array.isArray(planRaw.threads)
+        ? planRaw.threads
+            .filter((t): t is Record<string, unknown> => isRecord(t) && typeof t.title === "string")
+            .map((t) => ({
+              ...(typeof t.id === "string" ? { id: t.id } : {}),
+              title: String(t.title),
+              ...(typeof t.goal === "string" ? { goal: t.goal } : {}),
+              tasks: Array.isArray(t.tasks)
+                ? t.tasks.filter((x): x is string => typeof x === "string")
+                : []
+            }))
+        : undefined;
+      plan = {
+        ...(goal ? { goal } : { goal: null }),
+        tasks: normalizedTasks,
+        ...(threads ? { threads } : {})
+      };
+    }
 
     // Read view.json (capped 64 KB, swarm dir or narrator fallback)
     let viewRaw = await this.readCachedJsonObject(
@@ -1657,17 +2039,27 @@ export class AgentAuxService {
     }
     const view = viewRaw ? (viewRaw as unknown as AgentAuxSwarmView) : null;
 
+    const swarmTitle =
+      matchedRoster.title ||
+      (typeof swarmMetaRaw?.title === "string" ? swarmMetaRaw.title : "") ||
+      "蜂群协作";
+
     return {
-      id: matchedSwarmId,
-      title: matchedRoster.title || "蜂群协作",
-      selfMember,
-      head,
-      members,
-      messages,
-      edges: [...edgeMap.values()],
-      plan,
-      view,
-      systemAttention
+      etag: statEtag,
+      snapshot: {
+        id: matchedSwarmId,
+        title: swarmTitle,
+        selfMember,
+        head,
+        ...(swarmChannels && swarmChannels.length > 0 ? { channels: swarmChannels } : {}),
+        ...(swarmCreatedAt !== null ? { createdAt: swarmCreatedAt } : {}),
+        members,
+        messages,
+        edges: [...edgeMap.values()],
+        plan,
+        view,
+        systemAttention
+      }
     };
   }
 

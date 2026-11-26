@@ -3,6 +3,7 @@ import { memo, useEffect, useRef, type CSSProperties } from "react";
 import { AgentBrandLogo, type AgentBrandId } from "../agentBrand";
 import {
   buildBeeTileBackground,
+  computeBeeColor,
   computeBeeRamp,
   type AgentAuxMemberVisualStatus,
 } from "./agentAux.logic";
@@ -84,7 +85,9 @@ export function drawBeeToCanvas(
     [0, -1],
   ];
 
-  const rows = (spec: ReadonlyArray<readonly [number, number, number]>): Array<[number, number]> => {
+  const rows = (
+    spec: ReadonlyArray<readonly [number, number, number]>,
+  ): Array<[number, number]> => {
     const pts: Array<[number, number]> = [];
     for (const [y, x0, x1] of spec) {
       for (let x = x0; x <= x1; x += 1) pts.push([x, y]);
@@ -274,6 +277,50 @@ export function drawBeeToCanvas(
   }
 }
 
+// Bounded offscreen canvas & data-URL LRU cache (max 256 entries) for SVG <image> rendering.
+const MAX_BEE_DATA_URL_CACHE = 256;
+const beeDataUrlCache = new Map<string, string>();
+let sharedOffscreenCanvas: HTMLCanvasElement | null = null;
+
+export function getBeeSpriteDataUrl(
+  name: string,
+  state: PixelBeeRenderState = "landed",
+  frame: 0 | 1 = 0,
+): string {
+  const key = `${name}\0${state}\0${frame}`;
+  const cached = beeDataUrlCache.get(key);
+  if (cached !== undefined) {
+    // Refresh LRU order
+    beeDataUrlCache.delete(key);
+    beeDataUrlCache.set(key, cached);
+    return cached;
+  }
+  if (typeof document === "undefined") {
+    return "";
+  }
+  try {
+    if (!sharedOffscreenCanvas) {
+      sharedOffscreenCanvas = document.createElement("canvas");
+      sharedOffscreenCanvas.width = 22;
+      sharedOffscreenCanvas.height = 18;
+    }
+    drawBeeToCanvas(sharedOffscreenCanvas, name, state, frame);
+    const dataUrl = sharedOffscreenCanvas.toDataURL("image/png");
+    if (beeDataUrlCache.size >= MAX_BEE_DATA_URL_CACHE) {
+      const oldest = beeDataUrlCache.keys().next().value;
+      if (oldest !== undefined) beeDataUrlCache.delete(oldest);
+    }
+    beeDataUrlCache.set(key, dataUrl);
+    return dataUrl;
+  } catch {
+    return "";
+  }
+}
+
+export function clearBeeSpriteCacheForTest(): void {
+  beeDataUrlCache.clear();
+}
+
 export interface SwarmBeeSpriteProps {
   readonly name: string;
   readonly state: PixelBeeRenderState;
@@ -293,6 +340,7 @@ export const SwarmBeeSprite = memo(function SwarmBeeSprite({
   const frame0Ref = useRef<HTMLCanvasElement | null>(null);
   const frame1Ref = useRef<HTMLCanvasElement | null>(null);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- imperative 2D canvas pixel-art bee repaint on prop change
   useEffect(() => {
     if (frame0Ref.current) drawBeeToCanvas(frame0Ref.current, name, state, 0);
     if (frame1Ref.current) drawBeeToCanvas(frame1Ref.current, name, state, 1);
@@ -321,10 +369,59 @@ export const SwarmBeeSprite = memo(function SwarmBeeSprite({
   );
 });
 
+/**
+ * Crisp inline 16x14 pixel-styled queen bee emblem for Overview entry buttons & tab chrome
+ * (replaces OS-dependent emoji 🐝 cleanly across Windows/macOS/Linux).
+ */
+export const SwarmMiniBeeGlyph = memo(function SwarmMiniBeeGlyph({
+  size = 15,
+  className,
+}: {
+  readonly size?: number;
+  readonly className?: string;
+}) {
+  const height = Math.round((size * 18) / 22);
+  return (
+    <svg
+      width={size}
+      height={height}
+      viewBox="0 0 22 18"
+      fill="none"
+      className={className ? `shrink-0 ${className}` : "shrink-0"}
+      style={{ shapeRendering: "crispEdges" }}
+      aria-hidden="true"
+    >
+      {/* Wings */}
+      <rect x="12" y="1" width="4" height="3" fill="rgba(255,255,255,0.82)" />
+      <rect x="11" y="2" width="4" height="3" fill="rgba(220,234,255,0.85)" />
+      {/* Crown */}
+      <rect x="5" y="4" width="1" height="1" fill="#FFE9A6" />
+      <rect x="7" y="3" width="1" height="2" fill="#FFE9A6" />
+      <rect x="9" y="4" width="1" height="1" fill="#FFE9A6" />
+      <rect x="5" y="5" width="5" height="1" fill="#F7CE5B" />
+      <rect x="7" y="5" width="1" height="1" fill="#E4566A" />
+      {/* Body */}
+      <rect x="5" y="6" width="12" height="9" rx="3" fill="#F2B830" />
+      <rect x="6" y="7" width="4" height="2" fill="#FFE285" />
+      {/* Stripes */}
+      <rect x="11" y="6" width="2" height="9" fill="#3B2B1A" />
+      <rect x="15" y="7" width="2" height="7" fill="#3B2B1A" />
+      {/* Eye & blush */}
+      <rect x="6" y="9" width="2" height="2" fill="#2A1D12" />
+      <rect x="6" y="9" width="1" height="1" fill="#FFFFFF" />
+      <rect x="5" y="11" width="1" height="1" fill="#FF8096" />
+      {/* Stinger */}
+      <rect x="18" y="10" width="2" height="1" fill="#3B2B1A" />
+    </svg>
+  );
+});
+
+export type SwarmTileSize = "xs" | "sm" | "md" | "lg";
+
 export interface SwarmBeeTileProps {
   readonly name: string;
   readonly status: AgentAuxMemberVisualStatus;
-  readonly size?: "sm" | "md" | "lg";
+  readonly size?: SwarmTileSize;
   readonly showStatusDot?: boolean;
   readonly className?: string;
 }
@@ -336,16 +433,20 @@ export const SwarmBeeTile = memo(function SwarmBeeTile({
   showStatusDot = false,
   className,
 }: SwarmBeeTileProps) {
-  const scale: 2 | 3 = size === "lg" ? 3 : 2;
+  const scale: 1 | 2 | 3 = size === "lg" ? 3 : size === "xs" ? 1 : 2;
   const beeState = toPixelBeeState(status);
+  const isCoord = name === "coordinator";
   const showDot =
     showStatusDot &&
-    (status === "working" || status === "needs_you" || status === "waiting_on");
+    (status === "working" ||
+      status === "needs_you" ||
+      status === "waiting_on" ||
+      status === "error");
 
   return (
     <span
-      className={`pmx-bee-tile pmx-bee-tile--${size}${className ? ` ${className}` : ""}`}
-      style={{ background: buildBeeTileBackground(name) }}
+      className={`pmx-bee-tile pmx-bee-tile--${size}${isCoord ? " pmx-bee-tile--coord" : ""}${className ? ` ${className}` : ""}`}
+      style={isCoord ? undefined : { background: buildBeeTileBackground(name) }}
       data-bee-tile={name}
     >
       <SwarmBeeSprite name={name} state={beeState} scale={scale} />
@@ -364,7 +465,10 @@ export const SwarmMiniCluster = memo(function SwarmMiniCluster({
     <span className="pmx-bee-tile pmx-bee-tile--sm pmx-bee-tile--all" aria-hidden="true">
       <span className="pmx-bee-cluster">
         {picks.map((n, idx) => (
-          <span key={`${n}-${idx}`} className={`pmx-bee-cluster-slot pmx-bee-cluster-slot--${idx}`}>
+          <span
+            key={`cluster-slot-${idx === 0 ? "a" : idx === 1 ? "b" : "c"}-${n}`}
+            className={`pmx-bee-cluster-slot pmx-bee-cluster-slot--${idx}`}
+          >
             <SwarmBeeSprite name={n} state="landed" scale={1} />
           </span>
         ))}
@@ -379,9 +483,10 @@ export interface AgentMemberAvatarProps {
   readonly name: string;
   readonly displayName: string;
   readonly status: AgentAuxMemberVisualStatus;
-  readonly color?: string | null;
-  readonly size?: "sm" | "md" | "lg";
+  readonly color?: string | null | undefined;
+  readonly size?: SwarmTileSize;
   readonly showStatusDot?: boolean;
+  readonly isCoordinator?: boolean;
 }
 
 export const AgentMemberAvatar = memo(function AgentMemberAvatar({
@@ -393,45 +498,43 @@ export const AgentMemberAvatar = memo(function AgentMemberAvatar({
   color,
   size = "md",
   showStatusDot = true,
+  isCoordinator = false,
 }: AgentMemberAvatarProps) {
   if (useBees) {
-    return (
-      <SwarmBeeTile
-        name={name}
-        status={status}
-        size={size}
-        showStatusDot={showStatusDot}
-      />
-    );
+    return <SwarmBeeTile name={name} status={status} size={size} showStatusDot={showStatusDot} />;
   }
 
-  const accent = color || "#6366f1";
-  const initial = (displayName || name || "?").trim().slice(0, 2).toUpperCase();
+  const accent = color || computeBeeColor(name || displayName || "agent");
+  const isCoord = isCoordinator || name === "coordinator";
   const showDot =
     showStatusDot &&
-    (status === "working" || status === "needs_you" || status === "waiting_on" || status === "error");
+    (status === "working" ||
+      status === "needs_you" ||
+      status === "waiting_on" ||
+      status === "error");
+  const iconSize = size === "lg" ? 26 : size === "md" ? 20 : size === "sm" ? 18 : 14;
 
   return (
     <span
-      className={`pmx-agent-avatar pmx-agent-avatar--${size}`}
+      className={`pmx-agent-avatar pmx-agent-avatar--${size}${isCoord ? " pmx-agent-avatar--coord" : ""}${status === "working" ? " pmx-agent-avatar--working" : ""}${status === "parked" ? " pmx-agent-avatar--parked" : ""}`}
       style={{
-        background: `color-mix(in srgb, ${accent} 18%, var(--pmx-aux-card))`,
-        borderColor: `color-mix(in srgb, ${accent} 42%, var(--pmx-aux-border))`,
+        background: `color-mix(in srgb, ${accent} 16%, var(--pmx-aux-card))`,
+        borderColor: `color-mix(in srgb, ${accent} 38%, var(--pmx-aux-border))`,
       }}
+      data-agent-avatar-brand={providerBrand}
       aria-hidden="true"
     >
-      {providerBrand === "claude-code" ? (
-        <span className="pmx-agent-avatar-mono" style={{ color: accent }}>
-          {initial}
+      <AgentBrandLogo
+        provider={providerBrand}
+        size={iconSize}
+        online={status === "working"}
+        breathing={status === "working"}
+      />
+      {status === "parked" ? (
+        <span className="pmx-agent-avatar-zzz" aria-hidden="true">
+          z
         </span>
-      ) : (
-        <AgentBrandLogo
-          provider={providerBrand}
-          size={size === "lg" ? 22 : size === "md" ? 18 : 15}
-          online={status === "working"}
-          breathing={status === "working"}
-        />
-      )}
+      ) : null}
       {showDot ? <i className={`pmx-bee-dot pmx-bee-dot--${status}`} /> : null}
     </span>
   );
