@@ -151,7 +151,7 @@ export interface RetiredPluginItem {
   readonly titleZh: string;
   readonly titleEn: string;
   readonly status: "deprecated";
-  readonly replacedByBuiltin: true;
+  readonly replacedByBuiltin: boolean;
   readonly noticeZh: string;
   readonly noticeEn: string;
   readonly detailZh?: string;
@@ -182,6 +182,18 @@ export const DEFAULT_RETIRED_OFFICIAL_PLUGINS: readonly RetiredPluginItem[] = [
     noticeEn: "Deprecated: Replaced by Prismux built-in capabilities",
     detailZh: "原 SSH 插件已从官方目录与构建链路移除，远程终端与主机连接由 Prismux 内置终端与工作区能力取代。",
     detailEn: "Retired from the official catalog; superseded by built-in Prismux terminal capabilities.",
+  },
+  {
+    id: "fishdock-hook",
+    packageName: "@prismux/plugin-fishdock-hook",
+    titleZh: "FISH-Dock 灵动岛桥接（fishdock-hook）",
+    titleEn: "FISH-Dock Dynamic Island Bridge (fishdock-hook)",
+    status: "deprecated",
+    replacedByBuiltin: false,
+    noticeZh: "已停用：已从 Prismux 官方插件目录移除",
+    noticeEn: "Deprecated: Removed from the Prismux official plugin catalog",
+    detailZh: "原 FISH-Dock 灵动岛桥接插件已从 Prismux 官方插件目录与构建链路彻底移除，不再提供独立安装包或官方维护。",
+    detailEn: "Removed from the Prismux official plugin catalog and release pipeline.",
   },
 ] as const;
 
@@ -225,12 +237,10 @@ export interface GroupVisibilityResult<T> {
 
 export const OFFICIAL_TITLE_MAP: Readonly<Record<string, string>> = {
   qq: "QQ 主秘书与群聊隔离插件",
-  "fishdock-hook": "FISH-Dock 灵动岛审批回执插件",
 };
 
 const OFFICIAL_CATEGORY_MAP: Readonly<Record<string, PluginAssignedCategory>> = {
   qq: "communication",
-  "fishdock-hook": "communication",
 };
 
 const OFFICIAL_CONTRIBUTIONS_MAP: Readonly<Record<string, PluginCapabilityContributions>> = {
@@ -239,12 +249,6 @@ const OFFICIAL_CONTRIBUTIONS_MAP: Readonly<Record<string, PluginCapabilityContri
     commands: ["qq.send-test", "qq.reconnect-onebot"],
     hooks: ["Notification", "Stop"],
     routes: ["POST /plugins/qq/onebot/webhook", "GET /plugins/qq/status"],
-  },
-  "fishdock-hook": {
-    panels: [],
-    commands: ["fishdock.ping-island", "fishdock.sync-approvals"],
-    hooks: ["PreToolUse", "Notification", "Stop"],
-    routes: ["POST /plugins/fishdock/callback"],
   },
 };
 
@@ -864,9 +868,9 @@ export function parseRetiredPluginsPayload(payload: unknown): RetiredPluginItem[
       titleZh: asString(rec.titleZh, id),
       titleEn: asString(rec.titleEn, id),
       status: "deprecated",
-      replacedByBuiltin: true,
-      noticeZh: asString(rec.noticeZh, "已停用：已被 Prismux 内置功能取代"),
-      noticeEn: asString(rec.noticeEn, "Deprecated: Replaced by Prismux built-in capabilities"),
+      replacedByBuiltin: rec.replacedByBuiltin === true,
+      noticeZh: asString(rec.noticeZh, "已停用：已从 Prismux 官方插件目录移除"),
+      noticeEn: asString(rec.noticeEn, "Deprecated: Removed from the Prismux official plugin catalog"),
       ...(typeof rec.detailZh === "string" ? { detailZh: rec.detailZh } : {}),
       ...(typeof rec.detailEn === "string" ? { detailEn: rec.detailEn } : {}),
     });

@@ -303,7 +303,6 @@ export interface ReleaseNotesTemplateInput {
 
 const OFFICIAL_PLUGIN_SUMMARY_ZH: Record<string, string> = {
   qq: 'OneBot v11 私聊主秘书调度 + 群聊物理隔离陪聊',
-  'fishdock-hook': 'FISH-Dock 灵动岛审批卡片、重要邮件与夜间工场回执',
 };
 
 export function collectReleaseArtifactFiles(
@@ -487,7 +486,7 @@ export function buildReleaseNotesTemplate(input: ReleaseNotesTemplateInput): str
   const lines: string[] = [
     `# ${releaseTitle}`,
     '',
-    `> 标准 SemVer / Tag：\`${tag}\`（\`${input.version}\`）。**官方两大插件（\`qq\` / \`fishdock-hook\`）严格保持默认零预装**（原 \`pet\` / \`ssh\` 插件已停用：已被 Prismux 内置功能取代）：桌面安装包内不包含任何官方插件，需要时可从下方单独下载 \`.wb-plugin\` 或通过内置插件中心 / npm 单包按需安装。`,
+    `> 标准 SemVer / Tag：\`${tag}\`（\`${input.version}\`）。**官方独立插件（\`qq\`）严格保持默认零预装**（原 \`pet\` / \`ssh\` / \`fishdock-hook\` 插件已停用并移除）：桌面安装包内不包含任何官方插件，需要时可从下方单独下载 \`.wb-plugin\` 或通过内置插件中心 / npm 单包按需安装。`,
     '',
     '## 📦 下载指南：我应该下载哪个文件？',
     '',

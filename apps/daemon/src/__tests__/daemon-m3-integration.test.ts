@@ -127,7 +127,7 @@ test("daemon M3 integration: zero preinstalled plugins, reversible plugin toggle
     }
   });
 
-  // 1. Default zero preinstalled official plugins (qq, pet, fishdock-hook, ssh)
+  // 1. Default zero preinstalled official plugins (qq)
   assert.deepEqual(daemon.pluginHost.listInstalled(), []);
 
   const listHttpRes = await fetch(`${ready.httpUrl}/v1/rpc`, {

@@ -573,13 +573,10 @@ describe('release-and-npm-packages', () => {
       outDir: unscopedOut,
       version,
     });
-    assert.equal(unscopedBuilt.length, 2);
+    assert.equal(unscopedBuilt.length, 1);
     assert.deepEqual(
       unscopedBuilt.map((b) => b.packageName),
-      [
-        'prismux-plugin-qq',
-        'prismux-plugin-fishdock-hook',
-      ],
+      ['prismux-plugin-qq'],
     );
 
     const scopedBuilt = buildNpmPluginPackages({
@@ -858,7 +855,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
       'target',
       'x86_64-pc-windows-msvc',
       'release',
-      process.platform === 'win32' ? 't3-resource-monitor.exe' : 't3-resource-monitor',
+      process.platform === 'win32' ? 'prismux-resource-monitor.exe' : 'prismux-resource-monitor',
     );
     const outDir = join(mockRepo, '.work', 'release-v0.1.0-alpha.1');
     const invocations: DesktopCommandInvocation[] = [];
@@ -892,7 +889,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
       'root-build',
       'sqlite-vec-stage',
       'rust-build',
-      't3-build-desktop',
+      'prismux-build-desktop',
       'nsis-installer',
     ]);
     assert.ok(result.sqliteVecPath !== null && existsSync(result.sqliteVecPath));
@@ -938,7 +935,7 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     assert.deepEqual(skipResult.executedSteps, [
       'sqlite-vec-stage',
       'rust-skipped',
-      't3-build-desktop',
+      'prismux-build-desktop',
     ]);
     assert.equal(skipInvocations.some((i) => i.command === 'cargo'), false);
 
@@ -1057,9 +1054,9 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
     });
 
     assert.equal(releaseRes.version, version);
-    assert.equal(releaseRes.plugins.length, 2);
-    assert.equal(releaseRes.unscopedNpmPackages.length, 2);
-    assert.equal(releaseRes.scopedNpmPackages.length, 2);
+    assert.equal(releaseRes.plugins.length, 1);
+    assert.equal(releaseRes.unscopedNpmPackages.length, 1);
+    assert.equal(releaseRes.scopedNpmPackages.length, 1);
     assert.ok(existsSync(join(outDir, 'plugins', `prismux-plugin-qq-${version}.wb-plugin`)));
     assert.equal(existsSync(join(outDir, 'plugins', `prismux-plugin-qq-${version}.sha256`)), false);
     assert.ok(existsSync(join(outDir, RELEASE_CATALOG_FILENAME)));

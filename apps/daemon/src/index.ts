@@ -324,7 +324,7 @@ export class PrismuxDaemon {
       artifactBackdoor: this.artifactBackdoor,
     });
 
-    // Official plugins (qq, fishdock-hook) are NEVER preinstalled by default.
+    // Official plugins (qq) are NEVER preinstalled by default.
     this.pluginHost = new CordisPluginHost("daemon");
     this.pluginMasterKey = loadOrGeneratePluginMasterKey(options.dataDir, options.pluginMasterKey);
     this.pluginCredentialStore = new EncryptedPluginCredentialStore({

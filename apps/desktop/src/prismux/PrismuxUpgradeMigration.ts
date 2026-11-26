@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "../app/DesktopStatePaths.ts";
 
 export const PRISMUX_UPGRADE_MIGRATION_VERSION = "0.2.0-rc.1" as const;
+export const RETIRE_FISHDOCK_HOOK_MIGRATION_VERSION = "0.2.3-rc.3" as const;
 export const UPGRADE_MIGRATIONS_STATE_FILENAME = "upgrade-migrations.json" as const;
 
 export const DEPRECATED_CLIENT_SETTINGS_KEYS = [
@@ -35,6 +36,12 @@ export const DEPRECATED_CONNECT_SETTINGS_KEYS = [
   "clerkUser",
 ] as const;
 
+export const RETIRED_FISHDOCK_HOOK_PLUGIN_DIR_NAMES = [
+  "fishdock-hook",
+  "plugin-fishdock-hook",
+  "prismux-plugin-fishdock-hook",
+] as const;
+
 export const RETIRED_PLUGIN_DIR_NAMES = [
   "pet",
   "plugin-pet",
@@ -42,15 +49,13 @@ export const RETIRED_PLUGIN_DIR_NAMES = [
   "ssh",
   "plugin-ssh",
   "prismux-plugin-ssh",
+  ...RETIRED_FISHDOCK_HOOK_PLUGIN_DIR_NAMES,
 ] as const;
 
 export const ACTIVE_OFFICIAL_PLUGIN_DIR_NAMES = [
   "qq",
   "plugin-qq",
   "prismux-plugin-qq",
-  "fishdock-hook",
-  "plugin-fishdock-hook",
-  "prismux-plugin-fishdock-hook",
 ] as const;
 
 export const OBSOLETE_APPDATA_CACHE_RELPATHS = [
@@ -124,7 +129,9 @@ export interface PrismuxUpgradeMigrationErrorEntry {
 }
 
 export interface PrismuxUpgradeMigrationResult {
-  readonly migrationId: typeof PRISMUX_UPGRADE_MIGRATION_VERSION;
+  readonly migrationId:
+    | typeof PRISMUX_UPGRADE_MIGRATION_VERSION
+    | typeof RETIRE_FISHDOCK_HOOK_MIGRATION_VERSION;
   readonly skipped: boolean;
   readonly markerPath: string;
   readonly removedPaths: readonly string[];
@@ -472,11 +479,13 @@ function stripDeprecatedKeysFromJsonFile(
 }
 
 /**
- * Executes versioned idempotent one-time upgrade cleanup for `0.2.0-rc.1`:
+ * Executes versioned idempotent one-time upgrade cleanups (`0.2.0-rc.1` + `0.2.3-rc.3`):
  * 1. Sweeps obsolete cache directories under %APPDATA%\Prismux and %LOCALAPPDATA%\Prismux
  *    (plus legacy Prismux (Alpha), Tauri WebView2 EBWebView, and stale updater pending cache).
- * 2. Removes retired `pet` and `ssh` plugin directories under ~/.prismux/plugins/ while
- *    strictly preserving active official plugins (`qq`, `fishdock-hook`) and third-party plugins.
+ * 2. Removes retired `pet`, `ssh`, and `fishdock-hook` plugin directories under ~/.prismux/plugins/
+ *    while strictly preserving active official plugins (`qq`) and third-party plugins.
+ *    For users who already completed `0.2.0-rc.1`, runs an incremental `0.2.3-rc.3` sweep that
+ *    removes legacy `fishdock-hook` leftovers ONLY without touching runtime caches.
  * 3. Strips deprecated settings keys (`appearanceContrast`, `chatWidth`, obsolete T3 Connect
  *    cached keys) and removes obsolete T3 Connect / Clerk token caches.
  * 4. Strictly preserves `memory.db`, `credentials/`, wallpapers, active plugins, and all
@@ -489,7 +498,12 @@ export function runPrismuxUpgradeMigrations(
   const markerPath = NodePath.join(paths.stateDir, UPGRADE_MIGRATIONS_STATE_FILENAME);
   const existingState = readMigrationState(markerPath);
 
-  if (existingState.completed[PRISMUX_UPGRADE_MIGRATION_VERSION] !== undefined) {
+  const needsCoreMigration =
+    existingState.completed[PRISMUX_UPGRADE_MIGRATION_VERSION] === undefined;
+  const needsFishdockRetirement =
+    existingState.completed[RETIRE_FISHDOCK_HOOK_MIGRATION_VERSION] === undefined;
+
+  if (!needsCoreMigration && !needsFishdockRetirement) {
     return {
       migrationId: PRISMUX_UPGRADE_MIGRATION_VERSION,
       skipped: true,
@@ -505,102 +519,127 @@ export function runPrismuxUpgradeMigrations(
   const removedRetiredPlugins: string[] = [];
   const strippedSettingsKeys: string[] = [];
   const errors: PrismuxUpgradeMigrationErrorEntry[] = [];
-
-  // 1. Clean obsolete disposable caches under %APPDATA%\Prismux (and legacy Prismux (Alpha)).
-  const appDataRoots = deduplicatePaths(
-    [
-      NodePath.join(paths.appDataDir, "Prismux"),
-      NodePath.join(paths.appDataDir, "prismux"),
-      NodePath.join(paths.appDataDir, "Prismux (Alpha)"),
-    ],
-    paths.platform,
-  );
-  for (const appDataRoot of appDataRoots) {
-    for (const relCache of OBSOLETE_APPDATA_CACHE_RELPATHS) {
-      safeRemovePath(NodePath.join(appDataRoot, relCache), paths, removedPaths, errors);
-    }
-  }
-
-  // 2. Clean obsolete disposable caches under %LOCALAPPDATA%\Prismux, Tauri WebView2, and updater cache.
-  const localAppDataRoots = deduplicatePaths(
-    [
-      NodePath.join(paths.localAppDataDir, "Prismux"),
-      NodePath.join(paths.localAppDataDir, "prismux"),
-    ],
-    paths.platform,
-  );
-  for (const localRoot of localAppDataRoots) {
-    for (const relCache of OBSOLETE_LOCALAPPDATA_CACHE_RELPATHS) {
-      safeRemovePath(NodePath.join(localRoot, relCache), paths, removedPaths, errors);
-    }
-  }
-  safeRemovePath(
-    NodePath.join(paths.localAppDataDir, "io.prismux.desktop", "EBWebView"),
-    paths,
-    removedPaths,
-    errors,
-  );
-  safeRemovePath(
-    NodePath.join(paths.localAppDataDir, "prismux-updater", "pending"),
-    paths,
-    removedPaths,
-    errors,
-  );
-
-  // 3. Remove retired `pet` and `ssh` plugin leftovers ONLY (never touch qq, fishdock-hook, or user plugins).
   const pluginRoots = deduplicatePaths([NodePath.join(paths.baseDir, "plugins")], paths.platform);
-  for (const pluginRoot of pluginRoots) {
-    for (const retiredName of RETIRED_PLUGIN_DIR_NAMES) {
-      const target = NodePath.join(pluginRoot, retiredName);
-      if (safeRemovePath(target, paths, removedPaths, errors)) {
-        removedRetiredPlugins.push(retiredName);
+
+  if (needsCoreMigration) {
+    // 1. Clean obsolete disposable caches under %APPDATA%\Prismux (and legacy Prismux (Alpha)).
+    const appDataRoots = deduplicatePaths(
+      [
+        NodePath.join(paths.appDataDir, "Prismux"),
+        NodePath.join(paths.appDataDir, "prismux"),
+        NodePath.join(paths.appDataDir, "Prismux (Alpha)"),
+      ],
+      paths.platform,
+    );
+    for (const appDataRoot of appDataRoots) {
+      for (const relCache of OBSOLETE_APPDATA_CACHE_RELPATHS) {
+        safeRemovePath(NodePath.join(appDataRoot, relCache), paths, removedPaths, errors);
       }
     }
-  }
 
-  // 4. Remove obsolete T3 Connect / Clerk cached state files inside stateDir.
-  for (const relState of OBSOLETE_T3_CONNECT_STATE_RELPATHS) {
-    safeRemovePath(NodePath.join(paths.stateDir, relState), paths, removedPaths, errors);
-  }
-
-  // 5. Strip deprecated settings keys (`appearanceContrast`, `chatWidth`, obsolete T3 Connect keys).
-  const clientStripped = stripDeprecatedKeysFromJsonFile(
-    NodePath.join(paths.stateDir, "client-settings.json"),
-    DEPRECATED_CLIENT_SETTINGS_KEYS,
-    errors,
-  );
-  for (const key of clientStripped) {
-    if (!strippedSettingsKeys.includes(key)) {
-      strippedSettingsKeys.push(key);
+    // 2. Clean obsolete disposable caches under %LOCALAPPDATA%\Prismux, Tauri WebView2, and updater cache.
+    const localAppDataRoots = deduplicatePaths(
+      [
+        NodePath.join(paths.localAppDataDir, "Prismux"),
+        NodePath.join(paths.localAppDataDir, "prismux"),
+      ],
+      paths.platform,
+    );
+    for (const localRoot of localAppDataRoots) {
+      for (const relCache of OBSOLETE_LOCALAPPDATA_CACHE_RELPATHS) {
+        safeRemovePath(NodePath.join(localRoot, relCache), paths, removedPaths, errors);
+      }
     }
-  }
-
-  for (const secondaryFile of ["desktop-settings.json", "settings.json"] as const) {
-    const secondaryStripped = stripDeprecatedKeysFromJsonFile(
-      NodePath.join(paths.stateDir, secondaryFile),
-      DEPRECATED_CONNECT_SETTINGS_KEYS,
+    safeRemovePath(
+      NodePath.join(paths.localAppDataDir, "io.prismux.desktop", "EBWebView"),
+      paths,
+      removedPaths,
       errors,
     );
-    for (const key of secondaryStripped) {
+    safeRemovePath(
+      NodePath.join(paths.localAppDataDir, "prismux-updater", "pending"),
+      paths,
+      removedPaths,
+      errors,
+    );
+
+    // 3. Remove retired `pet`, `ssh`, and `fishdock-hook` plugin leftovers ONLY (never touch qq or user plugins).
+    for (const pluginRoot of pluginRoots) {
+      for (const retiredName of RETIRED_PLUGIN_DIR_NAMES) {
+        const target = NodePath.join(pluginRoot, retiredName);
+        if (safeRemovePath(target, paths, removedPaths, errors)) {
+          removedRetiredPlugins.push(retiredName);
+        }
+      }
+    }
+
+    // 4. Remove obsolete T3 Connect / Clerk cached state files inside stateDir.
+    for (const relState of OBSOLETE_T3_CONNECT_STATE_RELPATHS) {
+      safeRemovePath(NodePath.join(paths.stateDir, relState), paths, removedPaths, errors);
+    }
+
+    // 5. Strip deprecated settings keys (`appearanceContrast`, `chatWidth`, obsolete T3 Connect keys).
+    const clientStripped = stripDeprecatedKeysFromJsonFile(
+      NodePath.join(paths.stateDir, "client-settings.json"),
+      DEPRECATED_CLIENT_SETTINGS_KEYS,
+      errors,
+    );
+    for (const key of clientStripped) {
       if (!strippedSettingsKeys.includes(key)) {
         strippedSettingsKeys.push(key);
       }
     }
+
+    for (const secondaryFile of ["desktop-settings.json", "settings.json"] as const) {
+      const secondaryStripped = stripDeprecatedKeysFromJsonFile(
+        NodePath.join(paths.stateDir, secondaryFile),
+        DEPRECATED_CONNECT_SETTINGS_KEYS,
+        errors,
+      );
+      for (const key of secondaryStripped) {
+        if (!strippedSettingsKeys.includes(key)) {
+          strippedSettingsKeys.push(key);
+        }
+      }
+    }
+  } else if (needsFishdockRetirement) {
+    // Incremental 0.2.3-rc.3 sweep for existing 0.2.0+ users: remove retired fishdock-hook leftovers ONLY.
+    for (const pluginRoot of pluginRoots) {
+      for (const retiredName of RETIRED_FISHDOCK_HOOK_PLUGIN_DIR_NAMES) {
+        const target = NodePath.join(pluginRoot, retiredName);
+        if (safeRemovePath(target, paths, removedPaths, errors)) {
+          removedRetiredPlugins.push(retiredName);
+        }
+      }
+    }
   }
 
-  // 6. Persist idempotent completion marker.
+  // 6. Persist idempotent completion marker(s).
   const completedAt = options.nowIso ? options.nowIso() : DateTime.formatIso(DateTime.nowUnsafe());
+  const nextCompleted: Record<string, UpgradeMigrationMarkerRecord> = {
+    ...existingState.completed,
+  };
+  if (needsCoreMigration) {
+    nextCompleted[PRISMUX_UPGRADE_MIGRATION_VERSION] = {
+      completedAt,
+      removedPathsCount: removedPaths.length,
+      removedRetiredPlugins,
+      strippedSettingsKeys,
+    };
+  }
+  if (needsFishdockRetirement) {
+    nextCompleted[RETIRE_FISHDOCK_HOOK_MIGRATION_VERSION] = {
+      completedAt,
+      removedPathsCount: removedPaths.length,
+      removedRetiredPlugins: removedRetiredPlugins.filter((name) =>
+        (RETIRED_FISHDOCK_HOOK_PLUGIN_DIR_NAMES as readonly string[]).includes(name),
+      ),
+      strippedSettingsKeys: [],
+    };
+  }
   const nextState: UpgradeMigrationsStateDocument = {
     schemaVersion: 1,
-    completed: {
-      ...existingState.completed,
-      [PRISMUX_UPGRADE_MIGRATION_VERSION]: {
-        completedAt,
-        removedPathsCount: removedPaths.length,
-        removedRetiredPlugins,
-        strippedSettingsKeys,
-      },
-    },
+    completed: nextCompleted,
   };
   try {
     writeJsonAtomic(markerPath, nextState);
@@ -612,7 +651,9 @@ export function runPrismuxUpgradeMigrations(
   }
 
   return {
-    migrationId: PRISMUX_UPGRADE_MIGRATION_VERSION,
+    migrationId: needsCoreMigration
+      ? PRISMUX_UPGRADE_MIGRATION_VERSION
+      : RETIRE_FISHDOCK_HOOK_MIGRATION_VERSION,
     skipped: false,
     markerPath,
     removedPaths,

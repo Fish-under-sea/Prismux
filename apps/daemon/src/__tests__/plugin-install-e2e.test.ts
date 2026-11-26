@@ -137,7 +137,7 @@ function packRealPlugin(repoRoot: string, pluginId: string, outDir: string): {
   };
 }
 
-test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fallback, tamper rejection, retired pet/ssh 410, local .wb-plugin + rollback + restart hydration", async () => {
+test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fallback, tamper rejection, retired pet/ssh/fishdock-hook 410, local .wb-plugin + rollback + restart hydration", async () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = findRepoRoot(here);
   const workDir = mkdtempSync(join(tmpdir(), "prismux-plugin-e2e-"));
@@ -151,7 +151,6 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
   mkdirSync(isolatedCatalogDir, { recursive: true });
 
   const qqPack = packRealPlugin(repoRoot, "qq", packedDir);
-  const fishdockPack = packRealPlugin(repoRoot, "fishdock-hook", packedDir);
 
   // Copy official.json to an isolated directory without plugins-official/dist so local cache is guaranteed empty
   const repoCatalogRaw = readFileSync(
@@ -161,26 +160,27 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
   const isolatedCatalogPath = join(isolatedCatalogDir, "official.json");
   writeFileSync(isolatedCatalogPath, repoCatalogRaw, "utf8");
 
-  // Build an npm wrapper tarball for fishdock-hook matching scripts/build-npm-plugin-packages.ts
-  const fishdockManifestRaw = readFileSync(
-    join(repoRoot, "plugins-official", "plugin-fishdock-hook", "plugin.manifest.json"),
+  // Build an npm wrapper tarball for qq matching scripts/build-npm-plugin-packages.ts
+  const qqManifestRaw = readFileSync(
+    join(repoRoot, "plugins-official", "plugin-qq", "plugin.manifest.json"),
     "utf8"
   );
-  const fishdockNpmWrapper = buildDeterministicTgz({
+  const qqNpmWrapper = buildDeterministicTgz({
     "package/package.json": JSON.stringify({
-      name: "prismux-plugin-fishdock-hook",
-      version: fishdockPack.version,
+      name: "prismux-plugin-qq",
+      version: qqPack.version,
       type: "module",
-      bin: { "prismux-plugin-fishdock-hook": "bin/install.mjs" },
+      bin: { "prismux-plugin-qq": "bin/install.mjs" },
       engines: { prismux: ">=0.1.0-0 <2.0.0" },
       scripts: { postinstall: "exit 1" }
     }),
-    "package/plugin.manifest.json": fishdockManifestRaw,
-    [`package/${fishdockPack.filename}`]: fishdockPack.bytes
+    "package/plugin.manifest.json": qqManifestRaw,
+    [`package/${qqPack.filename}`]: qqPack.bytes
   });
-  const fishdockNpmSha512 = `sha512-${createHash("sha512").update(fishdockNpmWrapper).digest("base64")}`;
+  const qqNpmSha512 = `sha512-${createHash("sha512").update(qqNpmWrapper).digest("base64")}`;
 
   let tamperQqOnGithub = false;
+  let serveQqOnGitee = true;
   const requestedPaths: string[] = [];
 
   // Mock GitHub Release server: returns 404 normally (or tampered gzip when tamperQqOnGithub=true)
@@ -197,10 +197,10 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
     res.end("Not Found");
   });
 
-  // Mock Gitee Release server: serves real qq .wb-plugin, returns 404 for fishdock-hook
+  // Mock Gitee Release server: serves real qq .wb-plugin when serveQqOnGitee=true, 404 otherwise
   const mockGitee = await startLocalServer((req, res) => {
     requestedPaths.push(`gitee:${req.url}`);
-    if (!tamperQqOnGithub && req.url?.endsWith(`/${qqPack.filename}`)) {
+    if (!tamperQqOnGithub && serveQqOnGitee && req.url?.endsWith(`/${qqPack.filename}`)) {
       res.writeHead(200, { "content-type": "application/octet-stream" });
       res.end(qqPack.bytes);
       return;
@@ -209,22 +209,22 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
     res.end("Not Found");
   });
 
-  // Mock npm Registry server: serves wrapper package for fishdock-hook
+  // Mock npm Registry server: serves wrapper package for qq when both GitHub and Gitee return 404
   const mockNpm = await startLocalServer((req, res) => {
     requestedPaths.push(`npm:${req.url}`);
-    if (req.url === "/prismux-plugin-fishdock-hook") {
+    if (req.url === "/prismux-plugin-qq") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
-          name: "prismux-plugin-fishdock-hook",
-          "dist-tags": { latest: fishdockPack.version },
+          name: "prismux-plugin-qq",
+          "dist-tags": { latest: qqPack.version },
           versions: {
-            [fishdockPack.version]: {
-              version: fishdockPack.version,
+            [qqPack.version]: {
+              version: qqPack.version,
               engines: { prismux: ">=0.1.0-0 <2.0.0" },
               dist: {
-                tarball: `${mockNpm.baseUrl}/tarballs/prismux-plugin-fishdock-hook.tgz`,
-                integrity: fishdockNpmSha512
+                tarball: `${mockNpm.baseUrl}/tarballs/prismux-plugin-qq.tgz`,
+                integrity: qqNpmSha512
               }
             }
           }
@@ -232,9 +232,9 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
       );
       return;
     }
-    if (req.url === "/tarballs/prismux-plugin-fishdock-hook.tgz") {
+    if (req.url === "/tarballs/prismux-plugin-qq.tgz") {
       res.writeHead(200, { "content-type": "application/gzip" });
-      res.end(fishdockNpmWrapper);
+      res.end(qqNpmWrapper);
       return;
     }
     res.writeHead(404);
@@ -268,7 +268,7 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
     "content-type": "application/json"
   };
 
-  // 1. Catalog exposes 2 active plugins (qq, fishdock-hook) + retired pet/ssh notice, 0 preinstalled
+  // 1. Catalog exposes 1 active plugin (qq) + retired pet/ssh/fishdock-hook notices, 0 preinstalled
   const catRes = await fetch(`${ready.httpUrl}/v1/plugins/catalog`, {
     headers: { Authorization: `Bearer ${authToken}` }
   });
@@ -284,21 +284,21 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
   };
   assert.deepEqual(
     catalogBody.plugins.map((p) => p.id).sort(),
-    ["fishdock-hook", "qq"]
+    ["qq"]
   );
   assert.equal(catalogBody.plugins.every((p) => p.installed === false), true);
   assert.deepEqual(
     catalogBody.retiredPlugins.map((r) => r.id).sort(),
-    ["pet", "ssh"]
+    ["fishdock-hook", "pet", "ssh"]
   );
   for (const retired of catalogBody.retiredPlugins) {
     assert.equal(retired.status, "deprecated");
-    assert.equal(retired.replacedByBuiltin, true);
-    assert.match(retired.noticeZh, /已停用：已被 Prismux 内置功能取代/);
+    assert.equal(retired.replacedByBuiltin, retired.id !== "fishdock-hook");
+    assert.match(retired.noticeZh, /已停用/);
   }
 
-  // 2. Attempting to install retired pet or ssh is rejected with HTTP 410 PLUGIN_RETIRED
-  for (const retiredId of ["pet", "ssh"]) {
+  // 2. Attempting to install retired pet, ssh, or fishdock-hook is rejected with HTTP 410 PLUGIN_RETIRED
+  for (const retiredId of ["pet", "ssh", "fishdock-hook"]) {
     const retiredRes = await fetch(`${ready.httpUrl}/v1/plugins/install-official`, {
       method: "POST",
       headers: authHeaders,
@@ -389,36 +389,38 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
     effects: 0
   });
 
-  // 5. Official install of fishdock-hook: GitHub 404 & Gitee 404 -> npm wrapper fallback -> unwraps nested .wb-plugin -> mounts cleanly
-  const fishInstallRes = await fetch(`${ready.httpUrl}/v1/plugins/install`, {
+  // 5. Official install of qq via npm wrapper fallback: GitHub 404 & Gitee 404 -> npm wrapper fallback -> unwraps nested .wb-plugin -> mounts cleanly
+  serveQqOnGitee = false;
+  const qqNpmInstallRes = await fetch(`${ready.httpUrl}/v1/plugins/install`, {
     method: "POST",
     headers: authHeaders,
     body: JSON.stringify({
       source: "official",
-      pluginId: "fishdock-hook",
+      pluginId: "qq",
       confirmedAudit: true
     })
   });
-  assert.equal(fishInstallRes.status, 200);
-  const fishInstalled = (await fishInstallRes.json()) as {
+  assert.equal(qqNpmInstallRes.status, 200);
+  const qqNpmInstalled = (await qqNpmInstallRes.json()) as {
     ok: boolean;
     mounted: boolean;
     sourceUsed?: string;
     plugin: { manifest: { id: string }; distribution: string };
   };
-  assert.equal(fishInstalled.ok, true);
-  assert.equal(fishInstalled.mounted, true);
-  assert.equal(fishInstalled.plugin.manifest.id, "fishdock-hook");
-  assert.equal(fishInstalled.plugin.distribution, "managed");
-  assert.match(fishInstalled.sourceUsed ?? "", /^npm-fallback:/);
+  assert.equal(qqNpmInstalled.ok, true);
+  assert.equal(qqNpmInstalled.mounted, true);
+  assert.equal(qqNpmInstalled.plugin.manifest.id, "qq");
+  assert.equal(qqNpmInstalled.plugin.distribution, "managed");
+  assert.match(qqNpmInstalled.sourceUsed ?? "", /^npm-fallback:/);
 
-  const uninstallFishRes = await fetch(`${ready.httpUrl}/v1/plugins/uninstall`, {
+  const uninstallQqNpmRes = await fetch(`${ready.httpUrl}/v1/plugins/uninstall`, {
     method: "POST",
     headers: authHeaders,
-    body: JSON.stringify({ pluginId: "fishdock-hook" })
+    body: JSON.stringify({ pluginId: "qq" })
   });
-  assert.equal(uninstallFishRes.status, 200);
-  assert.equal(existsSync(join(dataDir, "plugins", "fishdock-hook")), false);
+  assert.equal(uninstallQqNpmRes.status, 200);
+  assert.equal(existsSync(join(dataDir, "plugins", "qq")), false);
+  serveQqOnGitee = true;
 
   // 6. Local .wb-plugin upload: modelVisible 409 audit gate -> confirmed install v1.0.0 -> upgrade v1.1.0 -> rollback v1.0.0 -> restart hydration
   const makeLocalWb = (version: string) =>

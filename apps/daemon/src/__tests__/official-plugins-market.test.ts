@@ -136,7 +136,7 @@ function packOfficialPluginArchive(
   return readFileSync(legacyPath);
 }
 
-test("official catalog metadata verifies active qq & fishdock-hook plugins, documents retired pet & ssh, and deterministic .wb-plugin market install mounts/unmounts with zero residual and zero node_modules", async () => {
+test("official catalog metadata verifies active qq plugin, documents retired pet/ssh/fishdock-hook, and deterministic .wb-plugin market install mounts/unmounts with zero residual and zero node_modules", async () => {
   const { repoRoot, archiveOutDir, pluginsDir, dataDir } = createTempMarketRoot();
   const rootVersion = readRootPackageVersion(repoRoot);
   const installer = new CordisStreamingInstaller({
@@ -156,19 +156,19 @@ test("official catalog metadata verifies active qq & fishdock-hook plugins, docu
     assert.ok((item.bytes ?? 0) > 0, `${item.id} must have positive bytes`);
   }
 
-  assert.equal(catalog.plugins.length, 2);
+  assert.equal(catalog.plugins.length, 1);
   assert.equal(entryById.has("purge"), false);
   assert.equal(entryById.has("pet"), false);
   assert.equal(entryById.has("ssh"), false);
-  for (const expectedId of ["qq", "fishdock-hook"]) {
-    assert.ok(entryById.has(expectedId), `Catalog must include ${expectedId}`);
-  }
+  assert.equal(entryById.has("fishdock-hook"), false);
+  assert.ok(entryById.has("qq"), "Catalog must include qq");
+
   const retiredList = catalog.retiredPlugins ?? [];
-  for (const retiredId of ["pet", "ssh"]) {
+  for (const retiredId of ["pet", "ssh", "fishdock-hook"]) {
     const retired = retiredList.find((item) => item.id === retiredId);
     assert.ok(retired !== undefined, `Catalog retiredPlugins must include ${retiredId}`);
     assert.equal(retired.status, "deprecated");
-    assert.equal(retired.replacedByBuiltin, true);
+    assert.equal(retired.replacedByBuiltin, retiredId !== "fishdock-hook");
     assert.match(retired.noticeZh, /已停用/);
   }
 
@@ -178,7 +178,7 @@ test("official catalog metadata verifies active qq & fishdock-hook plugins, docu
     masterKey: "official-plugins-market-test-master-key"
   });
 
-  for (const targetId of ["qq", "fishdock-hook"] as const) {
+  for (const targetId of ["qq"] as const) {
     const entry = entryById.get(targetId);
     assert.ok(entry !== undefined);
 
@@ -225,15 +225,13 @@ test("official catalog metadata verifies active qq & fishdock-hook plugins, docu
   }
 
   const mountedCounts = host.getActiveResourceCounts();
-  assert.ok(mountedCounts.routes >= 9);
-  assert.ok(mountedCounts.hooks >= 4);
-  assert.ok(mountedCounts.effects >= 2);
+  assert.ok(mountedCounts.routes >= 5);
+  assert.ok(mountedCounts.hooks >= 2);
+  assert.ok(mountedCounts.effects >= 1);
 
   await host.unmountPlugin("qq");
-  await host.unmountPlugin("fishdock-hook");
 
   assert.equal(host.isMounted("qq"), false);
-  assert.equal(host.isMounted("fishdock-hook"), false);
   assert.deepEqual(host.getActiveResourceCounts(), {
     routes: 0,
     hooks: 0,

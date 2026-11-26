@@ -310,7 +310,7 @@ describe("prismuxUpdates.logic", () => {
     const realV013GiteeNotes = [
       "# Prismux v0.1.3 Preview 1",
       "",
-      "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方两大活跃插件（`qq` / `fishdock-hook`）严格保持默认零预装**（原 `pet` / `ssh` 已停用：已被 Prismux 内置功能取代），桌面安装包内不包含任何官方插件。",
+      "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方独立插件（`qq`）严格保持默认零预装**（原 `pet` / `ssh` / `fishdock-hook` 已停用并移除），桌面安装包内不包含任何官方插件。",
       "",
       "## ✨ 本次核心升级亮点（v0.1.3 Preview 1）",
       "",
@@ -382,7 +382,7 @@ describe("prismuxUpdates.logic", () => {
     const realV012Preview4Notes = [
       "# Prismux v0.1.2 Preview 4",
       "",
-      "> 标准 SemVer / Tag：`v0.1.2-preview.4`（`0.1.2-preview.4`）。**官方两大活跃插件（`qq` / `fishdock-hook`）严格保持默认零预装**。",
+      "> 标准 SemVer / Tag：`v0.1.2-preview.4`（`0.1.2-preview.4`）。**官方独立插件（`qq`）严格保持默认零预装**。",
       "",
       "## 📦 下载指南：我应该下载哪个文件？",
       "",

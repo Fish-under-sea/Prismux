@@ -1259,7 +1259,7 @@ export function PrismuxPluginCenterView({
             <div className="flex flex-wrap items-center gap-2">
               <ShieldCheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />
               <h3 className="text-sm font-semibold text-foreground">
-                两大官方插件默认零预装声明
+                官方插件默认零预装声明
               </h3>
               <Badge variant="info" size="sm">
                 按需安装
@@ -1273,11 +1273,7 @@ export function PrismuxPluginCenterView({
               <code className="rounded bg-foreground/[0.06] px-1 py-0.5 font-mono text-[11px] text-foreground dark:bg-white/[0.08]">
                 qq
               </code>{" "}
-              与{" "}
-              <code className="rounded bg-foreground/[0.06] px-1 py-0.5 font-mono text-[11px] text-foreground dark:bg-white/[0.08]">
-                fishdock-hook
-              </code>{" "}
-              默认均不预装，按需安装并支持随时无残留卸载。
+              默认不预装，按需安装并支持随时无残留卸载。
             </p>
           </div>
         </div>

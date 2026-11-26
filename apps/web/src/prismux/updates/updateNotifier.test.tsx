@@ -500,7 +500,7 @@ describe("Sidebar update capsule & release modal rendering", () => {
     const richNotes = [
       "# Prismux v0.1.2 Preview 1",
       "",
-      "> 标准 SemVer / Tag: `v0.1.2-preview.1` (`0.1.2-preview.1`)。**官方四大插件（`qq` / `pet` / `fishdock-hook` / `ssh`）严格保持默认零预装**：按需独立安装。",
+      "> 标准 SemVer / Tag: `v0.1.2-preview.1` (`0.1.2-preview.1`)。**官方独立插件（`qq`）严格保持默认零预装**：按需独立安装。",
       "",
       "## 📦 下载指南：我应该下载哪个文件？",
       "",
@@ -537,7 +537,7 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(renderedHtml).toContain("1. 桌面主程序 (Desktop App)</h3>");
     expect(renderedHtml).toContain("<blockquote");
     expect(renderedHtml).toContain("<strong");
-    expect(renderedHtml).toContain("官方四大插件");
+    expect(renderedHtml).toContain("官方独立插件");
     expect(renderedHtml).toContain("<code");
     expect(renderedHtml).toContain("v0.1.2-preview.1");
     expect(renderedHtml).toContain('data-pmx-release-notes-table-wrap="1"');
@@ -558,7 +558,7 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(renderedHtml).not.toContain("## 📦");
     expect(renderedHtml).not.toContain("### 1.");
     expect(renderedHtml).not.toContain("&gt; 标准 SemVer");
-    expect(renderedHtml).not.toContain("**官方四大插件");
+    expect(renderedHtml).not.toContain("**官方独立插件");
     expect(renderedHtml).not.toContain("| :--- |");
 
     // Strict XSS & protocol hardening (no script tag or javascript: href)
@@ -572,7 +572,7 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(modalHtml).toContain('data-pmx-release-notes-markdown="1"');
     expect(modalHtml).toContain("<blockquote");
     expect(modalHtml).toContain("<table");
-    expect(modalHtml).not.toContain("**官方四大插件");
+    expect(modalHtml).not.toContain("**官方独立插件");
 
     // Verify PrismuxUpdatesSettingsPage no longer renders raw <pre> releaseNotes
     const updatesSettingsSource = NodeFS.readFileSync(
@@ -588,7 +588,7 @@ describe("Sidebar update capsule & release modal rendering", () => {
     const realV013ReleaseNotes = [
       "# Prismux v0.1.3 Preview 1",
       "",
-      "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方两大活跃插件（`qq` / `fishdock-hook`）严格保持默认零预装**。",
+      "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方独立插件（`qq`）严格保持默认零预装**。",
       "",
       "## ✨ 本次核心升级亮点（v0.1.3 Preview 1）",
       "",

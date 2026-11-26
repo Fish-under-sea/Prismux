@@ -15,9 +15,9 @@
 | 事件名 | 触发时机 | 是否可拦截 / 改写 | 典型插件用途 |
 | :--- | :--- | :--- | :--- |
 | `SessionStart` | 会话启动或恢复时触发 | 允许返回 `block` 阻断启动 | 初始化会话级上下文、记录审计日志 |
-| `PreToolUse` | 代理调用工具**之前**触发 | 支持 `allow` / `block` / `modify`（改写 `modifiedInput`），并联动四档权限门禁与中文 `ApprovalGuideCard` | 危险命令二次审批（如 `plugin-fishdock-hook`）、参数脱敏或重定向 |
+| `PreToolUse` | 代理调用工具**之前**触发 | 支持 `allow` / `block` / `modify`（改写 `modifiedInput`），并联动四档权限门禁与中文 `ApprovalGuideCard` | 危险命令二次审批、参数脱敏或重定向 |
 | `PostToolUse` | 工具执行完成后触发（携带 `toolOutput`） | 可附加 `feedback` 或在异常策略下阻断后续链路 | 结果审计、指标上报、输出后处理 |
-| `Notification` | 系统产生通知事件（邮件提醒、夜间工场完工等） | 观察与分发 | 转发至 QQ（`plugin-qq`）、FISH-Dock 灵动岛或自定义 Webhook |
+| `Notification` | 系统产生通知事件（邮件提醒、夜间工场完工等） | 观察与分发 | 转发至 QQ（`plugin-qq`）或自定义 Webhook |
 | `SubagentStop` | 子代理（Subagent）执行结束时触发 | 观察与汇总 | 记录子任务耗时、统计分片产出 |
 | `Stop` | 主会话或单轮任务完成停止时触发 | 观察与归档 | 推送任务完工摘要、清理轮次临时状态 |
 

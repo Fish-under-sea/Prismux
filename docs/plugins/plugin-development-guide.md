@@ -15,7 +15,7 @@ Prismux 插件生态运行在 `@prismux/cordis-kernel`（Cordis 时空可逆双�
    - 宿主通过 `CordisPluginHost.mountPlugin()` 为每个插件创建独立的 `ReversibleEffectScope`。
    - 插件注册的路由、钩子、声明式面板、样式、定时器及自定义 `ctx.effect()` 清理函数均挂入该作用域；当插件停用、卸载或 `apply(ctx)` 抛错回滚时，内核按 **LIFO（后进先出）** 顺序原子释放全部资源，确保零残留监听与状态泄漏。
 3. **官方插件零预装与托管单写锁（`distribution: "managed"`）**：
-   - Prismux 主程序与安装包**默认不预装任何官方插件**（当前活跃官方插件仅 `qq` 与 `fishdock-hook`；原 `pet`、`ssh` 插件已停用并由内置能力取代）。
+   - Prismux 主程序与安装包**默认不预装任何官方插件**（当前活跃官方插件仅 `qq`；原 `pet`、`ssh`、`fishdock-hook` 插件已停用并移除）。
    - 所有通过官方目录、社区 npm 或本地 `.wb-plugin` 安装的插件均自动写入 `.prismux-install.json` 并锁定 `"distribution": "managed"`。受管插件严禁在运行时应用内热自更（内核会抛出 `ManagedPluginSelfUpdateError`），升级与回滚（默认最多保留 3 份 `.snapshots` 快照）统一由宿主插件中心原子替换目录。
 4. **视觉层对模型 0 Token 红线**：
    - 纯宿主视觉、通知或配置插件必须声明 `"modelVisible": false`，不得向任何大模型或 Coding Agent 注入 Tool Schema 或 System Prompt。
@@ -246,7 +246,7 @@ pnpm plugin:pack -- --plugin ./path/to/my-plugin --out .work/plugin-dist --updat
    - 校验顶层 `engines.prismux`、构建中文权限审计卡，并写入 `distribution: "managed"` 锁。
 
 > [!TIP]
-> 官方两款独立插件另通过 `node scripts/build-npm-plugin-packages.ts --dir <release-dir> --out <out-dir>` 生成携带已验签 `.wb-plugin` 归档与防覆盖导出 CLI 的无脚本 npm 单包，适合离线或企业私有源分发。
+> 官方独立插件（`qq`）另通过 `node scripts/build-npm-plugin-packages.ts --dir <release-dir> --out <out-dir>` 生成携带已验签 `.wb-plugin` 归档与防覆盖导出 CLI 的无脚本 npm 单包，适合离线或企业私有源分发。
 
 ## 6. 完整最小可运行插件骨架
 
@@ -446,6 +446,5 @@ export function apply(ctx: PluginContext): void {
 ## 7. 官方参考范例与扩展阅读
 
 - **双域 + 凭据隔离 + 路由 + Hook 完整范例**：[`plugins-official/plugin-qq`](../../plugins-official/plugin-qq/src/index.ts)（OneBot v11 私聊主秘书与群聊硬隔离插件）
-- **纯 Daemon 钩子桥接范例**：[`plugins-official/plugin-fishdock-hook`](../../plugins-official/plugin-fishdock-hook/src/index.ts)（FISH-Dock 灵动岛 `PreToolUse` / `Notification` 审批回执插件）
 - **官方 Hook 钩子与浅色 / 深色 / 液态玻璃主题样式参考**：[`docs/plugins/official-hooks-and-theme-tokens.md`](./official-hooks-and-theme-tokens.md)
 - **官方插件索引清单**：[`plugins-official/catalog/official.json`](../../plugins-official/catalog/official.json)

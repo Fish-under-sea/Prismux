@@ -1340,7 +1340,7 @@ test("AppUpdater throttles high-frequency chunk SSE broadcasts while preserving 
 const REAL_V013_PREVIEW_1_GITHUB_BODY = [
   "# Prismux v0.1.3 Preview 1",
   "",
-  "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方两大活跃插件（`qq` / `fishdock-hook`）严格保持默认零预装**（原 `pet` / `ssh` 已停用：已被 Prismux 内置功能取代），桌面安装包内不包含任何官方插件，需要时可在 **设置 → 插件中心** 或通过下方独立 `.wb-plugin` / npm 单包按需安装。",
+  "> 标准 SemVer / Tag：`v0.1.3-preview.1`（`0.1.3-preview.1`）。本次为大版本视觉与交互升级，**官方独立插件（`qq`）严格保持默认零预装**（原 `pet` / `ssh` 已停用：已被 Prismux 内置功能取代，`fishdock-hook` 已停用并从官方插件目录移除），桌面安装包内不包含任何官方插件，需要时可在 **设置 → 插件中心** 或通过下方独立 `.wb-plugin` / npm 单包按需安装。",
   "",
   "## ✨ 本次核心升级亮点（v0.1.3 Preview 1）",
   "",

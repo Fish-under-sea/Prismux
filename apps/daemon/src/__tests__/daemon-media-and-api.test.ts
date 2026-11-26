@@ -1557,7 +1557,7 @@ test("Resilient cold-start: non-blocking T3 connect + /ws normalization + Electr
   });
   assert.equal(wpRes.status, 200);
 
-  // 2. Verify PRISMUX_CATALOG_PATH loads active official plugins (qq, fishdock-hook) while 0 are preinstalled
+  // 2. Verify PRISMUX_CATALOG_PATH loads active official plugins (qq) while 0 are preinstalled
   const catRes = await fetch(`${ready.httpUrl}/v1/plugins/catalog`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
