@@ -258,6 +258,7 @@ interface CreateManagerOptions {
     typeof TerminalManager.makeWithOptions
   >[0]["registerTerminalProcesses"];
   maxRetainedInactiveSessions?: number;
+  maxClosedSessionKeys?: number;
   historyByteLimit?: number;
   ptyAdapter?: FakePtyAdapter;
   resolveProviderInstanceEnvironment?: Parameters<
@@ -314,6 +315,9 @@ const createManager = (
           : {}),
         ...(options.maxRetainedInactiveSessions !== undefined
           ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
+          : {}),
+        ...(options.maxClosedSessionKeys !== undefined
+          ? { maxClosedSessionKeys: options.maxClosedSessionKeys }
           : {}),
         ...(options.resolveProviderInstanceEnvironment !== undefined
           ? { resolveProviderInstanceEnvironment: options.resolveProviderInstanceEnvironment }
@@ -3267,6 +3271,63 @@ it.layer(
       expect(process.writes).toEqual([]);
       expect(process.killSignals).toEqual([]);
       expect(missingEvents).toEqual([]);
+    }),
+  );
+
+  it.effect("bounds closedSessionKeys with a FIFO cap (default 512)", () =>
+    Effect.gen(function* () {
+      expect(TerminalManager.DEFAULT_MAX_CLOSED_SESSION_KEYS).toBe(512);
+
+      const { manager, ptyAdapter } = yield* createManager(5, { maxClosedSessionKeys: 3 });
+      for (const threadId of ["thread-1", "thread-2", "thread-3", "thread-4"]) {
+        yield* manager.open(openInput({ threadId }));
+        yield* manager.close({ threadId, terminalId: DEFAULT_TERMINAL_ID });
+      }
+      expect(ptyAdapter.spawnInputs).toHaveLength(4);
+
+      // thread-4 is still inside the 3-entry closedSessionKeys FIFO window, so resume does NOT respawn.
+      const recentEvents: TerminalAttachStreamEvent[] = [];
+      const stopRecent = yield* manager.attachStream(
+        {
+          threadId: "thread-4",
+          terminalId: DEFAULT_TERMINAL_ID,
+          cwd: process.cwd(),
+          cols: 100,
+          rows: 24,
+          resume: true,
+        },
+        (event) =>
+          Effect.sync(() => {
+            recentEvents.push(event);
+          }),
+      );
+      stopRecent();
+      expect(ptyAdapter.spawnInputs).toHaveLength(4);
+      expect(recentEvents).toEqual([
+        { type: "closed", threadId: "thread-4", terminalId: DEFAULT_TERMINAL_ID },
+      ]);
+
+      // thread-1 was evicted FIFO once the 4th close exceeded maxClosedSessionKeys=3, so resume recovers it.
+      const evictedEvents: TerminalAttachStreamEvent[] = [];
+      const stopEvicted = yield* manager.attachStream(
+        {
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          cwd: process.cwd(),
+          cols: 100,
+          rows: 24,
+          resume: true,
+        },
+        (event) =>
+          Effect.sync(() => {
+            evictedEvents.push(event);
+          }),
+      );
+      stopEvicted();
+      expect(ptyAdapter.spawnInputs).toHaveLength(5);
+      expect(evictedEvents).toMatchObject([
+        { type: "snapshot", snapshot: { threadId: "thread-1" } },
+      ]);
     }),
   );
 });

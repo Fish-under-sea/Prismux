@@ -80,6 +80,19 @@ export class CoreRpcHandshakeError extends Error {
   }
 }
 
+export const NON_RETRYABLE_CORE_HANDSHAKE_STATUS_CODES: ReadonlySet<number> = new Set([
+  401, 403, 426
+]);
+
+export function isNonRetryableCoreHandshakeError(
+  error: unknown
+): error is CoreRpcHandshakeError {
+  return (
+    error instanceof CoreRpcHandshakeError &&
+    NON_RETRYABLE_CORE_HANDSHAKE_STATUS_CODES.has(error.statusCode)
+  );
+}
+
 export class CoreRpcRemoteError extends Error {
   readonly code: string;
 
@@ -629,10 +642,7 @@ export class CoreRpcClient {
         const message = err instanceof Error ? err.message : String(err);
         this.lastError = message;
 
-        if (
-          err instanceof CoreRpcHandshakeError &&
-          (err.statusCode === 401 || err.statusCode === 426)
-        ) {
+        if (isNonRetryableCoreHandshakeError(err)) {
           this.state = "disconnected";
           this.rejectAllConnectedWaiters(err);
           return;

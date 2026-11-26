@@ -1,3 +1,5 @@
+import * as NodeVM from "node:vm";
+
 import { PreviewAutomationEvaluateInput } from "@prismux/core-contracts";
 import * as Schema from "effect/Schema";
 import {
@@ -1055,5 +1057,118 @@ describe("server browser net errors", () => {
     ["net::ERR_TLS13_DOWNGRADE_DETECTED", "ERR_TLS13_DOWNGRADE_DETECTED", -2],
   ])("reads the whole error name from %j", (errorText, description, code) => {
     expect(ServerBrowserPage.parseNetError(errorText)).toEqual({ description, code });
+  });
+});
+
+describe("recordingEncoderScript download Blob URL lifecycle", () => {
+  it("revokes the created recording object URL 30 seconds after triggering download", async () => {
+    vi.useFakeTimers();
+    try {
+      const revoked: string[] = [];
+      let clickedHref = "";
+      let clickedDownload = "";
+      let clickCount = 0;
+
+      const fakeWindow: Record<string, unknown> = {};
+      const fakeCanvas = {
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          fillStyle: "",
+          fillRect: () => {},
+          drawImage: () => {},
+          beginPath: () => {},
+          arc: () => {},
+          strokeStyle: "",
+          lineWidth: 0,
+          stroke: () => {},
+          save: () => {},
+          translate: () => {},
+          scale: () => {},
+          fill: () => {},
+          restore: () => {},
+        }),
+        captureStream: () => ({ getTracks: () => [], getVideoTracks: () => [] }),
+      };
+
+      class FakeMediaRecorder {
+        static isTypeSupported = () => true;
+        mimeType = "video/webm";
+        state = "inactive";
+        stream: unknown;
+        onstart: (() => void) | null = null;
+        onerror: ((ev: unknown) => void) | null = null;
+        onstop: (() => void) | null = null;
+        ondataavailable: ((ev: { data: { size: number } }) => void) | null = null;
+        constructor(stream: unknown) {
+          this.stream = stream;
+        }
+        start() {
+          this.state = "recording";
+          this.onstart?.();
+        }
+        stop() {
+          this.state = "inactive";
+          this.onstop?.();
+        }
+      }
+
+      const sandbox = {
+        window: fakeWindow,
+        document: {
+          createElement: (tag: string) => {
+            if (tag === "canvas") return fakeCanvas;
+            return {
+              href: "",
+              download: "",
+              click() {
+                clickCount += 1;
+                clickedHref = this.href;
+                clickedDownload = this.download;
+              },
+            };
+          },
+        },
+        Path2D: function FakePath2D() {},
+        Blob,
+        Uint8Array: Object.assign(Uint8Array, {
+          fromBase64: (b64: string) => Uint8Array.from(Buffer.from(b64, "base64")),
+        }),
+        createImageBitmap: async () => ({ width: 320, height: 180, close: () => {} }),
+        MediaRecorder: FakeMediaRecorder,
+        URL: {
+          createObjectURL: vi.fn(() => "blob:recording-1"),
+          revokeObjectURL: vi.fn((url: string) => {
+            revoked.push(url);
+          }),
+        },
+        performance: { now: () => 0 },
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+      };
+
+      NodeVM.runInNewContext(ServerBrowserPage.recordingEncoderScript(30), sandbox);
+      const recorderApi = fakeWindow.__t3Recorder as {
+        frame: (base64: string, cssWidth: number) => Promise<boolean>;
+        download: () => void;
+      };
+      await recorderApi.frame(Buffer.from([1, 2, 3]).toString("base64"), 320);
+      recorderApi.download();
+
+      expect(clickCount).toBe(1);
+      expect(clickedHref).toBe("blob:recording-1");
+      expect(clickedDownload).toBe("recording");
+      expect(revoked).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(revoked).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(revoked).toEqual(["blob:recording-1"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

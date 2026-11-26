@@ -2138,20 +2138,39 @@ const origRaf=typeof window.requestAnimationFrame==="function"
 const origCancelRaf=typeof window.cancelAnimationFrame==="function"
   ? window.cancelAnimationFrame.bind(window)
   : (typeof cancelAnimationFrame==="function"?cancelAnimationFrame:null);
+const MAX_PAUSED_RAF_QUEUE=64;
 const pausedRafQueue=new Map();
+const pausedRafIdByCb=new Map();
 let syntheticRafSeq=1000000;
+
+function enqueuePausedRaf(cb){
+  const existingId=pausedRafIdByCb.get(cb);
+  if(existingId!==undefined){
+    pausedRafQueue.delete(existingId);
+    pausedRafIdByCb.delete(cb);
+  }
+  while(pausedRafQueue.size>=MAX_PAUSED_RAF_QUEUE){
+    const oldest=pausedRafQueue.entries().next().value;
+    if(!oldest)break;
+    pausedRafQueue.delete(oldest[0]);
+    if(pausedRafIdByCb.get(oldest[1])===oldest[0]){
+      pausedRafIdByCb.delete(oldest[1]);
+    }
+  }
+  const qId=++syntheticRafSeq;
+  pausedRafQueue.set(qId,cb);
+  pausedRafIdByCb.set(cb,qId);
+  return qId;
+}
 
 function scheduleManagedRaf(cb){
   if(!origRaf||typeof cb!=="function")return 0;
   if(isPaused){
-    const qId=++syntheticRafSeq;
-    pausedRafQueue.set(qId,cb);
-    return qId;
+    return enqueuePausedRaf(cb);
   }
   return origRaf((ts)=>{
     if(isPaused){
-      const qId=++syntheticRafSeq;
-      pausedRafQueue.set(qId,cb);
+      enqueuePausedRaf(cb);
       return;
     }
     cb(ts);
@@ -2162,6 +2181,7 @@ function flushPausedRafQueue(){
   if(isPaused||!origRaf||pausedRafQueue.size===0)return;
   const queued=Array.from(pausedRafQueue.values());
   pausedRafQueue.clear();
+  pausedRafIdByCb.clear();
   for(let i=0;i<queued.length;i++){
     scheduleManagedRaf(queued[i]);
   }
@@ -2171,7 +2191,11 @@ if(origRaf){
   window.requestAnimationFrame=scheduleManagedRaf;
   window.cancelAnimationFrame=function(id){
     if(pausedRafQueue.has(id)){
+      const cb=pausedRafQueue.get(id);
       pausedRafQueue.delete(id);
+      if(cb!==undefined&&pausedRafIdByCb.get(cb)===id){
+        pausedRafIdByCb.delete(cb);
+      }
       return;
     }
     if(origCancelRaf){origCancelRaf(id);}
@@ -2300,15 +2324,36 @@ function syncMediaElement(el){
   try{if(origVolDesc&&origVolDesc.set)origVolDesc.set.call(el,effVol);}catch{}
 }
 
+function shouldPruneTrackedMedia(el){
+  if(!el)return true;
+  if(el.isConnected===false){
+    const info=mediaState.get(el);
+    if(el.ended&&!el.loop)return true;
+    if(el.paused&&!(info&&info.pausedByHost))return true;
+  }
+  return false;
+}
+
+function pruneTrackedMedia(){
+  trackedMedia.forEach((el)=>{
+    if(shouldPruneTrackedMedia(el)){
+      trackedMedia.delete(el);
+    }
+  });
+}
+
 function trackMediaElement(el){
   if(!el||trackedMedia.has(el))return;
+  if(trackedMedia.size>=64){
+    pruneTrackedMedia();
+  }
   trackedMedia.add(el);
   getMediaInfo(el);
   syncMediaElement(el);
   try{
     if(typeof el.addEventListener==="function"){
       el.addEventListener("ended",()=>{
-        if(!el.loop&&!el.isConnected){trackedMedia.delete(el);}
+        if(el.isConnected===false&&!el.loop){trackedMedia.delete(el);}
       });
     }
   }catch{}
@@ -2425,8 +2470,75 @@ if(typeof Document==="function"&&Document.prototype){
 
 const origAudioNodeConnect=typeof AudioNode==="function"&&AudioNode.prototype&&typeof AudioNode.prototype.connect==="function"?AudioNode.prototype.connect:null;
 
+const patchedAudioCtxCloseProtos=new WeakSet();
+const patchedAudioCtxOwnClose=new WeakSet();
+
+function evictAudioContext(ctx){
+  if(!ctx)return;
+  audioCtxSet.delete(ctx);
+  ctxGainMap.delete(ctx);
+}
+
+function patchAudioContextCloseProto(proto){
+  if(!proto||patchedAudioCtxCloseProtos.has(proto)||typeof proto.close!=="function")return;
+  patchedAudioCtxCloseProtos.add(proto);
+  const origClose=proto.close;
+  proto.close=function(){
+    evictAudioContext(this);
+    try{
+      const result=origClose.apply(this,arguments);
+      if(result&&typeof result.finally==="function"){
+        return result.finally(()=>{evictAudioContext(this);});
+      }
+      return result;
+    }catch(err){
+      evictAudioContext(this);
+      throw err;
+    }
+  };
+}
+
+function trackAudioContext(ctx){
+  if(!ctx||ctx.state==="closed"){
+    evictAudioContext(ctx);
+    return false;
+  }
+  if(!audioCtxSet.has(ctx)){
+    audioCtxSet.add(ctx);
+    try{patchAudioContextCloseProto(Object.getPrototypeOf(ctx));}catch{}
+    if(!patchedAudioCtxOwnClose.has(ctx)&&Object.prototype.hasOwnProperty.call(ctx,"close")&&typeof ctx.close==="function"){
+      patchedAudioCtxOwnClose.add(ctx);
+      const origOwnClose=ctx.close;
+      ctx.close=function(){
+        evictAudioContext(ctx);
+        try{
+          const result=origOwnClose.apply(this,arguments);
+          if(result&&typeof result.finally==="function"){
+            return result.finally(()=>{evictAudioContext(ctx);});
+          }
+          return result;
+        }catch(err){
+          evictAudioContext(ctx);
+          throw err;
+        }
+      };
+    }
+    try{
+      if(typeof ctx.addEventListener==="function"){
+        ctx.addEventListener("statechange",()=>{
+          if(ctx.state==="closed"){evictAudioContext(ctx);}
+        });
+      }
+    }catch{}
+  }
+  return true;
+}
+
 function ensureCtxGain(ctx){
-  if(!ctx)return null;
+  if(!ctx||ctx.state==="closed"){
+    evictAudioContext(ctx);
+    return null;
+  }
   let gain=ctxGainMap.get(ctx);
   if(!gain&&typeof ctx.createGain==="function"&&origAudioNodeConnect){
     try{
@@ -2435,7 +2547,7 @@ function ensureCtxGain(ctx){
       masterGainNodes.add(gain);
       origAudioNodeConnect.call(gain,ctx.destination);
       ctxGainMap.set(ctx,gain);
-      audioCtxSet.add(ctx);
+      trackAudioContext(ctx);
     }catch{
       return null;
     }
@@ -2458,6 +2570,10 @@ if(origAudioNodeConnect){
 }
 
 function syncAudioContext(ctx){
+  if(!ctx||ctx.state==="closed"){
+    evictAudioContext(ctx);
+    return;
+  }
   const gain=ensureCtxGain(ctx);
   const silent=isPaused||masterMuted||masterVol<=0;
   if(gain&&gain.gain){
@@ -2475,9 +2591,10 @@ function syncAudioContext(ctx){
 function wrapAudioContextCtor(propName){
   const OrigCtx=window[propName];
   if(typeof OrigCtx!=="function")return;
+  patchAudioContextCloseProto(OrigCtx.prototype);
   const WrappedCtx=function(){
     const ctx=Reflect.construct(OrigCtx,arguments,new.target||OrigCtx);
-    audioCtxSet.add(ctx);
+    trackAudioContext(ctx);
     syncAudioContext(ctx);
     return ctx;
   };
@@ -2499,7 +2616,12 @@ function applyMasterAudio(nextMuted,nextVol){
       for(let i=0;i<nodes.length;i++){trackMediaElement(nodes[i]);}
     }
   }catch{}
-  trackedMedia.forEach((el)=>{syncMediaElement(el);});
+  trackedMedia.forEach((el)=>{
+    syncMediaElement(el);
+    if(shouldPruneTrackedMedia(el)){
+      trackedMedia.delete(el);
+    }
+  });
   audioCtxSet.forEach((ctx)=>{syncAudioContext(ctx);});
 }
 
@@ -2514,6 +2636,10 @@ function applyMasterPaused(nextPaused){
     }
   }catch{}
   trackedMedia.forEach((el)=>{
+    if(shouldPruneTrackedMedia(el)){
+      trackedMedia.delete(el);
+      return;
+    }
     const info=getMediaInfo(el);
     if(isPaused){
       if(!el.paused){

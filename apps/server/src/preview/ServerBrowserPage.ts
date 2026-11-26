@@ -1375,9 +1375,11 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
     },
     download() {
       const link = document.createElement("a");
-      link.href = URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType }));
+      const url = URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType }));
+      link.href = url;
       link.download = "recording";
       link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
     },
   };
 })()`;

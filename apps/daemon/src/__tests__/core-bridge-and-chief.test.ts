@@ -32,6 +32,7 @@ import {
   CoreServerSupervisor,
   sanitizeChildEnv
 } from "../core/CoreServerSupervisor.js";
+import { PrismuxDaemon } from "../index.js";
 
 const tempDirs: string[] = [];
 
@@ -735,6 +736,178 @@ describe("CoreRpcClient", () => {
       assert.equal(client.isConnected(), false);
       assert.equal(client.getStatus().state, "closed");
       await server.close();
+    }
+  });
+
+  it("stops PrismuxDaemon core reconnect loop after HTTP 401/403/426 handshake rejection and logs once", async () => {
+    for (const statusCode of [401, 403, 426] as const) {
+      let upgradeAttempts = 0;
+      const rejectServer = createServer((_req, res) => {
+        res.writeHead(200);
+        res.end("ok");
+      });
+      rejectServer.on("upgrade", (_req, socket) => {
+        upgradeAttempts += 1;
+        const reason =
+          statusCode === 401
+            ? "Unauthorized"
+            : statusCode === 403
+              ? "Forbidden"
+              : "Upgrade Required";
+        const body = JSON.stringify({ code: "rejected" });
+        socket.write(
+          `HTTP/1.1 ${statusCode} ${reason}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+        );
+        socket.destroy();
+      });
+
+      await new Promise<void>((resolveListen, rejectListen) => {
+        rejectServer.once("error", rejectListen);
+        rejectServer.listen(0, "127.0.0.1", () => {
+          rejectServer.off("error", rejectListen);
+          resolveListen();
+        });
+      });
+
+      const addr = rejectServer.address();
+      assert(addr !== null && typeof addr === "object");
+
+      const dataDir = createTempDir(`prismux-daemon-reject-${statusCode}-`);
+      const warnings: string[] = [];
+      const origWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.map(String).join(" "));
+      };
+
+      const daemon = new PrismuxDaemon({
+        headless: true,
+        host: "127.0.0.1",
+        port: 0,
+        dataDir,
+        authToken: "daemon-test-token",
+        t3Url: `ws://127.0.0.1:${addr.port}/ws`,
+        t3Token: "raw-unsigned-bootstrap-token",
+        disableAutoUpdateCheck: true
+      });
+
+      try {
+        const ready = await daemon.start();
+        assert.equal(ready.coreConnected, false);
+        assert.equal(daemon.coreRpcClient?.isConnected(), false);
+
+        // Wait longer than the old 250ms + 500ms rapid backoff to prove retries stopped.
+        await new Promise((resolveWait) => setTimeout(resolveWait, 900));
+
+        assert.equal(
+          upgradeAttempts,
+          1,
+          `expected exactly 1 handshake attempt on HTTP ${statusCode}, got ${upgradeAttempts}`
+        );
+        const handshakeWarnings = warnings.filter((msg) =>
+          msg.includes(`HTTP ${statusCode}`)
+        );
+        assert.equal(
+          handshakeWarnings.length,
+          1,
+          `expected exactly 1 warning for HTTP ${statusCode}, got ${handshakeWarnings.length}`
+        );
+      } finally {
+        console.warn = origWarn;
+        await daemon.stop();
+        rejectServer.closeAllConnections?.();
+        await new Promise<void>((resolveClose) => {
+          rejectServer.close(() => resolveClose());
+        });
+      }
+    }
+  });
+
+  it("stops background startCoreConnectLoop once delayed server rejects with HTTP 401", async () => {
+    // Reserve an ephemeral port, close it so initial probe gets ECONNREFUSED and enters startCoreConnectLoop.
+    const probeServer = createServer();
+    await new Promise<void>((resolveListen, rejectListen) => {
+      probeServer.once("error", rejectListen);
+      probeServer.listen(0, "127.0.0.1", () => {
+        probeServer.off("error", rejectListen);
+        resolveListen();
+      });
+    });
+    const addr = probeServer.address();
+    assert(addr !== null && typeof addr === "object");
+    const reservedPort = addr.port;
+    await new Promise<void>((resolveClose) => probeServer.close(() => resolveClose()));
+
+    let upgradeAttempts = 0;
+    let resolveFirstUpgrade: (() => void) | undefined;
+    const firstUpgradeHit = new Promise<void>((resolve) => {
+      resolveFirstUpgrade = resolve;
+    });
+    const delayedServer = createServer((_req, res) => {
+      res.writeHead(200);
+      res.end("ok");
+    });
+    delayedServer.on("upgrade", (_req, socket) => {
+      upgradeAttempts += 1;
+      resolveFirstUpgrade?.();
+      const body = JSON.stringify({ code: "MalformedSessionTokenError" });
+      socket.write(
+        `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+      );
+      socket.destroy();
+    });
+
+    const dataDir = createTempDir("prismux-daemon-loop-401-");
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+
+    const daemon = new PrismuxDaemon({
+      headless: true,
+      host: "127.0.0.1",
+      port: 0,
+      dataDir,
+      authToken: "daemon-test-token",
+      t3Url: `ws://127.0.0.1:${reservedPort}/ws`,
+      t3Token: "malformed-token",
+      disableAutoUpdateCheck: true
+    });
+
+    let listening = false;
+    try {
+      await daemon.start();
+      await new Promise<void>((resolveListen, rejectListen) => {
+        delayedServer.once("error", rejectListen);
+        delayedServer.listen(reservedPort, "127.0.0.1", () => {
+          delayedServer.off("error", rejectListen);
+          listening = true;
+          resolveListen();
+        });
+      });
+
+      // Wait for background backoff to hit the server once, then verify it stops retrying.
+      await Promise.race([
+        firstUpgradeHit,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Timed out waiting for first 401 attempt")), 3_000)
+        )
+      ]);
+      assert.equal(upgradeAttempts, 1);
+
+      await new Promise((r) => setTimeout(r, 900));
+      assert.equal(upgradeAttempts, 1, "startCoreConnectLoop must stop after HTTP 401");
+      const authWarnings = warnings.filter((msg) => msg.includes("HTTP 401"));
+      assert.equal(authWarnings.length, 1);
+    } finally {
+      console.warn = origWarn;
+      await daemon.stop();
+      if (listening) {
+        delayedServer.closeAllConnections?.();
+        await new Promise<void>((resolveClose) => {
+          delayedServer.close(() => resolveClose());
+        });
+      }
     }
   });
 });

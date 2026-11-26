@@ -1689,6 +1689,8 @@ function normalizedRuntimeEnv(
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
+export const DEFAULT_MAX_CLOSED_SESSION_KEYS = 512;
+
 interface TerminalManagerOptions {
   logsDir: string;
   historyLineLimit?: number;
@@ -1707,6 +1709,7 @@ interface TerminalManagerOptions {
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
+  maxClosedSessionKeys?: number;
   registerTerminalProcesses?: (input: {
     readonly threadId: string;
     readonly terminalId: string;
@@ -1953,6 +1956,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
   const maxRetainedInactiveSessions =
     options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
+  const maxClosedSessionKeys = Math.max(
+    1,
+    Math.floor(options.maxClosedSessionKeys ?? DEFAULT_MAX_CLOSED_SESSION_KEYS),
+  );
   const registerTerminalProcesses = options.registerTerminalProcesses ?? (() => Effect.void);
   const unregisterTerminal = options.unregisterTerminal ?? (() => Effect.void);
 
@@ -1963,8 +1970,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     sessions: new Map(),
     killFibers: new Map(),
   });
-  // Keep close markers in memory so unknown IDs recover after a server restart.
+  // Keep bounded close markers in memory so unknown IDs recover after a server restart
+  // without allowing closedSessionKeys to grow indefinitely over long uptime.
   const closedSessionKeys = new Set<string>();
+  const rememberClosedSessionKey = (key: string) => {
+    closedSessionKeys.delete(key);
+    closedSessionKeys.add(key);
+    while (closedSessionKeys.size > maxClosedSessionKeys) {
+      const oldestKey = closedSessionKeys.values().next().value;
+      if (oldestKey === undefined) break;
+      closedSessionKeys.delete(oldestKey);
+    }
+  };
   const threadLocks = yield* KeyedLock.make<string>();
   const terminalEventListeners = new Set<(event: TerminalEvent) => Effect.Effect<void>>();
   const workerScope = yield* Scope.make("sequential");
@@ -2594,7 +2611,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         for (const session of inactiveSessions.slice(0, toEvict)) {
           const key = toSessionKey(session.threadId, session.terminalId);
           sessions.delete(key);
-          closedSessionKeys.add(key);
+          rememberClosedSessionKey(key);
         }
 
         return [undefined, { ...state, sessions }] as const;
@@ -3044,7 +3061,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* flushPersist(threadId, terminalId);
 
     const removed = yield* modifyManagerState((state) => {
-      closedSessionKeys.add(key);
+      rememberClosedSessionKey(key);
       if (!state.sessions.has(key)) {
         return [false, state] as const;
       }

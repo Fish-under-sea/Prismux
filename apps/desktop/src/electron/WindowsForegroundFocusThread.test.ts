@@ -5,12 +5,17 @@ import { vi } from "vite-plus/test";
 const workerConstructorMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:worker_threads", () => ({
+  parentPort: null,
   Worker: function Worker(...args: ReadonlyArray<unknown>) {
     return workerConstructorMock(...args);
   },
 }));
 
 import { startWindowsForegroundFocusThread } from "./WindowsForegroundFocusThread.ts";
+import {
+  createFocusElementCache,
+  MAX_CACHED_FOCUS_ELEMENTS,
+} from "./WindowsForegroundFocusWorker.ts";
 
 const makeWorker = () =>
   Object.assign(new NodeEvents.EventEmitter(), {
@@ -67,4 +72,45 @@ it("fails pending focus when the helper exits", async () => {
   assert.isTrue(await prepared);
   assert.lengthOf(workerConstructorMock.mock.calls, 2);
   thread.close();
+});
+
+it("forwards evict messages to the worker immediately when ready or queues them until ready", () => {
+  const thread = startWindowsForegroundFocusThread("focus.cjs");
+  thread.evict(11);
+  assert.lengthOf(worker.postMessage.mock.calls, 0);
+
+  worker.emit("message", "ready");
+  assert.deepEqual(worker.postMessage.mock.calls[0]?.[0], {
+    type: "evict",
+    windowId: 11,
+  });
+
+  thread.evict(12);
+  assert.deepEqual(worker.postMessage.mock.calls[1]?.[0], {
+    type: "evict",
+    windowId: 12,
+  });
+  thread.close();
+});
+
+it("bounds cached focus elements with LRU eviction and supports explicit delete", () => {
+  assert.equal(MAX_CACHED_FOCUS_ELEMENTS, 16);
+  const cache = createFocusElementCache<string>(3);
+  cache.set(1, "el-1");
+  cache.set(2, "el-2");
+  cache.set(3, "el-3");
+  assert.equal(cache.size, 3);
+
+  // Touch window 1 so window 2 becomes the LRU entry.
+  assert.equal(cache.get(1), "el-1");
+  cache.set(4, "el-4");
+  assert.equal(cache.size, 3);
+  assert.isUndefined(cache.get(2));
+  assert.equal(cache.get(1), "el-1");
+  assert.equal(cache.get(3), "el-3");
+  assert.equal(cache.get(4), "el-4");
+
+  assert.isTrue(cache.delete(3));
+  assert.equal(cache.size, 2);
+  assert.isUndefined(cache.get(3));
 });

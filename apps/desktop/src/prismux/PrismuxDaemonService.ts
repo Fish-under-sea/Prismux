@@ -262,9 +262,7 @@ const make = Effect.gen(function* () {
   const hostEnv = yield* HostProcess.Environment;
   const electronAppOption = yield* Effect.serviceOption(ElectronApp.ElectronApp);
   const electronWindowOption = yield* Effect.serviceOption(ElectronWindow.ElectronWindow);
-  const powerMonitorOption = yield* Effect.serviceOption(
-    ElectronPowerMonitor.ElectronPowerMonitor,
-  );
+  const powerMonitorOption = yield* Effect.serviceOption(ElectronPowerMonitor.ElectronPowerMonitor);
   const backendPoolOption = yield* Effect.serviceOption(DesktopBackendPool.DesktopBackendPool);
 
   const stateRef = yield* Ref.make<PrismuxDaemonState>(INITIAL_DAEMON_STATE);
@@ -282,7 +280,7 @@ const make = Effect.gen(function* () {
 
   let hasObservedMainWindow = false;
   const attachedWindows = new WeakSet<Electron.BrowserWindow>();
-  const windowListenerCleanups: Array<() => void> = [];
+  const windowListenerCleanups = new Map<Electron.BrowserWindow, () => void>();
 
   const updateActivityState = (
     update: (current: HostMetricsActivityState) => HostMetricsActivityState,
@@ -343,23 +341,16 @@ const make = Effect.gen(function* () {
     }
     attachedWindows.add(window);
     hasObservedMainWindow = true;
+    const events = ["minimize", "restore", "hide", "show", "focus", "blur"] as const;
     const syncThisWindow = () => {
       const nextWindow = readWindowActivity(window);
       updateActivityState((current) => ({ ...current, ...nextWindow }));
     };
-    const onClosed = () => {
-      updateActivityState((current) => ({
-        ...current,
-        windowVisible: false,
-        windowFocused: false,
-      }));
-    };
-    const events = ["minimize", "restore", "hide", "show", "focus", "blur"] as const;
-    for (const eventName of events) {
-      window.on(eventName as any, syncThisWindow);
-    }
-    window.on("closed", onClosed);
-    windowListenerCleanups.push(() => {
+    const cleanup = () => {
+      if (!windowListenerCleanups.delete(window)) {
+        return;
+      }
+      attachedWindows.delete(window);
       try {
         if (window.isDestroyed()) return;
         for (const eventName of events) {
@@ -369,7 +360,20 @@ const make = Effect.gen(function* () {
       } catch {
         // Ignore cleanup errors during window teardown.
       }
-    });
+    };
+    const onClosed = () => {
+      cleanup();
+      updateActivityState((current) => ({
+        ...current,
+        windowVisible: false,
+        windowFocused: false,
+      }));
+    };
+    for (const eventName of events) {
+      window.on(eventName as any, syncThisWindow);
+    }
+    window.on("closed", onClosed);
+    windowListenerCleanups.set(window, cleanup);
     syncThisWindow();
   };
 
@@ -445,9 +449,10 @@ const make = Effect.gen(function* () {
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
-      for (const cleanup of windowListenerCleanups.splice(0)) {
+      for (const cleanup of windowListenerCleanups.values()) {
         cleanup();
       }
+      windowListenerCleanups.clear();
     }),
   );
 
@@ -462,11 +467,7 @@ const make = Effect.gen(function* () {
 
   const pushHostMetricsOnce =
     /* Periodic host metrics loop; avoid a span per telemetry tick. */
-    Effect.fnUntraced(function* (
-      baseUrl: string,
-      token: string,
-      t3HttpUrl: string | undefined,
-    ) {
+    Effect.fnUntraced(function* (baseUrl: string, token: string, t3HttpUrl: string | undefined) {
       const metrics = yield* Option.match(electronAppOption, {
         onNone: () => Effect.succeed([] as const),
         onSome: (electronApp) =>
@@ -546,9 +547,7 @@ const make = Effect.gen(function* () {
         ];
 
     for (const candidate of candidates) {
-      const exists = yield* fileSystem
-        .exists(candidate)
-        .pipe(Effect.orElseSucceed(() => false));
+      const exists = yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false));
       if (exists) {
         return Option.some(candidate);
       }
@@ -626,9 +625,7 @@ const make = Effect.gen(function* () {
         }
         const entryPath = entryOption.value;
 
-        const portResult = yield* net
-          .reserveLoopbackPort(DAEMON_HOST)
-          .pipe(Effect.option);
+        const portResult = yield* net.reserveLoopbackPort(DAEMON_HOST).pipe(Effect.option);
         if (Option.isNone(portResult)) {
           yield* logDaemonWarning("failed to reserve loopback port for prismux daemon");
           return;
@@ -673,10 +670,7 @@ const make = Effect.gen(function* () {
               "catalog",
               "official.json",
             )
-          : environment.path.resolve(
-              environment.rootDir,
-              "plugins-official/catalog/official.json",
-            );
+          : environment.path.resolve(environment.rootDir, "plugins-official/catalog/official.json");
 
         const initialBackendSnapshot = yield* readPrimaryBackendSnapshot;
         const initialT3Pid =
@@ -787,11 +781,14 @@ const make = Effect.gen(function* () {
           yield* startHostMetricsReporter(child, baseUrl, token, normalizedT3HttpUrl);
           yield* logDaemonInfo("prismux daemon ready", { baseUrl });
         } else {
-          yield* logDaemonWarning("prismux daemon did not pass /health within timeout; continuing", {
-            baseUrl,
-            exitCode: child.exitCode,
-            stderrTail: stderrTail.trim(),
-          });
+          yield* logDaemonWarning(
+            "prismux daemon did not pass /health within timeout; continuing",
+            {
+              baseUrl,
+              exitCode: child.exitCode,
+              stderrTail: stderrTail.trim(),
+            },
+          );
         }
       }),
     );

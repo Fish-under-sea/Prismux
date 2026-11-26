@@ -46,6 +46,7 @@ import {
 import { symlinksSupported } from "@prismux/core-shared/testing/symlinks";
 import * as ServerConfig from "../config.ts";
 import {
+  createSharedConfigLockPool,
   isNonRepositoryGitStderr,
   makeGitVcsDriverCore,
   parseGitCheckoutProgressLine,
@@ -8426,7 +8427,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         yield* git(cwd, ["init"]);
-        yield* git(cwd, ["remote", "add", "origin", "https://github.com/Fish-under-sea/Prismux.git"]);
+        yield* git(cwd, [
+          "remote",
+          "add",
+          "origin",
+          "https://github.com/Fish-under-sea/Prismux.git",
+        ]);
         yield* git(cwd, ["config", "remote.origin.promisor", "true"]);
         yield* git(cwd, ["config", "remote.origin.partialclonefilter", "blob:none"]);
         const driver = yield* GitVcsDriver.GitVcsDriver;
@@ -8722,7 +8728,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* initRepoWithCommit(cwd);
         const driver = yield* GitVcsDriver.GitVcsDriver;
 
-        yield* git(cwd, ["remote", "add", "origin", "https://github.com/Fish-under-sea/Prismux.git"]);
+        yield* git(cwd, [
+          "remote",
+          "add",
+          "origin",
+          "https://github.com/Fish-under-sea/Prismux.git",
+        ]);
 
         const reusedForSsh = yield* driver.ensureRemote({
           cwd,
@@ -10845,5 +10856,64 @@ it.layer(layerTest)("branch change totals after a failed read", (it) => {
         deletions: 0,
       });
     }),
+  );
+
+  it.effect(
+    "serializes concurrent shared-config locks per repository and releases idle entries for ephemeral worktrees",
+    () =>
+      Effect.gen(function* () {
+        const pool = createSharedConfigLockPool();
+        const firstEntered = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        const events: string[] = [];
+
+        const firstFiber = yield* pool
+          .withLock(
+            "/repos/shared/.git",
+            Effect.gen(function* () {
+              events.push("first-start");
+              yield* Deferred.succeed(firstEntered, undefined);
+              yield* Deferred.await(releaseFirst);
+              events.push("first-end");
+            }),
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }));
+
+        yield* Deferred.await(firstEntered);
+        assert.strictEqual(pool.size, 1);
+
+        const secondFiber = yield* pool
+          .withLock(
+            "/repos/shared/.git",
+            Effect.sync(() => {
+              events.push("second-run");
+            }),
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }));
+
+        yield* Effect.yieldNow;
+        assert.deepStrictEqual(events, ["first-start"]);
+        assert.strictEqual(pool.size, 1);
+
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* Fiber.join(firstFiber);
+        yield* Fiber.join(secondFiber);
+
+        assert.deepStrictEqual(events, ["first-start", "first-end", "second-run"]);
+        assert.strictEqual(pool.size, 0, "idle repo lock must be evicted after last user finishes");
+
+        // Ephemeral worktree keys (including failing operations) must never accumulate.
+        for (let i = 0; i < 300; i += 1) {
+          if (i % 2 === 0) {
+            yield* pool.withLock(`/ephemeral/repo-${i}/.git`, Effect.void);
+          } else {
+            const exit = yield* Effect.exit(
+              pool.withLock(`/ephemeral/repo-${i}/.git`, Effect.fail("boom")),
+            );
+            assert.isTrue(Exit.isFailure(exit));
+          }
+        }
+        assert.strictEqual(pool.size, 0);
+      }),
   );
 });

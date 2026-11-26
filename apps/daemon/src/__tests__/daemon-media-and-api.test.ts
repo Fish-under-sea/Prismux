@@ -3464,3 +3464,290 @@ test("Wave 2: Web bridge intercepts requestAnimationFrame while paused and flush
   assert.equal(keptRan, 1);
   assert.equal(cancelledRan, 0, "cancelled queued rAF callback must never execute on resume");
 });
+
+test("Web wallpaper bridge deduplicates and caps pausedRafQueue and prunes closed AudioContexts and detached media elements", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-wp-bridge-leaks-"));
+  const steamRoot = mkdtempSync(join(tmpdir(), "prismux-wp-bridge-leaks-steam-"));
+  tempDirs.push(dataDir, steamRoot);
+
+  const webDir = join(steamRoot, "steamapps", "workshop", "content", "431960", "991133");
+  mkdirSync(webDir, { recursive: true });
+  writeFileSync(
+    join(webDir, "index.html"),
+    "<!doctype html><html><head><title>LeakGuard</title></head><body><canvas id='canvas'></canvas></body></html>",
+    "utf8"
+  );
+  writeFileSync(
+    join(webDir, "project.json"),
+    JSON.stringify({ id: "991133", title: "Leak Guard Web", type: "web", file: "index.html" }),
+    "utf8"
+  );
+
+  const authToken = "bridge-leak-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    host: "127.0.0.1",
+    port: 0,
+    dataDir,
+    authToken,
+    steamRootsDiscoverer: async () => [steamRoot]
+  });
+  const ready = await daemon.start();
+  cleanups.push(async () => {
+    await daemon.stop();
+  });
+
+  await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { advancedEngineEnabled: true } })
+  });
+
+  const htmlRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/991133/index.html`
+  );
+  assert.equal(htmlRes.status, 200);
+  const html = await htmlRes.text();
+  const scriptMatch = /<script data-pmx-we-bridge="1">([\s\S]*?)<\/script>/.exec(html);
+  assert.ok(scriptMatch && scriptMatch[1]);
+
+  const realRafQueue = new Map<number, (ts: number) => void>();
+  let nextRealRafId = 1;
+  const listeners = new Map<string, Array<(ev: unknown) => void>>();
+
+  class TrackedFakeMedia {
+    _vol = 1;
+    _muted = false;
+    paused = true;
+    ended = false;
+    loop = false;
+    isConnected = false;
+    volWriteCount = 0;
+    mutedWriteCount = 0;
+    private readonly mediaListeners = new Map<string, Array<() => void>>();
+    get volume(): number {
+      return this._vol;
+    }
+    set volume(v: number) {
+      this._vol = v;
+      this.volWriteCount += 1;
+    }
+    get muted(): boolean {
+      return this._muted;
+    }
+    set muted(v: boolean) {
+      this._muted = v;
+      this.mutedWriteCount += 1;
+    }
+    play(): Promise<void> {
+      this.paused = false;
+      return Promise.resolve();
+    }
+    pause(): void {
+      this.paused = true;
+    }
+    addEventListener(type: string, cb: () => void): void {
+      const list = this.mediaListeners.get(type) ?? [];
+      list.push(cb);
+      this.mediaListeners.set(type, list);
+    }
+  }
+  class TrackedFakeAudio extends TrackedFakeMedia {}
+  class TrackedFakeAudioNode {
+    context: TrackedFakeAudioContext;
+    constructor(ctx: TrackedFakeAudioContext) {
+      this.context = ctx;
+    }
+    connect(dest: unknown): unknown {
+      return dest;
+    }
+  }
+  class TrackedFakeGainNode extends TrackedFakeAudioNode {
+    gain = { value: 1 };
+  }
+  class TrackedFakeAudioContext {
+    destination = { isDestination: true };
+    state: "running" | "suspended" | "closed" = "running";
+    suspendCount = 0;
+    resumeCount = 0;
+    closeCount = 0;
+    createGain(): TrackedFakeGainNode {
+      return new TrackedFakeGainNode(this);
+    }
+    suspend(): Promise<void> {
+      this.suspendCount += 1;
+      this.state = "suspended";
+      return Promise.resolve();
+    }
+    resume(): Promise<void> {
+      this.resumeCount += 1;
+      this.state = "running";
+      return Promise.resolve();
+    }
+    close(): Promise<void> {
+      this.closeCount += 1;
+      this.state = "closed";
+      return Promise.resolve();
+    }
+  }
+
+  const winObj: Record<string, unknown> = {
+    location: { href: `${ready.httpUrl}/v1/wallpapers/web-t/${authToken}/991133/index.html` },
+    parent: { postMessage: () => undefined },
+    addEventListener: (type: string, cb: (ev: unknown) => void) => {
+      const list = listeners.get(type) ?? [];
+      list.push(cb);
+      listeners.set(type, list);
+    },
+    requestAnimationFrame: (cb: (ts: number) => void) => {
+      const id = nextRealRafId++;
+      realRafQueue.set(id, cb);
+      return id;
+    },
+    cancelAnimationFrame: (id: number) => {
+      realRafQueue.delete(id);
+    },
+    Audio: TrackedFakeAudio,
+    AudioContext: TrackedFakeAudioContext
+  };
+  winObj["window"] = winObj;
+
+  NodeVM.runInNewContext(scriptMatch[1], {
+    window: winObj,
+    document: {
+      readyState: "complete",
+      documentElement: { clientWidth: 1280, clientHeight: 720 },
+      querySelectorAll: () => [],
+      addEventListener: () => undefined
+    },
+    HTMLMediaElement: TrackedFakeMedia,
+    AudioNode: TrackedFakeAudioNode,
+    URL,
+    queueMicrotask,
+    setTimeout: () => 1,
+    clearTimeout: () => undefined
+  });
+
+  const emitMessage = (data: unknown) => {
+    for (const cb of listeners.get("message") ?? []) {
+      cb({ data });
+    }
+  };
+  const wrappedRaf = winObj["requestAnimationFrame"] as (cb: (ts: number) => void) => number;
+  const wrappedCancel = winObj["cancelAnimationFrame"] as (id: number) => void;
+
+  // 1) Deduplicate repeated scheduling of the same callback while paused
+  realRafQueue.clear();
+  emitMessage({
+    type: "wallpaperPropertyListener",
+    applyGeneralProperties: { paused: true },
+    audio: { muted: true, volume: 0 }
+  });
+
+  let sharedLoopRuns = 0;
+  const sharedLoop = () => {
+    sharedLoopRuns += 1;
+  };
+  for (let i = 0; i < 200; i += 1) {
+    wrappedRaf(sharedLoop);
+  }
+  assert.equal(realRafQueue.size, 0);
+
+  emitMessage({
+    type: "wallpaperPropertyListener",
+    applyGeneralProperties: { paused: false }
+  });
+  assert.equal(realRafQueue.size, 1, "identical paused rAF callbacks must deduplicate to 1");
+  for (const [, cb] of Array.from(realRafQueue.entries())) {
+    cb(100);
+  }
+  assert.equal(sharedLoopRuns, 1);
+
+  // 2) Cap distinct anonymous rAF callbacks queued during pause at 64 (keeping newest)
+  realRafQueue.clear();
+  emitMessage({
+    type: "wallpaperPropertyListener",
+    applyGeneralProperties: { paused: true }
+  });
+
+  const executedIndices: number[] = [];
+  let lastId = 0;
+  for (let i = 0; i < 150; i += 1) {
+    lastId = wrappedRaf(() => {
+      executedIndices.push(i);
+    });
+  }
+  // Cancel the last queued entry so 63 remain
+  wrappedCancel(lastId);
+
+  emitMessage({
+    type: "wallpaperPropertyListener",
+    applyGeneralProperties: { paused: false }
+  });
+  assert.equal(realRafQueue.size, 63, "distinct paused rAF queue must be capped at 64 (minus 1 cancelled)");
+  for (const [, cb] of Array.from(realRafQueue.entries())) {
+    cb(200);
+  }
+  assert.equal(executedIndices.length, 63);
+  assert.equal(executedIndices[0], 86, "oldest callbacks beyond cap 64 must be evicted FIFO");
+  assert.equal(executedIndices.at(-1), 148);
+
+  // 3) Evict closed AudioContexts immediately via close() hook and on state === 'closed'
+  const PatchedAudioCtx = winObj["AudioContext"] as typeof TrackedFakeAudioContext;
+  const closedViaMethod = new PatchedAudioCtx();
+  const closedExternally = new PatchedAudioCtx();
+  const activeCtx = new PatchedAudioCtx();
+
+  await closedViaMethod.close();
+  assert.equal(closedViaMethod.closeCount, 1);
+  const closedMethodSuspendBefore = closedViaMethod.suspendCount;
+  const closedMethodResumeBefore = closedViaMethod.resumeCount;
+
+  closedExternally.state = "closed";
+  const closedExtSuspendBefore = closedExternally.suspendCount;
+  const closedExtResumeBefore = closedExternally.resumeCount;
+
+  emitMessage({ type: "prismuxWallpaperAudio", muted: false, volume: 0.7 });
+  emitMessage({ type: "prismuxWallpaperAudio", muted: true, volume: 0 });
+  emitMessage({ type: "prismuxWallpaperAudio", muted: false, volume: 0.5 });
+
+  assert.equal(closedViaMethod.suspendCount, closedMethodSuspendBefore);
+  assert.equal(closedViaMethod.resumeCount, closedMethodResumeBefore);
+  assert.equal(closedExternally.suspendCount, closedExtSuspendBefore);
+  assert.equal(closedExternally.resumeCount, closedExtResumeBefore);
+  assert.ok(activeCtx.resumeCount >= 2, "active AudioContext must continue receiving master audio updates");
+
+  // 4) Prune disconnected/ended media elements while retaining actively playing detached audio
+  const PatchedAudio = winObj["Audio"] as typeof TrackedFakeAudio;
+  const deadSfx = new PatchedAudio();
+  deadSfx.ended = true;
+  deadSfx.paused = true;
+  deadSfx.isConnected = false;
+
+  const activeBgm = new PatchedAudio();
+  activeBgm.isConnected = false;
+  await activeBgm.play();
+
+  // First master audio sweep syncs and prunes deadSfx
+  emitMessage({ type: "prismuxWallpaperAudio", muted: false, volume: 0.6 });
+  const deadVolWritesAfterPrune = deadSfx.volWriteCount;
+  const bgmVolWritesBefore = activeBgm.volWriteCount;
+
+  // Subsequent sweeps must no longer touch pruned deadSfx, while still updating activeBgm
+  emitMessage({ type: "prismuxWallpaperAudio", muted: false, volume: 0.3 });
+  emitMessage({ type: "prismuxWallpaperAudio", muted: true, volume: 0 });
+
+  assert.equal(
+    deadSfx.volWriteCount,
+    deadVolWritesAfterPrune,
+    "pruned detached/ended media element must no longer be retained in trackedMedia"
+  );
+  assert.equal(
+    activeBgm.volWriteCount,
+    bgmVolWritesBefore + 2,
+    "actively playing detached Audio must stay tracked"
+  );
+});

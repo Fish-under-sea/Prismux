@@ -3,11 +3,60 @@ import * as NodeWorkerThreads from "node:worker_threads";
 import type { WindowsForegroundFocusTarget } from "./WindowsForegroundFocusThread.ts";
 import type { Element } from "@crowecawcaw/xa11y";
 
-type FocusRequest = {
-  readonly type: "prepare" | "focus";
-  readonly requestId: number;
-  readonly target: WindowsForegroundFocusTarget;
-};
+type FocusRequest =
+  | {
+      readonly type: "prepare" | "focus";
+      readonly requestId: number;
+      readonly target: WindowsForegroundFocusTarget;
+    }
+  | {
+      readonly type: "evict";
+      readonly windowId: number;
+    };
+
+export const MAX_CACHED_FOCUS_ELEMENTS = 16;
+
+export interface FocusElementCache<T = Element> {
+  get(windowId: number): T | undefined;
+  set(windowId: number, element: T): void;
+  delete(windowId: number): boolean;
+  clear(): void;
+  readonly size: number;
+}
+
+export function createFocusElementCache<T = Element>(
+  maxEntries: number = MAX_CACHED_FOCUS_ELEMENTS,
+): FocusElementCache<T> {
+  const limit = Math.max(1, Math.floor(maxEntries));
+  const entries = new Map<number, T>();
+  return {
+    get(windowId: number): T | undefined {
+      const existing = entries.get(windowId);
+      if (existing === undefined) return undefined;
+      entries.delete(windowId);
+      entries.set(windowId, existing);
+      return existing;
+    },
+    set(windowId: number, element: T): void {
+      entries.delete(windowId);
+      while (entries.size >= limit) {
+        const oldestWindowId = entries.keys().next().value;
+        if (oldestWindowId === undefined) break;
+        entries.delete(oldestWindowId);
+      }
+      entries.set(windowId, element);
+    },
+    delete(windowId: number): boolean {
+      return entries.delete(windowId);
+    },
+    clear(): void {
+      entries.clear();
+    },
+    get size(): number {
+      return entries.size;
+    },
+  };
+}
 
 function matchesTarget(
   element: {
@@ -35,7 +84,7 @@ async function findTarget(
   return children.find((candidate) => matchesTarget(candidate, target));
 }
 
-const cachedElements = new Map<number, Element>();
+const cachedElements = createFocusElementCache<Element>();
 
 async function prepareTarget(
   App: (typeof import("@crowecawcaw/xa11y"))["App"],
@@ -70,11 +119,17 @@ async function focusTarget(
 }
 
 async function start() {
-  const { App } = await import("@crowecawcaw/xa11y");
   const parentPort = NodeWorkerThreads.parentPort;
   if (!parentPort) return;
+  const { App } = await import("@crowecawcaw/xa11y");
   let work = Promise.resolve();
   parentPort.on("message", (message: FocusRequest) => {
+    if (message.type === "evict") {
+      work = work.then(() => {
+        cachedElements.delete(message.windowId);
+      });
+      return;
+    }
     if (message.type !== "prepare" && message.type !== "focus") return;
     work = work.then(async () => {
       const focused = await (
